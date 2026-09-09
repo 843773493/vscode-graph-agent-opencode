@@ -40,7 +40,7 @@
 2. 仓库中的 JavaScript 代码必须始终使用 ESM（ES 模块）通过 `import`/`export`，避免使用 CommonJS。
 3. `src/clients/` 按运行面组织客户端：`web` 是浏览器中的桌面布局，`electron` 是 Electron 的 main/preload 原生宿主，`electron-web` 是 Electron renderer 的浏览器可运行 parity 客户端，`mobile` 是 React Native 客户端，`mobile-web` 是移动布局的浏览器 parity 客户端；可复用的纯客户端核心和桌面 DOM 组件分别位于 `src/clients/shared/core`、`src/clients/shared/web-ui`，移动 Web DOM 组件可放入 `src/clients/shared/mobile-web-ui`。
 4. `app/` 中除 `app/gateway/` 外的工作区后端模块负责 Agent 业务规则、会话状态和核心计算；`app/gateway/` 只负责工作区路由和代理。
-5. **当前已实现的页面功能仍只在 `src/clients/web` 开发（浏览器前端 8011，端口以 `scripts/dev.mjs` 的 `frontendPort` 为准）。** `electron-web` 和 `mobile-web` 只承载对应原生端约 90% 的非原生 UI parity 测试，不能替代 Electron、React Native 真机或模拟器测试；`electron/main`、`electron/preload` 和 `mobile` 的原生实现必须通过各自的 OpenSpec 变更进入。用户未指定客户端时，现阶段“UI”仍指 `src/clients/web`。
+5. **当前已实现的页面功能仍只在 `src/clients/web` 开发（浏览器前端 8011，端口以 `scripts/launch/dev.mjs` 的 `frontendPort` 为准）。** `electron-web` 和 `mobile-web` 只承载对应原生端约 90% 的非原生 UI parity 测试，不能替代 Electron、React Native 真机或模拟器测试；`electron/main`、`electron/preload` 和 `mobile` 的原生实现必须通过各自的 OpenSpec 变更进入。用户未指定客户端时，现阶段“UI”仍指 `src/clients/web`。
 6. 编写纯 Web 代码时应保持共享协议和纯业务模型不绑定浏览器全局对象，但不要为尚未实现的客户端预写 adapter、bridge 或兼容层。
 
 ### 提交和目录规范
@@ -152,9 +152,9 @@
 ### 运行时说明
 
 1. 在 JS/TS 环境中使用 `bun`；使用 `bun install` 安装依赖，使用 `bun run dev` 启动本地开发环境。
-2. `bun run dev` 会执行 `scripts/dev.mjs`。当前主服务监听关系为：工作区后端 `127.0.0.1:8010`、浏览器前端 `0.0.0.0:8011`、Workspace Gateway `127.0.0.1:8014`；Terminal 和 Browser 辅助服务分别使用 8012/8013 与 8015/8016，默认监听 `0.0.0.0`。
-3. `scripts/dev.mjs` 启动前会清理 8010–8016 以及调试端口 8002 的旧监听进程，其中包括 Gateway。需要验证完整 Web 产品时必须通过该脚本统一重启，不要只手动重启 8010 后端而保留旧 Gateway 或旧前端。
-4. 需要让启动命令返回但服务继续运行时使用 `bun run scripts/dev.mjs --only-launch`；普通 `bun run dev` 会持续管理整组子进程，任一关键进程退出时会停止其余进程。
+2. `bun run dev` 会通过 `scripts/launch/dev-systemd.mjs` 创建当前 worktree 专属的 transient user-systemd unit，再由 unit 执行 `scripts/launch/dev.mjs`。源码开发未显式设置 `BOXTEAM_HOME` 时默认使用当前 worktree 的 `out/development-runtime/boxteam-home/`。当前主服务监听关系为：工作区后端 `127.0.0.1:8010`、浏览器前端 `0.0.0.0:8011`、Workspace Gateway `127.0.0.1:8014`；Terminal 和 Browser 辅助服务分别使用 8012/8013 与 8015/8016，默认监听 `0.0.0.0`。
+3. `scripts/launch/dev.mjs` 启动前会清理 8010–8016 以及调试端口 8002 的旧监听进程，其中包括 Gateway。需要验证完整 Web 产品时必须通过该脚本统一重启，不要只手动重启 8010 后端而保留旧 Gateway 或旧前端。
+4. `bun run dev` 在 transient unit 和完整服务就绪后返回，`bun run dev:status` 查看状态，`bun run dev:stop` 停止并回收 unit。只有需要前台调试整组进程时才使用 `bun run dev:foreground`；任一关键进程退出时仍会停止其余进程。
 5. 验证 Web 可用性不能只检查 8010 健康接口或 8011 HTML。至少应通过 8011 实际请求 `/api/gateway/health`、`/api/gateway/workspaces` 和 `/api/v1/workspace`，确认页面初始化链路、激活工作区以及响应头/响应体 `request_id` 均正确；涉及交互时还应进行真实浏览器测试。
 6. 在 Python 环境中使用 `uv`；使用 `uv sync` 安装依赖。仅调试单个工作区后端时可使用 `uv run uvicorn app.main:app --host 127.0.0.1 --port 8010`，但这不代表 Gateway 和 Web 全链路已经启动。
 7. 工作区后端 API 文档位于 http://127.0.0.1:8010/api/v1/docs；Gateway API 文档位于 http://127.0.0.1:8014/api/gateway/docs。

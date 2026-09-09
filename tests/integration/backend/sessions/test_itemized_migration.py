@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from app.domain.itemized.errors import FormatDispatchError
+from app.services.infrastructure.rollout_context.checkpoint.projection.message_projections import (
+    RolloutMessageProjectionMixin,
+)
 from app.services.infrastructure.rollout_context.migration import (
     store as migration_store,
-)
-from app.services.infrastructure.rollout_context.migration.projections import (
-    LegacyMigrationProjectionMixin,
-)
-from app.services.infrastructure.rollout_context.storage.serialization import (
-    canonical_json_line,
 )
 from tests.integration.backend.sessions.itemized_migration_helpers import (
     _accepted_records,
@@ -110,7 +106,7 @@ def test_legacy_migration_rejects_same_source_and_target_session(
         storage.migrate_legacy_to_v2("source", target_thread_id="source")
 
 
-def test_full_copy_v1_source_runs_explicit_staging_and_keeps_source_artifacts(
+def test_full_copy_v1_source_requires_explicit_import_without_side_effects(
     migration_workspace: Path,
     session_bundle_factory,
 ) -> None:
@@ -125,33 +121,19 @@ def test_full_copy_v1_source_runs_explicit_staging_and_keeps_source_artifacts(
     storage = _storage(sessions_root)
     source_index = storage.index_path("source").read_bytes()
 
-    assert (
+    with pytest.raises(FormatDispatchError, match="v1_migration_required"):
         storage.clone_rollout(
             source_thread_id="source",
             target_thread_id="target",
             source_checkpoint_id=None,
         )
-        is None
-    )
-
-    with storage._connect("target", "", read_only=True) as connection:
-        format_version, state, item_count, migration_status = connection.execute(
-            "SELECT database_meta.rollout_format_version, database_meta.database_state, "
-            "(SELECT COUNT(*) FROM item_catalog), "
-            "(SELECT status FROM legacy_migration_reports ORDER BY created_at DESC LIMIT 1) "
-            "FROM database_meta"
-        ).fetchone()
-    assert (format_version, state, item_count, migration_status) == (
-        2,
-        "active",
-        2,
-        "completed",
-    )
+    assert not storage.root("target").exists()
+    assert migration_audits(storage) == []
     assert storage.root("source").joinpath("rollout.jsonl").read_bytes() == source_lines
     assert storage.index_path("source").read_bytes() == source_index
 
 
-def test_full_copy_v1_commit_records_legacy_source_lineage(
+def test_explicit_v1_import_then_full_copy_records_v2_source_lineage(
     migration_workspace: Path,
     session_bundle_factory,
 ) -> None:
@@ -163,64 +145,58 @@ def test_full_copy_v1_commit_records_legacy_source_lineage(
         records=_accepted_records(),
     )
     session_bundle_factory(sessions_root, "target")
+    session_bundle_factory(sessions_root, "fork-target")
     storage = _storage(sessions_root)
 
-    assert (
-        storage.clone_rollout(
-            source_thread_id="source",
-            target_thread_id="target",
-            source_checkpoint_id=None,
-        )
-        is None
+    result = storage.migrate_legacy_to_v2(
+        "source", target_thread_id="target", require_lossless=True
+    )
+    assert result["status"] == "completed"
+    source_items = storage.read_items("target")
+    source_view_id = storage.clone_rollout(
+        source_thread_id="target",
+        target_thread_id="fork-target",
+        source_checkpoint_id=None,
     )
     materialization_id, fork_id = storage.begin_fork_materialization(
-        target_session_id="target",
-        source_session_id="source",
+        target_session_id="fork-target",
+        source_session_id="target",
         source_checkpoint_id=None,
-        source_view_id=None,
+        source_view_id=source_view_id,
         fork_mode="full_rollout_copy",
         relationship="detached",
     )
     assert (
         storage.commit_fork_materialization(
             materialization_id,
-            target_session_id="target",
-            source_session_id="source",
+            target_session_id="fork-target",
+            source_session_id="target",
             source_checkpoint_id=None,
-            source_view_id=None,
+            source_view_id=source_view_id,
             fork_mode="full_rollout_copy",
             relationship="detached",
         )
         == fork_id
     )
 
-    with storage._connect("target", "", read_only=True) as connection:
+    with storage._connect("fork-target", "", read_only=True) as connection:
         mappings = connection.execute(
-            "SELECT entity_type, source_local_id, target_local_id, source_offset, "
-            "target_offset, lineage_json "
-            "FROM fork_identity_mappings WHERE fork_id = ? ORDER BY entity_type, source_local_id",
+            "SELECT source_local_id, target_local_id "
+            "FROM fork_identity_mappings WHERE fork_id = ? AND entity_type = 'item' "
+            "ORDER BY source_local_id",
             (fork_id,),
         ).fetchall()
         origin = connection.execute(
-            "SELECT source_view_id, fork_mode FROM fork_origins WHERE fork_id = ?",
+            "SELECT source_session_id, source_view_id, fork_mode "
+            "FROM fork_origins WHERE fork_id = ?",
             (fork_id,),
         ).fetchone()
-    by_type = {str(row[0]): row for row in mappings}
-    assert by_type["item"][1].startswith("legacy:v1:message:")
-    assert by_type["turn"][1] == "legacy:v1:turn:legacy-turn-1"
-    assert by_type["execution"][1].startswith("legacy:v1:execution:")
-    assert by_type["item"][2] != by_type["item"][1]
-    item_offsets = sorted(
-        (int(row[3]), int(row[4])) for row in mappings if row[0] == "item"
-    )
-    first_source_length = len(canonical_json_line(_accepted_records()[0]))
-    assert [offset[0] for offset in item_offsets] == [0, first_source_length]
-    assert item_offsets[0][1] == 0
-    assert item_offsets[1][1] > item_offsets[0][1]
-    assert json.loads(str(by_type["item"][5]))["identity_mode"] == (
-        "legacy_migrated_target_local"
-    )
-    assert origin == (None, "full_rollout_copy")
+    fork_items = storage.read_items("fork-target")
+    assert len(mappings) == len(source_items) == len(fork_items)
+    assert {row[0] for row in mappings} == {item.item_id for item in source_items}
+    assert {row[1] for row in mappings} == {item.item_id for item in fork_items}
+    assert all(not row[0].startswith("legacy:v1:") for row in mappings)
+    assert origin == ("target", source_view_id, "full_rollout_copy")
 
 
 @pytest.mark.parametrize("failure_point", ["projection", "validation", "installation"])
@@ -247,8 +223,8 @@ def test_migration_failure_quarantines_staging_without_creating_target(
 
     owner, method = {
         "projection": (
-            LegacyMigrationProjectionMixin,
-            "_install_migration_message_projections",
+            RolloutMessageProjectionMixin,
+            "_materialize_canonical_message_projection",
         ),
         "validation": (migration_store, "_validate_staging"),
         "installation": (migration_store, "install_directory"),

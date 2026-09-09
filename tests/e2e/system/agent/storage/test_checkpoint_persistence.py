@@ -20,6 +20,17 @@ from tests.support.processes import (
 from tests.support.text import normalize_text
 
 
+@pytest.fixture(scope="module")
+def e2e_model_stream_config_path() -> str:
+    return str(
+        Path.cwd()
+        / "configs"
+        / "tests"
+        / "model_stream"
+        / "model_stream_checkpoint_persistence.jsonc"
+    )
+
+
 async def _send_simple_message(
     client: httpx.AsyncClient, session_id: str, content: str
 ) -> str:
@@ -65,6 +76,7 @@ async def test_checkpoint_save_reload_and_survive_restart(
     e2e_backend_process: subprocess.Popen[str],
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
+    e2e_model_stream_runtime_config_path: str,
 ):
     """checkpoint 保存到磁盘、多次运行读取上下文、后端重启后仍能恢复。"""
     create_response = await client.post(
@@ -93,11 +105,21 @@ async def test_checkpoint_save_reload_and_survive_restart(
 
     first_records = _read_rollout_messages(rollout_jsonl)
     assert first_records, "第一次运行后 rollout JSONL 文件为空"
-    assert {record["role"] for record in first_records} <= {
+    assert all(record["format_version"] == 2 for record in first_records)
+    assert all(record["record_type"] == "item" for record in first_records)
+    assert {
+        record["wire_role"]
+        for record in first_records
+        if record.get("wire_role") is not None
+    } <= {
         "user",
         "assistant",
         "tool",
     }
+    assert all(
+        "role" not in record and "message" not in record and "sequence" not in record
+        for record in first_records
+    )
     with sqlite3.connect(index_sqlite) as connection:
         first_checkpoint_count = connection.execute(
             "SELECT COUNT(*) FROM checkpoints"
@@ -157,6 +179,9 @@ async def test_checkpoint_save_reload_and_survive_restart(
         workspace_root=e2e_workspace_root_path,
         port=e2e_backend_port,
         log_name="e2e-backend-restart",
+        env_overrides={
+            "BOXTEAM_TEST_MODEL_STREAM_CONFIG": e2e_model_stream_runtime_config_path,
+        },
     )
     try:
         async with httpx.AsyncClient(

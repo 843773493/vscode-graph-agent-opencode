@@ -19,6 +19,22 @@ def _block_index(block: Mapping[str, object]) -> int | None:
     return index
 
 
+def _reasoning_text(block: Mapping[str, object]) -> str | None:
+    if block.get("type") not in {
+        "reasoning",
+        "reasoning_content",
+        "reasoning_items",
+        "thinking",
+        "redacted_thinking",
+    }:
+        return None
+    for key in ("reasoning", "reasoning_content", "thinking", "summary", "text"):
+        value = block.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
 def _merge_content(
     content: str | list[str | dict], canonical_blocks: list[dict[str, object]]
 ) -> list[dict[str, object]]:
@@ -31,11 +47,28 @@ def _merge_content(
     existing_ids = {
         block["id"] for block in existing if isinstance(block.get("id"), str)
     }
-    missing = [
-        block
-        for block in canonical_blocks
-        if not isinstance(block.get("id"), str) or block["id"] not in existing_ids
-    ]
+    matched_existing_indexes: set[int] = set()
+    missing: list[dict[str, object]] = []
+    for block in canonical_blocks:
+        if isinstance(block.get("id"), str) and block["id"] in existing_ids:
+            continue
+        canonical_text = _reasoning_text(block)
+        matching_index = next(
+            (
+                index
+                for index, value in enumerate(existing)
+                if index not in matched_existing_indexes
+                and canonical_text is not None
+                and _reasoning_text(value) == canonical_text
+            ),
+            None,
+        )
+        if matching_index is not None:
+            # provider carrier 已经承载了同一段 reasoning，只是没有稳定 id/index；
+            # exact text match 不需要猜测插入位置，也不能重复展示一份 reasoning。
+            matched_existing_indexes.add(matching_index)
+            continue
+        missing.append(block)
     if not missing:
         return existing
     if not existing:
@@ -133,11 +166,28 @@ def merge_canonical_reasoning(
         ]
         if not canonical_blocks:
             continue
+        unique_blocks: list[dict[str, object]] = []
+        for block in canonical_blocks:
+            block_text = _reasoning_text(block)
+            block_index = _block_index(block)
+            duplicate = any(
+                block_text is not None
+                and _reasoning_text(previous) == block_text
+                and (
+                    block_index is None
+                    or _block_index(previous) is None
+                    or _block_index(previous) == block_index
+                )
+                for previous in unique_blocks
+            )
+            if duplicate:
+                continue
+            unique_blocks.append(block)
         metadata = dict(message.response_metadata or {})
         metadata["reasoning_source"] = "canonical_item_stream"
         result[index] = message.model_copy(
             update={
-                "content": _merge_content(message.content, canonical_blocks),
+                "content": _merge_content(message.content, unique_blocks),
                 "response_metadata": metadata,
             }
         )

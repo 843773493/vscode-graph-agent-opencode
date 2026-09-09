@@ -4,22 +4,32 @@
 > ### start
 > [开发] 启动后端、Gateway、Web 和辅助服务
 ```sh
-  bun run scripts/dev.mjs --service=all --only-launch
+  bun run dev
+```
+> ### stop
+> [开发] 停止当前 worktree 的 transient systemd 开发服务
+```sh
+  bun run dev:stop
+```
+> ### status
+> [开发] 查看当前 worktree 的 transient systemd 开发服务状态
+```sh
+  bun run dev:status
 ```
 > ### backend
 > [开发] 仅启动 Workspace 后端
 ```sh
-  bun run scripts/dev.mjs --service=backend
+  bun run scripts/launch/dev.mjs --service=backend
 ```
 > ### gateway
 > [开发] 仅启动 Workspace Gateway
 ```sh
-  bun run scripts/dev.mjs --service=gateway
+  bun run scripts/launch/dev.mjs --service=gateway
 ```
 > ### web
 > [开发] 仅启动当前纯 Web 客户端
 ```sh
-  bun run scripts/dev.mjs --service=web
+  bun run scripts/launch/dev.mjs --service=web
 ```
 ## check
 > ### python
@@ -79,6 +89,12 @@
 ```sh
   uv run pytest tests/e2e/system/gateway
 ```
+## install
+> ### release
+> [安装] 安装当前发布版本的 BoxTeam CLI 和平台 runtime
+```sh
+  bun run scripts/install/install-release.mjs
+```
 ## config
 > ### install
 > [配置] 安装或更新当前源码开发配置
@@ -117,25 +133,25 @@
 > [开发目标] 查看 Linux、Windows 或 Docker 开发目标状态
 ```sh
   target="${target:-docker-debian}"
-  bun run scripts/cross-platform-development-target.mjs status "$target"
+  bun run scripts/launch/cross-platform-development-target.mjs status "$target"
 ```
 > ### start [target]
 > [开发目标] 启动指定开发目标
 ```sh
   target="${target:-docker-debian}"
-  bun run scripts/cross-platform-development-target.mjs start "$target" --profile development
+  bun run scripts/launch/cross-platform-development-target.mjs start "$target" --profile development
 ```
 > ### stop [target]
 > [开发目标] 停止指定开发目标
 ```sh
   target="${target:-docker-debian}"
-  bun run scripts/cross-platform-development-target.mjs stop "$target" --profile development
+  bun run scripts/launch/cross-platform-development-target.mjs stop "$target" --profile development
 ```
 > ### restart [target]
 > [开发目标] 重启指定开发目标
 ```sh
   target="${target:-docker-debian}"
-  bun run scripts/cross-platform-development-target.mjs restart "$target" --profile development
+  bun run scripts/launch/cross-platform-development-target.mjs restart "$target" --profile development
 ```
 ## package
 > ### linux

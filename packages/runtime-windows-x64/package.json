@@ -1,6 +1,5 @@
 {
   "name": "@boxteam/runtime-windows-x64",
-  "version": "0.1.0",
   "description": "BoxTeam self-contained runtime for Windows x64",
   "license": "UNLICENSED",
   "type": "module",

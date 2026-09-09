@@ -11,7 +11,21 @@ from pathlib import Path
 import commentjson
 import httpx
 import pytest
+from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.base import empty_checkpoint
 
+from app.core.checkpoint_config import build_checkpoint_config
+from app.core.path_utils import get_session_path_resolver
+from app.domain.itemized.enums import (
+    CanonicalItemStatus,
+    PayloadKind,
+    SemanticKind,
+    TurnScope,
+)
+from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from tests.integration.stubs.http_stubs import openai_chat_stub
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -25,6 +39,81 @@ from tests.support.workspaces import prepare_default_test_workspace
 
 PARTIAL_TEXT_SESSION_ID = "ses_b1a2c3d4e5f6478899aabbccddeeff04"
 PARTIAL_TEXT_TURN_ID = "boundary-turn-0004"
+PARTIAL_TEXT_ITEM_ID = "item-boundary-assistant-partial-text-0004"
+PARTIAL_TEXT_MESSAGE_ID = "boundary-assistant-partial-text-0004"
+PARTIAL_TEXT_CONTENT = "我已经开始分析这个问题，但回答在这里被用户中断……"
+PARTIAL_TEXT_USER_CONTENT = "请分析这个问题；如果我中断，请保留已经生成的正文。"
+
+
+def _seed_v2_partial_text_turn(workspace_root: Path) -> None:
+    sessions_dir = workspace_root / ".boxteam" / "sessions"
+    session_dir = get_session_path_resolver(sessions_dir).resolve_session_node(
+        PARTIAL_TEXT_SESSION_ID
+    )
+    shutil.rmtree(session_dir / "rollout")
+
+    saver = RolloutCheckpointSaver(sessions_dir)
+    accepted = saver.accept_turn(
+        PARTIAL_TEXT_SESSION_ID,
+        accepted_ingress_id="ingress-boundary-partial-text-0004",
+        acceptance_idempotency_key="acceptance-boundary-partial-text-0004",
+        payload=PARTIAL_TEXT_USER_CONTENT,
+        payload_kind=PayloadKind.TEXT,
+        turn_id=PARTIAL_TEXT_TURN_ID,
+        root_item_id="item-boundary-user-partial-text-0004",
+        initial_execution_id="execution-boundary-partial-text-0004",
+    )
+    checkpoint = empty_checkpoint()
+    checkpoint["id"] = "checkpoint-boundary-partial-text-0004"
+    checkpoint["channel_values"] = {
+        "messages": [
+            HumanMessage(
+                content=PARTIAL_TEXT_USER_CONTENT,
+                id="boundary-user-partial-text-0004",
+                response_metadata={
+                    "message_metadata": {"turn_id": PARTIAL_TEXT_TURN_ID}
+                },
+            )
+        ]
+    }
+    checkpoint["channel_versions"] = {"messages": "1"}
+    checkpoint["updated_channels"] = ["messages"]
+    saver.put(
+        build_checkpoint_config(PARTIAL_TEXT_SESSION_ID),
+        checkpoint,
+        {"source": "partial-text-boundary-v2-fixture", "step": 1},
+        {"messages": "1"},
+    )
+    partial_item = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id=PARTIAL_TEXT_ITEM_ID,
+        semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+        payload_kind=PayloadKind.TEXT,
+        status=CanonicalItemStatus.PARTIAL,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "model-call-boundary-partial-text-0004",
+            "invocation_id": str(accepted["initial_execution_id"]),
+        },
+        payload=PARTIAL_TEXT_CONTENT,
+        metadata={
+            "projection_message_id": PARTIAL_TEXT_MESSAGE_ID,
+            "completion_reason": "user_interrupt",
+            "phase": "assistant_text",
+        },
+        turn_id=PARTIAL_TEXT_TURN_ID,
+        turn_scope=TurnScope.TURN_MEMBER,
+        message_group_id="message-boundary-partial-text-0004",
+        wire_role="assistant",
+    )
+    saver.converge_execution(
+        PARTIAL_TEXT_SESSION_ID,
+        turn_id=PARTIAL_TEXT_TURN_ID,
+        execution_id=str(accepted["initial_execution_id"]),
+        outcome="cancelled",
+        turn_status="cancelled",
+        items=(partial_item,),
+    )
 
 
 @pytest.fixture(scope="module")
@@ -40,6 +129,7 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
+    _seed_v2_partial_text_turn(workspace_root)
     return str(workspace_root)
 
 
@@ -60,7 +150,7 @@ def browser_backend(
         {
             "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
             "model": "partial-text-boundary-browser-stub",
-            "api_key": "partial-text-boundary-local-key",
+            "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
             "custom_llm_provider": "openai",
         }
     )
@@ -73,6 +163,9 @@ def browser_backend(
             workspace_root=str(workspace_root),
             port=port_block.port(0),
             log_name="partial-text-boundary-browser-backend",
+            env_overrides={
+                "BOXTEAM_TEST_MODEL_API_KEY": "partial-text-boundary-local-key"
+            },
         )
         try:
             yield f"http://127.0.0.1:{backend.port}", workspace_root
@@ -131,32 +224,38 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
         record
         for record in map(json.loads, rollout_path.read_text(encoding="utf-8").splitlines())
         if record.get("turn_id") == PARTIAL_TEXT_TURN_ID
-        and record.get("role") == "assistant"
+        and record.get("item_id") == PARTIAL_TEXT_ITEM_ID
     )
-    response_metadata = boundary_record["message"]["data"]["response_metadata"]
-    assert response_metadata["partial"] is True
-    assert response_metadata["completion_reason"] == "user_interrupt"
+    assert boundary_record["format_version"] == 2
+    assert boundary_record["record_type"] == "item"
+    assert boundary_record["semantic_kind"] == "assistant_output"
+    assert boundary_record["payload_kind"] == "text"
+    assert boundary_record["status"] == "partial"
+    assert boundary_record["wire_role"] == "assistant"
+    assert boundary_record["payload"] == PARTIAL_TEXT_CONTENT
+    assert boundary_record["metadata"]["completion_reason"] == "user_interrupt"
+    assert "role" not in boundary_record
+    assert "message" not in boundary_record
 
     history_response = await browser_backend_client.post(
         f"/api/v1/sessions/{PARTIAL_TEXT_SESSION_ID}/history",
         json={
             "turn_ids": [PARTIAL_TEXT_TURN_ID],
-            "include": ["user", "assistant_text", "final_response"],
+            "include": ["user", "text", "assistant_text", "final_response"],
         },
     )
     assert history_response.status_code == 200, history_response.text
     history_item = history_response.json()["data"]["items"][0]
     assert history_item["status"] == "cancelled"
-    assert history_item["final_response"] == "我已经开始分析这个问题，但回答在这里被用户中断……"
+    assert history_item["final_response"] == ""
+    assert history_item["assistant_text"] == [PARTIAL_TEXT_CONTENT]
     partial_response_part = next(
         part
         for part in history_item["response_parts"]
-        if part.get("text") == "我已经开始分析这个问题，但回答在这里被用户中断……"
+        if part.get("text") == PARTIAL_TEXT_CONTENT
     )
     assert partial_response_part["kind"] == "text"
     assert partial_response_part["final"] is False
-    assert partial_response_part["partial"] is True
-    assert partial_response_part["completion_reason"] == "user_interrupt"
 
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     gateway = start_gateway_process(
@@ -224,10 +323,9 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
         )
         result = json.loads(result_path.read_text(encoding="utf-8"))
         assert result["apiCancelled"] is True
-        assert result["apiPartial"] is True
-        assert result["apiCompletionReason"] is True
+        assert result["apiNonFinalText"] is True
         assert result["partialTextVisible"] is True
-        assert result["interruptedStatusVisible"] is True
+        assert result["cancelledStatusVisible"] is True
         assert result["independentRetryVisible"] is False
         assert result["failedRetryLabelVisible"] is False
         assert result["renderErrorVisible"] is False

@@ -223,7 +223,15 @@ def build_detail(
         )
         activity_stats = TurnActivityStatsDTO(
             duration_ms=duration_ms,
-            message_count=nonnegative_int(raw_activity_stats.get("message_count")),
+            item_count=nonnegative_int(raw_activity_stats.get("item_count")),
+            first_item_sequence=(
+                nonnegative_int(raw_activity_stats.get("first_item_sequence"))
+                or None
+            ),
+            last_item_sequence=(
+                nonnegative_int(raw_activity_stats.get("last_item_sequence"))
+                or None
+            ),
         )
     tool_summary, tool_summary_truncated = bounded_tool_summary(
         projected_tool_summary

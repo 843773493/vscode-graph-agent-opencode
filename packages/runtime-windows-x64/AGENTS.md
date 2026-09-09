@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-- 可以维护 Windows x64 平台包的 `package.json`、资源导出和版本元数据。
+- 可以维护 Windows x64 平台包的 `package.json` 和资源导出元数据。
 - 可以调整与 `packaging/runtime/` 构建脚本一致的包边界。
 
 # 不可修改内容
@@ -16,4 +16,5 @@
 
 - 实际运行时内容只能由 `bun run package:windows-x64` 生成到 `out/packaging/windows-x64/`。
 - 包必须声明 `win32` 和 `x64` 的 npm 平台约束，并导出相对路径 runtime manifest。
+- 发布版本由打包 staging 阶段从根 `package.json` 注入，不能在此模板中单独维护。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

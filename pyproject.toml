@@ -1,6 +1,7 @@
 [project]
 name = "boxteam"
-version = "0.1.0"
+# 版本唯一维护在根 package.json，Python 项目不单独发布。
+dynamic = ["version"]
 description = "BoxTeam AI 编程助手后端"
 requires-python = ">=3.11"
 dependencies = [
@@ -26,7 +27,7 @@ dependencies = [
     "pytest-xdist>=3.8.0",
     "protobuf>=7.36.1,<8",
     "langchain-litellm==0.7.0",
-    "litellm>=1.93.0",
+    "litellm>=1.100.0",
     "langchain-community>=0.4.2",
     "langchain-mcp-adapters==0.3.0",
     "mcp>=1.27,<2",

@@ -20,6 +20,7 @@ from app.domain.itemized.hashing import (
     canonical_json_bytes,
     payload_content_length,
     sha256_jcs,
+    validate_hash_token,
 )
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.schema import validate_item_compatibility
@@ -49,9 +50,11 @@ def require_manifest_token(ref: object) -> str:
             "context ref 必须恰好携带 content_hash 或 redacted_stable_digest"
         )
     token = content_hash if content_hash is not None else redacted_digest
-    if not isinstance(token, str) or not token:
-        raise ItemSchemaError("context ref manifest token 必须是非空字符串")
-    return token
+    return validate_hash_token(
+        token,
+        "context ref manifest token",
+        redacted=redacted_digest is not None,
+    )
 
 
 def unique_ref_identities(refs: object) -> tuple[object, ...]:
@@ -60,6 +63,23 @@ def unique_ref_identities(refs: object) -> tuple[object, ...]:
     if len(identities) != len(set(identities)):
         raise ItemSchemaError("context ref registry 存在重复 ref_type/ref_id")
     return result
+
+
+def _tool_identity(value: Mapping[str, object]) -> str:
+    """返回工具 manifest 的显式稳定 identity。"""
+    for field_name in ("tool_id", "id"):
+        candidate = value.get(field_name)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    function = value.get("function")
+    if isinstance(function, Mapping):
+        candidate = function.get("name")
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    candidate = value.get("name")
+    if isinstance(candidate, str) and candidate:
+        return candidate
+    return ""
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -150,7 +170,9 @@ class ContextRef:
             _non_empty_string(self.plan_id, "ContextRef.plan_id")
         elif self.plan_id is not None:
             raise ItemSchemaError("canonical ContextRef 不得携带 plan_id")
-        if self.base_delta_role not in {item.value for item in BaseDeltaRole}:
+        if not isinstance(self.base_delta_role, str) or self.base_delta_role not in {
+            item.value for item in BaseDeltaRole
+        }:
             raise ItemSchemaError(
                 f"未知 ContextRef.base_delta_role: {self.base_delta_role}"
             )
@@ -160,11 +182,15 @@ class ContextRef:
             or self.source_overlay_epoch < 0
         ):
             raise ItemSchemaError("ContextRef.source_overlay_epoch 必须是非负整数")
-        if self.visibility not in {"public", "internal", "private"}:
+        if not isinstance(self.visibility, str) or self.visibility not in {
+            "public", "internal", "private"
+        }:
             raise ItemSchemaError(f"未知 ContextRef.visibility: {self.visibility}")
-        if self.protection not in {"public", "redacted", "protected"}:
+        if not isinstance(self.protection, str) or self.protection not in {
+            "public", "redacted", "protected"
+        }:
             raise ItemSchemaError(f"未知 ContextRef.protection: {self.protection}")
-        if self.availability not in {
+        if not isinstance(self.availability, str) or self.availability not in {
             "available",
             "unavailable",
             "forbidden",
@@ -184,6 +210,10 @@ class ContextRef:
                 self.redacted_stable_digest,
                 "ContextRef.redacted_stable_digest",
             )
+            if self.protection == DetailProtection.PUBLIC:
+                raise ItemSchemaError(
+                    "ContextRef.redacted_stable_digest 不得用于 public protection"
+                )
         if self.semantic_kind is not None:
             _non_empty_string(self.semantic_kind, "ContextRef.semantic_kind")
             if self.semantic_kind not in {item.value for item in SemanticKind}:
@@ -494,27 +524,15 @@ class ToolSetRef:
         if tool_policy is not None and not isinstance(tool_policy, Mapping):
             raise TypeError("ToolSetRef.tool_policy 必须是 object")
 
-        def tool_identity(value: Mapping[str, object]) -> str:
-            direct = value.get("tool_id", value.get("id"))
-            if isinstance(direct, str) and direct:
-                return direct
-            function = value.get("function")
-            if isinstance(function, Mapping):
-                function_name = function.get("name")
-                if isinstance(function_name, str) and function_name:
-                    return function_name
-            name = value.get("name")
-            return name if isinstance(name, str) else ""
-
         normalized_tools: list[dict[str, object]] = []
         for tool in tools:
             if not isinstance(tool, Mapping):
                 raise TypeError("ToolSetRef.tools 元素必须是 object")
             normalized = dict(tool)
-            tool_id = tool_identity(normalized)
+            tool_id = _tool_identity(normalized)
             _non_empty_string(tool_id, "ToolSetRef.tools[].tool_id")
             normalized_tools.append(normalized)
-        ordered_tools = tuple(sorted(normalized_tools, key=tool_identity))
+        ordered_tools = tuple(sorted(normalized_tools, key=_tool_identity))
         policy = dict(tool_policy) if tool_policy is not None else {}
         manifest = {
             "tool_set_schema": tool_set_schema,
@@ -565,11 +583,12 @@ class ToolSetRef:
                 "ToolSetRef 必须恰好包含 content_hash 或 redacted_stable_digest"
             )
         if self.content_hash is not None:
-            _non_empty_string(self.content_hash, "ToolSetRef.content_hash")
+            validate_hash_token(self.content_hash, "ToolSetRef.content_hash")
         if self.redacted_stable_digest is not None:
-            _non_empty_string(
+            validate_hash_token(
                 self.redacted_stable_digest,
                 "ToolSetRef.redacted_stable_digest",
+                redacted=True,
             )
         if (
             self.redacted_stable_digest is not None
@@ -578,9 +597,13 @@ class ToolSetRef:
             raise ItemSchemaError(
                 "带 redacted_stable_digest 的 ToolSetRef 必须声明 redacted 或 protected protection"
             )
-        if self.protection not in {item.value for item in DetailProtection}:
+        if not isinstance(self.protection, str) or self.protection not in {
+            item.value for item in DetailProtection
+        }:
             raise ItemSchemaError(f"未知 ToolSetRef.protection: {self.protection}")
-        if self.availability not in {item.value for item in DetailAvailability}:
+        if not isinstance(self.availability, str) or self.availability not in {
+            item.value for item in DetailAvailability
+        }:
             raise ItemSchemaError(f"未知 ToolSetRef.availability: {self.availability}")
         if self.assembly_id is not None:
             _non_empty_string(self.assembly_id, "ToolSetRef.assembly_id")
@@ -598,14 +621,9 @@ class ToolSetRef:
         for tool in self.tools:
             if not isinstance(tool, Mapping):
                 raise ItemSchemaError("ToolSetRef.tools 元素必须是 object")
-            function = tool.get("function")
-            function_name = (
-                function.get("name") if isinstance(function, Mapping) else None
+            tool_ids.append(
+                _non_empty_string(_tool_identity(tool), "ToolSetRef.tools[].tool_id")
             )
-            tool_id = tool.get("tool_id", tool.get("id", function_name))
-            if tool_id is None:
-                tool_id = tool.get("name")
-            tool_ids.append(_non_empty_string(tool_id, "ToolSetRef.tools[].tool_id"))
         if tool_ids != sorted(tool_ids):
             raise ItemSchemaError("ToolSetRef.tools 必须按 tool_id 稳定排序")
         if len(tool_ids) != len(set(tool_ids)):

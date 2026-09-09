@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "kind": "model_stream_cassette",
+  "metadata": {
+    "source": "handwritten",
+    "asset_id": "checkpoint-persistence",
+    "protocol": "openai_chat_sse",
+    "provider": "openai_compatible",
+    "model": "big-pickle"
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user"]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {"content-type": "text/event-stream"},
+        "frames": [
+          {"kind": "data", "encoding": "json", "payload": {"id": "checkpoint-persistence-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "已记住"}, "finish_reason": null}]}},
+          {"kind": "data", "encoding": "json", "payload": {"id": "checkpoint-persistence-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}}},
+          {"kind": "done", "encoding": "text", "payload": "[DONE]"}
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user", "assistant", "assistant", "assistant", "user"]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {"content-type": "text/event-stream"},
+        "frames": [
+          {"kind": "data", "encoding": "json", "payload": {"id": "checkpoint-persistence-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "42"}, "finish_reason": null}]}},
+          {"kind": "data", "encoding": "json", "payload": {"id": "checkpoint-persistence-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 9}}},
+          {"kind": "done", "encoding": "text", "payload": "[DONE]"}
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user", "assistant", "assistant", "assistant", "user", "assistant", "assistant", "assistant", "user"]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {"content-type": "text/event-stream"},
+        "frames": [
+          {"kind": "data", "encoding": "json", "payload": {"id": "checkpoint-persistence-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "43"}, "finish_reason": null}]}},
+          {"kind": "data", "encoding": "json", "payload": {"id": "checkpoint-persistence-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 14, "completion_tokens": 1, "total_tokens": 15}}},
+          {"kind": "done", "encoding": "text", "payload": "[DONE]"}
+        ]
+      }
+    }
+  ]
+}

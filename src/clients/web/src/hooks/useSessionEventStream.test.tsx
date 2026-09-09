@@ -27,6 +27,7 @@ describe("useSessionEventStream readiness", () => {
         timelineReady: false,
         initialEventCursor: null,
         refreshTurnHistory: () => undefined,
+        loadTerminalTurn: async () => undefined,
         setState: (update) => {
           void update;
         },

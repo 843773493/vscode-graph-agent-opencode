@@ -65,10 +65,19 @@ def test_long_session_persists_message_deltas_without_snapshot_growth(
         json.loads(line)
         for line in rollout_path.read_text(encoding="utf-8").splitlines()
     ]
-    message_records = [record for record in records if record["role"] == "user"]
+    message_records = [
+        record for record in records if record["semantic_kind"] == "user_input"
+    ]
     rollout_bytes = rollout_path.stat().st_size
 
+    assert all(record["format_version"] == 2 for record in records)
+    assert all(record["record_type"] == "item" for record in records)
+    assert all(
+        "role" not in record and "message" not in record and "sequence" not in record
+        for record in records
+    )
     assert len(message_records) == 128
-    assert len({record["message_id"] for record in message_records}) == 128
+    assert len({record["item_id"] for record in message_records}) == 128
+    assert all(record["wire_role"] == "user" for record in message_records)
     assert rollout_bytes * 8 < naive_snapshot_bytes
     assert not list(root.glob("segment-*.jsonl"))

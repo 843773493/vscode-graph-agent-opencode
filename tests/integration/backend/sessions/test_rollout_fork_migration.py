@@ -1,14 +1,13 @@
-"""一次性 v1 full-copy 的 loss gate、分段 lineage 和后续 v2 独立复制。"""
+"""v1 fork 拒绝、显式迁移和后续 v2 独立复制。"""
 
 from __future__ import annotations
 
 import copy
-import json
-import sqlite3
 from collections.abc import Callable
 
 import pytest
 
+from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     artifact_manifest,
 )
@@ -56,39 +55,24 @@ def _complete_copy(storage, source: str, target: str) -> str:
     return fork_id
 
 
-@pytest.mark.parametrize("loss", ["metadata", "unsupported_role", "overlay"])
-def test_full_copy_must_not_publish_a_lossy_v1_migration(
-    fork_source: Callable, loss: str
+def test_full_copy_rejects_v1_without_migration_side_effects(
+    fork_source: Callable,
 ) -> None:
     records = _accepted_records()
-    if loss == "metadata":
-        records[0]["metadata"]["unmapped"] = "must remain in private raw"
-    elif loss == "unsupported_role":
-        records[1]["role"] = "unknown-role"
     storage = fork_source(records)
-    if loss == "overlay":
-        with sqlite3.connect(storage.index_path("source")) as connection:
-            connection.executescript(
-                "CREATE TABLE source_overlays(base TEXT, delta TEXT); INSERT INTO source_overlays VALUES ('base', 'delta');"
-            )
     before = artifact_manifest(storage.root("source"))
-    with pytest.raises(RuntimeError, match="v1_full_copy_not_lossless"):
-        _complete_copy(storage, "source", "target")
+    with pytest.raises(FormatDispatchError, match="v1_migration_required"):
+        storage.clone_rollout(
+            source_thread_id="source",
+            target_thread_id="target",
+            source_checkpoint_id=None,
+        )
     assert not storage.root("target").exists()
     assert artifact_manifest(storage.root("source")) == before
-    audit = migration_audits(storage)[0]
-    assert audit["status"] == "failed"
-    assert audit["result"]["lossless"] is False
-    raw = (
-        storage.root("target").parent
-        / "legacy-import"
-        / audit["migration_id"]
-        / "source"
-    )
-    assert artifact_manifest(raw) == before
+    assert migration_audits(storage) == []
 
 
-def test_split_tool_lineage_is_one_to_one_and_v2_grandchild_is_local(
+def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
     fork_source: Callable,
 ) -> None:
     records = _accepted_records()
@@ -131,33 +115,27 @@ def test_split_tool_lineage_is_one_to_one_and_v2_grandchild_is_local(
     )
     storage = fork_source(records)
     source_before = artifact_manifest(storage.root("source"))
-    fork_id = _complete_copy(storage, "source", "target")
+    result = storage.migrate_legacy_to_v2(
+        "source", target_thread_id="target", require_lossless=True
+    )
+    assert result["status"] == "completed"
     items = storage.read_items("target")
     assert len(items) == 5
     call = next(item for item in items if item.semantic_kind == "tool_call")
-    output = next(
-        item
-        for item in items
-        if item.semantic_kind == "assistant_output"
-        and item.metadata["legacy_source_ref"]["message_id"] == "legacy-a1"
-    )
-    with storage._connect("target", "", read_only=True) as connection:
-        rows = connection.execute(
-            "SELECT source_local_id, target_local_id, source_offset FROM fork_identity_mappings WHERE fork_id=? AND entity_type='item'",
-            (fork_id,),
-        ).fetchall()
-    by_target = {row[1]: row for row in rows}
-    assert len({row[0] for row in rows}) == len(rows) == 5
-    assert by_target[call.item_id][0].startswith("legacy:v1:message-part:")
-    assert json.loads(
-        by_target[call.item_id][0].removeprefix("legacy:v1:message-part:")
-    ) == {"message_id": "legacy-a1", "part_id": "tool_call:source-call"}
-    assert by_target[call.item_id][2] == by_target[output.item_id][2]
     target_before = artifact_manifest(storage.root("target"))
-    _complete_copy(storage, "target", "grandchild")
+    fork_id = _complete_copy(storage, "target", "grandchild")
     assert artifact_manifest(storage.root("source")) == source_before
     assert artifact_manifest(storage.root("target")) == target_before
     child_items = storage.read_items("grandchild")
+    with storage._connect("grandchild", "", read_only=True) as connection:
+        rows = connection.execute(
+            "SELECT source_local_id, target_local_id FROM fork_identity_mappings WHERE fork_id=? AND entity_type='item'",
+            (fork_id,),
+        ).fetchall()
+    assert len(rows) == len(items) == len(child_items)
+    assert {row[0] for row in rows} == {item.item_id for item in items}
+    assert {row[1] for row in rows} == {item.item_id for item in child_items}
+    assert all(not row[0].startswith("legacy:v1:") for row in rows)
     child_call = next(item for item in child_items if item.semantic_kind == "tool_call")
     child_result = next(
         item for item in child_items if item.semantic_kind == "tool_result"

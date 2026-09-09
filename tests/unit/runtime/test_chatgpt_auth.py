@@ -19,9 +19,14 @@ def _set_test_home(monkeypatch, home: Path) -> None:
         monkeypatch.setenv("USERPROFILE", str(home))
 
 
-def _access_token(expires_at: int) -> str:
+def _access_token(expires_at: int, *, account_id: str | None = None) -> str:
+    payload: dict[str, object] = {"exp": expires_at}
+    if account_id is not None:
+        payload["https://api.openai.com/auth"] = {
+            "chatgpt_account_id": account_id,
+        }
     claims = base64.urlsafe_b64encode(
-        json.dumps({"exp": expires_at}).encode()
+        json.dumps(payload).encode()
     ).decode().rstrip("=")
     return f"header.{claims}.signature"
 
@@ -104,6 +109,39 @@ def test_chatgpt_auth_migrates_codex_tokens_once(monkeypatch, tmp_path: Path) ->
     assert json.loads(target.read_text(encoding="utf-8")) == {
         "access_token": "litellm-owned"
     }
+
+
+def test_chatgpt_auth_derives_missing_account_id_from_current_codex_jwt(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    source = home / ".codex" / "auth.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": _access_token(2_000_000_000),
+                    "refresh_token": "codex-refresh",
+                    "id_token": _access_token(
+                        2_000_000_000,
+                        account_id="jwt-account",
+                    ),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _set_test_home(monkeypatch, home)
+    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+
+    token_dir = configure_litellm_chatgpt_auth_directory()
+    migrated = json.loads((token_dir / "auth.json").read_text(encoding="utf-8"))
+
+    assert migrated["account_id"] == "jwt-account"
 
 
 def test_chatgpt_oauth_provider_requires_explicit_auth_shape() -> None:

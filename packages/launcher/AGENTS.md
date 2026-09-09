@@ -5,6 +5,7 @@
 # 可修改内容
 
 - 可以维护命令入口、runtime manifest、Gateway 前台监督、实例锁和诊断。
+- 发布包的版本和平台 runtime 依赖版本由打包 staging 阶段从根 `package.json` 注入，不能在此模板中单独维护。
 
 # 不可修改内容
 

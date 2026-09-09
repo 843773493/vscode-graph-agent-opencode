@@ -4,7 +4,7 @@
 
 `src/clients/web/` 是当前已经实现的浏览器桌面客户端，是一个可直接运行的 React + Vite + TypeScript 工程。它不依赖 VS Code webview、Electron 或 React Native 运行环境；未来桌面 DOM 复用应下沉到 `../shared/web-ui`，而不是复制到 `electron-web`。
 
-通过根目录 `bun run dev` 启动时，本工程由 `scripts/dev.mjs` 拉起，浏览器前端端口为 `8011`。
+通过根目录 `bun run dev` 启动时，本工程由 `scripts/launch/dev.mjs` 拉起，浏览器前端端口为 `8011`。
 
 如果你主要写后端，可以把这里理解成：
 

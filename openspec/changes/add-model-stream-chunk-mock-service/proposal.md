@@ -1,6 +1,6 @@
 ## Why
 
-当前模型 stream transport 的 cassette、录制器和回放器默认把上游响应理解为 OpenAI Chat Completions 的 `data: ...` 加 `[DONE]`。这使它无法正确保存或回放 OpenAI Responses 的 `event: response.output_text.delta` 等事件，也无法为已经声明支持的 `anthropic_messages` 留出稳定的协议边界。尤其是 `configs/tests/default.jsonc` 中的 `backup_3` 和 `backup_4` 使用 Responses API，继续沿用 Chat 专用终止规则会让测试替身与真实 provider 的字段和事件语义不一致。
+当前模型 stream transport 的 cassette、录制器和回放器默认把上游响应理解为 OpenAI Chat Completions 的 `data: ...` 加 `[DONE]`。这使它无法正确保存或回放 OpenAI Responses 的 `event: response.output_text.delta` 等事件，也无法为已经声明支持的 `anthropic_messages` 留出稳定的协议边界。尤其是 `configs/tests/workspace/default.jsonc` 中的 `backup_3` 和 `backup_4` 使用 Responses API，继续沿用 Chat 专用终止规则会让测试替身与真实 provider 的字段和事件语义不一致。
 
 需要从“通用 SSE 录制器”与“协议 codec”两个层次重新组织：transport 负责 HTTP、匹配、并发和生命周期；协议 codec 负责某一种 provider stream 的事件名、payload 和终止语义。这样既能保留 LiteLLM 原本的请求构造与解析链路，也能让同一套 cassette 基础设施扩展到 Anthropic Messages，而不在没有真实资源时制造伪造基线。
 
@@ -13,10 +13,10 @@
 - 保留显式 `request_reusable` 和 `session_sequence` 两种回放策略，协议扩展不改变其并发隔离语义。
 - 增加 Responses 的手写基础文本资源、场景、配置和 LiteLLM 真实异步调用测试；现有 Chat 资源和测试继续作为回归基线。
 - 补齐 Chat Completions 与 Responses 各自的稳定语义基线：两者默认都覆盖 reasoning、tool call、工具结果后的再次 reasoning 和最终文本；Responses 另保留显式 reasoning + text 场景作为轻量协议测试基线。
-- 将 Chat Completions 默认测试基线固定为 `reasoning-tool`，将 Responses 默认测试基线固定为 `responses-reasoning-tool`；基础文本、仅 reasoning + text、特定工具和其它协议变体只能通过 `configs/tests/` 中的显式配置切换。
+- 将 Chat Completions 默认测试基线固定为 `reasoning-tool`，将 Responses 默认测试基线固定为 `responses-reasoning-tool`；基础文本、仅 reasoning + text、特定工具和其它协议变体只能通过 `configs/tests/model_stream/` 中的显式配置切换。
 - 为 Chat 多 interaction 回放增加不暴露消息正文的安全结构匹配字段，使首轮请求和携带工具结果的后续请求可被 cassette 唯一选择。
 - 增加 Responses 双 `read_file` 并发工具调用场景，手写 cassette 刻意交错两个 function call 的参数 delta，并要求解析和业务关联按 `item_id`/`call_id` 保持独立。
-- 继续使用 `configs/tests/` 中的 JSONC 控制测试 transport。协议由所选 cassette 的 metadata 决定，不在 scenario 中重复配置，避免 provider 配置、测试运行配置和上游协议出现三处真相。
+- 继续使用 `configs/tests/model_stream/` 中的 JSONC 控制测试 transport。协议由所选 cassette 的 metadata 决定，不在 scenario 中重复配置，避免 provider 配置、测试运行配置和上游协议出现三处真相。
 - 对未知协议、非法事件、缺少协议终止事件、请求不匹配和不完整录制明确失败；不联网兜底、不返回默认数据。
 
 ## Capabilities

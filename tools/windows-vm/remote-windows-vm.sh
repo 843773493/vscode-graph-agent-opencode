@@ -285,7 +285,12 @@ push_packaging_artifacts() {
   require_config
   local source="$REPO_ROOT/out/packaging/windows-x64"
   local destination="$REMOTE_REPO/out/packaging/windows-x64"
-  [[ -f "$source/standalone/boxteam-windows-x64-0.1.0.zip" ]] || {
+  local boxteam_version
+  boxteam_version=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).version" "$REPO_ROOT/package.json")
+  [[ -n "$boxteam_version" ]] || {
+    die "根 package.json 缺少有效 version" push-packaging 78
+  }
+  [[ -f "$source/standalone/boxteam-windows-x64-${boxteam_version}.zip" ]] || {
     die "Linux 交叉打包便携 ZIP 不存在: $source/standalone" push-packaging 78
   }
   [[ -d "$source/tarballs" && -d "$source/release-assets" ]] || {

@@ -87,7 +87,9 @@ export interface ConversationView {
   turnStatus?: JobStatus;
   activityStats?: {
     duration_ms: number | null;
-    message_count: number;
+    item_count: number;
+    first_item_sequence?: number | null;
+    last_item_sequence?: number | null;
   };
   sessionId: string;
   userMessage: Message | null;

@@ -18,6 +18,7 @@ ReplayPolicy = Literal["request_reusable", "session_sequence"]
 TimingMode = Literal["none"]
 
 MODEL_STREAM_CONFIG_ENV = "BOXTEAM_TEST_MODEL_STREAM_CONFIG"
+DEFAULT_FIXTURE_ROOT = Path("tests/fixtures/model_stream")
 DEFAULT_ARTIFACT_ROOT = Path("out/tests/temp/model_stream/artifacts")
 
 
@@ -118,14 +119,12 @@ def load_model_stream_config(
     if scenario_id is not None and not isinstance(scenario_id, str):
         raise ModelStreamConfigError("model_stream.transport.scenario_id 必须是字符串")
 
-    fixture_root: Path | None = None
-    if "fixture_root" in transport:
-        raw_fixture_root = transport["fixture_root"]
-        if not isinstance(raw_fixture_root, str):
-            raise ModelStreamConfigError(
-                "model_stream.transport.fixture_root 必须是字符串"
-            )
-        fixture_root = _resolve_path(raw_fixture_root, project_root=resolved_project_root)
+    raw_fixture_root = transport.get("fixture_root", str(DEFAULT_FIXTURE_ROOT))
+    if not isinstance(raw_fixture_root, str):
+        raise ModelStreamConfigError(
+            "model_stream.transport.fixture_root 必须是字符串"
+        )
+    fixture_root = _resolve_path(raw_fixture_root, project_root=resolved_project_root)
 
     matching = _object(transport.get("matching", {}), label="transport.matching")
     matching_policy = cast(
@@ -150,9 +149,9 @@ def load_model_stream_config(
         else (resolved_project_root / DEFAULT_ARTIFACT_ROOT).resolve()
     )
 
-    if mode != "off" and (scenario_id is None or fixture_root is None):
+    if mode != "off" and scenario_id is None:
         raise ModelStreamConfigError(
-            "model_stream.transport 在 record/replay 模式必须配置 scenario_id 和 fixture_root"
+            "model_stream.transport 在 record/replay 模式必须配置 scenario_id"
         )
 
     return ModelStreamConfig(

@@ -587,6 +587,10 @@ Composer、LangChain projector 和 native Provider projector 在使用 `included
 
 历史 summary 只使用 SQLite 稀疏索引和目标 item offset；显式详情才读取对应 JSONL payload。默认历史不 materialize request-only prompt；未来来源详情也只通过 item/source/assembly reference 读取，不扫描整个 middleware runtime。
 
+Turn 历史中的可展开活动采用后端权威逻辑 Item 投影。SQLite projection 必须为每个逻辑 `reasoning|reasoning_summary|reasoning_encrypted|tool_call|tool_result|compaction_summary` 返回稳定 `item_id`、`item_sequence`、同一物理 item 内的 `part_ordinal`、`created_at` 和相对上一逻辑 Item 的 `elapsed_ms`，并在 Turn 统计中返回 `item_count`、`first_item_sequence`、`last_item_sequence` 与 Turn 总时长。一个 assistant carrier 内的多个 tool call 共享物理 item/offset，但按不同 `part_ordinal` 计为多个逻辑 Item；tool call 与 tool result 分别计数。checkpoint/provider 重影只能按持久 producer identity、tool relation 和 part ordinal 在后端解析，禁止比较文本正文去重。
+
+history summary/detail 都直接消费上述后端顺序；detail 仅按已命中的 item/message offset 补齐参数或结果正文，不得重新决定 identity、数量和顺序。Web 收到历史 projection 后必须整体替换该 Turn 的旧 response parts，不得与旧 summary 拼接、按 message 坐标重排或按正文去重。live Turn 尚未提交时，Web 可以按流实体 identity 临时计算时长和逻辑 Item 数；终态 history 到达后以后端统计和顺序为准，替换 live 投影，并显式报告 live/history 计数不一致，不能静默保留前端结果。
+
 LangGraph checkpoint 的 `messages` channel 仍可以保存或恢复 LangChain message projection，但其来源必须记录 context view、assembly/plan identity 和 projection version，且不得成为 canonical item 的第二事实源。checkpoint 可以保存执行需要的私有 middleware state，但该 state 不等于 prompt/tool canonical history；可恢复的 provenance 以 compact assembly/item reference 为准。
 
 compaction、rewind/replay 和 fork 通过 SQLite view/range/reference 选择 item；Turn 是 UI/history 默认分页边界，但 operation anchor 可以精确落在 item 或 content part。历史 projection 可以把一个 message group 拆成 text/thinking/tool summary，而 runtime restore 仍按目标 message grouping 生成合法 LangChain messages。

@@ -32,7 +32,7 @@ function fakeChild() {
 
 const runtime = {
   distribution: "source-development",
-  version: "0.1.0",
+  version: "test-version",
   manifestPath: "/runtime/runtime-manifest.json",
   pythonExecutable: "/runtime/python",
   applicationRoot: "/runtime/application",

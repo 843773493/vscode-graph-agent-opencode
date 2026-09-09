@@ -115,7 +115,9 @@ def start_remote_backend_via_ssh(
     remote_config_root = f"{remote_boxteam_home}/config"
     remote_config_path = f"{remote_workspace_path}/.boxteam/workspace.jsonc"
     remote_schema_path = f"{remote_workspace_path}/.boxteam/workspace_schema.jsonc"
-    test_config_source = f"{target.repository_path}/configs/tests/default.jsonc"
+    test_config_source = (
+        f"{target.repository_path}/configs/tests/workspace/default.jsonc"
+    )
     config_schema_source = f"{target.repository_path}/configs/workspace_schema.jsonc"
     quoted_remote_schema_path = shlex.quote(remote_schema_path)
     env_parts = [

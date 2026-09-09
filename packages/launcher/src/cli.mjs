@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 
 import { initializeUserConfiguration } from "./config-bootstrap.mjs";
 import { defaultBoxteamHome } from "./config-bootstrap.mjs";
@@ -9,13 +10,35 @@ import { acquireLauncherLock } from "./instance-lock.mjs";
 import { discoverRuntime } from "./runtime-discovery.mjs";
 import { openServiceLog } from "./service-log.mjs";
 
-const packageMetadata = JSON.parse(
+const launcherPackageMetadata = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 );
 
+function resolvePackageVersion() {
+  const packageVersion = launcherPackageMetadata.version?.trim();
+  if (packageVersion) return packageVersion;
+  const projectRoot = path.resolve(
+    process.env.BOXTEAM_PROJECT_ROOT?.trim() || process.cwd(),
+  );
+  const projectPackagePath = path.join(projectRoot, "package.json");
+  if (!existsSync(projectPackagePath)) {
+    throw new Error(`无法解析 BoxTeam 版本，根 package.json 不存在: ${projectPackagePath}`);
+  }
+  const projectPackage = JSON.parse(
+    readFileSync(projectPackagePath, "utf8"),
+  );
+  const version = projectPackage.version?.trim();
+  if (!version) {
+    throw new Error(`根 package.json 缺少有效 version: ${projectPackagePath}`);
+  }
+  return version;
+}
+
+const packageVersion = resolvePackageVersion();
+
 export async function main(args) {
   if (args.includes("--version") || args.includes("-v")) {
-    process.stdout.write(`${packageMetadata.version}\n`);
+    process.stdout.write(`${packageVersion}\n`);
     return;
   }
   const command = args[0]?.startsWith("-") ? "start" : (args[0] ?? "start");

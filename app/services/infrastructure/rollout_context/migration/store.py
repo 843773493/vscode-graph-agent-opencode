@@ -24,6 +24,9 @@ from app.services.infrastructure.rollout_context.migration.artifacts import (
 from app.services.infrastructure.rollout_context.migration.builder import (
     LegacyImportBuilder,
 )
+from app.services.infrastructure.rollout_context.migration.quarantine import (
+    write_quarantine,
+)
 from app.services.infrastructure.rollout_context.migration.source import (
     read_source_report,
 )
@@ -211,7 +214,9 @@ class LegacyMigrationStorage(RolloutStorage):
                 source_identity = copy_source(source, audit / "source")
                 record["source_files"] = source_identity
                 write_audit(audit, record)
-                report = read_source_report(audit / "source", source_thread_id)
+                report = read_source_report(
+                    audit / "source", source_thread_id, include_raw_candidates=True
+                )
                 report["raw_artifact_ref"] = f"legacy-import/{migration_id}/source"
                 report["protection"] = "protected"
                 storage = _StagingStorage(self, target_thread_id, staging)
@@ -222,6 +227,12 @@ class LegacyMigrationStorage(RolloutStorage):
                     migration_id=migration_id,
                     checkpoint_ns=checkpoint_ns,
                 )
+                if result["rejected"]:
+                    result["quarantine"] = write_quarantine(
+                        audit,
+                        raw_artifact_ref=report["raw_artifact_ref"],
+                        candidates=result["rejected"],
+                    )
                 record["result"] = result
                 if require_lossless and not result["lossless"]:
                     raise RuntimeError(

@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.support.model_stream_config import prepare_e2e_model_stream_config
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
@@ -24,6 +25,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         default=False,
         help="仅运行一个 Docker E2E 时保留该测试启动的宿主机和容器内进程",
+    )
+    parser.addoption(
+        "--model-stream-mode",
+        choices=("off", "record", "replay"),
+        default=os.getenv("BOXTEAM_E2E_MODEL_STREAM_MODE"),
+        help=(
+            "覆盖显式 model stream E2E 的运行模式；off 走真实模型且不录制，"
+            "record 走真实模型并录制，replay 使用现有 fixture"
+        ),
     )
 
 
@@ -56,7 +66,13 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
 
 @pytest.fixture(scope="module")
 def e2e_config_path() -> str:
-    return str(Path.cwd().resolve() / "configs" / "tests" / "default.jsonc")
+    return str(
+        Path.cwd().resolve()
+        / "configs"
+        / "tests"
+        / "workspace"
+        / "default.jsonc"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -64,6 +80,35 @@ def e2e_model_stream_config_path() -> str | None:
     """允许单个 E2E 模块显式注入 model stream JSONC；默认不启用。"""
 
     return None
+
+
+@pytest.fixture(scope="module")
+def e2e_model_stream_mode(request: pytest.FixtureRequest) -> str | None:
+    return request.config.getoption("model_stream_mode")
+
+
+@pytest.fixture(scope="module")
+def e2e_model_stream_runtime_config_path(
+    e2e_model_stream_config_path: str | None,
+    e2e_model_stream_mode: str | None,
+    e2e_workspace_root_path: str,
+) -> str | None:
+    if e2e_model_stream_config_path is None:
+        if e2e_model_stream_mode in {"record", "replay"}:
+            pytest.fail(
+                "--model-stream-mode=record/replay 需要当前 E2E 文件提供 "
+                "e2e_model_stream_config_path"
+            )
+        return None
+
+    output_root = Path(e2e_workspace_root_path).resolve().parent
+    return str(
+        prepare_e2e_model_stream_config(
+            e2e_model_stream_config_path,
+            output_root=output_root,
+            mode=e2e_model_stream_mode,
+        )
+    )
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -90,14 +135,14 @@ def e2e_backend_process(
     e2e_workspace_config_path: str,
     e2e_backend_port: int,
     is_debug: bool,
-    e2e_model_stream_config_path: str | None,
+    e2e_model_stream_runtime_config_path: str | None,
 ) -> Generator[subprocess.Popen[str], None, None]:
     if not Path(e2e_workspace_config_path).is_file():
         raise FileNotFoundError(f"E2E 工作区配置不存在: {e2e_workspace_config_path}")
     debugpy_port = int(os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY_PORT")) if is_debug else None
     env_overrides = (
-        {"BOXTEAM_TEST_MODEL_STREAM_CONFIG": e2e_model_stream_config_path}
-        if e2e_model_stream_config_path is not None
+        {"BOXTEAM_TEST_MODEL_STREAM_CONFIG": e2e_model_stream_runtime_config_path}
+        if e2e_model_stream_runtime_config_path is not None
         else None
     )
     handle = start_backend_process(
@@ -106,6 +151,7 @@ def e2e_backend_process(
         log_name="e2e-backend",
         debugpy_port=debugpy_port,
         env_overrides=env_overrides,
+        env_unset=("BOXTEAM_TEST_MODEL_STREAM_CONFIG",),
     )
     if debugpy_port is not None:
         print(

@@ -2,7 +2,7 @@
 
 ## 目录用途
 
-`src/workspace-services/terminal/` 存放独立的持久终端管理进程及其浏览器 attach 页面。该目录服务于本地开发运行时，由 `scripts/dev.mjs` 启动，不属于 `src/clients/web` 主前端，也不属于 Python FastAPI 后端。
+`src/workspace-services/terminal/` 存放独立的持久终端管理进程及其浏览器 attach 页面。该目录服务于本地开发运行时，由 `scripts/launch/dev.mjs` 启动，不属于 `src/clients/web` 主前端，也不属于 Python FastAPI 后端。
 
 ## 可修改内容
 

@@ -133,13 +133,13 @@ import sys
 from unittest.mock import patch
 from app.services.infrastructure.rollout_context.migration import store
 from tests.integration.backend.sessions.itemized_migration_helpers import _storage
-from app.services.infrastructure.rollout_context.migration.projections import LegacyMigrationProjectionMixin
+from app.services.infrastructure.rollout_context.checkpoint.projection.message_projections import RolloutMessageProjectionMixin
 original = store.install_directory
 def crash(staging, target):
     if sys.argv[2] == "after_install":
         original(staging, target)
     os._exit(73)
-owner, method = (LegacyMigrationProjectionMixin, "_install_migration_message_projections") if sys.argv[2] == "during_build" else (store, "install_directory")
+owner, method = (RolloutMessageProjectionMixin, "_materialize_canonical_message_projection") if sys.argv[2] == "during_build" else (store, "install_directory")
 def exit_during_build(*args, **kwargs):
     os._exit(73)
 with patch.object(owner, method, exit_during_build if sys.argv[2] == "during_build" else crash):

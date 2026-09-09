@@ -545,7 +545,144 @@ test("历史摘要与 replay live Turn 合并时保留回退元数据", () => {
   );
 });
 
-test("同一 Turn 的重复消息流镜像优先使用最高序号的终态", () => {
+test("terminal 历史投影替换 live 镜像并保留权威 Item 统计", () => {
+  const sessionId = "ses_terminal_history_merge";
+  const jobId = "job_terminal_history_merge";
+  const messageId = "msg_terminal_history_merge";
+  const timeline = {
+    ...createSessionTurnTimeline(sessionId),
+    phase: "ready" as const,
+    orderedTurnIds: [jobId],
+    turnsById: {
+      [jobId]: {
+        turn_id: jobId,
+        job_id: jobId,
+        session_id: sessionId,
+        ordinal: 1,
+        revision: 2,
+        status: "completed" as const,
+        created_at: "2026-09-08T00:00:00Z",
+        updated_at: "2026-09-08T00:00:07.100Z",
+        completed_at: "2026-09-08T00:00:07.100Z",
+        items_view: "summary" as const,
+        source_message_ids: [messageId],
+        user_messages: [{
+          message_id: messageId,
+          preview: "执行工具",
+          content_truncated: false,
+          attachment_count: 0,
+          created_at: "2026-09-08T00:00:00Z",
+        }],
+        response_preview: "OK",
+        response_parts: [{
+          part_id: "final-history",
+          kind: "final_text" as const,
+          projection: "summary" as const,
+          status: "completed" as const,
+          source: { item_id: "item-final" },
+          text: "OK",
+          final: true,
+        }],
+        activity_stats: { duration_ms: 7100, item_count: 5 },
+      },
+    },
+  };
+  const pending: ConversationView = {
+    conversationId: messageId,
+    displayMode: "live",
+    sessionId,
+    userMessage: {
+      message_id: messageId,
+      session_id: sessionId,
+      role: "user",
+      content: "执行工具",
+      attachments: [],
+      metadata: {},
+      created_at: "2026-09-08T00:00:00Z",
+      updated_at: "2026-09-08T00:00:00Z",
+    },
+    responseParts: [{
+      part_id: "reasoning-live",
+      kind: "reasoning",
+      projection: "streaming",
+      status: "completed",
+      source: { item_id: "item-reasoning" },
+      text: "Confirming test tool success with results",
+      final: false,
+    }],
+    events: [],
+    status: "done",
+    jobId,
+    pending: false,
+    source: "pending",
+  };
+  const state = {
+    pendingConversations: new Map([[sessionId, [pending]]]),
+    turnTimelinesBySession: new Map([[sessionId, timeline]]),
+    messageStreamsByTurnStream: new Map(),
+  } as unknown as AppState;
+
+  const [conversation] = getConversationsForSession(sessionId, state);
+
+  expect(conversation?.displayMode).toBe("history");
+  expect(conversation?.source).toBe("turn");
+  expect(conversation?.activityStats).toEqual({ duration_ms: 7100, item_count: 5 });
+  expect(conversation?.responseParts?.map((part) => part.text)).toEqual(["OK"]);
+});
+
+test("terminal live 与 history Item 数不一致时显式报告协议错误", () => {
+  const sessionId = "ses_item_count_mismatch";
+  const turnId = "job_item_count_mismatch";
+  const timeline = {
+    ...createSessionTurnTimeline(sessionId),
+    phase: "ready" as const,
+    orderedTurnIds: [turnId],
+    turnsById: {
+      [turnId]: {
+        turn_id: turnId,
+        job_id: turnId,
+        session_id: sessionId,
+        ordinal: 1,
+        revision: 1,
+        status: "completed" as const,
+        created_at: "2026-09-08T00:00:00Z",
+        updated_at: "2026-09-08T00:00:01Z",
+        items_view: "summary" as const,
+        activity_stats: { duration_ms: 1000, item_count: 2 },
+      },
+    },
+  };
+  const stream: MessageStreamState = {
+    ...createMessageStreamState(sessionId, turnId, "stream_item_count_mismatch"),
+    streamStatus: "completed",
+    connectionStatus: "terminal",
+    blocks: [{
+      block_id: "reasoning-1",
+      model_call_id: "model-1",
+      block_index: 0,
+      carrier_type: "reasoning_content",
+      status: "completed",
+      text: "一个 live Item",
+      items: [],
+      redacted: false,
+      projection: "final",
+    }],
+  };
+  const state = {
+    pendingConversations: new Map(),
+    turnTimelinesBySession: new Map([[sessionId, timeline]]),
+    messageStreamsByTurnStream: new Map([[stream.turnStreamId, stream]]),
+  } as unknown as AppState;
+
+  const [conversation] = getConversationsForSession(sessionId, state);
+
+  expect(conversation?.activityStats?.item_count).toBe(2);
+  expect(conversation?.messageStream?.protocolError).toBe(
+    "Turn Item 统计不一致: live=1 history=2",
+  );
+});
+
+test("同一 terminal Turn 保留历史正文并选择最高序号消息流作为诊断", () => {
   const sessionId = "ses_duplicate_message_stream";
   const turnId = "job_duplicate_message_stream";
   const timeline = {
@@ -611,7 +748,8 @@ test("同一 Turn 的重复消息流镜像优先使用最高序号的终态", ()
   const [conversation] = getConversationsForSession(sessionId, state);
 
   expect(conversation?.messageStream?.streamStatus).toBe("completed");
-  expect(conversation?.responseParts?.[0]?.text).toBe("snapshot 已恢复");
+  expect(conversation?.assistantMessages?.[0]?.content).toBe("历史正文");
+  expect(conversation?.responseParts).toEqual([]);
 });
 
 test("Job failed 镜像优先于迟到的 open message stream", () => {

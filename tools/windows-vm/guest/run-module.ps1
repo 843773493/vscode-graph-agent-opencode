@@ -276,7 +276,7 @@ switch ($Module) {
             Assert-DevPortsClear
         }
     }
-    "js-platform" { Invoke-Native "bun" @("test", "scripts/cross-platform-development-target.test.mjs") }
+    "js-platform" { Invoke-Native "bun" @("test", "scripts/launch/cross-platform-development-target.test.mjs") }
     "backend-js" { Invoke-Native "bun" @("test", "src/shared", "src/workspace-services/browser", "src/workspace-services/terminal") }
     "web-build" { Invoke-Native "bun" @("run", "--cwd", "src/clients/web", "build") }
     "full-python" { Invoke-Native "uv" @("run", "pytest") }
@@ -293,7 +293,12 @@ switch ($Module) {
     "verify-windows-x64-cross" {
         $sharedOutput = "Z:\out\packaging\windows-x64"
         $localOutput = Join-Path $projectRoot "out\packaging\windows-x64"
-        if (-not (Test-Path -LiteralPath "$sharedOutput\standalone\boxteam-windows-x64-0.1.0.zip")) {
+        $projectPackage = Get-Content -Raw -LiteralPath (Join-Path $projectRoot "package.json") | ConvertFrom-Json
+        $boxteamVersion = $projectPackage.version
+        if ([string]::IsNullOrWhiteSpace($boxteamVersion)) {
+            throw "Root package.json is missing a valid version"
+        }
+        if (-not (Test-Path -LiteralPath "$sharedOutput\standalone\boxteam-windows-x64-$boxteamVersion.zip")) {
             throw "Linux cross-package artifact is missing: $sharedOutput"
         }
         Remove-Item -LiteralPath $localOutput -Recurse -Force -ErrorAction SilentlyContinue

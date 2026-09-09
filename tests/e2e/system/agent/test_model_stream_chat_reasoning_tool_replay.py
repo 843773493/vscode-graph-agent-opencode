@@ -23,7 +23,13 @@ EXPECTED_SECOND_FINISH_REASON = "stop"
 
 @pytest.fixture(scope="module")
 def e2e_model_stream_config_path() -> str:
-    return str(Path.cwd() / "configs" / "tests" / "model_stream_chat_tool.jsonc")
+    return str(
+        Path.cwd()
+        / "configs"
+        / "tests"
+        / "model_stream"
+        / "model_stream_chat_tool.jsonc"
+    )
 
 
 def _load_and_validate_recorded_data() -> dict[str, object]:

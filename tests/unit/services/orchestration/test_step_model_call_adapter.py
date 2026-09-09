@@ -200,6 +200,74 @@ async def test_failed_registration_does_not_advance_retry_lineage(
 
 
 @pytest.mark.asyncio
+async def test_failed_provider_attempt_reuses_sealed_binding_for_fallback(
+    adapter: StepModelCallAdapter, saver: MagicMock,
+) -> None:
+    await adapter.register("model_1", 1, "provider_primary")
+    await adapter.update_outcome("model_1", "failed")
+    saver.consume_prepared_context_for_dispatch.return_value = None
+
+    await adapter.register("model_2", 2, "provider_fallback")
+
+    second_registration = saver.register_model_call.call_args_list[1]
+    assert second_registration.kwargs == {
+        "execution_id": "execution_1",
+        "model_call_id": "model_2",
+        "attempt": 2,
+        "provider": "provider_fallback",
+        "retry_of_model_call_id": "model_1",
+        "assembly_id": "assembly_1",
+        "dispatch_state": "dispatched",
+        "checkpoint_ns": "agent",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["completed", "completed_empty", "cancelled", "interrupted", "unknown"])
+async def test_non_failed_outcome_cannot_reuse_previous_dispatch_binding(
+    adapter: StepModelCallAdapter, saver: MagicMock, outcome: str,
+) -> None:
+    await adapter.register("model_1", 1, "provider_primary")
+    await adapter.update_outcome("model_1", outcome)
+    saver.consume_prepared_context_for_dispatch.return_value = None
+
+    with pytest.raises(RuntimeError, match="prepared context"):
+        await adapter.register("model_2", 2, "provider_fallback")
+
+    assert saver.register_model_call.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_outcome_for_stale_call_cannot_open_retry_binding(
+    adapter: StepModelCallAdapter, saver: MagicMock,
+) -> None:
+    await adapter.register("model_1", 1, "provider_primary")
+    await adapter.update_outcome("another_model_call", "failed")
+    saver.consume_prepared_context_for_dispatch.return_value = None
+
+    with pytest.raises(RuntimeError, match="prepared context"):
+        await adapter.register("model_2", 2, "provider_fallback")
+
+    assert saver.register_model_call.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_outcome_commit_must_succeed_before_retry_binding_opens(
+    adapter: StepModelCallAdapter, saver: MagicMock,
+) -> None:
+    await adapter.register("model_1", 1, "provider_primary")
+    saver.update_model_call_outcome.side_effect = RuntimeError("终态提交失败")
+
+    with pytest.raises(RuntimeError, match="终态提交失败"):
+        await adapter.update_outcome("model_1", "failed")
+
+    saver.update_model_call_outcome.side_effect = None
+    saver.consume_prepared_context_for_dispatch.return_value = None
+    with pytest.raises(RuntimeError, match="prepared context"):
+        await adapter.register("model_2", 2, "provider_fallback")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("outcome, dispatch_state", [
     ("completed", "completed"), ("completed_empty", "completed"),
     ("failed", "failed"), ("cancelled", "failed"), ("unknown", "unknown"),

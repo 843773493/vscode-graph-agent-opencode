@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from app.services.infrastructure.rollout_context.storage.transaction import (
@@ -39,6 +41,138 @@ _V2_TO_HISTORY_STATUS = {
     "failed": "failed",
     "unknown": "failed",
 }
+
+
+def _finalize_activity_projection(projection: dict[str, object]) -> None:
+    """从后端已解析的逻辑 activity item 生成统计与兼容投影。"""
+    activity = projection.get("activity_items")
+    if not isinstance(activity, list):
+        raise TypeError("Turn activity projection 缺少 activity_items")
+    previous_at = _required_datetime(
+        projection.get("created_at"), field="turn_projection.created_at"
+    )
+    thinking_blocks: list[dict[str, object]] = []
+    tool_items: list[dict[str, object]] = []
+    for item in activity:
+        if not isinstance(item, dict):
+            raise TypeError("activity item projection 必须是对象")
+        created_at = _required_datetime(
+            item.get("created_at"), field="activity_item.created_at"
+        )
+        item["elapsed_ms"] = max(
+            0,
+            int((created_at - previous_at).total_seconds() * 1000),
+        )
+        previous_at = created_at
+        if item.get("kind") in {
+            "reasoning",
+            "reasoning_summary",
+            "reasoning_encrypted",
+            "compaction_summary",
+        }:
+            compatibility_kind = (
+                "summary"
+                if item.get("kind") in {"reasoning_summary", "compaction_summary"}
+                else "encrypted"
+                if item.get("kind") == "reasoning_encrypted"
+                else "reasoning"
+            )
+            thinking_blocks.append(
+                {
+                    "kind": compatibility_kind,
+                    "text": item.get("text", ""),
+                }
+            )
+        elif item.get("kind") in {"tool_call", "tool_result"}:
+            tool_items.append(
+                {
+                    "item_kind": item["kind"],
+                    "sequence": item.get("message_sequence", 0),
+                    "assistant_message_sequence": item.get(
+                        "assistant_message_sequence"
+                    ),
+                    "result_message_sequence": item.get(
+                        "result_message_sequence"
+                    ),
+                    "call_index": item.get("call_index"),
+                    "tool_call_id": item.get("tool_call_id"),
+                    "tool_name": item.get("tool_name"),
+                    "status": item.get("status"),
+                }
+            )
+        else:
+            raise RuntimeError(f"未知 activity item kind: {item.get('kind')!r}")
+    projection["thinking_blocks"] = thinking_blocks
+    projection["tool_items"] = tool_items
+    activity_stats = projection.get("activity_stats")
+    if not isinstance(activity_stats, dict):
+        raise TypeError("Turn activity stats projection 字段不完整")
+    activity_stats["item_count"] = len(activity)
+    activity_stats["first_item_sequence"] = (
+        activity[0]["item_sequence"] if activity else None
+    )
+    activity_stats["last_item_sequence"] = (
+        activity[-1]["item_sequence"] if activity else None
+    )
+
+
+def _required_datetime(value: object, *, field: str) -> datetime:
+    text = strict_text(value, field=field)
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        raise RuntimeError(f"{field} 缺少时区")
+    return parsed.astimezone(UTC)
+
+
+def _json_object(value: object, *, field: str) -> dict[str, object]:
+    text = strict_text(value, field=field)
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"{field} 不是合法 JSON") from error
+    if not isinstance(decoded, dict):
+        raise TypeError(f"{field} 必须是对象")
+    return decoded
+
+
+def _normalized_model_call_id(producer_ref: dict[str, object]) -> str:
+    producer_id = strict_text(
+        producer_ref.get("producer_id"), field="producer_ref.producer_id"
+    )
+    return producer_id.removeprefix("lc_run--")
+
+
+def _logical_activity_key(item: dict[str, object]) -> tuple[object, ...]:
+    """只按持久 identity/provenance 合并同一逻辑 item，绝不比较正文。"""
+    kind = strict_text(item.get("kind"), field="activity_item.kind")
+    if kind == "tool_call":
+        return (
+            kind,
+            strict_text(item.get("tool_call_id"), field="tool_call_id"),
+            strict_non_negative_int(
+                item.get("assistant_message_sequence"),
+                field="assistant_message_sequence",
+            ),
+            strict_non_negative_int(item.get("call_index"), field="call_index"),
+        )
+    if kind == "tool_result":
+        return (
+            kind,
+            strict_text(item.get("tool_call_id"), field="tool_call_id"),
+            strict_non_negative_int(
+                item.get("result_message_sequence"),
+                field="result_message_sequence",
+            ),
+        )
+    if kind == "compaction_summary":
+        return (kind, strict_text(item.get("item_id"), field="item_id"))
+    producer_ref = item.get("producer_ref")
+    if not isinstance(producer_ref, dict):
+        raise TypeError("reasoning activity item 缺少 producer_ref")
+    block_ordinal = item.get("block_ordinal")
+    if not isinstance(block_ordinal, int) or isinstance(block_ordinal, bool):
+        raise TypeError("reasoning activity item 缺少 block_ordinal")
+    return (kind, _normalized_model_call_id(producer_ref), block_ordinal)
 
 
 def _turn_page_row(row: tuple[object, ...]) -> tuple[str, int, int, int]:
@@ -192,18 +326,15 @@ class TurnProjectionQueryMixin:
             f"SELECT turn_id, status, final_item_id FROM turn_records WHERE turn_id IN ({placeholders})",
             ids,
         ).fetchall()
-        message_count_rows = connection.execute(
-            f"SELECT turn_id, COUNT(*) FROM messages WHERE turn_id IN ({placeholders}) GROUP BY turn_id",
-            ids,
-        ).fetchall()
         tool_rows = connection.execute(
-            f"SELECT m.turn_id, tc.tool_call_id, tc.tool_name, tc.status, tc.result_message_sequence, tc.assistant_message_sequence, tc.call_index FROM tool_calls tc JOIN messages m ON m.message_sequence = tc.assistant_message_sequence WHERE m.turn_id IN ({placeholders}) ORDER BY tc.assistant_message_sequence, tc.call_index",
+            f"SELECT m.turn_id, m.message_id, tc.tool_call_id, tc.tool_name, tc.status, tc.result_message_sequence, tc.assistant_message_sequence, tc.call_index FROM tool_calls tc JOIN messages m ON m.message_sequence = tc.assistant_message_sequence WHERE m.turn_id IN ({placeholders}) ORDER BY tc.assistant_message_sequence, tc.call_index",
             ids,
         ).fetchall()
         final_rows = connection.execute(
             "SELECT t.turn_id, t.final_message_sequence, mp.visible_text, "
             "mp.visible_text_truncated, m.message_id, m.turn_id, "
-            "item.item_id, item.turn_id, item.semantic_kind, item.status "
+            "item.item_id, item.turn_id, item.semantic_kind, item.status, "
+            "item.item_sequence, item.created_at "
             "FROM turns t "
             "LEFT JOIN message_projections mp ON mp.message_sequence = t.final_message_sequence "
             "LEFT JOIN messages m ON m.message_sequence = t.final_message_sequence "
@@ -212,8 +343,28 @@ class TurnProjectionQueryMixin:
             f"WHERE t.turn_id IN ({placeholders})",
             ids,
         ).fetchall()
-        thinking_rows = connection.execute(
-            f"SELECT m.turn_id, rb.message_sequence, rb.content_block_index, rb.item_index, rb.carrier_type, rb.reasoning_text, rb.summary_text, rb.signature_present, rb.encrypted_length FROM reasoning_blocks rb JOIN messages m ON m.message_sequence = rb.message_sequence WHERE m.turn_id IN ({placeholders}) ORDER BY rb.message_sequence, rb.content_block_index, rb.item_index",
+        activity_rows = connection.execute(
+            "SELECT ic.turn_id, ic.item_sequence, ic.item_id, ic.semantic_kind, "
+            "ic.payload_kind, ic.status, ic.created_at, ic.producer_ref_json, "
+            "ic.metadata_json, ip.content, ip.content_truncated "
+            "FROM item_catalog AS ic JOIN item_projections AS ip "
+            "ON ip.item_id = ic.item_id AND ip.item_sequence = ic.item_sequence "
+            f"WHERE ic.turn_id IN ({placeholders}) AND ic.semantic_kind IN "
+            "('reasoning','tool_call','tool_result','compaction_summary') "
+            "ORDER BY ic.turn_id, ic.item_sequence",
+            ids,
+        ).fetchall()
+        final_reasoning_rows = connection.execute(
+            "SELECT t.turn_id, rb.message_sequence, rb.content_block_index, "
+            "rb.item_index, rb.carrier_type, rb.reasoning_text, rb.summary_text, "
+            "rb.signature_present, rb.encrypted_length, ic.item_id, "
+            "ic.item_sequence, ic.created_at "
+            "FROM turns AS t "
+            "JOIN turn_records AS tr ON tr.turn_id = t.turn_id "
+            "JOIN item_catalog AS ic ON ic.item_id = tr.final_item_id "
+            "JOIN reasoning_blocks AS rb ON rb.message_sequence = t.final_message_sequence "
+            f"WHERE t.turn_id IN ({placeholders}) "
+            "ORDER BY t.turn_id, rb.content_block_index, rb.item_index",
             ids,
         ).fetchall()
         result: dict[str, dict[str, object]] = {}
@@ -255,11 +406,14 @@ class TurnProjectionQueryMixin:
                 "assistant_text_sequences": [],
                 "has_encrypted_reasoning": False,
                 "tool_items": [],
+                "activity_items": [],
                 "created_at": created_at,
                 "updated_at": updated_at,
                 "activity_stats": {
                     "duration_ms": None,
-                    "message_count": 0,
+                    "item_count": 0,
+                    "first_item_sequence": None,
+                    "last_item_sequence": None,
                 },
             }
         # TurnRecord 是 v2 的生命周期事实源；旧 turns 行仅保留 message
@@ -278,18 +432,10 @@ class TurnProjectionQueryMixin:
             projection["status"] = _V2_TO_HISTORY_STATUS[status]
             if final_item_id is not None:
                 projection["final_item_id"] = final_item_id
-        for turn_id, count in message_count_rows:
-            turn_id = strict_text(turn_id, field="messages.turn_id")
-            count = strict_non_negative_int(count, field=f"messages.count:{turn_id}")
-            projection = result.get(turn_id)
-            if projection is None:
-                raise RuntimeError(f"messages 缺少 turns projection: {turn_id}")
-            activity_stats = projection["activity_stats"]
-            if isinstance(activity_stats, dict):
-                activity_stats["message_count"] = count
         for (
             turn_id, final_sequence, text, truncated, message_id, message_turn_id,
             item_id, item_turn_id, semantic_kind, item_status,
+            final_item_sequence, final_item_created_at,
         ) in final_rows:
             turn_id = strict_text(turn_id, field="turns.turn_id")
             final_sequence = strict_optional_non_negative_int(
@@ -327,6 +473,167 @@ class TurnProjectionQueryMixin:
                 )
             result[turn_id]["final_response_text"] = text or ""
             result[turn_id]["final_response_text_truncated"] = truncated_value == 1
+            result[turn_id]["final_item_sequence"] = strict_non_negative_int(
+                final_item_sequence,
+                field=f"item_catalog.item_sequence:{turn_id}",
+            )
+            result[turn_id]["final_item_created_at"] = strict_text(
+                final_item_created_at,
+                field=f"item_catalog.created_at:{turn_id}",
+            )
+        tool_by_message: dict[tuple[str, str], list[dict[str, object]]] = {}
+        tool_by_call_id: dict[tuple[str, str], dict[str, object]] = {}
+        for (
+            turn_id,
+            message_id,
+            call_id,
+            name,
+            status,
+            result_sequence,
+            assistant_sequence,
+            call_index,
+        ) in tool_rows:
+            turn_id = strict_text(turn_id, field="messages.turn_id")
+            message_id = strict_text(message_id, field="messages.message_id")
+            call_id = strict_text(call_id, field=f"tool_calls.tool_call_id:{turn_id}")
+            tool = {
+                "tool_call_id": call_id,
+                "tool_name": strict_text(name, field=f"tool_calls.tool_name:{call_id}"),
+                "status": strict_text(status, field=f"tool_calls.status:{call_id}"),
+                "result_message_sequence": strict_optional_non_negative_int(
+                    result_sequence,
+                    field=f"tool_calls.result_message_sequence:{call_id}",
+                ),
+                "assistant_message_sequence": strict_non_negative_int(
+                    assistant_sequence,
+                    field=f"tool_calls.assistant_message_sequence:{call_id}",
+                ),
+                "call_index": strict_non_negative_int(
+                    call_index, field=f"tool_calls.call_index:{call_id}"
+                ),
+            }
+            tool_by_message.setdefault((turn_id, message_id), []).append(tool)
+            tool_by_call_id[(turn_id, call_id)] = tool
+
+        seen_activity: dict[str, set[tuple[object, ...]]] = {
+            turn_id: set() for turn_id in result
+        }
+        for (
+            turn_id,
+            item_sequence,
+            item_id,
+            semantic_kind,
+            payload_kind,
+            item_status,
+            item_created_at,
+            producer_ref_json,
+            metadata_json,
+            content,
+            content_truncated,
+        ) in activity_rows:
+            turn_id = strict_text(turn_id, field="item_catalog.turn_id")
+            metadata = _json_object(
+                metadata_json, field=f"item_catalog.metadata_json:{item_id}"
+            )
+            producer_ref = _json_object(
+                producer_ref_json, field=f"item_catalog.producer_ref_json:{item_id}"
+            )
+            semantic_kind = strict_text(
+                semantic_kind, field=f"item_catalog.semantic_kind:{item_id}"
+            )
+            projection_message_id = metadata.get("projection_message_id")
+            matching_tools = (
+                tool_by_message.get((turn_id, projection_message_id), [])
+                if isinstance(projection_message_id, str)
+                else []
+            )
+            activity_tools: list[dict[str, object] | None] = [None]
+            if semantic_kind in {"tool_call", "tool_result"}:
+                metadata_call_id = metadata.get("tool_call_id")
+                block_id = metadata.get("block_id")
+                tool_call_id: str | None = None
+                if isinstance(metadata_call_id, str) and metadata_call_id:
+                    tool_call_id = metadata_call_id
+                elif isinstance(block_id, str) and block_id:
+                    tool_call_id = block_id
+                if tool_call_id is not None:
+                    selected_tool = tool_by_call_id.get((turn_id, tool_call_id))
+                    if selected_tool is None:
+                        raise RuntimeError(
+                            f"canonical {semantic_kind} 缺少 tool projection: {item_id}"
+                        )
+                    activity_tools = [selected_tool]
+                elif matching_tools:
+                    # 一个 assistant_output carrier 可以包含多个 tool_calls；
+                    # 它们共享物理 item offset，但每个 call 都是独立逻辑 Item。
+                    activity_tools = list(matching_tools)
+                else:
+                    raise RuntimeError(
+                        f"canonical {semantic_kind} 缺少稳定 tool_call_id: {item_id}"
+                    )
+            block_ordinal = metadata.get("block_index")
+            projection_group = metadata.get("projection_group")
+            if not isinstance(block_ordinal, int) or isinstance(block_ordinal, bool):
+                block_ordinal = (
+                    projection_group.get("ordinal")
+                    if isinstance(projection_group, dict)
+                    else 0
+                )
+            block_ordinal = strict_non_negative_int(
+                block_ordinal, field=f"activity_item.block_ordinal:{item_id}"
+            )
+            kind = (
+                "reasoning_summary"
+                if semantic_kind == "reasoning" and payload_kind == "summary"
+                else "reasoning_encrypted"
+                if semantic_kind == "reasoning" and payload_kind in {"opaque", "extension"}
+                else semantic_kind
+            )
+            for activity_tool in activity_tools:
+                activity_item: dict[str, object] = {
+                    "item_id": strict_text(item_id, field="item_catalog.item_id"),
+                    "item_sequence": strict_non_negative_int(
+                        item_sequence, field=f"item_catalog.item_sequence:{item_id}"
+                    ),
+                    "part_ordinal": 0,
+                    "kind": kind,
+                    "status": strict_text(item_status, field="item_catalog.status"),
+                    "created_at": strict_text(
+                        item_created_at, field=f"item_catalog.created_at:{item_id}"
+                    ),
+                    "text": strict_text(
+                        content,
+                        field=f"item_projections.content:{item_id}",
+                        allow_empty=True,
+                    ),
+                    "truncated": strict_non_negative_int(
+                        content_truncated,
+                        field=f"item_projections.content_truncated:{item_id}",
+                    )
+                    == 1,
+                    "producer_ref": producer_ref,
+                    "block_ordinal": block_ordinal,
+                    "message_sequence": 0,
+                }
+                if activity_tool is not None:
+                    activity_item.update(activity_tool)
+                    activity_item["tool_call_id"] = strict_text(
+                        activity_tool.get("tool_call_id"),
+                        field="tool_calls.tool_call_id",
+                    )
+                    activity_item["part_ordinal"] = strict_non_negative_int(
+                        activity_tool.get("call_index"),
+                        field="tool_calls.call_index",
+                    )
+                logical_key = _logical_activity_key(activity_item)
+                if logical_key in seen_activity[turn_id]:
+                    continue
+                seen_activity[turn_id].add(logical_key)
+                items = result[turn_id]["activity_items"]
+                if not isinstance(items, list):
+                    raise TypeError("Turn activity_items projection 必须是列表")
+                items.append(activity_item)
+
         for (
             turn_id,
             message_sequence,
@@ -337,11 +644,11 @@ class TurnProjectionQueryMixin:
             summary_text,
             signature_present,
             encrypted_length,
-        ) in thinking_rows:
-            turn_id = strict_text(turn_id, field="messages.turn_id")
-            message_sequence = strict_non_negative_int(
-                message_sequence, field=f"reasoning_blocks.message_sequence:{turn_id}"
-            )
+            item_id,
+            item_sequence,
+            item_created_at,
+        ) in final_reasoning_rows:
+            turn_id = strict_text(turn_id, field="turns.turn_id")
             content_block_index = strict_non_negative_int(
                 content_block_index,
                 field=f"reasoning_blocks.content_block_index:{turn_id}",
@@ -349,99 +656,72 @@ class TurnProjectionQueryMixin:
             item_index = strict_non_negative_int(
                 item_index, field=f"reasoning_blocks.item_index:{turn_id}"
             )
-            carrier_type = strict_text(
-                carrier_type, field=f"reasoning_blocks.carrier_type:{turn_id}"
-            )
-            reasoning_text = strict_optional_text(
-                reasoning_text, field=f"reasoning_blocks.reasoning_text:{turn_id}"
-            )
-            summary_text = strict_optional_text(
-                summary_text, field=f"reasoning_blocks.summary_text:{turn_id}"
-            )
-            signature_present_value = strict_non_negative_int(
-                signature_present,
-                field=f"reasoning_blocks.signature_present:{turn_id}",
-            )
-            if signature_present_value not in {0, 1}:
-                raise RuntimeError(f"reasoning signature 标记非法: {turn_id}")
             encrypted_length = strict_optional_non_negative_int(
                 encrypted_length,
                 field=f"reasoning_blocks.encrypted_length:{turn_id}",
             )
-            if turn_id not in result:
-                raise RuntimeError(f"reasoning projection 缺少 turns row: {turn_id}")
-            blocks = result[turn_id]["thinking_blocks"]
-            if isinstance(blocks, list):
-                source = {
-                    "message_sequence": message_sequence,
-                    "carrier_type": carrier_type,
+            if reasoning_text:
+                kind, text = "reasoning", strict_text(
+                    reasoning_text, field=f"reasoning_blocks.reasoning_text:{turn_id}"
+                )
+            elif summary_text:
+                kind, text = "reasoning_summary", strict_text(
+                    summary_text, field=f"reasoning_blocks.summary_text:{turn_id}"
+                )
+            elif encrypted_length is not None:
+                kind, text = "reasoning_encrypted", ""
+                result[turn_id]["has_encrypted_reasoning"] = True
+            else:
+                continue
+            signature_value = strict_non_negative_int(
+                signature_present,
+                field=f"reasoning_blocks.signature_present:{turn_id}",
+            )
+            if signature_value not in {0, 1}:
+                raise RuntimeError(f"reasoning signature 标记非法: {turn_id}")
+            items = result[turn_id]["activity_items"]
+            if not isinstance(items, list):
+                raise TypeError("Turn activity_items projection 必须是列表")
+            items.append(
+                {
+                    "item_id": strict_text(item_id, field="item_catalog.item_id"),
+                    "item_sequence": strict_non_negative_int(
+                        item_sequence, field="item_catalog.item_sequence"
+                    ),
+                    "part_ordinal": content_block_index * 1_000_000 + item_index,
+                    "kind": kind,
+                    "status": "completed",
+                    "created_at": strict_text(
+                        item_created_at, field="item_catalog.created_at"
+                    ),
+                    "text": text,
+                    "truncated": False,
+                    "message_sequence": strict_non_negative_int(
+                        message_sequence, field="reasoning_blocks.message_sequence"
+                    ),
                     "content_block_index": content_block_index,
                     "item_index": item_index,
-                    "signature_present": signature_present_value == 1,
+                    "carrier_type": strict_text(
+                        carrier_type, field="reasoning_blocks.carrier_type"
+                    ),
+                    "signature_present": signature_value == 1,
                 }
-                if reasoning_text:
-                    blocks.append(
-                        {"kind": "reasoning", "text": reasoning_text, **source}
-                    )
-                elif summary_text:
-                    blocks.append({"kind": "summary", "text": summary_text, **source})
-                elif encrypted_length is not None:
-                    blocks.append({"kind": "encrypted", "text": "", **source})
-            if encrypted_length is not None:
-                result[turn_id]["has_encrypted_reasoning"] = True
-        for (
-            turn_id,
-            call_id,
-            name,
-            status,
-            result_sequence,
-            assistant_sequence,
-            call_index,
-        ) in tool_rows:
-            turn_id = strict_text(turn_id, field="messages.turn_id")
-            call_id = strict_text(call_id, field=f"tool_calls.tool_call_id:{turn_id}")
-            name = strict_text(name, field=f"tool_calls.tool_name:{call_id}")
-            status = strict_text(status, field=f"tool_calls.status:{call_id}")
-            result_sequence = strict_optional_non_negative_int(
-                result_sequence, field=f"tool_calls.result_message_sequence:{call_id}"
             )
-            assistant_sequence = strict_non_negative_int(
-                assistant_sequence,
-                field=f"tool_calls.assistant_message_sequence:{call_id}",
-            )
-            call_index = strict_non_negative_int(
-                call_index, field=f"tool_calls.call_index:{call_id}"
-            )
-            if assistant_sequence == 0:
-                raise RuntimeError(
-                    f"tool call assistant message sequence 不能为 0: {call_id}"
+        for projection in result.values():
+            activity_items = projection["activity_items"]
+            if not isinstance(activity_items, list):
+                raise TypeError("Turn activity_items projection 必须是列表")
+            activity_items.sort(
+                key=lambda item: (
+                    strict_non_negative_int(
+                        item.get("item_sequence"), field="activity_item.item_sequence"
+                    ),
+                    strict_non_negative_int(
+                        item.get("part_ordinal", 0), field="activity_item.part_ordinal"
+                    ),
                 )
-            if turn_id not in result:
-                raise RuntimeError(f"tool projection 缺少 turns row: {turn_id}")
-            items = result[turn_id]["tool_items"]
-            if isinstance(items, list):
-                items.append(
-                    {
-                        "sequence": assistant_sequence,
-                        "call_index": call_index,
-                        "item_kind": "tool_call",
-                        "tool_name": name,
-                        "tool_call_id": call_id,
-                        "status": status,
-                    }
-                )
-                if result_sequence is not None:
-                    items.append(
-                        {
-                            "sequence": result_sequence,
-                            "assistant_message_sequence": assistant_sequence,
-                            "call_index": call_index,
-                            "item_kind": "tool_result",
-                            "tool_name": name,
-                            "tool_call_id": call_id,
-                            "status": status,
-                        }
-                    )
+            )
+            _finalize_activity_projection(projection)
         return result
 
     def decode_indexed_message(

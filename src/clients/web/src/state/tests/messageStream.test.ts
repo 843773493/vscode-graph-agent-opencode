@@ -625,6 +625,7 @@ describe("message stream reducer", () => {
       "call_1",
       "block_2",
       "exec_2",
+      "exec_2:result",
     ]);
     expect(parts[1]?.arguments).toBe('{"command":"first"}');
     expect(state.blocks[0]?.started_seq).toBe(4);

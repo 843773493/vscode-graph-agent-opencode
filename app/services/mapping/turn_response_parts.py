@@ -7,7 +7,6 @@ from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from app.schemas.internal_v2.turn import TurnResponsePartDTO, TurnResponseSourceDTO
-from app.services.mapping.itemized.provider_history import reasoning_projection_rows
 
 Projection = Literal["summary", "detail", "streaming"]
 
@@ -29,14 +28,6 @@ def _text(value: object) -> str:
         candidate = value.get("text")
         return candidate if isinstance(candidate, str) else ""
     return ""
-
-
-def _blocks(content: object) -> list[Mapping[str, object]]:
-    if isinstance(content, str):
-        return [{"type": "text", "text": content}]
-    if not isinstance(content, list):
-        return []
-    return [item for item in content if isinstance(item, Mapping)]
 
 
 def _serialized_message(record: Mapping[str, object]) -> Mapping[str, object]:
@@ -82,95 +73,293 @@ def _bounded(value: object, limit: int = 65536) -> tuple[str, bool]:
     return text[:limit], len(text) > limit
 
 
-def _summary_tool_parts(
+def _response_status(value: object) -> str:
+    if value in {"completed", "success", "succeeded", "ok"}:
+        return "completed"
+    if value in {"failed", "error", "unknown"}:
+        return "failed"
+    if value in {"open", "pending"}:
+        return "pending"
+    if value in {"active", "running"}:
+        return "running"
+    if value in {"partial", "incomplete", "cancelled"}:
+        return "cancelled"
+    raise ValueError(f"未知 canonical item status: {value!r}")
+
+
+def _activity_parts_from_projection(
     projection: Mapping[str, object],
     *,
-    limit: int,
+    mode: Projection,
     include: frozenset[str],
 ) -> list[TurnResponsePartDTO]:
-    raw_items = projection.get("tool_items")
+    """按后端 canonical identity/order 投影中间 item，不在 mapper 去重或排序。"""
+    raw_items = projection.get("activity_items")
     if not isinstance(raw_items, list):
-        return []
-    projection_status = projection.get("status")
-    terminal_turn = (
-        isinstance(projection_status, str)
-        and projection_status in _TERMINAL_TURN_STATUSES
-    )
-    result_call_ids = {
-        raw_item.get("tool_call_id")
-        for raw_item in raw_items
-        if isinstance(raw_item, Mapping)
-        and raw_item.get("item_kind") == "tool_result"
-        and isinstance(raw_item.get("tool_call_id"), str)
-    }
+        raise TypeError("Turn projection 缺少 activity_items")
     parts: list[TurnResponsePartDTO] = []
-    for index, raw_item in enumerate(raw_items):
-        if not isinstance(raw_item, Mapping):
-            continue
-        item_kind = raw_item.get("item_kind")
-        if item_kind not in {"tool_call", "tool_result"}:
-            continue
-        if item_kind == "tool_call":
-            if not ({"tool_summary", "tool_call"} & include):
-                continue
-        elif "tool_result" not in include:
-            continue
-        sequence = raw_item.get("sequence")
-        assistant_sequence = raw_item.get("assistant_message_sequence")
-        call_index = raw_item.get("call_index")
-        call_id = raw_item.get("tool_call_id")
-        tool_name = raw_item.get("tool_name")
-        status = raw_item.get("status")
-        if not isinstance(sequence, int) or isinstance(sequence, bool):
-            continue
-        if not isinstance(assistant_sequence, int) or isinstance(assistant_sequence, bool):
-            assistant_sequence = sequence
-        if not isinstance(call_index, int) or isinstance(call_index, bool):
-            call_index = None
-        if not isinstance(call_id, str) or not call_id:
-            call_id = None
-        if not isinstance(tool_name, str) or not tool_name:
-            tool_name = "tool"
-        normalized_status = status if isinstance(status, str) and status else "unknown"
-        terminal_failure = normalized_status in {"failed", "error"}
-        terminal_success = normalized_status in {
-            "completed",
-            "ok",
-            "success",
-            "succeeded",
-        }
-        outcome_unknown = (
-            item_kind == "tool_call"
-            and terminal_turn
-            and call_id not in result_call_ids
+    for raw in raw_items:
+        if not isinstance(raw, Mapping):
+            raise TypeError("Turn activity item 必须是对象")
+        raw_kind = raw.get("kind")
+        kind = (
+            "reasoning_summary"
+            if raw_kind == "compaction_summary"
+            else raw_kind
         )
+        if kind not in {
+            "reasoning",
+            "reasoning_summary",
+            "reasoning_encrypted",
+            "tool_call",
+            "tool_result",
+        }:
+            raise ValueError(f"未知 Turn activity item kind: {raw_kind!r}")
+        if kind == "reasoning" and not include & {"thinking", "reasoning_detail"}:
+            continue
+        if kind == "reasoning_summary" and not include & {
+            "thinking",
+            "reasoning_summary",
+            "reasoning_detail",
+        }:
+            continue
+        if kind == "reasoning_encrypted" and "encrypted_reasoning_meta" not in include:
+            continue
+        if kind == "tool_call" and not include & {"tool_summary", "tool_call"}:
+            continue
+        if kind == "tool_result" and not include & {"tool_summary", "tool_result"}:
+            continue
+        item_id = raw.get("item_id")
+        item_sequence = raw.get("item_sequence")
+        part_ordinal = raw.get("part_ordinal", 0)
+        created_at = raw.get("created_at")
+        if (
+            not isinstance(item_id, str)
+            or not item_id
+            or not isinstance(item_sequence, int)
+            or isinstance(item_sequence, bool)
+            or item_sequence < 1
+            or not isinstance(part_ordinal, int)
+            or isinstance(part_ordinal, bool)
+            or part_ordinal < 0
+            or not isinstance(created_at, str)
+            or not created_at
+        ):
+            raise TypeError("Turn activity item 缺少 canonical identity/order/time")
+        message_sequence = raw.get("message_sequence", 0)
+        if not isinstance(message_sequence, int) or isinstance(message_sequence, bool):
+            raise TypeError("Turn activity item message_sequence 非法")
+        text = raw.get("text") if isinstance(raw.get("text"), str) else ""
+        tool_call_id = raw.get("tool_call_id")
+        tool_name = raw.get("tool_name")
         parts.append(
             TurnResponsePartDTO(
-                part_id=f"tool-call:{assistant_sequence}:{call_index or 0}",
-                kind="tool_call" if item_kind == "tool_call" else "tool_result",
-                projection="summary",
-                status=(
-                    "failed"
-                    if terminal_failure or outcome_unknown
-                    else "completed"
-                    if item_kind == "tool_result" or terminal_success
-                    else "pending"
-                ),
+                part_id=f"{item_id}:part:{part_ordinal}",
+                kind=kind,
+                projection=mode,
+                status=_response_status(raw.get("status")),
                 source=TurnResponseSourceDTO(
-                    message_sequence=sequence,
-                    assistant_message_sequence=assistant_sequence,
-                    call_index=call_index,
+                    message_sequence=message_sequence,
+                    assistant_message_sequence=(
+                        raw.get("assistant_message_sequence")
+                        if isinstance(raw.get("assistant_message_sequence"), int)
+                        else None
+                    ),
+                    content_block_index=(
+                        raw.get("content_block_index")
+                        if isinstance(raw.get("content_block_index"), int)
+                        else None
+                    ),
+                    item_index=(
+                        raw.get("item_index")
+                        if isinstance(raw.get("item_index"), int)
+                        else None
+                    ),
+                    call_index=(
+                        raw.get("call_index")
+                        if isinstance(raw.get("call_index"), int)
+                        else None
+                    ),
                     result_message_sequence=(
-                        sequence if item_kind == "tool_result" else None
+                        raw.get("result_message_sequence")
+                        if isinstance(raw.get("result_message_sequence"), int)
+                        else None
+                    ),
+                    item_id=item_id,
+                    item_sequence=item_sequence,
+                    part_ordinal=part_ordinal,
+                    created_at=created_at,
+                    elapsed_ms=(
+                        raw.get("elapsed_ms")
+                        if isinstance(raw.get("elapsed_ms"), int)
+                        else None
                     ),
                 ),
-                text=normalized_status[:limit],
-                tool_call_id=call_id,
-                tool_name=tool_name,
-                outcome_unknown=outcome_unknown,
+                text=text,
+                carrier_type=(
+                    "compaction_summary"
+                    if raw_kind == "compaction_summary"
+                    else raw.get("carrier_type")
+                    if isinstance(raw.get("carrier_type"), str)
+                    else None
+                ),
+                tool_call_id=(
+                    tool_call_id if isinstance(tool_call_id, str) else None
+                ),
+                tool_name=tool_name if isinstance(tool_name, str) else None,
+                truncated=raw.get("truncated") is True,
+                partial=raw.get("status") in {"partial", "incomplete"},
             )
         )
     return parts
+
+
+def _tool_payloads(
+    records: Sequence[Mapping[str, object]],
+) -> tuple[
+    dict[tuple[str, int, int], tuple[str, bool]],
+    dict[tuple[str, int], tuple[str, bool]],
+]:
+    """读取详情正文，但不据此决定 Item identity、数量或顺序。"""
+    calls: dict[tuple[str, int, int], tuple[str, bool]] = {}
+    results: dict[tuple[str, int], tuple[str, bool]] = {}
+    for record in records:
+        sequence = record.get("_indexed_sequence")
+        if not isinstance(sequence, int) or isinstance(sequence, bool):
+            raise TypeError("rollout message 缺少有效 message_sequence")
+        message = _serialized_message(record)
+        data = _message_data(message)
+        if message.get("type") == "ai":
+            raw_calls = data.get("tool_calls")
+            if not isinstance(raw_calls, list):
+                continue
+            for call_index, call in enumerate(raw_calls):
+                if not isinstance(call, Mapping):
+                    continue
+                call_id = call.get("id")
+                if not isinstance(call_id, str) or not call_id:
+                    continue
+                calls[(call_id, sequence, call_index)] = _bounded(
+                    json.dumps(call.get("args", {}), ensure_ascii=False, default=str)
+                )
+        elif message.get("type") == "tool":
+            call_id = data.get("tool_call_id")
+            if isinstance(call_id, str) and call_id:
+                results[(call_id, sequence)] = _bounded(data.get("content"))
+    return calls, results
+
+
+def _enrich_activity_parts(
+    parts: list[TurnResponsePartDTO],
+    records: Sequence[Mapping[str, object]],
+    *,
+    projection: Mapping[str, object],
+) -> list[TurnResponsePartDTO]:
+    """用定点加载的 JSONL payload 丰富 canonical part，保持后端原顺序。"""
+    calls, results = _tool_payloads(records)
+    result_call_ids = {
+        part.tool_call_id
+        for part in parts
+        if part.kind == "tool_result" and part.tool_call_id is not None
+    }
+    terminal_turn = projection.get("status") in _TERMINAL_TURN_STATUSES
+    enriched: list[TurnResponsePartDTO] = []
+    for part in parts:
+        source = part.source
+        if part.kind == "tool_call" and part.tool_call_id is not None:
+            assistant_sequence = source.assistant_message_sequence
+            call_index = source.call_index
+            payload = (
+                calls.get((part.tool_call_id, assistant_sequence, call_index))
+                if assistant_sequence is not None and call_index is not None
+                else None
+            )
+            outcome_unknown = terminal_turn and part.tool_call_id not in result_call_ids
+            enriched.append(
+                part.model_copy(
+                    update={
+                        "status": "failed" if outcome_unknown else part.status,
+                        "arguments": payload[0] if payload is not None else None,
+                        "truncated": part.truncated
+                        or (payload[1] if payload is not None else False),
+                        "outcome_unknown": outcome_unknown,
+                    }
+                )
+            )
+            continue
+        if part.kind == "tool_result" and part.tool_call_id is not None:
+            result_sequence = source.result_message_sequence
+            payload = (
+                results.get((part.tool_call_id, result_sequence))
+                if result_sequence is not None
+                else None
+            )
+            enriched.append(
+                part.model_copy(
+                    update={
+                        "result": payload[0] if payload is not None else None,
+                        "text": payload[0] if payload is not None else part.text,
+                        "truncated": part.truncated
+                        or (payload[1] if payload is not None else False),
+                    }
+                )
+            )
+            continue
+        enriched.append(part)
+    return enriched
+
+
+def _final_response_part(
+    records: Sequence[Mapping[str, object]],
+    projection: Mapping[str, object],
+    *,
+    mode: Projection,
+    include: frozenset[str],
+) -> TurnResponsePartDTO | None:
+    if not ({"final_response", "assistant"} & include):
+        return None
+    final_sequence = projection.get("final_message_sequence")
+    final_text = projection.get("final_response_text")
+    if (
+        not isinstance(final_sequence, int)
+        or isinstance(final_sequence, bool)
+        or not isinstance(final_text, str)
+        or not final_text
+    ):
+        return None
+    final_item_id = projection.get("final_item_id")
+    final_item_sequence = projection.get("final_item_sequence")
+    final_item_created_at = projection.get("final_item_created_at")
+    if (
+        not isinstance(final_item_id, str)
+        or not final_item_id
+        or not isinstance(final_item_sequence, int)
+        or isinstance(final_item_sequence, bool)
+        or not isinstance(final_item_created_at, str)
+        or not final_item_created_at
+    ):
+        raise RuntimeError("final response projection 缺少 canonical identity")
+    completion_reason, partial = _completion_metadata_for_sequence(
+        records, final_sequence
+    )
+    return TurnResponsePartDTO(
+        part_id=f"{final_item_id}:final",
+        kind="text" if partial else "final_text",
+        projection=mode,
+        source=TurnResponseSourceDTO(
+            message_sequence=final_sequence,
+            item_id=final_item_id,
+            item_sequence=final_item_sequence,
+            part_ordinal=1_000_000_000,
+            created_at=final_item_created_at,
+            elapsed_ms=0,
+        ),
+        text=final_text[:65536],
+        truncated=bool(projection.get("final_response_text_truncated")),
+        final=not partial,
+        completion_reason=completion_reason,
+        partial=partial,
+    )
 
 
 def response_parts_from_records(
@@ -187,337 +376,28 @@ def response_parts_from_records(
     summary 模式以 SQLite 投影为正文来源，并从命中的最终 JSONL record 补充
     partial/completion_reason；detail 模式读取命中的 JSONL records。
     """
-    if mode == "summary":
-        if projection is None:
-            return []
-        parts: list[TurnResponsePartDTO] = []
-        final_sequence = projection.get("final_message_sequence")
-        if isinstance(final_sequence, int) and not isinstance(final_sequence, bool):
-            final_text = projection.get("final_response_text")
-            if isinstance(final_text, str) and final_text:
-                completion_reason, partial = _completion_metadata_for_sequence(
-                    records,
-                    final_sequence,
-                )
-                parts.append(
-                    TurnResponsePartDTO(
-                        part_id=f"message:{final_sequence}:final",
-                        kind="text" if partial else "final_text",
-                        projection="summary",
-                        source=TurnResponseSourceDTO(message_sequence=final_sequence),
-                        text=final_text[:65536],
-                        truncated=bool(projection.get("final_response_text_truncated")),
-                        final=not partial,
-                        completion_reason=completion_reason,
-                        partial=partial,
-                    )
-                )
-        raw_blocks = projection.get("thinking_blocks")
-        if isinstance(raw_blocks, list):
-            for index, raw in enumerate(raw_blocks):
-                if not isinstance(raw, Mapping):
-                    continue
-                kind = raw.get("kind")
-                if kind not in {"reasoning", "summary", "encrypted"}:
-                    continue
-                if kind == "reasoning" and not include & {"thinking", "reasoning_detail"}:
-                    continue
-                if kind == "summary" and not include & {
-                    "thinking",
-                    "reasoning_summary",
-                    "reasoning_detail",
-                }:
-                    continue
-                if kind == "encrypted" and "encrypted_reasoning_meta" not in include:
-                    continue
-                sequence = raw.get("message_sequence")
-                if not isinstance(sequence, int) or isinstance(sequence, bool):
-                    sequence = final_sequence if isinstance(final_sequence, int) else 1
-                part_kind = (
-                    "reasoning_summary"
-                    if kind == "summary"
-                    else "reasoning_encrypted"
-                    if kind == "encrypted"
-                    else "reasoning"
-                )
-                parts.append(
-                    TurnResponsePartDTO(
-                        part_id=f"reasoning:{sequence}:{index}",
-                        kind=part_kind,
-                        projection="summary",
-                        source=TurnResponseSourceDTO(
-                            message_sequence=sequence,
-                            content_block_index=(
-                                raw.get("content_block_index")
-                                if isinstance(raw.get("content_block_index"), int)
-                                else None
-                            ),
-                            item_index=(
-                                raw.get("item_index")
-                                if isinstance(raw.get("item_index"), int)
-                                else None
-                            ),
-                        ),
-                        text=(
-                            "思考内容已加密"
-                            if kind == "encrypted"
-                            else str(raw.get("text") or "")[:65536]
-                        ),
-                        carrier_type=(
-                            raw.get("carrier_type")
-                            if isinstance(raw.get("carrier_type"), str)
-                            else None
-                        ),
-                    )
-                )
-        parts.extend(
-            _summary_tool_parts(
-                projection,
-                limit=65536,
-                include=include,
-            )
-        )
-        parts.sort(
-            key=lambda part: (
-                part.source.message_sequence,
-                part.source.content_block_index
-                if part.source.content_block_index is not None
-                else 1_000_000_000,
-                part.source.item_index
-                if part.source.item_index is not None
-                else 1_000_000_000,
-                part.source.call_index
-                if part.source.call_index is not None
-                else 1_000_000_000,
-                1 if part.kind == "tool_result" else 0,
-            )
-        )
-        return parts[:max_parts]
-
-    parts = []
-    tool_call_sources: dict[str, list[tuple[int, int]]] = {}
-    terminal_turn = (
-        isinstance(projection, Mapping)
-        and isinstance(projection.get("status"), str)
-        and projection.get("status") in _TERMINAL_TURN_STATUSES
+    if projection is None:
+        raise RuntimeError("历史 response parts 缺少 canonical Turn projection")
+    parts = _activity_parts_from_projection(
+        projection,
+        mode=mode,
+        include=include,
     )
-    result_call_ids = {
-        data.get("tool_call_id")
-        for record in records
-        if isinstance(record, Mapping)
-        and _serialized_message(record).get("type") == "tool"
-        for data in [_message_data(_serialized_message(record))]
-        if isinstance(data.get("tool_call_id"), str)
-    }
-    final_sequence = (
-        projection.get("final_message_sequence") if projection is not None else None
-    )
-    for record in records:
-        sequence = record.get("_indexed_sequence")
-        if not isinstance(sequence, int) or isinstance(sequence, bool):
-            continue
-        message = _serialized_message(record)
-        message_type = message.get("type")
-        data = _message_data(message)
-        if message_type == "ai":
-            content = data.get("content")
-            blocks = _blocks(content)
-            reasoning_rows = reasoning_projection_rows(content)
-            completion_reason, partial = _completion_metadata(record)
-            for block_index, block in enumerate(blocks):
-                block_type = block.get("type")
-                if block_type in {"text", "input_text", "output_text", "refusal"}:
-                    text, truncated = _bounded(
-                        block.get("text") or block.get("refusal")
-                    )
-                    if not text:
-                        continue
-                    is_final = sequence == final_sequence
-                    if is_final and not (
-                        {"final_response", "assistant"} & include
-                    ):
-                        continue
-                    if not is_final and "text" not in include:
-                        continue
-                    parts.append(
-                        TurnResponsePartDTO(
-                            part_id=f"message:{sequence}:content:{block_index}",
-                            kind="final_text" if is_final and not partial else "text",
-                            projection="detail",
-                            source=TurnResponseSourceDTO(
-                                message_sequence=sequence,
-                                content_block_index=block_index,
-                            ),
-                            text=text,
-                            truncated=truncated,
-                            final=is_final and not partial,
-                            completion_reason=completion_reason,
-                            partial=partial,
-                        )
-                    )
-                    continue
-                block_rows = [
-                    row
-                    for row in reasoning_rows
-                    if row.get("content_block_index") == block_index
-                ]
-                for row in block_rows:
-                    row_index = row.get("item_index")
-                    if not isinstance(row_index, int):
-                        row_index = 0
-                    kind = row.get("kind")
-                    text, truncated = _bounded(
-                        "思考内容已加密" if kind == "encrypted" else row.get("text")
-                    )
-                    source = TurnResponseSourceDTO(
-                        message_sequence=sequence,
-                        content_block_index=block_index,
-                        item_index=row_index,
-                    )
-                    carrier_type = (
-                        row.get("carrier_type")
-                        if isinstance(row.get("carrier_type"), str)
-                        else None
-                    )
-                    logical_kind = (
-                        "reasoning_encrypted"
-                        if kind == "encrypted"
-                        else "reasoning_summary"
-                        if kind == "summary"
-                        else "reasoning"
-                    )
-                    if not text and logical_kind != "reasoning_encrypted":
-                        continue
-                    parts.append(
-                        TurnResponsePartDTO(
-                            part_id=(
-                                f"message:{sequence}:reasoning:{block_index}:"
-                                f"{row_index}"
-                            ),
-                            kind=logical_kind,
-                            projection="detail",
-                            source=source,
-                            text=text,
-                            carrier_type=carrier_type,
-                            truncated=truncated,
-                            completion_reason=completion_reason,
-                            partial=partial,
-                        )
-                    )
-            if "tool_call" in include or "tool_result" in include:
-                calls = data.get("tool_calls")
-                if isinstance(calls, list):
-                    for call_index, call in enumerate(calls):
-                        if not isinstance(call, Mapping):
-                            continue
-                        call_id = call.get("id")
-                        name = call.get("name")
-                        if not isinstance(call_id, str) or not call_id:
-                            continue
-                        if tool_call_ids is not None and call_id not in tool_call_ids:
-                            continue
-                        if not isinstance(name, str) or not name:
-                            name = "tool"
-                        arguments, truncated = _bounded(
-                            json.dumps(
-                                call.get("args", {}),
-                                ensure_ascii=False,
-                                default=str,
-                            )
-                        )
-                        outcome_unknown = terminal_turn and call_id not in result_call_ids
-                        if "tool_call" in include:
-                            parts.append(
-                                TurnResponsePartDTO(
-                                    part_id=f"tool-call:{sequence}:{call_index}",
-                                    kind="tool_call",
-                                    projection="detail",
-                                    status="failed" if outcome_unknown else "pending",
-                                    source=TurnResponseSourceDTO(
-                                        message_sequence=sequence,
-                                        assistant_message_sequence=sequence,
-                                        call_index=call_index,
-                                    ),
-                                    tool_call_id=call_id,
-                                    tool_name=name,
-                                    arguments=arguments,
-                                    truncated=truncated,
-                                    outcome_unknown=outcome_unknown,
-                                )
-                            )
-                        tool_call_sources.setdefault(call_id, []).append(
-                            (sequence, call_index)
-                        )
-        elif message_type == "tool" and "tool_result" in include:
-            call_id = data.get("tool_call_id")
-            if (
-                tool_call_ids is not None
-                and (not isinstance(call_id, str) or call_id not in tool_call_ids)
-            ):
-                continue
-            result, truncated = _bounded(data.get("content"))
-            if not result:
-                continue
-            sources = (
-                tool_call_sources.get(call_id)
-                if isinstance(call_id, str)
-                else None
-            )
-            call_source = sources.pop() if sources else None
-            assistant_sequence = call_source[0] if call_source else None
-            call_index = call_source[1] if call_source else None
-            parts.append(
-                TurnResponsePartDTO(
-                    part_id=(
-                        f"tool-call:{assistant_sequence}:{call_index}"
-                        if assistant_sequence is not None and call_index is not None
-                        else f"tool-result:{sequence}"
-                    ),
-                    kind="tool_result",
-                    projection="detail",
-                    status=(
-                        "failed"
-                        if data.get("status") in {"failed", "error"}
-                        else "completed"
-                    ),
-                    source=TurnResponseSourceDTO(
-                        message_sequence=sequence,
-                        assistant_message_sequence=assistant_sequence,
-                        call_index=call_index,
-                        result_message_sequence=sequence,
-                    ),
-                    tool_call_id=call_id if isinstance(call_id, str) else None,
-                    result=result,
-                    text=result,
-                    truncated=truncated,
-                )
-            )
-    if "tool_summary" in include:
-        existing_tool_kinds = {
-            part.kind for part in parts if part.kind in {"tool_call", "tool_result"}
-        }
-        parts.extend(
+    if tool_call_ids is not None:
+        parts = [
             part
-            for part in _summary_tool_parts(
-                projection or {},
-                limit=65536,
-                include=include,
-            )
-            if part.kind not in existing_tool_kinds
-        )
-        parts.sort(
-            key=lambda part: (
-                part.source.message_sequence,
-                part.source.content_block_index
-                if part.source.content_block_index is not None
-                else 1_000_000_000,
-                part.source.item_index
-                if part.source.item_index is not None
-                else 1_000_000_000,
-                part.source.call_index
-                if part.source.call_index is not None
-                else 1_000_000_000,
-                1 if part.kind == "tool_result" else 0,
-            )
-        )
+            for part in parts
+            if part.kind not in {"tool_call", "tool_result"}
+            or part.tool_call_id in tool_call_ids
+        ]
+    if mode == "detail":
+        parts = _enrich_activity_parts(parts, records, projection=projection)
+    final_part = _final_response_part(
+        records,
+        projection,
+        mode=mode,
+        include=include,
+    )
+    if final_part is not None:
+        parts.append(final_part)
     return parts[:max_parts]

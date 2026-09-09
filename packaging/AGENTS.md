@@ -1,6 +1,6 @@
 # 目录用途
 
-`packaging/` 存放 BoxTeam 可分发产物的构建入口、固定版本元数据和验证逻辑。
+`packaging/` 存放 BoxTeam 可分发产物的构建实现、固定版本元数据和验证逻辑；项目级发布入口位于 `scripts/release/`。
 
 # 可修改内容
 

@@ -20,8 +20,9 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.history_loading import HistoryLoadingConfig
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.runtime import ContentPart, ContentPartAnchor, ProvenanceEdge
+from app.domain.itemized.runtime import ProvenanceEdge
 from app.schemas.internal_v2.turn import (
     TurnHistoryLoadRequest,
     TurnHistoryPageDTO,
@@ -158,13 +159,12 @@ class RolloutCheckpointSaver(
     ) -> None:
         """显式升级当前会话索引；普通启动、读取和请求路径不得自动调用。"""
         # 只有显式升级加载旧 artifact parser；正常 Saver 构造和读取路径不加载它。
-        from app.services.infrastructure.rollout_context.migration.schema_v4 import (
-            prepare_schema_v4_upgrade,
-        )
-
         from app.services.infrastructure.rollout_context.migration.schema_v3 import (
             prepare_schema_v3_upgrade,
             resume_schema_v3_upgrade_audits,
+        )
+        from app.services.infrastructure.rollout_context.migration.schema_v4 import (
+            prepare_schema_v4_upgrade,
         )
 
         def prepare_artifacts(connection):

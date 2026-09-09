@@ -35,11 +35,15 @@ Launcher MUST（必须）从版本化 runtime manifest 解析 Python、应用资
 - **THEN** 启动失败，并报告 manifest 路径、缺失资源和发行标识
 
 ### Requirement: 按发行方式隔离数据
-除非显式提供 `BOXTEAM_HOME`，源码开发 SHALL（必须）默认使用 `~/.boxteams-dev/`，源码安装和 npm 安装发行版 SHALL（必须）默认使用 `~/.boxteams/`。
+除非显式提供 `BOXTEAM_HOME`，源码开发入口 SHALL（必须）默认使用当前 worktree 的 `out/development-runtime/boxteam-home/`，源码安装和 npm 安装发行版 SHALL（必须）默认使用 `~/.boxteams/`。Linux 源码开发完整启动 SHALL 使用按 worktree 隔离的 transient user-systemd unit，且不得启用开机启动或失败自动重启。
 
 #### Scenario: 源码开发默认目录
-- **WHEN** development Launcher 启动时没有 `BOXTEAM_HOME`
-- **THEN** Launcher 使用 `~/.boxteams-dev/` 保存配置和控制面状态
+- **WHEN** 源码开发入口启动时没有 `BOXTEAM_HOME`
+- **THEN** 开发入口使用当前 worktree 的 `out/development-runtime/boxteam-home/` 保存配置和控制面状态，并向 Launcher 显式传递该路径
+
+#### Scenario: Linux 源码开发临时后台启动
+- **WHEN** 用户在 Linux worktree 中运行完整源码开发启动命令
+- **THEN** 启动器创建名称按 worktree 和端口偏移隔离、`Restart=no` 且停止后自动回收的 transient user-systemd unit
 
 #### Scenario: 安装发行版默认目录
 - **WHEN** 已安装 Launcher 启动时没有 `BOXTEAM_HOME`

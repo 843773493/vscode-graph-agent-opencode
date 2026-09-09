@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 import sys
 from collections.abc import Mapping
 
 import rfc8785
 
 from app.domain.itemized.errors import ItemSchemaError
+
+_SHA256_JCS_PATTERN = re.compile(r"^sha256:jcs:v1:[0-9a-f]{64}$")
+_REDACTED_DIGEST_PATTERN = re.compile(r"^hmac-sha256:session:v1:[0-9a-f]{64}$")
 
 
 def _ensure_json_value(value: object, path: str = "value") -> None:
@@ -73,6 +77,26 @@ def canonical_json_bytes(value: object) -> bytes:
 
 def sha256_jcs(value: object) -> str:
     return "sha256:jcs:v1:" + hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def validate_hash_token(
+    value: object,
+    field_name: str,
+    *,
+    redacted: bool = False,
+) -> str:
+    """校验 manifest 中可跨进程恢复的 hash token 语法。"""
+    if not isinstance(value, str) or not value:
+        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
+    pattern = _REDACTED_DIGEST_PATTERN if redacted else _SHA256_JCS_PATTERN
+    if pattern.fullmatch(value) is None:
+        expected = (
+            "hmac-sha256:session:v1:<64位小写hex>"
+            if redacted
+            else "sha256:jcs:v1:<64位小写hex>"
+        )
+        raise ItemSchemaError(f"{field_name} 必须符合 {expected}")
+    return value
 
 
 def content_hash(payload_kind: str, payload: object) -> str:

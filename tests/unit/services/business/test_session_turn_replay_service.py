@@ -186,7 +186,6 @@ async def _build_service(
     session_bundle_factory(tmp_path, "ses_replay")
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     config = build_checkpoint_config("ses_replay")
-    config = await _put_checkpoint(saver, config, messages=[], todos=["initial"])
     first_messages = [
         HumanMessage(content="第一问", response_metadata=_metadata("msg_1")),
         AIMessage(content="第一答", response_metadata=_metadata("assistant_1")),
@@ -274,7 +273,7 @@ async def test_edit_first_turn_removes_all_following_turns(
         for item in final_messages
     )
     assert replacement_count == 1
-    assert latest.checkpoint["channel_values"]["todos"] == ["initial"]
+    assert latest.checkpoint["channel_values"]["todos"] == ["after_first"]
     assert "_summarization_event" not in latest.checkpoint["channel_values"]
 
 

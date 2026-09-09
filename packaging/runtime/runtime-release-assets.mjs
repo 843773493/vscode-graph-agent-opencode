@@ -28,6 +28,22 @@ export function runtimeAssetUrl(platform) {
   );
 }
 
+export function stampReleasePackageManifest(packageRoot, { launcher = false } = {}) {
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  packageJson.version = BOXTEAM_VERSION;
+  if (launcher) {
+    packageJson.optionalDependencies = {
+      "@boxteam/runtime-linux-x64": BOXTEAM_VERSION,
+      "@boxteam/runtime-windows-x64": BOXTEAM_VERSION,
+    };
+  }
+  writeFileSync(
+    packageJsonPath,
+    `${JSON.stringify(packageJson, null, 2)}\n`,
+  );
+}
+
 export async function sha256File(filePath) {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(filePath)) {
@@ -48,6 +64,7 @@ export async function stageRuntimeDownloaderPackage({
   mkdirSync(packageRoot, { recursive: true });
 
   const packageJson = JSON.parse(readFileSync(sourcePackagePath, "utf8"));
+  packageJson.version = BOXTEAM_VERSION;
   packageJson.description = `${packageJson.description}（GitHub Release 下载器）`;
   packageJson.dependencies = RUNTIME_DOWNLOADER_DEPENDENCIES;
   packageJson.scripts = { postinstall: `node ${POSTINSTALL_SCRIPT}` };
@@ -61,7 +78,7 @@ export async function stageRuntimeDownloaderPackage({
   };
 
   cpSync(
-    path.join(projectRoot, "packaging", "runtime", POSTINSTALL_SCRIPT),
+    path.join(projectRoot, "scripts", "install", POSTINSTALL_SCRIPT),
     path.join(packageRoot, POSTINSTALL_SCRIPT),
   );
   writeFileSync(

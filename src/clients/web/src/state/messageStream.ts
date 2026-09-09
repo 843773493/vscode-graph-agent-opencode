@@ -574,7 +574,12 @@ export function messageStreamToResponseParts(
         completion_reason: execution.completion_reason,
         final: status === "completed",
       });
-      if (execution.result || execution.error) {
+      if (
+        execution.result
+        || execution.error
+        || execution.status === "completed"
+        || execution.status === "failed"
+      ) {
         parts.push({
           part_id: `${execution.tool_execution_id}:result`,
           kind: "tool_result",

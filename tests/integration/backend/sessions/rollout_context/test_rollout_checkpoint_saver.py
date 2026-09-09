@@ -1442,11 +1442,30 @@ def test_sqlite_backup_restores_authoritative_checkpoint_state(
     index_path = storage.index_path("session_1")
     index_path.write_bytes(b"corrupted")
 
-    restored_snapshot = storage.restore_index_backup("session_1", backup)
+    restored_snapshot = storage.restore_index_backup_offline("session_1", backup)
     try:
         assert restored_snapshot.manifest.latest_checkpoint_id == "cp-1"
     finally:
         restored_snapshot.close()
+    quarantine_entries = tuple(
+        (index_path.parent / "recovery-quarantine").iterdir()
+    )
+    assert len(quarantine_entries) == 1
+    quarantine = quarantine_entries[0]
+    assert (quarantine / "index.sqlite").read_bytes() == b"corrupted"
+    restore_manifest = json.loads(
+        (quarantine / "restore-manifest.json").read_text(encoding="utf-8")
+    )
+    assert restore_manifest["schema"] == "rollout-index-offline-restore:v1"
+    assert restore_manifest["session_id"] == "session_1"
+    assert restore_manifest["source_path"] == str(backup)
+    assert restore_manifest["source_sha256"] == restore_manifest["installed_sha256"]
+    assert restore_manifest["quarantined"] == [
+        {
+            "name": "index.sqlite",
+            "sha256": storage._file_hash(quarantine / "index.sqlite"),
+        }
+    ]
     restored = RolloutCheckpointSaver(sessions_dir).get_tuple(config)
     assert restored is not None
     assert restored.checkpoint["channel_values"]["counter"] == 1
@@ -1463,9 +1482,10 @@ def test_sqlite_backup_failure_does_not_leave_partial_temporary_index(
     index_path = storage.index_path("session_1")
     index_path.write_bytes(b"not-a-sqlite-database")
 
-    with pytest.raises(sqlite3.DatabaseError):
+    with pytest.raises(RuntimeError, match="recovery_required") as caught:
         storage.backup_index("session_1", destination=tmp_path / "index.bak")
 
+    assert isinstance(caught.value.__cause__, sqlite3.DatabaseError)
     assert not tuple(tmp_path.glob(".*.tmp"))
 
 

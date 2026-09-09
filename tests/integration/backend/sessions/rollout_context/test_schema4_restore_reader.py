@@ -457,6 +457,62 @@ def test_restore_rejects_corrupt_target_without_replacement(restore_case):
     )
 
 
+@pytest.mark.parametrize("operation", ["initialize", "open_read_snapshot"])
+def test_corrupt_target_enters_explicit_recovery_required(restore_case, operation):
+    case = restore_case
+    original_backup = case.backup.read_bytes()
+    case.index.write_bytes(b"corrupted")
+    before = case.index.stat()
+
+    action = getattr(case.saver._storage, operation)
+    with pytest.raises(
+        RuntimeError,
+        match="recovery_required.*SQLite backup.*禁止从 JSONL 重建",
+    ) as caught:
+        action(case.session)
+
+    assert isinstance(caught.value.__cause__, sqlite3.DatabaseError)
+    assert case.index.read_bytes() == b"corrupted"
+    assert case.index.stat().st_ino == before.st_ino
+    assert case.index.stat().st_mtime_ns == before.st_mtime_ns
+    assert case.backup.read_bytes() == original_backup
+
+
+def test_offline_restore_rejects_readable_target_without_replacement(restore_case):
+    case = restore_case
+    original_target = case.index.read_bytes()
+    original_backup = case.backup.read_bytes()
+    inode = case.index.stat().st_ino
+
+    with pytest.raises(RuntimeError, match="只允许恢复无法打开的损坏 target"):
+        case.saver._storage.restore_index_backup_offline(case.session, case.backup)
+
+    assert case.index.read_bytes() == original_target
+    assert case.index.stat().st_ino == inode
+    assert case.backup.read_bytes() == original_backup
+    assert not (case.index.parent / "recovery-quarantine").exists()
+    assert not tuple(case.index.parent.glob(".index.sqlite.*.offline-restore"))
+
+
+def test_offline_restore_rejects_invalid_source_before_quarantine(restore_case):
+    case = restore_case
+    case.index.write_bytes(b"corrupted-target")
+    before = case.index.stat()
+    broken = case.context.artifacts_dir / f"{case.session}.invalid-offline.sqlite"
+    broken.write_bytes(b"not-a-sqlite-database")
+
+    with pytest.raises(sqlite3.DatabaseError, match="not a database"):
+        case.saver._storage.restore_index_backup_offline(case.session, broken)
+
+    assert case.index.read_bytes() == b"corrupted-target"
+    assert case.index.stat().st_ino == before.st_ino
+    assert case.index.stat().st_mtime_ns == before.st_mtime_ns
+    assert broken.read_bytes() == b"not-a-sqlite-database"
+    quarantine_root = case.index.parent / "recovery-quarantine"
+    assert not quarantine_root.exists() or not tuple(quarantine_root.iterdir())
+    assert not tuple(case.index.parent.glob(".index.sqlite.*.offline-restore"))
+
+
 def test_restore_fails_promptly_when_another_writer_holds_target(restore_case):
     case = restore_case
     original_backup = case.backup.read_bytes()

@@ -803,12 +803,14 @@ class MessageStreamStore:
             raise MessageStreamError(
                 "stream.snapshot 是控制帧，不得作为业务事件提交或消耗 event_seq"
             )
-        cached = self._states.get(turn_stream_id)
-        if cached is None:
-            raise MessageStreamNotFoundError(
-                f"消息流不存在: turn_stream_id={turn_stream_id}"
-            )
         async with self._lock_for(turn_stream_id):
+            # 必须在 Turn 锁内读取缓存；模型生命周期事件和 provider delta
+            # 可能并发提交，锁外捕获的旧 state 会让两个提交复用同一个 event_seq。
+            cached = self._states.get(turn_stream_id)
+            if cached is None:
+                raise MessageStreamNotFoundError(
+                    f"消息流不存在: turn_stream_id={turn_stream_id}"
+                )
             state = copy.deepcopy(cached)
             if event_id is not None:
                 self._load_event_ids_from_disk(

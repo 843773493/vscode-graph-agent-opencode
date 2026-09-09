@@ -82,7 +82,7 @@ def _run_target_command(project_root: Path, command: str, *arguments: str) -> No
         [
             "bun",
             "run",
-            "scripts/cross-platform-development-target.mjs",
+            "scripts/launch/cross-platform-development-target.mjs",
             command,
             TARGET_ID,
             "--config",

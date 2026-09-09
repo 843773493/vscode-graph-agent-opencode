@@ -62,7 +62,11 @@ EXPECTED_SECOND_EVENTS = [
 @pytest.fixture(scope="module")
 def e2e_model_stream_config_path() -> str:
     return str(
-        Path.cwd() / "configs" / "tests" / "model_stream_responses_tool.jsonc"
+        Path.cwd()
+        / "configs"
+        / "tests"
+        / "model_stream"
+        / "model_stream_responses_tool.jsonc"
     )
 
 

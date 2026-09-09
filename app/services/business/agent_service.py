@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.agents.agent_factory import provider_configuration_error
 from app.schemas.internal_v2.agent import AgentDTO, AgentProviderDTO
 from app.services.infrastructure.config_service import ConfigService
 
@@ -23,17 +24,26 @@ class AgentService:
                 workspace_default_provider_id = (
                     config_service.get_workspace_default_provider_id(agent_id)
                 )
-                providers = [
-                    AgentProviderDTO(
-                        provider_id=str(provider["id"]),
-                        model=str(provider["model"]),
-                        custom_llm_provider=str(provider["custom_llm_provider"]),
-                        workspace_default=(
-                            provider["id"] == workspace_default_provider_id
-                        ),
+                providers: list[AgentProviderDTO] = []
+                for provider in runtime["providers"]:
+                    configuration_error = provider_configuration_error(
+                        provider,
+                        runtime,
                     )
-                    for provider in runtime["providers"]
-                ]
+                    providers.append(
+                        AgentProviderDTO(
+                            provider_id=str(provider["id"]),
+                            model=str(provider["model"]),
+                            custom_llm_provider=str(
+                                provider["custom_llm_provider"]
+                            ),
+                            workspace_default=(
+                                provider["id"] == workspace_default_provider_id
+                            ),
+                            available=configuration_error is None,
+                            configuration_error=configuration_error,
+                        )
+                    )
                 agents.append(
                     AgentDTO(
                         agent_id=agent_id,

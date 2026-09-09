@@ -486,7 +486,7 @@ describe("ChatTurn 轮次动作", () => {
     value.turnStatus = "failed";
     value.assistantMessages = [];
     value.responseParts = [];
-    value.activityStats = { duration_ms: 30, message_count: 2 };
+    value.activityStats = { duration_ms: 30, item_count: 2 };
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
@@ -592,7 +592,7 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).not.toContain("生成已中断");
   });
 
-  test("未知工具结果显示结果未知而不是成功或运行中", () => {
+  test("完成态工具折叠行显示统计，展开后显示未知结果", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
@@ -619,10 +619,61 @@ describe("ChatTurn 轮次动作", () => {
     }];
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+    expect(html).toContain("耗时 — · Item 计数同步中");
+    expect(html).not.toContain("shell 结果未知");
 
-    expect(html).toContain("shell 结果未知");
-    expect(html).not.toContain("正在运行 shell");
-    expect(html).not.toContain("已运行 shell");
+    let renderer: ReactTestRenderer;
+    act(() => {
+      renderer = create(<ChatTurn {...chatTurnProps(value)} />);
+    });
+    const toggle = renderer!.root.findAllByType("button").find(
+      (button) => button.props.className === "chat-thinking-toggle",
+    );
+    expect(toggle).toBeDefined();
+    act(() => toggle!.props.onClick());
+    const expanded = renderer!.toJSON();
+    expect(JSON.stringify(expanded)).toContain("shell 结果未知");
+    expect(JSON.stringify(expanded)).not.toContain("正在运行 shell");
+    expect(JSON.stringify(expanded)).not.toContain("已运行 shell");
+    renderer!.unmount();
+  });
+
+  test("完成态 reasoning 折叠行只显示耗时和 Item 计数", () => {
+    const value = conversation("done");
+    value.displayMode = "live";
+    value.source = "pending";
+    value.activityStats = { duration_ms: 7100, item_count: 4 };
+    value.assistantMessages = [{
+      ...value.assistantMessages![0],
+      content: "OK",
+    }];
+    value.responseParts = [
+      {
+        part_id: "reasoning-complete",
+        kind: "reasoning",
+        projection: "streaming",
+        status: "completed",
+        source: { message_sequence: 1 },
+        text: "Confirming test tool success with results",
+        final: false,
+      },
+      {
+        part_id: "final-complete",
+        kind: "final_text",
+        projection: "streaming",
+        status: "completed",
+        source: { message_sequence: 2 },
+        text: "OK",
+        final: true,
+      },
+    ];
+
+    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+
+    expect(html).toContain("耗时 7.1s · Item 4 项");
+    expect(html).toContain('aria-label="展开 Turn 中间消息：耗时 7.1s · Item 4 项"');
+    expect(html).not.toContain("Confirming test tool success with results");
+    expect(html).toContain("OK");
   });
 
   test("历史 Turn 折叠行提示边界，展开后在中间消息中显示未知工具结果", async () => {
@@ -654,7 +705,7 @@ describe("ChatTurn 轮次动作", () => {
 
     const toggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
     expect(toggle.props["aria-label"]).toBe(
-      "展开 Turn 中间消息（工具执行结果未知）",
+      "展开 Turn 中间消息：耗时 — · Item 计数同步中 · 工具执行结果未知",
     );
     expect(renderer!.root.findAllByProps({ "data-status-kind": "tool-outcome-unknown" })).toHaveLength(1);
     expect(renderer!.root.findAllByProps({ className: "chat-inline-tool-unknown" })).toHaveLength(0);
@@ -982,7 +1033,7 @@ describe("ChatTurn 轮次动作", () => {
     value.turnItemsView = "summary";
     value.activityStats = {
       duration_ms: 1250,
-      message_count: 5,
+      item_count: 5,
     };
     let loadedInclude: string[] | undefined;
     let renderer: ReactTestRenderer;
@@ -996,9 +1047,10 @@ describe("ChatTurn 轮次动作", () => {
         />,
       );
     });
-    const toggle = renderer!.root.findByProps({
-      "aria-label": "展开 Turn 中间消息",
-    });
+    const toggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
+    expect(toggle.props["aria-label"]).toBe(
+      "展开 Turn 中间消息：耗时 1.3s · Item 5 项",
+    );
     await act(async () => {
       await toggle.props.onClick();
     });
@@ -1012,10 +1064,34 @@ describe("ChatTurn 轮次动作", () => {
     ]);
     expect(renderer!.root.findByProps({ "aria-expanded": true })).toBeTruthy();
     const summaryHtml = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-    expect(summaryHtml).toContain("耗时 1.3s · 消息 5 条");
+    expect(summaryHtml).toContain("耗时 1.3s · Item 5 项");
     expect(summaryHtml).not.toContain("assistant 1");
     expect(summaryHtml).not.toContain("tool 1/1");
     renderer!.unmount();
+  });
+
+  test("没有中间 item 的历史 Turn 只显示统计，不提供空展开区", () => {
+    const value = conversation("done");
+    value.turnId = "job_plain";
+    value.turnRevision = 1;
+    value.turnItemsView = "summary";
+    value.activityStats = {
+      duration_ms: 7100,
+      item_count: 0,
+    };
+
+    const renderer = create(<ChatTurn {...chatTurnProps(value)} />);
+    const activity = renderer.root.findByProps({
+      className: "chat-thinking-toggle is-static",
+    });
+    expect(activity.props.role).toBe("status");
+    expect(activity.props["aria-label"]).toBe(
+      "Turn 中间消息：耗时 7.1s · Item 0 项",
+    );
+    expect(renderer.root.findAllByProps({ className: "chat-thinking-body" })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ className: "chat-thinking-empty" })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ "aria-expanded": false })).toHaveLength(0);
+    renderer.unmount();
   });
 
   test("历史 ToolRow 展开时只请求当前 tool_call_id 的详情", async () => {
@@ -1052,9 +1128,10 @@ describe("ChatTurn 轮次动作", () => {
       );
     });
 
-    const activityToggle = renderer!.root.findByProps({
-      "aria-label": "展开 Turn 中间消息",
-    });
+    const activityToggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
+    expect(activityToggle.props["aria-label"]).toBe(
+      "展开 Turn 中间消息：耗时 — · Item 计数同步中",
+    );
     await act(async () => {
       await activityToggle.props.onClick();
     });
@@ -1122,9 +1199,10 @@ describe("ChatTurn 轮次动作", () => {
       );
     });
 
-    const toggle = renderer!.root.findByProps({
-      "aria-label": "展开 Turn 中间消息",
-    });
+    const toggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
+    expect(toggle.props["aria-label"]).toBe(
+      "展开 Turn 中间消息：耗时 — · Item 计数同步中",
+    );
     await act(async () => {
       await toggle.props.onClick();
     });

@@ -1,4 +1,21 @@
-export const BOXTEAM_VERSION = "0.1.0";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+const projectRoot = path.resolve(
+  process.env.BOXTEAM_PROJECT_ROOT?.trim() || process.cwd(),
+);
+const projectPackagePath = path.join(projectRoot, "package.json");
+const projectPackage = JSON.parse(
+  readFileSync(projectPackagePath, "utf8"),
+);
+if (
+  typeof projectPackage.version !== "string" ||
+  projectPackage.version.trim() === ""
+) {
+  throw new Error(`根 package.json 缺少有效 version: ${projectPackagePath}`);
+}
+
+export const BOXTEAM_VERSION = projectPackage.version;
 
 export const BOXTEAM_GITHUB_REPOSITORY =
   "843773493/vscode-graph-agent-opencode";

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -89,12 +90,18 @@ def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
                 },
             ),
         )
+        plan = replace(
+            plan,
+            plan_creation_idempotency_key="test_rollout_fork_plans:source-plan:create",
+        )
+        saver.create_context_plan("source", plan)
         sealed = saver.seal_context_plan(
             "source",
             plan,
             turn_id="source-turn",
             execution_id=saver.execution_for_turn("source", turn_id="source-turn"),
             provider_version="integration-provider",
+            seal_idempotency_key="test_rollout_fork_plans:source-plan:seal",
         )
         yield saver, sealed, body
 
@@ -500,12 +507,18 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
             refs=(ref,),
             history_view_revision=initial.history_view_revision,
         )
+        plan = replace(
+            plan,
+            plan_creation_idempotency_key=f"test_rollout_fork_plans:{plan_id}:create",
+        )
+        saver.create_context_plan("source", plan)
         sealed = saver.seal_context_plan(
             "source",
             plan,
             turn_id="source-turn",
             execution_id=saver.execution_for_turn("source", turn_id="source-turn"),
             provider_version="integration-provider",
+            seal_idempotency_key=f"test_rollout_fork_plans:{plan_id}:seal",
             request_only_content={ref_id: body} if ordinal == 1 else None,
         )
         entry = next(entry for entry in sealed.selection if entry.ref.ref_id == ref_id)

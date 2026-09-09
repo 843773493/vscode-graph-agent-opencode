@@ -243,9 +243,18 @@ async def test_history_loads_rollout_summary_and_tool_details(
     assert latest["tool_summary"]
     assert [part["kind"] for part in latest["response_parts"]] == [
         "tool_call",
+        "tool_result",
         "final_text",
     ]
     assert latest["response_parts"][0]["source"]["call_index"] == 0
+    assert [
+        part["source"]["item_sequence"] for part in latest["response_parts"]
+    ] == sorted(
+        part["source"]["item_sequence"] for part in latest["response_parts"]
+    )
+    assert all(
+        part["source"]["item_id"] for part in latest["response_parts"]
+    )
     assert len(latest["items"]) == 2
     assert all(item["raw"] == {} for item in latest["items"])
     assert "encrypted-0024" not in json.dumps(latest, ensure_ascii=False)
@@ -294,7 +303,7 @@ async def test_history_loads_rollout_summary_and_tool_details(
         session_id,
         {
             "turn_ids": [latest["turn_id"]],
-            "include": ["user", "thinking", "final_response"],
+            "include": ["user", "thinking", "tool_summary", "final_response"],
         },
     )
     assert reasoning["items"][0]["thinking_blocks"]
@@ -302,6 +311,14 @@ async def test_history_loads_rollout_summary_and_tool_details(
         "kind": "reasoning",
         "text": "检查问题 24",
     }
+    assert [
+        part["kind"] for part in reasoning["items"][0]["response_parts"]
+    ] == ["tool_call", "tool_result", "reasoning", "final_text"]
+    assert all(
+        part.get("arguments") is None and part.get("result") is None
+        for part in reasoning["items"][0]["response_parts"]
+        if part["kind"] in {"tool_call", "tool_result"}
+    )
     assert "encrypted-0024" not in json.dumps(reasoning, ensure_ascii=False)
 
     metadata = await _load_history(
@@ -605,8 +622,16 @@ async def test_rollout_history_around_anchor_returns_bidirectional_cursors(
     assert isinstance(activity_stats, dict)
     assert isinstance(activity_stats["duration_ms"], int)
     assert activity_stats["duration_ms"] >= 0
-    assert activity_stats["message_count"] == 4
-    assert set(activity_stats) == {"duration_ms", "message_count"}
+    # user/final projection 不属于可展开的中间 item；该 fixture 每轮只有
+    # 1 个 reasoning carrier、1 个 tool call 和 1 个 tool result。
+    assert activity_stats["item_count"] == 3
+    assert activity_stats["first_item_sequence"] <= activity_stats["last_item_sequence"]
+    assert set(activity_stats) == {
+        "duration_ms",
+        "item_count",
+        "first_item_sequence",
+        "last_item_sequence",
+    }
     assert all(item["items"] == [] for item in around["items"])
 
     before = await _load_history(

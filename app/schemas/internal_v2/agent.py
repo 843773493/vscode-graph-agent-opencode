@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel
 
 
@@ -10,12 +8,14 @@ class AgentProviderDTO(BaseModel):
     model: str
     custom_llm_provider: str
     workspace_default: bool = False
+    available: bool = True
+    configuration_error: str | None = None
 
 
 class AgentDTO(BaseModel):
     agent_id: str
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     model: str
     tools: list[str]
     capabilities: list[str]

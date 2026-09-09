@@ -600,6 +600,73 @@ async def test_history_replay_reuses_turn_root_without_execution(
 
 
 @pytest.mark.asyncio
+async def test_stale_fork_anchor_is_rejected_before_target_creation(
+    fork_context: ForkIntegrationContext,
+) -> None:
+    source = await _seed_source(fork_context)
+    before = await fork_context.sessions.list(limit=100)
+
+    with pytest.raises(KeyError, match="源 rollout 不存在 anchor"):
+        await fork_context.forks.fork(
+            source.session_id,
+            mode="context_fork",
+            anchor="anchor-not-in-source",
+        )
+
+    after = await fork_context.sessions.list(limit=100)
+    assert after.total == before.total == 1
+    assert [session.session_id for session in after.items] == [source.session_id]
+
+
+@pytest.mark.asyncio
+async def test_full_copy_without_selector_keeps_complete_history_after_restart(
+    fork_context: ForkIntegrationContext,
+) -> None:
+    source = await _seed_source(fork_context)
+    child = await fork_context.forks.fork(
+        source.session_id,
+        mode="full_rollout_copy",
+    )
+
+    restarted = RolloutCheckpointSaver(
+        fork_context.sessions.path_resolver.sessions_root
+    )
+    restored = await restarted.aget_tuple(
+        build_checkpoint_config(child.session_id)
+    )
+    assert restored is not None
+    assert [
+        message.content for message in restored.checkpoint["channel_values"]["messages"]
+    ] == ["问题一", "回答一", "问题二"]
+
+    source_root = fork_context.sessions.path_resolver.resolve_session_node(
+        source.session_id
+    )
+    child_root = fork_context.sessions.path_resolver.resolve_session_node(
+        child.session_id
+    )
+    with (
+        sqlite3.connect(source_root / "rollout" / "index.sqlite") as source_connection,
+        sqlite3.connect(child_root / "rollout" / "index.sqlite") as child_connection,
+    ):
+        source_turns = source_connection.execute(
+            "SELECT turn_id, status FROM turn_records ORDER BY turn_ordinal"
+        ).fetchall()
+        target_turns = child_connection.execute(
+            "SELECT turn_id, status, turn_ordinal FROM turn_records ORDER BY turn_ordinal"
+        ).fetchall()
+
+    assert source_turns == [("turn-1", "completed"), ("turn-2", "active")]
+    assert [row[1] for row in target_turns] == ["completed", "cancelled"]
+    assert [row[2] for row in target_turns] == [1, 2]
+    assert all(row[0] not in {"turn-1", "turn-2"} for row in target_turns)
+    mapping_rows = _identity_mapping_rows(fork_context, child.session_id)
+    turn_mappings = [row for row in mapping_rows if row[3] == "turn"]
+    assert {row[4] for row in turn_mappings} == {"turn-1", "turn-2"}
+    assert all(row[5] not in {"turn-1", "turn-2"} for row in turn_mappings)
+
+
+@pytest.mark.asyncio
 async def test_interrupted_fork_materialization_is_rolled_back_on_next_open(
     fork_context: ForkIntegrationContext,
 ) -> None:

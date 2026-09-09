@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-- npm 平台过滤、版本、exports 和许可说明。
+- npm 平台过滤、exports 和许可说明。
 
 # 不可修改内容
 
@@ -13,6 +13,6 @@
 
 # 规范
 
-- 版本必须与 `boxteam` 主包一致。
+- 发布版本由打包 staging 阶段从根 `package.json` 注入，不能在此模板中单独维护。
 - 实际包内容由 `packaging/runtime/build-linux-x64.mjs` 写入 `out/packaging/`。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

@@ -219,29 +219,12 @@ function mergeResponseParts(
   current: unknown,
   incoming: unknown,
 ): unknown[] | undefined {
-  const currentParts = Array.isArray(current) ? current : [];
-  const incomingParts = Array.isArray(incoming) ? incoming : [];
-  if (currentParts.length === 0 && incomingParts.length === 0) return undefined;
-  const parts = new Map<string, Record<string, unknown>>();
-  const order: string[] = [];
-  const add = (value: unknown) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return;
-    const part = value as Record<string, unknown>;
-    const key = `${String(part.part_id ?? "")}:${String(part.kind ?? "")}`;
-    if (!parts.has(key)) order.push(key);
-    const previous = parts.get(key);
-    parts.set(
-      key,
-      previous && projectionRichness(previous) > projectionRichness(part)
-        ? previous
-        : part,
-    );
-  };
-  currentParts.forEach(add);
-  incomingParts.forEach(add);
-  return order.map((key) => parts.get(key)).filter(
-    (part): part is Record<string, unknown> => part !== undefined,
-  );
+  if (Array.isArray(incoming)) {
+    // 历史响应已经携带 canonical item identity 和后端顺序。前端不得再按
+    // message 坐标重排、按正文去重，或把旧 summary 与新 detail 拼成第三套历史。
+    return [...incoming];
+  }
+  return Array.isArray(current) ? [...current] : undefined;
 }
 
 function mergeSameRevisionTurn(

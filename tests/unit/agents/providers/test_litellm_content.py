@@ -11,15 +11,17 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGenerationChunk
 from pydantic import ValidationError
 
-from app.agents.providers.litellm_content import (
-    build_ai_message_content,
-    canonicalize_ai_message,
-    project_ai_message_content,
-    project_user_message_content,
+from app.agents.providers.message_content_schema import validate_content_blocks
+from app.agents.providers.output_normalization import build_ai_message_content
+from app.agents.providers.response_normalization import canonicalize_ai_message
+from app.services.mapping.itemized.provider_history import (
     reasoning_projection_rows,
     visible_text,
 )
-from app.agents.providers.message_content_schema import validate_content_blocks
+from app.services.mapping.itemized.provider_request import (
+    project_ai_message_content,
+    project_user_message_content,
+)
 
 
 def _content() -> list[dict[str, object]]:

@@ -9,9 +9,9 @@ import pytest
 
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.parts import ContentPart
 from app.domain.itemized.records import ProducerRef
 from app.domain.itemized.runtime import (
-    ContentPart,
     ExecutionRecord,
     ModelCallRecord,
     ProvenanceEdge,

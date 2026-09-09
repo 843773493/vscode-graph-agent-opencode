@@ -27,7 +27,7 @@
 - 现在实现 Chat Completions、OpenAI Responses 和 Anthropic Messages SSE codec；Chat/Responses 继续覆盖真实 LiteLLM adapter，Anthropic 本次覆盖 codec、asset 和 wire round-trip。
 - 让 protocol codec 决定 `event`、payload 编码和终止事件，通用 transport 不包含 provider 专用判断。
 - 多会话并发共享只读 cassette；每个请求独立拥有 response stream，`request_reusable` 不共享迭代器，`session_sequence` 只在显式 session context 内维护游标。
-- 用 `configs/tests/*.jsonc` 选择运行模式和 scenario，避免大量环境变量和重复配置。
+- 用 `configs/tests/model_stream/*.jsonc` 选择运行模式和 scenario，避免大量环境变量和重复配置。
 - 将 provider 上游资产与业务 expectation 分离，使业务协议变更不要求修改 provider frame。
 - 在资产、协议、匹配、录制和生命周期出错时快速失败并保留可诊断信息。
 
@@ -43,7 +43,7 @@
 ## Top-Level Architecture
 
 ```text
-configs/tests/*.jsonc
+configs/tests/model_stream/*.jsonc
         │  mode / scenario / replay policy
         ▼
 scenario manifest ──► cassette metadata.protocol
@@ -111,15 +111,21 @@ registry 按 `metadata.protocol` 查找 codec。未知协议直接报告资产�
 
 ```text
 configs/tests/
-├── model_stream.jsonc                         # Chat 默认 reasoning/tool loop
-├── model_stream_responses.jsonc               # Responses 默认 reasoning/tool loop
-├── model_stream_chat_basic.jsonc              # Chat 基础文本切换
-├── model_stream_chat_tool.jsonc               # Chat 显式工具场景切换
-├── model_stream_responses_basic.jsonc         # Responses 基础文本切换
-├── model_stream_responses_tool.jsonc          # Responses 显式工具场景切换
-├── model_stream_responses_reasoning_text.jsonc # Responses 显式 reasoning/text 切换
-├── model_stream_responses_parallel_tool.jsonc # Responses 交错双工具切换
-└── model_stream_schema.jsonc                  # 共享配置 schema
+├── workspace/
+│   ├── default.jsonc                          # 完整 Workspace 测试配置
+│   ├── agent_name_check.jsonc                 # Agent 名称测试配置
+│   ├── cctq_vision.jsonc                      # 视觉 Provider 测试配置
+│   └── tool_denylist_check.jsonc              # 工具 denylist 测试配置
+└── model_stream/
+    ├── model_stream.jsonc                     # Chat 默认 reasoning/tool loop
+    ├── model_stream_responses.jsonc           # Responses 默认 reasoning/tool loop
+    ├── model_stream_chat_basic.jsonc          # Chat 基础文本切换
+    ├── model_stream_chat_tool.jsonc           # Chat 显式工具场景切换
+    ├── model_stream_responses_basic.jsonc     # Responses 基础文本切换
+    ├── model_stream_responses_tool.jsonc      # Responses 显式工具场景切换
+    ├── model_stream_responses_reasoning_text.jsonc # Responses 显式 reasoning/text 切换
+    ├── model_stream_responses_parallel_tool.jsonc # Responses 交错双工具切换
+    └── model_stream_schema.jsonc              # 共享配置 schema
 
 tests/fixtures/model_stream/
 ├── handwritten/

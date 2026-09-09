@@ -37,7 +37,9 @@ def config_service():
     """使用测试配置创建 ConfigService"""
     from tests.conftest import CONFIGS_DIR
 
-    test_config_path = os.path.join(CONFIGS_DIR, "tests", "default.jsonc")
+    test_config_path = os.path.join(
+        CONFIGS_DIR, "tests", "workspace", "default.jsonc"
+    )
     yield ConfigService(
         config_dir=Path(CONFIGS_DIR),
         config_path=Path(test_config_path),

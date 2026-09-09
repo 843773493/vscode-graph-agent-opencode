@@ -161,7 +161,6 @@ def project_detail(
             and not (
                 requested in {"tool_call", "tool_result"}
                 and "tool_summary" in fields
-                and part.projection == "summary"
             )
         ):
             continue
@@ -252,7 +251,7 @@ def summary(detail: TurnDetailDTO) -> TurnSummaryDTO:
         user_message_count=len(detail.user_messages),
         response_preview=detail.response_preview,
         preview_truncated=detail.preview_truncated,
-        item_count=len(detail.items),
+        item_count=detail.activity_stats.item_count,
         thinking_blocks=detail.thinking_blocks,
         tool_summary=detail.tool_summary,
         tool_summary_truncated=detail.tool_summary_truncated,

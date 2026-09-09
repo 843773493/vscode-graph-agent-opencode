@@ -29,6 +29,10 @@ from app.domain.itemized.schema import (
     validate_producer_ref,
 )
 
+_OPTIONAL_FIELDS = frozenset(
+    {"turn_id", "turn_scope", "message_group_id", "wire_role"}
+)
+
 
 def _non_empty_string(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value:
@@ -242,6 +246,8 @@ class CanonicalItemRecord:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> CanonicalItemRecord:
+        if not isinstance(value, Mapping):
+            raise ItemSchemaError("CanonicalItemRecord 必须是 object")
         missing = [field_name for field_name in _CORE_FIELDS if field_name not in value]
         if missing:
             raise ItemSchemaError(f"CanonicalItemRecord 缺少字段: {','.join(missing)}")
@@ -252,6 +258,11 @@ class CanonicalItemRecord:
             raise FormatDispatchError(
                 "v2 CanonicalItemRecord 禁止 legacy message envelope 字段: "
                 + ",".join(forbidden)
+            )
+        unknown = sorted(set(value) - set(_CORE_FIELDS) - _OPTIONAL_FIELDS)
+        if unknown:
+            raise ItemSchemaError(
+                "CanonicalItemRecord 含未知字段: " + ",".join(unknown)
             )
         return cls(
             format_version=value["format_version"],
@@ -311,6 +322,10 @@ class CanonicalItemRecord:
         if self.turn_scope == TurnScope.TURN_ROOT:
             if self.turn_id is None or semantic != SemanticKind.USER_INPUT:
                 raise ItemSchemaError("turn_root 必须是带 turn_id 的 user_input")
+            if producer.get("producer_kind") != "user":
+                raise ItemSchemaError(
+                    "turn_root 的 producer_ref.producer_kind 必须是 user"
+                )
         elif self.turn_scope == TurnScope.TURN_MEMBER:
             if self.turn_id is None:
                 raise ItemSchemaError("turn_member 必须带 turn_id")

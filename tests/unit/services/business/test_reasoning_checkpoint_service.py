@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -474,7 +475,7 @@ def reasoning_items():
                 payload_kind="text",
                 status="completed",
                 producer_ref={
-                    "producer_kind": "model",
+                    "producer_kind": "provider",
                     "producer_id": "test-model",
                     "invocation_id": "model-call-1",
                 },
@@ -493,7 +494,7 @@ def reasoning_items():
             payload_kind="tool_call",
             status="completed",
             producer_ref={
-                "producer_kind": "model",
+                "producer_kind": "provider",
                 "producer_id": "test-model",
                 "invocation_id": "model-call-1",
             },
@@ -542,6 +543,49 @@ def test_agent_state_reasoning_merge_preserves_text_and_protected_carrier(reason
     assert message.content == [protected, text]
     assert [item.to_dict() for item in items] == original_items
     assert merge_canonical_reasoning(result, items)[0].content == result[0].content
+
+
+def test_agent_state_reasoning_merge_reuses_matching_provider_carrier(reasoning_items):
+    message = AIMessage(
+        content=[
+            {
+                "type": "reasoning_content",
+                "reasoning_content": "思考 0",
+            }
+        ],
+        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
+    )
+    result = merge_canonical_reasoning([message], reasoning_items(0))
+    assert result[0].content == message.content
+    assert result[0].response_metadata["reasoning_source"] == "canonical_item_stream"
+
+
+def test_agent_state_reasoning_merge_deduplicates_stream_and_checkpoint_items(
+    reasoning_items,
+):
+    items = reasoning_items(0)
+    items.insert(
+        1,
+        replace(
+            items[0],
+            item_id="reasoning-0-checkpoint",
+            metadata={
+                "execution_confirmed": True,
+                "projection_group": {"content_form": "list", "ordinal": 0, "size": 2},
+            },
+        ),
+    )
+    message = AIMessage(
+        content=[
+            {
+                "type": "reasoning_content",
+                "reasoning_content": "思考 0",
+            }
+        ],
+        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
+    )
+    result = merge_canonical_reasoning([message], items)
+    assert result[0].content == message.content
 
 
 @pytest.mark.parametrize("indices", [(0, 2), (2, 0)])

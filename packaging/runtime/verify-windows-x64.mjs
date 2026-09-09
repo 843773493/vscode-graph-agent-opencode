@@ -10,6 +10,8 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 
+import { BOXTEAM_VERSION } from "./versions.mjs";
+
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
 );
@@ -274,10 +276,12 @@ async function main() {
       `windows-x64 验证器不支持当前平台: ${process.platform}-${process.arch}`,
     );
   }
-  const mainTarball = requiredTarball("boxteam-0.1.0");
-  const runtimeTarball = requiredTarball("boxteam-runtime-windows-x64-0.1.0");
+  const mainTarball = requiredTarball(`boxteam-${BOXTEAM_VERSION}`);
+  const runtimeTarball = requiredTarball(
+    `boxteam-runtime-windows-x64-${BOXTEAM_VERSION}`,
+  );
   const releaseAssetPath = requiredReleaseAsset(
-    "boxteam-runtime-windows-x64-0.1.0",
+    `boxteam-runtime-windows-x64-${BOXTEAM_VERSION}`,
   );
   const standaloneArchivePath = requiredStandaloneArchive();
   const nodeExecutable = run("node", ["--print", "process.execPath"], {

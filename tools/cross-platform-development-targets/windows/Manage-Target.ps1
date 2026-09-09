@@ -180,7 +180,7 @@ function Invoke-TargetAction([string[]]$Arguments) {
                     BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE = "0"
                 }
                 foreach ($Pair in $Environment.GetEnumerator()) { [Environment]::SetEnvironmentVariable($Pair.Key, $Pair.Value, "Process") }
-                Start-Process -FilePath "bun.exe" -ArgumentList @("run", "scripts/dev.mjs", "--only-launch") -WorkingDirectory $Repository -RedirectStandardOutput $Log -RedirectStandardError "$Log.stderr" -WindowStyle Hidden
+                Start-Process -FilePath "bun.exe" -ArgumentList @("run", "scripts/launch/dev.mjs", "--only-launch") -WorkingDirectory $Repository -RedirectStandardOutput $Log -RedirectStandardError "$Log.stderr" -WindowStyle Hidden
             } else {
                 $env:BOXTEAM_HOME = $BoxTeamHome
                 $env:BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT = $Workspace

@@ -109,6 +109,23 @@
 - **WHEN** v2 assistant output/content parts 后存在 tool_call 与匹配的 tool_result
 - **THEN** 渲染顺序由 canonical item/content-part identity 和 tool relation 决定，不用新的全局 part index 改写 canonical 顺序
 
+#### Scenario: 后端返回权威逻辑 Item 统计和计时
+
+- **WHEN** history summary 或 detail 读取一个 Turn
+- **THEN** SQLite projection 按逻辑 Item 顺序返回每个中间 part 的 `item_id`、`item_sequence`、`part_ordinal`、`created_at` 和 `elapsed_ms`，并返回不包含 user/final text 的 `item_count`、`first_item_sequence`、`last_item_sequence` 与 Turn `duration_ms`
+- **AND** 同一 assistant carrier 中的多个 tool call 按各自 `part_ordinal` 计数，tool_call 与 tool_result 分别计数；checkpoint/provider 重影只按持久 producer identity/tool relation 解析，禁止按正文相等去重
+
+#### Scenario: history detail 只补正文且前端整体替换
+
+- **WHEN** detail 通过索引命中目标 JSONL item/message offset 并读取工具参数或结果正文
+- **THEN** detail 只丰富后端已有 canonical part，不重新推断 identity、数量或顺序；Web 以返回数组整体替换同 Turn 的旧 summary/live response parts，不合并重排、不比较文本去重
+
+#### Scenario: live 统计与终态 history 收敛
+
+- **WHEN** live Turn 尚未持久化完整 history projection
+- **THEN** Web 可按 message stream 实体 identity 临时计算时长和逻辑 Item 数，不伪造 canonical item sequence
+- **AND** 终态 history 到达后以后端统计和顺序替换 live 值；若 live/history `item_count` 不一致，前端显式记录协议错误而不是静默采用任一猜测值
+
 ### Requirement: 所有 rollout 数据访问使用唯一 RolloutCheckpointSaver
 
 系统 SHALL 通过 `RolloutCheckpointSaver` 作为 checkpoint、Web history、fork context、Turn 状态和 `ContextRequestPlan`/`ContextAssemblySnapshot` 的唯一业务层入口。Saver MUST 在正常运行时只使用 v2 reader 解析已提交 SQLite view/range，验证 branch/view lineage，并提供 projection、detail、full 三种模式；v1 reader 不属于 Saver runtime API，只能由独立的一次性 `legacy_import_v1_to_v2` migration/import operation 调用。业务 service、middleware adapter、LangChain/Provider projector 只能消费 Saver 返回的已提交 plan/snapshot 与显式 runtime contribution，不得直接扫描 `RolloutStorage`、`AppendWriter` 或内部 context reader，也不得自行组合低层 SQLite 和 JSONL primitive。未 sealed 的内存 ledger 不是业务层可消费的恢复事实。

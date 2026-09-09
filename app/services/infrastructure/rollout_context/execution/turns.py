@@ -404,6 +404,61 @@ class RolloutTurnsMixin:
                         "turn_id": turn_value,
                     },
                 )
+                message_meta = connection.execute(
+                    "SELECT last_message_sequence FROM database_meta "
+                    "WHERE singleton_id = 1"
+                ).fetchone()
+                if message_meta is None:
+                    raise RuntimeError("acceptance 缺少 message sequence 元数据")
+                previous_last_message_sequence = strict_non_negative_int(
+                    message_meta[0],
+                    field="database_meta.last_message_sequence",
+                )
+                root_message_sequence = previous_last_message_sequence + 1
+                materialized = self._materialize_canonical_message_projection(
+                    connection,
+                    root,
+                    thread_id=thread_id,
+                    checkpoint_ns=checkpoint_ns,
+                    commit_id=commit_id,
+                    message_sequence=root_message_sequence,
+                    timestamp=_now(),
+                )
+                if materialized is None:
+                    raise RuntimeError("acceptance user root 未生成 message projection")
+                (
+                    materialized_sequence,
+                    projection_message_id,
+                    projection_role,
+                ) = materialized
+                if materialized_sequence != root_message_sequence:
+                    raise RuntimeError("acceptance user root message sequence 冲突")
+                self._upsert_turn(
+                    connection,
+                    turn_value,
+                    root_message_sequence,
+                    projection_message_id,
+                    projection_role,
+                    branch_value,
+                    _now(),
+                )
+                commit_update = connection.execute(
+                    "UPDATE storage_commits SET first_message_sequence = ?, "
+                    "last_message_sequence = ? WHERE commit_id = ?",
+                    (root_message_sequence, root_message_sequence, commit_id),
+                )
+                if commit_update.rowcount != 1:
+                    raise RuntimeError(
+                        "acceptance storage commit message sequence 更新失败"
+                    )
+                meta_update = connection.execute(
+                    "UPDATE database_meta SET last_message_sequence = ?, "
+                    "history_view_revision = history_view_revision + 1, "
+                    "updated_at = ? WHERE singleton_id = 1",
+                    (root_message_sequence, _now()),
+                )
+                if meta_update.rowcount != 1:
+                    raise RuntimeError("acceptance last_message_sequence 更新失败")
                 # acceptance 可能发生在首个 LangGraph checkpoint 之前。此时
                 # active branch 仍指向初始化 view，若只等待 checkpoint 创建
                 # view，首个 provider assembly 会看不到已经提交的 Turn root。
@@ -497,11 +552,12 @@ class RolloutTurnsMixin:
                             field="context_view_turns.logical_turn_ordinal",
                         )
                         connection.execute(
-                            "INSERT INTO context_view_turns(view_id, turn_id, logical_turn_ordinal, user_message_sequence, final_message_sequence, root_input_item_id, fork_lineage_json) VALUES (?, ?, ?, NULL, NULL, ?, ?)",
+                            "INSERT INTO context_view_turns(view_id, turn_id, logical_turn_ordinal, user_message_sequence, final_message_sequence, root_input_item_id, fork_lineage_json) VALUES (?, ?, ?, ?, NULL, ?, ?)",
                             (
                                 view_id,
                                 turn_value,
                                 next_turn_ordinal,
+                                root_message_sequence,
                                 root.item_id,
                                 _json({"source": "acceptance"}),
                             ),

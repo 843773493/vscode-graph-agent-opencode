@@ -79,12 +79,17 @@ class TurnResponseSourceDTO(BaseModel):
     assistant 的 tool_calls 列表顺序。
     """
 
-    message_sequence: int = Field(ge=1)
+    message_sequence: int = Field(ge=0)
     assistant_message_sequence: int | None = Field(default=None, ge=1)
     content_block_index: int | None = Field(default=None, ge=0)
     item_index: int | None = Field(default=None, ge=0)
     call_index: int | None = Field(default=None, ge=0)
     result_message_sequence: int | None = Field(default=None, ge=1)
+    item_id: str | None = Field(default=None, min_length=1, max_length=256)
+    item_sequence: int | None = Field(default=None, ge=1)
+    part_ordinal: int | None = Field(default=None, ge=0)
+    created_at: datetime | None = None
+    elapsed_ms: int | None = Field(default=None, ge=0)
 
 
 class TurnResponsePartDTO(BaseModel):
@@ -115,12 +120,39 @@ class TurnResponsePartDTO(BaseModel):
     completion_reason: str | None = Field(default=None, max_length=64)
     partial: bool = False
 
+    @model_validator(mode="after")
+    def validate_source_identity(self) -> TurnResponsePartDTO:
+        """历史 part 必须携带 canonical identity；live 只使用临时 part_id。"""
+        if self.projection == "streaming":
+            if self.source.item_id is not None or self.source.item_sequence is not None:
+                raise ValueError("live streaming part 不得伪造 canonical item identity")
+            return self
+        if self.source.item_id is None or self.source.item_sequence is None:
+            raise ValueError("历史 response part 缺少 canonical item identity")
+        if self.source.created_at is None:
+            raise ValueError("历史 response part 缺少 canonical created_at")
+        return self
+
 
 class TurnActivityStatsDTO(BaseModel):
-    """Turn 折叠行使用的轻量 rollout message 统计，不包含消息正文。"""
+    """Turn 折叠行使用的可展开中间 item 统计，不包含 Item 正文。"""
 
     duration_ms: int | None = Field(default=None, ge=0)
-    message_count: int = Field(default=0, ge=0)
+    item_count: int = Field(default=0, ge=0)
+    first_item_sequence: int | None = Field(default=None, ge=1)
+    last_item_sequence: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_item_range(self) -> TurnActivityStatsDTO:
+        if self.item_count == 0:
+            if self.first_item_sequence is not None or self.last_item_sequence is not None:
+                raise ValueError("空活动统计不得携带 item sequence 范围")
+            return self
+        if self.first_item_sequence is None or self.last_item_sequence is None:
+            raise ValueError("非空活动统计必须携带 item sequence 范围")
+        if self.last_item_sequence < self.first_item_sequence:
+            raise ValueError("活动统计 item sequence 范围非法")
+        return self
 
 
 class TurnBaseDTO(BaseModel):

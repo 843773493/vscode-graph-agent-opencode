@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
@@ -150,6 +151,7 @@ def start_backend_process(
     log_name: str,
     debugpy_port: int | None = None,
     env_overrides: dict[str, str] | None = None,
+    env_unset: Sequence[str] = (),
 ) -> BackendProcess:
     kill_process_on_port(port)
     if debugpy_port is not None:
@@ -173,6 +175,8 @@ def start_backend_process(
     env["WORKSPACE_ROOT"] = workspace_root
     env["BOXTEAM_HOME"] = str(boxteam_home)
     env["PYTHONUNBUFFERED"] = "1"
+    for name in env_unset:
+        env.pop(name, None)
     if env_overrides:
         env.update(env_overrides)
 

@@ -15,6 +15,7 @@ from app.domain.itemized.hashing import (
     _ensure_json_value,
     canonical_json_bytes,
     contribution_content_hash,
+    validate_hash_token,
 )
 from app.domain.itemized.plan_hash import context_plan_hash
 from app.domain.itemized.refs import ContextRef, ToolSetRef, unique_ref_identities
@@ -45,7 +46,12 @@ class ContextContribution:
     def __post_init__(self) -> None:
         for name in ("contribution_id", "source_kind", "source_revision"):
             _non_empty_string(getattr(self, name), f"ContextContribution.{name}")
-        if self.contribution_kind not in {"prompt", "overlay_base", "overlay_delta", "notice"}:
+        if not isinstance(self.contribution_kind, str) or self.contribution_kind not in {
+            "prompt",
+            "overlay_base",
+            "overlay_delta",
+            "notice",
+        }:
             raise ItemSchemaError(
                 f"contribution-kind-unsupported: 不支持的 ContextContribution.contribution_kind: {self.contribution_kind}"
             )
@@ -53,16 +59,24 @@ class ContextContribution:
             raise ItemSchemaError(
                 "ContextContribution.request_only 必须为 true；工具定义使用 ToolSetRef"
             )
-        if self.visibility not in {"public", "internal", "private"}:
+        if not isinstance(self.visibility, str) or self.visibility not in {
+            "public",
+            "internal",
+            "private",
+        }:
             raise ItemSchemaError(
                 f"未知 ContextContribution.visibility: {self.visibility}"
             )
-        if self.protection not in {item.value for item in DetailProtection}:
+        if not isinstance(self.protection, str) or self.protection not in {
+            item.value for item in DetailProtection
+        }:
             raise ItemSchemaError(
                 f"未知 ContextContribution.protection: {self.protection}"
             )
         if self.source_kind == "tool_set":
             raise ItemSchemaError("tool_set 只能通过 ToolSetSnapshot/ToolSetRef 表达")
+        if not isinstance(self.metadata, Mapping):
+            raise ItemSchemaError("ContextContribution.metadata 必须是 object")
         if self.body is not None:
             expected_hash = contribution_content_hash(self.contribution_kind, self.body)
             if self.content_hash != expected_hash:
@@ -82,12 +96,17 @@ class ContextContribution:
         ):
             raise ItemSchemaError("ContextContribution.content_length 必须是非负整数")
         if self.redacted_stable_digest is not None:
-            _non_empty_string(
+            validate_hash_token(
                 self.redacted_stable_digest,
                 "ContextContribution.redacted_stable_digest",
+                redacted=True,
             )
+            if self.protection == DetailProtection.PUBLIC:
+                raise ItemSchemaError(
+                    "ContextContribution.redacted_stable_digest 不得用于 public protection"
+                )
         if self.content_hash is not None:
-            _non_empty_string(self.content_hash, "ContextContribution.content_hash")
+            validate_hash_token(self.content_hash, "ContextContribution.content_hash")
         if (self.content_hash is None) == (self.redacted_stable_digest is None):
             raise ItemSchemaError(
                 "ContextContribution 必须恰好包含 content_hash 或 redacted_stable_digest"
@@ -236,7 +255,10 @@ class ContextRequestPlan:
         if self.active_view_id is not None:
             _non_empty_string(self.active_view_id, "ContextRequestPlan.active_view_id")
         _non_empty_string(self.selection_policy, "ContextRequestPlan.selection_policy")
-        if self.plan_state not in {"unsealed", "sealed"}:
+        if not isinstance(self.plan_state, str) or self.plan_state not in {
+            "unsealed",
+            "sealed",
+        }:
             raise ItemSchemaError(f"未知 ContextRequestPlan.plan_state: {self.plan_state}")
         if self.assembly_id is not None:
             _non_empty_string(self.assembly_id, "ContextRequestPlan.assembly_id")
@@ -249,7 +271,6 @@ class ContextRequestPlan:
                 self.plan_creation_idempotency_key,
                 "ContextRequestPlan.plan_creation_idempotency_key",
             )
-        unique_ref_identities(self.refs)
         for ref in self.refs:
             if not isinstance(ref, ContextRef):
                 raise ItemSchemaError("ContextRequestPlan.refs 元素非法")
@@ -257,6 +278,7 @@ class ContextRequestPlan:
                 raise ItemSchemaError("source-mismatch: ContextRef 不属于当前 session")
             if ref.ref_type == "request_only" and ref.plan_id != self.plan_id:
                 raise ItemSchemaError("source-mismatch: ContextRef 不属于当前 plan")
+        unique_ref_identities(self.refs)
         ref_ids = {(ref.ref_type, ref.ref_id) for ref in self.refs}
         for contribution in self.contributions:
             if not isinstance(contribution, ContextContribution):
@@ -301,6 +323,8 @@ class ContextRequestPlan:
                 )
         tool_ids: set[str] = set()
         for ref in self.tool_set_refs:
+            if not isinstance(ref, ToolSetRef):
+                raise ItemSchemaError("ContextRequestPlan.tool_set_refs 元素非法")
             if ref.session_id != self.session_id:
                 raise ItemSchemaError("source-mismatch: ToolSetRef 不属于当前 session")
             if ref.plan_id != self.plan_id:
@@ -322,6 +346,8 @@ class ContextRequestPlan:
             raise ItemSchemaError("selection entry 必须绑定当前 plan assembly")
         selected_keys: set[tuple[str, str]] = set()
         for entry in self.selection:
+            if not isinstance(entry, ContextSelectionEntry):
+                raise ItemSchemaError("ContextRequestPlan.selection 元素非法")
             ref = entry.ref
             if ref.session_id != self.session_id:
                 raise ItemSchemaError("source-mismatch: selection ref 不属于当前 session")

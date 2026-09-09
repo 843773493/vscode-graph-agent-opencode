@@ -21,7 +21,13 @@ from tests.support.ports import e2e_port_block_for_file
 
 @pytest.fixture(scope="module")
 def e2e_model_stream_config_path() -> str:
-    return str(Path.cwd() / "configs" / "tests" / "model_stream_web_basic_chat_tool_loop.jsonc")
+    return str(
+        Path.cwd()
+        / "configs"
+        / "tests"
+        / "model_stream"
+        / "model_stream_web_basic_chat_tool_loop.jsonc"
+    )
 
 
 @pytest.mark.asyncio
@@ -111,10 +117,24 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
         assert result["firstJob"]["status"] in {"completed", "succeeded"}
         assert result["secondJob"]["status"] in {"completed", "succeeded"}
         assert result["firstTurn"]["userCount"] == 1
+        assert result["firstTurn"]["durationMs"] > 0
+        assert result["firstTurn"]["itemCount"] == 4
+        assert result["firstTurn"]["expanded"] is True
+        assert result["firstTurn"]["activityPreview"].endswith(" · Item 4 项")
+        assert len(result["firstTurn"]["activityOrder"]) == 3
         assert result["firstTurn"]["finalText"] == "首轮工具调用已完成。"
         assert "已运行 read_file" in result["firstTurn"]["toolText"]
+        assert result["restoredHistory"]["durationMs"] == result["firstTurn"]["durationMs"]
+        assert result["restoredHistory"]["itemCount"] == 4
+        assert result["restoredHistory"]["activityPreview"] == result["firstTurn"]["activityPreview"]
+        assert result["restoredHistory"]["expanded"] is True
         assert result["restoredHistory"]["finalText"] == "首轮工具调用已完成。"
         assert result["secondTurn"]["userCount"] == 1
+        assert result["secondTurn"]["durationMs"] > 0
+        assert result["secondTurn"]["itemCount"] == 4
+        assert result["secondTurn"]["expanded"] is True
+        assert result["secondTurn"]["activityPreview"].endswith(" · Item 4 项")
+        assert len(result["secondTurn"]["activityOrder"]) == 3
         assert result["secondTurn"]["finalText"] == "第二轮工具调用也已完成。"
         assert "已运行 read_file" in result["secondTurn"]["toolText"]
         assert result["streams"] == {"trace": 2, "message": 2}

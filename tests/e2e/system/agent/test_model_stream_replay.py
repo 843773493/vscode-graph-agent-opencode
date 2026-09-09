@@ -14,7 +14,13 @@ from tests.support.trace import get_trace_payload
 
 @pytest.fixture(scope="module")
 def e2e_model_stream_config_path() -> str:
-    return str(Path.cwd() / "configs" / "tests" / "model_stream.jsonc")
+    return str(
+        Path.cwd()
+        / "configs"
+        / "tests"
+        / "model_stream"
+        / "model_stream.jsonc"
+    )
 
 
 @pytest.mark.asyncio

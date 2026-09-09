@@ -23,6 +23,7 @@ FIXTURE_ROOT = Path.cwd() / "tests" / "fixtures" / "model_stream"
 def test_all_handwritten_scenarios_load_to_the_same_cassette_model() -> None:
     scenario_ids = (
         "basic-text",
+        "checkpoint-persistence",
         "split-tool-call",
         "reasoning-stream",
         "reasoning-tool",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -105,7 +105,7 @@ def _rewrite_latest_assistant_message(
     token_usage: ModelTokenUsagePayload | None,
     turn_id: str | None,
     preserve_content_part_refs: bool,
-) -> bool:
+) -> AIMessage | None:
     latest = next(
         (
             message
@@ -115,7 +115,7 @@ def _rewrite_latest_assistant_message(
         None,
     )
     if latest is None:
-        return False
+        return None
 
     response_metadata = dict(latest.response_metadata or {})
     response_metadata["phase"] = "final_answer"
@@ -143,17 +143,16 @@ def _rewrite_latest_assistant_message(
         refs = _content_part_refs(content_blocks)
         if refs:
             response_metadata["content_part_refs"] = refs
-    messages.append(
-        latest.model_copy(
-            update={
-                "id": message_id,
-                "content": _build_assistant_content(content_blocks, final_text),
-                "additional_kwargs": {},
-                "response_metadata": response_metadata,
-            }
-        )
+    rewritten = latest.model_copy(
+        update={
+            "id": message_id,
+            "content": _build_assistant_content(content_blocks, final_text),
+            "additional_kwargs": {},
+            "response_metadata": response_metadata,
+        }
     )
-    return True
+    messages.append(rewritten)
+    return rewritten
 
 
 def persist_standard_assistant_checkpoint(
@@ -167,6 +166,7 @@ def persist_standard_assistant_checkpoint(
     message_created_at: datetime,
     token_usage: ModelTokenUsagePayload | None = None,
     preserve_content_part_refs: bool = False,
+    before_persist: Callable[[AIMessage], None] | None = None,
 ) -> bool:
     """把本轮最终 assistant 消息保存为 LangChain 标准 content blocks。"""
     if not message_id:
@@ -190,7 +190,7 @@ def persist_standard_assistant_checkpoint(
         )
 
     messages = list(raw_messages)
-    changed = _rewrite_latest_assistant_message(
+    rewritten = _rewrite_latest_assistant_message(
         messages,
         content_blocks=content_blocks,
         final_text=final_text,
@@ -200,8 +200,11 @@ def persist_standard_assistant_checkpoint(
         turn_id=turn_id,
         preserve_content_part_refs=preserve_content_part_refs,
     )
-    if not changed:
+    if rewritten is None:
         return False
+
+    if before_persist is not None:
+        before_persist(rewritten)
 
     channel_values["messages"] = messages
     checkpoint["channel_values"] = channel_values
@@ -293,6 +296,22 @@ def persist_intermediate_assistant_reasoning_checkpoint(
             if isinstance(existing_content, list)
             else []
         )
+        if any(
+            block.get("type")
+            in {
+                "reasoning",
+                "reasoning_content",
+                "reasoning_items",
+                "thinking",
+                "redacted_thinking",
+            }
+            for block in existing_blocks
+        ):
+            # LangGraph 可能已经把带 reasoning 的 tool-call message 写入
+            # checkpoint。此时只补同一内容的 metadata 会让 canonical group
+            # 重新编码并改变成员/语义校验；canonical stream 已经是权威来源，
+            # 直接保持该兼容消息不变即可。
+            continue
         existing_keys = {
             (
                 block.get("id"),

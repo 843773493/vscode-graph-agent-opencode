@@ -24,7 +24,13 @@ EXPECTED_FINAL_TEXT = (
 
 @pytest.fixture(scope="module")
 def e2e_model_stream_config_path() -> str:
-    return str(Path.cwd() / "configs" / "tests" / "model_stream_responses.jsonc")
+    return str(
+        Path.cwd()
+        / "configs"
+        / "tests"
+        / "model_stream"
+        / "model_stream_responses.jsonc"
+    )
 
 
 def _load_default_cassette_review() -> dict[str, object]:

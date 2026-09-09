@@ -10,7 +10,8 @@ from datetime import UTC, datetime
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.domain.itemized.runtime import ContentPart, ContentPartAnchor, ProvenanceEdge
+from app.domain.itemized.parts import ContentPart, ContentPartAnchor
+from app.domain.itemized.runtime import ProvenanceEdge
 from app.services.infrastructure.rollout_context.fork.validation import (
     json_mapping,
 )

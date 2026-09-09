@@ -92,6 +92,10 @@ class RolloutExecutionsMixin(
             raise ValueError(f"未知 Turn.status: {turn_status}")
         if turn_status == "completed" and not final_item_id:
             raise ValueError("completed Turn 必须指定 final_item_id")
+        if turn_status == "completed" and not items:
+            raise ValueError(
+                "completed terminal convergence 必须在同一提交中包含 final canonical item"
+            )
         if turn_status == TurnStatus.COMPLETED_EMPTY.value and items:
             raise ValueError("completed_empty Turn 不得包含 canonical output item")
         if turn_status in {
@@ -155,8 +159,10 @@ class RolloutExecutionsMixin(
                 if current_status in {
                     "completed",
                     "completed_empty",
+                    "interrupted",
                     "failed",
                     "cancelled",
+                    "unknown",
                 }:
                     if (
                         current_status == turn_status
@@ -246,11 +252,8 @@ class RolloutExecutionsMixin(
                         )
                     existing_final_item = None
                     if known is not None and candidate is None:
-                        existing_final_item = self._read_canonical_item_from_catalog(
-                            connection,
-                            thread_id=thread_id,
-                            checkpoint_ns=checkpoint_ns,
-                            item_id=final_item_id,
+                        raise ValueError(
+                            "completed terminal convergence 的 final item 必须属于同一 item-bearing commit"
                         )
                 else:
                     existing_final_item = None
@@ -277,7 +280,7 @@ class RolloutExecutionsMixin(
                         assembly_session_id != thread_id
                         or assembly_turn_id != turn_id
                         or assembly_execution_id != execution_id
-                        or assembly_status not in {"sealed", "terminal"}
+                        or assembly_status != "sealed"
                     ):
                         raise ValueError("terminal convergence assembly 关联冲突")
                     assembly_outcome = strict_optional_text(
@@ -459,6 +462,7 @@ class RolloutExecutionsMixin(
                     connection,
                     checkpoint_ns=checkpoint_ns,
                     item_ids=tuple(item.item_id for item in converged_items),
+                    require_view=True,
                 )
                 timestamp = _now()
                 execution_update = connection.execute(
@@ -585,11 +589,20 @@ class RolloutExecutionsMixin(
                         raise RuntimeError(
                             "terminal convergence Turn message projection 更新失败"
                         )
-                    connection.execute(
+                    view_turn_update = connection.execute(
                         "UPDATE context_view_turns SET final_message_sequence = ? "
                         "WHERE turn_id = ?",
                         (final_message_sequence, turn_id),
                     )
+                    if view_turn_update.rowcount != 1:
+                        # checkpoint-origin Turn 可能只有 view membership，尚未
+                        # 建立 context_view_turns。先按已更新的 turns 坐标补齐
+                        # 当前 active view，再执行同一事务内的 final pointer 更新。
+                        self._ensure_active_view_turn(
+                            connection,
+                            checkpoint_ns=checkpoint_ns,
+                            turn_id=turn_id,
+                        )
                     self._ensure_active_view_turn(
                         connection,
                         checkpoint_ns=checkpoint_ns,
@@ -604,7 +617,7 @@ class RolloutExecutionsMixin(
                         (history_status, timestamp, turn_id),
                     )
                 if assembly_id is not None:
-                    connection.execute(
+                    assembly_update = connection.execute(
                         "UPDATE context_assemblies SET status = 'terminal', outcome = ?, terminal_at = ? WHERE assembly_id = ? AND session_id = ? AND turn_id = ? AND execution_id = ? AND status = 'sealed'",
                         (
                             outcome,
@@ -615,5 +628,9 @@ class RolloutExecutionsMixin(
                             execution_id,
                         ),
                     )
+                    if assembly_update.rowcount != 1:
+                        raise RuntimeError(
+                            "terminal convergence assembly outcome 更新失败"
+                        )
                 self._commit_connection(connection)
                 return commit_id

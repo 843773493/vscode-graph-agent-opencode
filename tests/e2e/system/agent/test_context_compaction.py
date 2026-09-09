@@ -514,7 +514,13 @@ async def test_cache_preserving_middleware_forked_summary_hits_main_prompt_cache
     e2e_workspace_root_path: str,
 ):
     config_service = ConfigService(
-        config_path=Path.cwd() / "configs" / "tests" / "default.jsonc",
+        config_path=(
+            Path.cwd()
+            / "configs"
+            / "tests"
+            / "workspace"
+            / "default.jsonc"
+        ),
         workspace_root=e2e_workspace_root_path,
     )
     provider = config_service.get_llm_provider("primary")
@@ -723,7 +729,13 @@ async def test_luna_image_reasoning_compaction_hits_prompt_cache(
     e2e_workspace_root_path: str,
 ) -> None:
     config_service = ConfigService(
-        config_path=Path.cwd() / "configs" / "tests" / "default.jsonc",
+        config_path=(
+            Path.cwd()
+            / "configs"
+            / "tests"
+            / "workspace"
+            / "default.jsonc"
+        ),
         workspace_root=e2e_workspace_root_path,
     )
     provider = config_service.get_llm_provider("backup_3")

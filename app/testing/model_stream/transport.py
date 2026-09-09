@@ -352,8 +352,8 @@ class ModelStreamTransportController:
     def install(cls, config: ModelStreamConfig) -> ModelStreamTransportController | None:
         if config.transport.mode == "off":
             return None
-        if config.transport.fixture_root is None or config.transport.scenario_id is None:
-            raise ModelStreamError("启用 model stream transport 时缺少 fixture_root 或 scenario_id")
+        if config.transport.scenario_id is None:
+            raise ModelStreamError("启用 model stream transport 时缺少 scenario_id")
         scenario = load_scenario(
             config.transport.fixture_root,
             config.transport.scenario_id,

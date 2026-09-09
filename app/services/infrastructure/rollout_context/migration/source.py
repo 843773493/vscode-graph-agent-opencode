@@ -25,6 +25,9 @@ from app.services.infrastructure.rollout_context.migration.manifest import (
     message_checks,
     validate_message_checks,
 )
+from app.services.infrastructure.rollout_context.migration.semantics import (
+    candidate_audit,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -41,7 +44,9 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def read_source_report(source_root: Path, session_id: str) -> dict[str, object]:
+def read_source_report(
+    source_root: Path, session_id: str, *, include_raw_candidates: bool = False
+) -> dict[str, object]:
     files = artifact_manifest(source_root)
     for name in ("index.sqlite", "rollout.jsonl"):
         if name not in files:
@@ -187,7 +192,7 @@ def read_source_report(source_root: Path, session_id: str) -> dict[str, object]:
     apply_final_pointers(records, final_refs)
     if artifact_manifest(source_root) != files:
         raise FormatDispatchError("source-mismatch: v1 report 读取期间原件变化")
-    return {
+    report = {
         "source_session_id": session_id,
         "source_format_version": 1,
         "target_format_version": 2,
@@ -242,3 +247,11 @@ def read_source_report(source_root: Path, session_id: str) -> dict[str, object]:
         ],
         "candidates": LegacyRolloutAdapter(session_id).group_candidates(records),
     }
+    if not include_raw_candidates:
+        report["candidates"] = [
+            # 公共 report 只返回坐标和 raw_ref；正文只在显式 staging 内部
+            # 继续留在 audit/source，不进入调用方返回值或 report.json。
+            candidate_audit(candidate, str(source_root))
+            for candidate in report["candidates"]
+        ]
+    return report

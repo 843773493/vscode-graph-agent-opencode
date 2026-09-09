@@ -32,6 +32,8 @@ message AgentProviderDTO {
   string model = 2;
   string custom_llm_provider = 3;
   optional bool workspace_default = 4;
+  bool available = 5;
+  optional string configuration_error = 6;
 }
 
 message AgentStateMessagesDTO {
@@ -1401,7 +1403,9 @@ message TraceObservedPayloadDTO {
 
 message TurnActivityStatsDTO {
   optional int64 duration_ms = 1;
-  optional int64 message_count = 2;
+  optional int64 item_count = 2;
+  optional int64 first_item_sequence = 3;
+  optional int64 last_item_sequence = 4;
 }
 
 message TurnAttachmentDTO {
@@ -1548,6 +1552,11 @@ message TurnResponseSourceDTO {
   optional int64 item_index = 4;
   optional int64 call_index = 5;
   optional int64 result_message_sequence = 6;
+  optional string item_id = 7;
+  optional int64 item_sequence = 8;
+  optional int64 part_ordinal = 9;
+  optional google.protobuf.Timestamp created_at = 10;
+  optional int64 elapsed_ms = 11;
 }
 
 message TurnSummaryDTO {

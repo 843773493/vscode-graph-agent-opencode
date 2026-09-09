@@ -1,6 +1,6 @@
 # 目录用途
 
-本目录维护自包含平台运行时的 staging、npm 包组装和 relocation 验证。
+本目录维护自包含平台运行时的 staging、npm 包组装实现和 relocation 验证；发布命令入口位于 `scripts/release/`。
 
 # 可修改内容
 
@@ -15,6 +15,6 @@
 # 规范
 
 - JavaScript 始终使用 ESM。
-- Python、Chromium和 Node 依赖必须从显式版本清单构建。
+- Python、Chromium 和 Node 依赖必须从显式版本清单构建；BoxTeam 发布版本必须从根 `package.json` 读取。
 - staging 不得引用构建机仓库绝对路径。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

@@ -1,7 +1,6 @@
 {
   "name": "@boxteam/runtime-node-dependencies",
   "private": true,
-  "version": "0.1.0",
   "type": "module",
   "dependencies": {
     "node-pty": "1.1.0",

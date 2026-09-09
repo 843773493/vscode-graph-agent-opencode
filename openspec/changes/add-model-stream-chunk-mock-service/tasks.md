@@ -1,7 +1,7 @@
 ## 1. 顶层模型与测试配置
 
 - [x] 1.1 在 `app/testing/model_stream/` 固定 HTTP byte chunk、SSE frame、Provider frame、SDK chunk 和 Business event 的边界。
-- [x] 1.2 在 `configs/tests/` 增加 JSONC transport 配置和 schema，支持 `off`、`record`、`replay`。
+- [x] 1.2 在 `configs/tests/model_stream/` 增加 JSONC transport 配置和 schema，支持 `off`、`record`、`replay`。
 - [x] 1.3 保持 scenario 只引用 asset 和业务 expectation，不重复 transport 或协议配置。
 - [x] 1.4 校验 fixture root、scenario id、asset 相对路径和 artifact root 的安全边界。
 - [x] 1.5 保持 `_local` 配置约定，不把 API key、Authorization 或 provider 私有 endpoint 写入共享测试控制配置。

@@ -1,0 +1,4 @@
+{
+  "scenario_id": "checkpoint-persistence",
+  "asset": "handwritten/openai_chat/checkpoint-persistence.json"
+}

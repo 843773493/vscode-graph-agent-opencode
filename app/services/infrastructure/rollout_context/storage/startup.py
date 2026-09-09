@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -51,6 +54,27 @@ def _hash_bytes(value: bytes) -> str:
 
 
 class RolloutStartupMixin:
+    @contextmanager
+    def _existing_index_connection(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+    ) -> Iterator[sqlite3.Connection]:
+        """读取既有 authority；完全损坏时只报告恢复要求，不创建新库。"""
+        try:
+            with self._connect(
+                thread_id,
+                checkpoint_ns,
+                read_only=True,
+            ) as connection:
+                yield connection
+        except sqlite3.DatabaseError as error:
+            raise RuntimeError(
+                "recovery_required: rollout SQLite 无法读取；"
+                "必须从已验证的 SQLite backup 执行显式恢复，禁止从 JSONL 重建: "
+                f"{self.index_path(thread_id, checkpoint_ns)}"
+            ) from error
+
     def initialize(
         self,
         thread_id: str,
@@ -74,10 +98,9 @@ class RolloutStartupMixin:
             existing_index = self.index_path(thread_id, checkpoint_ns)
             needs_schema = True
             if existing_index.is_file() and existing_index.stat().st_size > 0:
-                with self._connect(
+                with self._existing_index_connection(
                     thread_id,
                     checkpoint_ns,
-                    read_only=True,
                 ) as existing_connection:
                     meta_columns = {
                         str(row[1])

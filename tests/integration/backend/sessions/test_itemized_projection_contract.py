@@ -131,6 +131,51 @@ def test_saver_seal_restores_same_selection_across_projections_and_process(
     assert before == after
 
 
+def test_projection_evidence_is_shared_across_saver_projection_surfaces(
+    projection_saver,
+    projection_plan,
+) -> None:
+    saver, session_id, _ = projection_saver
+    plan = projection_plan.as_sealed_plan()
+
+    _, langchain_evidence = saver.project_context_plan_to_messages_with_evidence(
+        session_id, plan
+    )
+    _, history_evidence = saver.project_context_plan_to_history_with_evidence(
+        session_id, plan
+    )
+    native, native_evidence = saver.project_context_plan_to_native_with_evidence(
+        session_id, plan
+    )
+    _, _, provider_evidence = saver.project_context_plan_to_provider_with_evidence(
+        session_id,
+        plan,
+        target_format="chat_completions",
+    )
+
+    evidences = (
+        langchain_evidence,
+        history_evidence,
+        native_evidence,
+        provider_evidence,
+    )
+    assert {evidence.projection for evidence in evidences} == {
+        "langchain",
+        "web_history",
+        "native",
+        "provider",
+    }
+    assert len({evidence.selection_manifest_hash for evidence in evidences}) == 1
+    assert len({evidence.plan_hash for evidence in evidences}) == 1
+    assert len({evidence.source_overlay_epoch for evidence in evidences}) == 1
+    assert len({evidence.history_view_revision for evidence in evidences}) == 1
+    assert all(evidence.selection == langchain_evidence.selection for evidence in evidences)
+    assert native["selection"] == list(langchain_evidence.selection)
+    assert native["losses"] == list(native_evidence.losses)
+    assert all(evidence.session_id == session_id for evidence in evidences)
+    assert all(evidence.assembly_id == plan.assembly_id for evidence in evidences)
+
+
 def test_unsealed_saver_plan_cannot_enter_any_projection(projection_saver) -> None:
     saver, session_id, _ = projection_saver
     draft = saver.compose_committed_context_plan(session_id, plan_id="draft-only")

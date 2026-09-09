@@ -1,20 +1,18 @@
-"""v2 Turn、execution、model-call、provenance 与 content-part 领域定义。"""
+"""v2 Turn、execution、model-call、provenance 与 item draft 领域定义。"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from app.domain.itemized.detail_ref import DetailRef
 from app.domain.itemized.enums import ControlOutcome, TurnStatus
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import _ensure_json_value, sha256_jcs
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.schema import (
-    ITEM_STATUSES as _ITEM_STATUSES,
-)
-from app.domain.itemized.schema import (
-    SEMANTIC_KINDS as _SEMANTIC_KINDS,
-)
+from app.domain.itemized.schema import ITEM_STATUSES as _ITEM_STATUSES
+from app.domain.itemized.schema import PROTECTIONS as _PROTECTIONS
+from app.domain.itemized.schema import PROVENANCE_RELATIONS as _PROVENANCE_RELATIONS
+from app.domain.itemized.schema import VISIBILITIES as _VISIBILITIES
 
 
 def _non_empty_string(value: object, field_name: str) -> str:
@@ -108,145 +106,47 @@ class ProvenanceEdge:
     relation: str
     source_ref: str
     target_ref: str
+    edge_idempotency_key: str | None = None
     attempt: int | None = None
     supersedes_edge_id: str | None = None
     replay_input: bool = False
+    produced_order: int | None = None
+    visibility: str = "internal"
+    protection: str = "public"
+    detail_ref: DetailRef | None = None
 
     def __post_init__(self) -> None:
-        for name in ("edge_id", "relation", "source_ref", "target_ref"):
+        for name in ("edge_id", "source_ref", "target_ref"):
             _non_empty_string(getattr(self, name), name)
+        _non_empty_string(self.relation, "relation")
+        if self.relation not in _PROVENANCE_RELATIONS:
+            raise ItemSchemaError(f"未知 provenance relation: {self.relation}")
+        if self.edge_idempotency_key is None:
+            object.__setattr__(self, "edge_idempotency_key", self.edge_id)
+        else:
+            _non_empty_string(self.edge_idempotency_key, "edge_idempotency_key")
         if self.attempt is not None and (
             not isinstance(self.attempt, int)
             or isinstance(self.attempt, bool)
             or self.attempt <= 0
         ):
             raise ItemSchemaError("provenance attempt 必须是正整数")
+        if self.produced_order is not None and (
+            not isinstance(self.produced_order, int)
+            or isinstance(self.produced_order, bool)
+            or self.produced_order < 0
+        ):
+            raise ItemSchemaError("provenance produced_order 必须是非负整数")
         if self.supersedes_edge_id is not None:
             _non_empty_string(self.supersedes_edge_id, "supersedes_edge_id")
-
-
-@dataclass(frozen=True, slots=True)
-class ContentPart:
-    """父 item payload 内的稳定 part；正文不在 SQLite 复制。"""
-
-    part_id: str
-    part_ordinal: int
-    part_semantic_kind: str
-    content: object
-    content_hash: str
-    prefix_hash: str | None = None
-
-    def __post_init__(self) -> None:
-        _non_empty_string(self.part_id, "ContentPart.part_id")
-        if not isinstance(self.part_ordinal, int) or isinstance(self.part_ordinal, bool) or self.part_ordinal < 0:
-            raise ItemSchemaError("content part ordinal 不能为负数")
-        _non_empty_string(self.part_semantic_kind, "ContentPart.part_semantic_kind")
-        if self.part_semantic_kind not in _SEMANTIC_KINDS:
-            raise ItemSchemaError(f"未知 content part semantic kind: {self.part_semantic_kind}")
-        if self.content_hash != sha256_jcs(self.content):
-            raise ItemSchemaError("content part hash 与正文不一致")
-        if self.prefix_hash is not None:
-            _non_empty_string(self.prefix_hash, "ContentPart.prefix_hash")
-
-    @classmethod
-    def create(
-        cls,
-        *,
-        part_id: str,
-        part_ordinal: int,
-        part_semantic_kind: str,
-        content: object,
-        prefix: object | None = None,
-    ) -> ContentPart:
-        if part_ordinal < 0:
-            raise ItemSchemaError("content part ordinal 不能为负数")
-        _non_empty_string(part_id, "part_id")
-        _non_empty_string(part_semantic_kind, "part_semantic_kind")
-        return cls(
-            part_id=part_id,
-            part_ordinal=part_ordinal,
-            part_semantic_kind=part_semantic_kind,
-            content=content,
-            content_hash=sha256_jcs(content),
-            prefix_hash=sha256_jcs(prefix) if prefix is not None else None,
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        result: dict[str, object] = {
-            "part_id": self.part_id,
-            "part_ordinal": self.part_ordinal,
-            "part_semantic_kind": self.part_semantic_kind,
-            "content": self.content,
-            "content_hash": self.content_hash,
-        }
-        if self.prefix_hash is not None:
-            result["prefix_hash"] = self.prefix_hash
-        return result
-
-
-@dataclass(frozen=True, slots=True)
-class ContentPartAnchor:
-    """durable part anchor；未声明 recovery capability 的 fragment 不可操作。"""
-
-    anchor_id: str
-    item_id: str
-    part_id: str
-    mode: str
-    view_id: str
-    branch_id: str
-    capability: str
-    content_hash: str
-    prefix_hash: str | None = None
-    fragment_identity: str | None = None
-    fragment_length: int | None = None
-    fragment_hash: str | None = None
-    fragment_layout: Mapping[str, object] | None = None
-
-    def __post_init__(self) -> None:
-        for name in (
-            "anchor_id",
-            "item_id",
-            "part_id",
-            "view_id",
-            "branch_id",
-            "capability",
-            "content_hash",
-        ):
-            _non_empty_string(getattr(self, name), name)
-        if self.mode not in {"before", "inclusive"}:
-            raise ItemSchemaError("content part anchor mode 必须是 before/inclusive")
-        if self.capability not in {"content_part", "fragment"}:
-            raise ItemSchemaError("未知 content part anchor capability")
-        if self.prefix_hash is not None:
-            _non_empty_string(self.prefix_hash, "prefix_hash")
-        if self.capability == "fragment":
-            _non_empty_string(self.fragment_identity, "fragment_identity")
-            if (
-                not isinstance(self.fragment_length, int)
-                or isinstance(self.fragment_length, bool)
-                or self.fragment_length < 0
-            ):
-                raise ItemSchemaError(
-                    "fragment anchor 必须包含非负 fragment_length"
-                )
-            _non_empty_string(self.fragment_hash, "fragment_hash")
-            if not isinstance(self.fragment_layout, Mapping) or not self.fragment_layout:
-                raise ItemSchemaError(
-                    "fragment anchor 必须包含可恢复的 fragment_layout"
-                )
-            _ensure_json_value(self.fragment_layout, "fragment_layout")
-        elif any(
-            value is not None
-            for value in (
-                self.fragment_identity,
-                self.fragment_length,
-                self.fragment_hash,
-                self.fragment_layout,
-            )
-        ):
-            raise ItemSchemaError(
-                "content_part anchor 不得携带 fragment 专用字段"
-            )
+        if type(self.replay_input) is not bool:
+            raise ItemSchemaError("provenance replay_input 必须是 boolean")
+        if self.visibility not in _VISIBILITIES:
+            raise ItemSchemaError(f"未知 provenance visibility: {self.visibility}")
+        if self.protection not in _PROTECTIONS:
+            raise ItemSchemaError(f"未知 provenance protection: {self.protection}")
+        if self.detail_ref is not None and not isinstance(self.detail_ref, DetailRef):
+            raise ItemSchemaError("provenance detail_ref 必须是 typed DetailRef")
 
 
 @dataclass(slots=True)
@@ -284,4 +184,4 @@ class ItemDraft:
             wire_role=self.wire_role,
         )
 
-__all__ = ["ContentPart", "ContentPartAnchor", "ExecutionRecord", "ItemDraft", "ModelCallRecord", "ProvenanceEdge", "TurnRecord"]
+__all__ = ["ExecutionRecord", "ItemDraft", "ModelCallRecord", "ProvenanceEdge", "TurnRecord"]

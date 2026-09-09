@@ -6,7 +6,7 @@ BoxTeam 区分“代码从哪里来”和“以什么方式运行”，不为每
 
 | 发行来源 | 运行模式 | 默认数据目录 | Web UI | Python |
 |---|---|---|---|---|
-| 源码 checkout | development | `~/.boxteams-dev/` | Vite/HMR | 仓库 `.venv` |
+| 源码 checkout | development | 当前 worktree 的 `out/development-runtime/boxteam-home/` | Vite/HMR | 仓库 `.venv` |
 | 源码安装产物 | installed | `~/.boxteams/` | Gateway 静态资源 | 安装产物内置 |
 | npm 安装产物 | installed | `~/.boxteams/` | Gateway 静态资源 | 平台包内置 |
 
@@ -28,6 +28,8 @@ BoxTeam Launcher
 ```
 
 Launcher 只监督 Gateway，负责前台进程、实例锁、信号转发和发行资源定位。Gateway 是所有本地托管工作区的生命周期所有者，包括默认工作区。Workspace API 负责 Job、工具调用和业务状态的排空及中断对账。
+
+Linux 源码开发完整启动由 worktree 专属的 transient user-systemd unit 承载。unit 使用 `Restart=no` 且停止后由 systemd 回收，不安装永久 unit，也不参与开机启动；其他平台和 focused 调试仍可直接运行底层开发管理器。
 
 用户显式提供的外部本地后端不归 Gateway 所有，只能健康探测。Gateway 不得尝试终止无法证明所有权的进程。
 
@@ -92,7 +94,7 @@ ${BOXTEAM_HOME}/
 {
   "schema_version": 1,
   "distribution": "npm",
-  "version": "0.1.0",
+  "version": "<root package.json version>",
   "python_executable": "python/bin/python",
   "application_root": "application",
   "skill_resources": "application/resources/skills",

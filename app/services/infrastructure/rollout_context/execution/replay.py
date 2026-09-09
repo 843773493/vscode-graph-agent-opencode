@@ -193,7 +193,7 @@ class RolloutReplayMixin:
             thread_id,
             ProvenanceEdge(
                 edge_id=f"replay-lineage:{replay_id}",
-                relation="replay_of",
+                relation="replay_input",
                 source_ref=f"{thread_id}:turn:{source_turn_id}",
                 target_ref=f"{thread_id}:turn:{new_turn_id}",
                 replay_input=True,

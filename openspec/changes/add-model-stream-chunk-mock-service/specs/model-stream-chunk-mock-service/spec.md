@@ -6,7 +6,7 @@
 
 ### Requirement: 场景必须选择一个协议可识别的 cassette
 
-测试运行在 `record` 或 `replay` 模式时，系统 MUST 通过 `configs/tests/` 下的 JSONC 配置选择 scenario；scenario MUST 引用 fixture root 内的 cassette。cassette metadata 中的 `protocol` MUST 是协议唯一来源，scenario MUST NOT 重复声明协议、transport mode 或 replay policy。
+测试运行在 `record` 或 `replay` 模式时，系统 MUST 通过 `configs/tests/model_stream/` 下的 JSONC 配置选择 scenario；scenario MUST 引用 fixture root 内的 cassette。cassette metadata 中的 `protocol` MUST 是协议唯一来源，scenario MUST NOT 重复声明协议、transport mode 或 replay policy。
 
 #### Scenario: Chat 场景被显式选择
 
@@ -69,7 +69,7 @@ registry MUST 识别 `openai_chat_sse`、`openai_responses_sse` 和 `anthropic_m
 
 Chat Completions 与 OpenAI Responses MUST 各自提供长期手写 cassette 和可运行 E2E 场景。两者默认场景 MUST 覆盖首轮 reasoning、tool call、工具结果驱动的后续 reasoning 和最终可见文本；Responses 另有显式 reasoning + text 场景供轻量协议测试使用。涉及 tool loop 的 E2E MUST 同时断言 provider 上游记录、业务 tool call 事件、工具执行结果和最终 assistant 文本。Chat cassette MUST 使用 `message_roles` 等不含消息正文的安全结构字段区分 interaction；Responses cassette MUST 使用 `input_types` 区分 interaction。
 
-默认测试配置 MUST 使用体现完整链路的稳定基线：Chat Completions 默认选择 `reasoning-tool`，Responses 默认选择 `responses-reasoning-tool`，两者都使用最简单的 `read_file(README.md)` 测试工具。基础文本、Responses reasoning + text 或其它特定工具需求 MUST 通过 `configs/tests/` 下的显式 JSONC 配置切换，不得改变默认基线的语义。
+默认测试配置 MUST 使用体现完整链路的稳定基线：Chat Completions 默认选择 `reasoning-tool`，Responses 默认选择 `responses-reasoning-tool`，两者都使用最简单的 `read_file(README.md)` 测试工具。基础文本、Responses reasoning + text 或其它特定工具需求 MUST 通过 `configs/tests/model_stream/` 下的显式 JSONC 配置切换，不得改变默认基线的语义。
 
 Responses 并发工具场景 MUST 额外提供显式的 JSONC 配置和手写 cassette，使用两个不同参数的 `read_file` 调用。cassette MUST 允许两个 function call 的 `response.output_item.added` 先后出现，并交错发送各自的 `response.function_call_arguments.delta`；解析器 MUST 根据 `item_id` 或等价的稳定 `call_id` 为每个调用独立累积参数，不得依赖两个调用的 delta 连续到达。该场景的测试 MUST 验证两个工具调用、两个工具结果以及第二轮最终文本均未串线。
 

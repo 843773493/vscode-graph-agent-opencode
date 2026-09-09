@@ -479,6 +479,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     reloadNonce: state.sessionHistoryReloadNonce,
     setState,
   });
+  const loadTerminalTurn = useCallback(
+    (turnId: string) => loadTurnDetails(
+      [turnId],
+      `terminal-turn:${turnId}`,
+      true,
+    ),
+    [loadTurnDetails],
+  );
   const currentTurnTimeline = currentSessionCacheKey
     ? state.turnTimelinesBySession.get(currentSessionCacheKey) ?? null
     : null;
@@ -493,6 +501,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       && currentTurnTimeline.projectionState === "ready",
     initialEventCursor: currentTurnTimeline?.eventCursor ?? null,
     refreshTurnHistory,
+    loadTerminalTurn,
     setState,
   });
   useSessionMessageStream({

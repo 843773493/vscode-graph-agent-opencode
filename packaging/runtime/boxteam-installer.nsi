@@ -1,7 +1,7 @@
 Unicode true
 
 !ifndef VERSION
-  !define VERSION "0.1.0"
+  !error "VERSION is required"
 !endif
 !ifndef INPUTDIR
   !error "INPUTDIR is required"

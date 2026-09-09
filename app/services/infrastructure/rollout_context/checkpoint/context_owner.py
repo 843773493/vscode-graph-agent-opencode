@@ -37,6 +37,10 @@ from app.services.infrastructure.rollout_context.provider.toolset_request_bridge
 )
 from app.services.mapping.itemized.history import project_history_plan
 from app.services.mapping.itemized.langchain import project_context_plan
+from app.services.mapping.itemized.projection import (
+    ProjectionEvidence,
+    build_projection_evidence,
+)
 
 
 class ContextOwnerMixin(
@@ -196,6 +200,128 @@ class ContextOwnerMixin(
             target_format=target_format,
             collect_capability_losses=True,
         )
+
+    def project_context_plan_to_messages_with_evidence(
+        self,
+        session_id: str,
+        plan: ContextRequestPlan,
+        *,
+        checkpoint_ns: str = "",
+        include_runtime_notices: bool = False,
+        include_summaries: bool = False,
+        request_only_content: Mapping[str, object] | None = None,
+    ) -> tuple[list[BaseMessage], ProjectionEvidence]:
+        """返回 LangChain message 与同一 Saver selection 的完整证据。"""
+        messages, _, losses = self._project_committed_context_plan(
+            session_id,
+            plan,
+            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            include_runtime_notices=include_runtime_notices,
+            include_summaries=include_summaries,
+            request_only_content=request_only_content,
+            collect_capability_losses=True,
+        )
+        evidence = build_projection_evidence(
+            self._committed_context_plan(
+                session_id,
+                plan,
+                checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            ),
+            projection="langchain",
+            losses=losses,
+        )
+        return messages, evidence
+
+    def project_context_plan_to_history_with_evidence(
+        self,
+        session_id: str,
+        plan: ContextRequestPlan,
+        *,
+        checkpoint_ns: str = "",
+        include_runtime_notices: bool = False,
+        include_summaries: bool = False,
+    ) -> tuple[list[BaseMessage], ProjectionEvidence]:
+        """返回 Web/history message 与同一 Saver selection 的完整证据。"""
+        normalized_ns = self._context_owner_namespace(checkpoint_ns)
+        messages, _, losses = self._project_committed_context_plan(
+            session_id,
+            plan,
+            checkpoint_ns=normalized_ns,
+            include_runtime_notices=include_runtime_notices,
+            include_summaries=include_summaries,
+            include_request_only=False,
+            collect_capability_losses=True,
+        )
+        evidence = build_projection_evidence(
+            self._committed_context_plan(
+                session_id,
+                plan,
+                checkpoint_ns=normalized_ns,
+            ),
+            projection="web_history",
+            losses=losses,
+        )
+        return messages, evidence
+
+    def project_context_plan_to_native_with_evidence(
+        self,
+        session_id: str,
+        plan: ContextRequestPlan,
+        *,
+        checkpoint_ns: str = "",
+    ) -> tuple[dict[str, object], ProjectionEvidence]:
+        """返回 native request 与同一 Saver selection 的完整证据。"""
+        native = self.project_context_plan_to_native(
+            session_id,
+            plan,
+            checkpoint_ns=checkpoint_ns,
+        )
+        evidence = build_projection_evidence(
+            self._committed_context_plan(
+                session_id,
+                plan,
+                checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            ),
+            projection="native",
+            losses=native.get("losses", ()),
+        )
+        if native.get("selection") != list(evidence.selection):
+            raise ValueError(
+                "plan-order-integrity: native projection selection evidence 不一致"
+            )
+        return native, evidence
+
+    def project_context_plan_to_provider_with_evidence(
+        self,
+        session_id: str,
+        plan: ContextRequestPlan,
+        *,
+        target_format: str,
+        checkpoint_ns: str = "",
+        include_runtime_notices: bool = False,
+        include_summaries: bool = False,
+        request_only_content: Mapping[str, object] | None = None,
+    ) -> tuple[list[BaseMessage], list[dict[str, object]], ProjectionEvidence]:
+        """返回 provider/LangChain 双 wire 与同一 selection 证据。"""
+        messages, tools, losses = self.project_context_plan_to_provider(
+            session_id,
+            plan,
+            target_format=target_format,
+            checkpoint_ns=checkpoint_ns,
+            include_runtime_notices=include_runtime_notices,
+            include_summaries=include_summaries,
+            request_only_content=request_only_content,
+        )
+        evidence = build_projection_evidence(
+            self._committed_context_plan(
+                session_id,
+                plan,
+                checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            ),
+            projection="provider",
+            losses=losses,
+        )
+        return messages, tools, evidence
 
     def _project_committed_context_plan(
         self,

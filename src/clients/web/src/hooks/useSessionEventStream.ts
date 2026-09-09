@@ -38,6 +38,7 @@ export function useSessionEventStream({
   timelineReady,
   initialEventCursor,
   refreshTurnHistory,
+  loadTerminalTurn,
   setState,
 }: {
   apiPort: number | null;
@@ -48,6 +49,7 @@ export function useSessionEventStream({
   timelineReady: boolean;
   initialEventCursor: string | null;
   refreshTurnHistory: () => void;
+  loadTerminalTurn: (turnId: string) => Promise<void>;
   setState: SetAppState;
 }) {
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -144,6 +146,14 @@ export function useSessionEventStream({
       pendingStreamEvents.push(event);
       if (isJobTerminalTraceType(event.type)) {
         flushStreamEvents();
+        void loadTerminalTurn(event.job_id).catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          const message = error instanceof Error ? error.message : String(error);
+          setState((latest) => ({
+            ...latest,
+            status: `加载已完成 Turn 失败: ${message}`,
+          }));
+        });
         return;
       }
       if (flushTimerId === null) {
@@ -238,6 +248,7 @@ export function useSessionEventStream({
     abortCurrentStream,
     apiPort,
     initialEventCursor,
+    loadTerminalTurn,
     refreshTurnHistory,
     sessionCacheKey,
     sessionId,

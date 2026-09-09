@@ -158,9 +158,9 @@ def _build_litellm_auth_record(source: Path) -> dict[str, Any]:
     source_data = json.loads(source.read_text(encoding="utf-8"))
     tokens = source_data.get("tokens")
     if not isinstance(tokens, dict):
-        raise ValueError(f"Codex 认证文件缺少 tokens 对象: {source}")
+        raise TypeError(f"Codex 认证文件缺少 tokens 对象: {source}")
 
-    required = ("access_token", "refresh_token", "id_token", "account_id")
+    required = ("access_token", "refresh_token", "id_token")
     missing = [
         key
         for key in required
@@ -171,13 +171,20 @@ def _build_litellm_auth_record(source: Path) -> dict[str, Any]:
             f"Codex 认证文件缺少 LiteLLM 所需字段: {', '.join(missing)}"
         )
 
-    return {
+    record = {
         "access_token": tokens["access_token"],
         "refresh_token": tokens["refresh_token"],
         "id_token": tokens["id_token"],
         "expires_at": _jwt_exp(tokens["access_token"]),
-        "account_id": tokens["account_id"],
     }
+    account_id = tokens.get("account_id")
+    if not isinstance(account_id, str) or not account_id:
+        account_id = _jwt_account_id(tokens["id_token"])
+        if account_id is None:
+            account_id = _jwt_account_id(tokens["access_token"])
+    if account_id is not None:
+        record["account_id"] = account_id
+    return record
 
 
 def _replace_auth_record(target: Path, record: dict[str, Any]) -> None:
@@ -209,12 +216,31 @@ def _replace_auth_record(target: Path, record: dict[str, Any]) -> None:
 
 
 def _jwt_exp(token: str) -> int:
-    parts = token.split(".")
-    if len(parts) < 2:
-        raise ValueError("Codex access token 不是有效的 JWT")
-    encoded = parts[1] + "=" * (-len(parts[1]) % 4)
-    claims = json.loads(base64.urlsafe_b64decode(encoded))
+    claims = _jwt_claims(token)
     expires_at = claims.get("exp")
     if not isinstance(expires_at, int):
-        raise ValueError("Codex access token JWT 缺少整数 exp")
+        raise TypeError("Codex access token JWT 缺少整数 exp")
     return expires_at
+
+
+def _jwt_account_id(token: str) -> str | None:
+    try:
+        claims = _jwt_claims(token)
+    except (TypeError, ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    auth_claims = claims.get("https://api.openai.com/auth")
+    if not isinstance(auth_claims, dict):
+        return None
+    account_id = auth_claims.get("chatgpt_account_id")
+    return account_id if isinstance(account_id, str) and account_id else None
+
+
+def _jwt_claims(token: str) -> dict[str, Any]:
+    parts = token.split(".")
+    if len(parts) < 2:
+        raise ValueError("Codex token 不是有效的 JWT")
+    encoded = parts[1] + "=" * (-len(parts[1]) % 4)
+    claims = json.loads(base64.urlsafe_b64decode(encoded))
+    if not isinstance(claims, dict):
+        raise TypeError("Codex token JWT payload 必须是对象")
+    return claims

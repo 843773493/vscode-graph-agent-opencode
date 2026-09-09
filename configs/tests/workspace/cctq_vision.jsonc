@@ -1,0 +1,43 @@
+{
+  "$schema": "../../workspace_schema.jsonc",
+  "llm": {
+    "providers": [
+      {
+        "id": "backup_3",
+        "endpoint": "https://www.cctq.ai/v1",
+        "model": "gpt-5.6-luna",
+        "api_key": "${CCTQ_API_KEY}",
+        "custom_llm_provider": "openai",
+        "api_mode": {
+          "protocol": "responses",
+          "model_info": {"supports_vision": true, "supports_function_calling": true, "supports_reasoning": true},
+          "supports_reasoning": {"reasoning_items": {"summary": true, "encrypted_content": true}},
+          "replay_policy": {"encrypted_content": "same_source"}
+        }
+      }
+    ]
+  },
+  "logger": {
+    "level": "info",
+    "pretty": true
+  },
+  "default_agent": "default",
+  "agents": {
+    "default": {
+      "name": "Vision Test Assistant",
+      "description": "只用于 e2e 图片输入识别测试的助手。",
+      "language": "zh-CN",
+      "instructions": {
+        "system_prompt": "你是一个图片识别测试助手。回答必须简短、直接，并准确描述用户提供图片中的可见几何图形和颜色。"
+      },
+      "model": {
+        "primary_provider": "backup_3",
+        "fallback_providers": []
+      },
+      "tools": {
+        "denylist": [],
+        "confirmation_required": []
+      }
+    }
+  }
+}

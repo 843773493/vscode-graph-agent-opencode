@@ -21,7 +21,9 @@ from app.domain.itemized.hashing import (
     content_hash,
     contribution_content_hash,
     sha256_jcs,
+    validate_hash_token,
 )
+from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.records import (
     CanonicalItemRecord,
     ProducerRef,
@@ -35,8 +37,6 @@ from app.domain.itemized.refs import (
 )
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.runtime import (
-    ContentPart,
-    ContentPartAnchor,
     ExecutionRecord,
     ItemDraft,
     ModelCallRecord,
@@ -89,6 +89,7 @@ __all__ = [
     "require_manifest_token",
     "sha256_jcs",
     "unique_ref_identities",
+    "validate_hash_token",
     "validate_item_compatibility",
     "validate_selection_compatibility",
     "validate_turn_transition",

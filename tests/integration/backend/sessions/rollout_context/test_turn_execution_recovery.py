@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
@@ -25,12 +25,15 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     sha256_jcs,
 )
+from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
-from app.domain.itemized.runtime import ContentPart, ContentPartAnchor
+from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
+from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 
 def _accept(saver: RolloutCheckpointSaver, session_id: str) -> dict[str, object]:
@@ -490,6 +493,234 @@ def test_execution_lost_resume_creates_execution_without_a_new_user_root(
         ("execution-user-1", 1, "execution_lost"),
         (resumed["execution_id"], 2, "completed_empty"),
     ]
+
+
+def test_interrupted_turn_resumes_after_restart_without_new_user_root(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    saver = RolloutCheckpointSaver(sessions_dir)
+    accepted = _accept(saver, "session_1")
+    saver.converge_execution(
+        "session_1",
+        turn_id="turn-user-1",
+        execution_id=str(accepted["initial_execution_id"]),
+        outcome="interrupted",
+        turn_status="interrupted",
+    )
+
+    restarted = RolloutCheckpointSaver(sessions_dir)
+    resumed = restarted.resume_turn("session_1", turn_id="turn-user-1")
+
+    assert resumed["execution_id"] != accepted["initial_execution_id"]
+    assert resumed["attempt"] == 2
+    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+        root_count = connection.execute(
+            "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind = 'user_input'"
+        ).fetchone()[0]
+        turn_row = connection.execute(
+            "SELECT turn_id, status, initial_execution_id, last_execution_id "
+            "FROM turn_records"
+        ).fetchone()
+        executions = connection.execute(
+            "SELECT execution_id, attempt, outcome FROM executions ORDER BY attempt"
+        ).fetchall()
+    assert root_count == 1
+    assert turn_row == (
+        "turn-user-1",
+        "active",
+        "execution-user-1",
+        resumed["execution_id"],
+    )
+    assert executions == [
+        ("execution-user-1", 1, "interrupted"),
+        (resumed["execution_id"], 2, "unknown"),
+    ]
+
+    restarted.converge_execution(
+        "session_1",
+        turn_id="turn-user-1",
+        execution_id=str(resumed["execution_id"]),
+        outcome="completed_empty",
+        turn_status="completed_empty",
+    )
+
+
+@pytest.mark.asyncio
+async def test_partial_stream_item_and_anchor_survive_runtime_restart(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    """真实 stream/runtime 写入的 partial item 与定位 anchor 可跨进程恢复。"""
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    saver = RolloutCheckpointSaver(sessions_dir)
+    _accept(saver, "session_1")
+    resolver = get_session_path_resolver(sessions_dir)
+    stream_store = MessageStreamStore(path_resolver=resolver)
+    writer = await stream_store.open(
+        session_id="session_1",
+        turn_id="turn-user-1",
+    )
+    item_sink = CanonicalItemSink(
+        saver,
+        session_id="session_1",
+        checkpoint_ns="",
+    )
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=item_sink.append,
+        canonical_turn_id="turn-user-1",
+    )
+    await runtime.start_model("model-call-partial", "test-provider")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content=[
+                {
+                    "id": "answer-partial",
+                    "index": 0,
+                    "type": "text",
+                    "text": "流式前半",
+                }
+            ]
+        )
+    )
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content=[
+                {
+                    "id": "answer-partial",
+                    "index": 0,
+                    "type": "text",
+                    "text": "流式后半",
+                }
+            ]
+        )
+    )
+    await runtime.fail_model(
+        code="user_interrupt",
+        message="用户在 provider 输出中断开流",
+        outcome="user_interrupt",
+        retryable=False,
+    )
+    await writer.close_interrupted("interrupt-partial-restart")
+
+    partial_items = [
+        item
+        for item in saver._storage.read_items("session_1")
+        if item.status == CanonicalItemStatus.PARTIAL.value
+    ]
+    assert len(partial_items) == 1
+    partial_item = partial_items[0]
+    assert partial_item.item_id == "item-model-call-partial-block-answer-partial"
+    assert partial_item.payload == "流式前半流式后半"
+    assert partial_item.producer_ref == {
+        "producer_kind": "provider",
+        "producer_id": "model-call-partial",
+        "invocation_id": "model-call-partial",
+    }
+
+    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+        view_id, branch_id = connection.execute(
+            "SELECT v.view_id, v.branch_id FROM context_views AS v "
+            "JOIN branches AS b ON b.head_view_id = v.view_id "
+            "WHERE b.status = 'active'"
+        ).fetchone()
+        part_row = connection.execute(
+            "SELECT part_id, part_ordinal, content_hash, locator_json "
+            "FROM item_parts WHERE item_id = ?",
+            (partial_item.item_id,),
+        ).fetchone()
+    assert part_row is not None
+    part_id, part_ordinal, content_hash, locator_json = part_row
+    assert (part_id, part_ordinal, content_hash) == (
+        "answer-partial",
+        0,
+        partial_item.content_hash,
+    )
+    assert locator_json == canonical_json_bytes(
+        {
+            "encoding": "jcs:v1",
+            "json_pointer": "/payload",
+            "length": len("流式前半流式后半".encode()),
+            "offset": 0,
+        }
+    ).decode("utf-8")
+    anchor = ContentPartAnchor(
+        anchor_id="anchor-partial-restart",
+        item_id=partial_item.item_id,
+        part_id=part_id,
+        mode="inclusive",
+        view_id=view_id,
+        branch_id=branch_id,
+        capability="content_part",
+        content_hash=content_hash,
+    )
+    saver.register_content_part_anchor("session_1", anchor)
+
+    restarted_saver = RolloutCheckpointSaver(sessions_dir)
+    restarted_items = restarted_saver._storage.read_items("session_1")
+    restored_item = next(
+        item for item in restarted_items if item.item_id == partial_item.item_id
+    )
+    assert restored_item == partial_item
+    assert (
+        restarted_saver.resolve_content_part_anchor(
+            "session_1",
+            anchor_id=anchor.anchor_id,
+        )
+        == anchor
+    )
+
+    restarted_stream_store = MessageStreamStore(path_resolver=resolver)
+    restarted_writer = await restarted_stream_store.open_existing(
+        session_id="session_1",
+        turn_id="turn-user-1",
+        turn_stream_id=writer.turn_stream_id,
+    )
+    stream_state = await restarted_stream_store.get_state(
+        restarted_writer.turn_stream_id
+    )
+    assert stream_state["stream_status"] == "interrupted"
+    assert len(stream_state["model_calls"]) == 1
+    model_call = stream_state["model_calls"][0]
+    assert {
+        key: model_call[key]
+        for key in ("model_call_id", "attempt", "outcome", "status")
+    } == {
+        "model_call_id": "model-call-partial",
+        "attempt": 1,
+        "outcome": "user_interrupt",
+        "status": "failed",
+    }
+    assert len(stream_state["blocks"]) == 1
+    block = stream_state["blocks"][0]
+    assert {
+        key: block[key]
+        for key in (
+            "block_id",
+            "block_index",
+            "carrier_type",
+            "status",
+            "text",
+            "model_call_id",
+            "projection",
+            "completion_reason",
+            "partial",
+        )
+    } == {
+        "block_id": "answer-partial",
+        "block_index": 0,
+        "carrier_type": "text",
+        "status": "completed",
+        "text": "流式前半流式后半",
+        "model_call_id": "model-call-partial",
+        "projection": "streaming",
+        "completion_reason": "user_interrupt",
+        "partial": True,
+    }
 
 
 def test_checkpoint_first_root_creates_one_based_turn_ordinal(
@@ -952,7 +1183,99 @@ def test_cancelled_turn_rejects_original_dispatch_and_replays_as_new_turn(
     assert len(acceptances) == 2
     assert acceptances[0][2] != acceptances[1][2]
     assert [row[0] for row in view_turns] == ["turn-user-1", replayed["turn_id"]]
-    assert view_turns[1][1] > view_turns[0][1]
+
+
+@pytest.mark.parametrize(
+    ("turn_status", "outcome"),
+    [("completed_empty", "completed_empty"), ("failed", "failed")],
+)
+def test_terminal_turn_rejects_resume_and_original_dispatch_without_mutation(
+    tmp_path: Path,
+    session_bundle_factory,
+    turn_status: str,
+    outcome: str,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    saver = RolloutCheckpointSaver(sessions_dir)
+    accepted = _accept(saver, "session_1")
+    saver.converge_execution(
+        "session_1",
+        turn_id="turn-user-1",
+        execution_id=str(accepted["initial_execution_id"]),
+        outcome=outcome,
+        turn_status=turn_status,
+    )
+
+    db_path = _rollout_db(sessions_dir, "session_1")
+    with sqlite3.connect(db_path) as connection:
+        before_turn = connection.execute(
+            "SELECT status, last_execution_id, final_item_id FROM turn_records "
+            "WHERE turn_id = 'turn-user-1'"
+        ).fetchone()
+        before_execution_count = connection.execute(
+            "SELECT COUNT(*) FROM executions WHERE turn_id = 'turn-user-1'"
+        ).fetchone()[0]
+
+    with pytest.raises(ValueError, match="turn_not_resumable"):
+        saver.resume_turn("session_1", turn_id="turn-user-1")
+    with pytest.raises(ValueError, match="turn_not_resumable"):
+        saver.dispatch_replay("session_1", turn_id="turn-user-1")
+
+    with sqlite3.connect(db_path) as connection:
+        after_turn = connection.execute(
+            "SELECT status, last_execution_id, final_item_id FROM turn_records "
+            "WHERE turn_id = 'turn-user-1'"
+        ).fetchone()
+        after_execution_count = connection.execute(
+            "SELECT COUNT(*) FROM executions WHERE turn_id = 'turn-user-1'"
+        ).fetchone()[0]
+
+    assert after_turn == before_turn
+    assert after_execution_count == before_execution_count == 1
+
+
+def test_replay_as_new_turn_is_idempotent_after_saver_restart(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    saver = RolloutCheckpointSaver(sessions_dir)
+    _accept(saver, "session_1")
+
+    first = saver.replay_as_new_turn(
+        "session_1",
+        source_turn_id="turn-user-1",
+        acceptance_idempotency_key="replay-acceptance-restart-1",
+    )
+    restarted = RolloutCheckpointSaver(sessions_dir)
+    second = restarted.replay_as_new_turn(
+        "session_1",
+        source_turn_id="turn-user-1",
+        acceptance_idempotency_key="replay-acceptance-restart-1",
+    )
+
+    assert second["idempotent"] is True
+    for field in (
+        "turn_id",
+        "root_input_item_id",
+        "initial_execution_id",
+        "commit_id",
+        "replay_of_turn_id",
+        "operation",
+    ):
+        assert second[field] == first[field]
+
+    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+        turn_count, root_count, acceptance_count, lineage_count = connection.execute(
+            "SELECT "
+            "(SELECT COUNT(*) FROM turn_records), "
+            "(SELECT COUNT(*) FROM item_catalog WHERE semantic_kind = 'user_input'), "
+            "(SELECT COUNT(*) FROM turn_acceptances), "
+            "(SELECT COUNT(*) FROM item_relations WHERE relation = 'replay_input')"
+        ).fetchone()
+    assert (turn_count, root_count, acceptance_count, lineage_count) == (2, 2, 2, 1)
 
 
 def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_view(

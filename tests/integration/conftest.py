@@ -47,7 +47,13 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
 
 @pytest.fixture(scope="module")
 def integration_config_path() -> str:
-    return str(Path.cwd().resolve() / "configs" / "tests" / "default.jsonc")
+    return str(
+        Path.cwd().resolve()
+        / "configs"
+        / "tests"
+        / "workspace"
+        / "default.jsonc"
+    )
 
 
 @pytest.fixture(scope="module", autouse=True)

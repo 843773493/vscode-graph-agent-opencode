@@ -244,6 +244,28 @@ class ForkCompactionMixin:
                     relationship=relationship,
                     detail_capability=self._detail_store.fork_detail_capability(),
                 )
+                if turn_anchor is not None:
+                    # full copy 先完成 target-local 安装；cutoff 必须随后使用
+                    # identity mapping 得到的 target Turn，不能把 source ID
+                    # 直接交给 rewind/dispatch。
+                    target_turn_id = (
+                        self._storage.fork_target_identity(
+                            target_session_id,
+                            fork_id=_fork_id,
+                            source_session_id=source_session_id,
+                            entity_type="turn",
+                            source_local_id=turn_anchor.turn_id,
+                            checkpoint_ns=checkpoint_ns,
+                        )
+                        or turn_anchor.turn_id
+                    )
+                    self.rewind_to_turn(
+                        build_checkpoint_config(
+                            target_session_id, checkpoint_ns=checkpoint_ns
+                        ),
+                        turn_id=target_turn_id,
+                        anchor_mode=anchor_mode,
+                    )
                 return RolloutForkResult(
                     source_checkpoint_id=source_checkpoint_id,
                     source_view_id=source_view_id,

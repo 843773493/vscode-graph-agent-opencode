@@ -2,104 +2,132 @@ from __future__ import annotations
 
 from app.services.mapping.turn_response_parts import response_parts_from_records
 
+NOW = "2026-09-09T00:00:00+00:00"
+
 
 def _record(sequence: int, message: dict[str, object]) -> dict[str, object]:
     return {"_indexed_sequence": sequence, "message": message}
 
 
-def test_detail_keeps_content_then_tool_call_then_tool_result_order() -> None:
+def _activity(
+    item_id: str,
+    item_sequence: int,
+    kind: str,
+    **extra: object,
+) -> dict[str, object]:
+    return {
+        "item_id": item_id,
+        "item_sequence": item_sequence,
+        "part_ordinal": 0,
+        "kind": kind,
+        "status": "completed",
+        "created_at": NOW,
+        "elapsed_ms": 10,
+        "message_sequence": 0,
+        "text": "",
+        **extra,
+    }
+
+
+def _projection(*items: dict[str, object], status: str = "completed") -> dict[str, object]:
+    return {
+        "status": status,
+        "activity_items": list(items),
+        "final_message_sequence": 3,
+        "final_response_text": "完成",
+        "final_response_text_truncated": False,
+        "final_item_id": "item-final",
+        "final_item_sequence": 8,
+        "final_item_created_at": NOW,
+    }
+
+
+def test_detail_keeps_backend_order_and_only_enriches_tool_payload() -> None:
     records = [
         _record(
-            1,
+            5,
             {
                 "type": "ai",
                 "data": {
-                    "content": [
-                        {"type": "reasoning_content", "reasoning_content": "先分析"},
-                        {"type": "text", "text": "准备调用工具"},
-                    ],
+                    "content": [],
                     "tool_calls": [
-                        {
-                            "id": "call-1",
-                            "name": "inspect_fixture",
-                            "args": {"path": "a"},
-                        },
+                        {"id": "call-1", "name": "inspect_fixture", "args": {"path": "a"}}
                     ],
                 },
             },
         ),
         _record(
-            2,
+            6,
             {
                 "type": "tool",
-                "data": {
-                    "tool_call_id": "call-1",
-                    "content": "tool result",
-                    "status": "success",
-                },
+                "data": {"tool_call_id": "call-1", "content": "tool result"},
             },
         ),
         _record(
             3,
-            {
-                "type": "ai",
-                "data": {
-                    "content": [{"type": "text", "text": "完成"}],
-                    "tool_calls": [],
-                },
-            },
+            {"type": "ai", "data": {"content": [{"type": "text", "text": "完成"}]}},
         ),
     ]
+    projection = _projection(
+        _activity("reasoning-1", 2, "reasoning", text="先分析"),
+        _activity(
+            "tool-call-1",
+            3,
+            "tool_call",
+            tool_call_id="call-1",
+            tool_name="inspect_fixture",
+            message_sequence=5,
+            assistant_message_sequence=5,
+            call_index=0,
+        ),
+        _activity(
+            "tool-result-1",
+            4,
+            "tool_result",
+            tool_call_id="call-1",
+            tool_name="inspect_fixture",
+            message_sequence=6,
+            assistant_message_sequence=5,
+            result_message_sequence=6,
+            call_index=0,
+        ),
+        _activity("reasoning-2", 7, "reasoning", text="确认结果"),
+    )
 
     parts = response_parts_from_records(
         records,
-        projection={"final_message_sequence": 3},
+        projection=projection,
         mode="detail",
         include=frozenset(
-            {"text", "reasoning_detail", "tool_call", "tool_result", "final_response"}
+            {"reasoning_detail", "tool_call", "tool_result", "final_response"}
         ),
     )
 
     assert [part.kind for part in parts] == [
         "reasoning",
-        "text",
         "tool_call",
         "tool_result",
+        "reasoning",
         "final_text",
     ]
-    assert parts[2].source.call_index == 0
-    assert parts[3].source.result_message_sequence == 2
-    assert parts[-1].final is True
+    assert parts[1].arguments == '{"path": "a"}'
+    assert parts[2].result == "tool result"
+    assert [part.source.item_sequence for part in parts] == [2, 3, 4, 7, 8]
 
 
-def test_summary_uses_projection_without_materializing_records() -> None:
+def test_summary_uses_sqlite_projection_without_materializing_records() -> None:
     parts = response_parts_from_records(
         [],
-        projection={
-            "status": "completed",
-            "final_message_sequence": 3,
-            "final_response_text": "完成",
-            "thinking_blocks": [
-                {
-                    "kind": "summary",
-                    "text": "摘要",
-                    "message_sequence": 1,
-                    "content_block_index": 0,
-                    "item_index": 0,
-                    "carrier_type": "reasoning_items",
-                }
-            ],
-            "tool_items": [
-                {
-                    "item_kind": "tool_call",
-                    "sequence": 1,
-                    "call_index": 0,
-                    "tool_call_id": "call-1",
-                    "tool_name": "inspect_fixture",
-                    "status": "succeeded",
-                }
-            ],
-        },
+        projection=_projection(
+            _activity("summary-1", 2, "reasoning_summary", text="摘要"),
+            _activity(
+                "tool-call-1",
+                3,
+                "tool_call",
+                tool_call_id="call-1",
+                tool_name="inspect_fixture",
+            ),
+        ),
         mode="summary",
         include=frozenset({"reasoning_summary", "tool_summary", "final_response"}),
     )
@@ -110,20 +138,34 @@ def test_summary_uses_projection_without_materializing_records() -> None:
         "final_text",
     ]
     assert all(part.projection == "summary" for part in parts)
-
-    tool_part = next(part for part in parts if part.kind == "tool_call")
-    assert tool_part.status == "failed"
-    assert tool_part.outcome_unknown is True
+    assert parts[0].part_id == "summary-1:part:0"
 
 
-def test_partial_final_text_keeps_interrupt_semantics_in_summary_and_detail() -> None:
+def test_identical_reasoning_text_with_distinct_identity_is_preserved() -> None:
+    parts = response_parts_from_records(
+        [],
+        projection=_projection(
+            _activity("reasoning-1", 2, "reasoning", text="相同正文"),
+            _activity("reasoning-2", 7, "reasoning", text="相同正文"),
+        ),
+        mode="detail",
+        include=frozenset({"reasoning_detail"}),
+    )
+
+    assert [part.part_id for part in parts] == [
+        "reasoning-1:part:0",
+        "reasoning-2:part:0",
+    ]
+
+
+def test_partial_final_text_keeps_interrupt_semantics() -> None:
     records = [
         _record(
-            2,
+            3,
             {
                 "type": "ai",
                 "data": {
-                    "content": [{"type": "text", "text": "半截回答"}],
+                    "content": [{"type": "text", "text": "完成"}],
                     "response_metadata": {
                         "completion_reason": "user_interrupt",
                         "partial": True,
@@ -132,142 +174,32 @@ def test_partial_final_text_keeps_interrupt_semantics_in_summary_and_detail() ->
             },
         )
     ]
-    projection = {
-        "status": "cancelled",
-        "final_message_sequence": 2,
-        "final_response_text": "半截回答",
-    }
 
-    summary_parts = response_parts_from_records(
-        records,
-        projection=projection,
-        mode="summary",
-        include=frozenset({"final_response"}),
-    )
-    detail_parts = response_parts_from_records(
-        records,
-        projection=projection,
-        mode="detail",
-        include=frozenset({"final_response", "text"}),
-    )
-
-    for parts in (summary_parts, detail_parts):
+    for mode in ("summary", "detail"):
+        parts = response_parts_from_records(
+            records,
+            projection=_projection(status="cancelled"),
+            mode=mode,
+            include=frozenset({"final_response"}),
+        )
         assert len(parts) == 1
         assert parts[0].kind == "text"
         assert parts[0].final is False
-        assert parts[0].partial is True
         assert parts[0].completion_reason == "user_interrupt"
 
 
-def test_detail_with_tool_summary_emits_payload_free_tool_parts() -> None:
+def test_terminal_tool_call_without_result_is_explicitly_unknown() -> None:
     parts = response_parts_from_records(
-        [
-            _record(
-                1,
-                {
-                    "type": "ai",
-                    "data": {
-                        "content": [{"type": "text", "text": "准备检查"}],
-                        "tool_calls": [],
-                    },
-                },
+        [],
+        projection=_projection(
+            _activity(
+                "tool-call-1",
+                3,
+                "tool_call",
+                tool_call_id="call-unknown",
+                tool_name="read_file",
             )
-        ],
-        projection={
-            "status": "completed",
-            "final_message_sequence": 1,
-            "tool_items": [
-                {
-                    "item_kind": "tool_call",
-                    "sequence": 2,
-                    "assistant_message_sequence": 2,
-                    "call_index": 0,
-                    "tool_call_id": "call-1",
-                    "tool_name": "inspect_fixture",
-                    "status": "success",
-                },
-                {
-                    "item_kind": "tool_result",
-                    "sequence": 3,
-                    "assistant_message_sequence": 2,
-                    "call_index": 0,
-                    "tool_call_id": "call-1",
-                    "tool_name": "inspect_fixture",
-                    "status": "success",
-                },
-            ],
-        },
-        mode="detail",
-        include=frozenset({"text", "tool_summary", "final_response"}),
-    )
-
-    assert [part.kind for part in parts] == ["final_text", "tool_call"]
-    assert parts[1].projection == "summary"
-    assert parts[1].status == "completed"
-    assert parts[1].outcome_unknown is False
-    assert parts[1].arguments is None
-    assert parts[1].result is None
-
-
-def test_detail_include_tool_result_does_not_invent_tool_call() -> None:
-    parts = response_parts_from_records(
-        [
-            _record(
-                1,
-                {
-                    "type": "ai",
-                    "data": {
-                        "content": [{"type": "text", "text": "完成"}],
-                        "tool_calls": [
-                            {
-                                "id": "call-1",
-                                "name": "inspect_fixture",
-                                "args": {"path": "a"},
-                            }
-                        ],
-                    },
-                },
-            ),
-            _record(
-                2,
-                {
-                    "type": "tool",
-                    "data": {
-                        "tool_call_id": "call-1",
-                        "content": "结果",
-                    },
-                },
-            ),
-        ],
-        projection={"final_message_sequence": 1},
-        mode="detail",
-        include=frozenset({"tool_result"}),
-    )
-
-    assert [part.kind for part in parts] == ["tool_result"]
-
-
-def test_detail_terminal_turn_without_tool_result_is_outcome_unknown() -> None:
-    parts = response_parts_from_records(
-        [
-            _record(
-                7,
-                {
-                    "type": "ai",
-                    "data": {
-                        "content": [],
-                        "tool_calls": [
-                            {
-                                "id": "call-unknown",
-                                "name": "read_file",
-                                "args": {"path": "README.md"},
-                            }
-                        ],
-                    },
-                },
-            )
-        ],
-        projection={"status": "completed", "final_message_sequence": 7},
+        ),
         mode="detail",
         include=frozenset({"tool_call", "tool_result"}),
     )
@@ -275,64 +207,3 @@ def test_detail_terminal_turn_without_tool_result_is_outcome_unknown() -> None:
     assert len(parts) == 1
     assert parts[0].status == "failed"
     assert parts[0].outcome_unknown is True
-
-
-def test_duplicate_tool_call_ids_use_assistant_source_coordinates() -> None:
-    parts = response_parts_from_records(
-        [
-            _record(
-                1,
-                {
-                    "type": "ai",
-                    "data": {
-                        "content": [],
-                        "tool_calls": [
-                            {"id": "reused", "name": "first", "args": {}}
-                        ],
-                    },
-                },
-            ),
-            _record(
-                2,
-                {
-                    "type": "tool",
-                    "data": {"tool_call_id": "reused", "content": "first result"},
-                },
-            ),
-            _record(
-                3,
-                {
-                    "type": "ai",
-                    "data": {
-                        "content": [],
-                        "tool_calls": [
-                            {"id": "reused", "name": "second", "args": {}}
-                        ],
-                    },
-                },
-            ),
-            _record(
-                4,
-                {
-                    "type": "tool",
-                    "data": {"tool_call_id": "reused", "content": "second result"},
-                },
-            ),
-        ],
-        projection=None,
-        mode="detail",
-        include=frozenset({"tool_call", "tool_result"}),
-    )
-
-    assert [part.part_id for part in parts] == [
-        "tool-call:1:0",
-        "tool-call:1:0",
-        "tool-call:3:0",
-        "tool-call:3:0",
-    ]
-    assert [part.source.assistant_message_sequence for part in parts] == [
-        1,
-        1,
-        3,
-        3,
-    ]

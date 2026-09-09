@@ -223,7 +223,7 @@ case "$action" in
           UV_PROJECT_ENVIRONMENT="$repository/.venv" \
           PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
           BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE=0 \
-          bun run scripts/dev.mjs --only-launch >"$log_file" 2>&1 </dev/null &
+          bun run scripts/launch/dev.mjs --only-launch >"$log_file" 2>&1 </dev/null &
         printf '%s\n' "$!" > "$artifacts/runtime/$profile/start.pid"
       )
       start_pid=$(cat "$artifacts/runtime/$profile/start.pid")

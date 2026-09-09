@@ -7,7 +7,7 @@ type WorkItem =
   | Extract<TimelineItem, { kind: "aggregated_text" }>
   | Extract<TimelineItem, { kind: "aggregated_tool" }>;
 
-function collapsedPreview(items: WorkItem[]): string {
+function activePreview(items: WorkItem[]): string {
   const latest = items[items.length - 1];
   if (!latest) {
     return "查看思考过程";
@@ -43,10 +43,12 @@ function compactWorkText(item: Extract<WorkItem, { kind: "aggregated_text" }>): 
 function ThinkingSection({
   items,
   active,
+  completedPreview,
   showRawDetails,
 }: {
   items: WorkItem[];
   active: boolean;
+  completedPreview: string;
   showRawDetails: boolean;
 }): React.ReactNode {
   const [open, setOpen] = React.useState(active);
@@ -65,6 +67,7 @@ function ThinkingSection({
   const hasRedactedThinking = items.some(
     (item) => item.kind === "aggregated_text" && item.redacted === true,
   );
+  const preview = active ? activePreview(items) : completedPreview;
 
   return (
     <section className={`chat-thinking ${active ? "is-active" : "is-complete"}`}>
@@ -72,6 +75,7 @@ function ThinkingSection({
         type="button"
         className="chat-thinking-toggle"
         aria-expanded={open}
+        aria-label={`${open ? "收起" : "展开"} Turn 中间消息：${preview}`}
         onClick={() => setOpen((current) => !current)}
       >
         <span
@@ -80,7 +84,9 @@ function ThinkingSection({
         />
         {active ? <span className="chat-thinking-label">正在思考</span> : null}
         {!open ? (
-          <span className="chat-thinking-preview">{collapsedPreview(items)}</span>
+          <span className="chat-thinking-preview">
+            {preview}
+          </span>
         ) : null}
         <span
           className={`codicon ${open ? "codicon-chevron-down" : "codicon-chevron-right"}`}

@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_key,
 )
@@ -65,7 +66,7 @@ def _source_snapshot(source: Path, target_session: Path):
 
 
 class ForkCloneMixin:
-    """完整 rollout 物理副本与一次性 v1 staging 入口。"""
+    """完整 v2 rollout 物理副本 owner。"""
 
     def _require_private_detail_staging(self) -> None:
         raise DetailUnavailableError(
@@ -113,41 +114,16 @@ class ForkCloneMixin:
         )
         target_lock = self._lock(target_thread_id, checkpoint_ns)
         source_lock.acquire()
-        source_lock_held = True
         source_view_id: str | None = None
         source_detail_rows: tuple[tuple[object, ...], ...] = ()
         try:
             with _source_snapshot(source, target.parent) as source_connection:
                 source_format_version = self._rollout_format(source_connection)
                 if source_format_version == 1:
-                    if detail_capability is not None:
-                        raise ValueError(
-                            "v1_migration_required: typed fork 必须先显式导入 v2"
-                        )
-                    from app.services.infrastructure.rollout_context.migration.store import (
-                        LegacyMigrationStorage,
+                    raise FormatDispatchError(
+                        "v1_migration_required: full_rollout_copy 不得隐式迁移 v1；"
+                        "请先显式运行 legacy_import_v1_to_v2"
                     )
-
-                    # 这是 full-copy 唯一允许读取 v1 的显式 staging 分支。
-                    # migration storage 保留 source 原件，把 target 先安装成
-                    # v2；之后 afork 的 journal/identity remap 只处理这个
-                    # target-local v2 artifact，正常 runtime 不会混读两种格式。
-                    # 先释放 clone 的 source 共享锁，再让 migration storage
-                    # 按自己的 source/target 锁顺序读取；同一进程内对同一
-                    # lock file 嵌套加锁会把显式 staging 卡成自锁超时。
-                    source_lock.release()
-                    source_lock_held = False
-                    LegacyMigrationStorage(
-                        self.sessions_dir,
-                        serde=self._serde,
-                        message_codec=self._message_codec,
-                    ).migrate_legacy_to_v2(
-                        source_thread_id,
-                        target_thread_id=target_thread_id,
-                        checkpoint_ns=checkpoint_ns,
-                        require_lossless=True,
-                    )
-                    return None
                 if source_format_version != storage_version.ROLLOUT_FORMAT_VERSION:
                     raise ValueError(
                         "v1_migration_required: normal full_rollout_copy 不读取 v1 rollout"
@@ -360,6 +336,5 @@ class ForkCloneMixin:
                         (target_thread_id,),
                     )
         finally:
-            if source_lock_held:
-                source_lock.release()
+            source_lock.release()
         return source_view_id

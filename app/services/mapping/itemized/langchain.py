@@ -63,6 +63,33 @@ def _tool_call_ids(item: CanonicalItemRecord) -> set[str]:
     }
 
 
+def _checkpoint_projection_duplicate_item_ids(
+    items: Sequence[CanonicalItemRecord],
+) -> set[str]:
+    """找出由 checkpoint 投影重复写入的 reasoning item。
+
+    流式记录和 checkpoint 投影记录都是事实来源，但同一轮的 checkpoint
+    投影不能在下一次 provider 请求中再次追加一份相同 reasoning。保留先写入
+    的流式 message group，后写入且带执行确认的投影 item 只作为存储证据保留。
+    """
+    stream_reasoning_keys: set[tuple[str | None, str]] = set()
+    duplicate_ids: set[str] = set()
+    for item in items:
+        is_checkpoint_projection = (
+            item.semantic_kind == SemanticKind.REASONING
+            and item.metadata.get("execution_confirmed") is True
+            and isinstance(item.metadata.get("projection_group"), Mapping)
+        )
+        key = (item.turn_id, item.content_hash)
+        if is_checkpoint_projection:
+            if key in stream_reasoning_keys:
+                duplicate_ids.add(item.item_id)
+            continue
+        if item.semantic_kind == SemanticKind.REASONING:
+            stream_reasoning_keys.add(key)
+    return duplicate_ids
+
+
 def _item_content(item: CanonicalItemRecord) -> object:
     if item.semantic_kind != SemanticKind.REASONING:
         return item.payload
@@ -106,7 +133,10 @@ def project_canonical_items(
     ordered = (
         items if preserve_order else sorted(items, key=lambda item: item.item_sequence)
     )
+    duplicate_projection_item_ids = _checkpoint_projection_duplicate_item_ids(ordered)
     for item in ordered:
+        if item.item_id in duplicate_projection_item_ids:
+            continue
         if item.semantic_kind == SemanticKind.REASONING and item.payload_kind in {
             "opaque",
             "extension",

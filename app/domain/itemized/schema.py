@@ -38,6 +38,28 @@ ITEM_STATUSES = frozenset(item.value for item in CanonicalItemStatus)
 PAYLOAD_KINDS = frozenset(item.value for item in PayloadKind)
 SEMANTIC_KINDS = frozenset(item.value for item in SemanticKind)
 TOOL_OUTCOMES = frozenset({"success", "failure", "cancelled", "unknown"})
+PRODUCER_KINDS = frozenset(
+    {"user", "provider", "middleware", "tool", "system", "runtime"}
+)
+PROVENANCE_RELATIONS = frozenset(
+    {
+        "influenced_by",
+        "transformed_by",
+        "derived_from",
+        "summary_of",
+        "replaces",
+        "notice_for",
+        "causes",
+        "result_of",
+        "retry_of",
+        "resumes",
+        "replay_input",
+        "produced_by",
+    }
+)
+VISIBILITIES = frozenset({"public", "internal", "private"})
+PROTECTIONS = frozenset({"public", "redacted", "protected"})
+AVAILABILITIES = frozenset({"available", "unavailable", "forbidden", "expired"})
 
 SELECTION_COMPATIBILITY: dict[str, tuple[str, str]] = {
     SelectionKind.CANONICAL_HISTORY: ("canonical_item", BaseDeltaRole.NONE),
@@ -101,12 +123,15 @@ def validate_item_compatibility(
     status: str,
 ) -> None:
     """校验完整 semantic/payload/status 三元组。"""
-    if semantic_kind not in SEMANTIC_KINDS:
-        raise ItemSchemaError(f"未知 semantic_kind: {semantic_kind}")
-    if payload_kind not in PAYLOAD_KINDS:
-        raise ItemSchemaError(f"未知 payload_kind: {payload_kind}")
-    if status not in ITEM_STATUSES:
-        raise ItemSchemaError(f"未知 item status: {status}")
+    for name, value, allowed in (
+        ("semantic_kind", semantic_kind, SEMANTIC_KINDS),
+        ("payload_kind", payload_kind, PAYLOAD_KINDS),
+        ("status", status, ITEM_STATUSES),
+    ):
+        if not isinstance(value, str):
+            raise ItemSchemaError(f"{name} 必须是字符串")
+        if value not in allowed:
+            raise ItemSchemaError(f"未知 {name}: {value}")
     if (
         payload_kind not in ALLOWED_PAYLOADS[semantic_kind]
         or status not in ALLOWED_STATUSES[semantic_kind]
@@ -122,6 +147,13 @@ def validate_selection_compatibility(
     base_delta_role: str,
 ) -> None:
     """在 source lookup 前校验 selection tagged-union 矩阵。"""
+    for name, value in (
+        ("selection_kind", selection_kind),
+        ("ref_type", ref_type),
+        ("base_delta_role", base_delta_role),
+    ):
+        if not isinstance(value, str):
+            raise ItemSchemaError(f"plan-order-integrity: {name} 必须是字符串")
     expected = SELECTION_COMPATIBILITY.get(selection_kind)
     if expected is None:
         raise ItemSchemaError(f"plan-order-integrity: 未知 selection_kind: {selection_kind}")
@@ -138,9 +170,25 @@ def validate_producer_ref(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise ItemSchemaError("producer_ref 必须是 object")
     result = dict(value)
+    allowed_fields = {
+        "producer_kind",
+        "producer_id",
+        "invocation_id",
+        "source_version",
+        "source_hash",
+    }
+    unknown_fields = sorted(set(result) - allowed_fields)
+    if unknown_fields:
+        raise ItemSchemaError(
+            "producer_ref 含未知字段: " + ",".join(unknown_fields)
+        )
     for name in ("producer_kind", "producer_id"):
         if not isinstance(result.get(name), str) or not result[name]:
             raise ItemSchemaError(f"producer_ref.{name} 必须是非空字符串")
+    if result["producer_kind"] not in PRODUCER_KINDS:
+        raise ItemSchemaError(
+            f"未知 producer_ref.producer_kind: {result['producer_kind']}"
+        )
     for name in ("invocation_id", "source_version", "source_hash"):
         child = result.get(name)
         if child is not None and not isinstance(child, str):

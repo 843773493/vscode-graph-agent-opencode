@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -74,6 +75,7 @@ if TYPE_CHECKING:
 
 AGENT_GRAPH_RECURSION_LIMIT = 9999
 PROVIDER_REQUEST_OPTION_KEYS = {"overrides", "default_headers"}
+logger = logging.getLogger(__name__)
 
 
 def _tool_metadata(
@@ -241,6 +243,18 @@ def build_model_from_provider(
     )
 
 
+def provider_configuration_error(
+    provider: dict[str, Any],
+    runtime_config: dict[str, Any],
+) -> str | None:
+    """返回单个 provider 的可展示配置错误，不让坏配置阻断 Agent 列表。"""
+    try:
+        build_model_from_provider(provider, runtime_config)
+    except Exception as error:  # noqa: BLE001 - 配置错误需要逐 provider 隔离展示
+        return str(error) or type(error).__name__
+    return None
+
+
 def _get_provider_request_options(provider: dict[str, Any]) -> dict[str, Any]:
     """读取 provider 级请求选项，并在拼错字段时直接报错。"""
     request_options = provider.get("request_options") or {}
@@ -281,12 +295,24 @@ def build_runtime_for_agent(
     providers = runtime_config["providers"]
 
     candidates = []
-    for provider in providers:
-        model = build_model_from_provider(
-            provider,
-            runtime_config,
-            prompt_cache_key=prompt_cache_key,
-        )
+    for index, provider in enumerate(providers):
+        try:
+            model = build_model_from_provider(
+                provider,
+                runtime_config,
+                prompt_cache_key=prompt_cache_key,
+            )
+        except Exception as error:
+            provider_id = str(provider.get("id") or provider.get("model") or "<unknown>")
+            if index == 0:
+                raise RuntimeError(
+                    f"当前选择的模型配置不可用: provider_id={provider_id}; {error}"
+                ) from error
+            logger.exception(
+                "跳过配置不可用的 fallback provider: provider_id=%s",
+                provider_id,
+            )
+            continue
         candidates.append(
             build_provider_model_candidate(provider=provider, model=model)
         )

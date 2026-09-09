@@ -22,7 +22,7 @@ if not os.environ.get("OPENROUTER_API_KEY"):
 
 
 CONFIGS_DIR = os.path.join(Path.cwd(), "configs")
-TEST_CONFIG_PATH = os.path.join(CONFIGS_DIR, "tests", "default.jsonc")
+TEST_CONFIG_PATH = os.path.join(CONFIGS_DIR, "tests", "workspace", "default.jsonc")
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def test_config_path() -> str:
 
 
 def use_config(name: str) -> str:
-    return os.path.join(CONFIGS_DIR, "tests", f"{name}.jsonc")
+    return os.path.join(CONFIGS_DIR, "tests", "workspace", f"{name}.jsonc")
 
 
 @pytest.fixture

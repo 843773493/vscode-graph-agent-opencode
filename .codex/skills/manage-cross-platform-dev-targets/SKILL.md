@@ -1,6 +1,6 @@
 ---
 name: manage-cross-platform-dev-targets
-description: Manage and develop this repository's isolated Linux, Windows, and Docker development targets through validated JSONC configuration, Git snapshots, SSH actions, lifecycle commands, tests, and artifact collection. Use when Codex needs to provision, synchronize, bootstrap, start, stop, restart, inspect, test, or collect from a cross-platform target, diagnose target orchestration, or modify files under tools/cross-platform-development-targets/ and scripts/cross-platform-development-target.mjs.
+description: Manage and develop this repository's isolated Linux, Windows, and Docker development targets through validated JSONC configuration, Git snapshots, SSH actions, lifecycle commands, tests, and artifact collection. Use when Codex needs to provision, synchronize, bootstrap, start, stop, restart, inspect, test, or collect from a cross-platform target, diagnose target orchestration, or modify files under tools/cross-platform-development-targets/ and scripts/launch/cross-platform-development-target.mjs.
 ---
 
 # 管理跨平台开发目标
@@ -12,7 +12,7 @@ description: Manage and develop this repository's isolated Linux, Windows, and D
 始终从项目根目录运行：
 
 ```bash
-bun run scripts/cross-platform-development-target.mjs <command> <target-id> [options]
+bun run scripts/launch/cross-platform-development-target.mjs <command> <target-id> [options]
 ```
 
 默认读取 `${BOXTEAM_HOME:-~/.boxteams-dev}/config/cross-platform-development-targets.jsonc`。仅在用户指定其它配置时使用 `--config <path>`；配置也可由 `BOXTEAM_CROSS_PLATFORM_TARGET_CONFIG` 指定。
@@ -44,11 +44,11 @@ bun run scripts/cross-platform-development-target.mjs <command> <target-id> [opt
 典型开发目标流程：
 
 ```bash
-bun run scripts/cross-platform-development-target.mjs status docker-debian
-bun run scripts/cross-platform-development-target.mjs sync docker-debian --activate --no-env
-bun run scripts/cross-platform-development-target.mjs bootstrap docker-debian
-bun run scripts/cross-platform-development-target.mjs restart docker-debian --profile development
-bun run scripts/cross-platform-development-target.mjs status docker-debian --profile development
+bun run scripts/launch/cross-platform-development-target.mjs status docker-debian
+bun run scripts/launch/cross-platform-development-target.mjs sync docker-debian --activate --no-env
+bun run scripts/launch/cross-platform-development-target.mjs bootstrap docker-debian
+bun run scripts/launch/cross-platform-development-target.mjs restart docker-debian --profile development
+bun run scripts/launch/cross-platform-development-target.mjs status docker-debian --profile development
 ```
 
 ## 保持安全边界
@@ -69,7 +69,7 @@ bun run scripts/cross-platform-development-target.mjs status docker-debian --pro
 修改后至少运行：
 
 ```bash
-bun test scripts/cross-platform-development-target.test.mjs
+bun test scripts/launch/cross-platform-development-target.test.mjs
 ```
 
 对改过的平台脚本再执行可用的语法检查；没有真实 Windows VMware 时，保留明确 TODO，不声称已经完成 Windows 实机验证。

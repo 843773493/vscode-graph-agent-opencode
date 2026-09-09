@@ -90,6 +90,10 @@ def test_tool_calls_and_results_get_target_local_linked_identity(
     items = storage.read_items("target")
     call = next(item for item in items if item.semantic_kind == "tool_call")
     result_item = next(item for item in items if item.semantic_kind == "tool_result")
+    root = next(item for item in items if item.semantic_kind == "user_input")
+    assert root.producer_ref["producer_kind"] == "user"
+    assert call.producer_ref["producer_kind"] == "provider"
+    assert result_item.producer_ref["producer_kind"] == "tool"
     assert (
         call.payload["tool_call_id"]
         == result_item.payload["tool_call_id"]

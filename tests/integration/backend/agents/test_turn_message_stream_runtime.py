@@ -102,6 +102,37 @@ async def test_model_tool_scopes_share_turn_cancellation_and_close_provider(
 
 
 @pytest.mark.asyncio
+async def test_concurrent_turn_events_allocate_contiguous_event_sequences(
+    runtime_context: tuple[MessageStreamStore, SessionPathResolver, str, Path],
+) -> None:
+    store, _, session_id, _ = runtime_context
+    writer = await store.open(session_id=session_id, turn_id="job_concurrent_events")
+
+    await asyncio.gather(
+        *(
+            writer.commit(
+                "block.delta",
+                {
+                    "block_id": f"block_{index}",
+                    "block_index": index,
+                    "carrier_type": "text",
+                    "operation": "append",
+                    "text": str(index),
+                },
+                block_id=f"block_{index}",
+            )
+            for index in range(12)
+        )
+    )
+
+    events = await store.list_events(
+        session_id=session_id,
+        turn_stream_id=writer.turn_stream_id,
+    )
+    assert [event["event_seq"] for event in events] == list(range(1, 14))
+
+
+@pytest.mark.asyncio
 async def test_model_call_local_deadline_does_not_cancel_turn(
     runtime_context: tuple[MessageStreamStore, SessionPathResolver, str, Path],
 ) -> None:

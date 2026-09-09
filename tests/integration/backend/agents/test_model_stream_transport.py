@@ -23,11 +23,15 @@ from app.testing.model_stream import (
     replay_session,
 )
 
-CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream.jsonc"
-CHAT_BASIC_CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream_chat_basic.jsonc"
-RESPONSES_CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream_responses.jsonc"
+CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream" / "model_stream.jsonc"
+CHAT_BASIC_CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream" / "model_stream_chat_basic.jsonc"
+RESPONSES_CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream" / "model_stream_responses.jsonc"
 RESPONSES_PARALLEL_TOOL_CONFIG_PATH = (
-    Path.cwd() / "configs" / "tests" / "model_stream_responses_parallel_tool.jsonc"
+    Path.cwd()
+    / "configs"
+    / "tests"
+    / "model_stream"
+    / "model_stream_responses_parallel_tool.jsonc"
 )
 FIXTURE_ROOT = Path.cwd() / "tests" / "fixtures" / "model_stream"
 

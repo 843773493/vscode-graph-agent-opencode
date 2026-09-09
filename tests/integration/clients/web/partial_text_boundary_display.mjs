@@ -97,18 +97,19 @@ try {
       },
       body: JSON.stringify({
         turn_ids: [turnId],
-        include: ["user", "assistant_text", "final_response"],
+        include: ["user", "text", "assistant_text", "final_response"],
       }),
     },
   );
   const historyItem = history.data.items.find((item) => item.turn_id === turnId);
   const apiCancelled = historyItem?.status === "cancelled";
-  const partialResponsePart = historyItem?.response_parts?.find(
+  const nonFinalResponsePart = historyItem?.response_parts?.find(
     (part) => part.text === "我已经开始分析这个问题，但回答在这里被用户中断……",
   );
-  const apiPartial = partialResponsePart?.partial === true;
-  const apiCompletionReason =
-    partialResponsePart?.completion_reason === "user_interrupt";
+  const apiNonFinalText =
+    nonFinalResponsePart?.kind === "text" &&
+    nonFinalResponsePart?.final !== true &&
+    historyItem?.final_response === "";
   if (!apiCancelled) {
     throw new Error(`历史 API 未返回 cancelled: ${JSON.stringify(historyItem)}`);
   }
@@ -116,6 +117,9 @@ try {
   await page.locator(`button[data-session-id="${sessionId}"]`).click();
   const boundaryTurn = page.locator(`[data-turn-id="${turnId}"]`);
   await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });
+  await boundaryTurn
+    .getByRole("button", { name: /展开 Turn 中间消息/ })
+    .click();
   await waitUntil(
     async () => (await boundaryTurn.innerText()).includes(
       "我已经开始分析这个问题，但回答在这里被用户中断……",
@@ -126,8 +130,8 @@ try {
   const partialTextVisible = boundaryText.includes(
     "我已经开始分析这个问题，但回答在这里被用户中断……",
   );
-  const interruptedStatusVisible = await boundaryTurn
-    .locator(".chat-inline-cancelled")
+  const cancelledStatusVisible = await boundaryTurn
+    .locator('[data-status-kind="cancelled"]')
     .count()
     .then((count) => count > 0);
   const independentRetryVisible = (await boundaryTurn
@@ -139,9 +143,8 @@ try {
     (await boundaryTurn.locator(".chat-turn-error").count()) > 0;
   if (
     !partialTextVisible ||
-    !apiPartial ||
-    !apiCompletionReason ||
-    !interruptedStatusVisible ||
+    !apiNonFinalText ||
+    !cancelledStatusVisible ||
     independentRetryVisible ||
     failedRetryLabelVisible ||
     legacyInterruptedStatusVisible ||
@@ -150,9 +153,8 @@ try {
     throw new Error(`partial text 边界展示错误: ${JSON.stringify({
       boundaryText,
       partialTextVisible,
-      apiPartial,
-      apiCompletionReason,
-      interruptedStatusVisible,
+      apiNonFinalText,
+      cancelledStatusVisible,
       independentRetryVisible,
       failedRetryLabelVisible,
       legacyInterruptedStatusVisible,
@@ -162,10 +164,9 @@ try {
 
   result = {
     apiCancelled,
-    apiPartial,
-    apiCompletionReason,
+    apiNonFinalText,
     partialTextVisible,
-    interruptedStatusVisible,
+    cancelledStatusVisible,
     independentRetryVisible,
     failedRetryLabelVisible,
     renderErrorVisible,

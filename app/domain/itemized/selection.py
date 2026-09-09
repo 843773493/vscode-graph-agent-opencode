@@ -12,6 +12,7 @@ from app.domain.itemized.enums import (
     SelectionKind,
 )
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.hashing import validate_hash_token
 from app.domain.itemized.refs import ContextRef, ToolSetRef
 from app.domain.itemized.schema import validate_selection_compatibility
 from app.domain.itemized.serialization import _non_empty_string
@@ -45,6 +46,10 @@ class ContextSelectionEntry:
     contribution_ordinal: int | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.ref, (ContextRef, ToolSetRef)):
+            raise ItemSchemaError(
+                "ContextSelectionEntry.ref 必须是 ContextRef 或 ToolSetRef"
+            )
         _non_empty_string(self.assembly_id, "ContextSelectionEntry.assembly_id")
         if not isinstance(self.plan_ordinal, int) or isinstance(
             self.plan_ordinal, bool
@@ -81,6 +86,14 @@ class ContextSelectionEntry:
         if self.availability not in {item.value for item in DetailAvailability}:
             raise ItemSchemaError(f"未知 selection availability: {self.availability}")
         if self.included:
+            if self.availability != DetailAvailability.AVAILABLE:
+                raise ItemSchemaError(
+                    "included selection 的 source availability 必须是 available"
+                )
+            if self.omission_reason is not None:
+                raise ItemSchemaError(
+                    "included selection 不得携带 omission_reason"
+                )
             _non_empty_string(self.source_revision, "ContextSelectionEntry.source_revision")
             if not isinstance(self.content_length, int) or isinstance(
                 self.content_length, bool
@@ -111,11 +124,15 @@ class ContextSelectionEntry:
         if self.source_revision is not None:
             _non_empty_string(self.source_revision, "ContextSelectionEntry.source_revision")
         if self.content_hash is not None:
-            _non_empty_string(self.content_hash, "ContextSelectionEntry.content_hash")
+            validate_hash_token(
+                self.content_hash,
+                "ContextSelectionEntry manifest content_hash",
+            )
         if self.redacted_stable_digest is not None:
-            _non_empty_string(
+            validate_hash_token(
                 self.redacted_stable_digest,
-                "ContextSelectionEntry.redacted_stable_digest",
+                "ContextSelectionEntry manifest redacted_stable_digest",
+                redacted=True,
             )
         if self.omission_reason is not None:
             _non_empty_string(

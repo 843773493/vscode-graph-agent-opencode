@@ -458,6 +458,11 @@ class StepRunner:
                 message_created_at=assistant_message_created_at,
                 token_usage=turn_token_usage,
                 preserve_content_part_refs=True,
+                before_persist=(
+                    model_call_adapter.converge_final_message
+                    if final_text
+                    else None
+                ),
             )
             if final_text and not persisted:
                 raise RuntimeError(

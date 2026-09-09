@@ -28,6 +28,7 @@ def e2e_model_stream_config_path() -> str:
         Path.cwd()
         / "configs"
         / "tests"
+        / "model_stream"
         / "model_stream_responses_parallel_tool.jsonc"
     )
 

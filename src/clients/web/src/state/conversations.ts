@@ -3,6 +3,7 @@ import type {
   Message,
   PendingRequestList,
   TraceEvent,
+  TurnResponsePart,
 } from "../types/backend";
 import type { AppState, ConversationView } from "../types/frontend";
 import {
@@ -159,7 +160,19 @@ function conversationFromTurn(turn: TurnRecord): ConversationView {
     activityStats: turn.activity_stats
       ? {
           duration_ms: turn.activity_stats.duration_ms ?? null,
-          message_count: turn.activity_stats.message_count ?? 0,
+          item_count: turn.activity_stats.item_count ?? 0,
+          ...(turn.activity_stats.first_item_sequence !== undefined
+            ? {
+                first_item_sequence:
+                  turn.activity_stats.first_item_sequence ?? null,
+              }
+            : {}),
+          ...(turn.activity_stats.last_item_sequence !== undefined
+            ? {
+                last_item_sequence:
+                  turn.activity_stats.last_item_sequence ?? null,
+              }
+            : {}),
         }
       : undefined,
     sessionId: turn.session_id,
@@ -261,6 +274,35 @@ function mergeConversation(
   persisted: ConversationView,
   pending: ConversationView,
 ): ConversationView {
+  const userMessage = persisted.userMessage && pending.userMessage
+    ? {
+        ...persisted.userMessage,
+        ...pending.userMessage,
+        // Turn 详情/摘要可能先于 live 状态到达；保留乐观 replay
+        // 的操作元数据，否则回退提示会在新 Job 运行期间消失。
+        metadata: {
+          ...persisted.userMessage.metadata,
+          ...pending.userMessage.metadata,
+        },
+      }
+    : persisted.userMessage ?? pending.userMessage;
+  const persistedTerminal = persisted.displayMode === "history"
+    && Boolean(persisted.turnStatus)
+    && TERMINAL_TURN_STATUSES.has(persisted.turnStatus!);
+  if (persistedTerminal) {
+    // terminal Turn 已经由后端 projection 确认后，完整替换 live 业务镜像；
+    // pending 只贡献诊断事件和乐观操作元数据，不能重新暴露流式思考正文。
+    return {
+      ...pending,
+      ...persisted,
+      displayMode: "history",
+      userMessage,
+      events: dedupeTraceEvents([...persisted.events, ...pending.events]),
+      pending: false,
+      activeJobOverlay: false,
+      source: "turn",
+    };
+  }
   const assistantMessages = [
     ...(persisted.assistantMessages ?? []),
     ...(pending.assistantMessages ?? []),
@@ -272,18 +314,7 @@ function mergeConversation(
     ...persisted,
     ...pending,
     displayMode: pending.displayMode,
-    userMessage: persisted.userMessage && pending.userMessage
-      ? {
-          ...persisted.userMessage,
-          ...pending.userMessage,
-          // Turn 详情/摘要可能先于 live 状态到达；保留乐观 replay
-          // 的操作元数据，否则回退提示会在新 Job 运行期间消失。
-          metadata: {
-            ...persisted.userMessage.metadata,
-            ...pending.userMessage.metadata,
-          },
-        }
-      : persisted.userMessage ?? pending.userMessage,
+    userMessage,
     assistantMessages,
     events: dedupeTraceEvents([...persisted.events, ...pending.events]),
     source: pending.source === "pending" ? "pending" : persisted.source,
@@ -772,6 +803,12 @@ function applyMessageStreamProjection(
     }
     const terminalTurn = conversation.turnStatus
       && TERMINAL_TURN_STATUSES.has(conversation.turnStatus);
+    const liveResponseParts = messageStreamToResponseParts(stream);
+    const liveActivityStats = messageStreamActivityStats(
+      stream,
+      liveResponseParts,
+      conversation.userMessage?.created_at,
+    );
     if (terminalTurn) {
       // Job API/Turn projection 已经确认终态时，任何旧 stream（包括错误的
       // completed）只能作为诊断镜像保留，不能重新驱动聊天状态或活动遮罩。
@@ -782,8 +819,12 @@ function applyMessageStreamProjection(
           : "error";
       return {
         ...conversation,
-        ...(isTerminalMessageStreamStatus(stream.streamStatus)
-          ? { responseParts: messageStreamToResponseParts(stream) }
+        ...(conversation.displayMode === "live"
+          && isTerminalMessageStreamStatus(stream.streamStatus)
+          ? {
+              responseParts: liveResponseParts,
+              activityStats: liveActivityStats,
+            }
           : {}),
         status: terminalConversationStatus,
         activeJobOverlay: false,
@@ -793,14 +834,18 @@ function applyMessageStreamProjection(
           streamStatus: stream.streamStatus,
           lastEventSeq: stream.lastEventSeq,
           failure: stream.failure,
-          protocolError: stream.protocolError,
+          protocolError: terminalActivityStatsError(
+            stream,
+            conversation,
+            liveActivityStats.item_count,
+          ),
           activeState: stream.activeState,
           activities: stream.activities,
           resumable: stream.resumable,
         },
       };
     }
-    const responseParts = messageStreamToResponseParts(stream);
+    const responseParts = liveResponseParts;
     const terminalStatus = stream.streamStatus === "completed"
       ? "done"
       : stream.streamStatus === "interrupted" || stream.streamStatus === "failed"
@@ -809,6 +854,7 @@ function applyMessageStreamProjection(
     return {
       ...conversation,
       responseParts,
+      activityStats: liveActivityStats,
       status: terminalStatus,
       activeJobOverlay: !isTerminalMessageStreamStatus(stream.streamStatus),
       messageStream: {
@@ -823,6 +869,62 @@ function applyMessageStreamProjection(
       },
     };
   });
+}
+
+const ACTIVITY_PART_KINDS = new Set([
+  "reasoning",
+  "reasoning_summary",
+  "reasoning_encrypted",
+  "tool_call",
+  "tool_result",
+]);
+
+function messageStreamActivityStats(
+  stream: MessageStreamState,
+  parts: TurnResponsePart[],
+  turnStartedAt?: string,
+): NonNullable<ConversationView["activityStats"]> {
+  const timestamps = [
+    ...stream.blocks.flatMap((block) => [
+      block.started_at,
+      block.updated_at,
+      block.completed_at,
+    ]),
+    ...stream.toolExecutions.flatMap((execution) => [
+      execution.started_at,
+      execution.updated_at,
+      execution.completed_at,
+    ]),
+  ].filter((value): value is string => typeof value === "string");
+  const startedAt = turnStartedAt ? Date.parse(turnStartedAt) : Number.NaN;
+  const latestAt = Math.max(
+    ...timestamps
+      .map((value) => Date.parse(value))
+      .filter((value) => Number.isFinite(value)),
+  );
+  return {
+    duration_ms: Number.isFinite(startedAt) && Number.isFinite(latestAt)
+      ? Math.max(0, latestAt - startedAt)
+      : null,
+    item_count: parts.filter((part) => ACTIVITY_PART_KINDS.has(part.kind)).length,
+  };
+}
+
+function terminalActivityStatsError(
+  stream: MessageStreamState,
+  conversation: ConversationView,
+  liveItemCount: number,
+): string | null {
+  if (
+    conversation.displayMode !== "history"
+    || !isTerminalMessageStreamStatus(stream.streamStatus)
+    || conversation.activityStats === undefined
+    || conversation.activityStats.item_count === liveItemCount
+  ) {
+    return stream.protocolError;
+  }
+  const mismatch = `Turn Item 统计不一致: live=${liveItemCount} history=${conversation.activityStats.item_count}`;
+  return stream.protocolError ? `${stream.protocolError}; ${mismatch}` : mismatch;
 }
 
 const TERMINAL_TURN_STATUSES = new Set([

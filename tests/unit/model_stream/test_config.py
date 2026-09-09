@@ -11,17 +11,25 @@ from app.testing.model_stream import (
     load_model_stream_config_from_environment,
 )
 
-CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream.jsonc"
-RESPONSES_CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream_responses.jsonc"
+CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream" / "model_stream.jsonc"
+RESPONSES_CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream" / "model_stream_responses.jsonc"
 RESPONSES_REASONING_TEXT_CONFIG_PATH = (
-    Path.cwd() / "configs" / "tests" / "model_stream_responses_reasoning_text.jsonc"
+    Path.cwd()
+    / "configs"
+    / "tests"
+    / "model_stream"
+    / "model_stream_responses_reasoning_text.jsonc"
 )
 RESPONSES_PARALLEL_TOOL_CONFIG_PATH = (
-    Path.cwd() / "configs" / "tests" / "model_stream_responses_parallel_tool.jsonc"
+    Path.cwd()
+    / "configs"
+    / "tests"
+    / "model_stream"
+    / "model_stream_responses_parallel_tool.jsonc"
 )
 
 
-def test_model_stream_config_uses_explicit_defaults() -> None:
+def test_model_stream_config_uses_default_fixture_root() -> None:
     config = load_model_stream_config(CONFIG_PATH)
 
     assert config.transport.mode == "replay"
@@ -70,7 +78,6 @@ def test_invalid_environment_config_fails_with_schema_context(tmp_path: Path) ->
                 "model_stream": {
                     "transport": {
                         "mode": "replay",
-                        "fixture_root": "tests/fixtures/model_stream",
                     }
                 },
             }
@@ -105,3 +112,16 @@ def test_invalid_transport_mode_fails_schema_validation(tmp_path: Path) -> None:
 
     with pytest.raises(ModelStreamConfigError, match="mode"):
         load_model_stream_config(path)
+
+
+def test_explicit_fixture_root_override_remains_supported(tmp_path: Path) -> None:
+    schema_path = CONFIG_PATH.parent / "model_stream_schema.jsonc"
+    raw_config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw_config["$schema"] = str(schema_path)
+    raw_config["model_stream"]["transport"]["fixture_root"] = str(tmp_path)
+    path = tmp_path / "explicit-fixture-root.jsonc"
+    path.write_text(json.dumps(raw_config), encoding="utf-8")
+
+    config = load_model_stream_config(path)
+
+    assert config.transport.fixture_root == tmp_path.resolve()

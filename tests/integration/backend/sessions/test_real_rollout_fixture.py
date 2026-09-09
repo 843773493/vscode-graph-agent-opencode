@@ -26,6 +26,9 @@ from app.services.infrastructure.rollout_context.migration.artifacts import (
 from app.services.infrastructure.rollout_context.migration.store import (
     LegacyMigrationStorage,
 )
+from app.services.infrastructure.rollout_context.storage.schema import (
+    ROLLOUT_SCHEMA_VERSION,
+)
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from tests.integration.backend.sessions.deterministic_rollout_fixture_helpers import (
@@ -382,7 +385,7 @@ def test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body(
     with storage._connect(session_id, "", read_only=True) as connection:
         assert connection.execute(
             "SELECT schema_version, rollout_format_version FROM database_meta"
-        ).fetchone() == (2, 2)
+        ).fetchone() == (ROLLOUT_SCHEMA_VERSION, 2)
     source_by_sequence = {item.item_sequence: item for item in items}
     accessed: list[int] = []
     original_read = storage._read_record_envelopes

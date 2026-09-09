@@ -340,6 +340,82 @@ describe("Turn timeline revision 合并", () => {
     expect(timeline.turnsById.job_2).toEqual(summary("job_2", 2, 3));
   });
 
+  test("detail 的后端顺序和 identity 原样替换 summary，不按正文去重", () => {
+    const summaryTurn = {
+      ...summary("job_activity", 1),
+      response_parts: [
+        {
+          part_id: "tool-call:5:0",
+          kind: "tool_call" as const,
+          projection: "summary" as const,
+          status: "completed" as const,
+          source: {
+            message_sequence: 5,
+            assistant_message_sequence: 5,
+            call_index: 0,
+          },
+          tool_call_id: "call-1",
+          tool_name: "read_file",
+        },
+      ],
+    };
+    const detailTurn = {
+      ...detail("job_activity", 1),
+      response_parts: [
+        {
+          part_id: "message:5:reasoning:0:0",
+          kind: "reasoning" as const,
+          projection: "detail" as const,
+          status: "completed" as const,
+          source: { message_sequence: 5, content_block_index: 0, item_index: 0 },
+          text: "执行工具",
+        },
+        {
+          part_id: "tool-call:5:0",
+          kind: "tool_call" as const,
+          projection: "detail" as const,
+          status: "completed" as const,
+          source: {
+            message_sequence: 5,
+            assistant_message_sequence: 5,
+            call_index: 0,
+          },
+          tool_call_id: "call-1",
+          tool_name: "read_file",
+          arguments: '{"path":"README.md"}',
+        },
+        {
+          part_id: "message:7:reasoning:0:0",
+          kind: "reasoning" as const,
+          projection: "detail" as const,
+          status: "completed" as const,
+          source: { message_sequence: 7, content_block_index: 0, item_index: 0 },
+          text: "确认结果",
+        },
+        {
+          part_id: "message:8:reasoning:0:0",
+          kind: "reasoning" as const,
+          projection: "detail" as const,
+          status: "completed" as const,
+          source: { message_sequence: 8, content_block_index: 0, item_index: 0 },
+          text: "确认结果",
+        },
+      ],
+    };
+
+    let timeline = upsertTurn(createSessionTurnTimeline(SCOPE_KEY), summaryTurn);
+    timeline = upsertTurn(timeline, detailTurn);
+    const merged = timeline.turnsById.job_activity.response_parts ?? [];
+
+    expect(merged.map((part) => part.kind)).toEqual([
+      "reasoning",
+      "tool_call",
+      "reasoning",
+      "reasoning",
+    ]);
+    expect(merged.filter((part) => part.text === "确认结果")).toHaveLength(2);
+  });
+
   test("历史前插保持现有 Turn 身份与顺序", () => {
     let timeline = createSessionTurnTimeline(SCOPE_KEY);
     timeline = upsertTurn(timeline, summary("job_4", 4));

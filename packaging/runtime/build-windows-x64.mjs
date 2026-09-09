@@ -22,6 +22,7 @@ import {
 import {
   runtimeAssetUrl,
   stageRuntimeDownloaderPackage,
+  stampReleasePackageManifest,
 } from "./runtime-release-assets.mjs";
 
 const projectRoot = path.resolve(
@@ -573,6 +574,8 @@ function stageNpmPackages() {
       return !source.split(path.sep).includes("node_modules");
     },
   });
+  stampReleasePackageManifest(runtimePackageRoot);
+  stampReleasePackageManifest(launcherPackageRoot, { launcher: true });
 }
 
 function npmPack(packageRoot, destinationRoot) {

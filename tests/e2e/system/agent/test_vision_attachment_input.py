@@ -19,7 +19,13 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def e2e_config_path() -> str:
-    return str(Path.cwd() / "configs" / "tests" / "cctq_vision.jsonc")
+    return str(
+        Path.cwd()
+        / "configs"
+        / "tests"
+        / "workspace"
+        / "cctq_vision.jsonc"
+    )
 
 
 def _assert_vision_answer_mentions_shapes(text: str) -> None:

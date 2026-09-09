@@ -1009,6 +1009,26 @@ body > #root {
   font-size: 11px;
   line-height: 1.35;
 }
+.composer-model-menu-item.configuration-error {
+  color: var(--bt-status-danger) !important;
+  background: color-mix(in srgb, var(--bt-status-danger) 10%, transparent) !important;
+}
+.composer-model-menu-item.configuration-error .composer-menu-item-main:disabled {
+  cursor: not-allowed;
+  opacity: 1;
+}
+.composer-model-menu-error {
+  display: flex;
+  gap: 4px;
+  color: var(--bt-status-danger);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.composer-model-pill.configuration-error {
+  border-color: var(--bt-status-danger) !important;
+  color: var(--bt-status-danger) !important;
+}
 .composer-agent-button {
   min-width: 82px;
   max-width: 150px;

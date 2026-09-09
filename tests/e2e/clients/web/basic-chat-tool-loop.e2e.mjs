@@ -161,7 +161,16 @@ async function sendPrompt(page, sessionId, prompt) {
   return { payload, jobId };
 }
 
-async function waitForCompletedTurn(page, prompt, finalText) {
+function expectedActivityPreview(durationMs, itemCount) {
+  assert.ok(Number.isInteger(durationMs) && durationMs > 0, "Turn duration_ms 必须是正整数");
+  assert.ok(Number.isInteger(itemCount) && itemCount > 0, "Turn item_count 必须是正整数");
+  const duration = durationMs < 1000
+    ? `${durationMs}ms`
+    : `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)}s`;
+  return `耗时 ${duration} · Item ${itemCount} 项`;
+}
+
+async function waitForCompletedTurn(page, prompt, finalText, expectedReasoning) {
   const userMessage = page.locator(".chat-user-text").filter({ hasText: prompt }).last();
   await userMessage.waitFor({ state: "visible", timeout: 60_000 });
   const turn = userMessage.locator("xpath=ancestor::article[contains(@class, 'chat-turn')]");
@@ -175,17 +184,71 @@ async function waitForCompletedTurn(page, prompt, finalText) {
   const thinking = turn.locator(".chat-thinking").last();
   await thinking.waitFor({ state: "visible", timeout: 30_000 });
   const thinkingToggle = thinking.locator(".chat-thinking-toggle");
-  if (await thinkingToggle.getAttribute("aria-expanded") !== "true") {
-    await thinkingToggle.click();
-  }
+  await waitUntil(
+    async () => thinking.getAttribute("data-item-count").then((value) => value !== null),
+    "terminal 历史投影提供 Item 统计",
+    30_000,
+  );
+  const durationMs = Number(await thinking.getAttribute("data-duration-ms"));
+  const itemCount = Number(await thinking.getAttribute("data-item-count"));
+  const activityPreview = expectedActivityPreview(durationMs, itemCount);
+  const activityPreviewElement = thinking.locator(".chat-thinking-preview");
+  await activityPreviewElement.waitFor({ state: "visible", timeout: 30_000 });
+  const originalViewport = page.viewportSize();
+  await page.setViewportSize({ width: 640, height: 900 });
+  assert.equal(
+    await activityPreviewElement.isVisible(),
+    true,
+    "窄窗口也必须显示耗时和 Item 数量",
+  );
+  if (originalViewport) await page.setViewportSize(originalViewport);
+  assert.equal(
+    await activityPreviewElement.innerText(),
+    activityPreview,
+    "可见标题必须精确匹配 Turn duration_ms 和中间 item_count",
+  );
+  assert.equal(itemCount, 4, "固定工具循环每轮必须投影 2 个 reasoning、1 个 tool call 和 1 个 tool result");
+  assert.equal(
+    await thinkingToggle.getAttribute("aria-label"),
+    `展开 Turn 中间消息：${activityPreview}`,
+    "折叠按钮的可访问名称必须包含精确耗时和 Item 数量",
+  );
+  assert.equal(await thinkingToggle.getAttribute("aria-expanded"), "false");
+  await thinkingToggle.click();
+  await waitUntil(
+    async () => await thinkingToggle.getAttribute("aria-expanded") === "true",
+    "Turn 中间 Item 展开",
+    30_000,
+  );
+  await activityPreviewElement.waitFor({ state: "visible", timeout: 30_000 });
+  assert.equal(await activityPreviewElement.innerText(), activityPreview);
   const completedTool = thinking.locator(".chat-tool-row.is-complete").filter({ hasText: "已运行 read_file" });
   await completedTool.waitFor({ state: "visible", timeout: 30_000 });
+  const activityOrder = await thinking.locator(".chat-thinking-body").evaluate((body) =>
+    [...body.children]
+      .filter((element) => element.matches(".chat-markdown, .chat-tool-row"))
+      .map((element) => element.textContent?.trim() ?? ""),
+  );
+  assert.equal(activityOrder.length, 3, "展开后应为 reasoning → 聚合工具 → reasoning 三个展示块");
+  assert.match(activityOrder[0], new RegExp(expectedReasoning[0]));
+  assert.match(activityOrder[1], /已运行 read_file/);
+  assert.match(activityOrder[2], new RegExp(expectedReasoning[1]));
+  assert.equal(
+    activityOrder.filter((text) => text.includes(expectedReasoning[1])).length,
+    1,
+    "工具后的 reasoning summary 不得重复投影",
+  );
   assert.equal(
     await turn.locator(".chat-tool-row.is-failed, .chat-tool-row.is-unknown, .chat-tool-row.is-incomplete").count(),
     0,
     "工具调用出现失败、未知或未完成状态",
   );
   return {
+    activityPreview,
+    durationMs,
+    itemCount,
+    activityOrder,
+    expanded: await thinkingToggle.getAttribute("aria-expanded") === "true",
     finalText: await finalMessage.innerText(),
     toolText: await completedTool.innerText(),
     userCount: await page.locator(".chat-user-text").filter({ hasText: prompt }).count(),
@@ -197,8 +260,43 @@ async function loadPersistedEvidence(page, sessionId, workspaceId) {
   const messages = await api(page, `/api/v1/sessions/${sessionId}/messages`, { headers });
   const logs = await api(page, `/api/v1/sessions/${sessionId}/llm-request-logs`, { headers });
   const agentState = await api(page, `/api/v1/sessions/${sessionId}/agent-state/messages`, { headers });
+  const history = await api(page, `/api/v1/sessions/${sessionId}/history`, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      direction: "tail",
+      turns: 2,
+      include: ["user", "reasoning_detail", "tool_call", "tool_result", "final_response"],
+    }),
+  });
   const items = messages?.data?.items ?? [];
   const logItems = Array.isArray(logs?.data) ? logs.data : logs?.data?.items ?? [];
+  const historyTurns = history?.data?.items ?? [];
+  const canonicalActivity = historyTurns.map((turn) => {
+    const parts = (turn.response_parts ?? []).filter((part) => part.kind !== "final_text");
+    assert.equal(parts.length, turn.activity_stats?.item_count, "history Item 数量与 response_parts 不一致");
+    assert.ok(parts.every((part) => typeof part.source?.item_id === "string"));
+    assert.ok(parts.every((part) => Number.isInteger(part.source?.item_sequence)));
+    assert.ok(parts.every((part) => Number.isInteger(part.source?.part_ordinal)));
+    assert.ok(parts.every((part) => typeof part.source?.created_at === "string"));
+    assert.ok(parts.every((part) => Number.isInteger(part.source?.elapsed_ms)));
+    const coordinates = parts.map((part) => [
+      part.source.item_sequence,
+      part.source.part_ordinal,
+    ]);
+    assert.deepEqual(
+      coordinates,
+      [...coordinates].sort((left, right) => left[0] - right[0] || left[1] - right[1]),
+      "history response_parts 未使用后端 canonical 顺序",
+    );
+    return {
+      turnId: turn.turn_id,
+      itemCount: turn.activity_stats.item_count,
+      firstItemSequence: turn.activity_stats.first_item_sequence,
+      lastItemSequence: turn.activity_stats.last_item_sequence,
+      coordinates,
+    };
+  });
   const upstreamAttempts = logItems
     .map((item) => item?.upstream?.attempts?.[0])
     .filter((attempt) => attempt);
@@ -210,6 +308,7 @@ async function loadPersistedEvidence(page, sessionId, workspaceId) {
     upstreamMessageRoles: upstreamAttempts.map((attempt) =>
       (attempt.request?.messages ?? []).map((message) => message.role)),
     agentStateJsonl: agentState?.data?.jsonl ?? "",
+    canonicalActivity,
   };
 }
 
@@ -289,16 +388,31 @@ try {
   await selectSession(page, result.sessionId, 1);
   const firstSend = await sendPrompt(page, result.sessionId, firstPrompt);
   await waitForStreamCount(page.streamResponses, "message", 1);
-  result.firstTurn = await waitForCompletedTurn(page, firstPrompt, firstFinalText);
+  result.firstTurn = await waitForCompletedTurn(
+    page,
+    firstPrompt,
+    firstFinalText,
+    ["先读取 README.md", "工具已经返回，我先核对 README.md"],
+  );
   result.firstJob = await waitForJobSuccess(page, firstSend.jobId);
 
   await page.reload({ waitUntil: "domcontentloaded" });
   await selectSession(page, result.sessionId, 2);
-  result.restoredHistory = await waitForCompletedTurn(page, firstPrompt, firstFinalText);
+  result.restoredHistory = await waitForCompletedTurn(
+    page,
+    firstPrompt,
+    firstFinalText,
+    ["先读取 README.md", "工具已经返回，我先核对 README.md"],
+  );
 
   const secondSend = await sendPrompt(page, result.sessionId, secondPrompt);
   await waitForStreamCount(page.streamResponses, "message", 2);
-  result.secondTurn = await waitForCompletedTurn(page, secondPrompt, secondFinalText);
+  result.secondTurn = await waitForCompletedTurn(
+    page,
+    secondPrompt,
+    secondFinalText,
+    ["复用历史上下文", "工具已经返回，我先确认历史上下文"],
+  );
   result.secondJob = await waitForJobSuccess(page, secondSend.jobId);
   result.persisted = await loadPersistedEvidence(page, result.sessionId, expectedWorkspaceId);
   result.streams = {
@@ -307,6 +421,11 @@ try {
   };
 
   assert.equal(result.persisted.llmRequestCount, 4, "两轮工具循环没有产生四次上游模型请求");
+  assert.deepEqual(
+    result.persisted.canonicalActivity.map((turn) => turn.itemCount),
+    [4, 4],
+    "两轮 history 均应由后端投影四个逻辑 Item",
+  );
   assert.deepEqual(result.persisted.userMessages, [firstPrompt, secondPrompt]);
   assert.equal(result.persisted.assistantMessages.at(-1), secondFinalText);
   assert.deepEqual(result.persisted.upstreamMessageRoles, [

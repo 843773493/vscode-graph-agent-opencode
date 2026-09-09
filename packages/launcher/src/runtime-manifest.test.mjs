@@ -10,7 +10,7 @@ import {
 const baseManifest = {
   schema_version: 1,
   distribution: "source-development",
-  version: "0.1.0",
+  version: "test-version",
   python_executable: "../../.venv/bin/python",
   application_root: "../..",
   config_resources: {

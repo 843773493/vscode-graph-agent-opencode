@@ -493,6 +493,15 @@ class RolloutStorageMaintenanceMixin:
                 )
             connection.execute("BEGIN")
             manifest = self._manifest_from_connection(connection, checkpoint_ns)
+        except sqlite3.DatabaseError as error:
+            if connection is not None:
+                connection.close()
+            file_lock.release()
+            raise RuntimeError(
+                "recovery_required: rollout SQLite 无法读取；"
+                "必须从已验证的 SQLite backup 执行显式恢复，禁止从 JSONL 重建: "
+                f"{index_path}"
+            ) from error
         except Exception:
             if connection is not None:
                 connection.close()

@@ -789,6 +789,14 @@
   color: var(--bt-text-primary);
 }
 
+.chat-thinking-toggle.is-static {
+  cursor: default;
+}
+
+.chat-thinking-toggle.is-static:hover {
+  color: inherit;
+}
+
 .chat-thinking-label,
 .chat-tool-label {
   flex: 0 0 auto;
@@ -1176,7 +1184,6 @@
     height: 20px;
   }
 
-  .chat-thinking-preview,
   .chat-tool-preview {
     display: none;
   }
@@ -1210,7 +1217,6 @@
     display: inline-flex;
   }
 
-  .chat-thinking-preview,
   .chat-tool-preview,
   .chat-working-detail {
     display: none;

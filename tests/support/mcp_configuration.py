@@ -13,7 +13,13 @@ def write_mcp_config(
     allowed_mcp_tools: list[str],
 ) -> str:
     project_root = Path.cwd().resolve()
-    source_config = project_root / "configs" / "tests" / "default.jsonc"
+    source_config = (
+        project_root
+        / "configs"
+        / "tests"
+        / "workspace"
+        / "default.jsonc"
+    )
     with source_config.open("r", encoding="utf-8") as stream:
         config = commentjson.load(stream)
     config["mcp"] = {"servers": servers}

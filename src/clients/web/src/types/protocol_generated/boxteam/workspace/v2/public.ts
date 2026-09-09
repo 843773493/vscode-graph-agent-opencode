@@ -32,6 +32,8 @@ export interface AgentProviderDTO {
   model: string;
   custom_llm_provider: string;
   workspace_default?: boolean | undefined;
+  available: boolean;
+  configuration_error?: string | undefined;
 }
 
 export interface AgentStateMessagesDTO {
@@ -1399,7 +1401,9 @@ export interface TraceObservedPayloadDTO {
 
 export interface TurnActivityStatsDTO {
   duration_ms?: number | undefined;
-  message_count?: number | undefined;
+  item_count?: number | undefined;
+  first_item_sequence?: number | undefined;
+  last_item_sequence?: number | undefined;
 }
 
 export interface TurnAttachmentDTO {
@@ -1546,6 +1550,11 @@ export interface TurnResponseSourceDTO {
   item_index?: number | undefined;
   call_index?: number | undefined;
   result_message_sequence?: number | undefined;
+  item_id?: string | undefined;
+  item_sequence?: number | undefined;
+  part_ordinal?: number | undefined;
+  created_at?: string | undefined;
+  elapsed_ms?: number | undefined;
 }
 
 export interface TurnSummaryDTO {
@@ -1835,7 +1844,14 @@ export const AgentDTO: MessageFns<AgentDTO> = {
 };
 
 function createBaseAgentProviderDTO(): AgentProviderDTO {
-  return { provider_id: "", model: "", custom_llm_provider: "", workspace_default: undefined };
+  return {
+    provider_id: "",
+    model: "",
+    custom_llm_provider: "",
+    workspace_default: undefined,
+    available: false,
+    configuration_error: undefined,
+  };
 }
 
 export const AgentProviderDTO: MessageFns<AgentProviderDTO> = {
@@ -1845,6 +1861,10 @@ export const AgentProviderDTO: MessageFns<AgentProviderDTO> = {
       model: isSet(object.model) ? globalThis.String(object.model) : "",
       custom_llm_provider: isSet(object.custom_llm_provider) ? globalThis.String(object.custom_llm_provider) : "",
       workspace_default: isSet(object.workspace_default) ? globalThis.Boolean(object.workspace_default) : undefined,
+      available: isSet(object.available) ? globalThis.Boolean(object.available) : false,
+      configuration_error: isSet(object.configuration_error)
+        ? globalThis.String(object.configuration_error)
+        : undefined,
     };
   },
 
@@ -1862,6 +1882,12 @@ export const AgentProviderDTO: MessageFns<AgentProviderDTO> = {
     if (message.workspace_default !== undefined) {
       obj.workspace_default = message.workspace_default;
     }
+    if (message.available !== false) {
+      obj.available = message.available;
+    }
+    if (message.configuration_error !== undefined) {
+      obj.configuration_error = message.configuration_error;
+    }
     return obj;
   },
 
@@ -1874,6 +1900,8 @@ export const AgentProviderDTO: MessageFns<AgentProviderDTO> = {
     message.model = object.model ?? "";
     message.custom_llm_provider = object.custom_llm_provider ?? "";
     message.workspace_default = object.workspace_default ?? undefined;
+    message.available = object.available ?? false;
+    message.configuration_error = object.configuration_error ?? undefined;
     return message;
   },
 };
@@ -11065,14 +11093,23 @@ export const TraceObservedPayloadDTO: MessageFns<TraceObservedPayloadDTO> = {
 };
 
 function createBaseTurnActivityStatsDTO(): TurnActivityStatsDTO {
-  return { duration_ms: undefined, message_count: undefined };
+  return {
+    duration_ms: undefined,
+    item_count: undefined,
+    first_item_sequence: undefined,
+    last_item_sequence: undefined,
+  };
 }
 
 export const TurnActivityStatsDTO: MessageFns<TurnActivityStatsDTO> = {
   fromJSON(object: any): TurnActivityStatsDTO {
     return {
       duration_ms: isSet(object.duration_ms) ? globalThis.Number(object.duration_ms) : undefined,
-      message_count: isSet(object.message_count) ? globalThis.Number(object.message_count) : undefined,
+      item_count: isSet(object.item_count) ? globalThis.Number(object.item_count) : undefined,
+      first_item_sequence: isSet(object.first_item_sequence)
+        ? globalThis.Number(object.first_item_sequence)
+        : undefined,
+      last_item_sequence: isSet(object.last_item_sequence) ? globalThis.Number(object.last_item_sequence) : undefined,
     };
   },
 
@@ -11081,8 +11118,14 @@ export const TurnActivityStatsDTO: MessageFns<TurnActivityStatsDTO> = {
     if (message.duration_ms !== undefined) {
       obj.duration_ms = Math.round(message.duration_ms);
     }
-    if (message.message_count !== undefined) {
-      obj.message_count = Math.round(message.message_count);
+    if (message.item_count !== undefined) {
+      obj.item_count = Math.round(message.item_count);
+    }
+    if (message.first_item_sequence !== undefined) {
+      obj.first_item_sequence = Math.round(message.first_item_sequence);
+    }
+    if (message.last_item_sequence !== undefined) {
+      obj.last_item_sequence = Math.round(message.last_item_sequence);
     }
     return obj;
   },
@@ -11093,7 +11136,9 @@ export const TurnActivityStatsDTO: MessageFns<TurnActivityStatsDTO> = {
   fromPartial<I extends Exact<DeepPartial<TurnActivityStatsDTO>, I>>(object: I): TurnActivityStatsDTO {
     const message = createBaseTurnActivityStatsDTO();
     message.duration_ms = object.duration_ms ?? undefined;
-    message.message_count = object.message_count ?? undefined;
+    message.item_count = object.item_count ?? undefined;
+    message.first_item_sequence = object.first_item_sequence ?? undefined;
+    message.last_item_sequence = object.last_item_sequence ?? undefined;
     return message;
   },
 };
@@ -12012,6 +12057,11 @@ function createBaseTurnResponseSourceDTO(): TurnResponseSourceDTO {
     item_index: undefined,
     call_index: undefined,
     result_message_sequence: undefined,
+    item_id: undefined,
+    item_sequence: undefined,
+    part_ordinal: undefined,
+    created_at: undefined,
+    elapsed_ms: undefined,
   };
 }
 
@@ -12030,6 +12080,11 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
       result_message_sequence: isSet(object.result_message_sequence)
         ? globalThis.Number(object.result_message_sequence)
         : undefined,
+      item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : undefined,
+      item_sequence: isSet(object.item_sequence) ? globalThis.Number(object.item_sequence) : undefined,
+      part_ordinal: isSet(object.part_ordinal) ? globalThis.Number(object.part_ordinal) : undefined,
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      elapsed_ms: isSet(object.elapsed_ms) ? globalThis.Number(object.elapsed_ms) : undefined,
     };
   },
 
@@ -12053,6 +12108,21 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     if (message.result_message_sequence !== undefined) {
       obj.result_message_sequence = Math.round(message.result_message_sequence);
     }
+    if (message.item_id !== undefined) {
+      obj.item_id = message.item_id;
+    }
+    if (message.item_sequence !== undefined) {
+      obj.item_sequence = Math.round(message.item_sequence);
+    }
+    if (message.part_ordinal !== undefined) {
+      obj.part_ordinal = Math.round(message.part_ordinal);
+    }
+    if (message.created_at !== undefined) {
+      obj.created_at = message.created_at;
+    }
+    if (message.elapsed_ms !== undefined) {
+      obj.elapsed_ms = Math.round(message.elapsed_ms);
+    }
     return obj;
   },
 
@@ -12067,6 +12137,11 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     message.item_index = object.item_index ?? undefined;
     message.call_index = object.call_index ?? undefined;
     message.result_message_sequence = object.result_message_sequence ?? undefined;
+    message.item_id = object.item_id ?? undefined;
+    message.item_sequence = object.item_sequence ?? undefined;
+    message.part_ordinal = object.part_ordinal ?? undefined;
+    message.created_at = object.created_at ?? undefined;
+    message.elapsed_ms = object.elapsed_ms ?? undefined;
     return message;
   },
 };

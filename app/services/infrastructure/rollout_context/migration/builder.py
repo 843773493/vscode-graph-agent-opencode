@@ -8,9 +8,6 @@ from datetime import UTC, datetime
 
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.rollout_context.migration.projections import (
-    LegacyMigrationProjectionMixin,
-)
 from app.services.infrastructure.rollout_context.migration.semantics import (
     candidate_audit,
     terminal_evidence,
@@ -28,7 +25,7 @@ def _json(value: object) -> str:
     return canonical_json_bytes(value).decode("utf-8")
 
 
-class LegacyImportBuilder(LegacyMigrationProjectionMixin):
+class LegacyImportBuilder:
     def build_import(
         self,
         source_thread_id: str,
@@ -123,18 +120,19 @@ class LegacyImportBuilder(LegacyMigrationProjectionMixin):
             )
             target_items = [accepted]
             target_item_by_source_id = {root.item_id: target_root_item_id}
+            target_members: list[CanonicalItemRecord] = []
+            with self._connect(
+                target_thread_id, checkpoint_ns, read_only=True
+            ) as connection:
+                next_sequence = strict_non_negative_int(
+                    connection.execute(
+                        "SELECT last_item_sequence + 1 FROM database_meta WHERE singleton_id = 1"
+                    ).fetchone()[0],
+                    field="migration.next_item_sequence",
+                )
             for item in items[1:]:
                 if not isinstance(item, CanonicalItemRecord):
                     raise TypeError("legacy migration item 类型非法")
-                with self._connect(
-                    target_thread_id, checkpoint_ns, read_only=True
-                ) as connection:
-                    next_sequence = strict_non_negative_int(
-                        connection.execute(
-                            "SELECT last_item_sequence + 1 FROM database_meta WHERE singleton_id = 1"
-                        ).fetchone()[0],
-                        field="migration.next_item_sequence",
-                    )
                 payload = item.payload
                 if item.semantic_kind in {"tool_call", "tool_result"}:
                     if not isinstance(payload, Mapping):
@@ -195,33 +193,36 @@ class LegacyImportBuilder(LegacyMigrationProjectionMixin):
                     ),
                     wire_role=item.wire_role,
                 )
-                self.append_item(target_thread_id, member, checkpoint_ns=checkpoint_ns)
-                target_items.append(member)
+                target_members.append(member)
                 target_item_by_source_id[item.item_id] = member.item_id
-            target_item_records = self.read_items(
-                target_thread_id,
-                item_ids=tuple(target_item_by_source_id.values()),
-                checkpoint_ns=checkpoint_ns,
-            )
-            self._install_migration_message_projections(
-                target_thread_id,
-                checkpoint_ns=checkpoint_ns,
-                items=tuple(target_item_records),
-            )
+                next_sequence += 1
             candidate_records = candidate["records"]
             migrated_status, final_source_item_id, final_reason = terminal_evidence(
                 candidate_records, items
             )
             final_item_id = target_item_by_source_id.get(final_source_item_id)
+            terminal_members = tuple(
+                member
+                for member in target_members
+                if member.turn_id == target_turn
+                and member.turn_scope.value == "turn_member"
+            )
+            runtime_notices = tuple(
+                member for member in target_members if member not in terminal_members
+            )
             self.converge_execution(
                 target_thread_id,
                 turn_id=target_turn,
                 execution_id=accepted["initial_execution_id"],
                 outcome=migrated_status,
                 turn_status=migrated_status,
+                items=terminal_members,
                 final_item_id=final_item_id,
                 checkpoint_ns=checkpoint_ns,
             )
+            for notice in runtime_notices:
+                self.append_item(target_thread_id, notice, checkpoint_ns=checkpoint_ns)
+            target_items.extend((*terminal_members, *runtime_notices))
             migrated.append(
                 {
                     "candidate_key": candidate.get("candidate_key"),

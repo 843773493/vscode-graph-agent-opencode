@@ -77,7 +77,7 @@ export function parseTargetCliArgs(args) {
 
 export function targetCliUsage() {
   return [
-    "用法: bun run scripts/cross-platform-development-target.mjs <command> <target-id> [options]",
+    "用法: bun run scripts/launch/cross-platform-development-target.mjs <command> <target-id> [options]",
     "命令: provision | sync | activate | bootstrap | start | stop | restart | status | shell | test | collect",
     "选项: --config <path> --profile <development|installed> --activate --no-env",
     "      --boxteam-home <path> --workspace <path> --output <path> --rebuild --submodules",

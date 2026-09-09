@@ -10,6 +10,8 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 
+import { BOXTEAM_VERSION } from "./versions.mjs";
+
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
 );
@@ -200,10 +202,12 @@ async function verifyRunningProduct(child, readLauncherOutput) {
 }
 
 async function main() {
-  const mainTarball = requiredTarball("boxteam-0.1.0");
-  const runtimeTarball = requiredTarball("boxteam-runtime-linux-x64-0.1.0");
+  const mainTarball = requiredTarball(`boxteam-${BOXTEAM_VERSION}`);
+  const runtimeTarball = requiredTarball(
+    `boxteam-runtime-linux-x64-${BOXTEAM_VERSION}`,
+  );
   const releaseAssetPath = requiredReleaseAsset(
-    "boxteam-runtime-linux-x64-0.1.0",
+    `boxteam-runtime-linux-x64-${BOXTEAM_VERSION}`,
   );
   const nodeExecutable = run("node", ["--print", "process.execPath"], {
     capture: true,

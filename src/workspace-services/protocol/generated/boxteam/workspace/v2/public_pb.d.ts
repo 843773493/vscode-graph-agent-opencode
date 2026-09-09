@@ -117,6 +117,16 @@ export declare type AgentProviderDTO = Message<"boxteam.workspace.v2.AgentProvid
    * @generated from field: optional bool workspace_default = 4;
    */
   workspaceDefault?: boolean | undefined;
+
+  /**
+   * @generated from field: bool available = 5;
+   */
+  available: boolean;
+
+  /**
+   * @generated from field: optional string configuration_error = 6;
+   */
+  configurationError?: string | undefined;
 };
 
 /**
@@ -6362,9 +6372,19 @@ export declare type TurnActivityStatsDTO = Message<"boxteam.workspace.v2.TurnAct
   durationMs?: bigint | undefined;
 
   /**
-   * @generated from field: optional int64 message_count = 2;
+   * @generated from field: optional int64 item_count = 2;
    */
-  messageCount?: bigint | undefined;
+  itemCount?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 first_item_sequence = 3;
+   */
+  firstItemSequence?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 last_item_sequence = 4;
+   */
+  lastItemSequence?: bigint | undefined;
 };
 
 /**
@@ -7039,6 +7059,31 @@ export declare type TurnResponseSourceDTO = Message<"boxteam.workspace.v2.TurnRe
    * @generated from field: optional int64 result_message_sequence = 6;
    */
   resultMessageSequence?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string item_id = 7;
+   */
+  itemId?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 item_sequence = 8;
+   */
+  itemSequence?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 part_ordinal = 9;
+   */
+  partOrdinal?: bigint | undefined;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp created_at = 10;
+   */
+  createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional int64 elapsed_ms = 11;
+   */
+  elapsedMs?: bigint | undefined;
 };
 
 /**

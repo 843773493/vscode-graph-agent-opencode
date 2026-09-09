@@ -16,7 +16,7 @@ description: "Use when: starting web service, running project, starting developm
 ## 启动前准备
 1. 确认项目根目录存在 `.venv` 目录（Python 虚拟环境）
 2. 确认项目根目录存在 `tools/bun.exe`（Bun 运行时）
-3. 确认 `scripts/dev.mjs` 文件存在于项目根目录
+3. 确认 `scripts/launch/dev.mjs` 文件存在于项目根目录
 
 ## 启动开发环境
 
@@ -33,7 +33,7 @@ description: "Use when: starting web service, running project, starting developm
 
 `dev.mjs` 会：
 1. 清理占用 8000（后端）、8001（前端）、8002（调试）端口的旧进程
-2. 在 `src/clients/web` 目录启动前端开发服务器（默认端口 8011，以 `scripts/dev.mjs` 配置为准）
+2. 在 `src/clients/web` 目录启动前端开发服务器（默认端口 8011，以 `scripts/launch/dev.mjs` 配置为准）
 3. 在根目录启动后端 FastAPI + debugpy（端口 8000，调试端口 8002）
 4. 等待前后端健康检查通过（最多 30 秒超时）
 5. 管理进程联动退出（任一进程崩溃会自动终止另一个）
@@ -108,6 +108,6 @@ curl http://127.0.0.1:8001/health
 这会启动前后端但立即返回，不阻塞终端。
 
 ## 相关资源
-- [dev.mjs 源码](./scripts/dev.mjs) - 启动脚本完整逻辑
+- [dev.mjs 源码](./scripts/launch/dev.mjs) - 启动脚本完整逻辑
 - [API 文档](http://127.0.0.1:8000/api/v1/docs) - 后端接口参考
 - [项目 AGENTS.md](../../../AGENTS.md) - 项目开发规范

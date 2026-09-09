@@ -66,6 +66,7 @@ describe("折叠详情按需解析", () => {
     const html = renderToStaticMarkup(
       <ThinkingSection
         active={false}
+        completedPreview="耗时 7.1s · Item 4 项"
         showRawDetails={false}
         items={[{
           kind: "aggregated_text",
@@ -82,6 +83,8 @@ describe("折叠详情按需解析", () => {
 
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("codicon-chevron-right");
+    expect(html).toContain("耗时 7.1s · Item 4 项");
+    expect(html).not.toContain("思考 思考");
     expect(html).not.toContain(hiddenTail);
   });
 
@@ -89,6 +92,7 @@ describe("折叠详情按需解析", () => {
     const html = renderToStaticMarkup(
       <ThinkingSection
         active
+        completedPreview="耗时 — · Item 计数同步中"
         showRawDetails={false}
         items={[{
           kind: "aggregated_text",

@@ -500,6 +500,17 @@ class LegacyRolloutAdapter:
                 item_metadata["legacy_outcome_source"] = "legacy_record_or_unknown"
                 if legacy_tool_outcome == "success":
                     item_metadata["execution_confirmed"] = True
+            producer_kind = (
+                "user"
+                if index == 0
+                else "provider"
+                if role == "assistant"
+                else "tool"
+                if role in {"tool", "function"}
+                else "system"
+                if role == "system_reminder"
+                else "runtime"
+            )
             items.append(
                 CanonicalItemRecord.create(
                     item_sequence=sequence,
@@ -508,7 +519,10 @@ class LegacyRolloutAdapter:
                     payload_kind=payload_type,
                     status=item_status,
                     producer_ref={
-                        "producer_kind": "legacy",
+                        # v2 producer_kind 是闭合集合；legacy 来源通过
+                        # legacy_provenance/source_ref metadata 保留，不能把
+                        # 未注册的 legacy 当成 v2 producer kind 写入。
+                        "producer_kind": producer_kind,
                         "producer_id": message_id,
                         "source_hash": sha256_jcs(source_ref),
                     },
@@ -517,7 +531,9 @@ class LegacyRolloutAdapter:
                     turn_id=item_turn_id,
                     turn_scope=scope,
                     message_group_id=f"legacy-message:{message_id}",
-                    wire_role=role,
+                    # v1 function 是旧 tool result 的等价 role；v2
+                    # projection 只接受规范化的 tool wire role。
+                    wire_role="tool" if role == "function" else role,
                 )
             )
             sequence += 1
@@ -531,7 +547,7 @@ class LegacyRolloutAdapter:
                             payload_kind=PayloadKind.TOOL_CALL,
                             status=CanonicalItemStatus.COMPLETED,
                             producer_ref={
-                                "producer_kind": "legacy",
+                                "producer_kind": "provider",
                                 "producer_id": message_id,
                                 "source_hash": sha256_jcs(source_ref),
                             },

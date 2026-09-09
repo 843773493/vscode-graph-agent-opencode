@@ -571,9 +571,9 @@ function formatActivityDuration(durationMs: number | null | undefined): string {
 function activityStatsPreview(
   stats: ConversationView["activityStats"],
 ): string {
-  if (!stats) return "消息统计不可用";
+  if (!stats) return "耗时 — · Item 计数同步中";
   const values = [formatActivityDuration(stats.duration_ms)];
-  values.push(`消息 ${stats.message_count} 条`);
+  values.push(`Item ${stats.item_count} 项`);
   return values.join(" · ");
 }
 
@@ -640,7 +640,10 @@ function TurnActivitySummary({
   const turnId = conversation.turnId;
   const boundaryStatus = historicalBoundaryStatus(conversation);
   const activityPreview = activityStatsPreview(conversation.activityStats);
-  const toggleLabel = boundaryStatus?.title;
+  const displayPreview = boundaryStatus
+    ? `${activityPreview} · ${boundaryStatus.title}`
+    : activityPreview;
+  const hasNoActivity = conversation.activityStats?.item_count === 0;
 
   const toggle = async () => {
     if (loading) return;
@@ -679,33 +682,50 @@ function TurnActivitySummary({
     <section
       className={`chat-thinking chat-turn-activity ${open ? "is-open" : "is-complete"}${boundaryStatus ? " has-boundary" : ""}`}
       data-status-kind={boundaryStatus?.kind}
+      data-duration-ms={conversation.activityStats?.duration_ms ?? undefined}
+      data-item-count={conversation.activityStats?.item_count ?? undefined}
     >
-      <button
-        type="button"
-        className="chat-thinking-toggle"
-        aria-expanded={open}
-        aria-label={open ? "收起 Turn 中间消息" : `展开 Turn 中间消息${toggleLabel ? `（${toggleLabel}）` : ""}`}
-        onClick={() => void toggle()}
-      >
-        <span
-          className={`codicon ${boundaryStatus?.icon ?? "codicon-check"}`}
-          aria-hidden="true"
-        />
-        <span className="chat-thinking-preview">
-          {loading
-            ? "正在加载中间消息…"
-            : boundaryStatus
-              ? `${activityPreview} · ${boundaryStatus.title}`
-              : activityPreview}
-        </span>
-        {boundaryStatus?.detail ? (
-          <span className="chat-working-detail">{boundaryStatus.detail}</span>
-        ) : null}
-        <span
-          className={`codicon ${open ? "codicon-chevron-down" : "codicon-chevron-right"}`}
-          aria-hidden="true"
-        />
-      </button>
+      {hasNoActivity ? (
+        <div
+          className="chat-thinking-toggle is-static"
+          role="status"
+          aria-label={`Turn 中间消息：${displayPreview}`}
+        >
+          <span
+            className={`codicon ${boundaryStatus?.icon ?? "codicon-check"}`}
+            aria-hidden="true"
+          />
+          <span className="chat-thinking-preview">{displayPreview}</span>
+          {boundaryStatus?.detail ? (
+            <span className="chat-working-detail">{boundaryStatus.detail}</span>
+          ) : null}
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="chat-thinking-toggle"
+          aria-expanded={open}
+          aria-label={`${open ? "收起" : "展开"} Turn 中间消息：${displayPreview}`}
+          onClick={() => void toggle()}
+        >
+          <span
+            className={`codicon ${boundaryStatus?.icon ?? "codicon-check"}`}
+            aria-hidden="true"
+          />
+          <span className="chat-thinking-preview">
+            {loading
+              ? "正在加载中间消息…"
+              : displayPreview}
+          </span>
+          {boundaryStatus?.detail ? (
+            <span className="chat-working-detail">{boundaryStatus.detail}</span>
+          ) : null}
+          <span
+            className={`codicon ${open ? "codicon-chevron-down" : "codicon-chevron-right"}`}
+            aria-hidden="true"
+          />
+        </button>
+      )}
       {open ? (
         <div className="chat-thinking-body">
           {error ? (
@@ -819,6 +839,7 @@ export default function ChatTurnResponseBody({
             key={group.id}
             items={group.items}
             active={running && group.items.some((item) => item.active)}
+            completedPreview={activityStatsPreview(conversation.activityStats)}
             showRawDetails={showRawDetails}
           />
         )

@@ -258,9 +258,15 @@ def candidate_audit(candidate: Mapping[str, object], raw_ref: str) -> dict[str, 
                 "protection": "protected",
             }
         )
-    return {
+    result = {
         "candidate_key": candidate["candidate_key"],
         "candidate_status": status,
         "turn_id": candidate.get("turn_id"),
+        "legacy_seed_hash": candidate.get("legacy_seed_hash"),
+        "window_start_sequence": candidate.get("window_start_sequence"),
+        "window_end_sequence": candidate.get("window_end_sequence"),
+        "source_turn_ids": list(candidate.get("source_turn_ids", [])),
+        "loss": list(candidate.get("loss", [])),
         "records": records,
     }
+    return result

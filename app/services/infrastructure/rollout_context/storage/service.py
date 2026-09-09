@@ -24,6 +24,15 @@ from app.services.infrastructure.rollout_context.checkpoint.operations import (
 from app.services.infrastructure.rollout_context.checkpoint.persistence import (
     RolloutCheckpointPersistenceMixin,
 )
+from app.services.infrastructure.rollout_context.checkpoint.projection.message_materializer import (
+    RolloutMessageMaterializerMixin,
+)
+from app.services.infrastructure.rollout_context.checkpoint.projection.message_projections import (
+    RolloutMessageProjectionMixin,
+)
+from app.services.infrastructure.rollout_context.checkpoint.projection.message_view import (
+    RolloutMessageViewMixin,
+)
 from app.services.infrastructure.rollout_context.checkpoint.view_anchor import (
     RolloutViewAnchorMixin,
 )
@@ -88,15 +97,6 @@ from app.services.infrastructure.rollout_context.storage.catalog.view_membership
 )
 from app.services.infrastructure.rollout_context.storage.maintenance import (
     RolloutStorageMaintenanceMixin,
-)
-from app.services.infrastructure.rollout_context.storage.message_materializer import (
-    RolloutMessageMaterializerMixin,
-)
-from app.services.infrastructure.rollout_context.storage.message_projections import (
-    RolloutMessageProjectionMixin,
-)
-from app.services.infrastructure.rollout_context.storage.message_view import (
-    RolloutMessageViewMixin,
 )
 from app.services.infrastructure.rollout_context.storage.migrations import (
     RolloutSchemaMigrationMixin,

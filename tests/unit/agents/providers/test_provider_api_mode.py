@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
     message_chunk_to_message,
 )
 
-from app.agents.agent_factory import build_model_from_provider
+from app.agents.agent_factory import (
+    build_model_from_provider,
+    build_runtime_for_agent,
+)
 from app.agents.providers.litellm_chat import (
     BoxteamLiteLLMChatModel,
     _StreamPartState,
@@ -258,7 +263,7 @@ def test_anthropic_messages_mode_uses_litellm_chat_model():
 def test_anthropic_history_projects_direct_content_to_thinking_blocks():
     from langchain_core.messages import AIMessage
 
-    from app.agents.providers.litellm_content import build_ai_message_content
+    from app.agents.providers.output_normalization import build_ai_message_content
 
     model = BoxteamLiteLLMChatModel(
         model="claude-test",
@@ -388,6 +393,62 @@ def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
     assert payload["instructions"] == "项目系统指令"
     assert [item.get("role") for item in payload["input"]] == ["user"]
     assert payload["litellm_session_id"] == "ses_chatgpt_cache_affinity"
+
+
+def test_runtime_skips_invalid_fallback_without_blocking_selected_provider(
+    monkeypatch,
+):
+    primary_model = MagicMock(spec=BaseChatModel)
+    providers = [_provider("responses"), _provider("responses")]
+    providers[0]["id"] = "selected"
+    providers[1]["id"] = "broken-fallback"
+
+    class ConfigServiceStub:
+        def get_agent_runtime_config(self, _agent_id, *, preferred_provider_id=None):
+            assert preferred_provider_id == "selected"
+            return {"providers": providers, "system_prompt": "test"}
+
+    def build(provider, _runtime, *, prompt_cache_key=None):
+        assert prompt_cache_key is None
+        if provider["id"] == "broken-fallback":
+            raise ValueError("fallback 配置损坏")
+        return primary_model
+
+    monkeypatch.setattr("app.agents.agent_factory.build_model_from_provider", build)
+
+    runtime = build_runtime_for_agent(
+        "default",
+        config_service=ConfigServiceStub(),
+        preferred_provider_id="selected",
+    )
+
+    assert runtime["model"] is primary_model
+    assert runtime["model_routing"]._candidates[0].provider_id == "selected"
+    assert len(runtime["model_routing"]._candidates) == 1
+
+
+def test_runtime_reports_invalid_selected_provider(monkeypatch):
+    providers = [_provider("responses")]
+    providers[0]["id"] = "broken-selected"
+
+    class ConfigServiceStub:
+        def get_agent_runtime_config(self, _agent_id, *, preferred_provider_id=None):
+            return {"providers": providers, "system_prompt": "test"}
+
+    monkeypatch.setattr(
+        "app.agents.agent_factory.build_model_from_provider",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("配置损坏")),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="当前选择的模型配置不可用.*broken-selected.*配置损坏",
+    ):
+        build_runtime_for_agent(
+            "default",
+            config_service=ConfigServiceStub(),
+            preferred_provider_id="broken-selected",
+        )
 
 
 def test_chatgpt_provider_rejects_missing_oauth_config():
@@ -1004,7 +1065,7 @@ def test_responses_stream_keeps_one_portable_reasoning_item() -> None:
             chunks.append(chunk.message)
 
     message = message_chunk_to_message(chunks[0])
-    from app.agents.providers.litellm_content import canonicalize_ai_message
+    from app.agents.providers.response_normalization import canonicalize_ai_message
 
     message = canonicalize_ai_message(message, source_provider="openai")
     assert isinstance(message.content, list)
