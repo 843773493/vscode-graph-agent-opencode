@@ -203,6 +203,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
     let bootstrapInFlight = 0;
     let maxBootstrapInFlight = 0;
     let detailCalls = 0;
+    let messageStreamAvailabilityCalls = 0;
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
@@ -213,6 +214,14 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             message: "ok",
             request_id: "req_credential",
             data: { token: "turn-history-test-token" },
+          });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_user",
+            data: { user_id: "user_turn_history", display_name: "Turn History" },
           });
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
@@ -248,6 +257,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
           });
         }
         if (path.endsWith("/message-streams/availability")) {
+          messageStreamAvailabilityCalls += 1;
           return Response.json({
             code: 0,
             message: "ok",
@@ -285,6 +295,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
     expect(bootstrapCalls).toBe(2);
     expect(maxBootstrapInFlight).toBe(1);
     expect(detailCalls).toBe(2);
+    expect(messageStreamAvailabilityCalls).toBe(0);
     expect(timeline?.projectionState).toBe("ready");
     expect(timeline?.projectionEpoch).toBe(2);
     expect(timeline?.turnsById.job_latest.items_view).toBe("full");

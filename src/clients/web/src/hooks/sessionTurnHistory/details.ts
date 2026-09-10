@@ -6,26 +6,18 @@ import {
 } from "react";
 import { HttpRequestError, isTransientNetworkError } from "../../api/http";
 import {
-  getSessionMessageStreamAvailability,
-  getSessionMessageStreamSnapshot,
-} from "../../api/sessionMessageStream";
-import {
   loadSessionHistory,
   StaleTurnCursorHttpError,
   StaleTurnReferenceHttpError,
   type TurnHistoryInclude,
 } from "../../api/sessionTurnHistory";
-import { cloneMaps } from "../../state/appStateMaps";
-import {
-  applyMessageStreamEvent,
-  type MessageStreamEvent,
-} from "../../state/messageStream";
 import {
   applyTurnDetails,
   createSessionTurnTimeline,
   decideTurnProjectionEpoch,
   failTurnTimeline,
   markTurnsLoading,
+  upsertTurns,
   writeTurnTimelineCache,
   type SessionTurnTimeline,
 } from "../../state/session/turnTimeline";
@@ -37,83 +29,6 @@ const TURN_DETAIL_COMMIT_RETRY_DELAYS_MS = [100, 250, 500, 1000] as const;
 function isTurnProjectionCommitConflict(error: unknown): boolean {
   return error instanceof StaleTurnCursorHttpError
     || (error instanceof HttpRequestError && error.status === 409);
-}
-
-async function hydrateMessageStreamSnapshots(
-  apiPort: number,
-  sessionId: string,
-  workspaceId: string | null,
-  turnIds: string[],
-  signal: AbortSignal,
-  setState: SetAppState,
-): Promise<void> {
-  const streamIds = await getSessionMessageStreamAvailability(
-    apiPort,
-    sessionId,
-    turnIds,
-    { workspaceId, signal },
-  );
-  const snapshots = await Promise.all(
-    turnIds
-      .filter((turnId) => Boolean(streamIds[turnId]))
-      .map(async (turnId) => {
-        try {
-          return await getSessionMessageStreamSnapshot(
-            apiPort,
-            sessionId,
-            turnId,
-            { workspaceId, signal, turnStreamId: streamIds[turnId] },
-          );
-        } catch (error) {
-          // 索引查询与 snapshot 之间允许流被清理；保留这个竞态的显式回退，
-          // 但正常的存量 Turn 不再通过一次必然的 404 进入这里。
-          if (error instanceof HttpRequestError && error.status === 404) {
-            return null;
-          }
-          throw error;
-        }
-      }),
-  );
-
-  if (signal.aborted) return;
-  setState((previous) => {
-    const next = cloneMaps(previous);
-    const messageStreams = next.messageStreamsByTurnStream ?? new Map();
-    next.messageStreamsByTurnStream = messageStreams;
-    for (const snapshot of snapshots) {
-      if (!snapshot) continue;
-      const event: MessageStreamEvent = {
-        event_id: `snapshot:${snapshot.turn_id}:${snapshot.snapshot_seq}`,
-        session_id: snapshot.session_id,
-        turn_id: snapshot.turn_id,
-        turn_stream_id: snapshot.turn_stream_id,
-        event_seq: snapshot.snapshot_seq,
-        type: "stream.snapshot",
-        payload: snapshot as unknown as Record<string, unknown>,
-      };
-      const currentEntry = [...messageStreams.entries()].find(
-        ([, stream]) =>
-          stream.sessionId === snapshot.session_id
-          && stream.turnId === snapshot.turn_id,
-      );
-      const current = currentEntry?.[1] ?? null;
-      if (current && current.lastEventSeq > snapshot.snapshot_seq) {
-        continue;
-      }
-      const updated = applyMessageStreamEvent(current, event);
-      for (const [key, stream] of messageStreams.entries()) {
-        if (
-          key !== snapshot.turn_stream_id
-          && stream.sessionId === snapshot.session_id
-          && stream.turnId === snapshot.turn_id
-        ) {
-          messageStreams.delete(key);
-        }
-      }
-      messageStreams.set(snapshot.turn_stream_id, updated);
-    }
-    return next;
-  });
 }
 
 async function waitForTurnCommit(
@@ -277,31 +192,16 @@ export function useTurnDetailLoader({
             turnTimelinesBySession: writeTurnTimelineCache(
               previous.turnTimelinesBySession,
               sessionCacheKey,
-            applyTurnDetails(timeline, {
-              items: page.items,
-              projection_epoch: page.projection_epoch,
-            }),
+              applyTurnDetails(
+                upsertTurns(timeline, page.summaries ?? []),
+                {
+                  items: page.items,
+                  projection_epoch: page.projection_epoch,
+                },
+              ),
             ),
           };
         });
-      });
-      // Turn 详情负责历史入口；一旦该 Turn 存在 message.v1 持久化流，
-      // snapshot 必须覆盖旧 response_parts，保证刷新/重新选中后仍使用同一语义。
-      void hydrateMessageStreamSnapshots(
-        apiPort,
-        sessionId,
-        workspaceId,
-        requestIds,
-        requestSignal,
-        setState,
-      ).catch((error: unknown) => {
-        if (requestSignal.aborted) return;
-        setState((previous) => ({
-          ...previous,
-          status: isTransientNetworkError(error)
-            ? "消息流连接暂时变化，已保留当前回合并等待重连"
-            : `恢复 Turn 消息流 snapshot 失败: ${error instanceof Error ? error.message : String(error)}`,
-        }));
       });
     } catch (error) {
       if (requestSignal.aborted) return;

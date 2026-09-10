@@ -73,6 +73,11 @@ describe("Turn 历史 API client", () => {
 
     expect(requests).toEqual([
       {
+        path: "/api/gateway/users/current",
+        method: "GET",
+        body: null,
+      },
+      {
         path: "/api/v1/sessions/ses_api/bootstrap",
         method: "GET",
         body: null,

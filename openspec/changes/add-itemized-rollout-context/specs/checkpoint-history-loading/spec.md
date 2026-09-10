@@ -120,11 +120,29 @@
 - **WHEN** detail 通过索引命中目标 JSONL item/message offset 并读取工具参数或结果正文
 - **THEN** detail 只丰富后端已有 canonical part，不重新推断 identity、数量或顺序；Web 以返回数组整体替换同 Turn 的旧 summary/live response parts，不合并重排、不比较文本去重
 
+#### Scenario: 最终 checkpoint 引用既有 reasoning part
+
+- **WHEN** 最终 assistant checkpoint 的 `content_part_refs.id` 指向同一 Turn 已提交 reasoning Item 的 `metadata.block_id` 或相同 provider reasoning item identity
+- **THEN** history projection 将它视为既有逻辑 Item 的 carrier 引用，只返回原 canonical reasoning 的 identity、顺序和计时，不按最终 assistant item 再追加一次
+- **AND** 只有正文相等但持久 part/provider identity 不同的 reasoning 必须继续分别返回，后端不得退回正文去重
+
 #### Scenario: live 统计与终态 history 收敛
 
 - **WHEN** live Turn 尚未持久化完整 history projection
 - **THEN** Web 可按 message stream 实体 identity 临时计算时长和逻辑 Item 数，不伪造 canonical item sequence
 - **AND** 终态 history 到达后以后端统计和顺序替换 live 值；若 live/history `item_count` 不一致，前端显式记录协议错误而不是静默采用任一猜测值
+
+#### Scenario: 历史页携带可淘汰详情的权威摘要
+
+- **WHEN** history API 返回一页 Turn detail
+- **THEN** 同一响应为每个 detail 返回 identity、revision、ordinal 和顺序一一对应的后端权威 summary；summary 强制使用 summary projection，并移除工具参数、工具结果和其它详情正文
+- **AND** Web 详情缓存超过条数或正文预算、或会话转为非活动 scope 时，只能恢复这份同 revision summary；不得在前端重新摘要，重新展开时通过 canonical history offset 定点补载
+
+#### Scenario: 历史详情与实时消息流隔离并有界驻留
+
+- **WHEN** 用户展开已终态化 Turn、切换会话、重启后端，或实时 block/tool 正文持续增长
+- **THEN** 历史详情只请求 canonical Turn history API，不查询或拼接 `message.v1` availability/snapshot；实时消息流只承载当前未终态 Turn
+- **AND** 前后端限制终态 stream cache、乱序事件、block 正文、工具正文、跨会话 timeline 和详情正文的驻留规模；启动恢复不 materialize 全部终态 snapshot，越界时明确截断或要求 snapshot 恢复，不得无界增长、静默丢失或卡死服务
 
 ### Requirement: 所有 rollout 数据访问使用唯一 RolloutCheckpointSaver
 
@@ -205,6 +223,15 @@ history/restore SHALL 在 source lookup、detail 解析和 message/tool projecti
 - **THEN** 系统拒绝该旁路访问；只有 RolloutCheckpointSaver 返回的已提交 view/plan/snapshot 可以进入编译与请求投影
 
 ## ADDED Requirements
+
+### Requirement: checkpoint/history loading 必须显式选择 product thread
+
+checkpoint restore、history loading、detail lookup 和 ContextRequestPlan materialization SHALL 以 `(session_id, thread_id)` 解析 owner。未指定 thread 的 Session-facing 产品入口只可从 Session catalog 解析 main thread；内部 API、subagent、retry、rewind 和 compaction 不得依赖该默认。LangGraph `checkpoint_ns` 只在已选定 thread 内继续限定 framework checkpoint，不得改变 owner selection。
+
+#### Scenario: 相同 namespace 的不同 thread 恢复隔离
+
+- **WHEN** 两个 SessionThread 均请求相同 `checkpoint_ns` 的 checkpoint
+- **THEN** loader 仅从各自 thread node 读取相应 checkpoint/context view；不得因 namespace 相同返回或合并另一个 thread 的 messages、ToolSet 或 source state
 
 ### Requirement: 正常历史 reader 只服务 v2，v1 仅用于一次性 migration/import
 

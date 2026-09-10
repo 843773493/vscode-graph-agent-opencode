@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projections import (
+    _final_reasoning_source_refs,
     _finalize_activity_projection,
     _logical_activity_key,
 )
@@ -117,18 +118,66 @@ def test_checkpoint_shadow_uses_producer_identity_instead_of_text() -> None:
     assert _logical_activity_key(provider) != _logical_activity_key(different_model_call)
 
 
-def test_reused_tool_call_id_keeps_distinct_source_coordinates() -> None:
+def test_reused_tool_call_id_keeps_distinct_model_call_provenance() -> None:
     first = {
         "kind": "tool_call",
         "tool_call_id": "reused",
-        "assistant_message_sequence": 2,
+        "producer_ref": {"producer_id": "model-call-1"},
         "call_index": 0,
     }
     second = {
         "kind": "tool_call",
         "tool_call_id": "reused",
-        "assistant_message_sequence": 5,
+        "producer_ref": {"producer_id": "model-call-2"},
         "call_index": 0,
     }
 
     assert _logical_activity_key(first) != _logical_activity_key(second)
+
+
+def test_checkpoint_tool_shadow_uses_model_call_provenance() -> None:
+    provider = {
+        "kind": "tool_call",
+        "tool_call_id": "call-1",
+        "producer_ref": {"producer_id": "model-call-1"},
+        "call_index": 0,
+    }
+    checkpoint_shadow = {
+        "kind": "tool_call",
+        "tool_call_id": "call-1",
+        "producer_ref": {"producer_id": "lc_run--model-call-1"},
+        "call_index": 0,
+    }
+
+    assert _logical_activity_key(provider) == _logical_activity_key(checkpoint_shadow)
+
+
+def test_final_reasoning_resolves_preserved_content_part_identity() -> None:
+    refs = _final_reasoning_source_refs(
+        {
+            "content_part_refs": [
+                {"id": "part-reasoning", "index": 0, "type": "reasoning"},
+                {"id": "part-text", "index": 1, "type": "text"},
+            ]
+        },
+        content_block_index=0,
+        item_index=0,
+        provider_item_id=None,
+    )
+
+    assert refs == {"part-reasoning"}
+
+
+def test_final_reasoning_keeps_distinct_provider_item_identity() -> None:
+    refs = _final_reasoning_source_refs(
+        {
+            "content_part_refs": [
+                {"id": "outer-reasoning", "index": 0, "type": "reasoning_items"}
+            ]
+        },
+        content_block_index=0,
+        item_index=1,
+        provider_item_id="provider-reasoning-2",
+    )
+
+    assert refs == {"provider-reasoning-2"}

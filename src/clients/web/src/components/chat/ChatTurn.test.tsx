@@ -1036,12 +1036,14 @@ describe("ChatTurn 轮次动作", () => {
       item_count: 5,
     };
     let loadedInclude: string[] | undefined;
+    let detailLoadCalls = 0;
     let renderer: ReactTestRenderer;
     act(() => {
       renderer = create(
         <ChatTurn
           {...chatTurnProps(value)}
           onLoadTurnDetails={async (_turnIds, _identity, _refresh, include) => {
+            detailLoadCalls += 1;
             loadedInclude = include;
           }}
         />,
@@ -1063,6 +1065,13 @@ describe("ChatTurn 轮次动作", () => {
       "final_response",
     ]);
     expect(renderer!.root.findByProps({ "aria-expanded": true })).toBeTruthy();
+    await act(async () => {
+      await toggle.props.onClick();
+    });
+    await act(async () => {
+      await toggle.props.onClick();
+    });
+    expect(detailLoadCalls).toBe(2);
     const summaryHtml = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
     expect(summaryHtml).toContain("耗时 1.3s · Item 5 项");
     expect(summaryHtml).not.toContain("assistant 1");

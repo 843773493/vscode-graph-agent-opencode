@@ -170,12 +170,50 @@ class RolloutCheckpointQueriesMixin:
         include_pending_notices: bool = True,
     ) -> tuple[ContextRef, ...]:
         """从已提交 item 生成 Saver-owned canonical refs。"""
+        items = self.committed_context_items(
+            snapshot,
+            include_pending_notices=include_pending_notices,
+        )
+        by_message_id = {
+            message_id: item
+            for item in items
+            if isinstance(
+                message_id := item.metadata.get("projection_message_id"), str
+            )
+            and message_id
+        }
+        superseded_message_ids: set[str] = set()
+        for item in items:
+            superseded = item.metadata.get("supersedes_message_id")
+            if superseded is None:
+                continue
+            if not isinstance(superseded, str) or not superseded:
+                raise RuntimeError(
+                    f"canonical item supersedes_message_id 非法: {item.item_id}"
+                )
+            previous = by_message_id.get(superseded)
+            if previous is None:
+                continue
+            if previous.turn_id != item.turn_id:
+                raise RuntimeError(
+                    "canonical assistant supersedes 跨 Turn: "
+                    f"{previous.item_id}->{item.item_id}"
+                )
+            if previous.item_sequence >= item.item_sequence:
+                raise RuntimeError(
+                    "canonical assistant supersedes 顺序非法: "
+                    f"{previous.item_id}->{item.item_id}"
+                )
+            if superseded in superseded_message_ids:
+                raise RuntimeError(
+                    f"canonical assistant 被多个消息替代: {superseded}"
+                )
+            superseded_message_ids.add(superseded)
         return tuple(
             ContextRef.canonical_item(item, session_id=snapshot.thread_id)
-            for item in self.committed_context_items(
-                snapshot,
-                include_pending_notices=include_pending_notices,
-            )
+            for item in items
+            if item.metadata.get("projection_message_id")
+            not in superseded_message_ids
         )
 
     def list_checkpoints(

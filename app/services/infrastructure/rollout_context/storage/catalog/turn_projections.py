@@ -146,23 +146,19 @@ def _logical_activity_key(item: dict[str, object]) -> tuple[object, ...]:
     """只按持久 identity/provenance 合并同一逻辑 item，绝不比较正文。"""
     kind = strict_text(item.get("kind"), field="activity_item.kind")
     if kind == "tool_call":
+        producer_ref = item.get("producer_ref")
+        if not isinstance(producer_ref, dict):
+            raise TypeError("tool_call activity item 缺少 producer_ref")
         return (
             kind,
             strict_text(item.get("tool_call_id"), field="tool_call_id"),
-            strict_non_negative_int(
-                item.get("assistant_message_sequence"),
-                field="assistant_message_sequence",
-            ),
+            _normalized_model_call_id(producer_ref),
             strict_non_negative_int(item.get("call_index"), field="call_index"),
         )
     if kind == "tool_result":
         return (
             kind,
             strict_text(item.get("tool_call_id"), field="tool_call_id"),
-            strict_non_negative_int(
-                item.get("result_message_sequence"),
-                field="result_message_sequence",
-            ),
         )
     if kind == "compaction_summary":
         return (kind, strict_text(item.get("item_id"), field="item_id"))
@@ -173,6 +169,54 @@ def _logical_activity_key(item: dict[str, object]) -> tuple[object, ...]:
     if not isinstance(block_ordinal, int) or isinstance(block_ordinal, bool):
         raise TypeError("reasoning activity item 缺少 block_ordinal")
     return (kind, _normalized_model_call_id(producer_ref), block_ordinal)
+
+
+def _final_reasoning_source_refs(
+    final_item_metadata: dict[str, object],
+    *,
+    content_block_index: int,
+    item_index: int,
+    provider_item_id: object,
+) -> set[str]:
+    """解析最终 checkpoint reasoning 指向的持久 content part identity。"""
+    refs: set[str] = set()
+    if provider_item_id is not None:
+        refs.add(strict_text(provider_item_id, field="reasoning_blocks.item_id"))
+
+    # reasoning_items 中第二个及后续匿名子项不能只凭外层 block ref 合并；
+    # 它们没有足够精确的持久 identity，应继续作为独立逻辑 Item。
+    if item_index != 0:
+        return refs
+    raw_part_refs = final_item_metadata.get("content_part_refs")
+    if raw_part_refs is None:
+        return refs
+    if not isinstance(raw_part_refs, list):
+        raise TypeError("final item metadata.content_part_refs 必须是列表")
+    matching_ids: list[str] = []
+    for ordinal, raw_ref in enumerate(raw_part_refs):
+        if not isinstance(raw_ref, dict):
+            raise TypeError(
+                f"final item metadata.content_part_refs[{ordinal}] 必须是对象"
+            )
+        ref_index = raw_ref.get("index")
+        if not isinstance(ref_index, int) or isinstance(ref_index, bool):
+            raise TypeError(
+                f"final item metadata.content_part_refs[{ordinal}].index 必须是整数"
+            )
+        if ref_index != content_block_index:
+            continue
+        matching_ids.append(
+            strict_text(
+                raw_ref.get("id"),
+                field=f"final item metadata.content_part_refs[{ordinal}].id",
+            )
+        )
+    if len(matching_ids) > 1:
+        raise RuntimeError(
+            "final item metadata.content_part_refs 存在重复 content block index"
+        )
+    refs.update(matching_ids)
+    return refs
 
 
 def _turn_page_row(row: tuple[object, ...]) -> tuple[str, int, int, int]:
@@ -357,8 +401,8 @@ class TurnProjectionQueryMixin:
         final_reasoning_rows = connection.execute(
             "SELECT t.turn_id, rb.message_sequence, rb.content_block_index, "
             "rb.item_index, rb.carrier_type, rb.reasoning_text, rb.summary_text, "
-            "rb.signature_present, rb.encrypted_length, ic.item_id, "
-            "ic.item_sequence, ic.created_at "
+            "rb.signature_present, rb.encrypted_length, rb.item_id, ic.item_id, "
+            "ic.item_sequence, ic.created_at, ic.metadata_json "
             "FROM turns AS t "
             "JOIN turn_records AS tr ON tr.turn_id = t.turn_id "
             "JOIN item_catalog AS ic ON ic.item_id = tr.final_item_id "
@@ -483,6 +527,9 @@ class TurnProjectionQueryMixin:
             )
         tool_by_message: dict[tuple[str, str], list[dict[str, object]]] = {}
         tool_by_call_id: dict[tuple[str, str], dict[str, object]] = {}
+        canonical_tools_by_model_call: dict[
+            tuple[str, str], list[dict[str, object]]
+        ] = {}
         for (
             turn_id,
             message_id,
@@ -518,6 +565,9 @@ class TurnProjectionQueryMixin:
         seen_activity: dict[str, set[tuple[object, ...]]] = {
             turn_id: set() for turn_id in result
         }
+        seen_reasoning_source_refs: dict[str, set[str]] = {
+            turn_id: set() for turn_id in result
+        }
         for (
             turn_id,
             item_sequence,
@@ -547,6 +597,17 @@ class TurnProjectionQueryMixin:
                 if isinstance(projection_message_id, str)
                 else []
             )
+            block_ordinal = metadata.get("block_index")
+            projection_group = metadata.get("projection_group")
+            if not isinstance(block_ordinal, int) or isinstance(block_ordinal, bool):
+                block_ordinal = (
+                    projection_group.get("ordinal")
+                    if isinstance(projection_group, dict)
+                    else 0
+                )
+            block_ordinal = strict_non_negative_int(
+                block_ordinal, field=f"activity_item.block_ordinal:{item_id}"
+            )
             activity_tools: list[dict[str, object] | None] = [None]
             if semantic_kind in {"tool_call", "tool_result"}:
                 metadata_call_id = metadata.get("tool_call_id")
@@ -559,29 +620,68 @@ class TurnProjectionQueryMixin:
                 if tool_call_id is not None:
                     selected_tool = tool_by_call_id.get((turn_id, tool_call_id))
                     if selected_tool is None:
-                        raise RuntimeError(
-                            f"canonical {semantic_kind} 缺少 tool projection: {item_id}"
+                        if semantic_kind != "tool_call":
+                            raise RuntimeError(
+                                "canonical tool_result 缺少对应 tool_call: "
+                                f"{item_id}"
+                            )
+                        # 实时 canonical tool_call 先于 LangChain message
+                        # projection 提交时，item 自身就是历史摘要的权威来源。
+                        # 后续 checkpoint shadow 通过 model-call provenance 和
+                        # tool_call_id 在本方法内合并，不能因派生表尚未存在而 500。
+                        selected_tool = {
+                            "tool_call_id": tool_call_id,
+                            "tool_name": strict_text(
+                                content,
+                                field=f"item_projections.content:{item_id}",
+                            ),
+                            "status": strict_text(
+                                item_status,
+                                field=f"item_catalog.status:{item_id}",
+                            ),
+                            "result_message_sequence": None,
+                            "assistant_message_sequence": None,
+                            "call_index": block_ordinal,
+                        }
+                        tool_by_call_id[(turn_id, tool_call_id)] = selected_tool
+                        model_call_key = (
+                            turn_id,
+                            _normalized_model_call_id(producer_ref),
                         )
+                        canonical_tools_by_model_call.setdefault(
+                            model_call_key, []
+                        ).append(selected_tool)
+                    if semantic_kind == "tool_result":
+                        selected_tool = {
+                            **selected_tool,
+                            "status": strict_text(
+                                item_status,
+                                field=f"item_catalog.status:{item_id}",
+                            ),
+                            "result_message_sequence": selected_tool.get(
+                                "result_message_sequence"
+                            ),
+                        }
                     activity_tools = [selected_tool]
                 elif matching_tools:
                     # 一个 assistant_output carrier 可以包含多个 tool_calls；
                     # 它们共享物理 item offset，但每个 call 都是独立逻辑 Item。
                     activity_tools = list(matching_tools)
                 else:
-                    raise RuntimeError(
-                        f"canonical {semantic_kind} 缺少稳定 tool_call_id: {item_id}"
+                    model_call_tools = canonical_tools_by_model_call.get(
+                        (turn_id, _normalized_model_call_id(producer_ref)),
+                        [],
                     )
-            block_ordinal = metadata.get("block_index")
-            projection_group = metadata.get("projection_group")
-            if not isinstance(block_ordinal, int) or isinstance(block_ordinal, bool):
-                block_ordinal = (
-                    projection_group.get("ordinal")
-                    if isinstance(projection_group, dict)
-                    else 0
-                )
-            block_ordinal = strict_non_negative_int(
-                block_ordinal, field=f"activity_item.block_ordinal:{item_id}"
-            )
+                    if semantic_kind == "tool_call" and model_call_tools:
+                        # ensure_request_tool_result_items 生成的 checkpoint shadow
+                        # 可能只在 typed payload 中保存 call id。其 model-call
+                        # provenance 与先到的实时 item 一致，直接复用后端已经
+                        # 解析出的逻辑工具身份，不读取正文或依赖相邻关系。
+                        activity_tools = list(model_call_tools)
+                    else:
+                        raise RuntimeError(
+                            f"canonical {semantic_kind} 缺少稳定 tool_call_id: {item_id}"
+                        )
             kind = (
                 "reasoning_summary"
                 if semantic_kind == "reasoning" and payload_kind == "summary"
@@ -589,6 +689,10 @@ class TurnProjectionQueryMixin:
                 if semantic_kind == "reasoning" and payload_kind in {"opaque", "extension"}
                 else semantic_kind
             )
+            if semantic_kind == "reasoning":
+                source_part_id = metadata.get("block_id")
+                if isinstance(source_part_id, str) and source_part_id:
+                    seen_reasoning_source_refs[turn_id].add(source_part_id)
             for activity_tool in activity_tools:
                 activity_item: dict[str, object] = {
                     "item_id": strict_text(item_id, field="item_catalog.item_id"),
@@ -644,9 +748,11 @@ class TurnProjectionQueryMixin:
             summary_text,
             signature_present,
             encrypted_length,
+            reasoning_item_id,
             item_id,
             item_sequence,
             item_created_at,
+            final_item_metadata_json,
         ) in final_reasoning_rows:
             turn_id = strict_text(turn_id, field="turns.turn_id")
             content_block_index = strict_non_negative_int(
@@ -679,6 +785,19 @@ class TurnProjectionQueryMixin:
             )
             if signature_value not in {0, 1}:
                 raise RuntimeError(f"reasoning signature 标记非法: {turn_id}")
+            final_item_metadata = _json_object(
+                final_item_metadata_json,
+                field=f"item_catalog.metadata_json:{item_id}",
+            )
+            source_refs = _final_reasoning_source_refs(
+                final_item_metadata,
+                content_block_index=content_block_index,
+                item_index=item_index,
+                provider_item_id=reasoning_item_id,
+            )
+            if source_refs & seen_reasoning_source_refs[turn_id]:
+                continue
+            seen_reasoning_source_refs[turn_id].update(source_refs)
             items = result[turn_id]["activity_items"]
             if not isinstance(items, list):
                 raise TypeError("Turn activity_items projection 必须是列表")

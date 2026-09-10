@@ -8,6 +8,7 @@ import type {
 import {
   applyTurnBootstrap,
   applyTurnDetails,
+  applyTurnHistoryPage,
   applyTurnPage,
   beginTurnBootstrap,
   createSessionTurnTimeline,
@@ -519,6 +520,74 @@ describe("Turn timeline revision 合并", () => {
     expect(timeline.phase).toBe("bootstrapping");
     expect(timeline.projectionState).toBe("partial");
     expect(timeline.eventCursor).toBe(null);
+  });
+
+  test("详情缓存超限时恢复后端原始 summary，不由前端重新摘要", () => {
+    const summaries = Array.from({ length: 10 }, (_, index) =>
+      summary(`job_detail_${index}`, index + 1)
+    );
+    let timeline = upsertTurns(
+      createSessionTurnTimeline(SCOPE_KEY),
+      summaries,
+    );
+    timeline = applyTurnDetails(timeline, {
+      items: summaries.map((item) => ({
+        ...detail(item.turn_id, item.ordinal),
+        final_response: "x".repeat(10_000),
+      })),
+      projection_epoch: 1,
+    });
+
+    expect(timeline.turnsById.job_detail_0).toBe(summaries[0]);
+    expect(timeline.turnsById.job_detail_1).toBe(summaries[1]);
+    expect(timeline.turnsById.job_detail_9.items_view).toBe("full");
+    expect(timeline.detailAccessOrder).toEqual(
+      Array.from({ length: 8 }, (_, index) => `job_detail_${index + 2}`),
+    );
+  });
+
+  test("history 页携带的权威 summaries 支持分页详情窗口淘汰", () => {
+    const summaries = Array.from({ length: 10 }, (_, index) =>
+      summary(`job_page_${index}`, index + 1)
+    );
+    const timeline = applyTurnHistoryPage(
+      createSessionTurnTimeline(SCOPE_KEY),
+      {
+        items: summaries.map((item) => detail(item.turn_id, item.ordinal)),
+        summaries,
+        projection_epoch: 1,
+      },
+      "before",
+    );
+
+    expect(timeline.orderedTurnIds).toHaveLength(10);
+    expect(timeline.turnsById.job_page_0).toBe(summaries[0]);
+    expect(timeline.turnsById.job_page_9.items_view).toBe("full");
+  });
+
+  test("切换 session scope 时卸载旧会话详情正文但保留摘要窗口", () => {
+    const firstSummary = summary("job_first", 1);
+    let firstTimeline = upsertTurn(
+      createSessionTurnTimeline("scope-first"),
+      firstSummary,
+    );
+    firstTimeline = applyTurnDetails(firstTimeline, {
+      items: [detail("job_first", 1)],
+      projection_epoch: 1,
+    });
+    let cache = writeTurnTimelineCache(
+      new Map(),
+      "scope-first",
+      firstTimeline,
+    );
+    cache = writeTurnTimelineCache(
+      cache,
+      "scope-second",
+      createSessionTurnTimeline("scope-second"),
+    );
+
+    expect(cache.get("scope-first")?.turnsById.job_first).toBe(firstSummary);
+    expect(cache.get("scope-first")?.detailAccessOrder).toEqual([]);
   });
 
   test("LRU 只保留最近 64 个 session scope", () => {

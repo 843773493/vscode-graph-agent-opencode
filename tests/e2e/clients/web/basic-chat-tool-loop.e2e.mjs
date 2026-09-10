@@ -431,8 +431,8 @@ try {
   assert.deepEqual(result.persisted.upstreamMessageRoles, [
     ["system", "user"],
     ["system", "user", "assistant", "tool"],
-    ["system", "user", "assistant", "tool", "assistant", "assistant", "user"],
-    ["system", "user", "assistant", "tool", "assistant", "assistant", "user", "assistant", "tool"],
+    ["system", "user", "assistant", "tool", "assistant", "user"],
+    ["system", "user", "assistant", "tool", "assistant", "user", "assistant", "tool"],
   ]);
   assert.match(result.persisted.agentStateJsonl, /先读取 README\.md/);
   assert.deepEqual(pageErrors, [], "浏览器 pageerror 出现");

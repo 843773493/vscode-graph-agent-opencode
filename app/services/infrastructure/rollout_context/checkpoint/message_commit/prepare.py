@@ -11,6 +11,7 @@ from pathlib import Path
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     SEMANTIC_FIELDS,
+    semantic_metadata,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
@@ -68,7 +69,16 @@ def _compare_group(
             raise ValueError(
                 f"canonical item 与 message projection 内容不一致: {stored.item_id}"
             )
-        for name in (*SEMANTIC_FIELDS, "projection_group", "reasoning_carrier"):
+        candidate_semantic_metadata = semantic_metadata(candidate.metadata)
+        stored_semantic_metadata = semantic_metadata(stored.metadata)
+        for name in SEMANTIC_FIELDS:
+            if candidate_semantic_metadata.get(name) != stored_semantic_metadata.get(
+                name
+            ):
+                raise ValueError(
+                    f"canonical item semantic/provenance metadata 不一致: {stored.item_id}:{name}"
+                )
+        for name in ("projection_group", "reasoning_carrier"):
             if candidate.metadata.get(name) != stored.metadata.get(name):
                 raise ValueError(
                     f"canonical item semantic/provenance metadata 不一致: {stored.item_id}:{name}"

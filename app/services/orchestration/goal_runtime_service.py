@@ -30,13 +30,21 @@ class GoalRuntimeService:
         self._session_orchestrator = session_orchestrator
         self._tasks: set[asyncio.Task[None]] = set()
         self._job_goal_ids: dict[str, str] = {}
+        self._job_goal_capture_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def on_event(self, event: Event) -> None:
         if event.type == EventType.JOB_STARTED:
-            job = await self._job_service.get(event.job_id)
-            goal = await self._goal_service.get(job.session_id)
-            if goal is not None and goal.status == GoalStatus.active:
-                self._job_goal_ids[event.job_id] = goal.goal_id
+            # JOB_STARTED 在 JobEventBus 的同步持久化事务中发布。Goal 续跑派发
+            # 此时仍持有同一个 session 的 Goal 锁；若在监听器内同步读取 Goal，
+            # 会形成 Goal lock -> JOB_STARTED -> Goal lock 的自锁，执行器因此连
+            # Turn 消息流都无法创建。启动关联改为发布事务之外的后台捕获。
+            task = self._spawn(self._capture_started_job(event.job_id))
+            self._job_goal_capture_tasks[event.job_id] = task
+            task.add_done_callback(
+                lambda completed, job_id=event.job_id: self._clear_capture_task(
+                    job_id, completed
+                )
+            )
             return
         if event.type in {EventType.JOB_FAILED, EventType.JOB_CANCELLED}:
             self._spawn(self._stop_after_terminal_error(event.job_id, event.type))
@@ -53,10 +61,19 @@ class GoalRuntimeService:
             )
         )
 
-    def _spawn(self, coroutine: Coroutine[object, object, None]) -> None:
+    def _spawn(
+        self, coroutine: Coroutine[object, object, None]
+    ) -> asyncio.Task[None]:
         task = asyncio.create_task(coroutine)
         self._tasks.add(task)
         task.add_done_callback(self._on_task_done)
+        return task
+
+    def _clear_capture_task(
+        self, job_id: str, task: asyncio.Task[None]
+    ) -> None:
+        if self._job_goal_capture_tasks.get(job_id) is task:
+            self._job_goal_capture_tasks.pop(job_id, None)
 
     def _on_task_done(self, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)
@@ -67,7 +84,19 @@ class GoalRuntimeService:
         except Exception:
             logger.exception("Goal 后台状态转换失败")
 
+    async def _capture_started_job(self, job_id: str) -> None:
+        job = await self._job_service.get(job_id)
+        goal = await self._goal_service.get(job.session_id)
+        if goal is not None and goal.status == GoalStatus.active:
+            self._job_goal_ids[job_id] = goal.goal_id
+
+    async def _wait_for_goal_capture(self, job_id: str) -> None:
+        task = self._job_goal_capture_tasks.get(job_id)
+        if task is not None and task is not asyncio.current_task():
+            await task
+
     async def _continue_after_agent_end(self, job_id: str, tokens: int = 0) -> None:
+        await self._wait_for_goal_capture(job_id)
         job = await self._job_service.get(job_id)
         goal = await self._goal_service.get(job.session_id)
         owner_goal_id = self._job_goal_ids.pop(job_id, None)
@@ -126,6 +155,7 @@ class GoalRuntimeService:
         await self.ensure_active_goal_running(job.session_id)
 
     async def _stop_after_terminal_error(self, job_id: str, event_type: str) -> None:
+        await self._wait_for_goal_capture(job_id)
         job = await self._job_service.get(job_id)
         goal = await self._goal_service.get(job.session_id)
         owner_goal_id = self._job_goal_ids.pop(job_id, None)

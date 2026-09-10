@@ -67,7 +67,7 @@
         "match": {
           "model": "big-pickle",
           "stream": true,
-          "message_roles": ["system", "user", "assistant", "tool", "assistant", "assistant", "user"]
+          "message_roles": ["system", "user", "assistant", "tool", "assistant", "user"]
         }
       },
       "replay": { "sequence_id": "basic-chat-tool-loop", "step": 2 },
@@ -93,7 +93,7 @@
         "match": {
           "model": "big-pickle",
           "stream": true,
-          "message_roles": ["system", "user", "assistant", "tool", "assistant", "assistant", "user", "assistant", "tool"]
+          "message_roles": ["system", "user", "assistant", "tool", "assistant", "user", "assistant", "tool"]
         }
       },
       "replay": { "sequence_id": "basic-chat-tool-loop", "step": 3 },

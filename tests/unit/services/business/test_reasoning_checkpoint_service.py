@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -9,17 +10,27 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Send
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.records import CanonicalItemRecord
 from app.prompting import internal_message_factory
 from app.schemas.event import ModelTokenUsagePayload
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.message_service import MessageService
 from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
     persist_user_message_checkpoint,
 )
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
+from app.services.infrastructure.rollout_context.checkpoint.reader import (
+    RolloutContextReader,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from app.services.mapping.itemized.message_reasoning_merge import (
     merge_canonical_reasoning,
 )
@@ -101,6 +112,58 @@ async def test_persist_user_message_checkpoint_is_idempotent(
     assert [item.response_metadata["message_id"] for item in messages] == [
         "msg_previous", "msg_user_checkpoint"
     ]
+
+
+def test_persist_user_message_checkpoint_preserves_internal_acceptance_metadata(
+    tmp_path,
+    session_bundle_factory,
+):
+    session_id = "sess_internal_acceptance"
+    session_bundle_factory(tmp_path, session_id)
+    saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    message = HumanMessage(
+        content="<system_reminder>继续 Goal</system_reminder>",
+        response_metadata={
+            "message_id": "msg_internal_goal",
+            "created_at": MESSAGE_TIME.isoformat(),
+            "updated_at": MESSAGE_TIME.isoformat(),
+            "message_metadata": {
+                "internal": True,
+                "turn_id": "job_internal_goal",
+                "job_id": "job_internal_goal",
+            },
+        },
+    )
+
+    assert persist_user_message_checkpoint(
+        checkpointer=saver,
+        session_id=session_id,
+        message=message,
+    ) is False
+
+    database_path = (
+        get_session_path_resolver(tmp_path).resolve_session_node(session_id)
+        / "rollout"
+        / "index.sqlite"
+    )
+    with sqlite3.connect(database_path) as connection:
+        row = connection.execute(
+            "SELECT metadata_json FROM item_catalog WHERE item_id = ?",
+            ("item-msg_internal_goal",),
+        ).fetchone()
+    assert row is not None
+    assert json.loads(row[0])["message_metadata"]["internal"] is True
+
+    page = RolloutHistoryReader(
+        RolloutContextReader(
+            RolloutStorage(tmp_path, message_codec=LangChainMessageCodec())
+        )
+    ).load(
+        session_id,
+        TurnHistoryLoadRequest(direction="tail", turns=1),
+    )
+    assert len(page.items) == 1
+    assert page.items[0].user_messages == []
 
 
 @pytest.mark.asyncio
@@ -240,6 +303,14 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     )
 
     assert changed is True
+    plan = saver.compose_committed_context_plan(
+        session_id,
+        plan_id="plan-standard-assistant",
+        include_pending_notices=False,
+    )
+    canonical_ref_ids = [ref.ref_id for ref in plan.refs]
+    assert "item-msg_intermediate" not in canonical_ref_ids
+    assert "item-msg_assistant" in canonical_ref_ids
     latest = await saver.aget_tuple(config)
     assert latest is not None
     messages = latest.checkpoint["channel_values"]["messages"]
@@ -248,6 +319,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     assert assistant.response_metadata["phase"] == "final_answer"
     assert assistant.id == "msg_assistant"
     assert assistant.response_metadata["message_id"] == "msg_assistant"
+    assert assistant.response_metadata["supersedes_message_id"] == "msg_intermediate"
     assert isinstance(assistant.response_metadata["created_at"], str)
     assert assistant.response_metadata["updated_at"] == assistant.response_metadata[
         "created_at"

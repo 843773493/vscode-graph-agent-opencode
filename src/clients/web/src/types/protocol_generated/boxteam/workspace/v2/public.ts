@@ -1502,6 +1502,7 @@ export interface TurnHistoryPageDTO {
   has_before?: boolean | undefined;
   has_after?: boolean | undefined;
   projection_epoch: number;
+  summaries: TurnSummaryDTO[];
 }
 
 export interface TurnJobSummaryDTO {
@@ -11734,6 +11735,7 @@ function createBaseTurnHistoryPageDTO(): TurnHistoryPageDTO {
     has_before: undefined,
     has_after: undefined,
     projection_epoch: 0,
+    summaries: [],
   };
 }
 
@@ -11748,6 +11750,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
       has_before: isSet(object.has_before) ? globalThis.Boolean(object.has_before) : undefined,
       has_after: isSet(object.has_after) ? globalThis.Boolean(object.has_after) : undefined,
       projection_epoch: isSet(object.projection_epoch) ? globalThis.Number(object.projection_epoch) : 0,
+      summaries: globalThis.Array.isArray(object?.summaries)
+        ? object.summaries.map((e: any) => TurnSummaryDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -11777,6 +11782,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     if (message.projection_epoch !== 0) {
       obj.projection_epoch = Math.round(message.projection_epoch);
     }
+    if (message.summaries?.length) {
+      obj.summaries = message.summaries.map((e) => TurnSummaryDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -11793,6 +11801,7 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     message.has_before = object.has_before ?? undefined;
     message.has_after = object.has_after ?? undefined;
     message.projection_epoch = object.projection_epoch ?? 0;
+    message.summaries = object.summaries?.map((e) => TurnSummaryDTO.fromPartial(e)) || [];
     return message;
   },
 };

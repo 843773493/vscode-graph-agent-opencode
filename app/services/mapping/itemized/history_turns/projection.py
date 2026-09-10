@@ -88,11 +88,13 @@ def project_detail(
                 output_truncated = True
         items.append(item.model_copy(update={"raw": bounded_raw, "content": content}))
     final_response = ""
+    final_response_truncated = False
     if "final_response" in fields or "assistant" in fields:
         final_response, content_truncated = bounded_text(
             detail.final_response,
             budget,
         )
+        final_response_truncated = content_truncated
         output_truncated = output_truncated or content_truncated
     assistant_text: list[str] = []
     if "assistant_text" in fields or "assistant" in fields:
@@ -182,7 +184,9 @@ def project_detail(
                 else []
             ),
             "response_preview": final_response[:1000],
-            "preview_truncated": len(final_response) > 1000,
+            "preview_truncated": (
+                final_response_truncated or len(final_response) > 1000
+            ),
             "items": items,
             "response_parts": response_parts,
             "detail_truncated": output_truncated
@@ -255,6 +259,15 @@ def summary(detail: TurnDetailDTO) -> TurnSummaryDTO:
         thinking_blocks=detail.thinking_blocks,
         tool_summary=detail.tool_summary,
         tool_summary_truncated=detail.tool_summary_truncated,
-        response_parts=detail.response_parts[:128],
+        response_parts=[
+            part.model_copy(
+                update={
+                    "projection": "summary",
+                    "arguments": None if part.kind == "tool_call" else part.arguments,
+                    "result": None if part.kind == "tool_result" else part.result,
+                }
+            )
+            for part in detail.response_parts[:128]
+        ],
         activity_stats=detail.activity_stats,
     )

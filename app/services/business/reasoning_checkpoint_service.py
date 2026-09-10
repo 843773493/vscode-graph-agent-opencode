@@ -106,22 +106,27 @@ def _rewrite_latest_assistant_message(
     turn_id: str | None,
     preserve_content_part_refs: bool,
 ) -> AIMessage | None:
-    latest = next(
-        (
-            message
-            for message in reversed(messages)
-            if isinstance(message, AIMessage) and not message.tool_calls
-        ),
-        None,
-    )
-    if latest is None:
+    latest_index = _latest_final_assistant_index(messages)
+    if latest_index < 0:
         return None
+    latest = messages[latest_index]
+    if not isinstance(latest, AIMessage):
+        raise TypeError("最终 assistant 定位结果不是 AIMessage")
 
     response_metadata = dict(latest.response_metadata or {})
     response_metadata["phase"] = "final_answer"
     response_metadata["message_id"] = message_id
     response_metadata["created_at"] = message_created_at.isoformat()
     response_metadata["updated_at"] = message_created_at.isoformat()
+    superseded_message_id = latest.id or latest.response_metadata.get("message_id")
+    if (
+        isinstance(superseded_message_id, str)
+        and superseded_message_id
+        and superseded_message_id != message_id
+    ):
+        # canonical item 不可覆盖；最终收敛消息显式指向它替代的 LangGraph
+        # carrier，供下次 Provider context 按 identity 排除旧副本。
+        response_metadata["supersedes_message_id"] = superseded_message_id
     if turn_id is not None:
         raw_message_metadata = response_metadata.get("message_metadata")
         message_metadata = (
@@ -400,7 +405,13 @@ def persist_user_message_checkpoint(
             ),
             turn_id=turn_id,
             root_item_id=f"item-{message_id}",
-            acceptance_metadata={"message_created_at": response_metadata.get("created_at")},
+            acceptance_metadata={
+                "message_created_at": response_metadata.get("created_at"),
+                # acceptance-time canonical root 必须保留消息的业务可见性。
+                # 否则内部 Goal/调度消息会在 LangChain projection 往返后
+                # 丢失 internal 标记，并被历史 API 当作真实用户输入展示。
+                "message_metadata": dict(message_metadata or {}),
+            },
         )
         if not isinstance(accepted, Mapping):
             raise TypeError("RolloutCheckpointSaver.accept_turn 返回值非法")

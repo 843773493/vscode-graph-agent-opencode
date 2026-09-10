@@ -198,7 +198,7 @@ v2 `content_part` 的 canonical 正文固定存于父 item JSONL envelope 的 pa
 
 ### Requirement: 大型正文只保存在 JSONL
 
-系统 SHALL 将大型 canonical assistant output、工具参数、工具结果和 encrypted reasoning 正文完整保存在对应 rollout JSONL。SQLite 只能保存类型、状态、长度、哈希、有界投影和 offset/length；`ContextPlanDetailStore` MUST 位于由 session catalog/path resolver 定位的工作区会话节点下的精确相对路径 `rollout/context-plan-details/<assembly_id>/<detail_id>`，不得写入全局 `${BOXTEAM_HOME}` 或按显示名定位。该物理 detail store 只服务已分配 assembly 的 sealed manifest；unsealed plan 不得创建或解析 assembly detail path。`detail_id` 是 assembly 内 target-local 的不可变物理叶名；sealed `detail_ref` 是不暴露物理路径、规范化为 `{session_id, assembly_id, detail_id}` 的逻辑 typed reference，由 resolver 唯一映射到该路径，调用方不得自行拼接路径。它只允许保存 request-only prompt、middleware 输入和 assembly 诊断详情，必须绑定同一 `session_id`/`assembly_id` 并受 visibility/protection、retention/GC 和显式 detail capability 控制；credential/token/secret/attachment 原文默认只能保存 redaction marker、长度和 stable digest。detail store 不得保存可替代 canonical item 正文的第二副本。
+系统 SHALL 将大型 canonical assistant output、工具参数、工具结果和 encrypted reasoning 正文完整保存在对应 thread rollout JSONL。SQLite 只能保存类型、状态、长度、哈希、有界投影和 offset/length；`ContextPlanDetailStore` MUST 位于由 session catalog与thread catalog/resolver定位的真实thread node下的精确相对路径 `rollout/context-plan-details/<assembly_id>/<detail_id>`，不得写入全局 `${BOXTEAM_HOME}`、workspace attachment blob store或按显示名定位。该物理 detail store 只服务已分配 assembly 的 sealed manifest；unsealed plan 不得创建或解析 assembly detail path。`detail_id` 是 assembly 内 target-local 的不可变物理叶名；sealed `detail_ref` 是不暴露物理路径、规范化为 `{session_id, thread_id, assembly_id, detail_id}` 的逻辑 typed reference，由 resolver 唯一映射到该路径，调用方不得自行拼接路径。它只允许保存 request-only prompt、middleware 输入和 assembly 诊断详情，必须绑定同一 `session_id`/`thread_id`/`assembly_id` 并受 visibility/protection、retention/GC 和显式 detail capability 控制；credential/token/secret/attachment 原文默认只能保存 redaction marker、长度和 stable digest。detail store 不得保存可替代 canonical item正文或attachment blob的第二副本。
 
 #### Scenario: 默认工具摘要
 
@@ -211,6 +211,30 @@ v2 `content_part` 的 canonical 正文固定存于父 item JSONL envelope 的 pa
 - **THEN** 系统通过 SQLite offset 读取 JSONL，并在超过预算时返回明确的 truncated 状态
 
 ## ADDED Requirements
+
+### Requirement: rollout storage 必须以 SessionThread 为物理与事务 owner
+
+系统 SHALL 使用 `(session_id, thread_id)` 解析一个唯一的 rollout JSONL、SQLite index、checkpoint control state、detail store 和 ContextStore transaction node。Session node 的 thread catalog 是 thread 位置、main pointer 与 GraphBinding 的权威索引；storage resolver MUST 先验证 catalog 再定位 thread node，不能扫描磁盘吸收目录，也不能把 session root、其它 thread node 或 `checkpoint_ns` 当作回退路径。每个 thread 的 `committed_jsonl_offset`、item sequence、Turn ordinal、source revision、active view 和 ToolSet applied revision 都相互独立。
+
+本 Requirement SHALL 取代本 change 中此前所有 session-root `rollout/` 物理路径和不含 `thread_id` 的 operational detail/plan/assembly locator；旧字段只能作为一次性 migration lineage 读取，正常 runtime不得继续生成。
+
+主 thread 的相对 locator MUST 是 `threads/{main_thread_id}`；非主 durable thread 的相对 locator MUST 是 `threads/YYYY/MM/DD/{sha256(thread_id)[0:2]}/{thread_id}`，其中日期来自 thread 不可变 UTC `created_at`。两类目录叶名都必须严格等于 `thread_id`，且 locator 一经提交不可因日期变化、重启、显示名或 thread kind 变化而重写。可预测的主路径也不得绕过 catalog/resolver。
+
+#### Scenario: 两个 thread 不能共享 offset 或上下文事实
+
+- **WHEN** 同一 Session 的 main thread 与 delegated child thread 都提交 item 或 checkpoint
+- **THEN** 各自只推进自己的 JSONL/SQLite transaction；任何一方失败、rewind、compaction 或 ToolSet rebase 均不得改变另一方的 offset、active view、source state 或 sealed assembly
+
+### Requirement: 附件正文必须使用 workspace 级内容寻址 blob store
+
+系统 SHALL 将附件正文保存到 `${workspace_abs_path}/.boxteam/attachments/YYYY/MM/DD/{digest-prefix}/{blob-id}`。日期 MUST 是该 digest 首次成功提交的 UTC 日期，`digest-prefix` MUST 是内容 SHA-256 的前两位小写 hex，`blob-id` MUST 是不依赖原始文件名、扩展名、Session 或 thread 的稳定内容身份。`${workspace_abs_path}/.boxteam/attachments/catalog.sqlite` MUST 是 attachment identity、digest、受校验相对 locator、length、MIME/protection、variant lineage、session/thread/item refs、retention、tombstone 与 GC 的唯一权威；reader 不得扫描日期目录定位 blob。
+
+相同 digest 的后续上传 MUST 复用既有 blob 和首次 locator，不得按上传日期复制。删除 Session/thread/item 时只移除相应 reference；存在 canonical item、active execution、sealed assembly、checkpoint/operation pin 或其它有效 owner reference 时不得删除正文。满足零引用与 retention 后，GC MUST 先原子提交 tombstone/availability，再删除物理 blob；失败可幂等重试。canonical `attachment_ref` 与外部 API不得包含物理 locator，访问必须同时校验 workspace、session、thread、item/view membership、hash/length 和 capability。
+
+#### Scenario: 相同附件跨 Session 复用 blob 但不共享权限
+
+- **WHEN** 两个 Session 上传相同内容并得到相同 digest
+- **THEN** attachment catalog 复用一个物理 blob，但为两个逻辑 attachment/owner reference分别校验权限；删除一个 Session 只释放其 reference，另一个 Session 的读取和 retention 不受影响
 
 ### Requirement: Sealed ContextAssemblySnapshot 与 canonical commit 具有明确边界
 
@@ -340,7 +364,7 @@ overlay 的 `base_ref` 和每个 `delta_ref` 若 `included=true`，必须在 `as
 
 ### Requirement: 跨 session fork 必须重映射存储 namespace
 
-跨 session fork 的 target rollout 一律创建为 v2 (`rollout_format_version=2`)；source 为 v1 时，`full_rollout_copy` 只能先调用一次性 `legacy_import_v1_to_v2` migration/import，将 source `message_id`、`message_sequence` 和 offset 作为 `legacy_source_ref`/audit coordinate，而不是写成 target v2 identity 或 committed offset。source overlay 的 epoch、base/delta、ambient item、assembly/detail reference 必须全部建立 target-local 映射：target epoch 重新编号，detail 复制到 target session 的精确 `rollout/context-plan-details/<target-assembly-id>/<target-detail-id>` 路径并换成 target-local `detail_id` 与由 `{target_session_id, target_assembly_id, target_detail_id}` 解析出的 `detail_ref`；source path 不得成为 target reader 的读取入口。detached target 物化后不依赖 source，pinned 只通过 source retention 保留 lineage/detail 审计；required detail 无法复制时 fork 失败，optional detail 显式 unavailable。不得以 v1 reader 作为 fork 后 target 的正常 history/provider/checkpoint 路径。
+跨 session fork 的 target rollout 一律创建为 v2 (`rollout_format_version=2`)；source 为 v1 时，`full_rollout_copy` 只能先调用一次性 `legacy_import_v1_to_v2` migration/import，将 source `message_id`、`message_sequence` 和 offset 作为 `legacy_source_ref`/audit coordinate，而不是写成 target v2 identity 或 committed offset。source overlay 的 epoch、base/delta、ambient item、assembly/detail reference 必须全部建立 target-local 映射：target epoch 重新编号，detail 复制到 target Session 的main thread node内精确 `rollout/context-plan-details/<target-assembly-id>/<target-detail-id>` 路径并换成 target-local `detail_id` 与由 `{target_session_id, target_thread_id, target_assembly_id, target_detail_id}` 解析出的 `detail_ref`；source path 不得成为 target reader 的读取入口。detached target 物化后不依赖 source，pinned 只通过 source retention 保留 lineage/detail 审计；required detail 无法复制时 fork 失败，optional detail 显式 unavailable。不得以 v1 reader 作为 fork 后 target 的正常 history/provider/checkpoint 路径。
 source `accepted_ingress_id` 与 `acceptance_idempotency_key` 同样不能直接复用：fork writer 必须为每个 copied Turn 分配 target-local accepted ingress/key，记录 `identity_origin=fork_copied` 及 source `GlobalEntityRef`，并在 target 的两组唯一约束下提交。target 新输入使用新的真实 ingress/key；复制 Turn 的显式 `resume_turn` 只有在 Turn.status 转移表允许时才复用 target Turn 并创建新的 execution/model-call；`history_replay` 只在相应 owner namespace 的 history view 中复用已有 Turn/root 且不创建 execution；显式 `replay_as_new_turn` 才创建新的 target Turn/root/acceptance/initial execution，在 target active view 登记新的 `logical_turn_ordinal`，可以复制或引用已映射 source history 作为上下文前缀，source Turn/root 不成为新 Turn 的 root，并以 `replay_of_turn_id` 保存 lineage，且不属于原 Turn 的 `dispatch_replay`。普通或 `cancelled` historical Turn 的 `resume_turn`/`dispatch_replay` 均返回 `turn_not_resumable`；需要重跑必须选择前述独立新 Turn 操作。重复同一 fork idempotency key 必须返回既有映射，mapping 或 acceptance identity 不一致则报冲突。
 
 `context_fork`、`history_prefix_fork` 和 `full_rollout_copy` 的 source/target session MUST 是两个独立的 owner namespace；跨 session 引用必须使用 `GlobalEntityRef=(session_id, entity_type, local_id)`。物化时 target 为复制范围内的 Turn、root/item、tool invocation/call/attempt、execution、model call、assembly、checkpoint、view、branch 和 operation anchor 分配新的 target-local identity，并在不可变 `fork_entity_mappings`（或等价 provenance）中保存 source→target 一对一映射。target 的 `root_input_item_id`、item sequence、JSONL offset、`context_view_turns.logical_turn_ordinal`、tool relation 和 assembly ref 只能指向 target namespace；source offset/sequence 只作为 lineage/audit 坐标。`fork_origins` 必须保存 source/target session、source checkpoint/view/branch、mode、mapping version 和 relationship，detached fork 物化提交后不依赖 source，pinned fork 才保留 source retention ref。`context_fork`/`history_prefix_fork` 发现选定范围有 active execution、未完成 Turn 或未终态 assembly 时拒绝且不创建 target；`full_rollout_copy` 可创建完整历史 target，但将对应 target Turn 标为 `cancelled`、reason=`fork_source_runtime_not_copied`，不创建可运行 target execution。target 对已复制 Turn 的显式 `resume_turn` 只有在 Turn.status 转移表允许时才复用 target Turn 并创建新的 target execution/model-call/assembly；`history_replay` 只在对应 owner namespace 的 history view 中复用已有 Turn/root 且不创建 execution；显式 `replay_as_new_turn` 才创建新的 target Turn/root/acceptance/initial execution，在 target active view 登记新的 `logical_turn_ordinal`，可以复制或引用已映射 source history 作为上下文前缀，source Turn/root 不成为新 Turn 的 root，并以 `replay_of_turn_id` 关联；普通或 `cancelled` historical Turn 的 `resume_turn`/`dispatch_replay` 均返回 `turn_not_resumable`，需要重跑必须明确选择 `replay_as_new_turn`，不能把它解释为原 Turn 的 dispatch replay。target 新输入创建新的 target Turn/root/initial execution 和递增 ordinal。

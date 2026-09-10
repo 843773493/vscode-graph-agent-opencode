@@ -325,8 +325,9 @@ export type TurnHistoryLoadRequest = Omit<WorkspaceProtocol.TurnHistoryLoadReque
   tool_call_ids?: string[] | null;
   include?: string[];
 };
-export type TurnHistoryPage = Omit<WorkspaceProtocol.TurnHistoryPageDTO, "items" | "next_cursor" | "before_cursor" | "after_cursor"> & {
+export type TurnHistoryPage = Omit<WorkspaceProtocol.TurnHistoryPageDTO, "items" | "summaries" | "next_cursor" | "before_cursor" | "after_cursor"> & {
   items: TurnDetail[];
+  summaries?: TurnSummary[];
   next_cursor?: string | null;
   before_cursor?: string | null;
   after_cursor?: string | null;

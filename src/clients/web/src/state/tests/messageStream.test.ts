@@ -4,6 +4,7 @@ import {
   createMessageStreamState,
   messageStreamToResponseParts,
   type MessageStreamEvent,
+  writeMessageStreamCache,
 } from "../messageStream";
 
 function event(
@@ -23,6 +24,92 @@ function event(
 }
 
 describe("message stream reducer", () => {
+  test("乱序事件缓冲有明确上限，溢出后要求 snapshot 恢复", () => {
+    let state = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.opened", { status: "open" }),
+    );
+    for (let seq = 3; seq < 303; seq += 1) {
+      state = applyMessageStreamEvent(state, event(seq, "block.delta", {
+        block_id: "b1",
+        operation: "append",
+        text: "x",
+      }));
+    }
+
+    expect(state.pendingEvents).toHaveLength(256);
+    expect(state.pendingEvents[0]?.event_seq).toBe(3);
+    expect(state.pendingEvents[255]?.event_seq).toBe(258);
+    expect(state.protocolError).toContain("必须通过 snapshot 恢复");
+  });
+
+  test("全局流缓存仅保留最近八个终态 Turn，并保留活动流", () => {
+    let streams = new Map<string, ReturnType<typeof createMessageStreamState>>();
+    for (let index = 0; index < 12; index += 1) {
+      const state = {
+        ...createMessageStreamState("ses_1", `turn_${index}`, `strm_${index}`),
+        streamStatus: "completed" as const,
+        connectionStatus: "terminal" as const,
+      };
+      streams = writeMessageStreamCache(streams, state.turnStreamId, state);
+    }
+    const active = createMessageStreamState("ses_1", "turn_live", "strm_live");
+    streams = writeMessageStreamCache(streams, active.turnStreamId, active);
+
+    expect([...streams.keys()]).toEqual([
+      "strm_4",
+      "strm_5",
+      "strm_6",
+      "strm_7",
+      "strm_8",
+      "strm_9",
+      "strm_10",
+      "strm_11",
+      "strm_live",
+    ]);
+  });
+
+  test("超大 live 文本和工具结果保持有界并显示明确截断标记", () => {
+    let state = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.opened", { status: "open" }),
+    );
+    state = applyMessageStreamEvent(state, event(2, "block.started", {
+      block_id: "block_large",
+      block_index: 0,
+      carrier_type: "text",
+    }));
+    state = applyMessageStreamEvent(state, event(3, "block.delta", {
+      block_id: "block_large",
+      operation: "append",
+      text: "a".repeat(200_000),
+    }));
+    state = applyMessageStreamEvent(state, event(4, "block.delta", {
+      block_id: "block_large",
+      operation: "append",
+      text: "b".repeat(200_000),
+    }));
+    state = applyMessageStreamEvent(state, event(5, "tool.started", {
+      tool_execution_id: "tool_large",
+      tool_call_id: "call_large",
+      tool_name: "large_tool",
+    }));
+    state = applyMessageStreamEvent(state, event(6, "tool.completed", {
+      tool_execution_id: "tool_large",
+      tool_call_id: "call_large",
+      tool_name: "large_tool",
+      status: "completed",
+      result: "r".repeat(100_000),
+    }));
+
+    expect(state.blocks[0]?.text).toHaveLength(256 * 1024);
+    expect(state.blocks[0]?.text.startsWith("a")).toBe(true);
+    expect(state.blocks[0]?.text.endsWith("b")).toBe(true);
+    expect(state.blocks[0]?.text).toContain("消息流展示已截断");
+    expect(state.toolExecutions[0]?.result).toHaveLength(64 * 1024);
+    expect(state.toolExecutions[0]?.result).toContain("消息流展示已截断");
+  });
+
   test("按 event_seq 聚合 reasoning/text，并对重复事件幂等", () => {
     let state = createMessageStreamState("ses_1", "turn_1");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));

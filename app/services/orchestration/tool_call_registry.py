@@ -54,8 +54,7 @@ class StreamToolRegistryMixin:
     ) -> str | None:
         """将 AgentLoop 的工具执行关联到最近尚未消费的模型工具调用。"""
         candidates: list[str] = []
-        for tool_index in reversed(tuple(self._tool_call_ids_by_index)):
-            tool_call_id = self._tool_call_ids_by_index[tool_index]
+        for tool_call_id in reversed(self._tool_call_order):
             if tool_call_id in self._claimed_tool_call_ids:
                 continue
             if self._tool_call_names_by_id.get(tool_call_id) != tool_name:
@@ -89,7 +88,7 @@ class StreamToolRegistryMixin:
     def pending_tool_calls(self) -> tuple[tuple[str, str, bool], ...]:
         """返回已经收到但尚未进入 Agent 工具执行器的调用。"""
         pending: list[tuple[str, str, bool]] = []
-        for tool_call_id in self._tool_call_ids_by_index.values():
+        for tool_call_id in self._tool_call_order:
             if (
                 tool_call_id in self._claimed_tool_call_ids
                 or tool_call_id in self._completed_tool_call_ids

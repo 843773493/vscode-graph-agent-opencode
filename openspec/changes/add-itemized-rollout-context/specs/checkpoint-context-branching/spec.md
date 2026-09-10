@@ -175,6 +175,15 @@
 
 ## ADDED Requirements
 
+### Requirement: rewind、compaction、fork 与 delegated thread 的边界不可混同
+
+rewind、compaction、history replay 与 checkpoint branch MUST 只重建其 selected `SessionThread` 的 active view、source state、ToolSet applied binding 和 graph checkpoint；不得影响同一 Session 的 sibling thread。`context_fork`、`history_prefix_fork` 和 `full_rollout_copy` 仍然创建新的 target Session 与其新的 main thread，并以 thread-qualified `GlobalEntityRef` 保存 source/target mapping。新 delegated execution 则在 parent Session 创建 child SessionThread，不得用 context fork 或新的 product Session 伪装。
+
+#### Scenario: child thread rewind 不影响 main thread
+
+- **WHEN** delegated child thread 从某个 item anchor rewind
+- **THEN** 只有该 child thread 新建或切换 active view；main thread 的 canonical prefix、assembly、ToolSet binding、checkpoint 和 Turn ordinal 保持不变
+
 ### Requirement: Checkpoint 区分 canonical view 与 request-only assembly
 
 checkpoint SHALL 将可恢复的 canonical context view、LangChain message projection 和某次请求的 `ContextAssemblySnapshot` 分开引用。checkpoint 可以记录当次请求应用过的 request-only prompt contribution 或独立 `ToolSetRef` 的 assembly reference、版本和 hash，但不得把合并后的 system/developer wire message、ToolSetSnapshot 或 tool definition 当作 canonical history 写回 view，也不得用当前 middleware 配置伪造旧 assembly。

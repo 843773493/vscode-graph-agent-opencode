@@ -352,6 +352,7 @@ class TurnHistoryLoadRequest(BaseModel):
 
 class TurnHistoryPageDTO(BaseModel):
     items: list[TurnDetailDTO] = Field(max_length=256)
+    summaries: list[TurnSummaryDTO] = Field(default_factory=list, max_length=256)
     next_cursor: str | None = None
     has_more: bool = False
     before_cursor: str | None = None

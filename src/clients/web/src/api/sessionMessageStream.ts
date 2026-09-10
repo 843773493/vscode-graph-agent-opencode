@@ -56,31 +56,6 @@ export interface MessageStreamSnapshotResponse {
   resumable: boolean;
 }
 
-export async function getSessionMessageStreamAvailability(
-  port: number,
-  sessionId: string,
-  turnIds: string[],
-  options: {
-    workspaceId?: string | null;
-    signal?: AbortSignal;
-  } = {},
-): Promise<Record<string, string>> {
-  if (turnIds.length === 0) return {};
-  const params = new URLSearchParams();
-  for (const turnId of [...new Set(turnIds)]) {
-    params.append("turn_ids", turnId);
-  }
-  const response = await requestJson<APIResponse<Record<string, string>>>(
-    port,
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/message-streams/availability?${params.toString()}`,
-    {
-      headers: workspaceHeader(options.workspaceId),
-      signal: options.signal,
-    },
-  );
-  return unwrapApiData(response);
-}
-
 export async function getSessionMessageStreamSnapshot(
   port: number,
   sessionId: string,

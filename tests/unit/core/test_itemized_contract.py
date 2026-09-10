@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from app.domain.itemized.assembly_snapshot import (
     context_request_hash,
@@ -35,7 +35,130 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     default_idempotency_key,
 )
 from app.services.mapping.itemized.history import project_history_plan
-from app.services.mapping.itemized.langchain import project_context_plan
+from app.services.mapping.itemized.langchain import (
+    project_canonical_items,
+    project_context_plan,
+)
+
+
+def _assistant_tool_item(
+    *,
+    item_sequence: int,
+    item_id: str,
+    group_id: str,
+    tool_call_id: str,
+    checkpoint: bool,
+    reasoning: str,
+) -> tuple[CanonicalItemRecord, CanonicalItemRecord]:
+    metadata: dict[str, object] = {}
+    if checkpoint:
+        metadata = {
+            "execution_confirmed": True,
+            "projection_message_id": group_id,
+            "projection_group": {"ordinal": 0, "size": 2, "content_form": "list"},
+        }
+    reasoning_item = CanonicalItemRecord.create(
+        item_sequence=item_sequence,
+        item_id=f"{item_id}-reasoning",
+        semantic_kind=SemanticKind.REASONING,
+        payload_kind=PayloadKind.TEXT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": item_id,
+            "invocation_id": "turn-tool",
+        },
+        payload=reasoning,
+        metadata=metadata,
+        turn_id="turn-tool",
+        turn_scope="turn_member",
+        message_group_id=group_id,
+        wire_role="assistant",
+    )
+    tool_metadata = dict(metadata)
+    if checkpoint:
+        tool_metadata["projection_group"] = {
+            "ordinal": 1,
+            "size": 2,
+            "content_form": "list",
+        }
+    else:
+        tool_metadata.update(block_id=tool_call_id, block_index=1)
+    tool_item = CanonicalItemRecord.create(
+        item_sequence=item_sequence + 1,
+        item_id=f"{item_id}-tool",
+        semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref=reasoning_item.producer_ref,
+        payload={"tool_call_id": tool_call_id, "name": "ls", "args": {}},
+        metadata=tool_metadata,
+        turn_id="turn-tool",
+        turn_scope="turn_member",
+        message_group_id=group_id,
+        wire_role="assistant",
+    )
+    return reasoning_item, tool_item
+
+
+def test_provider_projection_prefers_complete_checkpoint_tool_carrier() -> None:
+    live = _assistant_tool_item(
+        item_sequence=1,
+        item_id="live",
+        group_id="message-live",
+        tool_call_id="call-shared",
+        checkpoint=False,
+        reasoning="最后一个增量片段",
+    )
+    checkpoint = _assistant_tool_item(
+        item_sequence=3,
+        item_id="checkpoint",
+        group_id="message-checkpoint",
+        tool_call_id="call-shared",
+        checkpoint=True,
+        reasoning="checkpoint 中完整的思考正文",
+    )
+
+    messages = project_canonical_items((*live, *checkpoint))
+
+    assert len(messages) == 1
+    assert isinstance(messages[0], AIMessage)
+    assert messages[0].content == [
+        {
+            "type": "reasoning",
+            "text": "checkpoint 中完整的思考正文",
+            "item_id": "checkpoint-reasoning",
+        }
+    ]
+    assert [call["id"] for call in messages[0].tool_calls] == ["call-shared"]
+
+
+def test_provider_projection_does_not_deduplicate_same_text_without_tool_identity() -> None:
+    live = _assistant_tool_item(
+        item_sequence=1,
+        item_id="live-distinct",
+        group_id="message-live-distinct",
+        tool_call_id="call-live",
+        checkpoint=False,
+        reasoning="正文相同也不能作为身份",
+    )
+    checkpoint = _assistant_tool_item(
+        item_sequence=3,
+        item_id="checkpoint-distinct",
+        group_id="message-checkpoint-distinct",
+        tool_call_id="call-checkpoint",
+        checkpoint=True,
+        reasoning="正文相同也不能作为身份",
+    )
+
+    messages = project_canonical_items((*live, *checkpoint))
+
+    assert len(messages) == 2
+    assert all(isinstance(message, AIMessage) for message in messages)
+    assert [call["id"] for message in messages for call in message.tool_calls] == [
+        "call-live",
+        "call-checkpoint",
+    ]
 
 
 @pytest.fixture
@@ -194,6 +317,65 @@ def test_tool_result_codec_preserves_tool_outcome_status(
     assert item.payload["tool_outcome"] == tool_outcome
     projected = codec.project_message((item,))
     assert projected["data"]["status"] == tool_status
+
+
+def test_message_codec_restores_internal_visibility_from_acceptance_metadata() -> None:
+    codec = LangChainMessageCodec()
+    item = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="item-internal-goal",
+        semantic_kind=SemanticKind.USER_INPUT,
+        payload_kind=PayloadKind.TEXT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "user",
+            "producer_id": "msg-internal-goal",
+            "invocation_id": "execution-internal-goal",
+        },
+        payload="<system_reminder>继续 Goal</system_reminder>",
+        created_at="2026-09-09T00:00:00+00:00",
+        metadata={
+            "projection_message_id": "msg-internal-goal",
+            "message_metadata": {"internal": True},
+        },
+        turn_id="job-internal-goal",
+        turn_scope="turn_root",
+        wire_role="user",
+    )
+
+    projected = codec.project_message((item,))
+    restored = codec.from_dict(projected)
+
+    assert isinstance(restored, HumanMessage)
+    assert restored.response_metadata["internal"] is True
+
+
+def test_internal_execution_input_remains_turn_root_during_checkpoint_roundtrip() -> None:
+    codec = LangChainMessageCodec()
+    message = HumanMessage(
+        content="<system_reminder>继续 Goal</system_reminder>",
+        id="msg-internal-goal",
+        response_metadata={
+            "message_metadata": {
+                "internal": True,
+                "turn_id": "job-internal-goal",
+                "job_id": "job-internal-goal",
+            }
+        },
+    )
+
+    (item,) = codec.items_for_message(
+        message,
+        item_sequence=1,
+        message_id=str(message.id),
+        turn_id="job-internal-goal",
+        timestamp="2026-09-09T00:00:00+00:00",
+    )
+
+    assert item.semantic_kind == SemanticKind.USER_INPUT
+    assert item.turn_id == "job-internal-goal"
+    assert item.turn_scope == "turn_root"
+    assert item.metadata["internal"] is True
 
 
 def test_history_and_provider_consume_the_same_sealed_selection_order(

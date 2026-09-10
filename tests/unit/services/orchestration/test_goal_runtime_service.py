@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -118,6 +119,38 @@ async def test_idle_goal_dispatch_is_idempotent_and_pause_stops_it():
     await goals.set("sess_1", status=GoalStatus.active)
     await runtime.ensure_active_goal_running("sess_1")
     assert len(orchestrator.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_job_started_listener_does_not_reenter_goal_lock():
+    goals = SessionGoalService(
+        store=_Store(), session_service=_Sessions(), job_event_bus=_Bus()
+    )
+    jobs = _Jobs()
+    jobs.job = SimpleNamespace(job_id="job_1", session_id="sess_1")
+    runtime = GoalRuntimeService(
+        goal_service=goals,
+        job_service=jobs,
+        session_orchestrator=_Orchestrator(),
+    )
+    goal = await goals.set("sess_1", objective="完成目标")
+
+    goal_lock = goals.lock_for("sess_1")
+    await goal_lock.acquire()
+    try:
+        await asyncio.wait_for(
+            runtime.on_event(
+                SimpleNamespace(type="job_started", job_id="job_1")
+            ),
+            timeout=0.1,
+        )
+        capture_task = runtime._job_goal_capture_tasks["job_1"]
+        assert not capture_task.done()
+    finally:
+        goal_lock.release()
+
+    await capture_task
+    assert runtime._job_goal_ids["job_1"] == goal.goal_id
 
 
 @pytest.mark.asyncio

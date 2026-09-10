@@ -145,6 +145,51 @@ export interface MessageStreamState {
   protocolError: string | null;
 }
 
+const MESSAGE_STREAM_PENDING_EVENT_LIMIT = 256;
+const TERMINAL_MESSAGE_STREAM_CACHE_LIMIT = 8;
+const MESSAGE_STREAM_BLOCK_TEXT_MAX_CHARS = 256 * 1024;
+const MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS = 64 * 1024;
+const MESSAGE_STREAM_TEXT_TRUNCATION_MARKER =
+  "\n\n…消息流展示已截断；Turn 完成后可从权威历史详情读取持久化内容…\n\n";
+
+function boundedMessageStreamText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const retainedChars = maxChars - MESSAGE_STREAM_TEXT_TRUNCATION_MARKER.length;
+  const headChars = Math.floor(retainedChars / 2);
+  const tailChars = retainedChars - headChars;
+  return `${value.slice(0, headChars)}${MESSAGE_STREAM_TEXT_TRUNCATION_MARKER}${value.slice(-tailChars)}`;
+}
+
+export function writeMessageStreamCache(
+  streams: Map<string, MessageStreamState>,
+  key: string,
+  state: MessageStreamState,
+): Map<string, MessageStreamState> {
+  const next = new Map(streams);
+  for (const [existingKey, existing] of next.entries()) {
+    if (
+      existingKey !== key
+      && existing.sessionId === state.sessionId
+      && existing.turnId === state.turnId
+    ) {
+      next.delete(existingKey);
+    }
+  }
+  next.delete(key);
+  next.set(key, state);
+
+  const terminalKeys = [...next.entries()]
+    .filter(([, value]) => isTerminalStatus(value.streamStatus))
+    .map(([streamKey]) => streamKey);
+  while (terminalKeys.length > TERMINAL_MESSAGE_STREAM_CACHE_LIMIT) {
+    const oldestKey = terminalKeys.shift();
+    if (oldestKey !== undefined && oldestKey !== key) {
+      next.delete(oldestKey);
+    }
+  }
+  return next;
+}
+
 export function createMessageStreamState(
   sessionId: string,
   turnId: string,
@@ -212,11 +257,17 @@ export function applyMessageStreamEvent(
     );
     pendingEvents.push(event);
     pendingEvents.sort((left, right) => left.event_seq - right.event_seq);
+    const overflowed = pendingEvents.length > MESSAGE_STREAM_PENDING_EVENT_LIMIT;
+    if (overflowed) {
+      pendingEvents.length = MESSAGE_STREAM_PENDING_EVENT_LIMIT;
+    }
     return {
       ...state,
       connectionStatus: "gap",
       pendingEvents,
-      protocolError: `消息流 event_seq 不连续: expected=${state.lastEventSeq + 1} actual=${event.event_seq}`,
+      protocolError: overflowed
+        ? `消息流乱序事件超过 ${MESSAGE_STREAM_PENDING_EVENT_LIMIT} 条，必须通过 snapshot 恢复`
+        : `消息流 event_seq 不连续: expected=${state.lastEventSeq + 1} actual=${event.event_seq}`,
     };
   }
 
@@ -828,7 +879,10 @@ function applyBlockDelta(
   };
   const operation = stringValue(payload.operation) ?? "append";
   if (operation === "append" && typeof payload.text === "string") {
-    block.text += payload.text;
+    block.text = boundedMessageStreamText(
+      block.text + payload.text,
+      MESSAGE_STREAM_BLOCK_TEXT_MAX_CHARS,
+    );
   }
   if (operation === "redacted" || payload.redacted === true) block.redacted = true;
   if (operation === "item_upsert" || operation === "item_patch") {
@@ -954,8 +1008,12 @@ function toolFromPayload(
     status,
     outcome: toolExecutionOutcome(payload.outcome),
     completion_reason: stringValue(payload.completion_reason) ?? undefined,
-    result: stringValue(payload.result) ?? undefined,
-    error: stringValue(payload.error) ?? undefined,
+    result: typeof payload.result === "string"
+      ? boundedMessageStreamText(payload.result, MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS)
+      : undefined,
+    error: typeof payload.error === "string"
+      ? boundedMessageStreamText(payload.error, MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS)
+      : undefined,
     ...lifecycleFromValue(payload),
   };
 }
@@ -968,7 +1026,9 @@ function blockFromSnapshot(value: unknown): MessageStreamBlock[] {
     block_index: numberValue(value.block_index) ?? 0,
     carrier_type: stringValue(value.carrier_type) ?? "text",
     status: blockStatusValue(value.status),
-    text: stringValue(value.text) ?? "",
+    text: typeof value.text === "string"
+      ? boundedMessageStreamText(value.text, MESSAGE_STREAM_BLOCK_TEXT_MAX_CHARS)
+      : "",
     items: arrayValue(value.items).filter(isRecord),
     redacted: booleanValue(value.redacted) ?? false,
     projection: stringValue(value.projection) ?? "streaming",

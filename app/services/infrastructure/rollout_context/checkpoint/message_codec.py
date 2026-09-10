@@ -198,7 +198,20 @@ class LangChainMessageCodec:
                 attachments.append(safe_attachment)
             if attachments:
                 item_metadata["attachments"] = attachments
-        if internal:
+        message_turn_ids = tuple(
+            value
+            for name in ("turn_id", "job_id")
+            if isinstance(
+                value := self._message_metadata(message).get(name), str
+            )
+            and value
+        )
+        has_execution_turn = any(
+            not value.startswith("internal-") for value in message_turn_ids
+        )
+        if internal and not (
+            isinstance(message, HumanMessage) and has_execution_turn
+        ):
             semantic_kind = SemanticKind.RUNTIME_NOTICE
             payload_kind = PayloadKind.TEXT
             payload = _stringify_content(data_mapping.get("content"))
@@ -269,7 +282,11 @@ class LangChainMessageCodec:
             item_turn_id = turn_id
             turn_scope = TurnScope.TURN_MEMBER
         producer_kind = (
-            "runtime" if internal else "user" if role == "user" else "provider"
+            "user"
+            if semantic_kind == SemanticKind.USER_INPUT
+            else "runtime"
+            if internal
+            else "provider"
         )
         primary = CanonicalItemRecord.create(
             item_sequence=item_sequence,

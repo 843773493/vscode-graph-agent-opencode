@@ -4,6 +4,42 @@
 
 ## ADDED Requirements
 
+### Requirement: 产品 Session、durable Thread 与 LangGraph namespace 必须严格分层
+
+系统 SHALL 以 `workspace_id → session_id → SessionThread` 表达产品运行层级。每个 Session MUST 持久化且只持有一个 `main_thread_id`，并可持有 zero-or-more `delegated`、`specialist` 或 `service` child thread。每个 canonical item、Turn、execution、model call、context view、assembly、source registration 和 ToolSet applied binding MUST 以 `(session_id, thread_id)` 为 owner；同一 local identity 只能在该 owner pair 内解释。Session 仅拥有导航、共享资源、thread catalog 和 main-thread 默认路由，不得作为跨 thread 的 canonical context 或 ContextStore owner。
+
+LangGraph 的 `configurable.thread_id` MUST 等于 product `thread_id`。`checkpoint_ns` 仅用于该 product thread 内的 root graph/subgraph checkpoint namespace，MUST NOT 被当作、编码为或反向推断为 product thread identity。跨 owner 引用 MUST 使用 `(session_id, thread_id, entity_type, local_id)`，不得以裸 `session_id` 或 `checkpoint_ns` 访问其它 thread 的 item、checkpoint、source 或 active view。
+
+#### Scenario: Session 默认入口只定位 main thread
+
+- **WHEN** 产品 API 或 Web 未指定 thread 而请求一个 Session 的普通聊天、历史或执行
+- **THEN** 服务从权威 Session catalog 解析 `main_thread_id` 并只访问该 thread；响应包含实际 `thread_id`，不得扫描或合并 child thread 的历史
+
+#### Scenario: main 与非 main thread 使用不同物理分桶
+
+- **WHEN** Session 创建唯一 main thread，或创建 delegated/specialist/service durable thread
+- **THEN** main thread 的 catalog locator 固定为 `threads/{main_thread_id}`，目录叶名等于真实 thread ID；其它 thread 的 locator 固定为 `threads/YYYY/MM/DD/{sha256(thread_id)[0:2]}/{thread_id}`，日期来自不可变 UTC `created_at`
+- **AND** 所有读取和写入均先通过 thread catalog/resolver 校验 locator；不得使用 `threads/main` 别名、显示名、目录扫描、当前日期或 `checkpoint_ns` 推断路径
+
+#### Scenario: canonical attachment 只保存 workspace blob 引用
+
+- **WHEN** user input 或其它 canonical item 使用上传附件
+- **THEN** item 只保存稳定 `attachment_id`/variant、digest、length、MIME/protection 和 availability，不保存 `.boxteam/attachments` 物理 locator；workspace attachment catalog 验证该 reference 属于当前 session/thread/view 后才允许读取正文
+
+#### Scenario: subgraph namespace 不能越过产品边界
+
+- **WHEN** 同一 product thread 运行 root graph 和多个 LangGraph subgraph checkpoint namespace
+- **THEN** 它们共享该 thread 的 owner node 但各自按 `checkpoint_ns` 保存 framework state；另一个 product thread 即使使用相同 namespace 字符串也不能读取前者状态
+
+### Requirement: durable GraphBinding 可验证重建，不持久化进程对象
+
+每个 `SessionThread` SHALL 持久化 `GraphBinding(graph_id, graph_revision, graph_schema_hash, capability_profile_hash)`。重启恢复 MUST 通过受注册的 graph factory 解析完全相同的 binding 并校验 revision/hash；系统不得序列化或恢复 Python `CompiledStateGraph`，也不得在 binding 缺失或不匹配时静默选用最新 graph。进程缓存若复用 graph topology，缓存对象不得捕获 Session、thread、工具实例、provider request 或可变 execution state；这些值 MUST 在每次 model invocation 通过显式 `ThreadRuntimeBinding` 注入。
+
+#### Scenario: 缺失精确 graph revision
+
+- **WHEN** checkpoint/SessionThread 引用的 `graph_id + graph_revision` 未注册或 schema hash 不匹配
+- **THEN** 恢复返回 `graph_binding_unavailable` 并保持已提交 rollout/context 不变，不创建替代 graph 或新的 checkpoint
+
 ### Requirement: Canonical item 具有稳定身份和语义顺序
 
 `CanonicalItemRecord.status` 完整枚举固定为 `completed | partial | incomplete | cancelled | failed | unknown`，六者在 JSONL 中都表示终态；`completed` 表示 semantic item 的声明 payload 已完整收敛并可按 schema 正常投影，`partial` 表示截至中断/停止边界已持久化的完整 payload 快照但尚未达到正常语义完成边界；二者都只能写成一个 immutable JSONL item，不能把已提交的 `partial` 原地改成 `completed`。`open`、`active`、`running`、`draft` 和 `completed_empty` 只允许出现在内存 draft 或 assembly/Turn/control state，不能写入 canonical item。ItemDraft 只能从内部 `draft` 转移到上述六个终态之一；item 写入后不得更新、删除、覆盖、插入重排或改变 status。retry、resume、纠错必须追加新的 item identity，并用 `retry_of`/`resumes`/`supersedes` 关系连接旧 item；没有稳定 payload 的崩溃 draft 只能通过 control outcome 记录 execution lost，不能补造 `status=unknown` item。非 `completed` item 不得作为正常 final response；tool result 的已提交 payload 如果外部执行结果未确认，必须在其 typed payload 内使用 `tool_outcome=unknown` marker，且不可作为成功 replay input。`tool_outcome` 不是 `CanonicalItemRecord.status`，执行/控制记录的 outcome 也不得引入带 outcome 前缀的 unknown 状态别名。
@@ -59,11 +95,11 @@ item `status` 只描述单个 canonical payload 的持久化/语义完成事实�
 
 `cancelled` 是吸收态。特别是 `full_rollout_copy` 为未复制 source runtime 产生的 `cancelled` historical 必须保持不可运行；`resume_turn` 不创建 execution/model-call、不改变该 Turn，并返回 `turn_not_resumable`。对该历史的 `history_replay` 只能生成 projection；若要重新执行，调用方必须明确选择独立的 `replay_as_new_turn`，而不是要求原 Turn 的 Provider dispatch。所有 status 转移、execution outcome 和 `final_item_id` 约束必须在同一 SQLite 收敛事务中可见。
 
-`accepted_ingress_id` 与 `acceptance_idempotency_key` 各自在 `(session_id, accepted_ingress_id)` 与 `(session_id, acceptance_idempotency_key)` 范围内唯一，并各自一对一指向一个 accepted Turn。相同 key、相同 ingress、相同 payload hash 和相同 source branch 的重试返回原 Turn/root/initial execution；相同 key 但 ingress、payload 或 branch 不同，或相同 ingress 但 key/payload 不同，必须返回明确 acceptance idempotency conflict，不创建第二个 Turn/root，也不修改原记录。检查与创建必须在同一 SQLite 事务内完成。
+`accepted_ingress_id` 与 `acceptance_idempotency_key` 各自在 `(session_id, thread_id, accepted_ingress_id)` 与 `(session_id, thread_id, acceptance_idempotency_key)` 范围内唯一，并各自一对一指向一个 accepted Turn。相同 key、相同 ingress、相同 payload hash 和相同 source branch 的重试返回原 Turn/root/initial execution；相同 key 但 ingress、payload 或 branch 不同，或相同 ingress 但 key/payload 不同，必须返回明确 acceptance idempotency conflict，不创建第二个 Turn/root，也不修改原记录。检查与创建必须在同一 SQLite 事务内完成。
 
-系统 SHALL 在接受真实用户输入时创建或恢复一个 `TurnRecord`，并为新 Turn 保存唯一的 `root_input_item_id` 和对应的物理 item sequence。权威 `TurnRecord` 至少包含 `turn_id`、session-global 且不可重排的 `turn_ordinal`、`accepted_ingress_id`、session 内唯一的 `acceptance_idempotency_key`、`root_input_item_id`、`root_input_item_sequence`、`initial_execution_id`、`last_execution_id?`、`final_item_id?`、`status` 和不可变的 origin `source_branch_id`。`root_input_item_id` MUST 指向 `semantic_kind=user_input` 且 `producer_ref.producer_kind=user` 的 canonical item；Turn 的 identity 和起点不得从 `wire_role`、LangChain message 类型、首个物理 item、`message_group_id` 或 Provider model call 推断。一个 Turn 可以包含多个 execution/model-call，并允许在没有新用户输入时 resume 原 Turn。
+系统 SHALL 在接受真实用户输入时创建或恢复一个 `TurnRecord`，并为新 Turn 保存唯一的 `root_input_item_id` 和对应的物理 item sequence。权威 `TurnRecord` 至少包含 `turn_id`、thread-global 且不可重排的 `turn_ordinal`、`accepted_ingress_id`、thread 内唯一的 `acceptance_idempotency_key`、`root_input_item_id`、`root_input_item_sequence`、`initial_execution_id`、`last_execution_id?`、`final_item_id?`、`status` 和不可变的 origin `source_branch_id`。`root_input_item_id` MUST 指向 `semantic_kind=user_input` 且 `producer_ref.producer_kind=user` 的 canonical item；Turn 的 identity 和起点不得从 `wire_role`、LangChain message 类型、首个物理 item、`message_group_id` 或 Provider model call 推断。一个 Turn 可以包含多个 execution/model-call，并允许在没有新用户输入时 resume 原 Turn。
 
-`acceptance_idempotency_key` 在 `(session_id, acceptance_idempotency_key)` 范围内唯一。同一 key 重复提交相同 ingress payload hash 时，系统 MUST 返回原 `turn_id`、root item 和 `initial_execution_id`；同一 key 对应不同 payload 时 MUST 返回幂等冲突，不得创建第二个 Turn/root。acceptance-time 的 Turn、root item 和首次 execution 必须作为同一可重试提交边界可见。
+`acceptance_idempotency_key` 在 `(session_id, thread_id, acceptance_idempotency_key)` 范围内唯一。同一 key 重复提交相同 ingress payload hash 时，系统 MUST 返回原 `turn_id`、root item 和 `initial_execution_id`；同一 key 对应不同 payload 时 MUST 返回幂等冲突，不得创建第二个 Turn/root。acceptance-time 的 Turn、root item 和首次 execution 必须作为同一可重试提交边界可见。
 
 #### Scenario: 普通用户消息开启新 Turn
 
@@ -414,7 +450,7 @@ ContextAssemblySnapshot
 
 系统 SHALL 为每次 model call 形成在 dispatch 前 sealed 的 `ContextAssemblySnapshot`，记录 `plan_id`、`assembly_id`、`turn_id`、`execution_id`、`model_call_id`、active context view、按逻辑顺序排列的 canonical/request-only `ContextRef` 与 `ToolSetRef` references、应用的 contribution references/order、每个引用的 included/omission reason、tool set manifest、目标 provider/model、编译器版本、`hash_algorithm`、plan/request hash、可见性策略和 loss/redaction 结果。若使用缓存保持型 source overlay，还 MUST 记录 `history_view_revision`、`source_overlay_epoch`、base source revision/reference、按序 delta references、target/materialized revision、materialization reason 和 overlay hash。sealed snapshot 的 plan 内容不可变；其 lifecycle outcome 可以单独记录为 completed、completed_empty、failed、interrupted 或 unknown。实时请求失败、中断、空输出或执行丢失时也 MUST 能区分“canonical item 未提交”和“request-only overlay 已应用”；snapshot 不得反向成为 canonical history。
 
-本合同中的 detail store 物理路径冻结为 resolved session node 下的 `rollout/context-plan-details/<assembly_id>/<detail_id>`。`detail_id` 是 assembly 内 target-local 的不可变物理叶名；`detail_ref` 是规范化为 `{session_id, assembly_id, detail_id}` 的逻辑 typed reference，由 session catalog/path resolver 唯一解析，不是物理路径别名。所有 fork 都必须生成 target-local detail_id/detail_ref 并保留 source ref 到 target ref 的 lineage；source path 不得被 target reader 直接使用。任何父级 symlink、realpath containment 越界、敏感 detail 普通 plaintext、required detail 缺失或 source/content hash 不匹配都必须在 seal/dispatch 前显式失败。
+本合同中的 detail store 物理路径冻结为 resolved thread node 下的 `rollout/context-plan-details/<assembly_id>/<detail_id>`。`detail_id` 是 assembly 内 target-local 的不可变物理叶名；`detail_ref` 是规范化为 `{session_id, thread_id, assembly_id, detail_id}` 的逻辑 typed reference，由 session与thread catalog/path resolver唯一解析，不是物理路径别名。所有跨 session fork或跨thread materialization都必须生成 target-local detail_id/detail_ref并保留source ref到target ref的lineage；source path不得被target reader直接使用。任何父级symlink、realpath containment越界、敏感detail普通plaintext、required detail缺失或source/content hash不匹配都必须在seal/dispatch前显式失败。
 
 assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpointSaver` 持久化；业务层和 projector 只能消费 Saver 提供的已提交 plan/snapshot，不得直接扫描 `RolloutStorage`、`AppendWriter` 或内部 context reader。若 snapshot 或 required detail reference 无法持久化，系统不得发起 provider 请求。provider 结果、canonical item、Turn finalization 和 assembly outcome 的提交 MUST 遵守 sealed-before-dispatch 与 terminal convergence 两阶段 JSONL/SQLite 收敛边界；没有 item 时使用 `commit_kind=terminal_convergence`、`commit_mode=metadata_only`，不能另造 `metadata_only` commit kind。`plan_hash` 必须是 provider-neutral canonical plan 的 hash，同一 plan 在不同 provider projector 中可比较；`request_hash` 必须覆盖具体 projector 的规范化 request，但排除 provider request ID、时间戳、认证和 retry identity，仅在相同 projector/provider profile 内用于 exact replay。request-only prompt、middleware 输入和完整渲染 prompt 只有在需要精确重放时才进入工作区会话节点内有界、受保护的 detail store；SQLite 只保存 detail reference、长度、hash、retention 和 availability，detail store 不得成为 canonical item 正文的第二事实源。
 
@@ -450,7 +486,7 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 #### Scenario: detail store 拒绝敏感原文和父级 symlink
 
-- **WHEN** `sensitive=true` 的 detail 试图写入普通文件，或从 resolved session node 到 assembly/detail target 的任一父组件是 symlink、realpath 不在该 session/workspace containment 内
+- **WHEN** `sensitive=true` 的 detail 试图写入普通文件，或从 resolved SessionThread node 到 assembly/detail target 的任一父组件是 symlink、realpath 不在该 workspace/session/thread containment 内
 - **THEN** write/read/root 统一返回 detail security/path error；系统只能保存 redacted marker 或通过显式 protected/encrypted storage 保存受控正文，不得落盘或读取普通 plaintext，也不得跟随父级 symlink
 
 #### Scenario: contribution source hash 校验

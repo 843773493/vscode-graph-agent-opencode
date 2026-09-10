@@ -635,7 +635,6 @@ function TurnActivitySummary({
 }): React.ReactNode {
   const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
-  const [loaded, setLoaded] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const turnId = conversation.turnId;
   const boundaryStatus = historicalBoundaryStatus(conversation);
@@ -652,7 +651,7 @@ function TurnActivitySummary({
       return;
     }
     setError(null);
-    if (!loaded && turnId && onLoadTurnDetails) {
+    if (conversation.turnItemsView !== "full" && turnId && onLoadTurnDetails) {
       setLoading(true);
       try {
         await onLoadTurnDetails(
@@ -668,7 +667,6 @@ function TurnActivitySummary({
             "final_response",
           ],
         );
-        setLoaded(true);
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : String(loadError));
       } finally {

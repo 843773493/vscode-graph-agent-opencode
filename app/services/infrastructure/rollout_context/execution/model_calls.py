@@ -169,6 +169,46 @@ class RolloutModelCallsMixin:
                         "turn_not_resumable: model call 不能绑定 terminal Turn: "
                         f"status={execution[1]}"
                     )
+                retry_assembly_id: str | None = None
+                retry_outcome: str | None = None
+                retry_dispatch_state: str | None = None
+                if retry_of_model_call_id is not None:
+                    retry = connection.execute(
+                        "SELECT execution_id, attempt, assembly_id, outcome, dispatch_state "
+                        "FROM model_calls WHERE model_call_id = ?",
+                        (retry_of_model_call_id,),
+                    ).fetchone()
+                    if retry is None:
+                        raise ValueError(
+                            "retry_of_model_call_id 不是同一 execution 的旧 attempt"
+                        )
+                    retry_execution_id = strict_text(
+                        retry[0],
+                        field=f"model_calls.execution_id: {retry_of_model_call_id}",
+                    )
+                    retry_attempt = strict_non_negative_int(
+                        retry[1],
+                        field=f"model_calls.attempt: {retry_of_model_call_id}",
+                    )
+                    retry_assembly_id = strict_text(
+                        retry[2],
+                        field=f"model_calls.assembly_id: {retry_of_model_call_id}",
+                    )
+                    retry_outcome = strict_text(
+                        retry[3],
+                        field=f"model_calls.outcome: {retry_of_model_call_id}",
+                    )
+                    retry_dispatch_state = strict_text(
+                        retry[4],
+                        field=(
+                            "model_calls.dispatch_state: "
+                            f"{retry_of_model_call_id}"
+                        ),
+                    )
+                    if retry_execution_id != execution_id or retry_attempt >= attempt:
+                        raise ValueError(
+                            "retry_of_model_call_id 不是同一 execution 的旧 attempt"
+                        )
                 assembly = connection.execute(
                     "SELECT session_id, turn_id, execution_id, status, model_call_id FROM context_assemblies WHERE assembly_id = ?",
                     (assembly_id,),
@@ -190,35 +230,24 @@ class RolloutModelCallsMixin:
                 assembly_model_call_id = strict_optional_text(
                     assembly[4], field=f"context_assemblies.model_call_id: {assembly_id}"
                 )
+                reuses_failed_retry_assembly = (
+                    retry_of_model_call_id is not None
+                    and assembly_model_call_id == retry_of_model_call_id
+                    and retry_assembly_id == assembly_id
+                    and retry_outcome == "failed"
+                    and retry_dispatch_state == "failed"
+                )
                 if (
                     assembly_session_id != thread_id
                     or assembly_turn_id != execution_turn_id
                     or assembly_execution_id != execution_id
                     or assembly_status != "sealed"
-                    or assembly_model_call_id not in {None, model_call_id}
+                    or (
+                        assembly_model_call_id not in {None, model_call_id}
+                        and not reuses_failed_retry_assembly
+                    )
                 ):
                     raise ValueError("model_call 与 sealed assembly 关联冲突")
-                if retry_of_model_call_id is not None:
-                    retry = connection.execute(
-                        "SELECT execution_id, attempt FROM model_calls WHERE model_call_id = ?",
-                        (retry_of_model_call_id,),
-                    ).fetchone()
-                    if retry is None:
-                        raise ValueError(
-                            "retry_of_model_call_id 不是同一 execution 的旧 attempt"
-                        )
-                    retry_execution_id = strict_text(
-                        retry[0],
-                        field=f"model_calls.execution_id: {retry_of_model_call_id}",
-                    )
-                    retry_attempt = strict_non_negative_int(
-                        retry[1],
-                        field=f"model_calls.attempt: {retry_of_model_call_id}",
-                    )
-                    if retry_execution_id != execution_id or retry_attempt >= attempt:
-                        raise ValueError(
-                            "retry_of_model_call_id 不是同一 execution 的旧 attempt"
-                        )
                 timestamp = _now()
                 try:
                     inserted = connection.execute(

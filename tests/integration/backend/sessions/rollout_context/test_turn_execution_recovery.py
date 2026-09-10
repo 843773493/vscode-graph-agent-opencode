@@ -264,14 +264,7 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(
         attempt=2,
         provider="test-provider",
         retry_of_model_call_id="model-call-attempt-1",
-        assembly_id=saver.seal_context_for_dispatch(
-            "session_1",
-            turn_id="turn-user-1",
-            execution_id=execution_id,
-            model_call_id="model-call-attempt-2",
-            provider_version="test-provider-v1",
-            target_format="chat_completions",
-        ),
+        assembly_id=assembly_1,
     )
     saver.update_model_call_outcome(
         "session_1",
@@ -297,6 +290,10 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(
             "SELECT model_call_id, attempt, retry_of_model_call_id, outcome "
             "FROM model_calls ORDER BY attempt"
         ).fetchall()
+        assembly_model_call_id = connection.execute(
+            "SELECT model_call_id FROM context_assemblies WHERE assembly_id = ?",
+            (assembly_1,),
+        ).fetchone()[0]
     assert (root_count, turn_status, execution_outcome) == (
         1,
         "completed_empty",
@@ -306,6 +303,100 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(
         ("model-call-attempt-1", 1, None, "failed"),
         ("model-call-attempt-2", 2, "model-call-attempt-1", "completed_empty"),
     ]
+    assert assembly_model_call_id == "model-call-attempt-2"
+
+
+def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    saver = RolloutCheckpointSaver(sessions_dir)
+    _accept(saver, "session_1")
+    common = {
+        "turn_id": "turn-user-1",
+        "turn_scope": TurnScope.TURN_MEMBER,
+        "wire_role": "assistant",
+        "status": CanonicalItemStatus.COMPLETED,
+    }
+    live_call = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="item-model-call-1-block-call-1",
+        semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "model-call-1",
+            "invocation_id": "model-call-1",
+        },
+        payload={"tool_call_id": "call-1", "name": "get_goal", "args": {}},
+        metadata={"block_id": "call-1", "block_index": 0},
+        message_group_id="message-model-call-1",
+        **common,
+    )
+    checkpoint_shadow = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="item-lc_run--model-call-1",
+        semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "lc_run--model-call-1",
+            "invocation_id": "turn-user-1",
+        },
+        payload={
+            "tool_calls": [
+                {"id": "call-1", "name": "get_goal", "args": {}}
+            ]
+        },
+        metadata={
+            "projection_message_id": "lc_run--model-call-1",
+            "projection_group": {"content_form": "str", "ordinal": 0, "size": 1},
+        },
+        message_group_id="message-lc_run--model-call-1",
+        **common,
+    )
+    result = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="item-result-1",
+        semantic_kind=SemanticKind.TOOL_RESULT,
+        payload_kind=PayloadKind.TOOL_RESULT,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "result-1",
+            "invocation_id": "turn-user-1",
+        },
+        payload={
+            "tool_call_id": "call-1",
+            "result_id": "result-1",
+            "name": "get_goal",
+            "content": "{}",
+            "tool_outcome": "success",
+        },
+        metadata={"tool_call_id": "call-1", "execution_confirmed": True},
+        message_group_id="message-result-1",
+        wire_role="tool",
+        turn_id="turn-user-1",
+        turn_scope=TurnScope.TURN_MEMBER,
+        status=CanonicalItemStatus.COMPLETED,
+    )
+    saver.append_items("session_1", (live_call,))
+    saver.append_items("session_1", (checkpoint_shadow, result))
+
+    with saver._storage.open_read_snapshot("session_1") as snapshot:
+        projection = saver._storage.read_turn_projections(
+            snapshot, ("turn-user-1",)
+        )["turn-user-1"]
+
+    assert projection["activity_stats"]["item_count"] == 2
+    assert [item["kind"] for item in projection["activity_items"]] == [
+        "tool_call",
+        "tool_result",
+    ]
+    assert {
+        item["tool_call_id"] for item in projection["activity_items"]
+    } == {"call-1"}
 
 
 def test_item_catalog_reads_fail_closed_on_missing_item_and_view_reference(
@@ -1004,7 +1095,9 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
         output.item_id,
         2,
     )
-    assert commit == (commit_id, "item_bearing", 1, 1, 2, "committed")
+    # acceptance 已在独立 commit 中投影 sequence 1 的用户 root；终态 commit
+    # 只拥有本事务新增的 assistant sequence 2，不能把旧消息计入自身边界。
+    assert commit == (commit_id, "item_bearing", 1, 2, 2, "committed")
     assert messages == [
         (1, "user-1", "turn-user-1", "user"),
         (2, "output-without-projection", "turn-user-1", "assistant"),
@@ -1107,9 +1200,11 @@ def test_item_bearing_terminal_projection_failure_rolls_back_jsonl_and_sqlite(
             "(SELECT status FROM turn_records WHERE turn_id = 'turn-user-1'), "
             "(SELECT COUNT(*) FROM storage_commits WHERE commit_kind = 'terminal_convergence')"
         ).fetchone()
+    # 失败只回滚终态事务；acceptance 的 canonical root 与 message projection
+    # 已经提交，必须继续保留，不能把跨事务清空误当作回滚成功。
     assert (item_count, message_count, turn_status, terminal_commits) == (
         1,
-        0,
+        1,
         "active",
         0,
     )

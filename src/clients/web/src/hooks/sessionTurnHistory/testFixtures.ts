@@ -1,5 +1,9 @@
 import type { Session, SessionTurnBootstrap, TurnDetail } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
+import {
+  invalidateGatewayUserSession,
+  registerGatewayUserSessionInitializer,
+} from "../../api/http";
 
 export const SESSION_ID = "ses_partial_projection";
 export const WORKSPACE_ID = "workspace_partial_projection";
@@ -10,6 +14,8 @@ const originalWindowDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
   "window",
 );
+let restoreGatewayUserSessionInitializer: (() => void) | null = null;
+let installedApiPort: number | null = null;
 
 export function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
@@ -123,6 +129,12 @@ export function appState(): AppState {
 }
 
 export function installWindow(apiPort: number): void {
+  restoreGatewayUserSessionInitializer?.();
+  invalidateGatewayUserSession(apiPort);
+  installedApiPort = apiPort;
+  restoreGatewayUserSessionInitializer = registerGatewayUserSessionInitializer(
+    async () => undefined,
+  );
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
@@ -134,6 +146,12 @@ export function installWindow(apiPort: number): void {
 }
 
 export function restoreTurnHistoryTestGlobals(): void {
+  restoreGatewayUserSessionInitializer?.();
+  restoreGatewayUserSessionInitializer = null;
+  if (installedApiPort !== null) {
+    invalidateGatewayUserSession(installedApiPort);
+    installedApiPort = null;
+  }
   globalThis.fetch = originalFetch;
   if (originalWindowDescriptor) {
     Object.defineProperty(globalThis, "window", originalWindowDescriptor);

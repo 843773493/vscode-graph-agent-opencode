@@ -12,6 +12,21 @@ from app.services.orchestration.trace_observer import MessageStreamTraceObserver
 
 
 @pytest.mark.asyncio
+async def test_model_registration_failure_does_not_publish_unregistered_lifecycle() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    registrar = AsyncMock(side_effect=RuntimeError("登记失败"))
+    runtime = MessageStreamRuntime(writer, model_call_registrar=registrar)
+
+    with pytest.raises(RuntimeError, match="登记失败"):
+        await runtime.start_model("model_unregistered", "primary")
+
+    assert runtime.current_model_call_id is None
+    assert runtime.current_attempt == 0
+    writer.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_next_model_attempt_does_not_duplicate_completed_model_call() -> None:
     writer = MagicMock()
     writer.commit = AsyncMock()
@@ -126,6 +141,41 @@ async def test_same_name_tool_calls_are_claimed_by_arguments_first() -> None:
 
     assert runtime.claim_tool_call_id("read_file", {"path": "b.txt"}) == "call_1"
     assert runtime.claim_tool_call_id("read_file", {"path": "a.txt"}) == "call_0"
+
+
+@pytest.mark.asyncio
+async def test_next_model_start_preserves_late_tool_start_correlation() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    runtime = MessageStreamRuntime(writer)
+
+    await runtime.start_model("model_1", "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[{
+                "index": 0,
+                "id": "call_from_model_1",
+                "name": "read_file",
+                "args": '{"path":"README.md"}',
+            }],
+        )
+    )
+
+    # LangGraph 可以在父 astream_events 消费 on_tool_start 前就开始下一次模型调用。
+    await runtime.finish_model()
+    await runtime.start_model("model_2", "primary")
+
+    assert runtime.claim_tool_call_id(
+        "read_file",
+        {"path": "README.md"},
+    ) == "call_from_model_1"
+    await runtime.start_tool(
+        tool_execution_id="tool_execution_1",
+        tool_call_id="call_from_model_1",
+        tool_name="read_file",
+    )
+    assert runtime.pending_tool_calls() == ()
 
 
 @pytest.mark.asyncio

@@ -8,11 +8,13 @@ from copy import deepcopy
 from app.domain.itemized.hashing import canonical_json_bytes
 
 SEMANTIC_FIELDS = (
+    "internal",
     "phase",
     "source",
     "parent_session_id",
     "token_usage",
     "content_part_refs",
+    "supersedes_message_id",
 )
 
 
@@ -24,7 +26,15 @@ def semantic_metadata(response: Mapping[str, object]) -> dict[str, object]:
         value = response.get(name, nested.get(name))
         if value is None:
             continue
-        if name in {"phase", "source", "parent_session_id"}:
+        if name == "internal":
+            if not isinstance(value, bool):
+                raise ValueError("canonical metadata.internal 必须是布尔值")
+        elif name in {
+            "phase",
+            "source",
+            "parent_session_id",
+            "supersedes_message_id",
+        }:
             if not isinstance(value, str) or not value:
                 raise ValueError(f"canonical metadata.{name} 必须是非空字符串")
         elif name == "token_usage" and not isinstance(value, Mapping):

@@ -64,6 +64,7 @@ class MessageStreamRuntime(
         self._normalized_text_by_block: dict[str, str] = {}
         self._normalized_carrier_by_block: dict[str, str] = {}
         self._tool_call_ids_by_index: dict[int, str] = {}
+        self._tool_call_order: list[str] = []
         self._tool_call_names_by_id: dict[str, str] = {}
         self._tool_call_arguments: dict[str, str] = {}
         self._tool_call_arguments_by_id: dict[str, dict[str, object]] = {}

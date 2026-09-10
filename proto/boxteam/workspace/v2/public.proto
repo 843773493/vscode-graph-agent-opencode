@@ -1504,6 +1504,7 @@ message TurnHistoryPageDTO {
   optional bool has_before = 6;
   optional bool has_after = 7;
   int64 projection_epoch = 8;
+  repeated TurnSummaryDTO summaries = 9;
 }
 
 message TurnJobSummaryDTO {

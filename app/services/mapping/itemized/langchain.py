@@ -63,31 +63,68 @@ def _tool_call_ids(item: CanonicalItemRecord) -> set[str]:
     }
 
 
-def _checkpoint_projection_duplicate_item_ids(
+def _superseded_stream_tool_group_item_ids(
     items: Sequence[CanonicalItemRecord],
 ) -> set[str]:
-    """找出由 checkpoint 投影重复写入的 reasoning item。
+    """用持久工具身份找出已被完整 checkpoint carrier 替代的 live 组。
 
-    流式记录和 checkpoint 投影记录都是事实来源，但同一轮的 checkpoint
-    投影不能在下一次 provider 请求中再次追加一份相同 reasoning。保留先写入
-    的流式 message group，后写入且带执行确认的投影 item 只作为存储证据保留。
+    stream sink 与 checkpoint sink 都必须保存自己的 canonical 事实，但 provider
+    projection 对同一次模型工具调用只能选择一个 carrier。checkpoint group 是
+    LangChain 实际执行输入的完整镜像，live group 可能只有最后一个增量片段；
+    因此同一 Turn 内工具调用 ID 集合完全相等时保留 checkpoint group，并排除
+    live group。这里禁止按正文/hash 猜测，身份歧义必须直接失败。
     """
-    stream_reasoning_keys: set[tuple[str | None, str]] = set()
-    duplicate_ids: set[str] = set()
+    groups: dict[tuple[str | None, str], list[CanonicalItemRecord]] = {}
     for item in items:
-        is_checkpoint_projection = (
-            item.semantic_kind == SemanticKind.REASONING
-            and item.metadata.get("execution_confirmed") is True
-            and isinstance(item.metadata.get("projection_group"), Mapping)
-        )
-        key = (item.turn_id, item.content_hash)
-        if is_checkpoint_projection:
-            if key in stream_reasoning_keys:
-                duplicate_ids.add(item.item_id)
+        if item.semantic_kind not in {
+            SemanticKind.REASONING,
+            SemanticKind.TOOL_CALL,
+        }:
             continue
-        if item.semantic_kind == SemanticKind.REASONING:
-            stream_reasoning_keys.add(key)
-    return duplicate_ids
+        group_id = item.message_group_id or item.item_id
+        groups.setdefault((item.turn_id, group_id), []).append(item)
+
+    checkpoint_groups: dict[
+        tuple[str | None, frozenset[str]], list[CanonicalItemRecord]
+    ] = {}
+    stream_groups: dict[
+        tuple[str | None, frozenset[str]], list[CanonicalItemRecord]
+    ] = {}
+    for (turn_id, _group_id), group_items in groups.items():
+        tool_call_ids = frozenset(
+            call_id
+            for item in group_items
+            if item.semantic_kind == SemanticKind.TOOL_CALL
+            for call_id in _tool_call_ids(item)
+        )
+        if not tool_call_ids:
+            continue
+        is_checkpoint_group = any(
+            item.metadata.get("execution_confirmed") is True
+            and (
+                isinstance(item.metadata.get("projection_group"), Mapping)
+                or isinstance(item.metadata.get("projection_message_id"), str)
+            )
+            for item in group_items
+        )
+        registry = checkpoint_groups if is_checkpoint_group else stream_groups
+        key = (turn_id, tool_call_ids)
+        if key in registry:
+            raise ValueError(
+                "provider projection 的工具 carrier 身份不唯一: "
+                f"turn_id={turn_id}, tool_call_ids={sorted(tool_call_ids)}"
+            )
+        registry[key] = group_items
+
+    superseded_ids: set[str] = set()
+    for key, checkpoint_items in checkpoint_groups.items():
+        stream_items = stream_groups.get(key)
+        if stream_items is None:
+            continue
+        if not checkpoint_items:
+            raise AssertionError("checkpoint tool group 不得为空")
+        superseded_ids.update(item.item_id for item in stream_items)
+    return superseded_ids
 
 
 def _item_content(item: CanonicalItemRecord) -> object:
@@ -133,9 +170,9 @@ def project_canonical_items(
     ordered = (
         items if preserve_order else sorted(items, key=lambda item: item.item_sequence)
     )
-    duplicate_projection_item_ids = _checkpoint_projection_duplicate_item_ids(ordered)
+    superseded_stream_item_ids = _superseded_stream_tool_group_item_ids(ordered)
     for item in ordered:
-        if item.item_id in duplicate_projection_item_ids:
+        if item.item_id in superseded_stream_item_ids:
             continue
         if item.semantic_kind == SemanticKind.REASONING and item.payload_kind in {
             "opaque",
@@ -325,13 +362,6 @@ def project_context_plan(
                 f"source-mismatch: context plan canonical ref 缺失: {entry.ref.ref_id}"
             )
         selected_items.append(item)
-    stream_tool_call_ids = {
-        call_id
-        for item in selected_items
-        if item.semantic_kind == SemanticKind.TOOL_CALL
-        and isinstance(item.metadata.get("block_id"), str)
-        for call_id in _tool_call_ids(item)
-    }
     seen: set[tuple[str, str]] = set()
     for entry in plan.selection:
         ref = entry.ref
@@ -368,12 +398,6 @@ def project_context_plan(
         if ref.ref_type == "canonical_item":
             flush_system()
             item = resolve_selected_item(entry, by_id)
-            if (
-                item.semantic_kind == SemanticKind.TOOL_CALL
-                and isinstance(item.metadata.get("projection_message_id"), str)
-                and _tool_call_ids(item) & stream_tool_call_ids
-            ):
-                continue
             canonical_run.append(item)
             continue
         if not include_request_only:

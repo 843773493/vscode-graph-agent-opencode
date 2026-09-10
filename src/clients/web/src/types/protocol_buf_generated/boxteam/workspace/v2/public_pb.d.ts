@@ -6839,6 +6839,11 @@ export declare type TurnHistoryPageDTO = Message<"boxteam.workspace.v2.TurnHisto
    * @generated from field: int64 projection_epoch = 8;
    */
   projectionEpoch: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TurnSummaryDTO summaries = 9;
+   */
+  summaries: TurnSummaryDTO[];
 };
 
 /**

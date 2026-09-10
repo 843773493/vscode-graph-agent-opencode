@@ -22,7 +22,16 @@ class StreamBlockAssemblyMixin:
                 outcome="accepted",
                 reason="模型完成工具循环并进入下一次调用",
             )
-        self.current_attempt += 1
+        next_attempt = self.current_attempt + 1
+        # model.started 必须以持久化登记成功为前提。否则失败收口会拿一个从未
+        # 登记的 model_call_id 更新 outcome，覆盖原始异常并把消息流留在 open。
+        if self._model_call_registrar is not None:
+            await self._model_call_registrar(
+                model_call_id,
+                next_attempt,
+                model,
+            )
+        self.current_attempt = next_attempt
         self.current_model_call_id = model_call_id
         self._model_completed = False
         self._interruption_facts_finalized = False
@@ -34,14 +43,9 @@ class StreamBlockAssemblyMixin:
         self._normalized_text_by_block.clear()
         self._normalized_carrier_by_block.clear()
         self._tool_call_ids_by_index.clear()
-        self._tool_call_names_by_id.clear()
-        self._tool_call_arguments.clear()
-        self._tool_call_arguments_by_id.clear()
-        self._tool_call_arguments_complete.clear()
-        self._claimed_tool_call_ids.clear()
-        self._completed_tool_call_ids.clear()
-        self._started_tool_execution_ids.clear()
-        self._active_tool_executions.clear()
+        # provider delta 会先于 astream_events 的 on_tool_start 到达；下一次
+        # ModelCall 可能已经开始，而上一调用的工具事件仍在队列中。工具 identity
+        # 因此属于整个 Turn，只有 index->id 是单次 ModelCall 的临时映射。
         if (
             self._canonical_item_sink is not None
             and self._canonical_turn_id is not None
@@ -53,12 +57,6 @@ class StreamBlockAssemblyMixin:
             )
         else:
             self._canonical_block_accumulator = None
-        if self._model_call_registrar is not None:
-            await self._model_call_registrar(
-                model_call_id,
-                self.current_attempt,
-                model,
-            )
         await self.writer.commit(
             "model.started",
             {
@@ -254,6 +252,8 @@ class StreamBlockAssemblyMixin:
             or self._fallback_block_id("tool_call", tool_index)
         )
         self._tool_call_ids_by_index[tool_index] = tool_call_id
+        if tool_call_id not in self._tool_call_order:
+            self._tool_call_order.append(tool_call_id)
         raw_tool_name = chunk.get("name")
         if isinstance(raw_tool_name, str) and raw_tool_name:
             self._tool_call_names_by_id[tool_call_id] = raw_tool_name

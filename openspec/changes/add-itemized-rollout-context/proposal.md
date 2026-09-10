@@ -28,6 +28,10 @@
 - 为旧版 message-line rollout 定义唯一的显式一次性 `legacy_import_v1_to_v2` 读取/导入边界；v1 原始 artifact 仅用于该命令的 migration、报告、quarantine 和回滚审计，正常 history/provider/checkpoint/runtime 不读取 v1。新 writer 永久只写 v2，不维护 dual writer、dual projector、双 schema 或双事实源，也不通过 fallback 掩盖格式不一致。
 - v1 root candidate 按 source sequence 中的 user-root window、既有 `turn_id` 和 user message 数量确定；sequence 只提供可审计的窗口边界，不能凭物理邻接猜测归属。无 ID 的单 root window 生成稳定的 `legacy-missing-turn:<legacy_message_hash>` candidate，已有单一 ID 使用 `legacy-turn:<turn_id>` candidate；assistant/tool/function 才能作为 Turn member，system/developer 作为保留的 `legacy_request_context`，有可信 internal/checkpoint metadata 的 `system_reminder` 映射为 Turn 外 runtime_notice，未知或其它 role 标记 `legacy_unsupported_role` 并保留原行后拒绝；缺失/重复/冲突 ID、多 user message、无法确定边界的组明确拒绝或标记为 `legacy_orphan`，不创建伪造 Turn。
 - **BREAKING** 调整 checkpoint、历史 reader、compaction、rewind/replay 和 fork 的边界，使它们以 v2 item/view 引用工作，同时继续允许 compaction 在一个 Turn 中间使用精确 item anchor；v1 只由一次性 migration/import 命令读取。
+- **BREAKING** 将产品资源层的 `workspace_id → session_id → thread_id` 与 LangGraph 的运行时标识分离：一个 Session 持久化且只指定一个主 `SessionThread`，并可拥有 delegated/specialist/service 子 thread；CanonicalItem、Turn、checkpoint、ContextStore、CSM、active view、ToolSet applied binding 和执行均以 `(session_id, thread_id)` 为 owner。`checkpoint_ns` 仅表示某个 product thread 内的 LangGraph graph/subgraph namespace，绝不承载产品 thread 身份。
+- 每条 `SessionThread` 持久化 `GraphBinding(graph_id, graph_revision, graph_schema_hash, capability_profile_hash)`；重启后由受注册的 graph factory 重建，而非序列化 Python `CompiledStateGraph`。运行时可缓存不捕获 Session/Thread 的 graph blueprint/topology，但工具、中间件和 provider dispatch 必须在每次调用以显式 ThreadRuntimeBinding 绑定。无法解析精确 binding 必须失败，不得静默改用最新 graph。
+- 新 delegated subagent 默认创建同一 Session 下的 durable child thread，而非新的产品 Session；跨 session `context_fork` 仍创建新的 Session 及其新的 main thread。已有历史 delegated Session 的迁移不得静默并入父 Session，必须保留可审计映射并由显式迁移策略处理。
+- 冻结 SessionThread 与附件正文的物理布局：主 thread 固定为真实 session node 下的 `threads/{main_thread_id}/`；其它 durable thread 按创建日期与稳定 hash shard 存入 `threads/YYYY/MM/DD/{shard}/{thread_id}/`。附件正文提升为 workspace 级内容寻址 blob，存入 `.boxteam/attachments/YYYY/MM/DD/{digest-prefix}/{blob-id}`，由独立 catalog 维护逻辑 attachment、blob locator、owner reference 与 GC；Session/thread canonical history 只保存稳定 attachment reference，不保存或暴露物理路径。
 - 冻结跨 session `context_fork`、`history_prefix_fork` 和 `full_rollout_copy` 使用 `(session_id, entity_type, local_id)` 复合引用；target 一律为 v2，并为所有复制的 Turn/item/tool/execution/model-call/assembly/view/branch/anchor/overlay/detail 以及 `accepted_ingress_id`/`acceptance_idempotency_key` 分配新的 target-local identity，保留 source lineage、root/offset 审计坐标和 detached/pinned retention 语义。context/history-prefix fork 遇运行态 Turn 时目标不存在，full copy 则把该运行态作为不可运行的 cancelled historical state 保存；普通或 cancelled historical Turn 的 `resume_turn`/`dispatch_replay` 均拒绝，要求重跑必须明确调用独立的 `replay_as_new_turn` 创建新 target Turn/root/acceptance/initial execution，并在 target active view 登记新的 view-local `logical_turn_ordinal`；source history 可以复制或引用为上下文前缀，但 source Turn/root 只作为前缀或 lineage，不能成为新 Turn 的 root。该操作不是原 Turn 的 dispatch replay，target 的新输入与重放都不回到 source namespace。
 
 ## Capabilities
@@ -42,6 +46,7 @@
 - `checkpoint-context-branching`: checkpoint、context view、compaction、rewind/replay、fork 和 interrupt 的内部操作边界改用 item/content-part anchor，同时保留 Turn 入口和 branch/retention 语义。
 - `rollout-checkpoint-storage`: 将 v1 message-line 与 v2 item-line 的存储、dispatch、提交和 offset 定位合同分开，并将 final item identity 作为终态指针。
 - `checkpoint-history-loading`: 让正常历史加载从 v2 item 的统一 view/projection 入口读取，并明确 `assistant_text` 只是 projection；v1 message 仅由一次性 `legacy_import_v1_to_v2` migration/import 入口读取。
+- `session-turn-history`: Session 历史入口默认解析其 main thread；指定 thread 的历史、checkpoint、rewind、compaction 和执行严格只访问该 thread 的 owner namespace。
 - `litellm-aimessage-content-adapter`: 将 LiteLLM 的 `AIMessage` 作为兼容投影/执行载体，canonical v2 由 normalized item draft 和 `assistant_output` semantic item 表达。
 
 ## Impact
@@ -49,6 +54,7 @@
 - 主要影响历史聚合入口所覆盖的 rollout storage、checkpoint saver/runtime、历史 reader/projection、`app/agents/providers/` 内容归一化，以及 LangChain/provider request adapter；最终模块归属和删除门槛见 design 1.1。
 - 需要新增 JSONL item schema/version、SQLite 分层 item 索引、context compiler、provenance/assembly metadata 和 LangChain projector；实时 message stream 协议继续作为展示增量通道。
 - 影响旧 session 的读取、恢复、fork、compaction、历史 API 和测试 fixture；旧数据必须通过显式版本识别后交给一次性的 `legacy_import_v1_to_v2` migration/import 命令处理，正常 runtime 不提供 v1 只读 fallback。
+- 影响 Session catalog、路径解析、checkpoint config、subagent delegation、AgentFactory/graph cache、context/runtime storage、Gateway 路由和 Web history/trace。Session 继续是产品导航与共享资源容器；它不再是 canonical context 的隐式 owner。
 - 不改变 provider SDK 的事实来源，也不把 OpenAI `OutputItem` 直接作为全局领域模型；provider response item、canonical context item 和 LangChain message 是三个不同层次。
 
 ## Verification boundary

@@ -8,6 +8,7 @@ import {
 import {
   applyMessageStreamEvent,
   createMessageStreamState,
+  writeMessageStreamCache,
   type MessageStreamEvent,
   type MessageStreamState,
 } from "../state/messageStream";
@@ -70,16 +71,11 @@ export function useSessionMessageStream({
           : createMessageStreamState(targetSessionId, targetTurnId);
         const updated = update(current);
         const resolvedKey = updated.turnStreamId || currentKey;
-        for (const [key, value] of messageStreams.entries()) {
-          if (
-            key !== resolvedKey
-            && value.sessionId === targetSessionId
-            && value.turnId === targetTurnId
-          ) {
-            messageStreams.delete(key);
-          }
-        }
-        messageStreams.set(resolvedKey, updated);
+        next.messageStreamsByTurnStream = writeMessageStreamCache(
+          messageStreams,
+          resolvedKey,
+          updated,
+        );
         return next;
       });
     };

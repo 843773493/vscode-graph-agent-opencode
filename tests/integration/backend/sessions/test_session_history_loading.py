@@ -235,6 +235,15 @@ async def test_history_loads_rollout_summary_and_tool_details(
         {"direction": "tail", "turns": 1},
     )
     assert [item["ordinal"] for item in summary["items"]] == [24]
+    assert [item["ordinal"] for item in summary["summaries"]] == [24]
+    authoritative_summary = summary["summaries"][0]
+    assert authoritative_summary["items_view"] == "summary"
+    assert authoritative_summary["item_count"] == 3
+    assert all(
+        part.get("arguments") is None and part.get("result") is None
+        for part in authoritative_summary["response_parts"]
+        if part["kind"] in {"tool_call", "tool_result"}
+    )
     latest = summary["items"][0]
     assert latest["user_messages"][0]["content"] == "用户问题 24"
     assert latest["user_messages"][0]["metadata"] == {}
@@ -289,6 +298,7 @@ async def test_history_loads_rollout_summary_and_tool_details(
         },
     )
     detailed = details["items"][0]
+    assert details["summaries"] == [authoritative_summary]
     assert detailed["items"][0]["raw"]["payload"]["args"]["path"] == "fixture/0024.json"
     assert detailed["items"][1]["raw"]["payload"]["result"]
     assert detailed["final_response"] == "模型最终响应 24"
@@ -527,6 +537,142 @@ async def test_history_tool_selector_only_materializes_requested_tool(
     )
     assert "fixture result" in detail["items"][1]["raw"]["payload"]["result"]
     assert "call-0001-0" not in json.dumps(detail, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+    history_catalog_copy: sqlite3.Connection,
+) -> None:
+    session_id = await _create_session(
+        integration_client,
+        "最终 checkpoint reasoning part 引用去重",
+    )
+    turn_id = "job-shared-reasoning-part"
+    stamp = datetime(2026, 1, 1, tzinfo=UTC).isoformat()
+    reasoning_block = {
+        "type": "reasoning",
+        "id": "part-shared-reasoning",
+        "index": 0,
+        "content": [
+            {
+                "type": "reasoning_text",
+                "text": "同一条持久 reasoning",
+            }
+        ],
+    }
+    messages: list[object] = [
+        HumanMessage(
+            id="user-shared-reasoning",
+            content="测试 reasoning part identity",
+            response_metadata={
+                "message_id": "user-shared-reasoning",
+                "created_at": stamp,
+                "updated_at": stamp,
+                "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
+            },
+        ),
+        AIMessage(
+            id="assistant-tool-shared-reasoning",
+            content=[reasoning_block],
+            tool_calls=[
+                {
+                    "name": "read_fixture",
+                    "args": {"path": "fixture/shared.json"},
+                    "id": "call-shared-reasoning",
+                }
+            ],
+        ),
+        ToolMessage(
+            id="tool-result-shared-reasoning",
+            content="fixture result",
+            name="read_fixture",
+            tool_call_id="call-shared-reasoning",
+        ),
+        AIMessage(
+            id="assistant-final-shared-reasoning",
+            content=[
+                reasoning_block,
+                {
+                    "type": "text",
+                    "id": "part-final-text",
+                    "index": 1,
+                    "text": "最终响应",
+                },
+            ],
+            response_metadata={
+                "created_at": stamp,
+                "updated_at": stamp,
+                "phase": "final_answer",
+                "content_part_refs": [
+                    {
+                        "id": "part-shared-reasoning",
+                        "index": 0,
+                        "type": "reasoning",
+                    },
+                    {"id": "part-final-text", "index": 1, "type": "text"},
+                ],
+            },
+        ),
+    ]
+    sessions_dir = (
+        Path(integration_workspace_root_path) / ".boxteam" / "sessions"
+    )
+    saver = RolloutCheckpointSaver(sessions_dir)
+    config = saver.put(
+        build_checkpoint_config(session_id),
+        _checkpoint("checkpoint-shared-reasoning", messages, channel_version=1),
+        {"source": "deterministic-rollout-stub"},
+        {"messages": "1"},
+    )
+    assert config["configurable"]["checkpoint_id"] == "checkpoint-shared-reasoning"
+    saver.finalize_turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        final_message_id="assistant-final-shared-reasoning",
+    )
+
+    storage = RolloutStorage(sessions_dir, message_codec=LangChainMessageCodec())
+    with storage.open_read_snapshot(session_id) as snapshot:
+        snapshot.connection.backup(history_catalog_copy)
+        canonical_reasoning = history_catalog_copy.execute(
+            "SELECT item_sequence, metadata_json FROM item_catalog "
+            "WHERE turn_id = ? AND semantic_kind = 'reasoning' "
+            "ORDER BY item_sequence LIMIT 1",
+            (turn_id,),
+        ).fetchone()
+        assert canonical_reasoning is not None
+        reasoning_sequence = int(canonical_reasoning[0])
+        reasoning_metadata = json.loads(str(canonical_reasoning[1]))
+        reasoning_metadata["block_id"] = "part-shared-reasoning"
+        history_catalog_copy.execute(
+            "UPDATE item_catalog SET payload_kind = 'text', metadata_json = ? "
+            "WHERE item_sequence = ?",
+            (
+                json.dumps(reasoning_metadata, ensure_ascii=False),
+                reasoning_sequence,
+            ),
+        )
+        history_catalog_copy.execute(
+            "UPDATE item_projections SET payload_kind = 'text', content = ? "
+            "WHERE item_sequence = ?",
+            ("同一条持久 reasoning", reasoning_sequence),
+        )
+        copied = replace(snapshot, connection=history_catalog_copy)
+        projection = storage.read_turn_projections(copied, [turn_id])[turn_id]
+
+    assert [item["kind"] for item in projection["activity_items"]] == [
+        "reasoning",
+        "tool_call",
+        "tool_result",
+    ]
+    assert [
+        item["text"]
+        for item in projection["activity_items"]
+        if item["kind"] == "reasoning"
+    ] == ["同一条持久 reasoning"]
+    assert projection["activity_stats"]["item_count"] == 3
 
 
 @pytest.mark.asyncio

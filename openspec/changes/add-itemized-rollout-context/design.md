@@ -275,7 +275,7 @@ TurnRecord
 `afork(source_session_id, target_session_id, mode)` 成功后，target session 必须完全自持其可运行数据：目标会话为每个复制的实体分配新的 target-local ID，并在 `fork_entity_mappings`/等价 provenance 中保存 source `GlobalEntityRef` 到 target `GlobalEntityRef` 的一对一不可变映射。source ID 可以作为 `legacy_source_ref`/lineage metadata 保留，但不得作为 target active view 的裸 canonical identity；source assembly、tool identity、execution/model-call identity 也不得直接复用。target 的 `root_input_item_id`、`item_sequence`、JSONL offset、Turn ordinal、tool relation 和 assembly refs 全部指向 target namespace；source sequence/offset 只能作为审计坐标，不能被 target reader 打开。
 Turn 的 `accepted_ingress_id` 与 `acceptance_idempotency_key` 也必须做同样的一对一 target-local mapping，分别满足 target session 内各自的唯一约束，并在 mapping 中标记 `identity_origin=fork_copied`；source acceptance identity 只保留为 source `GlobalEntityRef`/lineage。复制后的 target acceptance identity 不能被普通新输入重用，target 新输入必须产生新的真实 ingress/key；复制 Turn 的显式 `resume_turn` 只有在 Turn.status 转移表允许时才复用 target acceptance 并创建新的 target execution/model-call；`history_replay` 不创建 execution，`replay_as_new_turn` 才创建新的 target Turn/root/acceptance/initial execution 并以 `replay_of_turn_id` 关联，且不属于原 Turn 的 `dispatch_replay`；普通或 historical `cancelled` Turn 的 `resume_turn`/`dispatch_replay` 均返回 `turn_not_resumable`。重复同一 fork idempotency key 返回既有映射，mapping 或 target acceptance identity 不一致必须报冲突。
 
-source overlay 也必须 target-local：每个被复制的 `source_overlay_epoch` 在 target 重新编号为 target-local epoch，source epoch 只保留在 `fork_origins`/overlay lineage；base、delta、supersedes/materializes relation 和其 canonical ambient item 必须建立 target mapping。需要重放的 sealed assembly 所引用的 detail 必须复制到 target session 的 `rollout/context-plan-details/<target-assembly-id>/<target-detail-id>` 并换成 target-local `detail_id`/`detail_ref`；detail 不得通过 source path 共享。detached target 在 fork 提交后完全不依赖 source，source 删除不会影响 target；pinned 只为审计和保留 source lineage 在 source 建立 retention reference，target request 仍只读 target-local overlay/detail。可选 detail 若因权限或 retention 无法复制，target 记录 unavailable；required detail 无法复制则 fork 失败，不得留下半可运行 target。
+source overlay 也必须 target-local：每个被复制的 `source_overlay_epoch` 在 target 重新编号为 target-local epoch，source epoch 只保留在 `fork_origins`/overlay lineage；base、delta、supersedes/materializes relation 和其 canonical ambient item 必须建立 target mapping。需要重放的 sealed assembly 所引用的 detail 必须复制到 target Session 的目标 main thread node内 `rollout/context-plan-details/<target-assembly-id>/<target-detail-id>`，并换成 target-local `detail_id`/`detail_ref`；detail 不得通过 source path 共享。detached target 在 fork 提交后完全不依赖 source，source 删除不会影响 target；pinned 只为审计和保留 source lineage 在 source 建立 retention reference，target request 仍只读 target-local overlay/detail。可选 detail 若因权限或 retention 无法复制，target 记录 unavailable；required detail 无法复制则 fork 失败，不得留下半可运行 target。
 
 三种跨 session fork 的物化范围固定为：`context_fork` 复制 source active view 的有效 canonical item/Turn/checkpoint prefix；`history_prefix_fork` 复制从 source session 开始到指定 inclusive/before anchor 的有效 prefix；`full_rollout_copy` 复制 source rollout 的全部 canonical records、SQLite checkpoint/view/branch/control state、checkpoint channel state 和可复制的 overlay/detail lineage，并为全部实体建立 target 映射。source v1 的原始 message-line 若需保留，只能由一次性 `legacy_import_v1_to_v2` staging 作为 migration/rollback audit 输入保存；它不挂载到 target 正常 reader，也不构成 target 的 legacy runtime。三种模式都创建新的 target branch/view；`full_rollout_copy` 的“full”描述语义范围，不意味着 source 和 target 可以共享 SQLite、JSONL 或 namespace。target active view 使用 target-local logical ordinal，source view/branch/turn ordinal 仅保留在 fork lineage。无论 source 是 v1 还是 v2，跨 session fork 的 target 一律是 `rollout_format_version=2`；v1 只能通过上述一次性 migration staging 映射到 target-local v2 item/Turn/execution，源 `message_id`、`message_sequence`、offset 只写入 `legacy_source_ref`，不能成为 target identity 或 offset。
 
@@ -336,9 +336,9 @@ storage_commits.commit_mode
 
 在 provider dispatch 前，composer 必须先把完整 plan、source/hash 和 tool-set snapshot 固化为 `sealed` assembly；assembly 持久化失败时不得发起 provider 请求。provider 返回后，canonical output item 的 JSONL fsync、SQLite item catalog/view 更新、Turn execution/model-call outcome、`final_item_id`/partial outcome 和 assembly terminal outcome 必须进入同一个 SQLite 收敛事务；JSONL 已写但事务未提交的 item 对 reader 不可见。provider 已调用但进程在 outcome 提交前退出时，恢复只能标记 `unknown/execution_lost`，不得假设成功或生成 final item。
 
-实时内存 ledger 可以先创建 assembly 并随 delta 更新，但它不是持久化事实。`ContextPlanDetailStore` 的物理归属固定且不再使用“类似”路径：通过 session catalog/path resolver 找到真实 session node 后，detail 的精确相对路径为 `rollout/context-plan-details/<assembly_id>/<detail_id>`，绝对形态为 `${workspace_abs_path}/.boxteam/sessions/<resolved-session-node>/rollout/context-plan-details/<assembly_id>/<detail_id>`；不得写入 `${BOXTEAM_HOME}`、工作区根目录、默认工作区或按显示名拼接路径。`detail_id` 是该 assembly 内 target-local 的不可变物理叶名；`detail_ref` 是不暴露物理路径的逻辑 typed reference，规范化为 `{session_id, assembly_id, detail_id}`，由 resolver 唯一映射到上述路径，调用方不得自行拼接路径。session 位于父会话 `children/` 时仍必须由稳定 `session_id` 和统一 resolver 定位，不能扫描磁盘吸收绕过索引的目录。
+实时内存 ledger 可以先创建 assembly 并随 delta 更新，但它不是持久化事实。`ContextPlanDetailStore` 的物理归属固定且不再使用“类似”路径：先由 session catalog/path resolver 找到真实 session node，再由 thread catalog/resolver 找到真实 thread node，detail 在 thread node 内的精确相对路径为 `rollout/context-plan-details/<assembly_id>/<detail_id>`；绝对形态为 `${workspace_abs_path}/.boxteam/sessions/<resolved-session-node>/<resolved-thread-locator>/rollout/context-plan-details/<assembly_id>/<detail_id>`。不得写入 `${BOXTEAM_HOME}`、workspace attachment blob store、工作区根目录、默认工作区或按显示名拼接路径。`detail_id` 是该 assembly 内 target-local 的不可变物理叶名；`detail_ref` 是不暴露物理路径的逻辑 typed reference，规范化为 `{session_id, thread_id, assembly_id, detail_id}`，由两级 resolver 唯一映射到上述路径，调用方不得自行拼接路径。session 位于父会话 `children/`、thread 位于日期/hash shard 时仍必须由稳定 ID 和权威 catalog 定位，不能扫描磁盘吸收绕过索引的目录。
 
-detail record 至少绑定 `session_id`、`assembly_id`、`detail_id`、`detail_kind`、`content_hash`、`length`、`retention_class`、`expires_at`、`visibility`、`protection` 和 `availability`。`detail_ref` 不是第二个物理 ID，而是对这三个 owner/identity 字段的逻辑引用；SQLite 可以保存该 typed ref 和由 resolver 产生的受校验相对 locator，但不得把显示名或任意调用方路径当作 ref。sealed assembly 只允许引用属于同一 session、assembly 且 hash/length 匹配的 detail；detail 在 seal 后不可变，替换内容必须创建新的 `detail_id`/assembly。跨 session fork 必须同时创建 target-local `detail_id` 和 target-local `detail_ref`，source ref 只进 lineage mapping。SQLite 只保存 `detail_ref`、相对定位、长度、hash、retention、visibility 和 availability，不保存可替代 canonical item 正文的第二副本。
+detail record 至少绑定 `session_id`、`thread_id`、`assembly_id`、`detail_id`、`detail_kind`、`content_hash`、`length`、`retention_class`、`expires_at`、`visibility`、`protection` 和 `availability`。`detail_ref` 不是第二个物理 ID，而是对这四个 owner/identity 字段的逻辑引用；SQLite 可以保存该 typed ref 和由 resolver 产生的受校验相对 locator，但不得把显示名或任意调用方路径当作 ref。sealed assembly 只允许引用属于同一 SessionThread、assembly 且 hash/length 匹配的 detail；detail 在 seal 后不可变，替换内容必须创建新的 `detail_id`/assembly。跨 session fork 或跨 thread materialization 必须创建 target-local `detail_id` 和 target-local `detail_ref`，source ref 只进 lineage mapping。SQLite 只保存 `detail_ref`、相对定位、长度、hash、retention、visibility 和 availability，不保存可替代 canonical item 正文的第二副本。
 
 detail store 只保存 request-only prompt、middleware 输入/诊断和必要的渲染重放材料。credential、API key、session token、attachment 原文、访问许可和其它 secret MUST 默认以受保护的 redaction marker、类型、长度和本地稳定 digest 表达，不得写入普通 detail；若未来有明确的加密 secret/attachment 子存储合同，也必须使用独立权限和引用，不能绕过本边界。普通 history、checkpoint restore 和默认扩展查询只能看到安全摘要、reference 和 availability；只有同一 workspace/session 权限下显式授权的 detail capability 才能读取 protected 内容，服务不得把物理路径直接暴露给调用方。
 
@@ -575,7 +575,7 @@ LangChain projector 的规则是：
 
 ### 5.4 Detail security、source integrity 与统一 selection/order gate
 
-`ContextPlanDetailStore` 的安全合同必须在实现边界强制执行，而不能只作为调用方约定。`sensitive=true` 的 detail 不得以普通可读文件写入；写入前必须完成按 detail policy 的 redaction，或交给独立的 protected/encrypted storage boundary，并在 detail metadata 中记录 protection、redaction class、availability 和 hash。受保护正文不可被 SQLite、普通 detail projection 或 hash preimage 反向复制。path resolver 从 session catalog 解析出的真实 session node 开始，必须对 session node 到精确路径 `rollout/context-plan-details/<assembly_id>/<detail_id>` 的每一级已有路径组件执行 `lstat`/等价的 no-follow 检查，拒绝任意父级或最终组件 symlink；同时用 realpath containment 拒绝 `..`、mount/symlink 解析后的 workspace/session 越界。`_root`、`write` 和 `read` 都必须执行同一检查，不能只检查最终文件。`detail_ref` 只能是 `{session_id, assembly_id, detail_id}` 的逻辑 typed reference，由 resolver 映射到该路径，不得成为第二种物理路径命名。
+`ContextPlanDetailStore` 的安全合同必须在实现边界强制执行，而不能只作为调用方约定。`sensitive=true` 的 detail 不得以普通可读文件写入；写入前必须完成按 detail policy 的 redaction，或交给独立的 protected/encrypted storage boundary，并在 detail metadata 中记录 protection、redaction class、availability 和 hash。受保护正文不可被 SQLite、普通 detail projection 或 hash preimage 反向复制。path resolver 从 session catalog 解析出的真实 session node 和 thread catalog 解析出的真实 thread node 开始，必须对 thread node 到精确路径 `rollout/context-plan-details/<assembly_id>/<detail_id>` 的每一级已有路径组件执行 `lstat`/等价的 no-follow 检查，拒绝任意父级或最终组件 symlink；同时用 realpath containment 拒绝 `..`、mount/symlink 解析后的 workspace/session/thread 越界。`_root`、`write` 和 `read` 都必须执行同一检查，不能只检查最终文件。`detail_ref` 只能是 `{session_id, thread_id, assembly_id, detail_id}` 的逻辑 typed reference，由 resolver 映射到该路径，不得成为第二种物理路径命名。
 
 `seal_context_assembly(required_detail=true)` 的 pre-dispatch gate 是硬拒绝：detail 参数缺失、detail ref 不存在、不可读、保护级别不满足、source revision 不匹配、`content_hash`/length 不匹配，或只有不可用于该请求的 redaction marker 时，assembly 不得进入 sealed/ready，Provider dispatch 必须返回 `detail-unavailable`、`source-mismatch` 或对应的 detail security error。只有 `required_detail=false` 才允许以显式 omission/loss marker seal；该 loss 必须进入 plan、assembly diagnostics 和 wire capability report，不能把缺失当作空字符串或成功。sealed assembly 绑定的 detail ref/hash 一旦改变必须创建新的 assembly。
 
@@ -587,9 +587,11 @@ Composer、LangChain projector 和 native Provider projector 在使用 `included
 
 历史 summary 只使用 SQLite 稀疏索引和目标 item offset；显式详情才读取对应 JSONL payload。默认历史不 materialize request-only prompt；未来来源详情也只通过 item/source/assembly reference 读取，不扫描整个 middleware runtime。
 
-Turn 历史中的可展开活动采用后端权威逻辑 Item 投影。SQLite projection 必须为每个逻辑 `reasoning|reasoning_summary|reasoning_encrypted|tool_call|tool_result|compaction_summary` 返回稳定 `item_id`、`item_sequence`、同一物理 item 内的 `part_ordinal`、`created_at` 和相对上一逻辑 Item 的 `elapsed_ms`，并在 Turn 统计中返回 `item_count`、`first_item_sequence`、`last_item_sequence` 与 Turn 总时长。一个 assistant carrier 内的多个 tool call 共享物理 item/offset，但按不同 `part_ordinal` 计为多个逻辑 Item；tool call 与 tool result 分别计数。checkpoint/provider 重影只能按持久 producer identity、tool relation 和 part ordinal 在后端解析，禁止比较文本正文去重。
+Turn 历史中的可展开活动采用后端权威逻辑 Item 投影。SQLite projection 必须为每个逻辑 `reasoning|reasoning_summary|reasoning_encrypted|tool_call|tool_result|compaction_summary` 返回稳定 `item_id`、`item_sequence`、同一物理 item 内的 `part_ordinal`、`created_at` 和相对上一逻辑 Item 的 `elapsed_ms`，并在 Turn 统计中返回 `item_count`、`first_item_sequence`、`last_item_sequence` 与 Turn 总时长。一个 assistant carrier 内的多个 tool call 共享物理 item/offset，但按不同 `part_ordinal` 计为多个逻辑 Item；tool call 与 tool result 分别计数。checkpoint/provider 重影只能按持久 producer identity、tool relation 和 part ordinal 在后端解析，禁止比较文本正文去重。最终 checkpoint assistant 的 `content_part_refs.id` 若指向已提交 reasoning Item 的 `metadata.block_id`（或同一 provider reasoning item identity），它只是既有逻辑 Item 的 carrier 引用，不能按最终 assistant 的 item identity 再追加一次；正文相同但上述持久引用不同的 reasoning 仍必须分别保留。
 
 history summary/detail 都直接消费上述后端顺序；detail 仅按已命中的 item/message offset 补齐参数或结果正文，不得重新决定 identity、数量和顺序。Web 收到历史 projection 后必须整体替换该 Turn 的旧 response parts，不得与旧 summary 拼接、按 message 坐标重排或按正文去重。live Turn 尚未提交时，Web 可以按流实体 identity 临时计算时长和逻辑 Item 数；终态 history 到达后以后端统计和顺序为准，替换 live 投影，并显式报告 live/history 计数不一致，不能静默保留前端结果。
+
+历史分页必须为每个 detail 同时返回同 revision 的后端权威 summary，且两组记录的 Turn identity、ordinal 和顺序一一对应。summary 必须强制使用 summary projection，并移除工具参数、工具结果等详情正文；Web 只能用这份后端摘要淘汰已展开详情，不能自行重新摘要。历史详情只走 canonical Turn history API，不得再为了展开历史 Turn 查询 `message.v1` availability/snapshot 或把旧实时流与 history 拼接。实时流只服务尚未终态化的当前 Turn：前后端都必须限制终态 stream cache、乱序事件、block 正文和工具正文的驻留规模，启动恢复只保留未终态 stream；越界时明确截断或要求 snapshot 恢复，不允许无界保留、静默丢失或卡死进程。Web 的跨会话 timeline 使用有界 LRU，非活动会话和详情预算超限时恢复为同 revision 的权威 summary；重新展开时再按 canonical history offset 定点加载详情。
 
 LangGraph checkpoint 的 `messages` channel 仍可以保存或恢复 LangChain message projection，但其来源必须记录 context view、assembly/plan identity 和 projection version，且不得成为 canonical item 的第二事实源。checkpoint 可以保存执行需要的私有 middleware state，但该 state 不等于 prompt/tool canonical history；可恢复的 provenance 以 compact assembly/item reference 为准。
 
@@ -629,6 +631,55 @@ v1 没有 acceptance-time ingress、execution 或可靠 final marker 时，迁�
 
 这份 change 是新架构演进，不修改已完成 change 的历史 artifact。实现完成前必须验证 v2-only item storage、projection、history、branch/recovery 和独立的一次性 legacy import；必须完成旧聚合职责与临时 import shim 的删除审计，再把 delta spec 同步到主 spec。保留 v1 原 artifact 只用于 migration/rollback audit，不等于保留旧运行代码；删除旧运行路径和 shim 是 7.5 与 change 完成的必要门槛，而不是后续可选讨论。
 
+### 9. SessionThread 是所有可执行上下文的 owner，GraphBinding 可重建但不可序列化
+
+产品层身份固定为：
+
+```text
+workspace_id
+└── session_id                         # 导航、共享资源、一个 main_thread_id
+    ├── thread_id (kind=main)
+    └── thread_id[] (delegated | specialist | service)
+```
+
+`SessionThread` 是 durable identity，不是 LangGraph 的 `checkpoint_ns`，也不是 Session 的显示别名。每个 Session 恰有一个不可变 `main_thread_id`；产品级“向 session 发送消息”是明确解析到 main thread 的便捷入口，内部 dispatch、history、checkpoint、rewind、compaction、ToolSet 与 subagent API 必须携带精确 `(session_id, thread_id)`。Turn、item、execution、model call、assembly、source registration、active view 和 fork anchor 都是 thread-local；其 local id 只在 owner thread 内唯一。`GlobalEntityRef` 相应升级为 `(session_id, thread_id, entity_type, local_id)`。
+
+每个 thread 有独立的 rollout/context node，但主 thread 与其它 durable thread 使用不同分桶策略：
+
+```text
+<resolved-session-node>/
+├── session.json
+├── thread-catalog.json
+├── threads/
+│   ├── <main_thread_id>/
+│   │   ├── rollout/
+│   │   └── runs/
+│   └── YYYY/MM/DD/<sha256(thread_id)[0:2]>/<thread_id>/
+│       ├── rollout/
+│       └── runs/
+└── children/                           # 只承载产品级子 Session，不承载 thread
+```
+
+主 thread 的目录叶名严格等于 `main_thread_id`，直接位于 `threads/` 下；不得使用 `threads/main/` 别名。delegated、specialist、service 等其它 durable thread 根据不可变 `created_at` 的 UTC 日期分桶，并使用 `sha256(thread_id)` 前两位小写 hex 作为 shard；移动或重命名 thread 不得改变已提交 locator。session 节点的权威 thread catalog 保存 main pointer、每个 thread 的受校验相对 locator、kind、created_at、parent thread/delegation lineage、状态和 `GraphBinding`。即使主 thread 路径可预测，调用方也必须通过 catalog/resolver 定位；不得扫描目录、按日期猜测、使用显示名，或把物理树提升为第二权威。catalog 是控制 metadata，不能成为第二个 canonical writer。
+
+附件正文不再放入 session/thread 节点。workspace 级内容寻址 store 固定为：
+
+```text
+<workspace>/.boxteam/attachments/
+├── catalog.sqlite
+└── YYYY/MM/DD/<digest[0:2]>/<blob-id>
+```
+
+日期是 blob 首次成功提交时的 UTC 日期，只用于物理分桶；`digest[0:2]` 是内容 SHA-256 的前两位小写 hex，`blob-id` 是不依赖原始文件名、扩展名或 MIME 的稳定内容身份。`catalog.sqlite` 是 `attachment_id/blob digest → relative blob locator`、长度/MIME/protection、session/thread/item reference、retention、tombstone 和 GC 的唯一权威；同一 digest 后续上传复用已有 blob 与首次 locator，不按新日期复制。删除 Session 或 thread 只释放其 reference，只有不存在任何 canonical/active execution/sealed assembly/operation pin 引用且满足 retention 后才能 tombstone 并回收 blob。模型、API、canonical item 和 Provider projector只能接收逻辑 `attachment_id`/variant reference及受控内容，不得接收物理路径。attachment catalog 不是 canonical message writer，thread rollout 中的 `attachment_ref` 仍是使用事实与 view membership 的权威。
+
+迁移必须保留既有 canonical JSONL payload 的原始 bytes、item/Turn identity 和审计坐标；`thread_id == session_id` 只能作为一次性迁移输入，不能成为正常 runtime alias。旧 session-local attachment 必须先登记 workspace attachment/blob catalog 和 owner refs、验证 digest/length，再迁移或复用正文；完成前不得删除旧文件，失败不得产生悬空 attachment ref。
+
+`GraphBinding` 至少保存 `graph_id`、`graph_revision`、`graph_schema_hash` 和 `capability_profile_hash`。持久化的是可验证的 factory selector，不是 Python `CompiledStateGraph`。重启时 runtime 以 binding 查找受注册的 factory 并校验 revision/hash；找不到或不匹配返回 `graph_binding_unavailable`，不能回退到当前最新图。进程内缓存最多复用不捕获 Session/Thread 的 graph blueprint/topology；需要 Session、thread、工具、provider 或执行信息的工具/middleware 通过每次 invocation 的 `ThreadRuntimeBinding` 取得，避免一个已编译图把其它 thread 的闭包带入请求。
+
+LangGraph `configurable.thread_id` 必须传 product `thread_id`；`checkpoint_ns` 仍只表示该 thread 内 graph/subgraph 的 checkpoint namespace。短生命周期、无用户可见历史的 independent subagent 可以继续作为 per-invocation subgraph，不创建 SessionThread；需要多轮、可恢复、可展示的 delegated agent 才创建 child thread，并对同一 persistent child thread 串行执行。跨 session context/history/full-copy fork 仍创建 target Session 及其 main thread，不把 fork 表示为 child thread。
+
+本决策是本 change 内所有旧 session-only 物理定位和逻辑引用的规范替代：此前出现的 session 根 `rollout/` 必须解释并迁移为 catalog 解析后的 thread node `rollout/`；此前 `{session_id, assembly_id, detail_id}` 等不含 thread 的 operational ref 必须升级为包含 `thread_id` 的 owner ref。历史任务台账中的旧路径仅描述当时已验证实现，不证明本节新增迁移已经完成。
+
 ## Risks / Trade-offs
 
 - [LangChain grouping 丢失 item 顺序或 source identity] → canonical `item_sequence` 永远是权威；projector 记录 `message_group_id` 和 loss report，并用混合 text/reasoning/tool fixture 验证恢复。
@@ -649,13 +700,17 @@ v1 没有 acceptance-time ingress、execution 或可靠 final marker 时，迁�
 ## Migration Plan
 
 1. 先冻结 `CanonicalItemRecord`、`TurnRecord`、`ExecutionRecord`、`ModelCallRecord`、`ContextRef`、`storage_commits`、`semantic_kind`、`payload_kind`、`producer_ref`、`turn_scope` 和 v1/v2 envelope dispatch/hash 合同，并声明 v2 domain/storage/runtime/projection 是唯一生产运行时事实源。
-2. 冻结 acceptance-time Turn root、ingress idempotency、global Turn/branch identity、execution/model-call/retry/resume identity、`final_item_id` 和 pending runtime notice 的 view/assembly 语义。
-3. 增加新格式的 reader/index/validator 与 deterministic fixture，先验证 user root、runtime notice、assistant output/content part、tool causality、reasoning protection、provenance、两阶段 commit、metadata-only outcome、assembly snapshot 和崩溃恢复。
-4. 将现有 LiteLLM normalized block/delta 接到 ItemDraft 和 canonical writer，同时保留现有实时 message stream；不要从最终 AIMessage 反向猜实时 item，也不要把 `assistant_text` 当 canonical kind。
-5. 让 `RolloutCheckpointSaver` 成为已提交 context view/plan/snapshot 的唯一 owner，再实现 ContextContribution composer、HistoryProjector、LangChainProjector 和 ProviderItemProjector；分别验证 prompt/tool provenance、system wire role 合并、hash mismatch、summary/detail、LangGraph restore、tool loop、native item request 与显式 loss。
-6. 接入 checkpoint、compaction、interrupt、rewind/replay、fork 的 item/content-part view/reference/anchor 语义；验证 pending notice 不创建 Turn、旧 branch 不污染新 active view、历史 Turn 不重复复制，且 Turn root 与细粒度 operation anchor 不冲突。
-7. 提供唯一的 `legacy_import_v1_to_v2` 一次性 message-line migration/import 命令和报告；正常 history/provider/checkpoint/runtime 不调用 v1 reader。迁移完成后原始 v1 artifact 只作为不可变 migration/rollback audit 保存，失败不得覆盖或删除它。
-8. 完成真实/确定性 mock/provider 分层验证、v2-only import/runtime 审计、旧聚合职责与临时 import shim 删除、主 spec 同步和 OpenSpec verify；删除旧运行代码、dual writer、dual projector、双 schema/双事实源是 change 完成和 7.5 的必要门槛，不得留到“再讨论”。
+2. 在所有 v2 Session 上原子建立 thread catalog 与一个 main `SessionThread`，把原 rollout/index/checkpoint 控制状态迁入该 main thread node；保持 canonical JSONL bytes、item/Turn id、offset 和 source lineage 不变，并将旧 session-as-thread 值仅记录为 migration lineage。
+3. 更新 checkpoint config、storage resolver、ContextStore/CSM/ToolSet owner、history/operation API 和 execution dispatch，使每一个操作要求 `(session_id, thread_id)`；禁止用 `checkpoint_ns` 或当前 process cache 推断 product thread。
+4. 将 graph factory 改为可由 `GraphBinding` 重建且以 invocation binding 注入 session/thread 依赖；在此之前不得跨 thread 复用捕获 session 的 compiled graph。
+5. 新 delegated agent 写入 parent Session 的 child thread；历史 delegated Session 保持独立且记录迁移候选，不能静默改写产品导航树。
+6. 冻结 acceptance-time Turn root、ingress idempotency、global Turn/branch identity、execution/model-call/retry/resume identity、`final_item_id` 和 pending runtime notice 的 view/assembly 语义。
+7. 增加新格式的 reader/index/validator 与 deterministic fixture，先验证 user root、runtime notice、assistant output/content part、tool causality、reasoning protection、provenance、两阶段 commit、metadata-only outcome、assembly snapshot 和崩溃恢复。
+8. 将现有 LiteLLM normalized block/delta 接到 ItemDraft 和 canonical writer，同时保留现有实时 message stream；不要从最终 AIMessage 反向猜实时 item，也不要把 `assistant_text` 当 canonical kind。
+9. 让 `RolloutCheckpointSaver` 成为已提交 context view/plan/snapshot 的唯一 owner，再实现 ContextContribution composer、HistoryProjector、LangChainProjector 和 ProviderItemProjector；分别验证 prompt/tool provenance、system wire role 合并、hash mismatch、summary/detail、LangGraph restore、tool loop、native item request 与显式 loss。
+10. 接入 checkpoint、compaction、interrupt、rewind/replay、fork 的 item/content-part view/reference/anchor 语义；验证 pending notice 不创建 Turn、旧 branch 不污染新 active view、历史 Turn 不重复复制，且 Turn root 与细粒度 operation anchor 不冲突。
+11. 提供唯一的 `legacy_import_v1_to_v2` 一次性 message-line migration/import 命令和报告；正常 history/provider/checkpoint/runtime 不调用 v1 reader。迁移完成后原始 v1 artifact 只作为不可变 migration/rollback audit 保存，失败不得覆盖或删除它。
+12. 完成真实/确定性 mock/provider 分层验证、v2-only import/runtime 审计、旧聚合职责与临时 import shim 删除、主 spec 同步和 OpenSpec verify；删除旧运行代码、dual writer、dual projector、双 schema/双事实源是 change 完成和 7.5 的必要门槛，不得留到“再讨论”。
 
 ## Open Questions
 

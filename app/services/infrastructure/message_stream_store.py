@@ -22,6 +22,13 @@ TERMINAL_STREAM_STATUSES = frozenset({"completed", "interrupted", "failed"})
 MESSAGE_STREAM_EVENT_MAX_PAYLOAD_BYTES = 256 * 1024
 MESSAGE_STREAM_MAX_BYTES = 64 * 1024 * 1024
 MESSAGE_STREAM_RETAINED_BYTES = 8 * 1024 * 1024
+MESSAGE_STREAM_TERMINAL_CACHE_MAX_ENTRIES = 16
+MESSAGE_STREAM_TERMINAL_CACHE_MAX_BYTES = 16 * 1024 * 1024
+MESSAGE_STREAM_BLOCK_TEXT_MAX_CHARS = 256 * 1024
+MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS = 64 * 1024
+MESSAGE_STREAM_TEXT_TRUNCATION_MARKER = (
+    "\n\n…消息流展示已截断；Turn 完成后可从权威历史详情读取持久化内容…\n\n"
+)
 # 消息事件日志逐事件持久化；状态快照只是恢复加速索引，不需要逐 token 写入。
 MESSAGE_STREAM_SNAPSHOT_INTERVAL_EVENTS = 32
 INTERRUPTING_ALLOWED_EVENT_TYPES = frozenset(
@@ -183,6 +190,69 @@ class MessageStreamStore:
         self._subscriptions: dict[str, set[MessageStreamSubscription]] = {}
         self._event_ids: dict[str, dict[str, dict[str, Any]]] = {}
         self._event_ids_loaded: set[str] = set()
+
+    @staticmethod
+    def _cached_state_size_bytes(state: Mapping[str, Any]) -> int:
+        return len(
+            json.dumps(
+                state,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+
+    def _evict_stream_cache(self, turn_stream_id: str) -> None:
+        self._states.pop(turn_stream_id, None)
+        self._event_ids.pop(turn_stream_id, None)
+        self._event_ids_loaded.discard(turn_stream_id)
+
+    def _touch_cached_state(
+        self,
+        turn_stream_id: str,
+        state: dict[str, Any],
+    ) -> None:
+        # dict 的插入顺序就是进程内 LRU。业务事实始终在 JSONL/state snapshot，
+        # 这里的终态状态只用于加速最近访问，不能随着历史会话无限增长。
+        self._states.pop(turn_stream_id, None)
+        self._states[turn_stream_id] = state
+        self._prune_terminal_cache(protected_stream_id=turn_stream_id)
+
+    def _prune_terminal_cache(self, *, protected_stream_id: str | None) -> None:
+        terminal_entries = [
+            (stream_id, state, self._cached_state_size_bytes(state))
+            for stream_id, state in self._states.items()
+            if str(state.get("stream_status")) in TERMINAL_STREAM_STATUSES
+        ]
+        total_bytes = sum(size for _, _, size in terminal_entries)
+        while (
+            len(terminal_entries) > MESSAGE_STREAM_TERMINAL_CACHE_MAX_ENTRIES
+            or total_bytes > MESSAGE_STREAM_TERMINAL_CACHE_MAX_BYTES
+        ):
+            candidate_index = next(
+                (
+                    index
+                    for index, (stream_id, _, _) in enumerate(terminal_entries)
+                    if stream_id != protected_stream_id
+                    and not self._subscriptions.get(stream_id)
+                ),
+                None,
+            )
+            if candidate_index is None:
+                # 当前请求使用中的单个超大终态允许暂留；下一条流进入时会把它淘汰。
+                break
+            stream_id, _, size = terminal_entries.pop(candidate_index)
+            total_bytes -= size
+            self._evict_stream_cache(stream_id)
+
+    @staticmethod
+    def _bounded_stream_text(value: str, max_chars: int) -> str:
+        if len(value) <= max_chars:
+            return value
+        marker = MESSAGE_STREAM_TEXT_TRUNCATION_MARKER
+        retained_chars = max_chars - len(marker)
+        head_chars = retained_chars // 2
+        tail_chars = retained_chars - head_chars
+        return f"{value[:head_chars]}{marker}{value[-tail_chars:]}"
 
     def _lock_for(self, turn_stream_id: str) -> asyncio.Lock:
         return self._locks.setdefault(turn_stream_id, asyncio.Lock())
@@ -597,6 +667,7 @@ class MessageStreamStore:
     def _load_state(self, session_id: str, turn_stream_id: str) -> dict[str, Any]:
         cached = self._states.get(turn_stream_id)
         if cached is not None:
+            self._touch_cached_state(turn_stream_id, cached)
             return copy.deepcopy(cached)
         return self._load_state_from_disk(session_id, turn_stream_id)
 
@@ -672,7 +743,7 @@ class MessageStreamStore:
                     state = self._apply_event(state, record.event)
                     state["snapshot_seq"] = event_seq
         self._backfill_lifecycle_metadata(state, records)
-        self._states[turn_stream_id] = state
+        self._touch_cached_state(turn_stream_id, state)
         self._event_ids[turn_stream_id] = {
             str(record.event["event_id"]): record.event for record in records
         }
@@ -775,16 +846,17 @@ class MessageStreamStore:
         turn_ids: list[str],
     ) -> dict[str, str]:
         """返回已持久化的 TurnStream，不为缺少 message.v1 的历史创建空流。"""
+        async with self._index_lock_for(session_id):
+            index = self._read_index(session_id)
         result: dict[str, str] = {}
         for turn_id in turn_ids:
-            try:
-                writer = await self.open_existing(
-                    session_id=session_id,
-                    turn_id=turn_id,
-                )
-            except MessageStreamNotFoundError:
+            turn_stream_id = index.get(turn_id)
+            if turn_stream_id is None:
                 continue
-            result[turn_id] = writer.turn_stream_id
+            # availability 只回答“索引指向的持久化流是否存在”，不能为了四个
+            # 布尔式结果把完整 snapshot、事件 ID 和正文加载进进程缓存。
+            if self._stream_path(session_id, turn_stream_id).is_file():
+                result[turn_id] = turn_stream_id
         return result
 
     async def commit(
@@ -935,7 +1007,7 @@ class MessageStreamStore:
                 self._event_ids_loaded.discard(turn_stream_id)
                 self._load_state_from_disk(session_id, turn_stream_id)
                 raise
-            self._states[turn_stream_id] = next_state
+            self._touch_cached_state(turn_stream_id, next_state)
             self._event_ids.setdefault(turn_stream_id, {})[event["event_id"]] = event
             self._event_ids_loaded.add(turn_stream_id)
             subscribers = self._subscriptions.get(turn_stream_id, set())
@@ -1683,7 +1755,10 @@ class MessageStreamStore:
         operation = str(payload.get("operation") or "append")
         text = payload.get("text")
         if operation == "append" and isinstance(text, str):
-            block["text"] = str(block.get("text") or "") + text
+            block["text"] = self._bounded_stream_text(
+                str(block.get("text") or "") + text,
+                MESSAGE_STREAM_BLOCK_TEXT_MAX_CHARS,
+            )
         if operation in {"item_upsert", "item_patch"}:
             item = payload.get("item")
             if not isinstance(item, Mapping):
@@ -1715,16 +1790,24 @@ class MessageStreamStore:
         execution_id = payload.get("tool_execution_id")
         if not isinstance(execution_id, str) or not execution_id:
             raise MessageStreamError("工具事件缺少 tool_execution_id")
+        bounded_payload = dict(payload)
+        for field_name in ("result", "error"):
+            field_value = bounded_payload.get(field_name)
+            if isinstance(field_value, str):
+                bounded_payload[field_name] = MessageStreamStore._bounded_stream_text(
+                    field_value,
+                    MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS,
+                )
         executions = state.setdefault("tool_executions", [])
         for execution in executions:
             if (
                 isinstance(execution, dict)
                 and execution.get("tool_execution_id") == execution_id
             ):
-                execution.update(dict(payload))
+                execution.update(bounded_payload)
                 execution["status"] = status
                 return execution
-        execution = {**dict(payload), "status": status}
+        execution = {**bounded_payload, "status": status}
         executions.append(execution)
         return execution
 
@@ -1734,6 +1817,7 @@ class MessageStreamStore:
             raise MessageStreamNotFoundError(
                 f"消息流不存在: turn_stream_id={turn_stream_id}"
             )
+        self._touch_cached_state(turn_stream_id, cached)
         return copy.deepcopy(cached)
 
     async def reconcile_unfinished_streams(self) -> int:
@@ -1775,13 +1859,16 @@ class MessageStreamStore:
                         turn_stream_id,
                     )
                 turn_stream_id = str(state["turn_stream_id"])
-                self._states[turn_stream_id] = state
+                if state["stream_status"] in TERMINAL_STREAM_STATUSES:
+                    # 启动扫描只需要识别未完成执行；终态历史已经在磁盘上，不能
+                    # 因一次全仓恢复扫描永久占用内存。
+                    self._evict_stream_cache(turn_stream_id)
+                    continue
+                self._touch_cached_state(turn_stream_id, state)
                 self._event_ids[turn_stream_id] = {
                     str(record.event["event_id"]): record.event
                 }
                 self._event_ids_loaded.discard(turn_stream_id)
-                if state["stream_status"] in TERMINAL_STREAM_STATUSES:
-                    continue
                 interrupt_state = state.get("interrupt_state")
                 after_interrupt_requested = (
                     isinstance(interrupt_state, Mapping)

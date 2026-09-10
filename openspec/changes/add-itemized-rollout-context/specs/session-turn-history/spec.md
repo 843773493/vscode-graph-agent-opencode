@@ -35,13 +35,13 @@
 - **WHEN** 旧调用方断言 final agent-state 只有 text
 - **THEN** 系统将其标记为 legacy compatibility mismatch；不能为了通过该断言静默删除 canonical checkpoint 中的 reasoning，Provider projector 也不能绕过目标能力策略直接发送该快照
 
-### Requirement: Turn acceptance identity 在历史层保持 session-local 唯一
+### Requirement: Turn acceptance identity 在历史层保持 thread-local 唯一
 
-历史服务和 Turn resolver SHALL 将 `accepted_ingress_id` 与 `acceptance_idempotency_key` 视为两个不同的 session-local identity，并分别约束 `(session_id, accepted_ingress_id)` 与 `(session_id, acceptance_idempotency_key)` 唯一；每个 identity 只能一对一指向一个 accepted Turn。相同 ingress、相同 acceptance key、相同 payload hash 和相同 origin branch 的重复 acceptance 只能返回既有 `turn_id`、root 和 initial execution，不创建第二个历史 Turn；同 ingress 被不同 key 重用、同 key 搭配不同 ingress/payload/branch，或跨 session 直接复用裸 identity 时，必须返回明确 acceptance idempotency conflict，且不修改原 Turn 或历史顺序。跨 session fork 的 copied acceptance identity 必须先映射为 target-local 值，source identity 只在 lineage/audit 中可见。
+历史服务和 Turn resolver SHALL 将 `accepted_ingress_id` 与 `acceptance_idempotency_key` 视为两个不同的 thread-local identity，并分别约束 `(session_id, thread_id, accepted_ingress_id)` 与 `(session_id, thread_id, acceptance_idempotency_key)` 唯一；每个 identity 只能一对一指向一个 accepted Turn。相同 ingress、相同 acceptance key、相同 payload hash 和相同 origin branch 的重复 acceptance 只能返回既有 `turn_id`、root 和 initial execution，不创建第二个历史 Turn；同 ingress 被不同 key 重用、同 key 搭配不同 ingress/payload/branch，或跨 thread 直接复用裸 identity 时，必须返回明确 acceptance idempotency conflict，且不修改原 Turn 或历史顺序。跨 session fork 的 copied acceptance identity 必须先映射为 target-local 值，source identity 只在 lineage/audit 中可见。
 
 #### Scenario: 重复 acceptance 不产生第二个历史 Turn
 
-- **WHEN** 同一 session 收到相同 `accepted_ingress_id`、`acceptance_idempotency_key` 和 payload hash 的重试
+- **WHEN** 同一 SessionThread 收到相同 `accepted_ingress_id`、`acceptance_idempotency_key` 和 payload hash 的重试
 - **THEN** resolver 返回原 Turn 的 root 和 initial execution，历史分页仍只显示一个 Turn
 
 #### Scenario: acceptance identity 冲突不修改历史
@@ -77,6 +77,15 @@
 - **THEN** summary 不把 overlay diff 当作 assistant/user 文本；获得授权的 provenance 详情请求才可按 assembly/source reference 返回其版本、来源和有界 diff 摘要
 
 ## ADDED Requirements
+
+### Requirement: Turn 和历史投影必须精确归属于 SessionThread
+
+Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_item_id` SHALL 在 `(session_id, thread_id)` 范围内唯一；不得再把它们解释为仅 session-local。默认 Session history 只解析 main thread，显式 thread history 只读取该 thread 的 catalog/index/rollout。child thread 的 assistant/tool/result 不得混入 main-thread Turn，跨 thread 汇报必须作为带 source-thread provenance 的独立 canonical/runtime item，由目标 thread 的 owner 提交，不得把原 item 复制为普通用户输入。
+
+#### Scenario: delegated child history 不污染主聊天
+
+- **WHEN** delegated child thread 产生 tool result 或最终报告
+- **THEN** 主 thread 的默认历史不包含 child 的原始 Turn/item；若系统需要向主 thread 发送汇报，则该汇报保留 child `session_id/thread_id` 和 source item/execution identity，且不是新的真实 user Turn root
 
 ### Requirement: 历史详情为 provenance 和扩展视图保留稳定引用
 

@@ -189,8 +189,14 @@ const gatewayUserSessionRecoveryByPort = new Map<number, Promise<void>>();
 
 export function registerGatewayUserSessionInitializer(
   initializer: GatewayUserSessionInitializer,
-): void {
+): () => void {
+  const previous = gatewayUserSessionInitializer;
   gatewayUserSessionInitializer = initializer;
+  return () => {
+    if (gatewayUserSessionInitializer === initializer) {
+      gatewayUserSessionInitializer = previous;
+    }
+  };
 }
 
 export function invalidateGatewayUserSession(port: number): void {

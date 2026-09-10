@@ -187,6 +187,69 @@ async def test_stream_events_do_not_duplicate_full_checkpoint_on_disk(
 
 
 @pytest.mark.asyncio
+async def test_live_projection_bounds_large_text_until_canonical_history_is_ready(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+) -> None:
+    store, _, session_id = message_stream_store
+    writer = await store.open(session_id=session_id, turn_id="job_large_live_text")
+    await writer.commit(
+        "block.started",
+        {"block_id": "block_large", "block_index": 0, "carrier_type": "text"},
+        block_id="block_large",
+    )
+    await writer.commit(
+        "block.delta",
+        {
+            "block_id": "block_large",
+            "carrier_type": "text",
+            "operation": "append",
+            "text": "a" * 200_000,
+        },
+        block_id="block_large",
+    )
+    await writer.commit(
+        "block.delta",
+        {
+            "block_id": "block_large",
+            "carrier_type": "text",
+            "operation": "append",
+            "text": "b" * 200_000,
+        },
+        block_id="block_large",
+    )
+    await writer.commit(
+        "tool.started",
+        {
+            "tool_execution_id": "tool_large",
+            "tool_call_id": "call_large",
+            "tool_name": "large_tool",
+        },
+        tool_execution_id="tool_large",
+    )
+    await writer.commit(
+        "tool.completed",
+        {
+            "tool_execution_id": "tool_large",
+            "tool_call_id": "call_large",
+            "tool_name": "large_tool",
+            "status": "completed",
+            "result": "r" * 100_000,
+        },
+        tool_execution_id="tool_large",
+    )
+
+    state = await store.get_state(writer.turn_stream_id)
+    block_text = state["blocks"][0]["text"]
+    assert len(block_text) == 256 * 1024
+    assert block_text.startswith("a")
+    assert block_text.endswith("b")
+    assert "消息流展示已截断" in block_text
+    tool_result = state["tool_executions"][0]["result"]
+    assert len(tool_result) == 64 * 1024
+    assert "消息流展示已截断" in tool_result
+
+
+@pytest.mark.asyncio
 async def test_fanout_does_not_wait_for_slow_state_snapshot(
     message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
     monkeypatch: pytest.MonkeyPatch,
@@ -480,6 +543,90 @@ async def test_existing_stream_ids_skip_legacy_turns_without_creating_streams(
         / "message_streams"
         / "job_legacy.jsonl"
     ).exists()
+
+
+@pytest.mark.asyncio
+async def test_existing_stream_ids_does_not_materialize_historical_snapshots(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+) -> None:
+    store, resolver, session_id = message_stream_store
+    writer = await store.open(session_id=session_id, turn_id="job_with_snapshot")
+    await writer.close_completed()
+    if store._snapshot_tasks:
+        await asyncio.gather(*store._snapshot_tasks.values())
+
+    restarted = MessageStreamStore(path_resolver=resolver)
+    streams = await restarted.existing_stream_ids(
+        session_id=session_id,
+        turn_ids=["job_with_snapshot"],
+    )
+
+    assert streams == {"job_with_snapshot": writer.turn_stream_id}
+    assert restarted._states == {}
+    assert restarted._event_ids == {}
+
+
+@pytest.mark.asyncio
+async def test_terminal_stream_cache_is_bounded_and_evicted_state_reloads(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _, session_id = message_stream_store
+    monkeypatch.setattr(
+        message_stream_store_module,
+        "MESSAGE_STREAM_TERMINAL_CACHE_MAX_ENTRIES",
+        3,
+    )
+    stream_ids: list[str] = []
+    for index in range(6):
+        writer = await store.open(
+            session_id=session_id,
+            turn_id=f"job_terminal_cache_{index}",
+        )
+        await writer.close_completed()
+        stream_ids.append(writer.turn_stream_id)
+
+    terminal_ids = [
+        stream_id
+        for stream_id, state in store._states.items()
+        if state["stream_status"] == "completed"
+    ]
+    assert terminal_ids == stream_ids[-3:]
+    assert stream_ids[0] not in store._event_ids
+
+    reopened = await store.open_existing(
+        session_id=session_id,
+        turn_id="job_terminal_cache_0",
+    )
+    assert reopened.turn_stream_id == stream_ids[0]
+    assert (await store.get_state(stream_ids[0]))["stream_status"] == "completed"
+    assert len(
+        [
+            state
+            for state in store._states.values()
+            if state["stream_status"] == "completed"
+        ]
+    ) == 3
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_retain_terminal_history_in_memory(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+) -> None:
+    store, resolver, session_id = message_stream_store
+    for index in range(4):
+        writer = await store.open(
+            session_id=session_id,
+            turn_id=f"job_restart_terminal_{index}",
+        )
+        await writer.close_completed()
+    if store._snapshot_tasks:
+        await asyncio.gather(*store._snapshot_tasks.values())
+
+    restarted = MessageStreamStore(path_resolver=resolver)
+    assert await restarted.reconcile_unfinished_streams() == 0
+    assert restarted._states == {}
+    assert restarted._event_ids == {}
 
 
 @pytest.mark.asyncio

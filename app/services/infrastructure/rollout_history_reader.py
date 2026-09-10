@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from langchain_core.messages import BaseMessage
 
 from app.core.history_loading import (
+    DEFAULT_INITIAL_INCLUDE,
     HistoryLoadingConfig,
     default_history_loading_config,
 )
@@ -91,7 +92,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 direction="before",
                 stage=0,
             )
-            return summary(page.items[0]), cursor, projection_epoch
+            return page.summaries[0], cursor, projection_epoch
         finally:
             indexed.snapshot.close()
 
@@ -266,6 +267,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         tool_call_ids: tuple[str, ...] = (),
     ) -> TurnHistoryPageDTO:
         budget = DetailReadBudget(LoadLimits())
+        summary_budget = DetailReadBudget(LoadLimits())
         load_tool_payload = bool(set(include) & {"tool_call", "tool_result"})
         selected_tool_call_ids = frozenset(tool_call_ids) or None
         projections = self._context_reader.read_turn_projections(
@@ -313,26 +315,33 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             tool_call_ids=selected_tool_call_ids,
             required_sequences=required_sequences,
         )
-        items = [
-            project_detail(
-                self._load_indexed_span(
-                    session_id,
-                    span,
-                    snapshot=snapshot,
-                    chain=chain,
-                    records=records_by_turn.get(span.turn_id, []),
-                    projection=projections.get(span.turn_id),
-                    load_tool_payload=load_tool_payload,
-                    include=include,
-                    tool_call_ids=selected_tool_call_ids,
-                ),
-                include,
-                budget,
+        items: list[TurnDetailDTO] = []
+        summaries: list[TurnSummaryDTO] = []
+        for span in spans:
+            detail = self._load_indexed_span(
+                session_id,
+                span,
+                snapshot=snapshot,
+                chain=chain,
+                records=records_by_turn.get(span.turn_id, []),
+                projection=projections.get(span.turn_id),
+                load_tool_payload=load_tool_payload,
+                include=include,
+                tool_call_ids=selected_tool_call_ids,
             )
-            for span in spans
-        ]
+            summaries.append(
+                summary(
+                    project_detail(
+                        detail,
+                        DEFAULT_INITIAL_INCLUDE,
+                        summary_budget,
+                    )
+                )
+            )
+            items.append(project_detail(detail, include, budget))
         return TurnHistoryPageDTO(
             items=items,
+            summaries=summaries,
             next_cursor=next_cursor,
             has_more=has_more,
             before_cursor=before_cursor,

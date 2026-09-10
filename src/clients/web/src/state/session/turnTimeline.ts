@@ -21,6 +21,9 @@ export interface SessionTurnTimeline {
   phase: TurnTimelinePhase;
   orderedTurnIds: string[];
   turnsById: Record<string, TurnRecord>;
+  /** 后端原样返回的摘要投影，用于淘汰已展开详情，禁止前端自行重建摘要。 */
+  summaryTurnsById: Record<string, TurnSummary>;
+  detailAccessOrder: string[];
   activeJobs: TurnJobSummary[];
   beforeCursor: string | null;
   afterCursor: string | null;
@@ -42,6 +45,8 @@ export interface SessionTurnTimeline {
 }
 
 const TURN_TIMELINE_CACHE_LIMIT = 64;
+const TURN_DETAIL_CACHE_LIMIT = 8;
+const TURN_DETAIL_CACHE_MAX_UNITS = 1_000_000;
 
 export function createSessionTurnTimeline(
   scopeKey: string,
@@ -53,6 +58,8 @@ export function createSessionTurnTimeline(
     phase: "idle",
     orderedTurnIds: [],
     turnsById: {},
+    summaryTurnsById: {},
+    detailAccessOrder: [],
     activeJobs: [],
     beforeCursor: null,
     afterCursor: null,
@@ -328,6 +335,8 @@ export function upsertTurns(
     return timeline;
   }
   let turnsById = { ...timeline.turnsById };
+  let summaryTurnsById = { ...timeline.summaryTurnsById };
+  let detailAccessOrder = [...timeline.detailAccessOrder];
   const mergedTurnIds = new Set(timeline.mergedTurnIds);
   let changed = false;
 
@@ -337,6 +346,26 @@ export function upsertTurns(
       || timeline.invalidatedTurnIds.includes(incoming.turn_id)
     ) {
       continue;
+    }
+    if (!isTurnDetail(incoming)) {
+      const previousSummary = summaryTurnsById[incoming.turn_id];
+      const summaryRecords: Record<string, TurnRecord> = {
+        ...(previousSummary ? { [incoming.turn_id]: previousSummary } : {}),
+      };
+      if (upsertTurnRecord(summaryRecords, incoming)) {
+        summaryTurnsById[incoming.turn_id] = summaryRecords[incoming.turn_id] as TurnSummary;
+        changed = true;
+      }
+    } else {
+      const previousOrder = detailAccessOrder;
+      detailAccessOrder = detailAccessOrder.filter((turnId) => turnId !== incoming.turn_id);
+      detailAccessOrder.push(incoming.turn_id);
+      if (
+        previousOrder.length !== detailAccessOrder.length
+        || previousOrder.some((turnId, index) => turnId !== detailAccessOrder[index])
+      ) {
+        changed = true;
+      }
     }
     if (upsertTurnRecord(turnsById, incoming)) {
       changed = true;
@@ -355,15 +384,19 @@ export function upsertTurns(
       if (Object.prototype.hasOwnProperty.call(turnsById, turnId)) {
         delete turnsById[turnId];
       }
+      delete summaryTurnsById[turnId];
+      detailAccessOrder = detailAccessOrder.filter((id) => id !== turnId);
     }
   }
 
   if (!changed) {
     return timeline;
   }
-  return {
+  return compactTurnDetails({
     ...timeline,
     turnsById,
+    summaryTurnsById,
+    detailAccessOrder,
     orderedTurnIds: sortedTurnIds(turnsById),
     mergedTurnIds: [...mergedTurnIds],
     loadingDetailIds: timeline.loadingDetailIds.filter(
@@ -372,6 +405,54 @@ export function upsertTurns(
     invalidatedTurnIds: timeline.invalidatedTurnIds.filter(
       (turnId) => !mergedTurnIds.has(turnId),
     ),
+  });
+}
+
+function compactTurnDetails(
+  timeline: SessionTurnTimeline,
+  maxDetails = TURN_DETAIL_CACHE_LIMIT,
+  maxUnits = TURN_DETAIL_CACHE_MAX_UNITS,
+): SessionTurnTimeline {
+  const detailIds = timeline.detailAccessOrder.filter((turnId) =>
+    isTurnDetail(timeline.turnsById[turnId])
+  );
+  let detailUnits = detailIds.reduce(
+    (total, turnId) => total + projectionRichness(timeline.turnsById[turnId]),
+    0,
+  );
+  let detailCount = detailIds.length;
+  let turnsById = timeline.turnsById;
+  const retainedOrder = [...detailIds];
+  let changed = detailIds.length !== timeline.detailAccessOrder.length;
+
+  while (detailCount > maxDetails || detailUnits > maxUnits) {
+    const candidateIndex = retainedOrder.findIndex((turnId) => {
+      const detail = turnsById[turnId];
+      const summary = timeline.summaryTurnsById[turnId];
+      return Boolean(
+        detail
+        && summary
+        && isTurnDetail(detail)
+        && summary.revision === detail.revision,
+      );
+    });
+    if (candidateIndex === -1) break;
+    const [turnId] = retainedOrder.splice(candidateIndex, 1);
+    const detail = turnsById[turnId];
+    const summary = timeline.summaryTurnsById[turnId];
+    if (!detail || !summary) continue;
+    if (turnsById === timeline.turnsById) turnsById = { ...turnsById };
+    turnsById[turnId] = summary;
+    detailUnits -= projectionRichness(detail);
+    detailCount -= 1;
+    changed = true;
+  }
+
+  if (!changed) return timeline;
+  return {
+    ...timeline,
+    turnsById,
+    detailAccessOrder: retainedOrder,
   };
 }
 
@@ -532,7 +613,8 @@ export function applyTurnHistoryPage(
   direction: "before" | "after" | "around" = "before",
 ): SessionTurnTimeline {
   requireMatchingEpoch(timeline, page.projection_epoch);
-  const next = upsertTurns(timeline, page.items);
+  const withSummaries = upsertTurns(timeline, page.summaries ?? []);
+  const next = upsertTurns(withSummaries, page.items);
   if (direction === "around") {
     return {
       ...next,
@@ -611,11 +693,15 @@ export function dropTurn(
   if (!hadTurn && alreadyInvalidated) return timeline;
 
   const turnsById = { ...timeline.turnsById };
+  const summaryTurnsById = { ...timeline.summaryTurnsById };
   delete turnsById[turnId];
+  delete summaryTurnsById[turnId];
   return {
     ...timeline,
     turnsById,
+    summaryTurnsById,
     orderedTurnIds: timeline.orderedTurnIds.filter((id) => id !== turnId),
+    detailAccessOrder: timeline.detailAccessOrder.filter((id) => id !== turnId),
     loadingDetailIds: timeline.loadingDetailIds.filter((id) => id !== turnId),
     invalidatedTurnIds: alreadyInvalidated
       ? timeline.invalidatedTurnIds
@@ -649,8 +735,13 @@ export function writeTurnTimelineCache(
   timeline: SessionTurnTimeline,
 ): Map<string, SessionTurnTimeline> {
   const next = new Map(timelines);
+  for (const [key, cachedTimeline] of next.entries()) {
+    if (key !== scopeKey) {
+      next.set(key, compactTurnDetails(cachedTimeline, 0, 0));
+    }
+  }
   next.delete(scopeKey);
-  next.set(scopeKey, timeline);
+  next.set(scopeKey, compactTurnDetails(timeline));
   while (next.size > TURN_TIMELINE_CACHE_LIMIT) {
     const oldestKey = next.keys().next().value;
     if (typeof oldestKey !== "string") {
