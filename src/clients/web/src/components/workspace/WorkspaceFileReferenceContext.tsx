@@ -58,7 +58,8 @@ async function findUniqueWorkspaceFilePath(
   referencePath: string,
 ): Promise<WorkspaceFilePathLookup> {
   const normalizedReferencePath = referencePath.replace(/\\/g, "/").replace(/^\.\//, "");
-  const fileName = normalizedReferencePath.split("/").filter(Boolean).at(-1) ?? "";
+  const pathSegments = normalizedReferencePath.split("/").filter(Boolean);
+  const fileName = pathSegments[pathSegments.length - 1] ?? "";
   const directories: Array<{ path: string; depth: number }> = [{ path: "", depth: 0 }];
   const matches: string[] = [];
   let visitedDirectories = 0;

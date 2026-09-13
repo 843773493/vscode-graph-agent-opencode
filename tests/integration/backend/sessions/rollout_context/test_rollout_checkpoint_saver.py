@@ -668,6 +668,69 @@ def test_failed_turn_status_survives_history_reload(
     assert page.items[0].status.value == "failed"
 
 
+def test_terminal_turn_status_convergence_is_idempotent_after_termination(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    """Turn 已收敛后，迟到的 job_failed 收敛不能抛错。
+
+    否则启动恢复会读到同一条历史 ``job_failed`` Trace 再次崩溃并写下新的失败
+    事件，形成每次启动都失败的死循环。
+    """
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    saver = RolloutCheckpointSaver(sessions_dir)
+    messages = [
+        HumanMessage(
+            content="会被取消的 Turn",
+            id="cancelled-user",
+            response_metadata={
+                "message_metadata": {
+                    "turn_id": "cancelled-turn",
+                    "job_id": "cancelled-turn",
+                }
+            },
+        )
+    ]
+    saver.put(
+        build_checkpoint_config("session_1"),
+        _checkpoint("cp-cancelled", messages),
+        {"source": "cancelled-turn-test"},
+        {"messages": "1"},
+    )
+
+    def turn_status() -> str:
+        with sqlite3.connect(
+            get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+            / "rollout"
+            / "index.sqlite"
+        ) as connection:
+            return connection.execute(
+                "SELECT status FROM turn_records WHERE turn_id = ?",
+                ("cancelled-turn",),
+            ).fetchone()[0]
+
+    assert (
+        saver.mark_turn_terminal_status(
+            session_id="session_1",
+            turn_id="cancelled-turn",
+            status="cancelled",
+        )
+        is True
+    )
+    assert turn_status() == "cancelled"
+    # 与终态不同的收敛请求必须幂等返回，而不是抛"非法 Turn.status 转移"。
+    assert (
+        saver.mark_turn_terminal_status(
+            session_id="session_1",
+            turn_id="cancelled-turn",
+            status="failed",
+        )
+        is True
+    )
+    assert turn_status() == "cancelled"
+
+
 def test_hidden_system_reminder_does_not_create_empty_chat_turn(
     tmp_path: Path,
     session_bundle_factory,

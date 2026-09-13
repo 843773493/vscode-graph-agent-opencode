@@ -63,6 +63,21 @@ def test_execution_disabled_tool_cannot_be_model_visible(tmp_path: Path) -> None
         )
 
 
+def test_tool_selection_reads_legacy_disabled_tool_lists(tmp_path: Path) -> None:
+    settings_dir = tmp_path / ".boxteam" / "settings"
+    settings_dir.mkdir(parents=True)
+    (settings_dir / "tool_selection.json").write_text(
+        '{"default": ["apply_patch"]}',
+        encoding="utf-8",
+    )
+
+    store = ToolSelectionStore(boxteam_root=tmp_path / ".boxteam")
+
+    assert store.execution_overrides("default") == {"apply_patch": False}
+    assert store.model_visibility_overrides("default") == {"apply_patch": False}
+    assert store.disabled_tools("default") == {"apply_patch"}
+
+
 @pytest.mark.skipif(os.name == "nt", reason="仅在 POSIX 上覆盖 fcntl 文件锁")
 def test_tool_selection_lock_times_out_when_file_lock_is_busy(
     tmp_path: Path,

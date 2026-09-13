@@ -120,23 +120,20 @@ export function useSessionMessageStream({
 
     const applyEvent = (event: MessageStreamEvent) => {
       turnStreamId = event.turn_stream_id;
-      const resolvedState: { value: MessageStreamState | null } = { value: null };
-      updateState((current) => {
-        const updated = applyMessageStreamEvent(current, event);
-        resolvedState.value = updated;
-        return updated;
-      });
-      const appliedState = resolvedState.value;
-      if (appliedState) {
-        lastEventSeq = Math.max(lastEventSeq, appliedState.lastEventSeq);
-        terminalSeen = appliedState.streamStatus === "completed"
-          || appliedState.streamStatus === "interrupted"
-          || appliedState.streamStatus === "failed";
-        if (terminalSeen) {
-          terminalStatus = appliedState.streamStatus;
-          terminalFailure = appliedState.failure;
-        }
-        turnStreamId = appliedState.turnStreamId || turnStreamId;
+      // React 的函数式 setState updater 可能在当前回调返回后才执行，不能
+      // 在 updater 内给这里的游标和终态变量赋值。否则真实浏览器会一直用旧
+      // 的 after_seq 重连，并在 SSE 结束时才一次性从历史看到完整响应。
+      lastEventSeq = Math.max(lastEventSeq, event.event_seq);
+      updateState((current) => applyMessageStreamEvent(current, event));
+
+      const eventTerminalStatus = terminalStatusFromEvent(event);
+      if (eventTerminalStatus) {
+        terminalSeen = true;
+        terminalStatus = eventTerminalStatus;
+        terminalFailure = failureFromEvent(event);
+        // 终态由事件本身确定，不应等待 SSE 连接自然关闭；服务端可能在
+        // 发送终态后继续保持连接，前端仍必须立即允许下一条消息。
+        notifyTerminal();
       }
     };
 
@@ -162,6 +159,7 @@ export function useSessionMessageStream({
         turn_stream_id: snapshotTurnStreamId,
         event_seq: snapshot.snapshot_seq,
         type: "stream.snapshot",
+        workspace_id: snapshot.workspace_id ?? undefined,
         payload: snapshot as unknown as Record<string, unknown>,
       };
       terminalSeen = snapshot.stream_status === "completed"
@@ -261,6 +259,50 @@ export function useSessionMessageStream({
   }, [apiPort, sessionId, turnId, workspaceId, sessionCacheKey, setState]);
 }
 
+type TerminalStreamStatus = Extract<
+  MessageStreamState["streamStatus"],
+  "completed" | "interrupted" | "failed"
+>;
+
+function terminalStatusFromEvent(event: MessageStreamEvent): TerminalStreamStatus | null {
+  if (
+    event.type === "stream.completed"
+    || event.type === "stream.interrupted"
+    || event.type === "stream.failed"
+  ) {
+    return event.type.slice("stream.".length) as TerminalStreamStatus;
+  }
+  if (event.type !== "stream.snapshot") return null;
+  const snapshot = isRecord(event.payload.snapshot)
+    ? event.payload.snapshot
+    : event.payload;
+  const streamStatus = snapshot.stream_status;
+  return streamStatus === "completed"
+    || streamStatus === "interrupted"
+    || streamStatus === "failed"
+    ? streamStatus
+    : null;
+}
+
+function failureFromEvent(event: MessageStreamEvent): MessageStreamState["failure"] {
+  const payload = event.type === "stream.snapshot" && isRecord(event.payload.snapshot)
+    ? event.payload.snapshot
+    : event.payload;
+  const failure = isRecord(payload.failure) ? payload.failure : payload;
+  const message = stringValue(failure.message);
+  if (!message) return null;
+  return {
+    code: stringValue(failure.code) ?? "message_stream_failure",
+    message,
+    afterInterruptRequested: failure.after_interrupt_requested === true,
+    resumable: failure.resumable === true,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }

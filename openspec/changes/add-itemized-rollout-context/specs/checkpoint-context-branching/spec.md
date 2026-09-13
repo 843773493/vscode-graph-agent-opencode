@@ -8,7 +8,7 @@
 2. `history_prefix_fork`：复制会话开始到指定 inclusive/before anchor 的有效 canonical prefix；
 3. `full_rollout_copy`：复制 source 的全部 v2 canonical rollout、SQLite checkpoint/view/branch/control state 和 checkpoint channel state；source v1 原始 message-line 仅可作为一次性 migration/rollback audit 输入保留，不进入 target 正常 runtime。
 
-三种模式都必须跨 session 使用 `GlobalEntityRef=(session_id, entity_type, local_id)`，在 target session 为复制范围内的 Turn、root/item、tool invocation/call/attempt、execution、model-call、assembly、view、branch、operation anchor、`accepted_ingress_id` 和 `acceptance_idempotency_key` 分配新的 target-local identity，并以不可变 `fork_entity_mappings`（或等价 provenance）保存 source→target 一对一映射。target active branch/view、root/item offset 和 view-local logical ordinal 只能引用 target namespace；source id/sequence/offset 只能作为 lineage/audit 坐标。source overlay epoch、base/delta、canonical ambient item、assembly detail ref 也必须映射为 target-local 引用。三种模式均不得共享 source JSONL/SQLite、canonical payload 或 detail path，或把 source 裸 ID 当作 target canonical identity。若 source 是 v1，fork 只能先由一次性 `legacy_import_v1_to_v2` migration staging 读取并生成 mapping/audit，再按 v2 copy 合同创建 target；正常 fork/history/provider/checkpoint/runtime 不得直接打开 v1。运行态 fork 的结果按模式区分：`context_fork`/`history_prefix_fork` preflight 拒绝并不创建 target；`full_rollout_copy` 可以创建完整历史 target，但把复制的未终态运行态标为不可运行的 `cancelled` 历史状态。
+三种模式都必须跨 session 使用 `GlobalEntityRef=(session_id, thread_id, entity_type, local_id)`，并且默认 target owner 为 target Session 的 main thread。系统在 target main thread 为复制范围内的 Turn、root/item、tool invocation/call/attempt、execution、model-call、assembly、view、branch、operation anchor、`accepted_ingress_id` 和 `acceptance_idempotency_key` 分配新的 target-thread-local identity，并以不可变 `fork_entity_mappings`（或等价 provenance）保存 source→target 一对一映射。target active branch/view、root/item offset 和 view-local logical ordinal 只能引用 target thread namespace；source id/sequence/offset 只能作为 lineage/audit 坐标。source overlay epoch、base/delta、canonical ambient item、assembly detail ref 也必须映射为 target-thread-local 引用。三种模式均不得共享 source JSONL/SQLite、canonical payload 或 detail path，或把 source 裸 ID 当作 target canonical identity。若 source 是 v1，fork 只能先由一次性 `legacy_import_v1_to_v2` migration staging 读取并生成 mapping/audit，再按 v2 copy 合同创建 target；正常 fork/history/provider/checkpoint/runtime 不得直接打开 v1。运行态 fork 的结果按模式区分：`context_fork`/`history_prefix_fork` preflight 拒绝并不创建 target；`full_rollout_copy` 可以创建完整历史 target，但把复制的未终态运行态标为不可运行的 `cancelled` 历史状态。
 
 #### Scenario: 默认有效上下文 fork
 
@@ -52,9 +52,66 @@
 - **THEN** target 拥有 source 全部可迁移 canonical rollout、SQLite checkpoint/view/branch 状态和所有 checkpoint channel BLOB 的 target-local 独立副本，并为全部实体建立 mapping；若 source 含 v1 原始 message-line，该原件只能由一次性 `legacy_import_v1_to_v2` migration staging 保留为 audit/quarantine 输入，不挂载为 target reader、history、provider 或 checkpoint runtime 数据
 - **AND** source 的 `fork_origins`、`retention_refs` 等 owner 关系表不直接带入 target；target 只由统一 writer 写入自己的 provenance、active view 和 namespace。若 source 是 v1，target 仍固定为 v2；source message id/sequence/offset 只写入 mapping/audit，不成为 target v2 identity/offset。source 中未终态 Turn、active execution 或未终态 assembly 在 target 中只保留不可运行的历史映射，并将 Turn 标为 `cancelled`、reason=`fork_source_runtime_not_copied`，不能自动 resume
 
+### Requirement: 跨 Session copy 必须冻结 source 后再写 target
+
+`context_fork`、`history_prefix_fork`和`full_rollout_copy` MUST从解析source catalog开始，到全部source node/SQLite read handle关闭并durably提交不可变source snapshot manifest与已校验staging bytes为止，持有source Session的shared `SessionReadGuard`。manifest MUST绑定source lifecycle generation、thread/view/checkpoint上界、artifact清单、逐对象hash和所需detail capability；guard释放后copy只能消费该冻结manifest/bytes，不得重新打开source。source删除先取得exclusive gate并关闭fence时，copy MUST返回`source_session_deletion_pending|source_session_deleted`且不创建可用target；guard先行时删除等待snapshot capture完成，随后可继续删除而不等待target staging/publication。target creation/publication MUST在不持source guard时独立准入；实现 MUST NOT同时持有两个Session gate、一个Session gate与另一个Session的read guard或两个数据库写事务。同一Session内的rewind/replay/compaction沿用owner operation lease/view事务，不建立虚假的跨Session source guard。
+
+对应的fork/Session creation journal MUST在capture前预分配唯一`source_snapshot_id`和正常resolver不可见的内部locator。capture MUST在source SQLite固定read snapshot内取得同一revision的view/checkpoint/control rows、`storage_commits`和各JSONL committed end offset，以可验证SQLite snapshot/online backup冻结数据库页，并只复制这些offset以内的JSONL与manifest引用且hash/length/capability校验通过的thread-local immutable detail；冻结revision后的并发append、view切换或terminal convergence不得混入。capture完成时 MUST先在预登记locator原子发布`SourceCopySnapshot(state=captured)`，绑定operation/preimage hash、source lifecycle generation、database snapshot hash、逐文件committed offset/length/hash、view/checkpoint revision、detail manifest hash和attachment claim manifest hash并完成目录durability barrier，释放guard后才把target operation CAS为`source_captured`。恢复只可定点接受完整且hash一致的captured snapshot；prepared/partial或冲突snapshot MUST使原operation abort并清理，不得扫盘、读取当前source补齐或换成更新revision。
+
+workspace attachment blob MUST NOT复制进`SourceCopySnapshot`或Session/thread staging。source SQLite snapshot只冻结logical attachment/variant identity、digest、length、availability、source owner/item ref与attachment catalog revision，并 MUST以journal绑定的IdentifierFactory为每个source attachment item/ref预分配target-local item/attachment identity与mapping到source snapshot staging manifest，不能复用source identity或等待guard释放后再决定。关闭source SQLite read transaction后且释放source guard前，copy MUST以单个workspace attachment catalog事务为每个需要保持available的target-local attachment ref按`(copy_operation_id,source_attachment_ref,target_owner_ref)` create-or-get `ForkAttachmentClaim(state=preparing)`，绑定`source_snapshot_id`、target Session/thread/item、digest/length、受控blob locator和operation preimage，并原子验证source owner ref、blob未tombstone及正文digest/length；claim提交后阻止GC。全部claim成功后才将有序claim ID清单/hash写入captured marker；中途崩溃只可按精确copy operation ID查询并释放本operation claim，不按digest/locator扫描。source已unavailable且不参与可运行request的历史ref MAY显式映射unavailable，active view/required replay需要正文而claim失败时copy MUST失败。
+
+target可见性发布前，worker MUST把全部required attachment claim推进`owner_reserved`并建立target owner ref；capability resolver还必须验证target Session/thread catalog active，因此reserved ref不提前授权未发布target。全部required claim reserved后才可发布target Session/board。存在required claim的公开copy target MUST在staging control DB预置绑定copy/preimage、target lifecycle generation、publication preimage及有序claim ID/hash的`CopyAttachmentSettlementRecord(state=preparing)`；board由`BoardMigrationRecord`保存等价字段。publication把对应record推进为非终态`published_pending_attachment_commit`；无required claim的公开copy不创建settlement record，board则直接进入终态`published`。随后finalizer单独取得target/coordinator gate并复核active generation/preimage，以不重叠的attachment catalog和session-control事务依次把claim推进`committed`，再把copy record推进`committed`或把board record推进`published`。
+
+`CopyAttachmentSettlementRecord`状态闭集 MUST为非终态`preparing|published_pending_attachment_commit`和终态`committed|aborted|target_deleted`；`BoardMigrationRecord`状态闭集 MUST为非终态`preparing|published_pending_attachment_commit`和终态`published|aborted|coordinator_deleted`。未发布失败进入`aborted`；已经发布但target/coordinator删除抢先时，对`owner_reserved`必须精确释放claim/ref，对已`committed` claim必须先验证其属于record冻结的target owner，再按普通删除协议幂等且持久释放该owner ref；只有全部claim、owner ref与release outcome收敛后才进入`target_deleted|coordinator_deleted`，不得伪装成成功终态。恢复 MUST按带类型终态继续，不得以无类型terminal标志猜测publication或attachment是否成功。
+
+target删除与finalizer竞争同一gate：finalizer先行时完成全部claim并把copy/board record分别推进成功终态`committed|published`后，删除按普通owner ref释放；删除先关闭fence时，排空流程按record中的精确claim ID释放`owner_reserved`的ref/claim，或验证已`committed` claim的精确target owner并按普通删除协议持久释放该owner ref，再把copy/board record分别推进终态`target_deleted|coordinator_deleted`。崩溃恢复只有在target仍active且publication preimage一致时才确认原owner ref用于finalization；target deleting/tombstoned时 MUST走删除settlement，不得重建owner、保留target owner ref、恢复active、写成功终态或报告target可用。未发布失败仍只按journal claim ID释放并进入`aborted`；不得扫描digest补claim、复用其它operation claim、复制blob bytes、留下GC空窗或在record非终态时隔离Session节点。
+
+#### Scenario: full rollout copy 与 source 删除按 gate 次序裁决
+
+- **WHEN** `full_rollout_copy`和source Session删除并发，且copy先取得source `SessionReadGuard`
+- **THEN**删除在关闭source fence前等待capture完成；copy释放guard后仅用冻结manifest/bytes完成target-local物化，source随后可删除且target不回读source
+- **WHEN**删除先取得exclusive gate并关闭source fence
+- **THEN**copy明确失败且不发布target，不从隔离节点、删除journal或tombstone旁路读取source
+
+#### Scenario: target publication 不与 source guard 重叠
+
+- **WHEN**copy已经冻结source snapshot并准备创建或发布target Session/main thread
+- **THEN**source `SessionReadGuard`已经释放，target gate/事务才可取得；锁顺序检查拒绝同时持有source与target Session gate/guard或两个数据库写事务
+
+#### Scenario: source 并发 append 不产生混合快照
+
+- **WHEN**capture已在source SQLite固定revision和JSONL committed offsets，随后source writer提交新item、terminal convergence或active view变化
+- **THEN**本次`SourceCopySnapshot`只包含冻结revision及其committed offsets以内的数据库/JSONL/detail集合；target校验不得看见更新后的SQLite配旧JSONL、旧SQLite配新JSONL或部分checkpoint channel
+
+#### Scenario: source capture 崩溃只能定点恢复
+
+- **WHEN**进程在复制部分数据库/JSONL/detail后退出，或在captured marker durable后、target operation记录`source_captured`前退出
+- **THEN**恢复仅检查journal预登记的`source_snapshot_id`/locator；前者abort并清理，后者验证完整manifest/hash后继续同一snapshot，不扫描其它目录、不回读当前source补齐或换revision
+
+#### Scenario: fork attachment claim 防止 source 删除后的 blob GC
+
+- **WHEN**source snapshot引用available attachment，copy在释放source guard前建立claim，随后source Session删除并释放自己的owner ref，而target尚未发布
+- **THEN**workspace blob由该claim保留且不复制正文；target发布前claim转为owner_reserved并建立target owner ref，发布后target仍可按digest/length读取同一blob
+
+#### Scenario: attachment claim 崩溃恢复不暴露未发布 target
+
+- **WHEN**进程在claim preparing、owner_reserved或target publication后/claim committed前退出
+- **THEN**正常resolver在target catalog发布前始终拒绝预留ref；发布后settlement record保持非终态，恢复只在target仍active且preimage一致时按fork journal中的claim ID继续，target deleting/tombstoned则由删除排空释放/确认且不得重建owner；全程不扫描digest、不遗留GC空窗或把其它fork的claim当成本次owner
+
+#### Scenario: target 删除与 attachment claim finalization 串行
+
+- **WHEN**target已经发布但claim仍为owner_reserved，target Session删除与copy finalizer竞争同一gate
+- **THEN**finalizer先行时在释放gate前提交全部claim并把copy/board record分别推进成功终态`committed|published`，删除随后按普通owner ref释放；删除先关闭fence时由排空流程释放reserved claim/ref，或验证committed claim归属后持久释放其target owner ref，再把copy/board record分别推进终态`target_deleted|coordinator_deleted`，copy恢复不得让已删除target重新可用或留下target owner ref
+
 ### Requirement: Fork 来源不形成默认运行时依赖
 
 默认 fork SHALL 在 target SQLite 的 `fork_origins` 保存 source/target session、source checkpoint/view/branch、fork mode、mapping version、overlay/detail mapping 和 relationship，但运行时不得读取 source rollout、source SQLite 或 source detail path。一次 fork 只能产生一条新的 provenance/mapping 记录；`full_rollout_copy` 的文件复制步骤不得额外重复插入来源记录。`detached` fork 在 target 物化提交后不依赖 source，target 自己保存被复制的 overlay base/delta 和可用 detail；`pinned` fork 也必须使用 target-local active ref，只在 source SQLite 的 `retention_refs` 保留 source lineage/detail，供审计而不是供 target request 直接读取。source deletion 对 detached target 无影响；pinned source 删除必须等 retention release。required detail 无法复制时 fork 失败，optional detail 记录 unavailable；本 change 不提供单独的 unpin API。
+
+`pinned` fork MUST在source capture前建立durable `ForkRetentionClaim`，不得等target提交后首次补写。target creation/fork journal先预分配target Session/operation/preimage；随后在不持target gate或事务时先取得workspace `NavigationTopologyGate` shared、再取得source exclusive `SessionLifecycleGate`，验证catalog/fence active，并在source `session-control.sqlite`同事务create-or-get绑定fork、source/target GlobalThreadAddress、target operation/preimage、source lifecycle generation与view/detail范围的`ForkRetentionClaim(state=preparing)`和operation lease/retention占位，之后按逆序立即释放两锁。source删除提交catalog deleting前 MUST检查preparing/active claim：删除先提交catalog deleting时fork不得建claim；claim先提交时删除返回`source_retained_by_fork|source_retention_operation_pending`且整棵子树catalog保持active。target `target_committed`后，worker另取source gate CAS同claim为`active`，再提交target `committed`。fork abort由target recovery record定点释放claim；target deletion先在target持久化`ForkRetentionReleaseRecord`，释放target gate后另取source gate释放精确claim，再回到target删除确认terminal；禁止同时持两端gate/事务。preparing claim无墙钟过期，关联record缺失/冲突时fail closed并要求recovery。
+
+`ForkRetentionClaim`自身 MUST以`operation_kind=fork_retention`承担Session operation lease，并与retention占位原子提交；不得再建立一条无法按fork/preimage枚举或settle的平行lease。
+
+本change的fork/copy API MUST限制在同一workspace、可由同一workspace Session catalog/lifecycle gate解析的source与target。Gateway federated link/grant只用于send/read/wait，MUST NOT授权远端fork、远端业务库读取或retention claim；未来跨Gateway copy需要独立export/import协议。
 
 #### Scenario: 父 rollout 被删除
 
@@ -66,10 +123,22 @@
 - **WHEN** target 存在 active pinned retention reference
 - **THEN** 删除 source 通过 source SQLite 的 active `retention_refs.owner_session_id` 被拒绝，并返回具体 target session
 
+#### Scenario: Pinned retention claim 与 source 删除双顺序
+
+- **WHEN**source删除先取得exclusive gate并关闭fence，随后pinned fork尝试建立claim
+- **THEN**fork返回`source_session_deletion_pending|source_session_deleted`，不capture source、不创建可用target或retention占位
+- **WHEN**pinned fork先提交preparing claim，随后source删除到达
+- **THEN**删除在整树catalog deleting前返回`source_retention_operation_pending`或`source_retained_by_fork`，source所在整棵逻辑子树保持active供同一fork capture/恢复；不得先删source再尝试从target补claim
+
 #### Scenario: Pinned 子会话被删除
 
 - **WHEN** 用户删除一个作为 pinned fork target 的 session
 - **THEN** 系统将 source SQLite 中对应 `reference_kind=fork`、`reference_id=fork_id` 的 retention reference 标记为 `released`，之后 source 可以继续删除或 pruning 未被其它关系保护的 view
+
+#### Scenario: Pinned release 不同时持有两端 gate
+
+- **WHEN**pinned target被删除或fork materialization abort，需要释放source claim
+- **THEN**target先durably记录release/abort intent并释放自己的gate，再单独取得source gate释放精确claim，最后回到target确认terminal；任一崩溃点从两侧record幂等恢复，不同时持有source/target gate或数据库事务
 
 #### Scenario: Fork 后 source overlay 与 detail 保持 target-local
 
@@ -78,7 +147,7 @@
 
 ### Requirement: Fork 物化必须可恢复提交
 
-系统 SHALL 在 target SQLite 记录 `fork_materializations` journal，且 journal 明确保存 source/target namespace、mode、source anchor/checkpoint/view、mapping version 和 materialization offsets。消息/item、checkpoint channel、pending state 和 target mapping 的中间 append 不得直接让 target session 变成可用状态。`context_fork`/`history_prefix_fork` 的运行态 preflight 拒绝在 target 创建前完成，失败不写目标取消 Turn；只有 `full_rollout_copy` 才在同一收敛事务中写入 target-local mapping、唯一 `fork_origins`、target active view 和复制运行态的 `cancelled` historical state，然后进入 `target_committed`。pinned fork 的 source retention 成功后才进入 `committed`。启动时遇到 `prepared` 必须按 journal 清理 target 半成品，遇到 `target_committed` 必须幂等重试 retention/最终状态，不能根据 JSONL source/target offset 猜测 fork 是否成功。
+系统 SHALL 在 target SQLite 记录 `fork_materializations` journal，且 journal 明确保存 source/target namespace、mode、source anchor/checkpoint/view、mapping version、source snapshot/retention claim identity和materialization offsets。消息/item、checkpoint channel、pending state 和 target mapping 的中间 append 不得直接让 target session 变成可用状态。`context_fork`/`history_prefix_fork` 的运行态 preflight 拒绝在 target 创建前完成，失败不写目标取消 Turn；只有 `full_rollout_copy` 才在同一收敛事务中写入 target-local mapping、唯一 `fork_origins`、target active view 和复制运行态的 `cancelled` historical state，然后进入 `target_committed`。pinned fork必须在source capture前已有`ForkRetentionClaim(state=preparing)`；target `target_committed`后只把同一claim激活，成功后才进入`committed`。启动时遇到`prepared`必须按journal清理target半成品并释放对应preparing claim，遇到`target_committed`必须幂等激活既有claim/推进最终状态，不能首次创建另一个retention或根据JSONL source/target offset猜测fork是否成功。
 
 #### Scenario: Fork 物化中途崩溃
 
@@ -88,16 +157,16 @@
 #### Scenario: Fork 目标提交后进程退出
 
 - **WHEN** target 已将 target-local finalization、运行态终止、mapping、active view 和 provenance 一起提交为 `target_committed`，但 source pinned retention 尚未完成时退出
-- **THEN** 下次打开 target rollout 幂等补写 source retention 并将 journal 标记为 `committed`；不得重复创建 mapping、provenance 或 retention
+- **THEN** 下次打开 target rollout按journal找回capture前已建立的preparing `ForkRetentionClaim`，验证两侧preimage后幂等激活并将journal标记为`committed`；不得首次补建或重复创建mapping、provenance、claim或retention
 
 ### Requirement: Compaction 创建 SQLite context view
 
-系统 SHALL 将 compaction 表达为 SQLite 中新的 context view 和控制事件，不创建新的 JSONL segment 或控制记录。摘要和保留的 canonical item 继续作为不可变 item 追加到 rollout.jsonl，新的 view 通过 item range/reference 选择摘要和保留范围。compaction 只改变 `history_view_revision`；若 source base/delta 仍兼容，必须通过 context reconciliation 复用同一 `source_overlay_epoch`，不能因为 history view 变化自动物化 source。只有 overlay 链需要压缩、source/detail 失效或其它明确的 source cache boundary invalidation 时，才在新的 `ContextAssemblySnapshot` 中推进 source overlay epoch 并物化完整 base。
+系统 SHALL将compaction表达为SQLite中新的context view和控制事件，不创建新的JSONL segment或控制记录。摘要和保留的canonical item继续作为不可变item追加到rollout.jsonl，新的view通过item range/reference选择摘要和保留范围。实际compaction是四类合法prefix epoch边界之一；compaction事务提交view及`PendingPrefixEpochTransition(reason=compaction)`，但pending记录没有wire bytes且不是applied epoch。下一次真正model-call preparation可以精确复用source base/delta，也可以从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision并物化为完整source，然后把source decision、首个新epoch assembly seal与transition消费原子提交。snapshot不可用时保留compaction view/transition但不产生半assembly或dispatch，且不读取文件、网络或其它provider。所有第一条真实用户消息后的summary/source完整或增量内容必须保持独立user-role item。source/detail失效不能被解释为物化理由来修复旧sealed assembly；精确恢复仍显式失败。
 
 #### Scenario: 压缩后继续运行
 
 - **WHEN** compaction 成功提交并开始下一轮 Agent 执行
-- **THEN** 新 checkpoint 引用包含摘要和必要尾部 item 的 SQLite context view，后续 item 继续追加到同一个 rollout.jsonl；若存在仍兼容的 source overlay，新 assembly 复用原 base/delta 和 source overlay epoch，只有 reconciliation 判定 source boundary 失效时才物化
+- **THEN** 新checkpoint引用包含摘要和必要尾部item的SQLite context view并登记pending compaction transition，后续item继续追加到同一个rollout.jsonl；下一次model-call preparation若精确复用source overlay或从冻结Registry activation snapshot物化tracked published完整user-role revision，都必须与首个新epochassembly及transition消费原子提交，不得修改旧item、请求期读源或用当前文件修复旧assembly
 
 #### Scenario: 压缩后读取原始历史
 
@@ -107,11 +176,11 @@
 #### Scenario: compaction 前的 source overlay 保留审计 lineage
 
 - **WHEN** `AGENTS.md` 或已应用的 skill source 在 compaction 前有 base A 和 A→B 增量
-- **THEN** 只有当 reconciliation 判定 overlay 链需要压缩、source/detail 失效或其它明确 source cache boundary invalidation 时，新 view/assembly 才引用 B 的完整物化 revision 和新的 `source_overlay_epoch`；若 overlay 仍兼容，则只创建新的 history view/revision，继续引用 A 与 A→B。无论哪种结果，A 与 A→B 的 item/provenance 都保持可审计，不被物理覆盖或删除
+- **THEN** compaction的新epoch可以继续精确引用A与A→B，也可以按明确materialization policy从冻结Registry activation snapshot取得并引用B的完整user-role revision；无论哪种结果，A与A→B的item/provenance都保持可审计，不被物理覆盖或删除。source/detail失效必须作为旧assembly的明确错误，不能触发静默重建或当前源读取
 
 ### Requirement: Rewind 在 SQLite 中创建新 branch 和 view
 
-系统 SHALL 在同一个 rollout.jsonl 上追加后续 canonical item，并在 SQLite 中创建新的 branch、context view 和 control event。rewind 只改变 `history_view_revision` 和 canonical history 的可见尾部；旧 item 保持不可变，旧后缀从新 view 中隐藏。rewind 提交后，下一次执行必须通过 context reconciliation 重新解析当前 source overlay：兼容时复用同一 `source_overlay_epoch`，若被隐藏的 ambient delta 仍有效则从 overlay lineage 重新注入；不得因为 rewind 本身物化 source base，也不得创建 semantic segment、parent segment 或复制旧 item 正文来伪造新 branch。
+系统 SHALL在同一个rollout.jsonl上追加后续canonical item，并在SQLite中创建新的branch、context view和control event。rewind事务改变`history_view_revision`和canonical history可见尾部，恢复checkpoint-versioned tracking state并提交`PendingPrefixEpochTransition(reason=rewind)`；旧item保持不可变，旧后缀从新view中隐藏。pending记录没有wire bytes且不是applied epoch。目标checkpoint若保留tracked registration但最新已注入revision不在重建后的active view，下一次真正model-call preparation必须从activation coordinator冻结的ResourceRegistry内存snapshot取得published完整revision，并把独立user-role source item、新source overlay epoch、首个rewind epoch assembly与transition消费原子提交；snapshot不可用或seal失败时保留rewind view/transition但不产生半item或dispatch，且不得读当前源。snapshot/untracked不自动恢复。不得从overlay lineage把cutoff后的delta直接复活，不得创建semantic segment、parent segment或复制旧item正文来伪造新branch。
 
 #### Scenario: 只回退不继续
 
@@ -131,7 +200,7 @@
 #### Scenario: rewind 到 source delta 之前
 
 - **WHEN** source overlay 为 A base 加 A→B delta，而 rewind 的 history view 不再包含保存该 delta 的历史 item
-- **THEN** 下一次 assembly 仍以 rewind view 作为 canonical history，并从独立 overlay lineage 重新注入 A→B；`source_overlay_epoch`、base identity 和 delta identity 保持不变
+- **THEN** 下一次model-call preparation以rewind view作为canonical history，并从冻结Registry activation snapshot取得tracked published revision B，把对应完整user-role item、新source overlay epoch、首个rewind prefix epoch assembly及transition消费原子提交；旧A→B只保留审计lineage，snapshot/untracked不恢复，当前源不被读取
 
 ### Requirement: Fork anchor 具有明确包含语义
 
@@ -151,6 +220,8 @@
 
 系统 SHALL 继续允许用户可见的 rewind、replay 以及从历史 Turn 发起的上下文操作使用稳定的 `turn_id` 和 `inclusive`/`before` 语义；backend resolver MUST 通过 `RolloutCheckpointSaver` 读取已提交的 active-lineage source view，并解析到 `TurnRecord.root_input_item_id` 对应的 canonical item 起点，再在需要时解析到 `content_part_id`/fragment anchor。业务层和 projector 不得直接扫描 RolloutStorage、AppendWriter 或内部 context reader。内部 compaction、fork 和恢复流程可以直接使用细粒度 durable item anchor；interrupt 首先使用当前 stream 的内存 cursor/ItemDraft，只有需要跨重启恢复或审计时才保存对应的 item/content-part reference。request-only context reference 与 pending runtime notice 不属于 view，不能直接作为 durable operation anchor。前端和普通调用方不需要传递 `view_id`、`checkpoint_id` 或物理 message 序号。
 
+任何将被继续执行或编译为 Provider request 的目标 view MUST 在 tool protocol 上闭合。若解析后的 item/content-part anchor 位于 assistant tool-call group 与任一匹配 terminal tool result 之间，resolver MUST 返回 `tool-protocol-boundary-conflict`，保持原 view 且不得创建新 view、branch、checkpoint 或 prefix epoch；响应可以提供不含内容正文的前后最近安全 anchor，但不得自动移动用户选择、合成 result 或按物理序号猜测边界。read-only history 可以保留 partial/incomplete group 用于审计，但不得把它标记为可执行。
+
 系统 SHALL 保留 item 级定位能力。自动 compaction、用户主动 compaction、重放和 durable interrupt finalization 均可以使用 canonical item/content-part 作为边界；不得因为 Turn 或 LangChain message projection 存在而把操作强制对齐到 message 末尾。实时 interrupt 可以只停留在内存 cursor，不能因此要求每个 raw chunk 都成为 SQLite anchor。所有 durable anchor MUST 明确记录 `inclusive`/`before`、source view/branch 和可恢复性；content-part anchor 至少需要稳定 part identity、ordinal、hash/prefix hash 和 recovery capability，任意字符/token offset 不得单独作为 durable anchor。
 
 #### Scenario: Turn 操作解析到 tool call 之前
@@ -167,6 +238,11 @@
 
 - **WHEN** 调用方提交的 item/content-part anchor 不在目标 branch/view 的有效 lineage 中
 - **THEN** 系统返回明确的 stale/unreachable anchor 错误，不按最大 message sequence 或最新 checkpoint 静默替换边界
+
+#### Scenario: item anchor 切入 tool 调用与结果之间
+
+- **WHEN** rewind、replay、compaction 或 fork 将一个 assistant tool-call group 与其任一匹配 terminal tool result 分隔到 active view 边界两侧
+- **THEN** 系统返回 `tool-protocol-boundary-conflict`，不改变原 view、不创建目标，并返回可选择的安全 anchor metadata；只有只读历史可以展示该 partial group，执行投影不得消费它
 
 #### Scenario: system reminder 位于新 Turn 之前
 
@@ -198,7 +274,7 @@ checkpoint 在 restore/replay 时必须把已选 ToolSetRef manifest identity（
 #### Scenario: checkpoint 恢复持久化系统通知
 
 - **WHEN** 中断提醒或 compaction notice 已通过 append intent 成为 canonical system notice
-- **THEN** checkpoint 的 view 可以引用该 canonical `runtime_notice` item，且它与当次请求中用于编译的 system wire role 保持可追踪但不互相替代
+- **THEN** checkpoint 的 view 可以引用该 canonical `runtime_notice` item；若它位于第一条真实用户消息之后，当次请求只能按plan ordinal投影为独立user wire item，并与canonical identity保持可追踪但不互相替代，不得提升为中途system
 
 ### Requirement: Turn root、execution 和 finalization 在分支操作中保持稳定
 
@@ -216,7 +292,7 @@ Turn.status 转移表冻结为：
 
 回放操作必须分离：`history_replay` 只生成 projection，不创建 execution；`resume_turn` 只按上表复用允许恢复的原 Turn；`dispatch_replay` 表示把 Provider dispatch 绑定到原 `turn_id`，对普通 `cancelled` 和 `full_rollout_copy` 的 cancelled historical 都返回 `turn_not_resumable`；`replay_as_new_turn` 才是显式的新 Turn 创建操作，创建新的 Turn/root/acceptance/initial execution 并以 `replay_of_turn_id` 保存 lineage。`replay_as_new_turn` 后续可以进行 Provider dispatch，但不是原 Turn 的 `dispatch_replay`，同一 API 语义不得同时返回错误并创建新 Turn。`full_rollout_copy` 的 cancelled historical 不允许任何同 Turn resume 或 dispatch replay。
 
-checkpoint、branch 和 view SHALL 保存 Turn 的 `turn_id`、session-global 且不可重排的 `turn_ordinal`、不可变 origin `source_branch_id`、`accepted_ingress_id`、`acceptance_idempotency_key`、`root_input_item_id`、execution/model-call lineage 和 `final_item_id` 引用。在同一 session 内，派生 branch/view 只能复制既有 Turn/item 的引用，不得复制或重新编号 TurnRecord；无新用户输入的 continue/resume 只有在 Turn.status 转移表允许时才继续原 Turn并创建新的 execution/model-call identity。`history_replay` 是唯一可以复用 source Turn/root 的历史 projection，不创建 execution；显式 `replay_as_new_turn` 必须创建新的 Turn/root/acceptance/initial execution，并在 active view 登记新的 `logical_turn_ordinal`，source history 可以作为前缀复制或引用但 source Turn/root 不能成为新 Turn 的 root，并用 `replay_of_turn_id` 关联。跨 session fork 不复用这些裸 local identity，而按本 delta 的 GlobalEntityRef/target-local mapping 合同建立新的 target Turn/item/acceptance identity，并仅在 lineage 中保存 source identity；target 两类 acceptance identity 各自必须满足 target session-local 唯一性。fork 后接受新的真实输入 MUST 创建新的 target/session-local Turn、全局递增的 target `turn_ordinal`、新的 root 和新的 origin branch。retry/resume 不得复用已经提交的 output item identity；没有成功 finalization 时不得以最后一个 assistant item 替代 `final_item_id`。`context_view_turns.logical_turn_ordinal` 是 view-local 唯一顺序，必须和全局 `turn_ordinal` 分开；上述新 Turn 操作不能被解释为绑定原 Turn 的 `dispatch_replay`。
+checkpoint、branch 和 view SHALL 保存 Turn 的 `turn_id`、owner-thread-global 且不可重排的 `turn_ordinal`、不可变 origin `source_branch_id`、`accepted_ingress_id`、`acceptance_idempotency_key`、`root_input_item_id`、execution/model-call lineage 和 `final_item_id` 引用。在同一 `(session_id, thread_id)` owner namespace 内，派生 branch/view 只能复制既有 Turn/item 的引用，不得复制或重新编号 TurnRecord；无新用户输入的 continue/resume 只有在 Turn.status 转移表允许时才继续原 Turn并创建新的 execution/model-call identity。`history_replay` 是唯一可以复用 source Turn/root 的历史 projection，不创建 execution；显式 `replay_as_new_turn` 必须创建新的 Turn/root/acceptance/initial execution，并在 active view 登记新的 `logical_turn_ordinal`，source history 可以作为前缀复制或引用但 source Turn/root 不能成为新 Turn 的 root，并用 `replay_of_turn_id` 关联。跨 session fork 不复用这些裸 local identity，而按本 delta 的 GlobalEntityRef/target-local mapping 合同建立新的 target Turn/item/acceptance identity，并仅在 lineage 中保存 source identity；target 两类 acceptance identity 各自必须满足 target-thread-local 唯一性。fork 后接受新的真实输入 MUST 在 target main thread 创建新的 thread-local Turn、递增的 target-thread `turn_ordinal`、新的 root 和新的 origin branch。retry/resume 不得复用已经提交的 output item identity；没有成功 finalization 时不得以最后一个 assistant item 替代 `final_item_id`。`context_view_turns.logical_turn_ordinal` 是 view-local 唯一顺序，必须和 owner-thread-global `turn_ordinal` 分开；上述新 Turn 操作不能被解释为绑定原 Turn 的 `dispatch_replay`。
 
 #### Scenario: resume 不创建伪造 Turn
 
@@ -228,21 +304,21 @@ checkpoint、branch 和 view SHALL 保存 Turn 的 `turn_id`、session-global �
 - **WHEN** pending runtime notice 之后提交一条普通用户输入
 - **THEN** 系统创建新的 `turn_id`、全局递增的 `turn_ordinal`、新的 root input item 和新的 origin `source_branch_id`；pending notice 只能通过 ambient/assembly relation 参与请求，不改变新 Turn 的 root
 
-#### Scenario: 同一 session 内 history_replay 复用 Turn 但不隐式执行
+#### Scenario: 同一 owner thread 内 history_replay 复用 Turn 但不隐式执行
 
-- **WHEN** 从已有 Turn 的 inclusive 或 before anchor 在同一 session 内创建 branch/view
+- **WHEN** 从已有 Turn 的 inclusive 或 before anchor 在同一 `(session_id, thread_id)` 内创建 branch/view
 - **THEN** 新 history view 复用原 `turn_id`、`turn_ordinal`、`source_branch_id` 和 `root_input_item_id`，并为该 view 登记自己的 `logical_turn_ordinal`；复制或加载 view 不产生新的 execution，`history_replay` 也不产生 execution，只有符合 Turn.status 转移表的显式 `resume_turn` 才新增 execution/model-call lineage
 
-#### Scenario: 同一 session 内 replay_as_new_turn 创建新 active Turn
+#### Scenario: 同一 owner thread 内 replay_as_new_turn 创建新 active Turn
 
-- **WHEN** 从已有 Turn 的 inclusive 或 before anchor 在同一 session 内明确选择 `replay_as_new_turn`
+- **WHEN** 从已有 Turn 的 inclusive 或 before anchor 在同一 `(session_id, thread_id)` 内明确选择 `replay_as_new_turn`
 - **THEN** 新 active view 可以复制或引用 source history 作为上下文前缀，但必须登记新的 target-local `turn_id`、新的 `user_input` root、acceptance、initial execution 和新的 view-local `logical_turn_ordinal`；source Turn/root 仅作为前缀或 lineage，不能成为新 Turn 的 root
 - **AND** 新 Turn 的 Provider dispatch 绑定新 `turn_id`，该操作不是 source Turn 的 `history_replay`、`resume_turn` 或 `dispatch_replay`
 
 #### Scenario: 跨 session fork 新建 target identity
 
 - **WHEN** 从 source session 的 Turn/anchor 通过 `context_fork`、`history_prefix_fork` 或 `full_rollout_copy` 创建 target session
-- **THEN** target 使用 target-local `turn_id`、`turn_ordinal`、`source_branch_id`、`accepted_ingress_id`、`acceptance_idempotency_key`、root/item/assembly refs 和 offset，并在 fork mapping 中保存 source GlobalEntityRef；两类 acceptance identity 分别占用 target session-local 唯一空间，source 值只保留为 lineage/audit 坐标；复制本身不隐式创建可运行 execution，只有符合 Turn.status 转移表的显式 `resume_turn` 才复用 target Turn 并创建新的 target execution/model-call lineage；`history_replay` 只在其 owner namespace 已存在的 history view 中复用该 namespace 的 Turn 引用且不创建 execution；显式 `replay_as_new_turn` 必须在 target active view 创建新的 target Turn/root/acceptance/initial execution 和新的 `logical_turn_ordinal`，可以复制或引用已映射 source history 作为前缀，source Turn/root 不能成为新 Turn 的 root，并以 `replay_of_turn_id` 关联；该操作不属于原 Turn 的 `dispatch_replay`；普通或 `cancelled` historical Turn 的 `resume_turn`/`dispatch_replay` 均返回 `turn_not_resumable`
+- **THEN** target 使用 target-main-thread-local `turn_id`、`turn_ordinal`、`source_branch_id`、`accepted_ingress_id`、`acceptance_idempotency_key`、root/item/assembly refs 和 offset，并在 fork mapping 中保存 source GlobalEntityRef；两类 acceptance identity 分别占用 target-thread-local 唯一空间，source 值只保留为 lineage/audit 坐标；复制本身不隐式创建可运行 execution，只有符合 Turn.status 转移表的显式 `resume_turn` 才复用 target Turn 并创建新的 target execution/model-call lineage；`history_replay` 只在其 owner namespace 已存在的 history view 中复用该 namespace 的 Turn 引用且不创建 execution；显式 `replay_as_new_turn` 必须在 target active view 创建新的 target Turn/root/acceptance/initial execution 和新的 `logical_turn_ordinal`，可以复制或引用已映射 source history 作为前缀，source Turn/root 不能成为新 Turn 的 root，并以 `replay_of_turn_id` 关联；该操作不属于原 Turn 的 `dispatch_replay`；普通或 `cancelled` historical Turn 的 `resume_turn`/`dispatch_replay` 均返回 `turn_not_resumable`
 
 #### Scenario: root lookup 与 view 顺序分离
 

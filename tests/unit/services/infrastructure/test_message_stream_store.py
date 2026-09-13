@@ -125,6 +125,49 @@ async def test_event_commit_is_idempotent_and_terminal_gate_is_strict(
 
 
 @pytest.mark.asyncio
+async def test_tool_event_identity_is_persisted_and_mismatch_is_rejected(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+) -> None:
+    _, resolver, session_id = message_stream_store
+    store = MessageStreamStore(path_resolver=resolver, workspace_id="workspace_1")
+    writer = await store.open(session_id=session_id, turn_id="job_tool_identity")
+    event = await writer.commit(
+        "tool.completed",
+        {
+            "model_call_id": "model_1",
+            "tool_execution_id": "exec_1",
+            "tool_call_id": "call_1",
+            "tool_invocation_id": "invocation_1",
+            "tool_attempt_id": "attempt_1",
+            "tool_name": "shell",
+            "status": "completed",
+            "outcome": "success",
+            "completion_reason": "tool_completed",
+            "result": "ok",
+        },
+    )
+
+    assert event["workspace_id"] == "workspace_1"
+    assert event["model_call_id"] == "model_1"
+    assert event["tool_execution_id"] == "exec_1"
+    assert event["tool_call_id"] == "call_1"
+    assert event["tool_invocation_id"] == "invocation_1"
+    assert event["tool_attempt_id"] == "attempt_1"
+    assert "workspace_id" not in event["payload"]
+
+    with pytest.raises(MessageStreamError, match="tool_call_id"):
+        await writer.commit(
+            "tool.completed",
+            {**event["payload"], "tool_call_id": "call_2"},
+            model_call_id="model_1",
+            tool_execution_id="exec_1",
+            tool_call_id="call_1",
+            tool_invocation_id="invocation_1",
+            tool_attempt_id="attempt_1",
+        )
+
+
+@pytest.mark.asyncio
 async def test_stream_terminal_event_survives_unrelated_catalog_drift(
     message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
 ) -> None:

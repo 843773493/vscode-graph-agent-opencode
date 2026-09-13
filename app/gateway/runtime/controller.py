@@ -391,6 +391,12 @@ class GatewayWorkspaceRuntimeController:
         target.backend_url = runtime.service_urls["workspace_api"]
         target.connection_error = None
         self._registry.upsert(target, activate=False)
+        if startup_contract is not None:
+            await self._resolve_pending_restart(
+                target.backend_url,
+                candidate_ref=str(startup_contract["candidate_ref"]),
+                request_id=request_id,
+            )
 
     async def _record_pending_restart_failure(
         self,
@@ -412,6 +418,35 @@ class GatewayWorkspaceRuntimeController:
                 headers=self._backend_headers(request_id),
             )
             response.raise_for_status()
+
+    async def _resolve_pending_restart(
+        self,
+        backend_url: str,
+        *,
+        candidate_ref: str,
+        request_id: str,
+    ) -> None:
+        """用候选后端的健康证明提交已成功启动的 Workspace 配置。"""
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            health_response = await client.get(
+                f"{backend_url.rstrip('/')}/api/v1/health",
+                headers=self._backend_headers(request_id),
+            )
+            health_response.raise_for_status()
+            health_payload = health_response.json()
+            if not isinstance(health_payload, dict):
+                raise TypeError("Workspace 健康响应必须是 JSON 对象")
+            health_proof = health_payload.get("config_proof")
+            if not isinstance(health_proof, dict):
+                raise TypeError("Workspace 健康响应缺少 config_proof")
+            resolve_response = await client.post(
+                f"{backend_url.rstrip('/')}/api/v1/config/pending/resolve",
+                params={"candidate_ref": candidate_ref},
+                json=health_proof,
+                headers=self._backend_headers(request_id),
+            )
+            resolve_response.raise_for_status()
 
     async def _runtime_status(
         self,

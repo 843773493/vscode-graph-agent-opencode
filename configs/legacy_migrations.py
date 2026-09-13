@@ -43,6 +43,14 @@ _LEGACY_BUILTIN_FACTORIES = {
     ),
 }
 
+_LEGACY_PROVIDER_CAPABILITY_FIELDS = {
+    "image_input": "supports_vision",
+    "video_input": "supports_video_input",
+    "audio_input": "supports_audio_input",
+    "audio_output": "supports_audio_output",
+    "function_calling": "supports_function_calling",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ConfigMigrationResult:
@@ -70,6 +78,8 @@ def migrate_config(raw_config: Mapping[str, object]) -> ConfigMigrationResult:
             raise ValueError(f"缺少配置迁移器: v{version} -> v{version + 1}")
         config = migration(config)
         version += 1
+
+    config = _migrate_legacy_provider_shape(config)
 
     return ConfigMigrationResult(
         config=config,
@@ -221,6 +231,125 @@ def _migrate_v3_to_v4(config: dict[str, object]) -> dict[str, object]:
             gateway["workspaces"] = migrated_workspaces
     config["config_version"] = 4
     return config
+
+
+def _migrate_legacy_provider_shape(config: dict[str, object]) -> dict[str, object]:
+    """把旧 provider 字段转换为当前结构化 api_mode。"""
+    llm = config.get("llm")
+    if not isinstance(llm, dict):
+        return config
+    providers = llm.get("providers")
+    if not isinstance(providers, list):
+        return config
+
+    migrated_providers: list[object] = []
+    for index, raw_provider in enumerate(providers):
+        if not isinstance(raw_provider, Mapping):
+            migrated_providers.append(deepcopy(raw_provider))
+            continue
+        provider = deepcopy(dict(raw_provider))
+        capabilities = _read_legacy_provider_capabilities(
+            provider.pop("capabilities", None),
+            context=f"llm.providers[{index}].capabilities",
+        )
+        raw_api_mode = provider.get("api_mode")
+        if isinstance(raw_api_mode, Mapping):
+            api_mode = deepcopy(dict(raw_api_mode))
+            _merge_legacy_capabilities_into_api_mode(
+                api_mode,
+                capabilities,
+                context=f"llm.providers[{index}].api_mode",
+            )
+            provider["api_mode"] = api_mode
+        elif raw_api_mode is None or isinstance(raw_api_mode, str):
+            protocol = raw_api_mode or _infer_legacy_provider_protocol(provider)
+            provider["api_mode"] = _build_legacy_api_mode(protocol, capabilities)
+        else:
+            raise TypeError(
+                f"llm.providers[{index}].api_mode 必须是字符串或对象，"
+                f"实际类型: {type(raw_api_mode).__name__}"
+            )
+        migrated_providers.append(provider)
+
+    llm["providers"] = migrated_providers
+    return config
+
+
+def _read_legacy_provider_capabilities(
+    raw_capabilities: object,
+    *,
+    context: str,
+) -> dict[str, bool]:
+    if raw_capabilities is None:
+        return {}
+    if not isinstance(raw_capabilities, list):
+        raise TypeError(f"{context} 必须是数组")
+
+    migrated: dict[str, bool] = {}
+    for capability in raw_capabilities:
+        if not isinstance(capability, str):
+            raise TypeError(f"{context} 只支持字符串元素")
+        field = _LEGACY_PROVIDER_CAPABILITY_FIELDS.get(capability)
+        if field is None:
+            raise ValueError(f"{context} 包含无法迁移的能力: {capability!r}")
+        migrated[field] = True
+    return migrated
+
+
+def _merge_legacy_capabilities_into_api_mode(
+    api_mode: dict[str, object],
+    capabilities: Mapping[str, bool],
+    *,
+    context: str,
+) -> None:
+    if not capabilities:
+        return
+    model_info = api_mode.get("model_info")
+    if not isinstance(model_info, dict):
+        raise TypeError(f"{context}.model_info 必须是对象，无法合并旧 capabilities")
+    for field, enabled in capabilities.items():
+        current = model_info.get(field)
+        if current is not None and current is not True and enabled:
+            raise ValueError(
+                f"{context}.model_info.{field} 与旧 capabilities 冲突: {current!r}"
+            )
+        model_info[field] = enabled
+
+
+def _infer_legacy_provider_protocol(provider: Mapping[str, object]) -> str:
+    auth = provider.get("auth")
+    if provider.get("custom_llm_provider") == "chatgpt" or (
+        isinstance(auth, Mapping) and auth.get("method") == "chatgpt"
+    ):
+        return "responses"
+    return "chat_completions"
+
+
+def _build_legacy_api_mode(
+    protocol: str,
+    capabilities: Mapping[str, bool],
+) -> dict[str, object]:
+    if protocol not in {"chat_completions", "responses", "anthropic_messages"}:
+        raise ValueError(f"旧 provider.api_mode 协议不受支持: {protocol!r}")
+    model_info: dict[str, object] = {
+        **capabilities,
+        "supports_reasoning": False,
+    }
+    if protocol == "responses":
+        supports_reasoning: dict[str, object] = {
+            "reasoning_items": {"summary": False, "encrypted_content": False}
+        }
+    elif protocol == "anthropic_messages":
+        supports_reasoning = {
+            "thinking_blocks": {"thinking": False, "redacted_thinking": False}
+        }
+    else:
+        supports_reasoning = {"reasoning_content": False}
+    return {
+        "protocol": protocol,
+        "model_info": model_info,
+        "supports_reasoning": supports_reasoning,
+    }
 
 
 _MIGRATIONS = {

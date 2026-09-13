@@ -413,7 +413,11 @@ class WorkspaceStateStore:
             connection.close()
 
     def migrate_legacy_config_secrets(self, config_key: str) -> tuple[str, ...]:
-        """升级旧表中的秘密；字面量只保留不可用摘要并返回阻断路径。"""
+        """升级旧表中的秘密引用。
+
+        字面量 key 保留原文（已受支持）；只有旧版本写入的不可逆
+        ``literal-sha256:`` 摘要才会被记为阻断路径。
+        """
 
         connection = self._database.connection()
         blocked: set[str] = set()
@@ -478,7 +482,7 @@ class WorkspaceStateStore:
         *,
         config_domain: str,
     ) -> tuple[str, ...]:
-        """升级旧 active payload，并对无法恢复的字面量建立恢复态。"""
+        """升级旧 active payload，并对无法恢复的旧摘要秘密建立恢复态。"""
 
         connection = self._database.connection()
         try:
@@ -506,7 +510,7 @@ class WorkspaceStateStore:
                     dump_json(build_secret_binding_summary(migrated)),
                     int(bool(blocked)),
                     int(bool(blocked)),
-                    "旧 active snapshot 含无法恢复的字面量 secret，需重新导入引用",
+                    "旧 active snapshot 含无法恢复的秘密摘要，需重新导入引用",
                     config_domain,
                 ),
             )

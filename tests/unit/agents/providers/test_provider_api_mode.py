@@ -631,6 +631,46 @@ def test_responses_history_drops_encrypted_reasoning_from_another_provider():
     assert any(item.get("type") == "message" for item in payload["input"])
 
 
+def test_responses_native_projection_skips_reasoning_items_and_keeps_text():
+    from app.services.infrastructure.rollout_context.provider.native_request import (
+        _text_blocks,
+    )
+
+    # 这个回归用例锁定实际会话中出现的 assistant structured_content 形状：
+    # reasoning_items 是 provider 扩展，普通 text 才是 Responses message content。
+    reasoning_and_text = [
+        {
+            "type": "reasoning_items",
+            "reasoning_items": [{"type": "reasoning", "summary": []}],
+        },
+        {"type": "text", "text": "上一轮工具调用已完成"},
+    ]
+    assert _text_blocks(reasoning_and_text, role="assistant") == [{
+        "type": "output_text",
+        "text": "上一轮工具调用已完成",
+    }]
+
+
+def test_responses_native_projection_drops_reasoning_only_assistant_content():
+    from app.services.infrastructure.rollout_context.provider.native_request import (
+        _text_blocks,
+    )
+
+    assert _text_blocks(
+        [{"type": "reasoning_items", "reasoning_items": [{"type": "reasoning"}]}],
+        role="assistant",
+    ) == []
+
+
+def test_responses_native_projection_rejects_unknown_system_block():
+    from app.services.infrastructure.rollout_context.provider.native_request import (
+        _text_blocks,
+    )
+
+    with pytest.raises(ValueError, match="source-mismatch"):
+        _text_blocks([{"type": "provider_private_extension"}], role="system")
+
+
 def test_responses_history_keeps_tool_call_when_dropping_unportable_reasoning():
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 

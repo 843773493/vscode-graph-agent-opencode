@@ -184,6 +184,11 @@ try {
     hasText: "已运行 read_file",
   });
   await completedTool.waitFor({ state: "visible", timeout: 30_000 });
+  await completedTool.locator(".chat-tool-summary").click();
+  await completedTool.getByText("README.md", { exact: false }).waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
   const completedToolText = await completedTool.innerText();
   if (
     completedToolText.includes("未完成")
@@ -191,6 +196,9 @@ try {
     || completedToolText.includes("未知")
   ) {
     throw new Error(`read_file 工具执行状态异常: ${completedToolText}`);
+  }
+  if (!completedToolText.includes("README.md")) {
+    throw new Error(`read_file 工具详情缺少输入参数: ${completedToolText}`);
   }
 
   result = {

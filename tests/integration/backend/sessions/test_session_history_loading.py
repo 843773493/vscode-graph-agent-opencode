@@ -540,6 +540,51 @@ async def test_history_tool_selector_only_materializes_requested_tool(
 
 
 @pytest.mark.asyncio
+async def test_history_tool_selector_accepts_model_call_scoped_tool_call_id(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+) -> None:
+    """定点详情携带 model-call scoped ID 时也必须命中 SQLite 原始 call 行。
+
+    前端从 canonical projection 拿到的是 ``<model-call>:tool-call:<raw-id>``，
+    而 SQLite ``tool_calls`` 表按 provider 原始 ``<raw-id>`` 保存。若不归一化，
+    定点请求会查不到任何记录，工具参数/结果在历史上静默为空。
+    """
+    session_id = await _create_session(integration_client, "scoped 工具详情")
+    _seed_rollout(
+        Path(integration_workspace_root_path), session_id, count=1, tool_count=2
+    )
+
+    raw_page = await _load_history(
+        integration_client,
+        session_id,
+        {
+            "turn_ids": ["job-0001"],
+            "tool_call_ids": ["call-0001-1"],
+            "include": ["tool_call", "tool_result"],
+        },
+    )
+    scoped_page = await _load_history(
+        integration_client,
+        session_id,
+        {
+            "turn_ids": ["job-0001"],
+            "tool_call_ids": ["model-call-0001:tool-call:call-0001-1"],
+            "include": ["tool_call", "tool_result"],
+        },
+    )
+
+    raw_parts = raw_page["items"][0]["response_parts"]
+    scoped_parts = scoped_page["items"][0]["response_parts"]
+    assert [part["kind"] for part in scoped_parts] == ["tool_call", "tool_result"]
+    assert [part["kind"] for part in raw_parts] == ["tool_call", "tool_result"]
+    assert scoped_parts[0]["arguments"] == raw_parts[0]["arguments"]
+    assert scoped_parts[0]["arguments"] is not None
+    assert scoped_parts[1]["result"] == raw_parts[1]["result"]
+    assert scoped_parts[1]["result"] is not None
+
+
+@pytest.mark.asyncio
 async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,

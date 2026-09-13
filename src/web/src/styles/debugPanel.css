@@ -1,0 +1,510 @@
+.auxiliary-debug-body {
+  min-width: 0;
+  overflow: auto;
+}
+
+.debug-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 100%;
+  gap: 12px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--bt-surface-raised) 72%, transparent);
+  color: var(--bt-text-primary);
+}
+
+.debug-panel-header,
+.debug-section-title-row,
+.debug-breakpoint-row,
+.debug-timeline-row,
+.debug-audit-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.debug-panel-header {
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--bt-panel-border);
+}
+
+.debug-panel-header > div,
+.debug-section-title-row h3 {
+  min-width: 0;
+}
+
+.debug-panel-header strong,
+.debug-panel-header span {
+  display: block;
+}
+
+.debug-panel-header strong {
+  font-size: 14px;
+}
+
+.debug-panel-header span,
+.debug-muted,
+.debug-section-title-row > span,
+.debug-stop-card p,
+.debug-timeline-row small,
+.debug-audit-row small {
+  color: var(--bt-text-muted);
+}
+
+.debug-panel-header span {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.debug-refresh-button,
+.debug-control-buttons button,
+.debug-breakpoint-form button,
+.debug-clear-all {
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: color-mix(in srgb, var(--bt-surface-raised) 68%, transparent);
+  color: var(--bt-text-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.debug-refresh-button,
+.debug-control-buttons button,
+.debug-breakpoint-form button {
+  min-height: 26px;
+  padding: 0 8px;
+}
+
+.debug-refresh-button:hover,
+.debug-control-buttons button:hover:not(:disabled),
+.debug-breakpoint-form button:hover,
+.debug-clear-all:hover {
+  border-color: color-mix(in srgb, var(--bt-accent) 52%, var(--bt-panel-border));
+  background: color-mix(in srgb, var(--bt-accent) 12%, var(--bt-surface-raised));
+}
+
+.debug-control-buttons button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.debug-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.debug-section-title-row {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.debug-section-title-row h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.debug-section-title-row > span {
+  font-size: 10px;
+}
+
+.debug-status {
+  color: var(--bt-status-success) !important;
+}
+
+.debug-status.stopped {
+  color: var(--bt-status-warning) !important;
+}
+
+.debug-mode-select,
+.debug-breakpoint-form select,
+.debug-breakpoint-form input {
+  min-width: 0;
+  min-height: 28px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: var(--bt-input-background, var(--bt-surface-raised));
+  color: var(--bt-text-primary);
+  font: inherit;
+  font-size: 11px;
+}
+
+.debug-mode-select {
+  width: 100%;
+  padding: 0 7px;
+}
+
+.debug-control-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.debug-control-buttons button:last-child {
+  grid-column: 1 / -1;
+}
+
+.debug-breakpoint-form {
+  display: grid;
+  grid-template-columns: minmax(66px, 0.7fr) minmax(0, 1.4fr) auto;
+  gap: 5px;
+}
+
+.debug-breakpoint-form select,
+.debug-breakpoint-form input {
+  padding: 0 6px;
+}
+
+.debug-breakpoint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.debug-breakpoint-row {
+  gap: 6px;
+  min-height: 26px;
+  padding: 3px 5px;
+  border: 1px solid color-mix(in srgb, var(--bt-panel-border) 70%, transparent);
+  border-radius: var(--bt-radius-small);
+  font-size: 11px;
+}
+
+.debug-breakpoint-row > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-breakpoint-row button {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--bt-text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.debug-breakpoint-row button:hover {
+  color: var(--bt-status-error);
+}
+
+.debug-breakpoint-dot,
+.debug-timeline-marker {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--bt-accent);
+}
+
+.debug-clear-all {
+  align-self: flex-start;
+  padding: 4px 7px;
+}
+
+.debug-stop-card {
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--bt-status-warning) 48%, var(--bt-panel-border));
+  border-radius: var(--bt-radius-small);
+  background: color-mix(in srgb, var(--bt-status-warning) 8%, transparent);
+}
+
+.debug-stop-card strong {
+  display: block;
+  font-size: 11px;
+}
+
+.debug-stop-card p {
+  margin: 5px 0 8px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.debug-stop-card details {
+  margin-top: 6px;
+  font-size: 10px;
+}
+
+.debug-stop-card pre {
+  max-height: 140px;
+  margin: 5px 0 0;
+  padding: 6px;
+  overflow: auto;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--bt-surface-base) 70%, transparent);
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.debug-empty-state {
+  padding: 18px 4px;
+  color: var(--bt-text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.debug-empty-state.compact {
+  padding: 7px 0;
+}
+
+.debug-timeline,
+.debug-audit-details {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.debug-timeline-row {
+  display: grid;
+  grid-template-columns: 8px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.debug-timeline-row small,
+.debug-audit-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-timeline-marker.debug {
+  background: var(--bt-status-warning);
+}
+
+.debug-timeline-marker.tool {
+  background: var(--bt-status-success);
+}
+
+.debug-audit-details {
+  margin-top: 5px;
+  font-size: 10px;
+}
+
+.debug-audit-row {
+  gap: 5px;
+}
+
+.debug-audit-row strong {
+  font-weight: 500;
+}
+
+.debug-audit-row small {
+  flex: 1 1 auto;
+}
+
+.debug-error {
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--bt-status-error) 48%, var(--bt-panel-border));
+  border-radius: var(--bt-radius-small);
+  color: var(--bt-status-error);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.node-debug-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid var(--bt-panel-border);
+  background: color-mix(in srgb, var(--bt-surface-raised) 96%, #6f8cff 4%);
+}
+
+.node-debug-header,
+.node-debug-actions-row,
+.node-debug-controls,
+.node-debug-breakpoint-form,
+.node-debug-evaluate-row,
+.node-debug-breakpoint-row,
+.node-debug-frame-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.node-debug-header {
+  justify-content: space-between;
+}
+
+.node-debug-header > div,
+.node-debug-frame-card {
+  display: grid;
+  gap: 3px;
+}
+
+.node-debug-header span,
+.node-debug-frame-card small,
+.node-debug-active-file {
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.node-debug-start-form,
+.node-debug-section {
+  display: grid;
+  gap: 7px;
+}
+
+.node-debug-start-form label {
+  display: grid;
+  gap: 4px;
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.node-debug-start-form input,
+.node-debug-breakpoint-form input,
+.node-debug-evaluate-row input {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 4px;
+  padding: 5px 7px;
+  color: var(--bt-text-primary);
+  background: var(--bt-surface-raised);
+  font: inherit;
+}
+
+.node-debug-actions-row button,
+.node-debug-controls button,
+.node-debug-breakpoint-form button,
+.node-debug-evaluate-row button,
+.node-debug-header button {
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 4px;
+  padding: 5px 8px;
+  color: var(--bt-text-primary);
+  background: var(--bt-surface-raised);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.node-debug-actions-row button:hover,
+.node-debug-controls button:hover,
+.node-debug-breakpoint-form button:hover,
+.node-debug-evaluate-row button:hover,
+.node-debug-header button:hover {
+  border-color: var(--bt-accent);
+}
+
+.node-debug-actions-row button:disabled,
+.node-debug-controls button:disabled,
+.node-debug-breakpoint-form button:disabled,
+.node-debug-evaluate-row button:disabled,
+.node-debug-header button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.node-debug-controls {
+  flex-wrap: wrap;
+}
+
+.node-debug-breakpoint-form input {
+  max-width: 68px;
+}
+
+.node-debug-breakpoint-row {
+  min-width: 0;
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.node-debug-breakpoint-row button:first-of-type {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+  color: var(--bt-text-primary);
+  background: transparent;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.node-debug-breakpoint-row button:last-child {
+  border: 0;
+  color: var(--bt-text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.node-debug-breakpoint-row .verified {
+  color: #55c88a;
+}
+
+.node-debug-breakpoint-row .unverified {
+  color: #d69d4f;
+}
+
+.node-debug-frame-card {
+  align-items: start;
+  border-left: 2px solid var(--bt-accent);
+  padding: 6px 8px;
+  background: var(--bt-surface-raised);
+}
+
+.node-debug-frame-card button {
+  width: fit-content;
+  border: 0;
+  padding: 0;
+  color: var(--bt-accent);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.node-debug-variables {
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 4px;
+  padding: 5px 7px;
+  background: var(--bt-surface-raised);
+  font-size: 11px;
+}
+
+.node-debug-variables > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.node-debug-variables code,
+.node-debug-section pre {
+  overflow: auto;
+  color: var(--bt-text-primary);
+  font: 11px/1.45 var(--bt-font-mono, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.node-debug-section pre {
+  max-height: 140px;
+  margin: 0;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 4px;
+  padding: 7px;
+  background: var(--bt-surface-raised);
+}
+
+.node-debug-output {
+  max-height: 90px !important;
+}

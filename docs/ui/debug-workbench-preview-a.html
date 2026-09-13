@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>调试工作台预览 A · 三栏工作区</title>
+    <link rel="stylesheet" href="./debug-workbench-previews.css" />
+  </head>
+  <body>
+    <div class="shell theme-warm">
+      <header class="topbar">
+        <div class="brand"><span class="mark">⌁</span><span>BoxTeam</span></div>
+        <nav class="top-tabs" aria-label="工作区标签"><button class="top-tab" type="button">文件</button><button class="top-tab active" type="button">调试</button><button class="top-tab" type="button">事件</button></nav>
+        <span class="spacer"></span><span class="crumb">会话 · node-debug-fixture</span><span class="status"><i></i><span id="status">已暂停</span></span>
+      </header>
+      <main class="layout-a">
+        <aside class="pane left" aria-label="调试配置和文件选择">
+          <div class="pane-head"><strong>调试目标</strong><button class="small-button" type="button">＋ 配置</button></div>
+          <section class="section">
+            <div class="section-title"><span>运行配置</span><span>⋮</span></div>
+            <div class="config">
+              <div class="config-header"><span class="config-name"><b class="node">JS</b> Node.js 文件</span><span class="muted">⚙</span></div>
+              <div class="fields">
+                <label class="field">运行时<select><option>Node.js · v22</option><option>Node.js · v20</option></select></label>
+                <label class="field">程序路径<input value="debug/node-debug-fixture.mjs" /></label>
+                <label class="field">工作目录<input value="/workspace" /></label>
+                <div class="field-row"><label class="field">参数<input id="args" value="23" /></label><label class="field">超时<input value="30s" /></label></div>
+              </div>
+              <div class="actions"><button class="primary" id="run" type="button">▶ 启动调试</button><button class="secondary" type="button">保存</button></div>
+            </div>
+          </section>
+          <section class="section file-list">
+            <div class="section-title"><span>工作区文件</span><span>⌕</span></div>
+            <button class="file-row" type="button">⌄　workspace</button>
+            <button class="file-row indent" type="button">⌄　debug</button>
+            <button class="file-row indent active" type="button"><span>JS</span><span>node-debug-fixture.mjs</span><span class="meta">14 行</span></button>
+            <button class="file-row indent" type="button"><span>JS</span><span>server.mjs</span></button>
+            <button class="file-row indent" type="button"><span>JS</span><span>test-runner.mjs</span></button>
+            <button class="file-row" type="button">⌄　src</button>
+          </section>
+        </aside>
+        <section class="editor" aria-label="源码预览">
+          <div class="editor-head"><span class="crumb">debug / <strong>node-debug-fixture.mjs</strong></span><div class="editor-tools"><button type="button">复制</button><button type="button">打开文件</button></div></div>
+          <div class="editor-note">源码预览 · 点击左侧行号槽设置或取消断点 · 红点为手动断点</div>
+          <div class="code-scroll">
+            <div class="code-line"><span class="gutter" data-line="1"></span><span class="line-number">1</span><span class="code"><span class="kw">const</span> input = Number(process.argv[2] ?? <span class="str">"7"</span>);</span></div>
+            <div class="code-line"><span class="gutter" data-line="2"></span><span class="line-number">2</span><span class="code"><span class="kw">const</span> label = <span class="str">"node-debug-fixture"</span>;</span></div>
+            <div class="code-line"><span class="gutter" data-line="3"></span><span class="line-number">3</span><span class="code"> </span></div>
+            <div class="code-line"><span class="gutter" data-line="4"></span><span class="line-number">4</span><span class="code"><span class="kw">function</span> <span class="fn">transform</span>(value) {</span></div>
+            <div class="code-line current"><span class="gutter breakpoint" data-line="5"></span><span class="line-number">5</span><span class="code">  <span class="kw">const</span> doubled = value * <span class="num">2</span>;</span></div>
+            <div class="code-line"><span class="gutter" data-line="6"></span><span class="line-number">6</span><span class="code">  <span class="kw">const</span> result = { value, doubled, label };</span></div>
+            <div class="code-line"><span class="gutter" data-line="7"></span><span class="line-number">7</span><span class="code">  <span class="kw">return</span> result;</span></div>
+            <div class="code-line"><span class="gutter" data-line="8"></span><span class="line-number">8</span><span class="code">}</span></div>
+            <div class="code-line"><span class="gutter" data-line="9"></span><span class="line-number">9</span><span class="code"> </span></div>
+            <div class="code-line"><span class="gutter" data-line="10"></span><span class="line-number">10</span><span class="code"><span class="kw">function</span> <span class="fn">main</span>() {</span></div>
+            <div class="code-line"><span class="gutter breakpoint" data-line="11"></span><span class="line-number">11</span><span class="code">  <span class="kw">const</span> snapshot = <span class="fn">transform</span>(input);</span></div>
+            <div class="code-line"><span class="gutter" data-line="12"></span><span class="line-number">12</span><span class="code">  console.log(JSON.stringify(snapshot));</span></div>
+            <div class="code-line"><span class="gutter" data-line="13"></span><span class="line-number">13</span><span class="code">}</span></div>
+            <div class="code-line"><span class="gutter" data-line="14"></span><span class="line-number">14</span><span class="code"><span class="fn">main</span>();</span></div>
+          </div>
+        </section>
+        <aside class="pane right" aria-label="调试检查器">
+          <div class="pane-head"><strong>调试检查器</strong><button class="small-button" id="stop" type="button">■ 停止</button></div>
+          <section class="section"><div class="stop"><strong id="stop-title">命中断点 · 第 5 行</strong><code>transform(value) · fixture.mjs:5</code></div></section>
+          <section class="section"><div class="section-title"><span>执行控制</span><span>协同模式</span></div><div class="control-grid"><button class="primary" id="continue" type="button">▶ 继续</button><button id="step" type="button">↷ 单步</button></div></section>
+          <section class="section"><details class="card" open><summary>调用栈 <span class="muted">2 帧</span></summary><div class="card-body"><div class="stack-row active"><span>transform</span><small>fixture.mjs:5</small></div><div class="stack-row"><span>main</span><small>fixture.mjs:11</small></div></div></details></section>
+          <section class="section"><details class="card" open><summary>局部变量</summary><div class="card-body"><div class="variable-row"><code>value</code><span>23</span></div><div class="variable-row"><code>label</code><span>"node-debug-fixture"</span></div><div class="variable-row"><code>doubled</code><small>未初始化</small></div></div></details></section>
+          <section class="section"><details class="card" open><summary>Watch / 表达式</summary><div class="card-body"><div class="watch"><input id="watch" value="value * 2" /><button id="eval" type="button">求值</button></div><div class="watch-value" id="watch-result">46</div></div></details></section>
+          <section class="section"><div class="section-title"><span>最近事件</span><span>审计</span></div><div class="timeline"><div class="timeline-row"><i class="timeline-mark warn"></i><time>10:42:18</time><span><strong>系统</strong> 命中源码断点</span></div><div class="timeline-row"><i class="timeline-mark"></i><time>10:42:17</time><span><strong>AI</strong> 启动 Node 调试</span></div><div class="timeline-row"><i class="timeline-mark"></i><time>10:42:16</time><span><strong>人类</strong> 设置第 11 行断点</span></div></div></section>
+        </aside>
+      </main>
+      <footer class="footer"><strong>方案 A · 三栏工作区</strong><span>左：配置与文件选择</span><span>中：源码与手动断点</span><span>右：调用栈、变量、Watch、事件</span></footer>
+    </div>
+    <div class="toast" id="toast"></div>
+    <script>
+      const toast = document.querySelector("#toast");
+      const notify = (text) => { toast.textContent = text; toast.classList.add("show"); window.setTimeout(() => toast.classList.remove("show"), 1600); };
+      document.querySelectorAll(".gutter").forEach((gutter) => gutter.addEventListener("click", () => { gutter.classList.toggle("breakpoint"); notify((gutter.classList.contains("breakpoint") ? "已设置" : "已取消") + "第 " + gutter.dataset.line + " 行断点"); }));
+      document.querySelector("#run").addEventListener("click", () => notify("Node 调试已启动，参数：" + document.querySelector("#args").value));
+      document.querySelector("#continue").addEventListener("click", () => { document.querySelector("#status").textContent = "运行中"; notify("程序继续运行"); });
+      document.querySelector("#step").addEventListener("click", () => { document.querySelector("#stop-title").textContent = "单步停在 · 第 6 行"; document.querySelector("#status").textContent = "已暂停"; notify("已执行一步"); });
+      document.querySelector("#stop").addEventListener("click", () => { document.querySelector("#status").textContent = "已退出"; notify("Node 调试已停止"); });
+      document.querySelector("#eval").addEventListener("click", () => { const value = document.querySelector("#watch").value.trim(); document.querySelector("#watch-result").textContent = value === "value + 1" ? "24" : value === "value * 2" ? "46" : "需在暂停状态求值"; notify("已求值：" + value); });
+    </script>
+  </body>
+</html>

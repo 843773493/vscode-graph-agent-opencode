@@ -32,6 +32,26 @@ type WorkspaceBootstrapPayload = {
   agents: Awaited<ReturnType<typeof apiListAgents>>;
 };
 
+type GatewayWorkspaceList = Awaited<ReturnType<typeof listGatewayWorkspaces>>;
+
+export class WorkspaceBootstrapUnavailableError extends Error {
+  readonly gatewayWorkspaces: GatewayWorkspaceList;
+
+  constructor(gatewayWorkspaces: GatewayWorkspaceList) {
+    const activeWorkspace = gatewayWorkspaces.items.find(
+      (workspace) => workspace.workspace_id === gatewayWorkspaces.active_workspace_id,
+    );
+    const activeWorkspaceDescription = activeWorkspace
+      ? `活动工作区“${activeWorkspace.name}”当前不可用`
+      : "当前没有活动工作区";
+    super(
+      `${activeWorkspaceDescription}，当前没有可用工作区。请在工作区列表中启动或重连工作区后重试。`,
+    );
+    this.name = "WorkspaceBootstrapUnavailableError";
+    this.gatewayWorkspaces = gatewayWorkspaces;
+  }
+}
+
 const BOOTSTRAP_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 3000, 5000, 5000];
 const INITIAL_BOOTSTRAP_DELAY_MS = 120;
 
@@ -40,6 +60,25 @@ export function isRetryableWorkspaceBootstrapError(error: unknown): boolean {
     error instanceof HttpRequestError
     && [502, 503, 504].includes(error.status)
   ) || error instanceof TypeError;
+}
+
+export function selectHealthyGatewayWorkspace(
+  workspaceList: GatewayWorkspaceList,
+): string | null {
+  const activeWorkspace = workspaceList.items.find(
+    (workspace) => workspace.workspace_id === workspaceList.active_workspace_id,
+  );
+  if (activeWorkspace?.status === "ready") {
+    return activeWorkspace.workspace_id;
+  }
+  return (
+    workspaceList.items.find(
+      (workspace) => workspace.system_default && workspace.status === "ready",
+    )?.workspace_id
+    ?? workspaceList.items.find((workspace) => workspace.status === "ready")
+      ?.workspace_id
+    ?? null
+  );
 }
 
 async function waitForBootstrapRetry(
@@ -179,7 +218,21 @@ async function loadWorkspaceBootstrap(
     });
   }
   signal?.throwIfAborted();
+  const healthyWorkspaceId = selectHealthyGatewayWorkspace(gatewayWorkspaces);
+  if (healthyWorkspaceId === null) {
+    throw new WorkspaceBootstrapUnavailableError(gatewayWorkspaces);
+  }
+  if (healthyWorkspaceId !== gatewayWorkspaces.active_workspace_id) {
+    await activateGatewayWorkspace(apiPort, healthyWorkspaceId, signal);
+    signal?.throwIfAborted();
+    gatewayWorkspaces = await listGatewayWorkspaces(apiPort, {
+      checkHealth: options.checkGatewayWorkspaceHealth,
+    });
+  }
   const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
+  if (selectHealthyGatewayWorkspace(gatewayWorkspaces) !== activeWorkspaceId) {
+    throw new WorkspaceBootstrapUnavailableError(gatewayWorkspaces);
+  }
   const [workspace, workspaceSessionResults, agents] = await Promise.all([
     getWorkspace(apiPort, activeWorkspaceId),
     Promise.allSettled(
@@ -411,7 +464,7 @@ export function useWorkspaceBootstrap({
         };
       });
       return true;
-    } catch (error) {
+    } catch (error: unknown) {
       if (
         controller.signal.aborted
         || refreshGeneration !== refreshGenerationRef.current
@@ -421,6 +474,13 @@ export function useWorkspaceBootstrap({
       const message = error instanceof Error ? error.message : String(error);
       setState((prev) => ({
         ...prev,
+        ...(error instanceof WorkspaceBootstrapUnavailableError
+          ? {
+              gatewayWorkspaces: error.gatewayWorkspaces.items,
+              activeGatewayWorkspaceId: error.gatewayWorkspaces.active_workspace_id,
+              gatewayError: message,
+            }
+          : {}),
         error: message,
         status: "初始化失败",
         isBootstrapping: false,
@@ -480,6 +540,20 @@ export function useWorkspaceBootstrap({
     }
   }, [apiPort, setState]);
 
+  const refreshAgents = useCallback(async (workspaceId: string): Promise<void> => {
+    const agents = await apiListAgents(
+      apiPort ?? DEFAULT_BACKEND_PORT,
+      workspaceId,
+    );
+    setState((previous) => {
+      const currentWorkspaceId =
+        previous.currentSessionWorkspaceId ?? previous.activeGatewayWorkspaceId;
+      return currentWorkspaceId === workspaceId
+        ? { ...previous, agents }
+        : previous;
+    });
+  }, [apiPort, setState]);
+
   useEffect(() => {
     // React.StrictMode 的开发探测会先 cleanup 再重新执行 effect；延迟首个
     // bootstrap 可以让探测阶段在发出网络请求前结束，避免同一组工作区读取被
@@ -497,6 +571,7 @@ export function useWorkspaceBootstrap({
 
   return {
     invalidateWorkspaceRefreshes,
+    refreshAgents,
     refreshGatewayWorkspaceStatuses,
     refreshSessions,
   };

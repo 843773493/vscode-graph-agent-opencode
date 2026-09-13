@@ -50,7 +50,9 @@ def test_message_stream_snapshot_preserves_tool_call_arguments() -> None:
             "turn_stream_id": "stream_123",
             "event_seq": 12,
             "type": "stream.snapshot",
+            "workspace_id": "wsp_123",
             "payload": {
+                "workspace_id": "wsp_123",
                 "session_id": "session_123",
                 "turn_id": "turn_123",
                 "turn_stream_id": "stream_123",
@@ -65,20 +67,39 @@ def test_message_stream_snapshot_preserves_tool_call_arguments() -> None:
                         "tool_name": "shell",
                         "arguments": {"command": "pwd"},
                         "status": "streaming",
+                        "model_call_id": "model_123",
+                        "tool_invocation_id": "invocation_123",
+                        "tool_attempt_id": "attempt_123",
                     }
                 ],
-                "tool_executions": [],
+                "tool_executions": [
+                    {
+                        "tool_execution_id": "execution_123",
+                        "tool_call_id": "call_123",
+                        "tool_name": "shell",
+                        "status": "completed",
+                        "outcome": "success",
+                        "result": "/workspace",
+                        "model_call_id": "model_123",
+                    }
+                ],
                 "resumable": True,
             },
         }
     )
 
+    assert encoded.stream_snapshot.workspace_id == "wsp_123"
     assert encoded.stream_snapshot.tool_calls[0].tool_call_id == "call_123"
+    assert encoded.stream_snapshot.tool_calls[0].tool_invocation_id == "invocation_123"
+    assert encoded.stream_snapshot.tool_calls[0].tool_attempt_id == "attempt_123"
     decoded = message_stream_to_json(encoded)
     snapshot = decoded["payload"]
     assert snapshot["snapshot_seq"] == 12
     assert isinstance(snapshot["snapshot_seq"], int)
     assert snapshot["tool_calls"][0]["arguments"] == {"command": "pwd"}
+    assert "model_call_id" not in snapshot["tool_calls"][0]
+    assert "model_call_id" not in snapshot["tool_executions"][0]
+    assert snapshot["workspace_id"] == "wsp_123"
 
 
 def test_message_stream_codec_projects_internal_tool_and_model_fields() -> None:
@@ -90,8 +111,12 @@ def test_message_stream_codec_projects_internal_tool_and_model_fields() -> None:
             "turn_stream_id": "stream_123",
             "event_seq": 13,
             "type": "tool_call.delta",
+            "workspace_id": "wsp_123",
+            "tool_call_id": "call_123",
+            "tool_invocation_id": "invocation_123",
             "payload": {
                 "tool_call_id": "call_123",
+                "tool_invocation_id": "invocation_123",
                 "tool_name": "shell",
                 "arguments_delta": "{\"command\":\"pwd\"}",
                 "status": "streaming",
@@ -99,7 +124,12 @@ def test_message_stream_codec_projects_internal_tool_and_model_fields() -> None:
         }
     )
     delta = message_stream_to_json(encoded_delta)["payload"]
+    assert encoded_delta.workspace_id == "wsp_123"
+    assert encoded_delta.tool_call_id == "call_123"
+    assert encoded_delta.tool_invocation_id == "invocation_123"
     assert delta["arguments_delta"] == '{"command":"pwd"}'
+    assert message_stream_to_json(encoded_delta)["tool_call_id"] == "call_123"
+    assert message_stream_to_json(encoded_delta)["tool_invocation_id"] == "invocation_123"
     assert "status" not in delta
 
     encoded_snapshot = message_stream_to_proto(
@@ -141,11 +171,15 @@ def test_message_stream_codec_projects_internal_tool_and_model_fields() -> None:
                         "status": "completed",
                         "outcome": "success",
                         "result": "/workspace",
+                        "tool_invocation_id": "invocation_123",
+                        "tool_attempt_id": "attempt_123",
                     }
                 ],
+                "workspace_id": "wsp_123",
             },
         }
     )
+    assert encoded_snapshot.stream_snapshot.workspace_id == "wsp_123"
     snapshot = message_stream_to_json(encoded_snapshot)["payload"]
     assert snapshot["model_calls"] == [
         {
@@ -157,6 +191,8 @@ def test_message_stream_codec_projects_internal_tool_and_model_fields() -> None:
     ]
     assert snapshot["tool_calls"][0]["arguments"] == {"command": "pwd"}
     assert snapshot["tool_executions"][0]["result"] == "/workspace"
+    assert snapshot["tool_executions"][0]["tool_invocation_id"] == "invocation_123"
+    assert snapshot["tool_executions"][0]["tool_attempt_id"] == "attempt_123"
 
 
 def test_message_stream_v1_round_trip_preserves_terminal_projection() -> None:

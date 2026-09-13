@@ -27,7 +27,7 @@
 - 规定任何 active promotion 前都必须对所有来源层重新执行 `base_layer_revision`/`base_layer_digest`/source generation CAS；外部副作用期间发现 source 变化时不得 promotion，必须补偿并重建候选或进入 conflict/recovery_required。
 - 定义 JSONC 层的 `present`、`absent` 和 tombstone 语义，覆盖删除、重命名、临时文件、恢复文件、备份及删除后的优先级合并和重启判断。
 - 固化 active snapshot 的持久化记录结构、唯一键、完整脱敏 payload、来源基线、secret binding、promotion 事务和进程崩溃恢复规则，禁止只依赖进程内快照。
-- 保持用户配置的 `api_key` 契约并在导入边界规范化为内部 `secret_ref`；明确 literal key、`${ENV}`、secret rotation、resolver 失败和旧 SQLite 记录的迁移结果。
+- 保持用户配置的 `api_key` 契约：`${ENV}` 在导入边界规范化为内部 `secret_ref`，字面量 key（本地模型 dummy key、临时 apikey）按原文持久化并在诊断侧脱敏；明确 `${ENV}`、secret rotation、resolver 失败和旧 SQLite 记录（含不可逆 `literal-sha256:` 摘要）的迁移结果。
 - 将 Gateway `connection_id` 迁移定义为可恢复的旧版本读取、旧 schema 校验、生成持久 ID、原子备份写入、新 schema 校验和 registry generation 建立流程，覆盖崩溃、重试、注释和旧程序回滚。
 - 由单一 source owner 持久化单调 `source_generation` 和 append-only source journal；`fanout_id` 关联 journal 事件，digest 只负责内容去重，必须区分 `A → B → A` 和停止 Workspace 的追赶。
 - 为 registry batch、manual CRUD 和 active promotion 增加 registry revision CAS、事务边界、恢复记录及 `workspace_id`/`connection_id`/remote target 的唯一命名空间，禁止整表删除重插入覆盖并发修改。

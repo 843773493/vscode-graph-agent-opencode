@@ -14,7 +14,6 @@ from app.schemas.internal_v2.config import ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
-    SecretReferenceRequiredError,
 )
 from app.services.infrastructure.config.watcher import ConfigFileWatcher
 from app.services.infrastructure.config_service import ConfigService
@@ -97,7 +96,7 @@ def test_config_accepts_chatgpt_oauth_provider_without_api_key(tmp_path: Path):
     assert service.get_llm_provider("backup_4")["auth"]["method"] == "chatgpt"
 
 
-def test_literal_provider_key_is_rejected_before_workspace_sqlite_write(
+def test_literal_provider_key_is_persisted_verbatim_in_workspace_sqlite(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
@@ -112,10 +111,22 @@ def test_literal_provider_key_is_rejected_before_workspace_sqlite_write(
             workspace_root=workspace_root,
             workspace_state_store=store,
         )
-        with pytest.raises(SecretReferenceRequiredError, match="无法安全持久化"):
-            service.validate_workspace_config()
-        assert store.get_active_config_snapshot("workspace") is None
-        assert "literal-provider-key" in config_path.read_text(encoding="utf-8")
+        service.validate_workspace_config()
+        active = store.get_active_config_snapshot("workspace")
+        assert active is not None
+        persist_state = store.connection()
+        try:
+            row = persist_state.execute(
+                """
+                SELECT payload_json FROM config_active_snapshot
+                WHERE config_domain = 'workspace'
+                """
+            ).fetchone()
+        finally:
+            persist_state.close()
+        assert row is not None
+        payload = json.loads(row[0])
+        assert payload["llm"]["providers"][0]["api_key"] == "literal-provider-key"
     finally:
         store.close()
 
@@ -1823,6 +1834,61 @@ async def test_restart_required_reload_persists_pending_candidate_without_changi
         assert events[0].activation_scope == "restart_workspace"
         assert events[0].applied_paths == ()
         assert events[0].deferred_paths == events[0].changed_paths
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_workspace_pending_restart_resolves_with_matching_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    config_path = _write_workspace_config(tmp_path, config)
+    workspace_root = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace_root)
+    try:
+        service = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace_root,
+            workspace_state_store=store,
+        )
+        service.validate_workspace_config()
+        config["logger"]["level"] = "debug"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+
+        async def require_restart(*_args) -> None:
+            raise ConfigRestartRequiredError(
+                "需要重启工作区后端",
+                changed_sections=("logger",),
+            )
+
+        with pytest.raises(ConfigRestartRequiredError):
+            await service.reload(candidate_applier=require_restart)
+        pending = store.get_pending_config_candidate(config_domain="workspace")
+        assert pending is not None
+        assert pending.candidate_ref is not None
+        proof = service._pending_restart_health_proof(
+            candidate_ref=pending.candidate_ref,
+            pending=pending,
+        )
+
+        service.resolve_pending_restart(
+            candidate_ref=pending.candidate_ref,
+            health_proof=proof,
+        )
+
+        active = store.get_active_config_snapshot("workspace")
+        resolved = store.get_pending_config_candidate(config_domain="workspace")
+        assert active is not None
+        assert resolved is not None
+        assert active.effective_digest == resolved.effective_digest
+        assert resolved.state == "active"
+        assert [event.result for event in store.list_config_events(
+            config_domain="workspace"
+        )] == ["restart_required", "applied"]
     finally:
         store.close()
 

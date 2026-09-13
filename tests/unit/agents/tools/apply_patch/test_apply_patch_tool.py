@@ -350,7 +350,7 @@ def test_apply_patch_accepts_missing_end_marker_like_vscode(
     assert target.read_text(encoding="utf-8") == "after\n"
 
 
-def test_apply_patch_rejects_duplicate_and_absolute_paths(
+def test_apply_patch_rejects_duplicate_paths_and_escapes_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -370,21 +370,43 @@ def test_apply_patch_rejects_duplicate_and_absolute_paths(
 +two
 *** End Patch"""
         )
-    with pytest.raises(ValueError, match="必须是工作区相对路径"):
-        _apply(
-            """*** Begin Patch
-*** Add File: /absolute.txt
-+content
-*** End Patch"""
-        )
 
-    with pytest.raises(ValueError, match="文件路径超出工作区"):
+    with pytest.raises(ValueError, match="apply_patch 文件路径无效"):
         _apply(
             """*** Begin Patch
 *** Add File: ../outside.txt
 +content
 *** End Patch"""
         )
+
+    # 工作区外的宿主机绝对路径不会逃出工作区，而是被收敛到工作区内；
+    # 文件不会写到工作区外。
+    outside_file = (tmp_path.parent / "outside.txt").resolve()
+    _apply(
+        f"""*** Begin Patch
+*** Add File: {outside_file}
++content
+*** End Patch"""
+    )
+    assert not outside_file.exists()
+
+
+def test_apply_patch_normalizes_in_workspace_absolute_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    absolute_inside = (tmp_path / "src" / "abs.txt").resolve()
+
+    result = _apply(
+        f"""*** Begin Patch
+*** Add File: {absolute_inside}
++content
+*** End Patch"""
+    )
+
+    assert result["status"] == "success"
+    assert (tmp_path / "src" / "abs.txt").read_text(encoding="utf-8") == "content"
 
 
 def test_apply_patch_tool_returns_json_result(

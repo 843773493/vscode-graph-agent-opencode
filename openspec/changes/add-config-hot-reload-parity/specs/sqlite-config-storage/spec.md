@@ -88,19 +88,23 @@ Workspace SQLite SHALL（必须）以独立记录保存 `user`、`user_local`、
 - **WHEN** 某个 Workspace 的 `user` layer 在 fan-out 前已被 API/UI 以更高 layer revision 提交
 - **THEN** 该 Workspace 的 CAS 失败并记录 conflict，其他 Workspace 仍可成功或各自失败；汇总结果明确为 `fanout_partial`，不跨数据库回滚
 
-### Requirement: 配置候选中的秘密必须以引用形式持久化
+### Requirement: 配置候选中的秘密必须以引用或自包含字面量持久化
 
-待持久化的 active/pending candidate SHALL（必须）只保存规范化配置和 `secret_ref`、secret version 或 `secret_binding_digest`，不得保存解析后的 provider API key、token 或其他秘密字节。Workspace runtime 在启动/应用时才通过 Workspace-owned secret resolver 解析秘密，并将引用/绑定摘要用于 candidate/effective digest；健康 proof、配置事件、诊断、日志、outbox 和 Gateway candidate_ref 委托 MUST（必须）脱敏，不得包含秘密值或完整候选 payload。
+待持久化的 active/pending candidate SHALL（必须）只保存规范化配置和 `secret_ref`、secret version、`secret_binding_digest` 或用户显式写入的自包含字面量 key，不得保存任何运行时新解析出来的秘密字节。Workspace runtime 在启动/应用时才通过 Workspace-owned secret resolver 解析 `env:` 引用，并将引用/绑定摘要用于 candidate/effective digest；健康 proof、配置事件、诊断、日志、outbox 和 Gateway candidate_ref 委托 MUST（必须）脱敏，不得包含秘密原文或完整候选 payload。
 
-若输入包含字面量秘密且无法物化为受支持的 secret reference，导入 MUST（必须）返回 `rejected`/`secret_reference_required`，保留旧 active 和原始 JSONC，不得把字面量复制到 SQLite、outbox 或诊断响应。secret resolver 失败时新 generation 启动失败，不得回退到 active 并伪造 pending 已加载。
+字面量 key（例如本地部署模型的 dummy key、临时测试 apikey）SHALL（必须）按原文写入 SQLite 以支持原样重启恢复；它没有独立的 `secret_ref`，绑定摘要按字面量原文计算，因此无法通过该摘要检测轮换。只有旧版本写入的不可逆 `literal-sha256:` 摘要无法还原成可用 key，导入 MUST（必须）返回 `rejected`/`secret_reference_required`，保留旧 active 和原始 JSONC。secret resolver 失败时新 generation 启动失败，不得回退到 active 并伪造 pending 已加载。
 
 #### Scenario: pending 候选包含 provider key
 - **WHEN** 待重启候选包含 provider API key 或环境变量引用
-- **THEN** SQLite pending、outbox、诊断和 health proof 只保留 secret reference/binding digest；新 Workspace backend 在内存中解析并返回匹配的脱敏 proof
+- **THEN** SQLite pending、outbox、诊断和 health proof 只保留 secret reference/binding digest 或字面量的不可逆摘要；新 Workspace backend 在内存中解析并返回匹配的脱敏 proof
 
-#### Scenario: 字面量秘密无法引用
-- **WHEN** 配置导入发现字面量 API key 且没有可用的 secret resolver
-- **THEN** 候选被拒绝并返回 secret_reference_required，旧 active 不变，任何持久化事件和错误详情都不包含该 key
+#### Scenario: 字面量秘密按原文持久化
+- **WHEN** 配置导入发现字面量 API key（如本地模型 dummy key 或临时 apikey）
+- **THEN** 候选按原文写入 SQLite 并可在重启后原样恢复运行，但所有诊断、事件、日志、outbox 和 health proof 中只出现不可逆摘要，不出现该 key 原文
+
+#### Scenario: 旧版不可逆摘要无法恢复
+- **WHEN** 旧 SQLite 记录包含 `literal-sha256:` 形式的不可逆摘要
+- **THEN** 导入被拒绝并返回 secret_reference_required，旧 active 不变，任何持久化事件和错误详情都不包含该摘要之外的秘密值
 
 ### Requirement: JSONC source layer 必须区分 present 与 absent
 
@@ -140,17 +144,21 @@ promotion 必须在同一事务中更新 active snapshot、pending state、apply
 
 ### Requirement: 用户 api_key 与内部 secret_ref 的边界必须稳定
 
-当前用户 JSONC schema MUST（必须）继续以 `api_key` 作为公开契约，并接受受支持的 `${ENV_NAME}` 引用；内部候选和持久 snapshot 才规范化为不可逆的 secret reference、version 或 binding digest。字面量 key 只有在显式 importer 成功物化为受支持 secret reference 时才能进入候选，否则返回 `secret_reference_required`，不得写入 SQLite、outbox、日志或诊断。未来正式支持用户侧 `secret_ref` 必须伴随配置版本升级。
+当前用户 JSONC schema MUST（必须）继续以 `api_key` 作为公开契约，并接受受支持的 `${ENV_NAME}` 引用与自包含字面量 key。`${ENV_NAME}` 在内部候选和持久 snapshot 中规范化为不可逆的 secret reference；字面量 key 按原文持久化并直接使用，但所有诊断、事件、日志、outbox 和 health proof 只暴露其不可逆摘要。只有旧版本写入的 `literal-sha256:` 摘要无法还原，导入返回 `secret_reference_required`。未来正式支持用户侧 `secret_ref` 必须伴随配置版本升级。
 
-旧 SQLite 中的字面量和环境变量引用必须逐条迁移；迁移成功保留旧 digest 与映射，resolver 失败保留旧 active 并阻止新 generation。secret rotation 必须产生新的 binding/version 和 candidate digest，旧 active 在新 generation proof 成功前继续服务。
+旧 SQLite 中的字面量和环境变量引用必须逐条迁移；环境变量引用规范化为 `env:NAME`，字面量按原文保留，两者迁移成功都不阻断。只有不可逆 `literal-sha256:` 摘要的迁移必须返回阻断路径并进入 blocked/recovery_required。secret rotation 必须产生新的 binding/version 和 candidate digest，旧 active 在新 generation proof 成功前继续服务。
 
 #### Scenario: 环境变量引用和 secret rotation
 - **WHEN** `${ENV_NAME}` 解析到新的 secret binding，或用户轮换 secret
 - **THEN** 系统以新的 reference/version 生成 candidate，旧 active 不被原地改写，新 generation proof 匹配后才 promotion
 
-#### Scenario: 旧 SQLite literal key 迁移失败
-- **WHEN** 旧 SQLite 记录包含 literal key 且 resolver/importer 不可用
-- **THEN** 迁移进入 blocked/recovery_required，旧 active 尽可能保持服务，任何错误和新记录都不复制该 key
+#### Scenario: 旧 SQLite literal key 迁移成功
+- **WHEN** 旧 SQLite 记录包含普通 literal key 或 `${ENV_NAME}` 引用
+- **THEN** 迁移分别按原文保留和规范化为 `env:NAME`，返回空阻断路径，记录可正常启动恢复
+
+#### Scenario: 旧 SQLite 不可逆摘要迁移失败
+- **WHEN** 旧 SQLite 记录包含 `literal-sha256:` 形式的不可逆摘要
+- **THEN** 迁移返回该字段路径并进入 blocked/recovery_required，旧 active 尽可能保持服务，任何错误和新记录都不复制该摘要之外的秘密值
 
 ### Requirement: 用户级 source 必须由共享 journal 分配单调 generation
 

@@ -20,6 +20,7 @@ from app.services.mapping.itemized.provider_history import (
 )
 from app.services.mapping.itemized.provider_request import (
     project_ai_message_content,
+    project_tool_message_content,
     project_user_message_content,
 )
 
@@ -482,6 +483,71 @@ def test_user_projection_does_not_emit_anthropic_native_image_source_block():
             ),
         }
     ]
+
+
+def test_tool_projection_keeps_image_when_provider_supports_vision():
+    content = [
+        {"type": "text", "text": "读取完成"},
+        {"type": "image", "base64": "eA==", "mime_type": "image/png"},
+    ]
+
+    projected = project_tool_message_content(
+        content,
+        image_input=True,
+        path="verification.png",
+    )
+
+    assert projected["content"] == content
+    assert projected["diagnostics"] == []
+
+
+def test_tool_projection_replaces_image_with_text_placeholder():
+    content = [
+        {"type": "text", "text": "读取完成"},
+        {"type": "image", "base64": "eA==", "mime_type": "image/png"},
+    ]
+
+    projected = project_tool_message_content(
+        content,
+        image_input=False,
+        path="verification.png",
+    )
+
+    assert projected["content"][0] == {"type": "text", "text": "读取完成"}
+    assert projected["content"][1]["type"] == "text"
+    assert "1 个图片媒体" in projected["content"][1]["text"]
+    assert "verification.png" in projected["content"][1]["text"]
+    assert projected["diagnostics"] == [
+        {
+            "block_index": 1,
+            "block_type": "image",
+            "status": "not_sent",
+            "detail": "目标 provider 未声明 image_input 能力",
+        }
+    ]
+    assert content[1]["base64"] == "eA=="
+
+
+def test_tool_projection_returns_string_content_unchanged():
+    projected = project_tool_message_content(
+        "纯文本结果",
+        image_input=False,
+    )
+
+    assert projected["content"] == "纯文本结果"
+    assert projected["diagnostics"] == []
+
+
+def test_tool_projection_keeps_non_mapping_entries():
+    content = [
+        "裸字符串",
+        {"type": "image", "base64": "eA==", "mime_type": "image/png"},
+    ]
+
+    projected = project_tool_message_content(content, image_input=False)
+
+    assert projected["content"][0] == "裸字符串"
+    assert projected["content"][1]["type"] == "text"
 
 
 def test_streaming_invoke_canonicalizes_langchain_cache_merge(monkeypatch):

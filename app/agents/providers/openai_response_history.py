@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
 
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
+from app.services.mapping.itemized.provider_request import tool_media_placeholder_text
 
 logger = logging.getLogger(__name__)
 
@@ -355,11 +356,13 @@ def _portable_tool_result_message(message: ToolMessage) -> ToolMessage:
         return message
 
     raw_path = (message.additional_kwargs or {}).get("read_file_path")
-    path_hint = f"，路径：{raw_path}" if isinstance(raw_path, str) and raw_path else ""
-    media_hint = (
-        f"[工具结果包含 {media_count} 个图片媒体{path_hint}。"
-        "图片仍保留在会话记录中；本次 Responses 请求将其按文本占位符回放，"
-        "以兼容仅接受字符串 function_call_output 的 provider。]"
+    media_hint = tool_media_placeholder_text(
+        media_count=media_count,
+        path=raw_path if isinstance(raw_path, str) and raw_path else None,
+        note=(
+            "图片仍保留在会话记录中；本次 Responses 请求将其按文本占位符回放，"
+            "以兼容仅接受字符串 function_call_output 的 provider。"
+        ),
     )
     replay_content = "\n".join([*text_parts, media_hint])
     return message.model_copy(update={"content": replay_content})

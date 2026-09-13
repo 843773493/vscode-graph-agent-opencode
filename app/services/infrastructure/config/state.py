@@ -109,7 +109,7 @@ class ConfigEventCursorGoneError(RuntimeError):
 
 
 class SecretReferenceRequiredError(ValueError):
-    """输入秘密没有可持久化的引用，必须先经过显式导入。"""
+    """旧配置中的秘密无法安全恢复（例如不可逆摘要），必须先重新导入。"""
 
     code = "secret_reference_required"
 
@@ -236,6 +236,9 @@ _SECRET_FIELD_NAMES = frozenset(
 
 _ENV_SECRET_PATTERN = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
+# 字面量秘密在"诊断/事件/日志"侧统一表示为不可逆摘要；持久化侧则保留原文。
+_LITERAL_SECRET_PREFIX = "literal-sha256:"
+
 
 def _environment_secret_name(value: str) -> str | None:
     match = _ENV_SECRET_PATTERN.fullmatch(value)
@@ -248,15 +251,26 @@ def normalize_secret_reference(value: str) -> str:
         return f"env:{env_name}"
     if value.startswith("env:") and value[4:]:
         return value
-    if value.startswith("literal-sha256:"):
+    if value.startswith(_LITERAL_SECRET_PREFIX):
         return value
-    return f"literal-sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
+    return f"{_LITERAL_SECRET_PREFIX}{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
+
+
+def _literal_secret_digest(value: str) -> str:
+    """返回字面量秘密的不可逆摘要，只用于诊断、事件和日志。"""
+    return f"{_LITERAL_SECRET_PREFIX}{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
 
 
 def migrate_legacy_secret_payload(
     value: object,
 ) -> tuple[dict[str, object], tuple[str, ...]]:
-    """把旧持久化 payload 转为引用，并返回需要重新导入的字面量路径。"""
+    """升级旧持久化 payload。
+
+    - ``${ENV_NAME}`` 规范化为 ``env:NAME`` 引用；
+    - 字面量 key 保留原文（现在受支持），可正常重启恢复；
+    - ``literal-sha256:`` 是旧版本写入的不可逆摘要，无法还原出密钥，必须
+      返回阻断路径交给调用方建立恢复态，不能当作可用密钥静默放行。
+    """
 
     blocked_paths: list[str] = []
 
@@ -267,10 +281,14 @@ def migrate_legacy_secret_payload(
                 key_text = str(key)
                 item_path = (*path, key_text)
                 if key_text in _SECRET_FIELD_NAMES and isinstance(item, str):
-                    reference = normalize_secret_reference(item)
-                    if reference.startswith("literal-sha256:"):
+                    if item.startswith(_LITERAL_SECRET_PREFIX):
                         blocked_paths.append("/" + "/".join(item_path))
-                    result[key_text] = reference
+                        result[key_text] = item
+                        continue
+                    reference = normalize_secret_reference(item)
+                    result[key_text] = (
+                        reference if reference.startswith("env:") else item
+                    )
                 else:
                     result[key_text] = visit(item, item_path)
             return result
@@ -284,13 +302,14 @@ def migrate_legacy_secret_payload(
     migrated = visit(value, ())
     if not isinstance(migrated, dict):
         raise TypeError("旧配置秘密迁移要求对象 payload")
-    return migrated, tuple(blocked_paths)
+    return migrated, tuple(sorted(blocked_paths))
 
 
 def _resolve_secret_reference(reference: str, *, path: str) -> str:
+    """解析 ``env:`` 引用；字面量自包含，不需要也不能从摘要解析回原文。"""
     if not reference.startswith("env:") or not reference[4:]:
         raise SecretReferenceRequiredError(
-            f"配置秘密必须使用受支持的环境变量引用: path={path}"
+            f"配置秘密引用不受支持: path={path}, reference={reference}"
         )
     env_name = reference[4:]
     resolved = os.environ.get(env_name)
@@ -306,10 +325,13 @@ def prepare_config_for_persistence(
     *,
     resolve_environment: bool = False,
 ) -> dict[str, object]:
-    """生成只含 secret reference 的候选 payload。
+    """生成可持久化的候选 payload。
 
-    用户 JSONC 继续使用 ``api_key: ${ENV_NAME}``。没有显式 secret importer
-    时，字面量秘密必须拒绝；这样不会把原文写入 SQLite、事件或诊断。
+    支持两种秘密输入：``${ENV_NAME}``（规范化为 ``env:NAME`` 引用）和字面量
+    key（例如本地部署模型的 dummy key、临时测试 key）。字面量按原文写入
+    SQLite，保证重启后能原样恢复；而诊断、事件和日志侧由
+    ``redact_config_payload``/``build_secret_binding_summary`` 统一降级为
+    不可逆摘要，二者职责分离。
     """
 
     def visit(current: object, path: tuple[str, ...]) -> object:
@@ -320,17 +342,18 @@ def prepare_config_for_persistence(
                 item_path = (*path, key_text)
                 if key_text in _SECRET_FIELD_NAMES and isinstance(item, str):
                     reference = normalize_secret_reference(item)
-                    if reference.startswith("literal-sha256:"):
-                        raise SecretReferenceRequiredError(
-                            "配置包含无法安全持久化的字面量秘密: "
-                            f"path=/{'/'.join(item_path)}"
-                        )
-                    if resolve_environment:
+                    # 字面量自包含：无需也不能解析环境变量。
+                    if resolve_environment and reference.startswith("env:"):
                         _resolve_secret_reference(
                             reference,
                             path="/" + "/".join(item_path),
                         )
-                    result[key_text] = reference
+                    # env 引用存引用本身；字面量存原文，才能原样重启恢复。
+                    result[key_text] = (
+                        reference
+                        if reference.startswith("env:")
+                        else item
+                    )
                 else:
                     result[key_text] = visit(item, item_path)
             return result
@@ -345,10 +368,21 @@ def prepare_config_for_persistence(
 
 
 def redact_config_payload(value: object) -> object:
+    """生成可对外展示的脱敏副本。
+
+    秘密字段一律替换为引用或不可逆摘要：``env:NAME`` 保留引用，字面量
+    降级为 ``literal-sha256:<digest>``。这个函数只用于诊断、事件、日志和
+    备份，不参与持久化，因此与 ``prepare_config_for_persistence`` 职责分离。
+    """
+
     if isinstance(value, dict):
         return {
             str(key): (
-                normalize_secret_reference(item)
+                (
+                    _literal_secret_digest(item)
+                    if not item.startswith(("env:", _LITERAL_SECRET_PREFIX))
+                    else normalize_secret_reference(item)
+                )
                 if str(key) in _SECRET_FIELD_NAMES and isinstance(item, str)
                 else redact_config_payload(item)
             )
@@ -360,7 +394,12 @@ def redact_config_payload(value: object) -> object:
 
 
 def restore_environment_secret_references(value: object) -> object:
-    """仅把可重解析的 env secret_ref 还原为用户配置契约。"""
+    """把持久化 payload 还原为用户配置契约。
+
+    ``env:NAME`` 还原为 ``${NAME}``；字面量 key 原样返回，因为它在持久化时
+    就按原文保存，可以完整往返。``literal-sha256:`` 是不可逆摘要，无法还原，
+    必须显式报错而不是把摘要当作密钥使用。
+    """
 
     if isinstance(value, dict):
         restored: dict[str, object] = {}
@@ -370,7 +409,7 @@ def restore_environment_secret_references(value: object) -> object:
                 if item.startswith("env:") and item[4:]:
                     restored[key_text] = "${" + item[4:] + "}"
                     continue
-                if item.startswith("literal-sha256:"):
+                if item.startswith(_LITERAL_SECRET_PREFIX):
                     raise ValueError(
                         f"无法从 secret_ref 恢复 literal secret: path={key_text}"
                     )
@@ -386,7 +425,11 @@ def build_secret_binding_summary(
     *,
     resolve_environment: bool = False,
 ) -> dict[str, object]:
-    """返回引用和绑定摘要；永远不把解析后的秘密写入结果。"""
+    """返回引用和绑定摘要；永远不把解析后的秘密写入结果。
+
+    ``resolve_environment`` 只决定 env 引用是否用解析后的值计算绑定的
+    digest（用于检测密钥轮换）。字面量自包含，直接按其原文计算。
+    """
 
     bindings: dict[str, object] = {}
 
@@ -397,15 +440,19 @@ def build_secret_binding_summary(
                 item_path = (*path, key_text)
                 if key_text in _SECRET_FIELD_NAMES and isinstance(item, str):
                     reference = normalize_secret_reference(item)
-                    binding_digest = hashlib.sha256(
-                        (
+                    if reference.startswith("env:"):
+                        material = (
                             _resolve_secret_reference(
                                 reference,
                                 path="/" + "/".join(item_path),
                             )
                             if resolve_environment
                             else reference
-                        ).encode("utf-8")
+                        )
+                    else:
+                        material = item
+                    binding_digest = hashlib.sha256(
+                        material.encode("utf-8")
                     ).hexdigest()
                     bindings["/" + "/".join(item_path)] = {
                         "secret_ref": reference,

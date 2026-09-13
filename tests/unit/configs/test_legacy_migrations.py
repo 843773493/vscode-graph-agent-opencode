@@ -67,6 +67,59 @@ def test_migration_is_idempotent() -> None:
     assert second.config == first.config
 
 
+def test_legacy_provider_fields_migrate_to_structured_api_mode() -> None:
+    result = migrate_config(
+        {
+            "llm": {
+                "providers": [
+                    {
+                        "id": "legacy-openai",
+                        "endpoint": "https://example.com/v1",
+                        "model": "legacy-model",
+                        "api_key": "test-key",
+                        "custom_llm_provider": "openai",
+                    },
+                    {
+                        "id": "legacy-vision",
+                        "endpoint": "https://example.com/v1",
+                        "model": "legacy-vision-model",
+                        "api_key": "test-key",
+                        "custom_llm_provider": "openai",
+                        "capabilities": ["image_input"],
+                    },
+                    {
+                        "id": "legacy-chatgpt",
+                        "endpoint": "https://chatgpt.com/backend-api/codex",
+                        "model": "legacy-chatgpt-model",
+                        "custom_llm_provider": "chatgpt",
+                        "auth": {"type": "oauth", "method": "chatgpt"},
+                        "api_mode": "responses",
+                    },
+                ]
+            }
+        }
+    )
+
+    providers = result.config["llm"]["providers"]
+    assert providers[0]["api_mode"] == {
+        "protocol": "chat_completions",
+        "model_info": {"supports_reasoning": False},
+        "supports_reasoning": {"reasoning_content": False},
+    }
+    assert providers[1]["api_mode"]["model_info"] == {
+        "supports_vision": True,
+        "supports_reasoning": False,
+    }
+    assert "capabilities" not in providers[1]
+    assert providers[2]["api_mode"] == {
+        "protocol": "responses",
+        "model_info": {"supports_reasoning": False},
+        "supports_reasoning": {
+            "reasoning_items": {"summary": False, "encrypted_content": False}
+        },
+    }
+
+
 def test_file_migration_persists_atomically_and_keeps_custom_options(
     tmp_path: Path,
 ) -> None:

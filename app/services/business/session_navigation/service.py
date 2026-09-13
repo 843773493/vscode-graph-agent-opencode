@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -13,6 +14,7 @@ from app.core.session_paths import (
     SessionPathResolver,
     SessionPhysicalNode,
 )
+from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
     SessionCatalogExportDTO,
@@ -502,7 +504,11 @@ class SessionCatalogService:
             for node in physical_nodes
             if node.parent_node_id is not None
         }
-        nodes = [self._to_catalog_node(node, child_parent_ids) for node in physical_nodes]
+        session_metadata = await self._load_session_metadata(physical_nodes)
+        nodes = [
+            self._to_catalog_node(node, child_parent_ids, session_metadata)
+            for node in physical_nodes
+        ]
         nodes_by_id = {node.node_id: node for node in nodes}
         self._validate_parent_graph(nodes, nodes_by_id)
         revision = self._revision(nodes)
@@ -512,15 +518,49 @@ class SessionCatalogService:
         self._consistency_error = consistency_error
         return nodes, revision
 
+    async def _load_session_metadata(
+        self,
+        physical_nodes: list[SessionPhysicalNode],
+    ) -> dict[str, SessionDTO]:
+        session_nodes = [node for node in physical_nodes if node.kind == "session"]
+        if not session_nodes:
+            return {}
+        sessions = await asyncio.gather(
+            *(self._session_service.get(node.node_id) for node in session_nodes)
+        )
+        metadata: dict[str, SessionDTO] = {}
+        for node, session in zip(session_nodes, sessions, strict=True):
+            if session.session_id != node.node_id:
+                raise RuntimeError(
+                    "会话目录节点与 session manifest ID 不一致: "
+                    f"node_id={node.node_id}, session_id={session.session_id}"
+                )
+            if session.session_id in metadata:
+                raise RuntimeError(
+                    f"会话目录返回重复会话元数据: session_id={session.session_id}"
+                )
+            if session.title != node.name:
+                raise RuntimeError(
+                    "会话目录节点名称与会话元数据标题不一致: "
+                    f"session_id={node.node_id}, node_name={node.name}, "
+                    f"session_title={session.title}"
+                )
+            metadata[session.session_id] = session
+        return metadata
+
     def _to_catalog_node(
         self,
         node: SessionPhysicalNode,
         child_parent_ids: set[str],
+        session_metadata: dict[str, SessionDTO],
     ) -> SessionCatalogNodeDTO:
+        session = session_metadata.get(node.node_id)
+        if node.kind == "session" and session is None:
+            raise RuntimeError(f"会话目录节点缺少会话元数据: session_id={node.node_id}")
         return SessionCatalogNodeDTO(
             node_id=node.node_id,
             kind=node.kind,
-            name=node.name,
+            name=session.title if session is not None else node.name,
             parent_node_id=node.parent_node_id,
             session_id=node.node_id if node.kind == "session" else None,
             folder_id=node.node_id if node.kind == "folder" else None,
@@ -530,6 +570,7 @@ class SessionCatalogService:
             ).as_posix(),
             created_at=node.created_at,
             updated_at=node.updated_at,
+            session=session,
         )
 
     @staticmethod

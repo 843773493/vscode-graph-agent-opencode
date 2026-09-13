@@ -148,6 +148,33 @@ def test_persist_inline_accepts_generic_pdf_attachment(tmp_path, session_bundle_
         store.read_thumbnail("session_pdf", stored.file_id)
 
 
+def test_read_thumbnail_reports_corrupt_image_as_value_error(
+    tmp_path,
+    session_bundle_factory,
+):
+    """损坏的图片必须产生领域 ValueError，而不是让 PIL 的 OSError 冒泡成 500。"""
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "session_corrupt")
+    store = SessionAttachmentStore(tmp_path)
+    truncated = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+    stored = store.persist_inline(
+        "session_corrupt",
+        [
+            AttachmentRef(
+                file_id="inline:truncated.png",
+                name="truncated.png",
+                content_type="image/png",
+                data_url=_data_url("image/png", truncated),
+            )
+        ],
+    )[0]
+
+    with pytest.raises(ValueError, match="已损坏或不是有效图片"):
+        store.read_thumbnail("session_corrupt", stored.file_id)
+    # 原始字节仍然可读，便于前端展示并让用户重新上传。
+    assert store.read("session_corrupt", stored.file_id).data == truncated
+
+
 def test_persist_inline_accepts_custom_generic_mime_with_name_suffix(
     tmp_path,
     session_bundle_factory,

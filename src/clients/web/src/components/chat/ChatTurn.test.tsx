@@ -1062,6 +1062,8 @@ describe("ChatTurn 轮次动作", () => {
       "reasoning_detail",
       "encrypted_reasoning_meta",
       "tool_summary",
+      "tool_call",
+      "tool_result",
       "final_response",
     ]);
     expect(renderer!.root.findByProps({ "aria-expanded": true })).toBeTruthy();

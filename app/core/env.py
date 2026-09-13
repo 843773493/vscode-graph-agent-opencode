@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 from app.core.path_utils import get_user_env_path
 
@@ -45,4 +45,16 @@ def load_boxteam_env(*, override: bool = False, required: bool = False) -> Path 
         return None
 
     load_dotenv(env_file, override=override)
+    configured_proxy_exclusions = {
+        value.strip()
+        for key in ("NO_PROXY", "no_proxy")
+        for value in (dotenv_values(env_file, interpolate=False).get(key) or "").split(",")
+        if value.strip()
+    }
+    if configured_proxy_exclusions:
+        for variable in ("NO_PROXY", "no_proxy"):
+            inherited = os.environ.get(variable, "")
+            inherited_values = [value.strip() for value in inherited.split(",") if value.strip()]
+            merged = dict.fromkeys((*inherited_values, *configured_proxy_exclusions))
+            os.environ[variable] = ",".join(merged)
     return env_file

@@ -14,6 +14,7 @@ from langchain_core.messages import (
 )
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_litellm import ChatLiteLLM
+from pydantic import PrivateAttr
 
 from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.provider_capabilities import (
@@ -41,6 +42,10 @@ from app.agents.providers.output_normalization import (
     MISSING,
     build_ai_message_content,
 )
+from app.agents.providers.provider_http_client import (
+    build_no_proxy_handler,
+    build_no_proxy_openai_client,
+)
 from app.agents.providers.response_normalization import canonicalize_ai_message
 from app.agents.upstream_request_trace import (
     attach_upstream_trace_callback,
@@ -58,6 +63,66 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
     reasoning_content_replay: bool = False
     thinking_blocks_replay: bool = False
     image_input_replay: bool = False
+    # Provider 级免代理开关：为该 Provider 注入 trust_env=False 的 HTTP client。
+    no_proxy: bool = False
+
+    _no_proxy_sync_client: Any = PrivateAttr(default=None)
+    _no_proxy_async_client: Any = PrivateAttr(default=None)
+
+    def _provider_http_client(self, *, is_async: bool) -> Any:
+        """返回本 Provider 的免代理 HTTP client；未启用时返回 None。
+
+        Anthropic Messages 适配族要求 LiteLLM 的 HTTPHandler，Chat
+        Completions / Responses 适配族要求 OpenAI SDK client，因此按协议分别
+        构造。client 在本实例内缓存复用，避免每次请求重建连接池。
+        """
+        if not self.no_proxy:
+            return None
+        if is_async:
+            if self._no_proxy_async_client is None:
+                self._no_proxy_async_client = (
+                    build_no_proxy_handler(is_async=True)
+                    if self.custom_llm_provider == "anthropic"
+                    else build_no_proxy_openai_client(
+                        is_async=True,
+                        base_url=self.api_base,
+                        api_key=self.api_key,
+                    )
+                )
+            return self._no_proxy_async_client
+        if self._no_proxy_sync_client is None:
+            self._no_proxy_sync_client = (
+                build_no_proxy_handler(is_async=False)
+                if self.custom_llm_provider == "anthropic"
+                else build_no_proxy_openai_client(
+                    is_async=False,
+                    base_url=self.api_base,
+                    api_key=self.api_key,
+                )
+            )
+        return self._no_proxy_sync_client
+
+    def completion_with_retry(
+        self,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        client = self._provider_http_client(is_async=False)
+        if client is not None:
+            kwargs.setdefault("client", client)
+        return super().completion_with_retry(run_manager=run_manager, **kwargs)
+
+    async def acompletion_with_retry(
+        self,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        client = self._provider_http_client(is_async=True)
+        if client is not None:
+            kwargs.setdefault("client", client)
+        return await super().acompletion_with_retry(
+            run_manager=run_manager, **kwargs
+        )
 
     def _stream_attempt_count(self) -> int:
         """返回包含首次请求在内的流式请求总尝试次数。"""
@@ -335,6 +400,8 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         params["stream_options"] = self.stream_options or {"include_usage": True}
 
         delta_sink = get_current_model_delta_sink()
+        raw_model_call_id = getattr(run_manager, "run_id", None)
+        model_call_id = str(raw_model_call_id) if raw_model_call_id is not None else None
         attempts = self._stream_attempt_count()
         for attempt in range(1, attempts + 1):
             first_chunk_yielded = False
@@ -361,7 +428,15 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                         if self._message_chunk_has_semantic_delta(cg_chunk.message):
                             semantic_delta_seen = True
                             if delta_sink is not None:
-                                await delta_sink.accept_message_chunk(cg_chunk.message)
+                                if model_call_id is None:
+                                    await delta_sink.accept_message_chunk(
+                                        cg_chunk.message
+                                    )
+                                else:
+                                    await delta_sink.accept_message_chunk(
+                                        cg_chunk.message,
+                                        model_call_id=model_call_id,
+                                    )
                         first_chunk_yielded = True
                         if run_manager:
                             await run_manager.on_llm_new_token(
@@ -735,6 +810,7 @@ def build_litellm_chat_model(
         "reasoning_content_replay": api_mode.supports_reasoning.reasoning_content,
         "thinking_blocks_replay": api_mode.supports_reasoning.thinking_blocks,
         "image_input_replay": "image_input" in capabilities,
+        "no_proxy": bool(request_options.get("no_proxy")),
     }
 
     if provider.get("endpoint"):

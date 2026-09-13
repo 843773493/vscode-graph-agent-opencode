@@ -132,6 +132,80 @@ def project_user_message_content(
     }
 
 
+_TOOL_IMAGE_BLOCK_TYPES = frozenset({"image", "image_url", "input_image"})
+
+_TOOL_MEDIA_UNSUPPORTED_NOTE = (
+    "图片仍保留在会话记录中；本次请求将其按文本占位符回放，"
+    "以兼容未声明 vision 能力的 provider。"
+)
+
+
+def tool_media_placeholder_text(
+    *,
+    media_count: int,
+    path: str | None,
+    note: str,
+) -> str:
+    """构造工具结果媒体被降级后的文本占位符。"""
+    path_hint = f"，路径：{path}" if path else ""
+    return f"[工具结果包含 {media_count} 个图片媒体{path_hint}。{note}]"
+
+
+def project_tool_message_content(
+    content: Any,
+    *,
+    image_input: bool,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """按目标 provider 的 image_input 能力投影工具结果 content。
+
+    工具结果里的图片以 ``image``/``image_url`` block 形式进入 checkpoint。
+    不支持 vision 的 provider 收到这些 block 时，部分兼容后端会直接拒绝请求。
+    此处把不支持的图片 block 合并成一个文本占位符，保留图片数量和路径线索；
+    消息在会话记录中的原始形态不变。
+
+    TODO: audio/video 工具结果目前没有对应的能力开关，未纳入本次投影。
+    """
+    if image_input or not isinstance(content, list):
+        return {"content": content, "diagnostics": []}
+
+    projected: list[Any] = []
+    diagnostics: list[dict[str, Any]] = []
+    media_count = 0
+    for index, block in enumerate(content):
+        if not isinstance(block, Mapping):
+            projected.append(copy.deepcopy(block))
+            continue
+        block_type = block.get("type")
+        if isinstance(block_type, str) and block_type in _TOOL_IMAGE_BLOCK_TYPES:
+            media_count += 1
+            diagnostics.append(
+                {
+                    "block_index": index,
+                    "block_type": block_type,
+                    "status": "not_sent",
+                    "detail": "目标 provider 未声明 image_input 能力",
+                }
+            )
+            continue
+        projected.append(copy.deepcopy(dict(block)))
+
+    if media_count == 0:
+        return {"content": content, "diagnostics": []}
+
+    projected.append(
+        {
+            "type": "text",
+            "text": tool_media_placeholder_text(
+                media_count=media_count,
+                path=path,
+                note=_TOOL_MEDIA_UNSUPPORTED_NOTE,
+            ),
+        }
+    )
+    return {"content": projected, "diagnostics": diagnostics}
+
+
 def _summary_text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
@@ -275,4 +349,9 @@ def project_ai_message_content(
     return result
 
 
-__all__ = ["project_ai_message_content", "project_user_message_content"]
+__all__ = [
+    "project_ai_message_content",
+    "project_tool_message_content",
+    "project_user_message_content",
+    "tool_media_placeholder_text",
+]

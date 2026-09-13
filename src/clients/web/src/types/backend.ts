@@ -1,6 +1,6 @@
 // 该文件是前端业务类型适配层，封装后端实际返回结构。
 // 本目录业务代码统一从这里导入类型；后端 DTO 直接别名到生成文件，避免手写协议漂移。
-import type { SessionResource } from "./protocol";
+import type { Session, SessionResource } from "./protocol";
 
 export type {
   Agent,
@@ -640,6 +640,8 @@ export interface SessionCatalogNode {
   storage_relative_path?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  /** 会话节点携带完整会话元数据；消息历史不属于目录节点。 */
+  session?: Session | null;
 }
 
 export interface SessionCatalogPage {

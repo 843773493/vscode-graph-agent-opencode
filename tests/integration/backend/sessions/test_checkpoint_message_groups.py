@@ -421,6 +421,55 @@ def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(
     assert path.read_bytes() == after
 
 
+def test_tool_result_shadow_reuses_completed_result_with_different_lifecycle_ids(
+    tmp_path, group_case
+):
+    session_id, session_dir, messages, _ = group_case
+    saver = RolloutCheckpointSaver(tmp_path)
+    shadow_ids = saver._storage.ensure_request_tool_result_items(
+        session_id,
+        turn_id="turn-tool-result",
+        messages=[messages[2]],
+    )
+    assert shadow_ids == ("item-result-1",)
+    result = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="item-tool-execution-result-call-1",
+        semantic_kind="tool_result",
+        payload_kind="tool_result",
+        status="completed",
+        producer_ref={
+            "producer_kind": "tool",
+            "producer_id": "tool-execution-1",
+            "invocation_id": "model-call-1",
+        },
+        payload={
+            "tool_call_id": "call-1",
+            "tool_invocation_id": "tool-invocation-1",
+            "tool_attempt_id": "tool-execution-1",
+            "result_id": "tool-execution-1",
+            "name": "read",
+            "content": "文件正文",
+            "tool_outcome": "success",
+        },
+        metadata={
+            "execution_id": "tool-execution-1",
+            "model_call_id": "model-call-1",
+            "tool_call_id": "call-1",
+            "tool_invocation_id": "tool-invocation-1",
+            "tool_attempt_id": "tool-execution-1",
+            "execution_confirmed": True,
+        },
+        turn_id="turn-tool-result",
+        turn_scope="turn_member",
+        message_group_id="message-tool-execution-1",
+        wire_role="tool",
+    )
+    before = (session_dir / "rollout" / "rollout.jsonl").read_bytes()
+    saver._storage.append_items(session_id, (result,))
+    assert (session_dir / "rollout" / "rollout.jsonl").read_bytes() == before
+
+
 def test_plain_reasoning_content_is_text_semantic_item(tmp_path, group_case):
     _, session_dir, messages, _ = group_case
     part = {"type": "reasoning_content", "reasoning_content": "先核对调用参数"}

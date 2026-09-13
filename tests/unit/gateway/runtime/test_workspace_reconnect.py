@@ -140,7 +140,9 @@ async def test_runtime_controller_starts_and_stops_optional_workspace(
             removable=False,
             system_default=True,
         ),
-        runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://127.0.0.1:41000"}),
+        runtime=WorkspaceRuntime(
+            service_urls={"workspace_api": "http://127.0.0.1:41000"}
+        ),
     )
     registry.upsert(
         WorkspaceTarget(
@@ -155,13 +157,13 @@ async def test_runtime_controller_starts_and_stops_optional_workspace(
     )
 
     async def fake_start(**_: object) -> WorkspaceRuntime:
-            return WorkspaceRuntime(
-                service_urls={
-                    "workspace_api": "http://127.0.0.1:42000",
-                    "terminal_manager": "http://127.0.0.1:42001",
-                    "browser_manager": "http://127.0.0.1:42002",
-                }
-            )
+        return WorkspaceRuntime(
+            service_urls={
+                "workspace_api": "http://127.0.0.1:42000",
+                "terminal_manager": "http://127.0.0.1:42001",
+                "browser_manager": "http://127.0.0.1:42002",
+            }
+        )
 
     async def fake_list_dtos() -> list[object]:
         return []
@@ -176,6 +178,7 @@ async def test_runtime_controller_starts_and_stops_optional_workspace(
         project_root=tmp_path,
         log_dir=tmp_path / "logs",
     )
+
     async def fake_runtime_action(*_: object, **__: object) -> dict[str, object]:
         return {"blockers": []}
 
@@ -323,6 +326,7 @@ async def test_runtime_controller_serializes_managed_restarts(
         project_root=tmp_path,
         log_dir=tmp_path / "logs",
     )
+
     async def fake_pending_startup_contract(*_: object, **__: object):
         return None
 
@@ -408,6 +412,92 @@ async def test_runtime_controller_records_restart_failure_after_old_runtime_reco
     assert recorded["old_runtime_cancelled"] is True
     assert recorded["old_runtime_recovered"] is True
     assert recorded["candidate_ref"] == "candidate-ref"
+
+
+@pytest.mark.asyncio
+async def test_runtime_controller_resolves_pending_after_candidate_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    controller = GatewayWorkspaceRuntimeController(
+        registry=registry,
+        project_root=tmp_path,
+        log_dir=tmp_path / "logs",
+    )
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    class _Client:
+        def __init__(self, *, timeout: int) -> None:
+            assert timeout == 10
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def get(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+        ) -> _Response:
+            captured["health_url"] = url
+            captured["health_headers"] = headers
+            return _Response(
+                {
+                    "config_proof": {
+                        "config_domain": "workspace",
+                        "loaded_source": "pending",
+                    }
+                }
+            )
+
+        async def post(
+            self,
+            url: str,
+            *,
+            params: dict[str, str],
+            json: dict[str, object],
+            headers: dict[str, str],
+        ) -> _Response:
+            captured["resolve_url"] = url
+            captured["resolve_params"] = params
+            captured["resolve_json"] = json
+            captured["resolve_headers"] = headers
+            return _Response({})
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.controller.httpx.AsyncClient",
+        _Client,
+    )
+
+    await controller._resolve_pending_restart(
+        "http://127.0.0.1:42000",
+        candidate_ref="candidate-ref",
+        request_id="request-id",
+    )
+
+    assert captured["health_url"] == "http://127.0.0.1:42000/api/v1/health"
+    assert captured["resolve_url"] == (
+        "http://127.0.0.1:42000/api/v1/config/pending/resolve"
+    )
+    assert captured["resolve_params"] == {"candidate_ref": "candidate-ref"}
+    assert captured["resolve_json"] == {
+        "config_domain": "workspace",
+        "loaded_source": "pending",
+    }
 
 
 @pytest.mark.asyncio
@@ -608,6 +698,7 @@ async def test_backend_restart_failure_keeps_old_generation(
 ) -> None:
     old_backend = _RuntimeProcess()
     new_backend = _RuntimeProcess()
+    recovered_backend = _RuntimeProcess()
     runtime = WorkspaceRuntime(
         service_urls={
             "workspace_api": "http://127.0.0.1:41000",
@@ -620,12 +711,19 @@ async def test_backend_restart_failure_keeps_old_generation(
         "app.gateway.runtime.local_workspace.allocate_local_port",
         lambda: 42000,
     )
+    started_backends = iter((new_backend, recovered_backend))
     monkeypatch.setattr(
         "app.gateway.runtime.local_workspace.start_local_backend_process",
-        lambda **_: new_backend,
+        lambda **_: next(started_backends),
     )
 
+    wait_calls = 0
+
     async def not_ready(*_: object, **__: object) -> None:
+        nonlocal wait_calls
+        wait_calls += 1
+        if wait_calls > 1:
+            return
         raise RuntimeError("candidate backend unhealthy")
 
     monkeypatch.setattr(
@@ -641,9 +739,10 @@ async def test_backend_restart_failure_keeps_old_generation(
             log_dir=tmp_path / "logs",
         )
 
-    assert old_backend.closed is False
+    assert old_backend.closed is True
     assert new_backend.closed is True
-    assert runtime.processes["workspace_api"] is old_backend
+    assert recovered_backend.closed is False
+    assert runtime.processes["workspace_api"] is recovered_backend
     assert runtime.service_urls["workspace_api"] == "http://127.0.0.1:41000"
 
 
@@ -654,6 +753,7 @@ async def test_backend_restart_requires_matching_config_proof_before_old_shutdow
 ) -> None:
     old_backend = _RuntimeProcess()
     new_backend = _RuntimeProcess()
+    recovered_backend = _RuntimeProcess()
     runtime = WorkspaceRuntime(
         service_urls={
             "workspace_api": "http://127.0.0.1:41000",
@@ -666,9 +766,10 @@ async def test_backend_restart_requires_matching_config_proof_before_old_shutdow
         "app.gateway.runtime.local_workspace.allocate_local_port",
         lambda: 42000,
     )
+    started_backends = iter((new_backend, recovered_backend))
     monkeypatch.setattr(
         "app.gateway.runtime.local_workspace.start_local_backend_process",
-        lambda **_: new_backend,
+        lambda **_: next(started_backends),
     )
 
     async def mismatched_proof(*_: object, **__: object) -> None:
@@ -677,6 +778,14 @@ async def test_backend_restart_requires_matching_config_proof_before_old_shutdow
     monkeypatch.setattr(
         "app.gateway.runtime.local_workspace.wait_for_workspace_config_proof",
         mismatched_proof,
+    )
+
+    async def recovered_ready(*_: object, **__: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.wait_for_http_ok",
+        recovered_ready,
     )
     startup_contract = {
         "candidate_id": "candidate-1",
@@ -700,9 +809,10 @@ async def test_backend_restart_requires_matching_config_proof_before_old_shutdow
             config_startup_contract=startup_contract,
         )
 
-    assert old_backend.closed is False
+    assert old_backend.closed is True
     assert new_backend.closed is True
-    assert runtime.processes["workspace_api"] is old_backend
+    assert recovered_backend.closed is False
+    assert runtime.processes["workspace_api"] is recovered_backend
 
 
 def test_gateway_restart_detaches_browser_and_closes_other_services() -> None:
@@ -1071,6 +1181,83 @@ async def test_managed_runtime_reclaims_persisted_backend_before_fresh_start(
 
 
 @pytest.mark.asyncio
+async def test_managed_runtime_migrates_default_backend_to_preferred_port(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale_backend = _RuntimeProcess()
+    fresh_backend = _RuntimeProcess()
+    started_ports: list[tuple[str, int]] = []
+    allocated_ports = iter([42001, 42002])
+
+    async def adopt_backend(**_: object) -> _RuntimeProcess:
+        return stale_backend
+
+    async def no_adopted_service(**_: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace._adopt_workspace_backend",
+        adopt_backend,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace._adopt_terminal_manager",
+        no_adopted_service,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace._adopt_browser_manager",
+        no_adopted_service,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.allocate_local_port",
+        lambda: next(allocated_ports),
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.is_local_port_available",
+        lambda port: port == 8010,
+    )
+
+    def start_node(**kwargs: object) -> _RuntimeProcess:
+        started_ports.append((str(kwargs["service"]), int(kwargs["port"])))
+        return _RuntimeProcess()
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.start_local_node_service_process",
+        start_node,
+    )
+
+    def start_backend(**kwargs: object) -> _RuntimeProcess:
+        started_ports.append(("backend", int(kwargs["port"])))
+        return fresh_backend
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.start_local_backend_process",
+        start_backend,
+    )
+
+    async def ready(*_: object, **__: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.wait_for_http_ok",
+        ready,
+    )
+
+    runtime = await start_managed_local_workspace_runtime(
+        project_root=tmp_path,
+        workspace_root=tmp_path,
+        log_dir=tmp_path / "logs",
+        preferred_backend_port=8010,
+        reusable_backend_url="http://127.0.0.1:41999",
+    )
+
+    assert stale_backend.closed is True
+    assert started_ports == [("terminal", 42001), ("browser", 42002), ("backend", 8010)]
+    assert runtime.service_urls["workspace_api"] == "http://127.0.0.1:8010"
+    assert runtime.processes["workspace_api"] is fresh_backend
+
+
+@pytest.mark.asyncio
 async def test_managed_runtime_reuses_browser_without_starting_replacement(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1119,9 +1306,7 @@ async def test_managed_runtime_reuses_browser_without_starting_replacement(
         project_root=tmp_path,
         workspace_root=tmp_path,
         log_dir=tmp_path / "logs",
-        reusable_service_urls={
-            "browser_manager": "http://127.0.0.1:42002"
-        },
+        reusable_service_urls={"browser_manager": "http://127.0.0.1:42002"},
     )
 
     assert started_services == ["terminal"]

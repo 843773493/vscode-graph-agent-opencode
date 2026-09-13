@@ -671,6 +671,21 @@ class SessionPathResolver(SessionPathMutationSupport):
 
     @property
     @session_tree_operation_locked
+    def legacy_inline_attachment_migration_record(self) -> dict[str, object]:
+        """返回旧 inline 附件迁移记录，供健康检查暴露降级原因。"""
+        with self._lock:
+            self._ensure_loaded()
+            migration_path = (
+                self.sessions_root.parent
+                / "migrations"
+                / "session-inline-attachments-v1.json"
+            )
+            if not migration_path.is_file():
+                return {"status": "not_started", "errors": []}
+            return _read_json_object(migration_path)
+
+    @property
+    @session_tree_operation_locked
     def authoritative_revision(self) -> int:
         """返回索引投影修订号，不要求物理树当前一致。"""
         with self._lock:

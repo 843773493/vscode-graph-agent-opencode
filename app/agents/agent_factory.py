@@ -74,7 +74,7 @@ if TYPE_CHECKING:
 
 
 AGENT_GRAPH_RECURSION_LIMIT = 9999
-PROVIDER_REQUEST_OPTION_KEYS = {"overrides", "default_headers"}
+PROVIDER_REQUEST_OPTION_KEYS = {"overrides", "default_headers", "no_proxy"}
 logger = logging.getLogger(__name__)
 
 
@@ -168,7 +168,7 @@ def _runtime_identity_system_prompt(
         f"- 已配置 fallback provider/model（按顺序）：`{fallback_text or '无'}`\n"
         "这些字段来自当前运行时配置，不是从 project.godot 或其他工作区文件推断的。\n"
         "回答 provider/model 身份时必须使用上述元数据；project.godot 的 `config/name` 只是项目显示名，绝不是模型名或 provider 名。\n"
-        "所有文件工具路径都相对于 workspace 根目录。项目位于子目录时必须保留该前缀：例如 `parry_arena/project.godot` 和 `parry_arena/godot_export/parry_arena.html`。只有在 exec_command 的 cwd 明确为 `parry_arena` 时，`godot_export/parry_arena.html` 才是同一文件的项目相对路径；不能因为 workspace 根下没有不带前缀的路径就报告文件不存在。\n"
+        "文件工具优先使用相对于 workspace 根目录的相对路径；上面列出的绝对根目录只用于 exec_command 的 cwd，不要把它当作文件工具的 path。项目位于子目录时必须保留该前缀：例如 `parry_arena/project.godot` 和 `parry_arena/godot_export/parry_arena.html`。只有在 exec_command 的 cwd 明确为 `parry_arena` 时，`godot_export/parry_arena.html` 才是同一文件的项目相对路径；不能因为 workspace 根下没有不带前缀的路径就报告文件不存在。工作区内的绝对路径会被自动归一化为相对路径，但你应直接给出相对路径。\n"
         "exec_command 的相对 workdir 只相对于上述 workspace 根目录解析一次；不要在命令中再次 cd 到同一个 workdir。工具结果中的 cwd 是实际执行目录，应以它解释相对路径。"
     )
     base_message = (
@@ -271,9 +271,13 @@ def _get_provider_request_options(provider: dict[str, Any]) -> dict[str, Any]:
     default_headers = request_options.get("default_headers") or {}
     if not isinstance(default_headers, dict):
         raise TypeError("provider.request_options.default_headers 必须是对象")
+    no_proxy = request_options.get("no_proxy", False)
+    if not isinstance(no_proxy, bool):
+        raise TypeError("provider.request_options.no_proxy 必须是布尔值")
     return {
         "overrides": dict(overrides),
         "default_headers": dict(default_headers),
+        "no_proxy": no_proxy,
     }
 
 

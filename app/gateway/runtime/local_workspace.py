@@ -13,6 +13,7 @@ from app.gateway.runtime.process import (
     GATEWAY_PROCESS_READY_TIMEOUT_SECONDS,
     AdoptedManagedProcess,
     allocate_local_port,
+    is_local_port_available,
     start_local_backend_process,
     start_local_node_service_process,
     wait_for_http_ok,
@@ -31,17 +32,13 @@ async def wait_for_workspace_config_proof(
 ) -> None:
     """等待 Workspace 返回与 pending candidate 完全匹配的健康证明。"""
 
-    deadline = (
-        asyncio.get_running_loop().time() + GATEWAY_PROCESS_READY_TIMEOUT_SECONDS
-    )
+    deadline = asyncio.get_running_loop().time() + GATEWAY_PROCESS_READY_TIMEOUT_SECONDS
     last_error: Exception | None = None
     async with httpx.AsyncClient(timeout=request_timeout_seconds) as client:
         while asyncio.get_running_loop().time() < deadline:
             poll = getattr(process, "poll", None)
             if callable(poll) and (returncode := poll()) is not None:
-                raise RuntimeError(
-                    f"进程提前退出: returncode={returncode}, url={url}"
-                )
+                raise RuntimeError(f"进程提前退出: returncode={returncode}, url={url}")
             try:
                 response = await client.get(
                     url,
@@ -53,10 +50,10 @@ async def wait_for_workspace_config_proof(
                     )
                 payload = response.json()
                 if not isinstance(payload, dict):
-                    raise RuntimeError("Workspace 健康响应必须是 JSON 对象")
+                    raise TypeError("Workspace 健康响应必须是 JSON 对象")
                 proof = payload.get("config_proof")
                 if not isinstance(proof, dict):
-                    raise RuntimeError("Workspace 健康响应缺少 config_proof")
+                    raise TypeError("Workspace 健康响应缺少 config_proof")
                 mismatches = {
                     key: (expected_proof[key], proof.get(key))
                     for key in expected_proof
@@ -94,8 +91,7 @@ def workspace_config_proof_expectation(
     missing = [field for field in required_fields if field not in startup_contract]
     if missing:
         raise ValueError(
-            "Workspace 启动契约缺少 config proof 字段: "
-            + ", ".join(missing)
+            "Workspace 启动契约缺少 config proof 字段: " + ", ".join(missing)
         )
     return {
         "config_domain": "workspace",
@@ -121,14 +117,14 @@ async def _adopt_local_node_service(
 ) -> AdoptedManagedProcess | None:
     parsed = urlparse(service_url)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
-        raise ValueError(f"持久化 {service_name} URL 必须是本机 HTTP 地址: {service_url}")
+        raise ValueError(
+            f"持久化 {service_name} URL 必须是本机 HTTP 地址: {service_url}"
+        )
     if parsed.port is None:
         raise ValueError(f"持久化 {service_name} URL 缺少端口: {service_url}")
     try:
         async with httpx.AsyncClient(timeout=2) as client:
-            response = await client.get(
-                f"{service_url.rstrip('/')}{health_path}"
-            )
+            response = await client.get(f"{service_url.rstrip('/')}{health_path}")
     except httpx.HTTPError:
         return None
     if response.status_code != 200:
@@ -195,6 +191,7 @@ async def start_managed_local_workspace_runtime(
     workspace_root: Path,
     log_dir: Path,
     backend_debug_port: int | None = None,
+    preferred_backend_port: int | None = None,
     reusable_backend_url: str | None = None,
     adopt_existing_backend: bool = True,
     reusable_service_urls: dict[str, str] | None = None,
@@ -208,6 +205,10 @@ async def start_managed_local_workspace_runtime(
     preserve_adopted_processes_on_failure: bool = False,
 ) -> WorkspaceRuntime:
     workspace_id = build_managed_local_workspace_id(str(workspace_root.resolve()))
+    if preferred_backend_port is not None and not 1 <= preferred_backend_port <= 65535:
+        raise ValueError(
+            f"preferred_backend_port 必须是 1-65535 的端口号: {preferred_backend_port}"
+        )
     allocated_ports: set[int] = set()
 
     def next_port() -> int:
@@ -223,17 +224,37 @@ async def start_managed_local_workspace_runtime(
             service_url=reusable_backend_url,
             workspace_root=workspace_root,
         )
+        reusable_backend_port = urlparse(reusable_backend_url).port
+        if reusable_backend_port is None:
+            raise RuntimeError(
+                f"持久化 Workspace API URL 缺少端口: {reusable_backend_url}"
+            )
+        if (
+            preferred_backend_port is not None
+            and candidate_backend is not None
+            and reusable_backend_port != preferred_backend_port
+        ):
+            # 默认 Home 的端口是发布版稳定契约；旧版本留下的动态后端不能
+            # 继续被接管，否则 workspaces.json 会一直保留错误端口。
+            await asyncio.to_thread(candidate_backend.close)
+            candidate_backend = None
         if adopt_existing_backend:
             adopted_backend = candidate_backend
         elif candidate_backend is not None:
             await asyncio.to_thread(candidate_backend.close)
-    backend_port = (
-        urlparse(reusable_backend_url).port
-        if reusable_backend_url and adopted_backend is not None
-        else next_port()
-    )
+    if preferred_backend_port is not None:
+        backend_port = preferred_backend_port
+        if adopted_backend is None and not is_local_port_available(backend_port):
+            raise RuntimeError(
+                f"默认 Workspace API 端口已被其它进程占用: 127.0.0.1:{backend_port}"
+            )
+    elif reusable_backend_url and adopted_backend is not None:
+        backend_port = urlparse(reusable_backend_url).port
+    else:
+        backend_port = next_port()
     if backend_port is None:
         raise RuntimeError(f"持久化 Workspace API URL 缺少端口: {reusable_backend_url}")
+    allocated_ports.add(backend_port)
     reusable_terminal_url = (reusable_service_urls or {}).get("terminal_manager")
     adopted_terminal = (
         await _adopt_terminal_manager(
@@ -392,39 +413,48 @@ async def restart_managed_workspace_backend(
     if parsed_backend_url.port is None:
         raise ValueError(f"Workspace API URL 缺少端口: {backend_url}")
     old_backend = runtime.processes.get("workspace_api")
-    candidate_port = allocate_local_port()
-    candidate_url = f"http://127.0.0.1:{candidate_port}"
-    backend = start_local_backend_process(
-        project_root=project_root,
-        workspace_root=workspace_root,
-        port=candidate_port,
-        log_dir=log_dir,
-        extra_env={
-            "BOXTEAM_TERMINAL_BACKEND_URL": runtime.service_urls[
-                "terminal_manager"
-            ],
-            "BOXTEAM_BROWSER_BACKEND_URL": runtime.service_urls[
-                "browser_manager"
-            ],
+    if old_backend is None:
+        raise RuntimeError("Workspace 重启缺少当前后端进程句柄")
+    old_port = parsed_backend_url.port
+
+    def backend_environment(*, include_config_startup_contract: bool) -> dict[str, str]:
+        environment = {
+            "BOXTEAM_TERMINAL_BACKEND_URL": runtime.service_urls["terminal_manager"],
+            "BOXTEAM_BROWSER_BACKEND_URL": runtime.service_urls["browser_manager"],
             "BOXTEAM_DEFAULT_SKILL_GROUPS": json.dumps(
                 list(default_skill_groups),
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
-            **(
+        }
+        if include_config_startup_contract and config_candidate_ref is not None:
+            environment.update(
                 {
                     "BOXTEAM_CONFIG_CANDIDATE_REF": config_candidate_ref,
-                    "BOXTEAM_CONFIG_GENERATION": config_generation,
-                    "BOXTEAM_CONFIG_FENCING_TOKEN": config_fencing_token,
+                    "BOXTEAM_CONFIG_GENERATION": config_generation or "",
+                    "BOXTEAM_CONFIG_FENCING_TOKEN": config_fencing_token or "",
                 }
-                if config_candidate_ref is not None
-                else {}
-            ),
-        },
-        debug_port=runtime.backend_debug_port,
-        connection_drain_timeout_seconds=connection_drain_timeout_seconds,
-    )
+            )
+        return environment
+
+    # SQLite 状态库的进程所有权锁要求同一工作区同一时刻只有一个后端。
+    # 因此候选后端必须在旧后端彻底退出后启动；旧后端若已成功退出但候选
+    # 启动失败，则在原端口恢复一个当前配置的后端，交给上层取消 drain。
+    old_backend.close(timeout_seconds=connection_drain_timeout_seconds)
+    candidate_port = allocate_local_port()
+    candidate_url = f"http://127.0.0.1:{candidate_port}"
+    backend = None
+    recovered_backend = None
     try:
+        backend = start_local_backend_process(
+            project_root=project_root,
+            workspace_root=workspace_root,
+            port=candidate_port,
+            log_dir=log_dir,
+            extra_env=backend_environment(include_config_startup_contract=True),
+            debug_port=runtime.backend_debug_port,
+            connection_drain_timeout_seconds=connection_drain_timeout_seconds,
+        )
         if config_startup_contract is None:
             await wait_for_http_ok(
                 f"{candidate_url}/api/v1/health",
@@ -442,11 +472,35 @@ async def restart_managed_workspace_backend(
                 request_timeout_seconds=health_request_timeout_seconds,
                 poll_interval_seconds=health_poll_interval_seconds,
             )
-        if old_backend is None:
-            raise RuntimeError("Workspace 重启缺少当前后端进程句柄")
-        old_backend.close(timeout_seconds=connection_drain_timeout_seconds)
         runtime.processes["workspace_api"] = backend
         runtime.service_urls["workspace_api"] = candidate_url
-    except Exception:
-        backend.close()
+    except Exception as error:
+        if backend is not None:
+            backend.close()
+        try:
+            recovered_backend = start_local_backend_process(
+                project_root=project_root,
+                workspace_root=workspace_root,
+                port=old_port,
+                log_dir=log_dir,
+                extra_env=backend_environment(include_config_startup_contract=False),
+                debug_port=runtime.backend_debug_port,
+                connection_drain_timeout_seconds=connection_drain_timeout_seconds,
+            )
+            await wait_for_http_ok(
+                backend_url,
+                recovered_backend.process,
+                request_timeout_seconds=health_request_timeout_seconds,
+                poll_interval_seconds=health_poll_interval_seconds,
+            )
+        except Exception as recovery_error:
+            if recovered_backend is not None:
+                recovered_backend.close()
+            runtime.processes.pop("workspace_api", None)
+            raise RuntimeError(
+                "Workspace 候选后端启动失败，且旧后端恢复失败: "
+                f"candidate={error}; recovery={recovery_error}"
+            ) from recovery_error
+        runtime.processes["workspace_api"] = recovered_backend
+        runtime.service_urls["workspace_api"] = backend_url
         raise

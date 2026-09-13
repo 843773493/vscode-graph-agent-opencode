@@ -338,7 +338,10 @@ def build_app_container(
         bus=job_event_bus,
         store=trace_event_store,
     )
-    message_stream_store = MessageStreamStore(path_resolver=session_path_resolver)
+    message_stream_store = MessageStreamStore(
+        path_resolver=session_path_resolver,
+        workspace_id=workspace_id,
+    )
     resource_manager = ResourceManager(
         state_path=resolved_boxteam_root / "resources.json"
     )

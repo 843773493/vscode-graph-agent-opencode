@@ -246,11 +246,29 @@ async def health(request: Request):
         if container is not None
         else None
     )
+    inline_attachment_migration = (
+        container.session_service.path_resolver.legacy_inline_attachment_migration_record
+        if container is not None
+        else {"status": "not_started", "errors": []}
+    )
+    migration_status = inline_attachment_migration.get("status")
+    trace_reconciliation_errors = (
+        container.runtime_service.startup_reconciliation_errors
+        if container is not None
+        else []
+    )
+    degraded = migration_status == "completed_with_errors" or bool(
+        trace_reconciliation_errors
+    )
     return {
-        "status": "ok",
+        "status": "degraded" if degraded else "ok",
         "process_id": os.getpid(),
         "workspace_root": str(get_runtime_workspace_root()),
         "config_proof": config_proof,
+        "session_migrations": {
+            "legacy_inline_attachments": inline_attachment_migration,
+        },
+        "startup_reconciliation": {"errors": trace_reconciliation_errors},
     }
 
 

@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   appendTraceEventsToPendingConversations,
   getConversationsForSession,
+  messageStreamTurnIdForSession,
   pendingSnapshotToConversations,
   preservePendingTerminalConversation,
   removePendingForTraceEvent,
@@ -36,6 +37,37 @@ test("历史 Turn 不显示实时事件流等待状态", () => {
   };
 
   expect(buildPendingStatusItem(historyConversation)).toBeNull();
+});
+
+test("Job/Trace 先结束时仍保留未完成的消息流订阅目标", () => {
+  const sessionId = "ses_message_stream_tail";
+  const sessionCacheKey = "workspace_message_stream_tail::ses_message_stream_tail";
+  const state = {
+    activeJobIdsBySession: new Map(),
+    pendingConversations: new Map([[sessionCacheKey, [{
+      conversationId: "msg_message_stream_tail",
+      displayMode: "live" as const,
+      sessionId,
+      userMessage: null,
+      events: [],
+      status: "done" as const,
+      jobId: "job_message_stream_tail",
+      pending: false,
+      source: "pending" as const,
+    }]]]),
+    messageStreamsByTurnStream: new Map([[
+      "stream_message_stream_tail",
+      {
+        ...createMessageStreamState(sessionId, "job_message_stream_tail", "stream_message_stream_tail"),
+        lastEventSeq: 9,
+        streamStatus: "open" as const,
+      },
+    ]]),
+  } as unknown as AppState;
+
+  expect(messageStreamTurnIdForSession(sessionId, state, sessionCacheKey)).toBe(
+    "job_message_stream_tail",
+  );
 });
 
 test("非 pending 来源即使带有 live 标记也不显示实时等待状态", () => {
@@ -606,7 +638,7 @@ test("terminal 历史投影替换 live 镜像并保留权威 Item 统计", () =>
       kind: "reasoning",
       projection: "streaming",
       status: "completed",
-      source: { item_id: "item-reasoning" },
+      source: { message_sequence: 1, item_id: "item-reasoning" },
       text: "Confirming test tool success with results",
       final: false,
     }],

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,9 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 )
 from app.services.infrastructure.rollout_context.migration.legacy_adapter import (
     LegacyRolloutAdapter,
+)
+from app.services.infrastructure.rollout_context.provider.native_request import (
+    project_native_request,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     default_idempotency_key,
@@ -159,6 +163,500 @@ def test_provider_projection_does_not_deduplicate_same_text_without_tool_identit
         "call-live",
         "call-checkpoint",
     ]
+
+
+def test_provider_projection_splits_legacy_execution_stream_group_by_model_call() -> None:
+    stream_first = tuple(
+        replace(
+            item,
+            metadata={**item.metadata, "model_call_id": "model-call-1"},
+        )
+        for item in _assistant_tool_item(
+            item_sequence=1,
+            item_id="stream-first",
+            group_id="message-shared-execution",
+            tool_call_id="call-first",
+            checkpoint=False,
+            reasoning="第一次调用的增量",
+        )
+    )
+    stream_second = tuple(
+        replace(
+            item,
+            metadata={**item.metadata, "model_call_id": "model-call-2"},
+        )
+        for item in _assistant_tool_item(
+            item_sequence=3,
+            item_id="stream-second",
+            group_id="message-shared-execution",
+            tool_call_id="call-second",
+            checkpoint=False,
+            reasoning="第二次调用的增量",
+        )
+    )
+    checkpoint_first = _assistant_tool_item(
+        item_sequence=5,
+        item_id="checkpoint-first",
+        group_id="message-checkpoint-first",
+        tool_call_id="call-first",
+        checkpoint=True,
+        reasoning="第一次调用的完整 carrier",
+    )
+    checkpoint_second = _assistant_tool_item(
+        item_sequence=7,
+        item_id="checkpoint-second",
+        group_id="message-checkpoint-second",
+        tool_call_id="call-second",
+        checkpoint=True,
+        reasoning="第二次调用的完整 carrier",
+    )
+
+    messages = project_canonical_items(
+        (*stream_first, *stream_second, *checkpoint_first, *checkpoint_second)
+    )
+
+    assert len(messages) == 2
+    assert all(isinstance(message, AIMessage) for message in messages)
+    assert [
+        call["id"] for message in messages for call in message.tool_calls
+    ] == ["call-first", "call-second"]
+
+
+def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -> None:
+    checkpoint = _assistant_tool_item(
+        item_sequence=1,
+        item_id="checkpoint-carrier",
+        group_id="message-checkpoint-carrier",
+        tool_call_id="call-final-carrier",
+        checkpoint=True,
+        reasoning="工具调用前的 reasoning",
+    )
+    tool_result = CanonicalItemRecord.create(
+        item_sequence=3,
+        item_id="tool-result-final-carrier",
+        semantic_kind=SemanticKind.TOOL_RESULT,
+        payload_kind=PayloadKind.TOOL_RESULT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "tool",
+            "producer_id": "tool-result-final-carrier",
+            "invocation_id": "turn-final-carrier",
+        },
+        payload={
+            "content": "工具结果",
+            "name": "ls",
+            "result_id": "result-final-carrier",
+            "tool_call_id": "call-final-carrier",
+            "tool_outcome": "success",
+        },
+        metadata={"execution_confirmed": True},
+        turn_id="turn-tool",
+        turn_scope="turn_member",
+        wire_role="tool",
+    )
+    stream_reasoning = CanonicalItemRecord.create(
+        item_sequence=4,
+        item_id="stream-after-tool-reasoning",
+        semantic_kind=SemanticKind.REASONING,
+        payload_kind=PayloadKind.TEXT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "model-call-after-tool",
+            "invocation_id": "turn-tool",
+        },
+        payload="工具返回后的 reasoning",
+        metadata={"block_id": "part-after-tool-reasoning", "block_index": 0},
+        turn_id="turn-tool",
+        turn_scope="turn_member",
+        message_group_id="message-stream-after-tool",
+        wire_role="assistant",
+    )
+    stream_text = CanonicalItemRecord.create(
+        item_sequence=5,
+        item_id="stream-after-tool-text",
+        semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+        payload_kind=PayloadKind.TEXT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref=stream_reasoning.producer_ref,
+        payload="最终文本",
+        metadata={"block_id": "part-after-tool-text", "block_index": 1},
+        turn_id="turn-tool",
+        turn_scope="turn_member",
+        message_group_id="message-stream-after-tool",
+        wire_role="assistant",
+    )
+    checkpoint_shadow = CanonicalItemRecord.create(
+        item_sequence=6,
+        item_id="checkpoint-shadow-after-tool",
+        semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+        payload_kind=PayloadKind.STRUCTURED_CONTENT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "lc-run-after-tool",
+            "invocation_id": "turn-tool",
+        },
+        payload=[
+            {"reasoning_content": "工具返回后的 reasoning", "type": "reasoning_content"},
+            {"text": "最终文本", "type": "text"},
+        ],
+        metadata={
+            "execution_confirmed": True,
+            "projection_message_id": "lc-run-after-tool",
+        },
+        turn_id="turn-tool",
+        turn_scope="turn_member",
+        message_group_id="message-checkpoint-shadow-after-tool",
+        wire_role="assistant",
+    )
+    final_carrier = CanonicalItemRecord.create(
+        item_sequence=7,
+        item_id="final-carrier-after-tool",
+        semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+        payload_kind=PayloadKind.STRUCTURED_CONTENT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "final-carrier-after-tool",
+            "invocation_id": "turn-tool",
+        },
+        payload=checkpoint_shadow.payload,
+        metadata={
+            "content_part_refs": [
+                {"id": "part-after-tool-reasoning", "index": 0},
+                {"id": "part-after-tool-text", "index": 1},
+            ],
+            "supersedes_message_id": "lc-run-after-tool",
+            "execution_confirmed": True,
+        },
+        turn_id="turn-tool",
+        turn_scope="turn_member",
+        message_group_id="message-final-carrier-after-tool",
+        wire_role="assistant",
+    )
+
+    messages = project_canonical_items(
+        (*checkpoint, tool_result, stream_reasoning, stream_text, checkpoint_shadow, final_carrier)
+    )
+
+    assert [message.type for message in messages] == ["ai", "tool", "ai"]
+    assert messages[0].tool_calls[0]["id"] == "call-final-carrier"
+    assert messages[2].content == [
+        {"reasoning_content": "工具返回后的 reasoning", "type": "reasoning_content"},
+        {"text": "最终文本", "type": "text"},
+    ]
+
+
+def test_provider_projection_deduplicates_scoped_stream_call_and_result_against_checkpoint():
+    stream_call_id = "model-call-1:tool-call:call-shared"
+    stream_call = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="stream-tool-call",
+        semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "model-call-1",
+            "invocation_id": "turn-scoped-tool",
+        },
+        payload={
+            "tool_call_id": stream_call_id,
+            "name": "ls",
+            "args": {"path": "."},
+        },
+        metadata={
+            "model_call_id": "model-call-1",
+            "block_id": stream_call_id,
+            "block_index": 0,
+        },
+        turn_id="turn-scoped-tool",
+        turn_scope="turn_member",
+        message_group_id="message-model-call-1",
+        wire_role="assistant",
+    )
+    stream_result = CanonicalItemRecord.create(
+        item_sequence=2,
+        item_id="stream-tool-result",
+        semantic_kind=SemanticKind.TOOL_RESULT,
+        payload_kind=PayloadKind.TOOL_RESULT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "tool",
+            "producer_id": "stream-tool-result",
+            "invocation_id": "turn-scoped-tool",
+        },
+        payload={
+            "content": "stream result",
+            "name": "ls",
+            "result_id": "stream-result-id",
+            "tool_call_id": stream_call_id,
+            "tool_outcome": "success",
+        },
+        metadata={"model_call_id": "model-call-1", "execution_confirmed": True},
+        turn_id="turn-scoped-tool",
+        turn_scope="turn_member",
+        wire_role="tool",
+    )
+    checkpoint_call = CanonicalItemRecord.create(
+        item_sequence=3,
+        item_id="checkpoint-tool-call",
+        semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "lc_run--model-call-1",
+            "invocation_id": "turn-scoped-tool",
+        },
+        payload={
+            "tool_calls": [
+                {"id": "call-shared", "name": "ls", "args": {"path": "."}}
+            ]
+        },
+        metadata={
+            "execution_confirmed": True,
+            "projection_message_id": "lc_run--model-call-1",
+            "projection_group": {"ordinal": 0, "size": 1, "content_form": "list"},
+        },
+        turn_id="turn-scoped-tool",
+        turn_scope="turn_member",
+        message_group_id="message-lc_run--model-call-1",
+        wire_role="assistant",
+    )
+    checkpoint_result = CanonicalItemRecord.create(
+        item_sequence=4,
+        item_id="checkpoint-tool-result",
+        semantic_kind=SemanticKind.TOOL_RESULT,
+        payload_kind=PayloadKind.TOOL_RESULT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "tool",
+            "producer_id": "checkpoint-tool-result",
+            "invocation_id": "turn-scoped-tool",
+        },
+        payload={
+            "content": "checkpoint result",
+            "name": "ls",
+            "result_id": "checkpoint-result-id",
+            "tool_call_id": "call-shared",
+            "tool_outcome": "success",
+        },
+        metadata={
+            "execution_confirmed": True,
+            "projection_message_id": "checkpoint-tool-result",
+        },
+        turn_id="turn-scoped-tool",
+        turn_scope="turn_member",
+        wire_role="tool",
+    )
+
+    messages = project_canonical_items(
+        (stream_call, stream_result, checkpoint_call, checkpoint_result)
+    )
+
+    assert len(messages) == 2
+    assert isinstance(messages[0], AIMessage)
+    assert [call["id"] for call in messages[0].tool_calls] == ["call-shared"]
+    assert isinstance(messages[1], ToolMessage)
+    assert messages[1].content == "checkpoint result"
+
+
+def _native_tool_plan(
+    *,
+    session_id: str,
+    plan_id: str,
+    assembly_id: str,
+    items: tuple[CanonicalItemRecord, ...],
+    tool_set_ref: ContextRef | None = None,
+) -> ContextRequestPlan:
+    selection = tuple(
+        ContextSelectionEntry(
+            assembly_id=assembly_id,
+            plan_ordinal=index,
+            ref=ContextRef.canonical_item(item, session_id=session_id),
+            selection_kind=SelectionKind.CANONICAL_HISTORY,
+            source_revision=ContextRef.canonical_item(
+                item, session_id=session_id
+            ).source_revision,
+            content_length=ContextRef.canonical_item(
+                item, session_id=session_id
+            ).content_length,
+            content_hash=ContextRef.canonical_item(
+                item, session_id=session_id
+            ).content_hash,
+            visibility="internal",
+            protection="public",
+            availability="available",
+        )
+        for index, item in enumerate(items)
+    )
+    refs = tuple(entry.ref for entry in selection)
+    if tool_set_ref is not None:
+        selection = (
+            *selection,
+            ContextSelectionEntry(
+                assembly_id=assembly_id,
+                plan_ordinal=len(selection),
+                ref=tool_set_ref,
+                selection_kind=SelectionKind.TOOL_SET,
+                source_revision=tool_set_ref.source_revision,
+                content_length=tool_set_ref.content_length,
+                content_hash=tool_set_ref.content_hash,
+                visibility=tool_set_ref.visibility,
+                protection=tool_set_ref.protection,
+                availability=tool_set_ref.availability,
+            ),
+        )
+        refs = (*refs, tool_set_ref)
+    return ContextRequestPlan(
+        session_id=session_id,
+        plan_id=plan_id,
+        refs=refs,
+    ).seal_for_assembly(assembly_id, selection=selection)
+
+
+def _scoped_stream_and_checkpoint_items(
+    *,
+    session_id: str,
+    model_call_id: str,
+    tool_call_id: str,
+) -> tuple[CanonicalItemRecord, ...]:
+    """构造同一 Turn 的 scoped stream carrier 与其 checkpoint carrier。"""
+    scoped_id = f"{model_call_id}:tool-call:{tool_call_id}"
+    stream_call = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id=f"stream-tool-call-{tool_call_id}",
+        semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": model_call_id,
+            "invocation_id": "turn-native-tool",
+        },
+        payload={"tool_call_id": scoped_id, "name": "ls", "args": {"path": "."}},
+        metadata={
+            "model_call_id": model_call_id,
+            "block_id": scoped_id,
+            "block_index": 0,
+        },
+        turn_id="turn-native-tool",
+        turn_scope="turn_member",
+        message_group_id=f"message-{model_call_id}",
+        wire_role="assistant",
+    )
+    stream_result = CanonicalItemRecord.create(
+        item_sequence=2,
+        item_id=f"stream-tool-result-{tool_call_id}",
+        semantic_kind=SemanticKind.TOOL_RESULT,
+        payload_kind=PayloadKind.TOOL_RESULT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "tool",
+            "producer_id": f"stream-tool-result-{tool_call_id}",
+            "invocation_id": "turn-native-tool",
+        },
+        payload={
+            "content": "stream result",
+            "name": "ls",
+            "result_id": f"stream-result-{tool_call_id}",
+            "tool_call_id": scoped_id,
+            "tool_outcome": "success",
+        },
+        metadata={"model_call_id": model_call_id, "execution_confirmed": True},
+        turn_id="turn-native-tool",
+        turn_scope="turn_member",
+        wire_role="tool",
+    )
+    checkpoint_call = CanonicalItemRecord.create(
+        item_sequence=3,
+        item_id=f"checkpoint-tool-call-{tool_call_id}",
+        semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": f"lc_run--{model_call_id}",
+            "invocation_id": "turn-native-tool",
+        },
+        payload={"tool_calls": [{"id": tool_call_id, "name": "ls", "args": {"path": "."}}]},
+        metadata={
+            "execution_confirmed": True,
+            "projection_message_id": f"lc_run--{model_call_id}",
+            "projection_group": {"ordinal": 0, "size": 1, "content_form": "list"},
+        },
+        turn_id="turn-native-tool",
+        turn_scope="turn_member",
+        message_group_id=f"message-lc_run--{model_call_id}",
+        wire_role="assistant",
+    )
+    checkpoint_result = CanonicalItemRecord.create(
+        item_sequence=4,
+        item_id=f"checkpoint-tool-result-{tool_call_id}",
+        semantic_kind=SemanticKind.TOOL_RESULT,
+        payload_kind=PayloadKind.TOOL_RESULT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "tool",
+            "producer_id": f"checkpoint-tool-result-{tool_call_id}",
+            "invocation_id": "turn-native-tool",
+        },
+        payload={
+            "content": "checkpoint result",
+            "name": "ls",
+            "result_id": f"checkpoint-result-{tool_call_id}",
+            "tool_call_id": tool_call_id,
+            "tool_outcome": "success",
+        },
+        metadata={
+            "execution_confirmed": True,
+            "projection_message_id": f"checkpoint-tool-result-{tool_call_id}",
+        },
+        turn_id="turn-native-tool",
+        turn_scope="turn_member",
+        wire_role="tool",
+    )
+    return (stream_call, stream_result, checkpoint_call, checkpoint_result)
+
+
+def test_native_projection_restores_scoped_ids_and_drops_stream_shadow() -> None:
+    """native wire 必须还原 scoped call_id 且不重复发送 stream shadow。"""
+    model_call_id = "01a099c7-3bf3-7722-b46c-0ee4a7174e96"
+    tool_call_id = "chatcmpl-tool-9e4b5d651f4e7a0e"
+    items = _scoped_stream_and_checkpoint_items(
+        session_id="session-native-scoped",
+        model_call_id=model_call_id,
+        tool_call_id=tool_call_id,
+    )
+    plan = _native_tool_plan(
+        session_id="session-native-scoped",
+        plan_id="plan-native-scoped",
+        assembly_id="assembly-native-scoped",
+        items=items,
+    )
+
+    projection = project_native_request(
+        plan,
+        items,
+        request_only_content={},
+    )
+
+    inputs = projection["request"]["input"]
+    call_ids = [
+        item["call_id"] for item in inputs if item["type"] == "function_call"
+    ]
+    output_ids = [
+        item["call_id"] for item in inputs if item["type"] == "function_call_output"
+    ]
+    # provider 只接受原始 ID；scoped 前缀会超出 ChatGPT 的 64 字符上限。
+    assert call_ids == [tool_call_id]
+    assert output_ids == [tool_call_id]
+    assert all(len(call_id) <= 64 for call_id in (*call_ids, *output_ids))
+    # stream shadow 的 result 不能和 checkpoint carrier 一起发送。
+    outputs = [item["output"] for item in inputs if item["type"] == "function_call_output"]
+    assert outputs == ["checkpoint result"]
 
 
 @pytest.fixture

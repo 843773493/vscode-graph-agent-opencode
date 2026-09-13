@@ -9,6 +9,7 @@ import { superviseGateway } from "./gateway-supervisor.mjs";
 import { acquireLauncherLock } from "./instance-lock.mjs";
 import { discoverRuntime } from "./runtime-discovery.mjs";
 import { openServiceLog } from "./service-log.mjs";
+import { stopLauncher } from "./stop.mjs";
 
 const launcherPackageMetadata = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -42,7 +43,11 @@ export async function main(args) {
     return;
   }
   const command = args[0]?.startsWith("-") ? "start" : (args[0] ?? "start");
-  if (!new Set(["start", "doctor", "config", "gateway"]).has(command)) {
+  if (
+    !new Set(["start", "stop", "restart", "doctor", "config", "gateway"]).has(
+      command,
+    )
+  ) {
     throw new Error(`未知命令: ${command}`);
   }
   const commandArgs = command === args[0] ? args.slice(1) : args;
@@ -74,6 +79,28 @@ export async function main(args) {
       json: effectiveArgs.includes("--json"),
     });
     return;
+  }
+  if (command === "stop") {
+    if (effectiveArgs.length > 0) {
+      throw new Error(`未知 stop 参数: ${effectiveArgs.join(", ")}`);
+    }
+    const result = await stopLauncher({ boxteamHome });
+    if (result.status === "not-running") {
+      process.stdout.write("BoxTeam 未运行\n");
+      return;
+    }
+    process.stdout.write(
+      `BoxTeam 已停止: pid=${String(result.pid)} status=${result.status}\n`,
+    );
+    return;
+  }
+  if (command === "restart") {
+    const result = await stopLauncher({ boxteamHome });
+    if (result.status !== "not-running") {
+      process.stdout.write(
+        `BoxTeam 旧实例已停止: pid=${String(result.pid)} status=${result.status}\n`,
+      );
+    }
   }
   if (command === "gateway") {
     if (effectiveArgs[0] !== "issue-federation-token") {

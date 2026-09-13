@@ -8,6 +8,7 @@ from typing import TypeVar
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import SessionFolderUpdateRequest
 from app.services.business.session_navigation import SessionCatalogService
 
@@ -18,9 +19,20 @@ class _SessionService:
     def __init__(self, sessions_root: Path) -> None:
         self.path_resolver = get_session_path_resolver(sessions_root)
         self.path_resolver.initialize()
+        self.get_calls: list[str] = []
 
     def register_change_listener(self, listener) -> None:
         del listener
+
+    async def get(self, session_id: str) -> SessionDTO:
+        self.get_calls.append(session_id)
+        session_path = self.path_resolver.resolve_session_node_for_runtime(session_id)
+        payload = json.loads(
+            (session_path / "session.json").read_text(encoding="utf-8")
+        )
+        payload.setdefault("workspace_id", "ws-test")
+        payload.setdefault("current_agent_id", "test-agent")
+        return SessionDTO.model_validate(payload)
 
 
 class _JobService:
@@ -61,8 +73,55 @@ async def test_catalog_cache_detects_manual_physical_move(
     resolver.resolve_session_node("ses_manual_catalog").replace(moved_path)
 
     assert first_node.parent_node_id == source_folder.node_id
+    assert first_node.session is not None
+    assert first_node.session.session_id == "ses_manual_catalog"
+    assert first_node.session.title == first_node.name
+    assert first_node.session.parent_session_id is None
     with pytest.raises(RuntimeError, match="绕过软件修改会话目录结构"):
         await catalog.export_index()
+
+
+@pytest.mark.asyncio
+async def test_catalog_snapshot_enriches_session_nodes_and_reuses_cached_metadata(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    sessions_root = tmp_path / "sessions"
+    session_service = _SessionService(sessions_root)
+    resolver = session_service.path_resolver
+    folder = resolver.create_folder(name="目录元数据", parent_node_id=None)
+    session_id = "ses_catalog_metadata"
+    session_bundle_factory(sessions_root, session_id)
+    resolver.relocate_session(
+        session_id=session_id,
+        parent_node_id=folder.node_id,
+        manifest=json.loads(
+            (resolver.resolve_session_node(session_id) / "session.json").read_text(
+                encoding="utf-8"
+            )
+        ),
+    )
+    catalog = SessionCatalogService(session_service=session_service)
+
+    first = await catalog.list_children(
+        parent_node_id=folder.node_id,
+        limit=100,
+        cursor=None,
+    )
+    second = await catalog.list_children(
+        parent_node_id=folder.node_id,
+        limit=100,
+        cursor=None,
+    )
+
+    assert len(first.items) == 1
+    session_node = first.items[0]
+    assert session_node.session is not None
+    assert session_node.session.session_id == session_id
+    assert session_node.session.title == session_node.name
+    assert session_node.session.workspace_id == "ws-test"
+    assert second.items[0].session == session_node.session
+    assert session_service.get_calls == [session_id]
 
 
 @pytest.mark.asyncio

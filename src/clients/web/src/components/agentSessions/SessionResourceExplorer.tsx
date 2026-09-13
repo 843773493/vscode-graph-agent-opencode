@@ -156,6 +156,21 @@ export default function SessionResourceExplorer({
     onStatusChange(errorMessage);
   };
 
+  const refreshSessionCatalogBranchInBackground = (
+    workspaceId: string,
+    parentNodeId: string | null,
+  ) => {
+    void explorer.loadBranch(workspaceId, parentNodeId).catch((error) => {
+      handleError("刷新会话目录失败", error);
+    });
+  };
+
+  const refreshWorkspaceNavigationInBackground = () => {
+    void explorer.refreshNavigation().catch((error) => {
+      handleError("刷新工作区目录失败", error);
+    });
+  };
+
   const workspaceRefsByWorkspaceId = new Map(
     navigationNodes
       .filter((node) => node.kind === "workspace_ref" && node.workspace_id)
@@ -530,6 +545,7 @@ export default function SessionResourceExplorer({
     node: SessionCatalogNode,
     depth: number,
   ): ReactNode => {
+    const workspace = workspacesById.get(workspaceId);
     const expansionId = `catalog:${workspaceId}:${node.node_id}`;
     const expanded = explorer.expandedIds.has(expansionId);
     const isFolder = node.kind === "folder";
@@ -618,15 +634,33 @@ export default function SessionResourceExplorer({
                 x: event.clientX,
                 y: event.clientY,
               });
+              if (workspace?.status === "ready") {
+                refreshSessionCatalogBranchInBackground(workspaceId, node.node_id);
+              }
               return;
             }
             if (!node.session_id) {
               return;
             }
             setFolderMenu(null);
-            void explorer.resolveSession(workspaceId, node.session_id)
-              .then((session) => onOpenSessionMenu(session, workspaceId, event.clientX, event.clientY))
-              .catch((error) => handleError("打开会话菜单失败", error));
+            const session = node.session;
+            if (!session) {
+              handleError(
+                "打开会话菜单失败",
+                new Error(`会话目录节点缺少会话元数据: ${node.node_id}`),
+              );
+              return;
+            }
+            if (session.session_id !== node.session_id) {
+              handleError(
+                "打开会话菜单失败",
+                new Error(
+                  `会话目录节点与会话元数据 ID 不一致: node_id=${node.node_id}, session_id=${session.session_id}`,
+                ),
+              );
+              return;
+            }
+            onOpenSessionMenu(session, workspaceId, event.clientX, event.clientY);
           }}
         >
           {canExpand ? (
@@ -726,6 +760,9 @@ export default function SessionResourceExplorer({
             setWorkspaceFolderMenu(null);
             if (workspace) {
               onOpenWorkspaceMenu(workspace, event.clientX, event.clientY);
+              if (workspace.status === "ready") {
+                refreshSessionCatalogBranchInBackground(workspaceId, null);
+              }
             }
           }}
         >
@@ -831,6 +868,7 @@ export default function SessionResourceExplorer({
               x: event.clientX,
               y: event.clientY,
             });
+            refreshWorkspaceNavigationInBackground();
           }}
         >
           <button type="button" className="session-resource-chevron" aria-label={`${expanded ? "折叠" : "展开"}工作区文件夹 ${node.name}`} onClick={() => explorer.toggleExpanded(expansionId)}>
@@ -943,6 +981,7 @@ export default function SessionResourceExplorer({
               x: event.clientX,
               y: event.clientY,
             });
+            refreshWorkspaceNavigationInBackground();
           }}
           onKeyDown={(event) => {
             if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) {
@@ -957,6 +996,7 @@ export default function SessionResourceExplorer({
               x: rect.left,
               y: rect.bottom,
             });
+            refreshWorkspaceNavigationInBackground();
           }}
           onDragOver={(event) => handleDragOver(event, { kind: "navigation_root" })}
           onDragEnter={(event) => handleDragOver(event, { kind: "navigation_root" })}
@@ -1017,6 +1057,7 @@ export default function SessionResourceExplorer({
             x: event.clientX,
             y: event.clientY,
           });
+          refreshWorkspaceNavigationInBackground();
         }}
       >
         {workspaceFolderEditor?.mode === "create" && workspaceFolderEditor.parentNodeId === null

@@ -462,6 +462,8 @@ export interface ToolCall {
   started_at: string | undefined;
   updated_at: string | undefined;
   completed_at: string | undefined;
+  tool_invocation_id?: string | undefined;
+  tool_attempt_id?: string | undefined;
 }
 
 export interface ToolCallDelta {
@@ -470,6 +472,8 @@ export interface ToolCallDelta {
   arguments_delta?: string | undefined;
   arguments: { [key: string]: any } | undefined;
   arguments_complete?: boolean | undefined;
+  tool_invocation_id?: string | undefined;
+  tool_attempt_id?: string | undefined;
 }
 
 export interface ToolCallCompleted {
@@ -478,12 +482,16 @@ export interface ToolCallCompleted {
   status: string;
   completion_reason: string;
   arguments_complete?: boolean | undefined;
+  tool_invocation_id?: string | undefined;
+  tool_attempt_id?: string | undefined;
 }
 
 export interface ToolStarted {
   tool_execution_id: string;
   tool_call_id: string;
   tool_name: string;
+  tool_invocation_id?: string | undefined;
+  tool_attempt_id?: string | undefined;
 }
 
 export interface ToolCompleted {
@@ -495,6 +503,8 @@ export interface ToolCompleted {
   error?: string | undefined;
   outcome: ToolExecutionOutcome;
   completion_reason: string;
+  tool_invocation_id?: string | undefined;
+  tool_attempt_id?: string | undefined;
 }
 
 export interface InterruptRequested {
@@ -558,6 +568,8 @@ export interface ToolExecutionSnapshot {
   started_at: string | undefined;
   updated_at: string | undefined;
   completed_at: string | undefined;
+  tool_invocation_id?: string | undefined;
+  tool_attempt_id?: string | undefined;
 }
 
 export interface ModelCallSnapshot {
@@ -622,6 +634,8 @@ export interface ActiveState {
   last_phase?: string | undefined;
   reason?: string | undefined;
   detail_ref?: string | undefined;
+  tool_invocation_id?: string | undefined;
+  tool_attempt_id?: string | undefined;
 }
 
 export interface InterruptState {
@@ -657,6 +671,7 @@ export interface StreamSnapshot {
   active_state?: ActiveState | undefined;
   interrupt_state?: InterruptState | undefined;
   recovery?: RecoveryState | undefined;
+  workspace_id?: string | undefined;
 }
 
 export interface MessageStreamEvent {
@@ -671,6 +686,10 @@ export interface MessageStreamEvent {
   block_id?: string | undefined;
   tool_execution_id?: string | undefined;
   job_id?: string | undefined;
+  workspace_id?: string | undefined;
+  tool_call_id?: string | undefined;
+  tool_invocation_id?: string | undefined;
+  tool_attempt_id?: string | undefined;
   payload:
     | { $case: "stream_opened"; stream_opened: StreamOpened }
     | { $case: "model_started"; model_started: ModelStarted }
@@ -1089,6 +1108,8 @@ function createBaseToolCall(): ToolCall {
     started_at: undefined,
     updated_at: undefined,
     completed_at: undefined,
+    tool_invocation_id: undefined,
+    tool_attempt_id: undefined,
   };
 }
 
@@ -1107,6 +1128,8 @@ export const ToolCall: MessageFns<ToolCall> = {
       started_at: isSet(object.started_at) ? globalThis.String(object.started_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       completed_at: isSet(object.completed_at) ? globalThis.String(object.completed_at) : undefined,
+      tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
+      tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
     };
   },
 
@@ -1148,6 +1171,12 @@ export const ToolCall: MessageFns<ToolCall> = {
     if (message.completed_at !== undefined) {
       obj.completed_at = message.completed_at;
     }
+    if (message.tool_invocation_id !== undefined) {
+      obj.tool_invocation_id = message.tool_invocation_id;
+    }
+    if (message.tool_attempt_id !== undefined) {
+      obj.tool_attempt_id = message.tool_attempt_id;
+    }
     return obj;
   },
 
@@ -1168,6 +1197,8 @@ export const ToolCall: MessageFns<ToolCall> = {
     message.started_at = object.started_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
     message.completed_at = object.completed_at ?? undefined;
+    message.tool_invocation_id = object.tool_invocation_id ?? undefined;
+    message.tool_attempt_id = object.tool_attempt_id ?? undefined;
     return message;
   },
 };
@@ -1179,6 +1210,8 @@ function createBaseToolCallDelta(): ToolCallDelta {
     arguments_delta: undefined,
     arguments: undefined,
     arguments_complete: undefined,
+    tool_invocation_id: undefined,
+    tool_attempt_id: undefined,
   };
 }
 
@@ -1190,6 +1223,8 @@ export const ToolCallDelta: MessageFns<ToolCallDelta> = {
       arguments_delta: isSet(object.arguments_delta) ? globalThis.String(object.arguments_delta) : undefined,
       arguments: isObject(object.arguments) ? object.arguments : undefined,
       arguments_complete: isSet(object.arguments_complete) ? globalThis.Boolean(object.arguments_complete) : undefined,
+      tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
+      tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
     };
   },
 
@@ -1210,6 +1245,12 @@ export const ToolCallDelta: MessageFns<ToolCallDelta> = {
     if (message.arguments_complete !== undefined) {
       obj.arguments_complete = message.arguments_complete;
     }
+    if (message.tool_invocation_id !== undefined) {
+      obj.tool_invocation_id = message.tool_invocation_id;
+    }
+    if (message.tool_attempt_id !== undefined) {
+      obj.tool_attempt_id = message.tool_attempt_id;
+    }
     return obj;
   },
 
@@ -1223,12 +1264,22 @@ export const ToolCallDelta: MessageFns<ToolCallDelta> = {
     message.arguments_delta = object.arguments_delta ?? undefined;
     message.arguments = object.arguments ?? undefined;
     message.arguments_complete = object.arguments_complete ?? undefined;
+    message.tool_invocation_id = object.tool_invocation_id ?? undefined;
+    message.tool_attempt_id = object.tool_attempt_id ?? undefined;
     return message;
   },
 };
 
 function createBaseToolCallCompleted(): ToolCallCompleted {
-  return { tool_call_id: "", tool_name: "", status: "", completion_reason: "", arguments_complete: undefined };
+  return {
+    tool_call_id: "",
+    tool_name: "",
+    status: "",
+    completion_reason: "",
+    arguments_complete: undefined,
+    tool_invocation_id: undefined,
+    tool_attempt_id: undefined,
+  };
 }
 
 export const ToolCallCompleted: MessageFns<ToolCallCompleted> = {
@@ -1239,6 +1290,8 @@ export const ToolCallCompleted: MessageFns<ToolCallCompleted> = {
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       completion_reason: isSet(object.completion_reason) ? globalThis.String(object.completion_reason) : "",
       arguments_complete: isSet(object.arguments_complete) ? globalThis.Boolean(object.arguments_complete) : undefined,
+      tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
+      tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
     };
   },
 
@@ -1259,6 +1312,12 @@ export const ToolCallCompleted: MessageFns<ToolCallCompleted> = {
     if (message.arguments_complete !== undefined) {
       obj.arguments_complete = message.arguments_complete;
     }
+    if (message.tool_invocation_id !== undefined) {
+      obj.tool_invocation_id = message.tool_invocation_id;
+    }
+    if (message.tool_attempt_id !== undefined) {
+      obj.tool_attempt_id = message.tool_attempt_id;
+    }
     return obj;
   },
 
@@ -1272,12 +1331,20 @@ export const ToolCallCompleted: MessageFns<ToolCallCompleted> = {
     message.status = object.status ?? "";
     message.completion_reason = object.completion_reason ?? "";
     message.arguments_complete = object.arguments_complete ?? undefined;
+    message.tool_invocation_id = object.tool_invocation_id ?? undefined;
+    message.tool_attempt_id = object.tool_attempt_id ?? undefined;
     return message;
   },
 };
 
 function createBaseToolStarted(): ToolStarted {
-  return { tool_execution_id: "", tool_call_id: "", tool_name: "" };
+  return {
+    tool_execution_id: "",
+    tool_call_id: "",
+    tool_name: "",
+    tool_invocation_id: undefined,
+    tool_attempt_id: undefined,
+  };
 }
 
 export const ToolStarted: MessageFns<ToolStarted> = {
@@ -1286,6 +1353,8 @@ export const ToolStarted: MessageFns<ToolStarted> = {
       tool_execution_id: isSet(object.tool_execution_id) ? globalThis.String(object.tool_execution_id) : "",
       tool_call_id: isSet(object.tool_call_id) ? globalThis.String(object.tool_call_id) : "",
       tool_name: isSet(object.tool_name) ? globalThis.String(object.tool_name) : "",
+      tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
+      tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
     };
   },
 
@@ -1300,6 +1369,12 @@ export const ToolStarted: MessageFns<ToolStarted> = {
     if (message.tool_name !== "") {
       obj.tool_name = message.tool_name;
     }
+    if (message.tool_invocation_id !== undefined) {
+      obj.tool_invocation_id = message.tool_invocation_id;
+    }
+    if (message.tool_attempt_id !== undefined) {
+      obj.tool_attempt_id = message.tool_attempt_id;
+    }
     return obj;
   },
 
@@ -1311,6 +1386,8 @@ export const ToolStarted: MessageFns<ToolStarted> = {
     message.tool_execution_id = object.tool_execution_id ?? "";
     message.tool_call_id = object.tool_call_id ?? "";
     message.tool_name = object.tool_name ?? "";
+    message.tool_invocation_id = object.tool_invocation_id ?? undefined;
+    message.tool_attempt_id = object.tool_attempt_id ?? undefined;
     return message;
   },
 };
@@ -1325,6 +1402,8 @@ function createBaseToolCompleted(): ToolCompleted {
     error: undefined,
     outcome: 0,
     completion_reason: "",
+    tool_invocation_id: undefined,
+    tool_attempt_id: undefined,
   };
 }
 
@@ -1339,6 +1418,8 @@ export const ToolCompleted: MessageFns<ToolCompleted> = {
       error: isSet(object.error) ? globalThis.String(object.error) : undefined,
       outcome: isSet(object.outcome) ? toolExecutionOutcomeFromJSON(object.outcome) : 0,
       completion_reason: isSet(object.completion_reason) ? globalThis.String(object.completion_reason) : "",
+      tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
+      tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
     };
   },
 
@@ -1368,6 +1449,12 @@ export const ToolCompleted: MessageFns<ToolCompleted> = {
     if (message.completion_reason !== "") {
       obj.completion_reason = message.completion_reason;
     }
+    if (message.tool_invocation_id !== undefined) {
+      obj.tool_invocation_id = message.tool_invocation_id;
+    }
+    if (message.tool_attempt_id !== undefined) {
+      obj.tool_attempt_id = message.tool_attempt_id;
+    }
     return obj;
   },
 
@@ -1384,6 +1471,8 @@ export const ToolCompleted: MessageFns<ToolCompleted> = {
     message.error = object.error ?? undefined;
     message.outcome = object.outcome ?? 0;
     message.completion_reason = object.completion_reason ?? "";
+    message.tool_invocation_id = object.tool_invocation_id ?? undefined;
+    message.tool_attempt_id = object.tool_attempt_id ?? undefined;
     return message;
   },
 };
@@ -1706,6 +1795,8 @@ function createBaseToolExecutionSnapshot(): ToolExecutionSnapshot {
     started_at: undefined,
     updated_at: undefined,
     completed_at: undefined,
+    tool_invocation_id: undefined,
+    tool_attempt_id: undefined,
   };
 }
 
@@ -1726,6 +1817,8 @@ export const ToolExecutionSnapshot: MessageFns<ToolExecutionSnapshot> = {
       started_at: isSet(object.started_at) ? globalThis.String(object.started_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       completed_at: isSet(object.completed_at) ? globalThis.String(object.completed_at) : undefined,
+      tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
+      tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
     };
   },
 
@@ -1773,6 +1866,12 @@ export const ToolExecutionSnapshot: MessageFns<ToolExecutionSnapshot> = {
     if (message.completed_at !== undefined) {
       obj.completed_at = message.completed_at;
     }
+    if (message.tool_invocation_id !== undefined) {
+      obj.tool_invocation_id = message.tool_invocation_id;
+    }
+    if (message.tool_attempt_id !== undefined) {
+      obj.tool_attempt_id = message.tool_attempt_id;
+    }
     return obj;
   },
 
@@ -1795,6 +1894,8 @@ export const ToolExecutionSnapshot: MessageFns<ToolExecutionSnapshot> = {
     message.started_at = object.started_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
     message.completed_at = object.completed_at ?? undefined;
+    message.tool_invocation_id = object.tool_invocation_id ?? undefined;
+    message.tool_attempt_id = object.tool_attempt_id ?? undefined;
     return message;
   },
 };
@@ -2115,6 +2216,8 @@ function createBaseActiveState(): ActiveState {
     last_phase: undefined,
     reason: undefined,
     detail_ref: undefined,
+    tool_invocation_id: undefined,
+    tool_attempt_id: undefined,
   };
 }
 
@@ -2135,6 +2238,8 @@ export const ActiveState: MessageFns<ActiveState> = {
       last_phase: isSet(object.last_phase) ? globalThis.String(object.last_phase) : undefined,
       reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
       detail_ref: isSet(object.detail_ref) ? globalThis.String(object.detail_ref) : undefined,
+      tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
+      tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
     };
   },
 
@@ -2182,6 +2287,12 @@ export const ActiveState: MessageFns<ActiveState> = {
     if (message.detail_ref !== undefined) {
       obj.detail_ref = message.detail_ref;
     }
+    if (message.tool_invocation_id !== undefined) {
+      obj.tool_invocation_id = message.tool_invocation_id;
+    }
+    if (message.tool_attempt_id !== undefined) {
+      obj.tool_attempt_id = message.tool_attempt_id;
+    }
     return obj;
   },
 
@@ -2204,6 +2315,8 @@ export const ActiveState: MessageFns<ActiveState> = {
     message.last_phase = object.last_phase ?? undefined;
     message.reason = object.reason ?? undefined;
     message.detail_ref = object.detail_ref ?? undefined;
+    message.tool_invocation_id = object.tool_invocation_id ?? undefined;
+    message.tool_attempt_id = object.tool_attempt_id ?? undefined;
     return message;
   },
 };
@@ -2316,6 +2429,7 @@ function createBaseStreamSnapshot(): StreamSnapshot {
     active_state: undefined,
     interrupt_state: undefined,
     recovery: undefined,
+    workspace_id: undefined,
   };
 }
 
@@ -2356,6 +2470,7 @@ export const StreamSnapshot: MessageFns<StreamSnapshot> = {
       active_state: isSet(object.active_state) ? ActiveState.fromJSON(object.active_state) : undefined,
       interrupt_state: isSet(object.interrupt_state) ? InterruptState.fromJSON(object.interrupt_state) : undefined,
       recovery: isSet(object.recovery) ? RecoveryState.fromJSON(object.recovery) : undefined,
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
     };
   },
 
@@ -2415,6 +2530,9 @@ export const StreamSnapshot: MessageFns<StreamSnapshot> = {
     if (message.recovery !== undefined) {
       obj.recovery = RecoveryState.toJSON(message.recovery);
     }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
     return obj;
   },
 
@@ -2449,6 +2567,7 @@ export const StreamSnapshot: MessageFns<StreamSnapshot> = {
     message.recovery = (object.recovery !== undefined && object.recovery !== null)
       ? RecoveryState.fromPartial(object.recovery)
       : undefined;
+    message.workspace_id = object.workspace_id ?? undefined;
     return message;
   },
 };
@@ -2466,6 +2585,10 @@ function createBaseMessageStreamEvent(): MessageStreamEvent {
     block_id: undefined,
     tool_execution_id: undefined,
     job_id: undefined,
+    workspace_id: undefined,
+    tool_call_id: undefined,
+    tool_invocation_id: undefined,
+    tool_attempt_id: undefined,
     payload: undefined,
   };
 }
@@ -2484,6 +2607,10 @@ export const MessageStreamEvent: MessageFns<MessageStreamEvent> = {
       block_id: isSet(object.block_id) ? globalThis.String(object.block_id) : undefined,
       tool_execution_id: isSet(object.tool_execution_id) ? globalThis.String(object.tool_execution_id) : undefined,
       job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+      tool_call_id: isSet(object.tool_call_id) ? globalThis.String(object.tool_call_id) : undefined,
+      tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
+      tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
       payload: isSet(object.stream_opened)
         ? { $case: "stream_opened", stream_opened: StreamOpened.fromJSON(object.stream_opened) }
         : isSet(object.model_started)
@@ -2563,6 +2690,18 @@ export const MessageStreamEvent: MessageFns<MessageStreamEvent> = {
     if (message.job_id !== undefined) {
       obj.job_id = message.job_id;
     }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.tool_call_id !== undefined) {
+      obj.tool_call_id = message.tool_call_id;
+    }
+    if (message.tool_invocation_id !== undefined) {
+      obj.tool_invocation_id = message.tool_invocation_id;
+    }
+    if (message.tool_attempt_id !== undefined) {
+      obj.tool_attempt_id = message.tool_attempt_id;
+    }
     if (message.payload?.$case === "stream_opened") {
       obj.stream_opened = StreamOpened.toJSON(message.payload.stream_opened);
     } else if (message.payload?.$case === "model_started") {
@@ -2623,6 +2762,10 @@ export const MessageStreamEvent: MessageFns<MessageStreamEvent> = {
     message.block_id = object.block_id ?? undefined;
     message.tool_execution_id = object.tool_execution_id ?? undefined;
     message.job_id = object.job_id ?? undefined;
+    message.workspace_id = object.workspace_id ?? undefined;
+    message.tool_call_id = object.tool_call_id ?? undefined;
+    message.tool_invocation_id = object.tool_invocation_id ?? undefined;
+    message.tool_attempt_id = object.tool_attempt_id ?? undefined;
     switch (object.payload?.$case) {
       case "stream_opened": {
         if (object.payload?.stream_opened !== undefined && object.payload?.stream_opened !== null) {

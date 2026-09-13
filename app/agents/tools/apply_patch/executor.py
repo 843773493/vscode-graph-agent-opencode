@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import BinaryIO
 
 from app.agents.tools.apply_patch.journal import (
@@ -23,6 +23,7 @@ from app.agents.tools.apply_patch.parser import (
     identify_files_needed,
     parse_patch,
 )
+from app.agents.workspace_tool_paths import normalize_workspace_relative_path
 from app.core.path_utils import get_workspace_root
 
 _workspace_locks_guard = threading.Lock()
@@ -383,20 +384,20 @@ def _existing_mode(path: Path) -> int | None:
 
 
 def _resolve_workspace_file(file_path: str, workspace_root: Path) -> Path:
-    raw_path = file_path.strip()
-    if not raw_path:
-        raise ValueError("文件路径不能为空")
-    if raw_path.startswith(("/", "\\")) or PureWindowsPath(raw_path).drive:
-        raise ValueError(
-            f"apply_patch 文件路径必须是工作区相对路径，不能以 / 开头: {file_path}"
-        )
-
     workspace_root = workspace_root.resolve()
-    real_path = (workspace_root / raw_path).resolve()
     try:
-        real_path.relative_to(workspace_root)
-    except ValueError as exc:
-        raise ValueError(f"文件路径超出工作区: {file_path}") from exc
+        relative_path = normalize_workspace_relative_path(
+            file_path,
+            workspace_root=workspace_root,
+        )
+    except ValueError as error:
+        raise ValueError(f"apply_patch 文件路径无效: {file_path} ({error})") from error
+    real_path = (workspace_root / relative_path).resolve()
+    if real_path != workspace_root:
+        try:
+            real_path.relative_to(workspace_root)
+        except ValueError as exc:
+            raise ValueError(f"文件路径超出工作区: {file_path}") from exc
     return real_path
 
 

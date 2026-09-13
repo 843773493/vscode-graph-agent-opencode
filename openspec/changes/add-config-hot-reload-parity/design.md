@@ -72,7 +72,7 @@ pending 记录至少包含：`state`、完整规范化候选、来源层 key、�
 
 对 Workspace，`source layers / desired state` 是 Workspace SQLite 中按 `layer_key` 分开的记录；`active snapshot` 是旧 generation 唯一可读的运行时快照；`pending candidate` 是带 `candidate_id` 的完整、不可变、脱敏候选。JSONC 导入成功后，来源层记录可以立即更新为新 desired payload，但 active snapshot 不变；若策略要求重启，则同一事务额外写入 pending candidate 和 pending commit revision。这样“source 已更新”不等于“runtime 已激活”。新 generation 必须拿到绑定 `workspace_id`、`config_domain`、`candidate_id`、candidate revision/digest 和 generation fencing token 的不透明 `candidate_ref`，再通过 Workspace-owned 启动读取路径从同一 SQLite 读取 pending 完整候选；缺失、过期或 digest 不匹配时必须启动失败，禁止静默回退到 active。没有 candidate_ref 的旧 generation 只能读取 active snapshot，不能发现或采用 pending。
 
-candidate payload 的秘密字段只保存 `secret_ref`、secret version 或 `secret_binding_digest`；解析后的 provider API key 只在进程内由 Workspace-owned secret resolver 短暂使用。若输入是字面量秘密且无法物化为受支持的 secret reference，则候选 `rejected`，旧 active 保持不变。candidate/effective digest 基于规范化的 secret reference 和 binding digest，而不是原始秘密字节。outbox、诊断、日志、健康证明和 Gateway 委托只允许出现 secret reference、是否存在和 digest，不得出现秘密值或完整候选 payload。
+candidate payload 的秘密字段只保存 `secret_ref`、secret version、`secret_binding_digest` 或用户显式写入的自包含字面量 key；解析后的 provider API key 只在进程内由 Workspace-owned secret resolver 短暂使用。字面量 key 按原文写入 SQLite 以支持原样重启恢复（例如本地模型 dummy key、临时 apikey），其 binding digest 基于字面量原文，因此无法检测轮换；只有旧版本写入的不可逆 `literal-sha256:` 摘要才使候选 `rejected`，旧 active 保持不变。candidate/effective digest 基于规范化的 secret reference、binding digest 或字面量原文，而不是运行时新解析出的秘密字节。outbox、诊断、日志、健康证明和 Gateway 委托只允许出现 secret reference、是否存在和不可逆摘要，不得出现秘密原文或完整候选 payload。
 
 pending 的处理规则固定为：来源基线未变时重启后尝试激活；来源只发生不重叠变化时重新生成候选并替换 pending；重叠变化进入 conflict；显式 discard 进入 discarded 并抑制同 digest 的重复 watcher 事件；副作用无法恢复进入 recovery_required。所有规则都必须保留可重试/可诊断记录。`retry` 沿用原 candidate 和逻辑 `idempotency_key`，只产生新的 attempt/apply claim；它不能产生第二个候选或第二个同结果配置事件。
 
@@ -260,9 +260,9 @@ config_pending_candidate
 
 ### 19. 用户配置保持 `api_key`，内部规范化为 `secret_ref`
 
-本变更不把内部 `secret_ref` 直接暴露为当前用户 JSONC 的新必填字段；现有用户 schema 继续接受 `api_key`，包括受支持的 `${ENV_NAME}` 形式。导入器在候选边界将其规范化为内部 secret reference：环境变量表达式映射到不可逆的 env reference，已有 secret store 条目映射到稳定 reference，字面量 key 只有在显式 secret importer 能先创建受支持的 secret reference 时才允许进入候选。无法安全物化的字面量直接返回 `secret_reference_required`，不写入 candidate、SQLite、outbox 或诊断。
+本变更不把内部 `secret_ref` 直接暴露为当前用户 JSONC 的新必填字段；现有用户 schema 继续接受 `api_key`，包括受支持的 `${ENV_NAME}` 形式和自包含字面量 key。导入器在候选边界做规范化：环境变量表达式映射到不可逆的 env reference；字面量 key 按原文保留并直接作为运行密钥使用，因为它自包含、无需外部 resolver，可原样重启恢复。字面量 key 的唯一代价是无法通过 binding digest 检测轮换，且出于安全考虑，诊断、事件、日志、outbox 和 health proof 中只暴露其不可逆摘要。只有旧版本写入的 `literal-sha256:` 摘要无法还原成可用 key，导入直接返回 `secret_reference_required`，不写入 candidate、SQLite、outbox 或诊断。
 
-旧 SQLite 中的 literal key 或 `${ENV_NAME}` 记录必须在迁移时逐条尝试规范化。成功时保留旧记录 digest 和迁移映射，仅把新 active/pending snapshot 写成 reference/binding digest；resolver 不可用时保留旧 active，迁移状态为 blocked/recovery_required，不复制或回显旧 key。secret rotation 生成新的 binding/version 和 candidate digest，旧 active 继续服务直到新 generation 返回匹配 proof；resolver 失败时新 generation 直接失败，不能回退后声称 pending 已加载。将来若用户 schema 正式支持 `secret_ref`，必须另行提升配置版本并保留本边界的兼容读取规则。
+旧 SQLite 中的 literal key 或 `${ENV_NAME}` 记录必须在迁移时逐条规范化。`${ENV_NAME}` 规范化为 `env:NAME` 引用，literal key 按原文保留，两者迁移成功都不阻断；仅不可逆 `literal-sha256:` 摘要迁移时保留阻断路径并把迁移状态置为 blocked/recovery_required，同时保留旧 active，不复制或回显该摘要之外的秘密值。secret rotation 只对 `env:` 引用有意义，会生成新的 binding/version 和 candidate digest，旧 active 继续服务直到新 generation 返回匹配 proof；resolver 失败时新 generation 直接失败，不能回退后声称 pending 已加载。将来若用户 schema 正式支持 `secret_ref`，必须另行提升配置版本并保留本边界的兼容读取规则。
 
 ### 20. `connection_id` 迁移必须是可恢复的版本流程
 
@@ -315,7 +315,7 @@ Gateway registry 维护一个 `registry_meta` 单行 revision 和 append-only ap
 | apply 期间 source 二次修改 | 候选 A 基于 source 1 apply，source 更新到 2 后准备 promotion | promotion 前重新 CAS 全部 source layer/active/pending/registry 基线；失败不 active，按是否已有副作用停止、补偿或进入 recovery_required | 全量 source baseline、最终 CAS、apply journal、补偿结果、无 applied paths |
 | JSONC 删除与 rename | 已迁移 JSONC 被删除、临时文件出现或路径原子 rename | 写入 absent tombstone 并按层合并；临时事件不导入；rename 有序记录 absent/present；需重启贡献保留旧 active/pending | presence、tombstone、source generation、备份/digest、changed/deferred paths |
 | active snapshot 崩溃恢复 | source 已更新但 pending 未 promotion，或 promotion/outbox 后进程崩溃 | active 与 pending 分离；启动先用 active；提交后从 snapshot/outbox/journal 恢复，不从当前 JSONC 猜测；损坏进入 recovery_required | snapshot 主键/字段、promoted generation、fencing token、outbox cursor、恢复状态 |
-| secret 兼容与轮换 | 用户使用 `api_key`、`${ENV}`、旧 literal SQLite 或轮换 secret | 公共 schema 保持 api_key，内部保存 reference/binding；旧 literal/resolver 失败不泄露；新 binding proof 成功后才 promotion | schema 版本、迁移映射、binding digest、脱敏 proof、旧 active |
+| secret 兼容与轮换 | 用户使用 `api_key`、`${ENV}`、旧 literal SQLite 或轮换 secret | 公共 schema 保持 api_key，内部保存 reference/binding 或自包含字面量；旧 literal-sha256 摘要/resolver 失败不泄露；新 binding proof 成功后才 promotion | schema 版本、迁移映射、binding digest、脱敏 proof、旧 active |
 | source A→B→A | 共享 source 连续写入 A、B、A，Workspace 中途停止 | source owner 分配 generation 1/2/3 和 distinct fanout id；digest 只做去重；停止 Workspace 从 high-water 追赶 | source journal、source event id、last-applied generation、fanout 结果 |
 | registry/manual 并发 | config batch、manual CRUD、active promotion 交错提交 | 所有操作以 registry revision CAS 串行化；旧 batch 不能覆盖 manual；promotion 失败按 apply journal 补偿；命名空间隔离 | registry_meta revision、expected CAS、owner/namespace、batch journal、冲突/恢复结果 |
 
@@ -334,7 +334,7 @@ Gateway registry 维护一个 `registry_meta` 单行 revision 和 append-only ap
 - [Risk] 待重启配置长时间未应用 → 诊断和 SSE 持续暴露 pending/restart 状态，并由 UI 提供明确的受控重启入口；不伪造 active 成功。
 - [Risk] 迁移逻辑改变用户文件或注释 → 保留现有备份/恢复约束，优先记录 digest 和 SQLite 状态；若必须重写 JSONC，单独验证原子写入与备份。
 - [Risk] 用户级 Workspace 配置 fan-out 不是跨数据库原子操作 → 用 `fanout_id` 关联每个 Workspace 的独立 CAS/result，允许明确的 `fanout_partial`，成功 Workspace 不回滚，冲突 Workspace 不静默覆盖。
-- [Risk] pending 候选或诊断泄露 provider API key → 只持久化 secret reference/version/binding digest，解析后的秘密仅在 Workspace runtime 内存中存在；发现无法物化的字面量秘密时拒绝候选。
+- [Risk] pending 候选或诊断泄露 provider API key → 只持久化 secret reference/version/binding digest 或自包含字面量；解析后的秘密仅在 Workspace runtime 内存中存在；字面量原文仅写入 SQLite 以支持重启恢复，任何诊断、事件、日志、outbox 和 health proof 只出现其不可逆摘要；只有无法还原的旧 `literal-sha256:` 摘要才拒绝候选。
 - [Risk] 连接字段变化被错误当成新目标或旧目标 → 用持久 `connection_id` 做唯一身份，迁移时一次性生成并落盘，任何重复或缺失身份都显式失败。
 
 ## Migration Plan
@@ -350,7 +350,7 @@ Gateway registry 维护一个 `registry_meta` 单行 revision 和 append-only ap
 9. 在所有外部副作用完成后、promotion 前执行全部 source layer、active/pending 和 registry 基线的最终 CAS；根据副作用阶段选择停止、补偿、重建或 recovery_required。
 10. 为 JSONC deletion/rename 建立 presence tombstone、source journal 顺序、备份和恢复协议，并把删除后的优先级合并结果纳入候选与重启分类。
 11. 将 active snapshot、pending candidate、apply claim、outbox 和 promoted generation 持久化，验证事务提交前后崩溃、active 损坏和 secret binding 失效的启动恢复边界。
-12. 保持用户 `api_key` schema 契约，在候选边界规范化 `secret_ref`/binding；迁移旧 literal/env 记录并验证 resolver failure 与 secret rotation 的 fail-closed 行为。
+12. 保持用户 `api_key` schema 契约，在候选边界把 `${ENV}` 规范化 `secret_ref`/binding，字面量按原文持久化；迁移旧 literal/env 记录并验证 resolver failure 与 secret rotation 的 fail-closed 行为，只有不可逆 `literal-sha256:` 摘要才拒绝。
 13. 由单一 source owner 提供单调 source journal/high-water mark，验证 A→B→A 事件身份和停止 Workspace 的 fan-out catch-up；digest 仅承担内容去重。
 14. 将 registry batch、manual CRUD、system/projection 和 active promotion 接入同一 registry revision CAS/apply journal，明确 owner/namespace 冲突与补偿恢复。
 15. 只有上述持久协议和验收场景通过后，才进入代码实现；否则继续保持 proposal/spec/design/tasks 的未实施状态。

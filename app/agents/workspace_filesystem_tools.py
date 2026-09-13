@@ -45,14 +45,20 @@ class _ToolSchema(BaseModel):
 
 class WorkspaceLsSchema(_ToolSchema):
     path: str = Field(
-        description="Workspace-relative directory path. Use '.' for the workspace root."
+        description=(
+            "Directory path to list; prefer a workspace-relative path and use "
+            "'.' for the workspace root."
+        )
     )
     runtime: Annotated[object, InjectedToolArg]
 
 
 class WorkspaceReadFileSchema(_ToolSchema):
     path: str = Field(
-        description="Workspace-relative file path. Do not start it with '/'."
+        description=(
+            "File path to read; prefer a workspace-relative path such as "
+            "'src/main.js'."
+        )
     )
     line_offset: int = Field(
         default=1,
@@ -69,7 +75,7 @@ class WorkspaceReadFileSchema(_ToolSchema):
 
 class WorkspaceWriteFileSchema(_ToolSchema):
     file_path: str = Field(
-        description="Workspace-relative destination path. Do not start it with '/'."
+        description="Destination file path; prefer a workspace-relative path."
     )
     content: str = Field(description="Text content to write.")
     runtime: Annotated[object, InjectedToolArg]
@@ -77,7 +83,7 @@ class WorkspaceWriteFileSchema(_ToolSchema):
 
 class WorkspaceEditFileSchema(_ToolSchema):
     file_path: str = Field(
-        description="Workspace-relative file path. Do not start it with '/'."
+        description="File path to edit; prefer a workspace-relative path."
     )
     old_string: str = Field(description="Exact text to replace.")
     new_string: str = Field(description="Replacement text; must differ from old_string.")
@@ -92,7 +98,7 @@ class WorkspaceGlobSchema(_ToolSchema):
     pattern: str = Field(description="Glob pattern to match files.")
     path: str = Field(
         default=".",
-        description="Workspace-relative base directory. Defaults to '.'.",
+        description="Base directory; prefer a workspace-relative path and defaults to '.'.",
     )
     runtime: Annotated[object, InjectedToolArg]
 
@@ -101,7 +107,7 @@ class WorkspaceGrepSchema(_ToolSchema):
     pattern: str = Field(description="Literal text to search for.")
     path: str | None = Field(
         default=None,
-        description="Workspace-relative directory. Omit to search from '.'.",
+        description="Directory to search; prefer a workspace-relative path and omit to search from '.'.",
     )
     glob: str | None = Field(
         default=None,
@@ -221,16 +227,33 @@ def _system_skill_metadata(relative_path: str) -> dict[str, str]:
     }
 
 
+def _is_session_attachment_path(relative_path: str) -> bool:
+    """判断路径是否为会话附件目录下的一级文件。
+
+    用户附件的 canonical content 会向模型注入 ``path`` 属性，该属性指向
+    ``.boxteam/sessions/<folder>/<session>/attachments/<file>``。附件是模型
+    合法输入，因此 ``read_file`` 必须允许读取这一精确位置；其余 ``.boxteam``
+    运行时数据（logs、rollout、message stream 等）仍然禁止访问。
+    """
+    parts = PurePosixPath(relative_path).parts
+    if len(parts) < 5 or parts[0] != ".boxteam" or parts[1] != "sessions":
+        return False
+    return parts[-2] == "attachments" and parts[-1] not in {"", ".", ".."}
+
+
 def _validate_model_path(
     tool_name: str,
     relative_path: str,
     *,
     allow_skill_roots: bool = False,
+    allow_attachment_paths: bool = False,
 ) -> str:
     parts = PurePosixPath(relative_path).parts
     if not parts or parts[0] != ".boxteam":
         return relative_path
     if allow_skill_roots and _system_skill_metadata(relative_path):
+        return relative_path
+    if allow_attachment_paths and _is_session_attachment_path(relative_path):
         return relative_path
     raise _runtime_path_error(tool_name, relative_path)
 
@@ -446,7 +469,12 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         try:
             relative_path = resolver.normalize_relative_path(path)
-            _validate_model_path("read_file", relative_path, allow_skill_roots=True)
+            _validate_model_path(
+                "read_file",
+                relative_path,
+                allow_skill_roots=True,
+                allow_attachment_paths=True,
+            )
             backend_path = resolver.backend_virtual_path(path)
         except ValueError as error:
             return _path_error("read_file", runtime, error)
@@ -470,7 +498,12 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         try:
             relative_path = resolver.normalize_relative_path(path)
-            _validate_model_path("read_file", relative_path, allow_skill_roots=True)
+            _validate_model_path(
+                "read_file",
+                relative_path,
+                allow_skill_roots=True,
+                allow_attachment_paths=True,
+            )
             backend_path = resolver.backend_virtual_path(path)
         except ValueError as error:
             return _path_error("read_file", runtime, error)

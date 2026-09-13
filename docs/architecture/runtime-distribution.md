@@ -115,7 +115,9 @@ npm 发行版的 Node 来源为 `launcher`，即使用执行 `boxteam` 的 `proc
 
 ## 正式 Web UI
 
-当前唯一开发和维护的客户端源码位于 `src/clients/web/`。development 模式由 Vite 8011 提供 HMR，并把 `/api` 转发到 Gateway 8014。installed 模式不启动 Vite；Gateway 在 8114 端口通过同一 origin 提供构建后的 Web UI，避免与开发版 Gateway 冲突。
+当前唯一开发和维护的客户端源码位于 `src/clients/web/`。development 模式由 Vite 8011 提供 HMR，并把 `/api` 转发到 Gateway 8014。installed 模式不启动 Vite；Gateway 在 8014 端口通过同一 origin 提供构建后的 Web UI。源码开发实例通过 `BOXTEAM_DEV_PORT_OFFSET` 偏移到独立端口，默认偏移 16。
+
+installed 模式下由 Python Gateway 直接监听 8014；Launcher 只负责启动、信号转发和进程生命周期，不再占用 8014 做反向代理。源码 development 模式仍可由 Launcher 使用稳定代理支持 Gateway generation handoff。
 
 Electron、Electron renderer parity、React Native 和 Mobile Web parity 当前只预留 TODO，不参与运行时打包。
 

@@ -7,7 +7,12 @@ from langchain_core.messages import AIMessageChunk
 
 
 class ModelDeltaSink(Protocol):
-    async def accept_message_chunk(self, chunk: AIMessageChunk) -> None: ...
+    async def accept_message_chunk(
+        self,
+        chunk: AIMessageChunk,
+        *,
+        model_call_id: str | None = None,
+    ) -> None: ...
 
 
 _CURRENT_MODEL_DELTA_SINK: ContextVar[ModelDeltaSink | None] = ContextVar(

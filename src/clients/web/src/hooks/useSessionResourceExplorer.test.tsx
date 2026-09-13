@@ -170,6 +170,87 @@ describe("useSessionResourceExplorer 自动同步", () => {
     act(() => renderer!.unmount());
   });
 
+  test("当前会话不在已完成缓存分支时会自动重读，避免误报导航故障", async () => {
+    let rootCatalogRequests = 0;
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const parsed = new URL(url);
+      if (parsed.pathname.includes("/api/gateway/auth/local-credential")) {
+        return apiResponse({ token: "local-test-token" });
+      }
+      if (parsed.pathname.includes("/api/gateway/users/current")) {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      if (parsed.pathname.includes("/api/gateway/workspace-navigation")) {
+        return apiResponse({ revision: "navigation", nodes: [] });
+      }
+      if (parsed.pathname.includes("/api/v1/session-catalog/children")) {
+        rootCatalogRequests += 1;
+        return apiResponse({
+          revision: `catalog-${rootCatalogRequests}`,
+          parent_node_id: null,
+          items: rootCatalogRequests === 1
+            ? []
+            : [{
+                node_id: "session-new",
+                kind: "session",
+                name: "新会话",
+                session_id: "session-new",
+                has_children: false,
+              }],
+          cursor: null,
+          total: rootCatalogRequests === 1 ? 0 : 1,
+        });
+      }
+      throw new Error(`测试收到未声明请求: ${url}`);
+    }, { preconnect: originalFetch.preconnect });
+
+    let latestExplorer: ReturnType<typeof useSessionResourceExplorer> | null = null;
+    const generatorResources = {
+      generators: null,
+      generationRuns: new Map(),
+      generatorError: null,
+    } as unknown as SessionGeneratorResourcesController;
+    function Harness(): React.ReactNode {
+      latestExplorer = useSessionResourceExplorer({
+        apiPort: 49_408,
+        activeWorkspaceId: "ws-test",
+        searchOpen: false,
+        searchQuery: "",
+        currentSessionId: "",
+        workspaceNavigationSyncKey: "ws-test",
+        catalogSyncKeys: new Map(),
+        catalogRefreshVersions: new Map(),
+        generatorResources,
+      });
+      return null;
+    }
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+      await flushEffects();
+      await flushEffects();
+      await flushEffects();
+    });
+    expect(rootCatalogRequests).toBe(1);
+
+    await act(async () => {
+      await latestExplorer!.revealSearchResult(
+        "ws-test",
+        ["session-new"],
+        "session",
+      );
+      await flushEffects();
+    });
+
+    expect(rootCatalogRequests).toBe(2);
+    expect(latestExplorer!.branches.get("ws-test:root")?.items[0]?.session_id)
+      .toBe("session-new");
+    expect(latestExplorer!.navigationError).toBeNull();
+    act(() => renderer!.unmount());
+  });
+
   test("目录移动失败时只重读旧父/新父分支并保留树状态", async () => {
     const catalogRequests: string[] = [];
     globalThis.fetch = Object.assign(async (

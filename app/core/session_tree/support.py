@@ -48,6 +48,10 @@ class SessionTreeLockTimeoutError(RuntimeError):
     """会话目录锁在有界时间内未释放。"""
 
 
+class LegacyInlineAttachmentMigrationError(RuntimeError):
+    """历史 inline 附件无法安全恢复或校验。"""
+
+
 class SessionTreeOperationLock:
     """为会话目录索引与物理树提供有界、可重入的进程间互斥。"""
 
@@ -281,7 +285,7 @@ def _rewrite_legacy_locator_value(
                 return value, False
             locator = attachment_locators.get(value)
             if locator is None:
-                raise RuntimeError(
+                raise LegacyInlineAttachmentMigrationError(
                     "旧会话数据引用了无法从请求日志恢复的 inline 附件: "
                     f"session_id={session_id}, file_id={value!r}"
                 )

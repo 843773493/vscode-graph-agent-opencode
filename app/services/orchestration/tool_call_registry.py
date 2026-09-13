@@ -18,11 +18,14 @@ class StreamToolRegistryMixin:
         tool_call_id: str,
         tool_name: str,
     ) -> None:
+        tool_call_id = self._resolve_tool_call_id(tool_call_id)
+        tool_invocation_id = self._tool_invocation_id_for(tool_call_id)
         if tool_call_id not in self._completed_tool_call_ids:
             await self.writer.commit(
                 "tool_call.completed",
                 {
                     "tool_call_id": tool_call_id,
+                    "tool_invocation_id": tool_invocation_id,
                     "tool_name": tool_name,
                     "status": "completed",
                     "completion_reason": "tool_started",
@@ -32,19 +35,28 @@ class StreamToolRegistryMixin:
                     ),
                 },
                 model_call_id=self.current_model_call_id,
+                tool_call_id=tool_call_id,
+                tool_invocation_id=tool_invocation_id,
             )
             self._completed_tool_call_ids.add(tool_call_id)
         self._started_tool_execution_ids.add(tool_execution_id)
         self._active_tool_executions[tool_execution_id] = (tool_call_id, tool_name)
+        if tool_call_id not in self._tool_call_model_call_ids:
+            self._tool_call_model_call_ids[tool_call_id] = self.current_model_call_id
         await self.writer.commit(
             "tool.started",
             {
                 "tool_execution_id": tool_execution_id,
                 "tool_call_id": tool_call_id,
+                "tool_invocation_id": tool_invocation_id,
+                "tool_attempt_id": tool_execution_id,
                 "tool_name": tool_name,
             },
             model_call_id=self.current_model_call_id,
             tool_execution_id=tool_execution_id,
+            tool_call_id=tool_call_id,
+            tool_invocation_id=tool_invocation_id,
+            tool_attempt_id=tool_execution_id,
         )
 
     def claim_tool_call_id(
@@ -111,10 +123,12 @@ class StreamToolRegistryMixin:
     ) -> None:
         """在分派丢失时闭合工具调用，避免 snapshot 永远停在 accumulating。"""
         for tool_call_id, tool_name, arguments_complete in self.pending_tool_calls():
+            tool_invocation_id = self._tool_invocation_id_for(tool_call_id)
             await self.writer.commit(
                 "tool_call.completed",
                 {
                     "tool_call_id": tool_call_id,
+                    "tool_invocation_id": tool_invocation_id,
                     "tool_name": tool_name,
                     "status": "incomplete",
                     "completion_reason": completion_reason,
@@ -122,6 +136,8 @@ class StreamToolRegistryMixin:
                     "error": error,
                 },
                 model_call_id=self.current_model_call_id,
+                tool_call_id=tool_call_id,
+                tool_invocation_id=tool_invocation_id,
             )
             self._completed_tool_call_ids.add(tool_call_id)
 
@@ -136,82 +152,121 @@ class StreamToolRegistryMixin:
         error: str | None = None,
         outcome: str | None = None,
     ) -> None:
-        if tool_execution_id in self._completed_tool_execution_ids:
-            return
-        normalized_status = "completed" if status == "succeeded" else status
-        normalized_outcome = outcome or (
-            "success" if normalized_status == "completed" else "provider_error"
-        )
-        payload: dict[str, object] = {
-            "tool_execution_id": tool_execution_id,
-            "tool_call_id": tool_call_id,
-            "tool_name": tool_name,
-            "status": normalized_status,
-            "outcome": normalized_outcome,
-            "completion_reason": (
-                "tool_completed"
-                if normalized_outcome == "success"
-                else "provider_failed"
-            ),
-            "result": result,
-        }
-        if error is not None:
-            payload["error"] = error
-        await self.writer.commit(
-            "tool.completed",
-            payload,
-            model_call_id=self.current_model_call_id,
-            tool_execution_id=tool_execution_id,
-        )
-        if self._canonical_item_sink is not None and self._canonical_turn_id is not None:
-            result_outcome = (
-                "unknown"
-                if normalized_outcome == "unknown"
-                else "success"
-                if normalized_outcome == "success"
-                else "cancelled"
-                if normalized_outcome in {"cancelled", "user_interrupt"}
-                else "failure"
-                if normalized_status == "failed" or error is not None
-                else "unknown"
+        tool_call_id = self._resolve_tool_call_id(tool_call_id)
+        async with self._tool_completion_lock:
+            # on_tool_end 与下一次 model call 中的 ToolMessage 可能并发到达。
+            # completion 的幂等键是实际 tool attempt（当前由
+            # tool_execution_id 承载）；同一逻辑 call 绑定不同 attempt 必须报
+            # 冲突，不能把后到的结果静默覆盖到已有 canonical item。
+            if tool_execution_id in self._completed_tool_execution_ids:
+                return
+            if tool_call_id in self._completed_tool_result_call_ids:
+                previous_execution_id = self._completed_tool_result_execution_by_call_id.get(
+                    tool_call_id
+                )
+                if previous_execution_id == tool_execution_id:
+                    return
+                raise RuntimeError(
+                    "同一 tool_call_id 绑定了多个已完成 tool attempt: "
+                    f"tool_call_id={tool_call_id} "
+                    f"previous={previous_execution_id} current={tool_execution_id}"
+                )
+            normalized_status = "completed" if status == "succeeded" else status
+            normalized_outcome = outcome or (
+                "success" if normalized_status == "completed" else "provider_error"
             )
-            # 工具执行失败与结果记录是否完整是两种事实；这里已经收到完整
-            # 终态通知，执行结果只由 tool_outcome 表达。
-            # TODO：由 Saver 的工具终态端口创建 item；此处最终只传递事件与引用。
-            result_item = CanonicalItemRecord.create(
-                item_sequence=1,
-                item_id=(
-                    f"item-{self.current_model_call_id or 'tool'}-result-"
-                    f"{tool_call_id}"
+            payload: dict[str, object] = {
+                "tool_execution_id": tool_execution_id,
+                "tool_call_id": tool_call_id,
+                "tool_invocation_id": self._tool_invocation_id_for(tool_call_id),
+                "tool_attempt_id": tool_execution_id,
+                "tool_name": tool_name,
+                "status": normalized_status,
+                "outcome": normalized_outcome,
+                "completion_reason": (
+                    "tool_completed"
+                    if normalized_outcome == "success"
+                    else "provider_failed"
                 ),
-                semantic_kind="tool_result",
-                payload_kind="tool_result",
-                status=CanonicalItemStatus.COMPLETED.value,
-                producer_ref={
-                    "producer_kind": "tool",
-                    "producer_id": tool_execution_id,
-                    "invocation_id": self.current_model_call_id,
-                },
-                payload={
-                    "tool_call_id": tool_call_id,
-                    "result_id": tool_execution_id,
-                    "name": tool_name,
-                    "content": result,
-                    "tool_outcome": result_outcome,
-                },
-                metadata={
-                    "tool_execution_id": tool_execution_id,
-                    "tool_call_id": tool_call_id,
-                    "execution_confirmed": result_outcome != "unknown",
-                },
-                turn_id=self._canonical_turn_id,
-                turn_scope="turn_member",
-                message_group_id=f"message-{tool_execution_id}",
-                wire_role="tool",
+                "result": result,
+            }
+            if error is not None:
+                payload["error"] = error
+            model_call_id = self._tool_call_model_call_ids.get(tool_call_id)
+            if model_call_id is None:
+                model_call_id = self.current_model_call_id
+                self._tool_call_model_call_ids[tool_call_id] = model_call_id
+            await self.writer.commit(
+                "tool.completed",
+                payload,
+                model_call_id=model_call_id,
+                tool_execution_id=tool_execution_id,
+                tool_call_id=tool_call_id,
+                tool_invocation_id=str(payload["tool_invocation_id"]),
+                tool_attempt_id=tool_execution_id,
             )
-            await self._canonical_item_sink((result_item,))
-        self._active_tool_executions.pop(tool_execution_id, None)
-        self._completed_tool_execution_ids.add(tool_execution_id)
+            if (
+                self._canonical_item_sink is not None
+                and self._canonical_turn_id is not None
+            ):
+                result_outcome = (
+                    "unknown"
+                    if normalized_outcome == "unknown"
+                    else "success"
+                    if normalized_outcome == "success"
+                    else "cancelled"
+                    if normalized_outcome in {"cancelled", "user_interrupt"}
+                    else "failure"
+                    if normalized_status == "failed" or error is not None
+                    else "unknown"
+                )
+                # 工具执行失败与结果记录是否完整是两种事实；这里已经收到完整
+                # 终态通知，执行结果只由 tool_outcome 表达。
+                # TODO：由 Saver 的工具终态端口创建 item；此处最终只传递事件与引用。
+                result_item = CanonicalItemRecord.create(
+                    item_sequence=1,
+                    item_id=(
+                        f"item-{tool_execution_id}-result-"
+                        f"{tool_call_id}"
+                    ),
+                    semantic_kind="tool_result",
+                    payload_kind="tool_result",
+                    status=CanonicalItemStatus.COMPLETED.value,
+                    producer_ref={
+                        "producer_kind": "tool",
+                        "producer_id": tool_execution_id,
+                        "invocation_id": model_call_id,
+                    },
+                    payload={
+                        "tool_call_id": tool_call_id,
+                        "tool_invocation_id": payload["tool_invocation_id"],
+                        "tool_attempt_id": tool_execution_id,
+                        "result_id": tool_execution_id,
+                        "name": tool_name,
+                        "content": result,
+                        "tool_outcome": result_outcome,
+                    },
+                    metadata={
+                        "execution_id": tool_execution_id,
+                        "model_call_id": model_call_id,
+                        "tool_execution_id": tool_execution_id,
+                        "tool_call_id": tool_call_id,
+                        "tool_invocation_id": payload["tool_invocation_id"],
+                        "tool_attempt_id": tool_execution_id,
+                        "execution_confirmed": result_outcome != "unknown",
+                    },
+                    turn_id=self._canonical_turn_id,
+                    turn_scope="turn_member",
+                    message_group_id=f"message-{tool_execution_id}",
+                    wire_role="tool",
+                )
+                await self._canonical_item_sink((result_item,))
+            self._active_tool_executions.pop(tool_execution_id, None)
+            self._completed_tool_execution_ids.add(tool_execution_id)
+            self._completed_tool_result_call_ids.add(tool_call_id)
+            self._completed_tool_result_execution_by_call_id[tool_call_id] = (
+                tool_execution_id
+            )
 
     async def complete_tool_from_message(self, message: BaseMessage) -> None:
         """在模型请求边界闭合已进入请求的 ToolMessage。
@@ -228,6 +283,8 @@ class StreamToolRegistryMixin:
             (execution_id, tool_name)
             for execution_id, (active_call_id, tool_name) in self._active_tool_executions.items()
             if active_call_id == tool_call_id
+            or self._provider_tool_call_ids_by_id.get(active_call_id)
+            == tool_call_id
         ]
         for execution_id, tool_name in matches:
             content = message.content

@@ -102,8 +102,7 @@ def test_debug_tool_names_and_model_schemas_match_debug_mcp_shape(
         assert hidden_fields.isdisjoint(tool.args)
     start_schema = by_name["start_debugging"].tool_call_schema.model_json_schema()
     path_description = start_schema["properties"]["fileFullPath"]["description"]
-    assert "工作区相对" in path_description
-    assert "不能以 / 开头" in path_description
+    assert "优先使用工作区相对路径" in path_description
     assert "已有活动方案时以方案保存的入口" in by_name["start_debugging"].description
     assert "失效断点不会阻止继续" in by_name["continue_execution"].description
     assert "重点查看 relocation_status" in by_name["list_breakpoints"].description

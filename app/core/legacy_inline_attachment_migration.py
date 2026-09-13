@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
+from app.core.session_tree.support import LegacyInlineAttachmentMigrationError
+
 SUPPORTED_MEDIA_PREFIXES = ("image/", "audio/", "video/")
 SESSION_ATTACHMENT_SCHEME = "boxteam-session://"
 
@@ -24,24 +26,24 @@ def materialize_legacy_inline_attachments(
     locators: dict[str, str] = {}
     for file_id, variants in candidates.items():
         if len(variants) != 1:
-            raise RuntimeError(
+            raise LegacyInlineAttachmentMigrationError(
                 f"旧会话附件存在多个不同内容，拒绝猜测: file_id={file_id!r}"
             )
         declared_type, data_url = next(iter(variants))
         content_type, data = _parse_data_url(data_url)
         if declared_type != content_type:
-            raise RuntimeError(
+            raise LegacyInlineAttachmentMigrationError(
                 "旧会话附件日志中的 MIME 类型不一致: "
                 f"file_id={file_id!r}, declared={declared_type!r}, "
                 f"actual={content_type!r}"
             )
         if not content_type.startswith(SUPPORTED_MEDIA_PREFIXES):
-            raise RuntimeError(
+            raise LegacyInlineAttachmentMigrationError(
                 f"旧会话附件类型不受支持: file_id={file_id!r}, type={content_type!r}"
             )
         suffix = mimetypes.guess_extension(content_type)
         if not suffix:
-            raise RuntimeError(
+            raise LegacyInlineAttachmentMigrationError(
                 f"无法确定旧会话附件扩展名: file_id={file_id!r}, type={content_type!r}"
             )
         digest = hashlib.sha256(data).hexdigest()
@@ -96,36 +98,48 @@ def _message_candidates(message: object) -> list[tuple[str, str, str]]:
     for index, attachment in enumerate(image_attachments):
         file_id = str(attachment["file_id"])
         if index >= len(image_blocks):
-            raise RuntimeError(f"旧会话附件缺少对应图片块: file_id={file_id!r}")
+            raise LegacyInlineAttachmentMigrationError(
+                f"旧会话附件缺少对应图片块: file_id={file_id!r}"
+            )
         image_url = image_blocks[index].get("image_url")
         data_url = image_url.get("url") if isinstance(image_url, dict) else image_url
         if not isinstance(data_url, str) or not data_url.startswith("data:image/"):
-            raise RuntimeError(f"旧会话附件图片块不是 data URL: file_id={file_id!r}")
+            raise LegacyInlineAttachmentMigrationError(
+                f"旧会话附件图片块不是 data URL: file_id={file_id!r}"
+            )
         results.append((file_id, str(attachment["content_type"]), data_url))
     return results
 
 
 def _parse_data_url(data_url: str) -> tuple[str, bytes]:
     if not data_url.startswith("data:"):
-        raise RuntimeError("旧会话附件 data URL 必须以 data: 开头")
+        raise LegacyInlineAttachmentMigrationError(
+            "旧会话附件 data URL 必须以 data: 开头"
+        )
     header, separator, payload = data_url.partition(",")
     if not separator:
-        raise RuntimeError("旧会话附件 data URL 缺少逗号分隔符")
+        raise LegacyInlineAttachmentMigrationError(
+            "旧会话附件 data URL 缺少逗号分隔符"
+        )
     content_type = header.removeprefix("data:").split(";", 1)[0]
     if not content_type:
-        raise RuntimeError("旧会话附件 data URL 缺少 MIME 类型")
+        raise LegacyInlineAttachmentMigrationError(
+            "旧会话附件 data URL 缺少 MIME 类型"
+        )
     if ";base64" not in header:
         return content_type, unquote_to_bytes(payload)
     try:
         return content_type, base64.b64decode(payload, validate=True)
     except ValueError as error:
-        raise RuntimeError("旧会话附件 data URL 包含非法 base64 数据") from error
+        raise LegacyInlineAttachmentMigrationError(
+            "旧会话附件 data URL 包含非法 base64 数据"
+        ) from error
 
 
 def _write_once(target: Path, data: bytes) -> None:
     if target.exists():
         if target.read_bytes() != data:
-            raise RuntimeError(f"附件摘要路径内容冲突: {target}")
+            raise LegacyInlineAttachmentMigrationError(f"附件摘要路径内容冲突: {target}")
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(

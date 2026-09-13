@@ -105,6 +105,27 @@
             }
           }
         }
+      },
+      {
+        "id": "DeepSeek-V4.1-Flash",
+        "endpoint": "http://100.64.0.58:8079/v1/messages",
+        "model": "DeepSeek-V4.1-Flash",
+        "custom_llm_provider": "anthropic",
+        "api_mode": {
+          "protocol": "anthropic_messages",
+          "model_info": {
+            "supports_function_calling": true,
+            "supports_vision": true,
+            "supports_reasoning": true
+          },
+          "supports_reasoning": {
+            "thinking_blocks": {"thinking": true, "redacted_thinking": false}
+          }
+        },
+        "api_key": "${DEEPSEEK_V41_FLASH_API_KEY}",
+        "request_options": {
+          "no_proxy": true
+        }
       }
     ]
   },
@@ -153,7 +174,8 @@
           "backup_1",
           "backup_2",
           "backup_3",
-          "backup_4"
+          "backup_4",
+          "DeepSeek-V4.1-Flash"
         ]
       },
       "tools": {
@@ -350,7 +372,8 @@
           "backup_1",
           "backup_2",
           "backup_3",
-          "backup_4"
+          "backup_4",
+          "DeepSeek-V4.1-Flash"
         ]
       },
       "tools": {
@@ -373,7 +396,8 @@
           "backup_1",
           "backup_2",
           "backup_3",
-          "backup_4"
+          "backup_4",
+          "DeepSeek-V4.1-Flash"
         ]
       }
     },
@@ -390,7 +414,8 @@
           "backup_1",
           "backup_2",
           "backup_3",
-          "backup_4"
+          "backup_4",
+          "DeepSeek-V4.1-Flash"
         ]
       }
     }

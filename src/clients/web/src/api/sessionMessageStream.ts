@@ -38,6 +38,7 @@ export interface MessageStreamSnapshotResponse {
   session_id: string;
   turn_id: string;
   turn_stream_id: string;
+  workspace_id?: string | null;
   snapshot_seq: number;
   stream_status: string;
   agent_loop_status: string;
@@ -155,6 +156,37 @@ function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
     throw new Error("消息流 event_seq 必须是非负整数");
   }
   if (!isRecord(value.payload)) throw new Error("消息流 payload 必须是对象");
+  for (const field of [
+    "model_call_id",
+    "block_id",
+    "tool_call_id",
+    "tool_invocation_id",
+    "tool_attempt_id",
+    "tool_execution_id",
+    "workspace_id",
+  ] as const) {
+    const rawEnvelopeValue = value[field];
+    const rawPayloadValue = value.payload[field];
+    if (
+      rawEnvelopeValue !== undefined
+      && rawEnvelopeValue !== null
+      && !stringValue(rawEnvelopeValue)
+    ) {
+      throw new Error(`消息流 ${field} 信封身份必须是非空字符串`);
+    }
+    if (
+      rawPayloadValue !== undefined
+      && rawPayloadValue !== null
+      && !stringValue(rawPayloadValue)
+    ) {
+      throw new Error(`消息流 ${field} payload 身份必须是非空字符串`);
+    }
+    const envelopeValue = stringValue(rawEnvelopeValue);
+    const payloadValue = stringValue(rawPayloadValue);
+    if (envelopeValue && payloadValue && envelopeValue !== payloadValue) {
+      throw new Error(`消息流 ${field} 信封与 payload 身份不一致`);
+    }
+  }
   return {
     event_id: eventId,
     session_id: sessionId,
@@ -163,9 +195,13 @@ function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
     event_seq: eventSeq,
     emitted_at: stringValue(value.emitted_at) ?? undefined,
     type,
+    workspace_id: stringValue(value.workspace_id) ?? undefined,
     model_call_id: stringValue(value.model_call_id) ?? undefined,
     block_id: stringValue(value.block_id) ?? undefined,
     tool_execution_id: stringValue(value.tool_execution_id) ?? undefined,
+    tool_call_id: stringValue(value.tool_call_id) ?? undefined,
+    tool_invocation_id: stringValue(value.tool_invocation_id) ?? undefined,
+    tool_attempt_id: stringValue(value.tool_attempt_id) ?? undefined,
     payload: value.payload,
   };
 }

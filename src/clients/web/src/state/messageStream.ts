@@ -33,9 +33,13 @@ export interface MessageStreamEvent {
   event_seq: number;
   emitted_at?: string;
   type: MessageStreamEventType;
+  workspace_id?: string;
   model_call_id?: string;
   block_id?: string;
   tool_execution_id?: string;
+  tool_call_id?: string;
+  tool_invocation_id?: string;
+  tool_attempt_id?: string;
   job_id?: string;
   payload: Record<string, unknown>;
 }
@@ -66,6 +70,8 @@ export interface MessageStreamBlock extends MessageStreamLifecycle {
 export interface MessageStreamToolExecution extends MessageStreamLifecycle {
   tool_execution_id: string;
   tool_call_id: string;
+  tool_invocation_id?: string;
+  tool_attempt_id?: string;
   tool_name: string;
   status: "running" | "completed" | "failed";
   outcome?: "success" | "provider_error" | "execution_lost" | "outcome_unknown";
@@ -100,6 +106,8 @@ export interface MessageStreamActiveState {
   carrier_type?: string;
   block_id?: string;
   tool_call_id?: string;
+  tool_invocation_id?: string;
+  tool_attempt_id?: string;
   tool_execution_id?: string;
   activity_id?: string;
   activity_kind?: string;
@@ -111,6 +119,7 @@ export interface MessageStreamActiveState {
 }
 
 export interface MessageStreamState {
+  workspaceId: string | null;
   sessionId: string;
   turnId: string;
   turnStreamId: string;
@@ -196,6 +205,7 @@ export function createMessageStreamState(
   turnStreamId: string = "",
 ): MessageStreamState {
   return {
+    workspaceId: null,
     sessionId,
     turnId,
     turnStreamId,
@@ -235,6 +245,13 @@ export function applyMessageStreamEvent(
       protocolError: "消息流关联键与当前 Turn 不一致",
     };
   }
+  if (state.workspaceId && event.workspace_id && state.workspaceId !== event.workspace_id) {
+    return {
+      ...state,
+      connectionStatus: "gap",
+      protocolError: "消息流 workspace_id 与当前工作区不一致",
+    };
+  }
   if (state.turnStreamId && state.turnStreamId !== event.turn_stream_id) {
     return {
       ...state,
@@ -272,6 +289,7 @@ export function applyMessageStreamEvent(
   }
 
   state.lastEventSeq = event.event_seq;
+  state.workspaceId = event.workspace_id ?? state.workspaceId;
   state.turnStreamId = event.turn_stream_id;
   state.connectionStatus = isTerminalEvent(event.type) ? "terminal" : "connected";
   state.protocolError = null;
@@ -284,7 +302,14 @@ export function applyMessageStreamEvent(
       state.currentModelCallId = stringValue(payload.model_call_id) ?? event.model_call_id ?? null;
       state.currentAttempt = numberValue(payload.attempt) ?? state.currentAttempt;
       state.agentLoopStatus = "model_running";
-      upsertModelCall(state, payload, "running", event);
+      upsertModelCall(
+        state,
+        event.model_call_id && !payload.model_call_id
+          ? { ...payload, model_call_id: event.model_call_id }
+          : payload,
+        "running",
+        event,
+      );
       state.activeState = {
         kind: "model_output",
         phase: "reasoning",
@@ -294,7 +319,14 @@ export function applyMessageStreamEvent(
       break;
     case "model.completed":
       state.agentLoopStatus = "validating";
-      upsertModelCall(state, payload, "completed", event);
+      upsertModelCall(
+        state,
+        event.model_call_id && !payload.model_call_id
+          ? { ...payload, model_call_id: event.model_call_id }
+          : payload,
+        "completed",
+        event,
+      );
       state.activeState = activeStateAfter(state.activeState, "model_output", "validating", "completed");
       break;
     case "model.retrying":
@@ -308,15 +340,27 @@ export function applyMessageStreamEvent(
     case "model.failed":
       state.agentLoopStatus = "failed";
       state.failure = failureFromPayload(payload);
-      upsertModelCall(state, payload, "failed", event);
+      upsertModelCall(
+        state,
+        event.model_call_id && !payload.model_call_id
+          ? { ...payload, model_call_id: event.model_call_id }
+          : payload,
+        "failed",
+        event,
+      );
       break;
     case "block.started":
       {
+        const blockPayload = { ...payload };
+        if (event.block_id && !blockPayload.block_id) {
+          blockPayload.block_id = event.block_id;
+        }
+        if (event.model_call_id && !blockPayload.model_call_id) {
+          blockPayload.model_call_id = event.model_call_id;
+        }
         const block = upsertBlock(
         state,
-        event.model_call_id
-          ? { ...payload, model_call_id: event.model_call_id }
-          : payload,
+        blockPayload,
         "running",
         event,
         );
@@ -333,7 +377,13 @@ export function applyMessageStreamEvent(
       }
       break;
     case "block.delta":
-      applyBlockDelta(state, payload, event);
+      applyBlockDelta(
+        state,
+        event.block_id && !payload.block_id
+          ? { ...payload, block_id: event.block_id }
+          : payload,
+        event,
+      );
       break;
     case "block.completed": {
       const block = findBlock(state, stringValue(payload.block_id) ?? event.block_id ?? null);
@@ -354,11 +404,12 @@ export function applyMessageStreamEvent(
     }
     case "tool_call":
     case "tool_call.delta": {
-      const toolCallId = stringValue(payload.tool_call_id);
+      const toolCallId = stringValue(payload.tool_call_id) ?? event.tool_call_id;
       if (toolCallId) {
+        const toolCallPayload = withToolIdentityFallback(payload, event);
         state.toolCalls[toolCallId] = mergeToolCall(
           state.toolCalls[toolCallId],
-          payload,
+          toolCallPayload,
         );
         applyLifecycle(state.toolCalls[toolCallId], event);
         state.activeState = {
@@ -366,17 +417,20 @@ export function applyMessageStreamEvent(
           phase: "arguments",
           entity_id: toolCallId,
           tool_call_id: toolCallId,
+          tool_invocation_id: stringValue(toolCallPayload.tool_invocation_id) ?? undefined,
+          tool_attempt_id: stringValue(toolCallPayload.tool_attempt_id) ?? undefined,
           status: "running",
         };
       }
       break;
     }
     case "tool_call.completed": {
-      const toolCallId = stringValue(payload.tool_call_id);
+      const toolCallId = stringValue(payload.tool_call_id) ?? event.tool_call_id;
       if (toolCallId) {
+        const toolCallPayload = withToolIdentityFallback(payload, event);
         state.toolCalls[toolCallId] = mergeToolCall(
           state.toolCalls[toolCallId],
-          payload,
+          toolCallPayload,
         );
         applyLifecycle(state.toolCalls[toolCallId], event, true);
         state.activeState = activeStateAfter(
@@ -385,30 +439,44 @@ export function applyMessageStreamEvent(
           "completed",
           stringValue(payload.status) ?? "completed",
           toolCallId,
+          toolCallPayload,
         );
       }
       break;
     }
     case "tool.started":
-      upsertTool(state, payload, "running", event);
+      upsertTool(
+        state,
+        withToolIdentityFallback(payload, event),
+        "running",
+        event,
+      );
       state.agentLoopStatus = "tool_running";
       state.activeState = {
         kind: "tool_execution",
         phase: "running",
-        entity_id: stringValue(payload.tool_execution_id) ?? "",
-        tool_call_id: stringValue(payload.tool_call_id) ?? undefined,
-        tool_execution_id: stringValue(payload.tool_execution_id) ?? undefined,
+        entity_id: stringValue(payload.tool_execution_id) ?? event.tool_execution_id ?? "",
+        tool_call_id: stringValue(payload.tool_call_id) ?? event.tool_call_id ?? undefined,
+        tool_invocation_id: stringValue(payload.tool_invocation_id) ?? event.tool_invocation_id ?? undefined,
+        tool_attempt_id: stringValue(payload.tool_attempt_id) ?? event.tool_attempt_id ?? undefined,
+        tool_execution_id: stringValue(payload.tool_execution_id) ?? event.tool_execution_id ?? undefined,
         status: "running",
       };
       break;
     case "tool.completed":
-      upsertTool(state, payload, toolExecutionStatus(payload.status), event);
+      upsertTool(
+        state,
+        withToolIdentityFallback(payload, event),
+        toolExecutionStatus(payload.status),
+        event,
+      );
       state.activeState = activeStateAfter(
         state.activeState,
         "tool_execution",
         "completed",
         toolExecutionStatus(payload.status),
-        stringValue(payload.tool_execution_id) ?? undefined,
+        stringValue(payload.tool_execution_id) ?? event.tool_execution_id ?? undefined,
+        withToolIdentityFallback(payload, event),
       );
       break;
     case "activity.started":
@@ -486,6 +554,7 @@ function applySnapshot(
   const payload = event.payload;
   const snapshot = isRecord(payload.snapshot) ? payload.snapshot : payload;
   const next = createMessageStreamState(current.sessionId, current.turnId, event.turn_stream_id);
+  next.workspaceId = stringValue(snapshot.workspace_id) ?? event.workspace_id ?? current.workspaceId;
   next.lastEventSeq = numberValue(snapshot.snapshot_seq) ?? event.event_seq;
   next.streamStatus = streamStatusValue(snapshot.stream_status);
   next.agentLoopStatus = stringValue(snapshot.agent_loop_status) ?? "running";
@@ -918,6 +987,23 @@ function upsertTool(
   state.toolExecutions.push(execution);
 }
 
+function withToolIdentityFallback(
+  payload: Record<string, unknown>,
+  event: MessageStreamEvent,
+): Record<string, unknown> {
+  const identityFields = [
+    "tool_execution_id",
+    "tool_call_id",
+    "tool_invocation_id",
+    "tool_attempt_id",
+  ] as const;
+  const fallback = { ...payload };
+  for (const field of identityFields) {
+    if (!fallback[field] && event[field]) fallback[field] = event[field];
+  }
+  return fallback;
+}
+
 function markRunningToolsUnknown(
   state: MessageStreamState,
   event: MessageStreamEvent,
@@ -1004,6 +1090,8 @@ function toolFromPayload(
   return {
     tool_execution_id: stringValue(payload.tool_execution_id) ?? "unknown-tool-execution",
     tool_call_id: stringValue(payload.tool_call_id) ?? "unknown-tool-call",
+    tool_invocation_id: stringValue(payload.tool_invocation_id) ?? undefined,
+    tool_attempt_id: stringValue(payload.tool_attempt_id) ?? undefined,
     tool_name: stringValue(payload.tool_name) ?? "tool",
     status,
     outcome: toolExecutionOutcome(payload.outcome),
@@ -1152,15 +1240,22 @@ function activeStateAfter(
   phase: string,
   status: string,
   entityId?: string,
+  identityPayload?: Record<string, unknown>,
 ): MessageStreamActiveState {
+  const toolCallId = stringValue(identityPayload?.tool_call_id);
+  const toolInvocationId = stringValue(identityPayload?.tool_invocation_id);
+  const toolAttemptId = stringValue(identityPayload?.tool_attempt_id);
+  const toolExecutionId = stringValue(identityPayload?.tool_execution_id);
   return {
     kind,
     phase,
     entity_id: entityId ?? previous?.entity_id ?? "",
     carrier_type: previous?.carrier_type,
     block_id: previous?.block_id,
-    tool_call_id: previous?.tool_call_id,
-    tool_execution_id: previous?.tool_execution_id,
+    tool_call_id: toolCallId ?? previous?.tool_call_id,
+    tool_invocation_id: toolInvocationId ?? previous?.tool_invocation_id,
+    tool_attempt_id: toolAttemptId ?? previous?.tool_attempt_id,
+    tool_execution_id: toolExecutionId ?? previous?.tool_execution_id,
     activity_id: previous?.activity_id,
     activity_kind: previous?.activity_kind,
     status,
@@ -1184,6 +1279,8 @@ function activeStateFromSnapshot(value: unknown): MessageStreamActiveState | nul
     block_id: stringValue(value.block_id) ?? undefined,
     tool_call_id: stringValue(value.tool_call_id) ?? undefined,
     tool_execution_id: stringValue(value.tool_execution_id) ?? undefined,
+    tool_invocation_id: stringValue(value.tool_invocation_id) ?? undefined,
+    tool_attempt_id: stringValue(value.tool_attempt_id) ?? undefined,
     activity_id: stringValue(value.activity_id) ?? undefined,
     activity_kind: stringValue(value.activity_kind) ?? undefined,
     status: stringValue(value.status) ?? "unknown",

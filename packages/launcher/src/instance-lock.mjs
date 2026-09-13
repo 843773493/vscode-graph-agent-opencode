@@ -31,7 +31,7 @@ export function readLauncherLock(boxteamHome) {
   }
 }
 
-function processIsAlive(pid, killImpl = process.kill) {
+export function processIsAlive(pid, killImpl = process.kill) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     killImpl(pid, 0);
@@ -40,6 +40,13 @@ function processIsAlive(pid, killImpl = process.kill) {
     if (error?.code === "ESRCH") return false;
     return true;
   }
+}
+
+export function removeLauncherLock(boxteamHome, token) {
+  const current = readLauncherLock(boxteamHome);
+  if (current?.value?.token !== token) return false;
+  rmSync(current.path);
+  return true;
 }
 
 export function acquireLauncherLock({
@@ -72,10 +79,7 @@ export function acquireLauncherLock({
         path: lockPath,
         value,
         release() {
-          const current = readLauncherLock(boxteamHome);
-          if (current?.value?.token === token) {
-            rmSync(lockPath);
-          }
+          removeLauncherLock(boxteamHome, token);
         },
       };
     } catch (error) {

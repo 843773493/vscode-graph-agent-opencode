@@ -577,6 +577,31 @@ function activityStatsPreview(
   return values.join(" · ");
 }
 
+function workItemStatusPreview(item: ToolTimelineItem): string {
+  if (item.active) return `正在运行 ${item.toolName}`;
+  if (item.incomplete) return `${item.toolName} 调用未完成`;
+  if (item.outcomeUnknown) return `${item.toolName} 结果未知`;
+  if (item.failed) return `${item.toolName} 执行失败`;
+  return `已运行 ${item.toolName}`;
+}
+
+function activityPreviewForItems(
+  items: WorkItem[],
+  stats: ConversationView["activityStats"],
+): string {
+  const latestTool = [...items].reverse().find(
+    (item): item is ToolTimelineItem => item.kind === "aggregated_tool",
+  );
+  const statsPreview = activityStatsPreview(stats);
+  return latestTool
+    && !latestTool.active
+    && !latestTool.incomplete
+    && !latestTool.outcomeUnknown
+    && !latestTool.failed
+    ? `${workItemStatusPreview(latestTool)} · ${statsPreview}`
+    : statsPreview;
+}
+
 function ActivityDetails({
   items,
   showRawDetails,
@@ -664,6 +689,8 @@ function TurnActivitySummary({
             "reasoning_detail",
             "encrypted_reasoning_meta",
             "tool_summary",
+            "tool_call",
+            "tool_result",
             "final_response",
           ],
         );
@@ -837,7 +864,7 @@ export default function ChatTurnResponseBody({
             key={group.id}
             items={group.items}
             active={running && group.items.some((item) => item.active)}
-            completedPreview={activityStatsPreview(conversation.activityStats)}
+            completedPreview={activityPreviewForItems(group.items, conversation.activityStats)}
             showRawDetails={showRawDetails}
           />
         )

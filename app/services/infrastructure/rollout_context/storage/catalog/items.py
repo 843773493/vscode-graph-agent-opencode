@@ -70,6 +70,21 @@ def _strict_db_optional_text(value: object, *, field: str) -> str | None:
     return _strict_db_text(value, field=field)
 
 
+def _comparable_tool_result_payload(value: object) -> object:
+    """提取工具结果正文，排除每个 producer 独有的生命周期 ID。"""
+
+    if not isinstance(value, Mapping):
+        return value
+    # on_tool_end 与下一次 model call 的 ToolMessage 可能分别生成 canonical
+    # result。result_id、tool invocation/attempt ID 是 producer 生命周期身份，
+    # 不是用户可见结果正文；同一 tool_call_id 的这些字段不同不应制造冲突。
+    return {
+        key: item
+        for key, item in value.items()
+        if key not in {"result_id", "tool_invocation_id", "tool_attempt_id"}
+    }
+
+
 class RolloutItemsMixin:
     """只负责 canonical item 的 JSONL/catalog transaction 与定位读取。"""
 
@@ -281,21 +296,12 @@ class RolloutItemsMixin:
                                         existing_payload = existing_envelope.get(
                                             "payload"
                                         )
-                                    new_payload = item.payload
-                                    comparable_existing = (
-                                        dict(existing_payload)
-                                        if isinstance(existing_payload, Mapping)
-                                        else existing_payload
+                                    comparable_existing = _comparable_tool_result_payload(
+                                        existing_payload
                                     )
-                                    comparable_new = (
-                                        dict(new_payload)
-                                        if isinstance(new_payload, Mapping)
-                                        else new_payload
+                                    comparable_new = _comparable_tool_result_payload(
+                                        item.payload
                                     )
-                                    if isinstance(comparable_existing, dict):
-                                        comparable_existing.pop("result_id", None)
-                                    if isinstance(comparable_new, dict):
-                                        comparable_new.pop("result_id", None)
                                     if comparable_existing != comparable_new:
                                         raise ItemSchemaError(
                                             "同一 tool_call_id 的 tool_result 正文发生变化: "

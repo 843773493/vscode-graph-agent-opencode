@@ -483,15 +483,21 @@ async def test_tool_dispatch_timeout_does_not_escape_as_agent_cancellation(
         for call in writer.commit.await_args_list
         if call.args[0] == "tool_call.completed"
     ]
+    expected_tool_call_id = (
+        "model_dispatch_timeout:tool-call:call_dispatch_timeout"
+    )
     assert completed[-1] == {
-        "tool_call_id": "call_dispatch_timeout",
+        "tool_call_id": expected_tool_call_id,
+        "tool_invocation_id": (
+            "tool-invocation:model_dispatch_timeout:call_dispatch_timeout"
+        ),
         "tool_name": "exec_command",
         "status": "incomplete",
         "completion_reason": "tool_dispatch_timeout",
         "arguments_complete": True,
         "error": (
             "模型工具调用参数已完整，但在有限时间内没有收到工具执行分派事件: "
-            "tool_calls=['call_dispatch_timeout']"
+            f"tool_calls=['{expected_tool_call_id}']"
         ),
     }
 
@@ -657,9 +663,10 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
     stream_events = [call.args for call in writer.commit.await_args_list]
     tool_started = next(payload for event_type, payload, *_ in stream_events if event_type == "tool.started")
     tool_completed = next(payload for event_type, payload, *_ in stream_events if event_type == "tool.completed")
-    assert tool_started["tool_call_id"] == "call_unknown_tool"
+    expected_tool_call_id = "model_unknown_tool:tool-call:call_unknown_tool"
+    assert tool_started["tool_call_id"] == expected_tool_call_id
     assert tool_started["tool_name"] == "totally_unknown_tool"
-    assert tool_completed["tool_call_id"] == "call_unknown_tool"
+    assert tool_completed["tool_call_id"] == expected_tool_call_id
 
 
 def test_last_model_token_usage_keeps_last_execution_request() -> None:

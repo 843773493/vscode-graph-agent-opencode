@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from app.core.session_tree.legacy_migration import (
 from app.core.session_tree.support import (
     SESSION_CHILDREN_DIR_NAME,
     SESSION_MANIFEST_NAME,
+    LegacyInlineAttachmentMigrationError,
     _atomic_write_json,
     _atomic_write_json_value,
     _atomic_write_text,
@@ -22,6 +24,8 @@ from app.core.session_tree.support import (
     _rewrite_legacy_locator_value,
     physical_segment,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SessionMetadataMigrationSupport(SessionLegacyLayoutMigrationSupport):
@@ -336,7 +340,7 @@ class SessionMetadataMigrationSupport(SessionLegacyLayoutMigrationSupport):
         migration_path = migration_dir / "session-inline-attachments-v1.json"
         if migration_path.exists():
             record = _read_json_object(migration_path)
-            if record.get("status") == "completed":
+            if record.get("status") in {"completed", "completed_with_errors"}:
                 return
         migration_dir.mkdir(parents=True, exist_ok=True)
         lock_path = migration_dir / "session-inline-attachments-v1.lock"
@@ -346,20 +350,37 @@ class SessionMetadataMigrationSupport(SessionLegacyLayoutMigrationSupport):
             started_at = datetime.now(UTC).isoformat()
             rewritten_files: list[str] = []
             materialized: dict[str, int] = {}
+            errors: list[dict[str, str]] = []
             try:
                 for session_id, session_path in self._discover_session_paths().items():
-                    locators = materialize_legacy_inline_attachments(
-                        session_id=session_id,
-                        session_path=session_path,
-                    )
-                    materialized[session_id] = len(locators)
-                    rewritten_files.extend(
-                        self._rewrite_session_locator_files(
+                    try:
+                        locators = materialize_legacy_inline_attachments(
+                            session_id=session_id,
+                            session_path=session_path,
+                        )
+                        materialized[session_id] = len(locators)
+                        rewritten_files.extend(
+                            self._rewrite_session_locator_files(
+                                session_id,
+                                session_path,
+                                attachment_locators=locators,
+                            )
+                        )
+                    except LegacyInlineAttachmentMigrationError as error:
+                        error_detail = str(error)
+                        errors.append(
+                            {
+                                "session_id": session_id,
+                                "error": error_detail,
+                            }
+                        )
+                        logger.error(
+                            "旧会话 inline 附件迁移失败，已保留该会话并继续启动: "
+                            "session_id=%s path=%s error=%s",
                             session_id,
                             session_path,
-                            attachment_locators=locators,
+                            error_detail,
                         )
-                    )
             except Exception as error:
                 _atomic_write_json(
                     migration_path,
@@ -378,11 +399,12 @@ class SessionMetadataMigrationSupport(SessionLegacyLayoutMigrationSupport):
                 migration_path,
                 {
                     "schema_version": 1,
-                    "status": "completed",
+                    "status": "completed_with_errors" if errors else "completed",
                     "started_at": started_at,
                     "completed_at": datetime.now(UTC).isoformat(),
                     "materialized": materialized,
                     "rewritten_files": rewritten_files,
+                    "errors": errors,
                 },
             )
         finally:

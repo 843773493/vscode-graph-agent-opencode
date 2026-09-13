@@ -25,7 +25,7 @@ const standaloneExtractRoot = path.join(verificationRoot, "standalone");
 const boxteamHome = path.join(verificationRoot, "home");
 const standaloneBoxteamHome = path.join(verificationRoot, "standalone-home");
 const emptyPath = path.join(verificationRoot, "empty-path");
-const gatewayUrl = "http://127.0.0.1:8114";
+const gatewayUrl = "http://127.0.0.1:8014";
 // TODO: Windows 打包 Python 首次导入依赖较慢，验证等待窗口需覆盖 Launcher 的冷启动上限。
 const gatewayReadyTimeoutMs = 180_000;
 const headers = {};

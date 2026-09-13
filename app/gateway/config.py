@@ -702,7 +702,7 @@ def load_gateway_config(
         )
         if blocked:
             raise SecretReferenceRequiredError(
-                "旧 Gateway active snapshot 的 secret 必须重新导入引用: "
+                "旧 Gateway active snapshot 含无法恢复的秘密摘要，必须重新导入: "
                 + ", ".join(blocked)
             )
         candidate_ref = os.environ.get("BOXTEAM_CONFIG_CANDIDATE_REF")
@@ -2190,7 +2190,8 @@ def _load_or_migrate_gateway_override(
         blocked = state_store.migrate_legacy_config_secrets(config_key)
         if blocked:
             raise SecretReferenceRequiredError(
-                "旧 Gateway SQLite secret 必须重新导入引用: " + ", ".join(blocked)
+                "旧 Gateway SQLite 含无法恢复的秘密摘要，必须重新导入: "
+                + ", ".join(blocked)
             )
     record = state_store.get_config(config_key)
     source_record = state_store.get_source_layer(config_key)

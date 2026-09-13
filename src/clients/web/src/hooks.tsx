@@ -57,6 +57,7 @@ import type {
 } from "./types/frontend";
 import {
   getConversationsForSession,
+  messageStreamTurnIdForSession,
 } from "./state/conversations";
 import { useContentViewLoader } from "./hooks/useContentViewLoader";
 import { useContentViewEffects } from "./hooks/useContentViewEffects";
@@ -233,6 +234,7 @@ interface AppContextType {
   ) => Promise<void>;
   switchAgent: (agentId: string) => Promise<void>;
   switchModel: (providerId: string) => Promise<void>;
+  refreshAgents: (workspaceId: string) => Promise<void>;
   setWorkspaceDefaultAgent: (agentId: string) => Promise<void>;
   setWorkspaceDefaultProvider: (
     agentId: string,
@@ -358,6 +360,7 @@ type ComposerContextActions = Pick<
   | "interruptSession"
   | "switchAgent"
   | "switchModel"
+  | "refreshAgents"
   | "setWorkspaceDefaultAgent"
   | "setWorkspaceDefaultProvider"
   | "switchContentView"
@@ -425,6 +428,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [currentSessionCacheKey]);
   const currentActiveJobId = currentSessionCacheKey
     ? state.activeJobIdsBySession.get(currentSessionCacheKey) ?? null
+    : null;
+  const currentMessageStreamTurnId = currentSessionId && currentSessionCacheKey
+    ? messageStreamTurnIdForSession(
+        currentSessionId,
+        state,
+        currentSessionCacheKey,
+      )
     : null;
   const currentTraceHistory = currentSessionCacheKey
     ? state.sessionTraceHistoryBySession.get(currentSessionCacheKey) ?? null
@@ -507,7 +517,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useSessionMessageStream({
     apiPort: state.apiPort,
     sessionId: currentSessionId,
-    turnId: currentActiveJobId,
+    turnId: currentMessageStreamTurnId,
     workspaceId: currentSessionGatewayWorkspaceId,
     sessionCacheKey: currentSessionCacheKey,
     setState,
@@ -898,6 +908,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const {
     invalidateWorkspaceRefreshes,
+    refreshAgents,
     refreshGatewayWorkspaceStatuses,
     refreshSessions,
   } = useWorkspaceBootstrap({
@@ -1647,6 +1658,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       clearGoal,
       switchAgent,
       switchModel,
+      refreshAgents,
       setWorkspaceDefaultAgent,
       setWorkspaceDefaultProvider,
       interruptSession: interruptSessionCallback,
@@ -1709,6 +1721,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       clearGoal,
       switchAgent,
       switchModel,
+      refreshAgents,
       setWorkspaceDefaultAgent,
       setWorkspaceDefaultProvider,
       interruptSessionCallback,
@@ -1770,6 +1783,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     interruptSession: interruptSessionCallback,
     switchAgent,
     switchModel,
+    refreshAgents,
     setWorkspaceDefaultAgent,
     setWorkspaceDefaultProvider,
     switchContentView,
@@ -1787,6 +1801,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     renameSession,
     sendMessage,
     setStatus,
+    refreshAgents,
     setWorkspaceDefaultAgent,
     setWorkspaceDefaultProvider,
     switchAgent,

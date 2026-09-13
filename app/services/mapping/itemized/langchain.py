@@ -22,6 +22,12 @@ from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.services.mapping.itemized.carrier_dedup import (
+    projection_message_group_id as _projection_message_group_id,
+)
+from app.services.mapping.itemized.carrier_dedup import (
+    superseded_stream_item_ids as _superseded_stream_item_ids,
+)
 from app.services.mapping.itemized.selection import (
     resolve_selected_item,
     resolve_selected_request_body,
@@ -61,70 +67,6 @@ def _tool_call_ids(item: CanonicalItemRecord) -> set[str]:
         for call in _tool_calls(item)
         if isinstance(call.get("id"), str) and call["id"]
     }
-
-
-def _superseded_stream_tool_group_item_ids(
-    items: Sequence[CanonicalItemRecord],
-) -> set[str]:
-    """用持久工具身份找出已被完整 checkpoint carrier 替代的 live 组。
-
-    stream sink 与 checkpoint sink 都必须保存自己的 canonical 事实，但 provider
-    projection 对同一次模型工具调用只能选择一个 carrier。checkpoint group 是
-    LangChain 实际执行输入的完整镜像，live group 可能只有最后一个增量片段；
-    因此同一 Turn 内工具调用 ID 集合完全相等时保留 checkpoint group，并排除
-    live group。这里禁止按正文/hash 猜测，身份歧义必须直接失败。
-    """
-    groups: dict[tuple[str | None, str], list[CanonicalItemRecord]] = {}
-    for item in items:
-        if item.semantic_kind not in {
-            SemanticKind.REASONING,
-            SemanticKind.TOOL_CALL,
-        }:
-            continue
-        group_id = item.message_group_id or item.item_id
-        groups.setdefault((item.turn_id, group_id), []).append(item)
-
-    checkpoint_groups: dict[
-        tuple[str | None, frozenset[str]], list[CanonicalItemRecord]
-    ] = {}
-    stream_groups: dict[
-        tuple[str | None, frozenset[str]], list[CanonicalItemRecord]
-    ] = {}
-    for (turn_id, _group_id), group_items in groups.items():
-        tool_call_ids = frozenset(
-            call_id
-            for item in group_items
-            if item.semantic_kind == SemanticKind.TOOL_CALL
-            for call_id in _tool_call_ids(item)
-        )
-        if not tool_call_ids:
-            continue
-        is_checkpoint_group = any(
-            item.metadata.get("execution_confirmed") is True
-            and (
-                isinstance(item.metadata.get("projection_group"), Mapping)
-                or isinstance(item.metadata.get("projection_message_id"), str)
-            )
-            for item in group_items
-        )
-        registry = checkpoint_groups if is_checkpoint_group else stream_groups
-        key = (turn_id, tool_call_ids)
-        if key in registry:
-            raise ValueError(
-                "provider projection 的工具 carrier 身份不唯一: "
-                f"turn_id={turn_id}, tool_call_ids={sorted(tool_call_ids)}"
-            )
-        registry[key] = group_items
-
-    superseded_ids: set[str] = set()
-    for key, checkpoint_items in checkpoint_groups.items():
-        stream_items = stream_groups.get(key)
-        if stream_items is None:
-            continue
-        if not checkpoint_items:
-            raise AssertionError("checkpoint tool group 不得为空")
-        superseded_ids.update(item.item_id for item in stream_items)
-    return superseded_ids
 
 
 def _item_content(item: CanonicalItemRecord) -> object:
@@ -170,9 +112,9 @@ def project_canonical_items(
     ordered = (
         items if preserve_order else sorted(items, key=lambda item: item.item_sequence)
     )
-    superseded_stream_item_ids = _superseded_stream_tool_group_item_ids(ordered)
+    superseded_ids = _superseded_stream_item_ids(ordered)
     for item in ordered:
-        if item.item_id in superseded_stream_item_ids:
+        if item.item_id in superseded_ids:
             continue
         if item.semantic_kind == SemanticKind.REASONING and item.payload_kind in {
             "opaque",
@@ -236,7 +178,7 @@ def project_canonical_items(
             )
             continue
         if item.semantic_kind == SemanticKind.TOOL_CALL:
-            group = item.message_group_id or item.item_id
+            group = _projection_message_group_id(item)
             calls = _tool_calls(item)
             current_index = message_groups.get(group)
             if (
@@ -263,7 +205,7 @@ def project_canonical_items(
                     f"{item.item_id}:{item.semantic_kind}/{item.payload_kind}"
                 )
             continue
-        group = item.message_group_id or item.item_id
+        group = _projection_message_group_id(item)
         content = _message_content(_item_content(item))
         current_index = message_groups.get(group)
         if (

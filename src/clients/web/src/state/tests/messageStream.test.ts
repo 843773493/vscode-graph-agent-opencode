@@ -361,6 +361,79 @@ describe("message stream reducer", () => {
     expect(toolPart?.arguments).toBe('{"command":"touch side-effect"}');
   });
 
+  test("工具信封身份可补入 payload 并在 active_state 中保留", () => {
+    let state = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      {
+        ...event(1, "stream.opened", { status: "open" }),
+        workspace_id: "workspace_1",
+      },
+    );
+    state = applyMessageStreamEvent(state, {
+      ...event(2, "tool.started", { tool_name: "shell" }),
+      workspace_id: "workspace_1",
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_invocation_id: "invocation_1",
+      tool_attempt_id: "attempt_1",
+    });
+    expect(state.workspaceId).toBe("workspace_1");
+    expect(state.toolExecutions[0]).toMatchObject({
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_invocation_id: "invocation_1",
+      tool_attempt_id: "attempt_1",
+    });
+    expect(state.activeState).toMatchObject({
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_invocation_id: "invocation_1",
+      tool_attempt_id: "attempt_1",
+    });
+
+    state = applyMessageStreamEvent(state, {
+      ...event(3, "tool.completed", { tool_name: "shell", status: "completed" }),
+      workspace_id: "workspace_1",
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_invocation_id: "invocation_1",
+      tool_attempt_id: "attempt_1",
+    });
+    expect(state.toolExecutions[0]).toMatchObject({
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_invocation_id: "invocation_1",
+      tool_attempt_id: "attempt_1",
+    });
+    expect(state.activeState).toMatchObject({
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_invocation_id: "invocation_1",
+      tool_attempt_id: "attempt_1",
+    });
+  });
+
+  test("模型和 block 的信封身份会补入前端实体", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, {
+      ...event(1, "model.started", { attempt: 1 }),
+      model_call_id: "model_1",
+    });
+    state = applyMessageStreamEvent(state, {
+      ...event(2, "block.started", { block_index: 0, carrier_type: "text" }),
+      model_call_id: "model_1",
+      block_id: "block_1",
+    });
+    expect(state.modelCalls.model_1).toMatchObject({
+      model_call_id: "model_1",
+      status: "running",
+    });
+    expect(state.blocks[0]).toMatchObject({
+      block_id: "block_1",
+      model_call_id: "model_1",
+    });
+  });
+
   test("工具调用分片不因空名称和空参数覆盖已有信息", () => {
     let state = createMessageStreamState("ses_1", "turn_1");
     state = applyMessageStreamEvent(state, event(1, "tool_call", {

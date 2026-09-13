@@ -125,6 +125,9 @@ class MessageStreamWriter:
         model_call_id: str | None = None,
         block_id: str | None = None,
         tool_execution_id: str | None = None,
+        tool_call_id: str | None = None,
+        tool_invocation_id: str | None = None,
+        tool_attempt_id: str | None = None,
         event_id: str | None = None,
     ) -> dict[str, Any]:
         return await self._store.commit(
@@ -134,6 +137,9 @@ class MessageStreamWriter:
             model_call_id=model_call_id,
             block_id=block_id,
             tool_execution_id=tool_execution_id,
+            tool_call_id=tool_call_id,
+            tool_invocation_id=tool_invocation_id,
+            tool_attempt_id=tool_attempt_id,
             job_id=self.job_id,
             event_id=event_id,
         )
@@ -177,9 +183,11 @@ class MessageStreamStore:
         self,
         *,
         path_resolver: SessionPathResolver,
+        workspace_id: str | None = None,
         subscriber_queue_size: int = 256,
     ) -> None:
         self._path_resolver = path_resolver
+        self._workspace_id = workspace_id
         self._subscriber_queue_size = subscriber_queue_size
         self._locks: dict[str, asyncio.Lock] = {}
         self._index_locks: dict[str, asyncio.Lock] = {}
@@ -348,6 +356,7 @@ class MessageStreamStore:
             "turn_id": turn_id,
             "turn_stream_id": turn_stream_id,
             "job_id": job_id,
+            "workspace_id": self._workspace_id,
             "snapshot_seq": 0,
             "stream_status": "open",
             "agent_loop_status": "running",
@@ -365,6 +374,40 @@ class MessageStreamStore:
             "recovery": None,
             "resumable": True,
         }
+
+    @staticmethod
+    def _validate_event_identity_fields(
+        event_type: str,
+        payload: Mapping[str, Any],
+        identity_fields: Mapping[str, Any],
+        *,
+        path: Path | None = None,
+    ) -> None:
+        """校验信封身份与 payload 身份一致，禁止同一事件出现两套归属。"""
+        location = f" path={path}" if path is not None else ""
+        for field_name, envelope_value in identity_fields.items():
+            payload_value = payload.get(field_name)
+            for value, source in (
+                (envelope_value, "信封"),
+                (payload_value, "payload"),
+            ):
+                if value is not None and (
+                    not isinstance(value, str) or not value
+                ):
+                    raise MessageStreamError(
+                        "消息流身份字段必须是非空字符串: "
+                        f"type={event_type} field={field_name} source={source}{location}"
+                    )
+            if (
+                envelope_value is not None
+                and payload_value is not None
+                and envelope_value != payload_value
+            ):
+                raise MessageStreamError(
+                    "消息流信封与 payload 身份不一致: "
+                    f"type={event_type} field={field_name} "
+                    f"envelope={envelope_value} payload={payload_value}{location}"
+                )
 
     @staticmethod
     def _validate_event_record(
@@ -402,6 +445,23 @@ class MessageStreamStore:
             raise MessageStreamError(
                 f"消息流事件 payload 必须是对象: path={path} type={event_type}"
             )
+        MessageStreamStore._validate_event_identity_fields(
+            event_type,
+            payload,
+            {
+                field_name: event.get(field_name)
+                for field_name in (
+                    "model_call_id",
+                    "block_id",
+                    "tool_call_id",
+                    "tool_invocation_id",
+                    "tool_attempt_id",
+                    "tool_execution_id",
+                    "workspace_id",
+                )
+            },
+            path=path,
+        )
         expected_values = (
             ("session_id", session_id, expected_session_id),
             ("turn_id", turn_id, expected_turn_id),
@@ -742,6 +802,18 @@ class MessageStreamStore:
                 if event_seq > snapshot_seq:
                     state = self._apply_event(state, record.event)
                     state["snapshot_seq"] = event_seq
+        stored_workspace_id = state.get("workspace_id")
+        if (
+            self._workspace_id is not None
+            and stored_workspace_id is not None
+            and stored_workspace_id != self._workspace_id
+        ):
+            raise MessageStreamError(
+                "消息流状态快照 workspace_id 不匹配: "
+                f"expected={self._workspace_id} actual={stored_workspace_id}"
+            )
+        if self._workspace_id is not None:
+            state["workspace_id"] = self._workspace_id
         self._backfill_lifecycle_metadata(state, records)
         self._touch_cached_state(turn_stream_id, state)
         self._event_ids[turn_stream_id] = {
@@ -868,6 +940,9 @@ class MessageStreamStore:
         model_call_id: str | None = None,
         block_id: str | None = None,
         tool_execution_id: str | None = None,
+        tool_call_id: str | None = None,
+        tool_invocation_id: str | None = None,
+        tool_attempt_id: str | None = None,
         job_id: str | None = None,
         event_id: str | None = None,
     ) -> dict[str, Any]:
@@ -875,6 +950,25 @@ class MessageStreamStore:
             raise MessageStreamError(
                 "stream.snapshot 是控制帧，不得作为业务事件提交或消耗 event_seq"
             )
+        payload = dict(payload)
+        identity_fields = {
+            "model_call_id": model_call_id,
+            "block_id": block_id,
+            "tool_call_id": tool_call_id,
+            "tool_invocation_id": tool_invocation_id,
+            "tool_attempt_id": tool_attempt_id,
+            "tool_execution_id": tool_execution_id,
+            "workspace_id": self._workspace_id,
+        }
+        for field_name, field_value in tuple(identity_fields.items()):
+            if field_value is None:
+                identity_fields[field_name] = payload.get(field_name)
+        self._validate_event_identity_fields(event_type, payload, identity_fields)
+        for field_name, field_value in identity_fields.items():
+            if field_value is not None and (
+                field_name != "workspace_id" or event_type == "stream.snapshot"
+            ):
+                payload.setdefault(field_name, field_value)
         async with self._lock_for(turn_stream_id):
             # 必须在 Turn 锁内读取缓存；模型生命周期事件和 provider delta
             # 可能并发提交，锁外捕获的旧 state 会让两个提交复用同一个 event_seq。
@@ -884,31 +978,62 @@ class MessageStreamStore:
                     f"消息流不存在: turn_stream_id={turn_stream_id}"
                 )
             state = copy.deepcopy(cached)
+            incoming_workspace_id = identity_fields["workspace_id"]
+            stored_workspace_id = state.get("workspace_id")
+            if (
+                incoming_workspace_id is not None
+                and stored_workspace_id is not None
+                and incoming_workspace_id != stored_workspace_id
+            ):
+                raise MessageStreamError(
+                    "消息流事件 workspace_id 与当前流不匹配: "
+                    f"turn_stream_id={turn_stream_id} "
+                    f"expected={stored_workspace_id} actual={incoming_workspace_id}"
+                )
+            if stored_workspace_id is None and incoming_workspace_id is not None:
+                state["workspace_id"] = incoming_workspace_id
             if event_id is not None:
                 self._load_event_ids_from_disk(
                     str(state["session_id"]),
                     turn_stream_id,
                 )
                 previous = self._event_ids.get(turn_stream_id, {}).get(event_id)
-                if previous is not None:
-                    if (
+                previous_payload = previous.get("payload") if previous is not None else None
+                allowed_interrupt_duplicate = (
+                    event_type == "interrupt.requested"
+                    and previous is not None
+                    and previous.get("type") == "interrupt.rejected"
+                    and isinstance(previous_payload, dict)
+                    and previous_payload.get("interrupt_request_id")
+                    == payload.get("interrupt_request_id")
+                    and previous_payload.get("reason")
+                    in {"already_interrupting", "already_terminal"}
+                )
+                identity_conflict = (
+                    previous is not None
+                    and (
                         previous.get("type") != event_type
-                        or previous.get("payload") != dict(payload)
-                    ):
-                        previous_payload = previous.get("payload")
-                        if not (
-                            event_type == "interrupt.requested"
-                            and previous.get("type") == "interrupt.rejected"
-                            and isinstance(previous_payload, dict)
-                            and previous_payload.get("interrupt_request_id")
-                            == payload.get("interrupt_request_id")
-                            and previous_payload.get("reason")
-                            in {"already_interrupting", "already_terminal"}
-                        ):
-                            raise MessageStreamError(
-                                "重复 event_id 的消息流事件内容不一致: "
-                                f"turn_stream_id={turn_stream_id} event_id={event_id}"
-                            )
+                        or previous.get("payload") != payload
+                        or any(
+                            field_value is not None
+                            and (
+                                previous.get(field_name)
+                                or (
+                                    previous_payload.get(field_name)
+                                    if isinstance(previous_payload, Mapping)
+                                    else None
+                                )
+                            ) != field_value
+                            for field_name, field_value in identity_fields.items()
+                        )
+                    )
+                )
+                if identity_conflict and not allowed_interrupt_duplicate:
+                    raise MessageStreamError(
+                        "重复 event_id 的消息流事件内容不一致: "
+                        f"turn_stream_id={turn_stream_id} event_id={event_id}"
+                    )
+                if previous is not None:
                     return copy.deepcopy(previous)
             current_status = state["stream_status"]
             if current_status == "interrupting":
@@ -968,12 +1093,11 @@ class MessageStreamStore:
                 "type": event_type,
                 "payload": copy.deepcopy(dict(payload)),
             }
-            if model_call_id is not None:
-                event["model_call_id"] = model_call_id
-            if block_id is not None:
-                event["block_id"] = block_id
-            if tool_execution_id is not None:
-                event["tool_execution_id"] = tool_execution_id
+            for field_name, field_value in identity_fields.items():
+                if field_value is not None:
+                    event[field_name] = field_value
+            if state.get("workspace_id") is not None:
+                event["workspace_id"] = state["workspace_id"]
             resolved_job_id = job_id or state.get("job_id")
             if resolved_job_id is not None:
                 event["job_id"] = resolved_job_id
@@ -1051,6 +1175,11 @@ class MessageStreamStore:
             "emitted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "type": "stream.snapshot",
             "payload": copy.deepcopy(state),
+            **(
+                {"workspace_id": state["workspace_id"]}
+                if state.get("workspace_id")
+                else {}
+            ),
             **({"job_id": state["job_id"]} if state.get("job_id") else {}),
         }
 
@@ -1193,6 +1322,8 @@ class MessageStreamStore:
                     "phase": "accumulating",
                     "entity_id": str(payload.get("tool_call_id") or ""),
                     "tool_call_id": payload.get("tool_call_id"),
+                    "tool_invocation_id": payload.get("tool_invocation_id"),
+                    "tool_attempt_id": payload.get("tool_attempt_id"),
                     "status": str(payload.get("status") or "running"),
                 },
             )
@@ -1211,6 +1342,8 @@ class MessageStreamStore:
                     "phase": "stopping",
                     "entity_id": str(payload.get("tool_call_id") or ""),
                     "tool_call_id": payload.get("tool_call_id"),
+                    "tool_invocation_id": payload.get("tool_invocation_id"),
+                    "tool_attempt_id": payload.get("tool_attempt_id"),
                     "status": str(payload.get("status") or "incomplete"),
                 },
             )
@@ -1224,6 +1357,9 @@ class MessageStreamStore:
                     "phase": "running",
                     "entity_id": str(payload.get("tool_execution_id") or ""),
                     "tool_execution_id": payload.get("tool_execution_id"),
+                    "tool_call_id": payload.get("tool_call_id"),
+                    "tool_invocation_id": payload.get("tool_invocation_id"),
+                    "tool_attempt_id": payload.get("tool_attempt_id"),
                     "status": "running",
                 },
             )
@@ -1243,6 +1379,9 @@ class MessageStreamStore:
                     "phase": "stopping",
                     "entity_id": str(payload.get("tool_execution_id") or ""),
                     "tool_execution_id": payload.get("tool_execution_id"),
+                    "tool_call_id": payload.get("tool_call_id"),
+                    "tool_invocation_id": payload.get("tool_invocation_id"),
+                    "tool_attempt_id": payload.get("tool_attempt_id"),
                     "status": tool_status,
                 },
             )
@@ -1512,7 +1651,7 @@ class MessageStreamStore:
             if block is not None:
                 cls._mark_entity_lifecycle(block, event, completed=completed)
         elif event_type in {"tool_call", "tool_call.delta", "tool_call.completed"}:
-            tool_call_id = payload.get("tool_call_id")
+            tool_call_id = payload.get("tool_call_id") or event.get("tool_call_id")
             if isinstance(tool_call_id, str) and tool_call_id:
                 for tool_call in state.get("tool_calls", []):
                     if (

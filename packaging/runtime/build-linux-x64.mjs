@@ -33,6 +33,7 @@ const runtimePackageRoot = path.join(stageRoot, "runtime-linux-x64", "package");
 const launcherPackageRoot = path.join(stageRoot, "launcher", "package");
 const tarballRoot = path.join(outputRoot, "tarballs");
 const releaseAssetRoot = path.join(outputRoot, "release-assets");
+const NODE_GYP_VERSION = "10.3.1";
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -106,7 +107,17 @@ function copyApplicationSources(applicationRoot) {
       path.join(applicationRoot, "src", "workspace-services", service, "server"),
       copyOptions,
     );
+    cpSync(
+      path.join(projectRoot, "src", "workspace-services", service, "protocol"),
+      path.join(applicationRoot, "src", "workspace-services", service, "protocol"),
+      copyOptions,
+    );
   }
+  cpSync(
+    path.join(projectRoot, "src", "workspace-services", "protocol"),
+    path.join(applicationRoot, "src", "workspace-services", "protocol"),
+    copyOptions,
+  );
   cpSync(
     path.join(projectRoot, "pyproject.toml"),
     path.join(applicationRoot, "pyproject.toml"),
@@ -139,13 +150,20 @@ function installNodeDependencies(applicationRoot) {
     path.join(projectRoot, "packaging", "runtime", "node-package.json"),
     path.join(applicationRoot, "package.json"),
   );
-  run("bun", ["install", "--production", "--exact"], {
+  // Bun 不会像 npm 一样为 node-pty 安装脚本提供 node-gyp；先跳过生命周期脚本，
+  // 再用 Bun 的 x 命令调用 node-gyp 编译 Linux 原生模块，避免把构建工具打进运行时。
+  run("bun", ["install", "--production", "--exact", "--ignore-scripts"], {
     cwd: applicationRoot,
     env: {
       ...process.env,
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
     },
   });
+  const nodePtyRoot = path.join(applicationRoot, "node_modules", "node-pty");
+  run("bun", ["x", `node-gyp@${NODE_GYP_VERSION}`, "rebuild"], {
+    cwd: nodePtyRoot,
+  });
+  run("bun", ["scripts/post-install.js"], { cwd: nodePtyRoot });
 }
 
 function installChromium(applicationRoot, chromiumRoot) {

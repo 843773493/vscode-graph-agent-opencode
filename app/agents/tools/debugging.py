@@ -39,9 +39,9 @@ _ENDING_DEBUG_TOOLS = frozenset(
 
 
 class StartDebuggingInput(BaseModel):
-    fileFullPath: str = Field(description="要调试的工作区相对源码路径；不能以 / 开头。")
+    fileFullPath: str = Field(description="要调试的源码路径；优先使用工作区相对路径，工作区内绝对路径会被自动归一化。")
     workingDirectory: str = Field(
-        description="工作区相对调试目录；使用 . 表示 workspace 根目录，不能以 / 开头。"
+        description="调试目录；优先使用工作区相对路径，用 . 表示 workspace 根目录。"
     )
     testName: str | None = Field(
         default=None,
@@ -60,10 +60,10 @@ class StartDebuggingInput(BaseModel):
 class CreateDebugConfigurationInput(BaseModel):
     name: str = Field(min_length=1, max_length=80, description="调试方案显示名。")
     fileFullPath: str = Field(
-        description="目标 JavaScript 的工作区相对路径；不能以 / 开头。"
+        description="目标 JavaScript 路径；优先使用工作区相对路径。"
     )
     workingDirectory: str = Field(
-        description="目标程序的工作区相对目录；使用 . 表示 workspace 根目录。"
+        description="目标程序目录；优先使用工作区相对路径，用 . 表示 workspace 根目录。"
     )
     configurationName: str | None = Field(
         default=None,
@@ -84,7 +84,7 @@ class DebugConfigurationIdInput(BaseModel):
 
 
 class BreakpointInput(BaseModel):
-    fileFullPath: str = Field(description="源码的工作区相对路径；不能以 / 开头。")
+    fileFullPath: str = Field(description="源码路径；优先使用工作区相对路径。")
     line: int = Field(ge=1, description="从 1 开始的源码行号。")
     condition: str | None = Field(default=None, description="可选的条件表达式。")
     hitCondition: int | None = Field(
@@ -95,12 +95,12 @@ class BreakpointInput(BaseModel):
 
 
 class RemoveBreakpointInput(BaseModel):
-    fileFullPath: str = Field(description="源码的工作区相对路径；不能以 / 开头。")
+    fileFullPath: str = Field(description="源码路径；优先使用工作区相对路径。")
     line: int = Field(ge=1, description="从 1 开始的源码行号。")
 
 
 class LogpointInput(BaseModel):
-    fileFullPath: str = Field(description="源码的工作区相对路径；不能以 / 开头。")
+    fileFullPath: str = Field(description="源码路径；优先使用工作区相对路径。")
     line: int = Field(ge=1, description="从 1 开始的源码行号。")
     logMessage: str = Field(
         min_length=1,

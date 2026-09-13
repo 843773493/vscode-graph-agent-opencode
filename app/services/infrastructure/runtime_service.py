@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
 from datetime import UTC, datetime
@@ -20,6 +21,8 @@ from app.schemas.internal_v2.runtime import (
 from app.services.business.job.service import JobService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
+
+logger = logging.getLogger(__name__)
 
 
 class TurnTerminalStatusWriter(Protocol):
@@ -64,9 +67,15 @@ class RuntimeService:
         self._terminal_status_writer = terminal_status_writer
         self._lifecycle_state: RuntimeLifecycleState = "ready"
         self._start_time: float | None = None
+        self._startup_reconciliation_errors: list[dict[str, str]] = []
 
     def get_log_dir(self) -> Path:
         return self._workspace_root / ".boxteam" / "logs"
+
+    @property
+    def startup_reconciliation_errors(self) -> list[dict[str, str]]:
+        """返回启动恢复时发现的历史 Trace 错误，供健康检查暴露。"""
+        return list(self._startup_reconciliation_errors)
 
     async def status(self) -> RuntimeInfoDTO:
         if self._start_time is None:
@@ -123,6 +132,7 @@ class RuntimeService:
 
     async def reconcile_stale_executions(self) -> int:
         """把上次进程未写终态的已启动 Job 标为进程中断。"""
+        self._startup_reconciliation_errors = []
         reconciled = await self._message_stream_store.reconcile_unfinished_streams()
         terminal_types = {
             "job_completed",
@@ -131,7 +141,20 @@ class RuntimeService:
             "session_interrupted",
         }
         for session_id in self._trace_event_store.list_session_ids():
-            events = self._trace_event_store.read_events(session_id)
+            try:
+                events = self._trace_event_store.read_events(session_id)
+            except (RuntimeError, TypeError) as error:
+                error_detail = str(error)
+                self._startup_reconciliation_errors.append(
+                    {"session_id": session_id, "error": error_detail}
+                )
+                logger.exception(
+                    "历史 Trace 无法参与启动恢复，已保留该会话并继续启动: "
+                    "session_id=%s error=%s",
+                    session_id,
+                    error_detail,
+                )
+                continue
             lifecycle_by_job: dict[str, Event] = {}
             for event in events:
                 if event.type == "job_started" or event.type in terminal_types:

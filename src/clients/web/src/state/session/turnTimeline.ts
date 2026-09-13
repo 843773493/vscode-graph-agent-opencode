@@ -222,6 +222,53 @@ function mergeTurnItems(
   return [...merged.values()];
 }
 
+function partIdOf(part: unknown): string | null {
+  const value = (part as { part_id?: unknown } | null)?.part_id;
+  return typeof value === "string" && value ? value : null;
+}
+
+/**
+ * 定点工具详情请求只返回被请求的工具部件（携带 tool_call_ids）。若把它的
+ * response_parts 直接整体替换，会把同一 Turn 的 reasoning、final 等部件一并
+ * 丢掉。这里按稳定 part_id 把定点结果补丁进现有部件：保持现有部件的后端顺序，
+ * 命中的部件用定点结果覆盖（拿到 arguments/result），未命中的新部件追加到末尾。
+ *
+ * 只有当 incoming 的每个 part_id 都已在 current 中时才使用补丁语义（说明这是
+ * 对既有部件的定点补载，而不是引入新部件的整轮详情）。否则仍按契约整体替换，
+ * 避免把旧 summary 与新 detail 拼成第三套历史。
+ */
+export function patchResponseParts(
+  current: readonly unknown[] | undefined | null,
+  incoming: readonly unknown[],
+): unknown[] {
+  const currentList = Array.isArray(current) ? current : [];
+  if (currentList.length === 0) return [...incoming];
+  const incomingById = new Map<string, unknown>();
+  let hasUnidentifiedPart = false;
+  for (const part of incoming) {
+    const id = partIdOf(part);
+    if (id) incomingById.set(id, part);
+    else hasUnidentifiedPart = true;
+  }
+  const currentIds = new Set<string>();
+  for (const part of currentList) {
+    const id = partIdOf(part);
+    if (id) currentIds.add(id);
+  }
+  const isPointPatch = !hasUnidentifiedPart
+    && incomingById.size > 0
+    && [...incomingById.keys()].every((id) => currentIds.has(id));
+  if (!isPointPatch) {
+    return [...incoming];
+  }
+  const patched: unknown[] = currentList.map((part) => {
+    const id = partIdOf(part);
+    if (!id) return part;
+    return incomingById.get(id) ?? part;
+  });
+  return patched;
+}
+
 function mergeResponseParts(
   current: unknown,
   incoming: unknown,
@@ -229,7 +276,7 @@ function mergeResponseParts(
   if (Array.isArray(incoming)) {
     // 历史响应已经携带 canonical item identity 和后端顺序。前端不得再按
     // message 坐标重排、按正文去重，或把旧 summary 与新 detail 拼成第三套历史。
-    return [...incoming];
+    return Array.isArray(current) ? patchResponseParts(current, incoming) : [...incoming];
   }
   return Array.isArray(current) ? [...current] : undefined;
 }

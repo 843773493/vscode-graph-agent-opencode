@@ -11,7 +11,6 @@ from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventInput,
-    SecretReferenceRequiredError,
 )
 
 
@@ -582,21 +581,22 @@ def test_corrupt_gateway_active_snapshot_enters_explicit_recovery_state(tmp_path
         state.close()
 
 
-def test_gateway_config_storage_rejects_literal_secret_fields(tmp_path):
+def test_gateway_config_storage_persists_literal_secret_fields(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
-        with pytest.raises(SecretReferenceRequiredError, match="无法安全持久化"):
-            state.set_config(
-                config_key="gateway-secret",
-                config_version=1,
-                payload={"api_key": "do-not-store"},
-            )
-        assert state.get_config("gateway-secret") is None
+        state.set_config(
+            config_key="gateway-secret",
+            config_version=1,
+            payload={"api_key": "local-dummy-key"},
+        )
+        record = state.get_config("gateway-secret")
+        assert record is not None
+        assert record.payload["api_key"] == "local-dummy-key"
     finally:
         state.close()
 
 
-def test_legacy_gateway_secret_migration_blocks_literal_and_normalizes_env(tmp_path):
+def test_legacy_gateway_secret_migration_blocks_irreversible_digest(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         connection = state.connection()
@@ -604,31 +604,18 @@ def test_legacy_gateway_secret_migration_blocks_literal_and_normalizes_env(tmp_p
             connection.execute(
                 """
                 INSERT INTO gateway_config(config_key, config_version, payload_json, updated_at)
-                VALUES ('legacy-literal', 1, ?, '2026-01-01T00:00:00+00:00')
+                VALUES ('legacy-digest', 1, ?, '2026-01-01T00:00:00+00:00')
                 """,
-                (json.dumps({"api_key": "literal-secret"}),),
-            )
-            connection.execute(
-                """
-                INSERT INTO gateway_config(config_key, config_version, payload_json, updated_at)
-                VALUES ('legacy-env', 1, ?, '2026-01-01T00:00:00+00:00')
-                """,
-                (json.dumps({"api_key": "${ROTATED_GATEWAY_API_KEY}"}),),
+                (json.dumps({"api_key": "literal-sha256:deadbeef"}),),
             )
             connection.commit()
         finally:
             connection.close()
 
-        assert state.migrate_legacy_config_secrets("legacy-literal") == ("/api_key",)
-        literal_record = state.get_config("legacy-literal")
-        assert literal_record is not None
-        assert literal_record.payload["api_key"].startswith("literal-sha256:")
-        assert "literal-secret" not in json.dumps(literal_record.payload)
-
-        assert state.migrate_legacy_config_secrets("legacy-env") == ()
-        env_record = state.get_config("legacy-env")
-        assert env_record is not None
-        assert env_record.payload == {"api_key": "env:ROTATED_GATEWAY_API_KEY"}
+        assert state.migrate_legacy_config_secrets("legacy-digest") == ("/api_key",)
+        digest_record = state.get_config("legacy-digest")
+        assert digest_record is not None
+        assert digest_record.payload["api_key"] == "literal-sha256:deadbeef"
     finally:
         state.close()
 

@@ -42,6 +42,10 @@ def test_config_policy_prefers_longest_explicit_path_and_marks_missing_defaults(
 
 def test_builtin_policies_cover_workspace_and_gateway_restart_boundaries():
     assert workspace_config_policy().restart_paths(("/mcp/tools",)) == ("/mcp/tools",)
+    assert workspace_config_policy().restart_paths(("/llm/providers",)) == ()
+    assert workspace_config_policy().activation_scope_for(
+        ("/llm/providers",)
+    ) == "next_job"
     assert workspace_config_policy().activation_scope_for(
         ("/runtime/gateway/connection/url",)
     ) == "next_job"

@@ -721,16 +721,40 @@ def test_legacy_workspace_secret_migration_blocks_literal_and_normalizes_env(tmp
             connection.close()
 
         blocked = store.migrate_legacy_config_secrets("legacy-literal")
-        assert blocked == ("/api_key",)
+        assert blocked == ()
         literal_record = store.get_config("legacy-literal")
         assert literal_record is not None
-        assert literal_record.payload["api_key"].startswith("literal-sha256:")
-        assert "literal-secret" not in json.dumps(literal_record.payload)
+        assert literal_record.payload["api_key"] == "literal-secret"
 
         assert store.migrate_legacy_config_secrets("legacy-env") == ()
         env_record = store.get_config("legacy-env")
         assert env_record is not None
         assert env_record.payload == {"api_key": "env:ROTATED_API_KEY"}
+    finally:
+        store.close()
+
+
+def test_legacy_workspace_secret_migration_blocks_irreversible_digest(tmp_path):
+    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+    try:
+        connection = store.connection()
+        try:
+            connection.execute(
+                """
+                INSERT INTO workspace_config(config_key, config_version, payload_json, updated_at)
+                VALUES ('legacy-digest', 1, ?, '2026-01-01T00:00:00+00:00')
+                """,
+                (json.dumps({"api_key": "literal-sha256:deadbeef"}),),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        blocked = store.migrate_legacy_config_secrets("legacy-digest")
+        assert blocked == ("/api_key",)
+        digest_record = store.get_config("legacy-digest")
+        assert digest_record is not None
+        assert digest_record.payload["api_key"] == "literal-sha256:deadbeef"
     finally:
         store.close()
 

@@ -35,12 +35,13 @@ function workspaceFileExtension(path: string): string {
   const pathWithoutSelection = path
     .replace(/#L?\d+(?:-L?\d+)?$/u, "")
     .replace(/:\d+(?::\d+)?$/u, "");
-  const fileName = pathWithoutSelection
+  const pathSegments = pathWithoutSelection
     .replace(/\\/g, "/")
     .split("/")
-    .filter(Boolean)
-    .at(-1) ?? "";
-  return fileName.split(".").at(-1)?.toLowerCase() ?? "";
+    .filter(Boolean);
+  const fileName = pathSegments[pathSegments.length - 1] ?? "";
+  const extensionSegments = fileName.split(".");
+  return extensionSegments[extensionSegments.length - 1]?.toLowerCase() ?? "";
 }
 
 export function isWorkspaceTextFilePath(path: string): boolean {

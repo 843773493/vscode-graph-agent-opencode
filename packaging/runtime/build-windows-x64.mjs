@@ -212,7 +212,17 @@ function copyApplicationSources(applicationRoot) {
       path.join(applicationRoot, "src", "workspace-services", service, "server"),
       copyOptions,
     );
+    cpSync(
+      path.join(projectRoot, "src", "workspace-services", service, "protocol"),
+      path.join(applicationRoot, "src", "workspace-services", service, "protocol"),
+      copyOptions,
+    );
   }
+  cpSync(
+    path.join(projectRoot, "src", "workspace-services", "protocol"),
+    path.join(applicationRoot, "src", "workspace-services", "protocol"),
+    copyOptions,
+  );
   cpSync(
     path.join(projectRoot, "pyproject.toml"),
     path.join(applicationRoot, "pyproject.toml"),

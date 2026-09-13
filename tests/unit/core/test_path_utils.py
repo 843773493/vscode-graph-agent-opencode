@@ -367,6 +367,131 @@ class TestPathUtils:
             / "checkpoints.jsonl"
         ).is_file()
 
+    def test_initialize_keeps_unrecoverable_inline_attachment_sessions(
+        self, tmp_path, monkeypatch
+    ):
+        """历史会话的坏 inline 附件不能阻断整个工作区启动。"""
+        workspace_root = tmp_path / "workspace"
+        monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
+        session_id = "ses_bad_inline_video"
+        boxteam_root = workspace_root / ".boxteam"
+        session_root = boxteam_root / "sessions" / session_id
+        session_root.mkdir(parents=True)
+        now = datetime.now(UTC).isoformat()
+        (session_root / "session.json").write_text(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "title": "包含失效视频附件的会话",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (session_root / "message_history").mkdir()
+        (session_root / "message_history" / "messages.jsonl").write_text(
+            json.dumps(
+                {
+                    "file_id": (
+                        "inline:9e7307e5-d2ca-45a6-b0ea-64ce126a3864:"
+                        "codex-ux-video-a.mp4"
+                    )
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        mime_mismatch_session_id = "ses_bad_mime"
+        mime_mismatch_root = boxteam_root / "sessions" / mime_mismatch_session_id
+        (mime_mismatch_root / "logs" / "llm_requests").mkdir(parents=True)
+        (mime_mismatch_root / "session.json").write_text(
+            json.dumps(
+                {
+                    "session_id": mime_mismatch_session_id,
+                    "title": "包含 MIME 不一致附件的会话",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (mime_mismatch_root / "logs" / "llm_requests" / "request.json").write_text(
+            json.dumps(
+                {
+                    "request": {
+                        "messages": [
+                            {
+                                "content": [
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": "data:image/jpeg;base64,AA=="
+                                        },
+                                    }
+                                ],
+                                "response_metadata": {
+                                    "attachments": [
+                                        {
+                                            "file_id": "inline:bad-mime.png",
+                                            "content_type": "image/png",
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        migrations_root = boxteam_root / "migrations"
+        migrations_root.mkdir(parents=True)
+        (migrations_root / "session-stable-locators-v1.json").write_text(
+            json.dumps({"schema_version": 1, "status": "completed"}),
+            encoding="utf-8",
+        )
+
+        resolver = SessionPathResolver(boxteam_root / "sessions")
+        resolver.initialize()
+
+        migration_record = json.loads(
+            (
+                migrations_root / "session-inline-attachments-v1.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert migration_record["status"] == "completed_with_errors"
+        assert migration_record["errors"] == [
+            {
+                "session_id": session_id,
+                "error": (
+                    "旧会话数据引用了无法从请求日志恢复的 inline 附件: "
+                    f"session_id={session_id}, file_id="
+                    "'inline:9e7307e5-d2ca-45a6-b0ea-64ce126a3864:"
+                    "codex-ux-video-a.mp4'"
+                ),
+            },
+            {
+                "session_id": mime_mismatch_session_id,
+                "error": (
+                    "旧会话附件日志中的 MIME 类型不一致: "
+                    "file_id='inline:bad-mime.png', declared='image/png', "
+                    "actual='image/jpeg'"
+                ),
+            },
+        ]
+        assert resolver.resolve_session_node(session_id) == session_root
+        assert resolver.resolve_session_node(mime_mismatch_session_id) == (
+            mime_mismatch_root
+        )
+        assert resolver.legacy_inline_attachment_migration_record == migration_record
+
+        # 降级记录是终态；下一次启动不应再次因同一个历史会话失败。
+        SessionPathResolver(boxteam_root / "sessions").initialize()
+
     def test_migrate_legacy_trace_timestamps_keeps_backup(self, tmp_path):
         boxteam_root = tmp_path / ".boxteam"
         sessions_root = boxteam_root / "sessions"

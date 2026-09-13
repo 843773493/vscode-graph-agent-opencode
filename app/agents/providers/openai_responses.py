@@ -707,6 +707,8 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         current_index = current_output_index = current_sub_index = -1
         part_state = _StreamPartState()
         delta_sink = get_current_model_delta_sink()
+        raw_model_call_id = getattr(run_manager, "run_id", None)
+        model_call_id = str(raw_model_call_id) if raw_model_call_id is not None else None
         scope = get_current_turn_execution_scope()
         signal = scope.effective_cancellation_signal if scope else None
 
@@ -743,7 +745,13 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                     self._message_chunk_has_semantic_delta(generation_chunk.message)
                     and delta_sink is not None
                 ):
-                    await delta_sink.accept_message_chunk(generation_chunk.message)
+                    if model_call_id is None:
+                        await delta_sink.accept_message_chunk(generation_chunk.message)
+                    else:
+                        await delta_sink.accept_message_chunk(
+                            generation_chunk.message,
+                            model_call_id=model_call_id,
+                        )
                 if run_manager:
                     await run_manager.on_llm_new_token(
                         _message_chunk_token(generation_chunk.message),
@@ -797,4 +805,5 @@ def build_openai_responses_model(
         reasoning_items_summary_replay=api_mode.supports_reasoning.reasoning_items_summary,
         reasoning_items_encrypted_replay=api_mode.supports_reasoning.reasoning_items_encrypted_content,
         image_input_replay="image_input" in parse_provider_capabilities(provider),
+        no_proxy=bool(request_options.get("no_proxy")),
     )

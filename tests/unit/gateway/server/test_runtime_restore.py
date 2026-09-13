@@ -9,6 +9,20 @@ from app.gateway.server import bootstrap
 from app.gateway.workspace_ids import build_managed_local_workspace_id
 
 
+def test_default_backend_port_is_optional_and_validated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BOXTEAM_DEFAULT_BACKEND_PORT", raising=False)
+    assert bootstrap._default_backend_port() is None
+
+    monkeypatch.setenv("BOXTEAM_DEFAULT_BACKEND_PORT", "8010")
+    assert bootstrap._default_backend_port() == 8010
+
+    monkeypatch.setenv("BOXTEAM_DEFAULT_BACKEND_PORT", "70000")
+    with pytest.raises(ValueError, match="BOXTEAM_DEFAULT_BACKEND_PORT"):
+        bootstrap._default_backend_port()
+
+
 @pytest.mark.asyncio
 async def test_gateway_start_restores_all_desired_managed_workspaces(
     tmp_path: Path,
@@ -24,9 +38,7 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(
     default_id = build_managed_local_workspace_id(str(default_root))
     running_id = build_managed_local_workspace_id(str(running_root))
     stopped_id = build_managed_local_workspace_id(str(stopped_root))
-    persisted = GatewayWorkspaceRegistry(
-        storage_path=gateway_root / "workspaces.json"
-    )
+    persisted = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
     persisted.upsert(
         WorkspaceTarget(
             workspace_id=default_id,
@@ -132,9 +144,7 @@ async def test_gateway_restore_failure_keeps_intent_and_restores_other_targets(
     healthy_root = tmp_path / "healthy"
     healthy_root.mkdir()
     missing_root = tmp_path / "missing"
-    registry = GatewayWorkspaceRegistry(
-        storage_path=gateway_root / "workspaces.json"
-    )
+    registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
     for workspace_id, workspace_root in (
         ("missing", missing_root),
         ("healthy", healthy_root),
@@ -179,4 +189,63 @@ async def test_gateway_restore_failure_keeps_intent_and_restores_other_targets(
     assert missing.connection_error is not None
     assert "工作区目录不存在" in missing.connection_error
     assert registry.has_runtime("healthy") is True
+    registry.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_restore_failure_falls_back_from_active_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway_root = tmp_path / "gateway"
+    default_root = tmp_path / "default"
+    default_root.mkdir(parents=True)
+    missing_root = tmp_path / "missing"
+    registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="default",
+            name="Default",
+            root_path=str(default_root),
+            backend_url="http://127.0.0.1:41000",
+            connection_kind="local",
+            managed=True,
+            system_default=True,
+            desired_running=True,
+        ),
+        runtime=WorkspaceRuntime(
+            service_urls={
+                "workspace_api": "http://127.0.0.1:41000",
+                "terminal_manager": "http://127.0.0.1:41001",
+                "browser_manager": "http://127.0.0.1:41002",
+            }
+        ),
+    )
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="missing",
+            name="Missing",
+            root_path=str(missing_root),
+            backend_url="http://127.0.0.1:42000",
+            connection_kind="local",
+            managed=True,
+            desired_running=True,
+        )
+    )
+    missing_root.mkdir(parents=True)
+    registry.acquire_route_reference("missing", streaming=True)
+
+    monkeypatch.setattr(bootstrap, "get_project_root", lambda: tmp_path)
+
+    await bootstrap._restore_managed_local_runtimes(
+        registry=registry,
+        default_workspace_id="default",
+        gateway_root=gateway_root,
+    )
+
+    assert registry.active_workspace_id == "default"
+    assert registry.resolve("missing").desired_running is True
+    assert registry.resolve("missing").connection_error is not None
+    assert registry.has_runtime("default") is True
+    registry.release_route_reference("missing", streaming=True)
     registry.close()

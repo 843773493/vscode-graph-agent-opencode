@@ -76,6 +76,7 @@ function Composer() {
     interruptSession,
     switchAgent,
     switchModel,
+    refreshAgents,
     setWorkspaceDefaultAgent,
     setWorkspaceDefaultProvider,
     switchContentView,
@@ -556,6 +557,17 @@ function Composer() {
     });
   };
 
+  const handleModelMenuToggle = () => {
+    const nextOpen = !modelMenuOpen;
+    setModelMenuOpen(nextOpen);
+    if (!nextOpen || !currentWorkspaceId) {
+      return;
+    }
+    void refreshAgents(currentWorkspaceId).catch((error: unknown) => {
+      setStatus(`刷新模型列表失败: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
+
   const handleWorkspaceDefaultProvider = (providerId: string) => {
     void setWorkspaceDefaultProvider(currentAgent, providerId).catch(() => {
       // 错误状态和后端状态校准由 AppProvider 统一处理。
@@ -749,7 +761,7 @@ function Composer() {
                     currentProviderId={currentProviderId}
                     open={modelMenuOpen}
                     disabled={currentProviders.length === 0}
-                    onToggle={() => setModelMenuOpen((open) => !open)}
+                    onToggle={handleModelMenuToggle}
                     onClose={() => setModelMenuOpen(false)}
                     onSelect={handleModelSelect}
                     onSetWorkspaceDefault={handleWorkspaceDefaultProvider}

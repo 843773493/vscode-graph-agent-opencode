@@ -42,7 +42,7 @@ const runtime = {
 };
 
 describe("gateway supervisor", () => {
-  test("开发版与安装版使用隔离的 Gateway 端口", () => {
+  test("源码开发默认端口与安装版共用 Gateway 端口", () => {
     expect(gatewayEndpoint("source-development")).toEqual({
       host: "127.0.0.1",
       port: 8014,
@@ -51,8 +51,8 @@ describe("gateway supervisor", () => {
     for (const distribution of ["source-installed", "npm", "standalone"]) {
       expect(gatewayEndpoint(distribution)).toEqual({
         host: "127.0.0.1",
-        port: 8114,
-        url: "http://127.0.0.1:8114",
+        port: 8014,
+        url: "http://127.0.0.1:8014",
       });
     }
   });
@@ -60,17 +60,17 @@ describe("gateway supervisor", () => {
   test("开发版允许通过环境变量切换 Gateway 端口", () => {
     expect(
       gatewayEndpoint("source-development", {
-        BOXTEAM_GATEWAY_PORT: "8114",
+        BOXTEAM_GATEWAY_PORT: "38114",
       }),
     ).toEqual({
       host: "127.0.0.1",
-      port: 8114,
-      url: "http://127.0.0.1:8114",
+      port: 38114,
+      url: "http://127.0.0.1:38114",
     });
     expect(
-      gatewayEnvironment(runtime, { BOXTEAM_GATEWAY_PORT: "8114" })
+      gatewayEnvironment(runtime, { BOXTEAM_GATEWAY_PORT: "38114" })
         .BOXTEAM_GATEWAY_URL,
-    ).toBe("http://127.0.0.1:8114");
+    ).toBe("http://127.0.0.1:38114");
   });
 
   test("向 Gateway 传入 manifest 资源", () => {
@@ -111,15 +111,19 @@ describe("gateway supervisor", () => {
   });
 
   test("拒绝不完整的 Gateway pending 启动契约", () => {
-    expect(() => gatewayStartupContract({
-      BOXTEAM_CONFIG_CANDIDATE_REF: "candidate-ref",
-    })).toThrow("Gateway generation");
-    expect(() => gatewayStartupContract({
-      BOXTEAM_CONFIG_GENERATION: "generation-2",
-    })).toThrow("不完整");
+    expect(() =>
+      gatewayStartupContract({
+        BOXTEAM_CONFIG_CANDIDATE_REF: "candidate-ref",
+      }),
+    ).toThrow("Gateway generation");
+    expect(() =>
+      gatewayStartupContract({
+        BOXTEAM_CONFIG_GENERATION: "generation-2",
+      }),
+    ).toThrow("不完整");
   });
 
-  test("安装版使用 8114 启动 Gateway", () => {
+  test("安装版使用 8014 启动 Gateway", () => {
     const calls = [];
     const installedRuntime = { ...runtime, distribution: "npm" };
     spawnGateway({
@@ -136,13 +140,14 @@ describe("gateway supervisor", () => {
       "--host",
       "127.0.0.1",
       "--port",
-      "8114",
+      "8014",
       "--timeout-graceful-shutdown",
       "2",
     ]);
     expect(calls[0].options.env.BOXTEAM_GATEWAY_URL).toBe(
-      "http://127.0.0.1:8114",
+      "http://127.0.0.1:8014",
     );
+    expect(calls[0].options.env.BOXTEAM_DEFAULT_BACKEND_PORT).toBe("8010");
     expect(calls[0].options.detached).toBe(process.platform !== "win32");
   });
 
@@ -269,7 +274,43 @@ describe("gateway supervisor", () => {
     expect(processObject.listenerCount("SIGTERM")).toBe(0);
   });
 
-test("pending Gateway 未就绪退出时回退到 active snapshot", async () => {
+  test("发布版 Gateway 直接监听 8014，不创建 Launcher 反向代理", async () => {
+    const child = fakeChild();
+    const processObject = new EventEmitter();
+    const calls = [];
+    const healthUrls = [];
+    const installedRuntime = { ...runtime, distribution: "npm" };
+    const resultPromise = superviseGateway({
+      runtime: installedRuntime,
+      environment: {},
+      openBrowser: false,
+      spawnImpl(_command, args, options) {
+        calls.push({ args, options });
+        setTimeout(() => {
+          child.exitCode = 0;
+          child.emit("exit", 0, null);
+          child.emit("close", 0, null);
+        }, 20);
+        return child;
+      },
+      fetchImpl: async (url) => {
+        healthUrls.push(url);
+        return { ok: true, status: 200, statusText: "OK" };
+      },
+      stdout: { write() {} },
+      stderr: { write() {} },
+      processObject,
+    });
+
+    expect(await resultPromise).toBe(0);
+    expect(calls).toHaveLength(1);
+    const portArgumentIndex = calls[0].args.indexOf("--port");
+    expect(calls[0].args[portArgumentIndex + 1]).toBe("8014");
+    expect(healthUrls).toEqual(["http://127.0.0.1:8014/api/gateway/health"]);
+    expect(processObject.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  test("pending Gateway 未就绪退出时回退到 active snapshot", async () => {
     const children = [];
     const output = [];
     const pendingEnvironment = {
@@ -314,9 +355,13 @@ test("pending Gateway 未就绪退出时回退到 active snapshot", async () => 
     expect(children[0].environment.BOXTEAM_CONFIG_CANDIDATE_REF).toBe(
       "candidate-ref",
     );
-    expect(children[1].environment.BOXTEAM_CONFIG_CANDIDATE_REF).toBeUndefined();
+    expect(
+      children[1].environment.BOXTEAM_CONFIG_CANDIDATE_REF,
+    ).toBeUndefined();
     expect(children[1].environment.BOXTEAM_CONFIG_GENERATION).toBeUndefined();
-    expect(children[1].environment.BOXTEAM_CONFIG_FENCING_TOKEN).toBeUndefined();
+    expect(
+      children[1].environment.BOXTEAM_CONFIG_FENCING_TOKEN,
+    ).toBeUndefined();
     expect(output.join("")).toContain("回退 active snapshot");
   });
 
@@ -425,7 +470,8 @@ test("pending Gateway 未就绪退出时回退到 active snapshot", async () => 
           const child = closeableChild();
           const portArgumentIndex = args.indexOf("--port");
           const privatePort = Number(args[portArgumentIndex + 1]);
-          const isPending = options.env.BOXTEAM_CONFIG_CANDIDATE_REF !== undefined;
+          const isPending =
+            options.env.BOXTEAM_CONFIG_CANDIDATE_REF !== undefined;
           const server = createHttpServer((_request, response) => {
             response.end(isPending ? "pending" : "active");
           });

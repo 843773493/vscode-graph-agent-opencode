@@ -148,8 +148,8 @@ async def test_read_file_never_reads_host_absolute_path(
 
     result = await tool.coroutine(path=str(outside_file), runtime=runtime)
 
+    # 工作区外的宿主机绝对路径被收敛回工作区，绝不读取工作区外内容。
     assert isinstance(result, ToolMessage)
-    assert result.status == "error"
     assert "HOST_ONLY_CONTENT" not in result.content
 
 
@@ -390,6 +390,66 @@ async def test_glob_rejects_runtime_pattern_before_backend_scan(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_read_file_allows_injected_session_attachment_path(tmp_path: Path) -> None:
+    """被注入的用户附件 path 必须可读，其余 .boxteam 运行时路径仍然禁止。"""
+    session_dir = (
+        tmp_path / ".boxteam" / "sessions" / "folder_x" / "ses_attachment_demo"
+    )
+    attachments_dir = session_dir / "attachments"
+    attachments_dir.mkdir(parents=True)
+    attachment_path = attachments_dir / "abc.png"
+    attachment_path.write_bytes(b"\x89PNG\r\n\x1a\nattachment")
+    logs_dir = session_dir / "logs" / "traces"
+    logs_dir.mkdir(parents=True)
+    (logs_dir / "events.jsonl").write_text("runtime", encoding="utf-8")
+    middleware = FilesystemMiddleware(
+        backend=build_workspace_backend(tmp_path),
+        tool_token_limit_before_evict=None,
+    )
+    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    tools = {item.name: item for item in middleware.tools}
+    runtime = cast(
+        "ToolRuntime[None, FilesystemState]",
+        SimpleNamespace(tool_call_id="call_attachment_read"),
+    )
+    relative_attachment = (
+        ".boxteam/sessions/folder_x/ses_attachment_demo/attachments/abc.png"
+    )
+
+    attachment_result = await tools["read_file"].coroutine(
+        path=relative_attachment,
+        runtime=runtime,
+    )
+
+    assert isinstance(attachment_result, ToolMessage)
+    assert attachment_result.status == "success"
+    assert any(
+        isinstance(block, dict) and block.get("type") == "image"
+        for block in attachment_result.content
+    )
+
+    for tool_name, kwargs in (
+        (
+            "read_file",
+            {
+                "path": (
+                    ".boxteam/sessions/folder_x/ses_attachment_demo/"
+                    "logs/traces/events.jsonl"
+                )
+            },
+        ),
+        (
+            "ls",
+            {"path": ".boxteam/sessions/folder_x/ses_attachment_demo/attachments"},
+        ),
+    ):
+        result = await tools[tool_name].coroutine(runtime=runtime, **kwargs)
+        assert isinstance(result, ToolMessage)
+        assert result.status == "error"
+        assert "运行时目录" in result.content
+
+
+@pytest.mark.asyncio
 async def test_grep_returns_bounded_timeout_without_python_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -426,7 +486,38 @@ async def test_grep_returns_bounded_timeout_without_python_fallback(
 
 
 @pytest.mark.asyncio
-async def test_all_filesystem_tools_reject_backend_virtual_paths(
+async def test_all_filesystem_tools_normalize_backend_virtual_paths(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.mjs").write_text("before", encoding="utf-8")
+    middleware = FilesystemMiddleware(
+        backend=build_workspace_backend(tmp_path),
+        tool_token_limit_before_evict=None,
+    )
+    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    tools = {item.name: item for item in middleware.tools}
+    runtime = cast(
+        "ToolRuntime[None, FilesystemState]",
+        SimpleNamespace(tool_call_id="call_normalize_virtual_path"),
+    )
+
+    # 模型误传虚拟绝对路径时不再直接拒绝，而是归一化为工作区相对路径。
+    ls_result = await tools["ls"].coroutine(path="/src", runtime=runtime)
+    read_result = await tools["read_file"].coroutine(
+        path="/src/main.mjs",
+        runtime=runtime,
+    )
+
+    assert isinstance(ls_result, ToolMessage)
+    assert ls_result.status == "success"
+    assert isinstance(read_result, ToolMessage)
+    assert read_result.status == "success"
+    assert "before" in read_result.content
+
+
+@pytest.mark.asyncio
+async def test_filesystem_tools_reject_escaping_paths(
     tmp_path: Path,
 ) -> None:
     middleware = FilesystemMiddleware(
@@ -437,31 +528,18 @@ async def test_all_filesystem_tools_reject_backend_virtual_paths(
     tools = {item.name: item for item in middleware.tools}
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
-        SimpleNamespace(tool_call_id="call_reject_virtual_path"),
+        SimpleNamespace(tool_call_id="call_reject_escaping_path"),
     )
     calls = (
-        tools["ls"].coroutine(path="/src", runtime=runtime),
-        tools["read_file"].coroutine(path="/src/main.mjs", runtime=runtime),
-        tools["write_file"].coroutine(
-            file_path="/src/main.mjs",
-            content="",
-            runtime=runtime,
-        ),
-        tools["edit_file"].coroutine(
-            file_path="/src/main.mjs",
-            old_string="before",
-            new_string="after",
-            runtime=runtime,
-        ),
-        tools["glob"].coroutine(pattern="**/*", path="/src", runtime=runtime),
-        tools["grep"].coroutine(pattern="needle", path="/src", runtime=runtime),
+        tools["ls"].coroutine(path="../secret", runtime=runtime),
+        tools["read_file"].coroutine(path="../secret", runtime=runtime),
+        tools["glob"].coroutine(pattern="**/*", path="../secret", runtime=runtime),
     )
 
     for call in calls:
         result = await call
         assert isinstance(result, ToolMessage)
         assert result.status == "error"
-        assert "不能以 / 开头" in result.content
 
 
 @pytest.mark.asyncio

@@ -199,7 +199,7 @@ def validate_policy_manifest(
     if manifest is None:
         return
     if not isinstance(manifest, list):
-        raise ValueError("schema 的 x-boxteam-policy-manifest 必须是数组")
+        raise TypeError("schema 的 x-boxteam-policy-manifest 必须是数组")
     expected = list(registry.policy_manifest())
     if manifest != expected:
         raise ValueError(
@@ -236,6 +236,7 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
         default_policy="restart_workspace",
         rules=(
             ConfigPolicyRule("/ui/*", "next_session", "next_session"),
+            ConfigPolicyRule("/llm/providers", "next_job", "next_job"),
             ConfigPolicyRule("/runtime/agent/run/timeout_seconds", "next_job", "next_job"),
             ConfigPolicyRule("/runtime/agent/run/mode", "next_session", "next_session"),
             ConfigPolicyRule("/runtime/auxiliary_services/*", "next_job", "next_job"),

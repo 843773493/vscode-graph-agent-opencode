@@ -20,8 +20,16 @@ from app.agents.providers.litellm_stream_types import _openai_tool_call
 from app.services.mapping.itemized.provider_history import reasoning_projection_rows
 from app.services.mapping.itemized.provider_request import (
     project_ai_message_content,
+    project_tool_message_content,
     project_user_message_content,
 )
+
+
+def _tool_result_path(message: ToolMessage) -> str | None:
+    """读取工具结果记录的文件路径，用于降级占位符提示。"""
+    additional_kwargs = message.additional_kwargs or {}
+    path = additional_kwargs.get("read_file_path")
+    return path if isinstance(path, str) and path else None
 
 
 class LiteLLMHistoryProjectionMixin:
@@ -291,6 +299,12 @@ class LiteLLMHistoryProjectionMixin:
                 message_dict["tool_call_id"] = message.tool_call_id
                 if message.name:
                     message_dict["name"] = message.name
+                tool_projection = project_tool_message_content(
+                    message_dict["content"],
+                    image_input=self.image_input_replay,
+                    path=_tool_result_path(message),
+                )
+                message_dict["content"] = tool_projection["content"]
             else:
                 raise TypeError(
                     f"未知 LangChain message 类型: {type(message).__name__}"

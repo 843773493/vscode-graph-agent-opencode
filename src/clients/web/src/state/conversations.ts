@@ -740,6 +740,36 @@ export function completePendingForJob(
   writePendingList(map, sessionId, next, mapKey);
 }
 
+/**
+ * 返回当前会话仍需消费的消息流 Turn。
+ *
+ * Job/Trace 终态可能先于 message.v1 的最后几帧到达。此时业务层会清除
+ * activeJobIdsBySession，但消息流仍是当前 live 会话的展示来源，不能因为
+ * Job 已结束就立刻卸载 SSE。
+ */
+export function messageStreamTurnIdForSession(
+  sessionId: string,
+  state: AppState,
+  sessionCacheKey: string = sessionId,
+): string | null {
+  const activeJobId = state.activeJobIdsBySession.get(sessionCacheKey);
+  if (activeJobId) return activeJobId;
+
+  const pendingJobIds = new Set(
+    (state.pendingConversations.get(sessionCacheKey) ?? [])
+      .map((conversation) => conversation.jobId)
+      .filter((jobId): jobId is string => Boolean(jobId)),
+  );
+  const candidate = [...(state.messageStreamsByTurnStream ?? new Map()).values()]
+    .filter((stream) =>
+      stream.sessionId === sessionId
+      && pendingJobIds.has(stream.turnId)
+      && !["completed", "interrupted", "failed"].includes(stream.streamStatus),
+    )
+    .sort((left, right) => right.lastEventSeq - left.lastEventSeq)[0];
+  return candidate?.turnId ?? null;
+}
+
 export function getConversationsForSession(
   sessionId: string,
   state: AppState,

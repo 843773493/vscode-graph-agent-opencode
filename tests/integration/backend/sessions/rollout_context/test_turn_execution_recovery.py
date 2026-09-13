@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
@@ -322,7 +322,7 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
     }
     live_call = CanonicalItemRecord.create(
         item_sequence=1,
-        item_id="item-model-call-1-block-call-1",
+        item_id="item-model-call-1-block-model-call-1-tool-call-call-1",
         semantic_kind=SemanticKind.TOOL_CALL,
         payload_kind=PayloadKind.TOOL_CALL,
         producer_ref={
@@ -330,8 +330,15 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
             "producer_id": "model-call-1",
             "invocation_id": "model-call-1",
         },
-        payload={"tool_call_id": "call-1", "name": "get_goal", "args": {}},
-        metadata={"block_id": "call-1", "block_index": 0},
+        payload={
+            "tool_call_id": "model-call-1:tool-call:call-1",
+            "name": "get_goal",
+            "args": {},
+        },
+        metadata={
+            "block_id": "model-call-1:tool-call:call-1",
+            "block_index": 0,
+        },
         message_group_id="message-model-call-1",
         **common,
     )
@@ -368,13 +375,16 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
             "invocation_id": "turn-user-1",
         },
         payload={
-            "tool_call_id": "call-1",
+            "tool_call_id": "model-call-1:tool-call:call-1",
             "result_id": "result-1",
             "name": "get_goal",
             "content": "{}",
             "tool_outcome": "success",
         },
-        metadata={"tool_call_id": "call-1", "execution_confirmed": True},
+        metadata={
+            "tool_call_id": "model-call-1:tool-call:call-1",
+            "execution_confirmed": True,
+        },
         message_group_id="message-result-1",
         wire_role="tool",
         turn_id="turn-user-1",
@@ -396,7 +406,104 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
     ]
     assert {
         item["tool_call_id"] for item in projection["activity_items"]
-    } == {"call-1"}
+    } == {"model-call-1:tool-call:call-1"}
+
+
+def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    """实时 canonical tool_call 只有 scoped block_id 时，也必须回填权威坐标。
+
+    SQLite ``tool_calls`` 派生表按 provider 原始 call ID 保存
+    ``assistant_message_sequence`` / ``call_index`` / ``result_message_sequence``。
+    实时 canonical tool_call 只携带 model-call scoped ``block_id``，查不到派生表
+    行；若不从 scoped ID 反解原始 call ID 回查，坐标会退化为
+    ``assistant_message_sequence=None``，后续定点详情只能依赖“原始 call ID 全局
+    唯一”的脆弱匹配，遇到 ID 复用就会静默丢参数。
+    """
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    saver = RolloutCheckpointSaver(sessions_dir)
+
+    # 先提交带 tool_calls 的 assistant 消息，建立 SQLite tool_calls 派生表。
+    checkpoint = empty_checkpoint()
+    checkpoint["id"] = "checkpoint-tool-call"
+    checkpoint["channel_values"] = {
+        "messages": [
+            HumanMessage(
+                content="请检查状态",
+                id="user-tool-call",
+                response_metadata={
+                    "message_id": "user-tool-call",
+                    "message_metadata": {"turn_id": "turn-tool-call"},
+                },
+            ),
+            AIMessage(
+                content=[{"type": "text", "text": "我先调用工具"}],
+                id="assistant-tool-call",
+                tool_calls=[
+                    {
+                        "name": "get_goal",
+                        "args": {"path": "fixture.json"},
+                        "id": "call-shared",
+                    }
+                ],
+                response_metadata={"message_metadata": {"turn_id": "turn-tool-call"}},
+            ),
+        ]
+    }
+    checkpoint["channel_versions"] = {"messages": "1"}
+    checkpoint["updated_channels"] = ["messages"]
+    saver.put(
+        build_checkpoint_config("session_1"),
+        checkpoint,
+        {"source": "canonical-coordinate-test", "step": 1},
+        {"messages": "1"},
+    )
+
+    common = {
+        "turn_id": "turn-tool-call",
+        "turn_scope": TurnScope.TURN_MEMBER,
+        "wire_role": "assistant",
+        "status": CanonicalItemStatus.COMPLETED,
+    }
+    live_call = CanonicalItemRecord.create(
+        item_sequence=3,
+        item_id="item-model-call-2-block-model-call-2-tool-call-call-shared",
+        semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "model-call-2",
+            "invocation_id": "model-call-2",
+        },
+        payload={
+            "tool_call_id": "model-call-2:tool-call:call-shared",
+            "name": "get_goal",
+            "args": {"path": "fixture.json"},
+        },
+        metadata={
+            "block_id": "model-call-2:tool-call:call-shared",
+            "block_index": 0,
+        },
+        message_group_id="message-model-call-2",
+        **common,
+    )
+    saver.append_items("session_1", (live_call,))
+
+    with saver._storage.open_read_snapshot("session_1") as snapshot:
+        projection = saver._storage.read_turn_projections(
+            snapshot, ("turn-tool-call",)
+        )["turn-tool-call"]
+
+    tool_calls = [
+        item for item in projection["activity_items"] if item["kind"] == "tool_call"
+    ]
+    assert tool_calls, "canonical tool_call 必须出现在 activity_items"
+    for item in tool_calls:
+        assert item["assistant_message_sequence"] is not None
+        assert item["call_index"] is not None
 
 
 def test_item_catalog_reads_fail_closed_on_missing_item_and_view_reference(
@@ -705,7 +812,13 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
     ]
     assert len(partial_items) == 1
     partial_item = partial_items[0]
-    assert partial_item.item_id == "item-model-call-partial-block-answer-partial"
+    # block 身份已提升为 model-call scoped（见 _scoped_block_id）；item_id 由
+    # execution_id + model_call_id + scoped block_id 组成，本用例中 execution_id
+    # 与 model_call_id 同为 model-call-partial。
+    assert partial_item.item_id == (
+        "item-model-call-partial-model-model-call-partial-block-"
+        "model-call-partial:block:answer-partial"
+    )
     assert partial_item.payload == "流式前半流式后半"
     assert partial_item.producer_ref == {
         "producer_kind": "provider",
@@ -726,8 +839,10 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
         ).fetchone()
     assert part_row is not None
     part_id, part_ordinal, content_hash, locator_json = part_row
+    # item_parts.part_id 直接使用 canonical 的 scoped block_id，provider 原始
+    # part id 只是其中的后缀。
     assert (part_id, part_ordinal, content_hash) == (
-        "answer-partial",
+        "model-call-partial:block:answer-partial",
         0,
         partial_item.content_hash,
     )
@@ -802,7 +917,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
             "partial",
         )
     } == {
-        "block_id": "answer-partial",
+        "block_id": "model-call-partial:block:answer-partial",
         "block_index": 0,
         "carrier_type": "text",
         "status": "completed",

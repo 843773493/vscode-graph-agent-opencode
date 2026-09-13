@@ -4,6 +4,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.turn_projection
     _final_reasoning_source_refs,
     _finalize_activity_projection,
     _logical_activity_key,
+    _source_ref_matches,
 )
 
 
@@ -118,6 +119,23 @@ def test_checkpoint_shadow_uses_producer_identity_instead_of_text() -> None:
     assert _logical_activity_key(provider) != _logical_activity_key(different_model_call)
 
 
+def test_distinct_persisted_reasoning_blocks_keep_identity_with_same_block_ordinal() -> None:
+    first = {
+        "kind": "reasoning",
+        "producer_ref": {"producer_id": "model-call-1"},
+        "block_ordinal": 0,
+        "block_id": "part-before-tool",
+    }
+    second = {
+        "kind": "reasoning",
+        "producer_ref": {"producer_id": "model-call-1"},
+        "block_ordinal": 0,
+        "block_id": "part-after-tool",
+    }
+
+    assert _logical_activity_key(first) != _logical_activity_key(second)
+
+
 def test_reused_tool_call_id_keeps_distinct_model_call_provenance() -> None:
     first = {
         "kind": "tool_call",
@@ -181,3 +199,10 @@ def test_final_reasoning_keeps_distinct_provider_item_identity() -> None:
     )
 
     assert refs == {"provider-reasoning-2"}
+
+
+def test_final_reasoning_matches_raw_part_against_scoped_block_identity() -> None:
+    assert _source_ref_matches(
+        "part-after-tool",
+        {"model-call-2:block:part-after-tool"},
+    )

@@ -142,6 +142,56 @@ def _normalized_model_call_id(producer_ref: dict[str, object]) -> str:
     return producer_id.removeprefix("lc_run--")
 
 
+def _activity_model_call_id(
+    metadata: dict[str, object],
+    producer_ref: dict[str, object],
+) -> str:
+    # TODO: 旧 canonical item 补齐 model_call_id 后，删除 producer_ref 回退。
+    model_call_id = metadata.get("model_call_id")
+    if isinstance(model_call_id, str) and model_call_id:
+        return model_call_id
+    return _normalized_model_call_id(producer_ref)
+
+
+def _raw_call_id_from_scoped(block_id: str) -> str | None:
+    """从 model-call scoped block_id 取出 checkpoint 中的 provider 原始 call ID。"""
+    marker = ":tool-call:"
+    if marker not in block_id:
+        return None
+    return block_id.rsplit(marker, 1)[-1] or None
+
+
+def _authoritative_tool_coordinates(
+    tool_by_call_id: dict[tuple[str, str], dict[str, object]],
+    turn_id: str,
+    block_id: object,
+) -> dict[str, object]:
+    """用 scoped block_id 内嵌的原始 call ID 回查 SQLite 权威工具坐标。
+
+    实时 canonical tool_call 只携带 model-call scoped block_id，且派生
+    ``tool_calls`` 表可能尚未提交，因此拿不到 ``assistant_message_sequence`` /
+    ``call_index`` / ``result_message_sequence``。这些坐标是后续定点详情按显式
+    位置回填参数/结果的唯一稳定依据；缺失时只能退化为“原始 call ID 全局唯一”
+    的脆弱匹配，一旦 ID 复用就会静默丢参数。这里从 scoped ID 反解 provider
+    原始 ID，再回查 SQLite 已提交的权威坐标。
+
+    TODO: 实时 canonical tool_call 直接携带坐标后，本回退即可删除。
+    """
+    if not isinstance(block_id, str) or not block_id:
+        return {}
+    raw_call_id = _raw_call_id_from_scoped(block_id)
+    if raw_call_id is None:
+        return {}
+    authoritative = tool_by_call_id.get((turn_id, raw_call_id))
+    if authoritative is None:
+        return {}
+    return {
+        "result_message_sequence": authoritative.get("result_message_sequence"),
+        "assistant_message_sequence": authoritative.get("assistant_message_sequence"),
+        "call_index": authoritative.get("call_index"),
+    }
+
+
 def _logical_activity_key(item: dict[str, object]) -> tuple[object, ...]:
     """只按持久 identity/provenance 合并同一逻辑 item，绝不比较正文。"""
     kind = strict_text(item.get("kind"), field="activity_item.kind")
@@ -168,6 +218,14 @@ def _logical_activity_key(item: dict[str, object]) -> tuple[object, ...]:
     block_ordinal = item.get("block_ordinal")
     if not isinstance(block_ordinal, int) or isinstance(block_ordinal, bool):
         raise TypeError("reasoning activity item 缺少 block_ordinal")
+    block_id = item.get("block_id")
+    if isinstance(block_id, str) and block_id:
+        return (
+            kind,
+            _normalized_model_call_id(producer_ref),
+            "block_id",
+            block_id,
+        )
     return (kind, _normalized_model_call_id(producer_ref), block_ordinal)
 
 
@@ -217,6 +275,20 @@ def _final_reasoning_source_refs(
         )
     refs.update(matching_ids)
     return refs
+
+
+def _source_ref_matches(
+    source_ref: str,
+    seen_refs: set[str],
+) -> bool:
+    """同时匹配 provider 原始 part ID 与 scoped block ID。"""
+    # TODO: 历史 scoped block ID 完成迁移后，删除 scoped 后缀兼容匹配。
+    if source_ref in seen_refs:
+        return True
+    return any(
+        seen_ref.endswith(f":block:{source_ref}")
+        for seen_ref in seen_refs
+    )
 
 
 def _turn_page_row(row: tuple[object, ...]) -> tuple[str, int, int, int]:
@@ -512,7 +584,7 @@ class TurnProjectionQueryMixin:
             if truncated_value not in {0, 1}:
                 raise RuntimeError(f"message projection truncated 标记非法: {turn_id}")
             if turn_id not in result:
-                raise RuntimeError(
+                raise TypeError(
                     f"final message projection 缺少 turns row: {turn_id}"
                 )
             result[turn_id]["final_response_text"] = text or ""
@@ -527,6 +599,7 @@ class TurnProjectionQueryMixin:
             )
         tool_by_message: dict[tuple[str, str], list[dict[str, object]]] = {}
         tool_by_call_id: dict[tuple[str, str], dict[str, object]] = {}
+        tool_by_model_call_index: dict[tuple[str, str, int], dict[str, object]] = {}
         canonical_tools_by_model_call: dict[
             tuple[str, str], list[dict[str, object]]
         ] = {}
@@ -561,11 +634,65 @@ class TurnProjectionQueryMixin:
             }
             tool_by_message.setdefault((turn_id, message_id), []).append(tool)
             tool_by_call_id[(turn_id, call_id)] = tool
+            tool_by_model_call_index[
+                (turn_id, message_id.removeprefix("lc_run--"), tool["call_index"])
+            ] = tool
+
+        canonical_tool_call_ids_by_model_call: dict[
+            tuple[str, str, int], str
+        ] = {}
+        canonical_tool_call_ids_by_raw_id: dict[tuple[str, str], str | None] = {}
+        # 实时消息流的 tool-call 使用 model-call scoped ID；checkpoint shadow
+        # 仍携带 provider 原始 ID。先建立 canonical 的 (模型调用, call index)
+        # 映射，后续所有兼容消息都通过这张表归一化。
+        for (
+            turn_id,
+            _item_sequence,
+            _item_id,
+            semantic_kind,
+            _payload_kind,
+            _item_status,
+            _item_created_at,
+            producer_ref_json,
+            metadata_json,
+            _content,
+            _content_truncated,
+        ) in activity_rows:
+            if semantic_kind != "tool_call":
+                continue
+            metadata = _json_object(
+                metadata_json, field="item_catalog.metadata_json:canonical-tool"
+            )
+            block_id = metadata.get("block_id")
+            if not isinstance(block_id, str) or not block_id:
+                continue
+            producer_ref = _json_object(
+                producer_ref_json, field="item_catalog.producer_ref_json:canonical-tool"
+            )
+            model_call_id = _activity_model_call_id(metadata, producer_ref)
+            block_index = metadata.get("block_index")
+            if not isinstance(block_index, int) or isinstance(block_index, bool):
+                raise TypeError(
+                    "canonical tool_call 缺少稳定 block_index: "
+                    f"turn_id={turn_id} block_id={block_id}"
+                )
+            canonical_tool_call_ids_by_model_call[
+                (turn_id, model_call_id, block_index)
+            ] = block_id
 
         seen_activity: dict[str, set[tuple[object, ...]]] = {
             turn_id: set() for turn_id in result
         }
         seen_reasoning_source_refs: dict[str, set[str]] = {
+            turn_id: set() for turn_id in result
+        }
+        canonical_reasoning_keys: dict[
+            str, dict[tuple[str, str, int], tuple[object, ...]]
+        ] = {turn_id: {} for turn_id in result}
+        shadow_reasoning_indices: dict[str, dict[tuple[str, str, int], int]] = {
+            turn_id: {} for turn_id in result
+        }
+        discarded_activity_indices: dict[str, set[int]] = {
             turn_id: set() for turn_id in result
         }
         for (
@@ -591,7 +718,9 @@ class TurnProjectionQueryMixin:
             semantic_kind = strict_text(
                 semantic_kind, field=f"item_catalog.semantic_kind:{item_id}"
             )
+            source_part_id = metadata.get("block_id")
             projection_message_id = metadata.get("projection_message_id")
+            activity_model_call_id = _activity_model_call_id(metadata, producer_ref)
             matching_tools = (
                 tool_by_message.get((turn_id, projection_message_id), [])
                 if isinstance(projection_message_id, str)
@@ -620,6 +749,79 @@ class TurnProjectionQueryMixin:
                 if tool_call_id is not None:
                     selected_tool = tool_by_call_id.get((turn_id, tool_call_id))
                     if selected_tool is None:
+                        selected_tool = tool_by_model_call_index.get(
+                            (turn_id, activity_model_call_id, block_ordinal)
+                        )
+                    canonical_tool_call_id: str | None = None
+                    raw_id_alias = canonical_tool_call_ids_by_raw_id.get(
+                        (turn_id, tool_call_id)
+                    )
+                    if raw_id_alias is not None:
+                        canonical_tool_call_id = raw_id_alias
+                    if selected_tool is not None:
+                        canonical_tool_call_id = canonical_tool_call_id or (
+                            canonical_tool_call_ids_by_model_call.get(
+                                (
+                                    turn_id,
+                                    activity_model_call_id,
+                                    strict_non_negative_int(
+                                        selected_tool.get("call_index"),
+                                        field="tool_calls.call_index",
+                                    ),
+                                )
+                            )
+                        )
+                    elif isinstance(block_id, str) and block_id:
+                        canonical_tool_call_id = block_id
+                    if canonical_tool_call_id is not None:
+                        if selected_tool is None:
+                            if semantic_kind != "tool_call":
+                                raise RuntimeError(
+                                    "canonical tool_result 缺少对应 tool_call: "
+                                    f"{item_id}"
+                                )
+                            coordinates = _authoritative_tool_coordinates(
+                                tool_by_call_id, turn_id, block_id
+                            )
+                            selected_tool = {
+                                "tool_call_id": canonical_tool_call_id,
+                                "tool_name": strict_text(
+                                    content,
+                                    field=f"item_projections.content:{item_id}",
+                                ),
+                                "status": strict_text(
+                                    item_status,
+                                    field=f"item_catalog.status:{item_id}",
+                                ),
+                                "result_message_sequence": coordinates.get(
+                                    "result_message_sequence"
+                                ),
+                                "assistant_message_sequence": coordinates.get(
+                                    "assistant_message_sequence"
+                                ),
+                                "call_index": coordinates.get(
+                                    "call_index", block_ordinal
+                                ),
+                            }
+                        else:
+                            selected_tool = {
+                                **selected_tool,
+                                "tool_call_id": canonical_tool_call_id,
+                            }
+                        selected_tool.setdefault("call_index", block_ordinal)
+                        if isinstance(block_id, str) and block_id:
+                            tool_by_call_id[(turn_id, canonical_tool_call_id)] = (
+                                selected_tool
+                            )
+                            model_call_key = (
+                                turn_id,
+                                activity_model_call_id,
+                            )
+                            canonical_tools_by_model_call.setdefault(
+                                model_call_key,
+                                [],
+                            ).append(selected_tool)
+                    if selected_tool is None:
                         if semantic_kind != "tool_call":
                             raise RuntimeError(
                                 "canonical tool_result 缺少对应 tool_call: "
@@ -629,6 +831,9 @@ class TurnProjectionQueryMixin:
                         # projection 提交时，item 自身就是历史摘要的权威来源。
                         # 后续 checkpoint shadow 通过 model-call provenance 和
                         # tool_call_id 在本方法内合并，不能因派生表尚未存在而 500。
+                        coordinates = _authoritative_tool_coordinates(
+                            tool_by_call_id, turn_id, block_id
+                        )
                         selected_tool = {
                             "tool_call_id": tool_call_id,
                             "tool_name": strict_text(
@@ -639,14 +844,20 @@ class TurnProjectionQueryMixin:
                                 item_status,
                                 field=f"item_catalog.status:{item_id}",
                             ),
-                            "result_message_sequence": None,
-                            "assistant_message_sequence": None,
-                            "call_index": block_ordinal,
+                            "result_message_sequence": coordinates.get(
+                                "result_message_sequence"
+                            ),
+                            "assistant_message_sequence": coordinates.get(
+                                "assistant_message_sequence"
+                            ),
+                            "call_index": coordinates.get(
+                                "call_index", block_ordinal
+                            ),
                         }
                         tool_by_call_id[(turn_id, tool_call_id)] = selected_tool
                         model_call_key = (
                             turn_id,
-                            _normalized_model_call_id(producer_ref),
+                            activity_model_call_id,
                         )
                         canonical_tools_by_model_call.setdefault(
                             model_call_key, []
@@ -666,10 +877,55 @@ class TurnProjectionQueryMixin:
                 elif matching_tools:
                     # 一个 assistant_output carrier 可以包含多个 tool_calls；
                     # 它们共享物理 item offset，但每个 call 都是独立逻辑 Item。
-                    activity_tools = list(matching_tools)
+                    # checkpoint message 仍携带 provider 原始 call id，必须先
+                    # 用同一 model-call 的 call_index 映射回 canonical identity，
+                    # 否则同一个工具会在历史中同时出现 raw call 和 canonical call。
+                    normalized_tools: list[dict[str, object]] = []
+                    model_call_key = (
+                        turn_id,
+                        activity_model_call_id,
+                    )
+                    for matching_tool in matching_tools:
+                        canonical_tool_call_id = (
+                            canonical_tool_call_ids_by_model_call.get(
+                                (
+                                    *model_call_key,
+                                    strict_non_negative_int(
+                                        matching_tool.get("call_index"),
+                                        field="tool_calls.call_index",
+                                    ),
+                                )
+                            )
+                        )
+                        if canonical_tool_call_id is None:
+                            normalized_tools.append(matching_tool)
+                            continue
+                        normalized_tool = {
+                            **matching_tool,
+                            "tool_call_id": canonical_tool_call_id,
+                        }
+                        tool_by_call_id[(turn_id, canonical_tool_call_id)] = (
+                            normalized_tool
+                        )
+                        raw_tool_call_id = matching_tool.get("tool_call_id")
+                        if isinstance(raw_tool_call_id, str) and raw_tool_call_id:
+                            alias_key = (turn_id, raw_tool_call_id)
+                            if alias_key not in canonical_tool_call_ids_by_raw_id:
+                                canonical_tool_call_ids_by_raw_id[alias_key] = (
+                                    canonical_tool_call_id
+                                )
+                            elif (
+                                canonical_tool_call_ids_by_raw_id[alias_key]
+                                != canonical_tool_call_id
+                            ):
+                                # 同一 raw ID 映射到多个 model-call 时不能猜测
+                                # result 属于哪一次，保持未归一化以避免误合并。
+                                canonical_tool_call_ids_by_raw_id[alias_key] = None
+                        normalized_tools.append(normalized_tool)
+                    activity_tools = normalized_tools
                 else:
                     model_call_tools = canonical_tools_by_model_call.get(
-                        (turn_id, _normalized_model_call_id(producer_ref)),
+                        (turn_id, activity_model_call_id),
                         [],
                     )
                     if semantic_kind == "tool_call" and model_call_tools:
@@ -689,10 +945,12 @@ class TurnProjectionQueryMixin:
                 if semantic_kind == "reasoning" and payload_kind in {"opaque", "extension"}
                 else semantic_kind
             )
-            if semantic_kind == "reasoning":
-                source_part_id = metadata.get("block_id")
-                if isinstance(source_part_id, str) and source_part_id:
-                    seen_reasoning_source_refs[turn_id].add(source_part_id)
+            if (
+                semantic_kind == "reasoning"
+                and isinstance(source_part_id, str)
+                and source_part_id
+            ):
+                seen_reasoning_source_refs[turn_id].add(source_part_id)
             for activity_tool in activity_tools:
                 activity_item: dict[str, object] = {
                     "item_id": strict_text(item_id, field="item_catalog.item_id"),
@@ -717,6 +975,11 @@ class TurnProjectionQueryMixin:
                     == 1,
                     "producer_ref": producer_ref,
                     "block_ordinal": block_ordinal,
+                    "block_id": (
+                        source_part_id
+                        if isinstance(source_part_id, str) and source_part_id
+                        else None
+                    ),
                     "message_sequence": 0,
                 }
                 if activity_tool is not None:
@@ -730,12 +993,48 @@ class TurnProjectionQueryMixin:
                         field="tool_calls.call_index",
                     )
                 logical_key = _logical_activity_key(activity_item)
+                reasoning_block_key = (
+                    (
+                        kind,
+                        activity_model_call_id,
+                        block_ordinal,
+                    )
+                    if semantic_kind == "reasoning"
+                    else None
+                )
+                is_checkpoint_reasoning_shadow = (
+                    semantic_kind == "reasoning"
+                    and activity_item["block_id"] is None
+                    and isinstance(projection_group, dict)
+                )
+                if (
+                    is_checkpoint_reasoning_shadow
+                    and reasoning_block_key is not None
+                    and reasoning_block_key in canonical_reasoning_keys[turn_id]
+                ):
+                    continue
                 if logical_key in seen_activity[turn_id]:
                     continue
                 seen_activity[turn_id].add(logical_key)
                 items = result[turn_id]["activity_items"]
                 if not isinstance(items, list):
                     raise TypeError("Turn activity_items projection 必须是列表")
+                if (
+                    is_checkpoint_reasoning_shadow
+                    and reasoning_block_key is not None
+                ):
+                    shadow_reasoning_indices[turn_id][reasoning_block_key] = len(items)
+                elif reasoning_block_key is not None and activity_item["block_id"]:
+                    canonical_reasoning_keys[turn_id].setdefault(
+                        reasoning_block_key,
+                        logical_key,
+                    )
+                    shadow_index = shadow_reasoning_indices[turn_id].pop(
+                        reasoning_block_key,
+                        None,
+                    )
+                    if shadow_index is not None:
+                        discarded_activity_indices[turn_id].add(shadow_index)
                 items.append(activity_item)
 
         for (
@@ -795,7 +1094,13 @@ class TurnProjectionQueryMixin:
                 item_index=item_index,
                 provider_item_id=reasoning_item_id,
             )
-            if source_refs & seen_reasoning_source_refs[turn_id]:
+            if any(
+                _source_ref_matches(
+                    source_ref,
+                    seen_reasoning_source_refs[turn_id],
+                )
+                for source_ref in source_refs
+            ):
                 continue
             seen_reasoning_source_refs[turn_id].update(source_refs)
             items = result[turn_id]["activity_items"]
@@ -826,10 +1131,17 @@ class TurnProjectionQueryMixin:
                     "signature_present": signature_value == 1,
                 }
             )
-        for projection in result.values():
+        for turn_id, projection in result.items():
             activity_items = projection["activity_items"]
             if not isinstance(activity_items, list):
                 raise TypeError("Turn activity_items projection 必须是列表")
+            discarded_indices = discarded_activity_indices[turn_id]
+            if discarded_indices:
+                projection["activity_items"] = activity_items = [
+                    item
+                    for index, item in enumerate(activity_items)
+                    if index not in discarded_indices
+                ]
             activity_items.sort(
                 key=lambda item: (
                     strict_non_negative_int(

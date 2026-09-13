@@ -159,6 +159,13 @@ async def test_session_catalog_uses_authoritative_index_for_crud_and_validation(
         ]
     ]
     initial_nodes = await _catalog_nodes(client)
+    for session_id in session_ids:
+        session_node = initial_nodes[session_id]
+        session_metadata = session_node["session"]
+        assert isinstance(session_metadata, dict)
+        assert session_metadata["session_id"] == session_id
+        assert session_metadata["title"] == session_node["name"]
+        assert session_metadata["parent_session_id"] is None
     initial_session_path = _node_path(sessions_root, initial_nodes[session_ids[1]])
     _assert_readable_stable_segment(
         initial_session_path,

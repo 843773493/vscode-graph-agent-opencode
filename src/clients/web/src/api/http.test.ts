@@ -1,15 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { listSessionCatalogChildren } from "./sessionCatalog";
-import { requestJson } from "./http";
+import { getApiBaseUrl, requestJson } from "./http";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
-function installWindow(port: number): void {
+function installWindow(
+  port: number,
+  origin = `http://127.0.0.1:${port}`,
+): void {
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
-      location: { port: String(port) },
+      location: { port: String(port), origin },
       setTimeout: globalThis.setTimeout.bind(globalThis),
       clearTimeout: globalThis.clearTimeout.bind(globalThis),
     },
@@ -23,6 +26,10 @@ function tokenResponse(): Response {
     request_id: "request-http-token",
     data: { token: "http-test-token" },
   });
+}
+
+function resolveTestUrl(input: RequestInfo | URL, port: number): URL {
+  return new URL(String(input), `http://127.0.0.1:${port}`);
 }
 
 afterEach(() => {
@@ -42,7 +49,7 @@ describe("requestJson 请求取消", () => {
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
-        const path = new URL(String(input)).pathname;
+        const path = resolveTestUrl(input, port).pathname;
         requestedPaths.push(path);
         if (path === "/api/gateway/auth/local-credential") {
           return Response.json({
@@ -86,7 +93,7 @@ describe("requestJson 请求取消", () => {
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
         const [input, init] = args;
-        const path = new URL(String(input)).pathname;
+        const path = resolveTestUrl(input, port).pathname;
         if (path === "/api/gateway/auth/local-credential") {
           credentialCalls += 1;
           return Response.json({
@@ -123,7 +130,7 @@ describe("requestJson 请求取消", () => {
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
-        const url = new URL(String(input));
+        const url = resolveTestUrl(input, port);
         requestedPaths.push(url.pathname);
         if (url.pathname === "/api/gateway/auth/local-credential") {
           return tokenResponse();
@@ -195,7 +202,7 @@ describe("requestJson 请求取消", () => {
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
         const [input, init] = args;
-        const path = new URL(String(input)).pathname;
+        const path = resolveTestUrl(input, port).pathname;
         if (path === "/api/gateway/auth/local-credential") return tokenResponse();
         requestSignal = init?.signal ?? null;
         const body = new ReadableStream<Uint8Array>({
@@ -235,7 +242,7 @@ describe("requestJson 请求取消", () => {
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
         const [input, init] = args;
-        const path = new URL(String(input)).pathname;
+        const path = resolveTestUrl(input, port).pathname;
         if (path === "/api/gateway/auth/local-credential") return tokenResponse();
         requestSignal = init?.signal ?? null;
         markFetchStarted!();
@@ -265,5 +272,19 @@ describe("requestJson 请求取消", () => {
     expect(externalController.signal.aborted).toBe(true);
     expect(requestSignal).not.toBe(externalController.signal);
     expect((requestSignal as AbortSignal | null)?.aborted).toBe(true);
+  });
+});
+
+describe("getApiBaseUrl", () => {
+  test("浏览器始终使用同源相对路径，避免 localhost 与 127.0.0.1 互相跨站", () => {
+    installWindow(8014, "http://localhost:8014");
+
+    expect(getApiBaseUrl(8014)).toBe("");
+  });
+
+  test("开发前端跨端口时继续使用相对路径交给 Vite 代理", () => {
+    installWindow(8011);
+
+    expect(getApiBaseUrl(8027)).toBe("");
   });
 });

@@ -23,7 +23,7 @@ const installRoot = path.join(verificationRoot, "installed");
 const relocatedRoot = path.join(verificationRoot, "relocated");
 const boxteamHome = path.join(verificationRoot, "home");
 const emptyPath = path.join(verificationRoot, "empty-path");
-const gatewayUrl = "http://127.0.0.1:8114";
+const gatewayUrl = "http://127.0.0.1:8014";
 const headers = {};
 
 function run(command, args, options = {}) {

@@ -174,7 +174,10 @@ export function workspaceHeader(workspaceId?: string | null): Record<string, str
 }
 
 export function getApiBaseUrl(port: number): string {
-  if (typeof window !== "undefined" && window.location.port !== String(port)) return "";
+  // 浏览器中的 API 必须走当前页面同源地址：开发环境由 Vite 代理到 Gateway，
+  // 发布版由 Gateway 自己托管 Web。不要在浏览器中拼接 127.0.0.1，避免
+  // localhost 页面与 127.0.0.1 API 之间产生跨站本地凭据请求。
+  if (typeof window !== "undefined") return "";
   return `http://${DEFAULT_BACKEND_HOST}:${port}`;
 }
 

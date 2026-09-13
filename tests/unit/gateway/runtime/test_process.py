@@ -11,6 +11,7 @@ from app.gateway.runtime.process import (
     ManagedProcess,
     SshLocalForwardSpec,
     allocate_local_port_in_range,
+    is_local_port_available,
     resolve_python_executable,
     ssh_tunnel_port_range_from_env,
     start_local_backend_process,
@@ -113,6 +114,31 @@ def test_allocate_local_port_in_range_skips_occupied_port():
         first_socket.close()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX 端口复用语义")
+def test_port_availability_probe_allows_reuse_after_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int, int]] = []
+
+    class _ProbeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            calls.append((level, option, value))
+
+        def bind(self, address: tuple[str, int]) -> None:
+            assert address == ("127.0.0.1", 8010)
+
+    monkeypatch.setattr(socket, "socket", lambda *_: _ProbeSocket())
+
+    assert is_local_port_available(8010) is True
+    assert calls == [(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)]
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX 进程组信号仅在 POSIX 上可用")
 def test_managed_process_closes_posix_process_group(
     monkeypatch: pytest.MonkeyPatch,
@@ -159,8 +185,9 @@ def test_managed_process_windows_stops_complete_process_tree(
     monkeypatch.setattr(os, "name", "nt")
     monkeypatch.setattr(
         "app.gateway.runtime.process.subprocess.run",
-        lambda arguments, **_: calls.append(arguments)
-        or SimpleNamespace(returncode=0, stderr=""),
+        lambda arguments, **_: (
+            calls.append(arguments) or SimpleNamespace(returncode=0, stderr="")
+        ),
     )
 
     ManagedProcess(process=process, log_file=log_file).close()
@@ -178,8 +205,9 @@ def test_managed_process_windows_force_kills_complete_process_tree_after_timeout
     monkeypatch.setattr(os, "name", "nt")
     monkeypatch.setattr(
         "app.gateway.runtime.process.subprocess.run",
-        lambda arguments, **_: calls.append(arguments)
-        or SimpleNamespace(returncode=0, stderr=""),
+        lambda arguments, **_: (
+            calls.append(arguments) or SimpleNamespace(returncode=0, stderr="")
+        ),
     )
 
     ManagedProcess(process=process, log_file=log_file).close(timeout_seconds=0.01)

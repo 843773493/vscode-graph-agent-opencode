@@ -11,6 +11,7 @@ from langgraph.types import Send
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
+from app.domain.itemized.hashing import content_hash
 from app.domain.itemized.records import CanonicalItemRecord
 from app.prompting import internal_message_factory
 from app.schemas.event import ModelTokenUsagePayload
@@ -660,22 +661,96 @@ def test_agent_state_reasoning_merge_deduplicates_stream_and_checkpoint_items(
     assert result[0].content == message.content
 
 
+def test_agent_state_reasoning_merge_excludes_final_carrier_parts_from_tool_message(
+    reasoning_items,
+):
+    items = reasoning_items(0)
+    post_tool = replace(
+        items[0],
+        item_id="reasoning-after-tool",
+        item_sequence=8,
+        payload="工具返回后的 reasoning",
+        content_hash=content_hash("text", "工具返回后的 reasoning"),
+        metadata={"block_id": "part-after-tool", "block_index": 0},
+    )
+    items.insert(1, post_tool)
+    items.append(
+        CanonicalItemRecord.create(
+            item_sequence=12,
+            item_id="final-assistant",
+            semantic_kind="assistant_output",
+            payload_kind="structured_content",
+            status="completed",
+            producer_ref={
+                "producer_kind": "provider",
+                "producer_id": "final-assistant",
+                "invocation_id": "turn-1",
+            },
+            payload=[
+                {"reasoning_content": "工具返回后的 reasoning", "type": "reasoning_content"},
+                {"text": "最终答复", "type": "text"},
+            ],
+            metadata={
+                "phase": "final_answer",
+                "content_part_refs": [
+                    {"id": "part-after-tool", "index": 0},
+                    {"id": "part-final-text", "index": 1},
+                ],
+            },
+            turn_id="turn-1",
+            turn_scope="turn_member",
+            wire_role="assistant",
+        )
+    )
+    message = AIMessage(
+        content=[
+            {
+                "type": "reasoning_content",
+                "reasoning_content": "思考 0",
+            }
+        ],
+        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
+    )
+
+    result = merge_canonical_reasoning([message], items)
+
+    assert result[0].content == message.content
+    assert result[0].response_metadata["reasoning_source"] == "canonical_item_stream"
+
+
 @pytest.mark.parametrize("indices", [(0, 2), (2, 0)])
-def test_agent_state_reasoning_merge_rejects_ambiguous_part_order(reasoning_items, indices):
+def test_agent_state_reasoning_merge_keeps_ambiguous_part_order_explicit(
+    reasoning_items,
+    indices,
+):
     message = AIMessage(
         content="缺少 content-part 顺序的正文",
         tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
     )
-    with pytest.raises(ValueError, match="缺少 content-part 顺序"):
-        merge_canonical_reasoning([message], reasoning_items(*indices))
-    assert message.content == "缺少 content-part 顺序的正文"
+    result = merge_canonical_reasoning([message], reasoning_items(*indices))
+    assert result[0].content == message.content
+    assert result[0].response_metadata["reasoning_merge_status"] == (
+        "skipped_ambiguous_order"
+    )
+    assert result[0].response_metadata["reasoning_merge_reason"] == (
+        "content_part_index_missing"
+    )
+    assert message.content == result[0].content
 
 
-def test_agent_state_reasoning_merge_rejects_conflicting_part_order(reasoning_items):
+def test_agent_state_reasoning_merge_keeps_conflicting_part_order_explicit(
+    reasoning_items,
+):
     message = AIMessage(
         content=[{"type": "text", "text": "调用前说明", "index": 1}],
         tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
     )
-    with pytest.raises(ValueError, match="canonical 顺序与 content-part 顺序冲突"):
-        merge_canonical_reasoning([message], reasoning_items(2, 0))
-    assert message.content == [{"type": "text", "text": "调用前说明", "index": 1}]
+    result = merge_canonical_reasoning([message], reasoning_items(2, 0))
+    assert result[0].content == message.content
+    assert result[0].response_metadata["reasoning_merge_status"] == (
+        "skipped_ambiguous_order"
+    )
+    assert result[0].response_metadata["reasoning_merge_reason"] == (
+        "content_part_order_conflict"
+    )
+    assert message.content == result[0].content

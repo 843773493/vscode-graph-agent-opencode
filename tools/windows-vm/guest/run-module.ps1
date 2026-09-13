@@ -401,7 +401,7 @@ switch ($Module) {
                             throw "Installed BoxTeam.exe exited before Gateway became healthy: exit_code=$($process.ExitCode)"
                         }
                         try {
-                            $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8114/api/gateway/health" -TimeoutSec 3
+                            $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8014/api/gateway/health" -TimeoutSec 3
                             if ($response.StatusCode -eq 200) {
                                 $healthy = $true
                                 break

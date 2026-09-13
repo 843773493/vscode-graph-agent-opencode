@@ -3,7 +3,6 @@ import {
   createSessionCatalogFolder,
   assignSessionCatalogFolder,
   deleteSessionCatalogFolder,
-  getSession,
   getSessionCatalogBreadcrumb,
   listSessionCatalogChildren,
   moveSessionCatalogNode,
@@ -127,7 +126,9 @@ export function useSessionResourceExplorer({
   const currentSessionRevealRequestRef = useRef(0);
   const navigationRequestRef = useRef(0);
   const branchRequestRefs = useRef<Map<string, number>>(new Map());
-  const branchInFlightRequestsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const branchInFlightRequestsRef = useRef<
+    Map<string, Promise<SessionCatalogPage | undefined>>
+  >(new Map());
   const catalogSyncKeysRef = useRef(catalogSyncKeys);
   const catalogRefreshVersionsRef = useRef(catalogRefreshVersions);
   const generationOutputSyncKeysRef = useRef<ReadonlyMap<string, string>>(new Map());
@@ -155,7 +156,7 @@ export function useSessionResourceExplorer({
     workspaceId: string,
     parentNodeId?: string | null,
     append = false,
-  ) => {
+  ): Promise<SessionCatalogPage | undefined> => {
     const key = branchKey(workspaceId, parentNodeId);
     const requestKey = `${key}:${append ? "append" : "replace"}`;
     const inFlight = branchInFlightRequestsRef.current.get(requestKey);
@@ -199,7 +200,7 @@ export function useSessionResourceExplorer({
           }
         }
         if (branchRequestRefs.current.get(key) !== requestId) {
-          return;
+          return page;
         }
         setBranches((previous) => {
           const next = new Map(previous);
@@ -219,9 +220,10 @@ export function useSessionResourceExplorer({
           );
           return next;
         });
+        return page;
       } catch (error) {
         if (branchRequestRefs.current.get(key) !== requestId) {
-          return;
+          return undefined;
         }
         const message = error instanceof Error ? error.message : String(error);
         setBranches((previous) => {
@@ -326,7 +328,24 @@ export function useSessionResourceExplorer({
     if (loaded?.items.some((item) => item.node_id === targetNodeId)) {
       return;
     }
+    let refreshedPage: SessionCatalogPage | undefined;
     if (loaded && !loaded.cursor) {
+      // “已加载且没有 cursor”只代表某个时间点的完整第一页，不代表目标节点
+      // 永远不存在。创建会话、目录移动等操作可能刚刚更新了权威索引，此时
+      // 必须重新读取该分支，再决定目标确实不存在并报告错误。
+      refreshedPage = await loadBranch(workspaceId, parentNodeId);
+      if (refreshedPage?.items.some((item) => item.node_id === targetNodeId)) {
+        return;
+      }
+    }
+    const effectiveLoaded = refreshedPage
+      ? {
+          ...refreshedPage,
+          loading: false,
+          error: null,
+        }
+      : loaded;
+    if (effectiveLoaded && !effectiveLoaded.cursor) {
       throw new Error(
         `目录分支已加载但未找到定位节点: workspace=${workspaceId}, node=${targetNodeId}`,
       );
@@ -336,19 +355,21 @@ export function useSessionResourceExplorer({
     setBranches((previous) => {
       const next = new Map(previous);
       next.set(key, {
-        revision: loaded?.revision ?? "",
+        revision: effectiveLoaded?.revision ?? "",
         parent_node_id: parentNodeId,
-        items: loaded?.items ?? [],
-        cursor: loaded?.cursor ?? null,
-        total: loaded?.total ?? 0,
+        items: effectiveLoaded?.items ?? [],
+        cursor: effectiveLoaded?.cursor ?? null,
+        total: effectiveLoaded?.total ?? 0,
         loading: true,
         error: null,
       });
       return next;
     });
-    const items: SessionCatalogPage["items"] = [...(loaded?.items ?? [])];
+    const items: SessionCatalogPage["items"] = [
+      ...(effectiveLoaded?.items ?? []),
+    ];
     const visitedCursors = new Set<string>();
-    let cursor: string | null = loaded?.cursor ?? null;
+    let cursor: string | null = effectiveLoaded?.cursor ?? null;
     try {
       while (true) {
         const page = await listSessionCatalogChildren(
@@ -406,7 +427,7 @@ export function useSessionResourceExplorer({
       });
       throw error;
     }
-  }, [apiPort]);
+  }, [apiPort, loadBranch]);
 
   const toggleExpanded = useCallback((
     id: string,
@@ -499,10 +520,6 @@ export function useSessionResourceExplorer({
     await createSessionCatalogFolder(apiPort, workspaceId, name, parentFolderId);
     await loadBranch(workspaceId, parentFolderId);
   }, [apiPort, loadBranch]);
-
-  const resolveSession = useCallback(async (workspaceId: string, sessionId: string) => {
-    return getSession(apiPort, sessionId, workspaceId);
-  }, [apiPort]);
 
   const renameWorkspaceFolder = useCallback(async (nodeId: string, name: string) => {
     const requestId = navigationRequestRef.current + 1;
@@ -842,7 +859,6 @@ export function useSessionResourceExplorer({
     revealSearchResult,
     revealWorkspaceFolder,
     createSessionFolder,
-    resolveSession,
     renameWorkspaceFolder,
     placeWorkspaceNode,
     deleteWorkspaceFolder,
@@ -880,7 +896,6 @@ export function useSessionResourceExplorer({
     refreshGenerationRuns,
     refreshNavigation,
     refreshResourceTree,
-    resolveSession,
     renameSessionFolder,
     renameWorkspaceFolder,
     revealSearchResult,

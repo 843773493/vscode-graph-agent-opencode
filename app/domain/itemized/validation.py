@@ -46,3 +46,14 @@ def validate_turn_transition(
         raise ItemSchemaError(f"只有显式 resume 可以恢复 Turn: {current}->{target}")
     if target not in TURN_TRANSITIONS[current]:
         raise ItemSchemaError(f"非法 Turn.status 转移: {current}->{target}")
+
+
+def is_terminal_turn_status(status: str) -> bool:
+    """判断 Turn.status 是否已收敛到终态。
+
+    终态 Turn 不可再被任何状态机路径改写。启动恢复等 best-effort 收敛路径
+    必须把终态当作幂等已完成，而不是当作非法转移继续抛出。
+    """
+    if status not in TURN_TRANSITIONS:
+        raise ItemSchemaError(f"未知 Turn.status: {status}")
+    return not TURN_TRANSITIONS[status]

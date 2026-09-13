@@ -417,6 +417,70 @@ describe("Turn timeline revision 合并", () => {
     expect(merged.filter((part) => part.text === "确认结果")).toHaveLength(2);
   });
 
+  test("定点工具详情补丁不丢失同一 Turn 的其他部件", () => {
+    const fullTurn = {
+      ...detail("job_tool_patch", 1),
+      response_parts: [
+        {
+          part_id: "reasoning:1",
+          kind: "reasoning" as const,
+          projection: "detail" as const,
+          status: "completed" as const,
+          source: { message_sequence: 1, content_block_index: 0 },
+          text: "分析命令",
+        },
+        {
+          part_id: "tool-call:1",
+          kind: "tool_call" as const,
+          projection: "summary" as const,
+          status: "completed" as const,
+          source: { message_sequence: 2, assistant_message_sequence: 2, call_index: 0 },
+          tool_call_id: "call-1",
+          tool_name: "exec_command",
+          arguments: null,
+        },
+        {
+          part_id: "final:1",
+          kind: "final_text" as const,
+          projection: "detail" as const,
+          status: "completed" as const,
+          source: { message_sequence: 3 },
+          text: "完成",
+          final: true,
+        },
+      ],
+    };
+    // 定点工具请求只返回被请求的工具部件（携带完整参数）。
+    const pointPatchTurn = {
+      ...detail("job_tool_patch", 1),
+      response_parts: [
+        {
+          part_id: "tool-call:1",
+          kind: "tool_call" as const,
+          projection: "detail" as const,
+          status: "completed" as const,
+          source: { message_sequence: 2, assistant_message_sequence: 2, call_index: 0 },
+          tool_call_id: "call-1",
+          tool_name: "exec_command",
+          arguments: '{"cmd":"pwd"}',
+        },
+      ],
+    };
+
+    let timeline = upsertTurn(createSessionTurnTimeline(SCOPE_KEY), fullTurn);
+    timeline = upsertTurn(timeline, pointPatchTurn);
+    const merged = timeline.turnsById.job_tool_patch.response_parts ?? [];
+
+    expect(merged.map((part) => part.part_id)).toEqual([
+      "reasoning:1",
+      "tool-call:1",
+      "final:1",
+    ]);
+    const toolPart = merged.find((part) => part.part_id === "tool-call:1");
+    expect(toolPart?.arguments).toBe('{"cmd":"pwd"}');
+    expect(toolPart?.projection).toBe("detail");
+  });
+
   test("历史前插保持现有 Turn 身份与顺序", () => {
     let timeline = createSessionTurnTimeline(SCOPE_KEY);
     timeline = upsertTurn(timeline, summary("job_4", 4));

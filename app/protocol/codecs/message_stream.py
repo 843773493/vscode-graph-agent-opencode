@@ -60,7 +60,15 @@ def message_stream_to_proto(
 
         parsed = datetime.fromisoformat(emitted_at)
         event.emitted_at.CopyFrom(timestamp_from_datetime(parsed))
-    for field_name in ("model_call_id", "block_id", "tool_execution_id"):
+    for field_name in (
+        "model_call_id",
+        "block_id",
+        "tool_execution_id",
+        "workspace_id",
+        "tool_call_id",
+        "tool_invocation_id",
+        "tool_attempt_id",
+    ):
         field_value = value.get(field_name)
         if field_value is not None:
             if not isinstance(field_value, str) or not field_value:
@@ -74,6 +82,37 @@ def message_stream_to_proto(
     payload = value.get("payload")
     if not isinstance(payload, Mapping):
         raise TypeError(f"消息流 payload 必须是对象: type={event.type}")
+    for field_name in (
+        "model_call_id",
+        "block_id",
+        "tool_execution_id",
+        "workspace_id",
+        "tool_call_id",
+        "tool_invocation_id",
+        "tool_attempt_id",
+    ):
+        envelope_value = value.get(field_name)
+        payload_value = payload.get(field_name)
+        for field_value, source in (
+            (envelope_value, "信封"),
+            (payload_value, "payload"),
+        ):
+            if field_value is not None and (
+                not isinstance(field_value, str) or not field_value
+            ):
+                raise TypeError(
+                    f"消息流 {field_name} 必须是非空字符串: source={source}"
+                )
+        if (
+            envelope_value is not None
+            and payload_value is not None
+            and envelope_value != payload_value
+        ):
+            raise ValueError(
+                f"消息流 {field_name} 信封与 payload 身份不一致"
+            )
+        if envelope_value is None and isinstance(payload_value, str):
+            setattr(event, field_name, payload_value)
     target = getattr(event, payload_field)
     if event.type == "stream.snapshot" and isinstance(payload.get("snapshot"), Mapping):
         payload = cast(Mapping[str, Any], payload["snapshot"])
@@ -111,7 +150,16 @@ def message_stream_to_json(
         result["emitted_at"] = value.emitted_at.ToDatetime().isoformat().replace(
             "+00:00", "Z"
         )
-    for field_name in ("model_call_id", "block_id", "tool_execution_id", "job_id"):
+    for field_name in (
+        "model_call_id",
+        "block_id",
+        "tool_execution_id",
+        "workspace_id",
+        "tool_call_id",
+        "tool_invocation_id",
+        "tool_attempt_id",
+        "job_id",
+    ):
         if value.HasField(field_name):
             result[field_name] = getattr(value, field_name)
     return result
@@ -279,17 +327,19 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
                     "message": "消息流快照中的失败详情格式无效",
                 }
             for execution in snapshot.get("tool_executions", []):
-                if (
-                    isinstance(execution, dict)
-                    and isinstance(execution.get("status"), str)
-                ):
+                if not isinstance(execution, dict):
+                    continue
+                # tool execution 聚合需要记录模型调用归属，但公共
+                # ToolExecutionSnapshot 没有该内部对账字段。
+                execution.pop("model_call_id", None)
+                if isinstance(execution.get("status"), str):
                     if execution["status"] == "outcome_unknown":
                         execution["status"] = "completed"
                         execution.setdefault("outcome", "outcome_unknown")
                     execution["status"] = enum_maps["status_tool"].get(
                         execution["status"], execution["status"]
                     )
-                if isinstance(execution, dict) and isinstance(execution.get("outcome"), str):
+                if isinstance(execution.get("outcome"), str):
                     execution["outcome"] = enum_maps["outcome_tool"].get(
                         execution["outcome"], execution["outcome"]
                     )
@@ -304,6 +354,9 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
                     model_call.pop("reason", None)
             for tool_call in snapshot.get("tool_calls", []):
                 if isinstance(tool_call, dict):
+                    # tool-call 聚合需要记录模型调用归属，但公共 ToolCall
+                    # 没有该内部对账字段；运行中的快照也必须经过同一投影。
+                    tool_call.pop("model_call_id", None)
                     # tool-call 聚合会保留旧版本的内部错误详情，但公共
                     # ToolCall 没有 error 字段；终态 StreamFailure 承载对用户
                     # 可见的失败原因，不能让旧字段把整个 snapshot 编码成 500。
@@ -327,6 +380,19 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
                     # MessageBlockSnapshot 只暴露 projection，避免把 attempt
                     # 归属重复塞进 block payload。
                     block.pop("model_call_id", None)
+    else:
+        # workspace_id 属于消息流信封身份，普通 oneof payload 不重复承载。
+        normalized.pop("workspace_id", None)
+    if event_type not in {
+        "model.started",
+        "model.completed",
+        "model.retrying",
+        "model.failed",
+    }:
+        # model_call_id 是 block/tool/activity 事件的内部归属身份，公共协议
+        # 只在 MessageStreamEvent 信封中承载；把它继续传给 oneof payload 会让
+        # 严格 protobuf 在 block.started 等首个增量事件处直接中止 SSE。
+        normalized.pop("model_call_id", None)
     return normalized
 
 

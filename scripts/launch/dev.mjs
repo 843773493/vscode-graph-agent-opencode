@@ -421,6 +421,7 @@ async function main() {
     BOXTEAM_DEV_PORT_OFFSET: String(portOffset),
     BOXTEAM_DEV_FRONTEND_PORT: String(ports.frontend),
     BOXTEAM_GATEWAY_PORT: String(ports.gateway),
+    BOXTEAM_DEFAULT_BACKEND_PORT: String(ports.backend),
     BOXTEAM_TERMINAL_FRONTEND_URL: `http://${host}:${ports.terminalFrontend}`,
     BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${ports.browserFrontend}`,
     BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT: String(ports.backendDebug),

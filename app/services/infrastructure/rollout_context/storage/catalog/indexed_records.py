@@ -11,6 +11,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.message_groups 
 )
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projections import (
     VISIBLE_NORMAL_TURN_PREDICATE,
+    _raw_call_id_from_scoped,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -153,8 +154,12 @@ class IndexedRecordQueryMixin:
         }
         selected_tool_call_ids = tuple(
             dict.fromkeys(
-                strict_text(value, field="indexed_records.tool_call_id")
+                # 前端定点详情携带的是 model-call scoped ID，而 SQLite
+                # tool_calls 表按 provider 原始 call ID 保存。两者必须在此
+                # 归一化，否则定点请求会查不到任何记录，参数/结果静默为空。
+                _raw_call_id_from_scoped(candidate) or candidate
                 for value in (tool_call_ids or ())
+                for candidate in (strict_text(value, field="indexed_records.tool_call_id"),)
             )
         )
         tool_id_filter = ""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -170,6 +171,46 @@ async def test_startup_reconciles_job_without_terminal_event(
     assert reconciled == 1
     assert events[-1].type == "session_interrupted"
     assert events[-1].payload.phase == "process_exit"
+
+
+@pytest.mark.asyncio
+async def test_startup_keeps_session_with_invalid_trace_available(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_root = session_bundle_factory(
+        tmp_path / ".boxteam" / "sessions", "ses_bad_trace"
+    )
+    trace_file = session_root / "logs" / "traces" / "events.jsonl"
+    trace_file.parent.mkdir(parents=True, exist_ok=True)
+    trace_file.write_text(
+        json.dumps(
+            {
+                "event_id": "evt_legacy_text_start",
+                "job_id": "job_legacy",
+                "step_id": None,
+                "agent_id": "default",
+                "timestamp": "2026-07-05T14:51:24.999582+00:00",
+                "type": "text_start",
+                "payload": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runtime, _ = build_runtime(tmp_path)
+
+    assert await runtime.reconcile_stale_executions() == 0
+    assert runtime.startup_reconciliation_errors == [
+        {
+            "session_id": "ses_bad_trace",
+            "error": "Trace 事件协议无效: session_id=ses_bad_trace event="
+            "{'event_id': 'evt_legacy_text_start', 'job_id': 'job_legacy', "
+            "'step_id': None, 'agent_id': 'default', "
+            "'timestamp': '2026-07-05T14:51:24.999582+00:00', "
+            "'type': 'text_start', 'payload': {}}",
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -50,7 +50,15 @@ def test_xxx_provider_format():
 
 provider 历史消息从 LangGraph checkpoint 读出后，**必须**经过本方法的转换再发回后端；不要在调用方另写一份 role 映射（LangChain `HumanMessage.type == "human"`、AIMessage 是 `"ai"`，但 OpenAI 风格后端要 `"user"` / `"assistant"`）。`_format_check.check_history_messages_accepted` 已在自检中覆盖这条契约。
 
-### 5. 测试位置
+### 5. 工具结果媒体必须经过 `project_tool_message_content`
+
+`read_file` 等工具会按扩展名把图片以 `image`/`image_url` block 返回。工具结果进入请求前，**必须**经过 `project_tool_message_content`，按目标 provider 的 `image_input` 能力决定透传还是降级为文本占位符；不要把媒体 block 直接交给 ChatLiteLLM 的 `_convert_message_to_dict`，它会无条件转成 `image_url`，部分兼容后端会直接拒绝请求。
+
+- Chat Completions 路径：保留其余 block，仅把图片 block 替换为一个文本占位符。
+- Responses 路径：`function_call_output` 只接受字符串，因此整体折叠为字符串（见 `_portable_tool_result_message`）。
+- 两条路径必须共用 `tool_media_placeholder_text` 构造占位符文案，不要各写一份。
+
+### 6. 测试位置
 
 - provider 自身行为（reasoning 剥离、历史 content 归一化、role 映射）：`tests/unit/agents/test_<provider>.py`
 - 通用格式契约 / 跨 provider 共享的检查项：`tests/unit/agents/test_provider_format_check.py`

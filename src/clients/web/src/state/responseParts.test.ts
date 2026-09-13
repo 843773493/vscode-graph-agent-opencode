@@ -1,7 +1,124 @@
 import { describe, expect, it } from "bun:test";
+import { applyMessageStreamEvent, createMessageStreamState, messageStreamToResponseParts } from "./messageStream";
 import { responsePartsToTimelineItems } from "./responseParts";
+import { formatToolCardContent, toolCollapsedText } from "./toolDisplay";
+
+function streamEvent(
+  eventSeq: number,
+  type: Parameters<typeof applyMessageStreamEvent>[1]["type"],
+  payload: Record<string, unknown>,
+): Parameters<typeof applyMessageStreamEvent>[1] {
+  return {
+    event_id: `evt_${eventSeq}`,
+    session_id: "ses_1",
+    turn_id: "turn_1",
+    turn_stream_id: "stream_1",
+    event_seq: eventSeq,
+    type,
+    payload,
+  };
+}
 
 describe("responsePartsToTimelineItems", () => {
+  it("live SSE 的 exec_command 参数和结果贯通到终端展示", () => {
+    let state = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1", "stream_1"),
+      streamEvent(1, "tool_call", {
+        tool_call_id: "call-exec",
+        tool_name: "exec_command",
+        arguments: { cmd: "pwd", yield_time_ms: 10000 },
+      }),
+    );
+    state = applyMessageStreamEvent(state, streamEvent(2, "tool.started", {
+      tool_execution_id: "exec-1",
+      tool_call_id: "call-exec",
+      tool_name: "exec_command",
+    }));
+    state = applyMessageStreamEvent(state, streamEvent(3, "tool.completed", {
+      tool_execution_id: "exec-1",
+      tool_call_id: "call-exec",
+      tool_name: "exec_command",
+      status: "completed",
+      result: JSON.stringify({
+        chunk_id: "term-1",
+        output: "/workspace",
+        exit_code: 0,
+        status: "success",
+      }),
+    }));
+
+    const [item] = responsePartsToTimelineItems(messageStreamToResponseParts(state));
+    expect(item).toMatchObject({
+      kind: "aggregated_tool",
+      toolName: "exec_command",
+      inputText: JSON.stringify({ cmd: "pwd", yield_time_ms: 10000 }),
+      resultText: JSON.stringify({
+        chunk_id: "term-1",
+        output: "/workspace",
+        exit_code: 0,
+        status: "success",
+      }),
+    });
+    if (item?.kind !== "aggregated_tool") throw new Error("应生成工具时间线项");
+    expect(toolCollapsedText(item)).toBe("命令已完成，终端仍可打开");
+    expect(formatToolCardContent(item)).toContain("/workspace");
+  });
+
+  it("历史 detail response parts 使用 arguments/result 展示 exec_command", () => {
+    const [item] = responsePartsToTimelineItems([
+      {
+        part_id: "tool-call:detail",
+        kind: "tool_call",
+        projection: "detail",
+        status: "completed",
+        source: { message_sequence: 1, assistant_message_sequence: 1, call_index: 0 },
+        tool_call_id: "call-detail",
+        tool_name: "exec_command",
+        arguments: JSON.stringify({ cmd: "ls", path: "." }),
+      },
+      {
+        part_id: "tool-result:detail",
+        kind: "tool_result",
+        projection: "detail",
+        status: "completed",
+        source: { message_sequence: 2, assistant_message_sequence: 1, call_index: 0 },
+        tool_call_id: "call-detail",
+        result: JSON.stringify({ output: "README.md", exit_code: 0 }),
+      },
+    ]);
+
+    expect(item?.kind).toBe("aggregated_tool");
+    if (item?.kind !== "aggregated_tool") throw new Error("应生成工具时间线项");
+    expect(formatToolCardContent(item)).toContain("ls");
+    expect(formatToolCardContent(item)).toContain("README.md");
+    expect(toolCollapsedText(item)).toBe("命令已完成，终端仍可打开");
+  });
+
+  it("历史 summary 没有正文时保留 tool_call_id，供 ToolRow 加载 detail", () => {
+    const [item] = responsePartsToTimelineItems([
+      {
+        part_id: "tool-call:summary",
+        kind: "tool_call",
+        projection: "summary",
+        status: "completed",
+        source: { message_sequence: 1, assistant_message_sequence: 1, call_index: 0 },
+        tool_call_id: "call-summary",
+        tool_name: "exec_command",
+        arguments: null,
+      },
+    ]);
+
+    expect(item).toMatchObject({
+      kind: "aggregated_tool",
+      toolCallId: "call-summary",
+      inputText: "",
+      resultText: "",
+      detailsLoaded: false,
+    });
+    if (item?.kind !== "aggregated_tool") throw new Error("应生成工具时间线项");
+    expect(toolCollapsedText(item)).toBe("命令工具已返回，终端仍可打开");
+  });
+
   it("按统一语义模型渲染历史 content、工具和最终文本", () => {
     const items = responsePartsToTimelineItems([
       {

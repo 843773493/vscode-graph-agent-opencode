@@ -138,6 +138,8 @@ message ToolCall {
   google.protobuf.Timestamp started_at = 10;
   google.protobuf.Timestamp updated_at = 11;
   google.protobuf.Timestamp completed_at = 12;
+  optional string tool_invocation_id = 13;
+  optional string tool_attempt_id = 14;
 }
 
 message ToolCallDelta {
@@ -146,6 +148,8 @@ message ToolCallDelta {
   optional string arguments_delta = 3;
   google.protobuf.Struct arguments = 4;
   optional bool arguments_complete = 5;
+  optional string tool_invocation_id = 6;
+  optional string tool_attempt_id = 7;
 }
 
 message ToolCallCompleted {
@@ -154,12 +158,16 @@ message ToolCallCompleted {
   string status = 3;
   string completion_reason = 4;
   optional bool arguments_complete = 5;
+  optional string tool_invocation_id = 6;
+  optional string tool_attempt_id = 7;
 }
 
 message ToolStarted {
   string tool_execution_id = 1;
   string tool_call_id = 2;
   string tool_name = 3;
+  optional string tool_invocation_id = 4;
+  optional string tool_attempt_id = 5;
 }
 
 message ToolCompleted {
@@ -171,6 +179,8 @@ message ToolCompleted {
   optional string error = 6;
   ToolExecutionOutcome outcome = 7;
   string completion_reason = 8;
+  optional string tool_invocation_id = 9;
+  optional string tool_attempt_id = 10;
 }
 
 message InterruptRequested {
@@ -234,6 +244,8 @@ message ToolExecutionSnapshot {
   google.protobuf.Timestamp started_at = 12;
   google.protobuf.Timestamp updated_at = 13;
   google.protobuf.Timestamp completed_at = 14;
+  optional string tool_invocation_id = 15;
+  optional string tool_attempt_id = 16;
 }
 
 message ModelCallSnapshot {
@@ -298,6 +310,8 @@ message ActiveState {
   optional string last_phase = 12;
   optional string reason = 13;
   optional string detail_ref = 14;
+  optional string tool_invocation_id = 15;
+  optional string tool_attempt_id = 16;
 }
 
 message InterruptState {
@@ -333,6 +347,7 @@ message StreamSnapshot {
   optional ActiveState active_state = 16;
   optional InterruptState interrupt_state = 17;
   optional RecoveryState recovery = 18;
+  optional string workspace_id = 19;
 }
 
 message MessageStreamEvent {
@@ -347,6 +362,10 @@ message MessageStreamEvent {
   optional string block_id = 9;
   optional string tool_execution_id = 10;
   optional string job_id = 11;
+  optional string workspace_id = 12;
+  optional string tool_call_id = 13;
+  optional string tool_invocation_id = 14;
+  optional string tool_attempt_id = 15;
   oneof payload {
     StreamOpened stream_opened = 20;
     ModelStarted model_started = 21;

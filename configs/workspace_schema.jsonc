@@ -24,6 +24,7 @@
   "x-boxteam-config-domain": "workspace",
   "x-boxteam-policy-manifest": [
     { "pattern": "/ui/*", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
+    { "pattern": "/llm/providers", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/agent/run/timeout_seconds", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/agent/run/mode", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
     { "pattern": "/runtime/auxiliary_services/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
@@ -937,6 +938,12 @@
                 "type": "string"
               },
               "default": {}
+            },
+            "no_proxy": {
+              "type": "boolean",
+              "default": false,
+              "description": "该 Provider 的请求是否绕过 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY；用于本地或内网网关，避免被全局代理拦截。需要重启工作区后端。"
+              // 已验证：为该 Provider 注入 trust_env=False 的 HTTP client，不修改全局 NO_PROXY。
             }
           }
         }

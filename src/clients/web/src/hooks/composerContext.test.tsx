@@ -92,6 +92,7 @@ const composerActions: Omit<ComposerContextType, "state"> = {
   interruptSession: () => undefined,
   switchAgent: async () => undefined,
   switchModel: async () => undefined,
+  refreshAgents: async () => undefined,
   setWorkspaceDefaultAgent: async () => undefined,
   setWorkspaceDefaultProvider: async () => undefined,
   switchContentView: () => undefined,

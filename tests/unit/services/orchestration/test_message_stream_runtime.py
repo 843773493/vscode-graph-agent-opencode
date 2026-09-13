@@ -110,11 +110,70 @@ async def test_tool_call_delta_keeps_identity_and_can_be_claimed_by_tool_executi
     first_payload = writer.commit.await_args_list[1].args[1]
     second_payload = writer.commit.await_args_list[2].args[1]
     assert first_payload["tool_name"] == "invoke_custom_tool"
-    assert second_payload["tool_call_id"] == "call_1"
+    assert second_payload["tool_call_id"] == "model_1:tool-call:call_1"
     assert second_payload["tool_name"] == "invoke_custom_tool"
     assert second_payload["arguments"] == {"tool_name": "unknown_tool"}
-    assert runtime.claim_tool_call_id("invoke_custom_tool") == "call_1"
+    second_event = writer.commit.await_args_list[2]
+    assert second_event.kwargs["tool_call_id"] == "model_1:tool-call:call_1"
+    assert second_event.kwargs["tool_invocation_id"] == (
+        "tool-invocation:model_1:call_1"
+    )
+    assert runtime.claim_tool_call_id("invoke_custom_tool") == (
+        "model_1:tool-call:call_1"
+    )
     assert runtime.claim_tool_call_id("invoke_custom_tool") is None
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_calls_with_reused_provider_index_get_distinct_identities() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    runtime = MessageStreamRuntime(writer)
+
+    await runtime.start_model("model_1", "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_first",
+                    "name": "grep",
+                    "args": '{"pattern":"first"}',
+                }
+            ],
+        )
+    )
+    # GLM-5.3 的兼容 OpenAI 流在并行调用时可能再次发送 index=0，
+    # 但 provider id 已经表明这是同一模型调用中的第二个 call。
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_second",
+                    "name": "apply_patch",
+                    "args": '{"input":"patch"}',
+                }
+            ],
+        )
+    )
+
+    assert runtime._tool_call_order == [
+        "model_1:tool-call:call_first",
+        "model_1:tool-call:call_second",
+    ]
+    deltas = [
+        call.args[1]
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool_call.delta"
+    ]
+    assert [delta["tool_call_id"] for delta in deltas] == runtime._tool_call_order
+    assert [delta["arguments"] for delta in deltas] == [
+        {"pattern": "first"},
+        {"input": "patch"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -139,8 +198,12 @@ async def test_same_name_tool_calls_are_claimed_by_arguments_first() -> None:
             )
         )
 
-    assert runtime.claim_tool_call_id("read_file", {"path": "b.txt"}) == "call_1"
-    assert runtime.claim_tool_call_id("read_file", {"path": "a.txt"}) == "call_0"
+    assert runtime.claim_tool_call_id("read_file", {"path": "b.txt"}) == (
+        "model_1:tool-call:call_1"
+    )
+    assert runtime.claim_tool_call_id("read_file", {"path": "a.txt"}) == (
+        "model_1:tool-call:call_0"
+    )
 
 
 @pytest.mark.asyncio
@@ -169,13 +232,100 @@ async def test_next_model_start_preserves_late_tool_start_correlation() -> None:
     assert runtime.claim_tool_call_id(
         "read_file",
         {"path": "README.md"},
-    ) == "call_from_model_1"
+    ) == "model_1:tool-call:call_from_model_1"
     await runtime.start_tool(
         tool_execution_id="tool_execution_1",
-        tool_call_id="call_from_model_1",
+        tool_call_id="model_1:tool-call:call_from_model_1",
         tool_name="read_file",
     )
     assert runtime.pending_tool_calls() == ()
+
+
+@pytest.mark.asyncio
+async def test_reused_provider_tool_call_id_is_scoped_per_model_call() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    runtime = MessageStreamRuntime(writer)
+
+    for model_call_id in ("model_1", "model_2"):
+        await runtime.start_model(model_call_id, "primary")
+        await runtime.accept_message_chunk(
+            AIMessageChunk(
+                content="",
+                tool_call_chunks=[
+                    {
+                        "index": 0,
+                        "id": "call_reused",
+                        "name": "read_file",
+                        "args": '{"path":"README.md"}',
+                    }
+                ],
+            )
+        )
+        await runtime.finish_model()
+
+    assert runtime._tool_call_order == [
+        "model_1:tool-call:call_reused",
+        "model_2:tool-call:call_reused",
+    ]
+    assert runtime._tool_invocation_id_for(
+        "model_1:tool-call:call_reused"
+    ) == "tool-invocation:model_1:call_reused"
+    assert runtime._tool_invocation_id_for(
+        "model_2:tool-call:call_reused"
+    ) == "tool-invocation:model_2:call_reused"
+    assert runtime.claim_tool_call_id("read_file") == (
+        "model_2:tool-call:call_reused"
+    )
+    assert runtime.claim_tool_call_id("read_file") == (
+        "model_1:tool-call:call_reused"
+    )
+
+
+@pytest.mark.asyncio
+async def test_late_provider_delta_after_model_sealed_does_not_reappend_canonical_item() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    canonical_sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=canonical_sink,
+        canonical_turn_id="turn_1",
+    )
+
+    await runtime.start_model("model_1", "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_late",
+                    "name": "read_file",
+                    "args": '{"path":"debug/tool_test_write.txt"}',
+                }
+            ],
+        )
+    )
+    await runtime.finish_model()
+
+    # provider 在 on_chat_model_end 之后重复投递同一调用的迟到参数片段。
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_late",
+                    "name": "read_file",
+                    "args": "{\"file_path\":\"debug/tool_test_write.txt\"}",
+                }
+            ],
+        )
+    )
+
+    canonical_sink.assert_awaited_once()
+    assert runtime._sealed_canonical_model_call_ids == {"model_1"}
 
 
 @pytest.mark.asyncio

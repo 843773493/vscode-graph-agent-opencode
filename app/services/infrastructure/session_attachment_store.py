@@ -73,15 +73,22 @@ class SessionAttachmentStore:
         derived_root.mkdir(parents=True, exist_ok=True)
         target = derived_root / f"{digest}-{max_edge}.webp"
         if not target.is_file():
-            with Image.open(BytesIO(source.data)) as image:
-                normalized = ImageOps.exif_transpose(image)
-                normalized.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
-                if normalized.mode not in {"RGB", "RGBA"}:
-                    normalized = normalized.convert(
-                        "RGBA" if "A" in normalized.mode else "RGB"
-                    )
-                output = BytesIO()
-                normalized.save(output, format="WEBP", quality=78, method=4)
+            try:
+                with Image.open(BytesIO(source.data)) as image:
+                    normalized = ImageOps.exif_transpose(image)
+                    normalized.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+                    if normalized.mode not in {"RGB", "RGBA"}:
+                        normalized = normalized.convert(
+                            "RGBA" if "A" in normalized.mode else "RGB"
+                        )
+                    output = BytesIO()
+                    normalized.save(output, format="WEBP", quality=78, method=4)
+            except (OSError, ValueError) as error:
+                # 损坏或被截断的图片必须给出可诊断的领域错误，而不是让
+                # PIL 的 OSError 冒泡成 500。调用方据此返回 4xx。
+                raise ValueError(
+                    f"附件图片已损坏或不是有效图片，无法生成缩略图: {file_id}"
+                ) from error
             self._write_once(target, output.getvalue())
         return StoredAttachmentContent(
             data=target.read_bytes(),

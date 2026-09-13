@@ -160,6 +160,9 @@ def _minimal_terminal_snapshot(
         "recovery": recovery,
         "resumable": False,
     }
+    workspace_id = snapshot.get("workspace_id")
+    if isinstance(workspace_id, str) and workspace_id:
+        result["workspace_id"] = workspace_id
     return result
 
 

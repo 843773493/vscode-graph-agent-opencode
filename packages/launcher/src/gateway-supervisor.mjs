@@ -2,22 +2,26 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { chmodSync, mkdirSync, rmSync } from "node:fs";
-import { request as httpRequest, createServer as createHttpServer } from "node:http";
+import {
+  request as httpRequest,
+  createServer as createHttpServer,
+} from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 const GATEWAY_HOST = "127.0.0.1";
-const DEVELOPMENT_GATEWAY_PORT = 8014;
-const INSTALLED_GATEWAY_PORT = 8114;
+const GATEWAY_PORT = 8014;
+const RELEASE_DEFAULT_BACKEND_PORT = 8010;
 // TODO: Windows 嵌入式 Python 冷启动可能超过 POSIX 默认窗口。
-const GATEWAY_READY_TIMEOUT_MS = process.platform === "win32" ? 180_000 : 90_000;
+const GATEWAY_READY_TIMEOUT_MS =
+  process.platform === "win32" ? 180_000 : 90_000;
 const GATEWAY_CONNECTION_DRAIN_TIMEOUT_SECONDS = 2;
 const GATEWAY_SHUTDOWN_TIMEOUT_MS = 10_000;
 
 function resolveDevelopmentGatewayPort(environment) {
   const rawValue = environment?.BOXTEAM_GATEWAY_PORT?.trim() ?? "";
-  if (rawValue === "") return DEVELOPMENT_GATEWAY_PORT;
+  if (rawValue === "") return GATEWAY_PORT;
   const port = Number(rawValue);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
     throw new Error(
@@ -37,7 +41,7 @@ export function gatewayEndpoint(distribution, environment = process.env) {
   const port =
     distribution === "source-development"
       ? resolveDevelopmentGatewayPort(environment)
-      : INSTALLED_GATEWAY_PORT;
+      : GATEWAY_PORT;
   return Object.freeze({
     host: GATEWAY_HOST,
     port,
@@ -76,6 +80,10 @@ export async function waitForGateway({
 export function gatewayEnvironment(runtime, baseEnvironment) {
   const endpoint = gatewayEndpoint(runtime.distribution, baseEnvironment);
   const startup = gatewayStartupContract(baseEnvironment);
+  const defaultBackendPort =
+    runtime.distribution === "source-development"
+      ? baseEnvironment.BOXTEAM_DEFAULT_BACKEND_PORT?.trim()
+      : String(RELEASE_DEFAULT_BACKEND_PORT);
   return {
     ...baseEnvironment,
     BOXTEAM_DISTRIBUTION: runtime.distribution,
@@ -84,6 +92,9 @@ export function gatewayEnvironment(runtime, baseEnvironment) {
     BOXTEAM_GATEWAY_URL: endpoint.url,
     BOXTEAM_NODE_BIN: runtime.nodeExecutable,
     BOXTEAM_PYTHON_BIN: runtime.pythonExecutable,
+    ...(defaultBackendPort === undefined || defaultBackendPort === ""
+      ? {}
+      : { BOXTEAM_DEFAULT_BACKEND_PORT: defaultBackendPort }),
     ...startup.environment,
     ...(runtime.webAssets === null
       ? {}
@@ -274,7 +285,9 @@ function proxyHttpRequest(request, response, target) {
 
 function proxyGatewayUpgrade(request, clientSocket, head, target) {
   if (target === null) {
-    clientSocket.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+    clientSocket.end(
+      "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n",
+    );
     return;
   }
   const upstream = httpRequest({
@@ -293,7 +306,11 @@ function proxyGatewayUpgrade(request, clientSocket, head, target) {
     const responseLines = [
       `HTTP/1.1 ${upstreamResponse.statusCode ?? 101} ${upstreamResponse.statusMessage ?? "Switching Protocols"}`,
     ];
-    for (let index = 0; index < upstreamResponse.rawHeaders.length; index += 2) {
+    for (
+      let index = 0;
+      index < upstreamResponse.rawHeaders.length;
+      index += 2
+    ) {
       responseLines.push(
         `${upstreamResponse.rawHeaders[index]}: ${upstreamResponse.rawHeaders[index + 1]}`,
       );
@@ -379,7 +396,10 @@ async function stopGatewayChild(childState) {
   const closed = await Promise.race([
     childState.closeResult.then(() => true),
     new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(false), GATEWAY_SHUTDOWN_TIMEOUT_MS);
+      const timer = setTimeout(
+        () => resolve(false),
+        GATEWAY_SHUTDOWN_TIMEOUT_MS,
+      );
       timer.unref?.();
     }),
   ]);
@@ -470,7 +490,9 @@ export function requestGatewayHandoff({
     let settled = false;
     const timer = setTimeout(() => {
       socket.destroy();
-      reject(new Error(`Gateway supervisor handoff 在 ${timeoutMs}ms 内未响应`));
+      reject(
+        new Error(`Gateway supervisor handoff 在 ${timeoutMs}ms 内未响应`),
+      );
     }, timeoutMs);
     timer.unref?.();
     const finish = (callback) => {
@@ -619,6 +641,9 @@ export async function superviseGateway({
   processObject = process,
 }) {
   const endpoint = gatewayEndpoint(runtime.distribution, environment);
+  // 只有源码开发需要用稳定代理完成 generation handoff；发行版让 Gateway
+  // 直接占用公开端口，避免 Launcher 退出后留下不可访问的孤儿 Gateway。
+  const gatewayOwnsPublicPort = runtime.distribution !== "source-development";
   stdout.write(
     `BoxTeam ${runtime.version} 正在启动 ` +
       `(distribution=${runtime.distribution})\n`,
@@ -627,11 +652,13 @@ export async function superviseGateway({
   stdout.write(`Python: ${runtime.pythonExecutable}\n`);
   stdout.write(`Node: ${runtime.nodeExecutable}\n`);
 
-  const publicListener = createGatewayPublicListener({
-    host: endpoint.host,
-    port: endpoint.port,
-  });
-  await publicListener.listen();
+  const publicListener = gatewayOwnsPublicPort
+    ? null
+    : createGatewayPublicListener({
+        host: endpoint.host,
+        port: endpoint.port,
+      });
+  if (publicListener !== null) await publicListener.listen();
 
   const activeEnvironment = activeGatewayEnvironment(environment);
   let currentChild = null;
@@ -642,7 +669,9 @@ export async function superviseGateway({
     childEnvironment,
     { installSignalHandlers = true } = {},
   ) => {
-    const childPort = await allocateGatewayChildPort(endpoint.host);
+    const childPort = gatewayOwnsPublicPort
+      ? endpoint.port
+      : await allocateGatewayChildPort(endpoint.host);
     const child = spawnGateway({
       runtime,
       environment: childEnvironment,
@@ -710,10 +739,12 @@ export async function superviseGateway({
       }
     }
     currentChild = initialChild;
-    publicListener.setTarget({
-      host: endpoint.host,
-      port: initialChild.childPort,
-    });
+    if (publicListener !== null) {
+      publicListener.setTarget({
+        host: endpoint.host,
+        port: initialChild.childPort,
+      });
+    }
     if (openBrowser) {
       void openGatewayBrowser({
         spawnImpl,
@@ -749,6 +780,9 @@ export async function superviseGateway({
         process.platform,
         { stderr },
       );
+      if (publicListener === null) {
+        throw new Error("直接监听公开端口的 Gateway 不支持 generation handoff");
+      }
       publicListener.setTarget({
         host: endpoint.host,
         port: replacement.childPort,
@@ -761,19 +795,22 @@ export async function superviseGateway({
       };
     };
 
-    const socketPath = gatewaySupervisorSocketPath(environment.BOXTEAM_HOME);
-    control = socketPath === null
+    const socketPath = gatewayOwnsPublicPort
       ? null
-      : createGatewaySupervisorControl({
-          socketPath,
-          onHandoff(payload) {
-            handoffChain = handoffChain.then(
-              () => handleHandoff(payload),
-              () => handleHandoff(payload),
-            );
-            return handoffChain;
-          },
-        });
+      : gatewaySupervisorSocketPath(environment.BOXTEAM_HOME);
+    control =
+      socketPath === null
+        ? null
+        : createGatewaySupervisorControl({
+            socketPath,
+            onHandoff(payload) {
+              handoffChain = handoffChain.then(
+                () => handleHandoff(payload),
+                () => handleHandoff(payload),
+              );
+              return handoffChain;
+            },
+          });
     if (control !== null) await control.listen();
 
     while (true) {
@@ -793,6 +830,6 @@ export async function superviseGateway({
       currentChild = null;
     }
     if (control !== null) await control.close();
-    await publicListener.close();
+    if (publicListener !== null) await publicListener.close();
   }
 }

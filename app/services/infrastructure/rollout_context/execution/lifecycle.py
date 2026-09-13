@@ -17,7 +17,10 @@ from app.domain.itemized.enums import (
     TurnStatus,
 )
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.validation import validate_turn_transition
+from app.domain.itemized.validation import (
+    is_terminal_turn_status,
+    validate_turn_transition,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -407,6 +410,13 @@ class RolloutTurnLifecycleMixin:
                         current_status == TurnStatus.UNKNOWN.value
                         and status == "failed"
                     ):
+                        return True
+                    # Turn 已经收敛到与本请求不同的终态时，它仍是同一个终态轴；
+                    # 例如 Turn 正常 completed 后迟到的 job_failed 事件。
+                    # 启动恢复与事件监听都是 best-effort 收敛路径，不能因为
+                    # 已有终态而抛错，否则每次启动都会用同一条历史 Trace 再次
+                    # 崩溃并写下新的失败事件，形成无法自愈的启动死循环。
+                    if is_terminal_turn_status(current_status):
                         return True
                     try:
                         validate_turn_transition(current_status, target_status)

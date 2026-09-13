@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.internal_v2.session import SessionDTO
+
 
 class SessionCatalogNodeDTO(BaseModel):
     node_id: str
@@ -17,6 +19,8 @@ class SessionCatalogNodeDTO(BaseModel):
     storage_relative_path: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # 会话目录节点同时携带菜单和导航所需的完整会话元数据；消息历史不属于此字段。
+    session: SessionDTO | None = None
 
 
 class SessionCatalogPageDTO(BaseModel):

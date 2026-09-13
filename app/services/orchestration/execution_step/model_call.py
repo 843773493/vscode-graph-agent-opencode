@@ -59,7 +59,7 @@ class StepModelCallAdapter:
         model_call_id: str,
         attempt: int,
         model: str,
-    ) -> None:
+    ) -> str:
         """只绑定 dispatch 前已封存的 assembly，不从事件重建请求事实。"""
         register = self._ports["register_model_call"]
         consume_prepared = self._ports["consume_prepared_context_for_dispatch"]
@@ -125,6 +125,7 @@ class StepModelCallAdapter:
             assembly_id,
         )
         self._previous_model_call_id = model_call_id
+        return execution_id
 
     def converge_final_message(self, message: AIMessage) -> None:
         """在最终 checkpoint message 落盘前提交同一份 terminal item。"""

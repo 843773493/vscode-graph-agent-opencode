@@ -31,6 +31,18 @@ function parseJsonRecord(value: unknown): Record<string, unknown> | null {
   return isRecord(parsed) ? parsed : null;
 }
 
+function toolInputRecord(item: AggregatedToolItem): Record<string, unknown> {
+  return parseJsonRecord(item.inputText) ??
+    parseJsonRecord(item.rawStart.args) ??
+    {};
+}
+
+function toolResultRecord(item: AggregatedToolItem): Record<string, unknown> {
+  return parseJsonRecord(item.resultText) ??
+    parseJsonRecord(item.rawEnd.result) ??
+    {};
+}
+
 function fieldText(record: Record<string, unknown>, key: string): string {
   const value = record[key];
   if (value === null || value === undefined || value === "") {
@@ -89,14 +101,15 @@ function formatTerminalToolContent(item: AggregatedToolItem): string | null {
     return null;
   }
 
-  const inputRecord = parseJsonRecord(item.rawStart.args) ?? {};
-  const resultRecord = parseJsonRecord(item.rawEnd.result) ?? {};
+  const inputRecord = toolInputRecord(item);
+  const resultRecord = toolResultRecord(item);
   const terminalId = fieldText(resultRecord, "chunk_id") ||
     fieldText(resultRecord, "session_id") ||
     fieldText(inputRecord, "session_id");
   const runningSessionId = fieldText(resultRecord, "session_id");
   const exitCode = fieldText(resultRecord, "exit_code");
-  const status = runningSessionId ? "running" : exitCode ? "completed" : "";
+  const hasExitCode = Object.prototype.hasOwnProperty.call(resultRecord, "exit_code");
+  const status = runningSessionId ? "running" : hasExitCode ? "completed" : "";
   const output = fieldText(resultRecord, "output");
 
   const sections = [
@@ -136,13 +149,13 @@ function terminalToolCollapsedText(item: AggregatedToolItem): string | null {
   if (item.toolName !== "exec_command" && item.toolName !== "write_stdin") {
     return null;
   }
-  const resultRecord = parseJsonRecord(item.rawEnd.result) ?? {};
+  const resultRecord = toolResultRecord(item);
   if (fieldText(resultRecord, "session_id")) {
     return item.toolName === "write_stdin"
       ? "已写入，命令仍在运行"
       : "命令仍在运行，终端可 attach";
   }
-  if (fieldText(resultRecord, "exit_code")) {
+  if (Object.prototype.hasOwnProperty.call(resultRecord, "exit_code")) {
     return "命令已完成，终端仍可打开";
   }
   return "命令工具已返回，终端仍可打开";
@@ -169,7 +182,7 @@ export function isSkillInternalToolItem(item: AggregatedToolItem): boolean {
   if (item.toolName !== "read_file") {
     return false;
   }
-  const inputRecord = parseJsonRecord(item.rawStart.args) ?? {};
+  const inputRecord = toolInputRecord(item);
   return Boolean(
     skillNameFromPath(
       fieldText(inputRecord, "file_path") || fieldText(inputRecord, "path"),
@@ -228,8 +241,8 @@ export function toolCollapsedText(item: AggregatedToolItem): string {
     return "未确认返回结果";
   }
 
-  const inputRecord = parseJsonRecord(item.rawStart.args) ?? {};
-  const resultRecord = parseJsonRecord(item.rawEnd.result);
+  const inputRecord = toolInputRecord(item);
+  const resultRecord = toolResultRecord(item);
   const path = fieldText(inputRecord, "file_path") || fieldText(inputRecord, "path");
   const skillName = skillNameFromPath(path);
   if (item.toolName === "read_file" && skillName) {

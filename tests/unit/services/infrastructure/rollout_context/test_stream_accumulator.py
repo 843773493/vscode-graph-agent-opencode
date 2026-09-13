@@ -46,6 +46,76 @@ def test_partial_text_fragments_remain_partial_until_saver_commits_them() -> Non
     assert items[0].payload == "前半后半"
 
 
+def test_message_group_is_scoped_to_model_call_within_one_execution() -> None:
+    first = CanonicalBlockAccumulator(
+        turn_id="turn-stream-contract",
+        execution_id="execution-shared",
+        producer_id="model-call-1",
+        model_call_id="model-call-1",
+    )
+    second = CanonicalBlockAccumulator(
+        turn_id="turn-stream-contract",
+        execution_id="execution-shared",
+        producer_id="model-call-2",
+        model_call_id="model-call-2",
+    )
+    for accumulator, block_id in ((first, "call-1"), (second, "call-2")):
+        accumulator.accept(
+            {
+                "block_id": block_id,
+                "carrier_type": "tool_call",
+                "block_index": 0,
+                "name": "read_file",
+                "args": {"path": "README.md"},
+            }
+        )
+
+    first_item = first.finalize(first_item_sequence=1)[0]
+    second_item = second.finalize(first_item_sequence=2)[0]
+
+    assert first_item.message_group_id == "message-model-call-1"
+    assert second_item.message_group_id == "message-model-call-2"
+    assert first_item.message_group_id != second_item.message_group_id
+    assert first_item.item_id == (
+        "item-execution-shared-model-model-call-1-block-call-1"
+    )
+    assert second_item.item_id == (
+        "item-execution-shared-model-model-call-2-block-call-2"
+    )
+    assert first_item.item_id != second_item.item_id
+
+
+def test_reused_provider_block_id_is_unique_per_model_call() -> None:
+    first = CanonicalBlockAccumulator(
+        turn_id="turn-stream-contract",
+        execution_id="execution-shared",
+        producer_id="model-call-1",
+        model_call_id="model-call-1",
+    )
+    second = CanonicalBlockAccumulator(
+        turn_id="turn-stream-contract",
+        execution_id="execution-shared",
+        producer_id="model-call-2",
+        model_call_id="model-call-2",
+    )
+    for accumulator in (first, second):
+        accumulator.accept(
+            {
+                "block_id": "provider-reused-block",
+                "carrier_type": "reasoning_content",
+                "block_index": 0,
+                "text": "同一个 provider block id",
+            }
+        )
+
+    first_item = first.finalize(first_item_sequence=1)[0]
+    second_item = second.finalize(first_item_sequence=2)[0]
+
+    assert first_item.item_id != second_item.item_id
+    assert first_item.metadata["model_call_id"] == "model-call-1"
+    assert second_item.metadata["model_call_id"] == "model-call-2"
+
+
 def test_repeated_block_identity_cannot_change_coordinate_or_carrier() -> None:
     accumulator = _accumulator()
     accumulator.accept(

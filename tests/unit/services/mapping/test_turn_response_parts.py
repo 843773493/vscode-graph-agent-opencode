@@ -207,3 +207,158 @@ def test_terminal_tool_call_without_result_is_explicitly_unknown() -> None:
     assert len(parts) == 1
     assert parts[0].status == "failed"
     assert parts[0].outcome_unknown is True
+
+
+def test_detail_backfills_scoped_canonical_tool_call_arguments_by_raw_id() -> None:
+    records = [
+        _record(
+            10,
+            {
+                "type": "ai",
+                "data": {
+                    "content": [],
+                    "tool_calls": [
+                        {
+                            "id": "call-pwd",
+                            "name": "exec_command",
+                            "args": {
+                                "cmd": "pwd",
+                                "login": True,
+                                "yield_time_ms": 10000,
+                            },
+                        }
+                    ],
+                },
+            },
+        )
+    ]
+    parts = response_parts_from_records(
+        records,
+        projection=_projection(
+            _activity(
+                "canonical-tool-call",
+                21,
+                "tool_call",
+                tool_call_id="model-call:tool-call:call-pwd",
+                tool_name="exec_command",
+            )
+        ),
+        mode="detail",
+        include=frozenset({"tool_call"}),
+    )
+
+    assert parts[0].arguments == (
+        '{"cmd": "pwd", "login": true, "yield_time_ms": 10000}'
+    )
+
+
+def test_detail_does_not_guess_arguments_when_raw_tool_call_id_is_ambiguous() -> None:
+    records = [
+        _record(
+            10,
+            {
+                "type": "ai",
+                "data": {
+                    "content": [],
+                    "tool_calls": [
+                        {"id": "call-reused", "name": "first", "args": {"n": 1}}
+                    ],
+                },
+            },
+        ),
+        _record(
+            11,
+            {
+                "type": "ai",
+                "data": {
+                    "content": [],
+                    "tool_calls": [
+                        {"id": "call-reused", "name": "second", "args": {"n": 2}}
+                    ],
+                },
+            },
+        ),
+    ]
+    parts = response_parts_from_records(
+        records,
+        projection=_projection(
+            _activity(
+                "canonical-tool-call",
+                21,
+                "tool_call",
+                tool_call_id="model-call:tool-call:call-reused",
+                tool_name="second",
+            )
+        ),
+        mode="detail",
+        include=frozenset({"tool_call"}),
+    )
+
+    assert parts[0].arguments is None
+
+
+def test_tool_parts_stay_summary_when_detail_mode_lacks_tool_payload() -> None:
+    """include 含 thinking 却没有 tool_call 时，工具部件不得标成 detail。
+
+    默认 initial include 为 ``["user","thinking","tool_summary","final_response"]``：
+    ``thinking`` 会把整个请求判定为 detail 模式，但该请求并没有加载工具参数。
+    若工具部件仍标记为 detail，前端 ``detailsLoaded`` 会误判为已加载，展开时
+    不再补拉参数，最终只显示“输入参数”标题却没有正文。
+    """
+    parts = response_parts_from_records(
+        [],
+        projection=_projection(
+            _activity("reasoning-1", 2, "reasoning", text="分析"),
+            _activity(
+                "tool-call-1",
+                3,
+                "tool_call",
+                tool_call_id="call-1",
+                tool_name="exec_command",
+            ),
+            _activity(
+                "tool-result-1",
+                4,
+                "tool_result",
+                tool_call_id="call-1",
+                tool_name="exec_command",
+            ),
+        ),
+        mode="detail",
+        include=frozenset(
+            {"user", "thinking", "tool_summary", "final_response"}
+        ),
+    )
+
+    tool_parts = [part for part in parts if part.kind in {"tool_call", "tool_result"}]
+    assert tool_parts, "tool_summary 请求必须保留工具占位部件"
+    assert [part.projection for part in tool_parts] == ["summary", "summary"]
+    assert all(part.arguments is None for part in tool_parts)
+
+
+def test_tool_parts_are_detail_when_tool_payload_is_included() -> None:
+    """显式请求 tool_call/tool_result 时，工具部件才标记为 detail。"""
+    parts = response_parts_from_records(
+        [],
+        projection=_projection(
+            _activity(
+                "tool-call-1",
+                3,
+                "tool_call",
+                tool_call_id="call-1",
+                tool_name="exec_command",
+            ),
+            _activity(
+                "tool-result-1",
+                4,
+                "tool_result",
+                tool_call_id="call-1",
+                tool_name="exec_command",
+            ),
+        ),
+        mode="detail",
+        include=frozenset({"tool_call", "tool_result"}),
+    )
+
+    tool_parts = [part for part in parts if part.kind in {"tool_call", "tool_result"}]
+    assert [part.projection for part in tool_parts] == ["detail", "detail"]

@@ -73,6 +73,17 @@ def _bounded(value: object, limit: int = 65536) -> tuple[str, bool]:
     return text[:limit], len(text) > limit
 
 
+def _raw_tool_call_id(tool_call_id: str | None) -> str | None:
+    """从 stream scoped tool-call ID 取出 checkpoint 中的原始 call ID。"""
+    if not isinstance(tool_call_id, str) or not tool_call_id:
+        return None
+    marker = ":tool-call:"
+    if marker not in tool_call_id:
+        return tool_call_id
+    raw_id = tool_call_id.rsplit(marker, 1)[-1]
+    return raw_id or None
+
+
 def _response_status(value: object) -> str:
     if value in {"completed", "success", "succeeded", "ok"}:
         return "completed"
@@ -85,6 +96,21 @@ def _response_status(value: object) -> str:
     if value in {"partial", "incomplete", "cancelled"}:
         return "cancelled"
     raise ValueError(f"未知 canonical item status: {value!r}")
+
+
+def _part_projection(kind: str, *, mode: Projection, include: frozenset[str]) -> Projection:
+    """部件的投影级别必须反映自身 payload 是否真的已加载。
+
+    ``mode`` 是整个请求的投影级别；当 include 含 ``thinking`` 等字段时，即使
+    没有请求 ``tool_call``/``tool_result``，请求也会被判定为 detail。此时工具
+    部件并没有参数正文，若仍标记为 detail，前端会误以为详情已加载而不再补拉，
+    最终只显示“输入参数”标题却没有内容。因此工具部件按各自的 include 判定。
+    """
+    if kind == "tool_call":
+        return "detail" if "tool_call" in include else "summary"
+    if kind == "tool_result":
+        return "detail" if "tool_result" in include else "summary"
+    return mode
 
 
 def _activity_parts_from_projection(
@@ -156,7 +182,7 @@ def _activity_parts_from_projection(
             TurnResponsePartDTO(
                 part_id=f"{item_id}:part:{part_ordinal}",
                 kind=kind,
-                projection=mode,
+                projection=_part_projection(kind, mode=mode, include=include),
                 status=_response_status(raw.get("status")),
                 source=TurnResponseSourceDTO(
                     message_sequence=message_sequence,
@@ -218,11 +244,17 @@ def _tool_payloads(
     records: Sequence[Mapping[str, object]],
 ) -> tuple[
     dict[tuple[str, int, int], tuple[str, bool]],
+    dict[str, tuple[str, bool] | None],
     dict[tuple[str, int], tuple[str, bool]],
+    dict[tuple[int, int], tuple[str, bool]],
+    dict[int, tuple[str, bool]],
 ]:
     """读取详情正文，但不据此决定 Item identity、数量或顺序。"""
     calls: dict[tuple[str, int, int], tuple[str, bool]] = {}
+    calls_by_id: dict[str, tuple[str, bool] | None] = {}
     results: dict[tuple[str, int], tuple[str, bool]] = {}
+    calls_by_position: dict[tuple[int, int], tuple[str, bool]] = {}
+    results_by_sequence: dict[int, tuple[str, bool]] = {}
     for record in records:
         sequence = record.get("_indexed_sequence")
         if not isinstance(sequence, int) or isinstance(sequence, bool):
@@ -239,14 +271,24 @@ def _tool_payloads(
                 call_id = call.get("id")
                 if not isinstance(call_id, str) or not call_id:
                     continue
-                calls[(call_id, sequence, call_index)] = _bounded(
+                payload = _bounded(
                     json.dumps(call.get("args", {}), ensure_ascii=False, default=str)
                 )
+                calls[(call_id, sequence, call_index)] = payload
+                if call_id in calls_by_id:
+                    # 原始 provider call ID 可能跨消息复用；存在歧义时禁止
+                    # 用没有坐标的 scoped ID 猜测参数归属。
+                    calls_by_id[call_id] = None
+                else:
+                    calls_by_id[call_id] = payload
+                calls_by_position[(sequence, call_index)] = payload
         elif message.get("type") == "tool":
             call_id = data.get("tool_call_id")
             if isinstance(call_id, str) and call_id:
-                results[(call_id, sequence)] = _bounded(data.get("content"))
-    return calls, results
+                payload = _bounded(data.get("content"))
+                results[(call_id, sequence)] = payload
+                results_by_sequence[sequence] = payload
+    return calls, calls_by_id, results, calls_by_position, results_by_sequence
 
 
 def _enrich_activity_parts(
@@ -256,7 +298,13 @@ def _enrich_activity_parts(
     projection: Mapping[str, object],
 ) -> list[TurnResponsePartDTO]:
     """用定点加载的 JSONL payload 丰富 canonical part，保持后端原顺序。"""
-    calls, results = _tool_payloads(records)
+    (
+        calls,
+        calls_by_id,
+        results,
+        calls_by_position,
+        results_by_sequence,
+    ) = _tool_payloads(records)
     result_call_ids = {
         part.tool_call_id
         for part in parts
@@ -274,6 +322,18 @@ def _enrich_activity_parts(
                 if assistant_sequence is not None and call_index is not None
                 else None
             )
+            if payload is None and assistant_sequence is not None and call_index is not None:
+                # TODO: 历史 stream scoped ID 完成迁移后，可删除位置索引回退。
+                # canonical stream 使用 model-call scoped ID，而 checkpoint JSONL
+                # 保存 provider 原始 ID；assistant sequence + call index 是同一
+                # 条消息内的显式位置，可安全完成这次 ID 载体转换。
+                payload = calls_by_position.get((assistant_sequence, call_index))
+            if payload is None:
+                # 实时 canonical tool-call 使用 model-call scoped ID，且有些
+                # 历史 projection 不携带 assistant sequence/call index。此时
+                # 只能在原始 call ID 全局唯一时回填，复用 ID 则保持为空并
+                # 继续透明暴露数据不完整，不能猜测参数归属。
+                payload = calls_by_id.get(_raw_tool_call_id(part.tool_call_id))
             outcome_unknown = terminal_turn and part.tool_call_id not in result_call_ids
             enriched.append(
                 part.model_copy(
@@ -294,6 +354,11 @@ def _enrich_activity_parts(
                 if result_sequence is not None
                 else None
             )
+            if payload is None and result_sequence is not None:
+                # TODO: 历史 stream scoped ID 完成迁移后，可删除结果序号回退。
+                # result message sequence 是工具结果的权威位置；不能要求
+                # checkpoint 的 raw provider ID 与 stream scoped ID 相同。
+                payload = results_by_sequence.get(result_sequence)
             enriched.append(
                 part.model_copy(
                     update={
@@ -384,11 +449,21 @@ def response_parts_from_records(
         include=include,
     )
     if tool_call_ids is not None:
+        # 定点详情可能传 model-call scoped ID，而 canonical part 的
+        # tool_call_id 可能是 provider 原始 ID（或反之）。两侧统一归一到原始
+        # call ID 后再比对，避免因 ID 载体不一致把命中的工具部件全部过滤掉。
+        selected_raw_ids = {
+            _raw_tool_call_id(tool_call_id) for tool_call_id in tool_call_ids
+        }
+        selected_raw_ids.discard(None)
         parts = [
             part
             for part in parts
             if part.kind not in {"tool_call", "tool_result"}
-            or part.tool_call_id in tool_call_ids
+            or (
+                part.tool_call_id is not None
+                and _raw_tool_call_id(part.tool_call_id) in selected_raw_ids
+            )
         ]
     if mode == "detail":
         parts = _enrich_activity_parts(parts, records, projection=projection)

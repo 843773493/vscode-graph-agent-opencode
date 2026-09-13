@@ -460,7 +460,7 @@ class ConfigService:
         blocked = self._workspace_state_store.migrate_legacy_config_secrets(config_key)
         if blocked:
             raise SecretReferenceRequiredError(
-                "旧 Workspace SQLite secret 必须重新导入引用: "
+                "旧 Workspace SQLite 含无法恢复的秘密摘要，必须重新导入: "
                 + ", ".join(blocked)
             )
         record = self._workspace_state_store.get_config(config_key)
@@ -760,7 +760,7 @@ class ConfigService:
                 )
                 if blocked:
                     raise SecretReferenceRequiredError(
-                        "旧 active snapshot 的 secret 必须重新导入引用: "
+                        "旧 active snapshot 含无法恢复的秘密摘要，必须重新导入: "
                         + ", ".join(blocked)
                     )
                 active = self._workspace_state_store.get_active_config_snapshot(
@@ -1101,7 +1101,7 @@ class ConfigService:
         candidate_ref: str,
         health_proof: dict[str, object],
     ) -> ConfigReloadStatus:
-        """用新 generation 的完整 proof 恢复并提升 recovery_required candidate。"""
+        """用新 generation 的完整 proof 提升已成功启动的 Workspace candidate。"""
 
         if self._workspace_state_store is None:
             raise ConfigConflictError("当前 Workspace 没有 Workspace-owned 状态库")
@@ -1109,9 +1109,10 @@ class ConfigService:
             candidate_ref=candidate_ref,
             allow_recovery=True,
         )
-        if pending.state != "recovery_required":
+        if pending.state not in {"pending_restart", "recovery_required"}:
             raise ConfigConflictError(
-                "Workspace pending resolve 只允许 recovery_required candidate: "
+                "Workspace pending resolve 只允许 pending_restart 或 "
+                "recovery_required candidate: "
                 f"state={pending.state}"
             )
         expected_proof = self._pending_restart_health_proof(
@@ -1124,7 +1125,7 @@ class ConfigService:
             )
         if not pending.target_generation or not pending.fencing_token:
             raise ConfigConflictError(
-                "Workspace recovery candidate 缺少 target generation 或 fencing token"
+                "Workspace pending candidate 缺少 target generation 或 fencing token"
             )
         active = self._workspace_state_store.get_active_config_snapshot(
             self._CONFIG_DOMAIN
@@ -1136,18 +1137,28 @@ class ConfigService:
 
         attempt_id = new_config_id("attempt")
         apply_id = new_config_id("apply")
+        resolve_source = (
+            "workspace-recovery-resolve"
+            if pending.state == "recovery_required"
+            else "workspace-restart-resolve"
+        )
+        resolve_event_suffix = (
+            "recovery_active"
+            if pending.state == "recovery_required"
+            else "restart_active"
+        )
         claim = self._workspace_state_store.begin_config_apply(
             config_domain=self._CONFIG_DOMAIN,
             candidate_id=pending.candidate_id,
             attempt_id=attempt_id,
             apply_id=apply_id,
-            owner="workspace-recovery-resolve",
+            owner=resolve_source,
             base_active_revision=active.active_revision,
             target_generation=pending.target_generation,
             pending_revision=pending.pending_revision,
             source_baseline=pending.source_baseline,
             active_baseline=active.source_baseline,
-            expected_candidate_state="recovery_required",
+            expected_candidate_state=pending.state,
         )
         baseline = pending.source_baseline
         layer_revisions: dict[str, int] = {}
@@ -1195,7 +1206,7 @@ class ConfigService:
                 expected_pending_state="applying",
                 expected_fencing_token=claim.fencing_token,
                 event=ConfigEventInput(
-                    event_id=f"config:{pending.candidate_id}:recovery_active",
+                    event_id=f"config:{pending.candidate_id}:{resolve_event_suffix}",
                     config_domain=self._CONFIG_DOMAIN,
                     candidate_id=pending.candidate_id,
                     attempt_id=attempt_id,
@@ -1204,7 +1215,7 @@ class ConfigService:
                     commit_revision=None,
                     active_revision=None,
                     pending_revision=pending.pending_revision,
-                    source="workspace-recovery-resolve",
+                    source=resolve_source,
                     result="applied",
                     activation_scope=workspace_config_policy().activation_scope_for(
                         changed_paths
@@ -1236,7 +1247,7 @@ class ConfigService:
                     commit_revision=None,
                     active_revision=active.active_revision,
                     pending_revision=pending.pending_revision,
-                    source="workspace-recovery-resolve",
+                    source=resolve_source,
                     result="recovery_required",
                     activation_scope=workspace_config_policy().activation_scope_for(
                         changed_paths

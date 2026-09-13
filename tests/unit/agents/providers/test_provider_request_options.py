@@ -408,6 +408,75 @@ def test_request_overrides_replace_output_parameter_without_model_branch():
     assert model._default_params["max_tokens"] is None
 
 
+def test_build_model_defaults_no_proxy_to_false():
+    """未显式配置 no_proxy 时，模型默认走系统代理（保持原有行为）。"""
+    model = build_model_from_provider(
+        provider={
+            "id": "backup_3",
+            "custom_llm_provider": "openai",
+            "model": "gpt-5.4-mini",
+            "api_key": "test-key",
+            "endpoint": "https://example.com/v1",
+            "api_mode": _chat_api_mode(),
+        },
+        runtime_config={},
+    )
+
+    assert isinstance(model, BoxteamLiteLLMChatModel)
+    assert model.no_proxy is False
+
+
+def test_build_model_passes_no_proxy_to_chat_model():
+    """provider.request_options.no_proxy=true 应透传到 chat 模型。"""
+    model = build_model_from_provider(
+        provider={
+            "id": "backup_3",
+            "custom_llm_provider": "openai",
+            "model": "DeepSeek-V4.1-Flash",
+            "api_key": "test-key",
+            "endpoint": "http://100.64.0.58:8079/v1",
+            "api_mode": _chat_api_mode(),
+            "request_options": {"no_proxy": True},
+        },
+        runtime_config={},
+    )
+
+    assert isinstance(model, BoxteamLiteLLMChatModel)
+    assert model.no_proxy is True
+
+
+def test_build_model_rejects_non_boolean_no_proxy():
+    """provider.request_options.no_proxy 必须是布尔值。"""
+    with pytest.raises(TypeError, match="no_proxy"):
+        build_model_from_provider(
+            provider={
+                "id": "backup_3",
+                "custom_llm_provider": "openai",
+                "model": "gpt-5.4-mini",
+                "api_key": "test-key",
+                "endpoint": "https://example.com/v1",
+                "api_mode": _chat_api_mode(),
+                "request_options": {"no_proxy": "true"},
+            },
+            runtime_config={},
+        )
+
+
+def test_no_proxy_injects_trust_env_false_client():
+    """no_proxy=true 时应注入 trust_env=False 的 HTTP 客户端。"""
+    model = BoxteamLiteLLMChatModel(
+        model="openai/DeepSeek-V4.1-Flash",
+        api_key="test-key",
+        api_base="http://100.64.0.58:8079/v1",
+        no_proxy=True,
+    )
+
+    client = model._provider_http_client(is_async=False)
+    assert client is not None
+    # 缓存复用：同一实例重复获取应返回同一个客户端
+    assert model._provider_http_client(is_async=False) is client
+
+
 def test_build_model_rejects_unknown_provider_request_options():
     """provider.request_options 拼错字段时应立即暴露。"""
     with pytest.raises(ValueError, match="extra_body"):

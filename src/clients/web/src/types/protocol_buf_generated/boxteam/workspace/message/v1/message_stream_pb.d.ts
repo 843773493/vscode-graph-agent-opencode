@@ -342,6 +342,16 @@ export declare type ToolCall = Message<"boxteam.workspace.message.v1.ToolCall"> 
    * @generated from field: google.protobuf.Timestamp completed_at = 12;
    */
   completedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional string tool_invocation_id = 13;
+   */
+  toolInvocationId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_attempt_id = 14;
+   */
+  toolAttemptId?: string | undefined;
 };
 
 /**
@@ -378,6 +388,16 @@ export declare type ToolCallDelta = Message<"boxteam.workspace.message.v1.ToolCa
    * @generated from field: optional bool arguments_complete = 5;
    */
   argumentsComplete?: boolean | undefined;
+
+  /**
+   * @generated from field: optional string tool_invocation_id = 6;
+   */
+  toolInvocationId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_attempt_id = 7;
+   */
+  toolAttemptId?: string | undefined;
 };
 
 /**
@@ -414,6 +434,16 @@ export declare type ToolCallCompleted = Message<"boxteam.workspace.message.v1.To
    * @generated from field: optional bool arguments_complete = 5;
    */
   argumentsComplete?: boolean | undefined;
+
+  /**
+   * @generated from field: optional string tool_invocation_id = 6;
+   */
+  toolInvocationId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_attempt_id = 7;
+   */
+  toolAttemptId?: string | undefined;
 };
 
 /**
@@ -440,6 +470,16 @@ export declare type ToolStarted = Message<"boxteam.workspace.message.v1.ToolStar
    * @generated from field: string tool_name = 3;
    */
   toolName: string;
+
+  /**
+   * @generated from field: optional string tool_invocation_id = 4;
+   */
+  toolInvocationId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_attempt_id = 5;
+   */
+  toolAttemptId?: string | undefined;
 };
 
 /**
@@ -491,6 +531,16 @@ export declare type ToolCompleted = Message<"boxteam.workspace.message.v1.ToolCo
    * @generated from field: string completion_reason = 8;
    */
   completionReason: string;
+
+  /**
+   * @generated from field: optional string tool_invocation_id = 9;
+   */
+  toolInvocationId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_attempt_id = 10;
+   */
+  toolAttemptId?: string | undefined;
 };
 
 /**
@@ -778,6 +828,16 @@ export declare type ToolExecutionSnapshot = Message<"boxteam.workspace.message.v
    * @generated from field: google.protobuf.Timestamp completed_at = 14;
    */
   completedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional string tool_invocation_id = 15;
+   */
+  toolInvocationId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_attempt_id = 16;
+   */
+  toolAttemptId?: string | undefined;
 };
 
 /**
@@ -1082,6 +1142,16 @@ export declare type ActiveState = Message<"boxteam.workspace.message.v1.ActiveSt
    * @generated from field: optional string detail_ref = 14;
    */
   detailRef?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_invocation_id = 15;
+   */
+  toolInvocationId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_attempt_id = 16;
+   */
+  toolAttemptId?: string | undefined;
 };
 
 /**
@@ -1245,6 +1315,11 @@ export declare type StreamSnapshot = Message<"boxteam.workspace.message.v1.Strea
    * @generated from field: optional boxteam.workspace.message.v1.RecoveryState recovery = 18;
    */
   recovery?: RecoveryState | undefined;
+
+  /**
+   * @generated from field: optional string workspace_id = 19;
+   */
+  workspaceId?: string | undefined;
 };
 
 /**
@@ -1311,6 +1386,26 @@ export declare type MessageStreamEvent = Message<"boxteam.workspace.message.v1.M
    * @generated from field: optional string job_id = 11;
    */
   jobId?: string | undefined;
+
+  /**
+   * @generated from field: optional string workspace_id = 12;
+   */
+  workspaceId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_call_id = 13;
+   */
+  toolCallId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_invocation_id = 14;
+   */
+  toolInvocationId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_attempt_id = 15;
+   */
+  toolAttemptId?: string | undefined;
 
   /**
    * @generated from oneof boxteam.workspace.message.v1.MessageStreamEvent.payload

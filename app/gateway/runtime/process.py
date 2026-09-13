@@ -80,8 +80,7 @@ def _windows_process_is_alive(pid: int) -> bool:
     )
     if result.returncode != 0:
         raise RuntimeError(
-            "Windows 进程状态查询失败: "
-            f"pid={pid}, stderr={result.stderr.strip()}"
+            f"Windows 进程状态查询失败: pid={pid}, stderr={result.stderr.strip()}"
         )
     return any(
         len(row) >= 2 and row[1] == str(pid)
@@ -242,6 +241,10 @@ def allocate_local_port() -> int:
 
 def is_local_port_available(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        # 发布版默认 Workspace 固定端口在重启后可能短暂处于 TIME_WAIT；POSIX
+        # 服务端同样允许复用该地址，探测必须与实际监听语义保持一致。
+        if os.name == "posix":
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind(("127.0.0.1", port))
         except OSError:
@@ -301,9 +304,7 @@ def resolve_python_executable(_: Path) -> Path:
         executable = Path(configured).expanduser()
         # TODO: Windows 将无盘符根路径（如 /workspace）表示为 rooted path，不能只依赖 pathlib.is_absolute。
         if not os.path.isabs(str(executable)):
-            raise ValueError(
-                f"BOXTEAM_PYTHON_BIN 必须是绝对路径: {configured}"
-            )
+            raise ValueError(f"BOXTEAM_PYTHON_BIN 必须是绝对路径: {configured}")
         # 不解引用 venv 的 python 符号链接；真实路径会丢失 pyvenv.cfg 上下文。
         return executable
     return Path(sys.executable).absolute()
@@ -341,8 +342,7 @@ async def wait_for_http_ok(
 
     detail = f"，最后错误: {last_error}" if last_error else ""
     raise TimeoutError(
-        f"目标服务在 {GATEWAY_PROCESS_READY_TIMEOUT_SECONDS} 秒内未就绪: "
-        f"{url}{detail}"
+        f"目标服务在 {GATEWAY_PROCESS_READY_TIMEOUT_SECONDS} 秒内未就绪: {url}{detail}"
     )
 
 
@@ -421,12 +421,7 @@ def start_local_node_service_process(
     if service not in {"terminal", "browser"}:
         raise ValueError(f"不支持的本地辅助服务: {service}")
     backend_path = (
-        project_root
-        / "src"
-        / "workspace-services"
-        / service
-        / "server"
-        / "backend.js"
+        project_root / "src" / "workspace-services" / service / "server" / "backend.js"
     )
     if not backend_path.is_file():
         raise FileNotFoundError(f"辅助服务入口不存在: {backend_path}")
@@ -511,9 +506,7 @@ def start_ssh_tunnel_process(
         extra_arguments=forward_arguments,
     )
     log_store = ProcessLogStore(log_dir)
-    log_path = log_store.path_for(
-        f"ssh-tunnel-{forwards[0].local_port}.log"
-    )
+    log_path = log_store.path_for(f"ssh-tunnel-{forwards[0].local_port}.log")
     log_file = log_store.open(log_path.name)
     process = _spawn_logged_process(
         command,
@@ -598,10 +591,7 @@ def start_workspace_ssh_port_forward_process(
         "-N",
         "-T",
         "-L",
-        (
-            f"127.0.0.1:{forward.local_port}:"
-            f"{forward.remote_host}:{forward.remote_port}"
-        ),
+        (f"127.0.0.1:{forward.local_port}:{forward.remote_host}:{forward.remote_port}"),
         "-o",
         "ExitOnForwardFailure=yes",
         "-o",

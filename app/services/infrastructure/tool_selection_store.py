@@ -106,11 +106,27 @@ class ToolSelectionStore:
         payload = json.loads(self._path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise TypeError(f"工具选择配置必须是对象: {self._path}")
+        normalized: dict[str, object] = {}
         for agent_id, settings in payload.items():
-            if not isinstance(agent_id, str) or not isinstance(settings, dict):
+            if not isinstance(agent_id, str):
                 raise TypeError(f"工具选择配置 Agent 项格式错误: {self._path}")
-            self._agent_settings_from_payload(payload, agent_id)
-        return payload
+            if isinstance(settings, list):
+                # TODO: 在完成旧版工作区配置迁移后移除旧的 disabled-tools 列表兼容。
+                if not all(isinstance(tool_id, str) for tool_id in settings):
+                    raise TypeError(f"工具选择配置 Agent 项格式错误: {self._path}")
+                disabled = {tool_id: False for tool_id in settings}
+                normalized[agent_id] = {
+                    "execution_overrides": disabled,
+                    "model_visibility_overrides": dict(disabled),
+                }
+                continue
+            if not isinstance(settings, dict):
+                raise TypeError(f"工具选择配置 Agent 项格式错误: {self._path}")
+            normalized[agent_id] = settings
+
+        for agent_id in normalized:
+            self._agent_settings_from_payload(normalized, agent_id)
+        return normalized
 
     def _write(self, payload: dict[str, object]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
