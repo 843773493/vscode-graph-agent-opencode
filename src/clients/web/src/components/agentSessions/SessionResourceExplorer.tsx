@@ -478,8 +478,13 @@ export default function SessionResourceExplorer({
       }
     };
     const recovering = recoveringWorkspaceIds.has(workspaceId);
-    const failure = branch.error
-      ? workspaceFailurePresentation(workspace, branch.error)
+    const branchError = !branch.loading
+      && workspace?.status === "offline"
+      && workspace.connection_error
+      ? workspace.connection_error
+      : branch.error;
+    const failure = branchError
+      ? workspaceFailurePresentation(workspace, branchError)
       : null;
     return (
       <ul className="session-resource-list" role="group">

@@ -181,6 +181,8 @@ def _openai_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
 class _StreamPartState:
     """为单次模型响应分配稳定的 LangChain content part 身份。"""
 
+    _REASONING_ALIAS_TYPES = frozenset({"reasoning_content", "thinking"})
+
     next_index: int = 0
     active_kind: str | None = None
     active_part_id: str | None = None
@@ -192,6 +194,8 @@ class _StreamPartState:
     responses_tool_call_ids_by_output_index: dict[int, str] = field(
         default_factory=dict
     )
+    last_reasoning_alias_type: str | None = None
+    last_reasoning_alias_text: str | None = None
 
     def __post_init__(self) -> None:
         self.fallback_item_ids = {}
@@ -201,6 +205,35 @@ class _StreamPartState:
         self.active_part_id = None
         self.active_index = None
         self.active_provider_part_id = None
+
+    def accept_reasoning_alias(self, block_type: str, text: str) -> bool:
+        """过滤两个 carrier 对同一增量的重复表达。
+
+        部分 Chat Completions 兼容服务会把同一段增量同时暴露为
+        ``reasoning_content`` 和 ``thinking``。这两个 carrier 在正常情况下
+        仍然必须保持独立；只有相邻 carrier 类型不同且正文完全相同时，才
+        认定后一个是别名重复。接受后的 block 继续由 ``decorate`` 使用同一
+        part 身份合并。
+        """
+        # TODO: 待 LiteLLM/各 Chat Completions provider 明确 carrier alias 合同后，
+        # 用显式 provider 能力替换当前的相邻正文启发式判断。
+        if block_type not in self._REASONING_ALIAS_TYPES:
+            return True
+        is_duplicate = (
+            self.last_reasoning_alias_type in self._REASONING_ALIAS_TYPES
+            and self.last_reasoning_alias_type != block_type
+            and self.last_reasoning_alias_text == text
+        )
+        if is_duplicate:
+            return False
+        self.last_reasoning_alias_type = block_type
+        self.last_reasoning_alias_text = text
+        return True
+
+    def reset_reasoning_alias(self) -> None:
+        """在正文或工具边界后结束 carrier 别名去重窗口。"""
+        self.last_reasoning_alias_type = None
+        self.last_reasoning_alias_text = None
 
     def item_id(self, index: int) -> str:
         """为缺少 provider ID 的 reasoning item 保留稳定的本地身份。"""

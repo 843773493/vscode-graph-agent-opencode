@@ -127,7 +127,7 @@
 
 #### Scenario: 最终 checkpoint 引用既有 reasoning part
 
-- **WHEN** 最终 assistant checkpoint 的 `content_part_refs.id` 指向同一 Turn 已提交 reasoning Item 的 `metadata.block_id` 或相同 provider reasoning item identity
+- **WHEN** 最终 assistant checkpoint 的 typed `content_part_refs.id` 指向同一 Turn 已提交 reasoning Item 的 `projection_identity.block_id` 或相同 provider reasoning item identity
 - **THEN** history projection 将它视为既有逻辑 Item 的 carrier 引用，只返回原 canonical reasoning 的 identity、顺序和计时，不按最终 assistant item 再追加一次
 - **AND** 只有正文相等但持久 part/provider identity 不同的 reasoning 必须继续分别返回，后端不得退回正文去重
 

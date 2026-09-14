@@ -20,7 +20,7 @@ Session创建 MUST先在workspace `.boxteam/navigation/session-catalog.sqlite`�
 
 `session-control.sqlite` MUST为每个Session保存唯一`SessionLifecycleFence(state=active|deleting|tombstoned, lifecycle_generation, deletion_record_id?)`。所有会产生新持久副作用的Session入口 MUST先取得workspace跨进程`NavigationTopologyGate` shared、再取得该Session的`SessionLifecycleGate` exclusive，在fresh SQLite catalog查询目标active/locator并确认local fence active generation，于至多一个session-control事务建立durable lease/等价record后立即释放两锁；已存在execution/runtime lease可覆盖其内部callback。最终可见性publication重取topology shared→Session gate并fresh验证catalog active及fencing token；catalog已deleting时新可见性发布必须取消，仅允许先前准入的冻结operation收敛，不得新派生root/wakeup/child。导航parent/name变更只写workspace SQLite且不产生context；lock顺序固定为topology→至多一个Session gate→至多一个SQLite写事务，禁止反向等待、持两个Session gate/两个DB写事务或持锁跨模型/网络等待。
 
-`SessionOperationLease` MUST至少包含`lease_id`、`operation_kind=thread_creation|board_migration|collaboration_fanout|runtime_owner|execution|context_control|communication_source|communication_target|federated_call|remote_observation|attachment|fork_retention|session_catalog_mutation`、稳定`operation_identity`与preimage hash、捕获的`lifecycle_generation`、`holder_generation/fencing_token`、`state=active|settling|completed|cancelled|failed`、revision和可选`recovery_ref`；同generation/operation identity唯一且非终态可索引。专用record承担lease时 MUST提供同等字段/约束，并以显式`lease_state`或版本化全映射把自己的preparing/routing/published/aborted等状态归入上述非终态/terminal集合，不得按状态名称猜测。lease MUST NOT按墙钟自动到期。恢复owner只有在验证旧holder generation失效并CAS新token后才能继续原operation或进入settling；fence deleting后不得建新lease，旧lease只可完成/取消冻结operation且不得派生新root/wakeup/child。跨库主体先durable commit、lease后terminal；中间崩溃按稳定identity/recovery ref核对同一结果。删除方请求settling后仍必须等待原writer确认或幂等恢复核对，terminal前不能隔离节点；terminal后旧token callback必须失败。同一Session的catalog locator/lifecycle/归档等目标条目mutation MUST以`session_catalog_mutation`竞争gate，旁路写入fail closed。
+`SessionOperationLease` MUST至少包含`lease_id`、`operation_kind=thread_creation|board_migration|collaboration_fanout|runtime_owner|execution|context_control|debug_control|communication_source|communication_target|federated_call|remote_observation|attachment|fork_retention|session_catalog_mutation`、稳定`operation_identity`与preimage hash、捕获的`lifecycle_generation`、`holder_generation/fencing_token`、`state=active|settling|completed|cancelled|failed`、revision和可选`recovery_ref`；同generation/operation identity唯一且非终态可索引。独立Web/API调试mutation以`debug_control`准入，Agent内部可由既有execution lease覆盖；该短期准入与跨Turn外部调试进程lease分工明确。专用record承担lease时 MUST提供同等字段/约束，并以显式`lease_state`或版本化全映射把自己的preparing/routing/published/aborted等状态归入上述非终态/terminal集合，不得按状态名称猜测。lease MUST NOT按墙钟自动到期。恢复owner只有在验证旧holder generation失效并CAS新token后才能继续原operation或进入settling；fence deleting后不得建新lease，旧lease只可完成/取消冻结operation且不得派生新root/wakeup/child。跨库主体先durable commit、lease后terminal；中间崩溃按稳定identity/recovery ref核对同一结果。删除方请求settling后仍必须等待原writer确认或幂等恢复核对，terminal前不能隔离节点；terminal后旧token callback必须失败。同一Session的catalog locator/lifecycle/归档等目标条目mutation MUST以`session_catalog_mutation`竞争gate，旁路写入fail closed。
 
 `SessionLifecycleGate` MUST按`(workspace_id, canonical_session_id)`使用navigation控制根中不随Session日期node改变的跨进程OS shared/exclusive锁，打开前执行ID/path/no-symlink校验；`NavigationTopologyGate`另在workspace导航根提供跨进程shared/exclusive短锁。cold history/detail read在topology shared下取得fresh catalog locator和Session shared `SessionReadGuard`后释放topology锁，保持Session guard直到全部node/SQLite handles关闭并复核catalog/fence；已开始reader可完成，catalog deleting后新reader返回`session_deletion_pending`。删除owner逐Session关闭local fence前须等待read guard；锁对象生命周期内不得unlink/recreate，仅进程mutex或不能验证的锁语义必须fail closed。
 
@@ -96,6 +96,11 @@ catalog批量deleting commit之后，即使部分Session local fence尚active，
 
 - **WHEN** 显式迁移读取旧`session-catalog-index.json`、Folder manifest及嵌套`children/`树
 - **THEN** 迁移先冻结旧索引和完整ID/父链/locator映射，验证日期/ID/正文/SessionThread完整性，在不可见staging写入新SQLite和日期节点，再以单一可恢复切换点发布；失败保留旧数据供审计且正常新runtime不得双读旧JSON、扫盘补节点或给旧物理路径建立别名
+
+#### Scenario: 旧Session调试文件随main thread迁移
+
+- **WHEN** 旧Session节点存在`debug/node/`归属manifest或调试方案，显式SessionThread迁移准备发布该Session
+- **THEN** 共享maintenance gate/journal必须静态接线调试domain迁移步骤，按冻结Session→main thread映射定点登记并校验文件bytes/hash、方案ID/revision/lineage和目标thread归属，再将文件纳入同一staging/发布完整性门槛；失败保留旧原件且不报告完整迁移，正常runtime不读旧路径或扫盘补缺
 
 #### Scenario: catalog 损坏或备份落后
 
@@ -206,7 +211,7 @@ child thread MUST 拥有独立 Turn、item、history、active view和执行状�
 
 ### Requirement: durable Thread 与 resident runtime 必须分离
 
-系统 SHALL 将 SessionThread 的 durable identity、catalog metadata、GraphBinding、canonical history、checkpoint/context view、CSM control state和 ToolSet applied binding与进程内 resident runtime分离。当前 durable child thread的默认 idle unload threshold MUST 为30分钟；当 thread没有 active、runnable或pending execution，没有未收敛 model/tool call或 mutation transaction，没有 runtime lease，并且连续达到该阈值无 execution、消息准入或 runtime callback活动时，系统 MUST 只卸载可重建运行资源，不得删除、归档、重命名或改写该 thread的持久事实。
+系统 SHALL 将 SessionThread 的 durable identity、catalog metadata、GraphBinding、canonical history、checkpoint/context view、CSM control state和 ToolSet applied binding与进程内 resident runtime分离。当前 durable child thread的默认 idle unload threshold MUST 为30分钟；当 thread没有 active、runnable或pending execution，没有未收敛 model/tool call或 mutation transaction，没有 runtime lease，且debug owner已核实没有`launch_pending`进程claim、`starting|running|paused|stopping`调试进程或`reconcile_required`阻断，并连续达到该阈值无 execution、消息准入或 runtime callback活动时，系统 MUST 只卸载可重建运行资源，不得删除、归档、重命名或改写该 thread的持久事实。活动调试期间不累计idle时长；调试owner核实终态并结清lease后重新起算30分钟，residency owner只消费该阻断状态而不决定业务进程停止。
 
 普通 thread列表、状态、历史和详情读取 MUST 使用 cold read路径，不得仅因用户查看 child历史就初始化模型、工具、graph或可写 ContextStore runtime。新的用户消息、内部 wakeup或其它需要执行的操作 MUST 在准入时以原 `(session_id, thread_id)` 和GraphBinding延迟重建唯一 runtime owner；新runtime generation必须重新解析并逐字段验证原`graph_id、graph_revision、graph_schema_hash、capability_profile_hash`，不得因为进程缓存已清空或registry已有更新而改用latest graph。卸载前后已经提交的上下文字节、prefix epoch、tracked registration、diff基准和ToolSet binding必须保持一致。idle unload不得被解释为Skill/上下文到期，也不得生成 context item。
 
@@ -221,6 +226,11 @@ child thread MUST 拥有独立 Turn、item、history、active view和执行状�
 
 - **WHEN** idle deadline到达时child thread仍有active/pending execution、未收敛model/tool call或持有runtime lease
 - **THEN** 系统不得卸载该runtime；必须等待这些条件真实收敛并重新计算空闲窗口，不得伪造取消或完成状态
+
+#### Scenario: 活动调试进程阻止child卸载
+
+- **WHEN** child存在未结清的`launch_pending`进程claim或处于`starting|running|paused|stopping`，且fake clock越过30分钟，随后debug owner核实进程不存在/退出并结清lease
+- **THEN** 前一阶段thread仍resident且`blocking_reasons`含脱敏debug阻断；终态后重新起算完整30分钟，无其它阻断才可cold；停止失败或重启后进程状态无法确认时保留`reconcile_required`且不得靠`LifetimeScope`关闭虚报停止
 
 #### Scenario: 查看历史不恢复执行资源
 
@@ -487,7 +497,9 @@ board migration MUST使用不可见staging和单一coordinator可见性提交点
 
 `CanonicalItemRecord.status` 完整枚举固定为 `completed | partial | incomplete | cancelled | failed | unknown`，六者在 JSONL 中都表示终态；`completed` 表示 semantic item 的声明 payload 已完整收敛并可按 schema 正常投影，`partial` 表示截至中断/停止边界已持久化的完整 payload 快照但尚未达到正常语义完成边界；二者都只能写成一个 immutable JSONL item，不能把已提交的 `partial` 原地改成 `completed`。`open`、`active`、`running`、`draft` 和 `completed_empty` 只允许出现在内存 draft 或 assembly/Turn/control state，不能写入 canonical item。ItemDraft 只能从内部 `draft` 转移到上述六个终态之一；item 写入后不得更新、删除、覆盖、插入重排或改变 status。retry、resume、纠错必须追加新的 item identity，并用 `retry_of`/`resumes`/`supersedes` 关系连接旧 item；没有稳定 payload 的崩溃 draft 只能通过 control outcome 记录 execution lost，不能补造 `status=unknown` item。非 `completed` item 不得作为正常 final response；tool result 的已提交 payload 如果外部执行结果未确认，必须在其 typed payload 内使用 `tool_outcome=unknown` marker，且不可作为成功 replay input。`tool_outcome` 不是 `CanonicalItemRecord.status`，执行/控制记录的 outcome 也不得引入带 outcome 前缀的 unknown 状态别名。
 
-系统 SHALL 将用户输入、assistant 输出、reasoning、tool call、tool result、需要持久化的 runtime notice、压缩摘要和未知 Provider 扩展表达为带 schema version 的 `CanonicalItemRecord`。v2 的必填核心字段必须非空且同时存在：`format_version=2`、`record_type=item`、`item_sequence`、`item_id`、`semantic_kind`、`payload_kind`、`status`、`producer_ref`、`payload`、`content_hash`、`created_at` 和 `metadata`；其中 `metadata` 至少是空 object，`producer_ref` 是单一完整 payload producer，`payload` 必须与 `payload_kind` 匹配。`turn_id`、`turn_scope`、`message_group_id` 和 `wire_role` 是按语义可空/可省略的关联或投影字段，不得被 reader 当成隐含默认值。`semantic_kind` MUST 使用固定枚举 `user_input | assistant_output | reasoning | tool_call | tool_result | runtime_notice | compaction_summary | attachment | extension`，`payload_kind` MUST 使用完整枚举 `text | structured_content | tool_call | tool_result | summary | attachment_ref | opaque | extension`。不得同时使用含义重叠的通用 `kind` 作为 canonical 语义字段。`assistant_text` 和 `final_response` 是 projection，不是 `semantic_kind` 枚举值。只对当前请求生效的静态或动态 system context 不得因为最终使用了 system/developer wire role 就自动成为 canonical item。
+系统 SHALL 将用户输入、assistant 输出、reasoning、tool call、tool result、需要持久化的 runtime notice、压缩摘要和未知 Provider 扩展表达为带 schema version 的 `CanonicalItemRecord`。v2 的必填核心字段必须非空且同时存在：`format_version=2`、`record_type=item`、`item_sequence`、`item_id`、`semantic_kind`、`payload_kind`、`status`、`producer_ref`、`payload`、`content_hash`、`created_at` 和 `extensions`；其中 `extensions` 至少是空 object，`producer_ref` 是单一完整 payload producer，`payload` 必须与 `payload_kind` 匹配。`turn_id`、`turn_scope`、`message_group_id`、`projection_group`、`projection_identity`、`tool_result_evidence`、`source_manifest` 和 `wire_role` 是按语义可空/可省略的 typed 关联或投影字段，不得被 reader 当成隐含默认值；v2 item-line 禁止通用 `metadata` 顶层字段。`semantic_kind` MUST 使用固定枚举 `user_input | assistant_output | reasoning | tool_call | tool_result | runtime_notice | compaction_summary | attachment | extension`，`payload_kind` MUST 使用完整枚举 `text | structured_content | tool_call | tool_result | summary | attachment_ref | opaque | extension`。不得同时使用含义重叠的通用 `kind` 作为 canonical 语义字段。`assistant_text` 和 `final_response` 是 projection，不是 `semantic_kind` 枚举值。只对当前请求生效的静态或动态 system context 不得因为最终使用了 system/developer wire role 就自动成为 canonical item。
+
+`ProjectionGroup(ordinal,size,content_form)` 的 `content_form` 只能为 `str|list`；它只在一个明确 `message_group_id` 下的多 item carrier 出现，要求 `size>=2`、ordinal 从 0 连续覆盖至 `size-1`、最后一个 anchor 为 `tool_call` 且整组 owner/Turn/producer 一致。`ItemProjectionIdentity` 的 message/model-call/part/block identity、`ToolResultEvidence` 的文本 tool result call/result identity与 `execution_confirmed`、`ItemSourceManifest` 的 source revision/visibility/protection必须按 design 的 typed schema 校验；缺少必需 identity 时不得用正文、时间、邻接、item id或可选扩展猜测。`extensions` 仅接受 namespaced key 指向 `{extension_version,value,protection,encoding?}` envelope；合法未知扩展可原样保留，但任何核心选择、归组、去重、结果确认、恢复或安全判断都不得读取扩展 value。需要新的决策能力时必须先增加 typed core contract/version/验证，再由 producer 提交该类型；不得靠新 JSON key 暗中启用。该新字段形态直接替换旧实验 v2，不提供旧 v2 `metadata` reader、双写、别名或自动转换；既有一次性 v1 importer 不因此成为正常运行时兼容路径。
 
 `turn_scope=turn_root` 必须有非空 `turn_id`，且只能用于该 Turn 唯一的 `semantic_kind=user_input` root；有非空 `turn_id` 的普通 Turn item 必须使用 `turn_scope=turn_member`。反向地，任何非空 `turn_id` 都必须配合 `turn_root` 或 `turn_member`，不得出现 `turn_id != NULL` 且 `turn_scope=NULL`。`turn_scope=ambient` 或 `turn_scope=pending_next_turn` 必须 `turn_id=NULL`，不得进入普通 Turn member/root 集合；持久化的 pending runtime notice 必须是 `semantic_kind=runtime_notice` 且 `turn_scope=pending_next_turn`，request-only notice 不产生 CanonicalItemRecord。若 `turn_id`、`turn_scope`、`message_group_id` 均为 null，item 不属于任何 Turn，reader 不得从相邻 item、wire role 或 message group 推断归属；`message_group_id` 非空也不能改变 root/member/ambient 约束。
 
@@ -501,7 +513,7 @@ board migration MUST使用不可见staging和单一coordinator可见性提交点
 | `assistant_output` | `text`, `structured_content` | `completed`, `partial`, `incomplete`, `cancelled`, `failed`, `unknown` | 只有 `completed` 可参与 finalization；不得有 `tool_outcome` |
 | `reasoning` | `text`, `summary`, `opaque`, `extension` | `completed`, `partial`, `incomplete`, `cancelled`, `failed`, `unknown` | `opaque`/`extension` 必须有 protection/encoding metadata；不得作为 final item |
 | `tool_call` | `tool_call`, `structured_content` | `completed`, `partial`, `incomplete`, `cancelled`, `failed`, `unknown` | 必须有 tool invocation/call identity；不得用 `tool_outcome` 表示 call status |
-| `tool_result` | `text`, `structured_content`, `tool_result`, `opaque`, `extension` | `completed`, `partial`, `incomplete`, `cancelled`, `failed`, `unknown` | 必须有 tool attempt/result identity；`status=completed` 时 `tool_outcome` 可为 `success|failure|cancelled|unknown`，但外部结果未确认时必须为 `unknown`；其它 status 只能省略 marker 或使用 `unknown`；只有 `status=completed` 且 `tool_outcome=success` 才可 replay |
+| `tool_result` | `text`, `structured_content`, `tool_result`, `opaque`, `extension` | `completed`, `partial`, `incomplete`, `cancelled`, `failed`, `unknown` | text 的 call/result identity 与确认状态必须在 typed `tool_result_evidence`，其它 payload 按自身 typed schema 保存；未确认结果必须改用可承载 `tool_outcome=unknown` 的 typed payload，不能选 text；其它 status 只能省略 marker 或使用 `unknown`；只有 `status=completed` 且 `tool_outcome=success` 才可 replay |
 | `runtime_notice` | `text`, `structured_content`, `opaque`, `extension` | `completed` | pending notice 必须使用 `pending_next_turn` 或 `ambient` scope；append 失败由 control outcome 记录，不补造 item；不得有 `tool_outcome` |
 | `compaction_summary` | `summary`, `structured_content` | `completed` | 必须绑定 compaction/view revision；失败由 control outcome 记录，不补造 item；不得有 `tool_outcome` |
 | `attachment` | `attachment_ref` | `completed` | payload 必须含稳定 ref、长度和 hash/availability；不得有 `tool_outcome` |
@@ -768,7 +780,7 @@ middleware MUST NOT 原地修改既有 canonical item，也不得把对 `ModelRe
 
 ### Requirement: Context contribution 和 plan selection 顺序必须可恢复
 
-被 `selection` 绑定且 `included=true` 的每个 `ContextContribution` MUST 在对应 `assembly_id` scope 内取得独立、稳定、不可重写的 `contribution_ordinal`；unsealed plan 中仅登记为 registry 的 contribution 和 `included=false` optional omission 不带该 binding。`ContextRequestPlan.selection` MUST 是 Saver 冻结的有序列表，每个 canonical/request-only/overlay/tool-set source ref 取得唯一 `plan_ordinal`，并记录 `selection_kind`、source overlay/base/delta role、visibility/protection/availability、omission/loss 及可得 source identity；只有 `included=true` 才强制 source revision、逻辑 content length 和恰一个 source hash token。request-only included entry 才强制 sealed detail_ref，tool_set entry 使用独立 ToolSetRef manifest，canonical entry 不带 detail_ref。`assembly_id` 是该次 plan/selection 的唯一持久范围。`ContextAssemblySnapshot`/SQLite `assembly_item_refs` 必须持久化这些字段及 content hash；omitted entry 的 detail、正文 hash/length 和 contribution ordinal 可以 null/未分配，已知 metadata 必须一致。重启后按 ordinal 恢复，不能按 `created_at`、`contribution_id`、物理邻接或 projector 本地规则猜顺序。LangChain、native Provider 和 Web history 必须消费同一 selection；只有 initial root 中启用的 contribution 可以合并到唯一 system/developer/instructions item，第一条真实用户消息后的 request-only/source/runtime/compaction contribution 必须保持独立 user-role item且不得与相邻 user item合并；Anthropic 中途 system role仅保留TODO。ToolSetRef只能进入Provider tools/tool-config，二者都不得被projector无条件prepend到canonical messages。optional omitted entry只保留omission/loss metadata并跳过正文/工具定义，required omission必须拒绝seal/dispatch。顺序或ordinal不一致必须返回plan-order-integrity error。
+被 `selection` 绑定且 `included=true` 的每个 `ContextContribution` MUST 在对应 `assembly_id` scope 内取得独立、稳定、不可重写的 `contribution_ordinal`；unsealed plan 中仅登记为 registry 的 contribution 和 `included=false` optional omission 不带该 binding。`ContextContribution` 本体 SHALL 显式声明 `selection_role=direct|backing_only`、`replacement_policy=immutable|replaceable` 和 typed `source_binding?`；source-backed contribution还须携带由source owner声明的typed`root_placement=root_eligible|tail_only`，非source contribution不得伪造资格。selection role决定是否可独立候选，replacement policy只允许同 owner/slot/revision CAS 更新未封存 registry，source binding承载alias/overlay ref、role、epoch并与selection manifest校验。`selection_only`、`replaceable_source`、`source_ref`、`overlay_ref`、`overlay_role`、`overlay_id`、`source_overlay_epoch` 不能作为自由metadata key影响行为，根指令资格也不得放在extensions。owner-thread registry SHALL 为每次登记返回 `RegisteredContribution(contribution, source_ordinal)`，持久分配不重用的非负 source ordinal；ledger/composer/plan builder不得从 contribution、扩展或内存计数补造它。`source_ordinal` 不属于 contribution 本体，也不等于 assembly-bound `contribution_ordinal` 或 sealed selection 的 `plan_ordinal`。`ContextRequestPlan.selection` MUST 是 Saver 冻结的有序列表，每个 canonical/request-only/overlay/tool-set source ref 取得唯一 `plan_ordinal`，并记录 `selection_kind`、source overlay/base/delta role、visibility/protection/availability、omission/loss 及可得 source identity；只有 `included=true` 才强制 source revision、逻辑 content length 和恰一个 source hash token。request-only included entry 才强制 sealed detail_ref，tool_set entry 使用独立 ToolSetRef manifest，canonical entry 不带 detail_ref。`assembly_id` 是该次 plan/selection 的唯一持久范围。`ContextAssemblySnapshot`/SQLite `assembly_item_refs` 必须持久化这些字段及 content hash；omitted entry 的 detail、正文 hash/length 和 contribution ordinal 可以 null/未分配，已知 typed source identity 必须一致。重启后按 ordinal 恢复，不能按 `created_at`、`contribution_id`、物理邻接或 projector 本地规则猜顺序。LangChain、native Provider 和 Web history 必须消费同一 selection；同epoch新增source一律独立user-role item，仅首次assembly或实际compaction/rewind/Provider ToolSet hard rebase/fork目标首次assembly的新root可合并`root_eligible`有效完整状态，`tail_only`始终独立user-role，旧sealed bytes与lineage不改写；Anthropic中途system仅保留TODO。ToolSetRef只能进入Provider tools/tool-config，二者都不得被projector无条件prepend到canonical messages。optional omitted entry只保留omission/loss metadata并跳过正文/工具定义，required omission必须拒绝seal/dispatch。顺序或ordinal不一致必须返回plan-order-integrity error。
 
 该要求的最小结构合同固定如下，字段不得仅由实现内部对象隐含：
 
@@ -788,10 +800,15 @@ ContextRef
 
 ContextContribution
 ├── contribution_id, contribution_kind, request_only=true, body/detail_ref
+├── selection_role=direct|backing_only, replacement_policy=immutable|replaceable
+├── source_binding?={source_ref?,overlay_ref?,overlay_id?,overlay_role,source_overlay_epoch?}
 ├── source_revision, content_length
 ├── content_hash? / redacted_stable_digest? # exactly one
 ├── protection, visibility
+├── extensions                 # namespaced/versioned；不得参与核心决策
 └── ordinal_binding?={assembly_id, contribution_ordinal} # 仅在 sealed assembly selection 中存在
+
+RegisteredContribution={contribution, source_ordinal} # owner-thread registry 分配，不属于 contribution 本体
 
 ToolSetRef
 ├── ref_type=tool_set        # ToolSetRef discriminator；不属于 ContextRef.ref_type
@@ -859,6 +876,16 @@ ContextAssemblySnapshot
 `ContextRef.content_length` 的来源按 selection union 分流：`ref_type=canonical_item` 的 `canonical_history` 只能来自已提交 `item_catalog.payload_length`；`ref_type=request_only` 的 request-only/overlay selection 必须来自同一 assembly 的 sealed detail/contribution source manifest；`ToolSetRef.ref_type=tool_set` 的 tool_set selection 必须来自同一 plan/assembly 的 ToolSetSnapshot manifest。三者都不能从 JSONL line offset/length、wire message 长度或当前文件猜测或替代。`ContextRequestPlan.refs[]`、`.tool_set_refs[]`/`.contributions[]`只是source registries，`selection[]`是唯一的顺序、inclusion和loss authority；selection entry只能在对应`(session_id, thread_id, assembly_id)`scope中存在。每个entry必须恰好解析到一个tagged-union source ref：非`tool_set` selection解析到一个`ContextRef`，`selection_kind=tool_set`解析到一个`ToolSetRef`，且同一ref/contribution/tool-set snapshot不得在一个assembly重复选择。所有entry的`ref_type`、`ref_id`、visibility、protection、availability、base/delta role和`source_overlay_epoch`必须逐字段等于对应registry/manifest；只有`included=true`时才强制`source_revision`、逻辑`content_length`和恰一个`content_hash`/`redacted_stable_digest`，且request-only才强制非空、同assembly的`detail_ref`，contribution-backed entry才强制`contribution_ordinal`。`included=false`仅允许optional omission，仍保留tagged source ref、`plan_ordinal`、`omission_reason`、`loss`、`availability`和可得source identity；source revision、length、hash token、detail_ref、contribution_ordinal可以为null/未分配，已知metadata必须逐字段等于manifest。缺项、重复、union类型/selection_kind不匹配或任意顺序/绑定不一致返回`plan-order-integrity`，canonical或tool-set source不一致返回`source-mismatch`，request-only detail不可用或不一致返回`detail-unavailable`。`selection_kind=tool_set`不得引用`item_catalog`、普通`ContextContribution`正文或ContextRef，ToolSetRef正文只来自tool schema/config manifest及其hash。`ContextAssemblySnapshot`持有seal时selection的不可变副本以及`ref_manifest[]`/`tool_set_manifest[]`；`assembly_item_refs`必须以`UNIQUE(session_id, thread_id, assembly_id, plan_ordinal)`、`UNIQUE(session_id, thread_id, assembly_id, ref_type, ref_id)`、`UNIQUE(session_id, thread_id, assembly_id, contribution_id)`和`UNIQUE(session_id, thread_id, assembly_id, contribution_ordinal)`保护一致性，omitted entry不分配detail/contribution ordinal。plan registry还必须以`UNIQUE(session_id, thread_id, plan_id, tool_set_snapshot_id)`防止ToolSetRef重复。`contribution_ordinal`是assembly binding，不是contribution跨assembly的全局属性；同一contribution在不同assembly重新绑定时取得新的ordinal，但同一sealed assembly内不可重写。三种projector和history只能消费该selection副本，不得重新从registry排序或prepend；omitted canonical/request-only/tool_set entry只保留metadata/loss，分别跳过正文、detail和工具定义，不从当前source回退或生成空值。
 
 `ContextContribution.content_hash` 的正文 preimage 固定为 `{ "contribution_kind": <contribution_kind>, "body": <typed body> }` 的 `sha256:jcs:v1` RFC 8785 JCS bytes；`body` 在 draft 可以来自内存 ledger 的 inline typed value 或 typed source ref，sealed manifest 必须从已解析的 body/detail_ref 复核。preimage 不包含 contribution identity、ordinal、assembly、时间或 wire role。敏感/受保护正文不能暴露普通 hash 时，ref 使用恰一个 owner-thread-scoped `redacted_stable_digest=hmac-sha256:thread:v1:<64位小写hex>`，protected manifest 仍保存内部 content hash 并完成校验；canonical item ref 不使用该替代 token，始终使用 immutable item `content_hash`。
+
+#### Scenario: 自由 metadata 不得改变 contribution 决策
+
+- **WHEN** 两份 contribution 的 typed selection/replacement/source binding 完全相同，仅一个合法 namespaced `extensions` envelope 的 `value` 中包含 `selection_only`、`replaceable_source`、`source_ordinal` 或 overlay alias 等旧控制 key
+- **THEN** registry、ledger、seal 和三个 projector 得到相同的注册/选择/替换/顺序结果；顶层旧 `metadata` 控制字段直接 schema error，不能被当作兼容输入
+
+#### Scenario: registry ordinal 在重启和替换后保持单一权威
+
+- **WHEN** 同一 owner thread 登记多个 source，合法 replace 一个未封存 source slot，随后重启并在另一 assembly 选择它们
+- **THEN** registry 唯一分配并恢复 `RegisteredContribution.source_ordinal`，replace 保留 slot 序号；ledger不再分配 fallback，sealed `plan_ordinal`/`contribution_ordinal` 仍分别由 selection/assembly 冻结，不读取扩展或对象遍历顺序
 
 #### Scenario: 统一 selection 被三个读取面复用
 
@@ -969,7 +996,7 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 需要跨 checkpoint 或后续请求恢复的 delta MUST 追加为 `semantic_kind=runtime_notice`、`turn_scope=ambient`、`payload_kind=structured_content` 的 canonical item，并通过 `supersedes`/`materializes` relation 连接 source revision；只对当前 request 有效的 delta 可以保持 request-only，不能因此伪造 canonical item。overlay item 不得成为 Turn root/member，也不能因 wire role 为 `user` 而改变 Turn 顺序。多次 source change 必须形成 `A(base) -> B(delta) -> C(delta)` 的可恢复链，不得把 C 的 diff 错当作 A 的完整内容。
 
-同一`prefix_epoch`内的replay、branch/view读取、checkpoint restore和普通source edit MUST完整继承上一sealed assembly的wire bytes，并且只能在尾部追加新的canonical/source item。只有首次组装、实际compaction、rewind重建和ToolSet hard rebase可以登记并在下一份成功sealed assembly中应用不继承旧字节前缀的新epoch；`overlay_materialized`也只能在这四类边界内发生。rewind/compaction可先提交view和`PendingPrefixEpochTransition`，但pending记录没有wire bytes且不是applied epoch。rewind目标checkpoint若仍保留tracked registration但最新已注入revision已被移出active view，下一次真正model-call preparation必须从activation coordinator冻结的ResourceRegistry内存snapshot取得当前published revision，并把完整user-role revision、首个新epoch assembly与transition消费原子提交；snapshot不可用时保留view/transition但不产生半item或dispatch，且不得读文件、网络或其它provider。snapshot/untracked不自动恢复。普通source edit只追加delta。source base/detail不可恢复、source删除或source detail读取授权变化、revision/hash mismatch、Provider/projector profile不兼容或required detail缺失必须返回invalid/mismatch并阻止dispatch，不能用当前source静默重建旧request或以显式refresh暗中改写前缀。Gateway federation operation policy不属于source读取授权，也不参加该reconciliation。
+同一`prefix_epoch`内的replay、branch/view读取、checkpoint restore和普通source edit MUST完整继承上一sealed assembly的wire bytes，并且只能在尾部追加新的canonical/source item。只有首次组装、实际compaction、rewind重建和Provider可见ToolSet hard rebase可以登记并在下一份成功sealed assembly中应用不继承旧字节前缀的新epoch；`overlay_materialized`也只能在这四类边界内发生。rewind/compaction可先提交view和`PendingPrefixEpochTransition`，但pending记录没有wire bytes且不是applied epoch。rewind目标checkpoint若仍保留tracked registration但最新已注入revision已被移出active view，下一次真正model-call preparation必须从activation coordinator冻结的ResourceRegistry内存snapshot取得当前published revision，持久化完整恢复事实并与首个新epochassembly和transition消费原子提交；只有source owner typed `root_placement=root_eligible`且实际重建新epoch时才能把有效状态合并新root，`tail_only`仍为独立user-role item。snapshot不可用时保留view/transition但不产生半item或dispatch，且不得读文件、网络或其它provider。snapshot/untracked不自动恢复。普通source edit只追加delta。source base/detail不可恢复、source删除或source detail读取授权变化、revision/hash mismatch、Provider/projector profile不兼容或required detail缺失必须返回invalid/mismatch并阻止dispatch，不能用当前source静默重建旧request或以显式refresh暗中改写前缀。Gateway federation operation policy不属于source读取授权，也不参加该reconciliation。
 
 每次会改变运行时上下文的操作都必须比较 history view 与 source overlay 两类状态，并形成 reconciliation outcome：`history_view_changed`、`overlay_reused`、`delta_appended`、`overlay_materialized` 或 `overlay_invalid`，同时记录 `prefix_epoch_reason`。只有合法新 prefix epoch 内的 `overlay_materialized` 才能改变 source base。source 不可读、source detail读取授权改变、revision/hash mismatch 或 detail 缺失时，系统必须显式返回 source-mismatch/detail-unavailable，不能用当前 source 静默重建旧 request。
 
@@ -981,7 +1008,7 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 #### Scenario: rewind 到 diff 之前恢复 tracked source 的当前完整 revision
 
 - **WHEN** source overlay 已有 `A(base) + A→B(delta)`，用户 rewind 到不包含最新已注入 revision 的较早 history view，且目标 checkpoint仍保留tracked registration
-- **THEN** rewind先提交view/pending transition；下一次真正model-call preparation从冻结的Registry activation snapshot取得published revision B，并把对应独立user-role item、新source overlay epoch、首个rewind prefix epoch assembly与transition消费原子提交；不得读取当前文件、越过rewind cutoff重新注入旧A→B delta，snapshot/untracked也不得自动恢复
+- **THEN** rewind先提交view/pending transition；下一次真正model-call preparation从冻结的Registry activation snapshot取得published revision B，并把恢复事实、新source overlay epoch、首个rewind prefix epoch assembly与transition消费原子提交；`root_eligible`可在新epoch合并新root，`tail_only`仍是独立user-role item；不得读取当前文件、越过rewind cutoff重新注入旧A→B delta，snapshot/untracked也不得自动恢复
 
 #### Scenario: 非 rewind 的只读 history view 不物化 source base
 
@@ -1001,7 +1028,7 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 #### Scenario: source overlay 只在合法新 prefix epoch 物化
 
 - **WHEN** 首次组装、实际compaction、rewind重建或ToolSet hard rebase已建立合法新prefix epoch，并且该边界的reconciliation决定以activation snapshot中已发布的tracked revision C替代可见base+delta链
-- **THEN** 系统创建以C为完整base的新`source_overlay_epoch`并把post-user内容保留为独立user-role item；旧A base与增量只作为不可变审计记录，不在新active plan中重复应用。该规则不允许修复或伪造任何旧sealed assembly
+- **THEN** 系统创建以C为完整base的新`source_overlay_epoch`；`root_eligible`可按owner声明合并到唯一新root，`tail_only`保留独立user-role item。旧A base与增量只作为不可变审计记录，不在新active plan中重复应用，也不修复或伪造旧sealed assembly
 
 #### Scenario: source 未进入 request 时不制造 diff
 
@@ -1020,22 +1047,36 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 #### Scenario: rewind 创建显式重建 epoch
 
 - **WHEN** rewind 隐藏canonical history尾部并重建active view
-- **THEN** rewind事务推进`history_view_revision`并登记pending rewind transition；下一次model-call preparation才从冻结的Registry activation snapshot取得published revision并原子seal首个`epoch_reason=rewind`assembly，保留tracked registration但最新source revision已移出view时在同一事务追加对应完整user-role revision，snapshot/untracked不恢复且不读当前源
+- **THEN** rewind事务推进`history_view_revision`并登记pending rewind transition；下一次model-call preparation才从冻结的Registry activation snapshot取得published revision并原子seal首个`epoch_reason=rewind`assembly，保留tracked registration但最新source revision已移出view时在同一事务持久化恢复事实；`root_eligible`可合并新root，`tail_only`仍独立user-role；snapshot/untracked不恢复且不读当前源
 
 #### Scenario: 被 rewind 隐藏的 delta 不跨 cutoff 复活
 
 - **WHEN** rewind 后A→B ambient delta不再属于active view，而registration仍为tracked
-- **THEN** reconciliation用冻结的Registry activation snapshot中published revision的新user-role item恢复有效source状态，旧A→B只保留lineage/audit且不重新进入active plan；若registration为snapshot/untracked则不恢复，不得读取当前文件补造revision
+- **THEN** reconciliation用冻结的Registry activation snapshot中published revision恢复有效source状态；仅合法新epoch中`root_eligible`可合并新root，`tail_only`为独立user-role item；旧A→B只保留lineage/audit且不重新进入active plan。snapshot/untracked不恢复，不得读取当前文件补造revision
 
 #### Scenario: 非文本上下文变化使用同一重协调边界
 
-- **WHEN** tool schema、工具可见性、环境状态、memory、附件权限或 provider/projector capability 发生变化
-- **THEN** 普通source变化只追加独立user-role delta；有效ToolSet变化在safe boundary执行hard rebase；其它会破坏已提交wire prefix的policy/profile变化显式失败。assembly记录变化原因和hash，不把这些变化追加为真实用户/assistant history，也不在非法边界物化overlay
+- **WHEN** Provider直接工具/信封schema、内部扩展target目录、环境状态、memory、附件权限或 provider/projector capability 发生变化
+- **THEN** 普通source与扩展工具指引变化只追加独立user-role delta；仅Provider可见ToolSet有效变化在safe boundary执行hard rebase，内部target目录变动不改变ToolSetRef/epoch；其它会破坏已提交wire prefix的policy/profile变化显式失败。assembly记录变化原因和hash，不把这些变化追加为真实用户/assistant history，也不在非法边界物化overlay
 
 #### Scenario: 重协调失败阻止请求
 
 - **WHEN** history view 已切换但 source revision、ToolSet assembly policy 或所需 detail 无法与上一份 snapshot 对齐
 - **THEN** 系统返回 `overlay_invalid` 或对应 mismatch/detail-unavailable，保留旧 assembly 和 canonical history，不使用未重协调的混合上下文发起 Provider request
+
+### Requirement: Provider ToolSet 与扩展工具目录必须分别封存且共同可重放
+
+`ToolSetRef` SHALL只封存Provider `tools`中可见的直接工具和固定`invoke_extension_tool(tool_name, arguments)`信封；内层ExtensionToolCatalog、MCP目标schema/description、连接generation和target执行权限 SHALL不作为ToolSetRef manifest或Provider信封description的一部分。每次model-call assembly SHALL另封存`ExtensionCatalogBindingRef`及相同激活边界的MCP指引source revision，绑定精确owner、model-call、catalog semantic hash、稳定target/schema identity、策略revision和受保护snapshot ref。目录变化 MAY生成新plan/binding及尾部user-role指引delta，但在Provider ToolSetRef不变时 MUST不生成`toolset_changed` epoch。retry、restore、fork与history MUST使用封存binding和target-local lineage，不读取当前MCP目录或悄悄路由到同名新target；binding自身不成为canonical Turn item，不计入`item_count`或`elapsed_ms`。
+
+#### Scenario: MCP目录变更不改变Provider工具集合
+
+- **WHEN** MCP目录新增/删除target，下一资源激活边界取得新目录与派生指引，而直接工具和信封schema均不变
+- **THEN** 新assembly保留原ToolSetRef与prefix epoch，以独立user-role source item追加指引delta并封存新的ExtensionCatalogBindingRef；同epoch父wire bytes逐字节相等
+
+#### Scenario: 恢复旧扩展调用
+
+- **WHEN** 旧sealed model call的`invoke_extension_tool`调用在MCP重连、目录变更或进程重启后收敛
+- **THEN** dispatcher按旧binding精确解析并用有效generation lease与最新权限返回真实terminal结果或明确拒绝；tool result与原tool_call_id配对且保存内部target/schema revision，不能用当前同名target替换或重放为另一工具
 
 ### Requirement: Context plan 与 provider request hash 必须可重放和比较
 
@@ -1199,7 +1240,7 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 ### Requirement: Canonical item 必须可编译为多种请求投影
 
-系统 SHALL 从 active context view 和 request-only contribution 先形成有序、可审计的 context request plan，再按目标能力编译为 LangChain message 或 Provider 原生 item/request。编译过程 MUST 保留 canonical/request-only reference、`semantic_kind`/`payload_kind`、可表达的顺序、tool-call/result 关联、附件和 reasoning 保护状态。只有同一prefix epoch最顶层且位于第一条真实用户消息之前的initial root contributions可以合并为唯一system/developer/instructions item；之后的runtime notice、compaction summary及所有source full/delta/恢复 contribution必须按plan ordinal成为独立user item，不得提升、前插或按相邻role合并。无法表达时必须显式reject，不得静默改role或拼接文本；Anthropic部分官方模型的mid-context system能力仅保留关闭TODO。`assistant_text` 只能作为 `assistant_output` payload/content-part 的 projection，不能在 plan 中作为 canonical item kind。
+系统 SHALL 从 active context view 和 request-only contribution 先形成有序、可审计的 context request plan，再按目标能力编译为 LangChain message 或 Provider 原生 item/request。编译过程 MUST 保留 canonical/request-only reference、`semantic_kind`/`payload_kind`、可表达的顺序、tool-call/result 关联、附件和 reasoning 保护状态。唯一顶层system root只在首次assembly及实际compaction、rewind、Provider可见ToolSet hard rebase或fork目标首次assembly中编译；合法新epoch只可合并source owner typed `root_placement=root_eligible`的有效完整状态。其它同epoch新增source及`tail_only`source均按plan ordinal成为独立user item，不得提升、前插或按相邻role合并；compaction summary和tool事实保留原语义与因果位置。无法表达时必须显式reject，不得静默改role或拼接文本；Anthropic部分官方模型的mid-context system能力仅保留关闭TODO。`assistant_text` 只能作为 `assistant_output` payload/content-part 的 projection，不能在 plan 中作为 canonical item kind。
 
 #### Scenario: 编译为 LangChain 执行消息
 
@@ -1306,7 +1347,7 @@ window 内的 legacy role 归属固定为：`assistant`、`tool` 以及明确等
 
 系统 SHALL 通过 SQLite manifest/database metadata 的 `rollout_format_version` 与每个 JSONL envelope 的 `format_version` 区分 v1 message-line 与 v2 item-line。reader MUST 同时校验两处版本；不得只根据 `role`、首行形状或字段存在性猜测格式。v1 与 v2 不得混写，未知版本、manifest/envelope 不一致或结构不完整时 MUST 进入明确 recovery/error。旧格式不得进入正常 context compiler；只有一次性 `legacy_import_v1_to_v2` migration/import operation 的 reader 可以在 staging 中读取并交给转换器。新 writer 不得永久双写，遇到未知或无法无损映射的旧字段不得静默丢弃或回退为空历史。
 
-v1 message-line 顶层字段固定为 `format_version=1`、`record_type=message`、`message_sequence`、`message_id`、`turn_id`、`role`、`message` 和 `metadata`；v2 item-line 顶层字段固定为 `format_version=2`、`record_type=item`、`item_sequence`、`item_id`、`turn_id?`、`turn_scope?`、`message_group_id?`、`semantic_kind`、`payload_kind`、`wire_role?`、`status`、`producer_ref`、`payload`、`content_hash`、`created_at` 和 `metadata`。SQLite manifest 的 `rollout_format_version` 必须与 envelope version 一致。v2 中 `assistant_output` 是 canonical semantic kind，`assistant_text` 只能是 projection；v1 的内部 `system_reminder` 只能依据已有 internal/checkpoint metadata 转换为 `runtime_notice`，不能使用当前 middleware 配置补造 provenance 或 Turn root。
+v1 message-line 顶层字段固定为 `format_version=1`、`record_type=message`、`message_sequence`、`message_id`、`turn_id`、`role`、`message` 和 `metadata`；v2 item-line 顶层字段固定为 `format_version=2`、`record_type=item`、`item_sequence`、`item_id`、`turn_id?`、`turn_scope?`、`message_group_id?`、`projection_group?`、`projection_identity?`、`tool_result_evidence?`、`source_manifest?`、`semantic_kind`、`payload_kind`、`wire_role?`、`status`、`producer_ref`、`payload`、`content_hash`、`created_at` 和 `extensions`。SQLite manifest 的 `rollout_format_version` 必须与 envelope version 一致。v2 中 `assistant_output` 是 canonical semantic kind，`assistant_text` 只能是 projection；v1 的内部 `system_reminder` 只能依据已有 internal/checkpoint metadata 转换为 `runtime_notice`，不能使用当前 middleware 配置补造 provenance 或 Turn root。
 v1 迁移不能从 message role、最后一条 assistant 或物理相邻记录推断 v2 身份。对每个 v1 root candidate，先将精确解码的 `role`/`message` 与 source session、message sequence、message id 组成 legacy message object，按 JCS/SHA-256 得到 `legacy_message_hash`，再对包含 source coordinate 和该 hash 的对象按同一算法得到 `legacy_seed_hash`；固定生成 `accepted_ingress_id=legacy-ingress:<legacy_seed_hash>`、`acceptance_idempotency_key=legacy-migration:<legacy_seed_hash>` 和 `initial_execution_id=legacy-execution:<legacy_seed_hash>`，并标记 `identity_origin=legacy_synthetic`。v1 的 `turn_id`、`message_id`、`message_sequence` 和 offset 只保留为 `legacy_source_ref`/lineage；迁移后的 v2 Turn、root item、item sequence 和 execution 使用新的 target-local identity。seed 冲突或同幂等键 payload 不同必须终止迁移。
 
 只有 v1 manifest/checkpoint 或明确的 legacy final marker 能无歧义指向同一 Turn 的 completed assistant output 时，迁移才设置 v2 `final_item_id`/`Turn.status=completed`；否则 `final_item_id=NULL` 且 status=`unknown`（有明确 failure/interrupted marker 时使用对应状态）。合成的 execution outcome 默认是 `unknown`，不表示实际 provider call 已成功。任何跨 session 的 `full_rollout_copy`（无论 source v1/v2）都把 target 固定创建为 `rollout_format_version=2`；source 为 v1 时，必须先由一次性 `legacy_import_v1_to_v2` staging 完成 mapping，再执行 copy。source v1 message identity/sequence/offset 只存映射审计坐标，不能写入 target 的 v2 identity 或 committed offset。

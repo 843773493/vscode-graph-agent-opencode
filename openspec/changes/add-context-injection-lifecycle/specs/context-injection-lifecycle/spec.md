@@ -52,6 +52,8 @@
 
 系统 SHALL为每个`SessionThread`维护唯一的逻辑RolloutCheckpointSaver/ContextStore mutation owner，处理所有会影响canonical history、active view、source control state、ToolSet binding和sealed assembly的变更。owner key是`(session_id, thread_id)`，其durable identity/state与thread同寿命；resident owner实例可以在idle unload时关闭，再于execution admission按原key恢复，并以runtime generation/lease阻止旧实例写入。Session只保存main-thread路由、thread catalog与共享资源。该边界 MUST区分canonical append、source lifecycle decision、ToolSet switch和compaction/rewind epoch rebuild；共享owner与原子transaction不得把这些domain事实都改造成CSM source。rewind/compaction可先提交active view、版本化CSM control state和`PendingPrefixEpochTransition`，但该pending记录没有wire bytes且不是applied epoch；下一次model-call preparation必须把source reconciliation、首个新epochassembly seal和transition消费原子提交。CSM SHALL仅管理需要identity/revision/diff/tracking/reconciliation的instruction、file和runtime source，不得截获普通canonical item、ToolSet或compaction summary。
 
+CSM/source producer MUST以 typed `SourceObservation`、`ApplySourceLifecycleDecision` 和 itemized `ContextContribution` 传递会影响追踪/激活/选择/替换的核心字段；`selection_role`、`replacement_policy`、`source_binding`、tracking state、desired/applied revision与 owner identity不能隐藏在自由 metadata/extension 中。只有 itemized owner-thread registry 可分配 `RegisteredContribution.source_ordinal`，CSM不得按观察事件顺序或内存计数补号。命名空间化、版本化的 `extensions` 可以透传或审计，但不参与 tracking、diff、selection、role、epoch、ToolSet或dispatch 决策；未知扩展不能因字符串 key 恰好等于旧控制 flag 而改变行为。任何新增生产代码需要影响核心行为时，必须先声明新的 typed capability/intent、owner、校验和测试。恢复时核心字段缺失或不一致必须显式失败，不从当前资源快照或扩展猜测；旧实验字段形态不提供 runtime alias/双读。
+
 #### Scenario: 提交真实用户输入
 
 - **WHEN** 可信 ingress接受用户文本或附件
@@ -72,6 +74,11 @@
 - **WHEN** CSM观察到一个 instruction、tracked file或 runtime source需要新增 base、delta、恢复 item或 control state
 - **THEN** CSM只返回结构化lifecycle decision。若发生在model-call preparation中，统一owner在同一transaction提交source item、applied revision/checkpoint state和assembly selection；若异步team/inbox/runtime producer在没有model call时到达，只提交幂等pending observation/ambient item及wakeup，保持applied/injected revision和diff基准不变，直到下一次真正preparation选择并seal
 
+#### Scenario: 扩展数据不能伪装成 source 控制字段
+
+- **WHEN** source observation或contribution 的合法 namespaced `extensions` envelope 的 `value` 中携带 `selection_only`、`replaceable_source`、`source_ordinal`、tracking state或role同名值，但 typed 控制字段不变
+- **THEN** CSM、registry和seal结果不变；缺失必需 typed 字段时直接 schema error，不能用扩展或旧 metadata 填补
+
 #### Scenario: pending source 在 seal 前重试
 
 - **WHEN**异步producer已经提交pending ambient item，但execution尚未取得active slot、preparation失败或进程重启
@@ -84,9 +91,9 @@
 
 ### Requirement: ToolSet 变化必须在 model-call safe boundary hard rebase
 
-系统 SHALL 将 ToolSetSnapshot/ToolSetRef保持为独立于 canonical message和 CSM source的权威事实。任何改变模型可见或可调用工具集合、schema、description、visibility、执行权限或确认 policy的有效变化都 SHALL产生 desired ToolSet revision；owner MUST在每次 model call前比较 desired与 applied revision，并在安全边界通过 hard rebase生效。hard rebase MUST封存新的 ToolSetSnapshot/Ref、创建 `epoch_reason=toolset_changed`的新 prefix epoch并重编译 root context、active canonical/source projection和 tools；不得向旧 context追加“工具已切换”之类的软通知，也不得修改 in-flight sealed assembly。
+系统 SHALL 将 ToolSetSnapshot/ToolSetRef保持为独立于 canonical message和 CSM source的Provider可见权威事实。Provider `tools` SHALL仅包含按capability profile选出的少量直接工具和始终存在、名称/schema/description固定的`invoke_extension_tool(tool_name, arguments)`；其描述不得枚举内部target。直接工具或信封自身的Provider可见名称、schema、description、visibility、确认policy发生有效变化 SHALL产生 desired ToolSet revision；owner MUST在安全边界通过hard rebase生效。内层ExtensionToolCatalog的MCP/内置/自定义target增删改、schema、目录revision或执行时权限变化不属于ToolSetRef，不得仅因此创建prefix epoch。hard rebase MUST封存新的 ToolSetSnapshot/Ref、创建 `epoch_reason=toolset_changed`的新 prefix epoch并重编译 root context、active canonical/source projection和 tools；不得向旧 context追加“工具已切换”之类的软通知，也不得修改 in-flight sealed assembly。
 
-ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selection及其控制面 revision；每个 SessionThread ContextStore SHALL拥有最后观察到的 desired revision、applied ToolSetRef/revision及其 prefix epoch。恢复或重放历史 assembly MUST使用已封存的 applied binding，不得用当前 desired selection反推历史工具集。
+ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selection及其控制面 revision；直接工具选择影响Provider ToolSet，扩展目标选择只影响ExtensionToolCatalog。每个 SessionThread ContextStore SHALL分别拥有最后观察到的desired及已applied ToolSetRef/revision、ExtensionCatalogBindingRef及其原始model-call binding。恢复或重放历史 assembly MUST使用两种已封存binding，不得用当前 desired selection反推历史工具集或扩展目标。
 
 #### Scenario: model call 期间修改工具选择
 
@@ -152,9 +159,37 @@ ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selecti
 - **WHEN** Skill activation 从未加载，使用 snapshot 加载，或已执行 untrack，随后 `SKILL.md` 发生变化
 - **THEN** 系统不得因该变化创建 activation delta、自动恢复 item 或 Provider 注入
 
+### Requirement: 扩展目录、MCP指引和信封执行必须使用同一生效快照
+
+系统 SHALL以固定的`invoke_extension_tool(tool_name, arguments)`作为全部非直接工具的唯一Provider信封，不保留`invoke_custom_tool`兼容别名。ExtensionToolCatalog SHALL把内置扩展、自定义及MCP target规范化为稳定identity、schema hash、目录revision和可审计权限策略；Provider ToolSetRef不得包含这些target的清单。McpCatalogOwner SHALL在启动、MCP `tools/list_changed`、重连和配置candidate切换时完整分页读取并验证`tools/list`，按语义变化发布不可变目录snapshot与独立channel通知；不具备变化通知的server只在显式刷新/重连或配置的有界轮询后承诺刷新，不得在model-call preparation执行网络请求。McpToolGuidanceProducer SHALL只从已验证目录派生有界、确定性的名称/描述/参数指引与删除tombstone，并明确注册为`root_placement=tail_only`的CSM source；原始MCP prompt/resource/instructions不得被动提升为指令。
+
+Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使用既有`turn|model_call`策略且默认为`turn`。目录binding与对应指引revision SHALL在同一边界一起冻结并进入sealed assembly；后续变化只在下一允许的边界以user-role增量生效，不得硬改前缀或令模型看到与dispatcher绑定不一致的目标。每个调用 SHALL用产生它的model-call已封存`ExtensionCatalogBindingRef`解析精确target，记录target/schema revision、调用与结果provenance；执行点重新执行最新权限校验，撤权/缺失返回原`tool_call_id`的明确terminal失败。配置candidate或连接刷新失败不得半发布目录或指引，已在flight的调用持有旧generation lease并按真实结果收敛。Provider可见信封始终存在，即使目录为空。
+
+同名target解析 MUST以稳定server identity与规范公共名称为键；跨server或内置扩展的公共名称冲突必须在candidate发布前显式拒绝或按已声明的确定性命名空间区分，不能依赖列表顺序/最近连接覆盖。工具指引只描述已验证schema所需的最小调用形式，外部description作为不可信数据经长度、转义和注入隔离后成为`tail_only`内容；其文本不得更改授权、工具schema、source根资格或Provider信封description。目录条目缺少可执行schema、分页不完整或协议revision冲突时不发布半目录。
+
+#### Scenario: MCP目录变化但Provider工具形状不变
+
+- **WHEN** MCP server发出`tools/list_changed`且完整relist验证出target新增、修改或删除，而当前Turn冻结为`turn`
+- **THEN** 已sealed与本Turn后续model call仍使用旧catalog和指引；下一Turn同时取得新catalog binding与user-role指引delta，ToolSetRef、prefix epoch及既有wire bytes不变
+
+#### Scenario: model_call边界及时生效
+
+- **WHEN** 冻结policy把`mcp_tool_catalog`设为`model_call`，新validated目录在两个model call间发布
+- **THEN** 下一安全preparation在全部outstanding tool result配对后一起冻结新目录和指引，按协议顺序追加一个合并delta；不会请求期访问MCP server或触发ToolSet hard rebase
+
+#### Scenario: 扩展调用已封存后目录更新或撤权
+
+- **WHEN** 旧model call发出了`invoke_extension_tool`调用，执行前目录generation或权限变化
+- **THEN** 系统不把该调用改投新同名target；旧generation lease维持原identity并按最新授权返回真实结果或与原tool_call_id配对的明确拒绝，结果记录内层target/schema revision，Provider信封schema不变
+
+#### Scenario: 空目录仍保持稳定信封
+
+- **WHEN** 当前没有任何extension target，之后MCP server发布首个工具
+- **THEN** 两个model call的Provider ToolSetRef都包含相同的`invoke_extension_tool`定义；前者调用未知target显式失败，后者在相应activation边界获得新目录/指引，不借信封增删制造epoch
+
 ### Requirement: Root system 与 post-user source role 必须按位置确定
 
-每个合法 prefix epoch的最顶层 root context SHALL至多投影为一个 `wire_role=system` source item；首次 assembly建立该 root，compaction、rewind或 ToolSet hard rebase只能在新 epoch重编译它。第一条真实用户消息之后追加或恢复的 CSM source item SHALL默认投影为 `wire_role=user`，不因其内容是完整 base、delta、rewind恢复、compaction物化或 hard rebase reconciliation结果而改变，也不得被吸收进新 root。wire role只能表达 Provider投影，不得改变 canonical source identity、scope或 Turn归属。
+每个source owner SHALL用typed `root_placement=root_eligible|tail_only`声明根指令资格，CSM不得从路径、文本或`extensions`推断。每个合法prefix epoch的最顶层root context SHALL至多投影为一个`wire_role=system` source item。首次assembly及实际compaction、rewind、Provider ToolSet hard rebase或fork目标首次assembly时，compiler MAY把仍在active view且被owner声明`root_eligible`的受信来源当前完整状态按确定顺序合并成该新root；`tail_only`来源，包括默认外部MCP工具指引，只能作为独立user-role数据。除此之外，第一条真实用户消息之后任何source完整内容、delta或恢复 SHALL作为独立`wire_role=user` item追加，不得改写、合并或前插旧前缀。新epoch物化必须记录base/delta lineage并避免重复选择，旧canonical item和sealed assembly保持字节不变。wire role不能改变canonical source identity、scope或Turn归属。
 
 #### Scenario: 首次组装 root context
 
@@ -169,7 +204,7 @@ ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selecti
 #### Scenario: rewind 或 compaction 完整恢复
 
 - **WHEN** tracked source 在 rewind 后需要恢复当前完整 revision，或在 compaction 后物化为完整 revision
-- **THEN** 完整恢复 item 仍位于用户消息之后并投影为 user role，不提升为中途 system item
+- **THEN** 只在实际新epoch重建时将`root_eligible`有效完整状态合并到新root；`tail_only`完整恢复仍是独立user-role item，旧base/delta只保留lineage且不重复投影；若无实际重建，全部恢复只能尾部追加user-role item
 
 #### Scenario: Provider 原生工具 role
 
@@ -179,17 +214,17 @@ ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selecti
 #### Scenario: ToolSet hard rebase 重编译条件化 root
 
 - **WHEN** ToolSet变化使一个仅在特定工具 policy下启用的初始 instruction source改变 included状态
-- **THEN** assembly compiler只在新的 `toolset_changed` epoch重编译最顶层 root system item；既有 post-user source仍按原 canonical ordinal以 user role存在，不被提升或合并进 root
+- **THEN** assembly compiler只在新的 `toolset_changed` epoch按owner的`root_placement`重编译最顶层root system item；`tail_only`和真实用户/工具协议事实仍保留其原有顺序与role，旧sealed assembly不变
 
-### Requirement: 资源变化必须通过可扩展观察、快照和语义激活链路
+### Requirement: 已知资源变化必须通过代码内装配的观察、快照和语义激活链路
 
-系统 SHALL 允许文件、网络、内存及插件提供的资源通过统一贡献协议登记监视、稳定快照、解析和业务reaction能力。贡献定义、观察来源和已发布语义资源 MUST是不同身份与存储边界：`source_id`标识owner scope内的软件登记来源，`resource_id`标识可由一个或多个来源及其它语义资源派生的语义资源；路径、watch key、display URI均不得充当这两种身份。每个底层资源监视订阅 MUST 按provider instance、规范化私有locator及recursive/filter/exclude/correlation/options等完整语义共享并引用计数，不能误合并不同观察合同，也不得为每个SessionThread建立独立watcher。资源观察、Job事件、配置生命周期和context source通知 MUST使用相互隔离的事件channel、queue、cursor、背压和故障域；资源事件不得进入job专属队列。
+系统 SHALL 对代码内明确装配的文件、Gateway受认证内部快照和权威内存来源提供统一的变化观察、稳定快照、解析与语义发布流程；typed适配合同可以供测试注入替身，但本change不得要求可安装资源插件、plugin manifest监视或动态执行任意provider/loader/reaction。已登记观察来源和已发布语义资源 MUST是不同身份与存储边界：`source_id`标识owner scope内的软件登记来源，`resource_id`标识可由一个或多个来源及其它语义资源派生的语义资源；路径、watch key、display URI均不得充当这两种身份。每个底层文件监视订阅 MUST 按monitor instance、规范化私有locator及recursive/filter/exclude/correlation/options等完整语义共享并引用计数，不能误合并不同观察合同，也不得为每个SessionThread建立独立watcher。资源观察、Job事件、配置生命周期和context source通知 MUST使用相互隔离的事件channel、queue、cursor、背压和故障域；资源事件不得进入job专属队列。
 
-观察事件只能把已登记来源标记为dirty/change/gap/overflow，不能携带正文、credential或直接成为来源/语义revision。SourceReconciler MUST用provider自己的稳定一致性合同形成不可变`ObservedSourceRevision`：文件用允许根、稳定双读与完整原始byte hash，网络/内存用其可验证版本token，不能把后两者伪装成文件读取。ResourceDerivationGraph MUST从已接受的来源/语义依赖revision按无环拓扑、版本化loader、语义diff和CAS发布不可变`ResourceSnapshot`，并保留可验证source lineage；依赖环、缺失required依赖和跨generation不一致的多输入组合 MUST显式失败。同一来源可派生多个资源，多个来源可合成一个资源；原始来源变化但某facet语义payload不变时该facet不得推进revision或追加context item。重复、乱序、rename burst、丢失或overflow MUST通过有界reconcile收敛；失败时保留上一份valid snapshot并显式标记unavailable/diagnostic，required consumer不得使用旧valid替代当前失败。启动、provider重连和监视图变更 MUST先完成已登记边界的initial reconcile并通过readiness gate；不得递归扫描未知目录、运行周期`rg`或根据物理目录猜测资源owner。
+观察事件只能把已登记来源标记为dirty/change/gap/overflow，不能携带正文、credential或直接成为来源/语义revision。SourceReconciler MUST用已知来源适配的稳定一致性合同形成不可变`ObservedSourceRevision`：文件用允许根、稳定双读与完整原始byte hash，Gateway内部快照与权威内存状态用其可验证版本token，不能把后两者伪装成文件读取。ResourceDerivationGraph MUST从已接受的来源/语义依赖revision按无环拓扑、版本化loader、语义diff和CAS发布不可变`ResourceSnapshot`，并保留可验证source lineage；依赖环、缺失required依赖和跨generation不一致的多输入组合 MUST显式失败。同一来源可派生多个资源，多个来源可合成一个资源；原始来源变化但某facet语义payload不变时该facet不得推进revision或追加context item。重复、乱序、rename burst、丢失或overflow MUST通过有界reconcile收敛；失败时保留上一份valid snapshot并显式标记unavailable/diagnostic，required consumer不得使用旧valid替代当前失败。启动、Gateway内部快照重连和已知来源登记变更 MUST先完成已登记边界的initial reconcile并通过readiness gate；不得递归扫描未知目录、运行周期`rg`或根据物理目录猜测资源owner。
 
-插件或配置改变资源监视图时，系统 MUST先在shadow generation启动新task tree、完成initial reconcile与health检查，再原子发布新generation并排空旧task tree；失败时旧generation保持权威，新旧generation不得同时发布同一资源。事件变化不得主动唤醒所有thread、直接追加context item或修改sealed assembly。
+配置改变已知来源登记时，config domain owner MUST先在独立shadow lifetime scope校验候选配置与受影响的订阅、完成initial reconcile与health检查，再原子发布新配置/来源generation、阻断旧generation继续发布并排空旧scope；失败时只关闭candidate scope，旧generation保持权威，新旧generation不得同时发布同一来源。动态配置只能更改已知source registration和业务policy，不得安装可执行provider/loader/reaction。进程内释放机制不得决定candidate有效性、发布时机或业务reload policy。事件变化不得主动唤醒所有thread、直接追加context item或修改sealed assembly。
 
-每个owner进程 MUST由不可被动态配置或插件移除的最小`ResourcePlatformBootstrap`启动本进程事件服务、task supervisor控制根、内置file snapshot能力，并只登记本配置域的发行内置配置、用户覆盖、允许的Workspace覆盖与plugin manifest这些已知精确locator。Gateway bootstrap不得读取Workspace `.boxteam/workspace.jsonc`，Workspace bootstrap不得接管Gateway控制面配置。bootstrap不得注册模型source、执行业务reaction或取得ContextStore writer；动态配置只能替换其下的contribution graph。新candidate配置/manifest必须先完成schema校验、shadow启动、initial reconcile和health再发布；已有valid generation时失败保留旧generation并显式报告，冷启动不存在valid内置/合并配置时必须直接失败，不得以空图、旧字段兼容或未校验插件继续。
+每个owner进程 MUST由代码内固定、不可被动态配置移除的最小`ResourcePlatformBootstrap`启动本进程事件服务、process-root lifetime scope、内置file snapshot能力，并只登记本配置域的发行内置配置、用户覆盖与允许的Workspace覆盖这些已知精确locator。Gateway bootstrap不得读取Workspace `.boxteam/workspace.jsonc`，Workspace bootstrap不得接管Gateway控制面配置。bootstrap不得注册模型source、执行业务reaction或取得ContextStore writer；动态配置只能替换其下已知来源登记与业务policy。新candidate配置必须先完成schema校验、受影响来源的initial reconcile和health再发布；已有valid generation时失败保留旧generation并显式报告，冷启动不存在valid内置/合并配置时必须直接失败，不得以空图或旧字段兼容配置继续。
 
 #### Scenario: 文件变化在没有模型请求时完成资源发布
 
@@ -221,19 +256,79 @@ ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selecti
 - **WHEN** 一个AGENTS链或有效配置的required来源缺失、解析失败、依赖成环，或candidate generation把新旧来源混合成一个快照
 - **THEN** 目标语义资源明确unavailable并保持旧valid可审计，required model dispatch等待有界恢复或失败；不得发布混合revision、空默认值、直接请求期读盘或改写已提交前缀
 
-#### Scenario: 插件监视图原子替换
+#### Scenario: 配置来源登记原子替换
 
-- **WHEN** 配置在运行中增加、移除或替换resource monitor/loader/reaction贡献
-- **THEN** 新generation在shadow状态完成初始快照和健康检查后一次切换，旧generation随后排空；失败时继续使用旧generation并返回明确诊断，不产生双重revision
+- **WHEN** 配置在运行中增加、移除或替换已知来源登记与订阅，而内置adapter/loader/reaction代码保持不变
+- **THEN** 新配置/来源generation在shadow状态完成初始快照和健康检查后一次切换，旧generation随后排空；失败时继续使用旧generation并返回明确诊断，不产生双重revision或动态装载代码
 
-#### Scenario: 配置监视不依赖动态插件图自举
+#### Scenario: 配置监视不依赖可变配置自举
 
-- **WHEN** plugin contribution graph尚未建立、被重新配置或candidate插件启动失败
-- **THEN** bootstrap仍能监视已知配置与manifest精确locator并报告candidate失败；动态配置不能移除bootstrap，失败candidate不能让旧valid generation与核心事件诊断一起消失
+- **WHEN** 动态配置尚未解析、被重新配置或candidate配置验证失败
+- **THEN** 固定bootstrap仍能监视已知配置精确locator并报告candidate失败；动态配置不能移除bootstrap，失败candidate不能让旧valid generation与核心事件诊断一起消失
+
+#### Scenario: MCP工具目录只派生受控工具指引来源
+
+- **WHEN** 已配置MCP Server提供工具或其工具目录发生变化
+- **THEN** 明确的McpCatalogOwner验证完整工具目录，McpToolGuidanceProducer从其派生一个`tail_only` CSM指引来源；原始MCP prompts/resources/server instructions不自动注册或注入，亦不安装可执行资源插件；未来消费MCP resources/subscriptions须另行定义来源owner与版本合同
+
+### Requirement: 进程内资源释放必须只有一个无业务决策的所有权机制
+
+系统 SHALL 用唯一`LifetimeScope`合同持有和释放进程内task、可撤销订阅、client及子scope；`EventChannelService`只传递通知，语义`ResourceRegistry`只发布不可变snapshot，二者均不得成为第二个dispose owner。每个订阅/cleanup登记 MUST返回可撤销handle；scope关闭 MUST先拒绝新登记、取消并排空所拥有的子task/子scope、按逆取得顺序等待释放其它handle。同一scope的并发close只执行一次并共享结果，成功后重复close幂等；失败必须保留`close_failed`及未释放handle的诊断、后续调用重报失败，不得标记为closed或留下无人持有的异步task。业务owner决定何时关闭scope，并在释放失败时将typed状态事件投到其所属的状态channel，同时向调用方保留原始错误；事件服务不可用时仍 MUST 显式返回/抛出错误并记录诊断，不得虚报成功。`LifetimeScope`自身 MUST NOT 依赖事件服务、选择channel或发布业务状态，也 MUST NOT 决定Skill追踪、config reload、thread idle、资源activation、外部资源删除或持久状态变更。`CancellationSignal`只传递取消意图，不能替代close；Turn child关闭必须解除父信号hook。Web局部订阅继续遵守React effect cleanup，不额外建立并行的全局dispose registry。
+
+#### Scenario: 关闭子作用域不停止共享监视
+
+- **WHEN**一个child ThreadRuntime卸载，且config或其它consumer仍持有同一底层watch的订阅handle
+- **THEN**child scope只释放自己的handle；底层watch保持运行，直到最后一个consumer handle释放，且已提交ContextStore/CSM/ResourceSnapshot不变
+
+#### Scenario: 候选配置generation失败只回收候选
+
+- **WHEN**新配置candidate的health失败或其已知来源订阅在shadow启动期间抛错
+- **THEN**composition owner关闭并排空candidate scope，旧active scope、Registry revision和bootstrap仍有效；scope本身不把失败candidate发布为active
+
+#### Scenario: 释放失败不得宣称完成
+
+- **WHEN**一个child cleanup失败、异步task在关闭时仍未排空，或已关闭scope再次收到登记
+- **THEN**失败与阻断原因显式报告，未关闭资源不得被标记为已释放；已关闭scope不得接受新资源或创建无人持有的回调task
+
+#### Scenario: owner报告释放失败而scope不发布状态
+
+- **WHEN**scope关闭返回`close_failed`，其domain/composition owner仍可使用事件服务
+- **THEN**owner把typed失败状态事件投到对应`resource.state/*`或`config.lifecycle/*`状态channel并保留原始错误；`LifetimeScope`不选择channel、不发布事件，通知本身不成为持久状态事实
+
+#### Scenario: 状态channel不可用时释放错误仍可见
+
+- **WHEN**scope释放失败且owner投递状态事件时事件服务已不可用
+- **THEN**owner显式返回/抛出原始释放错误并记录投递失败诊断，不得报告释放成功或静默吞掉错误
+
+### Requirement: 外部业务资源的持久lease不得伪装成dispose
+
+跨Turn terminal、browser、MCP、dev-server或Node调试进程的操作占用 SHALL由唯一持久operation lease账本记录typed资源身份、holder/operation身份与恢复状态；实际资源状态、停止、删除和恢复只由对应domain owner/provider核实并执行。Node调试必须用`(workspace_id, session_id, thread_id, debug process identity)`的typed`node_debug_process`资源身份，归属由debug owner校验而非模型参数决定。工具调用必须从typed tool/provider contract取得resource-use，不得在通用账本中按`terminal_id`、`pageId`等参数名推断资源或自动伪造登记。取消Turn、idle卸载和进程内scope close本身不得停止跨Turn业务资源；domain owner根据业务策略及所有有效lease决定停止还是只释放本次占用。旧内存stopper缺失、provider不可达、核实失败或仍有其它有效lease时不得把资源标记为`stopped`。`SessionResourceProviderRegistry`只路由列表/控制，不与业务owner或lease账本并行保存第二套资源状态。
+
+Node调试的`debug process identity` MUST是每次启动唯一`process_instance_id`，而非PID、Inspector端口或单次tool/Web operation identity。debug owner须在spawn前durably登记绑定精确thread/lifecycle generation/launch preimage与一次性nonce的`launch_pending` claim，并在spawn后由nonce、OS进程起始身份和Inspector握手证明同一实例，才能登记PID/端口和运行态；该owner-held claim跨Turn持续，不因启动调用的短期`execution|debug_control` lease结束而消失。启动中崩溃只允许凭该claim/nonce核实原实例：证实不存在才结清，证实仍运行才接管或按domain策略停止，不可证明则保持`reconcile_required`及residency/delete blocker，不能认领/停止仅复用了PID或端口的其它进程。替换/重启必须先核实并结清旧实例，再建新实例claim；通用账本只保存身份、状态和证据引用，不负责搜索/杀进程或决定停止策略。
+
+#### Scenario: 重启后缺少资源控制能力
+
+- **WHEN**持久lease恢复后内存stopper不存在，且调用方要求停止外部资源
+- **THEN**系统向实际owner查询并取得核实过的停止结果，或返回明确不可用/`reconcile_required`；不得只更新账本就向用户报告`stopped`
+
+#### Scenario: 一个操作结束但其它lease仍有效
+
+- **WHEN**同一外部资源被两个有效operation lease占用，其中一个Turn取消
+- **THEN**只收敛该Turn的lease；除非资源owner在其业务协议下明确验证可停止，否则不能停止资源或自动释放另一holder的lease
+
+#### Scenario: 活动Node调试进程的lease阻止闲置卸载
+
+- **WHEN** debug owner有未结清的`launch_pending`进程claim、核实某thread进程处于`starting|running|paused|stopping`，或backend重启后无法确认旧进程是否已停止
+- **THEN** 唯一外部资源lease账本保留该thread的占用/`reconcile_required`恢复事实，residency owner保持该thread的脱敏idle blocker而不宣称cold；只有debug owner核实`idle|exited|failed`并结清lease后才可重新起算30分钟，通用账本与`LifetimeScope`都不决定停止策略
+
+#### Scenario: Node启动窗口崩溃与PID复用
+
+- **WHEN** `launch_pending` claim提交后，backend在spawn前、spawn后登记进程属性前或停止确认前崩溃，重启时原PID/端口可能已复用
+- **THEN** claim仍以原process_instance_id/nonce归属原thread，实际debug owner按OS起始身份和Inspector握手核实后才接管或停止；无法核实则保留`reconcile_required`与idle/delete blocker，不把PID/端口相同的其它进程标为原资源，也不由一次tool/Web操作lease终结推断资源已停止
 
 ### Requirement: Virtual Resource Namespace 必须隐藏locator并固定资源来源
 
-系统 SHALL为可向模型或客户端展示的管理资源提供规范`boxteam://`虚拟资源URI。workspace AGENTS、workspace/Gateway/builtin Skill、memory和plugin资源 MUST分别使用可区分的逻辑scope/kind/name；URI中不得出现绝对路径、真实网络endpoint、credential、provider私有handle或正文。每个资源 MUST区分模型可见`display_uri`、内部稳定`source_id`、语义`resource_id`和provider私有`provider_locator`：URI只是locator/provenance，不是任一资源身份、授权凭据、dedupe key或业务幂等键，revision/hash/snapshot reference不得编码进URI。
+系统 SHALL为可向模型或客户端展示的管理资源提供规范`boxteam://`虚拟资源URI。workspace AGENTS、workspace/Gateway/builtin Skill和memory资源 MUST分别使用可区分的逻辑scope/kind/name；URI中不得出现绝对路径、真实网络endpoint、credential、provider私有handle或正文。每个资源 MUST区分模型可见`display_uri`、内部稳定`source_id`、语义`resource_id`和provider私有`provider_locator`：URI只是locator/provenance，不是任一资源身份、授权凭据、dedupe key或业务幂等键，revision/hash/snapshot reference不得编码进URI。
 
 URI resolver MUST在当前principal、workspace/gateway binding、resource activation snapshot和requested operation下返回typed resource handle，并重新校验resource capability；来源的`source_id`和provider私有locator只能从Registry-owned绑定解析，不能由URI、资源名或模型输入推导；不得把URI percent-decode后直接拼接为文件路径。parser MUST只接受已登记grammar，decode恰好一次，并拒绝userinfo、credential、未知query/fragment、控制字符、反斜杠、空segment、`.`/`..`、编码歧义和越界scope。旧context item、history或sealed assembly MUST使用当时封存的resource id/revision/hash/snapshot ref恢复，不能根据display URI重新读取当前资源。
 
@@ -265,7 +360,7 @@ URI resolver MUST在当前principal、workspace/gateway binding、resource activ
 
 effective boundary MUST记录在每个resource binding中；系统不得以一个assembly级`boundary=turn|model_call`单值表示可能混合的资源。`skill_load` MUST使用产生该tool invocation的Turn/ModelCall snapshot解析Skill名称、entry与revision，不得在工具真正执行时改用更新的catalog snapshot。
 
-ResourceActivationCoordinator MUST只通过唯一Saver/ContextStore port提交typed snapshot；SQLite/JSONL/detail持久化、assembly binding、hash和恢复由itemized rollout owner实现。CSM、resource platform或plugin不得建立第二snapshot writer/catalog。
+ResourceActivationCoordinator MUST只通过唯一Saver/ContextStore port提交typed snapshot；SQLite/JSONL/detail持久化、assembly binding、hash和恢复由itemized rollout owner实现。CSM、资源观察流水线或MCP适配不得建立第二snapshot writer/catalog。
 
 两种边界都只能读取ResourceRegistry已经发布的内存snapshot/revision，不得在model request路径执行stat、read、目录枚举、网络fetch或`rg`扫描。若required resource仍处于dirty/gap/reconciling/unavailable状态，系统 MUST等待有界reconcile或明确阻断dispatch，不能旁路Registry。系统不得提供`immediate`、TTL、request-count或注入次数型activation；config runtime reload policy与context resource activation boundary必须是两个独立配置维度。
 
@@ -458,7 +553,7 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 
 ### Requirement: Rewind 与 compaction 必须遵守模式和恢复 role
 
-系统 SHALL在rewind时从目标checkpoint恢复版本化tracking registration，按snapshot、tracked、untrack语义重建active view，并提交`PendingPrefixEpochTransition(reason=rewind)`；compaction提交summary/view时登记对应`reason=compaction` transition。pending transition没有wire bytes且不是applied epoch。下一次真正model-call preparation需要恢复/物化tracked source时 SHALL在同一owner事务中创建完整revision、seal首个新prefix epoch assembly并消费transition；失败保留已提交view/transition但不追加半成品、不应用epoch或dispatch。所有位于真实用户消息之后的恢复/物化source item必须使用user role。
+系统 SHALL在rewind时从目标checkpoint恢复版本化tracking registration，按snapshot、tracked、untrack语义重建active view，并提交`PendingPrefixEpochTransition(reason=rewind)`；compaction提交summary/view时登记对应`reason=compaction` transition。pending transition没有wire bytes且不是applied epoch。下一次真正model-call preparation需要恢复/物化tracked source时 SHALL在同一owner事务中创建完整revision恢复事实、seal首个新prefix epoch assembly并消费transition；失败保留已提交view/transition但不追加半成品、不应用epoch或dispatch。同epoch或`tail_only`恢复/物化source必须是独立user-role item；只有真实新epoch中`root_eligible`受信source的完整有效状态可合并唯一system root。
 
 任何会用于继续执行的rewind、compaction、replay或fork目标view SHALL在创建view或pending transition前验证tool protocol closure。若anchor位于assistant tool-call group与任一匹配terminal result之间，系统 SHALL返回`tool-protocol-boundary-conflict`、保持旧view且不创建目标或transition，并只返回无正文的最近安全anchor metadata；不得自动偏移、合成result、借source item闭合协议，或把只读partial history送入sealed assembly/Provider dispatch。
 
@@ -475,7 +570,7 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 #### Scenario: tracked revision 被 rewind 移除
 
 - **WHEN** rewind 目标 checkpoint 仍包含 tracked registration，但其最新已注入 revision 不在重建后的 active view
-- **THEN** 下一次真正model-call preparation从activation coordinator冻结的ResourceRegistry内存snapshot取得当前published revision，并将user-role恢复item、首个rewind epoch assembly与transition消费原子提交；snapshot不可用时保留rewind view/pending transition但不追加item或dispatch，且不读取文件、网络或其它provider
+- **THEN** 下一次真正model-call preparation从activation coordinator冻结的ResourceRegistry内存snapshot取得当前published revision，并将恢复事实、首个rewind epoch assembly与transition消费原子提交；`root_eligible`可进入新root，`tail_only`为独立user-role item；snapshot不可用时保留rewind view/pending transition但不追加item或dispatch，且不读取文件、网络或其它provider
 
 #### Scenario: untrack 状态参与 rewind
 
@@ -485,7 +580,7 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 #### Scenario: compaction 物化 tracked source
 
 - **WHEN** active source 为 `A(base) + A→B(delta) + B→C(delta)` 且 compaction 实际重建上下文
-- **THEN** compaction先提交view/pending transition，下一次真正model-call preparation把以C为完整内容的新revision、首个compaction epoch assembly与transition消费原子提交，仅投影一个post-user user-role恢复item并保留旧链审计引用
+- **THEN** compaction先提交view/pending transition，下一次真正model-call preparation把以C为完整内容的新revision、首个compaction epoch assembly与transition消费原子提交；`root_eligible`只在新root投影一次，`tail_only`仍为独立post-user user-role item，旧链保留审计引用
 
 #### Scenario: compaction 处理 snapshot 或 untracked 内容
 
@@ -596,7 +691,7 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 #### Scenario: 当前 Provider 不支持中途 system item
 
 - **WHEN** post-user CSM source 进入当前 Provider projector
-- **THEN** 当前实现统一输出 user-role source item；Anthropic 官方部分模型的中途 system 能力只保留未启用 TODO，不参与当前 capability matrix 或运行时选择
+- **THEN** 同epoch或中途新增source统一输出独立user-role item；仅合法新epoch首个root可按owner的根指令资格重编译为system。Anthropic官方部分模型的中途system能力只保留未启用TODO
 
 ### Requirement: Context lifecycle owner 必须精确为 SessionThread
 
@@ -606,7 +701,7 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 
 `session-control.sqlite` MUST保存唯一`SessionLifecycleFence(state=active|deleting|tombstoned, lifecycle_generation, deletion_record_id?)`。新Session持久副作用的准入先取workspace `NavigationTopologyGate` shared，再取至多一个目标`SessionLifecycleGate` exclusive，读取fresh SQLite catalog active/locator并确认local fence同generation，在一个Session control事务durably建立lease/等价record后释放；已有execution/runtime lease可覆盖其内部item/source/tool callback。最终可见性publication重取topology shared→原Session gate并fresh验证catalog active及token，catalog已deleting时新可见性发布必须取消、已准入lease只可收敛。导航parent/name调整仅由workspace SQLite/topology gate负责，不写thread context；所有lock顺序为topology→至多一个Session gate→至多一个SQLite写事务，不持锁跨模型/工具/网络或整个删除排空。
 
-`SessionOperationLease` MUST至少持久化`lease_id`、`operation_kind=thread_creation|board_migration|collaboration_fanout|runtime_owner|execution|context_control|communication_source|communication_target|federated_call|remote_observation|attachment|fork_retention|session_catalog_mutation`、稳定operation identity/preimage hash、captured lifecycle generation、holder generation/fencing token、`state=active|settling|completed|cancelled|failed`、revision和可选recovery ref；同generation/operation identity唯一且非终态可索引。专用record承担lease时 MUST以显式lease state或版本化全映射归一自己的preparing/routing/published/aborted等状态，不得按名称猜测。lease不得墙钟自动到期。恢复owner验证旧holder generation失效并CAS新token后才可继续原operation或settle；fence deleting后不建新lease，旧lease只完成/取消冻结operation，不派生新root/wakeup/child。跨库主体先durable commit再terminal lease，中间崩溃按稳定identity/ref核对；删除请求settling后仍等待writer确认或幂等恢复核对，terminal后旧token callback必须失败。同一Session catalog目标条目的locator/lifecycle/归档mutation MUST以`session_catalog_mutation`竞争gate，旁路写入fail closed。
+`SessionOperationLease` MUST至少持久化`lease_id`、`operation_kind=thread_creation|board_migration|collaboration_fanout|runtime_owner|execution|context_control|debug_control|communication_source|communication_target|federated_call|remote_observation|attachment|fork_retention|session_catalog_mutation`、稳定operation identity/preimage hash、captured lifecycle generation、holder generation/fencing token、`state=active|settling|completed|cancelled|failed`、revision和可选recovery ref；同generation/operation identity唯一且非终态可索引。专用record承担lease时 MUST以显式lease state或版本化全映射归一自己的preparing/routing/published/aborted等状态，不得按名称猜测。独立Web/API debug mutation须以`debug_control`准入，Agent工具可由其已有execution lease覆盖；该短期准入lease不替代跨Turn`node_debug_process`外部资源lease。lease不得墙钟自动到期。恢复owner验证旧holder generation失效并CAS新token后才可继续原operation或settle；fence deleting后不建新lease，旧lease只完成/取消冻结operation，不派生新root/wakeup/child。跨库主体先durable commit再terminal lease，中间崩溃按稳定identity/ref核对；删除请求settling后仍等待writer确认或幂等恢复核对，terminal后旧token callback必须失败。同一Session catalog目标条目的locator/lifecycle/归档mutation MUST以`session_catalog_mutation`竞争gate，旁路写入fail closed。
 
 `SessionLifecycleGate` MUST按`(workspace_id, canonical_session_id)`使用workspace navigation根中的跨进程shared/exclusive OS锁；`NavigationTopologyGate`是该根中的独立跨进程短锁，所有Session准入先取shared topology。cold history/detail先在topology shared下获取fresh catalog locator和Session shared`SessionReadGuard`，释放topology后保持read guard到全部node/SQLite handle关闭并复核catalog/fence；catalog deleting前已开始reader可完成，新reader返回`session_deletion_pending`。删除owner逐Session关闭local fence前等待其read guard；锁文件不保存业务状态且不得unlink/recreate，不可验证时fail closed。
 
@@ -920,7 +1015,7 @@ workspace attachment正文 MUST NOT进入copy staging。source snapshot只冻结
 
 ### Requirement: resident runtime 卸载不得改变 durable context lifecycle
 
-系统 SHALL 允许durable SessionThread的resident runtime被卸载和延迟重建，同时保持同一逻辑ContextStore/CSM owner identity。当前child thread默认在无active/runnable/pending execution、未收敛model/tool/mutation和runtime lease且连续30分钟无活动后进入cold状态。卸载 MUST 只释放可重建的进程内资源；canonical history、checkpoint/view、source registration/revision、latest-visible-committed基准、tracking/untrack状态、prefix epoch、ToolSet applied binding和sealed assembly引用必须保持不变。
+系统 SHALL 允许durable SessionThread的resident runtime被卸载和延迟重建，同时保持同一逻辑ContextStore/CSM owner identity。当前child thread默认在无active/runnable/pending execution、未收敛model/tool/mutation和runtime lease、debug owner已核实无`launch_pending`进程claim、`starting|running|paused|stopping`进程及`reconcile_required`阻断且连续30分钟无活动后进入cold状态。调试进程活动期间不累计idle时长；终态核实和lease结清后重新起算完整30分钟。residency manager决定关闭目标runtime generation的`LifetimeScope`，但不能自行推断debug状态；scope只释放可重建的进程内资源，不计算idle、不停止进程级共享watch或跨Turn外部业务资源；canonical history、checkpoint/view、source registration/revision、latest-visible-committed基准、tracking/untrack状态、prefix epoch、ToolSet applied binding和sealed assembly引用必须保持不变。backend重启若调试占用仍在恢复/状态不明，应先恢复/核实owner并维持loading或带阻断的resident状态，不得直接宣称cold。
 
 系统 SHALL 提供只读`ThreadResidencySnapshot`，至少包含`session_id`、`thread_id`、`residency=cold|loading|resident|unloading`、execution状态、`last_activity_at`、`idle_deadline_at`和脱敏`blocking_reasons[]`。该snapshot只描述runtime residency，不得成为canonical item、CSM source、team state或模型上下文。residency manager MUST 通过可注入单调`Clock`计算deadline：生产使用真实时钟，测试使用fake clock验证真实30分钟阈值，不得实际等待30分钟或降低产品阈值。
 
@@ -935,6 +1030,11 @@ list/history/detail读取 MUST 走cold path且不得创建可写runtime。下一
 
 - **WHEN**测试在无阻断lease的child thread上将可注入Clock推进到最后活动后的29分59秒，再推进到30分钟整
 - **THEN**`ThreadResidencySnapshot`先保持resident并给出deadline，随后转为cold；若存在active/pending execution、未收敛mutation或lease，则30分钟整仍不得卸载并在`blocking_reasons`中给出脱敏原因
+
+#### Scenario: 调试进程跨越30分钟不进入cold
+
+- **WHEN** child在无execution时保有`launch_pending`进程claim或保持`starting|running|paused|stopping`Node调试进程，fake clock跨过30分钟，随后debug owner核实终态并结清lease
+- **THEN** 活动期间residency保持resident且有脱敏debug blocker；终态后从零重新起算30分钟，停止失败或重启状态未知时保持`reconcile_required`阻断，不因旧scope消失误报cold
 
 #### Scenario: cold history 读取不创建 owner 实例
 

@@ -32,7 +32,7 @@ optional stateless framework dispatch bridge -> Provider adapter
 - 让 canonical append、source lifecycle、ToolSet switch 和 epoch rebuild 共用同一持久化/assembly transaction 边界，但保持各自的 domain owner 与不变量。
 - 把任意有效 ToolSet 变化定义为 model-call safe boundary 上的 hard rebase，并让同一 Turn 可以跨多个 prefix epoch。
 - 统一 AGENTS、Skill metadata/activation、团队状态和其它内部 source 的 identity、revision、diff、追踪及恢复语义。
-- 用插件化 Resource Observation Platform统一文件、网络、内存等资源的监视、稳定读取、解析、语义diff和不可变snapshot发布，正常model-call preparation只消费内存revision/snapshot。
+- 用代码内显式装配的资源观察流水线统一已知文件、Gateway内部快照和权威内存状态的稳定读取、语义diff与不可变snapshot发布；正常model-call preparation只消费内存revision/snapshot。
 - 建立Virtual Resource Namespace（VRN），让模型能够引用和理解资源的逻辑来源，同时隐藏物理路径、endpoint、credential和provider locator。
 - 让资源变化的观察、业务desired state与某个SessionThread的context activation相互解耦，并支持默认`turn`、可选`model_call`两种确定性激活边界。
 - 删除 PromptReplay 及所有 request-time 反向捕获，让 Provider dispatch只消费已封存 assembly；framework middleware 若不可避免，只承担无状态 bridge 职责。
@@ -44,6 +44,7 @@ optional stateless framework dispatch bridge -> Provider adapter
 
 **Non-Goals:**
 
+- 不建立资源插件安装/卸载宿主、plugin manifest监视、第三方进程内provider ABI或任意外部网络资源自动注入；外部服务的工具扩展沿用MCP，未来MCP resource订阅需要独立设计和实现，不能假称当前runtime已支持。
 - 不设计按 Turn/请求次数自动到期、注入次数或即时 Skill 移除。
 - 不让模型看到或传入 Skill 的绝对路径、相对路径、catalog 层级或 Gateway 内部 locator。
 - Skill metadata 暂不解析 `name`、`description` 之外的 frontmatter 字段。
@@ -78,6 +79,8 @@ ContextMutationIntent =
 - `RebuildContextEpochIntent`：compaction或rewind先提交active view与版本化CSM control state，并登记只可由下一次model-call preparation消费的`PendingPrefixEpochTransition(reason, view_revision, control_revision)`；首次assembly由owner直接初始化epoch。
 
 `ContextSourceManager`（CSM）是该 owner 下的 source-specific 子管理器。producer向CSM提交结构化observation或名称化Skill操作；CSM负责source identity、`observed/pending/applied` revision、diff基准、tracking state和reconciliation决策，但只能返回`ApplySourceLifecycleDecision`，不能截获普通canonical append、重组整个消息历史或直接生成LangChain/Provider message。team fanout、跨Session inbox或其它异步producer可以在没有model call时提交幂等pending observation/ambient item和wakeup intent，此时不得推进`applied/injected_revision`、diff基准或创建assembly；下一次真正model-call preparation才把pending事实选择进plan并原子推进applied状态。已经创建的pending item仍是不可变事实，失败重试按identity复用而非覆盖。
+
+CSM 的输入/输出和持久控制记录必须复用 itemized change 的“核心决策字段闭合、扩展数据开放”合同：`SourceObservation`/`ApplySourceLifecycleDecision` 显式携带 owner thread、source/facet identity、published semantic revision、activation boundary、tracking mode/state、base/delta relation、desired/applied revision 和幂等键，typed enum/union 与中文字段注释是唯一决策入口。`ContextContribution.selection_role`、`replacement_policy`、typed `source_binding` 由 producer 声明并由 itemized registry/selection 校验；owner-thread registry 才分配 `RegisteredContribution.source_ordinal`，CSM、watch reaction和ledger均不得从事件到达顺序、内存计数或 `extensions` 推导/补造该序号。旧 `selection_only`、`replaceable_source`、overlay alias和 ordinal metadata flags不保留第二解释路径。producer可提交 namespaced/versioned/protected `extensions` 供审计或展示，但未知扩展原样保留、不影响 tracking、diff 基准、pending/applied推进、role、ToolSet hard rebase、epoch或dispatch；若任何新增代码需要改变这些行为，须先定义显式 typed capability/intent 与验证，不能靠扩展 key 触发。该约束同样适用于 checkpoint restore 和 fork/remap，缺核心字段必须失败而不能以当前文件、watch事件或扩展值补齐。
 
 owner在一次model-call preparation中按确定顺序消费当时已提交的canonical事实和pending epoch transition，完成tool protocol convergence、source reconciliation、active-view/ToolSet selection、plan创建与assembly seal。tool protocol convergence是source选择前的硬门槛：只要前一assistant item声明的任一outstanding tool call还没有同一causal execution内匹配的terminal `tool_result`，期间由`skill_load`、team、terminal callback或其它producer提交的source/runtime事实只能保持pending，不得被排到tool call与result之间或进入可dispatch selection。全部配对result收敛后，plan必须按协议因果先选择assistant tool-call group和其全部result，再按稳定source identity/ordinal选择期间积累的pending source；物理`item_sequence`/JSONL offset或提交时间不能替代该顺序。该次preparation任一步失败都不得部分推进新item、source committed revision、applied ToolSet revision、applied prefix epoch或消费pending transition；但先前由用户显式提交的rewind/compaction active view保持有效。成功seal首个新epoch assembly与source materialization/applied ToolSet推进在同一owner transaction完成，再把transition标记consumed。
 
@@ -117,11 +120,13 @@ Provider/model projection profile同样不是第五种epoch reason。尚未有se
 
 该约束同时禁止把新 source 合并进旧 system/user message，也禁止 Provider adapter 为满足交替 role 而合并相邻 user item。某 Provider 无法表达独立追加 item 时必须显式 reject。
 
-### 3. ToolSet 变化必须 hard rebase，不能伪装成软上下文 append
+### 3. Provider ToolSet 变化必须 hard rebase；扩展目标目录是另一种版本化事实
 
-ToolSetSnapshot/ToolSetRef 与 canonical item、CSM source state保持独立，但必须参与每次 sealed assembly 的 compatibility key。新增、删除、隐藏、恢复工具，修改工具 schema/description、执行权限或确认 policy，只要改变模型实际可见或可调用的工具事实，都产生新的 desired ToolSet revision；不区分“添加可软切换、删除才硬切换”等两套语义。
+ToolSetSnapshot/ToolSetRef 只描述 Provider `tools` 中的少量直接工具与始终存在、schema/description固定的 `invoke_extension_tool(tool_name, arguments)`。直接工具或该信封的名称、schema、description、Provider可见启停/确认policy发生有效变化才产生新的 desired ToolSet revision并触发hard rebase；不区分添加和删除。内层`ExtensionToolCatalog`由其domain owner管理，包含非直接内置工具、自定义工具和MCP工具的稳定target identity、schema hash、权限/确认策略与revision。目标增删、描述/schema变化、连接generation变化或执行期权限撤销，不得改变Provider可见的信封schema/description，也不得仅因此制造ToolSetRef或prefix epoch。只有显式提升/降级为直接工具、或信封本身改变，才跨越这条边界。Provider描述不能枚举内部target名称/schema；模型从Skill、AGENTS、用户输入及受控的MCP工具指引来源了解可用目标，指引不授予执行权限。
 
-ToolSelectionStore/ToolService继续拥有 workspace/agent级 desired selection及其控制面 revision；它们不写 Session context。每个 SessionThread 的 ContextStore owner持久化最后观察到的 desired revision、当前 applied ToolSetRef/revision和产生它的 prefix epoch，并根据二者差异构造 `SwitchToolSetIntent`。因此控制面切换可以先于某个 thread 生效，但历史 assembly永远只读自身封存的 applied binding，不能用当前 ToolSelectionStore反推。
+扩展调用必须在产生该tool call的sealed model-call上冻结`ExtensionCatalogBindingRef`，并由dispatcher按该ref解析target，而不是按执行时的最新目录悄悄改投。目录与指引必须在同一资源激活边界原子选中：默认Turn固定；显式`model_call`时只在下一安全preparation消费Registry已发布snapshot。每次实际调用仍按最新不可关闭的身份/完整性校验和可热变的权限策略重新授权，撤权返回与原`tool_call_id`配对的明确失败，不修改已sealed的调用身份、schema或目标。未知/已删除目标显式报错，不伪造成功。内层目录ref、target/schema revision与结果provenance独立持久化和校验，不塞进Provider ToolSetRef、也不以目录revision扰动同epoch前缀。
+
+ToolSelectionStore/ToolService继续拥有 workspace/agent级 desired selection及其控制面 revision；它们不写 Session context。其直接工具选择产生Provider ToolSet desired revision；内层扩展目标选择只产生ExtensionToolCatalog desired revision。每个 SessionThread 的 ContextStore owner分别持久化最后观察到的desired、当前applied ToolSetRef和内层catalog binding，并仅对前者的有效Provider形状变化构造`SwitchToolSetIntent`。历史assembly永远只读自身封存的两种binding，不能用当前ToolSelectionStore反推。
 
 运行中的 sealed model call 永远绑定其 applied ToolSet revision，用户或控制面此时修改工具选择只能更新 pending desired revision，不能改写该请求。owner 在下一次 model-call safe boundary 按以下顺序生效：
 
@@ -136,21 +141,22 @@ hard rebase不修改已有 canonical item identity、正文或因果顺序，也
 
 多次 selection变化若都发生在下一个 safe boundary前，可以把中间 desired状态合并为最终 revision再 seal，但控制面仍需保留可审计的 revision因果，不能把已经 applied/sealed 的 ToolSet历史改写掉。若 Provider无法在新 ToolSet下合法投影 active history中的旧 tool call/result，系统必须明确阻止 rebase，并要求适用的显式 compaction或终止该 execution；不得删除、改写或伪造历史工具事实。
 
-### 4. 只有 epoch 顶层 root context 使用 system，后续 CSM item 使用 user
+### 4. source owner 声明根指令资格；普通追加永远使用 user
 
-首次组装把当时已经存在的顶层基础说明、初始 AGENTS revision 和 Skill metadata catalog 编译为一个不可变 root context item，投影为 `wire_role=system`。第一条真实用户消息之后，CSM 追加的 item 不再按“完整内容还是 delta”决定 role，而按因果位置统一投影：
+每个source owner以必填typed `root_placement=root_eligible|tail_only`声明其受信内容是否有资格进入新epoch的根指令；CSM不得从文件名、路径、wire role或自由extensions推断资格。首次组装只把当时有效的`root_eligible`来源按稳定顺序编译成一个不可变最顶层`wire_role=system` item。`tail_only`来源包括默认不可信的外部MCP工具指引，只能作为上下文数据进入独立user item。第一条真实用户消息之后、且没有实际新epoch边界时，任何source完整内容、diff、重新加载或恢复都只能在尾部新增独立`wire_role=user` item，不因资格或内容是full/delta而改变：
 
 | CSM item | 当前 wire role |
 |---|---|
 | 首次组装的唯一 root context | `system` |
 | `skill_load` 的完整 snapshot/tracked activation | `user` |
 | AGENTS、Skill metadata/activation、team/runtime delta | `user` |
-| tracked source 的 rewind 完整恢复 | `user` |
-| compaction 后重新物化的完整动态 source | `user` |
+| 同epoch的source完整恢复或合并后的delta | `user` |
+| 实际compaction、rewind、Provider ToolSet hard rebase或fork首次组装形成的新root中的`root_eligible`有效内容 | 新epoch唯一顶层`system` |
+| 同一新epoch中的`tail_only`有效内容 | 独立`user` |
 
 这些 `wire_role=user` item 仍是 ambient runtime/source item，不是 canonical `user_input`，没有 `turn_id`，不能成为 Turn root/member。Provider 原生的 assistant/tool call/tool result role 不受此表影响。
 
-Provider projector 当前不得把中途完整 source 提升成 system，也不得将其前插到 root context。为 Anthropic 官方部分模型未来可能支持的中途 system item 只保留关闭状态的 capability TODO；启用它必须另行修改 spec、projector profile 和缓存验证合同。
+合法新epoch重建时，compiler可从已提交active view及冻结的受信ResourceSnapshot，把`root_eligible`来源的base+delta物化为新root中的当前完整状态；必须记录确定性顺序、source refs/hash、覆盖的revision链和旧item lineage，避免同一语义在新root与tail重复投影。旧canonical item/detail/assembly字节不变，历史读取仍是旧sealed selection；fork只对目标新thread首次assembly应用此规则，不重编译source历史。`tail_only`即使在新epoch也不得借摘要或合并进入system。任何source变化本身不得制造epoch；若无合法重建边界，不能为提高优先级而前插system。为Anthropic中途system只保留关闭的capability TODO。
 
 ### 5. Resource Observation Platform、VRN 与 SkillCatalog
 
@@ -164,42 +170,43 @@ bundled resources/skills
 
 同名项按上述优先级确定唯一有效 entry；名称冲突、非法 metadata 或不可读文件必须显式诊断。`${BOXTEAM_HOME}/skills` 是 Gateway 级全局 catalog，默认可用于所有工作区；Gateway 负责全局 catalog/control-plane 发现，但不得写工作区 Session SQLite。Workspace 后端取得内部 catalog descriptor 后，由当前 Session 的 CSM 完成加载和持久化。
 
-资源平台区分“观察的来源”和“消费的语义资源”，再接一条只读激活链：
+资源流水线区分“观察的来源”和“消费的语义资源”，再接一条只读激活链。内置适配和业务解析器由各进程composition root在代码中显式装配；typed port只用于清晰边界与测试替身，不构成可安装插件宿主：
 
 ```text
-ResourceContributionRegistry
-  ├── IResourceMonitorProvider   # file/network/memory/... 只产生轻量变化事件
-  ├── IResourceSnapshotProvider  # 根据私有handle稳定读取候选来源快照
-  ├── IResourceLoader            # 从一个或多个来源/资源形成语义资源
-  └── IResourceReaction          # 按业务policy处理已发布语义revision
+代码内composition root
+  ├── 内置file monitor / stable reader
+  ├── Gateway受认证snapshot adapter / 权威memory mutation adapter
+  └── AGENTS / Skill / config / team业务loader和owner reaction
           │
-          ▼
-ResourceTaskSupervisor           # 树形生命周期、共享订阅、取消、重启、健康状态
-          │
-          ▼
-EventChannelService              # resource.observe/* 与 job.events/* 等独立channel
-          │
-          ▼
-SourceReconciler ──CAS──> ObservedSourceRevision
-          │                 │
-          └──> ResourceDerivationGraph ──CAS──> ResourceRegistry immutable ResourceSnapshot
-          │
-          ▼
-ResourceActivationCoordinator ──> Turn/ModelCall ResourceActivationSnapshot
-          │
-          ▼
-CSM decision -> ContextStore owner -> sealed assembly
+          └── dirty/gap事件 ──> EventChannelService
+                                # resource.observe/* 与 job.events/* 等独立channel
+                                │
+                                ▼
+                       SourceReconciler ──CAS──> ObservedSourceRevision
+                              │                         │
+                              └──> ResourceDerivationGraph ──CAS──> ResourceRegistry immutable ResourceSnapshot
+                                           │
+                                           ▼
+                       ResourceActivationCoordinator ──> Turn/ModelCall ResourceActivationSnapshot
+                                           │
+                                           ▼
+                       CSM decision -> ContextStore owner -> sealed assembly
+
+LifetimeScope ──仅持有/释放──> monitor task、订阅handle、client、worker、子scope
+                             # 与上述事件/快照传递链正交；不解析事件或决定业务状态
 ```
 
-Task lifecycle是树：一个runtime root拥有provider monitor、source reconcile、derivation与reaction worker，停止父task必须取消并排空子task；数据依赖是有向无环图（DAG）：一个来源可派生多个语义资源，多个来源也可合成一个资源，同一底层monitor subscription还可服务config、AGENTS、SkillCatalog和UI file event等多个consumer。`ResourceTaskSupervisor`以`provider instance + 规范化私有locator + recursive/filter/exclude/correlation/options`作为共享watch key并引用计数；语义不同的watch不得误合并，禁止每个SessionThread建立独立watcher。`ResourceContributionRegistry`只保存built-in/plugin的声明式贡献定义、依赖与factory，不存放已发布resource revision；plugin不能取得ContextStore writer或绕过ResourceRegistry直接注入模型。
+同一种机制只有一个抽象，传递机制不承载业务决策。进程内资源的**持有与释放**统一由薄`LifetimeScope`承担：它可基于`AsyncExitStack`和结构化task supervision实现，持有可异步关闭的task、订阅句柄、client及子scope；关闭先拒绝新登记、停止/排空子task，再按逆取得顺序释放句柄。同一scope的并发close只执行一次并等待相同结果；成功后重复close幂等，失败保持可观察`close_failed`与未释放handle诊断、后续调用重报同一失败，不能虚报`closed`或用GC finalizer代替显式关闭。`LifetimeScope`只向调用方返回释放结果/错误，不依赖事件服务、不选择channel，也不发布业务状态；持有该scope的domain/composition owner负责把失败映射为其资源域的typed状态事件并投到相应状态channel，保留原始错误供调用方处理。若事件服务已不可用，owner仍须显式返回/抛出释放错误并记录诊断，不能把投递失败当作释放成功。`LifetimeScope`不认识Skill、AGENTS、terminal、Turn、30分钟阈值、config reload policy或ResourceSnapshot，不持久化事实，也不决定何时close。既有`TurnExecutionScope`组合`CancellationSignal`与该唯一释放机制：cancel传递中止意图，close释放运行期持有物；清理/订阅登记须返回可撤销handle，关闭child时解除父信号hook，禁止注册后立即创建无人持有的异步task。Web React effect仍以effect cleanup持有其局部订阅，不再建立平行的全局DisposableStore。
+
+Task lifecycle是`LifetimeScope`的所有权树：process root持有内置file monitor、source reconcile、derivation与业务reaction worker所属的scope，child ThreadRuntime只持有自身runtime scope；停止父scope取消并排空其子scope。数据依赖另为有向无环图（DAG），不能用task树表达资源派生。file monitor的`subscribe(watch_descriptor)`返回释放该consumer引用的opaque handle；观察层内部以`monitor instance + 规范化私有locator + recursive/filter/exclude/correlation/options`为完整共享watch key并引用计数，仅最后一个handle释放时停止底层watch。共享watch归进程级file monitor而非ThreadRuntime或通用scope；不同语义不得误合并。配置/Skill/AGENTS/team的loader与reaction由各domain owner在代码中显式接线，测试可替换typed port；Registry只保存已登记来源和已发布语义revision，不存可执行插件定义、factory或活task。CSM与ContextStore writer不暴露给资源适配器。
 
 Event service按channel隔离队列、cursor、背压和故障域，至少包含`job.events/{job_id}`、`resource.observe/{provider_instance}`、`resource.state/{owner_domain}`、`config.lifecycle/{domain}`和`context.source/{workspace_id}`。现有Job event bus成为通用`EventChannelService`上的typed adapter，不允许资源变化继续挤入job专属队列。observation event只携带`provider_instance_id`、内部`source_id/watch_key`、event sequence、dirty/change/gap/overflow kind和时间，不携带文件正文、diff、credential或模型上下文；重复、乱序、rename burst和overflow可以合并为dirty/gap，只有SourceReconciler有权重新读取来源，ResourceDerivationGraph才有权发布语义snapshot。业务durable state仍由各domain owner保存，event队列不是事实数据库。
 
-file provider只监视已由descriptor注册的精确文件或固定一层entry boundary；Skill根变化可以使catalog descriptor集合dirty，但reconcile仍只枚举固定`<root>/<entry>/SKILL.md`一层，不递归未知目录、不跟随越界symlink、不运行`rg`。network provider自行实现etag/version/stream/poll策略，memory provider通过显式mutation event发布；它们共享相同snapshot/revision/CAS合同。watcher startup、overflow、provider reconnect或进程恢复都先把受影响descriptor标记dirty，执行有界initial/full reconcile并通过readiness gate后才允许依赖资源的新model dispatch；恢复不得扫描未登记工作区或猜测owner。
+内置file monitor只监视已由descriptor注册的精确文件或固定一层entry boundary；Skill根变化可以使catalog descriptor集合dirty，但reconcile仍只枚举固定`<root>/<entry>/SKILL.md`一层，不递归未知目录、不跟随越界symlink、不运行`rg`。Gateway全局Skill通过Gateway owner的受认证内部snapshot/revision提供给Workspace，team等内存状态只由权威owner的显式mutation event发布；它们共享source/semantic revision与CAS合同，但不能假装拥有文件双读语义。MCP工具目录由明确的`McpCatalogOwner`按启动、`tools/list_changed`、重连及配置candidate切换做完整分页`tools/list`校验和语义快照，发布轻量事件到独立channel；没有通知能力时只承诺显式重连/刷新或配置的有界轮询，不谎称立即生效。`McpToolGuidanceProducer`只从已验证工具目录派生确定性、受限长度的name/description/参数指引与增删改tombstone，作为明确登记的`tail_only` CSM source；原始MCP prompts/resources/server instructions不自动注入，未来若要消费它们另行设计。连接或配置candidate须shadow校验、原子发布、generation lease保护in-flight调用；失败保留旧valid generation并显式报告。watcher startup、overflow、Gateway snapshot重连或进程恢复都先把受影响descriptor标记dirty，执行有界initial/full reconcile并通过readiness gate后才允许依赖资源的新model dispatch；恢复不得扫描未登记工作区或猜测owner。
 
-为避免“配置负责创建监视器、监视器又负责发现配置变化”的自举环，每个owner进程保留一个不可由插件或动态配置移除的最小`ResourcePlatformBootstrap`。它只启动本进程的`EventChannelService`、`ResourceTaskSupervisor`控制根、内置file snapshot能力，并登记本进程配置域的发行内置配置、用户覆盖、允许的Workspace覆盖及plugin manifest这些已知精确locator；Gateway bootstrap不得读取Workspace `.boxteam/workspace.jsonc`，Workspace bootstrap不得接管Gateway控制面配置。bootstrap不能注册模型source、取得ContextStore writer或执行业务reaction。它读到的新配置/manifest只形成candidate contribution graph，必须完成schema校验、shadow task tree启动、initial reconcile与health后才原子发布。已有有效generation时，candidate失败保留旧generation并发布明确诊断；冷启动没有任何有效内置/合并配置时直接启动失败，不能以空插件图或旧字段兼容配置继续。动态配置只能增删bootstrap之下的provider/loader/reaction task，不能关闭bootstrap自身、identity/integrity校验或事件故障报告。
+为避免“配置负责创建监视器、监视器又负责发现配置变化”的自举环，每个owner进程在代码中建立不可被动态配置移除的最小`ResourcePlatformBootstrap`。它启动本进程的`EventChannelService`、process-root `LifetimeScope`、内置file snapshot能力，并登记本进程配置域的发行内置配置、用户覆盖及允许的Workspace覆盖这些已知精确locator；Gateway bootstrap不得读取Workspace `.boxteam/workspace.jsonc`，Workspace bootstrap不得接管Gateway控制面配置。bootstrap不能注册模型source、取得ContextStore writer或执行业务reaction。config domain owner决定配置candidate创建、schema校验、readiness/health证明和原子发布：候选配置及其受影响的来源订阅在独立shadow scope中验证，失败只关闭candidate且旧active配置与来源绑定保持可用；成功先发布新配置/来源generation并以generation fence禁止旧scope再发布revision，然后排空旧scope。`LifetimeScope`只执行关闭，不判断candidate是否有效或何时切换。冷启动没有任何有效内置/合并配置时直接启动失败，不能以空图或旧字段兼容配置继续。动态配置只能变更bootstrap之下的已知source registration与业务policy，不能安装可执行provider/loader/reaction、关闭bootstrap自身或移除identity/integrity校验与事件故障报告。
 
-来源身份与语义资源身份分开：来源registry持有`source_id -> ObservedSourceDescriptor`和provider私有locator/watch反向索引，语义`ResourceRegistry`只持有`resource_id -> SemanticResourceDescriptor`及其published revision。路径、URI和watch key都不是持久identity；同一`SKILL.md`形成metadata与activation两个语义资源，同一有效Workspace配置由多层JSONC来源合成，AGENTS链可依赖多个已登记文件，Session团队资源只能从权威ledger/memory provider派生而不能复制状态。两层descriptor至少包含：
+来源身份与语义资源身份分开：来源registry持有`source_id -> ObservedSourceDescriptor`和实际owner私有locator/watch反向索引，语义`ResourceRegistry`只持有`resource_id -> SemanticResourceDescriptor`及其published revision。路径、URI和watch key都不是持久identity；同一`SKILL.md`形成metadata与activation两个语义资源，同一有效Workspace配置由多层JSONC来源合成，AGENTS链可依赖多个已登记文件，Session团队资源只能从权威ledger/内存状态适配派生而不能复制状态。两层descriptor至少包含：
 
 ```text
 ObservedSourceDescriptor {          # provider-private，不进入模型、history或canonical item
@@ -224,7 +231,7 @@ SemanticResourceDescriptor {       # 公开部分不含provider locator
 }
 ```
 
-SourceReconciler从provider稳定读取候选并按来源类型校验，发布不可变`ObservedSourceRevision(source_id, source_revision, raw_hash_or_version, snapshot_ref, availability, diagnostics)`；完整原始byte hash是file source的要求，网络/内存provider用自身可验证的版本与一致性token，不能假装拥有文件的双读语义。`ResourceDerivationGraph`只消费已接受的来源revision及其它语义resource revision，执行版本化解析/facet extraction、依赖拓扑排序、typed semantic diff和CAS，发布不可变`ResourceSnapshot(resource_id, semantic_revision, semantic_hash, source_lineage, parsed_ref, availability, diagnostics)`。依赖图必须拒绝环与缺失required依赖；多输入快照必须在一致的generation/vector上导出，不能混合新旧来源。原始来源变化但目标facet payload不变时，不推进该语义resource revision，也不追加context item；多次未激活变化可由CSM相对最新可见已提交revision合并成一个delta。watch事件只标脏，不能直接增加任一revision。读取/解析失败保留上一份valid snapshot并显式发布unavailable/diagnostic状态；依赖required资源的新dispatch fail closed，不能用旧valid快照、空值或当前文件偷偷替代。
+SourceReconciler经代码内装配的来源适配稳定读取候选并按来源类型校验，发布不可变`ObservedSourceRevision(source_id, source_revision, raw_hash_or_version, snapshot_ref, availability, diagnostics)`；完整原始byte hash是file source的要求，Gateway内部snapshot与权威内存状态使用各自可验证的版本与一致性token，不能假装拥有文件的双读语义。`ResourceDerivationGraph`只消费已接受的来源revision及其它语义resource revision，执行版本化解析/facet extraction、依赖拓扑排序、typed semantic diff和CAS，发布不可变`ResourceSnapshot(resource_id, semantic_revision, semantic_hash, source_lineage, parsed_ref, availability, diagnostics)`。依赖图必须拒绝环与缺失required依赖；多输入快照必须在一致的generation/vector上导出，不能混合新旧来源。原始来源变化但目标facet payload不变时，不推进该语义resource revision，也不追加context item；多次未激活变化可由CSM相对最新可见已提交revision合并成一个delta。watch事件只标脏，不能直接增加任一revision。读取/解析失败保留上一份valid snapshot并显式发布unavailable/diagnostic状态；依赖required资源的新dispatch fail closed，不能用旧valid快照、空值或当前文件偷偷替代。
 
 #### 5.1 Virtual Resource Namespace
 
@@ -236,10 +243,9 @@ boxteam://workspace/{workspace_id}/resources/skills/{skill_name}/SKILL.md
 boxteam://gateway/{gateway_id}/resources/skills/{skill_name}/SKILL.md
 boxteam://builtin/{distribution_id}/resources/skills/{skill_name}/SKILL.md
 boxteam://memory/{scope}/{logical_resource_name}
-boxteam://plugin/{plugin_id}/resources/{resource_kind}/{logical_resource_name}
 ```
 
-同一资源同时具有四种不能混用的标识/定位：模型可见且可安全展示的`display_uri`；来源registry内稳定的`source_id`；语义Registry内稳定、跨rename/locator变化保持不变的`resource_id`；provider私有的`provider_locator`（绝对路径、HTTP endpoint、credential ref、memory key等）。`display_uri`表达逻辑scope/kind/name，但不是任一内部identity、授权凭据、dedupe key或业务幂等键。URI不携带revision；精确revision/hash/snapshot_ref由activation/assembly provenance另存。解析必须通过`VirtualResourceResolver.resolve(uri, operation, ResolutionContext)`得到绑定`resource_id/source_id/provider/语义revision/snapshot_ref/capabilities`的typed handle，不能percent-decode后直接join到文件系统。
+同一资源同时具有四种不能混用的标识/定位：模型可见且可安全展示的`display_uri`；来源registry内稳定的`source_id`；语义Registry内稳定、跨rename/locator变化保持不变的`resource_id`；实际owner私有的`provider_locator`（绝对路径、Gateway内部snapshot引用、credential ref、memory key等）。`display_uri`表达逻辑scope/kind/name，但不是任一内部identity、授权凭据、dedupe key或业务幂等键。URI不携带revision；精确revision/hash/snapshot_ref由activation/assembly provenance另存。解析必须通过`VirtualResourceResolver.resolve(uri, operation, ResolutionContext)`得到绑定`resource_id/source_id/provider/语义revision/snapshot_ref/capabilities`的typed handle，不能percent-decode后直接join到文件系统。
 
 规范parser只接受注册的authority/path grammar，percent decode恰好一次，拒绝userinfo、credential、未知query/fragment、控制字符、反斜杠、空segment、`.`/`..`、编码歧义和越界scope。核心功能的policy默认允许不等于取消这些identity/integrity约束。每次实际operation仍按当前principal、workspace/gateway binding、resource capability和activation snapshot校验；URI本身不授予读取、激活、监视或跨workspace权限。provider locator、内部handle、credential和绝对路径不得进入模型prompt、普通工具结果、history projection、日志或URI。
 
@@ -256,7 +262,7 @@ Resource observation、domain desired state与thread applied context分离。pro
 
 ResourceActivationCoordinator只构造和校验typed snapshot，不直接写thread SQLite、JSONL或detail store；它把snapshot交给唯一Saver/ContextStore owner，具体schema、assembly binding、hash、恢复和history projection由`add-itemized-rollout-context`拥有。两份change之间不得各自建立snapshot writer或catalog。
 
-配置只允许`turn|model_call`，不提供`immediate`、按请求次数、TTL或注入次数。默认值是`turn`，可按`agent_spec`、`skill_catalog`、`tracked_skill_activation`等resource kind覆盖。`model_call`也只读Registry内存snapshot/revision，不在请求路径执行stat/read/目录枚举或网络fetch。若对应resource仍dirty/gap/reconciling，required consumer等待有界reconcile或明确失败；不得绕过Registry自行读取。config自身的`immediate|next_job|restart`等runtime reload policy与“何时把上下文资源revision激活进模型”是两套不同维度，不能混成一个枚举；前者即使立即发布新的desired配置，activation policy仍只在下一Turn active-slot边界生效。
+配置只允许`turn|model_call`，不提供`immediate`、按请求次数、TTL或注入次数。默认值是`turn`，可按`agent_spec`、`skill_catalog`、`tracked_skill_activation`、`mcp_tool_catalog`等resource kind覆盖。MCP目录binding与其派生指引在同一边界冻结，不能只更新提示或只更新dispatcher。`model_call`也只读Registry内存snapshot/revision，不在请求路径执行stat/read/目录枚举或网络fetch。若对应resource仍dirty/gap/reconciling，required consumer等待有界reconcile或明确失败；不得绕过Registry自行读取。config自身的`immediate|next_job|restart`等runtime reload policy与“何时把上下文资源revision激活进模型”是两套不同维度，不能混成一个枚举；前者即使立即发布新的desired配置，activation policy仍只在下一Turn active-slot边界生效。
 
 该公共配置属于Workspace配置域，使用现有`workspace_inline.jsonc → 用户workspace.jsonc → workspace_local.jsonc → ${workspace}/.boxteam/workspace.jsonc`递归对象合并；`workspace_dev.jsonc`只作为完整开发模板，不自动参与运行时合并。新增结构固定为：
 
@@ -269,7 +275,8 @@ ResourceActivationCoordinator只构造和校验typed snapshot，不直接写thre
         "agent_spec": "turn",
         "skill_catalog": "turn",
         "tracked_skill_activation": "turn",
-        "team_state": "turn"
+        "team_state": "turn",
+        "mcp_tool_catalog": "turn"
       }
     }
   }
@@ -278,7 +285,7 @@ ResourceActivationCoordinator只构造和校验typed snapshot，不直接写thre
 
 `overrides`按resource kind整体key覆盖，value闭集为`turn|model_call`；未列kind继承`default_boundary`。schema校验最终合并配置，未知boundary/kind和错误类型直接失败。该字段是新增且默认行为完整定义，不为不存在的旧字段设计alias、deprecated兼容分支或双内部模型；默认、schema、dev模板、配置诊断来源和focused merge/reload测试必须同时更新。若未来变更字段层级或既有值语义，再按Workspace `config_version`执行显式迁移，不能静默猜测。
 
-Turn/ModelCall snapshot将`display_uri`映射到精确`resource_id + semantic_revision + semantic_hash + source_lineage_digest/ref + snapshot_ref`并交给ContextRequestPlan/assembly；source lineage只进入provenance/integrity合同，不因来源原始字节变化而令未变的模型可见facet重建plan hash。旧context item和旧assembly永远读取其已封存snapshot/detail，不通过display URI解析当前资源。tracked registration也绑定exact resource identity；同名高优先级Skill后来出现只改变未来catalog snapshot，既有registration不自动改绑。plugin/config导致provider graph变化时使用shadow start、initial reconcile和health校验，成功后原子切换graph generation并drain旧task tree；失败继续保留旧generation且显式诊断，不留下两套同时发布的monitor。
+Turn/ModelCall snapshot将`display_uri`映射到精确`resource_id + semantic_revision + semantic_hash + source_lineage_digest/ref + snapshot_ref`并交给ContextRequestPlan/assembly；source lineage只进入provenance/integrity合同，不因来源原始字节变化而令未变的模型可见facet重建plan hash。旧context item和旧assembly永远读取其已封存snapshot/detail，不通过display URI解析当前资源。tracked registration也绑定exact resource identity；同名高优先级Skill后来出现只改变未来catalog snapshot，既有registration不自动改绑。配置变更影响已知来源登记时由config owner在独立shadow scope中完成candidate校验、initial reconcile和health校验，成功后原子切换来源绑定generation、fence旧发布并drain旧scope；失败只关闭candidate，继续保留旧generation且显式诊断，不留下两套同时发布的monitor。
 
 所有 Skill metadata、Skill activation、AGENTS 和其它文件 source 都经同一个 `StableSourceReader`，不能由 middleware 各自执行一次普通 `read_text`。reader 输入是 provider 所有的 `SourceReadHandle` 和允许根，不要求 ContextStore 能直接访问物理路径：workspace 文件可由 workspace provider 本地读取，Gateway global Skill 必须由 Gateway provider 读取后，以仅内部可用且受认证的 `StableSourceSnapshot(entry_identity, source_identity, revision_hash, byte_length, content_bytes)` 返回；该 envelope 和 handle 都不得进入模型、普通工具结果或 canonical history。handle 必须能在 Gateway/backend 重启后由持久 catalog entry identity 重新解析，不能依赖进程内临时路径 token。
 
@@ -298,49 +305,60 @@ Metadata 与 activation 独立生效：metadata 让模型知道可选 Skill；ac
 
 ```text
 app/
-├── abstractions/                                 # provider/registry/activation的typed ports
+├── core/lifecycle.py                            # 唯一进程内LifetimeScope/释放handle；无业务策略
+├── abstractions/                                 # 内置来源适配/registry/activation的typed ports；测试可替换
 ├── domain/
 │   ├── resources/                               # 来源与语义revision、依赖和snapshot的纯值对象
 │   └── itemized/                                # sealed context/ref与canonical领域事实（既有）
 ├── services/
 │   ├── infrastructure/
 │   │   ├── events/                              # 跨业务channel的短期通知传输与backpressure
-│   │   ├── resource_platform/                   # 进程内资源平台装配边界
-│   │   │   ├── contributions/                   # 贡献定义、bootstrap、task tree与generation切换
-│   │   │   ├── observation/                     # monitor订阅共享、watch key与dirty/gap事件
+│   │   ├── external_resource_leases.py          # 跨Turn外部资源的持久操作占用/恢复账本
+│   │   ├── mcp/                                 # MCP连接、完整工具目录relist与generation lease（既有目录重构）
+│   │   ├── tool_catalog_service.py              # Provider直接工具与ExtensionToolCatalog的desired视图（既有）
+│   │   ├── resource_platform/                   # 进程内资源流水线；代码内装配
+│   │   │   ├── bootstrap.py                     # 固定启动根与已知配置locator
+│   │   │   ├── observation/                     # provider内部共享watch、引用计数与dirty/gap事件
 │   │   │   ├── sources/                         # 私有locator、稳定读取与ObservedSourceRevision
 │   │   │   ├── derivation/                      # source→semantic依赖DAG、解析调度与CAS
 │   │   │   ├── registry/                        # 已发布语义ResourceSnapshot与只读索引
 │   │   │   ├── virtual_resources/               # boxteam://语法、身份绑定与typed resolver
-│   │   │   └── providers/                       # file/network/memory/Gateway内部snapshot适配
+│   │   │   └── adapters/                        # 内置file、Gateway内部snapshot、权威memory适配
 │   │   ├── config/                              # 既有配置层合并、schema与reload owner
 │   │   └── rollout_context/                     # 既有SessionThread唯一I/O owner
 │   │       ├── runtime/context_sources/         # CSM registration、diff与恢复决策
 │   │       ├── assembly/                       # frozen activation ref和sealed selection
 │   │       ├── checkpoint/                     # 唯一ContextStore/Saver writer
 │   │       └── storage/                        # thread-local SQLite/JSONL/detail持久化
-│   ├── business/resource_derivations/            # AGENTS/Skill/team的业务解析与reaction policy
+│   ├── business/resource_derivations/            # AGENTS/Skill/team/MCP工具指引的业务解析与reaction policy
+│   ├── business/session_resource_providers.py    # 会话资源控制适配；委托实际owner核实
 │   ├── orchestration/resource_activation/        # active-slot冻结、Turn/ModelCall绑定与readiness
+│   ├── orchestration/thread_residency.py          # thread idle/lease/generation准入与scope关闭时机
 │   └── mapping/itemized/                         # 不读源的history/Provider DTO纯投影（既有）
-└── agents/tools/                                 # name-only skill_load工具适配（既有）
+└── agents/tools/                                 # name-only skill_load与固定invoke_extension_tool适配（既有目录重构）
 ```
 
 | 目录 | 精确职责与禁止跨越的边界 |
 |---|---|
-| `app/`、`app/abstractions/` | `app/`仅是应用包边界；`abstractions/`定义monitor/snapshot/loader/reaction、Registry查询、activation snapshot等typed port与可释放订阅合同，不实现provider I/O或线程状态。 |
+| `app/core/lifecycle.py`、`app/abstractions/` | `lifecycle.py`只实现唯一进程内`LifetimeScope`和可撤销释放handle，可用标准库`AsyncExitStack`/task supervision；它不实现cancel理由、idle policy、watch key、generation发布或持久外部资源停止。`abstractions/`定义已知来源读取、共享文件监视、业务解析、Registry查询、activation snapshot等typed port，供代码内装配和测试替身使用；文件订阅返回可被scope持有的释放handle，不暴露可安装插件API。 |
 | `app/domain/`、`app/domain/resources/` | `domain/`只承载纯领域规则；`resources/`冻结`source_id`/`resource_id`、来源/语义revision、依赖边、availability、typed snapshot ref等不可变值对象和校验，不持有provider locator、路径、文件句柄、event queue或数据库。 |
 | `app/domain/itemized/` | 保存既有canonical item、ContextRef、ResourceActivationSnapshotRef与ResourceProvenanceRef的纯schema/hash；不把ResourceRegistry的当前状态当历史事实。 |
 | `app/services/`、`app/services/infrastructure/` | 前者按基础设施/业务/编排/映射分层；后者只实现I/O与进程级设施，不吸收Skill解析规则、Agent决策或Session业务事实。 |
 | `app/services/infrastructure/events/` | 通用`EventChannelService`拥有按channel隔离的queue/cursor/backpressure/gap；`job.events`及resource/config/context均以typed adapter接入。它是短期通知传输，不是durable事实库，也不替代现有Session事件提交。 |
-| `app/services/infrastructure/resource_platform/` | 资源设施的composition root；只装配process/workspace作用域服务与协议，不成为巨型`ResourceManager`，不保存ContextStore或Skill业务状态。 |
-| `.../contributions/` | `ResourceContributionRegistry`登记内置/插件的定义和factory；`ResourcePlatformBootstrap`保留不可移除配置根；`ResourceTaskSupervisor`管理task tree、shadow generation健康检查、原子发布和旧树排空。定义注册与已发布revision严格分库。 |
-| `.../observation/` | provider monitor订阅、规范化watch key、引用计数、防抖及dirty/gap/overflow事件；同资源可为UI和多个业务consumer共享，但不同filter/correlation语义不得误共用。只标脏，不读正文或推进revision。 |
-| `.../sources/` | provider私有source descriptor/read handle映射、`SourceReconciler`和不可变`ObservedSourceRevision`；file稳定双读及根边界在这里执行，network/memory用各自一致性token。locator永不出现在模型、普通history或sealed context。 |
-| `.../derivation/` | `ResourceDerivationGraph`解析依赖DAG、调度typed loader、校验多输入版本向量、执行语义diff/CAS；这里只放通用求值框架，AGENTS/Skill/config/team的领域规则由其owner贡献。 |
+| `app/services/infrastructure/external_resource_leases.py` | 旧`ResourceManager`收敛后的跨Turn操作占用账本，只保存经实际owner验证的typed资源identity、operation/lease identity、状态与恢复引用；不猜工具参数、不存`cleanup_policy`或不可恢复的stopper、不决定关闭terminal/browser/MCP。持久SessionOperationLease、runtime generation lease与共享watch引用各守其原有owner/持久性边界，不强行合并成一个计数器。 |
+| `app/services/infrastructure/mcp/`、`tool_catalog_service.py` | MCP目录owner负责协议能力、完整分页relist、语义hash、通知/重连、shadow发布与generation lease；工具目录service只组合Provider直接集合、固定信封和独立ExtensionToolCatalog desired视图，不把target清单塞进Provider ToolSetRef。两者都不拥有CSM、指引文本或Session writer。 |
+| `app/services/infrastructure/resource_platform/` | 资源设施的composition root；在Gateway/Workspace各自代码中显式装配已知适配、loader和owner reaction，不成为巨型`ResourceManager`、插件宿主或第二ContextStore。 |
+| `.../bootstrap.py` | 固定启动本进程事件服务、process-root scope、内置file snapshot能力和已知配置locator，不受动态配置关闭。config owner可借独立`LifetimeScope`验证受影响的候选来源登记和有效配置，完成readiness/health后原子发布并关闭旧scope；没有可执行贡献注册表、plugin manifest或通用发布策略。 |
+| `.../observation/` | provider monitor订阅、规范化watch key、内部引用计数、防抖及dirty/gap/overflow事件；每个consumer取得可释放handle，最后一个释放才停止底层watch。同资源可供UI和多个业务consumer共享，但不同filter/correlation语义不得误共用。只标脏，不读正文或推进revision。 |
+| `.../sources/` | 实际owner私有source descriptor/read handle映射、`SourceReconciler`和不可变`ObservedSourceRevision`；file稳定双读及根边界在这里执行，Gateway内部snapshot与权威memory状态用各自一致性token。locator永不出现在模型、普通history或sealed context。 |
+| `.../derivation/` | `ResourceDerivationGraph`解析依赖DAG、调度typed loader、校验多输入版本向量、执行语义diff/CAS；这里只放通用求值框架，AGENTS/Skill/config/team的领域规则由其owner在代码中实现。 |
 | `.../registry/` | `ResourceRegistry`发布/查询不可变语义revision、readiness和generation；不拥有provider读取、目录扫描、Session SQLite写入或tool结果。旧valid与当前unavailable必须可区分。 |
 | `.../virtual_resources/` | `boxteam://` parser、scope/operation/capability校验与typed resolver；URI仅作安全展示与解析入口，不是稳定identity、文件挂载、授权凭据或历史重读入口。 |
-| `.../providers/` | 文件、网络、内存及Gateway全局Skill受认证内部snapshot的可替换适配；各provider仅在自己的owner进程持有locator/credential，Workspace不能猜测Gateway物理路径。新增provider不要求修改CSM或ContextStore。 |
+| `.../adapters/` | 文件、Gateway全局Skill受认证内部snapshot和权威内存状态的内置适配；各owner只在本进程持有locator/credential，Workspace不能猜测Gateway物理路径。生产装配在代码中显式维护，测试可注入替身；新增外部服务能力优先走MCP，不借此目录动态安装资源插件。 |
 | `app/services/infrastructure/config/` | 现有config owner仍负责JSONC schema、layer merge、candidate validation与runtime reload。Gateway与Workspace配置域分别合成有效配置资源；资源平台负责观察来源/调度派生，不复制配置merge或把`workspace_dev.jsonc`变成隐式运行层。 |
+| `app/services/business/resource_derivations/`、`app/agents/tools/` | 前者实现MCP工具指引等业务语义派生与source owner根资格声明，不持有MCP连接或CSM writer；后者以固定`invoke_extension_tool`工具适配封存的ExtensionCatalogBindingRef并执行权限校验，旧`custom_invocation`命名在实施时直接替换，不保留工具别名或双schema。 |
+| `app/services/business/session_resource_providers.py` | 会话资源列表/控制适配委托terminal/browser/后台任务等实际owner核实资源状态、决定业务关闭/删除及副作用；既有`SessionResourceProviderRegistry`只路由，不与外部lease账本并行维护第二套资源状态。工具端通过typed resource-use声明占用，不能在通用层解析`terminal_id`/`pageId`等参数名并自动伪造资源登记。 |
+| `app/services/orchestration/thread_residency.py` | itemized change拥有的SessionThread runtime准入、generation/lease fence、idle时钟与cold投影owner；它决定何时关闭该generation的`LifetimeScope`，但不能另实现dispose、共享watch、持久外部资源停止或ContextStore第二writer。 |
 | `app/services/infrastructure/rollout_context/` | 既有SessionThread唯一I/O owner；仅消费冻结的资源结果，不直接监视或读取当前源。其未列出的`execution/operations/provider/migration`等既有子目录职责维持`add-itemized-rollout-context`的拆分合同。 |
 | `.../rollout_context/runtime/`、`.../runtime/context_sources/` | `runtime/`保存线程运行期协调；`context_sources/`独占CSM registration、latest-visible-committed基准、delta合并、rewind/compaction恢复决策；只能提交给唯一owner，不能拥有watcher或第二ContextStore。 |
 | `.../rollout_context/assembly/`、`.../checkpoint/`、`.../storage/` | `assembly/`封存selection/activation provenance和稳定wire帧；`checkpoint/`是唯一ContextStore/Saver提交入口；`storage/`保管thread-local事实与受保护detail。三者都不能从当前资源URI/路径补造旧assembly。 |
@@ -349,7 +367,11 @@ app/
 | `app/services/mapping/`、`.../itemized/` | 只把已提交sealed selection/provenance映射为history、LangChain或Provider DTO，不读取当前Registry、provider locator或ContextStore底层表。 |
 | `app/agents/`、`.../tools/` | Agent层只提供模型调用面；`tools/`里的`skill_load`只接受name/mode并调用当前冻结catalog+CSM端口，不能自行拼路径、读`SKILL.md`或建立第二追踪状态。 |
 
-作用域固定为：Gateway进程拥有全局Skill source/catalog及其monitor；Workspace进程拥有本地source/provider、Registry和共享watch；Session只拥有目录/协作控制；SessionThread拥有CSM registration、ContextStore及sealed assembly；active execution仅持有冻结activation snapshot。child idle卸载只释放其线程运行期对象与订阅引用，不删除进程级watch、语义revision或已提交上下文。来源变化可异步发布，但只能在配置的`turn|model_call`边界变为新的尾部item；只有首次组装、实际compaction、rewind重建、ToolSet hard rebase能改变prefix epoch，普通revision/监视事件不能重写旧wire bytes。
+作用域固定为：Gateway进程拥有全局Skill source/catalog及其monitor；Workspace进程拥有本地source/provider、Registry和共享watch；Session只拥有目录/协作控制；SessionThread拥有CSM registration、ContextStore及sealed assembly；active execution仅持有冻结activation snapshot。`LifetimeScope`的所有权只描述进程内对象，不重定义这些durable owner。child idle卸载只释放其线程运行期对象与订阅引用，不删除进程级watch、语义revision或已提交上下文。来源变化可异步发布，但只能在配置的`turn|model_call`边界变为新的尾部item；只有首次组装、实际compaction、rewind重建、ToolSet hard rebase能改变prefix epoch，普通revision/监视事件不能重写旧wire bytes。
+
+外部terminal/browser/MCP/dev-server/Node调试进程等业务资源不是`LifetimeScope`所拥有的进程内句柄。现有`ResourceManager`在工具参数名中猜`resource_id`、将`cleanup_policy`混入通用账本，并以无法跨进程恢复的stopper执行stop；重启后stopper缺失却仍可能持久化`stopped`。实施时删除该通用控制入口，保留真正需要的跨Turn持久operation lease语义于唯一`ExternalResourceLeaseLedger`；工具/provider以typed resource-use和实际owner验证resource identity/归属后才能登记占用。debug owner提供精确`(workspace_id, session_id, thread_id, debug process identity)`的typed`node_debug_process`占用/恢复引用，核实`starting|running|paused|stopping`及`reconcile_required`阻断后向residency owner提供状态，不把Node停止策略放进通用账本；独立Web/API调试mutation在同一Session gate建立`debug_control`准入lease，Agent内部已有execution lease可覆盖，避免删除与启动交错。用户取消Turn时domain owner先决定停止还是仅释放该operation lease；若其它lease仍有效，不得凭一个holder的结束停止共享外部资源。实际停止、删除、恢复和状态核实必须经终端/浏览器/MCP/调试等原owner的typed operation，成功证据提交后才更新lease/资源投影；缺少owner/连接或核实失败时返回明确错误或`reconcile_required`，不能宣称已停止。`SessionResourceProviderRegistry`只路由可见列表/控制，其响应必须来自实际owner，不持有另一份独立status。持久`SessionOperationLease`保护Session删除/创建等准入，resident runtime generation lease保护卸载，monitor引用保护共享watch，它们虽都叫lease，却分别具有不同的恢复和所有权语义，不能合并为一个万能计数器。
+
+Node的跨Turn资源占用由debug owner按每次启动唯一process_instance_id持有，并在spawn前持久登记`launch_pending` claim，绑定精确thread、lifecycle generation、launch preimage与nonce；短期`execution|debug_control` lease只覆盖该次操作准入，结束不释放process claim。spawn后debug owner以nonce、OS进程起始身份与Inspector握手核验后才把PID/端口登记为实例属性。崩溃恢复核查同一实例：可证明未spawn/已退出则结清，可证明仍运行则接管或按owner策略收敛，不可证明则保留`reconcile_required`及idle/delete blocker并给出诊断，不凭PID/端口复用误杀无关进程。重启/替换旧实例必须先核实并结清其claim，再创建新的process_instance_id；通用账本不查询OS、不持有业务stopper、不决定哪个Node进程可终止。
 
 ### 6. `skill_load` 使用一个工具和三个明确 mode
 
@@ -376,7 +398,7 @@ CSM 保存 resource/source identity、catalog/provider binding revision、当前
 
 - 文件未变化且最新 committed revision 仍在 active view：不追加 item；
 - 文件变化：从 active view 中最新已提交可见 revision 计算到当前 revision 的一个 delta，并以 `wire_role=user` 追加；
-- registration 在 rewind 目标 checkpoint 中仍为 tracked，但最新已注入 revision 不在重建后的 active view：从冻结activation snapshot取得并追加published完整 revision，仍使用 `wire_role=user`；
+- registration 在 rewind 目标 checkpoint 中仍为 tracked，但最新已注入 revision 不在重建后的 active view：从冻结activation snapshot取得并持久化published完整revision恢复事实；实际新epoch中只把`root_eligible`状态合并新root，`tail_only`仍用独立`wire_role=user` item；
 - 同一文件在两个 model request 之间多次变化：只提交从最新已提交可见 revision 到最终稳定 revision 的一个 delta。
 
 revision 只有在对应 item 进入 sealed assembly 后才算 committed/injected。仅观察到变化或生成临时候选不能推进 diff 基准。seal 前失败保留 pending candidate；retry 必须复用同一 candidate identity/bytes。
@@ -412,7 +434,7 @@ latest_visible_committed_revision
 
 同一个 tool call、model attempt、prepare 或 seal 重试通过稳定 idempotency key 复用结果。若同一 identity 对应不同正文/hash，则报告 conflict，不能按文本相似度去重。
 
-### 8. rewind 与 compaction 建立新 epoch，但恢复 item 仍为 user
+### 8. rewind 与 compaction 建立新 epoch，并按 owner 根指令资格物化
 
 在建立 view 或 pending epoch transition 前，resolver必须验证结果 active view 的tool protocol closure：assistant tool-call group 与全部匹配terminal results必须整体位于边界同侧。若compaction、rewind/replay或fork anchor切入该group，操作返回`tool-protocol-boundary-conflict`、保持旧view且不创建transition/target，并只给出不含正文的最近安全anchor；不得自动偏移边界、合成result或借source item掩盖未闭合协议。只读history可展示明确标记的partial group，但不能进入sealed assembly或Provider dispatch。
 
@@ -422,9 +444,9 @@ rewind先从目标checkpoint恢复checkpoint-versioned CSM registration，重建
 - tracked registration 若仍有效且当前 revision 不在 active view，CSM 从冻结的Registry activation snapshot追加published完整 revision；
 - untracked registration 不检查、不恢复。
 
-rewind可以在不继续执行时只提交view和pending transition；下一次真正model-call preparation从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision，并在同一transaction提交恢复item、seal首个`rewind` epoch assembly及消费transition。snapshot不可用或seal失败时保留rewind view与pending transition，但不追加半成品source、不应用新epoch、不dispatch；该路径不得读文件、网络或其它provider。tracked完整恢复位于重建后的上下文尾部并使用`wire_role=user`，不能塞回最顶层system item。
+rewind可以在不继续执行时只提交view和pending transition；下一次真正model-call preparation从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision，并在同一transaction提交恢复事实、seal首个`rewind` epoch assembly及消费transition。snapshot不可用或seal失败时保留rewind view与pending transition，但不追加半成品source、不应用新epoch、不dispatch；该路径不得读文件、网络或其它provider。合法新epoch中，只有owner声明`root_eligible`且仍在目标active view有效的source完整状态可合并进新root；`tail_only`的tracked完整恢复作为独立`wire_role=user` item。恢复事实/lineage必须持久化且旧sealed assembly不变，不能把旧delta再次选入新plan造成重复。
 
-compaction提交summary/active view时登记`PendingPrefixEpochTransition(reason=compaction)`。下一次model-call preparation可以从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision，把原base+delta链物化为该完整revision，并在同一transaction推进source overlay epoch、seal首个compaction epoch assembly和消费transition。snapshot不可用或seal失败不回滚已提交的compaction view，但不产生半应用epoch或Provider request，也不回退读源。动态source的物化结果仍位于用户消息之后并使用`wire_role=user`；它不能被吸收到root system item。旧base/delta/detail保持不可变，直到retention/GC确认没有sealed assembly依赖。
+compaction提交summary/active view时登记`PendingPrefixEpochTransition(reason=compaction)`。下一次model-call preparation可以从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision，把原base+delta链物化为该完整revision，并在同一transaction推进source overlay epoch、seal首个compaction epoch assembly和消费transition。snapshot不可用或seal失败不回滚已提交的compaction view，但不产生半应用epoch或Provider request，也不回退读源。实际新epoch只将`root_eligible`的完整有效状态合并到唯一顶层system root；`tail_only`仍位于用户消息之后并使用独立`wire_role=user` item。新plan只选择物化后的有效状态一次，旧base/delta/detail保持不可变，直到retention/GC确认没有sealed assembly依赖。
 
 snapshot/untracked 内容不允许重新读取源文件。压缩器只能根据 active view 和已提交受保护 detail 决定是否携带；CSM 不执行自动恢复。若压缩没有实际重建上下文，则不得借 compaction 名义改变旧前缀。
 
@@ -441,7 +463,7 @@ snapshot/untracked 内容不允许重新读取源文件。压缩器只能根据 
 | R05 | Skill metadata/index：`WorkspaceSkillsMiddleware`/upstream `SkillsMiddleware` 发现 bundled 与 workspace Skill，向 system prompt写入 locations、name、description、路径和 `read_file` 指令 | metadata 在 `before_agent` 读取一次，格式化后的 catalog 在每次 model request 前追加；当前未发现 `${BOXTEAM_HOME}/skills` | 路径泄露给模型；metadata 与 activation 混合；通过通用 read 工具激活；catalog revision、覆盖关系和运行中变化没有统一事实 | Resource platform持续维护三层SkillCatalog snapshot与`skill:*:metadata` facet，只暴露name/description及安全display URI；activation boundary消费冻结snapshot，首次metadata进入root，后续catalog diff使用user role；activation只能由`skill_load`建立。删除旧middleware位置提示、`.boxteam` Skill mount暴露和通用read白名单。现有`allowed_tools`若仍需用于事件归因，迁到独立工具归属配置 |
 | R06 | 文件系统静态规则：`FilesystemMiddleware(system_prompt=FILESYSTEM_SYSTEM_PROMPT, custom_tool_descriptions=...)` | 每次请求前追加 filesystem/environment system block，并注册/改写文件工具说明 | system block 依赖请求期拼接；其中 Skill 路径例外与旧 read 激活方案绑定；工具说明不是独立 ToolSet 事实 | 文件系统行为规则注册为绑定 ToolSet policy的 root source并删除 Skill 读取例外；所有 tool descriptions 归 C02；工具 policy变化触发 hard rebase并重编译新 epoch，不能重写旧 context item |
 | R07 | 手动压缩工具静态规则：`CachePreservingSummarizationToolMiddleware(... COMPACT_CONVERSATION_SYSTEM_PROMPT)` | 启用 `compact_conversation` 时，每次 model request 前追加 system block并提供工具 | 与压缩派生请求、压缩结果的生命周期混在一起 | 静态使用规则注册为绑定 ToolSet policy的条件化 root source；工具 schema与启停归 C02并以 hard rebase生效；真正的派生摘要请求与结果归 D01，不把它们伪装成同一 CSM source |
-| R08 | 工作区 `AGENTS.md`：`WorkspaceAgentsMiddleware` 初次读取完整内容，`before_model` 检测变化后追加 `workspace_agents_change` `HumanMessage`，发现 compaction marker 时又把当前完整内容拼回 system prompt | 每次 model request 前读单文件；变化时生成 unified diff；middleware 内存保存 applied/observed 内容 | 直接改 LangChain state/system prompt；控制状态不随 checkpoint 版本化；compaction 后提升回 system；重启/rewind 容易重复或错基准 | 注册`workspace-agents:content` resource/source；共享file monitor标脏，Reconciler稳定读取并发布snapshot，activation boundary按latest-visible-committed生成user-role delta；rewind/compaction完整恢复仍为user role，状态由Saver/ContextStore持久化。删除旧middleware直接读取和消息注入，不运行`rg`扫盘 |
+| R08 | 工作区 `AGENTS.md`：`WorkspaceAgentsMiddleware` 初次读取完整内容，`before_model` 检测变化后追加 `workspace_agents_change` `HumanMessage`，发现 compaction marker 时又把当前完整内容拼回 system prompt | 每次 model request 前读单文件；变化时生成 unified diff；middleware 内存保存 applied/observed 内容 | 直接改 LangChain state/system prompt；控制状态不随 checkpoint 版本化；重启/rewind 容易重复或错基准 | 注册`workspace-agents:content` resource/source，由实际owner声明`root_placement`；共享file monitor标脏，Reconciler稳定读取并发布snapshot，普通激活边界按latest-visible-committed追加user-role delta；实际rewind/compaction新epoch仅在资格为`root_eligible`时将完整有效状态合并新root，否则恢复为独立user item。状态由Saver/ContextStore持久化，删除旧middleware直接读盘/拼接和消息注入，不运行`rg`扫盘 |
 | R09 | Agent memory：`StructuredMemoryMiddleware` 可读取配置的 memory sources，并用 `MEMORY_SYSTEM_PROMPT` 包裹为 system block | 仅 `create_my_deep_agent(memory=...)` 非空时启用；当前默认生产 runtime 未传入，属于已实现但未接线能力 | 一旦启用仍会每请求拼接，正文与 source revision 无统一 owner；当前配置状态容易被误报为已生效 | 保持默认未启用；任何生产接线前必须把 memory descriptor/content 注册为独立 source：首次可进 root，后续变化按 user-role source item；memory 是不可信 reference，不能借 CSM 提升优先级 |
 | E01 | main-thread Goal生命周期：`goal_continuation`、`goal_objective_updated`、`goal_budget_limited` | `GoalRuntimeService` 构造`PreparedInternalMessage`，再用`create_and_run_internal()`创建`MessageRole.user`消息和Job；当前只以Session定位 | 内部控制状态成为普通user message/Turn root，注入与execution唤醒绑死；若按thread机械复制会错误地让child拥有Goal | Goal capability只允许Session main thread；作为`goal:<goal_id>:state` ambient/pending event source提交，保留事件revision与用户目标边界并由独立wakeup启动execution，不创建真实user Turn。child thread收到Goal操作必须明确拒绝，不能fallback到main |
 | E02 | Session内委派与跨Session生成结果：`delegated_task`、`generated_session_result` | `SessionSubagentService`或session-generation reporting通过internal message准备/派发Job；新生成Session的seed prompt另有`prepare_user_message()`路径 | durable委派当前创建child Session且回报只按Session定位；系统委派/回报可伪装user root | durable委派改为同一Session的child thread，任务seed进入精确child，完成汇报按持久parent thread地址注册幂等ambient event；不复制child history。生成Session result回到发起thread；seed由producer显式声明`user_derived_root`或`internal_source`，禁止根据文本/role猜测 |
@@ -452,7 +474,8 @@ snapshot/untracked 内容不允许重新读取源文件。压缩器只能根据 
 | E07 | checkpoint/runtime reminder：`checkpoint_reminder`，覆盖 interrupt、startup/turn/scope/tool timeout、execution lost/error、resource cancel 等原因 | `append_system_reminder_checkpoint()` 直接读取并改写 LangGraph checkpoint messages，追加 `HumanMessage` | 绕过 canonical item、ContextStore transaction和 source owner，是最明显的第二 writer | 删除直接 checkpoint message mutation；按 `checkpoint:<reason>:<execution/resource>` identity 经 Saver/CSM 原子提交 pending source/control outcome；恢复只读已提交事实，不从当前 runtime补造 |
 | D01 | 压缩派生上下文：`compaction_summary_instruction`、`compaction_retry_marker`、派生请求 fallback `SystemMessage("Summarize...")`，以及返回主上下文的 `compaction_summary` | summarization middleware建立独立模型请求；instruction/retry 是 `HumanMessage`；结果替换 active history 中段 | 静态压缩工具规则、派生请求控制项、最终 summary 和 source materialization 容易混为同一注入来源 | 派生摘要请求使用独立sealed derived assembly和自己的root system item；instruction/retry是该derived assembly的request-only control；结果由compaction owner持久化为canonical `compaction_summary`并登记pending prefix transition，不是CSM source；CSM只在下一次model-call preparation内按规则物化各tracked source一次并与首个新epoch assembly原子seal |
 | C01 | 真实用户输入与附件：可信UI/API ingress、replay-as-new-turn，以及producer显式标记的user-derived generated seed | `UserContentBuilder`组装文本/多模态blocks，runner创建`HumanMessage`并持久化user root；当前模型侧session消息工具也可用`simulate_user`进入该路径 | 当前`MessageRole.user`同时被内部消息复用，且模型工具可伪造可信用户来源；role无法证明真实用户来源 | 不进入CSM；只有可信UI/API ingress owner可构造`AppendCanonicalItemIntent`，经统一ContextStore owner创建唯一`semantic_kind=user_input` root。模型工具和内部source禁止调用此路径；模型侧`send_message_to_session`不暴露`simulate_user` |
-| C02 | 模型可见工具定义：直接 built-in、Todo/filesystem/compact middleware tools、自定义扩展、MCP、Session内team tools及 visibility/policy过滤 | Agent构建和request middleware确定实际tools/tool config；Itemized middleware快照为`ToolSetSnapshot/ToolSetRef`；当前执行step只在Turn/Job开始时读取一次selection，运行中Job保留旧Agent引用 | descriptions与对应静态prompt当前散落在同一middleware；运行中selection变化没有desired/applied revision或model-call safe-boundary语义；main/child capability差异及跨Session无状态工具边界无法复现 | 不进入CSM，也不编码成context message；ToolSet registry保持唯一domain owner，经`SwitchToolSetIntent`进入统一transaction。每次model call前比较desired/applied revision，先收敛旧调用，再封存新snapshot/ref、建立`toolset_changed` epoch并重编译root/messages/tools；main/child capability profile决定Goal与Session内team工具，跨Sessionsend/read/wait仍只解析目标main；Skill`allowed_tools`不得改变此权威 |
+| C02 | 模型可见工具定义与内层扩展目录：当前直接built-in、Todo/filesystem/compact、自定义、MCP、Session内team tools及visibility/policy过滤 | Agent构建和request middleware确定实际tools/tool config；Itemized middleware快照为`ToolSetSnapshot/ToolSetRef`；当前执行step只在Turn/Job开始时读取一次selection，运行中Job保留旧Agent引用 | descriptions与静态prompt散落；Provider可见工具和内部target目录混合，变化会扰动工具schema与前缀；运行中selection无model-call安全边界 | 拆成Provider可见直接工具+固定`invoke_extension_tool`信封的ToolSetRef，以及独立ExtensionToolCatalog binding。只有前者有效变化经`SwitchToolSetIntent`在安全边界hard rebase；内层MCP/自定义/内置target变化只在资源激活边界更新binding与对应CSM指引，执行期重新鉴权且旧tool call真实配对收敛。main/child capability profile仍决定直接工具集合，Skill`allowed_tools`不改变此权威 |
+| M01 | MCP工具目录：当前`McpRuntimeManager`启动时加载MCP工具适配器；变化通知尚无完整刷新闭环 | 运行中server目录变化不稳定地反映到Agent/信封绑定，目录与模型指引没有统一生效快照 | 将raw目录直接塞进Provider工具说明会破坏缓存；只刷新dispatcher又使指引和真实目标脱节 | `McpCatalogOwner`完整relist/验证/发布稳定目录；`McpToolGuidanceProducer`只从validated目录派生`tail_only` CSM source，增删改以user-role delta提示；同一`turn|model_call`激活边界封存目录与指引。原始prompts/resources/instructions不自动注册；target执行按旧binding和最新权限。 |
 | C03 | 模型与工具协议事实：assistant/reasoning、Provider tool call/result，以及 invalid args、timeout、confirmation、patch repair、compact tool生成的 synthetic `ToolMessage` | 模型流或 middleware在执行内追加 `AIMessage`/`ToolMessage`，随后进入 canonical item/checkpoint | 它们是会话事实或协议配对，不是 instruction source；误纳入 CSM 会破坏 tool_call_id 和 Provider role合同 | 不进入 CSM；由 canonical item、tool execution与terminal convergence owner构造 `AppendCanonicalItemIntent`并经统一 ContextStore owner提交，保持原生 role/配对、item identity和 plan ordinal；只能参与稳定前缀选择，不能按文本去重 |
 | P01 | 请求捕获与投影管线：`PromptReplayCaptureMiddleware`、`ItemizedContextProjectionMiddleware._prompt_contributions()`、`project_context_plan()` | 逐 middleware 比较 system blocks，推断 append/replace并全部记为 request-only contribution；LangChain projector把连续贡献合成 `request-only-system-prompt` | 这是从最终请求反推 provenance，不是 producer 权威；replace/合并会丢 item边界并破坏稳定前缀；无捕获时 synthetic fallback掩盖漏接来源 | 删除 PromptReplay、捕获标签和 instrument 链；废弃 `ItemizedContextProjectionMiddleware` 的 prompt/tool/context反向捕获。每个 R/E producer在 seal 前显式登记；若框架必须保留 middleware hook，只实现无状态 sealed-assembly dispatch bridge，按 Saver-issued reference转发精确 messages/tools/frames，缺失或不匹配即 fail closed |
 
@@ -600,7 +623,7 @@ workspace attachment blob不得进入Session copy staging。source SQLite snapsh
 
 整块可见不依赖跨thread/workspace分布式事务。migration必须在创建任何child staging前，先于coordinator Session `session-control.sqlite` create-or-get不改变thread catalog/collaboration ledger的`BoardMigrationRecord(state=preparing)`，冻结operation/preimage、coordinator lifecycle、旧board/catalog revision，并为每个target内嵌唯一`MigrationChildCreationEntry`，包含child ID、最终/内部staging locator、GraphBinding/capability、source checkpoint/view、lineage/mapping与预期artifact manifest/hash；同operation不同preimage冲突。该entry是batch child唯一creation journal，普通ThreadCreationWorker不得枚举、发布或启动它，且不得为同一target建立独立`ThreadCreationRecord`。随后才按单source guard规则冻结source snapshot，把记录中的所有child artifact、mapping、权限和hash写入正常catalog不可见的staging区并durably flush，再把全部child原子rename到记录冻结且尚未被catalog引用的最终locator；每次恢复只枚举该record中的有限target。全部rename成功后，以同一`session-control.sqlite`事务CAS验证coordinator仍active、旧board/catalog revision及member/task preimage未漂移，再发布thread catalog、collaboration ledger全部locator/member/task mapping；无required attachment claim时record直接进入终态`published`，否则进入非终态`published_pending_attachment_commit`并在claim结算后转为`published`。该事务是唯一可见性提交点，后续结算不得改变board成员集合。CAS失败不得覆盖并发变更、重基或部分发布，只定点清理后标记`aborted`。rename失败同样不得发布；rename后/发布前崩溃时preparing record已经存在，故可定点继续或清理，禁止扫盘或吸收无record目录；发布后/terminal response前按catalog/ledger与record恢复原结果。发布前正常reader只见旧board，发布后只见完整新board；源Session保持只读和独立。不得只发布部分member/task、把一个member同时保留为跨Session与child，或在正常运行时解释staging/旧跨Sessionteam状态。
 
-resident ThreadRuntime是durable owner的可回收执行缓存。统一residency manager为每个thread维护当前generation、lease、last activity和profile；child默认idle threshold为30分钟。没有active/runnable/pending execution、未收敛model/tool/mutation或lease时才可关闭compiled invocation、model/tool clients、in-memory CSM/ContextStore cache和stream execution fanout。durable callback/queue只保存精确thread address；迟到callback先获取当前generation owner再提交，不能继续写已关闭实例。
+resident ThreadRuntime是durable owner的可回收执行缓存。统一residency manager为每个thread维护当前generation、lease、last activity和profile；child默认idle threshold为30分钟。没有active/runnable/pending execution、未收敛model/tool/mutation或lease，且debug owner已核实该thread没有`starting|running|paused|stopping`进程/`reconcile_required`阻断时，residency manager才决定关闭该thread generation的`LifetimeScope`，由scope释放compiled invocation、model/tool clients、in-memory CSM/ContextStore cache和stream execution fanout；scope不得自行计算idle、修改持久state、停止共享monitor、判断Node进程业务状态或产生source item。活动调试期间不累计idle时长，核实终态/lease结清后重新起算30分钟；backend重启时必须先恢复调试owner持久占用并核实进程，无法确认不得宣称cold。durable callback/queue只保存精确thread address；迟到callback先获取当前generation owner再提交，不能继续写已关闭实例。
 
 产品提供只读`ThreadResidencySnapshot`观察面，至少包含`session_id`、`thread_id`、`residency=cold|loading|resident|unloading`、execution状态、`last_activity_at`、`idle_deadline_at`和脱敏`blocking_reasons[]`。它是runtime观测，不是canonical item、CSM source、team state或模型上下文；generation/lease细节只进入受保护trace和测试诊断。residency manager通过可注入单调`Clock`计算deadline：生产使用真实时钟，测试使用fake clock精确验证29:59仍resident、30:00转cold及lease阻断，不允许真实等待30分钟或为测试缩短产品阈值。
 
@@ -612,14 +635,14 @@ rehydrate只发生在execution admission或确实需要可写runtime的operation
 
 ## Risks / Trade-offs
 
-- **[post-user 完整 source 使用 user role，指令优先级低于 root system]** → 这是当前统一语义；通过明确 source framing 表达内部上下文，不偷偷提升 role。Anthropic 中途 system 能力只留 TODO。
+- **[post-user source 的role与新epoch根资格]** → 同epoch一律独立user-role，避免暗中提高优先级；只有实际新epoch才按source owner typed`root_placement`决定受信完整状态是否进入唯一system root，默认外部MCP指引维持`tail_only`。Anthropic中途system能力只留TODO。
 - **[untrack 不会立即消除 Skill 影响]** → 工具名称和结果明确描述“停止追踪”；既有上下文继续存在，不承诺即时移除。
 - **[Provider adapter 自动合并连续 user message]** → 对 projector 输出做 frame-level golden test 和 dispatch 前 stable-prefix 校验；无法关闭合并的 Provider profile 显式 reject。
 - **[bridge 之后仍有 middleware 修改 request]** → bridge必须位于最后一个 request-mutating hook，Provider preflight比较 sealed frame bytes/hash；任何差异阻断 dispatch，telemetry只能旁路观察。
 - **[Gateway 全局与 workspace Skill 同名]** → 使用固定优先级和内部 catalog entry identity；模型只看到唯一有效名称，诊断保留 origin 但不泄露路径。
 - **[文件读取期间变化导致错误 delta]** → 使用 stat/signature/hash 的稳定读取循环；无法获得一致快照时阻止本次 dispatch。
 - **[watcher丢事件、重复事件或overflow]** → event只标dirty/gap，SourceReconciler按source descriptor有界重读，ResourceDerivationGraph按依赖DAG parse/diff/CAS；required资源未恢复readiness时阻断新dispatch，不把event sequence当来源或语义revision。
-- **[共享watch task或plugin失效影响多个consumer]** → 每个channel独立背压，task tree暴露provider/consumer健康状态；graph generation采用shadow start、initial reconcile、原子切换和旧树drain，失败继续使用上一份valid snapshot并显式标记stale/unavailable。
+- **[共享watch task或已知来源订阅失效影响多个consumer]** → 每个channel独立背压，文件监视器暴露共享watch/consumer健康状态；config owner对受影响的候选来源订阅用独立scope完成shadow start、initial reconcile、原子切换和旧scope drain，失败继续使用上一份valid snapshot并显式标记stale/unavailable；释放机制不作reload决策。
 - **[默认turn边界让文件变化到下一Turn才生效]** → 这是保证同一Turn可重复和上下文稳定的默认语义；确需更快生效的resource kind可显式选择`model_call`，但仍只消费Registry已发布内存snapshot。
 - **[虚拟URI被误当作权限或真实路径]** → resolver只返回typed capability handle，operation执行点重新校验principal/scope/snapshot；URI不含credential/revision且从不直接join文件系统，storage以resource_id和snapshot_ref为权威。
 - **[旧会话没有 source manifest]** → 返回明确 migration/source-mismatch，不从当前文件静默回填。
@@ -636,9 +659,9 @@ rehydrate只发生在execution admission或确实需要可写runtime的operation
 
 ## Migration Plan
 
-1. 先建立以 `(session_id, thread_id)` 为 key 的统一 `ContextMutationIntent` 端口、单一 thread owner transaction与版本化 migration，使 canonical append、source lifecycle、ToolSet switch和 epoch rebuild都不再旁路 ContextStore，同时不修改旧 JSONL item bytes。
+1. 先按 itemized 新字段合同替换实验 v2 的自由 metadata 决策路径，并建立以 `(session_id, thread_id)` 为 key 的统一 `ContextMutationIntent` 端口、单一 thread owner transaction与后续受支持版本的显式schema migration，使 canonical append、source lifecycle、ToolSet switch和 epoch rebuild都不再旁路 ContextStore。旧实验 v2 字段形态不做就地升级或运行时兼容读取，遇到它保留原件并明确报schema-incompatible；对已经按新合同提交的 JSONL item，仍绝不原地改字节。独立 v1 一次性导入边界保持原规划。
 2. 增加 stable-prefix epoch/reason/manifest、ToolSet compatibility key、desired/applied revision和 CSM source/tracking contract。
-3. 先提取通用`EventChannelService`和`ResourceContributionRegistry`，建立ResourceTaskSupervisor、file/network/memory provider contract、SourceReconciler、ResourceDerivationGraph、语义ResourceRegistry、initial reconcile/readiness及按完整选项语义去重的watch subscription；把Job event bus迁为独立channel adapter，再迁移config、workspace file event、AGENTS和Skill consumer，迁完即删除各自旧watch loop与请求期reader/enumerator。
+3. 先提取通用`EventChannelService`、进程内`LifetimeScope`，使既有TurnExecutionScope、watcher、MCP/client及runtime stop/close复用单一异步释放合同；内置file monitor按完整watch选项共享subscription并返回释放handle；Gateway内部snapshot和权威memory状态各按自身版本合同接入。再建立SourceReconciler、ResourceDerivationGraph、语义ResourceRegistry、initial reconcile/readiness；config owner而非scope负责候选配置与来源登记的shadow健康/原子发布，旧scope随后排空。把Job event bus迁为独立channel adapter，再迁移config、workspace file event、AGENTS和Skill consumer，迁完即删除各自旧watch loop与请求期reader/enumerator。旧ResourceManager在外部资源provider完成typed身份/状态核实后迁为只处理跨Turn持久operation lease的账本，删除工具参数猜测、cleanup policy及内存stopper控制。
 4. 建立VRN grammar/resolver、三层SkillCatalog及metadata/activation facet；实现默认turn、可选model_call的ResourceActivationCoordinator和持久activation provenance，验证URI/path/credential不泄露、旧assembly不按当前URI重解。
 5. 实现`skill_load`的snapshot/tracked/untrack及checkpoint-versioned control state，删除通用read激活、模型可见`/.boxteam/...`Skill路径/挂载、旧Skills/AGENTS request-time middleware和任何即时移除规划/入口。
 6. 建立logical thread owner与resident runtime的generation/lease/idle-unload/lazy-rehydrate边界；验证child默认30分钟cold切换不改变CSM state、ToolSet binding、stable prefix或历史，cold read不创建runtime。

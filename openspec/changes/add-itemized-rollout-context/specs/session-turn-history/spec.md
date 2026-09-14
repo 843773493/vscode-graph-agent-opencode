@@ -131,7 +131,7 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 
 #### Scenario: 历史详情隐藏物理来源
 
-- **WHEN** 授权用户展开来自 workspace、Gateway、builtin、memory 或 plugin provider 的 resource provenance
+- **WHEN** 授权用户展开来自 workspace、Gateway、builtin 或 memory 来源的 resource provenance
 - **THEN** 响应只返回对应命名空间的 `boxteam://` display URI 和策略允许的 manifest；绝对路径、provider locator、credential、memory key 及旧 `/.boxteam/...` 路径均不出现在 API、SSE 或 DOM
 
 #### Scenario: 旧 path-based 投影不能恢复
@@ -162,7 +162,7 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 
 ### Requirement: 基础 Web tool-loop E2E 必须验收完整 Session 协作场景
 
-仓库 SHALL 在已有 `tests/e2e/clients/web/test_basic_chat_tool_loop.py` 内保留基础两轮聊天/工具循环验收，并在同一 pytest 模块内增加多 Session main thread、Session内durable child、resident runtime回收、跨workspace/server send/read/wait、Session内team状态及右侧侧边栏child对话的分离用例。该模块是这一组跨change业务场景的唯一Web E2E owner；可拆成多个test function并调用共享Python/Node helper，但pytest collection、场景fixture和PASS/FAIL gate必须位于该模块，不得把唯一断言放进未被pytest收集的脚本，也不得在其它E2E中另造一套不同语义的验收流程。
+仓库 SHALL 在已有 `tests/e2e/clients/web/test_basic_chat_tool_loop.py` 内保留基础两轮聊天/工具循环验收，并在同一 pytest 模块内增加多 Session main thread、Session内durable child、resident runtime回收、跨workspace/server send/read/wait、Session内team状态及右侧侧边栏child对话的分离用例。该模块是这一组跨change业务场景的唯一Web E2E owner；可拆成多个test function并调用共享Python/Node helper，但pytest collection、场景fixture和PASS/FAIL gate必须位于该模块，不得把唯一断言放进未被pytest收集的脚本，也不得在其它E2E中另造一套不同语义的验收流程。进程内`LifetimeScope`的释放合同、共享watch及外部资源lease由`add-context-injection-lifecycle`唯一拥有；本change只验证thread residency owner调用该合同后的可观察结果，不建立第二套dispose/ResourceManager。
 
 验收 MUST 同时使用用户可见DOM、Gateway/workspace网络回执、thread-qualified history/SSE cursor、权威item/time/order投影和只读runtime/trace证据；只检查DOM存在、健康端点或数据库行都不足以通过。基础两轮使用固定golden；每个新增可见Turn也 MUST 从权威history projection取得预期item identity/order、`item_count`与`elapsed_ms`，并与live DOM及刷新后的DOM精确一致：同正文不同identity保留，同identity只出现一次，无可展开item时count为0且标题不得显示首条思考。测试 MUST 使用 `out/tests/e2e/clients/web/test_basic_chat_tool_loop/workspace/` 作为隔离根，将多个workspace分别放入`hub/`、`spoke-b/`、`spoke-c/`等确定性子目录并分配隔离端口，产物放同级`artifacts/`。A/B/C Gateway必须作为三个独立进程，分别使用同名输出根`runtime/gateways/{hub-a,spoke-b,spoke-c}/boxteam-home/`作为`BOXTEAM_HOME`，只在这些目录内建立稳定identity、测试peer credential与policy snapshot；A通过真实loopback SSH转发等价fixture建立到B/C的全双工WebSocket channel，跨spoke场景必须经过`B → A → C`及`C → A → B`响应路径，不得读取或写入用户正常`${BOXTEAM_HOME}`/`~/.boxteams`，也不得以resolver stub、直接请求远端workspace或B/C直连冒充。pytest拥有的外置`E2ETestControlHarness` MUST 分别提供`residency_clock`、`wait_deadline_clock`，以及按operation/phase寻址的`CommunicationAdmissionBarrier`、`SessionLifecyclePhaseBarrier`和`CopyCaptureBarrier`；后两者至少覆盖deletion journal/fence/final rename、source revision freeze、attachment claim、captured marker、owner_reserved、target/board publication及attachment finalization。测试backend只通过fixture composition的内部port连接；生产composition只绑定真实时钟与立即返回的no-op phase observer/barrier，不得注册test client、HTTP路由、模型工具或热开关。barrier只暂停并上报phase，不修改业务状态/identity/时间/结果；pytest收到ack后从进程外终止/重启进程，backend不得由test hook自杀。harness socket/log只写同名输出根`runtime/test-control/`和`artifacts/`，不得进入业务库/checkpoint/canonical时间戳；fixture teardown必须关闭全部进程/端口。测试可推进虚拟时间但不得sleep真实阈值或改短产品合同。所有模型请求使用本模块拥有且按SessionThread/model-call identity匹配的确定性ModelStream fixture，禁止访问真实Provider或由并发thread共享顺序游标。
 
@@ -181,7 +181,7 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 #### Scenario: idle unload 与 cold history 在 Web E2E 中可证明
 
 - **WHEN** fake clock依次推进到29分59秒、30分00秒，并在cold后只打开child历史，最后发送一条新消息
-- **THEN** 只读residency与trace证明仅在30分钟且无blocker时转为cold，查看历史不唤醒，新消息才reload；reload产生新的runtime generation，但持久`GraphBinding(graph_id, graph_revision, graph_schema_hash, capability_profile_hash)`逐字段等于卸载前值，Provider/runtime trace证明该次执行使用这一精确binding而非当前latest graph。上述过程不改变已提交item、stable prefix、sealed bytes或历史排序
+- **THEN** 只读residency与trace证明仅在30分钟且无blocker、该generation的`LifetimeScope`已取消并排空自有task/句柄后转为cold；另以当前child保有`launch_pending`进程claim或正在`starting|running|paused|stopping`的Node调试进程推进同一fake clock，验证仍resident且显示脱敏debug blocker，debug owner核实终态/结清lease后重新起算30分钟。其它consumer仍持有的共享watch和跨Turn terminal/browser/MCP不随child关闭。查看历史不唤醒，新消息才reload；reload产生新的runtime generation，但持久`GraphBinding(graph_id, graph_revision, graph_schema_hash, capability_profile_hash)`逐字段等于卸载前值，Provider/runtime trace证明该次执行使用这一精确binding而非当前latest graph。上述过程不改变已提交item、stable prefix、sealed bytes或历史排序
 
 #### Scenario: Session 内 team 与跨 Session 无状态边界可见
 

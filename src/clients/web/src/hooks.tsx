@@ -1172,7 +1172,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           // refreshGatewayState 已将二次读取失败完整写入界面状态。
         }
         const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => ({ ...prev, gatewayError: message, error: message, status: `启动工作区失败: ${message}` }));
+        setState((prev) => ({ ...prev, gatewayError: message, status: `启动工作区失败: ${message}` }));
         throw error;
       }
       setState((prev) => ({

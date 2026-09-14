@@ -266,6 +266,79 @@ def test_stream_parses_reasoning_content_from_model_extra(
     assert block["index"] == 0
 
 
+def test_stream_deduplicates_reasoning_content_and_thinking_aliases(
+    model: BoxteamLiteLLMChatModel,
+):
+    """同一思考增量的 Chat Completions 两种 carrier 只能形成一个 part。"""
+    part_state = _StreamPartState()
+    blocks: list[dict[str, object]] = []
+    for delta in (
+        {"reasoning_content": "片段A"},
+        {
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "片段A",
+                    "signature": "duplicate-alias",
+                }
+            ]
+        },
+        {"reasoning_content": "片段B"},
+        {
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "片段B",
+                    "signature": "duplicate-alias",
+                }
+            ]
+        },
+    ):
+        for chunk in model._delta_to_message_chunks(
+            delta,
+            part_state=part_state,
+        ):
+            content = chunk.content
+            if isinstance(content, list):
+                blocks.extend(
+                    block for block in content if isinstance(block, dict)
+                )
+
+    assert [block["type"] for block in blocks] == [
+        "reasoning_content",
+        "reasoning_content",
+    ]
+    assert [block["reasoning_content"] for block in blocks] == ["片段A", "片段B"]
+    assert blocks[0]["id"] == blocks[1]["id"]
+
+
+def test_stream_keeps_distinct_reasoning_content_and_thinking_blocks(
+    model: BoxteamLiteLLMChatModel,
+):
+    """正文不同的两个思考 carrier 仍然是两个有序 part。"""
+    part_state = _StreamPartState()
+    chunks = model._delta_to_message_chunks(
+        {
+            "reasoning_content": "内部推理",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "带签名的独立思考",
+                    "signature": "signature",
+                }
+            ],
+        },
+        part_state=part_state,
+    )
+
+    assert len(chunks) == 2
+    assert [chunk.content[0]["type"] for chunk in chunks] == [
+        "reasoning_content",
+        "thinking",
+    ]
+    assert chunks[0].content[0]["id"] != chunks[1].content[0]["id"]
+
+
 def test_stream_parses_litellm_thinking_blocks_and_reasoning_items(
     model: BoxteamLiteLLMChatModel,
 ):

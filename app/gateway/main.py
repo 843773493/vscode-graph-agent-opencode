@@ -3445,7 +3445,10 @@ async def start_managed_workspace_backend(
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    except (PermissionError, ValueError) as error:
+    except PermissionError as error:
+        registry.mark_connection_error(workspace_id, str(error))
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
         registry.mark_connection_error(workspace_id, str(error))

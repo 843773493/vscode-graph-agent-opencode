@@ -2,11 +2,12 @@
 
 `add-itemized-rollout-context` 已经定义 canonical item、ContextRequestPlan、assembly 和 rewind/compaction 的基础合同，但 AGENTS、Skill、团队状态与 checkpoint reminder 仍由不同 producer 直接拼接消息，既无法保证已提交上下文前缀的字节级稳定，也缺少统一的 source revision、追踪和恢复语义。
 
-本 change 将所有上下文变更收敛到同一个 Saver/ContextStore mutation owner，同时只由 Context Source Manager（CSM）管理需要 revision、追踪和恢复的 source lifecycle；再以插件化 Resource Observation Platform 和 Virtual Resource Namespace（VRN）统一文件、网络、内存等资源的发现、稳定快照、语义差异、模型可见来源与隐藏 locator，并把稳定前缀、资源激活边界、Skill 加载模式、ToolSet hard rebase 和 wire role 规则固化为可验证合同。
+本 change 将所有上下文变更收敛到同一个 Saver/ContextStore mutation owner，同时只由 Context Source Manager（CSM）管理需要 revision、追踪和恢复的 source lifecycle；再以代码内装配的资源观察流水线和 Virtual Resource Namespace（VRN）统一已知文件、Gateway 内部快照和内存状态的稳定快照、语义差异、模型可见来源与隐藏 locator，并把稳定前缀、资源激活边界、Skill 加载模式、ToolSet hard rebase 和 wire role 规则固化为可验证合同。模型工具的外部服务扩展继续使用 MCP；本 change 不建立通用资源插件宿主。
 
 ## What Changes
 
 - 新增统一的上下文 mutation 边界：真实用户消息、assistant/reasoning、tool call/result 通过 canonical append intent 提交；source lifecycle、ToolSet switch、compaction/rewind rebuild 使用各自语义明确的 intent，但全部由同一个 Saver/ContextStore owner 原子提交和 seal。
+- 与 `add-itemized-rollout-context` 的实验 v2 字段收紧共同实施：CSM 和各 producer 只能提交/消费有 owner、类型和语义注释的 source lifecycle intent、contribution selection/replacement/source binding 与 registry ordinal；命名空间化、版本化 `extensions` 仅供保留/展示，不承担追踪、注入、排序或稳定前缀决策。直接删除旧自由 `metadata` flag/路径和兼容读取，不为现有实验数据建立第二套字段解释器。
 - 该 owner 的最小生命周期单位是 `SessionThread` 而非产品 Session：Session 只保存唯一 main thread、child thread catalog 与共享资源；每个 thread 独立拥有 canonical context、CSM state、active view、prefix epoch、ToolSet applied binding 和 sealed assembly。LangGraph `checkpoint_ns` 仍仅为 thread 内子图 namespace，不得成为 CSM/ContextStore owner key。
 - Session路径与导航改由itemized change的workspace SQLite catalog统一管理：物理node固定为`sessions/YYYY/MM/DD/{session_id}`，父子Session/Folder仅是catalog关系。所有新Session副作用准入先取workspace topology shared gate、再取本地Session gate并持久化lease；Session/Folder递归删除以同库batch record一次标记整棵逻辑子树deleting，catalog commit关闭新准入，之后逐Session关闭local fence、排空旧generation lease并定点隔离日期目录。CSM不能因导航移动重建owner、因删除时部分fence仍active而新建context，也不能扫盘补洞。
 - 会话目录的乐观投影/持久命令队列由`add-itemized-rollout-context`定义。pending或仅accepted的导航意图不属于SessionThread canonical history、CSM source、ToolSet/ResourceActivation状态，也不能触发owner rehydrate或重新seal；生命周期准入只读workspace SQLite已经committed的catalog node/locator/generation。导航终态事件仅更新客户端展示，不作为绕过catalog/fence的执行许可。
@@ -14,12 +15,13 @@
 - 将 durable ContextStore/CSM 状态与 resident Agent runtime 分离：child thread 默认在无 active/pending execution、未收敛 model/tool/mutation 和 runtime lease且连续30分钟无活动后卸载可重建进程资源；cold history读取不恢复runtime，下一次model execution在准入时按原ThreadRuntimeBinding延迟重建。该卸载不产生source item、prefix epoch或上下文/Skill到期语义。
 - 固定SessionThread owner与外部附件正文的物理边界：Session node由workspace SQLite catalog解析到`sessions/YYYY/MM/DD/{session_id}`，main thread位于其`threads/{main_thread_id}`，其它durable thread直接位于`threads/YYYY/MM/DD/{thread_id}`；附件正文直接位于workspace `.boxteam/attachments/YYYY/MM/DD/{blob-id}`内容寻址store。CSM/ContextStore只持久化逻辑attachment reference、owner/view membership和provenance，不把任何物理locator注入模型上下文或source detail；逻辑导航移动不改变thread context路径或已提交前缀。
 - 新增 `ContextSourceManager`（CSM）作为该 owner 下的 source lifecycle 子管理器，负责 AGENTS、Skill、Session内部团队角色/任务状态及其它动态 source 的 identity、revision、diff、追踪状态和 reconciliation；它不接管普通 canonical append，也不维护注入次数。
-- 新增插件化 Resource Observation Platform：`ResourceContributionRegistry`只注册文件、网络、内存及后续provider的monitor/snapshot/loader/reaction定义；`ResourceTaskSupervisor`以树形生命周期管理订阅和worker，通用`EventChannelService`通过独立channel、背压和cursor分发轻量dirty/change/gap事件。`SourceReconciler`发布不可变来源revision，`ResourceDerivationGraph`按无环依赖图和语义diff/CAS发布不可变`ResourceSnapshot`；`SKILL.md`一源多facet、多层配置多源一有效资源，watch event不是内容或一致性权威。
+- 新增由 Gateway/Workspace 进程代码显式装配的资源观察流水线：内置文件监视、Gateway 受认证快照和权威内存状态适配由各自 owner 维护，可通过 typed port 在测试中注入替身，但不支持安装/热替换任意资源插件。唯一通用`LifetimeScope`持有进程内task、订阅句柄和client并负责异步释放；文件监视按完整watch语义共享订阅、引用计数，domain owner决定何时启动、替换或关闭scope。通用`EventChannelService`通过独立channel、背压和cursor分发轻量dirty/change/gap事件。`SourceReconciler`发布不可变来源revision，`ResourceDerivationGraph`按无环依赖图和语义diff/CAS发布不可变`ResourceSnapshot`；`SKILL.md`一源多facet、多层配置多源一有效资源，watch event不是内容或一致性权威。
 - 模型请求正常路径不再读取、stat、枚举或扫描 AGENTS、Skill/config 文件。资源 provider 持续监视其已登记的有界资源；Turn取得active execution slot时先冻结不可变`ResourceActivationPolicySnapshot`与`TurnResourceSnapshot`。默认所有resource kind复用Turn binding；按kind配置为`model_call`时，每次安全preparation建立引用该Turn snapshot的`ModelCallResourceSnapshot`，只替换这些kind的binding并复用其它Turn binding，不执行请求期I/O。policy热更新只影响后续Turn，sealed request永不受中途变化影响。
-- 新增 Virtual Resource Namespace（VRN）：模型只看到 `boxteam://.../resources/...` 语义 URI，用来理解 workspace、Gateway、builtin、memory 或 plugin 来源；Registry 内部使用不可伪造的 `resource_id`，provider 私有保存物理路径、网络 endpoint、credential ref 或 memory key。URI 是 locator/provenance而不是授权凭据、资源 identity 或幂等键，历史 assembly 只读取当时封存的 snapshot，不按当前 URI 重新解析正文。
+- 新增 Virtual Resource Namespace（VRN）：模型只看到 `boxteam://.../resources/...` 语义 URI，用来理解 workspace、Gateway、builtin 或 memory 来源；Registry 内部使用不可伪造的 `resource_id`，实际 owner 私有保存物理路径、内部 endpoint、credential ref 或 memory key。URI 是 locator/provenance而不是授权凭据、资源 identity 或幂等键，历史 assembly 只读取当时封存的 snapshot，不按当前 URI 重新解析正文。
 - 将“已提交上下文前缀字节级稳定”设为首要约束：同一 `prefix_epoch` 内的后续请求只能在已提交 wire context 后追加新 item，不得回写、合并、重排或重新序列化旧 item；合法 epoch 边界只有首次组装、实际 compaction、rewind 和 ToolSet hard rebase。
-- 将所有有效 ToolSet 变化定义为 hard rebase：当前 in-flight sealed model call 保持不可变，desired revision 在下一个 model-call safe boundary 生效，先真实收敛旧工具调用，再封存新 ToolSetSnapshot/Ref、创建 `epoch_reason=toolset_changed` 的新 prefix epoch 并重建 root/messages/tools 投影；禁止用 user-role 文本模拟软切换。
-- 首次组装只生成一个最顶层 `wire_role=system` root item；第一条真实用户消息之后追加的 CSM 完整内容、delta 及 rewind/compaction 恢复内容当前统一使用 `wire_role=user`。
+- Provider可见的少量直接工具与固定`invoke_extension_tool`信封构成唯一ToolSet；只有它们的Provider可见形状/策略有效变化才在model-call安全边界hard rebase。内层MCP/内置/自定义ExtensionToolCatalog的增删改与权限变化不制造ToolSetRef或prefix epoch，目录binding与调用目标独立封存、按调用时最新权限校验，旧tool call仍需真实配对收敛。
+- MCP工具目录通过明确的McpCatalogOwner观察、验证和发布，再由McpToolGuidanceProducer生成受控CSM指引；目录与指引默认下一Turn一起生效，可按resource kind配置为下一安全model_call生效。不自动注入原始MCP prompts/resources/instructions；不在模型请求路径访问MCP server。将现有`invoke_custom_tool`与相关提示词、schema、展示和测试直接迁移为`invoke_extension_tool`，不留别名。
+- Source owner以typed`root_placement=root_eligible|tail_only`声明根指令资格：普通同epoch变化无论full/delta都只追加独立`wire_role=user` item；首次组装及实际compaction、rewind、Provider ToolSet hard rebase或fork目标首次assembly的新epoch才允许把合格受信来源的完整有效状态合并为唯一顶层system root。默认外部MCP指引只能作`tail_only`数据，旧sealed bytes和canonical lineage不改写。
 - 为 Anthropic 官方部分模型未来可能支持的中途 system item 仅保留 Provider capability TODO；当前运行时不得启用该分支，也不得因此改变通用 role 合同。
 - 将一个 `SKILL.md` 拆为相互独立的 Skill metadata 与 Skill activation source；metadata 当前只读取 `name` 和 `description`。
 - 新增仅按名称调用的 `skill_load(name, mode="snapshot" | "tracked" | "untrack")` 工具，默认 `snapshot`；模型不可读取或传入 Skill 路径。
@@ -38,6 +40,8 @@
 - **BREAKING** 删除生产路径中由 middleware 通过通用 read 工具加载 Skill、直接追加内部 `HumanMessage`，以及通过可变有效期或计数改写 active context 的实现。
 - **BREAKING** 删除模型可见的 `/.boxteam/skills`、`/.boxteam/bundled-skills`、`.boxteam/.../SKILL.md` 路径提示及通用 `read_file` Skill 白名单；`skill_load` 仍只接受名称，软件从冻结的 SkillCatalogSnapshot 解析 exact resource handle，并在结果/context provenance 中返回安全虚拟 URI。
 - **BREAKING** 迁移 config、AGENTS、Skill 和 workspace 文件事件消费者后，删除各自独立的 watcher loop、request-time reader/enumerator 与兼容 adapter；现有 Job event bus 改为建立在通用多 channel EventChannelService 上的业务 adapter，资源事件不得继续进入 job 专属队列或与其争用背压。
+- **BREAKING** 收敛旧`TurnExecutionScope`内的通用cleanup、各runtime手写stop/close与资源平台task树为一个进程内释放合同；取消信号只传递取消意图，`LifetimeScope`只关闭其持有的运行期句柄。旧`ResourceManager`不再猜测工具参数、保存`cleanup_policy`或凭内存stopper宣称外部资源已停止；跨Turn外部资源由实际provider/domain owner执行并核实操作，持久操作lease只负责占用与恢复。会话资源列表/控制不得形成第二事实源。
+- Node调试进程的跨Turn占用由debug owner在spawn前按唯一process-instance建立持久claim，不能由短期tool/Web operation lease替代；重启时以可验证进程代际证据核实，PID/端口复用或证据缺失不得被误认作成功停止。
 
 ## Capabilities
 
@@ -61,7 +65,7 @@
 - 影响`send_message_to_session`、`read_context`、等待/监控工具及Session link解析：跨workspace/server操作不materialize目标runtime或建立共享协作状态，目标resolved main-thread identity必须进入审计和幂等记录。
 - 影响Gateway federation transport、配置与权限控制：新增SSH隧道内的长期全双工WebSocket对等RPC channel、hub唯一中继、origin-preserving transit grant、channel重连/背压/多路复用，以及`permissions.federation`默认允许且运行时热发布的policy snapshot；现有持久`connection_id`不改成socket实例身份。
 - 影响 Gateway 全局 Skill catalog、`${BOXTEAM_HOME}/skills/` 与 workspace/bundled Skill 名称解析，但 Gateway 仍不得读写工作区 `.boxteam/` Session 数据。
-- 影响 config watcher、workspace file watcher、Job event bus及其进程装配：新增贡献定义registry、SourceReconciler、语义资源依赖DAG、ResourceTaskSupervisor、按channel隔离的通用事件服务、ResourceRegistry、activation coordinator和启动期initial reconcile/readiness gate；来源/语义identity与revision独立，监视按完整选项语义去重并按订阅引用计数。目标模块归属和各目录边界见design 5.3；不在`app/core`建立第二事件总线或把整个资源平台塞入单个Manager。
+- 影响 config watcher、workspace file watcher、Job event bus及其进程装配：以代码内显式接线替代贡献定义registry和插件装载，新增SourceReconciler、语义资源依赖DAG、通用`LifetimeScope`、按channel隔离的事件服务、ResourceRegistry、activation coordinator和启动期initial reconcile/readiness gate；来源/语义identity与revision独立，文件监视按完整选项语义去重并按订阅引用计数。旧`ResourceManager`收敛为外部资源操作lease账本，实际资源状态和停止结果只由其domain owner提供；不把release、watch共享、generation发布或业务停止策略塞入单个Manager。目标模块归属和各目录边界见design 5.3。
 - 影响 workspace backend、文件工具与模型提示：新增 `boxteam://` VRN parser/resolver、typed capability dispatch 和安全 display URI projection，删除旧 `/.boxteam/...` Skill 虚拟挂载对模型的暴露及通用读取激活入口。
 - 需要增加 CSM 追踪控制状态、resource descriptor/snapshot/activation snapshot、VRN/resource provenance、source revision/detail、稳定前缀 epoch/reason/hash/length、desired/applied ToolSet revision、Skill metadata/activation provenance 及 `skill_load` 工具 schema。
 - 需要更新 Python 单元/集成测试、真实 Provider request projection、snapshot/tracked/untrack、rewind、compaction、restart 场景；跨change Web验收统一写入`tests/e2e/clients/web/test_basic_chat_tool_loop.py`，保留基础两轮item/time/order断言并增加main/child、cold runtime和跨workspace/session协作，不创建第二套E2E owner。

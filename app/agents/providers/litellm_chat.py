@@ -260,7 +260,9 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
     ) -> list[AIMessageChunk]:
         chunks: list[AIMessageChunk] = []
         reasoning = self._delta_reasoning(delta)
-        if reasoning:
+        if reasoning and part_state.accept_reasoning_alias(
+            "reasoning_content", reasoning
+        ):
             chunks.append(
                 AIMessageChunk(
                     content=self._stream_content(
@@ -280,6 +282,17 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             part_state=part_state,
         )
         for index, block in enumerate(structured_reasoning):
+            block_type = block.get("type")
+            block_text = block.get("thinking")
+            if block_type != "thinking" or not isinstance(block_text, str) or not block_text:
+                part_state.reset_reasoning_alias()
+            if (
+                block_type == "thinking"
+                and isinstance(block_text, str)
+                and block_text
+                and not part_state.accept_reasoning_alias("thinking", block_text)
+            ):
+                continue
             if index:
                 part_state.close()
             chunks.append(
@@ -290,6 +303,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
 
         content = delta.get("content")
         if content:
+            part_state.reset_reasoning_alias()
             chunks.append(
                 AIMessageChunk(
                     content=self._stream_content(content, part_state=part_state),
@@ -299,6 +313,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         raw_tool_calls = delta.get("tool_calls")
         tool_call_chunks = self._delta_tool_call_chunks(raw_tool_calls)
         if tool_call_chunks:
+            part_state.reset_reasoning_alias()
             part_state.close()
             chunks.append(
                 AIMessageChunk(
