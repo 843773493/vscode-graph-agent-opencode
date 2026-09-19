@@ -195,14 +195,16 @@ def superseded_stream_tool_group_item_ids(
     # assistant carrier 内有作用域；不能因两个不同 model call 复用了同一个
     # 原始 ID 就误判为重复。旧数据若没有 model_call_id，只在双方各自唯一时
     # 建立显式配对；否则必须报歧义，禁止按正文或时间猜测。
-    entries_by_identity: dict[
-        tuple[str | None, frozenset[str]], list[dict[str, object]]
-    ] = {}
+    # (model-call scope, provider call id) 已唯一确定一次工具调用；checkpoint
+    # carrier 可能因 checkpoint 的 turn 归因回退落在另一 turn，跨 turn 的
+    # 同调用 carrier 也必须去重，不能按 turn 拆开。
+    entries_by_identity: dict[frozenset[str], list[dict[str, object]]] = {}
     for entry in group_entries:
-        key = (entry["turn_id"], entry["tool_call_ids"])
+        key = entry["tool_call_ids"]
         entries_by_identity.setdefault(key, []).append(entry)
 
-    for (turn_id, tool_call_ids), entries in entries_by_identity.items():
+    for tool_call_ids, entries in entries_by_identity.items():
+        turn_id = next(iter(entries), {"turn_id": None})["turn_id"]
         explicit_scopes = {
             scope
             for entry in entries
@@ -249,10 +251,10 @@ def superseded_stream_tool_group_item_ids(
             entry["resolved_scope"] = scope
 
     checkpoint_groups: dict[
-        tuple[str | None, str, frozenset[str]], list[CanonicalItemRecord]
+        tuple[str, frozenset[str]], list[CanonicalItemRecord]
     ] = {}
     stream_groups: dict[
-        tuple[str | None, str, frozenset[str]], list[CanonicalItemRecord]
+        tuple[str, frozenset[str]], list[CanonicalItemRecord]
     ] = {}
     resolved_item_scopes: dict[str, str] = {}
     for entry in group_entries:
@@ -272,7 +274,7 @@ def superseded_stream_tool_group_item_ids(
             if entry["is_checkpoint"] is True
             else stream_groups
         )
-        key = (turn_id, scope, tool_call_ids)
+        key = (scope, tool_call_ids)
         if key in registry:
             raise ValueError(
                 "provider projection 的工具 carrier 身份不唯一: "

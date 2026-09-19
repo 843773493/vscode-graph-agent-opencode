@@ -121,14 +121,18 @@ def _entry(
         plan_ordinal=plan_ordinal,
         ref=ref,
         selection_kind=selection_kind,
-        source_revision=ref.source_revision if source_revision is None else source_revision,
+        source_revision=ref.source_revision
+        if source_revision is None
+        else source_revision,
         contribution_id=contribution_id,
         base_delta_role=base_delta_role,
         source_overlay_epoch=source_overlay_epoch,
         overlay_from_revision=overlay_from_revision,
         overlay_to_revision=overlay_to_revision,
         overlay_diff_hash=(
-            overlay_diff_hash if overlay_diff_hash is not None else ref.overlay_diff_hash
+            overlay_diff_hash
+            if overlay_diff_hash is not None
+            else ref.overlay_diff_hash
         ),
         content_length=ref.content_length,
         content_hash=ref.content_hash,
@@ -206,7 +210,9 @@ def test_minimal_assembly_passes_without_tool_pairings() -> None:
     validate_seal_dispatch_invariants(_minimal_snapshot())
 
 
-def _mutate_entry(entry: ContextSelectionEntry, **changes: object) -> ContextSelectionEntry:
+def _mutate_entry(
+    entry: ContextSelectionEntry, **changes: object
+) -> ContextSelectionEntry:
     clone = object.__new__(ContextSelectionEntry)
     for item in fields(ContextSelectionEntry):
         object.__setattr__(
@@ -215,7 +221,9 @@ def _mutate_entry(entry: ContextSelectionEntry, **changes: object) -> ContextSel
     return clone
 
 
-def _clone_with(snapshot: ContextAssemblySnapshot, **changes: object) -> ContextAssemblySnapshot:
+def _clone_with(
+    snapshot: ContextAssemblySnapshot, **changes: object
+) -> ContextAssemblySnapshot:
     # 恢复/外部位图路径可能给出绕过 domain 构造器的快照；seal preflight
     # 用同一不变量兜底，这里用旁路构造模拟该输入。
     clone = object.__new__(ContextAssemblySnapshot)
@@ -367,8 +375,12 @@ def test_overlay_chain_in_order_passes() -> None:
 
 
 def _tool_pair_snapshot() -> ContextAssemblySnapshot:
-    call = _canonical_ref("call-1", SemanticKind.TOOL_CALL.value, PayloadKind.TOOL_CALL.value)
-    result = _canonical_ref("result-1", SemanticKind.TOOL_RESULT.value, PayloadKind.TOOL_RESULT.value)
+    call = _canonical_ref(
+        "call-1", SemanticKind.TOOL_CALL.value, PayloadKind.TOOL_CALL.value
+    )
+    result = _canonical_ref(
+        "result-1", SemanticKind.TOOL_RESULT.value, PayloadKind.TOOL_RESULT.value
+    )
     return _snapshot(
         selection=(
             _entry(0, call, selection_kind=SelectionKind.CANONICAL_HISTORY.value),
@@ -485,3 +497,70 @@ def test_canonical_tool_pairings_fail_closed_on_duplicate_call_id() -> None:
     with pytest.raises(ContextAssemblySealPreflightError) as error:
         canonical_tool_pairings((first, second))
     assert error.value.code == "seal-dispatch-tool-pairing-conflict"
+
+
+def test_canonical_tool_pairings_restore_scoped_stream_call_id() -> None:
+    # stream carrier 保存 model-call scoped ID；result 保存 provider 原始 ID。
+    stream_call = _canonical_record(
+        "item-stream-call-1",
+        semantic_kind=SemanticKind.TOOL_CALL.value,
+        payload_kind=PayloadKind.TOOL_CALL.value,
+        payload={
+            "name": "tool",
+            "args": {},
+            "tool_call_id": "mc-1:tool-call:tc-1",
+        },
+    )
+    object.__setattr__(stream_call, "metadata", {"model_call_id": "mc-1"})
+    result = _canonical_record(
+        "result-item-1",
+        semantic_kind=SemanticKind.TOOL_RESULT.value,
+        payload_kind=PayloadKind.TOOL_RESULT.value,
+        payload={"tool_call_id": "tc-1", "result_id": "res-1", "content": "ok"},
+    )
+
+    assert canonical_tool_pairings((stream_call, result)) == (
+        ("item-stream-call-1", "result-item-1"),
+    )
+
+
+def test_canonical_tool_pairings_cover_dual_carriers_with_one_result() -> None:
+    # 同一次调用的 stream 影子 carrier 与 checkpoint carrier 共享一个 result。
+    stream_call = _canonical_record(
+        "item-stream-call-1",
+        semantic_kind=SemanticKind.TOOL_CALL.value,
+        payload_kind=PayloadKind.TOOL_CALL.value,
+        payload={
+            "name": "tool",
+            "args": {},
+            "tool_call_id": "mc-1:tool-call:tc-1",
+        },
+    )
+    object.__setattr__(stream_call, "metadata", {"model_call_id": "mc-1"})
+    checkpoint_call = _canonical_record(
+        "item-checkpoint-call-1",
+        semantic_kind=SemanticKind.TOOL_CALL.value,
+        payload_kind=PayloadKind.TOOL_CALL.value,
+        payload={"tool_calls": [{"id": "tc-1", "name": "tool", "args": {}}]},
+    )
+    object.__setattr__(
+        checkpoint_call,
+        "metadata",
+        {
+            "execution_confirmed": True,
+            "model_call_id": "mc-1",
+            "projection_group": {"ordinal": 1, "size": 2},
+            "projection_message_id": "lc_run--mc-1",
+        },
+    )
+    result = _canonical_record(
+        "result-item-1",
+        semantic_kind=SemanticKind.TOOL_RESULT.value,
+        payload_kind=PayloadKind.TOOL_RESULT.value,
+        payload={"tool_call_id": "tc-1", "result_id": "res-1", "content": "ok"},
+    )
+
+    assert canonical_tool_pairings((stream_call, checkpoint_call, result)) == (
+        ("item-stream-call-1", "result-item-1"),
+        ("item-checkpoint-call-1", "result-item-1"),
+    )
