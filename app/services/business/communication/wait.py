@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
 
+from app.core.session_catalog_store import validate_session_id, validate_thread_id
 from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.business.communication.errors import CommunicationContractError
 
@@ -49,6 +50,30 @@ class WaitSelector:
             raise CommunicationContractError(
                 "wait-selector-invalid",
                 f"wait selector_id 必须是非空字符串: {self.selector_id!r}",
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationWaitBinding:
+    """communication selector 解析出的 target execution binding。"""
+
+    target_session_id: str
+    target_main_thread_id: str
+    job_id: str | None
+    turn_id: str | None
+
+    def __post_init__(self) -> None:
+        validate_session_id(self.target_session_id)
+        validate_thread_id(self.target_main_thread_id)
+        if self.job_id is not None and not self.job_id.strip():
+            raise CommunicationContractError(
+                "wait-binding-invalid",
+                "CommunicationWaitBinding.job_id 必须是非空字符串",
+            )
+        if self.turn_id is not None and not self.turn_id.strip():
+            raise CommunicationContractError(
+                "wait-binding-invalid",
+                "CommunicationWaitBinding.turn_id 必须是非空字符串",
             )
 
 

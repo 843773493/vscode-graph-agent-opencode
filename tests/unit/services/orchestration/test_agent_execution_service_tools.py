@@ -221,12 +221,14 @@ class _FakeCommunicationBindingLookup(CommunicationWaitBindingLookupPort):
         self._job_id = job_id
         self._turn_id = turn_id
 
-    async def resolve(self, *, communication_id: str):
+    async def resolve(
+        self, *, target_session_id: str, communication_id: str
+    ):
         from app.agents.tools.session_wait import CommunicationWaitBinding
 
         return CommunicationWaitBinding(
             target_session_id=self._target_session_id,
-            target_main_thread_id=f"thr_{communication_id}",
+            target_main_thread_id="thr_4f9d3a1e8b2c4d5f8a7b6c5d4e3f2a1b",
             job_id=self._job_id,
             turn_id=self._turn_id,
         )

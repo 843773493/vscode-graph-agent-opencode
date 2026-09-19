@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Literal, Protocol
 
@@ -25,6 +24,7 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.core.session_catalog_store import validate_session_id
 from app.services.business.communication.wait import (
     DEFAULT_WAIT_TIMEOUT_SECONDS,
+    CommunicationWaitBinding,
     WaitObservation,
     WaitSelector,
     WaitState,
@@ -60,29 +60,15 @@ _JOB_STATUS_TO_WAIT_STATE: dict[str, WaitState] = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class CommunicationWaitBinding:
-    """communication selector 解析出的 target execution binding。
-
-    job_id 为空表示 target 已 acceptance 但尚未 execution-bound（先等
-    binding，不得把短暂无 active Job 误报为 idle）。
-    """
-
-    target_session_id: str
-    target_main_thread_id: str
-    job_id: str | None
-    turn_id: str | None
-
-
 class CommunicationWaitBindingLookupPort(Protocol):
-    """communication_id → target execution binding 的 typed lookup port。
+    """(target_session_id, communication_id) → execution binding。
 
     生产实现冷读 target session-control inbox（不加载目标 runtime）；
     未知 communication 返回 None（工具层转 selector_not_found）。
     """
 
     async def resolve(
-        self, *, communication_id: str
+        self, *, target_session_id: str, communication_id: str
     ) -> CommunicationWaitBinding | None: ...
 
 
@@ -201,7 +187,8 @@ def create_wait_for_session_tool(
             """返回当前观察快照；communication selector 返回未绑定标记。"""
             if communication_id_value is not None:
                 binding = await binding_lookup.resolve(
-                    communication_id=communication_id_value
+                    target_session_id=target_session_id,
+                    communication_id=communication_id_value,
                 )
                 if binding is None:
                     raise ValueError(

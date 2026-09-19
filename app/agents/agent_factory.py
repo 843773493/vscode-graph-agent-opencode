@@ -110,6 +110,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.tool_output_store import ToolOutputStore
+from app.services.orchestration.communication.binding_lookup import (
+    SessionControlStoreWaitBindingLookup,
+)
 
 if TYPE_CHECKING:
     from app.services.business.message_service import MessageService
@@ -941,8 +944,15 @@ def create_runtime_deep_agent_for_session(
     direct_confirmation_tool_names = (
         confirmation_tool_names - configured_custom_tool_names
     )
+    if session_service is None:
+        raise RuntimeError(
+            "create_runtime_deep_agent_for_session 需要显式传入 SessionService"
+        )
 
     model = override_model if override_model is not None else runtime["model"]
+    communication_binding_lookup = SessionControlStoreWaitBindingLookup(
+        path_resolver=session_service.path_resolver,
+    )
 
     return create_my_deep_agent(
         model=model,
@@ -978,6 +988,7 @@ def create_runtime_deep_agent_for_session(
         workspace_session_context_client=workspace_session_context_client,
         session_target_resolver=session_target_resolver,
         session_message_delivery_service=session_message_delivery_service,
+        communication_binding_lookup=communication_binding_lookup,
         mcp_tools=mcp_tools,
         tool_timeout_seconds=tool_timeout_seconds,
         workspace_file_resource_registry=workspace_file_resource_registry,

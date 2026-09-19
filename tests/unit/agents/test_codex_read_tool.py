@@ -547,11 +547,7 @@ async def test_read_file_rejects_agent_visible_bundled_skill_path(
     tmp_path: Path,
 ) -> None:
     middleware = FilesystemMiddleware(
-        backend=build_workspace_backend(
-            tmp_path,
-            bundled_skill_groups=("debugging",),
-            project_root=Path.cwd(),
-        ),
+        backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
     configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
@@ -576,11 +572,7 @@ async def test_read_file_rejects_non_definition_system_skill_paths(
     tmp_path: Path,
 ) -> None:
     middleware = FilesystemMiddleware(
-        backend=build_workspace_backend(
-            tmp_path,
-            bundled_skill_groups=("debugging",),
-            project_root=Path.cwd(),
-        ),
+        backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
     configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
