@@ -175,9 +175,11 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
             )
             await client.aclose()
 
+            # Gateway 控制面数据（含工作区导航树）位于隔离 BOXTEAM_HOME。
             storage_path = (
-                workspace_root
-                / ".boxteam"
+                workspace_root.parent
+                / "boxteam-home"
+                / "state"
                 / "gateway"
                 / "navigation"
                 / "workspace-tree.json"

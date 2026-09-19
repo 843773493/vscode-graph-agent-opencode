@@ -85,9 +85,10 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
             "session_id": None,
             "folder_id": secondary_folder_id,
             "has_children": True,
-            "storage_relative_path": secondary_folder_storage,
-            "created_at": None,
-            "updated_at": None,
+                "storage_relative_path": secondary_folder_storage,
+                "created_at": None,
+                "updated_at": None,
+                "session": None,
         },
         {
             "node_id": secondary_session_id,
@@ -97,9 +98,10 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
             "session_id": secondary_session_id,
             "folder_id": None,
             "has_children": False,
-            "storage_relative_path": secondary_session_storage,
-            "created_at": None,
-            "updated_at": None,
+                "storage_relative_path": secondary_session_storage,
+                "created_at": None,
+                "updated_at": None,
+                "session": None,
         },
     ]
     with generation_target_stub(
@@ -185,9 +187,12 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                     for record in secondary_state.requests
                 )
 
+                # Gateway 控制面数据（含目录索引缓存）位于隔离 BOXTEAM_HOME，
+                # 不写入工作区 .boxteam/。
                 cache_dir = (
-                    primary_workspace
-                    / ".boxteam"
+                    primary_workspace.parent
+                    / "boxteam-home"
+                    / "state"
                     / "gateway"
                     / "indexes"
                     / "session-catalogs"

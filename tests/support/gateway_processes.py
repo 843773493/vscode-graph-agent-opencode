@@ -14,6 +14,7 @@ import commentjson
 import httpx
 
 from configs.installer import install_user_configuration
+from configs.runtime import load_validated_config
 from tests.support.processes import (
     kill_process_on_port,
     resolve_workspace_python_executable,
@@ -26,6 +27,41 @@ READY_TIMEOUT_SECONDS = 60
 
 def _test_boxteam_home(workspace_root: Path) -> Path:
     return workspace_root.resolve().parent / "boxteam-home"
+
+
+def _install_current_user_configuration(
+    *,
+    config_root: Path,
+    project_root: Path,
+    force: bool,
+) -> None:
+    """安装当前用户配置；上次运行遗留的旧键被新 schema 拒绝时强制刷新。
+
+    测试内手动编辑配置并重启 Gateway 的用例依赖配置跨重启保留，
+    因此只有配置校验失败（schema 演进后的陈旧残留）才回退到内置配置。
+    """
+
+    install_user_configuration(
+        config_root=config_root,
+        profile="default",
+        project_root=project_root,
+        force=force,
+    )
+    if force:
+        return
+    for domain in ("gateway", "workspace"):
+        config_path = config_root / f"{domain}.jsonc"
+        schema_path = config_root / f"{domain}_schema.jsonc"
+        try:
+            load_validated_config(config_path=config_path, schema_path=schema_path)
+        except (OSError, TypeError, ValueError):
+            install_user_configuration(
+                config_root=config_root,
+                profile="default",
+                project_root=project_root,
+                force=True,
+            )
+            return
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,9 +124,8 @@ def start_gateway_process(
     project_root = Path.cwd().resolve()
     python_executable = resolve_workspace_python_executable(project_root)
     boxteam_home = _test_boxteam_home(workspace_root)
-    install_user_configuration(
+    _install_current_user_configuration(
         config_root=boxteam_home / "config",
-        profile="default",
         project_root=project_root,
         force=refresh_config,
     )

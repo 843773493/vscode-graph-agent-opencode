@@ -141,7 +141,9 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         "BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT": str(workspace_root),
         "WORKSPACE_ROOT": str(workspace_root),
         "BOXTEAM_DEVELOPMENT_RESTART_RUNNER": bun_executable,
-        "BOXTEAM_DEVELOPMENT_RESTART_SCRIPT": str(project_root / "scripts" / "dev.mjs"),
+        "BOXTEAM_DEVELOPMENT_RESTART_SCRIPT": (
+            str(project_root / "scripts" / "launch" / "dev.mjs")
+        ),
         "BOXTEAM_DEVELOPMENT_RESTART_CWD": str(project_root),
     }
     process = None

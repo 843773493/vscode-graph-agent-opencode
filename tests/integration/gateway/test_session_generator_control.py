@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 
 import httpx
@@ -14,6 +15,26 @@ from tests.support.gateway_processes import (
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
+
+
+@pytest.fixture(autouse=True)
+def isolated_gateway_state(
+    integration_workspace_root_path: str,
+) -> None:
+    """每个测试函数都从干净的 Gateway 生成器持久状态开始。
+
+    上一次运行遗留的生成器定义会让列表断言读到过期项；测试函数内部
+    产生的运行记录仍跨进程保留。
+    """
+
+    gateway_root = (
+        Path(integration_workspace_root_path).resolve().parent
+        / "boxteam-home"
+        / "state"
+        / "gateway"
+    )
+    if gateway_root.exists():
+        shutil.rmtree(gateway_root)
 
 
 def _definition_payload(
@@ -229,17 +250,13 @@ async def test_generator_crud_preview_and_idempotent_manual_run(
                     for item in list_response.json()["data"]["items"]
                 ] == [generator_id]
 
+                # Gateway 控制面数据（含生成器定义）位于隔离 BOXTEAM_HOME。
+                gateway_root = workspace_root.parent / "boxteam-home" / "state" / "gateway"
                 definition_path = (
-                    workspace_root
-                    / ".boxteam"
-                    / "gateway"
-                    / "generators"
-                    / f"{generator_id}.json"
+                    gateway_root / "generators" / f"{generator_id}.json"
                 )
                 run_path = (
-                    workspace_root
-                    / ".boxteam"
-                    / "gateway"
+                    gateway_root
                     / "generation-runs"
                     / generator_id
                     / f"{completed_run['run_id']}.json"
