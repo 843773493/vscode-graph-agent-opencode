@@ -5,6 +5,9 @@ import pytest
 from app.core.job_event_bus import JobEventBus
 from app.services.event_service import EventService, JobEventCursorGoneError
 
+# SSE 编码边界强制 canonical session_id（OpenSpec 2.1），事件载荷必须自带。
+SESSION_ID = "ses_12345678123446788234567812345678"
+
 
 @pytest.fixture
 def event_bus() -> JobEventBus:
@@ -24,9 +27,11 @@ async def test_job_sse_replays_after_cursor_with_transport_id(
     first = await event_bus.publish(
         "job-replay",
         "job_created",
-        {"session_id": "session-replay", "message": "start", "agent_id": "default"},
+        {"session_id": SESSION_ID, "message": "start", "agent_id": "default"},
     )
-    second = await event_bus.publish("job-replay", "job_started", {})
+    second = await event_bus.publish(
+        "job-replay", "job_started", {"session_id": SESSION_ID}
+    )
     await event_service.ensure_cursor("job-replay", first.event_id)
 
     stream = event_service.stream_sse(
@@ -48,7 +53,7 @@ async def test_job_sse_rejects_foreign_or_missing_cursor(
     foreign = await event_bus.publish(
         "other-job",
         "job_created",
-        {"session_id": "other-session", "message": "start", "agent_id": "default"},
+        {"session_id": SESSION_ID, "message": "start", "agent_id": "default"},
     )
 
     with pytest.raises(JobEventCursorGoneError):

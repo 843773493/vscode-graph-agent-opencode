@@ -31,7 +31,9 @@ _HOST_PATH_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z]:[\\/]")
 
 # revision 必须是完整的 sha256 摘要（sha256: + 恰好 64 位小写 hex）。
 # 只查前缀会让「sha256: + 任意正文」走私（R2b 审查 M1 实测）。
-_SHA256_DIGEST_PATTERN: Final[re.Pattern[str]] = re.compile(r"sha256:[0-9a-f]{64}")
+_SHA256_DIGEST_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"sha256:(?:jcs:v1:)?[0-9a-f]{64}"
+)
 
 # identity/可选 id 的长度上限：typed id、域 名与定位字段都是短标识，
 # 超长值只可能是把正文塞进了 identity 字段。
