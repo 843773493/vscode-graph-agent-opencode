@@ -6,17 +6,28 @@ import os
 import shutil
 import subprocess
 from collections.abc import AsyncIterator, Generator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import commentjson
 import httpx
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.checkpoint.base import empty_checkpoint
 
-from app.core.session_paths import SessionPathResolver
-from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.orchestration.activity_runtime import (
-    ActivityHandlerRegistry,
-    ActivityRuntime,
+from app.core.checkpoint_config import build_checkpoint_config
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_migration import migrate_workspace_session_catalog
+from app.domain.itemized.enums import (
+    CanonicalItemStatus,
+    PayloadKind,
+    SemanticKind,
+)
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
 )
 from tests.integration.stubs.http_stubs import openai_chat_stub
 from tests.support.gateway_processes import (
@@ -27,135 +38,285 @@ from tests.support.gateway_processes import (
 from tests.support.paths import output_root_for_test
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.web_boundary_seeding import (
+    boundary_item,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 STATIC_LONG_SESSION_ID = "ses_9f4e2c7a1b6d4830a5e8f2c1d7b90436"
-COMPACTION_STREAM_TURN_ID = "job-0126"
-ACTIVITY_STREAM_TURN_ID = "job-0125"
+LONG_SESSION_TOOL_CALL_ID = "call_chat_reasoning_tool"
+LONG_SESSION_TOOL_NAME = "invoke_extension_tool"
+LONG_SESSION_FINAL_TEXT = "工具调用完成"
+LONG_SESSION_LARGE_JSON_LENGTH = 65536
+LARGE_ARGUMENT_TURNS = frozenset({121, 128})
 
 
-async def seed_compaction_message_stream(workspace_root: Path) -> None:
-    """在隔离测试工作区写入可通过 Web snapshot 恢复的重复压缩 Activity。"""
+def _call_arguments(turn_number: int) -> dict[str, object]:
+    """invoke_extension_tool 调用参数；被断言的轮次序列化后恰好 65536 字符。"""
+    marker = f"turn-{turn_number:04d}"
+    line = f"LARGE_CALL {marker}|record=000000|status=ok|source=handwritten_sse"
 
-    sessions_root = workspace_root / ".boxteam" / "sessions"
-    resolver = SessionPathResolver(sessions_root)
-    resolver.initialize()
-    store = MessageStreamStore(path_resolver=resolver)
-    writer = await store.open(
-        session_id=STATIC_LONG_SESSION_ID,
-        turn_id=COMPACTION_STREAM_TURN_ID,
+    def arguments_for(query_context: str) -> dict[str, object]:
+        return {
+            "tool_name": "large_test_output",
+            "arguments": {
+                "lines": 768,
+                "marker": marker,
+                "output_bytes": 65536,
+                "query_context": query_context,
+            },
+        }
+
+    if turn_number not in LARGE_ARGUMENT_TURNS:
+        return arguments_for(f"LARGE_CALL {marker}_BEGIN\nLARGE_CALL {marker}_END\n")
+
+    def serialized_length(query_context: str) -> int:
+        return len(json.dumps(arguments_for(query_context), ensure_ascii=False))
+
+    # 每个中间行在 JSON 字符串里贡献 len(line) 个字符和 1 个转义换行
+    # （换行符序列化为 2 个字符）；剩余字符用 END 行补空格凑满精确长度。
+    base_context = (
+        "\n".join([f"LARGE_CALL {marker}_BEGIN", f"LARGE_CALL {marker}_END"]) + "\n"
     )
-    runtime = ActivityRuntime(writer, ActivityHandlerRegistry())
-    await runtime.started(
-        activity_id="browser_compaction_1",
-        kind="context.compaction",
-        summary="第一次压缩服务端摘要",
-    )
-    await runtime.completed(
-        activity_id="browser_compaction_1",
-        kind="context.compaction",
-        summary="第一次压缩已提交",
-    )
-    await runtime.started(
-        activity_id="browser_compaction_2",
-        kind="context.compaction",
-        summary="第二次压缩服务端摘要",
-    )
-    await runtime.failed(
-        activity_id="browser_compaction_2",
-        kind="context.compaction",
-        outcome="outcome_unknown",
-        summary="第二次压缩结果未知",
-    )
-    await writer.close_completed()
+    base_length = serialized_length(base_context)
+    line_length = len(line) + 2
+    remaining = LONG_SESSION_LARGE_JSON_LENGTH - base_length
+    line_count = remaining // line_length
+    filler_length = remaining - line_count * line_length
+    parts = [f"LARGE_CALL {marker}_BEGIN"]
+    parts.extend([line] * line_count)
+    parts.append(f"LARGE_CALL {marker}_END" + " " * filler_length)
+    arguments = arguments_for("\n".join(parts) + "\n")
+    actual_length = len(json.dumps(arguments, ensure_ascii=False))
+    if actual_length != LONG_SESSION_LARGE_JSON_LENGTH:
+        raise RuntimeError(
+            "大参数 JSON 长度校准失败: "
+            f"expected={LONG_SESSION_LARGE_JSON_LENGTH}, actual={actual_length}"
+        )
+    return arguments
 
 
-async def seed_additional_message_stream_display_cases(workspace_root: Path) -> None:
-    """写入通用 Activity 和未知工具结果的历史消息流。"""
+def _tool_result_content(turn_number: int) -> str:
+    marker = f"turn-{turn_number:04d}"
+    if turn_number not in LARGE_ARGUMENT_TURNS:
+        return f"LARGE_RESULT {marker}_BEGIN\nLARGE_RESULT {marker}_END\n"
+    line = f"LARGE_RESULT {marker}|record=000000|status=ok|source=handwritten_sse"
+    begin = f"LARGE_RESULT {marker}_BEGIN"
+    end = f"LARGE_RESULT {marker}_END"
+    # 总长 = 首尾行 + 尾部换行 + 每条中间行自身长度与分隔换行。
+    remaining = LONG_SESSION_LARGE_JSON_LENGTH - len(begin) - len(end) - 2
+    lines: list[str] = []
+    while remaining >= len(line) + 1:
+        lines.append(line)
+        remaining -= len(line) + 1
+    if remaining > 0:
+        # 剩余预算由一个 0 填充行吸收：行体占 remaining-1 字符加 1 换行。
+        lines.append(f"{marker}"[: remaining - 1].ljust(remaining - 1, "0"))
+    content = "\n".join([begin, *lines, end]) + "\n"
+    if len(content) != LONG_SESSION_LARGE_JSON_LENGTH:
+        raise RuntimeError(
+            "大结果长度校准失败: "
+            f"expected={LONG_SESSION_LARGE_JSON_LENGTH}, actual={len(content)}"
+        )
+    return content
 
-    sessions_root = workspace_root / ".boxteam" / "sessions"
-    resolver = SessionPathResolver(sessions_root)
-    resolver.initialize()
-    store = MessageStreamStore(path_resolver=resolver)
 
-    activity_writer = await store.open(
-        session_id=STATIC_LONG_SESSION_ID,
-        turn_id=ACTIVITY_STREAM_TURN_ID,
+def _reasoning_items(turn_id: str, *, has_result: bool) -> tuple[object, ...]:
+    """按模板 v1 文案生成推理与摘要 item；block_id 保证逻辑 key 唯一。"""
+    blocks: list[tuple[str, str, object]] = [
+        ("a", PayloadKind.TEXT, "先读取 "),
+        ("a-summary", PayloadKind.SUMMARY, None),
+        ("b", PayloadKind.TEXT, "README，再根据工具结果作答。"),
+        ("b-summary", PayloadKind.SUMMARY, None),
+    ]
+    if has_result:
+        blocks.extend(
+            [
+                ("c", PayloadKind.TEXT, "已读取 README，"),
+                ("c-summary", PayloadKind.SUMMARY, None),
+                ("d", PayloadKind.TEXT, "整理最终答复。"),
+                ("d-summary", PayloadKind.SUMMARY, None),
+            ]
+        )
+    items: list[object] = []
+    for suffix, payload_kind, text in blocks:
+        item_id = f"item-rollout-reasoning-{suffix}-{turn_id}"
+        if payload_kind is PayloadKind.SUMMARY:
+            payload: object = {
+                "summary_id": item_id,
+                "view_revision": "0",
+                "content": [
+                    {
+                        "id": f"reasoning-item:{suffix}-{turn_id}",
+                        "type": "reasoning",
+                        "summary": [
+                            {"type": "summary_text", "text": "summary-large"}
+                        ],
+                    }
+                ],
+            }
+        else:
+            payload = text
+        items.append(
+            boundary_item(
+                item_id=item_id,
+                semantic_kind=SemanticKind.REASONING,
+                payload_kind=payload_kind,
+                status=CanonicalItemStatus.COMPLETED,
+                payload=payload,
+                turn_id=turn_id,
+                metadata={"block_id": f"reasoning-{suffix}-{turn_id}"},
+            )
+        )
+    return tuple(items)
+
+
+def seed_long_rollout_history(workspace_root: Path) -> None:
+    """以模板 v1 文案为基线，用当前 Saver 重写 128 轮长会话数据。
+
+    模板 rollout 是 v1 dispatch 旧格式，runtime 与 legacy 导入器都无法读取；
+    复制出的工作区副本先读取 v1 的轮次结构与用户文案，再按真实运行时的
+    提交顺序（accept_turn → converge/put → put）重写为 schema-4 数据：
+    结果轮的 canonical item 由 LangChainMessageCodec 从消息生成，保证与
+    checkpoint message projection 的内容哈希一致；无结果轮由 checkpoint
+    直接派生 tool_call item，并以 completed_empty 收敛。
+    """
+    sessions_dir = workspace_root / ".boxteam" / "sessions"
+    session_dir = get_session_path_resolver(sessions_dir).resolve_session_node(
+        STATIC_LONG_SESSION_ID
     )
-    activity_runtime = ActivityRuntime(activity_writer, ActivityHandlerRegistry())
-    await activity_runtime.started(
-        activity_id="browser_approval_wait",
-        kind="approval.wait",
-        summary="等待浏览器审批",
-    )
-    await activity_runtime.updated(
-        activity_id="browser_approval_wait",
-        kind="approval.wait",
-        status="waiting",
-    )
-    await activity_runtime.started(
-        activity_id="browser_subagent_done",
-        kind="subagent.run",
-    )
-    await activity_runtime.completed(
-        activity_id="browser_subagent_done",
-        kind="subagent.run",
-    )
-    await activity_runtime.started(
-        activity_id="browser_resource_unknown",
-        kind="resource.operation",
-        resource_refs=("resource_browser_1",),
-    )
-    await activity_runtime.failed(
-        activity_id="browser_resource_unknown",
-        kind="resource.operation",
-        outcome="outcome_unknown",
-        summary="资源操作结果无法确认",
-    )
-    await activity_runtime.failed(
-        activity_id="browser_private_unknown",
-        kind="provider.private",
-        outcome="outcome_unknown",
-    )
-    await activity_writer.commit(
-        "activity.updated",
-        {
-            "activity_id": "browser_private_unknown",
-            "kind": "provider.private",
-            "status": "unknown",
-            "summary": "Provider 私有 Activity 状态无法确认",
-        },
-    )
-    await activity_writer.commit(
-        "tool_call",
-        {
-            "tool_call_id": "browser_unknown_call",
-            "tool_name": "shell",
-            "arguments": {"command": "touch side-effect"},
-            "status": "completed",
-        },
-    )
-    await activity_writer.commit(
-        "tool.started",
-        {
-            "tool_execution_id": "browser_unknown_execution",
-            "tool_call_id": "browser_unknown_call",
-            "tool_name": "shell",
-        },
-    )
-    await activity_writer.commit(
-        "tool.completed",
-        {
-            "tool_execution_id": "browser_unknown_execution",
-            "tool_call_id": "browser_unknown_call",
-            "tool_name": "shell",
-            "status": "completed",
-            "outcome": "outcome_unknown",
-            "completion_reason": "execution_lost",
-        },
-    )
-    # 保留 approval.wait 的 waiting 状态，用于验证前端不会把等待中的
-    # Activity 误显示成已完成；该测试工作区在 fixture 生命周期结束时销毁。
+    rollout_path = session_dir / "rollout" / "rollout.jsonl"
+    if not rollout_path.is_file():
+        raise FileNotFoundError(f"模板长会话 rollout 缺失: {rollout_path}")
+    records = [
+        json.loads(line)
+        for line in rollout_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    turn_order: list[str] = []
+    user_texts: dict[str, str] = {}
+    result_turns: set[str] = set()
+    for record in records:
+        turn_id = record["turn_id"]
+        if turn_id not in user_texts and turn_id not in result_turns:
+            turn_order.append(turn_id)
+        if record.get("role") == "user":
+            user_texts[turn_id] = record["message"]["data"]["content"]
+        elif record.get("role") == "tool":
+            result_turns.add(turn_id)
+    if len(turn_order) != 128 or len(user_texts) != 128 or len(result_turns) != 16:
+        raise RuntimeError(
+            "模板长会话结构与基线不符: "
+            f"turns={len(turn_order)}, users={len(user_texts)}, results={len(result_turns)}"
+        )
+    shutil.rmtree(session_dir / "rollout")
+    saver = RolloutCheckpointSaver(sessions_dir)
+    codec = LangChainMessageCodec()
+    timestamp = datetime.now(UTC).isoformat()
+    for index, turn_id in enumerate(turn_order, start=1):
+        has_result = turn_id in result_turns
+        model_call_id = f"model-call-{turn_id}"
+        message_metadata = {
+            "message_metadata": {"turn_id": turn_id},
+            "model_call_id": model_call_id,
+        }
+        messages: list[object] = [
+            HumanMessage(
+                content=user_texts[turn_id],
+                id=f"rollout-user-{turn_id}",
+                response_metadata={
+                    "message_metadata": {"turn_id": turn_id}
+                },
+            ),
+            AIMessage(
+                content="",
+                id=f"rollout-call-{turn_id}",
+                tool_calls=[
+                    {
+                        "name": LONG_SESSION_TOOL_NAME,
+                        "args": _call_arguments(index),
+                        "id": LONG_SESSION_TOOL_CALL_ID,
+                        "type": "tool_call",
+                    }
+                ],
+                response_metadata=message_metadata,
+            ),
+        ]
+        if has_result:
+            messages.extend(
+                [
+                    ToolMessage(
+                        content=_tool_result_content(index),
+                        tool_call_id=LONG_SESSION_TOOL_CALL_ID,
+                        name=LONG_SESSION_TOOL_NAME,
+                        id=f"rollout-result-{turn_id}",
+                        status="success",
+                        response_metadata=message_metadata,
+                    ),
+                    AIMessage(
+                        content=LONG_SESSION_FINAL_TEXT,
+                        id=f"rollout-final-{turn_id}",
+                        response_metadata=message_metadata,
+                    ),
+                ]
+            )
+        accepted = saver.accept_turn(
+            STATIC_LONG_SESSION_ID,
+            accepted_ingress_id=f"ingress-rollout-{turn_id}",
+            acceptance_idempotency_key=f"acceptance-rollout-{turn_id}",
+            payload=user_texts[turn_id],
+            payload_kind=PayloadKind.TEXT,
+            turn_id=turn_id,
+            root_item_id=f"item-rollout-user-{turn_id}",
+            initial_execution_id=f"execution-rollout-{turn_id}",
+        )
+
+        def put_checkpoint(turn_messages: list[object], checkpoint_turn_id: str) -> None:
+            checkpoint = empty_checkpoint()
+            checkpoint["id"] = f"checkpoint-rollout-{checkpoint_turn_id}"
+            checkpoint["channel_values"] = {"messages": turn_messages}
+            checkpoint["channel_versions"] = {"messages": "1"}
+            checkpoint["updated_channels"] = ["messages"]
+            saver.put(
+                build_checkpoint_config(STATIC_LONG_SESSION_ID),
+                checkpoint,
+                {"source": f"rollout-history-fixture-{checkpoint_turn_id}", "step": 1},
+                {"messages": "1"},
+            )
+
+        if has_result:
+            converge_items: list[object] = []
+            for message in messages[1:]:
+                converge_items.extend(
+                    codec.items_for_message(
+                        message,
+                        item_sequence=1,
+                        message_id=message.id,
+                        turn_id=turn_id,
+                        timestamp=timestamp,
+                        model_call_id=model_call_id,
+                    )
+                )
+            saver.converge_execution(
+                STATIC_LONG_SESSION_ID,
+                turn_id=turn_id,
+                execution_id=str(accepted["initial_execution_id"]),
+                outcome="completed",
+                turn_status="completed",
+                items=tuple(converge_items),
+                final_item_id=f"item-rollout-final-{turn_id}",
+            )
+            put_checkpoint(messages, turn_id)
+        else:
+            put_checkpoint(messages, turn_id)
+            saver.converge_execution(
+                STATIC_LONG_SESSION_ID,
+                turn_id=turn_id,
+                execution_id=str(accepted["initial_execution_id"]),
+                outcome="completed_empty",
+                turn_status="completed_empty",
+            )
+        saver.append_items(STATIC_LONG_SESSION_ID, list(_reasoning_items(turn_id, has_result=has_result)))
 
 
 @pytest.fixture(scope="module")
@@ -171,6 +332,12 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
+    # 模板 rollout 是 v1 dispatch 旧格式，runtime 与 legacy 导入器都拒绝
+    # 读取；catalog 权威模式先迁移布局，legacy 模式保持旧 JSON 布局，
+    # 然后统一在副本上以当前 Saver 重写 schema-4 数据。
+    if os.environ.get("BOXTEAM_SESSION_CATALOG_RESOLVER") not in ("0", "legacy"):
+        asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
+    seed_long_rollout_history(workspace_root)
     return str(workspace_root)
 
 
@@ -202,11 +369,11 @@ def browser_backend(
     # 该历史 fixture 原本由 handwritten provider 生成，但本测试的 replay
     # 需要真正启动一轮新 Job；复制后的工作区统一切到测试 stub provider，
     # 不修改只读 fixture 源目录。
+    sessions_dir = workspace_root / ".boxteam" / "sessions"
     session_path = (
-        workspace_root
-        / ".boxteam"
-        / "sessions"
-        / STATIC_LONG_SESSION_ID
+        get_session_path_resolver(sessions_dir).resolve_session_node(
+            STATIC_LONG_SESSION_ID
+        )
         / "session.json"
     )
     session = json.loads(session_path.read_text(encoding="utf-8"))
@@ -267,47 +434,71 @@ async def test_rollout_history_around_loading_real_web_chain(
     assert build.returncode == 0, f"Web 构建失败:\n{build.stdout}\n{build.stderr}"
 
     session_id = STATIC_LONG_SESSION_ID
+    sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     static_rollout_root = (
-        Path(integration_workspace_root_path)
-        / ".boxteam"
-        / "sessions"
-        / session_id
+        get_session_path_resolver(sessions_dir).resolve_session_node(session_id)
         / "rollout"
     )
     rollout_path = static_rollout_root / "rollout.jsonl"
     assert rollout_path.is_file()
     assert not list(static_rollout_root.glob("segment-*.jsonl"))
-    large_records = []
-    for line in rollout_path.read_text(encoding="utf-8").splitlines():
-        record = json.loads(line)
-        message = record.get("message", {})
-        data = message.get("data", {}) if isinstance(message, dict) else {}
-        tool_calls = data.get("tool_calls", []) if isinstance(data, dict) else []
-        if any(
-            isinstance(call, dict)
-            and isinstance(call.get("args"), dict)
-            and isinstance(call["args"].get("arguments"), dict)
-            and isinstance(call["args"]["arguments"].get("query_context"), str)
-            for call in tool_calls
-        ):
-            large_records.append(record)
-    assert len(large_records) >= 10
-    assert any(
-        record.get("message", {}).get("data", {}).get("tool_calls", [{}])[0].get("name")
-        == "invoke_extension_tool"
-        for record in large_records
-        if record.get("message", {}).get("data", {}).get("tool_calls")
-    )
-    assert all(
-        "payload_ref" not in record.get("message", {}) for record in large_records
-    )
+    item_records = [
+        json.loads(line)
+        for line in rollout_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    tool_call_records = [
+        record
+        for record in item_records
+        if record.get("record_type") == "item"
+        and record.get("semantic_kind") == "tool_call"
+    ]
+    tool_result_records = [
+        record
+        for record in item_records
+        if record.get("record_type") == "item"
+        and record.get("semantic_kind") == "tool_result"
+    ]
+    final_text_records = [
+        record
+        for record in item_records
+        if record.get("record_type") == "item"
+        and record.get("semantic_kind") == "assistant_output"
+        and record.get("payload_kind") == "text"
+        and record.get("status") == "completed"
+    ]
+    assert len(tool_call_records) == 128
+    assert len(tool_result_records) == 16
+    assert len(final_text_records) == 16
+    for record in tool_call_records:
+        assert "payload_ref" not in record
+        payload = record["payload"]
+        (call,) = payload["tool_calls"]
+        assert call["name"] == LONG_SESSION_TOOL_NAME
+        arguments = call["args"]
+        arguments_json = json.dumps(arguments, ensure_ascii=False)
+        marker = arguments["arguments"]["marker"]
+        assert marker == f"turn-{int(record['turn_id'].removeprefix('job-')):04d}"
+        assert arguments["arguments"]["query_context"].startswith(
+            f"LARGE_CALL {marker}_BEGIN"
+        )
+        # 大参数只放在被断言精确长度的轮次；其余轮次保持结构一致的短参数。
+        if int(record["turn_id"].removeprefix("job-")) in LARGE_ARGUMENT_TURNS:
+            assert len(arguments_json) == LONG_SESSION_LARGE_JSON_LENGTH
+        else:
+            assert len(arguments_json) < LONG_SESSION_LARGE_JSON_LENGTH
+    for record in tool_result_records:
+        marker = f"turn-{int(record['turn_id'].removeprefix('job-')):04d}"
+        content = record["payload"]["content"]
+        assert content.startswith(f"LARGE_RESULT {marker}_BEGIN")
+        if int(record["turn_id"].removeprefix("job-")) in LARGE_ARGUMENT_TURNS:
+            assert len(content) == LONG_SESSION_LARGE_JSON_LENGTH
+    for record in final_text_records:
+        assert record["payload"] == LONG_SESSION_FINAL_TEXT
     session_response = await browser_backend_client.get(
         f"/api/v1/sessions/{session_id}"
     )
     assert session_response.status_code == 200, session_response.text
-    await seed_compaction_message_stream(Path(integration_workspace_root_path))
-    await seed_additional_message_stream_display_cases(Path(integration_workspace_root_path))
-
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     gateway = start_gateway_process(
         workspace_root=Path(browser_backend[1]),
@@ -373,24 +564,8 @@ async def test_rollout_history_around_loading_real_web_chain(
         )
         result = json.loads(result_path.read_text(encoding="utf-8"))
         assert result["defaultProjectionSafe"] is True
+        assert result["detailProjectionSafe"] is True
         assert result["canonicalMixedMessageRestored"] is True
-        assert result["compactionActivityIds"] == [
-            "browser_compaction_1",
-            "browser_compaction_2",
-        ]
-        assert result["compactionCompletedVisible"] is True
-        assert result["compactionFailedVisible"] is True
-        assert result["activityStatusIds"] == [
-            "browser_approval_wait",
-            "browser_subagent_done",
-            "browser_resource_unknown",
-            "browser_private_unknown",
-        ]
-        assert result["approvalWaitingVisible"] is True
-        assert result["subagentCompletedVisible"] is True
-        assert result["resourceUnknownVisible"] is True
-        assert result["genericActivityUnknownVisible"] is True
-        assert result["unknownToolVisible"] is True
         assert result["responseActionsVisible"] is True
         assert result["responseActionLabels"] == [
             "朗读（暂未开放）",

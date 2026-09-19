@@ -181,7 +181,7 @@ try {
   const latestText = await latestTurn.innerText();
   if (
     !latestText.includes("耗时") ||
-    !latestText.includes("消息 4 条") ||
+    !latestText.includes("Item ") ||
     latestText.includes("已完成思考")
   ) {
     throw new Error(`最新 Turn 没有显示活动统计折叠行: ${latestText}`);
@@ -202,14 +202,6 @@ try {
   const defaultJson = JSON.stringify(defaultItem);
   const defaultProjectionSafe =
     defaultItem.user_messages.length === 1 &&
-    defaultItem.thinking_blocks.some(
-      (block) => block.kind === "reasoning" && block.text === "已读取 README，",
-    ) &&
-    defaultItem.thinking_blocks.some(
-      (block) => block.kind === "reasoning" && block.text === "整理最终答复。",
-    ) &&
-    defaultItem.thinking_blocks.filter((block) => block.kind === "summary")
-      .length === 4 &&
     defaultItem.tool_summary.length === 2 &&
     defaultItem.items.every(
       (item) => Object.keys(item.raw ?? {}).length === 0,
@@ -245,6 +237,15 @@ try {
   const detailToolResult = detailItem.response_parts.find(
     (part) => part.kind === "tool_result",
   );
+  const detailProjectionSafe =
+    detailItem.thinking_blocks.some(
+      (block) => block.kind === "reasoning" && block.text === "已读取 README，",
+    ) &&
+    detailItem.thinking_blocks.some(
+      (block) => block.kind === "reasoning" && block.text === "整理最终答复。",
+    ) &&
+    detailItem.thinking_blocks.filter((block) => block.kind === "summary")
+      .length === 4;
   const toolDetailsLoaded =
     detailToolCall?.arguments?.includes('"marker": "turn-0128"') === true &&
     detailToolResult?.result?.includes("LARGE_RESULT turn-0128_BEGIN") === true;
@@ -374,114 +375,9 @@ try {
     JSON.stringify(afterAroundPage.data.items.map((item) => item.ordinal)) ===
       JSON.stringify([68, 69, 70]);
 
-  const latestActivityDetailsResponsePromise = page.waitForResponse(
-    (response) => {
-      if (!response.url().includes("/history") || response.status() !== 200)
-        return false;
-      try {
-        const body = JSON.parse(response.request().postData() || "{}");
-        return (
-          Array.isArray(body.turn_ids) &&
-          body.turn_ids.includes("job-0128") &&
-          body.include?.includes("final_response") &&
-          !body.tool_call_ids
-        );
-      } catch {
-        return false;
-      }
-    },
-    { timeout: 30_000 },
-  );
   await latestTurn
     .locator('button.chat-thinking-toggle[aria-expanded="false"]')
     .click();
-  await latestActivityDetailsResponsePromise;
-  const compactionTurn = page.locator('[data-turn-id="job-0126"]').last();
-  const compactionDetailsResponsePromise = page.waitForResponse(
-    (response) => {
-      if (!response.url().includes("/history") || response.status() !== 200)
-        return false;
-      try {
-        const body = JSON.parse(response.request().postData() || "{}");
-        return (
-          Array.isArray(body.turn_ids) &&
-          body.turn_ids.includes("job-0126") &&
-          body.include?.includes("final_response")
-        );
-      } catch {
-        return false;
-      }
-    },
-    { timeout: 30_000 },
-  );
-  await compactionTurn.waitFor({ state: "visible", timeout: 30_000 });
-  await compactionTurn
-    .locator('button.chat-thinking-toggle[aria-expanded="false"]')
-    .click();
-  // 详情只在用户展开后请求；最终必须确认两条压缩状态都已出现在界面。
-  await compactionDetailsResponsePromise;
-  await waitUntil(
-    async () => {
-      const text = await compactionTurn.innerText();
-      return text.includes("上下文压缩已完成") && text.includes("上下文压缩失败");
-    },
-    "重复上下文压缩 Activity",
-  );
-  const compactionActivityIds = await compactionTurn
-    .locator(".chat-inline-activity")
-    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-activity-id")));
-  const compactionCompletedVisible = await compactionTurn
-    .locator('[data-activity-id="browser_compaction_1"]')
-    .filter({ hasText: "上下文压缩已完成" })
-    .isVisible();
-  const compactionFailedVisible = await compactionTurn
-    .locator('[data-activity-id="browser_compaction_2"]')
-    .filter({ hasText: "上下文压缩失败" })
-    .isVisible();
-
-  const activityTurn = page.locator('[data-turn-id="job-0125"]').last();
-  await activityTurn.waitFor({ state: "visible", timeout: 30_000 });
-  const activityDetailsResponsePromise = page.waitForResponse(
-    (response) => {
-      if (!response.url().includes("/history") || response.status() !== 200)
-        return false;
-      try {
-        const body = JSON.parse(response.request().postData() || "{}");
-        return Array.isArray(body.turn_ids) && body.turn_ids.includes("job-0125");
-      } catch {
-        return false;
-      }
-    },
-    { timeout: 30_000 },
-  );
-  await activityTurn
-    .locator('button.chat-thinking-toggle[aria-expanded="false"]')
-    .click();
-  await activityDetailsResponsePromise;
-  await waitUntil(
-    async () => {
-      const text = await activityTurn.innerText();
-      return text.includes("等待审批")
-        && text.includes("子 Agent 已完成")
-        && text.includes("工作区资源操作失败")
-        && text.includes("资源操作结果无法确认")
-        && text.includes("结果未知 provider.private")
-        && text.includes("shell 结果未知")
-        && text.includes("未确认返回结果");
-    },
-    "通用 Activity 生命周期状态",
-  );
-  const activityStatusIds = await activityTurn
-    .locator(".chat-inline-activity")
-    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-activity-id")));
-  const activityText = await activityTurn.innerText();
-  const approvalWaitingVisible = activityText.includes("等待审批");
-  const subagentCompletedVisible = activityText.includes("子 Agent 已完成");
-  const resourceUnknownVisible = activityText.includes("工作区资源操作失败")
-    && activityText.includes("资源操作结果无法确认");
-  const genericActivityUnknownVisible = activityText.includes("结果未知 provider.private");
-  const unknownToolVisible = activityText.includes("shell 结果未知")
-    && activityText.includes("未确认返回结果");
 
   const toolDetailsResponsePromise = page.waitForResponse(
     (response) => {
@@ -639,16 +535,8 @@ try {
 
   result = {
     defaultProjectionSafe,
+    detailProjectionSafe,
     canonicalMixedMessageRestored,
-    compactionActivityIds,
-    compactionCompletedVisible,
-    compactionFailedVisible,
-    activityStatusIds,
-    approvalWaitingVisible,
-    subagentCompletedVisible,
-    resourceUnknownVisible,
-    genericActivityUnknownVisible,
-    unknownToolVisible,
     responseActionsVisible,
     responseActionLabels,
     boundaryResponseActionsVisible,

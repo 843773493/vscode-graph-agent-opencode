@@ -184,13 +184,23 @@ def _activity_parts_from_projection(
         if not isinstance(message_sequence, int) or isinstance(message_sequence, bool):
             raise TypeError("Turn activity item message_sequence 非法")
         text = raw.get("text") if isinstance(raw.get("text"), str) else ""
+        part_projection = _part_projection(kind, mode=mode, include=include)
+        # 工具部件在 summary 投影不携带正文：tool_summary 只提供身份与状态，
+        # 完整参数/结果必须经显式 tool_call/tool_result include 补拉。这与
+        # summary 模式「不物化工具 payload」的既有契约一致；否则默认历史页
+        # 会把 item_projections 的整段工具正文（上限 64KB）随页带出。
+        part_text = (
+            ""
+            if part_projection == "summary" and kind in {"tool_call", "tool_result"}
+            else text
+        )
         tool_call_id = raw.get("tool_call_id")
         tool_name = raw.get("tool_name")
         parts.append(
             TurnResponsePartDTO(
                 part_id=f"{item_id}:part:{part_ordinal}",
                 kind=kind,
-                projection=_part_projection(kind, mode=mode, include=include),
+                projection=part_projection,
                 status=_response_status(raw.get("status")),
                 source=TurnResponseSourceDTO(
                     message_sequence=message_sequence,
@@ -229,7 +239,7 @@ def _activity_parts_from_projection(
                         else None
                     ),
                 ),
-                text=text,
+                text=part_text,
                 carrier_type=(
                     "compaction_summary"
                     if raw_kind == "compaction_summary"

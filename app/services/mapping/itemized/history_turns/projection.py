@@ -274,6 +274,12 @@ def summary(detail: TurnDetailDTO) -> TurnSummaryDTO:
                     "projection": "summary",
                     "arguments": None if part.kind == "tool_call" else part.arguments,
                     "result": None if part.kind == "tool_result" else part.result,
+                    # summary 契约与 mapper 首段投影一致：工具部件不携带
+                    # 正文；detail 投影降级为摘要时同样剥掉，避免 summaries
+                    # 与默认 tail 摘要口径分裂。
+                    "text": ""
+                    if part.kind in {"tool_call", "tool_result"}
+                    else part.text,
                 }
             )
             for part in detail.response_parts[:128]
