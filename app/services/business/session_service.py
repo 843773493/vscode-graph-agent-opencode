@@ -75,9 +75,7 @@ class SessionService:
         # parent_session_id，register 剥离口径）：写入时剥离三键、移动走
         # 逻辑移动签名；旧 resolver 的物理校验强制 manifest 携带这些字段，
         # 写入口径保持现状不变。
-        self._catalog_mode = isinstance(
-            self._path_resolver, SessionCatalogPathResolver
-        )
+        self._catalog_mode = isinstance(self._path_resolver, SessionCatalogPathResolver)
         self._path_resolver.initialize()
         self._migrate_legacy_workspace_ids()
         self._job_service: JobServiceProtocol | None = None
@@ -107,9 +105,32 @@ class SessionService:
             data = json.loads(session_file.read_text(encoding="utf-8"))
             if data.get("workspace_id") not in LEGACY_BACKEND_WORKSPACE_IDS:
                 continue
-            session = SessionDTO.model_validate(data)
-            session.workspace_id = self._workspace_id
-            self._write_session_file(session_file, session)
+            if all(key in data for key in _MANIFEST_NAVIGATION_KEYS):
+                # 旧形态完整 manifest：按完整模型校验并重写。
+                session = SessionDTO.model_validate(data)
+                session.workspace_id = self._workspace_id
+                self._write_session_file(session_file, session)
+                continue
+            # 剥离形态：导航键由 catalog 权威承载，SessionDTO 必填的
+            # title 不在 manifest 上；只改写 workspace_id，不整体校验。
+            data["workspace_id"] = self._workspace_id
+            self._write_stripped_session_file(session_file, data)
+
+    def _write_stripped_session_file(self, path: Path, data: dict[str, object]) -> None:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            dir=path.parent,
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+                json.dump(data, file, ensure_ascii=False, indent=2, default=str)
+                file.write("\n")
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     def register_change_listener(self, listener: Callable[[str, str], None]) -> None:
         self._change_listeners.append(listener)
@@ -209,11 +230,9 @@ class SessionService:
         # 换源：title/parent_session_id 以 resolver 权威投影为准回填，
         # manifest 仍提供其余字段（kind/delegation/created_at 等）。
         data["title"] = node.name
-        data["parent_session_id"] = (
-            self._nearest_session_ancestor_in_projection(
-                node.parent_node_id,
-                nodes_by_id,
-            )
+        data["parent_session_id"] = self._nearest_session_ancestor_in_projection(
+            node.parent_node_id,
+            nodes_by_id,
         )
 
         session = SessionDTO.model_validate(data)
@@ -249,11 +268,9 @@ class SessionService:
             # 换源：与 get() 同口径，title 取权威索引节点显示名，
             # parent_session_id 由父链派生，不读 manifest 中这两键。
             data["title"] = node.name
-            data["parent_session_id"] = (
-                self._nearest_session_ancestor_in_projection(
-                    node.parent_node_id,
-                    nodes_by_id,
-                )
+            data["parent_session_id"] = self._nearest_session_ancestor_in_projection(
+                node.parent_node_id,
+                nodes_by_id,
             )
             session = SessionDTO.model_validate(data)
             self._assert_workspace_binding(session)
@@ -298,9 +315,7 @@ class SessionService:
         )
         if not control_database.is_file():
             # 无控制库 = 该 Session 尚无 child thread（不建库、零副作用）。
-            return ChildThreadListDTO(
-                parent_session_id=session_id, items=[], total=0
-            )
+            return ChildThreadListDTO(parent_session_id=session_id, items=[], total=0)
         control = SessionControlStore(control_database)
         try:
             threads = control.list_child_thread_rows()
@@ -332,12 +347,8 @@ class SessionService:
                         member.subagent_type if member is not None else None
                     ),
                     title=member.title if member is not None else None,
-                    collaboration_state=(
-                        member.state if member is not None else None
-                    ),
-                    admission_state=(
-                        intent.state if intent is not None else None
-                    ),
+                    collaboration_state=(member.state if member is not None else None),
+                    admission_state=(intent.state if intent is not None else None),
                 )
             )
         items.sort(key=lambda item: (item.created_at, item.thread_id), reverse=True)
