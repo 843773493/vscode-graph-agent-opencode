@@ -14,6 +14,10 @@ from tests.harness.python.browser_manager import (
     close_browser_frontend_process,
     start_browser_frontend_process,
 )
+from tests.harness.python.terminal_manager import (
+    close_terminal_frontend_process,
+    start_terminal_frontend_process,
+)
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
@@ -59,6 +63,11 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     gateway_port = port_block.port(20)
     browser_frontend_port = port_block.port(21)
+    terminal_frontend_port = port_block.port(22)
+    terminal_frontend = start_terminal_frontend_process(
+        workspace_root=workspace_root,
+        frontend_port=terminal_frontend_port,
+    )
     browser_frontend = start_browser_frontend_process(
         workspace_root=workspace_root,
         frontend_port=browser_frontend_port,
@@ -71,6 +80,7 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
             port=gateway_port,
             extra_env={
                 "BOXTEAM_WEB_ASSETS": str(project_root / "src" / "clients" / "web" / "dist"),
+                "BOXTEAM_TERMINAL_FRONTEND_URL": f"http://127.0.0.1:{terminal_frontend_port}",
                 "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{browser_frontend_port}",
             },
         )
@@ -123,9 +133,11 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
             f"结果: {result_path}\n截图: {screenshot_path}"
         )
         browser_result = json.loads(result_path.read_text(encoding="utf-8"))
+        assert "/extension?" in browser_result["popup_url"]
+        assert f"resourceId={browser_result['browser_id']}" in browser_result["popup_url"]
         assert browser_result["transition"]["badge"] in {"正在初始化", "连接中"}
         assert browser_result["final"]["badge"].startswith("已连接")
-        assert "已在预览区打开" in browser_result["final"]["parentNotice"]
+        assert "新建浏览器成功" in browser_result["final"]["parentNotice"]
         assert "正在" not in browser_result["final"]["parentNotice"]
         assert browser_result["final"]["focusedElement"] == "address-input"
         assert browser_result["final"]["submittedDuringInitialization"] is True
@@ -148,4 +160,5 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
     finally:
         if gateway is not None:
             close_gateway_process(gateway)
+        close_terminal_frontend_process(terminal_frontend)
         close_browser_frontend_process(browser_frontend)

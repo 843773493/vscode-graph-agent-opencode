@@ -21,6 +21,23 @@ const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefi
 const browser = await chromium.launch({ executablePath, headless: true });
 const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
 const page = await context.newPage();
+// 控制台错误、页面异常与失败请求留档，失败时随结果输出，便于定位 attach 链路问题。
+const consoleErrors = [];
+const pageErrors = [];
+const requestFailures = [];
+context.on("console", (message) => {
+  if (message.type() === "error") {
+    consoleErrors.push(`${Date.now()} ${message.text()}`);
+  }
+});
+context.on("pageerror", (error) => {
+  pageErrors.push(`${Date.now()} ${error.message}`);
+});
+context.on("requestfailed", (request) => {
+  requestFailures.push(
+    `${Date.now()} ${request.method()} ${request.url()} ${request.failure()?.errorText ?? ""}`,
+  );
+});
 let delayedInitialSnapshot = false;
 let delayedClientModule = false;
 let clientModuleCacheControl = null;
@@ -28,6 +45,7 @@ let abortClientModuleOnce = false;
 const result = {
   schema_version: 1,
   browser_id: null,
+  popup_url: null,
   attach_url: null,
   transition: null,
   final: null,
@@ -41,37 +59,58 @@ context.on("response", (response) => {
   }
 });
 
+// 共享宿主机上其他项目的 Docker 网络变更会触发 Chromium 网络变更通知，
+// 批量中断在飞的 loopback 请求（ERR_NETWORK_CHANGED，attach 模块图加载失败）。
+// attach 资源改由测试进程代取并回注，绕开浏览器网络栈；资源仍来自真实 Gateway。
+async function fetchThroughRoute(route) {
+  const response = await route.fetch();
+  await route.fulfill({ response });
+}
+
 await context.route("**/browser-manager/api/browsers/*", async (route) => {
   const request = route.request();
   if (!delayedInitialSnapshot && request.method() === "GET") {
     delayedInitialSnapshot = true;
     await new Promise((resolve) => setTimeout(resolve, 600));
   }
-  await route.continue();
+  await fetchThroughRoute(route);
 });
-await context.route("**/api/gateway/attach/browser/main.js", async (route) => {
-  if (abortClientModuleOnce) {
-    abortClientModuleOnce = false;
-    await route.abort("failed");
+await context.route("**/api/gateway/attach/**", async (route) => {
+  const request = route.request();
+  const url = new URL(request.url());
+  if (/^\/api\/gateway\/attach\/(browser|terminal)\/?$/.test(url.pathname)) {
+    // 文档必须直连加载：CDP fulfill 会让文档失去本地地址归属，
+    // 触发 Chrome Local Network Access 检查阻断后续 WebSocket（ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS）。
+    await route.continue();
     return;
   }
-  if (!delayedClientModule) {
-    delayedClientModule = true;
-    await new Promise((resolve) => setTimeout(resolve, 600));
+  if (url.pathname === "/api/gateway/attach/browser/main.js") {
+    if (abortClientModuleOnce) {
+      abortClientModuleOnce = false;
+      await route.abort("failed");
+      return;
+    }
+    if (!delayedClientModule) {
+      delayedClientModule = true;
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    }
   }
-  await route.continue();
+  await fetchThroughRoute(route);
 });
 
 try {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  const sessionButton = page.getByRole("button", {
-    name: fixture.sessionTitle,
-    exact: true,
+  // 会话按钮的可访问名包含标题之外的时间/活动文本，不能用 exact 角色名匹配；
+  // 按仓库既有模式（gateway_auth 同款）用 data-session-id + hasText 定位。
+  const sessionButton = page.locator("[data-session-id]").filter({
+    hasText: fixture.sessionTitle,
   }).first();
   await sessionButton.waitFor({ state: "visible", timeout: 15_000 });
   await sessionButton.click();
 
-  await page.getByRole("button", { name: "后台连接", exact: true }).click();
+  // 资源面板入口是内容区的“运行与连接”标签（gateway_auth 同款），
+  // 不存在名为“后台连接”的按钮。
+  await page.getByRole("tab", { name: "运行与连接", exact: true }).click();
   await page.getByRole("button", { name: /新建连接/ }).waitFor({ state: "visible" });
   await page.getByRole("button", { name: /新建连接/ }).click();
 
@@ -80,6 +119,7 @@ try {
       && response.url().includes("/browser-manager/api/browsers"),
     { timeout: 30_000 },
   );
+  const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
   await page.getByRole("menuitem", { name: /新建浏览器/ }).click();
   const createResponse = await createResponsePromise;
   assertCondition(createResponse.ok(), `新建浏览器请求失败: ${createResponse.status()}`);
@@ -88,7 +128,27 @@ try {
   assertCondition(typeof browserId === "string" && browserId, "新建浏览器响应缺少 browser_id");
   result.browser_id = browserId;
 
-  const iframe = page.locator(`iframe[title="浏览器 ${browserId}"]`);
+  // 产品链路：新建浏览器后由 openExtensionWindow 打开扩展窗口，
+  // 预览 iframe 渲染在扩展窗口中，主页面只保留资源面板与成功提示。
+  const popup = await popupPromise;
+  // popup 事件触发时 URL 尚未提交，先等扩展窗口路由生效再读取参数。
+  await popup.waitForURL(
+    (url) => url.pathname === "/extension",
+    { timeout: 15_000 },
+  );
+  const popupUrl = new URL(popup.url());
+  assertCondition(
+    popupUrl.pathname === "/extension"
+      && popupUrl.searchParams.get("resourceType") === "browser"
+      && popupUrl.searchParams.get("resourceId") === browserId,
+    `扩展窗口没有定位到新建浏览器资源: ${popup.url()}`,
+  );
+  result.popup_url = popup.url();
+
+  // iframe title 由资源显示名拼接（含浏览器标题，导航后会变化），
+  // 改用包含 browserId 的 src 属性稳定定位。
+  const iframeSelector = `iframe[src*="browserId=${encodeURIComponent(browserId)}"]`;
+  const iframe = popup.locator(iframeSelector);
   await iframe.waitFor({ state: "visible", timeout: 15_000 });
   result.attach_url = await iframe.getAttribute("src");
   assertCondition(
@@ -98,7 +158,7 @@ try {
     `浏览器预览未使用 Gateway attach 地址: ${result.attach_url}`,
   );
 
-  const attachedPage = page.frameLocator(`iframe[title="浏览器 ${browserId}"]`);
+  const attachedPage = popup.frameLocator(iframeSelector);
   const badge = attachedPage.locator("#attach-state-badge");
   const statusLine = attachedPage.locator("#status-line");
   const overlay = attachedPage.locator("#screen-overlay");
@@ -108,8 +168,9 @@ try {
   await address.fill(targetUrl);
   await address.press("Enter");
   result.transition = {
-    badge: (await badge.textContent())?.trim() || "",
-    status: (await statusLine.textContent())?.trim() || "",
+    // badge 与 status-line 的状态文本自 a1e7bfc 起只写入 aria-label，textContent 仅剩图标。
+    badge: (await badge.getAttribute("aria-label"))?.trim() || "",
+    status: (await statusLine.getAttribute("aria-label"))?.trim() || "",
     overlay: (await overlay.textContent())?.trim() || "",
     parentNotice: (await page.locator(".resource-notice").textContent())?.trim() || "",
     queuedAddress: await address.inputValue(),
@@ -124,14 +185,15 @@ try {
   assertCondition(result.transition.queuedAddress === targetUrl, "初始化阶段提交的 URL 没有保留");
 
   await badge.waitFor({ state: "visible", timeout: 15_000 });
-  await page.waitForFunction(
-    ({ title }) => {
-      const frame = [...document.querySelectorAll("iframe")].find(
-        (candidate) => candidate.title === title,
+  await popup.waitForFunction(
+    ({ browserId }) => {
+      const frame = [...document.querySelectorAll("iframe")].find((candidate) =>
+        candidate.src.includes(`browserId=${browserId}`),
       );
-      return frame?.contentDocument?.querySelector("#attach-state-badge")?.textContent?.includes("已连接");
+      return frame?.contentDocument?.querySelector("#attach-state-badge")
+        ?.getAttribute("aria-label")?.includes("已连接");
     },
-    { title: `浏览器 ${browserId}` },
+    { browserId },
     { timeout: 20_000 },
   );
 
@@ -144,7 +206,7 @@ try {
     timeout: 20_000,
   });
   result.final = {
-    badge: (await badge.textContent())?.trim() || "",
+    badge: (await badge.getAttribute("aria-label"))?.trim() || "",
     parentNotice: (await page.locator(".resource-notice").textContent())?.trim() || "",
     focusedElement,
     submittedDuringInitialization: true,
@@ -155,9 +217,10 @@ try {
   };
   assertCondition(result.final.badge.includes("已连接"), `首次导航后连接状态异常: ${result.final.badge}`);
   assertCondition(
-    result.final.parentNotice.includes("已在预览区打开")
-      && !/正在|连接中/.test(result.final.parentNotice),
-    `浏览器可用后父页面仍显示处理中提示: ${result.final.parentNotice}`,
+    result.final.parentNotice.includes("新建浏览器成功")
+      // “运行与连接中查看”含“连接中”子串，处理中判定只看“正在”。
+      && !result.final.parentNotice.includes("正在"),
+    `浏览器可用后父页面提示异常: ${result.final.parentNotice}`,
   );
   assertCondition(delayedInitialSnapshot, "测试未命中浏览器初始化快照请求，过渡态断言无效");
   assertCondition(delayedClientModule, "测试未延迟浏览器客户端模块，早期提交断言无效");
@@ -171,29 +234,33 @@ try {
     state: "visible",
     timeout: 20_000,
   });
-  await page.waitForFunction(
-    ({ title }) => {
-      const frame = [...document.querySelectorAll("iframe")].find((candidate) => candidate.title === title);
+  await popup.waitForFunction(
+    ({ browserId }) => {
+      const frame = [...document.querySelectorAll("iframe")].find((candidate) =>
+        candidate.src.includes(`browserId=${browserId}`),
+      );
       const targetCanvas = frame?.contentDocument?.querySelector("#screen-canvas");
       if (targetCanvas?.tagName !== "CANVAS") return false;
       const pixel = targetCanvas.getContext("2d")?.getImageData(20, 20, 1, 1).data;
       return pixel && pixel[1] > 150 && pixel[0] < 80;
     },
-    { title: `浏览器 ${browserId}` },
+    { browserId },
     { timeout: 20_000 },
   );
 
   await attachedPage.locator("#new-tab-button").click();
   await attachedPage.locator(".browser-tab").nth(1).waitFor({ state: "visible", timeout: 10_000 });
-  await page.waitForFunction(
-    ({ title }) => {
-      const frame = [...document.querySelectorAll("iframe")].find((candidate) => candidate.title === title);
+  await popup.waitForFunction(
+    ({ browserId }) => {
+      const frame = [...document.querySelectorAll("iframe")].find((candidate) =>
+        candidate.src.includes(`browserId=${browserId}`),
+      );
       const targetCanvas = frame?.contentDocument?.querySelector("#screen-canvas");
       if (targetCanvas?.tagName !== "CANVAS") return false;
       const pixel = targetCanvas.getContext("2d")?.getImageData(20, 20, 1, 1).data;
       return pixel && !(pixel[1] > 150 && pixel[0] < 80);
     },
-    { title: `浏览器 ${browserId}` },
+    { browserId },
     { timeout: 20_000 },
   );
   const blankPixel = await canvas.evaluate((element) => (
@@ -204,16 +271,18 @@ try {
   const failedUrl = "http://127.0.0.1:1/";
   await address.fill(failedUrl);
   await address.press("Enter");
-  await page.waitForFunction(
-    ({ title }) => {
-      const frame = [...document.querySelectorAll("iframe")].find((candidate) => candidate.title === title);
-      const status = frame?.contentDocument?.querySelector("#status-line")?.textContent || "";
+  await popup.waitForFunction(
+    ({ browserId }) => {
+      const frame = [...document.querySelectorAll("iframe")].find((candidate) =>
+        candidate.src.includes(`browserId=${browserId}`),
+      );
+      const status = frame?.contentDocument?.querySelector("#status-line")?.getAttribute("aria-label") || "";
       return status.includes("ERR_") && status.includes("127.0.0.1:1");
     },
-    { title: `浏览器 ${browserId}` },
+    { browserId },
     { timeout: 20_000 },
   );
-  const navigationFailedStatus = (await statusLine.textContent())?.trim() || "";
+  const navigationFailedStatus = (await statusLine.getAttribute("aria-label"))?.trim() || "";
   const navigationFailedOverlay = (await overlay.textContent())?.trim() || "";
   assertCondition(await address.inputValue() === failedUrl, "导航失败后地址栏没有保留用户请求 URL");
   assertCondition(navigationFailedOverlay.includes("ERR_"), `画面没有展示导航失败原因: ${navigationFailedOverlay}`);
@@ -228,15 +297,17 @@ try {
     state: "visible",
     timeout: 20_000,
   });
-  await page.waitForFunction(
-    ({ title }) => {
-      const frame = [...document.querySelectorAll("iframe")].find((candidate) => candidate.title === title);
+  await popup.waitForFunction(
+    ({ browserId }) => {
+      const frame = [...document.querySelectorAll("iframe")].find((candidate) =>
+        candidate.src.includes(`browserId=${browserId}`),
+      );
       const targetCanvas = frame?.contentDocument?.querySelector("#screen-canvas");
       if (targetCanvas?.tagName !== "CANVAS") return false;
       const pixel = targetCanvas.getContext("2d")?.getImageData(20, 20, 1, 1).data;
       return pixel && pixel[2] > 150 && pixel[0] < 80;
     },
-    { title: `浏览器 ${browserId}` },
+    { browserId },
     { timeout: 20_000 },
   );
   result.tab_and_navigation_failure = {
@@ -244,7 +315,7 @@ try {
     failedStatus: navigationFailedStatus,
     failedOverlay: navigationFailedOverlay,
     recoveredTitle: "RECOVERED_BLUE",
-    recoveredStatus: (await statusLine.textContent())?.trim() || "",
+    recoveredStatus: (await statusLine.getAttribute("aria-label"))?.trim() || "",
   };
   assertCondition(
     !result.tab_and_navigation_failure.recoveredStatus.includes("ERR_"),
@@ -264,7 +335,7 @@ try {
     timeout: 30_000,
   });
   await randomUuidUnavailablePage.waitForFunction(
-    () => document.querySelector("#attach-state-badge")?.textContent?.includes("已连接"),
+    () => document.querySelector("#attach-state-badge")?.getAttribute("aria-label")?.includes("已连接"),
     undefined,
     { timeout: 20_000 },
   );
@@ -273,7 +344,8 @@ try {
     ready: await randomUuidUnavailablePage.evaluate(
       () => window.BOXTEAM_BROWSER_CLIENT_READY === true,
     ),
-    badge: (await randomUuidUnavailablePage.locator("#attach-state-badge").textContent())?.trim() || "",
+    badge: (await randomUuidUnavailablePage.locator("#attach-state-badge")
+      .getAttribute("aria-label"))?.trim() || "",
   };
   assertCondition(
     result.random_uuid_unavailable.randomUuidType === "undefined",
@@ -302,27 +374,50 @@ try {
   const recoveryOverlay = recoveryPage.locator("#screen-overlay");
   await recoveryBadge.waitFor({ state: "visible", timeout: 5_000 });
   await recoveryPage.waitForFunction(
-    () => document.querySelector("#attach-state-badge")?.textContent === "初始化失败",
+    () => document.querySelector("#attach-state-badge")?.getAttribute("aria-label") === "初始化失败",
     undefined,
     { timeout: 5_000 },
   );
-  const failedStatus = (await recoveryStatus.textContent())?.trim() || "";
+  const failedStatus = (await recoveryStatus.getAttribute("aria-label"))?.trim() || "";
   assertCondition(failedStatus.includes("点击画面区域重新加载"), `初始化失败提示不完整: ${failedStatus}`);
   await recoveryOverlay.click();
   await recoveryPage.waitForFunction(
-    () => document.querySelector("#attach-state-badge")?.textContent?.includes("已连接"),
+    () => document.querySelector("#attach-state-badge")?.getAttribute("aria-label")?.includes("已连接"),
     undefined,
     { timeout: 20_000 },
   );
   result.recovery = {
     failedStatus,
-    reloadedBadge: (await recoveryBadge.textContent())?.trim() || "",
+    reloadedBadge: (await recoveryBadge.getAttribute("aria-label"))?.trim() || "",
   };
   assertCondition(result.recovery.reloadedBadge.includes("已连接"), "初始化失败后点击重载没有恢复连接");
   await recoveryPage.close();
   await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
 } catch (error) {
   await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
+  result.console_errors = consoleErrors;
+  result.page_errors = pageErrors;
+  result.request_failures = requestFailures;
+  const pageStates = [];
+  for (const candidate of context.pages()) {
+    const entry = { url: candidate.url() };
+    try {
+      entry.iframes = await candidate.evaluate(() => [
+        ...document.querySelectorAll("iframe"),
+      ].map((frame) => ({
+        title: frame.title,
+        src: frame.getAttribute("src"),
+        badge: frame.contentDocument?.querySelector("#attach-state-badge")?.getAttribute("aria-label") ?? null,
+        status: frame.contentDocument?.querySelector("#status-line")?.getAttribute("aria-label") ?? null,
+        overlay: frame.contentDocument?.querySelector("#screen-overlay")?.textContent ?? null,
+        clientReady: frame.contentWindow?.BOXTEAM_BROWSER_CLIENT_READY ?? null,
+      })));
+    } catch (stateError) {
+      entry.error = String(stateError);
+    }
+    pageStates.push(entry);
+  }
+  result.page_states = pageStates;
   result.error = error instanceof Error ? error.stack || error.message : String(error);
   await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
   throw error;
