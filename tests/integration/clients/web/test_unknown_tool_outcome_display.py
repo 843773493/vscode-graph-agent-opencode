@@ -12,6 +12,7 @@ import commentjson
 import httpx
 import pytest
 
+from app.core.session_catalog_migration import migrate_workspace_session_catalog
 from tests.integration.stubs.http_stubs import openai_chat_stub
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -21,6 +22,7 @@ from tests.support.gateway_processes import (
 from tests.support.paths import output_root_for_test
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.web_boundary_seeding import seed_boundary_cases
 from tests.support.workspaces import prepare_default_test_workspace
 
 UNKNOWN_TOOL_SESSION_ID = "ses_b1a2c3d4e5f6478899aabbccddeeff03"
@@ -40,6 +42,12 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
+    # 模板 rollout 是 schema-4 之前的旧格式，runtime 与 legacy 导入器都拒绝
+    # 读取；catalog 权威模式先迁移布局，再在副本上以当前 Saver 重写
+    # schema-4 边界数据。legacy 模式保持旧 JSON 布局，直接在原位重写。
+    if os.environ.get("BOXTEAM_SESSION_CATALOG_RESOLVER") not in ("0", "legacy"):
+        asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
+    seed_boundary_cases(workspace_root, session_ids=(UNKNOWN_TOOL_SESSION_ID,))
     return str(workspace_root)
 
 

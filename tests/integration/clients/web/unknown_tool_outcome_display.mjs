@@ -142,7 +142,7 @@ try {
   );
 
   await boundaryTurn
-    .getByRole("button", { name: "展开 Turn 中间消息", exact: true })
+    .getByRole("button", { name: /^展开 Turn 中间消息/ })
     .click();
   await waitUntil(
     async () => (await boundaryTurn.innerText()).includes("large_test_output 结果未知"),

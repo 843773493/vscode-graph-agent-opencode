@@ -126,10 +126,19 @@ def project_detail(
             output_truncated = output_truncated or content_truncated
     response_parts = []
     for part in detail.response_parts:
+        # 非 completed 终态 Turn 没有 final pointer，已生成的 assistant 正文
+        # 是该 Turn 唯一可展示的答复记录；与用户中断的 partial 正文一样按
+        # final_response 语义进入默认摘要投影，避免正文在历史中丢失。
+        terminal_without_final = part.kind == "text" and detail.status in {
+            "failed",
+            "cancelled",
+            "timed_out",
+        }
         requested = (
             "final_response"
             if part.kind == "final_text"
             or (part.partial is True and part.completion_reason == "user_interrupt")
+            or terminal_without_final
             else "text"
             if part.kind == "text"
             else "reasoning_detail"

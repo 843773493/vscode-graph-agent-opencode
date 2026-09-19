@@ -101,9 +101,10 @@ def _finalize_activity_projection(projection: dict[str, object]) -> None:
                 }
             )
         elif item.get("kind") == "text":
-            # PARTIAL assistant_output 只作为非 final text part 进入时间线；
-            # 不进入 thinking/tool 统计。completed 中间正文仍由 final pointer
-            # 与 assistant_text 承载，避免同一正文投影两次。
+            # assistant_output 正文只作为非 final text part 进入时间线，
+            # 不进入 thinking/tool 统计。completed Turn 的中间正文仍由 final
+            # pointer 承载避免双重投影；非 completed 终态 Turn 没有 final
+            # pointer，其 completed 正文也在此投影，否则历史会丢失正文。
             pass
         else:
             raise RuntimeError(f"未知 activity item kind: {item.get('kind')!r}")
@@ -472,9 +473,12 @@ class TurnProjectionQueryMixin:
             "ic.metadata_json, ip.content, ip.content_truncated "
             "FROM item_catalog AS ic JOIN item_projections AS ip "
             "ON ip.item_id = ic.item_id AND ip.item_sequence = ic.item_sequence "
-            f"WHERE ic.turn_id IN ({placeholders}) AND ic.semantic_kind IN "
+            "LEFT JOIN turn_records AS tr ON tr.turn_id = ic.turn_id "
+            f"WHERE ic.turn_id IN ({placeholders}) AND (ic.semantic_kind IN "
             "('reasoning','tool_call','tool_result','compaction_summary') "
-            "OR (ic.semantic_kind = 'assistant_output' AND ic.status = 'partial') "
+            "OR (ic.semantic_kind = 'assistant_output' AND (ic.status = 'partial' "
+            "OR (ic.status = 'completed' AND tr.status IN "
+            "('failed','cancelled','interrupted','unknown'))))) "
             "ORDER BY ic.turn_id, ic.item_sequence",
             ids,
         ).fetchall()
@@ -767,8 +771,15 @@ class TurnProjectionQueryMixin:
                     if raw_id_alias is not None:
                         canonical_tool_call_id = raw_id_alias
                     if selected_tool is not None:
+                        # item 自投影的 tool_calls 行已携带 canonical call ID；
+                        # (model_call, call_index) 反查只服务 checkpoint shadow
+                        # （provider 原始 ID）。同一 model call 的并行工具各自
+                        # 物化独立 message，表内 call_index 恒为 0，直接反查会
+                        # 命中同位兄弟调用的 ID，导致并行工具互相覆盖丢失。
                         canonical_tool_call_id = canonical_tool_call_id or (
-                            canonical_tool_call_ids_by_model_call.get(
+                            tool_call_id
+                            if selected_tool.get("tool_call_id") == tool_call_id
+                            else canonical_tool_call_ids_by_model_call.get(
                                 (
                                     turn_id,
                                     activity_model_call_id,
@@ -883,7 +894,7 @@ class TurnProjectionQueryMixin:
                         }
                     activity_tools = [selected_tool]
                 elif semantic_kind == "assistant_output":
-                    # PARTIAL assistant_output 不携带工具身份，直接按单一
+                    # assistant_output 正文 item 不携带工具身份，直接按单一
                     # text part 投影；工具 identity 归属 tool_call item。
                     pass
                 elif matching_tools:
