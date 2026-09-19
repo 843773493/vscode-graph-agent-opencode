@@ -1116,8 +1116,8 @@ def test_application_container_exposes_one_checkpoint_entrypoint(
         is not other_container.message_service._checkpointer._storage
     )
     assert (
-        container.session_subagent_service._session_orchestrator
-        is container.session_orchestrator
+        container.session_subagent_service._parent_session_reader
+        is container.session_service
     )
     assert (
         container.terminal_steering_service._session_orchestrator

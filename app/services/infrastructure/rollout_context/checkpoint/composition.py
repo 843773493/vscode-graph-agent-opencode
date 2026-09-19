@@ -44,6 +44,26 @@ def _manifest_sql_bool(value: object, *, field: str) -> bool:
     return value == 1
 
 
+def _identity_comparable(contribution: ContextContribution) -> ContextContribution:
+    """剥离 registry 分配状态，只比较 caller 提供的 contribution 身份。
+
+    source_ordinal 由 SQLite registry 分配（历史形态存于 metadata，现行形态
+    是 typed 字段）；重入登记同一 source 时，两侧 ordinal 可能分别为已分配
+    值与 None，不属于内容漂移，不得触发 identity 冲突。
+    """
+    return replace(
+        replace(
+            contribution,
+            metadata={
+                key: value
+                for key, value in contribution.metadata.items()
+                if key != "source_ordinal"
+            },
+        ),
+        source_ordinal=None,
+    )
+
+
 class ContextPlanCompositionMixin:
     def _composer_for(
         self,
@@ -95,22 +115,7 @@ class ContextPlanCompositionMixin:
             existing = composer.ledger.contributions.get(contribution.contribution_id)
             if (
                 existing is not None
-                and replace(
-                    existing,
-                    metadata={
-                        key: value
-                        for key, value in existing.metadata.items()
-                        if key != "source_ordinal"
-                    },
-                )
-                != replace(
-                    contribution,
-                    metadata={
-                        key: value
-                        for key, value in contribution.metadata.items()
-                        if key != "source_ordinal"
-                    },
-                )
+                and _identity_comparable(existing) != _identity_comparable(contribution)
                 and not replaceable
             ):
                 raise ValueError(

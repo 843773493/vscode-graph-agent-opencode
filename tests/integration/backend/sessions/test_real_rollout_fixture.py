@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
@@ -116,9 +117,13 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
-    # 模板是旧 JSON 权威索引形态；副本经产品一次性迁移机建立完整 SQLite
-    # catalog authority（默认 fail-closed 拒绝"旧 JSON 在而 catalog 缺"）。
-    asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
+    # 模板是旧 JSON 权威索引形态；默认（catalog 权威）副本经产品一次性
+    # 迁移机建立完整 SQLite catalog authority（fail-closed 拒绝"旧 JSON 在
+    # 而 catalog 缺"）。legacy 显式 opt-in 模式保持旧 JSON 布局，不迁移。
+    # 模式判定读环境开关而不是构造 resolver：未迁移工作区上 catalog
+    # resolver 构造本身即 fail-closed（R24-finalize 实测）。
+    if os.environ.get("BOXTEAM_SESSION_CATALOG_RESOLVER") not in ("0", "legacy"):
+        asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
     return str(workspace_root)
 
 

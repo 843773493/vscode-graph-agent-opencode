@@ -512,6 +512,24 @@ class TestRegistryStabilityAcrossRestart:
         assert rows[0]["source_ordinal"] == first
         assert rows[0]["source_revision"] == "rev-b"
 
+    def test_reregistration_of_same_source_is_idempotent(
+        self, saver: RolloutCheckpointSaver,
+    ) -> None:
+        # prepare 链路以原对象（source_ordinal=None）重注册同一 source：
+        # registry 分配的 typed ordinal 不属于 caller 内容，不得触发
+        # identity 冲突（R24 回归：typed 迁移后比较只豁免了 metadata 键）。
+        contribution = _contribution("prepare-source")
+        first = _register(saver, MAIN_SESSION_ID, contribution)
+        # 重注册使用与首次完全相同的 caller 内容（ordinal 仍为 None）。
+        saver.register_context_contribution(MAIN_SESSION_ID, contribution)
+        rows = _rows(saver, MAIN_SESSION_ID)
+        assert len(rows) == 1
+        assert rows[0]["source_ordinal"] == first
+        # 内容漂移（source_revision 变化）仍必须显式拒绝。
+        drifted = replace(contribution, source_revision="rev-drift")
+        with pytest.raises(ValueError, match="identity 冲突"):
+            saver.register_context_contribution(MAIN_SESSION_ID, drifted)
+
     def test_owner_threads_are_isolated(
         self, saver: RolloutCheckpointSaver,
     ) -> None:

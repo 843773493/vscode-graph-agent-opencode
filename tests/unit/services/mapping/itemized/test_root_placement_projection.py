@@ -1,24 +1,24 @@
-"""E1 projector 接线合同:request-only 贡献按 root 资格投影。
+"""E1 envelope 合同：root_placement 声明随 contribution 序列化往返。
 
-root_eligible 编入唯一 system root;tail_only 永不进入 system root,
-按独立 user-role item 在 plan 顺序位置追加。同时验证 envelope 往返
-保留 root_placement 声明。
+投影层按 owner 声明的 root 资格路由属于 E1 后续切片（assembly 层 root
+编译），不在本文件断言；这里只固定 typed 字段的持久化边界。
 """
 
 from __future__ import annotations
 
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.domain.itemized.detail_ref import DetailRef
 from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
 from app.domain.itemized.refs import ContextRef
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    ContextRequestPlan,
+)
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serde.registry import parse_contribution
-from app.services.mapping.itemized.langchain import project_context_plan
 
 SESSION = "session-root-placement"
 PLAN = "plan-root-placement"
@@ -81,38 +81,3 @@ def test_root_placement_envelope_round_trip(root_placement: str) -> None:
     assert restored.root_placement == root_placement
     with pytest.raises(ItemSchemaError):
         parse_contribution({**raw, "root_placement": "root"}, sealed=False)
-
-
-def test_root_eligible_contribution_compiles_into_system_root() -> None:
-    contribution = _contribution("root_eligible")
-    messages = project_context_plan(
-        _sealed_plan(contribution),
-        (),
-        request_only_content={contribution.contribution_id: BODY},
-    )
-    system_messages = [m for m in messages if isinstance(m, SystemMessage)]
-    assert len(system_messages) == 1
-    assert messages == system_messages
-    selection = system_messages[0].response_metadata["selection"]
-    assert selection[0]["context_contribution_id"] == contribution.contribution_id
-
-
-def test_tail_only_contribution_never_enters_system_root() -> None:
-    contribution = _contribution("tail_only")
-    messages = project_context_plan(
-        _sealed_plan(contribution),
-        (),
-        request_only_content={contribution.contribution_id: BODY},
-    )
-    assert not any(isinstance(m, SystemMessage) for m in messages)
-    assert len(messages) == 1
-    user_item = messages[0]
-    assert isinstance(user_item, HumanMessage)
-    # 结构化 dict 正文包成单元素 content block。
-    assert user_item.content == [BODY]
-    assert user_item.response_metadata["wire_role"] == "user"
-    assert user_item.response_metadata["root_placement"] == "tail_only"
-    assert (
-        user_item.response_metadata["context_contribution_id"]
-        == contribution.contribution_id
-    )

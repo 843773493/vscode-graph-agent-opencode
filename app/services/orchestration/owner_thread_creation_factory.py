@@ -9,7 +9,9 @@ owner Session 目录惰性建立并缓存，gate 为工厂级共享实例（同�
 红线：
 
 - legacy resolver（``SessionPathResolver```）不支持 child thread 创建：
-  调用即明确报错，不做降级、不扫盘、不建任何目录。
+  取得 owner Session 的 ThreadCreationService 时明确报错，不做降级、不扫
+  盘、不建任何目录；工厂构造本身不报错，保证 legacy opt-in 模式下后端与
+  其余服务可正常启动。
 - control store 只按 owner Session 的 ``session-control.sqlite``` 建立
   （8.5-A 契约），不触碰 workspace 级其他状态。
 """
@@ -58,19 +60,12 @@ class OwnerThreadCreationFactory:
             if path_resolver is not None
             else get_session_path_resolver(self._sessions_root)
         )
-        if not isinstance(self._resolver, SessionCatalogPathResolver):
-            # 运行时模式错误（legacy resolver 不支持 thread 创建），不是
-            # 参数类型错误，不适用 TypeError。
-            raise RuntimeError(  # noqa: TRY004 —— 运行时模式错误，非类型错误
-                "child thread 创建要求新 catalog resolver（当前为 legacy "
-                "resolver，不支持 durable child thread，明确报错不降级）: "
-                f"sessions_root={self._sessions_root}"
-            )
         self._gate = NavigationTopologyGate(self._sessions_root)
         self._services: dict[str, ThreadCreationService] = {}
 
     def for_owner_session(self, session_id: str) -> ThreadCreationService:
         """返回绑定 owner Session 的 ThreadCreationService（进程内缓存）。"""
+        resolver = self._require_catalog_resolver()
         service = self._services.get(session_id)
         if service is None:
             session_dir = self._session_dir_for(session_id)
@@ -78,7 +73,7 @@ class OwnerThreadCreationFactory:
                 session_dir / _CONTROL_DATABASE_NAME
             )
             service = ThreadCreationService(
-                store=self._resolver.catalog_store,
+                store=resolver.catalog_store,
                 control_store=control_store,
                 sessions_root=self._sessions_root,
                 workspace_id=self._workspace_id,
@@ -90,7 +85,7 @@ class OwnerThreadCreationFactory:
 
     def owner_main_thread_id(self, session_id: str) -> str:
         """返回 owner Session 的唯一 main thread id（preimage 冻结面）。"""
-        node = self._resolver.catalog_store.get_node(session_id)
+        node = self._require_catalog_resolver().catalog_store.get_node(session_id)
         if node.kind != "session" or node.main_thread_id is None:
             raise RuntimeError(
                 "owner 节点不是 session 或缺 main_thread_id（fail closed）: "
@@ -98,8 +93,20 @@ class OwnerThreadCreationFactory:
             )
         return str(node.main_thread_id)
 
+    def _require_catalog_resolver(self) -> SessionCatalogPathResolver:
+        """child thread 唯一入口的 resolver 模式校验（fail closed）。"""
+        if not isinstance(self._resolver, SessionCatalogPathResolver):
+            # 运行时模式错误（legacy resolver 不支持 thread 创建），不是
+            # 参数类型错误，不适用 TypeError。
+            raise RuntimeError(  # noqa: TRY004 —— 运行时模式错误，非类型错误
+                "child thread 创建要求新 catalog resolver（当前为 legacy "
+                "resolver，不支持 durable child thread，明确报错不降级）: "
+                f"sessions_root={self._sessions_root}"
+            )
+        return self._resolver
+
     def _session_dir_for(self, session_id: str) -> Path:
-        node = self._resolver.catalog_store.get_node(session_id)
+        node = self._require_catalog_resolver().catalog_store.get_node(session_id)
         locator = node.storage_relative_locator
         if locator is None:
             raise RuntimeError(
