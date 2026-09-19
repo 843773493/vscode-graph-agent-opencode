@@ -8,7 +8,7 @@ from typing import Literal
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
-from app.schemas.public_v2.debug import (
+from app.schemas.internal_v2.debug import (
     AgentDebugStateDTO,
     DebugActionRecordDTO,
     DebugBreakpointDTO,
@@ -341,7 +341,9 @@ class AgentDebugService:
             last_stop=state.last_stop.model_copy(deep=True)
             if state.last_stop
             else None,
-            breakpoints=[item.model_copy(deep=True) for item in state.breakpoints.values()],
+            breakpoints=[
+                item.model_copy(deep=True) for item in state.breakpoints.values()
+            ],
             actions=[item.model_copy(deep=True) for item in state.actions],
             stop_count=state.stop_count,
         )
@@ -371,8 +373,7 @@ class AgentDebugService:
     def _mode(cls, value: object) -> DebugMode:
         if not isinstance(value, str) or value not in _DEBUG_MODES:
             raise ValueError(
-                "调试 mode 必须是 ai、human 或 collaborative，"
-                f"实际值: {value!r}"
+                f"调试 mode 必须是 ai、human 或 collaborative，实际值: {value!r}"
             )
         return value  # type: ignore[return-value]
 
@@ -415,7 +416,11 @@ class AgentDebugService:
             prefix = "单步工具已执行到返回前" if single_step else "即将调用工具"
             return f"{prefix} {tool_name or '未知工具'}，可以检查输入参数后继续。"
         if point == "tool_after":
-            result_hint = "工具返回了错误" if result and result.startswith("Error:") else "工具已经返回结果"
+            result_hint = (
+                "工具返回了错误"
+                if result and result.startswith("Error:")
+                else "工具已经返回结果"
+            )
             return f"{tool_name or '未知工具'}：{result_hint}，可以检查结果后决定是否继续请求模型。"
         model = args.get("model") or "当前模型"
         return f"即将发起 {model} 的下一次模型请求，可以先检查当前 Agent 执行上下文。"

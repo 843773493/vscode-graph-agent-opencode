@@ -8,7 +8,8 @@ MAINTAINED_SOURCE_ROOTS = (
     PROJECT_ROOT / "src" / "workspace-services",
     PROJECT_ROOT / "tests",
 )
-IGNORED_DIRECTORY_NAMES = {"__pycache__", "node_modules"}
+# fixtures 是二进制测试数据，不参与源码标记审计。
+IGNORED_DIRECTORY_NAMES = {"__pycache__", "node_modules", "fixtures"}
 
 
 def _source_files() -> list[Path]:

@@ -18,15 +18,14 @@ from app.services.infrastructure.message_stream_store import MessageStreamStore
 
 @pytest.fixture
 def message_stream_api() -> tuple[FastAPI, MessageStreamStore, str, str]:
-    output_root = (
-        Path.cwd() / "out/tests/contracts/api/test_message_stream_api"
-    )
+    output_root = Path.cwd() / "out/tests/contracts/api/test_message_stream_api"
     if output_root.exists():
         shutil.rmtree(output_root)
     sessions_root = output_root / "workspace" / ".boxteam" / "sessions"
     resolver = SessionPathResolver(sessions_root)
     resolver.initialize()
-    session_id = "ses_message_stream_api"
+    # API 路径参数强制 canonical session_id（OpenSpec 2.1）。
+    session_id = "ses_12345678123446788234567812345678"
     turn_id = "job_message_stream_api"
     session_dir = resolver.allocate_session_dir(
         session_id=session_id,
@@ -68,7 +67,11 @@ def _sse_events(body: str) -> list[dict[str, object]]:
     events: list[dict[str, object]] = []
     for frame in body.strip().split("\n\n"):
         data_line = next(
-            (line.removeprefix("data:") for line in frame.splitlines() if line.startswith("data:")),
+            (
+                line.removeprefix("data:")
+                for line in frame.splitlines()
+                if line.startswith("data:")
+            ),
             None,
         )
         if data_line is not None:
