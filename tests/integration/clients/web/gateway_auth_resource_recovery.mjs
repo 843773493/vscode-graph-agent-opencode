@@ -53,10 +53,15 @@ try {
     (await page.getByText("前端初始化失败").count()) === 0
     && (await page.getByText("user_session_required").count()) === 0;
 
+  await page.getByRole("tab", { name: "运行与连接", exact: true }).click();
+  await waitUntil(
+    async () => resourceResponses.includes(200),
+    "资源面板初次加载",
+  );
+  // Tab 切换会先发出 ui-settings 持久化请求；先激活资源面板再清 Cookie，
+  // 让下一次 5s 轮询的 resources 请求自己承受 401 并验证自动恢复。
   await context.clearCookies();
   resourceResponses.length = 0;
-  await page.getByRole("tab", { name: "文件", exact: true }).click();
-  await page.getByRole("tab", { name: "运行与连接", exact: true }).click();
   await waitUntil(
     async () => resourceResponses.includes(401) && resourceResponses.includes(200),
     "资源认证失效后自动恢复",
