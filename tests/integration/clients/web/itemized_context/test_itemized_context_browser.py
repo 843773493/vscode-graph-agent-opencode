@@ -16,7 +16,10 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    TurnScope,
+)
 from app.domain.itemized.refs import ContextRef
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -254,13 +257,35 @@ async def browser_source(browser_runtime, native_http_server):
             provider_version="browser-contract",
         )
         rich_evidence = _projection_evidence(saver, session_id, rich)
+        # da9291b 起 completed terminal convergence 要求 final item 与终态指针
+        # 在同一 item-bearing 提交内落地；checkpoint 投影已提交的 canonical item
+        # 不能直接作为 final 指针（其 message identity 属于既有提交）。这里以
+        # 同一正文、全新 identity 新建 final item 收敛。
+        turn_final = CanonicalItemRecord.create(
+            item_id="browser-turn-final",
+            item_sequence=max(item.item_sequence for item in source_items) + 2,
+            semantic_kind=final_item.semantic_kind,
+            payload_kind=final_item.payload_kind,
+            status=final_item.status,
+            producer_ref={
+                "producer_kind": "provider",
+                "producer_id": "browser-contract",
+            },
+            payload=final_item.payload,
+            metadata={"projection_message_id": "browser-turn-final-message"},
+            turn_id=turn_id,
+            turn_scope=TurnScope.TURN_MEMBER,
+            message_group_id=f"message-{turn_id}-final",
+            wire_role=final_item.wire_role,
+        )
         saver.converge_execution(
             session_id,
             turn_id=turn_id,
             execution_id=execution_id,
             outcome="completed",
             turn_status="completed",
-            final_item_id=final_item.item_id,
+            items=(turn_final,),
+            final_item_id=turn_final.item_id,
         )
     fixture = {
         "workspace_id": workspace_id,
