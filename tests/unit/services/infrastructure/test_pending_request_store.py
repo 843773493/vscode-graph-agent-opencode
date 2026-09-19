@@ -34,7 +34,7 @@ def _request(
 @pytest.mark.asyncio
 async def test_pending_request_store_round_trip(tmp_path, session_bundle_factory):
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_restore"
+    session_id = "ses_f2c04fddbd9446ab8bb83e681b9cb905"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
     request = _request(session_id, sequence=1)
@@ -53,7 +53,7 @@ async def test_pending_summary_read_is_bounded_and_skips_full_detail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_pending_summary"
+    session_id = "ses_57f78fe6c75a4abb89931b84bf9bd413"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
     requests = [
@@ -113,7 +113,7 @@ async def test_legacy_pending_schema_is_rejected_without_compatibility_migration
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_pending_legacy"
+    session_id = "ses_44d0f0b4ce7c4c1880f83ecfe75b8c8d"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
     path = session_dir / "pending_requests.json"
@@ -134,7 +134,7 @@ async def test_store_rejects_duplicate_queue_sequences(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_pending_corrupt"
+    session_id = "ses_2f1661213e174de08ba2ab0651e315a6"
     session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
 

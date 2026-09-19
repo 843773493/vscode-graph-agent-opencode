@@ -269,7 +269,7 @@ try {
   const largeToolSummarySafe =
     largeToolSummaryItem.tool_summary.length === 1 &&
     largeToolSummaryItem.tool_summary.every(
-      (item) => item.tool_name === "invoke_custom_tool",
+      (item) => item.tool_name === "invoke_extension_tool",
     ) &&
     largeToolSummaryItem.items.every(
       (item) => Object.keys(item.raw ?? {}).length === 0,

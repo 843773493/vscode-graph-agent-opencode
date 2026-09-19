@@ -91,6 +91,38 @@
         }
       }
     },
+    "context": {
+      "type": "object",
+      "description": "上下文注入生命周期配置。",
+      "additionalProperties": false,
+      "required": ["resource_activation"],
+      "properties": {
+        "resource_activation": {
+          "type": "object",
+          "description": "资源上下文 activation 边界；修改后只在下一个 Turn active slot 冻结。",
+          "additionalProperties": false,
+          "required": ["default_boundary", "overrides"],
+          "properties": {
+            "default_boundary": {
+              "type": "string",
+              "enum": ["turn", "model_call"],
+              "default": "turn"
+            },
+            "overrides": {
+              "type": "object",
+              "description": "按已登记 resource kind 覆盖 effective boundary。",
+              "additionalProperties": {
+                "type": "string",
+                "enum": ["turn", "model_call"]
+              },
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+              }
+            }
+          }
+        }
+      }
+    },
     "default_agent": {
       "type": "string",
       "description": "Default agent key in the agents object. 支持热重载，但只影响后续新建会话；已有会话保持其 agent_id。",
@@ -1206,6 +1238,17 @@
                     "description": "传给该工具 factory 的专属配置。",
                     "additionalProperties": true
                   },
+                  "skills": {
+                    "type": "array",
+                    "description": "独立工具归属配置:该工具触发事件归因到的 Skill 名。",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                    },
+                    "uniqueItems": true,
+                    "maxItems": 20,
+                    "default": []
+                  },
                   "description": {
                     "type": "string",
                     "minLength": 1,
@@ -1230,6 +1273,17 @@
                     "type": "object",
                     "description": "传给该工具 factory 的专属配置。",
                     "additionalProperties": true
+                  },
+                  "skills": {
+                    "type": "array",
+                    "description": "独立工具归属配置:该工具触发事件归因到的 Skill 名。",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                    },
+                    "uniqueItems": true,
+                    "maxItems": 20,
+                    "default": []
                   },
                   "description": {
                     "type": "string",

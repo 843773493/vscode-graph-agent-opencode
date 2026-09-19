@@ -6,6 +6,7 @@ from google.protobuf import json_format
 from google.protobuf.message import Message
 from pydantic import BaseModel
 
+from app.protocol.canonical import validate_session_id
 from app.protocol.codecs.json import (
     struct_from_mapping,
     struct_to_mapping,
@@ -41,6 +42,8 @@ def _parse_model(model: BaseModel, target: Message) -> None:
 
 
 def _header(event: SessionExecutionEventBaseDTO) -> session_interaction_pb2.SessionExecutionEventHeader:
+    # 2.1：wire 上的 session_id 必须过唯一 canonical 验证器（encode 边界）。
+    validate_session_id(event.session_id)
     header = session_interaction_pb2.SessionExecutionEventHeader(
         event_id=event.event_id,
         session_id=event.session_id,
@@ -76,6 +79,7 @@ def _job_progress(payload: JobProgressDTO) -> job_pb2.JobProgress:
 def _session_status(
     payload: SessionStatusDTO | SessionObservationStateDTO,
 ) -> session_interaction_pb2.SessionStatus:
+    validate_session_id(payload.session_id)
     if isinstance(payload, SessionStatusDTO):
         status = session_interaction_pb2.SessionStatus(
             session_id=payload.session_id,

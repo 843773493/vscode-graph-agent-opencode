@@ -40,8 +40,8 @@ def migration_setup(request: pytest.FixtureRequest, session_bundle_factory):
     sessions = workspace / ".boxteam" / "sessions"
 
     def setup(records: list[dict[str, object]] | None = None) -> SimpleNamespace:
-        source_id = f"legacy-source-{uuid4().hex}"
-        target_id = f"v2-target-{uuid4().hex}"
+        source_id = f"ses_{uuid4().hex}"
+        target_id = f"ses_{uuid4().hex}"
         lines = _write_v1_source(
             sessions,
             session_id=source_id,

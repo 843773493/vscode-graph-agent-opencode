@@ -170,6 +170,10 @@ def validate_source_bindings(
         expected.update(
             assembly_id=snapshot.assembly_id,
             contribution_ordinal=entry.contribution_ordinal,
+            # domain seal 只保留 registry slot 于来源清单；sealed contribution
+            # 的 assembly 顺序由 contribution_ordinal 固化，typed source_ordinal
+            # 与 metadata 中的同名历史键一样不进入 sealed 形态。
+            source_ordinal=None,
             metadata={key: value for key, value in item.metadata.items() if key != "source_ordinal"},
         )
         if json_text(expected) != json_text(_contribution_value(actual)):

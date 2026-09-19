@@ -35,8 +35,8 @@ async def test_message_service_loads_history_from_checkpoint(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(tmp_path, session_bundle_factory, "sess1")
-    config = {"configurable": {"thread_id": "sess1", "checkpoint_ns": ""}}
+    saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_2b802e1903204588891039a3fc6ef4cd")
+    config = {"configurable": {"thread_id": "ses_2b802e1903204588891039a3fc6ef4cd", "checkpoint_ns": ""}}
     checkpoint = {
         "channel_values": {
             "messages": [
@@ -65,7 +65,7 @@ async def test_message_service_loads_history_from_checkpoint(
     )
 
     service = MessageService(checkpointer=saver)
-    messages = await service.list(session_id="sess1", limit=10)
+    messages = await service.list(session_id="ses_2b802e1903204588891039a3fc6ef4cd", limit=10)
 
     assert len(messages.items) == 2
     assert messages.items[0].role.value == "user"
@@ -83,9 +83,9 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
     saver, _ = _create_saver(
         tmp_path,
         session_bundle_factory,
-        "sess_paged",
+        "ses_6f3014ef05814de18703956b657ea3ae",
     )
-    config = {"configurable": {"thread_id": "sess_paged", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": "ses_6f3014ef05814de18703956b657ea3ae", "checkpoint_ns": ""}}
     raw_messages = []
     for index in range(6):
         raw_messages.extend(
@@ -113,7 +113,7 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
     )
 
     service = MessageService(checkpointer=saver)
-    latest = await service.list(session_id="sess_paged", limit=4)
+    latest = await service.list(session_id="ses_6f3014ef05814de18703956b657ea3ae", limit=4)
     assert [item.content for item in latest.items] == [
         "问题 4",
         "回答 4",
@@ -124,7 +124,7 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
     assert latest.next_cursor is not None
 
     older = await service.list(
-        session_id="sess_paged",
+        session_id="ses_6f3014ef05814de18703956b657ea3ae",
         limit=4,
         cursor=latest.next_cursor,
     )
@@ -138,13 +138,13 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
 
     # 游标属于会话和 checkpoint 版本，不能接受畸形或跨会话输入。
     with pytest.raises(ValueError, match="游标格式无效"):
-        await service.list("sess_paged", limit=4, cursor="!" + latest.next_cursor)
+        await service.list("ses_6f3014ef05814de18703956b657ea3ae", limit=4, cursor="!" + latest.next_cursor)
     with pytest.raises(ValueError, match="limit 必须为正整数"):
-        await service.list("sess_paged", limit=True)
+        await service.list("ses_6f3014ef05814de18703956b657ea3ae", limit=True)
 
-    other_saver, _ = _create_saver(tmp_path, session_bundle_factory, "sess_other")
+    other_saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_63f3c9ef1b6944b388806112c47da251")
     await other_saver.aput(
-        {"configurable": {"thread_id": "sess_other", "checkpoint_ns": ""}},
+        {"configurable": {"thread_id": "ses_63f3c9ef1b6944b388806112c47da251", "checkpoint_ns": ""}},
         {
             "id": "ckpt-other",
             "channel_values": {"messages": [HumanMessage(content="另一个会话")]},
@@ -156,7 +156,7 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
     )
     with pytest.raises(ValueError, match="消息历史已更新"):
         await MessageService(checkpointer=other_saver).list(
-            "sess_other", cursor=latest.next_cursor
+            "ses_63f3c9ef1b6944b388806112c47da251", cursor=latest.next_cursor
         )
 
 
@@ -168,10 +168,10 @@ async def test_visible_history_omits_inline_media_payload_from_metadata(
     saver, _ = _create_saver(
         tmp_path,
         session_bundle_factory,
-        "sess_media_projection",
+        "ses_1db3e57dd1b54855806754956ed663e1",
     )
     await saver.aput(
-        {"configurable": {"thread_id": "sess_media_projection", "checkpoint_ns": ""}},
+        {"configurable": {"thread_id": "ses_1db3e57dd1b54855806754956ed663e1", "checkpoint_ns": ""}},
         {
             "channel_values": {
                 "messages": [
@@ -190,7 +190,7 @@ async def test_visible_history_omits_inline_media_payload_from_metadata(
                             attachments=[
                                 {
                                     "file_id": (
-                                        "boxteam-session://sess_media_projection/"
+                                        "boxteam-session://ses_1db3e57dd1b54855806754956ed663e1/"
                                         "attachments/a.png"
                                     ),
                                     "name": "a.png",
@@ -210,7 +210,7 @@ async def test_visible_history_omits_inline_media_payload_from_metadata(
     )
 
     page = await MessageService(checkpointer=saver).list(
-        "sess_media_projection",
+        "ses_1db3e57dd1b54855806754956ed663e1",
         limit=10,
     )
 
@@ -273,9 +273,9 @@ async def test_human_message_role_and_source_survive_legacy_system_metadata(
     saver, _ = _create_saver(
         tmp_path,
         session_bundle_factory,
-        "sess_delegated",
+        "ses_6a460fb1ede24f9b83befbeeabf35f10",
     )
-    config = {"configurable": {"thread_id": "sess_delegated", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": "ses_6a460fb1ede24f9b83befbeeabf35f10", "checkpoint_ns": ""}}
     checkpoint = {
         "channel_values": {
             "messages": [
@@ -311,7 +311,7 @@ async def test_human_message_role_and_source_survive_legacy_system_metadata(
     )
 
     messages = await MessageService(checkpointer=saver).list(
-        session_id="sess_delegated",
+        session_id="ses_6a460fb1ede24f9b83befbeeabf35f10",
         limit=10,
     )
 
@@ -344,9 +344,9 @@ async def test_message_service_returns_empty_when_no_checkpoint(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(tmp_path, session_bundle_factory, "sess_noexist")
+    saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_40cc4258059d4fd583f9b2d710032b9c")
     service = MessageService(checkpointer=saver)
-    messages = await service.list(session_id="sess_noexist", limit=10)
+    messages = await service.list(session_id="ses_40cc4258059d4fd583f9b2d710032b9c", limit=10)
     assert messages.items == []
 
 
@@ -358,10 +358,10 @@ async def test_message_service_restores_identity_from_rollout_index(
     saver, _ = _create_saver(
         tmp_path,
         session_bundle_factory,
-        "sess_invalid_message",
+        "ses_00f90d52b18f47068e06ede2aa8f4135",
     )
     config = {
-        "configurable": {"thread_id": "sess_invalid_message", "checkpoint_ns": ""}
+        "configurable": {"thread_id": "ses_00f90d52b18f47068e06ede2aa8f4135", "checkpoint_ns": ""}
     }
     checkpoint = {
         "channel_values": {"messages": [HumanMessage(content="hi")]},
@@ -377,7 +377,7 @@ async def test_message_service_restores_identity_from_rollout_index(
     )
 
     messages = await MessageService(checkpointer=saver).list(
-        session_id="sess_invalid_message",
+        session_id="ses_00f90d52b18f47068e06ede2aa8f4135",
         limit=10,
     )
 
@@ -391,8 +391,8 @@ async def test_agent_context_state_applies_summarization_event(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(tmp_path, session_bundle_factory, "sess_compacted")
-    config = {"configurable": {"thread_id": "sess_compacted", "checkpoint_ns": ""}}
+    saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_cbd344c00430463482e8595356c6e117")
+    config = {"configurable": {"thread_id": "ses_cbd344c00430463482e8595356c6e117", "checkpoint_ns": ""}}
     checkpoint = {
         "channel_values": {
             "messages": [
@@ -407,7 +407,7 @@ async def test_agent_context_state_applies_summarization_event(
                     content="旧上下文摘要",
                     additional_kwargs={"lc_source": "summarization"},
                 ),
-                "file_path": "/conversation_history/sess_compacted.md",
+                "file_path": "/conversation_history/ses_cbd344c00430463482e8595356c6e117.md",
             },
         },
         "channel_versions": {"messages": "1", "_summarization_event": "1"},
@@ -422,14 +422,14 @@ async def test_agent_context_state_applies_summarization_event(
     )
 
     state = await MessageService(checkpointer=saver).get_agent_context_state(
-        "sess_compacted"
+        "ses_cbd344c00430463482e8595356c6e117"
     )
 
     assert state["checkpoint_id"] == "ckpt-compacted"
     assert state["raw_message_count"] == 4
     assert state["compacted"] is True
     assert state["compaction_cutoff"] == 2
-    assert state["history_file_path"] == "/conversation_history/sess_compacted.md"
+    assert state["history_file_path"] == "/conversation_history/ses_cbd344c00430463482e8595356c6e117.md"
     assert [record["content"] for record in state["records"]] == [
         "旧上下文摘要",
         "保留问题",
@@ -445,10 +445,10 @@ async def test_agent_context_state_applies_cache_preserving_event(
     saver, _ = _create_saver(
         tmp_path,
         session_bundle_factory,
-        "sess_cache_compacted",
+        "ses_62e61175069149bb8780e8f6f11473c9",
     )
     config = {
-        "configurable": {"thread_id": "sess_cache_compacted", "checkpoint_ns": ""}
+        "configurable": {"thread_id": "ses_62e61175069149bb8780e8f6f11473c9", "checkpoint_ns": ""}
     }
     prefix = [HumanMessage(content="稳定问题"), AIMessage(content="稳定回答")]
     messages = [
@@ -468,7 +468,7 @@ async def test_agent_context_state_applies_cache_preserving_event(
                     content="中段上下文摘要",
                     additional_kwargs={"lc_source": "summarization"},
                 ),
-                "file_path": "/conversation_history/sess_cache_compacted.md",
+                "file_path": "/conversation_history/ses_62e61175069149bb8780e8f6f11473c9.md",
             },
         },
         "channel_versions": {"messages": "1", "_summarization_event": "1"},
@@ -483,7 +483,7 @@ async def test_agent_context_state_applies_cache_preserving_event(
     )
 
     state = await MessageService(checkpointer=saver).get_agent_context_state(
-        "sess_cache_compacted"
+        "ses_62e61175069149bb8780e8f6f11473c9"
     )
 
     assert state["compacted"] is True
@@ -501,8 +501,8 @@ async def test_message_service_preserves_distinct_canonical_message_ids(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(tmp_path, session_bundle_factory, "sess_dedupe")
-    config = {"configurable": {"thread_id": "sess_dedupe", "checkpoint_ns": ""}}
+    saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_8a7c09d6021645f583b6247d317a4689")
+    config = {"configurable": {"thread_id": "ses_8a7c09d6021645f583b6247d317a4689", "checkpoint_ns": ""}}
     user_message = HumanMessage(
         content="请调用 test_tool_2",
         response_metadata=_visible_metadata("msg_user_001"),
@@ -530,7 +530,7 @@ async def test_message_service_preserves_distinct_canonical_message_ids(
     )
 
     service = MessageService(checkpointer=saver)
-    messages = await service.list(session_id="sess_dedupe", limit=10)
+    messages = await service.list(session_id="ses_8a7c09d6021645f583b6247d317a4689", limit=10)
 
     assert [(item.role.value, item.message_id) for item in messages.items] == [
         ("user", "msg_user_001"),
@@ -547,9 +547,9 @@ async def test_agent_state_preserves_distinct_canonical_message_records(
     saver, _ = _create_saver(
         tmp_path,
         session_bundle_factory,
-        "sess_state_dedupe",
+        "ses_b588ce3ccd714842848cb4780164fec2",
     )
-    config = {"configurable": {"thread_id": "sess_state_dedupe", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": "ses_b588ce3ccd714842848cb4780164fec2", "checkpoint_ns": ""}}
     user_message = HumanMessage(
         content="请调用 test_tool_2",
         response_metadata=_visible_metadata("msg_user_001"),
@@ -577,7 +577,7 @@ async def test_agent_state_preserves_distinct_canonical_message_records(
     )
 
     service = MessageService(checkpointer=saver)
-    state_snapshot = await service.get_agent_state_messages("sess_state_dedupe")
+    state_snapshot = await service.get_agent_state_messages("ses_b588ce3ccd714842848cb4780164fec2")
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
 
     assert state_snapshot.message_count == 3
@@ -591,8 +591,8 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(
     session_bundle_factory,
 ):
     """验证 Responses API 路径下产生的 reasoning 块被正确提取到 metadata。"""
-    saver, _ = _create_saver(tmp_path, session_bundle_factory, "sess_reasoning")
-    config = {"configurable": {"thread_id": "sess_reasoning", "checkpoint_ns": ""}}
+    saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_f83e7b429f3148d686a6f1fbf4da61dc")
+    config = {"configurable": {"thread_id": "ses_f83e7b429f3148d686a6f1fbf4da61dc", "checkpoint_ns": ""}}
     reasoning_msg = AIMessage(
         content=[
             {
@@ -626,7 +626,7 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(
     )
 
     service = MessageService(checkpointer=saver)
-    messages = await service.list(session_id="sess_reasoning", limit=10)
+    messages = await service.list(session_id="ses_f83e7b429f3148d686a6f1fbf4da61dc", limit=10)
 
     assert len(messages.items) == 2
     assistant = messages.items[1]
@@ -649,9 +649,9 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(
     saver, _ = _create_saver(
         tmp_path,
         session_bundle_factory,
-        "sess_tool_reasoning",
+        "ses_1833a18a73d74f20857056c42205891c",
     )
-    config = {"configurable": {"thread_id": "sess_tool_reasoning", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": "ses_1833a18a73d74f20857056c42205891c", "checkpoint_ns": ""}}
     reasoning_text = "用户想查看当前系统时间。"
     tool_call = {
         "name": "python_exec",
@@ -687,11 +687,11 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(
     )
 
     service = MessageService(checkpointer=saver)
-    messages = await service.list(session_id="sess_tool_reasoning", limit=10)
+    messages = await service.list(session_id="ses_1833a18a73d74f20857056c42205891c", limit=10)
     assert len(messages.items) == 1
     assert messages.items[0].role.value == "user"
 
-    state_snapshot = await service.get_agent_state_messages("sess_tool_reasoning")
+    state_snapshot = await service.get_agent_state_messages("ses_1833a18a73d74f20857056c42205891c")
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
     state_assistant = records[1]
     assert state_assistant["content"] == [
@@ -707,8 +707,8 @@ async def test_message_service_hides_empty_assistant_tool_call_messages(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(tmp_path, session_bundle_factory, "sess_tool_hidden")
-    config = {"configurable": {"thread_id": "sess_tool_hidden", "checkpoint_ns": ""}}
+    saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_629e24840acb4f1784b914c0a6cc43a0")
+    config = {"configurable": {"thread_id": "ses_629e24840acb4f1784b914c0a6cc43a0", "checkpoint_ns": ""}}
     tool_call_message = AIMessage(
         content="",
         tool_calls=[
@@ -754,7 +754,7 @@ async def test_message_service_hides_empty_assistant_tool_call_messages(
     )
 
     service = MessageService(checkpointer=saver)
-    messages = await service.list(session_id="sess_tool_hidden", limit=10)
+    messages = await service.list(session_id="ses_629e24840acb4f1784b914c0a6cc43a0", limit=10)
 
     assert [message.role.value for message in messages.items] == ["user", "assistant"]
     assert messages.items[-1].content == "4568"
@@ -766,8 +766,8 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
     session_bundle_factory,
 ):
     """多模态用户消息应在 Agent State 中保留 image_url 块。"""
-    saver, _ = _create_saver(tmp_path, session_bundle_factory, "sess_image")
-    config = {"configurable": {"thread_id": "sess_image", "checkpoint_ns": ""}}
+    saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_b9abad624e5b4ff688a49162a647fb0f")
+    config = {"configurable": {"thread_id": "ses_b9abad624e5b4ff688a49162a647fb0f", "checkpoint_ns": ""}}
     image_block = {
         "type": "image_url",
         "image_url": {"url": "data:image/jpeg;base64,abc123"},
@@ -802,11 +802,11 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
     )
 
     service = MessageService(checkpointer=saver)
-    messages = await service.list(session_id="sess_image", limit=10)
+    messages = await service.list(session_id="ses_b9abad624e5b4ff688a49162a647fb0f", limit=10)
     assert messages.items[0].content == "请描述图片"
     assert messages.items[0].attachments[0].file_id == "assets/test.jpg"
 
-    state_snapshot = await service.get_agent_state_messages("sess_image")
+    state_snapshot = await service.get_agent_state_messages("ses_b9abad624e5b4ff688a49162a647fb0f")
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
     assert records[0]["content"] == [
         {"type": "text", "text": "请描述图片"},
@@ -824,9 +824,9 @@ async def test_message_service_uses_user_content_blocks_for_user_message_text(
     saver, _ = _create_saver(
         tmp_path,
         session_bundle_factory,
-        "sess_video_display",
+        "ses_c21438f10b4845798dcdd7f1561b7bc6",
     )
-    config = {"configurable": {"thread_id": "sess_video_display", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": "ses_c21438f10b4845798dcdd7f1561b7bc6", "checkpoint_ns": ""}}
     user_message = HumanMessage(
         content=[
             {"type": "text", "text": "请按时间顺序说明这个视频。"},
@@ -872,11 +872,11 @@ async def test_message_service_uses_user_content_blocks_for_user_message_text(
     )
 
     service = MessageService(checkpointer=saver)
-    messages = await service.list(session_id="sess_video_display", limit=10)
+    messages = await service.list(session_id="ses_c21438f10b4845798dcdd7f1561b7bc6", limit=10)
     assert messages.items[0].content == "请按时间顺序说明这个视频。"
     assert "已抽取为" not in messages.items[0].content
 
-    state_snapshot = await service.get_agent_state_messages("sess_video_display")
+    state_snapshot = await service.get_agent_state_messages("ses_c21438f10b4845798dcdd7f1561b7bc6")
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
     assert "display_content" not in records[0].get("response_metadata", {})
 
@@ -921,8 +921,8 @@ def test_registered_hidden_system_reminder_stays_hidden():
 @pytest.mark.asyncio
 async def test_message_service_refusal_block(tmp_path, session_bundle_factory):
     """验证 refusal 块被识别并标记。"""
-    saver, _ = _create_saver(tmp_path, session_bundle_factory, "sess_refusal")
-    config = {"configurable": {"thread_id": "sess_refusal", "checkpoint_ns": ""}}
+    saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_82a51b14dca749e3861ba7fd0b164c15")
+    config = {"configurable": {"thread_id": "ses_82a51b14dca749e3861ba7fd0b164c15", "checkpoint_ns": ""}}
     msg = AIMessage(
         content=[{"type": "refusal", "refusal": "我拒绝回答"}],
         response_metadata=_visible_metadata("msg_assistant"),
@@ -949,6 +949,6 @@ async def test_message_service_refusal_block(tmp_path, session_bundle_factory):
     )
 
     service = MessageService(checkpointer=saver)
-    messages = await service.list(session_id="sess_refusal", limit=10)
+    messages = await service.list(session_id="ses_82a51b14dca749e3861ba7fd0b164c15", limit=10)
 
     assert messages.items[1].content == "[拒绝]我拒绝回答"

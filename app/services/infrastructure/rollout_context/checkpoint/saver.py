@@ -46,6 +46,9 @@ from app.services.infrastructure.rollout_context.checkpoint.context_replay impor
 from app.services.infrastructure.rollout_context.checkpoint.context_source import (
     ContextSourceOverlayMixin,
 )
+from app.services.infrastructure.rollout_context.checkpoint.context_source_control import (
+    ContextSourceControlOwnerMixin,
+)
 from app.services.infrastructure.rollout_context.checkpoint.fork_compaction import (
     ForkCompactionMixin,
 )
@@ -82,6 +85,7 @@ class RolloutCheckpointSaver(
     ContextPlanRegistryOwnerMixin,
     ContextOwnerMixin,
     ContextSourceOverlayMixin,
+    ContextSourceControlOwnerMixin,
     ContextReconciliationMixin,
     ContextReplayMixin,
     RolloutLangGraphAsyncMixin,
@@ -250,6 +254,22 @@ class RolloutCheckpointSaver(
     ) -> str:
         return self._storage.execution_for_turn(
             session_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns
+        )
+
+    def safe_compaction_prefix_cutoffs(
+        self,
+        session_id: str,
+        *,
+        checkpoint_ns: str,
+        state_messages: Sequence[object],
+        cutoff_indexes: Sequence[int],
+    ) -> frozenset[int]:
+        """compaction preflight 只读端口；唯一实现由 storage owner 提供。"""
+        return self._storage.safe_compaction_prefix_cutoffs(
+            session_id,
+            checkpoint_ns=checkpoint_ns,
+            state_messages=state_messages,
+            cutoff_indexes=cutoff_indexes,
         )
 
     def dispatch_replay(

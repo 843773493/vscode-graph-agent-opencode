@@ -21,7 +21,7 @@ def test_list_session_logs_reads_request_and_response(
     session_bundle_factory,
 ):
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_read"
+    session_id = "ses_56dd25ee0c7a40618621b7492d151691"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     second = write_log(
         session_dir,
@@ -60,7 +60,7 @@ def test_list_session_logs_returns_empty_without_log_files(
     session_bundle_factory,
 ):
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_without_logs"
+    session_id = "ses_748ad3f52a2842748bf651d80f475960"
     session_bundle_factory(sessions_dir, session_id)
     records = LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(
         session_id
@@ -74,13 +74,13 @@ def test_list_session_logs_exposes_invalid_log_file(
     session_bundle_factory,
 ):
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_bad"
+    session_id = "ses_64a3feef8e4d4177829260fdfc01db12"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     log_dir = session_dir / "logs" / "llm_requests"
     log_dir.mkdir(parents=True)
     (log_dir / "1000.json").write_text("[]", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="不是 JSON object"):
+    with pytest.raises(TypeError, match="不是 JSON object"):
         LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(session_id)
 
 
@@ -89,7 +89,7 @@ def test_list_session_logs_exposes_missing_response(
     session_bundle_factory,
 ):
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_bad_shape"
+    session_id = "ses_d1080d1dc6864a638064642b7bf6aef3"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     write_log(
         session_dir,
@@ -101,5 +101,5 @@ def test_list_session_logs_exposes_missing_response(
         },
     )
 
-    with pytest.raises(ValueError, match="缺少 response object"):
+    with pytest.raises(TypeError, match="缺少 response object"):
         LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(session_id)

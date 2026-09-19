@@ -290,7 +290,7 @@ async def run_agent_with_retries(
                 "你正在回答另一个 Agent 的跨会话问题，普通最终文本不会送达提问方。"
                 "必须调用 send_message_to_session："
                 f"target_session_id={question_sender_session_id}，"
-                "simulate_user=false，kind=reply，"
+                "kind=reply，"
                 f"reply_to_communication_id={question_communication_id}。"
                 f"这是第 {delegated_report_retries} 次通信恢复。"
             )

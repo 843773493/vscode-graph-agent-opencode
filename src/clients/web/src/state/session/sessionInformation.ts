@@ -156,8 +156,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+// 与后端唯一 canonical 验证器同口径（OpenSpec 2.1：ses_ + 32 位小写
+// hex + UUIDv4 version/variant 位），不保留宽松旧形态。
+const SESSION_ID_PATTERN = /^ses_[0-9a-f]{32}$/;
+
 function isSessionId(value: unknown): value is string {
-  return typeof value === "string" && /^ses_[A-Za-z0-9_-]+$/.test(value);
+  if (typeof value !== "string" || !SESSION_ID_PATTERN.test(value)) {
+    return false;
+  }
+  const payload = value.slice(4);
+  return payload[12] === "4" && "89ab".includes(payload[16] ?? "");
 }
 
 function jsonCandidates(text: string): string[] {

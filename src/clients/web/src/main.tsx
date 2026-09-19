@@ -13,6 +13,7 @@ import './styles/agentState.css';
 import './styles/eventQueue.css';
 import './styles/requestLog.css';
 import './styles/resourcePanel.css';
+import './styles/childThreadPanel.css';
 import './styles/workspace.css';
 import './styles/agentSessionsPanel.css';
 import './styles/sessionResourceExplorer.css';

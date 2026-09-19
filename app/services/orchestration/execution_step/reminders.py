@@ -51,7 +51,7 @@ def build_delegated_report_retry_reminder(
     return (
         "这是委派子会话的首轮任务。你输出了普通最终文本，但父 Agent 不会自动收到它。"
         "必须调用 send_message_to_session 把问题、失败说明或最终结果发送给父会话。"
-        f"target_session_id={parent_session_id}，simulate_user=false。"
+        f"target_session_id={parent_session_id}。"
         f"{progress_instruction}"
         f"这是第 {attempt} 次通信恢复；不要只再次输出普通最终文本。"
     )
@@ -66,7 +66,6 @@ def has_valid_delegated_report(
     return any(
         call.tool_name == "send_message_to_session"
         and call.tool_args.get("target_session_id") == parent_session_id
-        and call.tool_args.get("simulate_user", False) is False
         and call.tool_args.get("kind", "result") in allowed_kinds
         for call in successful_tool_calls
     )
@@ -81,7 +80,6 @@ def has_valid_session_question_reply(
     return any(
         call.tool_name == "send_message_to_session"
         and call.tool_args.get("target_session_id") == sender_session_id
-        and call.tool_args.get("simulate_user", False) is False
         and call.tool_args.get("kind", "result") == "reply"
         and call.tool_args.get("reply_to_communication_id") == communication_id
         for call in successful_tool_calls
@@ -109,7 +107,7 @@ def build_missing_custom_tool_retry_reminder(
         "上一轮模型输出了最终正文，但本轮用户请求明确要求执行以下工作区扩展工具，"
         f"而这些工具还没有完成真实工具调用：{tools_text}。"
         f"这是第 {attempt} 次扩展工具调用恢复。"
-        "必须通过工具调用通道调用 invoke_custom_tool，"
+        "必须通过工具调用通道调用 invoke_extension_tool，"
         '参数格式为 {"tool_name": "<目标扩展工具名>", "arguments": {}}。'
         "不要只描述调用计划，不要把工具名称或 JSON 参数写成普通正文。"
         "工具返回后，最终回复只能包含用户需要看到的结果。"

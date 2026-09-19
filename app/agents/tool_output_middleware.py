@@ -7,7 +7,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
-from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 
 
@@ -75,7 +75,7 @@ def _tool_identity(request: ToolCallRequest) -> tuple[str, str]:
 
     tool_name = raw_name
     arguments = tool_call.get("args")
-    if raw_name == CUSTOM_TOOL_INVOKER_NAME and isinstance(arguments, Mapping):
+    if raw_name == EXTENSION_TOOL_INVOKER_NAME and isinstance(arguments, Mapping):
         target_name = arguments.get("tool_name")
         if isinstance(target_name, str) and target_name.strip():
             tool_name = target_name.strip()

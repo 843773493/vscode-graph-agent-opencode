@@ -161,7 +161,7 @@ ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selecti
 
 ### Requirement: 扩展目录、MCP指引和信封执行必须使用同一生效快照
 
-系统 SHALL以固定的`invoke_extension_tool(tool_name, arguments)`作为全部非直接工具的唯一Provider信封，不保留`invoke_custom_tool`兼容别名。ExtensionToolCatalog SHALL把内置扩展、自定义及MCP target规范化为稳定identity、schema hash、目录revision和可审计权限策略；Provider ToolSetRef不得包含这些target的清单。McpCatalogOwner SHALL在启动、MCP `tools/list_changed`、重连和配置candidate切换时完整分页读取并验证`tools/list`，按语义变化发布不可变目录snapshot与独立channel通知；不具备变化通知的server只在显式刷新/重连或配置的有界轮询后承诺刷新，不得在model-call preparation执行网络请求。McpToolGuidanceProducer SHALL只从已验证目录派生有界、确定性的名称/描述/参数指引与删除tombstone，并明确注册为`root_placement=tail_only`的CSM source；原始MCP prompt/resource/instructions不得被动提升为指令。
+系统 SHALL以固定的`invoke_extension_tool(tool_name, arguments)`作为全部非直接工具的唯一Provider信封，不保留`invoke_extension_tool`兼容别名。ExtensionToolCatalog SHALL把内置扩展、自定义及MCP target规范化为稳定identity、schema hash、目录revision和可审计权限策略；Provider ToolSetRef不得包含这些target的清单。McpCatalogOwner SHALL在启动、MCP `tools/list_changed`、重连和配置candidate切换时完整分页读取并验证`tools/list`，按语义变化发布不可变目录snapshot与独立channel通知；不具备变化通知的server只在显式刷新/重连或配置的有界轮询后承诺刷新，不得在model-call preparation执行网络请求。McpToolGuidanceProducer SHALL只从已验证目录派生有界、确定性的名称/描述/参数指引与删除tombstone，并明确注册为`root_placement=tail_only`的CSM source；原始MCP prompt/resource/instructions不得被动提升为指令。
 
 Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使用既有`turn|model_call`策略且默认为`turn`。目录binding与对应指引revision SHALL在同一边界一起冻结并进入sealed assembly；后续变化只在下一允许的边界以user-role增量生效，不得硬改前缀或令模型看到与dispatcher绑定不一致的目标。每个调用 SHALL用产生它的model-call已封存`ExtensionCatalogBindingRef`解析精确target，记录target/schema revision、调用与结果provenance；执行点重新执行最新权限校验，撤权/缺失返回原`tool_call_id`的明确terminal失败。配置candidate或连接刷新失败不得半发布目录或指引，已在flight的调用持有旧generation lease并按真实结果收敛。Provider可见信封始终存在，即使目录为空。
 

@@ -1,0 +1,5 @@
+{
+  "scenario_id": "child-thread-delegate",
+  "asset": "handwritten/openai_chat/child-thread-delegate.json",
+  "business_assertion": "web-child-thread-delegate-panel"
+}

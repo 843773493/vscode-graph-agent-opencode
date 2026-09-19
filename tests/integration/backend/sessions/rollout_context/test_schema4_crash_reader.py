@@ -44,7 +44,7 @@ def reader_case(
 ) -> ReaderCase:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session = f"crash-reader-{uuid4().hex}"
+    session = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(

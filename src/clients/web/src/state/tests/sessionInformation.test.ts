@@ -16,7 +16,7 @@ function information(): SessionInformationSnapshot {
     schema_version: 2,
     generated_at: "2026-07-15T12:00:00Z",
     session: {
-      session_id: "ses_test",
+      session_id: "ses_12345678123446788234567812345678",
       workspace_id: "ws_local",
       title: "会话信息测试",
       current_agent_id: "default",
@@ -154,24 +154,28 @@ describe("通用会话信息", () => {
   });
 
   test("粘贴纯会话 ID 时直接返回 ID", () => {
-    expect(extractSessionIdFromClipboardText(" ses_direct_123 ")).toBe(
-      "ses_direct_123",
+    expect(extractSessionIdFromClipboardText(" ses_12345678123446788234567812345678 ")).toBe(
+      "ses_12345678123446788234567812345678",
     );
+    // 非 canonical 形态（宽松旧 ID）在 UI 入口同样拒绝，不留旧 ID 别名。
+    expect(() =>
+      extractSessionIdFromClipboardText(" ses_direct_123 "),
+    ).toThrow("既不是会话 ID");
   });
 
   test("粘贴通用会话信息时提取 session.id", () => {
     const text = formatSessionInformationDump(
       buildSessionInformationDump(information(), gatewayWorkspace("local")),
     );
-    expect(extractSessionIdFromClipboardText(text)).toBe("ses_test");
+    expect(extractSessionIdFromClipboardText(text)).toBe("ses_12345678123446788234567812345678");
     expect(extractSessionIdFromClipboardText(`\`\`\`json\n${text}\n\`\`\``)).toBe(
-      "ses_test",
+      "ses_12345678123446788234567812345678",
     );
   });
 
   test("不接受没有协议 kind 的任意 JSON", () => {
     expect(() =>
-      extractSessionIdFromClipboardText('{"session":{"id":"ses_test"}}'),
+      extractSessionIdFromClipboardText('{"session":{"id":"ses_12345678123446788234567812345678"}}'),
     ).toThrow("既不是会话 ID，也不是有效的通用会话信息 JSON");
   });
 });

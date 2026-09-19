@@ -80,7 +80,7 @@
 - [ ] 5.5 废弃 `ItemizedContextProjectionMiddleware` 的 prompt/tool/context反向捕获、prepare/seal、状态与 fallback职责；框架确需 model-call hook时实现无状态 sealed-assembly dispatch bridge并置于最后一个 request-mutating位置，否则删除该 middleware，由 Provider adapter直接消费 Saver-issued dispatch reference；history/diagnostic独立读取同一 sealed selection。
 - [ ] 5.6 分离设计表 D01/C01–C03：派生摘要请求使用独立 sealed assembly且 summary保留 compaction owner；真实用户输入/附件及 assistant/reasoning/tool协议事实通过 canonical append intent提交，ToolSet通过 switch intent提交，它们共用 ContextStore owner但不进入 CSM；附件正文只由workspace content-addressed catalog按capability和thread/item/view membership读取，模型与历史不接收物理locator，展示文本不得反写任何 canonical/source/ToolSet/control状态。
 
-本节 5.1–5.6 的未完成验收还须将Provider可见ToolSet限制为直接工具加始终存在的固定`invoke_extension_tool(tool_name, arguments)`，从Provider工具description移除内层target清单；将内置非直接、自定义和MCP统一到ExtensionToolCatalog并在model-call seal时冻结`ExtensionCatalogBindingRef`，dispatcher只按该ref解析旧调用、按执行时最新权限返回真实配对结果。直接工具/信封形状变化hard rebase，内部target增删改/权限变化不hard rebase；目录与指引同激活边界，先收敛旧tool result再选新source。旧`invoke_custom_tool`工具名、schema、AgentFactory构造、工具选择/提示词/重试reminder、配置模板、前端显示与测试断言全部直接迁移为新名称，不留兼容别名；检查目录为空时Provider工具schema仍稳定。
+本节 5.1–5.6 的未完成验收还须将Provider可见ToolSet限制为直接工具加始终存在的固定`invoke_extension_tool(tool_name, arguments)`，从Provider工具description移除内层target清单；将内置非直接、自定义和MCP统一到ExtensionToolCatalog并在model-call seal时冻结`ExtensionCatalogBindingRef`，dispatcher只按该ref解析旧调用、按执行时最新权限返回真实配对结果。直接工具/信封形状变化hard rebase，内部target增删改/权限变化不hard rebase；目录与指引同激活边界，先收敛旧tool result再选新source。旧`invoke_extension_tool`工具名、schema、AgentFactory构造、工具选择/提示词/重试reminder、配置模板、前端显示与测试断言全部直接迁移为新名称，不留兼容别名；检查目录为空时Provider工具schema仍稳定。
 
 ## 6. Rewind、compaction、restart 与边界测试
 
@@ -104,7 +104,7 @@
   - 6.8-G 覆盖copy attachment claim在source owner release和GC竞争下保持单一blob，target/child未发布时reserved owner不可访问、发布后可用；注入preparing、owner_reserved和publication后/committed前崩溃并验证定点继续/释放。另让copy finalizer与target/coordinator删除竞争同一gate，验证finalizer先行把copy/board record推进成功终态`committed|published`，删除先行释放reserved claim/ref或验证committed claim归属后持久释放target owner ref，再推进删除终态`target_deleted|coordinator_deleted`，且恢复不重建/保留owner或复活target。required blob/claim缺失阻断copy，非required unavailable历史ref保持明确不可用；多copy/同digest claim不串用且不产生重复正文。
   - 6.8-H 为fixture composition增加按operation/phase寻址的`SessionLifecyclePhaseBarrier`与`CopyCaptureBarrier`/observer，生产绑定立即返回no-op；覆盖deletion journal/fence/final rename、source revision freeze、attachment claim/captured marker/owner_reserved、target/board publication及attachment finalization。barrier只暂停并ack，不改业务状态/identity/time/result或写业务库；pytest从进程外终止/重启，验证并发operation不串扰且不存在生产test路由、热开关或backend自杀hook。
 
-6.1/6.3/6.4/6.7及唯一Web E2E的未完成验证还须把M01列入producer/owner矩阵：MCP `tools/list_changed`完整relist、无通知刷新、配置shadow失败、空目录固定信封、默认Turn与可选model_call目录/指引同步、增删改tombstone、连接generation lease、执行点撤权与旧调用原`tool_call_id`收敛、root资格与新epoch去重、Provider ToolSetRef不变及stable-prefix逐字节相等。验收同时审计旧`invoke_custom_tool`提示词、schema、产品显示和测试零残留；历史PASS不能代替这些新场景。
+6.1/6.3/6.4/6.7及唯一Web E2E的未完成验证还须把M01列入producer/owner矩阵：MCP `tools/list_changed`完整relist、无通知刷新、配置shadow失败、空目录固定信封、默认Turn与可选model_call目录/指引同步、增删改tombstone、连接generation lease、执行点撤权与旧调用原`tool_call_id`收敛、root资格与新epoch去重、Provider ToolSetRef不变及stable-prefix逐字节相等。验收同时审计旧`invoke_extension_tool`提示词、schema、产品显示和测试零残留；历史PASS不能代替这些新场景。
 
 ## 7. 产品回归与交付门槛
 

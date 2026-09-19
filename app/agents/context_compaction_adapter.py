@@ -6,6 +6,7 @@ from langchain_core.messages import AnyMessage, BaseMessage
 
 from app.agents.agent_factory import build_runtime_for_agent
 from app.agents.cache_preserving_summarization import (
+    NoDurableOwnerCompactionPreflight,
     apply_summarization_event,
     build_safe_compaction_partition,
     create_cache_preserving_summarization_middleware,
@@ -65,6 +66,9 @@ class AgentSummarizationCompactor:
         summarization = create_cache_preserving_summarization_middleware(
             runtime["model"],
             self._history_store.backend,
+            # 预览装配没有 durable Saver owner；端口仅在真实触发压缩时
+            # 才会被调用，按合成装配合同给显式失败端口，不静默跳过。
+            compaction_preflight=NoDurableOwnerCompactionPreflight(),
         )
         return summarization
 

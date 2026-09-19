@@ -5,7 +5,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-NodeDebugStatus = Literal["idle", "starting", "running", "paused", "exited", "failed"]
+NodeDebugStatus = Literal[
+    "idle", "starting", "running", "paused", "stopping", "exited", "failed",
+    "reconcile_required",
+]
 NodeDebugAction = Literal[
     "continue",
     "pause",
@@ -28,6 +31,7 @@ class NodeDebugBreakpointRequest(BaseModel):
 
 class NodeDebugStartRequest(BaseModel):
     session_id: str = Field(min_length=1)
+    thread_id: str = Field(default="main", min_length=1)
     path: str = Field(min_length=1)
     args: list[str] = Field(default_factory=list)
     breakpoints: list[NodeDebugBreakpointRequest] = Field(
@@ -38,6 +42,7 @@ class NodeDebugStartRequest(BaseModel):
 
 class NodeDebugActionRequest(BaseModel):
     session_id: str = Field(min_length=1)
+    thread_id: str = Field(default="main", min_length=1)
     action: NodeDebugAction
     params: dict[str, object] = Field(default_factory=dict)
 
@@ -86,6 +91,7 @@ class NodeDebugEvaluationDTO(BaseModel):
 class NodeDebugActionRecordDTO(BaseModel):
     action_id: str
     session_id: str
+    thread_id: str = Field(default="main", min_length=1)
     action: str
     message: str
     tool_name: str | None = None
@@ -96,6 +102,7 @@ class NodeDebugActionRecordDTO(BaseModel):
 
 class NodeDebugStateDTO(BaseModel):
     session_id: str
+    thread_id: str = Field(default="main", min_length=1)
     status: NodeDebugStatus
     script_path: str | None = None
     args: list[str] = Field(default_factory=list)

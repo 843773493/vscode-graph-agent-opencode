@@ -31,12 +31,12 @@ evaluate_expression
 
 工具的模型可见输入 schema SHALL 不包含 `session_id`、`job_id`、`adapter`、`launch`、`runtime`、`program`、`inspectorPort`、`debugpyPort`、`vscodeSessionId`、`threadId` 或 `frameId` 等后端控制字段；会话身份和基础设施依赖必须由当前 Agent 工具上下文注入。
 
-这些目标工具 SHALL 只能通过固定的 `invoke_custom_tool` 入口调用。Agent runtime 的模型工具列表 SHALL 暴露 `invoke_custom_tool`，而不得把上述 20 个目标工具作为独立模型工具直接注册；`invoke_custom_tool.arguments` SHALL 使用 `tool_name` 和目标工具的 `arguments` 承载调用。
+这些目标工具 SHALL 只能通过固定的 `invoke_extension_tool` 入口调用。Agent runtime 的模型工具列表 SHALL 暴露 `invoke_extension_tool`，而不得把上述 20 个目标工具作为独立模型工具直接注册；`invoke_extension_tool.arguments` SHALL 使用 `tool_name` 和目标工具的 `arguments` 承载调用。
 
 #### Scenario: Agent receives the compatible extension tool group
 
 - **WHEN** Agent 使用包含调试工具组的有效工具配置创建运行时
-- **THEN** 工具目录包含上述 20 个目标工具，模型工具列表包含 `invoke_custom_tool`，且不包含上述目标工具的独立模型入口
+- **THEN** 工具目录包含上述 20 个目标工具，模型工具列表包含 `invoke_extension_tool`，且不包含上述目标工具的独立模型入口
 
 #### Scenario: Backend identity fields stay hidden
 
@@ -45,7 +45,7 @@ evaluate_expression
 
 ### Requirement: Custom target input schemas match the DebugMCP contract
 
-系统 SHALL 将以下输入契约作为扩展目标工具的 `invoke_custom_tool.arguments` schema；除必需性和取值约束外，不得为了当前后端实现增加新的目标参数。固定入口的外层 schema 由 Agent runtime 的 `invoke_custom_tool` 工具定义提供。
+系统 SHALL 将以下输入契约作为扩展目标工具的 `invoke_extension_tool.arguments` schema；除必需性和取值约束外，不得为了当前后端实现增加新的目标参数。固定入口的外层 schema 由 Agent runtime 的 `invoke_extension_tool` 工具定义提供。
 
 ```json
 {
@@ -98,7 +98,7 @@ evaluate_expression
 
 #### Scenario: Agent starts a source debug session
 
-- **WHEN** Agent 通过 `invoke_custom_tool` 以 `tool_name=start_debugging`，并使用 `fileFullPath` 和 `workingDirectory` 作为 `arguments` 调用
+- **WHEN** Agent 通过 `invoke_extension_tool` 以 `tool_name=start_debugging`，并使用 `fileFullPath` 和 `workingDirectory` 作为 `arguments` 调用
 - **THEN** 系统根据当前工作区解析目标文件，使用选定的调试启动配置创建会话，并返回调试状态
 
 #### Scenario: Saved configuration is authoritative when starting
@@ -236,12 +236,12 @@ evaluate_expression
 
 ### Requirement: Debugging Skill is discoverable and the prompt flow is verifiable
 
-系统 SHALL 在 `resources/skills/debugging/SKILL.md` 提供与 20 个扩展目标工具同步的 `tool_name` + `arguments_schema` JSON 契约、通过 `invoke_custom_tool` 调用的方式、面向模型的状态决策流程、并发处理规则和安全边界。该流程 SHALL 指导模型优先读取权威状态、只在必要时追加工具调用，并明确 `invalid_breakpoints` 的出现时机及处理方式；不得要求模型机械重复查询或为取得控制权而重启。E2E 工作区 SHALL 从该产品资源复制 Skill 到 `/.boxteam/skills/debugging/SKILL.md`，不得维护一份会漂移的产品副本。
+系统 SHALL 在 `resources/skills/debugging/SKILL.md` 提供与 20 个扩展目标工具同步的 `tool_name` + `arguments_schema` JSON 契约、通过 `invoke_extension_tool` 调用的方式、面向模型的状态决策流程、并发处理规则和安全边界。该流程 SHALL 指导模型优先读取权威状态、只在必要时追加工具调用，并明确 `invalid_breakpoints` 的出现时机及处理方式；不得要求模型机械重复查询或为取得控制权而重启。E2E 工作区 SHALL 从该产品资源复制 Skill 到 `/.boxteam/skills/debugging/SKILL.md`，不得维护一份会漂移的产品副本。
 
 #### Scenario: Agent reads the debugging Skill before acting
 
 - **WHEN** 用户通过 session message 请求调试 JavaScript 源码
-- **THEN** 提示词驱动测试可以观察到 Agent 先读取 `/.boxteam/skills/debugging/SKILL.md`，再通过 `invoke_custom_tool` 调用 `add_breakpoint`、`start_debugging` 和其他调试目标工具
+- **THEN** 提示词驱动测试可以观察到 Agent 先读取 `/.boxteam/skills/debugging/SKILL.md`，再通过 `invoke_extension_tool` 调用 `add_breakpoint`、`start_debugging` 和其他调试目标工具
 
 #### Scenario: Prompt-driven flow reaches a real Node debug session
 

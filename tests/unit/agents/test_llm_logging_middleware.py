@@ -10,18 +10,14 @@ from langgraph.runtime import ExecutionInfo, Runtime
 
 from app.agents import llm_logging_middleware
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
-from app.agents.request_replay_middleware import (
-    PromptReplayCaptureMiddleware,
-    read_prompt_replay_components,
-)
 from app.agents.upstream_request_trace import UpstreamRequestTraceCallback
 
 
-def test_llm_log_persists_prompt_replay_components_and_tool_stats(
+def test_llm_log_persists_request_and_tool_stats_without_prompt_replay(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_replay"
+    session_id = "ses_e6d2707870e54cab8c135193c0802532"
     session_dir = session_bundle_factory(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
@@ -46,92 +42,48 @@ def test_llm_log_persists_prompt_replay_components_and_tool_stats(
         runtime=runtime,
     )
     initial_state = dict(request.state)
-    default_capture = PromptReplayCaptureMiddleware(
-        source="agent_factory",
-        label="默认指令",
-    )
-    agents_capture = PromptReplayCaptureMiddleware(
-        source="WorkspaceAgentsMiddleware",
-        label="工作区 AGENTS.md",
-    )
     middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
 
-    def after_default_capture(next_request: ModelRequest) -> ModelResponse:
-        updated_request = next_request.override(
-            system_message=SystemMessage(
-                content_blocks=[
-                    *next_request.system_message.content_blocks,
-                    {"type": "text", "text": "AGENTS.md 内容"},
-                ]
-            )
-        )
-        return agents_capture.wrap_model_call(
-            updated_request,
-            lambda final_request: middleware.wrap_model_call(
-                final_request,
-                lambda _: ModelResponse(result=[AIMessage(content="done")]),
-            ),
-        )
-
-    default_capture.wrap_model_call(request, after_default_capture)
+    middleware.wrap_model_call(
+        request,
+        lambda _: ModelResponse(result=[AIMessage(content="done")]),
+    )
 
     log_file = next((session_dir / "logs" / "llm_requests").glob("*.json"))
     payload = json.loads(log_file.read_text(encoding="utf-8"))
-    replay = payload["request"]["replay"]
-    assert [item["label"] for item in replay["prompt_components"]] == [
-        "默认指令",
-        "工作区 AGENTS.md",
-    ]
-    assert [item["operation"] for item in replay["prompt_components"]] == [
-        "append",
-        "append",
-    ]
-    assert replay["message_count"] == 1
-    assert replay["tools"]["count"] == 1
-    assert replay["tools"]["names"] == ["read_file"]
-    assert replay["system_prompt_char_count"] > 0
+    request_payload = payload["request"]
+    assert "replay" not in request_payload
+    assert request_payload["messages"][0]["content"] == "hello"
+    assert request_payload["system_message"]["content"] == "默认指令"
+    assert request_payload["tools"][0]["name"] == "read_file"
+    assert request_payload["tools"][0]["args"]["path"]["type"] == "string"
     assert request.state == initial_state, "请求审计元信息不得写入 Agent 上下文状态"
 
 
-def test_prompt_replay_records_non_append_system_prompt_replacement() -> None:
+def test_llm_logging_does_not_capture_prompt_replacement_side_channel(
+    tmp_path: Path,
+) -> None:
     request = ModelRequest(
         model=None,
         messages=[],
         system_message=SystemMessage(content="before"),
     )
-    initial_state = dict(request.state)
-    default_capture = PromptReplayCaptureMiddleware(
-        source="agent_factory",
-        label="默认指令",
+    # R17：不再硬编码全局 /tmp（catalog 模式工厂会在其父目录建导航目录，
+    # 触发权限错误，也违反测试工作区隔离）；改用测试专属临时目录。
+    middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
+
+    replaced_request = request.override(
+        system_message=SystemMessage(content="after")
     )
-    memory_capture = PromptReplayCaptureMiddleware(
-        source="MemoryMiddleware",
-        label="Agent 记忆",
-    )
-    components: list[dict[str, object]] = []
-
-    def after_default_capture(next_request: ModelRequest) -> ModelResponse:
-        replaced_request = next_request.override(
-            system_message=SystemMessage(content="after")
-        )
-
-        def observe_replay(_: ModelRequest) -> ModelResponse:
-            components.extend(read_prompt_replay_components())
-            return ModelResponse(result=[AIMessage(content="done")])
-
-        return memory_capture.wrap_model_call(replaced_request, observe_replay)
-
-    default_capture.wrap_model_call(request, after_default_capture)
-    assert components[-1]["operation"] == "replace"
-    assert components[-1]["label"] == "Agent 记忆"
-    assert request.state == initial_state, "替换 Prompt 的审计信息也不得污染 Agent 上下文"
+    assert replaced_request.system_message.text == "after"
+    assert not hasattr(middleware, "_build_request_replay")
 
 
 def test_llm_log_merges_redacted_upstream_request_and_response(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_upstream"
+    session_id = "ses_a03b3d8d67eb46e483f7e0c5fc296fae"
     session_dir = session_bundle_factory(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
@@ -192,7 +144,7 @@ def test_llm_log_bounds_large_payload_and_keeps_valid_json(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_bounded_log"
+    session_id = "ses_63b1e65e253d4e348ef2255613c8c915"
     session_dir = session_bundle_factory(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
@@ -246,7 +198,7 @@ def test_llm_log_persists_failed_upstream_attempt(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_failed_upstream"
+    session_id = "ses_3785202dfada418b8c2fe1925714d0d7"
     session_dir = session_bundle_factory(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(

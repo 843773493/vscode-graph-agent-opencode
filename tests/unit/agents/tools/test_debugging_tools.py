@@ -6,17 +6,26 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 
-from app.agents.tool_invocation_context import ToolInvocationContext
+from app.agents.tool_invocation_context import (
+    ThreadRuntimeBinding,
+    ToolInvocationContext,
+)
 from app.agents.tools.debug_redaction import REDACTION_PLACEHOLDER
 from app.agents.tools.debugging import create_debugging_tools
 from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
+    NodeDebugConfigurationDTO,
+    NodeDebugConfigurationSummaryDTO,
     NodeDebugEvaluationDTO,
     NodeDebugStackFrameDTO,
     NodeDebugStateDTO,
     NodeDebugVariableDTO,
 )
+
+_MAIN_THREAD_ID = "main"
+_MISSING_CONFIGURATION_ID = "dbgcfg_" + "b" * 32
 
 
 def _build_tools(tmp_path: Path):
@@ -26,6 +35,70 @@ def _build_tools(tmp_path: Path):
         node_debug_service=MagicMock(),
         invocation_context=ToolInvocationContext(),
     )
+
+
+def _debug_configuration(
+    *,
+    configuration_id: str = "dbgcfg_" + "a" * 32,
+    name: str = "调试 debug-fixture.mjs",
+    script_path: str = "debug-fixture.mjs",
+    working_directory: str = "",
+    launch_profile_name: str | None = "node-default",
+) -> NodeDebugConfigurationDTO:
+    now = datetime.now(UTC)
+    return NodeDebugConfigurationDTO(
+        configuration_id=configuration_id,
+        name=name,
+        script_path=script_path,
+        working_directory=working_directory,
+        launch_profile_name=launch_profile_name,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _configuration_summary(
+    configuration: NodeDebugConfigurationDTO,
+) -> NodeDebugConfigurationSummaryDTO:
+    return NodeDebugConfigurationSummaryDTO(
+        configuration_id=configuration.configuration_id,
+        name=configuration.name,
+        script_path=configuration.script_path,
+        launch_profile_name=configuration.launch_profile_name,
+        breakpoint_count=len(configuration.breakpoints),
+        revision=configuration.revision,
+        updated_at=configuration.updated_at,
+    )
+
+
+def _service_for_launch(
+    *,
+    state: NodeDebugStateDTO,
+    configurations: list[NodeDebugConfigurationDTO] | None = None,
+) -> MagicMock:
+    service = MagicMock()
+    service.get_state = AsyncMock(return_value=state)
+    service.list_configurations = MagicMock(
+        return_value=list(configurations or []),
+    )
+    service.start = AsyncMock(return_value=state)
+    service.record_tool_action = AsyncMock()
+    service.resolve_launch_profile_name = MagicMock(
+        side_effect=lambda value: value or "node-default",
+    )
+    return service
+
+
+def _tool_map(tmp_path: Path, service: MagicMock) -> dict[str, object]:
+    return {
+        tool.name: tool
+        for tool in create_debugging_tools(
+            session_id="ses_debug_launch",
+            workspace_root=tmp_path,
+            node_debug_service=service,
+            invocation_context=ToolInvocationContext(),
+        )
+    }
 
 
 def test_debug_tool_names_and_model_schemas_match_debug_mcp_shape(
@@ -138,6 +211,7 @@ async def test_logpoint_maps_to_non_pausing_breakpoint_definition(
     assert payload["ok"] is True
     service.apply_action.assert_awaited_once_with(
         session_id="ses_debug_logpoint",
+        thread_id=_MAIN_THREAD_ID,
         action="set_breakpoint",
         params={
             "path": "fixture.mjs",
@@ -350,3 +424,305 @@ async def test_evaluate_expression_redacts_sensitive_expression_result(
     assert payload["state"]["last_evaluation"]["description"] == (REDACTION_PLACEHOLDER)
     assert payload["redaction_notice"]
     assert "hunter2" not in result
+
+
+@pytest.mark.asyncio
+async def test_tools_resolve_owner_from_trusted_thread_binding(tmp_path: Path) -> None:
+    state = NodeDebugStateDTO(
+        session_id="ses_child_debug",
+        thread_id=_MAIN_THREAD_ID,
+        status="idle",
+    )
+    service = MagicMock()
+    service.get_state = AsyncMock(return_value=state)
+    service.record_tool_action = AsyncMock()
+    tools = create_debugging_tools(
+        session_id="ses_child_debug",
+        workspace_root=tmp_path,
+        node_debug_service=service,
+        invocation_context=ToolInvocationContext(
+            thread_binding=ThreadRuntimeBinding(
+                session_id="ses_child_debug",
+                thread_id=_MAIN_THREAD_ID,
+            )
+        ),
+    )
+
+    result = json.loads(
+        await next(tool for tool in tools if tool.name == "list_breakpoints").ainvoke(
+            {}
+        )
+    )
+
+    assert result["ok"] is True
+    assert {
+        call_args.args for call_args in service.get_state.await_args_list
+    } == {("ses_child_debug", _MAIN_THREAD_ID)}
+    assert all(
+        call_args.kwargs["thread_id"] == _MAIN_THREAD_ID
+        for call_args in service.record_tool_action.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_alias_binding_passes_precise_parent_child_owner_to_service(
+    tmp_path: Path,
+) -> None:
+    state = NodeDebugStateDTO(
+        session_id="ses_parent_debug",
+        thread_id="ses_child_thread",
+        status="idle",
+    )
+    service = MagicMock()
+    service.get_state = AsyncMock(return_value=state)
+    service.record_tool_action = AsyncMock()
+    tools = create_debugging_tools(
+        session_id="ses_parent_debug",
+        workspace_root=tmp_path,
+        node_debug_service=service,
+        invocation_context=ToolInvocationContext(
+            thread_binding=ThreadRuntimeBinding(
+                session_id="ses_parent_debug",
+                thread_id="ses_child_thread",
+            )
+        ),
+    )
+
+    await next(tool for tool in tools if tool.name == "list_breakpoints").ainvoke({})
+
+    # 工具层只传绑定结果；别名折叠仍由服务层唯一实现。
+    assert {
+        call_args.args for call_args in service.get_state.await_args_list
+    } == {("ses_parent_debug", "ses_child_thread")}
+
+
+@pytest.mark.asyncio
+async def test_model_state_and_tool_schemas_hide_runtime_identity(
+    tmp_path: Path,
+) -> None:
+    state = NodeDebugStateDTO(
+        session_id="ses_hidden_identity",
+        thread_id="ses_child_thread",
+        status="idle",
+    )
+    service = MagicMock()
+    service.get_state = AsyncMock(return_value=state)
+    service.record_tool_action = AsyncMock()
+    tools = create_debugging_tools(
+        session_id="ses_hidden_identity",
+        workspace_root=tmp_path,
+        node_debug_service=service,
+        invocation_context=ToolInvocationContext(),
+    )
+    by_name = {tool.name: tool for tool in tools}
+
+    result = json.loads(await by_name["list_breakpoints"].ainvoke({}))
+
+    assert "thread_id" not in result["state"]
+    assert "session_id" not in result["state"]
+    runtime_fields = {
+        "session_id",
+        "sessionId",
+        "thread_id",
+        "threadId",
+        "port",
+        "inspectorPort",
+        "debugpyPort",
+        "frameId",
+        "callFrameId",
+        "vscodeSessionId",
+        "adapter",
+        "runtime",
+        "program",
+        "launch",
+    }
+    for tool in tools:
+        properties = tool.tool_call_schema.model_json_schema()["properties"]
+        assert runtime_fields.isdisjoint(properties), tool.name
+
+    with pytest.raises(ValidationError, match="threadId"):
+        await by_name["add_breakpoint"].ainvoke(
+            {"fileFullPath": "fixture.mjs", "line": 1, "threadId": "child"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_start_debugging_reports_missing_explicit_configuration_first(
+    tmp_path: Path,
+) -> None:
+    state = NodeDebugStateDTO(session_id="ses_debug_launch", status="idle")
+    service = _service_for_launch(state=state, configurations=[])
+    tools = _tool_map(tmp_path, service)
+
+    payload = json.loads(
+        await tools["start_debugging"].ainvoke(
+            {
+                "fileFullPath": "debug-fixture.mjs",
+                "workingDirectory": ".",
+                "debugConfigurationId": _MISSING_CONFIGURATION_ID,
+            }
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "debug_configuration_not_found"
+    assert payload["error"]["configuration_id"] == _MISSING_CONFIGURATION_ID
+    assert payload["error"]["available_configuration_ids"] == []
+    service.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_debugging_rejects_launch_parameter_conflict_with_fields(
+    tmp_path: Path,
+) -> None:
+    configuration = _debug_configuration(
+        script_path="debug-entry.mjs",
+        working_directory="src",
+        launch_profile_name="node-test",
+    )
+    state = NodeDebugStateDTO(
+        session_id="ses_debug_launch",
+        status="idle",
+        active_configuration_id=configuration.configuration_id,
+        active_configuration_name=configuration.name,
+        configurations=[_configuration_summary(configuration)],
+    )
+    service = _service_for_launch(state=state, configurations=[configuration])
+    tools = _tool_map(tmp_path, service)
+
+    payload = json.loads(
+        await tools["start_debugging"].ainvoke(
+            {
+                "fileFullPath": "other.mjs",
+                "workingDirectory": ".",
+                "configurationName": "node-default",
+            }
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "debug_launch_parameter_conflict"
+    assert payload["error"]["fields"] == [
+        "configurationName",
+        "fileFullPath",
+        "workingDirectory",
+    ]
+    assert payload["error"]["conflicts"]["fileFullPath"] == {
+        "provided": "other.mjs",
+        "expected": "debug-entry.mjs",
+    }
+    assert payload["error"]["conflicts"]["workingDirectory"] == {
+        "provided": "",
+        "expected": "src",
+    }
+    assert payload["error"]["conflicts"]["configurationName"] == {
+        "provided": "node-default",
+        "expected": "node-test",
+    }
+    service.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_debugging_accepts_normalized_paths_matching_active_configuration(
+    tmp_path: Path,
+) -> None:
+    configuration = _debug_configuration()
+    state = NodeDebugStateDTO(
+        session_id="ses_debug_launch",
+        status="idle",
+        active_configuration_id=configuration.configuration_id,
+        configurations=[_configuration_summary(configuration)],
+    )
+    service = _service_for_launch(state=state, configurations=[configuration])
+    tools = _tool_map(tmp_path, service)
+
+    payload = json.loads(
+        await tools["start_debugging"].ainvoke(
+            {
+                # 工作区内绝对路径与 `.` 必须与方案保存的相对形式归一相等。
+                "fileFullPath": str(tmp_path / "debug-fixture.mjs"),
+                "workingDirectory": str(tmp_path),
+                "configurationName": "node-default",
+            }
+        )
+    )
+
+    assert payload["ok"] is True, payload
+    service.start.assert_awaited_once()
+    start_kwargs = service.start.await_args.kwargs
+    assert start_kwargs["session_id"] == "ses_debug_launch"
+    assert start_kwargs["thread_id"] == _MAIN_THREAD_ID
+    assert start_kwargs["configuration_id"] == configuration.configuration_id
+    assert start_kwargs["path"] == "debug-fixture.mjs"
+    assert start_kwargs["working_directory"] == ""
+
+
+@pytest.mark.asyncio
+async def test_start_debugging_prefers_explicit_id_then_active_configuration(
+    tmp_path: Path,
+) -> None:
+    active = _debug_configuration(
+        configuration_id="dbgcfg_" + "a" * 32,
+        name="活动方案",
+    )
+    explicit = _debug_configuration(
+        configuration_id="dbgcfg_" + "c" * 32,
+        name="显式方案",
+    )
+    state = NodeDebugStateDTO(
+        session_id="ses_debug_launch",
+        status="idle",
+        active_configuration_id=active.configuration_id,
+        configurations=[
+            _configuration_summary(active),
+            _configuration_summary(explicit),
+        ],
+    )
+    service = _service_for_launch(state=state, configurations=[active, explicit])
+    tools = _tool_map(tmp_path, service)
+
+    explicit_payload = json.loads(
+        await tools["start_debugging"].ainvoke(
+            {
+                "fileFullPath": "debug-fixture.mjs",
+                "workingDirectory": ".",
+                "debugConfigurationId": explicit.configuration_id,
+            }
+        )
+    )
+    assert explicit_payload["ok"] is True, explicit_payload
+    assert (
+        service.start.await_args.kwargs["configuration_id"]
+        == explicit.configuration_id
+    )
+
+    service.start.reset_mock()
+    active_payload = json.loads(
+        await tools["start_debugging"].ainvoke(
+            {"fileFullPath": "debug-fixture.mjs", "workingDirectory": "."}
+        )
+    )
+    assert active_payload["ok"] is True, active_payload
+    assert service.start.await_args.kwargs["configuration_id"] == active.configuration_id
+
+
+@pytest.mark.asyncio
+async def test_start_debugging_without_configuration_uses_safe_creation_path(
+    tmp_path: Path,
+) -> None:
+    state = NodeDebugStateDTO(session_id="ses_debug_launch", status="idle")
+    service = _service_for_launch(state=state, configurations=[])
+    tools = _tool_map(tmp_path, service)
+
+    payload = json.loads(
+        await tools["start_debugging"].ainvoke(
+            {"fileFullPath": "debug-fixture.mjs", "workingDirectory": "."}
+        )
+    )
+
+    assert payload["ok"] is True, payload
+    start_kwargs = service.start.await_args.kwargs
+    assert start_kwargs["configuration_id"] is None
+    assert start_kwargs["thread_id"] == _MAIN_THREAD_ID
+    assert start_kwargs["path"] == "debug-fixture.mjs"
+    assert start_kwargs["working_directory"] == ""

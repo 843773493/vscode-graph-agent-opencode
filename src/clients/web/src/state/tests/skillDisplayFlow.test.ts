@@ -79,13 +79,13 @@ const skillEvents: TraceEvent[] = [
     tool_name: "test_tool_2",
     args: {},
     skill_names: ["test-tool-2", "test-tool-2"],
-    invocation_tool_name: "invoke_custom_tool",
+    invocation_tool_name: "invoke_extension_tool",
   }, "run_test_tool_2"),
   event(14, "tool_call_end", {
     tool_name: "test_tool_2",
     result: "4568",
     skill_names: ["test-tool-2"],
-    invocation_tool_name: "invoke_custom_tool",
+    invocation_tool_name: "invoke_extension_tool",
   }, "run_test_tool_2"),
   event(15, "text_start", { kind: "markdown" }, "final_1"),
   event(16, "text_delta", { kind: "markdown", text: "4568" }, "final_1"),
@@ -117,7 +117,7 @@ assert(
   summary.toolResults.some(
     (result) =>
       result.toolName === "test_tool_2" &&
-      result.invocationToolName === "invoke_custom_tool" &&
+      result.invocationToolName === "invoke_extension_tool" &&
       result.resultText === "4568" &&
       result.skillNames.includes("test-tool-2"),
   ),

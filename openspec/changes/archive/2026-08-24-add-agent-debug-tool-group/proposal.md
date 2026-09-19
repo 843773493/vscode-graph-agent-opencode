@@ -4,7 +4,7 @@
 
 ## What Changes
 
-- 新增一组通过固定 `invoke_custom_tool` 扩展入口提供给 Agent 的源码调试工具；16 个执行工具尽量兼容 DebugMCP，另有 4 个会话方案管理工具，20 个目标工具均不直接注册到 Agent runtime 的模型工具列表。
+- 新增一组通过固定 `invoke_extension_tool` 扩展入口提供给 Agent 的源码调试工具；16 个执行工具尽量兼容 DebugMCP，另有 4 个会话方案管理工具，20 个目标工具均不直接注册到 Agent runtime 的模型工具列表。
 - 覆盖调试会话生命周期、继续/暂停/单步、断点与 Logpoint、变量查看和表达式求值。
 - 首期使用现有 Node Inspector 实现 JavaScript 调试；为未来 debugpy、DAP 和 VS Code 调试适配预留后端边界，但本次不实现 VS Code 会话路由。
 - 新增 `runtime.debug` 工作区配置，支持默认 adapter、Node Inspector、debugpy 预留配置和可命名的 launch profile。

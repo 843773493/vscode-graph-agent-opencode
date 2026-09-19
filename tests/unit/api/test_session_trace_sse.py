@@ -23,7 +23,7 @@ async def _single_trace_event() -> AsyncIterator[tuple[TraceEventDTO, str]]:
 def _trace_event() -> TraceEventDTO:
     return TraceEventDTO(
         event_id="evt_sse_heartbeat",
-        session_id="ses_sse_heartbeat",
+        session_id="ses_12345678123446788234567812345678",
         job_id="job_sse_heartbeat",
         type="job_started",
         phase="job",
@@ -56,7 +56,7 @@ async def test_trace_sse_emits_complete_event_block() -> None:
     chunk = await asyncio.wait_for(anext(stream), timeout=0.2)
 
     assert chunk.startswith("id: tc1.heartbeat\nevent: trace\ndata: ")
-    assert '"session_id":"ses_sse_heartbeat"' in chunk
+    assert '"session_id":"ses_12345678123446788234567812345678"' in chunk
     assert chunk.endswith("\n\n")
     await stream.aclose()
 

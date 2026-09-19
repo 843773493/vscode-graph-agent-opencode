@@ -22,10 +22,14 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 def session_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SessionService:
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     initialize_directories()
+    # R17：workspace_id 与 resolver 同源（identity API）；catalog 模式下
+    # register 校验 manifest workspace_id 与分配一致，不再硬编码假 UUID。
+    from app.core.workspace_identity import load_or_create_workspace_id
+
     return SessionService(
         config_service=ConfigService(),
         trace_event_store=TraceEventStore(sessions_dir=get_sessions_dir()),
-        workspace_id="00000000-0000-4000-8000-000000000001",
+        workspace_id=load_or_create_workspace_id(tmp_path),
     )
 
 

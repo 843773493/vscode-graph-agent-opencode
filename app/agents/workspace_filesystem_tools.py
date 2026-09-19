@@ -14,6 +14,7 @@ from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.middleware_prompts import FILESYSTEM_TOOL_DESCRIPTIONS
+from app.agents.workspace_backend import SessionArtifactBackend
 from app.agents.workspace_tool_paths import (
     WorkspaceToolPathResolver,
     backend_virtual_to_workspace_relative,
@@ -33,12 +34,6 @@ GREP_EXCLUDED_GLOBS = (
     "!node_modules",
     "!node_modules/**",
 )
-SYSTEM_SKILL_SOURCES = {
-    "skills": "workspace",
-    "bundled-skills": "bundled",
-}
-
-
 class _ToolSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -173,7 +168,6 @@ def _rewrite_known_path(
         additional_kwargs["read_file_path"] = backend_virtual_to_workspace_relative(
             read_path
         )
-    additional_kwargs.update(_system_skill_metadata(relative_path))
     return message.model_copy(
         update={"content": content, "additional_kwargs": additional_kwargs}
     )
@@ -208,23 +202,8 @@ def _runtime_path_error(tool_name: str, relative_path: str) -> ValueError:
     return ValueError(
         f"{tool_name} 禁止访问工作区运行时目录: {relative_path!r}。"
         " .boxteam 由系统管理，不能用于普通源码搜索或读写；"
-        "系统 Skill 只允许读取被注入的精确 SKILL.md 文件。"
+        "Skill 正文必须通过 skill_load 按名称激活。"
     )
-
-
-def _system_skill_metadata(relative_path: str) -> dict[str, str]:
-    parts = PurePosixPath(relative_path).parts
-    if len(parts) != 4 or parts[0] != ".boxteam" or parts[3] != "SKILL.md":
-        return {}
-    source = SYSTEM_SKILL_SOURCES.get(parts[1])
-    if source is None:
-        return {}
-    return {
-        "workspace_path_scope": "system_skill",
-        "workspace_file_kind": "skill_definition",
-        "skill_source": source,
-        "skill_name": parts[2],
-    }
 
 
 def _is_session_attachment_path(relative_path: str) -> bool:
@@ -245,13 +224,10 @@ def _validate_model_path(
     tool_name: str,
     relative_path: str,
     *,
-    allow_skill_roots: bool = False,
     allow_attachment_paths: bool = False,
 ) -> str:
     parts = PurePosixPath(relative_path).parts
     if not parts or parts[0] != ".boxteam":
-        return relative_path
-    if allow_skill_roots and _system_skill_metadata(relative_path):
         return relative_path
     if allow_attachment_paths and _is_session_attachment_path(relative_path):
         return relative_path
@@ -420,6 +396,49 @@ def _run_bounded_workspace_grep(
     )
 
 
+def _run_session_artifact_grep(
+    *,
+    pattern: str,
+    relative_path: str,
+    glob: str | None,
+    output_mode: Literal["files_with_matches", "content", "count"],
+    backend: SessionArtifactBackend,
+    runtime: ToolRuntime[None, FilesystemState],
+) -> ToolMessage:
+    """在模型可见的会话产物虚拟路径中搜索。"""
+
+    artifact_tail = relative_path.removeprefix("session-artifacts").lstrip("/")
+    backend_path = "/" if not artifact_tail else f"/{artifact_tail}"
+    result = backend.grep(pattern, path=backend_path, glob=glob)
+    if result.error:
+        return _grep_result_error(runtime, result.error)
+
+    matches: list[dict[str, str | int]] = []
+    for match in result.matches or []:
+        raw_path = match.get("path")
+        line_number = match.get("line")
+        line_text = match.get("text")
+        if (
+            not isinstance(raw_path, str)
+            or not isinstance(line_number, int)
+            or not isinstance(line_text, str)
+        ):
+            continue
+        matches.append(
+            {
+                "path": f"session-artifacts/{raw_path.lstrip('/')}",
+                "line": line_number,
+                "text": line_text,
+            }
+        )
+    return ToolMessage(
+        content=format_grep_matches(matches, output_mode),
+        name="grep",
+        tool_call_id=runtime.tool_call_id,
+        status="success",
+    )
+
+
 def configure_workspace_filesystem_tools(
     middleware: FilesystemMiddleware,
     *,
@@ -428,6 +447,7 @@ def configure_workspace_filesystem_tools(
     """将 DeepAgents 文件工具适配为模型可见的标准相对路径协议。"""
 
     resolver = WorkspaceToolPathResolver(workspace_root)
+    session_artifact_backend = SessionArtifactBackend(workspace_root)
     implementations = {
         name: _tool_implementations(middleware, name)
         for name in ("ls", "read_file", "write_file", "edit_file", "glob")
@@ -472,7 +492,6 @@ def configure_workspace_filesystem_tools(
             _validate_model_path(
                 "read_file",
                 relative_path,
-                allow_skill_roots=True,
                 allow_attachment_paths=True,
             )
             backend_path = resolver.backend_virtual_path(path)
@@ -501,7 +520,6 @@ def configure_workspace_filesystem_tools(
             _validate_model_path(
                 "read_file",
                 relative_path,
-                allow_skill_roots=True,
                 allow_attachment_paths=True,
             )
             backend_path = resolver.backend_virtual_path(path)
@@ -668,6 +686,17 @@ def configure_workspace_filesystem_tools(
             relative_path = _validate_grep_scope(resolver, path, glob)
         except ValueError as error:
             return _path_error("grep", runtime, error)
+        if relative_path == "session-artifacts" or relative_path.startswith(
+            "session-artifacts/"
+        ):
+            return _run_session_artifact_grep(
+                pattern=pattern,
+                relative_path=relative_path,
+                glob=glob,
+                output_mode=output_mode,
+                backend=session_artifact_backend,
+                runtime=runtime,
+            )
         return _run_bounded_workspace_grep(
             pattern=pattern,
             relative_path=relative_path,
@@ -690,6 +719,18 @@ def configure_workspace_filesystem_tools(
             relative_path = _validate_grep_scope(resolver, path, glob)
         except ValueError as error:
             return _path_error("grep", runtime, error)
+        if relative_path == "session-artifacts" or relative_path.startswith(
+            "session-artifacts/"
+        ):
+            return await asyncio.to_thread(
+                _run_session_artifact_grep,
+                pattern=pattern,
+                relative_path=relative_path,
+                glob=glob,
+                output_mode=output_mode,
+                backend=session_artifact_backend,
+                runtime=runtime,
+            )
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(

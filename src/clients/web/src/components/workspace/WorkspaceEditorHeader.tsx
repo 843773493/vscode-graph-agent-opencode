@@ -43,7 +43,7 @@ const WORKSPACE_COMPONENT_OPTIONS: ReadonlyArray<{
   {
     tab: "resources",
     label: "运行与连接",
-    description: "查看终端、浏览器和后台连接",
+    description: "查看终端、浏览器、后台连接和子会话线程",
     icon: "codicon-server-process",
   },
 ];

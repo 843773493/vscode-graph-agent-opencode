@@ -40,7 +40,7 @@ Skill 的“可发现、可读取”与扩展工具的“实际启用”是两�
 
 ## 动态扩展工具契约
 
-`invoke_custom_tool` 的固定外层 schema 已经作为模型工具内置提供：模型调用它时传入 `tool_name` 和 `arguments`。Skill 不重复复制这份固定 schema，而是在工具组正文中为每个目标工具提供以下 JSON 对象：
+`invoke_extension_tool` 的固定外层 schema 已经作为模型工具内置提供：模型调用它时传入 `tool_name` 和 `arguments`。Skill 不重复复制这份固定 schema，而是在工具组正文中为每个目标工具提供以下 JSON 对象：
 
 ```json
 {

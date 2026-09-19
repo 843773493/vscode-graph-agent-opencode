@@ -13,12 +13,46 @@ ROLLOUT_SCHEMA_VERSION = 4
 MESSAGE_FORMAT_VERSION = 1
 ROLLOUT_FORMAT_VERSION = 2
 
+CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS context_source_control_states (
+        session_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        binding_revision TEXT,
+        tracking_status TEXT NOT NULL CHECK(tracking_status IN ('tracked','untracked')),
+        latest_visible_committed_revision TEXT,
+        latest_revision TEXT,
+        state_revision INTEGER NOT NULL CHECK(state_revision >= 1),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(session_id, thread_id, source_id),
+        CHECK (binding_revision IS NULL OR length(binding_revision) > 0),
+        CHECK (latest_visible_committed_revision IS NULL OR length(latest_visible_committed_revision) > 0),
+        CHECK (latest_revision IS NULL OR length(latest_revision) > 0),
+        CHECK (latest_revision IS NOT NULL OR latest_visible_committed_revision IS NULL)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS context_source_control_states_owner_index
+        ON context_source_control_states(session_id, thread_id, tracking_status);
+    """,
+)
+"""CSM 控制状态的唯一 DDL 定义；新库与既有 v4 库共用同一份语句。"""
+
+CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_SQL = "\n".join(
+    CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_STATEMENTS
+)
+
 
 def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
     """创建 v2 schema；不执行数据迁移或业务查询。"""
     connection.executescript(
         PLAN_REGISTRY_SCHEMA_SQL.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
         + TOOL_SET_SNAPSHOT_SCHEMA_SQL.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
+        + CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_SQL
         +
         """
         CREATE TABLE IF NOT EXISTS database_meta (
@@ -588,6 +622,8 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
 
 
 __all__ = [
+    "CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_SQL",
+    "CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_STATEMENTS",
     "MESSAGE_FORMAT_VERSION",
     "ROLLOUT_FORMAT_VERSION",
     "ROLLOUT_SCHEMA_VERSION",

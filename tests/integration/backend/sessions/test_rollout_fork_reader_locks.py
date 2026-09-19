@@ -24,6 +24,9 @@ from tests.integration.backend.sessions.test_rollout_fork_protected import (
     protected_source as protected_source,  # noqa: PLC0414 - 不运行其它正式文件
 )
 
+SOURCE_SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+TARGET_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
+
 
 def _locks(index: Path) -> list[str]:
     inode = index.stat().st_ino
@@ -39,7 +42,7 @@ def _locks(index: Path) -> list[str]:
 @pytest.fixture
 def source_reader(protected_source, request):
     saver = protected_source[0]
-    connection = sqlite3.connect(saver._storage.index_path("source"))
+    connection = sqlite3.connect(saver._storage.index_path(SOURCE_SESSION_ID))
     if request.param:
         connection.execute("BEGIN")
     connection.execute("SELECT count(*) FROM context_plans").fetchone()
@@ -58,7 +61,7 @@ def lock_artifacts(request):
 
 @pytest.fixture
 def forbid_parent_sqlite_copy(protected_source, monkeypatch):
-    source_root = protected_source[0]._storage.root("source")
+    source_root = protected_source[0]._storage.root(SOURCE_SESSION_ID)
     original = shutil.copyfile
 
     def checked_copyfile(source, destination, *, follow_symlinks=True):
@@ -83,8 +86,8 @@ from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
 
 with RolloutCheckpointSaver(Path(sys.argv[1])) as saver:
-    saver.create_context_plan('source', ContextRequestPlan(
-        session_id='source', plan_id='independent-writer', refs=(),
+    saver.create_context_plan(sys.argv[2], ContextRequestPlan(
+        session_id=sys.argv[2], plan_id='independent-writer', refs=(),
         plan_creation_idempotency_key='writer-after-fork',
     ))
 """
@@ -107,7 +110,7 @@ async def test_fork_preserves_live_reader_and_independent_writer(
     operation,
 ):
     saver = protected_source[0]
-    index = saver._storage.index_path("source")
+    index = saver._storage.index_path(SOURCE_SESSION_ID)
     before = _locks(index)
     assert before, "合法 source reader 必须持有 SQLite database SHARED lock"
     transaction_reader = source_reader.in_transaction
@@ -115,11 +118,11 @@ async def test_fork_preserves_live_reader_and_independent_writer(
         "SELECT count(*) FROM context_plans"
     ).fetchone()[0]
     if operation == "preflight":
-        await saver.preflight_fork(source_session_id="source", mode="full_rollout_copy")
+        await saver.preflight_fork(source_session_id=SOURCE_SESSION_ID, mode="full_rollout_copy")
     else:
         await saver.afork(
-            source_session_id="source",
-            target_session_id="target",
+            source_session_id=SOURCE_SESSION_ID,
+            target_session_id=TARGET_SESSION_ID,
             mode="full_rollout_copy",
         )
     after = _locks(index)
@@ -127,7 +130,7 @@ async def test_fork_preserves_live_reader_and_independent_writer(
     assert source_reader.in_transaction == transaction_reader
     result = await asyncio.to_thread(
         subprocess.run,
-        [sys.executable, "-c", _WRITER, str(saver._storage.sessions_dir)],
+        [sys.executable, "-c", _WRITER, str(saver._storage.sessions_dir), SOURCE_SESSION_ID],
         check=False,
         capture_output=True,
         text=True,
@@ -158,7 +161,7 @@ async def test_fork_preserves_live_reader_and_independent_writer(
     assert source_reader.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
     assert source_reader.execute("PRAGMA foreign_key_check").fetchall() == []
     if operation == "full-copy":
-        with saver._storage._connect("target", "", read_only=True) as target:
+        with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as target:
             assert target.execute(
                 "SELECT count(*) FROM context_plans WHERE plan_id='independent-writer'"
             ).fetchone() == (0,)

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
 class TraceEventDTO(BaseModel):
     event_id: str
-    part_id: Optional[str] = None
+    part_id: str | None = None
     session_id: str
     job_id: str
     type: Literal[
@@ -33,13 +33,15 @@ class TraceEventDTO(BaseModel):
         "session_interrupted",
         "goal_updated",
         "goal_cleared",
+        "debug_stop",
+        "debug_action",
     ]
-    phase: Literal["agent", "llm", "tool", "error", "job", "text", "system", "status", "message", "session", "goal"]
+    phase: Literal["agent", "llm", "tool", "error", "job", "text", "system", "status", "message", "session", "goal", "debug"]
     title: str
     content: str
-    status: Optional[str] = None
-    tool_name: Optional[str] = None
+    status: str | None = None
+    tool_name: str | None = None
     skill_names: list[str] = Field(default_factory=list)
-    step_id: Optional[str] = None
+    step_id: str | None = None
     timestamp: datetime
     raw: dict[str, Any] = Field(default_factory=dict)

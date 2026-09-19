@@ -199,6 +199,45 @@ runtime 同时保留当前 ModelCall 的规范化可见文本，AgentLoop 在每
 
 如果某个测试替身没有安装该 hook，它只能验证最终聚合/业务事件，不能把 `on_chat_model_stream` 重新当成消息流回退入口；生产 provider wrapper 缺少 hook 必须显式失败。这样可以避免真实运行时出现“双提交”或一条链路丢 delta、另一条链路补 delta 的不一致。
 
+#### 5.1 Provider 身份与工具事件的单一投影约束
+
+Provider wrapper 必须优先使用本次 LangChain model run 的 `run_id` 作为
+`model_call_id`。如果某条 Agent 图在调用 wrapper 时没有继续传递
+`run_manager`，则由同一执行上下文安装的内部身份 callback 在
+`on_chat_model_start` 时登记该 run，wrapper 只能消费对应 sink 的短期身份
+登记；不得按当前活动模型、最近一次事件、正文 hash 或其它业务顺序猜测
+model call。身份登记在 Turn 结束时清理，不能成为跨 Turn 的状态。
+
+`tool_call_id` 的解析也必须是确定性的：固定信封工具的外层执行事件要同时
+匹配 provider 入口名称、信封内目标名称和规范化后的目标参数；当参数已经
+提供但没有精确匹配时必须报错，不能回退到“最新 pending call”。同一个
+`tool_call_id` 仍可有独立的 `tool_execution_id`，但其 model-call scope 和
+provider identity 不能跨调用复用。
+
+请求边界收到的 `ToolMessage` 可以提前收口内存中的 ToolExecution，解决
+LangGraph `on_tool_end` 晚于下一次 model call 的情况；它不得再次发布已经由
+外层 `on_tool_start`/`on_tool_end` 表达的用户可见 `tool.started` 或
+`tool.completed`。同一实际执行在 canonical message stream 中只能有一份开始
+和一份终态投影；迟到事件只做幂等收口或提交明确的生命周期补全，不能复制
+工具正文、工具结果或前端 trace。
+
+`on_chat_model_end` 只允许作为没有 canonical provider 正文时的受限回退。
+如果 provider hook 已提交当前 `model_call_id` 的可见正文，end 事件只能补齐
+AgentLoop 的本地聚合结果，不得再次写入 MessageStreamWriter；如果 canonical
+流只提交了 reasoning，则回退正文也不得复制 reasoning carrier。
+
+实时 stream item 的 `block_id` 按
+`<model_call_id>:block:<provider_part_id>` 生成，最终 checkpoint assistant
+carrier 的 `content_part_refs[].id` 可以保留 provider 的局部 part ID；两者在
+provider projection 中只能按这个明确的身份格式（以及可选的同一 block index）
+关联。不得使用 `endswith`、正文相等或时间顺序判断 stream shadow。这样同一
+provider 在不同 model call 复用局部 part ID 时，前一调用不会误删后一调用的
+assistant 内容；已被最终 carrier 引用的 stream item 必须从下一次 provider
+context 中排除，但其 canonical/history 事实仍保留。最终 carrier 的
+`supersedes_message_id` 如果是 `lc_run--<model_call_id>`，它本身就是明确的
+model-call scope；projection 不得要求被替代的 checkpoint item 也必须在当前
+selection 中才能解析这个 scope。
+
 #### 6. AgentLoop 的 ModelCall attempt 与最终收尾
 
 一次 AgentLoop 可能因为空回复、缺少工具调用、缺少委派报告或其它业务校验而重新请求模型。每次真实上游请求都必须有独立的 `model_call_id`/attempt，不得把多个请求的 block 合并成同一个 ModelCall。
@@ -240,7 +279,7 @@ tool_call.completed(
 
 如果工具调用已经完整但尚未启动执行，则中断时提交 `status=cancelled, completion_reason=user_interrupt`，不得产生 `tool.started`。如果 `tool.started` 已经持久化，工具执行则必须单独提交 `tool.completed`；取消后无法确认结果时也必须实时提交 `status=completed, outcome=outcome_unknown`，不能只在 checkpoint 内把 running 标记改掉，否则在线客户端在收到 `stream.interrupted` 后仍可能把工具显示为运行中。
 
-工具调用的关联必须跨越 provider delta 和 AgentLoop 事件：同一个模型工具调用的所有分片都使用同一个 provider `tool_call_id`，后续分片缺少 `name` 或参数仍不得清空已经收到的名称和参数；`tool.started`/`tool.completed` 使用独立的 `tool_execution_id`，但其 `tool_call_id` 必须指向对应的 provider 调用。对于 `invoke_custom_tool` 这类入口，`tool_calls[].tool_name` 保留模型实际调用的入口名称，`tool_executions[].tool_name` 可以是解析后的目标工具名，目标工具名和参数仍从同一 `tool_call_id` 的 `tool_calls[]` 恢复。这样实时投影、snapshot 和刷新后的历史投影不会因执行 run id 与 provider call id 不同而丢失参数。
+工具调用的关联必须跨越 provider delta 和 AgentLoop 事件：同一个模型工具调用的所有分片都使用同一个 provider `tool_call_id`，后续分片缺少 `name` 或参数仍不得清空已经收到的名称和参数；`tool.started`/`tool.completed` 使用独立的 `tool_execution_id`，但其 `tool_call_id` 必须指向对应的 provider 调用。对于 `invoke_extension_tool` 这类入口，`tool_calls[].tool_name` 保留模型实际调用的入口名称，`tool_executions[].tool_name` 可以是解析后的目标工具名，目标工具名和参数仍从同一 `tool_call_id` 的 `tool_calls[]` 恢复。这样实时投影、snapshot 和刷新后的历史投影不会因执行 run id 与 provider call id 不同而丢失参数。
 
 如果后端在 `tool.started` 之后、`tool.completed` 持久化之前崩溃，恢复扫描必须将该 ToolExecution 标记为 `status=completed, outcome=outcome_unknown`。本变更默认不得自动重放，因为工具可能已经写文件、发送消息或修改外部状态。
 

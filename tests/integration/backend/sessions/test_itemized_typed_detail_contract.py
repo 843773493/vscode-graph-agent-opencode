@@ -43,7 +43,7 @@ __all__ = [
 def test_plain_request_recovery_requires_explicit_source_identity(
     projection_saver, projection_draft, change_identity
 ) -> None:
-    saver, session_id, session = projection_saver
+    saver, session_id, _ = projection_saver
     draft, bodies = projection_draft
     draft = replace(draft, tool_set_refs=())
     draft = register_projection_draft(saver, session_id, draft)
@@ -79,7 +79,7 @@ def test_plain_request_recovery_requires_explicit_source_identity(
             for ref in draft.refs
         ),
     )
-    with RolloutCheckpointSaver(session.parent) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         next_draft = register_projection_draft(restarted, session_id, next_draft)
         arguments = {
             "seal_idempotency_key": f"seal:{next_draft.plan_id}",
@@ -103,7 +103,7 @@ def test_plain_request_recovery_requires_explicit_source_identity(
             == _project(restarted, session_id, second.assembly_id)["native"]["request"]
         )
     # 再次打开 owner：source_ref 仍是旧 source，恢复只能读新 selection detail。
-    with RolloutCheckpointSaver(session.parent) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         assert (
             _project(restarted, session_id, second.assembly_id)["native"]["selection"][
                 2
@@ -178,7 +178,7 @@ def test_detail_read_rejects_wrong_owner_or_untyped_input_before_storage(
 def test_corrupt_typed_selection_binding_is_rejected_after_restart(
     projection_saver, projection_plan, owner_field
 ) -> None:
-    _, session_id, session = projection_saver
+    saver, session_id, session = projection_saver
     original = projection_plan.selection[1].detail_ref
     changed = replace(original, **{owner_field: f"wrong-{owner_field}"})
     with sqlite3.connect(session / "rollout/index.sqlite") as connection:
@@ -187,7 +187,7 @@ def test_corrupt_typed_selection_binding_is_rejected_after_restart(
             "WHERE assembly_id = ? AND plan_ordinal = 1",
             (detail_ref_key(changed), projection_plan.assembly_id),
         )
-    with RolloutCheckpointSaver(session.parent) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         for projector in (
             restarted.project_context_plan_to_messages,
             restarted.project_context_plan_to_native,

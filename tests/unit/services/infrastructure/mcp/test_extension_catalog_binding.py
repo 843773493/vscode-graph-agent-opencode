@@ -1,0 +1,308 @@
+"""ExtensionCatalogBindingRef typed 合同测试（OpenSpec E4 硬探针）。
+
+覆盖：binding 冻结/可验证、目录更新后 sealed ref 不漂移、generation lease
+只在 revision 推进时递增、tombstone 后旧调用按 sealed ref 解析、空目录固定
+envelope、同名 target 发布前显式拒绝。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import pytest
+from langchain_core.tools import BaseTool, StructuredTool
+from pydantic import BaseModel
+
+from app.domain.itemized.hashing import canonical_json_bytes
+from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.mcp import (
+    ExtensionCatalogBindingRef,
+    ExtensionTargetBindingInput,
+    ExtensionTargetConflictError,
+    ExtensionTargetResolutionError,
+    McpCatalogOwner,
+    build_extension_catalog_binding,
+)
+from app.services.infrastructure.mcp.config import McpServerConfig
+from app.services.infrastructure.mcp.extension_catalog import (
+    _BINDING_HASH_DOMAIN,
+    extension_args_fingerprint,
+)
+
+
+class _EchoInput(BaseModel):
+    text: str
+
+
+def _make_remote_tool(name: str) -> StructuredTool:
+    async def _call(text: str) -> str:
+        return f"{name}:{text}"
+
+    return StructuredTool.from_function(
+        coroutine=_call,
+        name=name,
+        description=f"{name} 工具",
+        args_schema=_EchoInput,
+    )
+
+
+class _FakeSession:
+    def __init__(self, *, tool_names: list[str], supports_notifications: bool = True):
+        self.tool_names = list(tool_names)
+        self.supports_notifications = supports_notifications
+
+    async def initialize(self) -> None:
+        return None
+
+    async def list_tools(self) -> list[BaseTool]:
+        return [_make_remote_tool(name) for name in self.tool_names]
+
+    def supports_tool_list_changed(self) -> bool:
+        return self.supports_notifications
+
+
+class _FakeSessionFactory:
+    def __init__(self, initial_tools: dict[str, list[str]] | None = None):
+        self._initial_tools = initial_tools or {}
+        self.sessions: dict[str, _FakeSession] = {}
+        self.notify_callbacks: dict[str, Callable[[], None]] = {}
+
+    def __call__(
+        self,
+        server: McpServerConfig,
+        on_tools_list_changed: Callable[[], None],
+    ) -> object:
+        session = _FakeSession(
+            tool_names=list(self._initial_tools.get(server.server_id, [])),
+        )
+        self.sessions[server.server_id] = session
+        self.notify_callbacks[server.server_id] = on_tools_list_changed
+
+        @asynccontextmanager
+        async def _session() -> AsyncIterator[_FakeSession]:
+            yield session
+
+        return _session()
+
+
+def _stdio_server(server_id: str = "mini") -> dict[str, object]:
+    return {
+        server_id: {
+            "enabled": True,
+            "transport": "stdio",
+            "command": "fake-server",
+        }
+    }
+
+
+def _make_owner(
+    tmp_path: Path,
+    factory: _FakeSessionFactory,
+    servers: dict[str, object] | None = None,
+) -> McpCatalogOwner:
+    return McpCatalogOwner(
+        raw_config={"servers": servers if servers is not None else _stdio_server()},
+        workspace_root=tmp_path,
+        event_service=EventChannelService(),
+        session_factory=factory,
+    )
+
+
+async def _drain_pending_relists(owner: McpCatalogOwner) -> None:
+    tasks = tuple(owner._pending_relist_tasks)
+    if tasks:
+        await asyncio.gather(*tasks)
+
+
+async def _started_owner(
+    tmp_path: Path,
+    factory: _FakeSessionFactory,
+    servers: dict[str, object] | None = None,
+):
+    owner = _make_owner(tmp_path, factory, servers)
+    await owner.start()
+    return owner
+
+
+def _expected_binding_hash(ref: ExtensionCatalogBindingRef) -> str:
+    """按文档化 payload 形状独立重算 binding_hash，验证可核对性。"""
+    payload = [
+        _BINDING_HASH_DOMAIN,
+        ref.binding_id,
+        ref.catalog_revision,
+        ref.generation,
+        ref.provider_binding_identity,
+        [
+            [t.target_id, t.origin, t.server_id, t.schema_hash]
+            for t in sorted(ref.targets.values(), key=lambda item: item.target_id)
+        ],
+    ]
+    return "sha256:" + hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+
+async def test_binding_snapshot_frozen_and_verifiable(tmp_path: Path) -> None:
+    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
+    owner = await _started_owner(tmp_path, factory)
+    try:
+        ref = owner.binding_snapshot()
+        assert ref.catalog_revision == owner.catalog_revision()
+        assert ref.generation == owner.catalog_generation() == 1
+        assert ref.binding_id == f"ext-catalog:v1:1:{ref.catalog_revision}"
+        assert set(ref.targets) == {"mcp__mini__echo"}
+        target = ref.targets["mcp__mini__echo"]
+        assert target.origin == "mcp"
+        assert target.server_id == "mini"
+        assert target.schema_hash.startswith("sha256:")
+        # schema_hash 与目录语义 revision 同源：对同一 args 重算一致。
+        assert target.schema_hash == (
+            "sha256:"
+            + hashlib.sha256(
+                extension_args_fingerprint(
+                    owner.get_tools()[0].args
+                ).encode()
+            ).hexdigest()
+        )
+        # binding_hash 可按文档化 payload 独立重算核对。
+        assert ref.binding_hash == _expected_binding_hash(ref)
+        # frozen：targets 不可变。
+        with pytest.raises(TypeError):
+            ref.targets["new"] = target  # type: ignore[index]
+    finally:
+        await owner.shutdown()
+
+
+async def test_binding_snapshot_does_not_drift_after_catalog_update(
+    tmp_path: Path,
+) -> None:
+    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
+    owner = await _started_owner(tmp_path, factory)
+    try:
+        sealed = owner.binding_snapshot()
+        sealed_revision = sealed.catalog_revision
+        sealed_hash = sealed.binding_hash
+        # 目录新增 target：sealed ref 封存的字段值必须保持不变。
+        factory.sessions["mini"].tool_names.append("extra")
+        factory.notify_callbacks["mini"]()
+        await _drain_pending_relists(owner)
+
+        assert sealed.catalog_revision == sealed_revision
+        assert sealed.binding_hash == sealed_hash
+        assert _expected_binding_hash(sealed) == sealed_hash
+        assert set(sealed.targets) == {"mcp__mini__echo"}
+        assert sealed.resolve("mcp__mini__echo").server_id == "mini"
+
+        fresh = owner.binding_snapshot()
+        assert fresh.catalog_revision != sealed.catalog_revision
+        assert fresh.generation == 2
+        assert set(fresh.targets) == {"mcp__mini__echo", "mcp__mini__extra"}
+    finally:
+        await owner.shutdown()
+
+
+async def test_generation_advances_only_on_revision_change(tmp_path: Path) -> None:
+    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
+    owner = await _started_owner(tmp_path, factory)
+    try:
+        generation_before = owner.catalog_generation()
+        # unchanged relist：generation 不推进。
+        factory.notify_callbacks["mini"]()
+        await _drain_pending_relists(owner)
+        assert owner.catalog_generation() == generation_before
+
+        # 语义变化 relist：generation 恰好 +1。
+        factory.sessions["mini"].tool_names[0] = "renamed"
+        factory.notify_callbacks["mini"]()
+        await _drain_pending_relists(owner)
+        assert owner.catalog_generation() == generation_before + 1
+    finally:
+        await owner.shutdown()
+
+
+async def test_old_call_resolves_by_sealed_ref_after_tombstone(
+    tmp_path: Path,
+) -> None:
+    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
+    owner = await _started_owner(tmp_path, factory)
+    try:
+        sealed = owner.binding_snapshot()
+        # 目录删除 target（tombstone）：旧调用仍按 sealed ref 解析原 target。
+        factory.sessions["mini"].tool_names.clear()
+        factory.notify_callbacks["mini"]()
+        await _drain_pending_relists(owner)
+
+        assert sealed.resolve("mcp__mini__echo").server_id == "mini"
+        with pytest.raises(ExtensionTargetResolutionError):
+            sealed.resolve("mcp__mini__missing")
+        # 新调用按新 sealed binding 解析：旧 target 已不存在，显式失败。
+        live = owner.binding_snapshot()
+        with pytest.raises(ExtensionTargetResolutionError):
+            live.resolve("mcp__mini__echo")
+    finally:
+        await owner.shutdown()
+
+
+async def test_empty_catalog_binding_envelope_deterministic(tmp_path: Path) -> None:
+    owner_a = await _started_owner(tmp_path, _FakeSessionFactory(), servers={})
+    owner_b = await _started_owner(
+        tmp_path / "b", _FakeSessionFactory(), servers={}
+    )
+    try:
+        ref_a = owner_a.binding_snapshot()
+        ref_b = owner_b.binding_snapshot()
+        assert ref_a.targets == {}
+        # 空 envelope 的 revision 与 binding 跨实例逐字节一致。
+        assert ref_a.catalog_revision == ref_b.catalog_revision
+        assert ref_a.binding_id == ref_b.binding_id
+        assert ref_a.binding_hash == ref_b.binding_hash
+    finally:
+        await owner_a.shutdown()
+        await owner_b.shutdown()
+
+
+async def test_cross_server_same_remote_name_uses_declared_namespace(
+    tmp_path: Path,
+) -> None:
+    """跨 server 同名远端工具按规范命名空间区分，不冲突也不静默覆盖。"""
+    servers: dict[str, object] = {
+        "alpha": {"enabled": True, "transport": "stdio", "command": "fake-a"},
+        "beta": {"enabled": True, "transport": "stdio", "command": "fake-b"},
+    }
+    factory = _FakeSessionFactory(
+        initial_tools={"alpha": ["echo"], "beta": ["echo"]}
+    )
+    owner = await _started_owner(tmp_path, factory, servers)
+    try:
+        ref = owner.binding_snapshot()
+        assert set(ref.targets) == {"mcp__alpha__echo", "mcp__beta__echo"}
+        assert ref.resolve("mcp__alpha__echo").server_id == "alpha"
+        assert ref.resolve("mcp__beta__echo").server_id == "beta"
+    finally:
+        await owner.shutdown()
+
+
+def test_builder_rejects_duplicate_targets_and_invalid_inputs() -> None:
+    base = ExtensionTargetBindingInput(
+        target_id="mcp__mini__echo", origin="mcp", args={"text": {}}, server_id="mini"
+    )
+    with pytest.raises(ExtensionTargetConflictError):
+        build_extension_catalog_binding(
+            catalog_revision="sha256:" + "0" * 64,
+            generation=1,
+            targets=[base, base],
+        )
+    with pytest.raises(ValueError):
+        build_extension_catalog_binding(
+            catalog_revision="sha256:" + "0" * 64,
+            generation=0,
+            targets=[base],
+        )
+    with pytest.raises(ValueError):
+        build_extension_catalog_binding(
+            catalog_revision="not-a-hash",
+            generation=1,
+            targets=[base],
+        )

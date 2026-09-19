@@ -21,6 +21,9 @@ from tests.integration.backend.sessions.itemized_migration_helpers import (
     prepare_migration_workspace,
 )
 
+SOURCE_SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+TARGET_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
+
 
 @pytest.fixture
 def migration_setup(request: pytest.FixtureRequest, session_bundle_factory) -> Callable:
@@ -29,11 +32,11 @@ def migration_setup(request: pytest.FixtureRequest, session_bundle_factory) -> C
     def setup(records: list[dict[str, object]]) -> LegacyMigrationStorage:
         _write_v1_source(
             sessions,
-            session_id="source",
+            session_id=SOURCE_SESSION_ID,
             session_bundle_factory=session_bundle_factory,
             records=records,
         )
-        session_bundle_factory(sessions, "target")
+        session_bundle_factory(sessions, TARGET_SESSION_ID)
         return _storage(sessions)
 
     return setup
@@ -85,9 +88,9 @@ def test_tool_calls_and_results_get_target_local_linked_identity(
     }
     storage = migration_setup([*records, result, final])
     imported = storage.migrate_legacy_to_v2(
-        "source", target_thread_id="target", require_lossless=True
+        SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID, require_lossless=True
     )
-    items = storage.read_items("target")
+    items = storage.read_items(TARGET_SESSION_ID)
     call = next(item for item in items if item.semantic_kind == "tool_call")
     result_item = next(item for item in items if item.semantic_kind == "tool_result")
     root = next(item for item in items if item.semantic_kind == "user_input")
@@ -137,7 +140,7 @@ def test_conflicting_candidates_never_create_turns(
         if case == "unsupported_same_id":
             records[1]["role"] = "unknown-role"
     storage = migration_setup(records)
-    result = storage.migrate_legacy_to_v2("source", target_thread_id="target")
+    result = storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
     assert not result["migrated"]
     assert {candidate["candidate_status"] for candidate in result["rejected"]} == {
         expected
@@ -145,7 +148,7 @@ def test_conflicting_candidates_never_create_turns(
     assert sum(len(candidate["records"]) for candidate in result["rejected"]) == len(
         records
     )
-    assert storage.read_items("target") == []
+    assert storage.read_items(TARGET_SESSION_ID) == []
 
 
 @pytest.mark.parametrize("trusted", [True, False])
@@ -158,9 +161,9 @@ def test_system_reminder_never_becomes_a_turn_member(
     notice["message"]["data"]["id"] = "notice"
     notice["metadata"] = {"internal": True, "checkpoint": True} if trusted else {}
     storage = migration_setup([*records, notice])
-    result = storage.migrate_legacy_to_v2("source", target_thread_id="target")
+    result = storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
     if trusted:
-        item = storage.read_items("target")[-1]
+        item = storage.read_items(TARGET_SESSION_ID)[-1]
         assert (item.semantic_kind, item.turn_id, item.turn_scope) == (
             "runtime_notice",
             None,
@@ -168,7 +171,7 @@ def test_system_reminder_never_becomes_a_turn_member(
         )
     else:
         assert result["rejected"][0]["candidate_status"] == "legacy_unsupported_role"
-        assert storage.read_items("target") == []
+        assert storage.read_items(TARGET_SESSION_ID) == []
 
 
 @pytest.mark.parametrize("corrupt", [False, True])
@@ -178,7 +181,7 @@ def test_manifest_final_pointer_is_validated(
     records = _accepted_records()
     records[1]["metadata"] = {}
     storage = migration_setup(records)
-    with sqlite3.connect(storage.index_path("source")) as connection:
+    with sqlite3.connect(storage.index_path(SOURCE_SESSION_ID)) as connection:
         connection.execute(
             "CREATE TABLE turns(turn_id TEXT,status TEXT,final_message_id TEXT,final_message_sequence INTEGER)"
         )
@@ -188,10 +191,10 @@ def test_manifest_final_pointer_is_validated(
         )
     if corrupt:
         with pytest.raises(FormatDispatchError, match="final pointer"):
-            storage.migrate_legacy_to_v2("source", target_thread_id="target")
-        assert not storage.root("target").exists()
+            storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
+        assert not storage.root(TARGET_SESSION_ID).exists()
     else:
-        result = storage.migrate_legacy_to_v2("source", target_thread_id="target")
+        result = storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
         assert result["migrated"][0]["status"] == "completed"
         assert result["migrated"][0]["final_item_id"] is not None
 
@@ -202,7 +205,7 @@ def test_legacy_manifest_content_identity_is_checked(
 ) -> None:
     records = _accepted_records()
     storage = migration_setup(records)
-    with sqlite3.connect(storage.index_path("source")) as connection:
+    with sqlite3.connect(storage.index_path(SOURCE_SESSION_ID)) as connection:
         connection.executescript(
             "ALTER TABLE messages ADD COLUMN role TEXT; ALTER TABLE messages ADD COLUMN content_hash TEXT; ALTER TABLE messages ADD COLUMN content_length INTEGER;"
         )
@@ -233,11 +236,11 @@ def test_legacy_manifest_content_identity_is_checked(
         with pytest.raises(
             FormatDispatchError, match="content_hash|content_length|role"
         ):
-            storage.migrate_legacy_to_v2("source", target_thread_id="target")
-        assert not storage.root("target").exists()
+            storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
+        assert not storage.root(TARGET_SESSION_ID).exists()
     else:
         assert (
-            storage.migrate_legacy_to_v2("source", target_thread_id="target")[
+            storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)[
                 "lossless"
             ]
             is True

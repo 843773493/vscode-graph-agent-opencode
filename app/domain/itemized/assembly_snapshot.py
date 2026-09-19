@@ -409,6 +409,7 @@ class ContextAssemblySnapshot:
                     "contribution_kind": item.contribution_kind,
                     "visibility": item.visibility,
                     "protection": item.protection,
+                    "root_placement": item.root_placement,
                     "body": (
                         item.body
                         if item.body is not None

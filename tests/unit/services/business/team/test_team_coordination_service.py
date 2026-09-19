@@ -57,15 +57,22 @@ class _SubagentService:
 
     async def delegate(self, **kwargs) -> SessionSubagentAccepted:
         self.calls.append(kwargs)
-        child = _session(f"ses_child_{len(self.calls)}", title="团队审查员")
-        self.session_service.sessions[child.session_id] = child
-        before_start = kwargs["before_start"]
-        await before_start(child)
-        return SessionSubagentAccepted(
-            child_session=child,
-            message_id="msg_child_start",
-            job_id="job_child_start",
+        # R25 契约：委派产出 owner Session 内 child thread + pending
+        # intent（不创建 child Session，不返回运行中 Job）。
+        index = len(self.calls)
+        accepted = SessionSubagentAccepted(
+            owner_session_id=kwargs["parent_session_id"],
+            child_thread_id=f"thr_{index:032x}",
+            delegation_id=f"del_{index:032x}",
+            admission_idempotency_key=f"del_{index:032x}",
+            admission_state="pending",
+            execution_binding_id=f"tbind_{index:032x}",
+            frozen_job_id=f"job_{index:032x}",
         )
+        before_start = kwargs.get("before_start")
+        if before_start is not None:
+            await before_start(accepted)
+        return accepted
 
 
 def _service(tmp_path, sessions: list[SessionDTO]):
@@ -103,8 +110,13 @@ async def test_delegated_reviewer_uses_shared_board_and_reports_to_parent(tmp_pa
     )
 
     reviewer_id = member_result.member.session_id
+    assert reviewer_id == "thr_" + f"{1:032x}"
     assert member_result.member.source == "delegated"
-    assert member_result.member.activation_job_id == "job_child_start"
+    # R25：委派成员无激活 Job（R26 接线）；admission 保持 pending。
+    assert member_result.member.activation_job_id is None
+    assert member_result.child_thread_id == reviewer_id
+    assert member_result.child_delegation_id == "del_" + f"{1:032x}"
+    assert member_result.child_admission_state == "pending"
     assert subagents.calls[0]["trusted_context"]["team_id"] == team.team_id
     assert subagents.calls[0]["title"] == "reviewer · 交付循环"
 

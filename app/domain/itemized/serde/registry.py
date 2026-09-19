@@ -189,7 +189,15 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         raise ItemSchemaError(
             "ContextContribution 缺少字段: " + ",".join(missing_contribution_fields)
         )
-    if set(raw) - required_contribution_fields:
+    # source_ordinal 是可选 typed 字段（registry 分配值随 unsealed 清单
+    # 往返；sealed manifest 不携带），只加入允许集，不进入必需集。
+    # root_placement 是 E1 typed 控制字段；旧 envelope 不携带时应用规范
+    # 文档化默认 tail_only（默认外部内容恒为 tail_only），不是旧别名兼容。
+    allowed_contribution_fields = required_contribution_fields | {
+        "source_ordinal",
+        "root_placement",
+    }
+    if set(raw) - allowed_contribution_fields:
         raise ItemSchemaError("ContextContribution 含未知或不属于 registry 的字段")
     if not isinstance(raw["request_only"], bool):
         raise ItemSchemaError("ContextContribution.request_only 必须是 boolean")
@@ -199,6 +207,22 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         )
     if not isinstance(raw["metadata"], Mapping):
         raise ItemSchemaError("ContextContribution.metadata 必须是 object")
+    # source_ordinal 是 draft/source manifest 的可选 typed 字段；registry
+    # 分配值随 unsealed 清单往返，sealed manifest 不携带（保持旧字节合同）。
+    raw_source_ordinal = raw.get("source_ordinal")
+    if raw_source_ordinal is not None and (
+        not isinstance(raw_source_ordinal, int)
+        or isinstance(raw_source_ordinal, bool)
+        or raw_source_ordinal < 0
+    ):
+        raise ItemSchemaError(
+            "ContextContribution.source_ordinal 必须是非负整数或 NULL"
+        )
+    raw_root_placement = raw.get("root_placement", "tail_only")
+    if raw_root_placement not in ("root_eligible", "tail_only"):
+        raise ItemSchemaError(
+            f"未知 ContextContribution.root_placement: {raw_root_placement!r}"
+        )
     return ContextContribution(
         contribution_id=_required_string(
             raw["contribution_id"], "ContextContribution.contribution_id"
@@ -238,6 +262,8 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
             raw["contribution_ordinal"],
             "ContextContribution.contribution_ordinal",
         ),
+        source_ordinal=raw_source_ordinal,
+        root_placement=raw_root_placement,
     )
 
 

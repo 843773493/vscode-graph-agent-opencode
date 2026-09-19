@@ -12,10 +12,7 @@ from langchain_core.messages import SystemMessage
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from app.agents.request_replay_middleware import (
-    native_request_projection_scope,
-    read_prompt_replay_components,
-)
+from app.agents.sealed_assembly_dispatch import sealed_native_projection_scope
 from app.core.job_context import get_current_job_id
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.domain.itemized.hashing import (
@@ -137,67 +134,39 @@ def _target_format(model: object) -> str:
 def _prompt_contributions(
     message: SystemMessage | None,
 ) -> tuple[ContextContribution, ...]:
-    components = read_prompt_replay_components()
-    if not components:
-        blocks = _system_blocks(message)
-        components = (
-            [
-                {
-                    "source": "provider_request",
-                    "label": "assembled system prompt",
-                    "operation": "replace",
-                    "content_blocks": blocks,
-                }
-            ]
-            if blocks
-            else []
-        )
-    result: list[ContextContribution] = []
-    for order, component in enumerate(components, start=1):
-        raw_blocks = component.get("content_blocks")
-        if not isinstance(raw_blocks, list):
-            raise TypeError(f"prompt component[{order}] content_blocks 必须是 list")
-        blocks = []
-        for index, block in enumerate(raw_blocks):
-            if not isinstance(block, Mapping):
-                raise TypeError(
-                    f"prompt component[{order}].content_blocks[{index}] 必须是 object"
-                )
-            blocks.append({str(key): value for key, value in block.items()})
-        source = component.get("source")
-        label = component.get("label")
-        operation = component.get("operation")
-        if not all(
-            isinstance(value, str) and value for value in (source, label, operation)
-        ):
-            raise TypeError(f"prompt component[{order}] identity 不完整")
-        slot_hash = sha256_jcs({"source": source, "label": label, "order": order})
-        result.append(
-            ContextContribution(
-                contribution_id=f"prompt-slot:{slot_hash}",
-                source_kind=f"middleware:{source}",
-                source_revision=sha256_jcs(blocks),
-                content_hash=contribution_content_hash("prompt", blocks),
-                request_only=True,
-                metadata={
-                    "label": label,
-                    "operation": operation,
-                    # storage registry 会在首次登记时分配稳定 source_ordinal；
-                    # 不使用临时 selection ordinal 作为持久化顺序。
-                    "source_ordinal": order,
-                    "replaceable_source": True,
-                    "runtime_projection": True,
-                },
-                contribution_kind="prompt",
-                body=blocks,
-                content_length=len(canonical_json_bytes(blocks)),
-            )
-        )
-    return tuple(result)
+    blocks = _system_blocks(message)
+    if not blocks:
+        return ()
+    slot_hash = sha256_jcs({"source": "sealed_request", "slot": "system"})
+    return (
+        ContextContribution(
+            contribution_id=f"prompt-slot:{slot_hash}",
+            source_kind="sealed_request:system",
+            source_revision=sha256_jcs(blocks),
+            content_hash=contribution_content_hash("prompt", blocks),
+            request_only=True,
+            metadata={
+                "label": "assembled system prompt",
+                "operation": "replace",
+                # source_ordinal 由 itemized registry 列分配并经 typed 字段
+                # 承载；producer 不再向 metadata 写入控制 ordinal。
+                # TODO(OpenSpec 1.5-B): replaceable_source 的 typed 闭包需要
+                # registry 列与 schema 版本化迁移，当前仍由 metadata 承载。
+                "replaceable_source": True,
+                "runtime_projection": True,
+            },
+            contribution_kind="prompt",
+            body=blocks,
+            content_length=len(canonical_json_bytes(blocks)),
+            # assembled system prompt 是唯一 root producer slot；显式声明
+            # root_eligible，projector 按它编译唯一 system root。
+            root_placement="root_eligible",
+        ),
+    )
 
 
-class ItemizedContextProjectionMiddleware(AgentMiddleware[StateT, Any, Any]):
-    """在最终 prompt middleware 后使用同一 sealed selection 投影请求。"""
+class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
+    """无状态地把 Saver sealed selection 转发给 Provider handler。"""
 
     def __init__(self, *, checkpointer: object) -> None:
         self._checkpointer = checkpointer
@@ -324,7 +293,7 @@ class ItemizedContextProjectionMiddleware(AgentMiddleware[StateT, Any, Any]):
         # 消费 on_chat_model_start。prepared handle 必须保留到该事件由
         # RolloutCheckpointSaver 绑定真实 model_call_id 后再移除，不能在
         # middleware 的 handler 返回路径提前清理。
-        with native_request_projection_scope(prepared.get("native_projection")):
+        with sealed_native_projection_scope(prepared.get("native_projection")):
             return handler(
                 request.override(
                     messages=messages,
@@ -363,7 +332,7 @@ class ItemizedContextProjectionMiddleware(AgentMiddleware[StateT, Any, Any]):
             )
         # 同步包装器的相同生命周期约束：真实 model-start event 消费前不
         # 得删除 Saver-owned prepared handle。
-        with native_request_projection_scope(prepared.get("native_projection")):
+        with sealed_native_projection_scope(prepared.get("native_projection")):
             return await handler(
                 request.override(
                     messages=messages,
@@ -373,4 +342,4 @@ class ItemizedContextProjectionMiddleware(AgentMiddleware[StateT, Any, Any]):
             )
 
 
-__all__ = ["ItemizedContextProjectionMiddleware"]
+__all__ = ["SealedAssemblyDispatchBridge"]

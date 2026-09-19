@@ -20,12 +20,26 @@ from app.schemas.internal_v2.node_debug import (
 )
 from app.services.infrastructure.node_debug_service import NodeDebugService
 
+# Session 级产品入口语义：裸 session_id 等价于 main thread（DTO/query 的
+# thread_id 默认值就是该映射），显式传入 thread_id 才定位 child thread。
+# 所有 mutation 的 Session 生命周期准入（Session 存在且未删除）由
+# NodeDebugService 入口的 NodeDebugSessionAdmission 统一执行，准入失败在此
+# 映射为 404，不从 API 层重复读取 Session。
 router = APIRouter(prefix="/debug/node", tags=["node-debug"])
 
 
 def _configuration_error(error: Exception) -> HTTPException:
     if isinstance(error, FileNotFoundError):
         return HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, KeyError):
+        return HTTPException(
+            status_code=404,
+            detail=(
+                f"调试目标不存在: {error.args[0]}"
+                if error.args
+                else "调试目标不存在"
+            ),
+        )
     if isinstance(error, (TypeError, ValueError)):
         return HTTPException(status_code=400, detail=str(error))
     return HTTPException(status_code=409, detail=str(error))
@@ -51,8 +65,12 @@ async def get_node_debug_state(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
+    thread_id: Annotated[str, Query(min_length=1)] = "main",
 ):
-    result = await node_debug_service.get_state(session_id)
+    try:
+        result = await node_debug_service.get_state(session_id, thread_id)
+    except KeyError as error:
+        raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -66,8 +84,12 @@ async def list_node_debug_configurations(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
+    thread_id: Annotated[str, Query(min_length=1)] = "main",
 ):
-    result = node_debug_service.list_configurations(session_id)
+    try:
+        result = node_debug_service.list_configurations(session_id, thread_id)
+    except KeyError as error:
+        raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -82,9 +104,12 @@ async def get_node_debug_configuration(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
+    thread_id: Annotated[str, Query(min_length=1)] = "main",
 ):
     try:
-        result = node_debug_service.get_configuration(session_id, configuration_id)
+        result = node_debug_service.get_configuration(
+            session_id, configuration_id, thread_id
+        )
     except (FileNotFoundError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -146,6 +171,7 @@ async def activate_node_debug_configuration(
         result = await node_debug_service.activate_configuration(
             payload.session_id,
             configuration_id,
+            thread_id=payload.thread_id,
         )
     except (FileNotFoundError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
@@ -163,11 +189,13 @@ async def delete_node_debug_configuration(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
+    thread_id: Annotated[str, Query(min_length=1)] = "main",
 ):
     try:
         result = await node_debug_service.delete_configuration(
             session_id,
             configuration_id,
+            thread_id=thread_id,
         )
     except (FileNotFoundError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
@@ -189,6 +217,7 @@ async def import_node_debug_configuration(
         result = await node_debug_service.import_configuration(
             payload.session_id,
             payload.configuration,
+            thread_id=payload.thread_id,
             activate=payload.activate,
         )
     except (FileNotFoundError, TypeError, ValueError, RuntimeError) as error:
@@ -211,7 +240,9 @@ async def copy_node_debug_configuration(
     try:
         result = await node_debug_service.copy_configuration(
             source_session_id=payload.source_session_id,
+            source_thread_id=payload.source_thread_id,
             target_session_id=payload.target_session_id,
+            target_thread_id=payload.target_thread_id,
             configuration_id=configuration_id,
             name=payload.name,
             activate=payload.activate,
@@ -231,6 +262,7 @@ async def start_node_debug(
     try:
         result = await node_debug_service.start(
             session_id=payload.session_id,
+            thread_id=payload.thread_id,
             configuration_id=payload.configuration_id,
             path=payload.path,
             args=payload.args,
@@ -257,9 +289,12 @@ async def apply_node_debug_action(
     try:
         result = await node_debug_service.apply_action(
             session_id=payload.session_id,
+            thread_id=payload.thread_id,
             action=payload.action,
             params=payload.params,
         )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
     except (TypeError, ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)

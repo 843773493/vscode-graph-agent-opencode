@@ -4,7 +4,6 @@ from langchain_core.tools import BaseTool, tool
 
 from app.agents.custom_tools import CustomToolFactoryContext
 
-
 LARGE_TEST_TARGET_LINE_INDEX = 1_200
 LARGE_TEST_TARGET_VALUE = "BOXTEAM_MIDDLE_SECRET_7F3A9C"
 LARGE_TEST_OUTPUT = "\n".join(

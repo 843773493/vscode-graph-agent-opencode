@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from app.abstractions.session_resources import (
     BackgroundTaskRegistryProtocol,
     BrowserManagerClientProtocol,
@@ -72,8 +70,6 @@ class BackgroundTaskResourceProvider:
                     f"后台任务不存在: session_id={session_id}, task_id={resource_id}"
                 )
             handle = await self._task_registry.cancel(session_id, resource_id)
-            if existing_handle.task_name == "monitor_session_agent_end":
-                self._append_monitor_cancel_reminder(handle)
             return SessionResourceControlResultDTO(
                 session_id=session_id,
                 resource_id=resource_id,
@@ -102,42 +98,6 @@ class BackgroundTaskResourceProvider:
             handle,
             available_actions=background_task_available_actions(handle.status),
         )
-
-    def _append_monitor_cancel_reminder(self, handle: BackgroundTaskHandle) -> None:
-        cancelled_at = datetime.now(UTC).isoformat()
-        target_session_id = handle.metadata.get("target_session_id")
-        target_text = (
-            f"目标 session：{target_session_id}。"
-            if isinstance(target_session_id, str) and target_session_id
-            else ""
-        )
-        reminder = (
-            f"用户于 {cancelled_at} 通过后台连接面板手动取消了后台任务 "
-            f"{handle.task_name}（task_id={handle.task_id}）。"
-            f"{target_text}"
-            "该监控任务不会继续监听 AGENT_END，也不会再自动转发目标回复。"
-            "请不要等待这个后台任务继续产生消息，后续按用户最新请求继续。"
-        )
-        injected = self._message_service.append_system_reminder(
-            session_id=handle.session_id,
-            reminder=reminder,
-            response_metadata={
-                "phase": "background_task",
-                "source": "resource_cancel",
-                "user_initiated": True,
-                "task_id": handle.task_id,
-                "task_name": handle.task_name,
-                "action": "cancel",
-                "target_session_id": target_session_id,
-                "cancelled_at": cancelled_at,
-            },
-            checkpoint_source="resource_cancel",
-        )
-        if not injected:
-            raise RuntimeError(
-                "后台任务已取消，但未找到可注入 system_reminder 的 checkpoint: "
-                f"session_id={handle.session_id}, task_id={handle.task_id}"
-            )
 
 
 class TerminalResourceProvider:

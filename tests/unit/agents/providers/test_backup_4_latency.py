@@ -256,9 +256,14 @@ async def test_responses_semantic_delta_reaches_hook_before_langchain_yield(
     observed: list[str] = []
 
     class RecordingSink:
-        async def accept_message_chunk(self, chunk: AIMessageChunk) -> None:
+        async def accept_message_chunk(
+            self,
+            chunk: AIMessageChunk,
+            *,
+            model_call_id: str | None = None,
+        ) -> None:
             del chunk
-            observed.append("hook")
+            observed.append(f"hook:{model_call_id or 'unbound'}")
 
     token = set_current_model_delta_sink(RecordingSink())
     try:
@@ -269,5 +274,5 @@ async def test_responses_semantic_delta_reaches_hook_before_langchain_yield(
     finally:
         reset_current_model_delta_sink(token)
 
-    assert observed == ["hook", "yield"]
+    assert observed == ["hook:unbound", "yield"]
     assert len(chunks) == 1

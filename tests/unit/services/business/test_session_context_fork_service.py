@@ -31,10 +31,14 @@ def fork_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ForkServic
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     checkpointer = RolloutCheckpointSaver(sessions_dir=sessions_dir)
+    # R17：workspace_id 与 resolver 同源（identity API）；catalog 模式下
+    # register 校验 manifest workspace_id 与分配一致，不再硬编码假 UUID。
+    from app.core.workspace_identity import load_or_create_workspace_id
+
     session_service = SessionService(
         config_service=ConfigService(workspace_root=tmp_path),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
-        workspace_id="00000000-0000-4000-8000-000000000001",
+        workspace_id=load_or_create_workspace_id(tmp_path),
         fork_relationship_checker=checkpointer,
     )
     return ForkServices(
@@ -69,7 +73,7 @@ async def test_fork_copies_agent_state_into_independent_child(
             ],
             "scratchpad": {"current_task": "继续验证 alpha"},
         },
-        "channel_versions": {"messages": 1, "scratchpad": 1},
+        "channel_versions": {"messages": "1", "scratchpad": "1"},
         "versions_seen": {},
         "pending_sends": [],
         "updated_channels": ["messages", "scratchpad"],
@@ -78,7 +82,7 @@ async def test_fork_copies_agent_state_into_independent_child(
         build_checkpoint_config(source.session_id),
         checkpoint,
         {"source": "loop", "step": 2, "parents": {}},
-        {"messages": 1, "scratchpad": 1},
+        {"messages": "1", "scratchpad": "1"},
     )
     fork_services.checkpointer.finalize_turn(
         session_id=source.session_id,
@@ -125,22 +129,15 @@ async def test_fork_copies_agent_state_into_independent_child(
 
 
 @pytest.mark.asyncio
-async def test_fork_empty_context_still_creates_bound_child(
+async def test_fork_empty_context_is_rejected_before_child_creation(
     fork_services: ForkServices,
 ) -> None:
     source = await fork_services.session_service.create(
         SessionCreateRequest(title="空上下文")
     )
 
-    child = await fork_services.fork_service.fork(source.session_id)
-
-    assert child.parent_session_id is None
-    assert (
-        await fork_services.checkpointer.aget_tuple(
-            build_checkpoint_config(child.session_id)
-        )
-        is None
-    )
+    with pytest.raises(ValueError, match="fork_source_not_completed"):
+        await fork_services.fork_service.fork(source.session_id)
 
 
 @pytest.mark.asyncio
@@ -165,7 +162,7 @@ async def test_detached_fork_survives_parent_deletion(
             ],
             "scratchpad": {"current_task": "继续"},
         },
-        "channel_versions": {"messages": 1, "scratchpad": 1},
+        "channel_versions": {"messages": "1", "scratchpad": "1"},
         "versions_seen": {},
         "pending_sends": [],
         "updated_channels": ["messages", "scratchpad"],
@@ -198,6 +195,36 @@ async def test_pinned_fork_blocks_parent_deletion(
 ) -> None:
     source = await fork_services.session_service.create(
         SessionCreateRequest(title="固定源会话")
+    )
+    checkpoint = {
+        "v": 1,
+        "id": "checkpoint-pinned-source",
+        "ts": "2026-07-13T00:00:00+00:00",
+        "channel_values": {
+            "messages": [
+                HumanMessage(
+                    content="固定源上下文",
+                    id="pinned-user-1",
+                    response_metadata={"turn_id": "pinned-turn-1"},
+                ),
+                AIMessage(content="固定源回答", id="pinned-final-1"),
+            ],
+        },
+        "channel_versions": {"messages": "1"},
+        "versions_seen": {},
+        "pending_sends": [],
+        "updated_channels": ["messages"],
+    }
+    await fork_services.checkpointer.aput(
+        build_checkpoint_config(source.session_id),
+        checkpoint,
+        {"source": "test", "step": 1, "parents": {}},
+        {"messages": "1"},
+    )
+    fork_services.checkpointer.finalize_turn(
+        session_id=source.session_id,
+        turn_id="pinned-turn-1",
+        final_message_id="pinned-final-1",
     )
     child = await fork_services.fork_service.fork(
         source.session_id,

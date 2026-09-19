@@ -1,6 +1,6 @@
 ## Context
 
-当前`NodeDebugService`按session管理Node Inspector进程、断点、配置方案和动作；现有调试目标已通过`tools.custom`/`invoke_custom_tool`接入，但目标OpenSpec仍把16个能力描述为直接Provider工具。`NodeDebugSessionStore`仍在Session节点的`debug/node/`持久化，Node调试HTTP API也只接受`session_id`。新版上下文方案已经把SessionThread定为执行与工具binding owner，把Provider工具面固定为少量直接工具和`invoke_extension_tool`信封，因此需同时迁移调试目录与资源identity，不能只改工具名称。
+当前`NodeDebugService`按session管理Node Inspector进程、断点、配置方案和动作；现有调试目标已通过`tools.custom`/`invoke_extension_tool`接入，但目标OpenSpec仍把16个能力描述为直接Provider工具。`NodeDebugSessionStore`仍在Session节点的`debug/node/`持久化，Node调试HTTP API也只接受`session_id`。新版上下文方案已经把SessionThread定为执行与工具binding owner，把Provider工具面固定为少量直接工具和`invoke_extension_tool`信封，因此需同时迁移调试目录与资源identity，不能只改工具名称。
 
 本变更需要把已有 Node 调试能力映射为 Agent 工具，同时保留未来 adapter 的边界。当前不引入 VS Code 扩展或 debugpy 依赖，也不把调试端口、线程和 frame 标识交给模型。
 
@@ -32,7 +32,7 @@
 
 每个目标保留稳定、全局无冲突的tool identity和各自公开输入schema；重名必须在目录candidate发布前拒绝，不按注册顺序覆盖。工具是否可调用仍由现有denylist、allowlist和`confirmation_required`在内层解析；`evaluate_expression`不绕过人工确认。目录/权限变化只改变下一激活边界的ExtensionCatalogBindingRef及必要user-role指引，不产生Provider ToolSet hard rebase；已sealed调用按产生它的binding解析，执行点重新校验最新权限，结果与原tool_call_id配对。固定信封即使没有可用调试目标也留在Provider工具列表。
 
-原方案“16个直接Provider工具”与固定前缀/信封合同冲突，正式废弃；`invoke_custom_tool`旧名在实施时直接替换为`invoke_extension_tool`，不保留模型可见别名。DebugMCP兼容性限定为内层目标名、参数与结果语义，不声称Provider顶层工具协议仍与DebugMCP相同。
+原方案“16个直接Provider工具”与固定前缀/信封合同冲突，正式废弃；`invoke_extension_tool`旧名在实施时直接替换为`invoke_extension_tool`，不保留模型可见别名。DebugMCP兼容性限定为内层目标名、参数与结果语义，不声称Provider顶层工具协议仍与DebugMCP相同。
 
 ### 2. Add a narrow Agent-facing facade over NodeDebugService
 
@@ -99,7 +99,7 @@ Node Inspector虽无与VS Code `SourceBreakpoint.logMessage`等价的独立API�
 ## Migration Plan
 
 1. 复用现有Workspace`runtime.debug`默认/schema/开发模板并核对合并来源，不新建thread配置开关或改写旧用户配置。
-2. 对齐生命周期change的固定`invoke_extension_tool`和ExtensionCatalogBindingRef；把全部调试目标保留在内层`debugging`目录，迁移相关工具提示词/测试，删除`invoke_custom_tool`别名与16个直接Provider注册。默认Node profile沿用动态Inspector端口。
+2. 对齐生命周期change的固定`invoke_extension_tool`和ExtensionCatalogBindingRef；把全部调试目标保留在内层`debugging`目录，迁移相关工具提示词/测试，删除`invoke_extension_tool`别名与16个直接Provider注册。默认Node profile沿用动态Inspector端口。
 3. 在itemized维护门槛下把旧Session调试方案定点迁到main thread节点；NodeDebugService、配置registry、API/Web/SSE/审计和路径resolver改为thread-qualified。活进程不复制/迁移，按真实owner收敛。未配置`runtime.debug`仍使用有效Workspace默认值；没有Node可执行文件时明确失败。
 4. 如需回滚，按明确owner关闭本次thread调试进程，不复活旧Session目录或直接工具兼容入口；已有HTTP Node调试API只作为经catalog解析main thread的产品入口保留。
 5. 未来增加 debugpy 或 VS Code adapter 时，只新增 adapter 实现和 profile 校验，不改变 16 个 Agent 工具的输入 schema。

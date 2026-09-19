@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 from pathlib import Path
-from urllib.parse import urlparse
 
-import commentjson
 import httpx
 import pytest
 import websockets
@@ -37,7 +36,9 @@ from tests.harness.python.terminal_manager import (
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
+    acquire_gateway_guest,
     close_gateway_process,
+    reset_gateway_user_configuration,
     start_gateway_process,
     write_gateway_remote_gateway_config,
 )
@@ -71,14 +72,28 @@ async def _receive_terminal_output(websocket, expected_text: str) -> None:
     raise TimeoutError(f"终端 WebSocket 未输出: {expected_text}")
 
 
-def _remove_declared_remote_gateway(workspace_root: Path) -> None:
-    config_path = workspace_root / ".boxteam" / "workspace.jsonc"
-    payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    payload["gateway"] = {"workspaces": []}
-    config_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+@pytest.fixture(autouse=True)
+def isolated_gateway_state(
+    e2e_workspace_root_path: str,
+) -> None:
+    """每个测试函数都从干净的 Gateway 持久状态开始。
+
+    Gateway 注册表把远程连接和投影分开落盘：scoped 保存会沿用注册表元数据里
+    已有的 `remote_gateway_connections`，因此在已经写入过元数据的 BOXTEAM_HOME
+    上新增配置声明的远程 Gateway 时，连接不会再次落盘，只剩投影。下一次
+    Gateway 启动就会因为“投影引用未知连接”而按 fail-closed 拒绝加载。这里在
+    每个测试函数开始前清空隔离 BOXTEAM_HOME 的 state/gateway，保证单个用例内
+    写入的是自洽的完整快照；用例内部的多次重启仍然共享同一份持久化状态。
+    """
+
+    gateway_root = (
+        Path(e2e_workspace_root_path).resolve().parent
+        / "boxteam-home"
+        / "state"
+        / "gateway"
     )
+    if gateway_root.exists():
+        shutil.rmtree(gateway_root)
 
 
 @pytest.mark.asyncio
@@ -102,6 +117,7 @@ async def test_gateway_restart_reuses_local_browser_manager_and_live_page(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
+            await acquire_gateway_guest(client)
             workspace_list = (await client.get("/api/gateway/workspaces")).json()["data"]
             workspace_id = workspace_list["active_workspace_id"]
             health_path = (
@@ -127,20 +143,14 @@ async def test_gateway_restart_reuses_local_browser_manager_and_live_page(
             )
             assert browser_response.status_code == 200, browser_response.text
             browser_id = browser_response.json()["data"]["browser_id"]
-
-        registry_payload = json.loads(
-            (workspace_root / ".boxteam" / "gateway" / "workspaces.json").read_text(
-                encoding="utf-8"
+            refreshed_list = (await client.get("/api/gateway/workspaces")).json()["data"]
+            browser_manager_service = next(
+                item["services"]["browser_manager"]
+                for item in refreshed_list["items"]
+                if item["workspace_id"] == workspace_id
             )
-        )
-        persisted_target = next(
-            target
-            for target in registry_payload["targets"]
-            if target["workspace_id"] == workspace_id
-        )
-        browser_manager_url = persisted_target["local_service_urls"]["browser_manager"]
-        browser_manager_port = urlparse(browser_manager_url).port
-        assert browser_manager_port is not None
+            browser_manager_port = browser_manager_service["local_port"]
+            assert browser_manager_port is not None
 
         close_gateway_process(gateway)
         gateway = None
@@ -200,6 +210,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
     browser_frontend: BrowserFrontendProcess | None = None
     remote_gateway_pid: str | None = None
     docker_target: GatewaySshTarget | None = None
+    remote_gateway_declared = False
 
     try:
         docker_target = ensure_gateway_ssh_container(
@@ -224,6 +235,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
                 remote_boxteam_home=remote_boxteam_home,
             ),
         )
+        remote_gateway_declared = True
         terminal_frontend = start_terminal_frontend_process(
             workspace_root=local_workspace,
             frontend_port=terminal_frontend_port,
@@ -252,6 +264,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
+            await acquire_gateway_guest(client)
             workspace_list = (await client.get("/api/gateway/workspaces")).json()["data"]
             remote_workspace = next(
                 item
@@ -367,7 +380,8 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
 
         close_gateway_process(gateway)
         gateway = None
-        _remove_declared_remote_gateway(local_workspace)
+        # 这里刻意保留用户配置里的远程 Gateway 声明，用于验证重启后从注册表恢复
+        # 远程投影；声明的清理统一放在 finally 中，避免跨运行残留。
         gateway = start_gateway_process(
             workspace_root=local_workspace,
             default_backend_url="managed-by-gateway",
@@ -388,6 +402,8 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
     finally:
         if gateway is not None:
             close_gateway_process(gateway)
+        if remote_gateway_declared:
+            reset_gateway_user_configuration(workspace_root=local_workspace)
         if remote_gateway_pid is not None and docker_target is not None:
             stop_remote_backend(docker_target, remote_gateway_pid)
         if browser_frontend is not None:

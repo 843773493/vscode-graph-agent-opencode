@@ -24,7 +24,6 @@ from app.agents.cache_preserving_summarization import (
 from app.agents.custom_tool_confirmation_middleware import (
     CustomToolConfirmationMiddleware,
 )
-from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.middleware_prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,
@@ -35,10 +34,9 @@ from app.agents.middleware_prompts import (
     TODO_TOOL_DESCRIPTION,
 )
 from app.agents.model_tool_visibility import ModelToolVisibilityMiddleware
-from app.agents.request_replay_middleware import PromptReplayCaptureMiddleware
 from app.agents.skill_runtime import (
+    PublishedSkillCatalog,
     append_skill_middlewares,
-    append_workspace_agents_middleware,
 )
 from app.agents.structured_memory_middleware import StructuredMemoryMiddleware
 from app.agents.structured_prompt_validation_middleware import (
@@ -49,65 +47,21 @@ from app.agents.tool_identity import tool_definition_name
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
+from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
+    ContextSourceReactor,
+)
+from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
+    WorkspaceFileResourceRegistry,
+)
+from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
+    CompactionPreflightPort,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+)
 
 ToolDefinition = BaseTool | Callable[..., Any] | dict[str, Any]
 FILESYSTEM_INTERNAL_TOOL_DENYLIST = {"execute"}
-
-
-_PROMPT_REPLAY_LABELS = {
-    "TodoListMiddleware": "任务规划指令",
-    "WorkspaceSkillsMiddleware": "Skills 索引",
-    "FilesystemMiddleware": "文件系统与环境信息",
-    "SummarizationMiddleware": "上下文压缩指令",
-    "SummarizationToolMiddleware": "上下文压缩工具指令",
-    "CachePreservingSummarizationMiddleware": "上下文压缩指令",
-    "CachePreservingSummarizationToolMiddleware": "上下文压缩工具指令",
-    "WorkspaceAgentsMiddleware": "工作区 AGENTS.md",
-    "MemoryMiddleware": "Agent 记忆",
-    "StructuredMemoryMiddleware": "Agent 记忆",
-}
-
-
-def _prompt_replay_label(middleware: AgentMiddleware) -> str:
-    class_name = middleware.__class__.__name__
-    return _PROMPT_REPLAY_LABELS.get(class_name, class_name)
-
-
-def _instrument_prompt_replay(
-    middleware_stack: list[AgentMiddleware],
-) -> list[AgentMiddleware]:
-    logging_middleware = [
-        item for item in middleware_stack if isinstance(item, LLMLoggingMiddleware)
-    ]
-    if not logging_middleware:
-        return middleware_stack
-    if len(logging_middleware) > 1:
-        raise ValueError(
-            "LLMLoggingMiddleware 只能注册一次，否则同一次请求会产生重复日志"
-        )
-
-    request_middleware = [
-        item for item in middleware_stack if not isinstance(item, LLMLoggingMiddleware)
-    ]
-    instrumented: list[AgentMiddleware] = [
-        PromptReplayCaptureMiddleware(
-            source="agent_factory",
-            label="默认指令",
-            capture_id="initial",
-        )
-    ]
-    for index, middleware_item in enumerate(request_middleware, start=1):
-        instrumented.append(middleware_item)
-        instrumented.append(
-            PromptReplayCaptureMiddleware(
-                source=middleware_item.__class__.__name__,
-                label=_prompt_replay_label(middleware_item),
-                capture_id=f"{index}:{middleware_item.name}",
-            )
-        )
-    # 日志器必须在所有请求改写 middleware 之后，才能拿到最终模型、Prompt 和工具集。
-    instrumented.extend(logging_middleware)
-    return instrumented
 
 
 def filter_tools_by_name(
@@ -136,8 +90,13 @@ def _build_summarization_middleware(
     backend: BackendProtocol,
     *,
     compact_tool_enabled: bool,
+    compaction_preflight: CompactionPreflightPort,
 ) -> list[AgentMiddleware]:
-    summarization = create_cache_preserving_summarization_middleware(model, backend)
+    summarization = create_cache_preserving_summarization_middleware(
+        model,
+        backend,
+        compaction_preflight=compaction_preflight,
+    )
     if not compact_tool_enabled:
         return [summarization]
 
@@ -157,7 +116,11 @@ def build_deep_agent_middleware(
     backend: BackendProtocol,
     workspace_root: Path,
     permissions: list[FilesystemPermission] | None,
-    resolved_skills: list[Any] | None,
+    resolved_skills: PublishedSkillCatalog | None,
+    compaction_preflight: CompactionPreflightPort,
+    context_source_manager: ContextSourceManager | None = None,
+    source_registry: WorkspaceFileResourceRegistry | None = None,
+    context_source_reactor: ContextSourceReactor | None = None,
     resolved_tool_denylist: set[str],
     interrupt_on: dict[str, bool | InterruptOnConfig] | None,
     runtime_middleware: list[AgentMiddleware],
@@ -181,11 +144,13 @@ def build_deep_agent_middleware(
         )
     append_skill_middlewares(
         deepagent_middleware,
-        backend=backend,
-        skills=resolved_skills,
+        catalog=resolved_skills,
         system_prompt=(
             SKILLS_SYSTEM_PROMPT if "read_file" not in resolved_tool_denylist else None
         ),
+        context_source_manager=context_source_manager,
+        source_registry=source_registry,
+        context_source_reactor=context_source_reactor,
     )
     filesystem_middleware = FilesystemMiddleware(
         backend=backend,
@@ -212,17 +177,14 @@ def build_deep_agent_middleware(
                 backend,
                 compact_tool_enabled="compact_conversation"
                 not in resolved_tool_denylist,
+                compaction_preflight=compaction_preflight,
             ),
             PatchToolCallsMiddleware(),
             StructuredToolCallMiddleware(),
         ]
     )
-    # 必须位于 summarization middleware 之后，才能在同一轮看到新压缩事件，
-    # 并把最新 AGENTS.md 重新追加到压缩后的 system prompt 尾部。
-    append_workspace_agents_middleware(
-        deepagent_middleware,
-        workspace_root=workspace_root,
-    )
+    # D3-B 起 AGENTS 来源注册由 WorkspaceSkillsMiddleware 的唯一 CSM 链承载，
+    # 不再有独立的 AGENTS 注入 middleware 槽位。
 
     if model_hidden_tool_names:
         deepagent_middleware.append(
@@ -256,4 +218,4 @@ def build_deep_agent_middleware(
     # 放在所有会改写模型请求的 middleware 之后，确保派生的压缩请求也会被验证。
     deepagent_middleware.append(StructuredPromptValidationMiddleware())
 
-    return _instrument_prompt_replay(deepagent_middleware)
+    return deepagent_middleware

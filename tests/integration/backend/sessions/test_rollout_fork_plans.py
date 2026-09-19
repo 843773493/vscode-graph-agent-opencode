@@ -37,11 +37,15 @@ from tests.integration.backend.sessions.itemized_migration_helpers import (
     prepare_migration_workspace,
 )
 
+SOURCE_SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+TARGET_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
+COPY_TARGET_SESSION_ID = "ses_5ce2590d35c74fd9a71e8d7526be328c"
+
 
 @pytest.fixture
 def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
     sessions = prepare_migration_workspace(request) / ".boxteam" / "sessions"
-    for session in ("source", "target"):
+    for session in (SOURCE_SESSION_ID, TARGET_SESSION_ID):
         session_bundle_factory(sessions, session)
     with RolloutCheckpointSaver(sessions) as saver:
         checkpoint = empty_checkpoint()
@@ -58,14 +62,14 @@ def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
         }
         checkpoint["channel_versions"] = {"messages": "1"}
         saver.put(
-            build_checkpoint_config("source"),
+            build_checkpoint_config(SOURCE_SESSION_ID),
             checkpoint,
             {"source": "integration"},
             {"messages": "1"},
         )
         body = [{"type": "text", "text": "source plan 明文不是 identity，必须保持"}]
         saver.register_context_contribution(
-            "source",
+            SOURCE_SESSION_ID,
             ContextContribution(
                 contribution_id="source-contribution",
                 source_kind="environment",
@@ -77,7 +81,7 @@ def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
             request_content=body,
         )
         plan = saver.compose_committed_context_plan(
-            "source",
+            SOURCE_SESSION_ID,
             plan_id="source-plan",
             tool_snapshot=(
                 {
@@ -94,12 +98,12 @@ def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
             plan,
             plan_creation_idempotency_key="test_rollout_fork_plans:source-plan:create",
         )
-        saver.create_context_plan("source", plan)
+        saver.create_context_plan(SOURCE_SESSION_ID, plan)
         sealed = saver.seal_context_plan(
-            "source",
+            SOURCE_SESSION_ID,
             plan,
             turn_id="source-turn",
-            execution_id=saver.execution_for_turn("source", turn_id="source-turn"),
+            execution_id=saver.execution_for_turn(SOURCE_SESSION_ID, turn_id="source-turn"),
             provider_version="integration-provider",
             seal_idempotency_key="test_rollout_fork_plans:source-plan:seal",
         )
@@ -109,14 +113,14 @@ def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
 def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
     saver, sealed, body = plan_source
     storage = saver._storage
-    source_root = storage.root("source")
+    source_root = storage.root(SOURCE_SESSION_ID)
     before = artifact_manifest(source_root)
     source_view = storage.clone_rollout(
-        source_thread_id="source", target_thread_id="target", source_checkpoint_id=None
+        source_thread_id=SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID, source_checkpoint_id=None
     )
     fields = {
-        "source_session_id": "source",
-        "target_session_id": "target",
+        "source_session_id": SOURCE_SESSION_ID,
+        "target_session_id": TARGET_SESSION_ID,
         "source_checkpoint_id": None,
         "source_view_id": source_view,
         "fork_mode": "full_rollout_copy",
@@ -125,7 +129,7 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
     materialization, fork_id = storage.begin_fork_materialization(**fields)
     storage.commit_fork_materialization(materialization, **fields)
     assert artifact_manifest(source_root) == before
-    with storage._connect("target", "", read_only=True) as connection:
+    with storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
         target_assembly = connection.execute(
             "SELECT target_local_id FROM fork_identity_mappings WHERE fork_id=? AND entity_type='assembly' AND source_local_id=?",
             (fork_id, sealed.assembly_id),
@@ -136,28 +140,28 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
         ).fetchone()[0]
     source_root.rename(source_root.with_name("rollout-archived"))
     with RolloutCheckpointSaver(storage.sessions_dir) as restarted:
-        snapshot = restarted.get_context_assembly("target", assembly_id=target_assembly)
-        assert snapshot.session_id == "target"
+        snapshot = restarted.get_context_assembly(TARGET_SESSION_ID, assembly_id=target_assembly)
+        assert snapshot.session_id == TARGET_SESSION_ID
         target_plan = snapshot.as_sealed_plan()
         assert target_plan.plan_id == target_plan_id != sealed.plan_id
-        assert all(ref.session_id == "target" for ref in target_plan.refs)
+        assert all(ref.session_id == TARGET_SESSION_ID for ref in target_plan.refs)
         assert all(
             ref.plan_id == target_plan_id
             for ref in target_plan.refs
             if ref.ref_type == "request_only"
         )
         assert all(
-            ref.session_id == "target" and ref.plan_id == target_plan_id
+            ref.session_id == TARGET_SESSION_ID and ref.plan_id == target_plan_id
             for ref in target_plan.tool_set_refs
         )
-        assert all(entry.ref.session_id == "target" for entry in target_plan.selection)
+        assert all(entry.ref.session_id == TARGET_SESSION_ID for entry in target_plan.selection)
         assert all("detail_ref" not in ref.to_dict() for ref in target_plan.refs)
         for entry in target_plan.selection:
             if entry.included and entry.ref.ref_type == "request_only":
                 assert isinstance(entry.detail_ref, DetailRef)
-                entry.detail_ref.require_owner("target", target_assembly)
+                entry.detail_ref.require_owner(TARGET_SESSION_ID, target_assembly)
                 manifest = restarted._storage.get_context_plan_detail(
-                    "target", detail_ref=entry.detail_ref
+                    TARGET_SESSION_ID, detail_ref=entry.detail_ref
                 )
                 assert manifest["detail_ref"] == entry.detail_ref
                 assert manifest["detail_id"] == entry.detail_ref.detail_id
@@ -165,7 +169,7 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
                     f"rollout/context-plan-details/{target_assembly}/{entry.detail_ref.detail_id}"
                 )
         projected, losses = restarted.project_context_plan_with_diagnostics(
-            "target", target_plan
+            TARGET_SESSION_ID, target_plan
         )
         assert losses == () or losses == []
         rendered = json.dumps(
@@ -181,7 +185,7 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
         assert {ref.ref_id for ref in target_plan.tool_set_refs}.isdisjoint(
             ref.ref_id for ref in sealed.tool_set_refs
         )
-        native = restarted.project_context_plan_to_native("target", target_plan)
+        native = restarted.project_context_plan_to_native(TARGET_SESSION_ID, target_plan)
         assert native is not None
 
 
@@ -202,9 +206,9 @@ def test_full_copy_rejects_invalid_source_without_rebuilding_it(
 ) -> None:
     saver, sealed, _ = plan_source
     storage = saver._storage
-    source_root = storage.root("source")
+    source_root = storage.root(SOURCE_SESSION_ID)
     with (
-        closing(sqlite3.connect(storage.index_path("source"))) as connection,
+        closing(sqlite3.connect(storage.index_path(SOURCE_SESSION_ID))) as connection,
         connection,
     ):
         if corruption == "ref_owner":
@@ -244,23 +248,23 @@ def test_full_copy_rejects_invalid_source_without_rebuilding_it(
     before = artifact_manifest(source_root)
     with pytest.raises((RuntimeError, ValueError)) as error:
         storage.clone_rollout(
-            source_thread_id="source",
-            target_thread_id="target",
+            source_thread_id=SOURCE_SESSION_ID,
+            target_thread_id=TARGET_SESSION_ID,
             source_checkpoint_id=None,
         )
     if corruption == "source_schema":
         assert "schema-upgrade-required" in str(error.value)
         assert "v1_migration_required" not in str(error.value)
     assert artifact_manifest(source_root) == before
-    assert not storage.root("target").exists()
-    assert not (storage.root("target").parent / "legacy-import").exists()
+    assert not storage.root(TARGET_SESSION_ID).exists()
+    assert not (storage.root(TARGET_SESSION_ID).parent / "legacy-import").exists()
 
 
 def test_full_copy_preflight_observes_wal_without_modifying_source(plan_source) -> None:
     saver, _, _ = plan_source
     storage = saver._storage
-    source = storage.root("source")
-    with closing(sqlite3.connect(storage.index_path("source"))) as connection:
+    source = storage.root(SOURCE_SESSION_ID)
+    with closing(sqlite3.connect(storage.index_path(SOURCE_SESSION_ID))) as connection:
         connection.execute("PRAGMA wal_autocheckpoint=0")
         connection.execute("UPDATE database_meta SET schema_version=1")
         connection.commit()
@@ -268,12 +272,12 @@ def test_full_copy_preflight_observes_wal_without_modifying_source(plan_source) 
         before = artifact_manifest(source)
         with pytest.raises(RuntimeError, match="schema-upgrade-required"):
             storage.clone_rollout(
-                source_thread_id="source",
-                target_thread_id="target",
+                source_thread_id=SOURCE_SESSION_ID,
+                target_thread_id=TARGET_SESSION_ID,
                 source_checkpoint_id=None,
             )
         assert artifact_manifest(source) == before
-        assert not storage.root("target").exists()
+        assert not storage.root(TARGET_SESSION_ID).exists()
 
 
 @pytest.mark.parametrize("failure_phase", ["during_detail", "after_detail"])
@@ -284,20 +288,20 @@ def test_failed_full_copy_restores_jsonl_and_detail_bytes(
 
     saver, _, _ = plan_source
     storage = saver._storage
-    source_before = artifact_manifest(storage.root("source"))
+    source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
     source_view = storage.clone_rollout(
-        source_thread_id="source", target_thread_id="target", source_checkpoint_id=None
+        source_thread_id=SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID, source_checkpoint_id=None
     )
     fields = {
-        "source_session_id": "source",
-        "target_session_id": "target",
+        "source_session_id": SOURCE_SESSION_ID,
+        "target_session_id": TARGET_SESSION_ID,
         "source_checkpoint_id": None,
         "source_view_id": source_view,
         "fork_mode": "full_rollout_copy",
         "relationship": "detached",
     }
     materialization, _ = storage.begin_fork_materialization(**fields)
-    target_root = storage.root("target")
+    target_root = storage.root(TARGET_SESSION_ID)
     before = artifact_manifest(target_root)
 
     def fail(*_args, **_kwargs):
@@ -310,21 +314,21 @@ def test_failed_full_copy_restores_jsonl_and_detail_bytes(
     with pytest.raises(RuntimeError, match="injected detail materialization failure"):
         storage.commit_fork_materialization(materialization, **fields)
     assert artifact_manifest(target_root) == before
-    assert artifact_manifest(storage.root("source")) == source_before
+    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
 
 
 @pytest.fixture
 def typed_detail_mapping_state(request: pytest.FixtureRequest, session_bundle_factory):
     """真实 schema3 registry + fork/domain 映射；这些 optional manifest 无可用正文。"""
     sessions = prepare_migration_workspace(request) / ".boxteam" / "sessions"
-    for session in ("source", "target"):
+    for session in (SOURCE_SESSION_ID, TARGET_SESSION_ID):
         session_bundle_factory(sessions, session)
     with RolloutCheckpointSaver(sessions) as saver:
         storage = saver._storage
-        storage.initialize("source")
-        storage.initialize("target")
+        storage.initialize(SOURCE_SESSION_ID)
+        storage.initialize(TARGET_SESSION_ID)
         refs = tuple(
-            DetailRef("source", assembly, leaf)
+            DetailRef(SOURCE_SESSION_ID, assembly, leaf)
             for assembly, leaf in (
                 ("assembly-a", "same-leaf"),
                 ("assembly-a", "another-leaf"),
@@ -333,7 +337,7 @@ def typed_detail_mapping_state(request: pytest.FixtureRequest, session_bundle_fa
         )
         for ref in refs:
             relative = detail_relative_path(ref)
-            (storage.root("source").parent / relative).parent.mkdir(
+            (storage.root(SOURCE_SESSION_ID).parent / relative).parent.mkdir(
                 parents=True, exist_ok=True
             )
             storage.register_context_plan_detail(
@@ -354,12 +358,12 @@ def typed_detail_mapping_state(request: pytest.FixtureRequest, session_bundle_fa
                     availability="unavailable",
                 )
             )
-        with storage._connect("source", "", read_only=True) as connection:
+        with storage._connect(SOURCE_SESSION_ID, "", read_only=True) as connection:
             state = prepare_full_copy_remap(
                 storage,
                 connection,
-                source_session_id="source",
-                target_session_id="target",
+                source_session_id=SOURCE_SESSION_ID,
+                target_session_id=TARGET_SESSION_ID,
                 fork_id="typed-detail-fork",
                 checkpoint_ns="",
                 timestamp="2026-09-08T00:00:00Z",
@@ -378,12 +382,12 @@ def test_typed_detail_mapping_keeps_leaf_owner_and_selection_separate(
     assert len(set(targets)) == len(refs)
     assert len({ref.detail_id for ref in targets}) == len(refs)
     for source, target in zip(refs, targets, strict=True):
-        target.require_owner("target", state.maps["assembly"][source.assembly_id])
+        target.require_owner(TARGET_SESSION_ID, state.maps["assembly"][source.assembly_id])
         assert target.detail_id != source.detail_id
     source = refs[0]
     raw_ref = ContextRef.request_only_ref(
         "source-plan-item",
-        session_id="source",
+        session_id=SOURCE_SESSION_ID,
         plan_id="source-plan",
         source_revision="source-revision",
         source_ref=source,
@@ -445,16 +449,16 @@ def test_full_copy_unavailable_detail_manifest_localizes_typed_owner(
 ) -> None:
     refs, state = typed_detail_mapping_state
     storage = state.service
-    session_bundle_factory(storage.sessions_dir, "copy-target")
-    source_before = artifact_manifest(storage.root("source"))
+    session_bundle_factory(storage.sessions_dir, COPY_TARGET_SESSION_ID)
+    source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
     source_view = storage.clone_rollout(
-        source_thread_id="source",
-        target_thread_id="copy-target",
+        source_thread_id=SOURCE_SESSION_ID,
+        target_thread_id=COPY_TARGET_SESSION_ID,
         source_checkpoint_id=None,
     )
     fields = {
-        "source_session_id": "source",
-        "target_session_id": "copy-target",
+        "source_session_id": SOURCE_SESSION_ID,
+        "target_session_id": COPY_TARGET_SESSION_ID,
         "source_checkpoint_id": None,
         "source_view_id": source_view,
         "fork_mode": "full_rollout_copy",
@@ -464,21 +468,21 @@ def test_full_copy_unavailable_detail_manifest_localizes_typed_owner(
     storage.commit_fork_materialization(materialization, **fields)
     for source_ref in refs:
         key = storage.fork_target_identity(
-            "copy-target",
+            COPY_TARGET_SESSION_ID,
             fork_id=fork_id,
-            source_session_id="source",
+            source_session_id=SOURCE_SESSION_ID,
             entity_type="detail",
             source_local_id=detail_ref_key(source_ref),
         )
         target_ref = detail_ref_from_key(key)
-        target_ref.require_owner("copy-target")
-        manifest = storage.get_context_plan_detail("copy-target", detail_ref=target_ref)
+        target_ref.require_owner(COPY_TARGET_SESSION_ID)
+        manifest = storage.get_context_plan_detail(COPY_TARGET_SESSION_ID, detail_ref=target_ref)
         assert manifest["detail_id"] == target_ref.detail_id != source_ref.detail_id
         assert manifest["status"] == manifest["availability"] == "unavailable"
         assert manifest["relative_path"] == detail_relative_path(target_ref).as_posix()
         with pytest.raises(ValueError, match="source-mismatch"):
-            storage.get_context_plan_detail("copy-target", detail_ref=source_ref)
-    assert artifact_manifest(storage.root("source")) == source_before
+            storage.get_context_plan_detail(COPY_TARGET_SESSION_ID, detail_ref=source_ref)
+    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
 
 
 def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
@@ -492,7 +496,7 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
         ref_id, plan_id = f"source-extra-ref-{ordinal}", f"source-extra-plan-{ordinal}"
         ref = ContextRef.request_only_ref(
             ref_id,
-            session_id="source",
+            session_id=SOURCE_SESSION_ID,
             plan_id=plan_id,
             source_revision="existing-source-revision",
             content=body,
@@ -502,7 +506,7 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
             visibility="internal",
         )
         plan = saver.compose_context_plan(
-            session_id="source",
+            session_id=SOURCE_SESSION_ID,
             plan_id=plan_id,
             refs=(ref,),
             history_view_revision=initial.history_view_revision,
@@ -511,12 +515,12 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
             plan,
             plan_creation_idempotency_key=f"test_rollout_fork_plans:{plan_id}:create",
         )
-        saver.create_context_plan("source", plan)
+        saver.create_context_plan(SOURCE_SESSION_ID, plan)
         sealed = saver.seal_context_plan(
-            "source",
+            SOURCE_SESSION_ID,
             plan,
             turn_id="source-turn",
-            execution_id=saver.execution_for_turn("source", turn_id="source-turn"),
+            execution_id=saver.execution_for_turn(SOURCE_SESSION_ID, turn_id="source-turn"),
             provider_version="integration-provider",
             seal_idempotency_key=f"test_rollout_fork_plans:{plan_id}:seal",
             request_only_content={ref_id: body} if ordinal == 1 else None,
@@ -527,14 +531,14 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
             source_detail = entry.detail_ref
         else:
             assert entry.ref.source_ref == source_detail != entry.detail_ref
-    source_root = storage.root("source")
+    source_root = storage.root(SOURCE_SESSION_ID)
     before = artifact_manifest(source_root)
     source_view = storage.clone_rollout(
-        source_thread_id="source", target_thread_id="target", source_checkpoint_id=None
+        source_thread_id=SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID, source_checkpoint_id=None
     )
     fields = {
-        "source_session_id": "source",
-        "target_session_id": "target",
+        "source_session_id": SOURCE_SESSION_ID,
+        "target_session_id": TARGET_SESSION_ID,
         "source_checkpoint_id": None,
         "source_view_id": source_view,
         "fork_mode": "full_rollout_copy",
@@ -543,33 +547,33 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
     materialization, fork_id = storage.begin_fork_materialization(**fields)
     storage.commit_fork_materialization(materialization, **fields)
     target_assembly = storage.fork_target_identity(
-        "target",
+        TARGET_SESSION_ID,
         fork_id=fork_id,
-        source_session_id="source",
+        source_session_id=SOURCE_SESSION_ID,
         entity_type="assembly",
         source_local_id=sealed.assembly_id,
     )
     assert artifact_manifest(source_root) == before
     source_root.rename(source_root.with_name("rollout-archived"))
     with RolloutCheckpointSaver(storage.sessions_dir) as restarted:
-        target = restarted.get_context_assembly("target", assembly_id=target_assembly)
+        target = restarted.get_context_assembly(TARGET_SESSION_ID, assembly_id=target_assembly)
         entry = next(
             entry
             for entry in target.selection
             if isinstance(entry.ref.source_ref, DetailRef)
         )
-        entry.detail_ref.require_owner("target", target_assembly)
-        entry.ref.source_ref.require_owner("target")
+        entry.detail_ref.require_owner(TARGET_SESSION_ID, target_assembly)
+        entry.ref.source_ref.require_owner(TARGET_SESSION_ID)
         assert entry.ref.source_ref.assembly_id != entry.detail_ref.assembly_id
         assert "detail_ref" not in entry.ref.to_dict()
         assert (
             restarted.read_context_plan_detail(
-                "target", detail_ref=entry.ref.source_ref
+                TARGET_SESSION_ID, detail_ref=entry.ref.source_ref
             )["detail"]
             == body
         )
         projected, losses = restarted.project_context_plan_with_diagnostics(
-            "target", target.as_sealed_plan()
+            TARGET_SESSION_ID, target.as_sealed_plan()
         )
         assert not losses
         assert body[0]["text"] in json.dumps(

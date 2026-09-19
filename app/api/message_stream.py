@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from google.protobuf import json_format
 
+from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_message_stream_store,
     get_request_id,
@@ -55,7 +56,7 @@ def _sse_frame(event: dict[str, object]) -> str:
 
 def _public_snapshot(
     *,
-    session_id: str,
+    session_id: CanonicalSessionId,
     turn_id: str,
     turn_stream_id: str,
     snapshot: dict[str, object],
@@ -172,7 +173,7 @@ def _minimal_terminal_snapshot(
     summary="查询 Turn 已持久化的消息流",
 )
 async def get_message_stream_availability(
-    session_id: str,
+    session_id: CanonicalSessionId,
     turn_ids: list[str] = Query(min_length=1, max_length=4),  # noqa: B008
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -191,7 +192,7 @@ async def get_message_stream_availability(
     summary="订阅 Turn 消息流",
 )
 async def stream_message_events(
-    session_id: str,
+    session_id: CanonicalSessionId,
     turn_id: str,
     request: Request,
     turn_stream_id: str | None = Query(default=None),
@@ -239,7 +240,7 @@ async def stream_message_events(
     summary="获取 Turn 消息流快照",
 )
 async def get_message_stream_snapshot(
-    session_id: str,
+    session_id: CanonicalSessionId,
     turn_id: str,
     turn_stream_id: str | None = Query(default=None),
     _: str = Depends(verify_local_token),
@@ -272,7 +273,7 @@ async def get_message_stream_snapshot(
     summary="获取 Turn 消息流事件",
 )
 async def list_message_stream_events(
-    session_id: str,
+    session_id: CanonicalSessionId,
     turn_id: str,
     turn_stream_id: str | None = Query(default=None),
     after_seq: int = Query(default=0, ge=0),

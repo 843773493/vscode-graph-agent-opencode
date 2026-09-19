@@ -151,6 +151,19 @@ def test_debug_runtime_config_reads_workspace_override(tmp_path: Path) -> None:
     assert config["node"]["inspector_port"] == 8217
 
 
+def test_development_template_contains_the_same_debug_defaults_as_inline() -> None:
+    inline = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        inline_config_path=Path.cwd() / "configs" / "workspace_inline.jsonc",
+    )
+    development = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        inline_config_path=Path.cwd() / "configs" / "workspace_dev.jsonc",
+    )
+
+    assert development.get_debug_runtime_config() == inline.get_debug_runtime_config()
+
+
 @pytest.mark.parametrize(
     ("debug", "message"),
     [

@@ -63,15 +63,40 @@ class StreamToolRegistryMixin:
         self,
         tool_name: str,
         tool_args: Mapping[str, object] | None = None,
+        *,
+        target_tool_name: str | None = None,
     ) -> str | None:
-        """将 AgentLoop 的工具执行关联到最近尚未消费的模型工具调用。"""
+        """将 AgentLoop 工具执行严格关联到模型工具调用。
+
+        固定信封工具的模型参数形如 ``{tool_name, arguments}``。外层 Agent
+        事件携带的是目标工具名和目标参数，不能因为事件先到而退回到最新
+        pending call；那会把同一轮后续工具的结果绑定到当前工具。
+        """
         candidates: list[str] = []
+        reconciled_candidates: list[str] = []
         for tool_call_id in reversed(self._tool_call_order):
-            if tool_call_id in self._claimed_tool_call_ids:
+            if tool_call_id in self._claimed_tool_call_ids and not (
+                tool_call_id in self._reconciled_tool_call_ids
+                and tool_call_id
+                not in self._reconciled_late_claimed_tool_call_ids
+            ):
                 continue
             if self._tool_call_names_by_id.get(tool_call_id) != tool_name:
                 continue
-            candidates.append(tool_call_id)
+            if (
+                tool_call_id in self._reconciled_tool_call_ids
+                and tool_call_id not in self._reconciled_late_claimed_tool_call_ids
+            ):
+                reconciled_candidates.append(tool_call_id)
+            else:
+                candidates.append(tool_call_id)
+        if reconciled_candidates:
+            # 迟到的 on_tool_start 属于已在请求边界 reconcile 的调用（其
+            # ToolMessage 先于事件流到达）。事件流内部 on_tool_start 之间保持
+            # 顺序，因此这里优先认领最早的可重领 reconciled 调用；否则同名
+            # 同参的更新 pending 调用会被错绑，导致同一 tool_call_id 在
+            # tool 侧与 provider 侧提交两个不同正文。
+            candidates = list(reversed(reconciled_candidates)) + candidates
         if tool_args is not None:
             normalized_tool_args = dict(tool_args)
             for tool_call_id in candidates:
@@ -81,19 +106,37 @@ class StreamToolRegistryMixin:
                 )
                 if provider_arguments == normalized_tool_args:
                     self._claimed_tool_call_ids.add(tool_call_id)
+                    if tool_call_id in self._reconciled_tool_call_ids:
+                        self._reconciled_late_claimed_tool_call_ids.add(tool_call_id)
                     return tool_call_id
                 nested_tool_name = provider_arguments.get("tool_name")
                 nested_arguments = provider_arguments.get("arguments")
                 if (
-                    nested_tool_name == tool_name
+                    nested_tool_name
+                    == (target_tool_name if target_tool_name is not None else tool_name)
                     and isinstance(nested_arguments, Mapping)
                     and dict(nested_arguments) == normalized_tool_args
                 ):
                     self._claimed_tool_call_ids.add(tool_call_id)
+                    if tool_call_id in self._reconciled_tool_call_ids:
+                        self._reconciled_late_claimed_tool_call_ids.add(tool_call_id)
                     return tool_call_id
-        if candidates:
+            incomplete_candidates = [
+                tool_call_id
+                for tool_call_id in candidates
+                if not self._tool_call_arguments_complete.get(tool_call_id, False)
+            ]
+            if len(incomplete_candidates) == 1:
+                tool_call_id = incomplete_candidates[0]
+                self._claimed_tool_call_ids.add(tool_call_id)
+                if tool_call_id in self._reconciled_tool_call_ids:
+                    self._reconciled_late_claimed_tool_call_ids.add(tool_call_id)
+                return tool_call_id
+        if tool_args is None and candidates:
             tool_call_id = candidates[0]
             self._claimed_tool_call_ids.add(tool_call_id)
+            if tool_call_id in self._reconciled_tool_call_ids:
+                self._reconciled_late_claimed_tool_call_ids.add(tool_call_id)
             return tool_call_id
         return None
 
@@ -151,6 +194,7 @@ class StreamToolRegistryMixin:
         result: str,
         error: str | None = None,
         outcome: str | None = None,
+        persist_canonical: bool = True,
     ) -> None:
         tool_call_id = self._resolve_tool_call_id(tool_call_id)
         async with self._tool_completion_lock:
@@ -166,6 +210,53 @@ class StreamToolRegistryMixin:
                 )
                 if previous_execution_id == tool_execution_id:
                     return
+                if tool_call_id in self._reconciled_tool_call_ids:
+                    # 请求边界已经收到同一调用的 ToolMessage，但 LangGraph
+                    # 的 on_tool_start/on_tool_end 可能在外层事件流中迟到。
+                    # 迟到的 execution 只完成生命周期收口，不能把已确认的
+                    # 结果再当成第二次工具执行。这里仍要写一条 execution
+                    # 的终态事件；否则内存 registry 虽已移除它，持久化的
+                    # message-stream snapshot 仍会把它保留为 running。
+                    normalized_status = (
+                        "completed" if status == "succeeded" else status
+                    )
+                    normalized_outcome = outcome or (
+                        "success"
+                        if normalized_status == "completed"
+                        else "provider_error"
+                    )
+                    if normalized_outcome == "unknown":
+                        normalized_outcome = "outcome_unknown"
+                    tool_invocation_id = self._tool_invocation_id_for(tool_call_id)
+                    model_call_id = self._tool_call_model_call_ids.get(tool_call_id)
+                    if model_call_id is None:
+                        model_call_id = self.current_model_call_id
+                        self._tool_call_model_call_ids[tool_call_id] = model_call_id
+                    payload: dict[str, object] = {
+                        "tool_execution_id": tool_execution_id,
+                        "tool_call_id": tool_call_id,
+                        "tool_invocation_id": tool_invocation_id,
+                        "tool_attempt_id": tool_execution_id,
+                        "tool_name": tool_name,
+                        "status": normalized_status,
+                        "outcome": normalized_outcome,
+                        "completion_reason": "reconciled_tool_message",
+                        "result": result,
+                    }
+                    if error is not None:
+                        payload["error"] = error
+                    await self.writer.commit(
+                        "tool.completed",
+                        payload,
+                        model_call_id=model_call_id,
+                        tool_execution_id=tool_execution_id,
+                        tool_call_id=tool_call_id,
+                        tool_invocation_id=tool_invocation_id,
+                        tool_attempt_id=tool_execution_id,
+                    )
+                    self._active_tool_executions.pop(tool_execution_id, None)
+                    self._completed_tool_execution_ids.add(tool_execution_id)
+                    return
                 raise RuntimeError(
                     "同一 tool_call_id 绑定了多个已完成 tool attempt: "
                     f"tool_call_id={tool_call_id} "
@@ -175,6 +266,8 @@ class StreamToolRegistryMixin:
             normalized_outcome = outcome or (
                 "success" if normalized_status == "completed" else "provider_error"
             )
+            if normalized_outcome == "unknown":
+                normalized_outcome = "outcome_unknown"
             payload: dict[str, object] = {
                 "tool_execution_id": tool_execution_id,
                 "tool_call_id": tool_call_id,
@@ -206,12 +299,13 @@ class StreamToolRegistryMixin:
                 tool_attempt_id=tool_execution_id,
             )
             if (
-                self._canonical_item_sink is not None
+                persist_canonical
+                and self._canonical_item_sink is not None
                 and self._canonical_turn_id is not None
             ):
                 result_outcome = (
                     "unknown"
-                    if normalized_outcome == "unknown"
+                    if normalized_outcome == "outcome_unknown"
                     else "success"
                     if normalized_outcome == "success"
                     else "cancelled"
@@ -286,6 +380,39 @@ class StreamToolRegistryMixin:
             or self._provider_tool_call_ids_by_id.get(active_call_id)
             == tool_call_id
         ]
+        if not matches:
+            pending_matches = [
+                pending_call_id
+                for pending_call_id in self._tool_call_order
+                if pending_call_id not in self._claimed_tool_call_ids
+                and pending_call_id not in self._completed_tool_call_ids
+                and (
+                    pending_call_id == tool_call_id
+                    or self._provider_tool_call_ids_by_id.get(pending_call_id)
+                    == tool_call_id
+                )
+            ]
+            if len(pending_matches) > 1:
+                raise RuntimeError(
+                    "请求边界的 ToolMessage 无法唯一关联 pending tool call: "
+                    f"tool_call_id={tool_call_id} candidates={pending_matches}"
+                )
+            if pending_matches:
+                pending_call_id = pending_matches[0]
+                self._claimed_tool_call_ids.add(pending_call_id)
+                tool_name = self._tool_call_names_by_id.get(pending_call_id)
+                if not isinstance(tool_name, str) or not tool_name:
+                    raise RuntimeError(
+                        "pending tool call 缺少工具名称，无法从 ToolMessage reconciliation: "
+                        f"tool_call_id={pending_call_id}"
+                    )
+                execution_id = (
+                    message.id
+                    if isinstance(message.id, str) and message.id
+                    else f"reconciled:{pending_call_id}"
+                )
+                self._reconciled_tool_call_ids.add(pending_call_id)
+                matches = [(execution_id, tool_name)]
         for execution_id, tool_name in matches:
             content = message.content
             if isinstance(content, str):
@@ -310,4 +437,8 @@ class StreamToolRegistryMixin:
                 result=result,
                 error=result if status == "failed" else None,
                 outcome="success" if status == "succeeded" else "failure",
+                # ToolMessage 已经是请求边界的 canonical 输入；下一次
+                # _prepare 会将它写入唯一的 checkpoint carrier。这里仅
+                # 收口 runtime/trace 生命周期，不能再写一个 stream result。
+                persist_canonical=False,
             )

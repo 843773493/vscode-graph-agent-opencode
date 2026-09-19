@@ -49,7 +49,7 @@ for (const target of [
   "state.counter",
   "state.counter++",
   "<parameter=tool_name>unknown_tool</parameter>",
-  "<function=invoke_custom_tool><parameter=tool_name>unknown_tool</parameter></function>",
+  "<function=invoke_extension_tool><parameter=tool_name>unknown_tool</parameter></function>",
   "WINDUP/STRIKE",
   "A/D",
   ".html/.wasm",

@@ -35,6 +35,8 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+
 
 def _accept(saver: RolloutCheckpointSaver, session_id: str) -> dict[str, object]:
     return saver.accept_turn(
@@ -102,10 +104,10 @@ def test_acceptance_retry_rejects_corrupted_idempotency_ledger(
     match: str,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    _accept(saver, SESSION_ID)
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         current = connection.execute(
             f"SELECT {column} FROM storage_commits WHERE commit_kind = 'acceptance'"
         ).fetchone()[0]
@@ -116,7 +118,7 @@ def test_acceptance_retry_rejects_corrupted_idempotency_ledger(
         connection.commit()
 
     with pytest.raises(RuntimeError, match=match):
-        _accept(RolloutCheckpointSaver(sessions_dir), "session_1")
+        _accept(RolloutCheckpointSaver(sessions_dir), SESSION_ID)
 
 
 @pytest.mark.parametrize(
@@ -134,19 +136,19 @@ def test_item_commit_rejects_non_canonical_locator_metadata(
     metadata: dict[str, object],
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
-    rollout_path = saver._storage.jsonl_path("session_1")
+    _accept(saver, SESSION_ID)
+    rollout_path = saver._storage.jsonl_path(SESSION_ID)
     before = rollout_path.read_bytes()
 
     with pytest.raises(ItemSchemaError, match="source_revision|block_id|block_index"):
         saver._storage.append_item(
-            "session_1",
+            SESSION_ID,
             _assistant_item("item-invalid-storage-metadata", metadata=metadata),
         )
 
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         assert (
             connection.execute(
                 "SELECT COUNT(*) FROM item_catalog WHERE item_id = ?",
@@ -162,16 +164,16 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
+    _accept(saver, SESSION_ID)
 
     item = _assistant_item(
         "item-block-projection",
         metadata={"block_id": "block-1", "block_index": 0},
     )
-    commit_id = saver._storage.append_item("session_1", item)
-    db_path = _rollout_db(sessions_dir, "session_1")
+    commit_id = saver._storage.append_item(SESSION_ID, item)
+    db_path = _rollout_db(sessions_dir, SESSION_ID)
     with sqlite3.connect(db_path) as connection:
         part = connection.execute(
             "SELECT item_id, part_id, part_ordinal, content_hash, line_hash "
@@ -185,7 +187,7 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
         ).fetchone()
     assert part[:4] == (item.item_id, "block-1", 0, item.content_hash)
     assert locator[2] == commit_id
-    raw = saver._storage.jsonl_path("session_1").read_bytes()
+    raw = saver._storage.jsonl_path(SESSION_ID).read_bytes()
     assert (
         part[4] == hashlib.sha256(raw[locator[0] : locator[0] + locator[1]]).hexdigest()
     )
@@ -194,7 +196,7 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
 def _source_overlay_for_test(**overrides: object) -> SimpleNamespace:
     values: dict[str, object] = {
         "overlay_id": "overlay-contract",
-        "session_id": "session_1",
+        "session_id": SESSION_ID,
         "checkpoint_ns": "",
         "source_kind": "workspace_policy",
         "source_revision": "policy-1",
@@ -226,17 +228,17 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
 
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     assert accepted["turn_id"] == "turn-user-1"
     assert accepted["root_input_item_id"] == "item-user-1"
     assert accepted["initial_execution_id"] == "execution-user-1"
     assert accepted["idempotent"] is False
     execution_id = str(accepted["initial_execution_id"])
     assembly_1 = saver.seal_context_for_dispatch(
-        "session_1",
+        SESSION_ID,
         turn_id="turn-user-1",
         execution_id=execution_id,
         model_call_id="model-call-attempt-1",
@@ -244,7 +246,7 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(
         target_format="chat_completions",
     )
     saver.register_model_call(
-        "session_1",
+        SESSION_ID,
         execution_id=execution_id,
         model_call_id="model-call-attempt-1",
         attempt=1,
@@ -252,13 +254,13 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(
         assembly_id=assembly_1,
     )
     saver.update_model_call_outcome(
-        "session_1",
+        SESSION_ID,
         model_call_id="model-call-attempt-1",
         outcome="failed",
         dispatch_state="failed",
     )
     saver.register_model_call(
-        "session_1",
+        SESSION_ID,
         execution_id=execution_id,
         model_call_id="model-call-attempt-2",
         attempt=2,
@@ -267,20 +269,20 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(
         assembly_id=assembly_1,
     )
     saver.update_model_call_outcome(
-        "session_1",
+        SESSION_ID,
         model_call_id="model-call-attempt-2",
         outcome="completed_empty",
         dispatch_state="completed",
     )
     saver.converge_execution(
-        "session_1",
+        SESSION_ID,
         turn_id="turn-user-1",
         execution_id=execution_id,
         outcome="completed_empty",
         turn_status="completed_empty",
     )
 
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         root_count, turn_status, execution_outcome = connection.execute(
             "SELECT (SELECT COUNT(*) FROM item_catalog WHERE semantic_kind = 'user_input'), "
             "(SELECT status FROM turn_records WHERE turn_id = 'turn-user-1'), "
@@ -311,9 +313,9 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
+    _accept(saver, SESSION_ID)
     common = {
         "turn_id": "turn-user-1",
         "turn_scope": TurnScope.TURN_MEMBER,
@@ -391,10 +393,10 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
         turn_scope=TurnScope.TURN_MEMBER,
         status=CanonicalItemStatus.COMPLETED,
     )
-    saver.append_items("session_1", (live_call,))
-    saver.append_items("session_1", (checkpoint_shadow, result))
+    saver.append_items(SESSION_ID, (live_call,))
+    saver.append_items(SESSION_ID, (checkpoint_shadow, result))
 
-    with saver._storage.open_read_snapshot("session_1") as snapshot:
+    with saver._storage.open_read_snapshot(SESSION_ID) as snapshot:
         projection = saver._storage.read_turn_projections(
             snapshot, ("turn-user-1",)
         )["turn-user-1"]
@@ -423,7 +425,7 @@ def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
     唯一”的脆弱匹配，遇到 ID 复用就会静默丢参数。
     """
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
 
     # 先提交带 tool_calls 的 assistant 消息，建立 SQLite tool_calls 派生表。
@@ -456,7 +458,7 @@ def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
     checkpoint["channel_versions"] = {"messages": "1"}
     checkpoint["updated_channels"] = ["messages"]
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         checkpoint,
         {"source": "canonical-coordinate-test", "step": 1},
         {"messages": "1"},
@@ -490,9 +492,9 @@ def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
         message_group_id="message-model-call-2",
         **common,
     )
-    saver.append_items("session_1", (live_call,))
+    saver.append_items(SESSION_ID, (live_call,))
 
-    with saver._storage.open_read_snapshot("session_1") as snapshot:
+    with saver._storage.open_read_snapshot(SESSION_ID) as snapshot:
         projection = saver._storage.read_turn_projections(
             snapshot, ("turn-tool-call",)
         )["turn-tool-call"]
@@ -511,14 +513,14 @@ def test_item_catalog_reads_fail_closed_on_missing_item_and_view_reference(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
+    _accept(saver, SESSION_ID)
 
     with pytest.raises(KeyError, match="canonical item catalog 缺少请求的 item"):
-        saver._storage.read_items("session_1", item_ids=("item-does-not-exist",))
+        saver._storage.read_items(SESSION_ID, item_ids=("item-does-not-exist",))
 
-    rollout_db = _rollout_db(sessions_dir, "session_1")
+    rollout_db = _rollout_db(sessions_dir, SESSION_ID)
     with sqlite3.connect(rollout_db) as connection:
         view_id = str(
             connection.execute(
@@ -540,7 +542,7 @@ def test_item_catalog_reads_fail_closed_on_missing_item_and_view_reference(
         connection.commit()
 
     with (
-        saver._storage.open_read_snapshot("session_1") as snapshot,
+        saver._storage.open_read_snapshot(SESSION_ID) as snapshot,
         pytest.raises(KeyError, match="canonical item catalog 缺少请求的 item"),
     ):
         saver._storage.read_items_for_view(snapshot, view_id)
@@ -551,10 +553,10 @@ def test_index_validation_rejects_catalog_sequence_gaps_even_when_jsonl_matches(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
-    rollout_root = _rollout_db(sessions_dir, "session_1").parent
+    _accept(saver, SESSION_ID)
+    rollout_root = _rollout_db(sessions_dir, SESSION_ID).parent
 
     raw = (rollout_root / "rollout.jsonl").read_bytes()
     assert raw.count(b'"item_sequence":1') == 1
@@ -569,7 +571,7 @@ def test_index_validation_rejects_catalog_sequence_gaps_even_when_jsonl_matches(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="item_sequence 不连续"):
-        saver._storage.validate_index("session_1")
+        saver._storage.validate_index(SESSION_ID)
 
 
 def test_item_projection_read_rejects_catalog_hash_drift(
@@ -577,10 +579,10 @@ def test_item_projection_read_rejects_catalog_hash_drift(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    _accept(saver, SESSION_ID)
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         connection.execute(
             "UPDATE item_projections SET content_hash = 'corrupted' WHERE item_id = ?",
             ("item-user-1",),
@@ -588,7 +590,7 @@ def test_item_projection_read_rejects_catalog_hash_drift(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="item projection 与 canonical catalog"):
-        saver._storage.read_item_projections("session_1", item_ids=("item-user-1",))
+        saver._storage.read_item_projections(SESSION_ID, item_ids=("item-user-1",))
 
 
 @pytest.mark.parametrize(
@@ -608,10 +610,10 @@ def test_item_projection_read_rejects_typed_or_identity_drift(
     value: object,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    _accept(saver, SESSION_ID)
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         connection.execute(
             f"UPDATE item_projections SET {column} = ? WHERE item_id = ?",
             (value, "item-user-1"),
@@ -619,7 +621,7 @@ def test_item_projection_read_rejects_typed_or_identity_drift(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="item_projections|item projection"):
-        saver._storage.read_item_projections("session_1", item_ids=("item-user-1",))
+        saver._storage.read_item_projections(SESSION_ID, item_ids=("item-user-1",))
 
 
 def test_execution_lost_resume_creates_execution_without_a_new_user_root(
@@ -627,24 +629,24 @@ def test_execution_lost_resume_creates_execution_without_a_new_user_root(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    accepted = _accept(saver, SESSION_ID)
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         accepted_offset = connection.execute(
             "SELECT committed_jsonl_offset FROM database_meta WHERE singleton_id = 1"
         ).fetchone()[0]
 
     lost = saver.mark_execution_lost(
-        "session_1",
+        SESSION_ID,
         turn_id="turn-user-1",
         execution_id=str(accepted["initial_execution_id"]),
         reason="provider response lost before durable result commit",
     )
-    resumed = saver.resume_turn("session_1", turn_id="turn-user-1")
+    resumed = saver.resume_turn(SESSION_ID, turn_id="turn-user-1")
     assert lost["status"] == "unknown"
     assert lost["outcome"] == "execution_lost"
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         metadata_only = connection.execute(
             "SELECT commit_mode, jsonl_offset_before, jsonl_offset_after, "
             "jsonl_record_count, outcome FROM storage_commits "
@@ -665,14 +667,14 @@ def test_execution_lost_resume_creates_execution_without_a_new_user_root(
     assert resumed["execution_id"] != accepted["initial_execution_id"]
     assert resumed["attempt"] == 2
     saver.converge_execution(
-        "session_1",
+        SESSION_ID,
         turn_id="turn-user-1",
         execution_id=str(resumed["execution_id"]),
         outcome="completed_empty",
         turn_status="completed_empty",
     )
 
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         root_count = connection.execute(
             "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind = 'user_input'"
         ).fetchone()[0]
@@ -698,11 +700,11 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     saver.converge_execution(
-        "session_1",
+        SESSION_ID,
         turn_id="turn-user-1",
         execution_id=str(accepted["initial_execution_id"]),
         outcome="interrupted",
@@ -710,11 +712,11 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
     )
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    resumed = restarted.resume_turn("session_1", turn_id="turn-user-1")
+    resumed = restarted.resume_turn(SESSION_ID, turn_id="turn-user-1")
 
     assert resumed["execution_id"] != accepted["initial_execution_id"]
     assert resumed["attempt"] == 2
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         root_count = connection.execute(
             "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind = 'user_input'"
         ).fetchone()[0]
@@ -738,7 +740,7 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
     ]
 
     restarted.converge_execution(
-        "session_1",
+        SESSION_ID,
         turn_id="turn-user-1",
         execution_id=str(resumed["execution_id"]),
         outcome="completed_empty",
@@ -753,18 +755,18 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
 ) -> None:
     """真实 stream/runtime 写入的 partial item 与定位 anchor 可跨进程恢复。"""
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
+    _accept(saver, SESSION_ID)
     resolver = get_session_path_resolver(sessions_dir)
     stream_store = MessageStreamStore(path_resolver=resolver)
     writer = await stream_store.open(
-        session_id="session_1",
+        session_id=SESSION_ID,
         turn_id="turn-user-1",
     )
     item_sink = CanonicalItemSink(
         saver,
-        session_id="session_1",
+        session_id=SESSION_ID,
         checkpoint_ns="",
     )
     runtime = MessageStreamRuntime(
@@ -807,7 +809,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
 
     partial_items = [
         item
-        for item in saver._storage.read_items("session_1")
+        for item in saver._storage.read_items(SESSION_ID)
         if item.status == CanonicalItemStatus.PARTIAL.value
     ]
     assert len(partial_items) == 1
@@ -826,7 +828,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
         "invocation_id": "model-call-partial",
     }
 
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         view_id, branch_id = connection.execute(
             "SELECT v.view_id, v.branch_id FROM context_views AS v "
             "JOIN branches AS b ON b.head_view_id = v.view_id "
@@ -864,17 +866,17 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
         capability="content_part",
         content_hash=content_hash,
     )
-    saver.register_content_part_anchor("session_1", anchor)
+    saver.register_content_part_anchor(SESSION_ID, anchor)
 
     restarted_saver = RolloutCheckpointSaver(sessions_dir)
-    restarted_items = restarted_saver._storage.read_items("session_1")
+    restarted_items = restarted_saver._storage.read_items(SESSION_ID)
     restored_item = next(
         item for item in restarted_items if item.item_id == partial_item.item_id
     )
     assert restored_item == partial_item
     assert (
         restarted_saver.resolve_content_part_anchor(
-            "session_1",
+            SESSION_ID,
             anchor_id=anchor.anchor_id,
         )
         == anchor
@@ -882,7 +884,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
 
     restarted_stream_store = MessageStreamStore(path_resolver=resolver)
     restarted_writer = await restarted_stream_store.open_existing(
-        session_id="session_1",
+        session_id=SESSION_ID,
         turn_id="turn-user-1",
         turn_stream_id=writer.turn_stream_id,
     )
@@ -935,7 +937,7 @@ def test_checkpoint_first_root_creates_one_based_turn_ordinal(
 ) -> None:
     """checkpoint 先到时也必须建立合法的 v2 Turn root/ordinal。"""
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     checkpoint = empty_checkpoint()
     checkpoint["id"] = "checkpoint-first-root"
@@ -954,13 +956,13 @@ def test_checkpoint_first_root_creates_one_based_turn_ordinal(
     checkpoint["updated_channels"] = ["messages"]
 
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         checkpoint,
         {"source": "checkpoint-first-test", "step": 1},
         {"messages": "1"},
     )
 
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         turn = connection.execute(
             "SELECT turn_id, turn_ordinal, root_input_item_id, status FROM turn_records"
         ).fetchone()
@@ -987,14 +989,14 @@ def test_committed_overlay_selection_is_epoch_stable_after_restart(
 ) -> None:
     """active overlay 的 base/delta 顺序不能依赖 registry 或内存插入顺序。"""
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
+    _accept(saver, SESSION_ID)
 
     def overlay(epoch: int) -> SimpleNamespace:
         return SimpleNamespace(
             overlay_id=f"overlay-{epoch}",
-            session_id="session_1",
+            session_id=SESSION_ID,
             checkpoint_ns="",
             source_kind="workspace_policy",
             source_revision=f"policy-{epoch}",
@@ -1027,7 +1029,7 @@ def test_committed_overlay_selection_is_epoch_stable_after_restart(
             base_content={"policy": f"base-{epoch}"},
             delta_content={"policy": f"delta-{epoch}"},
         )
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         connection.execute(
             "UPDATE source_overlays SET created_at = CASE overlay_id "
             "WHEN 'overlay-2' THEN '2026-09-07T00:00:03+00:00' "
@@ -1037,7 +1039,7 @@ def test_committed_overlay_selection_is_epoch_stable_after_restart(
 
     def ref_ids(checkpoint_saver: RolloutCheckpointSaver) -> list[str]:
         plan = checkpoint_saver.compose_committed_context_plan(
-            "session_1",
+            SESSION_ID,
             plan_id="plan-overlay-order",
         )
         return [ref.ref_id for ref in plan.refs]
@@ -1073,9 +1075,9 @@ def test_source_overlay_registration_rejects_coerced_manifest_values(
     value: object,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
+    _accept(saver, SESSION_ID)
     overlay = _source_overlay_for_test(**{field_name: value})
 
     with pytest.raises((TypeError, ValueError)):
@@ -1090,9 +1092,9 @@ def test_source_overlay_registration_rejects_ref_identity_collision(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
+    _accept(saver, SESSION_ID)
     overlay = _source_overlay_for_test(
         delta_ref="policy-base",
         delta_source_revision="policy-delta-rev-1",
@@ -1120,14 +1122,14 @@ def test_source_overlay_restore_rejects_corrupted_registry_rows(
     value: object,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
+    _accept(saver, SESSION_ID)
     saver.register_source_overlay(
         _source_overlay_for_test(),
         base_content={"policy": "persisted"},
     )
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         connection.execute(
             f"UPDATE source_overlays SET {column} = ? WHERE overlay_id = ?",
             (value, "overlay-contract"),
@@ -1135,7 +1137,7 @@ def test_source_overlay_restore_rejects_corrupted_registry_rows(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="source overlay"):
-        RolloutCheckpointSaver(sessions_dir).list_source_overlays("session_1")
+        RolloutCheckpointSaver(sessions_dir).list_source_overlays(SESSION_ID)
 
 
 def test_item_bearing_terminal_convergence_materializes_output_and_restart(
@@ -1143,9 +1145,9 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     execution_id = str(accepted["initial_execution_id"])
     output = CanonicalItemRecord.create(
         item_sequence=99,
@@ -1165,7 +1167,7 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
         wire_role="assistant",
     )
     commit_id = saver.converge_execution(
-        "session_1",
+        SESSION_ID,
         turn_id="turn-user-1",
         execution_id=execution_id,
         outcome="completed",
@@ -1175,11 +1177,11 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     )
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    assert [item.item_id for item in restarted._storage.read_items("session_1")] == [
+    assert [item.item_id for item in restarted._storage.read_items(SESSION_ID)] == [
         "item-user-1",
         output.item_id,
     ]
-    rollout_root = _rollout_db(sessions_dir, "session_1").parent
+    rollout_root = _rollout_db(sessions_dir, SESSION_ID).parent
     with sqlite3.connect(rollout_root / "index.sqlite") as connection:
         status, final_item_id, item_count = connection.execute(
             "SELECT tr.status, tr.final_item_id, "
@@ -1219,7 +1221,7 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     ]
     assert projected_turn == (1, 2, 1, 2, "output-without-projection", "completed")
     assert view_turn == (1, 2)
-    latest, cursor, projection_epoch = restarted._history_reader.bootstrap("session_1")
+    latest, cursor, projection_epoch = restarted._history_reader.bootstrap(SESSION_ID)
     assert latest is not None
     assert latest.turn_id == "turn-user-1"
     assert latest.response_preview == "没有对应 message projection"
@@ -1227,7 +1229,7 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     assert projection_epoch == 1
     assert (
         restarted.converge_execution(
-            "session_1",
+            SESSION_ID,
             turn_id="turn-user-1",
             execution_id=execution_id,
             outcome="completed",
@@ -1256,7 +1258,7 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     )
     with pytest.raises(ValueError, match="幂等键冲突"):
         restarted.converge_execution(
-            "session_1",
+            SESSION_ID,
             turn_id="turn-user-1",
             execution_id=execution_id,
             outcome="completed",
@@ -1271,9 +1273,9 @@ def test_item_bearing_terminal_projection_failure_rolls_back_jsonl_and_sqlite(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     execution_id = str(accepted["initial_execution_id"])
     output = CanonicalItemRecord.create(
         item_sequence=99,
@@ -1294,7 +1296,7 @@ def test_item_bearing_terminal_projection_failure_rolls_back_jsonl_and_sqlite(
     )
     with pytest.raises(ValueError, match="wire_role 与 message projection 不匹配"):
         saver.converge_execution(
-            "session_1",
+            SESSION_ID,
             turn_id="turn-user-1",
             execution_id=execution_id,
             outcome="completed",
@@ -1304,10 +1306,10 @@ def test_item_bearing_terminal_projection_failure_rolls_back_jsonl_and_sqlite(
         )
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    assert [item.item_id for item in restarted._storage.read_items("session_1")] == [
+    assert [item.item_id for item in restarted._storage.read_items(SESSION_ID)] == [
         "item-user-1"
     ]
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         item_count, message_count, turn_status, terminal_commits = connection.execute(
             "SELECT "
             "(SELECT COUNT(*) FROM item_catalog), "
@@ -1330,13 +1332,13 @@ def test_cancelled_turn_rejects_original_dispatch_and_replays_as_new_turn(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     execution_id = str(accepted["initial_execution_id"])
 
     saver.converge_execution(
-        "session_1",
+        SESSION_ID,
         turn_id="turn-user-1",
         execution_id=execution_id,
         outcome="cancelled",
@@ -1344,19 +1346,19 @@ def test_cancelled_turn_rejects_original_dispatch_and_replays_as_new_turn(
     )
 
     with pytest.raises(ValueError, match="turn_not_resumable"):
-        saver.resume_turn("session_1", turn_id="turn-user-1")
+        saver.resume_turn(SESSION_ID, turn_id="turn-user-1")
     with pytest.raises(ValueError, match="turn_not_resumable"):
-        saver.dispatch_replay("session_1", turn_id="turn-user-1")
+        saver.dispatch_replay(SESSION_ID, turn_id="turn-user-1")
 
     replayed = saver.replay_as_new_turn(
-        "session_1",
+        SESSION_ID,
         source_turn_id="turn-user-1",
         acceptance_idempotency_key="replay-acceptance-1",
     )
     assert replayed["turn_id"] != "turn-user-1"
     assert replayed["replay_of_turn_id"] == "turn-user-1"
 
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         turns = connection.execute(
             "SELECT turn_id, turn_ordinal, root_input_item_id, status, replay_of_turn_id "
             "FROM turn_records ORDER BY turn_ordinal"
@@ -1406,18 +1408,18 @@ def test_terminal_turn_rejects_resume_and_original_dispatch_without_mutation(
     outcome: str,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     saver.converge_execution(
-        "session_1",
+        SESSION_ID,
         turn_id="turn-user-1",
         execution_id=str(accepted["initial_execution_id"]),
         outcome=outcome,
         turn_status=turn_status,
     )
 
-    db_path = _rollout_db(sessions_dir, "session_1")
+    db_path = _rollout_db(sessions_dir, SESSION_ID)
     with sqlite3.connect(db_path) as connection:
         before_turn = connection.execute(
             "SELECT status, last_execution_id, final_item_id FROM turn_records "
@@ -1428,9 +1430,9 @@ def test_terminal_turn_rejects_resume_and_original_dispatch_without_mutation(
         ).fetchone()[0]
 
     with pytest.raises(ValueError, match="turn_not_resumable"):
-        saver.resume_turn("session_1", turn_id="turn-user-1")
+        saver.resume_turn(SESSION_ID, turn_id="turn-user-1")
     with pytest.raises(ValueError, match="turn_not_resumable"):
-        saver.dispatch_replay("session_1", turn_id="turn-user-1")
+        saver.dispatch_replay(SESSION_ID, turn_id="turn-user-1")
 
     with sqlite3.connect(db_path) as connection:
         after_turn = connection.execute(
@@ -1450,18 +1452,18 @@ def test_replay_as_new_turn_is_idempotent_after_saver_restart(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, "session_1")
+    _accept(saver, SESSION_ID)
 
     first = saver.replay_as_new_turn(
-        "session_1",
+        SESSION_ID,
         source_turn_id="turn-user-1",
         acceptance_idempotency_key="replay-acceptance-restart-1",
     )
     restarted = RolloutCheckpointSaver(sessions_dir)
     second = restarted.replay_as_new_turn(
-        "session_1",
+        SESSION_ID,
         source_turn_id="turn-user-1",
         acceptance_idempotency_key="replay-acceptance-restart-1",
     )
@@ -1477,7 +1479,7 @@ def test_replay_as_new_turn_is_idempotent_after_saver_restart(
     ):
         assert second[field] == first[field]
 
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         turn_count, root_count, acceptance_count, lineage_count = connection.execute(
             "SELECT "
             "(SELECT COUNT(*) FROM turn_records), "
@@ -1493,9 +1495,9 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     root = "请检查当前状态"
     part = ContentPart.create(
         part_id="part-user-1",
@@ -1504,7 +1506,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         content=root,
     )
     saver.register_content_part(
-        "session_1",
+        SESSION_ID,
         item_id=str(accepted["root_input_item_id"]),
         part=part,
         locator={
@@ -1522,12 +1524,12 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
     checkpoint["channel_versions"] = {"messages": "1"}
     checkpoint["updated_channels"] = ["messages"]
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         checkpoint,
         {"source": "anchor-test", "step": 1, "parents": {}},
         {"messages": "1"},
     )
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         view_id, branch_id = connection.execute(
             "SELECT v.view_id, v.branch_id FROM context_views AS v "
             "JOIN branches AS b ON b.head_view_id = v.view_id "
@@ -1543,20 +1545,20 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         capability="content_part",
         content_hash=sha256_jcs(root),
     )
-    saver.register_content_part_anchor("session_1", anchor)
+    saver.register_content_part_anchor(SESSION_ID, anchor)
 
     restarted = RolloutCheckpointSaver(sessions_dir)
     resolved = restarted.resolve_content_part_anchor(
-        "session_1",
+        SESSION_ID,
         anchor_id=anchor.anchor_id,
     )
     assert resolved == anchor
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         persisted = connection.execute(
             "SELECT item_id, part_id, part_ordinal, line_hash FROM item_parts"
         ).fetchone()
         raw_line = (
-            _rollout_db(sessions_dir, "session_1").parent / "rollout.jsonl"
+            _rollout_db(sessions_dir, SESSION_ID).parent / "rollout.jsonl"
         ).read_bytes()
         item_offset, item_length = connection.execute(
             "SELECT jsonl_offset, jsonl_length FROM item_catalog WHERE item_id = ?",
@@ -1568,7 +1570,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         == hashlib.sha256(raw_line[item_offset : item_offset + item_length]).hexdigest()
     )
     assert (
-        restarted._storage.read_items("session_1")[0].item_id
+        restarted._storage.read_items(SESSION_ID)[0].item_id
         == accepted["root_input_item_id"]
     )
 
@@ -1583,11 +1585,11 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         content_hash=part.content_hash,
     )
     with pytest.raises(ValueError, match="不在指定 view"):
-        restarted.register_content_part_anchor("session_1", unreachable)
+        restarted.register_content_part_anchor(SESSION_ID, unreachable)
 
     inactive_view_id = "view-inactive-anchor"
     inactive_branch_id = "branch-inactive-anchor"
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         connection.execute(
             "INSERT INTO branches(branch_id, branch_kind, status, head_view_id, "
             "head_checkpoint_id, parent_branch_id, created_at, updated_at) "
@@ -1626,14 +1628,14 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         content_hash=part.content_hash,
     )
     with pytest.raises(ValueError, match="active branch lineage"):
-        restarted.register_content_part_anchor("session_1", inactive_anchor)
+        restarted.register_content_part_anchor(SESSION_ID, inactive_anchor)
 
-    jsonl_path = _rollout_db(sessions_dir, "session_1").parent / "rollout.jsonl"
+    jsonl_path = _rollout_db(sessions_dir, SESSION_ID).parent / "rollout.jsonl"
     original = jsonl_path.read_bytes()
     jsonl_path.write_bytes(original.replace(b"user-1", b"user-2", 1))
     with pytest.raises(ValueError, match="line hash 不匹配"):
         restarted.resolve_content_part_anchor(
-            "session_1",
+            SESSION_ID,
             anchor_id=anchor.anchor_id,
         )
 
@@ -1643,9 +1645,9 @@ def test_sealed_selection_drives_langchain_and_provider_projection_after_restart
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     tool_snapshot = [
         {
             "type": "function",
@@ -1657,7 +1659,7 @@ def test_sealed_selection_drives_langchain_and_provider_projection_after_restart
         }
     ]
     assembly_id = saver.seal_context_for_dispatch(
-        "session_1",
+        SESSION_ID,
         turn_id=str(accepted["turn_id"]),
         execution_id=str(accepted["initial_execution_id"]),
         model_call_id="model-call-projection-1",
@@ -1666,12 +1668,12 @@ def test_sealed_selection_drives_langchain_and_provider_projection_after_restart
         target_format="chat_completions",
     )
     snapshot = saver.get_context_assembly(
-        "session_1",
+        SESSION_ID,
         assembly_id=assembly_id,
     )
     plan = snapshot.as_sealed_plan()
     first_messages, first_tools, first_losses = saver.project_context_plan_to_provider(
-        "session_1",
+        SESSION_ID,
         plan,
         target_format="chat_completions",
     )
@@ -1682,15 +1684,15 @@ def test_sealed_selection_drives_langchain_and_provider_projection_after_restart
     assert [tool["function"]["name"] for tool in first_tools] == ["read_file"]
     assert first_losses == ()
     history_messages = saver.project_context_plan_to_messages(
-        "session_1",
+        SESSION_ID,
         plan,
     )
     history_projection = saver.project_context_plan_to_history(
-        "session_1",
+        SESSION_ID,
         plan,
     )
     diagnostic_messages, diagnostic_losses = (
-        saver.project_context_plan_with_diagnostics("session_1", plan)
+        saver.project_context_plan_with_diagnostics(SESSION_ID, plan)
     )
     assert [message.content for message in history_messages] == [
         message.content for message in first_messages
@@ -1711,12 +1713,12 @@ def test_sealed_selection_drives_langchain_and_provider_projection_after_restart
 
     restarted = RolloutCheckpointSaver(sessions_dir)
     restored_snapshot = restarted.get_context_assembly(
-        "session_1",
+        SESSION_ID,
         assembly_id=assembly_id,
     )
     second_messages, second_tools, second_losses = (
         restarted.project_context_plan_to_provider(
-            "session_1",
+            SESSION_ID,
             restored_snapshot.as_sealed_plan(),
             target_format="chat_completions",
         )
@@ -1734,9 +1736,9 @@ def test_optional_omitted_selection_skips_detail_body_and_provider_tools(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     body = {"policy": "只在需要时注入", "scope": "optional"}
     contribution = ContextContribution(
         contribution_id="optional-policy-1",
@@ -1744,16 +1746,16 @@ def test_optional_omitted_selection_skips_detail_body_and_provider_tools(
         source_revision="optional-policy-rev-1",
         content_hash=contribution_content_hash("prompt", body),
         body=body,
-        metadata={"source_ordinal": 0},
+        source_ordinal=0,
     )
     saver.register_context_contribution(
-        "session_1",
+        SESSION_ID,
         contribution,
         request_content=body,
     )
 
     assembly_id = saver.seal_context_for_dispatch(
-        "session_1",
+        SESSION_ID,
         turn_id=str(accepted["turn_id"]),
         execution_id=str(accepted["initial_execution_id"]),
         model_call_id="model-call-optional-omission",
@@ -1762,7 +1764,7 @@ def test_optional_omitted_selection_skips_detail_body_and_provider_tools(
         omitted_ref_ids=(contribution.contribution_id,),
     )
     snapshot = saver.get_context_assembly(
-        "session_1",
+        SESSION_ID,
         assembly_id=assembly_id,
     )
     omitted = next(
@@ -1777,14 +1779,14 @@ def test_optional_omitted_selection_skips_detail_body_and_provider_tools(
     assert omitted.loss == ("selection_omitted",)
 
     messages, tools, losses = saver.project_context_plan_to_provider(
-        "session_1",
+        SESSION_ID,
         snapshot.as_sealed_plan(),
         target_format="chat_completions",
     )
     assert [message.content for message in messages] == ["请检查当前状态"]
     assert tools == []
     assert losses == ("selection_omitted",)
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         assert (
             connection.execute("SELECT COUNT(*) FROM context_plan_details").fetchone()[
                 0
@@ -1798,9 +1800,9 @@ def test_request_only_detail_and_selection_restore_without_memory_body(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     body = {"policy": "先读取工作区配置", "scope": "request"}
     contribution = ContextContribution(
         contribution_id="policy-contribution-1",
@@ -1809,11 +1811,11 @@ def test_request_only_detail_and_selection_restore_without_memory_body(
         content_hash=contribution_content_hash("prompt", body),
         body=body,
         content_length=len(canonical_json_bytes(body)),
-        metadata={"source_ordinal": 0},
+        source_ordinal=0,
     )
 
     prepared = saver.prepare_context_for_provider(
-        "session_1",
+        SESSION_ID,
         turn_id=str(accepted["turn_id"]),
         prompt_contributions=(contribution,),
         tool_snapshot=({"type": "function", "function": {"name": "read_file"}},),
@@ -1846,12 +1848,12 @@ def test_request_only_detail_and_selection_restore_without_memory_body(
 
     restarted = RolloutCheckpointSaver(sessions_dir)
     restored = restarted.get_context_assembly(
-        "session_1",
+        SESSION_ID,
         assembly_id=assembly_id,
     )
     restored_plan = restored.as_sealed_plan()
     messages, tools, losses = restarted.project_context_plan_to_provider(
-        "session_1",
+        SESSION_ID,
         restored_plan,
         target_format="chat_completions",
     )
@@ -1862,7 +1864,7 @@ def test_request_only_detail_and_selection_restore_without_memory_body(
     assert tools == first_tools
     assert losses == ()
     history_messages = restarted.project_context_plan_to_history(
-        "session_1",
+        SESSION_ID,
         restored_plan,
     )
     assert [message.content for message in history_messages] == ["请检查当前状态"]
@@ -1876,13 +1878,13 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     key = b"0123456789abcdef0123456789abcdef"
     saver = RolloutCheckpointSaver(
         sessions_dir,
         protected_detail_key=key,
     )
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     body = {"secret_policy": "只允许 provider 使用"}
     contribution = ContextContribution(
         contribution_id="protected-policy-1",
@@ -1893,11 +1895,11 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
         content_length=len(canonical_json_bytes(body)),
         visibility="private",
         protection="protected",
-        metadata={"source_ordinal": 0},
+        source_ordinal=0,
     )
 
     prepared = saver.prepare_context_for_provider(
-        "session_1",
+        SESSION_ID,
         turn_id=str(accepted["turn_id"]),
         prompt_contributions=(contribution,),
         provider_version="provider-v2",
@@ -1921,12 +1923,12 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
         protected_detail_key=key,
     )
     restored = restarted.get_context_assembly(
-        "session_1",
+        SESSION_ID,
         assembly_id=str(prepared["assembly_id"]),
     )
     restored_plan = restored.as_sealed_plan()
     messages, _, losses = restarted.project_context_plan_to_provider(
-        "session_1",
+        SESSION_ID,
         restored_plan,
         target_format="chat_completions",
     )
@@ -1937,7 +1939,7 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
     ]
     assert (
         restarted.read_context_plan_detail(
-            "session_1",
+            SESSION_ID,
             detail_ref=protected_entries[0].detail_ref,
             include_sensitive=True,
         )["detail"]
@@ -1961,11 +1963,11 @@ def test_sealed_assembly_restore_rejects_coerced_sqlite_manifest_values(
     value: object,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     assembly_id = saver.seal_context_for_dispatch(
-        "session_1",
+        SESSION_ID,
         turn_id=str(accepted["turn_id"]),
         execution_id=str(accepted["initial_execution_id"]),
         model_call_id="model-call-corrupt-manifest",
@@ -1976,7 +1978,7 @@ def test_sealed_assembly_restore_rejects_coerced_sqlite_manifest_values(
     parameters: tuple[object, ...] = (value, assembly_id)
     if table == "assembly_item_refs":
         where = "assembly_id = ? AND ref_ordinal = 0"
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         connection.execute(
             f"UPDATE {table} SET {column} = ? WHERE {where}",
             parameters,
@@ -1984,7 +1986,7 @@ def test_sealed_assembly_restore_rejects_coerced_sqlite_manifest_values(
         connection.commit()
 
     with pytest.raises((RuntimeError, TypeError), match="assembly manifest|manifest"):
-        saver.get_context_assembly("session_1", assembly_id=assembly_id)
+        saver.get_context_assembly(SESSION_ID, assembly_id=assembly_id)
 
 
 def test_sealed_assembly_restore_rejects_missing_detail_manifest(
@@ -1992,9 +1994,9 @@ def test_sealed_assembly_restore_rejects_missing_detail_manifest(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, "session_1")
+    accepted = _accept(saver, SESSION_ID)
     body = {"policy": "只能在本次请求使用"}
     contribution = ContextContribution(
         contribution_id="restore-detail-missing",
@@ -2003,10 +2005,10 @@ def test_sealed_assembly_restore_rejects_missing_detail_manifest(
         content_hash=contribution_content_hash("prompt", body),
         body=body,
         content_length=len(canonical_json_bytes(body)),
-        metadata={"source_ordinal": 0},
+        source_ordinal=0,
     )
     prepared = saver.prepare_context_for_provider(
-        "session_1",
+        SESSION_ID,
         turn_id=str(accepted["turn_id"]),
         prompt_contributions=(contribution,),
         provider_version="provider-v2",
@@ -2014,7 +2016,7 @@ def test_sealed_assembly_restore_rejects_missing_detail_manifest(
         plan_creation_idempotency_key="test_turn_execution_recovery:1471:create",
         seal_idempotency_key="test_turn_execution_recovery:1471:seal",
     )
-    with sqlite3.connect(_rollout_db(sessions_dir, "session_1")) as connection:
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         connection.execute(
             "DELETE FROM context_plan_details WHERE assembly_id = ?",
             (prepared["assembly_id"],),
@@ -2023,6 +2025,6 @@ def test_sealed_assembly_restore_rejects_missing_detail_manifest(
 
     with pytest.raises(RuntimeError, match="detail-unavailable"):
         saver.get_context_assembly(
-            "session_1",
+            SESSION_ID,
             assembly_id=str(prepared["assembly_id"]),
         )

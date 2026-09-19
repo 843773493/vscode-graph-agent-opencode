@@ -11,10 +11,19 @@ SEMANTIC_FIELDS = (
     "internal",
     "phase",
     "source",
+    "tool_name",
+    "task_id",
+    "user_initiated",
+    "interrupted_at",
     "parent_session_id",
     "token_usage",
     "content_part_refs",
     "supersedes_message_id",
+    "context_source_kind",
+    "context_source_id",
+    "context_source_name",
+    "context_wire_role",
+    "context_revision",
 )
 
 
@@ -32,11 +41,26 @@ def semantic_metadata(response: Mapping[str, object]) -> dict[str, object]:
         elif name in {
             "phase",
             "source",
+            "tool_name",
+            "task_id",
+            "interrupted_at",
             "parent_session_id",
             "supersedes_message_id",
+            "context_source_kind",
+            "context_source_id",
+            "context_source_name",
+            "context_wire_role",
+            "context_revision",
         }:
             if not isinstance(value, str) or not value:
                 raise ValueError(f"canonical metadata.{name} 必须是非空字符串")
+            if name == "context_wire_role" and value != "user":
+                raise ValueError(
+                    "canonical metadata.context_wire_role 当前只能是 user"
+                )
+        elif name == "user_initiated":
+            if not isinstance(value, bool):
+                raise ValueError("canonical metadata.user_initiated 必须是布尔值")
         elif name == "token_usage" and not isinstance(value, Mapping):
             raise ValueError("canonical metadata.token_usage 必须是 object")
         elif name == "content_part_refs" and not isinstance(value, list):
@@ -53,5 +77,9 @@ def restore_metadata(metadata: Mapping[str, object]) -> dict[str, object]:
         key: result.pop(key) for key in ("source", "parent_session_id") if key in result
     }
     if provenance:
+        # canonical item 的 provenance 同时服务于两类消费者：消息 codec
+        # 需要嵌套的 message_metadata，状态/执行投影仍按顶层语义字段读取。
+        # 两者表达同一份已封存事实，不在这里生成第二套值。
+        result.update(provenance)
         result["message_metadata"] = provenance
     return result

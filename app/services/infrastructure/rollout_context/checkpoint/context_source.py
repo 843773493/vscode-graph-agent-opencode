@@ -143,6 +143,9 @@ class ContextSourceOverlayMixin:
                 content_length=content_length,
                 visibility="internal",
                 protection="public",
+                # source base/delta 是 post-user source 内容，恒为独立
+                # user-role 数据，不得进入 system root。
+                root_placement="tail_only",
             )
             self.register_context_contribution(
                 session_id,

@@ -13,7 +13,6 @@ from app.agents.custom_tools import (
 from app.agents.policy import custom_tool_spec_names, parse_custom_tool_specs
 from app.agents.tool_invocation_context import ToolInvocationContext
 
-
 TEST_TOOL_SPEC = {
     "name": "test_tool_2",
     "factory": "app.agents.tools.testing:create_test_tool_2",

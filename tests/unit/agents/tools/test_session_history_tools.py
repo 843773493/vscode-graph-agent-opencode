@@ -8,7 +8,10 @@ from langchain_core.messages import ToolMessage
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
 from app.abstractions.session_target import SessionTarget
-from app.agents.tools.custom_invocation import create_custom_tool_invoker_tool
+from app.agents.tools.custom_invocation import (
+    create_extension_tool_invoker_tool,
+    seal_extension_catalog_binding_from_tools,
+)
 from app.agents.tools.session_history import (
     create_read_context_tool,
     create_search_context_tool,
@@ -216,7 +219,12 @@ async def test_custom_invoker_returns_revision_change_as_tool_error():
         workspace_session_context_client=_FakeWorkspaceClient(),
     )
     target_tool = create_read_context_tool(context)
-    invoker = create_custom_tool_invoker_tool([target_tool])
+    invoker = create_extension_tool_invoker_tool(
+        [target_tool],
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            [target_tool]
+        ),
+    )
 
     result = await invoker.ainvoke(
         {
@@ -237,3 +245,31 @@ async def test_custom_invoker_returns_revision_change_as_tool_error():
     assert result.status == "error"
     assert "expected=old" in result.text
     assert "actual=new" in result.text
+
+
+@pytest.mark.asyncio
+async def test_custom_invoker_returns_unknown_target_argument_as_tool_error():
+    context = SimpleNamespace(
+        session_context_query_service=_FakeLocalQueryService(),
+        workspace_session_context_client=_FakeWorkspaceClient(),
+    )
+    target_tool = create_read_context_tool(context)
+    invoker = create_extension_tool_invoker_tool(
+        [target_tool],
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            [target_tool]
+        ),
+    )
+
+    result = await invoker.ainvoke(
+        {
+            "tool_name": target_tool.name,
+            "arguments": {
+                "resource": "boxteam://session/ses_target",
+                "query": "不是 read_context 的参数",
+            },
+        }
+    )
+
+    assert isinstance(result, str)
+    assert result == "扩展工具 read_context 包含未知参数: query"

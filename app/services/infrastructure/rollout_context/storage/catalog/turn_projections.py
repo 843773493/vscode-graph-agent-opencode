@@ -929,7 +929,7 @@ class TurnProjectionQueryMixin:
                         [],
                     )
                     if semantic_kind == "tool_call" and model_call_tools:
-                        # ensure_request_tool_result_items 生成的 checkpoint shadow
+                        # ensure_request_items 生成的 checkpoint shadow
                         # 可能只在 typed payload 中保存 call id。其 model-call
                         # provenance 与先到的实时 item 一致，直接复用后端已经
                         # 解析出的逻辑工具身份，不读取正文或依赖相邻关系。

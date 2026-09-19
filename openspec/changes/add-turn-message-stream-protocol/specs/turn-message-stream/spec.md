@@ -307,8 +307,65 @@
 
 #### Scenario: Custom tool entry and target tool remain distinguishable
 
-- **WHEN** 模型通过 `invoke_custom_tool` 入口请求一个目标工具
+- **WHEN** 模型通过 `invoke_extension_tool` 入口请求一个目标工具
 - **THEN** `tool_calls[]` 保留 provider 入口名称及原始参数，`tool_executions[]` 可以展示解析后的目标工具名称，但前端通过 `tool_call_id` 同时恢复工具参数，不能因执行 run id 不同而显示空参数
+
+### Requirement: [Tool] Tool correlation is exact and has one visible projection
+
+系统 MUST 在同一个 `turn_stream_id` 和 `model_call_id` 范围内保留 provider
+`tool_call_id` 的身份，并将外层工具执行绑定到对应的
+`tool_execution_id`。固定信封工具的关联 MUST 同时校验 provider 入口名称、
+信封中的目标工具名称和规范化后的目标参数；参数已经提供但没有精确候选时
+必须返回明确关联错误，不得按“最新 pending tool call”、数组位置、正文或
+时间戳猜测。`ToolMessage` reconciliation 可以关闭内部未完成生命周期，
+但不能重复发布已经由外层工具生命周期表达的用户可见开始/完成事件。同一
+实际执行在 live、checkpoint、snapshot 和旧 trace 投影中只能有一份可见的
+工具生命周期与终态结果。
+
+#### Scenario: Envelope execution selects the exact target
+
+- **WHEN** 同一个模型调用先后声明两个 `invoke_extension_tool`，它们的目标名或参数不同，外层执行事件在任一 provider 事件之后到达
+- **THEN** 每个执行只绑定目标名和规范化参数都相等的 `tool_call_id`；不能因为另一个候选更晚到达而绑定到最近的 pending 调用
+
+#### Scenario: Missing exact envelope candidate is rejected
+
+- **WHEN** 外层工具事件携带了目标名称和参数，但 provider 工具调用中不存在完全匹配的信封目标
+- **THEN** 系统返回明确关联错误并闭合/标记该分派失败，不启动一个猜测出的工具调用，也不把结果写到其它 `tool_call_id`
+
+#### Scenario: ToolMessage reconciliation does not duplicate the trace
+
+- **WHEN** 下一次 model call 的请求边界先收到某个 `ToolMessage`，随后迟到同一工具执行的 `on_tool_start`/`on_tool_end`
+- **THEN** reconciliation 至多提前收口同一执行的内部状态，迟到事件只幂等收口或补齐必要生命周期；live 和历史 trace 不出现第二份 tool start、tool result 或工具正文
+
+### Requirement: [Model] Provider bridge preserves model-call identity
+
+每个生产 provider wrapper MUST 使用本次 LangChain model run 的稳定身份提交
+`NormalizedModelDelta`。wrapper 收不到 `run_manager` 时，只能消费同一执行
+上下文中由内部 model-start callback 登记的对应 run ID；该短期登记必须在
+Turn 清理时销毁，不得跨 Turn、跨 session 或按“当前 model call”隐式复用。
+`model.end` 不是第二个模型消息来源：只有 canonical provider stream 没有
+可见正文时才能用它补齐正文；canonical stream 已有正文时只能补 AgentLoop
+本地聚合，不能再次提交 block delta。
+
+#### Scenario: A provider without run manager still keeps the callback identity
+
+- **WHEN** LangChain 的 `on_chat_model_start` 已登记某个 run ID，但 provider wrapper 的 `_astream` 没有收到 `run_manager`
+- **THEN** provider delta 使用该已登记 run ID 作为 `model_call_id`，不会落入另一个活动 model call；Turn 结束后该登记不再可被下一 Turn 消费
+
+#### Scenario: End output does not replay canonical text
+
+- **WHEN** provider hook 已为当前 `model_call_id` 提交可见 text，外层随后收到携带同一正文的 `on_chat_model_end`
+- **THEN** MessageStreamWriter 和前端 trace 只保留一份 block delta；end 事件最多补齐 AgentLoop 的本地返回值
+
+#### Scenario: Scoped stream shadow is removed without merging model calls
+
+- **WHEN** 最终 checkpoint assistant carrier 通过 `content_part_refs[].id` 引用 provider 局部 part ID，而实时 canonical item 使用 `<model_call_id>:block:<provider_part_id>` 的 scoped `block_id`
+- **THEN** provider context 只按该明确的 model-call/part 身份关系移除被最终 carrier 替代的 stream item；相同 provider part ID 出现在另一个 `model_call_id` 时必须保留，不能按字符串后缀、正文或时间顺序误去重
+
+#### Scenario: Carrier scope is available when the checkpoint shadow is omitted
+
+- **WHEN** 当前 selection 只包含 stream shadow 和最终 carrier，且 carrier 的 `supersedes_message_id` 为 `lc_run--<model_call_id>`
+- **THEN** projector MUST 直接从该稳定 checkpoint producer identity 解析 model-call scope，不得因为被替代的 checkpoint item 未被 selection 读取而保留重复 stream item
 
 ### Requirement: [Ingestion] A normalized upstream delta is committed before live fanout
 

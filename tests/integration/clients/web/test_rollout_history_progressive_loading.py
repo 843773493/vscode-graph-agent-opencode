@@ -294,7 +294,7 @@ async def test_rollout_history_around_loading_real_web_chain(
     assert len(large_records) >= 10
     assert any(
         record.get("message", {}).get("data", {}).get("tool_calls", [{}])[0].get("name")
-        == "invoke_custom_tool"
+        == "invoke_extension_tool"
         for record in large_records
         if record.get("message", {}).get("data", {}).get("tool_calls")
     )

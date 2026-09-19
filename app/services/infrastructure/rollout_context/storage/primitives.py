@@ -42,6 +42,12 @@ class MessageCodec(Protocol):
         self, message: object | Mapping[str, object]
     ) -> list[Mapping[str, object]]: ...
 
+    def model_call_id(self, message: object) -> str | None: ...
+
+    def tool_message_model_call_id(
+        self, message: object, preceding_messages: Sequence[object]
+    ) -> str | None: ...
+
     def items_for_message(
         self,
         message: object,
@@ -50,6 +56,7 @@ class MessageCodec(Protocol):
         message_id: str,
         turn_id: str,
         timestamp: str,
+        model_call_id: str | None = None,
     ) -> tuple[CanonicalItemRecord, ...]: ...
 
     def project_message(

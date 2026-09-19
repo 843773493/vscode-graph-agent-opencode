@@ -96,7 +96,13 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     current_text: str,
     expected_assistant_text: str | None,
 ) -> None:
-    session_id = f"ses_user_interrupt_{phase}"
+    # R17：session ID 必须满足 canonical 形态（ses_ + UUIDv4 位 profile）；
+    # 参数化 phase 的派生 ID 按任务书确定性映射函数（md5 + v4 位 profile）
+    # 显式定值，保持与旧字面量同名的确定性对应。
+    session_id = {
+        "text": "ses_4d61915efc1d469b80f735dad37dfec2",  # ses_user_interrupt_text
+        "tool": "ses_f786d2fb0aa04e768cd94003d6710fe9",  # ses_user_interrupt_tool
+    }[phase]
     job_id = f"job_user_interrupt_{phase}"
     SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)
@@ -114,12 +120,12 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
                     HumanMessage(content="请执行一个可以被取消的任务"),
                 ]
             },
-            "channel_versions": {"messages": 1},
+            "channel_versions": {"messages": "1"},
             "updated_channels": ["messages"],
             "id": "ckpt-user-interrupt",
         },
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     SessionInterruptState.set(
@@ -191,7 +197,7 @@ async def test_user_interrupt_fails_when_system_reminder_checkpoint_missing(
     tmp_path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_user_interrupt_missing_checkpoint"
+    session_id = "ses_395c5d0c0b4b414d8a5248f16f17a677"
     job_id = "job_user_interrupt_missing_checkpoint"
     SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)

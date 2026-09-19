@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
-from app.abstractions.session_subagent import SessionStoreProtocol, SessionSubagentProtocol
+from app.abstractions.session_subagent import (
+    SessionSubagentAccepted,
+    SessionSubagentProtocol,
+    SessionReaderProtocol,
+)
 from app.abstractions.team import TeamStoreProtocol
-from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.team import (
     TeamBoardDTO,
     TeamListDTO,
@@ -34,7 +37,7 @@ class TeamCoordinationService:
         self,
         *,
         store: TeamStoreProtocol,
-        session_service: SessionStoreProtocol,
+        session_service: SessionReaderProtocol,
         session_orchestrator: SessionOrchestratorProtocol,
         session_subagent_service: SessionSubagentProtocol,
     ) -> None:
@@ -92,20 +95,24 @@ class TeamCoordinationService:
             startup_prompt,
             "startup_prompt",
         )
-        member_session_id: str | None = None
+        member_anchor_id: str | None = None
 
-        async def add_member_before_start(child_session: SessionDTO) -> None:
-            nonlocal member_session_id
+        async def add_member_before_start(
+            accepted: SessionSubagentAccepted,
+        ) -> None:
+            nonlocal member_anchor_id
             await self._boards.add_member(
                 team_id=team_id,
                 actor_session_id=requester_session_id,
-                target_session_id=child_session.session_id,
+                # R25：delegated 成员锚点是 owner Session 内的 child
+                # thread id（board 成员键沿用锚点；线程通信归 R26）。
+                target_session_id=accepted.child_thread_id,
                 role=normalized_role,
                 source="delegated",
                 work_mode=work_mode,
                 instructions=instructions,
             )
-            member_session_id = child_session.session_id
+            member_anchor_id = accepted.child_thread_id
 
         try:
             accepted = await self._session_subagent_service.delegate(
@@ -126,11 +133,11 @@ class TeamCoordinationService:
                 before_start=add_member_before_start,
             )
         except Exception as error:
-            if member_session_id is not None:
+            if member_anchor_id is not None:
                 await self._boards.set_member_activation(
                     team_id=team_id,
                     actor_session_id=requester_session_id,
-                    target_session_id=member_session_id,
+                    target_session_id=member_anchor_id,
                     status="activation_failed",
                     activation_error=str(error),
                 )
@@ -139,20 +146,21 @@ class TeamCoordinationService:
         board = await self._boards.set_member_activation(
             team_id=team_id,
             actor_session_id=requester_session_id,
-            target_session_id=accepted.child_session.session_id,
+            target_session_id=accepted.child_thread_id,
             status="active",
-            activation_job_id=accepted.job_id,
+            # R25 不启动真实 child Job：委派成员无激活 Job；R26 接线。
+            activation_job_id=None,
         )
         member = require_active_member(
             board,
-            accepted.child_session.session_id,
+            accepted.child_thread_id,
         )
         return TeamMemberOperationDTO(
             board=self._boards.with_recent_events(board),
             member=member,
-            child_session_id=accepted.child_session.session_id,
-            child_message_id=accepted.message_id,
-            child_job_id=accepted.job_id,
+            child_thread_id=accepted.child_thread_id,
+            child_delegation_id=accepted.delegation_id,
+            child_admission_state=accepted.admission_state,
         )
 
     async def attach_session(
@@ -211,9 +219,7 @@ class TeamCoordinationService:
         return TeamMemberOperationDTO(
             board=self._boards.with_recent_events(board),
             member=member,
-            child_session_id=target_session_id,
-            child_message_id=accepted.message_id if accepted is not None else None,
-            child_job_id=accepted.job_id if accepted is not None else None,
+            child_thread_id=target_session_id,
         )
 
     async def assign_task(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.services.infrastructure.config.snapshot import (
     ConfigReloadFailureReason,
@@ -48,6 +48,7 @@ class ConfigSnapshotStore:
         self,
         *,
         candidate_applier: ConfigCandidateApplier | None = None,
+        apply_unchanged: bool = False,
     ) -> bool:
         async with self._reload_lock:
             previous = self.current()
@@ -57,6 +58,12 @@ class ConfigSnapshotStore:
                 self._record_failure(error, reason="invalid_config")
                 raise
             if candidate.revision == previous.revision:
+                if candidate_applier is not None and apply_unchanged:
+                    try:
+                        await candidate_applier(previous, candidate)
+                    except Exception as error:
+                        self._record_failure(error, reason="apply_failed")
+                        raise
                 self._commit(candidate)
                 return False
             if candidate_applier is not None:
@@ -82,7 +89,7 @@ class ConfigSnapshotStore:
         *,
         reason: ConfigReloadFailureReason,
     ) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         active = self.current()
         previous_status = self._status
         restart_required = isinstance(error, ConfigRestartRequiredError)
@@ -114,7 +121,7 @@ class ConfigSnapshotStore:
         # 让元数据准确反映 json/jsonc 优先级切换后的当前来源。
         self._snapshot = candidate
         active = self.current()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self._status = ConfigReloadStatus(
             healthy=True,
             revision=active.revision,

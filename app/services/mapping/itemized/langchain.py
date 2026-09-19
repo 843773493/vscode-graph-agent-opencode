@@ -22,6 +22,7 @@ from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.root_compilation import resolve_source_wire_role
 from app.services.mapping.itemized.carrier_dedup import (
     projection_message_group_id as _projection_message_group_id,
 )
@@ -351,12 +352,11 @@ def project_context_plan(
         flush_canonical()
         body = resolve_selected_request_body(plan, entry, bodies)
         contribution = contribution_registry.get(entry.contribution_id)
-        if entry.contribution_id is not None and contribution is None:
+        if contribution is None:
             raise ValueError(
-                "plan-order-integrity: request-only contribution manifest 缺失: "
-                f"{entry.contribution_id}"
+                "plan-order-integrity: included request-only ref 缺少 contribution "
+                f"绑定，无法确定 root 资格: {ref.ref_id}"
             )
-        system_run.extend(body if isinstance(body, list) else [body])
         entry_metadata = {
             "context_ref_id": ref.ref_id,
             "ref_type": ref.ref_type,
@@ -382,15 +382,41 @@ def project_context_plan(
             "base_delta_role": entry.base_delta_role,
             "source_overlay_epoch": entry.source_overlay_epoch,
         }
-        if contribution is not None:
-            entry_metadata.update(
-                {
-                    "context_contribution_id": contribution.contribution_id,
-                    "source_kind": contribution.source_kind,
-                    "content_hash": contribution.content_hash,
-                }
+        entry_metadata.update(
+            {
+                "context_contribution_id": contribution.contribution_id,
+                "source_kind": contribution.source_kind,
+                "content_hash": contribution.content_hash,
+            }
+        )
+        # E1: request-only 贡献按 owner 声明的 root 资格投影。root_eligible
+        # 编入唯一 system root；tail_only 永不进入 system root，按独立
+        # user-role item 在 plan 顺序位置追加，不合并、不前插。
+        wire_role = resolve_source_wire_role(
+            contribution.root_placement,
+            compiled_into_root=contribution.root_placement == "root_eligible",
+        )
+        if wire_role == "system":
+            system_run.extend(body if isinstance(body, list) else [body])
+            system_metadata.append(entry_metadata)
+            continue
+        flush_system()
+        messages.append(
+            HumanMessage(
+                # 结构化 dict 正文包成单元素 content block；str/list 原样透传。
+                content=(
+                    body
+                    if isinstance(body, (str, list))
+                    else [body]
+                ),
+                id=f"context-source:{ref.ref_id}",
+                response_metadata={
+                    **entry_metadata,
+                    "wire_role": "user",
+                    "root_placement": contribution.root_placement,
+                },
             )
-        system_metadata.append(entry_metadata)
+        )
     flush_canonical()
     flush_system()
     return messages

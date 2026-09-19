@@ -1,9 +1,9 @@
 ## 1. 配置与运行时契约
 
-- [ ] 1.1 核对并补齐既有`workspace_schema.jsonc`中`runtime.debug`、Node、Python预留与launch profile严格schema；不得新增thread级JSONC层或静默改变旧字段语义
-- [ ] 1.2 核对既有`workspace_inline.jsonc`安全Node Inspector默认值和完整`workspace_dev.jsonc`模板，保持loopback/动态端口、有效配置合并来源与既有`config_version`
-- [ ] 1.3 让ConfigService规范化读取已生效Workspace级debug模板并校验adapter/profile/端口；每个thread的活动方案保存在thread资源而非工作区JSONC，模板热更新不改正在运行的其它thread进程
-- [ ] 1.4 覆盖debug配置默认值、Workspace覆盖、未知字段、非法端口/timeout、同Session两个thread不同活动方案及模板热更新不串改的focused配置测试
+- [x] 1.1 核对并补齐既有`workspace_schema.jsonc`中`runtime.debug`、Node、Python预留与launch profile严格schema；不得新增thread级JSONC层或静默改变旧字段语义
+- [x] 1.2 核对既有`workspace_inline.jsonc`安全Node Inspector默认值和完整`workspace_dev.jsonc`模板，保持loopback/动态端口、有效配置合并来源与既有`config_version`
+- [x] 1.3 让ConfigService规范化读取已生效Workspace级debug模板并校验adapter/profile/端口；每个thread的活动方案保存在thread资源而非工作区JSONC，模板热更新不改正在运行的其它thread进程
+- [x] 1.4 覆盖debug配置默认值、Workspace覆盖、未知字段、非法端口/timeout、同Session两个thread不同活动方案及模板热更新不串改的focused配置测试
 
 ## 2. Node 调试服务扩展
 
@@ -24,9 +24,9 @@
 ## 4. Agent 注册与策略
 
 - [ ] 4.1 将16个目标和既有调试方案管理目标保留在ExtensionToolCatalog的`debugging`分组；Provider仅见少量直接工具与始终存在、schema/description固定的`invoke_extension_tool`，目录空或启停目标也不改信封
-- [ ] 4.2 AgentFactory按每次调用的ThreadRuntimeBinding接入NodeDebugService和封存的ExtensionCatalogBindingRef；移除16个直接Provider注册/`invoke_custom_tool`旧模型入口，更新bundled debugging Skill为`skill_load(name="debugging")`→固定信封指引，删除`read_file`加载Skill/按Session共享调试状态的旧描述；不把目标清单拼进信封description
+- [ ] 4.2 AgentFactory按每次调用的ThreadRuntimeBinding接入NodeDebugService和封存的ExtensionCatalogBindingRef；移除16个直接Provider注册/`invoke_extension_tool`旧模型入口，更新bundled debugging Skill为`skill_load(name="debugging")`→固定信封指引，删除`read_file`加载Skill/按Session共享调试状态的旧描述；不把目标清单拼进信封description
 - [ ] 4.3 调试目标各自遵守denylist、allowlist和`confirmation_required`；`evaluate_expression`执行点重验最新权限/确认，撤权与非法调用返回原tool_call_id配对的真实失败，目标切换不触发Provider ToolSet hard rebase
-- [ ] 4.4 更新目录、Provider工具schema、tool result、提示词和Web/API测试：16个目标名仅出现在内层目录/指引，固定信封仅接受tool_name/arguments，模型不能传session/thread、端口、DAP/VS Code字段；无旧`invoke_custom_tool`别名或提示
+- [ ] 4.4 更新目录、Provider工具schema、tool result、提示词和Web/API测试：16个目标名仅出现在内层目录/指引，固定信封仅接受tool_name/arguments，模型不能传session/thread、端口、DAP/VS Code字段；无旧`invoke_extension_tool`别名或提示
 
 ## 5. 纯后端 E2E 测试
 

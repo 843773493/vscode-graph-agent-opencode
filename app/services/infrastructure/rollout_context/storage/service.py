@@ -18,6 +18,15 @@ from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.rollout_context.assembly.store import (
     ContextAssemblyStorageMixin,
 )
+from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
+    RolloutCompactionPreflightOwnerMixin,
+)
+from app.services.infrastructure.rollout_context.checkpoint.context_source_control import (
+    ContextSourceControlStorageMixin,
+)
+from app.services.infrastructure.rollout_context.checkpoint.fork_boundary import (
+    RolloutForkBoundaryOwnerMixin,
+)
 from app.services.infrastructure.rollout_context.checkpoint.operations import (
     RolloutCheckpointOperationsMixin,
 )
@@ -163,6 +172,8 @@ class RolloutStorage(
     RolloutCheckpointPersistenceMixin,
     RolloutViewAnchorMixin,
     RolloutCheckpointOperationsMixin,
+    RolloutCompactionPreflightOwnerMixin,
+    RolloutForkBoundaryOwnerMixin,
     RolloutCheckpointQueriesMixin,
     RolloutMessageViewMixin,
     RolloutMessageMaterializerMixin,
@@ -186,6 +197,7 @@ class RolloutStorage(
     RolloutStorageMaintenanceMixin,
     RolloutStartupMixin,
     ContextAssemblyStorageMixin,
+    ContextSourceControlStorageMixin,
     RolloutSerializationMixin,
     RolloutTransactionProjectionMixin,
     RolloutMessageProjectionMixin,

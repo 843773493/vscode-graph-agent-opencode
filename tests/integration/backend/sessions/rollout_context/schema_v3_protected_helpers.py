@@ -22,9 +22,11 @@ from tests.integration.backend.sessions.rollout_context.test_protected_detail_up
     _OLD_BLOB,
 )
 
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+
 
 def create_protected_schema2_artifact(saver: RolloutCheckpointSaver) -> Schema2Artifact:
-    session_id = "upgrade-session"
+    session_id = SESSION_ID
     saver.accept_turn(session_id, accepted_ingress_id="protected-ingress",
         acceptance_idempotency_key="protected-acceptance", payload="确定性 schema2 protected fixture")
     root = saver._storage.root(session_id)

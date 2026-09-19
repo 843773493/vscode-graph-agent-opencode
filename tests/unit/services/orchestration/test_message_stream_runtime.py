@@ -2,7 +2,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, ToolMessage
 
 from app.core.job_event_bus import EventType
 from app.services.orchestration.message_stream_runtime import (
@@ -92,7 +92,7 @@ async def test_tool_call_delta_keeps_identity_and_can_be_claimed_by_tool_executi
                 {
                     "index": 0,
                     "id": "call_1",
-                    "name": "invoke_custom_tool",
+                    "name": "invoke_extension_tool",
                     "args": '{"tool_name":',
                 }
             ],
@@ -109,19 +109,19 @@ async def test_tool_call_delta_keeps_identity_and_can_be_claimed_by_tool_executi
 
     first_payload = writer.commit.await_args_list[1].args[1]
     second_payload = writer.commit.await_args_list[2].args[1]
-    assert first_payload["tool_name"] == "invoke_custom_tool"
+    assert first_payload["tool_name"] == "invoke_extension_tool"
     assert second_payload["tool_call_id"] == "model_1:tool-call:call_1"
-    assert second_payload["tool_name"] == "invoke_custom_tool"
+    assert second_payload["tool_name"] == "invoke_extension_tool"
     assert second_payload["arguments"] == {"tool_name": "unknown_tool"}
     second_event = writer.commit.await_args_list[2]
     assert second_event.kwargs["tool_call_id"] == "model_1:tool-call:call_1"
     assert second_event.kwargs["tool_invocation_id"] == (
         "tool-invocation:model_1:call_1"
     )
-    assert runtime.claim_tool_call_id("invoke_custom_tool") == (
+    assert runtime.claim_tool_call_id("invoke_extension_tool") == (
         "model_1:tool-call:call_1"
     )
-    assert runtime.claim_tool_call_id("invoke_custom_tool") is None
+    assert runtime.claim_tool_call_id("invoke_extension_tool") is None
 
 
 @pytest.mark.asyncio
@@ -280,6 +280,120 @@ async def test_reused_provider_tool_call_id_is_scoped_per_model_call() -> None:
     assert runtime.claim_tool_call_id("read_file") == (
         "model_1:tool-call:call_reused"
     )
+
+
+@pytest.mark.asyncio
+async def test_late_tool_execution_writes_persisted_terminal_event_after_reconciliation() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    runtime = MessageStreamRuntime(writer)
+
+    await runtime.start_model("model_1", "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_late",
+                    "name": "read_file",
+                    "args": '{"path":"README.md"}',
+                }
+            ],
+        )
+    )
+
+    # ToolMessage 已在下一次模型请求组装前到达，先确认唯一结果事实。
+    await runtime.complete_tool_from_message(
+        ToolMessage(
+            content="README 内容",
+            tool_call_id="call_late",
+            name="read_file",
+        )
+    )
+
+    # LangGraph 的生命周期事件随后才到达；它必须补齐持久化 execution
+    # 状态，但不能再次写 canonical 工具结果。
+    normalized_call_id = "model_1:tool-call:call_late"
+    assert runtime.claim_tool_call_id(
+        "read_file",
+        {"path": "README.md"},
+    ) == normalized_call_id
+    await runtime.start_tool(
+        tool_execution_id="late_execution",
+        tool_call_id=normalized_call_id,
+        tool_name="read_file",
+    )
+    await runtime.complete_tool(
+        tool_execution_id="late_execution",
+        tool_call_id=normalized_call_id,
+        tool_name="read_file",
+        status="succeeded",
+        result="README 内容",
+    )
+
+    assert runtime._active_tool_executions == {}
+    completion_events = [
+        call.args[1]
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool.completed"
+    ]
+    assert len(completion_events) == 2
+    assert completion_events[-1]["tool_execution_id"] == "late_execution"
+    assert completion_events[-1]["completion_reason"] == "reconciled_tool_message"
+
+
+@pytest.mark.asyncio
+async def test_late_tool_start_claims_own_reconciled_call_not_newer_pending() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    runtime = MessageStreamRuntime(writer)
+
+    # 两次同名同参调用：第一次的 ToolMessage 已在请求边界 reconcile，
+    # 第二次仍是 pending。迟到的第一次 on_tool_start 必须认领自己的
+    # reconciled 调用，不能按"最新优先"绑到第二次调用上——否则同一
+    # tool_call_id 会在 tool 侧与 provider 侧提交两个不同正文。
+    await runtime.start_model("model_1", "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_first",
+                    "name": "read_file",
+                    "args": '{"path":"a.txt"}',
+                }
+            ],
+        )
+    )
+    await runtime.start_model("model_2", "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_second",
+                    "name": "read_file",
+                    "args": '{"path":"a.txt"}',
+                }
+            ],
+        )
+    )
+
+    await runtime.complete_tool_from_message(
+        ToolMessage(
+            content="第一次结果",
+            tool_call_id="call_first",
+            name="read_file",
+        )
+    )
+
+    first_claim = runtime.claim_tool_call_id("read_file", {"path": "a.txt"})
+    assert first_claim == "model_1:tool-call:call_first"
+    second_claim = runtime.claim_tool_call_id("read_file", {"path": "a.txt"})
+    assert second_claim == "model_2:tool-call:call_second"
 
 
 @pytest.mark.asyncio
@@ -500,7 +614,7 @@ async def test_interruption_finalizes_partial_blocks_calls_and_unknown_tool_resu
     assert calls[5][1]["status"] == "completed"
     assert calls[5][1]["completion_reason"] == "tool_started"
     assert calls[7][1]["status"] == "completed"
-    assert calls[7][1]["outcome"] == "unknown"
+    assert calls[7][1]["outcome"] == "outcome_unknown"
     assert calls[8][1]["outcome"] == "user_interrupt"
     assert calls[8][1]["retryable"] is False
 

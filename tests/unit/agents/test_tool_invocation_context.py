@@ -11,11 +11,14 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
 from app.agents.tool_invocation_context import (
+    ThreadRuntimeBinding,
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
 )
 from app.core.turn_execution_scope import ScopeCancelledError, TurnExecutionScope
-from app.services.infrastructure.resource_manager import ResourceManager
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 
 
 class _ToolBindingFakeModel(FakeMessagesListChatModel):
@@ -195,12 +198,14 @@ async def test_parallel_transport_timeouts_still_emit_one_result_per_tool_call()
 
 
 @pytest.mark.asyncio
-async def test_tool_resource_reference_gets_lease_and_releases_on_normal_completion(
+async def test_tool_invocation_does_not_infer_resource_lease_from_public_arguments(
     tmp_path: Path,
 ) -> None:
-    manager = ResourceManager(state_path=tmp_path / "resources.json")
-    context = ToolInvocationContext(resource_manager=manager)
-    middleware = ToolInvocationContextMiddleware(context)
+    ledger = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    # ToolInvocationContext 不再持有资源账本：通用调用链没有可注入的
+    # lease 入口，公开参数（如 terminal_id）无法在通用层制造占用。
+    assert not hasattr(ToolInvocationContext(), "resource_manager")
+    middleware = ToolInvocationContextMiddleware(ToolInvocationContext())
     scope = TurnExecutionScope("stream_1")
 
     async def handler(_request_value):
@@ -222,8 +227,8 @@ async def test_tool_resource_reference_gets_lease_and_releases_on_normal_complet
         await scope.close()
 
     assert isinstance(result, ToolMessage)
-    assert manager.get("terminal_1") is not None
-    assert manager.leases_for_turn("stream_1")[0].status == "released"
+    assert ledger.get("terminal_1") is None
+    assert ledger.leases_for_turn("stream_1") == []
 
 
 def test_tool_invocation_context_rejects_missing_call_id():
@@ -239,6 +244,20 @@ def test_tool_invocation_context_rejects_missing_call_id():
                 tool_call_id="missing",
             ),
         )
+
+
+def test_thread_runtime_binding_carries_exact_trusted_identity():
+    with pytest.raises(ValueError, match="session_id"):
+        ThreadRuntimeBinding(session_id="   ", thread_id="main")
+    with pytest.raises(ValueError, match="thread_id"):
+        ThreadRuntimeBinding(session_id="ses_binding", thread_id="")
+
+    binding = ThreadRuntimeBinding(session_id="ses_binding", thread_id="child")
+    context = ToolInvocationContext(thread_binding=binding)
+
+    assert context.thread_binding == binding
+    # 没有 Agent runtime 绑定时不伪造归属，由调用方显式补齐。
+    assert ToolInvocationContext().thread_binding is None
 
 
 def test_agent_injects_call_id_without_exposing_runtime_parameter():

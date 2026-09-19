@@ -4,6 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_request_id,
     get_session_turn_history_service,
@@ -29,7 +30,7 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
 def _turn_history_http_error(
-    session_id: str,
+    session_id: CanonicalSessionId,
     error: Exception,
 ) -> HTTPException:
     if isinstance(error, StaleTurnCursorError):
@@ -61,7 +62,7 @@ def _turn_history_http_error(
     summary="获取有界会话 Turn 启动快照",
 )
 async def get_session_turn_bootstrap(
-    session_id: str,
+    session_id: CanonicalSessionId,
     request: Request,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
@@ -90,7 +91,7 @@ async def get_session_turn_bootstrap(
     summary="按语义方向读取有界会话历史",
 )
 async def load_session_history(
-    session_id: str,
+    session_id: CanonicalSessionId,
     payload: TurnHistoryLoadRequest,
     request: Request,
     _: Annotated[str, Depends(verify_local_token)],

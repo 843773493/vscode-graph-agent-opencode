@@ -50,7 +50,7 @@ def _create_store(tmp_path: Path, session_bundle_factory, session_id: str):
 
 @pytest.mark.asyncio
 async def test_store_append_and_read(tmp_path: Path, session_bundle_factory):
-    session_id = "ses_1"
+    session_id = "ses_739ec3cc97674aaa8e48e6eb77fa520c"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
 
     event = AgentStartEvent(
@@ -70,7 +70,7 @@ async def test_store_append_and_read(tmp_path: Path, session_bundle_factory):
 
 @pytest.mark.asyncio
 async def test_store_stream_new_events(tmp_path: Path, session_bundle_factory):
-    session_id = "ses_2"
+    session_id = "ses_9d3b74812280434b8f7982eea309d419"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
 
     stream = store.stream_events(session_id)
@@ -93,7 +93,7 @@ async def test_store_reads_and_streams_after_event_cursor(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    session_id = "ses_cursor"
+    session_id = "ses_d488ac89b39e41b3833249a2eee2c9f7"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
 
@@ -126,11 +126,11 @@ async def test_store_reads_and_streams_after_event_cursor(
 
 @pytest.mark.asyncio
 async def test_store_reads_only_latest_trace_tail(tmp_path: Path, session_bundle_factory):
-    store, _ = _create_store(tmp_path, session_bundle_factory, "ses_tail")
+    store, _ = _create_store(tmp_path, session_bundle_factory, "ses_011963ad10604f2b881c963a8e3cc48c")
     now = datetime.now(UTC)
     for index in range(12):
         await store.append(
-            "ses_tail",
+            "ses_011963ad10604f2b881c963a8e3cc48c",
             AgentStartEvent(
                 event_id=f"evt_tail_{index}",
                 job_id="job_tail",
@@ -143,7 +143,7 @@ async def test_store_reads_only_latest_trace_tail(tmp_path: Path, session_bundle
             ),
         )
 
-    events = store.read_events("ses_tail", tail_limit=4)
+    events = store.read_events("ses_011963ad10604f2b881c963a8e3cc48c", tail_limit=4)
 
     assert [event.event_id for event in events] == [
         "evt_tail_8",
@@ -158,7 +158,7 @@ async def test_store_reads_latest_event_cursor_without_replaying_trace(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    session_id = "ses_latest_cursor"
+    session_id = "ses_b185418e7e634220892a13be1b968d30"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
 
@@ -188,7 +188,7 @@ async def test_trace_diagnostic_page_reads_tail_then_older_with_opaque_cursor(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_trace_page"
+    session_id = "ses_d19a5212d9e44aa486c10ad57371cc80"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     for index in range(8):
@@ -233,7 +233,7 @@ async def test_trace_diagnostic_page_obeys_fixed_read_budget_without_read_text(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_trace_page_budget"
+    session_id = "ses_ae047e12b250405a8f1feeec97559afa"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     for index in range(20):
@@ -272,7 +272,7 @@ async def test_trace_diagnostic_page_stale_cursor_fails_fast(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_trace_page_stale"
+    session_id = "ses_5bffe5c28634453c83781cc639502cf0"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     for index in range(2):
@@ -299,7 +299,7 @@ async def test_trace_diagnostic_page_rejects_event_larger_than_byte_budget(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_trace_page_oversized"
+    session_id = "ses_8e44a09c7e7d4a448986cfb4e6c389f2"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     await store.append(
         session_id,
@@ -325,7 +325,7 @@ async def test_turn_migration_snapshot_uses_immutable_message_boundary(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_migration_snapshot"
+    session_id = "ses_5b11b3e69a3f4e8d81ba66ffeb83c29f"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     first = JobCreatedEvent(
         event_id="evt_snapshot_1",
@@ -367,7 +367,7 @@ async def test_turn_migration_snapshot_uses_immutable_message_boundary(
 
 
 def test_store_rejects_missing_event_cursor(tmp_path: Path, session_bundle_factory):
-    session_id = "ses_missing_cursor"
+    session_id = "ses_a7a6693f19824eb6881310d8e02dcc88"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
 
     with pytest.raises(TraceCursorGoneError, match="evt_missing"):
@@ -382,7 +382,7 @@ async def test_store_appends_message_trace_for_key_events(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    session_id = "ses_3"
+    session_id = "ses_0885f007e18d4c00806ac1d5caf47bf6"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
 
@@ -446,7 +446,7 @@ async def test_store_appends_message_trace_for_key_events(
 
 @pytest.mark.asyncio
 async def test_store_stream_message_events(tmp_path: Path, session_bundle_factory):
-    session_id = "ses_4"
+    session_id = "ses_820410eff1824c42820a4a25947db714"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
 
     stream = store.stream_message_events(session_id)
@@ -471,7 +471,7 @@ async def test_store_file_write_does_not_block_event_loop(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    store, _ = _create_store(tmp_path, session_bundle_factory, "ses_slow_disk")
+    store, _ = _create_store(tmp_path, session_bundle_factory, "ses_844d06d6b2e8407281dd580ef906a58d")
     release_write = threading.Event()
     original_append = store._append_event_files
 
@@ -490,7 +490,7 @@ async def test_store_file_write_does_not_block_event_loop(
     timer = threading.Timer(0.2, release_write.set)
     timer.start()
     started_at = time.monotonic()
-    append_task = asyncio.create_task(store.append("ses_slow_disk", event))
+    append_task = asyncio.create_task(store.append("ses_844d06d6b2e8407281dd580ef906a58d", event))
 
     await asyncio.sleep(0.02)
     assert time.monotonic() - started_at < 0.1
@@ -503,7 +503,7 @@ def test_read_events_rejects_legacy_events_without_part_identity(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    session_id = "ses_legacy_parts"
+    session_id = "ses_bd7ee81104db4ebf86491862330b7071"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     trace_file = session_dir / "logs" / "traces" / "events.jsonl"
     trace_file.parent.mkdir(parents=True)
@@ -535,24 +535,46 @@ async def test_store_rejects_manual_session_move_before_writing(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    session_id = "ses_manual_trace_move"
+    session_id = "ses_937d497097414acb8bd4a086345a3de0"
     store, source = _create_store(tmp_path, session_bundle_factory, session_id)
     resolver = get_session_path_resolver(tmp_path)
+    from app.core.session_catalog_resolver import SessionCatalogPathResolver
+
     folder = resolver.create_folder(name="手工移动目标", parent_node_id=None)
-    target = folder.path / source.name
+    if isinstance(resolver, SessionCatalogPathResolver):
+        # 新模型：folder 无物理目录（SQLite-only 节点）；把会话日期桶目录
+        # 手工挪到 sessions 树外任意位置，解析必须 fail closed（防篡改
+        # 收敛到物理解析点，不扫盘比对）。与 test_path_utils R17 适配同款。
+        target = tmp_path / "手工挪走" / source.name
+    else:
+        target = folder.path / source.name
+    target.parent.mkdir(parents=True, exist_ok=True)
     source.replace(target)
 
-    with pytest.raises(RuntimeError, match="绕过软件修改会话目录结构"):
-        await store.append(
-            session_id,
-            AgentStartEvent(
-                event_id="evt_after_move",
-                job_id="job_after_move",
-                agent_id="default",
-                timestamp=datetime.now(UTC),
-                payload=AgentStartPayload(message="moved", agent_id="default"),
-            ),
-        )
+    if isinstance(resolver, SessionCatalogPathResolver):
+        with pytest.raises(RuntimeError, match="会话物理目录缺失"):
+            await store.append(
+                session_id,
+                AgentStartEvent(
+                    event_id="evt_after_move",
+                    job_id="job_after_move",
+                    agent_id="default",
+                    timestamp=datetime.now(UTC),
+                    payload=AgentStartPayload(message="moved", agent_id="default"),
+                ),
+            )
+    else:
+        with pytest.raises(RuntimeError, match="绕过软件修改会话目录结构"):
+            await store.append(
+                session_id,
+                AgentStartEvent(
+                    event_id="evt_after_move",
+                    job_id="job_after_move",
+                    agent_id="default",
+                    timestamp=datetime.now(UTC),
+                    payload=AgentStartPayload(message="moved", agent_id="default"),
+                ),
+            )
 
     assert not (target / "logs" / "traces" / "events.jsonl").exists()
     assert not source.exists()
@@ -563,7 +585,7 @@ async def test_turn_bootstrap_index_keeps_job_start_beyond_128_events(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_long_turn_index"
+    session_id = "ses_4d1dcff79274456581230e409a6eb168"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     created = JobCreatedEvent(
@@ -610,7 +632,7 @@ async def test_turn_bootstrap_uses_compact_index_without_parsing_huge_trace_line
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_huge_indexed_line"
+    session_id = "ses_a6a98ee8ae5145988c4cf2e09a333a81"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     await store.append(
         session_id,
@@ -647,7 +669,7 @@ def test_legacy_huge_line_returns_partial_shell_without_reading_payload(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_huge_legacy_line"
+    session_id = "ses_532420813a6340a2889a2e83dd8f9bde"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     event = JobCreatedEvent(
         event_id="evt_huge_legacy",
@@ -690,7 +712,7 @@ async def test_turn_index_recovers_commit_after_trace_files_were_flushed(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_index_commit_recovery"
+    session_id = "ses_a5b3015d269346b8813fe5ecd3949325"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     original_commit = TraceTurnIndex.commit
 
@@ -750,7 +772,14 @@ async def test_next_append_recovers_incomplete_trace_transaction(
     monkeypatch: pytest.MonkeyPatch,
     cutpoint: str,
 ) -> None:
-    session_id = f"ses_trace_cutpoint_{cutpoint}"
+    # R18 catalog 模式适配：f-string 派生 ID 改显式映射（与 r18-replace.py
+    # 同一 md5 canonical 函数，按逐参数完整字面量整串派生，确定性可复算）。
+    cutpoint_session_ids = {
+        "after_index": "ses_ad2554620d4b44a88cce7b29528a819d",
+        "after_message": "ses_e8533845b3ea4b1f88dc6b93bc815740",
+        "partial_trace": "ses_eabc24d0d1d545c9836143fbab6cd079",
+    }
+    session_id = cutpoint_session_ids[cutpoint]
     store, session_dir = _create_store(
         tmp_path,
         session_bundle_factory,
@@ -828,7 +857,13 @@ async def test_non_indexed_append_recovers_incomplete_trace_transaction(
     monkeypatch: pytest.MonkeyPatch,
     cutpoint: str,
 ) -> None:
-    session_id = f"ses_non_indexed_recovery_{cutpoint}"
+    session_id = {
+        # R18 catalog 模式适配：f-string 派生 ID 改显式映射（同一 md5
+        # canonical 函数，按逐参数完整字面量整串派生）。
+        "after_index": "ses_5333f2b4c40f41bc8d2afbd23180a7c8",
+        "after_message": "ses_0f8f942b48664a9b876faf9d220e3e4f",
+        "partial_trace": "ses_c3f4a3df00e64c428401434cedf1f24a",
+    }[cutpoint]
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     await store.append(
@@ -919,7 +954,7 @@ async def test_partial_non_indexed_tail_is_repaired_before_restart_append_and_st
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_partial_non_indexed"
+    session_id = "ses_a00ec1bd384e48df891d83ac77fa3a25"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     await store.append(
@@ -989,7 +1024,7 @@ async def test_partial_trace_tail_invading_committed_watermark_fails_fast(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_committed_trace_intrusion"
+    session_id = "ses_d0de061593e84b71875c48301640b44a"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     await store.append(
@@ -1028,7 +1063,7 @@ async def test_next_append_succeeds_when_caller_crashes_after_index_manifest(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_after_manifest_cutpoint"
+    session_id = "ses_725e01e81ca94d618d73b8cd886e490a"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     original_commit = TraceTurnIndex.commit
     failed = False
@@ -1083,7 +1118,7 @@ async def test_partial_semantic_trace_recovery_preserves_prior_text_delta(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_partial_after_delta"
+    session_id = "ses_4e208e8358b84df88e473ca81212ec3b"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     await store.append(
@@ -1156,7 +1191,7 @@ async def test_latest_semantic_cursor_uses_index_without_full_trace_scan(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_indexed_cursor"
+    session_id = "ses_35254628bb66462987f96359467a7e5d"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     receipt = await store.append(
         session_id,
@@ -1189,7 +1224,7 @@ async def test_projected_cursor_streams_later_indexed_non_projected_event(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_projected_cursor"
+    session_id = "ses_3682811cf3a4434f887ce4e13b8b74f1"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     await store.append(
@@ -1253,7 +1288,7 @@ async def test_text_delta_transport_cursor_resumes_without_trace_scan(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_delta_transport_cursor"
+    session_id = "ses_5f76065640b7464e8e8e39f39e38904c"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     await store.append(
@@ -1308,7 +1343,7 @@ async def test_unindexed_raw_event_id_is_rejected_without_full_trace_scan(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_raw_unindexed_cursor"
+    session_id = "ses_0492c70c2c4b4446838027e41d41ca14"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     await store.append(
         session_id,
@@ -1338,7 +1373,7 @@ def test_legacy_index_rebuild_allows_unrecorded_interrupted_event(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_legacy_interrupted"
+    session_id = "ses_2f2c42e33fcb4ce184271111c5f1b2bb"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     created = JobCreatedEvent(
@@ -1396,7 +1431,7 @@ async def test_legacy_prefix_is_rebuilt_after_non_semantic_append_for_resume(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_legacy_prefix_resume"
+    session_id = "ses_e3f28f8ce05b43b0891af9424cb83230"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     legacy_created = JobCreatedEvent(

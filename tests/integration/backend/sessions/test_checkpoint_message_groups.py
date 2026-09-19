@@ -24,7 +24,7 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 
 @pytest.fixture
 def group_case(tmp_path, session_bundle_factory):
-    session_id = "session-codec-group"
+    session_id = "ses_e6d2707870e54cab8c135193c0802532"
     session_dir = session_bundle_factory(tmp_path, session_id)
     content = [
         {"type": "text", "text": "先检查", "id": "text-before"},
@@ -361,7 +361,7 @@ def test_request_tool_group_rejects_existing_group_semantic_changes(
     path = session_dir / "rollout" / "rollout.jsonl"
     before = path.read_bytes()
     turn_id = json.loads(before.splitlines()[0])["turn_id"]
-    assert saver._storage.ensure_request_tool_result_items(
+    assert saver._storage.ensure_request_items(
         session_id, turn_id=turn_id, messages=messages
     ) == ()
     changed = messages[1].model_copy(
@@ -370,7 +370,7 @@ def test_request_tool_group_rejects_existing_group_semantic_changes(
         else {"response_metadata": {**messages[1].response_metadata, "phase": "changed"}}
     )
     with pytest.raises(RuntimeError, match="canonical.*group"):
-        saver._storage.ensure_request_tool_result_items(
+        saver._storage.ensure_request_items(
             session_id, turn_id=turn_id, messages=[changed]
         )
     assert path.read_bytes() == before
@@ -391,7 +391,7 @@ def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(
     )
     path = session_dir / "rollout" / "rollout.jsonl"
     turn_id = json.loads(path.read_bytes().splitlines()[0])["turn_id"]
-    committed = saver._storage.ensure_request_tool_result_items(
+    committed = saver._storage.ensure_request_items(
         session_id, turn_id=turn_id, messages=messages[1:3]
     )
     assert committed == (
@@ -403,7 +403,7 @@ def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(
     )
     before = path.read_bytes()
     assert len(before.splitlines()) == 6
-    assert saver._storage.ensure_request_tool_result_items(
+    assert saver._storage.ensure_request_items(
         session_id, turn_id=turn_id, messages=messages[1:3]
     ) == ()
     assert path.read_bytes() == before
@@ -426,10 +426,15 @@ def test_tool_result_shadow_reuses_completed_result_with_different_lifecycle_ids
 ):
     session_id, session_dir, messages, _ = group_case
     saver = RolloutCheckpointSaver(tmp_path)
-    shadow_ids = saver._storage.ensure_request_tool_result_items(
+    # 结果正文去重不能只依赖裸 provider tool_call_id；测试消息显式携带
+    # 所属 model call，覆盖同一 Turn 内 provider 重用短 ID 的边界。
+    tool_result_message = messages[2].model_copy(
+        update={"response_metadata": {"model_call_id": "model-call-1"}}
+    )
+    shadow_ids = saver._storage.ensure_request_items(
         session_id,
         turn_id="turn-tool-result",
-        messages=[messages[2]],
+        messages=[tool_result_message],
     )
     assert shadow_ids == ("item-result-1",)
     result = CanonicalItemRecord.create(
@@ -444,7 +449,7 @@ def test_tool_result_shadow_reuses_completed_result_with_different_lifecycle_ids
             "invocation_id": "model-call-1",
         },
         payload={
-            "tool_call_id": "call-1",
+            "tool_call_id": "model-call-1:tool-call:call-1",
             "tool_invocation_id": "tool-invocation-1",
             "tool_attempt_id": "tool-execution-1",
             "result_id": "tool-execution-1",
@@ -455,7 +460,7 @@ def test_tool_result_shadow_reuses_completed_result_with_different_lifecycle_ids
         metadata={
             "execution_id": "tool-execution-1",
             "model_call_id": "model-call-1",
-            "tool_call_id": "call-1",
+            "tool_call_id": "model-call-1:tool-call:call-1",
             "tool_invocation_id": "tool-invocation-1",
             "tool_attempt_id": "tool-execution-1",
             "execution_confirmed": True,

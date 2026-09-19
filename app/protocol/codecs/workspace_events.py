@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import cast
 
+from app.protocol.canonical import validate_session_id
 from app.protocol.codecs.json import struct_from_mapping, struct_to_mapping
 from app.protocol.generated.boxteam.workspace.v2 import file_events_pb2, trace_pb2
 
@@ -53,6 +54,8 @@ def trace_to_proto(value: Mapping[str, object]) -> trace_pb2.TraceEvent:
     for field_name in required:
         if not isinstance(value.get(field_name), str):
             raise TypeError(f"Trace 事件缺少字段: {field_name}")
+    # 2.1：wire 上的 session_id 必须过唯一 canonical 验证器（encode 边界）。
+    validate_session_id(cast(str, value["session_id"]))
     result = trace_pb2.TraceEvent(
         event_id=cast(str, value["event_id"]),
         session_id=cast(str, value["session_id"]),

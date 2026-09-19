@@ -1,6 +1,6 @@
 ## Context
 
-当前工作区后端的工具目录把所有能力压缩成一个 `enabled` 字段，`ToolSelectionStore` 只保存禁用工具名；Agent 执行时再把这些名称作为 denylist 使用。这样无法表达“后端保留工具执行能力，但本轮模型请求不携带该工具定义”的状态。当前 MCP runtime 已经发现并持有远程 `BaseTool`，但 `AgentFactory` 将它们直接放入模型工具集合，和普通 `tools.custom` 扩展工具的 `invoke_custom_tool` 边界不一致。
+当前工作区后端的工具目录把所有能力压缩成一个 `enabled` 字段，`ToolSelectionStore` 只保存禁用工具名；Agent 执行时再把这些名称作为 denylist 使用。这样无法表达“后端保留工具执行能力，但本轮模型请求不携带该工具定义”的状态。当前 MCP runtime 已经发现并持有远程 `BaseTool`，但 `AgentFactory` 将它们直接放入模型工具集合，和普通 `tools.custom` 扩展工具的 `invoke_extension_tool` 边界不一致。
 
 Workspace Gateway 已经有 `/api/v1/{path:path}` 的透明工作区代理和远程 Gateway 路由，因此不新增 Gateway 业务工具注册表；本次只保证新的工具协议字段、认证、工作区选择和联邦转发不被代理层截断或改写。
 
@@ -10,7 +10,7 @@ Workspace Gateway 已经有 `/api/v1/{path:path}` 的透明工作区代理和远
 
 - 为每个目录工具提供 `execution_enabled` 与 `model_visible` 两个权威状态。
 - 在 Agent graph 中保留执行开启的工具，在模型请求层过滤模型不可见的直接工具。
-- 让扩展工具和 MCP 工具共同使用一个 `invoke_custom_tool`，并保留目标工具的真实 schema 做后端参数校验。
+- 让扩展工具和 MCP 工具共同使用一个 `invoke_extension_tool`，并保留目标工具的真实 schema 做后端参数校验。
 - 让模型可见的扩展工具 schema 以固定入口的补充描述形式出现；关闭时仍保留最小固定入口，供 Skill 驱动调用。
 - 将 MCP 工具按 Server 归入 `扩展工具 · MCP · {server_id}`，不再把 MCP 作为独立工具组类型。
 - 用后端单元/集成测试、Gateway 代理测试和 Web 组件测试覆盖两项开关的默认、联动、混合和错误路径。
@@ -69,7 +69,7 @@ model_visible      是否向模型请求提供工具说明和参数 schema
 
 ### 4. 扩展工具通过固定入口执行，schema 作为入口描述的可选部分
 
-普通 `tools.custom` 工具和 MCP `BaseTool` 组成同一个目标工具映射，由 `create_custom_tool_invoker_tool` 创建唯一的 `invoke_custom_tool`。目标工具不直接加入模型工具列表；固定入口始终只暴露 `tool_name` 与 `arguments` 两个参数，并在调用前使用目标工具的公开 schema 校验参数。
+普通 `tools.custom` 工具和 MCP `BaseTool` 组成同一个目标工具映射，由 `create_extension_tool_invoker_tool` 创建唯一的 `invoke_extension_tool`。目标工具不直接加入模型工具列表；固定入口始终只暴露 `tool_name` 与 `arguments` 两个参数，并在调用前使用目标工具的公开 schema 校验参数。
 
 当目标扩展工具 `model_visible=true` 时，固定入口描述附带目标工具名称、描述和 JSON schema；当其为 false 时不附带详细定义，只保留“可通过 Skill/上下文提供目标名后调用”的最小说明。这样既保留用户想要的 schema 可见性控制，又不要求 LangGraph 为每个动态扩展工具创建独立模型工具节点。
 

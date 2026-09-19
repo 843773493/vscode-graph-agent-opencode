@@ -50,7 +50,7 @@ def terminal_case(
 ) -> TerminalCase:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"terminal-{uuid4().hex}"
+    session_id = f"ses_{uuid4().hex}"
     session_node = session_bundle_factory(sessions, session_id)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(
@@ -412,7 +412,7 @@ session_id = sys.argv[2]
 turn_id = sys.argv[3]
 execution_id = sys.argv[4]
 item = CanonicalItemRecord.from_dict(__import__("json").loads(sys.argv[5]))
-jsonl = (sessions / session_id / "rollout" / "rollout.jsonl").resolve()
+jsonl = Path(sys.argv[6]).resolve()
 real_fsync = os.fsync
 
 def crash_after_jsonl_barrier(fd):
@@ -445,6 +445,7 @@ RolloutCheckpointSaver(sessions).converge_execution(
             case.turn_id,
             case.execution_id,
             json.dumps(output.to_dict(), ensure_ascii=False),
+            str(case.jsonl),
         ],
         cwd=Path.cwd(),
         capture_output=True,

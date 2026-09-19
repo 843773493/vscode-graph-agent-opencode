@@ -5,8 +5,7 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
-
-CUSTOM_TOOL_INVOKER_NAME = "invoke_custom_tool"
+EXTENSION_TOOL_INVOKER_NAME = "invoke_extension_tool"
 
 ToolDefinitionLike = BaseTool | Callable[..., Any] | dict[str, Any]
 

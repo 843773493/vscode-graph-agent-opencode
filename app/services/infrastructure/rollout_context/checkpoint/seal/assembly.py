@@ -5,9 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     validate_sealed_plan,
+)
+from app.services.infrastructure.rollout_context.assembly.seal_preflight import (
+    canonical_tool_pairings,
+    validate_seal_dispatch_invariants,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
     record_failed_seal,
@@ -23,6 +28,34 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
 )
 
 
+def _seal_tool_pairings(
+    owner,
+    snapshot: ContextAssemblySnapshot,
+    checkpoint_ns: str,
+) -> tuple[tuple[str, str], ...]:
+    """唯一 seal owner 边界的显式 tool 配对来源。
+
+    只从已提交 canonical items 的显式 tool_call_id 派生；assembly 不含
+    included tool 条目时不读取 storage，直接返回空配对。
+    """
+    entries = tuple(
+        entry
+        for entry in snapshot.selection
+        if entry.included
+        and entry.ref.ref_type == "canonical_item"
+        and entry.ref.semantic_kind
+        in (SemanticKind.TOOL_CALL.value, SemanticKind.TOOL_RESULT.value)
+    )
+    if not entries:
+        return ()
+    items = owner._storage.read_items(
+        snapshot.session_id,
+        checkpoint_ns=checkpoint_ns,
+        item_ids=tuple(entry.ref.ref_id for entry in entries),
+    )
+    return canonical_tool_pairings(items)
+
+
 def seal_snapshot(
     owner,
     snapshot: ContextAssemblySnapshot,
@@ -36,6 +69,12 @@ def seal_snapshot(
 ) -> int:
     require_key(seal_idempotency_key, field="seal_idempotency_key")
     require_key(seal_input_hash, field="seal_input_hash")
+    # seal 与已提交 retry 都必须先通过唯一 preflight；冲突 fail closed，
+    # 不进入字节比对或 detail 写入。
+    validate_seal_dispatch_invariants(
+        snapshot,
+        tool_pairings=_seal_tool_pairings(owner, snapshot, checkpoint_ns),
+    )
     registered = owner.get_context_plan_registration(
         snapshot.session_id, plan_id=snapshot.plan_id, checkpoint_ns=checkpoint_ns
     )

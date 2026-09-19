@@ -12,6 +12,31 @@ from app.agents.tools import web as web_tools
 from app.runtime.embeddings import LiteLLMEmbeddingComputer
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
+    """R19 测试内 hermetic 修复：清掉本机代理环境变量。
+
+    本文件用例全部 monkeypatch 掉真实抓取（``_fetch_page``/搜索工具），
+    自身不经任何网络；而环境的 NO_PROXY 含 IPv6 字面量（``::1``/
+    ``[::1]``）会让 httpx 客户端构造时（``create_fetch_webpage_tool`` 内
+    建 AsyncClient）的代理解析直接抛 ``InvalidURL: Invalid port: ':1]'``
+    ——属外部环境噪声混入测试。与 R18 对 gateway 会话上下文客户端的
+    同类修复一致（任务书许可的 monkeypatch 清 ``*_proxy`` 做法）；清掉
+    后客户端不取代理，与用例意图一致。
+    """
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 class _FakeEmbeddingComputer:
     provider_id = "embedding_test"
     model = "semantic-test-model"

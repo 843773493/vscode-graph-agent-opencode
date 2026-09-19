@@ -3,7 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_log_service, get_request_id, get_runtime_service, verify_local_token
+from app.api.canonical_params import CanonicalSessionId
+from app.api.deps import (
+    get_log_service,
+    get_request_id,
+    get_runtime_service,
+    verify_local_token,
+)
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.runtime import (
     RuntimeDrainResultDTO,
@@ -18,7 +24,7 @@ router = APIRouter(prefix="/runtime", tags=["runtime"])
 
 class UiSnapshotRequest(BaseModel):
     workspace_root: str = Field(min_length=1)
-    session_id: str | None = None
+    session_id: CanonicalSessionId | None = None
     html: str = Field(min_length=1)
     page_title: str | None = None
     status: str | None = None

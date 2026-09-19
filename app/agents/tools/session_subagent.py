@@ -23,10 +23,10 @@ def create_session_subagent_tool(
     @tool(
         "task",
         description=(
-            "为复杂、可独立执行的工作创建一个持久化子会话并立即启动。"
-            "本工具只返回 child_session_id/job_id，不会把子 Agent 最终文本作为隐藏返回值带回。"
-            "父子 Agent 的问题、进度和最终结果必须通过 send_message_to_session 继续通信；"
-            "不要为寒暄、简单问题或单步操作创建子会话。"
+            "为复杂、可独立执行的工作在当前会话内创建一个持久化 child thread。"
+            "本工具返回 child_thread_id 与委派 admission 状态（pending），"
+            "不会把子 Agent 最终文本作为隐藏返回值带回；"
+            "不要为寒暄、简单问题或单步操作创建 child thread。"
         ),
     )
     async def task(
@@ -53,14 +53,16 @@ def create_session_subagent_tool(
             subagent_type=subagent_type,
         )
         return {
-            "child_session_id": accepted.child_session.session_id,
-            "child_job_id": accepted.job_id,
-            "child_message_id": accepted.message_id,
+            "child_thread_id": accepted.child_thread_id,
+            "owner_session_id": accepted.owner_session_id,
+            "delegation_id": accepted.delegation_id,
+            "admission_state": accepted.admission_state,
             "status": "accepted",
-            "communication_tool": "send_message_to_session",
             "message": (
-                "子会话已启动。task 不会等待或回传子 Agent 的最终文本；"
-                "父子双方必须通过 send_message_to_session 进行后续通信。"
+                "child thread 已在当前会话内创建，初始执行 admission 处于 "
+                "pending，由后端执行面绑定后开始运行。task 不会等待或回传 "
+                "child Agent 的最终文本；与 child thread 的直接通信能力由 "
+                "后续 child-thread 执行面提供。"
             ),
         }
 

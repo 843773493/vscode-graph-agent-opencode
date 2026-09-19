@@ -10,6 +10,9 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from app.agents.agent_tools import build_default_tools
+from app.agents.cache_preserving_summarization import (
+    NoDurableOwnerCompactionPreflight,
+)
 from app.agents.deep_agent_stack import build_deep_agent_middleware
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.policy import (
@@ -160,6 +163,7 @@ def test_policy_default_names_match_actual_agent_graph_tools(
         terminal_manager_client=MagicMock(),
         invocation_context=invocation_context,
         workspace_root=tmp_path,
+        communication_binding_lookup=MagicMock(),
         include_team_tools=True,
     )
     model = FakeListChatModel(responses=["ok"])
@@ -168,7 +172,10 @@ def test_policy_default_names_match_actual_agent_graph_tools(
         backend=StateBackend(),
         workspace_root=tmp_path,
         permissions=None,
-        resolved_skills=[],
+        # D1 后 resolved_skills 合同是 PublishedSkillCatalog | None；
+        # 本测试只关注工具名集合，不装配 Skill middleware。
+        resolved_skills=None,
+        compaction_preflight=NoDurableOwnerCompactionPreflight(),
         resolved_tool_denylist=set(),
         interrupt_on=None,
         runtime_middleware=[],

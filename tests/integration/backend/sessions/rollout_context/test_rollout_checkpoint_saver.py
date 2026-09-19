@@ -46,6 +46,9 @@ from app.services.infrastructure.rollout_context.storage.service import (
 )
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+LEGACY_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
+
 
 def _storage(sessions_dir: Path) -> RolloutStorage:
     """测试低层 storage 时显式注入 checkpoint 层的消息 codec。"""
@@ -186,7 +189,7 @@ def test_rollout_preserves_langchain_invalid_tool_calls_field(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     invalid = AIMessage(
         content="需要重新生成工具参数",
         id="invalid-call-message",
@@ -203,7 +206,7 @@ def test_rollout_preserves_langchain_invalid_tool_calls_field(
     valid = AIMessage(content="普通响应", id="valid-message")
     saver = RolloutCheckpointSaver(sessions_dir)
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint(
             "cp-invalid-tool-call",
             [HumanMessage(content="检查文件", id="user-1"), valid, invalid],
@@ -215,7 +218,7 @@ def test_rollout_preserves_langchain_invalid_tool_calls_field(
     records = [
         json.loads(line)
         for line in (
-            get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+            get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
             / "rollout"
             / "rollout.jsonl"
         )
@@ -233,7 +236,7 @@ def test_rollout_preserves_langchain_invalid_tool_calls_field(
     assert all(record["record_type"] == "item" for record in records)
     assert all("message" not in record and "role" not in record for record in records)
 
-    restored = saver.get_tuple(build_checkpoint_config("session_1"))
+    restored = saver.get_tuple(build_checkpoint_config(SESSION_ID))
     assert restored is not None
     restored_invalid = restored.checkpoint["channel_values"]["messages"][-1]
     assert isinstance(restored_invalid, AIMessage)
@@ -246,11 +249,11 @@ def test_put_treats_unpersisted_initial_parent_as_root(
 ) -> None:
     """首个真实写入不能把 LangGraph 的内存父 ID 落成孤儿引用。"""
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
 
     config = build_checkpoint_config(
-        "session_1", checkpoint_id="unpersisted-initial-checkpoint"
+        SESSION_ID, checkpoint_id="unpersisted-initial-checkpoint"
     )
     saver.put(
         config,
@@ -262,10 +265,10 @@ def test_put_treats_unpersisted_initial_parent_as_root(
         {"messages": "1"},
     )
 
-    restored = saver.get_tuple(build_checkpoint_config("session_1"))
+    restored = saver.get_tuple(build_checkpoint_config(SESSION_ID))
     assert restored is not None
     assert restored.parent_config is None
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         assert (
             connection.execute(
@@ -280,7 +283,7 @@ def test_put_repairs_empty_message_channel_version(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     checkpoint = empty_checkpoint()
     checkpoint["id"] = "cp-empty-message-version"
@@ -291,13 +294,13 @@ def test_put_repairs_empty_message_channel_version(
     checkpoint["updated_channels"] = ["messages"]
 
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         checkpoint,
         {"source": "empty-message-version"},
         {},
     )
 
-    restored = saver.get_tuple(build_checkpoint_config("session_1"))
+    restored = saver.get_tuple(build_checkpoint_config(SESSION_ID))
     assert restored is not None
     assert restored.checkpoint["channel_versions"]["messages"].startswith("checkpoint:")
 
@@ -307,10 +310,10 @@ def test_checkpoint_namespace_queries_do_not_cross_match(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    namespace_a = build_checkpoint_config("session_1", checkpoint_ns="ns-a")
-    namespace_b = build_checkpoint_config("session_1", checkpoint_ns="ns-b")
+    namespace_a = build_checkpoint_config(SESSION_ID, checkpoint_ns="ns-a")
+    namespace_b = build_checkpoint_config(SESSION_ID, checkpoint_ns="ns-b")
 
     saver.put(
         namespace_a,
@@ -338,7 +341,7 @@ def test_checkpoint_namespace_queries_do_not_cross_match(
 def _append_checkpoint_in_child(sessions_dir: str) -> None:
     saver = RolloutCheckpointSaver(sessions_dir)
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-child", [HumanMessage(content="子进程写入", id="child-u")]),
         {"source": "cross-process-lock"},
         {"messages": "child"},
@@ -350,16 +353,16 @@ def test_read_snapshot_keeps_sqlite_and_jsonl_watermark_consistent_across_proces
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-parent", [HumanMessage(content="父进程写入", id="parent-u")]),
         {"source": "snapshot-test"},
         {"messages": "parent"},
     )
     storage = _storage(sessions_dir)
-    snapshot = storage.open_read_snapshot("session_1")
+    snapshot = storage.open_read_snapshot(SESSION_ID)
     child = multiprocessing.get_context("spawn").Process(
         target=_append_checkpoint_in_child,
         args=(str(sessions_dir),),
@@ -378,7 +381,7 @@ def test_read_snapshot_keeps_sqlite_and_jsonl_watermark_consistent_across_proces
     child.join(timeout=10)
     assert child.exitcode == 0
     restored = RolloutCheckpointSaver(sessions_dir).get_tuple(
-        build_checkpoint_config("session_1")
+        build_checkpoint_config(SESSION_ID)
     )
     assert restored is not None
     assert restored.checkpoint["id"] == "cp-child"
@@ -389,11 +392,11 @@ def test_read_snapshot_does_not_touch_existing_rollout_files(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     storage = _storage(sessions_dir)
-    storage.initialize("session_1")
+    storage.initialize(SESSION_ID)
     rollout_root = (
-        get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
         / "rollout"
     )
     rollout_path = rollout_root / "rollout.jsonl"
@@ -403,7 +406,7 @@ def test_read_snapshot_does_not_touch_existing_rollout_files(
         for path in (rollout_path, index_path)
     }
     time.sleep(0.01)
-    snapshot = storage.open_read_snapshot("session_1")
+    snapshot = storage.open_read_snapshot(SESSION_ID)
     try:
         assert snapshot.connection.execute("PRAGMA query_only").fetchone()[0] == 1
     finally:
@@ -421,11 +424,11 @@ def test_checkpoint_read_does_not_reinitialize_existing_rollout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     storage = _storage(sessions_dir)
     saver = RolloutCheckpointSaver(sessions_dir, storage=storage)
     config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint(
             "cp-existing",
             [HumanMessage(content="只读 checkpoint", id="user-existing")],
@@ -449,9 +452,9 @@ def test_delete_legacy_rollout_does_not_initialize_removed_layout(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_legacy")
+    session_bundle_factory(sessions_dir, LEGACY_SESSION_ID)
     rollout_root = (
-        get_session_path_resolver(sessions_dir).resolve_session_node("session_legacy")
+        get_session_path_resolver(sessions_dir).resolve_session_node(LEGACY_SESSION_ID)
         / "rollout"
     )
     rollout_root.mkdir(parents=True)
@@ -461,9 +464,9 @@ def test_delete_legacy_rollout_does_not_initialize_removed_layout(
 
     storage = _storage(sessions_dir)
 
-    assert storage.pinned_fork_children("session_legacy") == ()
-    storage.release_fork_retentions("session_legacy")
-    storage.delete_thread("session_legacy")
+    assert storage.pinned_fork_children(LEGACY_SESSION_ID) == ()
+    storage.release_fork_retentions(LEGACY_SESSION_ID)
+    storage.delete_thread(LEGACY_SESSION_ID)
 
     assert not rollout_root.exists()
 
@@ -473,11 +476,11 @@ def test_validate_index_uses_read_only_snapshot_for_maintenance_check(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     storage = _storage(sessions_dir)
-    storage.initialize("session_1")
+    storage.initialize(SESSION_ID)
 
-    snapshot = storage.validate_index("session_1")
+    snapshot = storage.validate_index(SESSION_ID)
     try:
         assert snapshot.connection.execute("PRAGMA query_only").fetchone()[0] == 1
     finally:
@@ -490,11 +493,11 @@ def test_history_page_uses_one_snapshot_and_sqlite_keyset_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     first = _turn("turn-1", "001")
     config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-1", first),
         {"source": "keyset-test"},
         {"messages": "1"},
@@ -520,7 +523,7 @@ def test_history_page_uses_one_snapshot_and_sqlite_keyset_window(
         counted_open_snapshot,
     )
     page = reader.load(
-        "session_1",
+        SESSION_ID,
         TurnHistoryLoadRequest(direction="tail", turns=1),
     )
     assert opened == 1
@@ -538,12 +541,12 @@ def test_history_index_failure_closes_read_snapshot(
     )
 
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     storage = _storage(sessions_dir)
-    storage.initialize("session_1")
+    storage.initialize(SESSION_ID)
     context_reader = RolloutContextReader(storage)
     snapshots = IndexedHistorySnapshots(context_reader)
-    snapshot = storage.open_read_snapshot("session_1")
+    snapshot = storage.open_read_snapshot(SESSION_ID)
     monkeypatch.setattr(
         context_reader,
         "open_snapshot",
@@ -556,7 +559,7 @@ def test_history_index_failure_closes_read_snapshot(
     monkeypatch.setattr(snapshots, "_read_indexed_history_snapshot", fail_after_open)
 
     with pytest.raises(RuntimeError, match="模拟索引解析失败"):
-        snapshots.read("session_1")
+        snapshots.read(SESSION_ID)
     assert snapshot.closed is True
 
 
@@ -565,17 +568,17 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     messages = _turn("turn-1", "001")
     checkpoint_config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-1", messages, counter=3, task_state=None),
         {"source": "unit", "step": 1},
         {"messages": "1", "counter": "1", "task_state": "1"},
     )
     saver.finalize_turn(
-        session_id="session_1",
+        session_id=SESSION_ID,
         turn_id="turn-1",
         final_message_id="final-001",
     )
@@ -589,7 +592,7 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
     assert restored.checkpoint["channel_values"]["task_state"] is None
 
     rollout_root = (
-        get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
         / "rollout"
     )
     assert (rollout_root / "rollout.jsonl").is_file()
@@ -632,7 +635,7 @@ def test_failed_turn_status_survives_history_reload(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     messages = [
         HumanMessage(
@@ -644,7 +647,7 @@ def test_failed_turn_status_survives_history_reload(
         )
     ]
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-failed", messages),
         {"source": "failed-turn-test"},
         {"messages": "1"},
@@ -653,7 +656,7 @@ def test_failed_turn_status_survives_history_reload(
     writer = RolloutAppendWriter(sessions_dir)
     assert (
         writer.mark_turn_terminal_status(
-            session_id="session_1",
+            session_id=SESSION_ID,
             turn_id="failed-turn",
             status="failed",
         )
@@ -661,7 +664,7 @@ def test_failed_turn_status_survives_history_reload(
     )
 
     page = RolloutHistoryReader(RolloutContextReader(_storage(sessions_dir))).load(
-        "session_1",
+        SESSION_ID,
         TurnHistoryLoadRequest(direction="tail", turns=1),
     )
     assert page.items[0].turn_id == "failed-turn"
@@ -678,7 +681,7 @@ def test_terminal_turn_status_convergence_is_idempotent_after_termination(
     事件，形成每次启动都失败的死循环。
     """
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     messages = [
         HumanMessage(
@@ -693,7 +696,7 @@ def test_terminal_turn_status_convergence_is_idempotent_after_termination(
         )
     ]
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-cancelled", messages),
         {"source": "cancelled-turn-test"},
         {"messages": "1"},
@@ -701,7 +704,7 @@ def test_terminal_turn_status_convergence_is_idempotent_after_termination(
 
     def turn_status() -> str:
         with sqlite3.connect(
-            get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+            get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
             / "rollout"
             / "index.sqlite"
         ) as connection:
@@ -712,7 +715,7 @@ def test_terminal_turn_status_convergence_is_idempotent_after_termination(
 
     assert (
         saver.mark_turn_terminal_status(
-            session_id="session_1",
+            session_id=SESSION_ID,
             turn_id="cancelled-turn",
             status="cancelled",
         )
@@ -722,7 +725,7 @@ def test_terminal_turn_status_convergence_is_idempotent_after_termination(
     # 与终态不同的收敛请求必须幂等返回，而不是抛"非法 Turn.status 转移"。
     assert (
         saver.mark_turn_terminal_status(
-            session_id="session_1",
+            session_id=SESSION_ID,
             turn_id="cancelled-turn",
             status="failed",
         )
@@ -736,7 +739,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     user = HumanMessage(
         content="带工具的任务",
@@ -744,7 +747,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
         response_metadata={"message_metadata": {"turn_id": "job-1", "job_id": "job-1"}},
     )
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-1", [user]),
         {"source": "test"},
         {"messages": "1"},
@@ -753,7 +756,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
     assert (
         append_system_reminder_checkpoint(
             checkpointer=saver,
-            session_id="session_1",
+            session_id=SESSION_ID,
             reminder="任务已超时，请根据已完成结果明确报告失败。",
             response_metadata={"source": "job_timeout"},
             checkpoint_source="job_timeout",
@@ -762,7 +765,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
     )
 
     with sqlite3.connect(
-        get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
         / "rollout"
         / "index.sqlite"
     ) as connection:
@@ -788,14 +791,14 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
 
     assert (
         saver.mark_turn_terminal_status(
-            session_id="session_1",
+            session_id=SESSION_ID,
             turn_id="job-1",
             status="failed",
         )
         is True
     )
     page = RolloutHistoryReader(RolloutContextReader(_storage(sessions_dir))).load(
-        "session_1",
+        SESSION_ID,
         TurnHistoryLoadRequest(direction="tail", turns=8),
     )
     assert [item.turn_id for item in page.items] == ["job-1"]
@@ -807,7 +810,7 @@ def test_legacy_hidden_reminder_turn_is_excluded_from_history(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     legacy_reminder = HumanMessage(
         content="<system_reminder>旧的超时提醒</system_reminder>",
@@ -819,14 +822,14 @@ def test_legacy_hidden_reminder_turn_is_excluded_from_history(
         },
     )
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-legacy", [legacy_reminder]),
         {"source": "legacy-reminder"},
         {"messages": "1"},
     )
 
     page = RolloutHistoryReader(RolloutContextReader(_storage(sessions_dir))).load(
-        "session_1",
+        SESSION_ID,
         TurnHistoryLoadRequest(direction="tail", turns=8),
     )
 
@@ -838,17 +841,17 @@ def test_rewind_replay_uses_new_canonical_suffix_without_replacement_event(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     first = _turn("turn-1", "001")
     first_config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-1", first),
         {"source": "unit"},
         {"messages": "1"},
     )
     saver.finalize_turn(
-        session_id="session_1", turn_id="turn-1", final_message_id="final-001"
+        session_id=SESSION_ID, turn_id="turn-1", final_message_id="final-001"
     )
     second_config = saver.put(
         first_config,
@@ -857,15 +860,15 @@ def test_rewind_replay_uses_new_canonical_suffix_without_replacement_event(
         {"messages": "2"},
     )
     root = (
-        get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
         / "rollout"
     )
     immutable_prefix = (root / "rollout.jsonl").read_bytes()
-    saver.rewind(build_checkpoint_config("session_1"), checkpoint_id="cp-1")
+    saver.rewind(build_checkpoint_config(SESSION_ID), checkpoint_id="cp-1")
     assert (root / "rollout.jsonl").read_bytes() == immutable_prefix
     replay = [first[0], AIMessage(content="编辑后的响应", id="replay-a")]
     replay_config = saver.put(
-        build_checkpoint_config("session_1", checkpoint_id="cp-1"),
+        build_checkpoint_config(SESSION_ID, checkpoint_id="cp-1"),
         _checkpoint("cp-3", replay),
         {"source": "replay"},
         {"messages": "3"},
@@ -910,10 +913,10 @@ def test_pending_writes_and_all_checkpoint_channels_round_trip(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint(
             "cp-1", [HumanMessage(content="状态", id="u1")], counter=0, optional=None
         ),
@@ -933,16 +936,16 @@ def test_pending_write_corruption_is_rejected_instead_of_decoded(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-1", [HumanMessage(content="状态", id="u1")]),
         {"source": "unit"},
         {"messages": "1"},
     )
     saver.put_writes(config, [("counter", 1)], "task-1", "node-a")
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         connection.execute(
             "UPDATE pending_writes SET value_length = value_length + 1 WHERE checkpoint_id = ?",
@@ -959,16 +962,16 @@ def test_uncommitted_jsonl_tail_is_truncated_but_sqlite_loss_is_explicit_failure
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-1", [HumanMessage(content="已提交", id="u1")]),
         {"source": "unit"},
         {"messages": "1"},
     )
     root = (
-        get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
         / "rollout"
     )
     path = root / "rollout.jsonl"
@@ -978,13 +981,13 @@ def test_uncommitted_jsonl_tail_is_truncated_but_sqlite_loss_is_explicit_failure
             b'{"sequence":999,"message_id":"tail","turn_id":"t","role":"user","message":{}}\n'
         )
     assert path.stat().st_size > committed_size
-    _storage(sessions_dir).initialize("session_1")
+    _storage(sessions_dir).initialize(SESSION_ID)
     assert path.stat().st_size == committed_size
 
     (root / "index.sqlite").write_bytes(b"not sqlite")
     with pytest.raises((sqlite3.DatabaseError, RuntimeError)):
         RolloutCheckpointSaver(sessions_dir).get_tuple(
-            build_checkpoint_config("session_1")
+            build_checkpoint_config(SESSION_ID)
         )
 
 
@@ -994,10 +997,10 @@ def test_half_line_and_fsync_failure_never_become_committed_messages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     path = (
-        get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
         / "rollout"
         / "rollout.jsonl"
     )
@@ -1011,7 +1014,7 @@ def test_half_line_and_fsync_failure_never_become_committed_messages(
     )
     with pytest.raises(OSError, match="fsync"):
         saver.put(
-            build_checkpoint_config("session_1"),
+            build_checkpoint_config(SESSION_ID),
             _checkpoint("cp-fsync", [HumanMessage(content="未提交", id="u-fsync")]),
             {"source": "fsync-test"},
             {"messages": "1"},
@@ -1021,10 +1024,10 @@ def test_half_line_and_fsync_failure_never_become_committed_messages(
         "app.services.infrastructure.rollout_context.storage.maintenance.os.fsync",
         lambda _stream: None,
     )
-    _storage(sessions_dir).initialize("session_1")
+    _storage(sessions_dir).initialize(SESSION_ID)
     assert path.read_bytes() == b""
     path.write_bytes(b'{"sequence":1,"message_id":"half"')
-    _storage(sessions_dir).initialize("session_1")
+    _storage(sessions_dir).initialize(SESSION_ID)
     assert path.read_bytes() == b""
 
 
@@ -1034,9 +1037,9 @@ def test_sqlite_commit_window_is_retryable_without_duplicate_jsonl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    config = build_checkpoint_config("session_1")
+    config = build_checkpoint_config(SESSION_ID)
     checkpoint = _checkpoint(
         "cp-commit-window",
         [HumanMessage(content="已提交但调用方崩溃", id="u-commit-window")],
@@ -1053,7 +1056,7 @@ def test_sqlite_commit_window_is_retryable_without_duplicate_jsonl(
         saver.put(config, checkpoint, {"source": "commit-window"}, {"messages": "1"})
 
     rollout_path = (
-        get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
         / "rollout"
         / "rollout.jsonl"
     )
@@ -1127,12 +1130,12 @@ def test_concurrent_checkpoint_appends_do_not_interleave_jsonl(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
 
     def append(index: int) -> None:
         saver.put(
-            build_checkpoint_config("session_1"),
+            build_checkpoint_config(SESSION_ID),
             _checkpoint(
                 f"cp-concurrent-{index}",
                 [HumanMessage(content=f"并发 {index}", id=f"u-concurrent-{index}")],
@@ -1144,7 +1147,7 @@ def test_concurrent_checkpoint_appends_do_not_interleave_jsonl(
     with ThreadPoolExecutor(max_workers=4) as executor:
         list(executor.map(append, range(4)))
 
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     records = [
         json.loads(line)
         for line in (root / "rollout" / "rollout.jsonl")
@@ -1162,9 +1165,9 @@ def test_repeating_same_checkpoint_is_idempotent_but_conflicting_payload_fails(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    config = build_checkpoint_config("session_1")
+    config = build_checkpoint_config(SESSION_ID)
     checkpoint = _checkpoint(
         "cp-idempotent",
         [HumanMessage(content="只写一次", id="u-idempotent")],
@@ -1172,7 +1175,7 @@ def test_repeating_same_checkpoint_is_idempotent_but_conflicting_payload_fails(
     metadata = {"source": "idempotency"}
     versions = {"messages": "1"}
     first_config = saver.put(config, checkpoint, metadata, versions)
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     jsonl_path = root / "rollout" / "rollout.jsonl"
     original = jsonl_path.read_bytes()
 
@@ -1195,9 +1198,9 @@ def test_checkpoint_retry_rejects_corrupted_commit_pointer(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    config = build_checkpoint_config("session_1")
+    config = build_checkpoint_config(SESSION_ID)
     checkpoint = _checkpoint(
         "cp-corrupted-pointer",
         [HumanMessage(content="commit pointer", id="u-pointer")],
@@ -1205,7 +1208,7 @@ def test_checkpoint_retry_rejects_corrupted_commit_pointer(
     metadata = {"source": "commit-pointer"}
     versions = {"messages": "1"}
     saver.put(config, checkpoint, metadata, versions)
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         connection.execute(
             "UPDATE checkpoints SET commit_id = 999999 WHERE checkpoint_id = ?",
@@ -1228,10 +1231,10 @@ def test_checkpoint_view_without_new_items_reuses_previous_commit(
 ) -> None:
     """纯 view 更新不能伪造 terminal_convergence 或推进 JSONL offset。"""
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     first_config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint(
             "cp-view-source",
             [HumanMessage(content="同一个 canonical item", id="view-user")],
@@ -1249,7 +1252,7 @@ def test_checkpoint_view_without_new_items_reuses_previous_commit(
         {"messages": "2"},
     )
 
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         commit_count, first_commit, second_commit, last_commit = connection.execute(
             "SELECT COUNT(*), "
@@ -1275,10 +1278,10 @@ def test_read_rejects_broken_storage_commit_offset_chain(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint(
             "cp-broken-commit-chain",
             [HumanMessage(content="提交链完整性", id="user-broken-chain")],
@@ -1286,7 +1289,7 @@ def test_read_rejects_broken_storage_commit_offset_chain(
         {"source": "broken-commit-chain"},
         {"messages": "1"},
     )
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         connection.execute(
             "UPDATE storage_commits SET jsonl_offset_after = jsonl_offset_after - 1 "
@@ -1295,7 +1298,7 @@ def test_read_rejects_broken_storage_commit_offset_chain(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="JSONL offset 链断裂"):
-        saver.get_tuple(build_checkpoint_config("session_1"))
+        saver.get_tuple(build_checkpoint_config(SESSION_ID))
 
 
 def test_read_rejects_storage_commit_with_incomplete_item_catalog(
@@ -1303,10 +1306,10 @@ def test_read_rejects_storage_commit_with_incomplete_item_catalog(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint(
             "cp-broken-commit-catalog",
             [HumanMessage(content="提交 catalog 不完整", id="user-broken-catalog")],
@@ -1314,7 +1317,7 @@ def test_read_rejects_storage_commit_with_incomplete_item_catalog(
         {"source": "broken-commit-catalog"},
         {"messages": "1"},
     )
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         connection.execute(
             "UPDATE storage_commits SET jsonl_record_count = jsonl_record_count + 1 "
@@ -1323,7 +1326,7 @@ def test_read_rejects_storage_commit_with_incomplete_item_catalog(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="item catalog 数量不一致"):
-        saver.get_tuple(build_checkpoint_config("session_1"))
+        saver.get_tuple(build_checkpoint_config(SESSION_ID))
 
 
 def test_read_rejects_catalog_locator_that_does_not_match_canonical_jsonl(
@@ -1331,10 +1334,10 @@ def test_read_rejects_catalog_locator_that_does_not_match_canonical_jsonl(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint(
             "cp-broken-item-locator",
             [HumanMessage(content="损坏 item locator", id="user-broken-item")],
@@ -1342,7 +1345,7 @@ def test_read_rejects_catalog_locator_that_does_not_match_canonical_jsonl(
         {"source": "broken-item-locator"},
         {"messages": "1"},
     )
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         connection.execute(
             "UPDATE item_catalog SET jsonl_length = jsonl_length - 1 "
@@ -1352,7 +1355,7 @@ def test_read_rejects_catalog_locator_that_does_not_match_canonical_jsonl(
 
     # 摘要 snapshot 先校验 SQLite locator 边界，无需打开正文才发现少一个字节。
     with pytest.raises(RuntimeError, match="committed_jsonl_offset.*不一致"):
-        saver.get_tuple(build_checkpoint_config("session_1"))
+        saver.get_tuple(build_checkpoint_config(SESSION_ID))
 
 
 def test_rollout_schema_exposes_all_authoritative_tables_and_core_constraints(
@@ -1360,10 +1363,10 @@ def test_rollout_schema_exposes_all_authoritative_tables_and_core_constraints(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     storage = _storage(sessions_dir)
-    storage.initialize("session_1")
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    storage.initialize(SESSION_ID)
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     expected_columns = {
         "database_meta": {
             "schema_version",
@@ -1492,20 +1495,20 @@ def test_sqlite_backup_restores_authoritative_checkpoint_state(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-1", [HumanMessage(content="可恢复", id="u1")], counter=1),
         {"source": "backup-test"},
         {"messages": "1", "counter": "1"},
     )
     storage = _storage(sessions_dir)
-    backup = storage.backup_index("session_1", destination=tmp_path / "index.bak")
-    index_path = storage.index_path("session_1")
+    backup = storage.backup_index(SESSION_ID, destination=tmp_path / "index.bak")
+    index_path = storage.index_path(SESSION_ID)
     index_path.write_bytes(b"corrupted")
 
-    restored_snapshot = storage.restore_index_backup_offline("session_1", backup)
+    restored_snapshot = storage.restore_index_backup_offline(SESSION_ID, backup)
     try:
         assert restored_snapshot.manifest.latest_checkpoint_id == "cp-1"
     finally:
@@ -1520,7 +1523,7 @@ def test_sqlite_backup_restores_authoritative_checkpoint_state(
         (quarantine / "restore-manifest.json").read_text(encoding="utf-8")
     )
     assert restore_manifest["schema"] == "rollout-index-offline-restore:v1"
-    assert restore_manifest["session_id"] == "session_1"
+    assert restore_manifest["session_id"] == SESSION_ID
     assert restore_manifest["source_path"] == str(backup)
     assert restore_manifest["source_sha256"] == restore_manifest["installed_sha256"]
     assert restore_manifest["quarantined"] == [
@@ -1539,14 +1542,14 @@ def test_sqlite_backup_failure_does_not_leave_partial_temporary_index(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     storage = _storage(sessions_dir)
-    storage.initialize("session_1")
-    index_path = storage.index_path("session_1")
+    storage.initialize(SESSION_ID)
+    index_path = storage.index_path(SESSION_ID)
     index_path.write_bytes(b"not-a-sqlite-database")
 
     with pytest.raises(RuntimeError, match="recovery_required") as caught:
-        storage.backup_index("session_1", destination=tmp_path / "index.bak")
+        storage.backup_index(SESSION_ID, destination=tmp_path / "index.bak")
 
     assert isinstance(caught.value.__cause__, sqlite3.DatabaseError)
     assert not tuple(tmp_path.glob(".*.tmp"))
@@ -1557,16 +1560,16 @@ def test_sqlite_restore_failure_does_not_leave_partial_temporary_index(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     storage = _storage(sessions_dir)
-    storage.initialize("session_1")
+    storage.initialize(SESSION_ID)
     broken_backup = tmp_path / "broken-index.bak"
     broken_backup.write_bytes(b"not-a-sqlite-database")
 
     with pytest.raises(sqlite3.DatabaseError):
-        storage.restore_index_backup("session_1", broken_backup)
+        storage.restore_index_backup(SESSION_ID, broken_backup)
 
-    rollout_root = storage.index_path("session_1").parent
+    rollout_root = storage.index_path(SESSION_ID).parent
     assert not tuple(rollout_root.glob(".index.sqlite.*.restore"))
 
 
@@ -1575,16 +1578,16 @@ def test_schema_migration_checksum_and_completion_are_authoritative(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     storage = _storage(sessions_dir)
-    storage.initialize("session_1")
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    storage.initialize(SESSION_ID)
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         connection.execute(
             "UPDATE schema_migrations SET migration_checksum = 'broken' WHERE from_version = 0"
         )
     with pytest.raises(RuntimeError, match="checksum"):
-        storage.initialize("session_1")
+        storage.initialize(SESSION_ID)
 
 
 def test_schema_migration_runs_transactionally_and_keeps_backup(
@@ -1593,9 +1596,9 @@ def test_schema_migration_runs_transactionally_and_keeps_backup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     storage = _storage(sessions_dir)
-    storage.initialize("session_1")
+    storage.initialize(SESSION_ID)
     target_version = storage_version.ROLLOUT_SCHEMA_VERSION + 1
     monkeypatch.setattr(
         storage_version,
@@ -1604,7 +1607,7 @@ def test_schema_migration_runs_transactionally_and_keeps_backup(
     )
 
     snapshot = storage.migrate_schema(
-        "session_1",
+        SESSION_ID,
         to_version=target_version,
         migration_name="add_migration_probe_index",
         migration_sql="CREATE INDEX migration_probe ON messages(message_id)",
@@ -1613,7 +1616,7 @@ def test_schema_migration_runs_transactionally_and_keeps_backup(
         assert snapshot.manifest.rollout_id.startswith("rollout-")
     finally:
         snapshot.close()
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         assert (
             connection.execute(
@@ -1643,9 +1646,9 @@ def test_failed_schema_migration_restores_backup_and_requires_recovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     storage = _storage(sessions_dir)
-    storage.initialize("session_1")
+    storage.initialize(SESSION_ID)
     target_version = storage_version.ROLLOUT_SCHEMA_VERSION + 1
     monkeypatch.setattr(
         storage_version,
@@ -1655,13 +1658,13 @@ def test_failed_schema_migration_restores_backup_and_requires_recovery(
 
     with pytest.raises(sqlite3.OperationalError):
         storage.migrate_schema(
-            "session_1",
+            SESSION_ID,
             to_version=target_version,
             migration_name="broken_migration",
             migration_sql="ALTER TABLE table_that_does_not_exist ADD COLUMN value TEXT",
         )
 
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         assert (
             connection.execute(

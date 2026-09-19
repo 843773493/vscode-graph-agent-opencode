@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +15,10 @@ from app.services.infrastructure.node_debug_breakpoints import (
     anchor_breakpoint,
     reconcile_breakpoint,
 )
-from app.services.infrastructure.node_debug_service import NodeDebugService
+from app.services.infrastructure.node_debug_service import (
+    NodeDebugService,
+    _NodeDebugRuntime,
+)
 from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
 
 
@@ -27,6 +31,11 @@ class _SessionPathResolverStub:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
+        path = self._session_root / session_id / "threads" / thread_id
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
 
 def _breakpoint(path: str, line: int) -> NodeDebugBreakpointDTO:
     return NodeDebugBreakpointDTO(
@@ -36,6 +45,24 @@ def _breakpoint(path: str, line: int) -> NodeDebugBreakpointDTO:
         original_line=line,
         created_at=datetime.now(UTC),
     )
+
+
+class _BlockingProcess:
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+        self.terminate_called = asyncio.Event()
+        self.release_wait = asyncio.Event()
+
+    def terminate(self) -> None:
+        self.terminate_called.set()
+
+    async def wait(self) -> int:
+        await self.release_wait.wait()
+        self.returncode = 0
+        return self.returncode
+
+    def kill(self) -> None:
+        self.release_wait.set()
 
 
 def test_breakpoint_becomes_invalid_after_lines_are_inserted(tmp_path: Path) -> None:
@@ -86,6 +113,29 @@ def test_breakpoint_marks_ambiguous_and_deleted_source(tmp_path: Path) -> None:
     source.unlink()
     deleted = reconcile_breakpoint(ambiguous, source)
     assert deleted.relocation_status == "source_deleted"
+
+
+@pytest.mark.asyncio
+async def test_stopping_state_remains_visible_until_process_exits(tmp_path: Path) -> None:
+    service = NodeDebugService(workspace_root=tmp_path)
+    process = _BlockingProcess()
+    runtime = _NodeDebugRuntime(
+        session_id="session-stopping",
+        thread_id="main",
+        configuration_id="configuration-stopping",
+        workspace_root=tmp_path,
+        script_path=tmp_path / "entry.mjs",
+        relative_script_path="entry.mjs",
+        process=process,  # type: ignore[arg-type]
+        status="running",
+    )
+
+    stop_task = asyncio.create_task(service._stop_runtime(runtime))
+    await process.terminate_called.wait()
+    assert runtime.status == "stopping"
+    process.release_wait.set()
+    await stop_task
+    assert runtime.status == "stopping"
 
 
 @pytest.mark.asyncio
@@ -210,6 +260,57 @@ async def test_multiple_configurations_are_isolated_and_portable(
         / f"{copied.configuration_id}.json"
     )
     assert copied_path.is_file()
+
+
+@pytest.mark.asyncio
+async def test_main_and_child_thread_have_independent_debug_state(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    (workspace_root / "main.mjs").write_text("console.log('main');\n", encoding="utf-8")
+    (workspace_root / "child.mjs").write_text("console.log('child');\n", encoding="utf-8")
+    resolver = _SessionPathResolverStub(tmp_path / "sessions")
+    service = NodeDebugService(
+        workspace_root=workspace_root,
+        session_store=NodeDebugSessionStore(resolver),
+    )
+
+    main = await service.create_configuration(
+        NodeDebugConfigurationCreateRequest(
+            session_id="shared-session",
+            thread_id="main",
+            name="主线程方案",
+            script_path="main.mjs",
+        )
+    )
+    child = await service.create_configuration(
+        NodeDebugConfigurationCreateRequest(
+            session_id="shared-session",
+            thread_id="child-thread",
+            name="子线程方案",
+            script_path="child.mjs",
+        )
+    )
+
+    assert main.thread_id == "main"
+    assert child.thread_id == "child-thread"
+    assert main.active_configuration_name == "主线程方案"
+    assert child.active_configuration_name == "子线程方案"
+    assert (await service.get_state("shared-session", "main")).script_path == "main.mjs"
+    assert (
+        await service.get_state("shared-session", "child-thread")
+    ).script_path == "child.mjs"
+    assert (
+        tmp_path
+        / "sessions"
+        / "shared-session"
+        / "threads"
+        / "child-thread"
+        / "debug"
+        / "node"
+        / "manifest.json"
+    ).is_file()
 
 
 @pytest.mark.asyncio

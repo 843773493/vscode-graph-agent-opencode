@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from langchain_core.tools import BaseTool, tool
-from pydantic import Field, StrictBool, create_model
+from pydantic import Field
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.abstractions.session_message import SessionMessageDeliveryProtocol
@@ -21,11 +21,14 @@ def create_send_message_to_session_tool(
     session_orchestrator: SessionOrchestratorProtocol,
     message_delivery_service: SessionMessageDeliveryProtocol | None = None,
 ) -> BaseTool:
-    """创建向目标 session 发送消息的工具。"""
-    input_schema = create_model(
-        "SendMessageToSessionInput",
-        target_session_id=(str, Field(description="接收消息的目标 session ID")),
-        target_workspace_id=(
+    """创建向目标 session 发送消息的工具（模型侧无模拟用户 ingress）。"""
+    @tool("send_message_to_session")
+    async def send_message_to_session(
+        target_session_id: Annotated[
+            str, Field(description="接收消息的目标 session ID")
+        ],
+        content: Annotated[str, Field(description="要发送的消息正文")],
+        target_workspace_id: Annotated[
             str | None,
             Field(
                 default=None,
@@ -36,8 +39,8 @@ def create_send_message_to_session_tool(
                     "目标不在当前工作区时才需要填写"
                 ),
             ),
-        ),
-        communication_id=(
+        ] = None,
+        communication_id: Annotated[
             str | None,
             Field(
                 default=None,
@@ -46,48 +49,28 @@ def create_send_message_to_session_tool(
                     "communication_id，避免目标重复注入"
                 ),
             ),
-        ),
-        content=(str, Field(description="要发送的消息正文")),
-        kind=(
+        ] = None,
+        kind: Annotated[
             Literal["question", "reply", "progress", "result"],
             Field(
                 default="result",
                 description="跨 Agent 消息语义：提问、回复、进度或最终结果",
             ),
-        ),
-        reply_to_communication_id=(
+        ] = "result",
+        reply_to_communication_id: Annotated[
             str | None,
             Field(
                 default=None,
                 description="kind=reply 时必填，使用收到问题中的 communication_id",
             ),
-        ),
-        simulate_user=(
-            StrictBool,
-            Field(
-                default=False,
-                description="是否模拟普通用户发送；false 时由系统注入发送方身份并包装跨会话提醒",
-            ),
-        ),
-        delivery_policy=(
+        ] = None,
+        delivery_policy: Annotated[
             DeliveryPolicy,
             Field(
                 default="after_turn",
                 description="目标 Session 的投递边界：turn 结束、tool-result 后或 interrupt 后",
             ),
-        ),
-    )
-
-    @tool("send_message_to_session", args_schema=input_schema)
-    async def send_message_to_session(
-        target_session_id: str,
-        content: str,
-        target_workspace_id: str | None = None,
-        communication_id: str | None = None,
-        kind: Literal["question", "reply", "progress", "result"] = "result",
-        reply_to_communication_id: str | None = None,
-        simulate_user: bool = False,
-        delivery_policy: DeliveryPolicy = "after_turn",
+        ] = "after_turn",
     ) -> dict[str, Any]:
         """向目标 session 发送消息并启动任务。
 
@@ -117,7 +100,6 @@ def create_send_message_to_session_tool(
                 {
                     "tool": "send_message_to_session",
                     "target_session_id": sender_session_id,
-                    "simulate_user": False,
                     "kind": "reply",
                     "reply_to_communication_id": communication_id,
                 }
@@ -141,7 +123,6 @@ def create_send_message_to_session_tool(
             ),
             metadata={
                 "source": "send_message_to_session",
-                "simulate_user": False,
                 **reminder_payload,
             },
         )
@@ -152,16 +133,10 @@ def create_send_message_to_session_tool(
                     workspace_id=target_workspace_id,
                     content=content,
                     metadata=dict(internal_message.metadata),
-                    internal_message=(None if simulate_user else internal_message),
-                    simulate_user=simulate_user,
+                    internal_message=internal_message,
+                    simulate_user=False,  # 受信 ingress Protocol 必填位；模型路径恒为系统注入
                     delivery_policy=delivery_policy,
                     idempotency_key=communication_id,
-                )
-            elif simulate_user:
-                result = await session_orchestrator.create_and_run(
-                    target_session_id,
-                    content,
-                    delivery_policy=delivery_policy,
                 )
             else:
                 result = await session_orchestrator.create_and_run_internal(
@@ -173,7 +148,6 @@ def create_send_message_to_session_tool(
             raise ValueError(str(error)) from error
         return {
             "job_id": result.job_id,
-            "simulate_user": simulate_user,
             "sender_session_id": sender_session_id,
             "sender_agent_id": sender_agent_id,
             "target_session_id": target_session_id,

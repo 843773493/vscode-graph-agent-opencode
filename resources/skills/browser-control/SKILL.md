@@ -8,7 +8,7 @@ allowed-tools: listBrowserPage, openBrowserPage, readPage, screenshotPage, navig
 
 ## 调用约定
 
-- 所有工具都必须通过固定入口 `invoke_custom_tool` 调用。
+- 所有工具都必须通过固定入口 `invoke_extension_tool` 调用。
 - `tool_name` 必须使用本 Skill 声明的工具名；`arguments` 必须符合对应的 `arguments_schema`。
 - 工具返回的 `pageId` 是后续调用使用的浏览器实例 ID。`readPage` 返回的 `pages[].page_id` 是标签页 `tabId`。
 - 用户和模型可以共享浏览器。遇到“用户锁定了浏览器”时停止重试，告知用户等待解锁。
@@ -22,7 +22,7 @@ allowed-tools: listBrowserPage, openBrowserPage, readPage, screenshotPage, navig
 
 ## 工具参数 schema
 
-以下每段是目标工具的参数描述，不是新的模型工具入口。实际调用时，必须把它放入 `invoke_custom_tool.arguments`。
+以下每段是目标工具的参数描述，不是新的模型工具入口。实际调用时，必须把它放入 `invoke_extension_tool.arguments`。
 
 ### listBrowserPage
 

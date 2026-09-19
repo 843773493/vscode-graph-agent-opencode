@@ -20,7 +20,7 @@
 - 新增 Virtual Resource Namespace（VRN）：模型只看到 `boxteam://.../resources/...` 语义 URI，用来理解 workspace、Gateway、builtin 或 memory 来源；Registry 内部使用不可伪造的 `resource_id`，实际 owner 私有保存物理路径、内部 endpoint、credential ref 或 memory key。URI 是 locator/provenance而不是授权凭据、资源 identity 或幂等键，历史 assembly 只读取当时封存的 snapshot，不按当前 URI 重新解析正文。
 - 将“已提交上下文前缀字节级稳定”设为首要约束：同一 `prefix_epoch` 内的后续请求只能在已提交 wire context 后追加新 item，不得回写、合并、重排或重新序列化旧 item；合法 epoch 边界只有首次组装、实际 compaction、rewind 和 ToolSet hard rebase。
 - Provider可见的少量直接工具与固定`invoke_extension_tool`信封构成唯一ToolSet；只有它们的Provider可见形状/策略有效变化才在model-call安全边界hard rebase。内层MCP/内置/自定义ExtensionToolCatalog的增删改与权限变化不制造ToolSetRef或prefix epoch，目录binding与调用目标独立封存、按调用时最新权限校验，旧tool call仍需真实配对收敛。
-- MCP工具目录通过明确的McpCatalogOwner观察、验证和发布，再由McpToolGuidanceProducer生成受控CSM指引；目录与指引默认下一Turn一起生效，可按resource kind配置为下一安全model_call生效。不自动注入原始MCP prompts/resources/instructions；不在模型请求路径访问MCP server。将现有`invoke_custom_tool`与相关提示词、schema、展示和测试直接迁移为`invoke_extension_tool`，不留别名。
+- MCP工具目录通过明确的McpCatalogOwner观察、验证和发布，再由McpToolGuidanceProducer生成受控CSM指引；目录与指引默认下一Turn一起生效，可按resource kind配置为下一安全model_call生效。不自动注入原始MCP prompts/resources/instructions；不在模型请求路径访问MCP server。将现有`invoke_extension_tool`与相关提示词、schema、展示和测试直接迁移为`invoke_extension_tool`，不留别名。
 - Source owner以typed`root_placement=root_eligible|tail_only`声明根指令资格：普通同epoch变化无论full/delta都只追加独立`wire_role=user` item；首次组装及实际compaction、rewind、Provider ToolSet hard rebase或fork目标首次assembly的新epoch才允许把合格受信来源的完整有效状态合并为唯一顶层system root。默认外部MCP指引只能作`tail_only`数据，旧sealed bytes和canonical lineage不改写。
 - 为 Anthropic 官方部分模型未来可能支持的中途 system item 仅保留 Provider capability TODO；当前运行时不得启用该分支，也不得因此改变通用 role 合同。
 - 将一个 `SKILL.md` 拆为相互独立的 Skill metadata 与 Skill activation source；metadata 当前只读取 `name` 和 `description`。

@@ -17,8 +17,10 @@ if TYPE_CHECKING:
     from app.abstractions.session_context import SessionLookupProtocol
     from app.abstractions.tool_selection import ToolSelectionReader
     from app.services.infrastructure.config_service import ConfigService
+    from app.services.infrastructure.external_resource_leases import (
+        ExternalResourceLeaseLedger,
+    )
     from app.services.infrastructure.message_stream_store import MessageStreamStore
-    from app.services.infrastructure.resource_manager import ResourceManager
 
 
 class StepAgentFactory(Protocol):
@@ -49,5 +51,5 @@ class StepExecutionPorts:
     agent_factory: StepAgentFactory
     checkpointer_provider: Callable[[], BaseCheckpointSaver]
     session_service_provider: Callable[[], SessionLookupProtocol]
-    resource_manager: ResourceManager | None = None
+    external_resource_leases: ExternalResourceLeaseLedger | None = None
     model_timeout_seconds: float | None = None

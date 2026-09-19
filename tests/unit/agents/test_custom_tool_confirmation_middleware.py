@@ -35,7 +35,7 @@ def _custom_call(
     arguments: dict[str, object],
 ) -> dict[str, object]:
     return {
-        "name": "invoke_custom_tool",
+        "name": "invoke_extension_tool",
         "args": {"tool_name": target_name, "arguments": arguments},
         "id": call_id,
         "type": "tool_call",
@@ -157,7 +157,7 @@ def test_custom_tool_confirmation_edit_keeps_fixed_model_entry(
     assert isinstance(messages, list)
     assert messages[0].tool_calls == [
         {
-            "name": "invoke_custom_tool",
+            "name": "invoke_extension_tool",
             "args": {
                 "tool_name": "evaluate_expression",
                 "arguments": {"expression": "safeValue"},

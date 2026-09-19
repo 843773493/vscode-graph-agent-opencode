@@ -21,7 +21,7 @@ def draft() -> ContextRequestPlan:
     contribution = ContextContribution(
         contribution_id="contribution", source_kind="workspace_instructions",
         source_revision="revision-1", content_hash=contribution_content_hash("prompt", body),
-        body=body, metadata={"source_ordinal": 0},
+        body=body, source_ordinal=0,
     )
     ref = ContextRef.request_only_ref(
         "plan-item", session_id="session", plan_id="plan", source_revision="revision-1",

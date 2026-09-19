@@ -9,7 +9,7 @@ import pytest
 
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.schemas.event import (
     JobFailedEvent,
     JobFailedPayload,
@@ -82,7 +82,11 @@ def build_runtime(
         ),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         message_stream_store=MessageStreamStore(
-            path_resolver=SessionPathResolver(sessions_dir)
+            # R18 catalog 模式适配：经 path_utils 开关工厂取 resolver
+            # （catalog 模式走 SQLite catalog 链，旧模式返回原 legacy
+            # resolver，行为不变）。直连旧类会在 catalog 模式下解析不到
+            # 经 factory 注册的会话。
+            path_resolver=get_session_path_resolver(sessions_dir)
         ),
         terminal_status_writer=terminal_status_writer,
     )
@@ -151,12 +155,12 @@ async def test_startup_reconciles_job_without_terminal_event(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_stale")
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_29e5b12a664c4bad8baaf88f2b34a3ab")
     runtime, _ = build_runtime(tmp_path)
     store = runtime._trace_event_store
     now = datetime.now(UTC)
     await store.append(
-        "ses_stale",
+        "ses_29e5b12a664c4bad8baaf88f2b34a3ab",
         JobStartedEvent(
             event_id=create_prefixed_id("evt"),
             job_id="job_stale",
@@ -166,7 +170,7 @@ async def test_startup_reconciles_job_without_terminal_event(
     )
 
     reconciled = await runtime.reconcile_stale_executions()
-    events = store.read_events("ses_stale")
+    events = store.read_events("ses_29e5b12a664c4bad8baaf88f2b34a3ab")
 
     assert reconciled == 1
     assert events[-1].type == "session_interrupted"
@@ -179,7 +183,7 @@ async def test_startup_keeps_session_with_invalid_trace_available(
     session_bundle_factory,
 ) -> None:
     session_root = session_bundle_factory(
-        tmp_path / ".boxteam" / "sessions", "ses_bad_trace"
+        tmp_path / ".boxteam" / "sessions", "ses_6cf12b207df7421385418036cbcd9a27"
     )
     trace_file = session_root / "logs" / "traces" / "events.jsonl"
     trace_file.parent.mkdir(parents=True, exist_ok=True)
@@ -203,8 +207,8 @@ async def test_startup_keeps_session_with_invalid_trace_available(
     assert await runtime.reconcile_stale_executions() == 0
     assert runtime.startup_reconciliation_errors == [
         {
-            "session_id": "ses_bad_trace",
-            "error": "Trace 事件协议无效: session_id=ses_bad_trace event="
+            "session_id": "ses_6cf12b207df7421385418036cbcd9a27",
+            "error": "Trace 事件协议无效: session_id=ses_6cf12b207df7421385418036cbcd9a27 event="
             "{'event_id': 'evt_legacy_text_start', 'job_id': 'job_legacy', "
             "'step_id': None, 'agent_id': 'default', "
             "'timestamp': '2026-07-05T14:51:24.999582+00:00', "
@@ -218,11 +222,11 @@ async def test_startup_reconciles_persisted_turn_as_failed(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_stale")
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_29e5b12a664c4bad8baaf88f2b34a3ab")
     writer = RecordingTurnStatusWriter()
     runtime, _ = build_runtime(tmp_path, writer)
     await runtime._trace_event_store.append(
-        "ses_stale",
+        "ses_29e5b12a664c4bad8baaf88f2b34a3ab",
         JobStartedEvent(
             event_id=create_prefixed_id("evt"),
             job_id="job_stale",
@@ -234,9 +238,9 @@ async def test_startup_reconciles_persisted_turn_as_failed(
     await runtime.reconcile_stale_executions()
 
     assert writer.calls == [
-        {"session_id": "ses_stale", "turn_id": "job_stale", "status": "failed"}
+        {"session_id": "ses_29e5b12a664c4bad8baaf88f2b34a3ab", "turn_id": "job_stale", "status": "failed"}
     ]
-    event = runtime._trace_event_store.read_events("ses_stale")[-1]
+    event = runtime._trace_event_store.read_events("ses_29e5b12a664c4bad8baaf88f2b34a3ab")[-1]
     assert event.payload.code == "execution_lost"
     assert event.payload.resumable is False
 
@@ -246,12 +250,12 @@ async def test_startup_repairs_existing_process_exit_turn_status(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_stale")
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_29e5b12a664c4bad8baaf88f2b34a3ab")
     writer = RecordingTurnStatusWriter()
     runtime, _ = build_runtime(tmp_path, writer)
     now = datetime.now(UTC)
     await runtime._trace_event_store.append(
-        "ses_stale",
+        "ses_29e5b12a664c4bad8baaf88f2b34a3ab",
         JobStartedEvent(
             event_id=create_prefixed_id("evt"),
             job_id="job_stale",
@@ -260,13 +264,13 @@ async def test_startup_repairs_existing_process_exit_turn_status(
         ),
     )
     await runtime._trace_event_store.append(
-        "ses_stale",
+        "ses_29e5b12a664c4bad8baaf88f2b34a3ab",
         SessionInterruptedEvent(
             event_id=create_prefixed_id("evt"),
             job_id="job_stale",
             timestamp=now,
             payload=SessionInterruptedPayload(
-                session_id="ses_stale",
+                session_id="ses_29e5b12a664c4bad8baaf88f2b34a3ab",
                 phase="process_exit",
                 code="execution_lost",
                 message="工作区后端重启，无法安全续接原 AgentLoop 执行",
@@ -278,9 +282,9 @@ async def test_startup_repairs_existing_process_exit_turn_status(
 
     assert reconciled == 0
     assert writer.calls == [
-        {"session_id": "ses_stale", "turn_id": "job_stale", "status": "failed"}
+        {"session_id": "ses_29e5b12a664c4bad8baaf88f2b34a3ab", "turn_id": "job_stale", "status": "failed"}
     ]
-    assert len(runtime._trace_event_store.read_events("ses_stale")) == 2
+    assert len(runtime._trace_event_store.read_events("ses_29e5b12a664c4bad8baaf88f2b34a3ab")) == 2
 
 
 @pytest.mark.asyncio
@@ -288,11 +292,11 @@ async def test_startup_preserves_timeout_status_from_failed_event(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_timeout")
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_e4a9cc5baba448238041d63a5cb89e05")
     writer = RecordingTurnStatusWriter()
     runtime, _ = build_runtime(tmp_path, writer)
     await runtime._trace_event_store.append(
-        "ses_timeout",
+        "ses_e4a9cc5baba448238041d63a5cb89e05",
         JobFailedEvent(
             event_id=create_prefixed_id("evt"),
             job_id="job_timeout",
@@ -308,7 +312,7 @@ async def test_startup_preserves_timeout_status_from_failed_event(
     await runtime.reconcile_stale_executions()
 
     assert writer.calls == [{
-        "session_id": "ses_timeout",
+        "session_id": "ses_e4a9cc5baba448238041d63a5cb89e05",
         "turn_id": "job_timeout",
         "status": "timed_out",
     }]
@@ -319,11 +323,11 @@ async def test_startup_preserves_legacy_timeout_text_status(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_legacy_timeout")
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_ef850e62581f46b88eef10234b31bfd7")
     writer = RecordingTurnStatusWriter()
     runtime, _ = build_runtime(tmp_path, writer)
     await runtime._trace_event_store.append(
-        "ses_legacy_timeout",
+        "ses_ef850e62581f46b88eef10234b31bfd7",
         JobFailedEvent(
             event_id=create_prefixed_id("evt"),
             job_id="job_legacy_timeout",
@@ -335,7 +339,7 @@ async def test_startup_preserves_legacy_timeout_text_status(
     await runtime.reconcile_stale_executions()
 
     assert writer.calls == [{
-        "session_id": "ses_legacy_timeout",
+        "session_id": "ses_ef850e62581f46b88eef10234b31bfd7",
         "turn_id": "job_legacy_timeout",
         "status": "timed_out",
     }]

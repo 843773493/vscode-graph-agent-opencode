@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import shutil
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -32,6 +32,7 @@ from app.core.config_sources import (
     read_stable_config_file,
     verify_stable_config_file,
 )
+from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import (
     get_user_workspace_config_path,
     get_user_workspace_local_config_path,
@@ -50,6 +51,10 @@ from app.services.infrastructure.config import (
     build_config_snapshot,
 )
 from app.services.infrastructure.config.policy import workspace_config_policy
+from app.services.infrastructure.config.shadow_adapter import (
+    ConfigShadowLifecycleAdapter,
+)
+from app.services.infrastructure.config.shadow_scope import ConfigShadowLifecycleError
 from app.services.infrastructure.config.state import (
     ConfigActiveSnapshotRecord,
     ConfigConflictError,
@@ -66,6 +71,7 @@ from app.services.infrastructure.config.state import (
     redact_config_payload,
     restore_environment_secret_references,
 )
+from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.installer import resolve_config_resource_source
 from configs.layout_migrations import migrate_legacy_workspace_configuration
@@ -91,6 +97,7 @@ class ConfigService:
         workspace_state_store: WorkspaceStateStore | None = None,
         source_owner: WorkspaceSourceOwner | None = None,
         source_owner_workspace_id: str | None = None,
+        event_channel_service: EventChannelService | None = None,
     ) -> None:
         resolved_config_dir = (
             Path(config_dir).expanduser().resolve()
@@ -139,6 +146,13 @@ class ConfigService:
         )
         self._watcher: ConfigFileWatcher | None = None
         self._candidate_applier: ConfigCandidateApplier | None = None
+        self._shadow_lifecycle = ConfigShadowLifecycleAdapter(
+            validator=self._validate_shadow_config,
+            reconcile=self._reconcile_shadow_config,
+            event_service=event_channel_service,
+            bootstrap_guard_keys=("config_version",),
+            domain=self._CONFIG_DOMAIN,
+        )
         self._loaded_source: str | None = None
         self._runtime_generation = (
             os.environ.get("BOXTEAM_CONFIG_GENERATION", "").strip()
@@ -1839,6 +1853,33 @@ class ConfigService:
             mcp_tool_names=mcp_tool_names,
         )
 
+    def _validate_shadow_config(self, config: Mapping[str, object]) -> None:
+        """shadow generation 的纯内存 schema 校验入口。
+
+        source 文件稳定读取和工具策略预检仍由 candidate builder 负责；这里
+        禁止重读磁盘，否则 bootstrap 会把尚未构建的坏 candidate 误算成旧
+        active generation 的失败。
+        """
+        jsonschema.validate(dict(config), self._load_schema())
+
+    @staticmethod
+    async def _reconcile_shadow_config(
+        _config: Mapping[str, object],
+        _scope: LifetimeScope,
+    ) -> None:
+        """配置 source 已由 ConfigService 读取；运行时 reconcile 在发布钩子执行。"""
+
+    async def _ensure_shadow_started(self) -> None:
+        readiness = self._shadow_lifecycle.readiness
+        if readiness == "ready":
+            return
+        if readiness != "cold":
+            raise ConfigShadowLifecycleError(
+                "readiness_gate_closed",
+                f"workspace 配置 shadow lifecycle 不可启动: readiness={readiness}",
+            )
+        await self._shadow_lifecycle.bootstrap(self._require_snapshot().to_dict())
+
     async def _renew_apply_claim(self, apply_id: str, fencing_token: str) -> None:
         """在外部副作用期间续租 claim；claim 丢失由最终 CAS 明确暴露。"""
 
@@ -2113,8 +2154,30 @@ class ConfigService:
                         fencing_token=claim.fencing_token,
                     )
 
+        async def apply_through_shadow(
+            previous: ConfigSnapshot,
+            candidate: ConfigSnapshot,
+        ) -> None:
+            # candidate builder 已成功后才启动 shadow；解析/schema 失败仍由
+            # ConfigSnapshotStore 记录本次 reload failure，不能在其外层短路。
+            if self._shadow_lifecycle.readiness == "cold":
+                await self._shadow_lifecycle.bootstrap(previous.to_dict())
+            publish_hook = None
+            if candidate.revision != previous.revision:
+
+                async def publish_candidate(_generation) -> None:
+                    await persist_candidate(previous, candidate)
+
+                publish_hook = publish_candidate
+            await self._shadow_lifecycle.apply_candidate(
+                candidate.to_dict(),
+                expected_generation=self._shadow_lifecycle.generation,
+                publish_hook=publish_hook,
+            )
+
         return await self._snapshot_store.reload(
-            candidate_applier=persist_candidate,
+            candidate_applier=apply_through_shadow,
+            apply_unchanged=True,
         )
 
     def _prepare_candidate(
@@ -2361,7 +2424,7 @@ class ConfigService:
     ) -> None:
         if self._watcher is not None:
             raise RuntimeError("配置文件监听器不允许重复启动")
-        self._require_snapshot()
+        await self._ensure_shadow_started()
         self._candidate_applier = candidate_applier
         directories = {self._get_workspace_config_path().parent}
         candidate_paths = {
@@ -2391,6 +2454,11 @@ class ConfigService:
         await watcher.stop()
         self._candidate_applier = None
 
+    async def close(self) -> None:
+        """停止文件监听并关闭 workspace 配置 shadow generation。"""
+        await self.stop_watching()
+        await self._shadow_lifecycle.close()
+
     async def _reload_from_watcher(
         self,
         *,
@@ -2398,8 +2466,10 @@ class ConfigService:
     ) -> None:
         try:
             await self.reload(candidate_applier=candidate_applier)
-        except Exception:
-            # reload 已记录完整异常与失败状态；监听循环必须继续处理后续修复。
+        except Exception as error:
+            # reload 已写入失败状态并发布 failed 事件；watcher 继续等待后续修复，
+            # 同时必须记录完整堆栈，不能把失败静默转换成成功。
+            logger.exception("workspace 配置 watcher reload 失败", exc_info=error)
             return
 
     def _get_effective_config(self) -> dict[str, Any]:

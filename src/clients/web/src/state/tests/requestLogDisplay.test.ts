@@ -65,19 +65,19 @@ const multiCustomToolLog = requestLog({
   file_path: "/tmp/request-log.json",
   file_name: "request-log.json",
   request: {
-    tools: [{ name: "invoke_custom_tool" }],
+    tools: [{ name: "invoke_extension_tool" }],
     messages: [
       {
         type: "ai",
         tool_calls: [
           {
             id: "call_alpha",
-            name: "invoke_custom_tool",
+            name: "invoke_extension_tool",
             args: { tool_name: "alpha_tool", arguments: {} },
           },
           {
             id: "call_beta",
-            name: "invoke_custom_tool",
+            name: "invoke_extension_tool",
             args: { tool_name: "beta_tool", arguments: {} },
           },
         ],
@@ -86,7 +86,7 @@ const multiCustomToolLog = requestLog({
         type: "tool",
         role: "tool",
         id: "msg_alpha_result",
-        name: "invoke_custom_tool",
+        name: "invoke_extension_tool",
         tool_call_id: "call_alpha",
         content: "alpha-result",
       },
@@ -94,7 +94,7 @@ const multiCustomToolLog = requestLog({
         type: "tool",
         role: "tool",
         id: "msg_beta_result",
-        name: "invoke_custom_tool",
+        name: "invoke_extension_tool",
         tool_call_id: "call_beta",
         content: "beta-result",
       },
@@ -123,13 +123,13 @@ const splitResultLog = requestLog({
   file_path: "/tmp/result-log.json",
   file_name: "result-log.json",
   request: {
-    tools: [{ name: "invoke_custom_tool" }],
+    tools: [{ name: "invoke_extension_tool" }],
     messages: [
       {
         type: "tool",
         role: "tool",
         id: "msg_split_result",
-        name: "invoke_custom_tool",
+        name: "invoke_extension_tool",
         tool_call_id: "call_split",
         content: "4568",
       },
@@ -143,7 +143,7 @@ const splitCallLog = requestLog({
   file_path: "/tmp/call-log.json",
   file_name: "call-log.json",
   request: {
-    tools: [{ name: "invoke_custom_tool" }],
+    tools: [{ name: "invoke_extension_tool" }],
     messages: [],
   },
   response: {
@@ -153,7 +153,7 @@ const splitCallLog = requestLog({
         tool_calls: [
           {
             id: "call_split",
-            name: "invoke_custom_tool",
+            name: "invoke_extension_tool",
             args: { tool_name: "test_tool_2", arguments: {} },
           },
         ],
@@ -175,19 +175,19 @@ const retryAfterInvalidInvocationLog = requestLog({
   file_path: "/tmp/retry-after-invalid-invocation.json",
   file_name: "retry-after-invalid-invocation.json",
   request: {
-    tools: [{ name: "invoke_custom_tool" }],
+    tools: [{ name: "invoke_extension_tool" }],
     messages: [
       {
         type: "ai",
         tool_calls: [
           {
             id: "call_invalid",
-            name: "invoke_custom_tool",
+            name: "invoke_extension_tool",
             args: {},
           },
           {
             id: "call_valid",
-            name: "invoke_custom_tool",
+            name: "invoke_extension_tool",
             args: { tool_name: "test_tool_2", arguments: {} },
           },
         ],
@@ -196,16 +196,16 @@ const retryAfterInvalidInvocationLog = requestLog({
         type: "tool",
         role: "tool",
         id: "msg_invalid_invocation",
-        name: "invoke_custom_tool",
+        name: "invoke_extension_tool",
         tool_call_id: "call_invalid",
         content:
-          "Error invoking tool 'invoke_custom_tool' with kwargs {} with error:\n tool_name: Field required\n Please fix the error and try again.",
+          "Error invoking tool 'invoke_extension_tool' with kwargs {} with error:\n tool_name: Field required\n Please fix the error and try again.",
       },
       {
         type: "tool",
         role: "tool",
         id: "msg_valid_invocation",
-        name: "invoke_custom_tool",
+        name: "invoke_extension_tool",
         tool_call_id: "call_valid",
         content: "4568",
       },
@@ -239,7 +239,7 @@ const malformedArgumentLog = requestLog({
   file_path: "/tmp/malformed-request-log.json",
   file_name: "malformed-request-log.json",
   request: {
-    tools: [{ name: "invoke_custom_tool" }],
+    tools: [{ name: "invoke_extension_tool" }],
     messages: [],
   },
   response: {
@@ -249,7 +249,7 @@ const malformedArgumentLog = requestLog({
         tool_calls: [
           {
             id: "call_bad_json",
-            name: "invoke_custom_tool",
+            name: "invoke_extension_tool",
             arguments: "{\"tool_name\":\"test_tool_2\"",
           },
         ],
@@ -259,7 +259,7 @@ const malformedArgumentLog = requestLog({
 });
 const malformedDisplay = buildRequestLogDisplay(malformedArgumentLog);
 assert(
-  malformedDisplay.calledToolNames.includes("invoke_custom_tool"),
+  malformedDisplay.calledToolNames.includes("invoke_extension_tool"),
   "请求日志遇到不完整 JSON 参数时不应崩溃，应退回显示固定入口",
 );
 

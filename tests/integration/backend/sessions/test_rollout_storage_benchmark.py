@@ -12,6 +12,8 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+
 
 def _checkpoint(checkpoint_id: str, messages: list[HumanMessage]) -> dict[str, object]:
     checkpoint = empty_checkpoint()
@@ -30,11 +32,11 @@ def test_long_session_persists_message_deltas_without_snapshot_growth(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     messages: list[HumanMessage] = []
     naive_snapshot_bytes = 0
-    config = build_checkpoint_config("session_1")
+    config = build_checkpoint_config(SESSION_ID)
 
     for index in range(128):
         message = HumanMessage(
@@ -57,7 +59,7 @@ def test_long_session_persists_message_deltas_without_snapshot_growth(
         )
 
     root = (
-        get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
         / "rollout"
     )
     rollout_path = root / "rollout.jsonl"

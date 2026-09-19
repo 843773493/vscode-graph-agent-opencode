@@ -39,7 +39,7 @@ def dispatch_session(
 ) -> tuple[RolloutCheckpointSaver, str, str, Path]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"session-{uuid4().hex}"
+    session_id = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session_id)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(
@@ -246,7 +246,7 @@ def test_same_plan_and_source_ids_stay_with_their_session_owner(
     session_bundle_factory: Callable[[Path, str], Path],
 ) -> None:
     saver, first_session, first_turn, sessions = dispatch_session
-    second_session = f"session-{uuid4().hex}"
+    second_session = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, second_session)
     second_acceptance = saver.accept_turn(
         second_session,

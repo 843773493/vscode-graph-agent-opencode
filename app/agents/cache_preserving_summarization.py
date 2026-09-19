@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import Annotated, Any, ClassVar, NotRequired, cast
 
 from deepagents.backends.protocol import BACKEND_TYPES
@@ -30,10 +30,21 @@ from langchain_core.messages import (
 )
 from langgraph.types import Command
 
+from app.agents.itemized_context_middleware import (
+    _runtime_checkpoint_ns,
+    _runtime_session_id,
+)
 from app.agents.workspace_tool_paths import backend_virtual_to_workspace_relative
 from app.core.identifier import create_uuid_hex
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.prompting import internal_message_factory
+from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
+    CompactionPreflightPort,
+    prefix_has_open_tool_group,
+)
+from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
+    ToolProtocolBoundaryConflict,
+)
 from app.services.orchestration.activity_runtime import ActivityRuntime
 
 CACHE_PRESERVING_STRATEGY = "cache_preserving"
@@ -70,6 +81,9 @@ class CachePreservingPartition:
     messages_to_summarize: list[AnyMessage]
     preserved_messages: list[AnyMessage]
     state_cutoff: int
+    # overflow retry 中段切点经唯一 compaction preflight 过滤后的安全子集
+    # （中段坐标）；由 model-call 路径写入，调度预览路径保持默认空集。
+    safe_retry_middle_boundaries: frozenset[int] = frozenset()
 
     @property
     def effective_messages(self) -> list[AnyMessage]:
@@ -172,13 +186,18 @@ def replacement_effective_cutoff_to_state_cutoff(
     return previous_cutoff + effective_cutoff - 1
 
 
-def _initial_prefix_cutoff(
-    summarization: _DeepAgentsSummarizationMiddleware,
+def _prefix_cutoff_candidates(
     messages: list[AnyMessage],
     summarize_end: int,
-) -> int:
+) -> list[int]:
+    """按稳定性排序的缓存前缀切点候选。
+
+    缓存前缀应停在一轮对话结束处；HumanMessage 起始的轮次边界优先，
+    其余位置降序兜底。安全性一律由唯一 compaction preflight port 判定
+    （调度预览路径用内存闭合初筛），本函数不做任何配对判断。
+    """
     if summarize_end <= _MIN_CACHE_PREFIX_MESSAGES:
-        return 0
+        return []
     preferred_minimum = (
         _PREFERRED_CACHE_PREFIX_MESSAGES
         if summarize_end > _PREFERRED_CACHE_PREFIX_MESSAGES
@@ -189,27 +208,18 @@ def _initial_prefix_cutoff(
         max(preferred_minimum, summarize_end // 4),
         summarize_end - 1,
     )
-    # 缓存前缀应停在一轮对话结束处；下一条 HumanMessage 是最稳定的轮次边界。
-    for index in range(target, 0, -1):
-        if isinstance(messages[index], HumanMessage):
-            return index
-    for index in range(target, 0, -1):
-        if _is_safe_api_round_boundary(messages, index):
-            return index
-    return 0
-
-
-def _is_safe_api_round_boundary(
-    messages: list[AnyMessage],
-    index: int,
-) -> bool:
-    if index <= 0 or index >= len(messages):
-        return False
-    if isinstance(messages[index], ToolMessage):
-        return False
-    return not (
-        isinstance(messages[index - 1], AIMessage) and messages[index - 1].tool_calls
-    )
+    return [
+        *(
+            index
+            for index in range(target, 0, -1)
+            if isinstance(messages[index], HumanMessage)
+        ),
+        *(
+            index
+            for index in range(target, 0, -1)
+            if not isinstance(messages[index], HumanMessage)
+        ),
+    ]
 
 
 def build_cache_preserving_partition(
@@ -217,6 +227,8 @@ def build_cache_preserving_partition(
     effective_messages: list[AnyMessage],
     event: object,
     summarize_end: int,
+    *,
+    prefix_cutoff_candidates: Sequence[int] | None = None,
 ) -> CachePreservingPartition | None:
     """保留已经发送过的前缀，只摘要中段并继续保留近期尾部。"""
     if (
@@ -227,11 +239,21 @@ def build_cache_preserving_partition(
         middle_start = len(prefix_messages)
         # effective_messages 中紧随稳定前缀的是上一次摘要，也要滚入新摘要。
     else:
-        middle_start = _initial_prefix_cutoff(
-            summarization,
-            effective_messages,
-            summarize_end,
+        candidates = (
+            prefix_cutoff_candidates
+            if prefix_cutoff_candidates is not None
+            # 调度预览合同：没有 preflight 信息时用内存闭合初筛，
+            # 最终 durable 安全门在 model-call 路径的 preflight port。
+            else [
+                index
+                for index in _prefix_cutoff_candidates(
+                    effective_messages,
+                    summarize_end,
+                )
+                if not prefix_has_open_tool_group(effective_messages, index)
+            ]
         )
+        middle_start = next(iter(candidates), 0)
         if middle_start == 0:
             return None
         prefix_messages = list(effective_messages[:middle_start])
@@ -254,6 +276,8 @@ def build_safe_compaction_partition(
     summarization: _DeepAgentsSummarizationMiddleware,
     effective_messages: list[AnyMessage],
     event: object,
+    *,
+    prefix_cutoff_candidates: Sequence[int] | None = None,
 ) -> CachePreservingPartition | None:
     """统一计算自动、HTTP 与工具入口使用的安全压缩分区。"""
     summarize_end = summarization._determine_cutoff_index(effective_messages)
@@ -275,6 +299,7 @@ def build_safe_compaction_partition(
             effective_messages,
             event,
             summarize_end,
+            prefix_cutoff_candidates=prefix_cutoff_candidates,
         )
     if partition is not None:
         return partition
@@ -509,6 +534,7 @@ def compact_large_tool_payloads_for_summary(
 
 def _overflow_retry_middle_messages(
     messages: list[AnyMessage],
+    safe_middle_boundaries: frozenset[int],
 ) -> list[list[AnyMessage]]:
     stripped, media_changed = strip_media_from_summary_messages(messages)
     retries: list[list[AnyMessage]] = [stripped] if media_changed else []
@@ -520,7 +546,7 @@ def _overflow_retry_middle_messages(
     boundaries = [
         index
         for index in range(2, len(compacted))
-        if _is_safe_api_round_boundary(compacted, index)
+        if index in safe_middle_boundaries
     ]
     selected: set[int] = set()
     for attempt in range(1, _MAX_SUMMARY_OVERFLOW_RETRIES + 1):
@@ -596,6 +622,17 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
     serialized_name: ClassVar[str] = "SummarizationMiddleware"
     state_schema = CachePreservingSummarizationState
 
+    def __init__(
+        self,
+        *args: Any,
+        compaction_preflight: CompactionPreflightPort,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        # compaction preflight port 必填：Agent 层不得持有 SQLite connection，
+        # durable 闭包验证统一经该只读端口进入唯一 Saver owner。
+        self._compaction_preflight = compaction_preflight
+
     @property
     def name(self) -> str:
         return "SummarizationMiddleware"
@@ -636,12 +673,94 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         force_compaction = request.state.get("_force_cache_compaction") is True
         if not force_compaction and not self._should_summarize(effective, total_tokens):
             return None
+        state_messages = list(request.messages)
+        summarize_end = self._determine_cutoff_index(effective)
+        prefix_candidates = _prefix_cutoff_candidates(effective, summarize_end)
+        safe_prefix = self._preflight_safe_cutoffs(
+            request,
+            state_messages,
+            prefix_candidates,
+        )
         partition = build_safe_compaction_partition(
             self,
             effective,
             request.state.get("_summarization_event"),
+            prefix_cutoff_candidates=[
+                index for index in prefix_candidates if index in safe_prefix
+            ],
+        )
+        if partition is None:
+            return effective, None
+        partition = self._preflight_partition_boundaries(
+            request,
+            state_messages,
+            partition,
         )
         return effective, partition
+
+    def _preflight_safe_cutoffs(
+        self,
+        request: ModelRequest,
+        state_messages: list[AnyMessage],
+        candidates: list[int],
+    ) -> frozenset[int]:
+        """把边界候选交给唯一 compaction preflight port 验证。"""
+        if not candidates:
+            return frozenset()
+        return self._compaction_preflight.safe_compaction_prefix_cutoffs(
+            _runtime_session_id(request),
+            checkpoint_ns=_runtime_checkpoint_ns(request),
+            state_messages=state_messages,
+            cutoff_indexes=candidates,
+        )
+
+    def _preflight_partition_boundaries(
+        self,
+        request: ModelRequest,
+        state_messages: list[AnyMessage],
+        partition: CachePreservingPartition,
+    ) -> CachePreservingPartition:
+        """在 summary/offload/checkpoint mutation 前验证分区全部边界候选。
+
+        稳定前缀边界与 state cutoff 是强制边界：任一不在安全集合内即抛
+        tool-protocol-boundary-conflict，保证零 summary、零 offload、零
+        transition。overflow retry 的中段候选切点经同一 port 过滤。
+        """
+        state_index_by_identity = {
+            id(message): index for index, message in enumerate(state_messages)
+        }
+        mandatory: list[int] = []
+        if partition.prefix_messages:
+            mandatory.append(len(partition.prefix_messages))
+        mandatory.append(partition.state_cutoff)
+        retry_candidates: dict[int, int] = {}
+        middle = partition.messages_to_summarize
+        for middle_index in range(2, len(middle)):
+            state_index = state_index_by_identity.get(id(middle[middle_index]))
+            if state_index is None:
+                # 摘要消息等 request-only 对象不构成 durable 边界候选。
+                continue
+            retry_candidates[state_index] = middle_index
+        safe = self._preflight_safe_cutoffs(
+            request,
+            state_messages,
+            [*mandatory, *retry_candidates],
+        )
+        conflicting = [index for index in mandatory if index not in safe]
+        if conflicting:
+            raise ToolProtocolBoundaryConflict(
+                "tool-protocol-boundary-conflict: compaction 边界拆散 "
+                f"assistant tool-call group 与 terminal result: {conflicting}",
+                safe_anchors=(),
+            )
+        return replace(
+            partition,
+            safe_retry_middle_boundaries=frozenset(
+                middle_index
+                for state_index, middle_index in retry_candidates.items()
+                if state_index in safe
+            ),
+        )
 
     def _handle_unavailable_forced_compaction(
         self,
@@ -693,7 +812,8 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         partition: CachePreservingPartition,
     ) -> list[tuple[list[AnyMessage], bool]]:
         middle_retries = _overflow_retry_middle_messages(
-            partition.messages_to_summarize
+            partition.messages_to_summarize,
+            partition.safe_retry_middle_boundaries,
         )
         retries = [
             (_forked_summary_messages(partition, middle), False)
@@ -1098,6 +1218,27 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         )
 
 
+class NoDurableOwnerCompactionPreflight:
+    """合成装配（无 RolloutCheckpointSaver durable owner）的显式失败端口。
+
+    按合成/test assembly 合同：没有 durable owner 就不允许静默跳过
+    compaction preflight；真实触发压缩时立即报错，不伪造安全结论。
+    """
+
+    def safe_compaction_prefix_cutoffs(
+        self,
+        session_id: str,
+        *,
+        checkpoint_ns: str,
+        state_messages: Sequence[object],
+        cutoff_indexes: Sequence[int],
+    ) -> frozenset[int]:
+        raise RuntimeError(
+            "compaction preflight 需要 RolloutCheckpointSaver durable owner；"
+            f"当前装配 session={session_id} 没有 Saver 端口"
+        )
+
+
 class CachePreservingSummarizationToolMiddleware(SummarizationToolMiddleware):
     """让 compact_conversation 工具使用与自动压缩相同的缓存优先策略。"""
 
@@ -1170,6 +1311,8 @@ class CachePreservingSummarizationToolMiddleware(SummarizationToolMiddleware):
 def create_cache_preserving_summarization_middleware(
     model: BaseChatModel,
     backend: BACKEND_TYPES,
+    *,
+    compaction_preflight: CompactionPreflightPort,
 ) -> CachePreservingSummarizationMiddleware:
     if not isinstance(model, RuntimeBaseChatModel):
         raise TypeError("缓存优先压缩需要 BaseChatModel 实例")
@@ -1181,6 +1324,7 @@ def create_cache_preserving_summarization_middleware(
         keep=defaults["keep"],
         trim_tokens_to_summarize=None,
         truncate_args_settings=defaults["truncate_args_settings"],
+        compaction_preflight=compaction_preflight,
     )
 
 
@@ -1191,6 +1335,7 @@ __all__ = [
     "CachePreservingSummarizationMiddleware",
     "CachePreservingSummarizationToolMiddleware",
     "CompactConversationSchema",
+    "NoDurableOwnerCompactionPreflight",
     "apply_summarization_event",
     "build_cache_preserving_event",
     "build_cache_preserving_partition",

@@ -58,7 +58,7 @@ def assembly_case(
 ) -> Iterator[AssemblyCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"schema4-manifest-{uuid4().hex}"
+    session_id = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session_id)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(
@@ -103,8 +103,8 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
             metadata={
                 "owner": plan_id,
                 "source_ref": name,
-                "source_ordinal": ordinal,
             },
+            source_ordinal=ordinal,
         )
         for ordinal, name in enumerate(("included-source", "omitted-source"))
     )
@@ -347,7 +347,7 @@ def test_registry_hash_and_metadata_are_exact_without_legacy_tolerance(
                     "SELECT manifest_json FROM context_plan_contributions WHERE contribution_id = 'included-source'"
                 ).fetchone()[0]
             )
-            raw["metadata"]["source_ordinal"] = 999
+            raw["source_ordinal"] = 999
             case.connection.execute(
                 "UPDATE context_plan_contributions SET manifest_json = ? WHERE contribution_id = 'included-source'",
                 (canonical_json_bytes(raw).decode(),),
@@ -363,7 +363,7 @@ def test_registry_hash_and_metadata_are_exact_without_legacy_tolerance(
         ("assembly_item_refs", "contribution_id", "changed"),
         ("context_assembly_contributions", "contribution_ordinal", 9),
         ("context_assembly_contributions", "content_length", 999),
-        ("context_assembly_contributions", "metadata_json", '{"source_ordinal":999}'),
+        ("context_assembly_contributions", "metadata_json", '{"forged":true}'),
         ("context_assembly_selections", "plan_ordinal", 9),
         ("context_assembly_selections", "content_hash", "changed"),
         ("context_assembly_selections", "detail_ref", "changed"),

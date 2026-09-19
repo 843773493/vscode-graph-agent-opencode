@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
-
 _BUILTIN_TOOL_FACTORIES = MappingProxyType(
     {
         "read_context": "app.agents.tools.session_history:create_read_context_tool",

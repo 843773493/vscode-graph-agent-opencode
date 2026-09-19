@@ -10,6 +10,9 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
+    validate_tool_protocol_closure,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -139,6 +142,13 @@ class RolloutCheckpointOperationsMixin:
                         ) from error
                     cutoff = anchor_index + (1 if anchor_mode == "inclusive" else 0)
                 visible_sequences = source_sequences[:cutoff]
+                # 在创建目标 view/branch 前验证 tool protocol closure：
+                # 冲突时旧 active view 与全部状态保持零副作用。
+                validate_tool_protocol_closure(
+                    connection,
+                    source_sequences,
+                    cutoff,
+                )
                 branch_id = "branch-" + uuid4().hex[:12]
                 timestamp = _now()
                 old_active_branch, _projection_epoch = self._namespace_state(

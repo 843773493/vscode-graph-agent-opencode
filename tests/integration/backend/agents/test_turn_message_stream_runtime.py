@@ -13,8 +13,10 @@ from app.core.turn_execution_scope import (
     AgentLoopControlCoordinator,
     TurnExecutionScope,
 )
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.infrastructure.resource_manager import ResourceManager
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 
@@ -151,13 +153,11 @@ async def test_resource_cancel_stop_and_crash_reconcile_are_independent(
     runtime_context: tuple[MessageStreamStore, SessionPathResolver, str, Path],
 ) -> None:
     _, _, _, output_root = runtime_context
-    stopped: list[str] = []
-    manager = ResourceManager(state_path=output_root / "resources.json")
+    manager = ExternalResourceLeaseLedger(state_path=output_root / "resources.json")
     manager.register_external(
         resource_id="browser_1",
         kind="browser_context",
         lifetime_scope="session",
-        stopper=lambda: stopped.append("browser_1"),
     )
     lease = manager.acquire_operation(
         resource_id="browser_1",
@@ -165,14 +165,9 @@ async def test_resource_cancel_stop_and_crash_reconcile_are_independent(
         operation_id="navigate_1",
     )
 
-    released = await manager.cancel_turn("stream_resource")
+    released = manager.release_turn_leases("stream_resource")
     assert [item.lease_id for item in released] == [lease.lease_id]
     assert manager.get("browser_1").status == "running"  # type: ignore[union-attr]
-    assert stopped == []
-
-    await manager.stop(resource_id="browser_1")
-    assert manager.get("browser_1").status == "stopped"  # type: ignore[union-attr]
-    assert stopped == ["browser_1"]
 
     manager.register_external(
         resource_id="mcp_1",
@@ -184,7 +179,7 @@ async def test_resource_cancel_stop_and_crash_reconcile_are_independent(
         turn_stream_id="stream_crashed",
         operation_id="call_1",
     )
-    restarted = ResourceManager(state_path=output_root / "resources.json")
+    restarted = ExternalResourceLeaseLedger(state_path=output_root / "resources.json")
     records = restarted.reconcile({"browser_1": "stopped", "mcp_1": "running"})
     statuses = {record.resource_id: record.status for record in records}
     assert statuses["mcp_1"] == "recovered"

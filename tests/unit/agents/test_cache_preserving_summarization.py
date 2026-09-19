@@ -38,6 +38,12 @@ from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
+from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
+    prefix_has_open_tool_group,
+)
+from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
+    ToolProtocolBoundaryConflict,
+)
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 
@@ -55,6 +61,107 @@ def _conversation(pair_count: int) -> list[HumanMessage | AIMessage]:
             ]
         )
     return messages
+
+
+class _ScriptedPreflight:
+    """合成 preflight 端口：记录调用并按脚本返回安全切点集合。
+
+    safe_cutoff_indexes 为 None 时全部候选视为安全；否则只放行集合内切点。
+    """
+
+    def __init__(self, safe_cutoff_indexes: frozenset[int] | None = None) -> None:
+        self.safe = safe_cutoff_indexes
+        self.calls: list[dict[str, object]] = []
+
+    def safe_compaction_prefix_cutoffs(
+        self,
+        session_id: str,
+        *,
+        checkpoint_ns: str,
+        state_messages: object,
+        cutoff_indexes: object,
+    ) -> frozenset[int]:
+        self.calls.append(
+            {
+                "session_id": session_id,
+                "checkpoint_ns": checkpoint_ns,
+                "cutoff_indexes": list(cutoff_indexes),  # type: ignore[arg-type]
+            }
+        )
+        candidates = frozenset(cutoff_indexes)  # type: ignore[arg-type]
+        if self.safe is None:
+            return candidates
+        return candidates & self.safe
+
+
+class _InMemoryPreflight:
+    """合成 preflight：等价于真实端口的内存闭合半边（单进程合同）。"""
+
+    def safe_compaction_prefix_cutoffs(
+        self,
+        session_id: str,
+        *,
+        checkpoint_ns: str,
+        state_messages: object,
+        cutoff_indexes: object,
+    ) -> frozenset[int]:
+        return frozenset(
+            index
+            for index in cutoff_indexes  # type: ignore[arg-type]
+            if not prefix_has_open_tool_group(state_messages, index)  # type: ignore[arg-type]
+        )
+
+
+def _stub_runtime() -> SimpleNamespace:
+    return SimpleNamespace(
+        execution_info=SimpleNamespace(thread_id="ses_preflight", checkpoint_ns="")
+    )
+
+
+def _preflight_conversation() -> list[AnyMessage]:
+    """长内容对话：保证压缩后 token 计数必然下降。"""
+    return [
+        HumanMessage(content="读取配置", id="u1"),
+        AIMessage(content="第一轮回复" * 120, id="a1"),
+        HumanMessage(content="继续", id="u2"),
+        AIMessage(content="第二轮回复" * 120, id="a2"),
+        HumanMessage(content="需要摘要", id="u3"),
+        AIMessage(content="第三轮回复" * 120, id="a3"),
+        HumanMessage(content="最近一轮", id="u4"),
+        AIMessage(content="最近回复" * 120, id="a4"),
+        HumanMessage(content="当前输入", id="u5"),
+    ]
+
+
+def _make_preflight_middleware(
+    port: _ScriptedPreflight,
+    *,
+    offloaded: list[object],
+) -> CachePreservingSummarizationMiddleware:
+    middleware = object.__new__(CachePreservingSummarizationMiddleware)
+    middleware._compaction_preflight = port  # type: ignore[attr-defined]
+    middleware._lc_helper = SimpleNamespace(  # type: ignore[attr-defined]
+        _should_summarize=lambda messages, total_tokens: True,
+        _determine_cutoff_index=lambda messages: 7,
+        token_counter=lambda counted, tools=None: sum(
+            len(str(getattr(message, "text", "") or "")) for message in counted
+        ),
+    )
+    middleware._backend = object()  # type: ignore[attr-defined]
+    middleware._offload_to_backend = (  # type: ignore[attr-defined]
+        lambda backend, messages: offloaded.append(messages)
+        or "/session-artifacts/ses_preflight/context/history.md"
+    )
+    return middleware
+
+
+def _in_memory_safe_boundaries(middle: list[AnyMessage]) -> frozenset[int]:
+    """测试侧合成 preflight：内存闭合初筛（与调度预览合同一致）。"""
+    return frozenset(
+        index
+        for index in range(2, len(middle))
+        if not prefix_has_open_tool_group(middle, index)
+    )
 
 
 def test_first_compaction_preserves_complete_prefix_and_recent_tail() -> None:
@@ -505,6 +612,7 @@ def test_tool_round_overflow_retries_drop_complete_rounds_without_mutation() -> 
         messages_to_summarize=middle,
         preserved_messages=[HumanMessage(content="当前用户消息")],
         state_cutoff=len(middle),
+        safe_retry_middle_boundaries=_in_memory_safe_boundaries(middle),
     )
     middleware = object.__new__(CachePreservingSummarizationMiddleware)
     request = ModelRequest(model=None, messages=[])
@@ -654,6 +762,7 @@ def test_parallel_tool_payloads_are_compacted_by_aggregate_budget() -> None:
         messages_to_summarize=middle,
         preserved_messages=[HumanMessage(content="当前用户消息")],
         state_cutoff=len(middle),
+        safe_retry_middle_boundaries=_in_memory_safe_boundaries(middle),
     )
     middleware = object.__new__(CachePreservingSummarizationMiddleware)
     observed: list[ModelRequest] = []
@@ -730,6 +839,7 @@ async def test_async_tool_round_overflow_retries_drop_complete_rounds() -> None:
         messages_to_summarize=middle,
         preserved_messages=[HumanMessage(content="当前用户消息")],
         state_cutoff=len(middle),
+        safe_retry_middle_boundaries=_in_memory_safe_boundaries(middle),
     )
     middleware = object.__new__(CachePreservingSummarizationMiddleware)
     observed: list[ModelRequest] = []
@@ -876,7 +986,15 @@ def test_prepare_compaction_never_rewrites_stable_prefix_tool_arguments() -> Non
         def _determine_cutoff_index(_: list) -> int:
             return 7
 
-    request = ModelRequest(model=None, messages=messages)
+        _compaction_preflight = _ScriptedPreflight()
+        _preflight_safe_cutoffs = (
+            CachePreservingSummarizationMiddleware._preflight_safe_cutoffs
+        )
+        _preflight_partition_boundaries = (
+            CachePreservingSummarizationMiddleware._preflight_partition_boundaries
+        )
+
+    request = ModelRequest(model=None, messages=messages, runtime=_stub_runtime())
     prepared = CachePreservingSummarizationMiddleware._prepare_cache_compaction(
         _PrepareStub(),  # type: ignore[arg-type]
         request,
@@ -1240,9 +1358,17 @@ def test_prepare_preserves_complete_api_round_without_new_human_boundary() -> No
         def _determine_cutoff_index(_: list) -> int:
             return 5
 
+        _compaction_preflight = _InMemoryPreflight()
+        _preflight_safe_cutoffs = (
+            CachePreservingSummarizationMiddleware._preflight_safe_cutoffs
+        )
+        _preflight_partition_boundaries = (
+            CachePreservingSummarizationMiddleware._preflight_partition_boundaries
+        )
+
     prepared = CachePreservingSummarizationMiddleware._prepare_cache_compaction(
         _PrepareStub(),  # type: ignore[arg-type]
-        ModelRequest(model=None, messages=messages),
+        ModelRequest(model=None, messages=messages, runtime=_stub_runtime()),
     )
 
     assert prepared is not None
@@ -1342,6 +1468,14 @@ def _emergency_replacement_partition() -> tuple[
     messages = [*_conversation(2), HumanMessage(content="当前用户消息")]
 
     class _EmergencyPrepareStub:
+        _compaction_preflight = _ScriptedPreflight()
+        _preflight_safe_cutoffs = (
+            CachePreservingSummarizationMiddleware._preflight_safe_cutoffs
+        )
+        _preflight_partition_boundaries = (
+            CachePreservingSummarizationMiddleware._preflight_partition_boundaries
+        )
+
         @staticmethod
         def _get_effective_messages(_: ModelRequest) -> list:
             return messages
@@ -1364,7 +1498,7 @@ def _emergency_replacement_partition() -> tuple[
 
     prepared = CachePreservingSummarizationMiddleware._prepare_cache_compaction(
         _EmergencyPrepareStub(),  # type: ignore[arg-type]
-        ModelRequest(model=None, messages=messages),
+        ModelRequest(model=None, messages=messages, runtime=_stub_runtime()),
     )
     assert prepared is not None
     _, partition = prepared
@@ -1481,12 +1615,21 @@ def test_replacement_rolls_existing_cache_prefix_and_summary_together() -> None:
         def _determine_cutoff_index(_: list) -> int:
             return 4
 
+        _compaction_preflight = _ScriptedPreflight()
+        _preflight_safe_cutoffs = (
+            CachePreservingSummarizationMiddleware._preflight_safe_cutoffs
+        )
+        _preflight_partition_boundaries = (
+            CachePreservingSummarizationMiddleware._preflight_partition_boundaries
+        )
+
     prepared = CachePreservingSummarizationMiddleware._prepare_cache_compaction(
         _PrepareStub(),  # type: ignore[arg-type]
         ModelRequest(
             model=None,
             messages=raw_messages,
             state={"_summarization_event": old_event},
+            runtime=_stub_runtime(),
         ),
     )
     assert prepared is not None
@@ -1556,3 +1699,65 @@ def test_encrypted_reasoning_block_survives_prefix_and_tail_projection() -> None
     assert projected[-1].content[0]["encrypted_content"] == (
         "recent-encrypted-payload"
     )
+
+
+def test_preflight_conflict_blocks_summary_offload_and_transition() -> None:
+    messages = _preflight_conversation()
+    port = _ScriptedPreflight(safe_cutoff_indexes=frozenset())
+    offloaded: list[object] = []
+    middleware = _make_preflight_middleware(port, offloaded=offloaded)
+    handler_calls: list[ModelRequest] = []
+
+    def handler(next_request: ModelRequest) -> ModelResponse:
+        handler_calls.append(next_request)
+        return ModelResponse(result=[AIMessage(content="不应被调用")])
+
+    request = ModelRequest(
+        model=None,
+        messages=messages,
+        state={},
+        runtime=_stub_runtime(),
+    )
+
+    with pytest.raises(ToolProtocolBoundaryConflict):
+        middleware.wrap_model_call(request, handler)
+
+    assert offloaded == []
+    assert handler_calls == []
+    assert port.calls
+
+
+def test_preflight_closed_boundary_runs_summary_offload_and_transition() -> None:
+    messages = _preflight_conversation()
+    port = _ScriptedPreflight()
+    offloaded: list[object] = []
+    middleware = _make_preflight_middleware(port, offloaded=offloaded)
+    handler_calls: list[ModelRequest] = []
+
+    def handler(next_request: ModelRequest) -> ModelResponse:
+        handler_calls.append(next_request)
+        last = next_request.messages[-1]
+        if isinstance(last, HumanMessage) and (
+            "Create a concise but complete summary" in str(last.content)
+        ):
+            return ModelResponse(result=[AIMessage(content="压缩摘要正文")])
+        return ModelResponse(result=[AIMessage(content="最终回复")])
+
+    request = ModelRequest(
+        model=None,
+        messages=messages,
+        state={},
+        runtime=_stub_runtime(),
+    )
+
+    result = middleware.wrap_model_call(request, handler)
+
+    assert isinstance(result, ExtendedModelResponse)
+    event = result.command.update["_summarization_event"]
+    assert event["cutoff_index"] == 7
+    assert event["strategy"] == CACHE_PRESERVING_STRATEGY
+    assert event["cache_prefix_messages"] == messages[:4]
+    assert len(offloaded) == 1
+    assert offloaded[0] == messages[4:7]
+    assert len(port.calls) == 2
+    assert len(handler_calls) >= 2

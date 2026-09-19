@@ -142,15 +142,14 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
         for ref in sorted(tool_set_refs_for_hash, key=lambda value: value.ref_id)
     ]
     def contribution_order_key(item: ContextContribution) -> tuple[int, str]:
-        raw_source_ordinal = item.metadata.get("source_ordinal")
-        source_ordinal = (
-            raw_source_ordinal
-            if isinstance(raw_source_ordinal, int)
-            and not isinstance(raw_source_ordinal, bool)
-            and raw_source_ordinal >= 0
-            else None
+        # source_ordinal 只来自 itemized registry 分配的 typed 字段；
+        # metadata 中的同名历史键不再参与 hash 排序。
+        source_ordinal = item.source_ordinal
+        ordinal = (
+            item.contribution_ordinal
+            if item.contribution_ordinal is not None
+            else source_ordinal
         )
-        ordinal = item.contribution_ordinal if item.contribution_ordinal is not None else source_ordinal
         if ordinal is None:
             raise ItemSchemaError(
                 "ContextRequestPlan hash scope 缺少 contribution ordinal: "
@@ -160,14 +159,7 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
 
     contribution_rows = []
     for item in sorted(contributions_for_hash, key=contribution_order_key):
-        raw_source_ordinal = item.metadata.get("source_ordinal")
-        source_ordinal = (
-            raw_source_ordinal
-            if isinstance(raw_source_ordinal, int)
-            and not isinstance(raw_source_ordinal, bool)
-            and raw_source_ordinal >= 0
-            else None
-        )
+        source_ordinal = item.source_ordinal
         if item.contribution_ordinal is None and source_ordinal is None:
             raise ItemSchemaError(
                 "ContextRequestPlan hash scope 缺少 contribution ordinal: "
@@ -187,6 +179,9 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
                 "request_only": item.request_only,
                 "visibility": item.visibility,
                 "protection": item.protection,
+                # root 资格决定投影 wire role，必须进入 sealed plan hash，
+                # 防止 seal 后改声明改变投影而不改 plan_hash。
+                "root_placement": item.root_placement,
             }
         )
     return sha256_jcs(

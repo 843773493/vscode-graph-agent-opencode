@@ -55,6 +55,8 @@ from tests.integration.backend.sessions.rollout_context.test_protected_detail_up
     upgrade_store as upgrade_store,  # noqa: PLC0414 - 显式导出 pytest fixture
 )
 
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+
 
 @pytest.fixture
 def capability(upgrade_store):
@@ -434,7 +436,7 @@ def test_typed_json_markers_verify_using_real_store_output(
     capability, upgrade_store, session_root, body
 ):
     record = upgrade_store.write(
-        session_id="upgrade-session",
+        session_id=SESSION_ID,
         assembly_id="typed-assembly",
         detail_kind="request_source",
         retention_class="request_replay",

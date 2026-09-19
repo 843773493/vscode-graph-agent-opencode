@@ -39,7 +39,6 @@ class AgentEventStreamResult:
     successful_tool_calls: tuple[SuccessfulToolCall, ...] = ()
     completed_custom_tool_names: tuple[str, ...] = ()
     token_usage: ModelTokenUsagePayload = field(default_factory=ModelTokenUsagePayload)
-    model_content_blocks: tuple[tuple[dict[str, object], ...], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

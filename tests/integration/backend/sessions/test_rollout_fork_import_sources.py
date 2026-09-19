@@ -34,6 +34,10 @@ from tests.integration.backend.sessions.test_rollout_fork_protected import (
     fork_workspace as fork_workspace,  # noqa: PLC0414 - 当前正式文件独占工作区
 )
 
+SOURCE_SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+TARGET_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
+GRANDCHILD_SESSION_ID = "ses_5ce2590d35c74fd9a71e8d7526be328c"
+
 
 @pytest.fixture
 def forbid_detail_body(monkeypatch):
@@ -47,17 +51,17 @@ def forbid_detail_body(monkeypatch):
 @pytest.fixture
 def omitted_source(fork_workspace, session_bundle_factory, forbid_detail_body, request):
     sessions = fork_workspace / ".boxteam" / "sessions"
-    for session in ("source", "target", "grandchild"):
+    for session in (SOURCE_SESSION_ID, TARGET_SESSION_ID, GRANDCHILD_SESSION_ID):
         session_bundle_factory(sessions, session)
     with RolloutCheckpointSaver(sessions) as saver:
         accepted = saver.accept_turn(
-            "source", accepted_ingress_id="source-ingress",
+            SOURCE_SESSION_ID, accepted_ingress_id="source-ingress",
             acceptance_idempotency_key="source-root", payload="真实来源 root", payload_kind="text",
         )
         mode = getattr(request, "param", "alias")
         role = mode.removeprefix("overlay-") if mode.startswith("overlay-") else "none"
         contribution_id = "omitted-ref" if mode == "direct" else "known-contribution"
-        metadata = {"source_ordinal": 0, "source_ref": "registered-alias"}
+        metadata = {"source_ref": "registered-alias"}
         if role != "none":
             metadata.update(overlay_ref="omitted-ref", overlay_role=role, source_overlay_epoch=0)
         kind = "prompt" if role == "none" else f"overlay_{role}"
@@ -65,22 +69,22 @@ def omitted_source(fork_workspace, session_bundle_factory, forbid_detail_body, r
             contribution_id=contribution_id, source_kind="environment", source_revision="revision-1",
             content_hash=contribution_content_hash(kind, "not-materialized"),
             content_length=len(canonical_json_bytes("not-materialized")),
-            contribution_kind=kind, metadata=metadata,
+            contribution_kind=kind, metadata=metadata, source_ordinal=0,
         )
         ref = ContextRef.request_only_ref(
-            "omitted-ref", session_id="source", plan_id="actual-runtime-plan",
+            "omitted-ref", session_id=SOURCE_SESSION_ID, plan_id="actual-runtime-plan",
             source_revision=unavailable.source_revision,
             content_hash_value=unavailable.content_hash, content_length=unavailable.content_length,
             availability="unavailable", source_ref="registered-alias", base_delta_role=role,
             source_overlay_epoch=0 if role != "none" else None,
         )
         draft = ContextRequestPlan(
-            session_id="source", plan_id="actual-runtime-plan", refs=(ref,), contributions=(unavailable,),
+            session_id=SOURCE_SESSION_ID, plan_id="actual-runtime-plan", refs=(ref,), contributions=(unavailable,),
             plan_creation_idempotency_key="actual-runtime-create",
         )
-        saver.create_context_plan("source", draft)
+        saver.create_context_plan(SOURCE_SESSION_ID, draft)
         snapshot = ContextPlanComposer().assembly(
-            plan=draft, session_id="source", assembly_id="omitted-assembly",
+            plan=draft, session_id=SOURCE_SESSION_ID, assembly_id="omitted-assembly",
             turn_id=accepted["turn_id"], execution_id=accepted["initial_execution_id"],
             provider_version="fork-import-source-fixture",
         )
@@ -101,7 +105,7 @@ def omitted_source(fork_workspace, session_bundle_factory, forbid_detail_body, r
             snapshot, seal_idempotency_key="actual-runtime-seal",
             seal_input_hash=sha256_jcs({"fixture": "registered omitted source"}),
         )
-        with saver._storage._connect("source", "", read_only=True) as connection:
+        with saver._storage._connect(SOURCE_SESSION_ID, "", read_only=True) as connection:
             assert connection.execute("SELECT count(*) FROM context_contributions").fetchone() == (0,)
             assert connection.execute("SELECT count(*) FROM context_plan_details").fetchone() == (0,)
         yield saver, snapshot, mode
@@ -117,18 +121,18 @@ def _only_registration(saver, session):
 @pytest.mark.parametrize("omitted_source", ["direct", "alias", "overlay-base", "overlay-delta"], indirect=True)
 async def test_full_copy_omitted_existing_source_survives_recursive_import_and_restart(omitted_source):
     saver, original, mode = omitted_source
-    source_root = saver._storage.root("source")
+    source_root = saver._storage.root(SOURCE_SESSION_ID)
     source_before = _artifacts(source_root)
-    await saver.afork(source_session_id="source", target_session_id="target", mode="full_rollout_copy")
+    await saver.afork(source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy")
     assert _artifacts(source_root) == source_before
-    target = _only_registration(saver, "target")
+    target = _only_registration(saver, TARGET_SESSION_ID)
     assert target.registration_origin == "fork_import" and target.draft is None
     assert target.source_manifest["contributions"][0]["contribution_id"] != original.selection[0].contribution_id
-    target_before = _artifacts(saver._storage.root("target"))
-    await saver.afork(source_session_id="target", target_session_id="grandchild", mode="full_rollout_copy")
-    assert _artifacts(saver._storage.root("target")) == target_before
+    target_before = _artifacts(saver._storage.root(TARGET_SESSION_ID))
+    await saver.afork(source_session_id=TARGET_SESSION_ID, target_session_id=GRANDCHILD_SESSION_ID, mode="full_rollout_copy")
+    assert _artifacts(saver._storage.root(TARGET_SESSION_ID)) == target_before
     with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
-        for session in ("target", "grandchild"):
+        for session in (TARGET_SESSION_ID, GRANDCHILD_SESSION_ID):
             restored = _only_registration(restarted, session)
             manifest = restored.source_manifest
             copied = restarted.get_context_assembly(session, assembly_id=restored.assembly_id)
@@ -160,20 +164,20 @@ async def test_full_copy_omitted_existing_source_survives_recursive_import_and_r
 @pytest.mark.parametrize("mutation", ["manifest", "index", "wrong_ref"])
 async def test_recursive_fork_rejects_import_evidence_tampering_before_publication(omitted_source, mutation):
     saver = omitted_source[0]
-    await saver.afork(source_session_id="source", target_session_id="target", mode="full_rollout_copy")
-    with saver._storage._connect("target", "") as connection:
+    await saver.afork(source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy")
+    with saver._storage._connect(TARGET_SESSION_ID, "") as connection:
         if mutation == "index":
             connection.execute("DELETE FROM context_plan_contributions")
         else:
             raw = connection.execute("SELECT source_manifest_json FROM context_plans").fetchone()[0]
             manifest = json.loads(raw)
             if mutation == "manifest":
-                manifest["contributions"][0]["metadata"]["source_ordinal"] += 1
+                manifest["contributions"][0]["source_ordinal"] += 1
             else:
                 manifest["contributions"][0]["metadata"]["source_ref"] = "unknown-source"
             connection.execute("UPDATE context_plans SET source_manifest_json=?", (json_text(manifest),))
-    target_before = _artifacts(saver._storage.root("target"))
+    target_before = _artifacts(saver._storage.root(TARGET_SESSION_ID))
     with pytest.raises(ValueError, match="source-mismatch|plan-order-integrity"):
-        await saver.afork(source_session_id="target", target_session_id="grandchild", mode="full_rollout_copy")
-    assert not saver._storage.root("grandchild").exists()
-    assert _artifacts(saver._storage.root("target")) == target_before
+        await saver.afork(source_session_id=TARGET_SESSION_ID, target_session_id=GRANDCHILD_SESSION_ID, mode="full_rollout_copy")
+    assert not saver._storage.root(GRANDCHILD_SESSION_ID).exists()
+    assert _artifacts(saver._storage.root(TARGET_SESSION_ID)) == target_before

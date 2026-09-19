@@ -210,6 +210,11 @@ class SessionCatalogPathResolver:
         """兼容属性名：新模型权威索引即 SQLite catalog 数据库文件。"""
         return self._store.database_path
 
+    @property
+    def catalog_store(self) -> SessionCatalogStore:
+        """权威 catalog store 只读访问（8.5 装配面；不开放写事务）。"""
+        return self._store
+
     # ------------------------------------------------------------------
     # 节点投影
     # ------------------------------------------------------------------
@@ -1132,7 +1137,7 @@ class SessionCatalogPathResolver:
             self._store.mark_subtree_deleting(idempotency_key)
             self._subtree_delete_keys[folder_id] = idempotency_key
 
-    def finish_subtree_delete(self, folder_id: str) -> None:
+    async def finish_subtree_delete(self, folder_id: str) -> None:
         """对应 :meth:`begin_subtree_delete`：drain（fence CAS + 物理隔离）
         + finish（tombstone）。
 
@@ -1143,36 +1148,29 @@ class SessionCatalogPathResolver:
             idempotency_key = self._subtree_delete_keys.get(folder_id)
             if idempotency_key is None:
                 raise RuntimeError(f"会话文件夹子树删除锁不存在: {folder_id}")
-            record = self._store.get_subtree_delete_record(idempotency_key)
-            # TODO(切换轮): 复用 SessionSubtreeDeleteService 非公开
-            # _drain（fence CAS → .deleting/ 隔离 → barrier → 进度记录）——
-            # R14 文件本轮冻结；切换轮应提升为服务公开 API。
-            self._delete_service._drain(record, idempotency_key)
-            self._store.finish_subtree_delete(idempotency_key)
-            del self._subtree_delete_keys[folder_id]
+        await self._delete_service.delete(
+            idempotency_key=idempotency_key,
+            root_node_id=folder_id,
+        )
+        with self._lock:
+            self._subtree_delete_keys.pop(folder_id, None)
 
-    def delete_session_subtree(self, session_id: str) -> list[str]:
+    async def delete_session_subtree(self, session_id: str) -> list[str]:
         """删除完整会话子树（R14 协议单调用版），返回被删后代 session ID。"""
         with self._lock:
             node = self._store.get_node(session_id)
             if node.kind != "session":
                 raise RuntimeError(f"节点不是会话: {session_id}")
             idempotency_key = uuid.uuid4().hex
-            self._store.create_or_get_subtree_delete_record(
-                idempotency_key=idempotency_key,
-                workspace_id=self._workspace_id,
-                root_node_id=session_id,
-            )
-            self._store.mark_subtree_deleting(idempotency_key)
-            record = self._store.get_subtree_delete_record(idempotency_key)
-            # TODO(切换轮): 同 finish_subtree_delete——复用服务 _drain。
-            self._delete_service._drain(record, idempotency_key)
-            self._store.finish_subtree_delete(idempotency_key)
-            return sorted(
-                candidate_id
-                for candidate_id in record.frozen_session_locators
-                if candidate_id != session_id
-            )
+        result = await self._delete_service.delete(
+            idempotency_key=idempotency_key,
+            root_node_id=session_id,
+        )
+        return sorted(
+            candidate_id
+            for candidate_id in result.drained_session_ids
+            if candidate_id != session_id
+        )
 
 
 @dataclass(frozen=True, slots=True)

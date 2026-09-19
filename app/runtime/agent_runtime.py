@@ -22,6 +22,7 @@ from app.agents.agent_factory import (
     create_runtime_deep_agent_for_session,
     resolve_agent_id,
 )
+from app.agents.graph_binding import GraphBindingStorePort
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy import (
@@ -29,13 +30,18 @@ from app.agents.policy import (
     catalog_group_for_tool,
     parse_custom_tool_specs,
 )
-from app.agents.skill_runtime import discover_workspace_custom_tool_skill_map
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.node_debug_service import NodeDebugService
-from app.services.infrastructure.resource_manager import ResourceManager
+from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
+    ReactorCreatedCallback,
+)
+from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
+    WorkspaceFileResourceRegistry,
+)
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 
 if TYPE_CHECKING:
@@ -98,7 +104,12 @@ def build_session_agent_runtime(
     model_visibility_overrides: Mapping[str, bool] | None = None,
     preferred_provider_id: str | None = None,
     tool_timeout_seconds: float | None = None,
-    resource_manager: ResourceManager | None = None,
+    workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
+    reactor_lifetime_scope: LifetimeScope | None = None,
+    on_reactor_created: ReactorCreatedCallback | None = None,
+    # OpenSpec 8.4：GraphBinding 持久化端口。None 时构建路径不持久化也不报错
+    # （不伪造持久化成功）；生产由 container 装配唯一 store 实例。
+    graph_binding_store: GraphBindingStorePort | None = None,
     workspace_root: Path,
     include_team_tools: bool = False,
 ) -> Any:
@@ -148,7 +159,10 @@ def build_session_agent_runtime(
         model_visibility_overrides=model_visibility_overrides,
         preferred_provider_id=preferred_provider_id,
         tool_timeout_seconds=tool_timeout_seconds,
-        resource_manager=resource_manager,
+        workspace_file_resource_registry=workspace_file_resource_registry,
+        reactor_lifetime_scope=reactor_lifetime_scope,
+        on_reactor_created=on_reactor_created,
+        graph_binding_store=graph_binding_store,
         include_team_tools=include_team_tools,
         workspace_root=workspace_root,
     )
@@ -158,12 +172,25 @@ def get_workspace_custom_tool_skill_sources(
     agent_id: str,
     config_service: ConfigService,
 ) -> dict[str, list[str]]:
-    """返回当前 workspace 中自定义扩展工具到 skill 名称的映射。"""
+    """从独立工具归属配置返回自定义扩展工具到 skill 名称的映射。
+
+    归因只来自 tools.custom[].skills 显式声明;SKILL.md frontmatter 的
+    allowed_tools 已按 OpenSpec 4.2 从 Skill context contract 移除。
+    """
     custom_tool_names = get_configured_custom_tool_names(
         agent_id=agent_id,
         config_service=config_service,
     )
-    return discover_workspace_custom_tool_skill_map(custom_tool_names=custom_tool_names)
+    tool_config = config_service.get_agent_tool_config(agent_id)
+    tool_to_skills: dict[str, list[str]] = {}
+    for spec in parse_custom_tool_specs(
+        tool_config.get("custom", []),
+        context=f"agent {agent_id} 的 tools.custom",
+    ):
+        if spec.name not in custom_tool_names or not spec.skills:
+            continue
+        tool_to_skills[spec.name] = list(spec.skills)
+    return tool_to_skills
 
 
 def get_configured_custom_tool_names(

@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.trace import get_trace_payload
@@ -127,7 +127,7 @@ async def test_model_searches_web_then_fetches_selected_result(
         assert tool_starts[-1].get("skill_names", []) == ["web-search-fetch"]
         assert (
             get_trace_payload(tool_starts[-1]).get("invocation_tool_name")
-            == CUSTOM_TOOL_INVOKER_NAME
+            == EXTENSION_TOOL_INVOKER_NAME
         )
 
     fetch_ends = [

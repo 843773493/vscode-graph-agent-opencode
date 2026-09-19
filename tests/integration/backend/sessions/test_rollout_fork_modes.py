@@ -10,6 +10,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_service import SessionService
@@ -46,7 +47,7 @@ def fork_context(
     sessions = SessionService(
         config_service=ConfigService(workspace_root=workspace),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
-        workspace_id="00000000-0000-4000-8000-000000000001",
+        workspace_id=load_or_create_workspace_id(workspace),
         fork_relationship_checker=saver,
     )
     return ForkIntegrationContext(

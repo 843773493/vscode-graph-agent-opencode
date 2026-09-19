@@ -178,7 +178,7 @@ async def test_overview_defaults_to_initial_goal_recent_three_rounds_and_safe_co
     )
 
     serialized = result.model_dump_json()
-    assert result.revision == "ckpt-1"
+    assert result.revision.startswith("content:")
     assert result.compacted is True
     assert result.compaction_cutoff == 2
     assert "最初目标 ALPHA" in serialized
@@ -259,7 +259,7 @@ async def test_read_cursor_is_opaque_and_fails_when_revision_changes(_service):
     )
     assert second.items[0].locator != first.items[0].locator
 
-    source.checkpoint_id = "ckpt-2"
+    source.records[-1]["content"] = "第四次回答已变化"
     with pytest.raises(SessionContextRevisionChangedError):
         await service.read_context(
             SessionContextReadRequest(
@@ -272,7 +272,7 @@ async def test_read_cursor_is_opaque_and_fails_when_revision_changes(_service):
         await service.read_context(
             SessionContextReadRequest(
                 resource="boxteam://session/ses_target",
-                expected_revision="ckpt-1",
+                expected_revision=first.revision,
             )
         )
 
@@ -294,7 +294,7 @@ async def test_search_literal_by_default_regex_explicit_and_locator_can_be_read(
     assert literal.total_matches == 1
     match = literal.matches[0]
     assert match.locator.endswith("#record=4")
-    assert match.revision == "ckpt-1"
+    assert match.revision.startswith("content:")
 
     expanded = await service.read_context(
         SessionContextReadRequest(

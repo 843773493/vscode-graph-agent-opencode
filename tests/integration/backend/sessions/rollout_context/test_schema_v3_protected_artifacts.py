@@ -38,6 +38,8 @@ from tests.integration.backend.sessions.rollout_context.schema_v3_protected_help
 )
 from tests.support.workspaces import prepare_default_test_workspace
 
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+
 
 @pytest.fixture
 def protected_artifact(request, session_bundle_factory):
@@ -47,7 +49,7 @@ def protected_artifact(request, session_bundle_factory):
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
     )
     sessions = workspace / ".boxteam" / "sessions"
-    session_bundle_factory(sessions, "upgrade-session")
+    session_bundle_factory(sessions, SESSION_ID)
     with RolloutCheckpointSaver(sessions, protected_detail_key=b"p" * 32) as saver:
         source = create_protected_schema2_artifact(saver)
         yield source

@@ -19,6 +19,7 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.plan_hash import context_plan_hash
 from app.domain.itemized.refs import ContextRef, ToolSetRef, unique_ref_identities
+from app.domain.itemized.root_compilation import RootPlacement
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serialization import (
     _non_empty_string,
@@ -42,6 +43,15 @@ class ContextContribution:
     protection: str = "public"
     assembly_id: str | None = None
     contribution_ordinal: int | None = None
+    # source_ordinal 是 itemized registry（SQLite context_contributions 列）
+    # 分配的稳定 slot 序号；producer、CSM、watch reaction 和 ledger 都不得
+    # 从事件顺序、内存计数或 metadata/extensions 补造。sealed assembly 使用
+    # contribution_ordinal，本字段归 None。
+    source_ordinal: int | None = None
+    # root_placement 是 source owner 显式声明的根资格（E1 合同）。默认
+    # tail_only 对齐规范“默认外部内容与未受信指引恒为 tail_only”；只有
+    # root producer（如 sealed system slot）显式声明 root_eligible。
+    root_placement: RootPlacement = "tail_only"
 
     def __post_init__(self) -> None:
         for name in ("contribution_id", "source_kind", "source_revision"):
@@ -75,6 +85,11 @@ class ContextContribution:
             )
         if self.source_kind == "tool_set":
             raise ItemSchemaError("tool_set 只能通过 ToolSetSnapshot/ToolSetRef 表达")
+        if self.root_placement not in ("root_eligible", "tail_only"):
+            raise ItemSchemaError(
+                f"未知 ContextContribution.root_placement: {self.root_placement!r}；"
+                "root 资格只能由 owner 显式声明为 root_eligible|tail_only"
+            )
         if not isinstance(self.metadata, Mapping):
             raise ItemSchemaError("ContextContribution.metadata 必须是 object")
         if self.body is not None:
@@ -121,6 +136,14 @@ class ContextContribution:
         ):
             raise ItemSchemaError(
                 "contribution_ordinal 只能是 assembly scope 内的非负整数"
+            )
+        if self.source_ordinal is not None and (
+            not isinstance(self.source_ordinal, int)
+            or isinstance(self.source_ordinal, bool)
+            or self.source_ordinal < 0
+        ):
+            raise ItemSchemaError(
+                "ContextContribution.source_ordinal 只能是 registry 分配的非负整数"
             )
         _ensure_json_value(self.metadata, "ContextContribution.metadata")
 
@@ -290,16 +313,17 @@ class ContextRequestPlan:
                 raise ItemSchemaError(
                     "unsealed plan 的 contribution 不得带 assembly binding"
                 )
-            if self.plan_state == "unsealed":
-                source_ordinal = contribution.metadata.get("source_ordinal")
-                if (
-                    not isinstance(source_ordinal, int)
-                    or isinstance(source_ordinal, bool)
-                    or source_ordinal < 0
-                ):
-                    raise ItemSchemaError(
-                        "unsealed plan 的 contribution 必须带稳定 source_ordinal"
-                    )
+            # source_ordinal 只能由 itemized registry 分配；metadata 中
+            # 的同名历史键不再拥有任何解释权（不做兼容读取）。
+            if self.plan_state == "unsealed" and (
+                not isinstance(contribution.source_ordinal, int)
+                or isinstance(contribution.source_ordinal, bool)
+                or contribution.source_ordinal < 0
+            ):
+                raise ItemSchemaError(
+                    "unsealed plan 的 contribution 必须带 registry 分配的 "
+                    "typed source_ordinal"
+                )
             if self.plan_state == "sealed" and (
                 contribution.assembly_id != self.assembly_id
                 or contribution.contribution_ordinal is None
@@ -559,6 +583,7 @@ class ContextRequestPlan:
                 redacted_stable_digest=contribution.redacted_stable_digest,
                 visibility=contribution.visibility,
                 protection=contribution.protection,
+                root_placement=contribution.root_placement,
                 assembly_id=assembly_id,
                 contribution_ordinal=ordinal,
             )
@@ -615,6 +640,7 @@ class ContextRequestPlan:
                     "contribution_kind": item.contribution_kind,
                     "visibility": item.visibility,
                     "protection": item.protection,
+                    "root_placement": item.root_placement,
                     "body": (
                         item.body
                         if item.body is not None
@@ -623,6 +649,7 @@ class ContextRequestPlan:
                     ),
                     "assembly_id": item.assembly_id,
                     "contribution_ordinal": item.contribution_ordinal,
+                    "source_ordinal": item.source_ordinal,
                     "metadata": dict(item.metadata),
                 }
                 for item in self.contributions

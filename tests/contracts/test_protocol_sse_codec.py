@@ -16,7 +16,7 @@ def test_session_sse_codec_preserves_oneof_and_dynamic_payload() -> None:
     value = SessionExecutionSseDTO(
         event=JobUpdatedExecutionEventDTO(
             event_id="event_123",
-            session_id="session_123",
+            session_id="ses_12345678123446788234567812345678",
             job_id="job_123",
             time=datetime(2026, 8, 24, tzinfo=UTC),
             type="job.updated",
@@ -45,7 +45,7 @@ def test_message_stream_snapshot_preserves_tool_call_arguments() -> None:
     encoded = message_stream_to_proto(
         {
             "event_id": "event_123",
-            "session_id": "session_123",
+            "session_id": "ses_12345678123446788234567812345678",
             "turn_id": "turn_123",
             "turn_stream_id": "stream_123",
             "event_seq": 12,
@@ -53,7 +53,7 @@ def test_message_stream_snapshot_preserves_tool_call_arguments() -> None:
             "workspace_id": "wsp_123",
             "payload": {
                 "workspace_id": "wsp_123",
-                "session_id": "session_123",
+                "session_id": "ses_12345678123446788234567812345678",
                 "turn_id": "turn_123",
                 "turn_stream_id": "stream_123",
                 "snapshot_seq": 12,
@@ -106,7 +106,7 @@ def test_message_stream_codec_projects_internal_tool_and_model_fields() -> None:
     encoded_delta = message_stream_to_proto(
         {
             "event_id": "event_tool_delta",
-            "session_id": "session_123",
+            "session_id": "ses_12345678123446788234567812345678",
             "turn_id": "turn_123",
             "turn_stream_id": "stream_123",
             "event_seq": 13,
@@ -135,7 +135,7 @@ def test_message_stream_codec_projects_internal_tool_and_model_fields() -> None:
     encoded_snapshot = message_stream_to_proto(
         {
             "event_id": "event_snapshot_projection",
-            "session_id": "session_123",
+            "session_id": "ses_12345678123446788234567812345678",
             "turn_id": "turn_123",
             "turn_stream_id": "stream_123",
             "event_seq": 14,
@@ -199,7 +199,7 @@ def test_message_stream_v1_round_trip_preserves_terminal_projection() -> None:
     encoded = message_stream_to_proto(
         {
             "event_id": "event_terminal",
-            "session_id": "session_123",
+            "session_id": "ses_12345678123446788234567812345678",
             "turn_id": "turn_123",
             "turn_stream_id": "stream_123",
             "job_id": "job_123",

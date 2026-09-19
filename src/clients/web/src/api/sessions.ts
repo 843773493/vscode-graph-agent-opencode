@@ -1,5 +1,6 @@
 import type {
   APIResponse,
+  ChildThreadList,
   CursorPage,
   DeleteSessionResult,
   Session,
@@ -74,6 +75,25 @@ export async function getSessionInformation(
     await requestJson<APIResponse<SessionInformationSnapshot>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/information`,
+      { headers: workspaceHeader(workspaceId) },
+    ),
+  );
+}
+
+/**
+ * 读取会话的 child thread 列表（当前架构下即 delegated child session）。
+ * 404（父会话不存在）与 409（目录树异常）由 requestJson 以 HttpRequestError
+ * 透明抛出，由调用方决定展示方式；本函数不做静默降级。
+ */
+export async function listChildThreads(
+  port: number,
+  sessionId: string,
+  workspaceId?: string | null,
+): Promise<ChildThreadList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<ChildThreadList>>(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/child-threads`,
       { headers: workspaceHeader(workspaceId) },
     ),
   );

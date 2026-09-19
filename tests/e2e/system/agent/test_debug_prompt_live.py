@@ -58,7 +58,8 @@ console.log(JSON.stringify(result));
     session_id = create_response.json()["data"]["session_id"]
     prompt = (
         f"请调试文件 {fixture_path}，工作目录是 {workspace_root}。"
-        f"请先了解当前工作区适用的调试能力，再对入口第 3 行和 {worker_path} 第 2 行设置断点，"
+        "请先使用 skill_load(name=debugging) 加载当前工作区适用的调试能力，"
+        f"再对入口第 3 行和 {worker_path} 第 2 行设置断点，"
         "调用 start_debugging，在入口暂停后继续到 worker，求值 value * 2，调用 step_over，"
         "再调用 continue_execution 和 stop_debugging，直到调试结束。"
         "不要只解释，必须真实调用工具。最后只回复 LIVE_DEBUG_PROMPT_FLOW_OK。"
@@ -96,7 +97,7 @@ console.log(JSON.stringify(result));
     ]
     names = [str(payload.get("tool_name")) for payload in start_payloads]
     expected = [
-        "read_file",
+        "skill_load",
         "add_breakpoint",
         "start_debugging",
         "continue_execution",
@@ -118,17 +119,16 @@ console.log(JSON.stringify(result));
     ]
     assert debug_start_payloads
     assert all(
-        payload.get("invocation_tool_name") == "invoke_custom_tool"
+        payload.get("invocation_tool_name") == "invoke_extension_tool"
         for payload in debug_start_payloads
     ), debug_start_payloads
 
-    read_file_starts = [
-        payload for payload in start_payloads if payload.get("tool_name") == "read_file"
+    skill_load_starts = [
+        payload for payload in start_payloads if payload.get("tool_name") == "skill_load"
     ]
-    assert len(read_file_starts) == 1, read_file_starts
+    assert len(skill_load_starts) == 1, skill_load_starts
     assert (
-        read_file_starts[0].get("args", {}).get("path")
-        == ".boxteam/bundled-skills/debugging/SKILL.md"
+        skill_load_starts[0].get("args", {}).get("name") == "debugging"
     )
 
     end_payloads = [
@@ -147,9 +147,9 @@ console.log(JSON.stringify(result));
         for payload in payloads
     ), end_payloads_by_name
 
-    skill_result = end_payloads_by_name["read_file"][0].get("result")
-    assert "# 源码调试工具" in str(skill_result)
-    assert "invoke_custom_tool" in str(skill_result)
+    skill_result = end_payloads_by_name["skill_load"][0].get("result")
+    assert '"name":"debugging"' in str(skill_result)
+    assert '"mode":"snapshot"' in str(skill_result)
 
     decoded_results = {
         name: _decode_debug_result(payloads[-1])
@@ -224,7 +224,7 @@ console.log(JSON.stringify(result));
         }
         for request in model_requests
     ]
-    assert any("invoke_custom_tool" in names for names in exposed_tool_names)
+    assert any("invoke_extension_tool" in names for names in exposed_tool_names)
     assert all(not set(expected[1:]) & names for names in exposed_tool_names), (
         exposed_tool_names
     )

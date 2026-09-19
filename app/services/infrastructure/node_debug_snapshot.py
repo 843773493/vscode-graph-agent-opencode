@@ -24,6 +24,7 @@ class _DebugProcess(Protocol):
 
 class NodeDebugSnapshotRuntime(Protocol):
     session_id: str
+    thread_id: str
     status: NodeDebugStatus
     configuration_id: str
     process: _DebugProcess | None
@@ -49,6 +50,7 @@ def append_pending_debug_action(
     actions: list[NodeDebugActionRecordDTO],
     *,
     session_id: str,
+    thread_id: str,
     action: str,
     message: str,
     actor: Literal["human", "ai", "system"],
@@ -61,6 +63,7 @@ def append_pending_debug_action(
         NodeDebugActionRecordDTO(
             action_id=create_prefixed_id("node-debug-action"),
             session_id=session_id,
+            thread_id=thread_id,
             action=action,
             message=message,
             actor=actor,
@@ -87,6 +90,7 @@ def append_runtime_debug_action(
     append_pending_debug_action(
         runtime.actions,
         session_id=runtime.session_id,
+        thread_id=runtime.thread_id,
         action=action,
         message=message,
         actor=actor,
@@ -104,10 +108,14 @@ def build_node_debug_snapshot(
     process_id = runtime.process.pid if runtime.process is not None else None
     return NodeDebugStateDTO(
         session_id=runtime.session_id,
+        # 运行状态必须携带实际 thread 归属；child thread 的状态不能伪装成 main。
+        thread_id=runtime.thread_id,
         status=runtime.status,
         active_configuration_id=runtime.configuration_id,
-        active_configuration_name=registry.active_name(runtime.session_id),
-        configurations=registry.summaries(runtime.session_id),
+        active_configuration_name=registry.active_name(
+            runtime.session_id, runtime.thread_id
+        ),
+        configurations=registry.summaries(runtime.session_id, runtime.thread_id),
         script_path=runtime.relative_script_path,
         working_directory=(
             str(runtime.working_directory.relative_to(runtime.workspace_root))
@@ -139,7 +147,9 @@ def build_node_debug_snapshot(
             evaluation.model_copy(deep=True) for evaluation in runtime.evaluations
         ],
         actions=[action.model_copy(deep=True) for action in runtime.actions],
-        configuration_revision=registry.active_revision(runtime.session_id),
+        configuration_revision=registry.active_revision(
+            runtime.session_id, runtime.thread_id
+        ),
         requires_restart=runtime.requires_restart,
         source_changed_paths=sorted(runtime.source_changed_paths),
     )

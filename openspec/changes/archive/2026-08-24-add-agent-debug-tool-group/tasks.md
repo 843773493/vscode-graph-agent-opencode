@@ -23,10 +23,10 @@
 
 ## 4. Agent 注册与策略
 
-- [x] 4.1 在 `tools.custom` 注册首批 16 个调试执行工具并加入 debugging catalog 分组，默认 Agent runtime 只注册固定 `invoke_custom_tool`
+- [x] 4.1 在 `tools.custom` 注册首批 16 个调试执行工具并加入 debugging catalog 分组，默认 Agent runtime 只注册固定 `invoke_extension_tool`
 - [x] 4.2 将 NodeDebugService 注入扩展工具构建链，不加入默认工具构建链
 - [x] 4.3 让调试工具遵守 denylist、allowlist 和 `confirmation_required`，验证 expression 工具确认行为
-- [x] 4.4 更新工具目录和运行时工具 schema 测试，确认模型只看到 `invoke_custom_tool`，且目标 schema 不暴露 session、端口、thread/frame 或 VS Code 字段
+- [x] 4.4 更新工具目录和运行时工具 schema 测试，确认模型只看到 `invoke_extension_tool`，且目标 schema 不暴露 session、端口、thread/frame 或 VS Code 字段
 
 ## 5. 纯后端 E2E 测试
 
@@ -48,7 +48,7 @@
 
 - [x] 7.1 在 `resources/skills/debugging/` 增加产品级 Skill、完整工具 schema、调用顺序和安全边界，并加入默认 Gateway Skill 组
 - [x] 7.2 让默认 E2E 工作区准备器把 `resources/skills/` 同步到隔离工作区，验证产物包含 `/.boxteam/skills/debugging/SKILL.md`，避免在 `asset/` 维护产品副本
-- [x] 7.3 增加经过真实后端 HTTP、真实 Agent runtime、固定 `invoke_custom_tool`、真实 Node Inspector 和本地 OpenAI-compatible 模型边界的提示词驱动 E2E
+- [x] 7.3 增加经过真实后端 HTTP、真实 Agent runtime、固定 `invoke_extension_tool`、真实 Node Inspector 和本地 OpenAI-compatible 模型边界的提示词驱动 E2E
 - [x] 7.4 增加可选的真实外部模型 E2E 开关 `BOXTEAM_RUN_LIVE_DEBUG_E2E=1`，默认不产生外部模型调用费用
 - [x] 7.5 将原有直接 `.ainvoke()` 用例明确标为 Node Inspector 适配器集成检查，不再把它们作为完整提示词 E2E 的证据
 - [x] 7.6 运行新 E2E、静态检查和 OpenSpec 严格校验

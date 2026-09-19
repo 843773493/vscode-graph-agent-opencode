@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_mcp_runtime_manager, get_request_id, verify_local_token
+from app.api.deps import get_mcp_catalog_owner, get_request_id, verify_local_token
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.mcp import (
     McpServerDTO,
     McpToolDTO,
 )
-from app.services.infrastructure.mcp import McpRuntimeManager
-
+from app.services.infrastructure.mcp import McpCatalogOwner
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
@@ -22,7 +21,7 @@ router = APIRouter(prefix="/mcp", tags=["mcp"])
 async def list_mcp_servers(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    manager: McpRuntimeManager = Depends(get_mcp_runtime_manager),
+    owner: McpCatalogOwner = Depends(get_mcp_catalog_owner),
 ):
     servers = [
         McpServerDTO(
@@ -40,6 +39,6 @@ async def list_mcp_servers(
                 for tool in server.tools
             ],
         )
-        for server in manager.list_servers()
+        for server in owner.list_servers()
     ]
     return APIResponse(data=servers, request_id=request_id)

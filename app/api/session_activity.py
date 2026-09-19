@@ -4,7 +4,9 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
+from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_request_id,
     get_workspace_activity_service,
@@ -16,13 +18,12 @@ from app.services.infrastructure.workspace_state_store import (
     WorkspaceActivityRecord,
     WorkspaceActivityService,
 )
-from pydantic import BaseModel
 
 
 class SessionActivityDTO(BaseModel):
     event_seq: int
     event_id: str
-    session_id: str
+    session_id: CanonicalSessionId
     status: str
     summary: str
     occurred_at: str

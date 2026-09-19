@@ -68,7 +68,7 @@ async def test_agent_uses_test_started_stateful_mini_mcp(
                 "message": {
                     "content": (
                         "必须调用工具 mcp__mini__increment，"
-                        f"这是第 {invocation_index} 次调用；请通过 invoke_custom_tool，"
+                        f"这是第 {invocation_index} 次调用；请通过 invoke_extension_tool，"
                             "传入 tool_name=mcp__mini__increment 和 arguments={}；不得猜测结果。"
                     )
                 },

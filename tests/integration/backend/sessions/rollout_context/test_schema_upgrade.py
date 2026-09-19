@@ -49,7 +49,7 @@ def old_schema(
 ) -> OldSchema:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"schema-{uuid4().hex}"
+    session_id = f"ses_{uuid4().hex}"
     node = session_bundle_factory(sessions, session_id)
     fixture = OldSchema(sessions, session_id, node / "rollout")
     with RolloutCheckpointSaver(sessions) as saver:

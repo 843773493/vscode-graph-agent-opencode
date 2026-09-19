@@ -9,18 +9,8 @@ from .common import TimestampedDTO
 from .session_resource import SessionResourceKind
 
 TitleSource = Literal["default", "user", "auto"]
-SessionKind = Literal["normal", "context_fork", "delegated"]
+SessionKind = Literal["normal", "context_fork"]
 SessionForkMode = Literal["context_fork", "history_prefix_fork", "full_rollout_copy"]
-DelegationStartStatus = Literal["pending", "running", "failed"]
-
-
-class SessionDelegationDTO(BaseModel):
-    parent_session_id: str
-    parent_job_id: str
-    parent_tool_call_id: str
-    subagent_type: str
-    start_status: DelegationStartStatus = "pending"
-    start_error: Optional[str] = None
 
 
 class SessionGenerationOriginDTO(BaseModel):
@@ -70,15 +60,10 @@ class SessionDTO(TimestampedDTO):
     parent_session_id: Optional[str] = None
     context_source_session_id: Optional[str] = None
     kind: SessionKind = "normal"
-    delegation: Optional[SessionDelegationDTO] = None
     generation_origin: Optional[SessionGenerationOriginDTO] = None
 
     @model_validator(mode="after")
     def validate_internal_origin(self) -> Self:
-        if self.kind == "delegated" and self.delegation is None:
-            raise ValueError("delegated 会话缺少不可变 delegation 来源")
-        if self.kind != "delegated" and self.delegation is not None:
-            raise ValueError("只有 delegated 会话可以包含 delegation 来源")
         if self.kind == "context_fork" and self.context_source_session_id is None:
             raise ValueError("context_fork 会话缺少 context_source_session_id")
         return self
@@ -88,6 +73,31 @@ class SessionListResultDTO(BaseModel):
     items: list[SessionDTO]
     total: int
     cursor: Optional[str] = None
+
+
+class ChildThreadSummaryDTO(BaseModel):
+    """owner Session 内 durable child thread 的只读投影。
+
+    数据来自 owner session-control.sqlite 的 thread_catalog（child
+    row）+ collaboration ledger/member + initial execution intent；
+    admission_state 为 pending|bound（R25 只会看到 pending，bound 由
+    R26 binder 推进）。
+    """
+
+    thread_id: str
+    created_at: datetime
+    delegation_id: str | None = None
+    role: str | None = None
+    subagent_type: str | None = None
+    title: str | None = None
+    collaboration_state: str | None = None
+    admission_state: str | None = None
+
+
+class ChildThreadListDTO(BaseModel):
+    parent_session_id: str
+    items: list[ChildThreadSummaryDTO] = Field(default_factory=list)
+    total: int
 
 
 class SessionInformationWorkspaceDTO(BaseModel):
@@ -228,3 +238,39 @@ class SessionCompactResultDTO(BaseModel):
     history_file_path: Optional[str] = None
     strategy: Optional[Literal["cache_preserving", "cache_replacement"]] = None
     compacted_at: datetime = Field(default_factory=lambda: datetime.now())
+
+
+class SessionSkillUntrackRequest(BaseModel):
+    """受信 Session untrack 请求：只接受 Skill 逻辑名，不接受路径。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, description="Skill 逻辑名，不是文件路径。")
+
+
+class SessionSkillUntrackErrorDTO(BaseModel):
+    """untrack 确定性失败的闭合错误码与脱敏消息。"""
+
+    code: str
+    message: str
+
+
+class SessionSkillUntrackResultDTO(BaseModel):
+    """复用生产 CSM load_skill(mode=untrack) 的同一结果合同（脱敏 DTO）。
+
+    不含物理路径、locator、credential 或正文；display_uri 只能是
+    boxteam:// 虚拟资源 URI。
+    """
+
+    session_id: str
+    thread_id: str
+    name: str
+    mode: Literal["untrack"]
+    status: Literal["loaded", "already_active", "not_tracked", "error"]
+    display_uri: str | None = None
+    revision: str | None = None
+    content_hash: str | None = None
+    append_status: Literal["appended", "already_active", "none"] = "none"
+    tracked: bool = False
+    queued: bool = False
+    error: SessionSkillUntrackErrorDTO | None = None

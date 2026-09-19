@@ -34,6 +34,9 @@ from app.services.infrastructure.rollout_context.runtime.protected_detail import
     ProtectedDetailError,
 )
 
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+OTHER_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
+
 
 @pytest.fixture
 def tmp_path(integration_workspace_root_path, request) -> Path:
@@ -58,7 +61,7 @@ def test_detail_store_round_trip_uses_session_relative_assembly_path(
     detail = {"blocks": [{"type": "text", "text": "请求详情"}]}
 
     record = store.write(
-        session_id="session_1",
+        session_id=SESSION_ID,
         assembly_id="assembly-1",
         detail_kind="request_source",
         retention_class="request_replay",
@@ -69,7 +72,7 @@ def test_detail_store_round_trip_uses_session_relative_assembly_path(
     )
 
     target = (
-        _session_rollout(detail_sessions, "session_1")
+        _session_rollout(detail_sessions, SESSION_ID)
         / "context-plan-details"
         / (f"assembly-1/{record.detail_id}")
     )
@@ -78,7 +81,7 @@ def test_detail_store_round_trip_uses_session_relative_assembly_path(
         == f"rollout/context-plan-details/assembly-1/{record.detail_id}"
     )
     assert target.is_file()
-    assert store.read(session_id="session_1", record=record)["detail"] == detail
+    assert store.read(session_id=SESSION_ID, record=record)["detail"] == detail
 
 
 def test_sensitive_detail_never_writes_plaintext_or_claims_protected_body(
@@ -87,7 +90,7 @@ def test_sensitive_detail_never_writes_plaintext_or_claims_protected_body(
     store = ContextPlanDetailStore(detail_sessions)
     secret = "sensitive-provider-prompt"
     record = store.write(
-        session_id="session_1",
+        session_id=SESSION_ID,
         assembly_id="assembly-sensitive",
         detail_kind="request_source",
         retention_class="request_replay",
@@ -96,14 +99,14 @@ def test_sensitive_detail_never_writes_plaintext_or_claims_protected_body(
         sensitive=True,
     )
     target = (
-        get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+        get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
         / record.relative_path
     )
     assert secret.encode() not in target.read_bytes()
     with pytest.raises(PermissionError, match="未授权读取"):
-        store.read(session_id="session_1", record=record)
+        store.read(session_id=SESSION_ID, record=record)
     with pytest.raises(DetailUnavailableError, match="没有 protected body"):
-        store.read(session_id="session_1", record=record, include_sensitive=True)
+        store.read(session_id=SESSION_ID, record=record, include_sensitive=True)
 
 
 def test_protected_detail_round_trip_survives_restart_and_rejects_wrong_key(
@@ -113,7 +116,7 @@ def test_protected_detail_round_trip_survives_restart_and_rejects_wrong_key(
     store = ContextPlanDetailStore(detail_sessions, protected_key=key)
     detail = {"secret": "必须进入 provider，但不能进入普通 manifest"}
     record = store.write(
-        session_id="session_1",
+        session_id=SESSION_ID,
         assembly_id="assembly-protected",
         detail_kind="request_source",
         retention_class="request_replay",
@@ -126,7 +129,7 @@ def test_protected_detail_round_trip_survives_restart_and_rejects_wrong_key(
     )
 
     session_root = get_session_path_resolver(detail_sessions).resolve_session_node(
-        "session_1"
+        SESSION_ID
     )
     manifest = session_root / record.relative_path
     protected = session_root / protected_detail_relative_path(
@@ -140,7 +143,7 @@ def test_protected_detail_round_trip_survives_restart_and_rejects_wrong_key(
     assert detail["secret"].encode() not in protected.read_bytes()
     assert (
         store.read(
-            session_id="session_1",
+            session_id=SESSION_ID,
             record=record,
             include_sensitive=True,
         )["detail"]
@@ -150,7 +153,7 @@ def test_protected_detail_round_trip_survives_restart_and_rejects_wrong_key(
     restarted = ContextPlanDetailStore(detail_sessions, protected_key=key)
     assert (
         restarted.read(
-            session_id="session_1",
+            session_id=SESSION_ID,
             record=record,
             include_sensitive=True,
         )["detail"]
@@ -168,7 +171,7 @@ def test_protected_detail_round_trip_survives_restart_and_rejects_wrong_key(
     )
     with pytest.raises(DetailUnavailableError, match="provenance"):
         restarted.read(
-            session_id="session_1",
+            session_id=SESSION_ID,
             record=record,
             include_sensitive=True,
         )
@@ -179,7 +182,7 @@ def test_protected_detail_round_trip_survives_restart_and_rejects_wrong_key(
     )
     with pytest.raises(DetailUnavailableError, match="校验失败"):
         wrong_key.read(
-            session_id="session_1",
+            session_id=SESSION_ID,
             record=record,
             include_sensitive=True,
         )
@@ -187,7 +190,7 @@ def test_protected_detail_round_trip_survives_restart_and_rejects_wrong_key(
     protected.write_bytes(protected.read_bytes()[:-1] + b"x")
     with pytest.raises(DetailUnavailableError, match="校验失败"):
         restarted.read(
-            session_id="session_1",
+            session_id=SESSION_ID,
             record=record,
             include_sensitive=True,
         )
@@ -199,7 +202,7 @@ def test_detail_read_rejects_symlink_target(
 ) -> None:
     store = ContextPlanDetailStore(detail_sessions)
     record = store.write(
-        session_id="session_1",
+        session_id=SESSION_ID,
         assembly_id="assembly-symlink",
         detail_kind="request_source",
         retention_class="request_replay",
@@ -207,7 +210,7 @@ def test_detail_read_rejects_symlink_target(
         detail={"value": "safe"},
     )
     target = (
-        get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+        get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
         / record.relative_path
     )
     outside = tmp_path / "outside.json"
@@ -216,7 +219,7 @@ def test_detail_read_rejects_symlink_target(
     target.symlink_to(outside)
 
     with pytest.raises(DetailUnavailableError, match="符号链接"):
-        store.read(session_id="session_1", record=record)
+        store.read(session_id=SESSION_ID, record=record)
 
 
 def test_owner_gc_removes_expired_file_and_leaves_unavailable_tombstone(
@@ -224,7 +227,7 @@ def test_owner_gc_removes_expired_file_and_leaves_unavailable_tombstone(
 ) -> None:
     saver = RolloutCheckpointSaver(detail_sessions)
     record = saver._detail_store.write(
-        session_id="session_1",
+        session_id=SESSION_ID,
         assembly_id="assembly-gc",
         detail_kind="request_source",
         retention_class="request_replay",
@@ -234,20 +237,20 @@ def test_owner_gc_removes_expired_file_and_leaves_unavailable_tombstone(
     )
     saver._storage.register_context_plan_detail(record)
     target = (
-        get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+        get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
         / record.relative_path
     )
     assert target.is_file()
 
     removed = saver.gc_context_plan_details(
-        "session_1",
+        SESSION_ID,
         expired_before=datetime.now(UTC) + timedelta(seconds=1),
     )
 
     assert removed == (record.detail_ref,)
     assert not target.exists()
     with sqlite3.connect(
-        _session_rollout(detail_sessions, "session_1") / "index.sqlite"
+        _session_rollout(detail_sessions, SESSION_ID) / "index.sqlite"
     ) as connection:
         status, availability = connection.execute(
             "SELECT status, availability FROM context_plan_details WHERE detail_ref = ?",
@@ -273,7 +276,7 @@ def test_detail_manifest_restore_rejects_coerced_or_unknown_values(
 ) -> None:
     saver = RolloutCheckpointSaver(detail_sessions)
     record = saver._detail_store.write(
-        session_id="session_1",
+        session_id=SESSION_ID,
         assembly_id="assembly-corrupt-manifest",
         detail_kind="request_source",
         retention_class="request_replay",
@@ -283,7 +286,7 @@ def test_detail_manifest_restore_rejects_coerced_or_unknown_values(
     saver._storage.register_context_plan_detail(record)
 
     with sqlite3.connect(
-        _session_rollout(detail_sessions, "session_1") / "index.sqlite"
+        _session_rollout(detail_sessions, SESSION_ID) / "index.sqlite"
     ) as connection:
         connection.execute(
             f"UPDATE context_plan_details SET {column} = ? WHERE detail_ref = ?",
@@ -294,7 +297,7 @@ def test_detail_manifest_restore_rejects_coerced_or_unknown_values(
     # SQLite registry 会先拒绝非法基础列；其余保护语义由 detail manifest 拒绝。
     with pytest.raises(RuntimeError, match="detail manifest|context_plan_details"):
         saver.read_context_plan_detail(
-            "session_1",
+            SESSION_ID,
             detail_ref=record.detail_ref,
         )
 
@@ -302,15 +305,15 @@ def test_detail_manifest_restore_rejects_coerced_or_unknown_values(
 @pytest.fixture
 def detail_sessions(tmp_path: Path, session_bundle_factory) -> Path:
     sessions = tmp_path / "workspace" / ".boxteam" / "sessions"
-    session_bundle_factory(sessions, "session_1")
-    session_bundle_factory(sessions, "session_2")
+    session_bundle_factory(sessions, SESSION_ID)
+    session_bundle_factory(sessions, OTHER_SESSION_ID)
     return sessions
 
 
 @pytest.fixture
 def detail_arguments() -> dict[str, object]:
     return {
-        "session_id": "session_1",
+        "session_id": SESSION_ID,
         "assembly_id": "assembly-detail",
         "detail_kind": "request_source",
         "retention_class": "request_replay",
@@ -346,7 +349,7 @@ def test_typed_record_and_registry_roundtrip(
     detail_sessions, detail_store, public_record, typed_manifest
 ):
     ref = public_record.detail_ref
-    assert ref == DetailRef("session_1", "assembly-detail", public_record.detail_id)
+    assert ref == DetailRef(SESSION_ID, "assembly-detail", public_record.detail_id)
     assert "detail_ref" not in asdict(public_record)
     assert not hasattr(public_record, "content_length")
     assert not hasattr(public_record, "gc_after")
@@ -359,18 +362,18 @@ def test_typed_record_and_registry_roundtrip(
     )
     saver = RolloutCheckpointSaver(detail_sessions, protected_detail_key=b"k" * 32)
     saver._storage.register_context_plan_detail(public_record)
-    restored = saver._storage.get_context_plan_detail("session_1", detail_ref=ref)
+    restored = saver._storage.get_context_plan_detail(SESSION_ID, detail_ref=ref)
     assert restored["detail_ref"] == ref
     assert detail_record_from_mapping(restored) == public_record
     assert saver.read_context_plan_detail(
-        "session_1", detail_ref=ref
+        SESSION_ID, detail_ref=ref
     ) == detail_store.read(
-        session_id="session_1",
+        session_id=SESSION_ID,
         record=public_record,
     )
     with pytest.raises((AttributeError, TypeError)):
         public_record.detail_ref = DetailRef(
-            "session_2", ref.assembly_id, ref.detail_id
+            OTHER_SESSION_ID, ref.assembly_id, ref.detail_id
         )
 
 
@@ -378,11 +381,11 @@ def test_typed_record_and_registry_roundtrip(
     "field,value",
     [
         ("detail_ref", "legacy-id"),
-        ("detail_ref", {"session_id": "session_1"}),
-        ("detail_ref", DetailRef("session_2", "assembly-detail", "other")),
+        ("detail_ref", {"session_id": SESSION_ID}),
+        ("detail_ref", DetailRef(OTHER_SESSION_ID, "assembly-detail", "other")),
         ("detail_id", "other"),
         ("assembly_id", "other"),
-        ("session_id", "session_2"),
+        ("session_id", OTHER_SESSION_ID),
         ("relative_path", "rollout/context-plan-details/assembly-detail/legacy.json"),
         ("content_length", 1),
         ("gc_after", None),
@@ -435,7 +438,7 @@ def test_write_has_no_classification_defaults(detail_store, detail_arguments, fi
         detail_store.write(**detail_arguments)
 
 
-@pytest.mark.parametrize("value", ["detail-legacy", {"session_id": "session_1"}, None])
+@pytest.mark.parametrize("value", ["detail-legacy", {"session_id": SESSION_ID}, None])
 def test_locator_only_accepts_typed_identity(value):
     with pytest.raises(TypeError, match="DetailRef"):
         detail_relative_path(value)
@@ -447,23 +450,23 @@ def test_locator_only_accepts_typed_identity(value):
 def test_owner_failure_cannot_touch_either_session(
     detail_sessions, detail_store, public_record, operation
 ):
-    root = get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+    root = get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
     target = root / public_record.relative_path
     original = target.read_bytes()
     with pytest.raises(ValueError, match="source-mismatch"):
         if operation == "gc":
             detail_store.gc(
-                session_id="session_2",
+                session_id=OTHER_SESSION_ID,
                 expired_before=datetime.now(UTC),
                 allowed_refs=[public_record.detail_ref],
             )
         else:
             getattr(detail_store, operation)(
-                session_id="session_2", record=public_record
+                session_id=OTHER_SESSION_ID, record=public_record
             )
     assert target.read_bytes() == original
     second = get_session_path_resolver(detail_sessions).resolve_session_node(
-        "session_2"
+        OTHER_SESSION_ID
     )
     assert not (second / "rollout").exists()
 
@@ -487,8 +490,8 @@ def test_sensitive_marker_keeps_session_v1_algorithm_for_all_json_types(
     first = detail_store.write(**arguments)
     restarted = ContextPlanDetailStore(detail_sessions, protected_key=b"k" * 32)
     same = restarted.write(**arguments)
-    other = restarted.write(**{**arguments, "session_id": "session_2"})
-    root = get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+    other = restarted.write(**{**arguments, "session_id": OTHER_SESSION_ID})
+    root = get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
     key = (root / "rollout" / ".context-redaction-key").read_bytes()
     expected = (
         "hmac-sha256:session:v1:"
@@ -508,7 +511,7 @@ def test_sensitive_marker_keeps_session_v1_algorithm_for_all_json_types(
     assert raw["length"] == first.length == len(canonical_json_bytes(body))
     assert raw["detail_ref"] == first.detail_ref.to_dict()
     assert (
-        restarted.read(session_id="session_1", record=first, include_sensitive=True)[
+        restarted.read(session_id=SESSION_ID, record=first, include_sensitive=True)[
             "detail"
         ]
         == body
@@ -518,7 +521,7 @@ def test_sensitive_marker_keeps_session_v1_algorithm_for_all_json_types(
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("session_id", "session_2"),
+        ("session_id", OTHER_SESSION_ID),
         ("assembly_id", "other-assembly"),
         ("detail_id", "other-detail"),
         ("detail_kind", "assembly_snapshot"),
@@ -536,7 +539,7 @@ def test_protected_aad_binds_typed_owner_and_manifest(
     detail_sessions, detail_store, detail_arguments, field, value
 ):
     record = detail_store.write(**detail_arguments, sensitive=True)
-    root = get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+    root = get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
     blob = (root / protected_detail_relative_path(record.detail_ref)).read_bytes()
     changes = {field: value}
     if field in {"assembly_id", "detail_id"}:
@@ -566,13 +569,13 @@ def test_protected_aad_binds_typed_owner_and_manifest(
 def test_read_rejects_corrupt_envelope(
     detail_sessions, detail_store, public_record, field, value
 ):
-    root = get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+    root = get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
     target = root / public_record.relative_path
     payload = json.loads(target.read_bytes())
     payload[field] = value
     target.write_bytes(canonical_json_bytes(payload))
     with pytest.raises(DetailUnavailableError):
-        detail_store.read(session_id="session_1", record=public_record)
+        detail_store.read(session_id=SESSION_ID, record=public_record)
 
 
 def test_expired_read_fails_and_gc_requires_explicit_typed_allowlist(
@@ -580,32 +583,32 @@ def test_expired_read_fails_and_gc_requires_explicit_typed_allowlist(
 ):
     expired = detail_store.write(**detail_arguments, retention_days=0)
     retained = detail_store.write(**detail_arguments)
-    root = get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+    root = get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
     target = root / expired.relative_path
     with pytest.raises(DetailUnavailableError, match="已过期"):
-        detail_store.read(session_id="session_1", record=expired)
+        detail_store.read(session_id=SESSION_ID, record=expired)
     cutoff = datetime.now(UTC) + timedelta(seconds=1)
     with pytest.raises(TypeError, match="allowed_refs"):
-        detail_store.gc(session_id="session_1", expired_before=cutoff)
+        detail_store.gc(session_id=SESSION_ID, expired_before=cutoff)
     with pytest.raises(TypeError, match="DetailRef"):
         detail_store.gc(
-            session_id="session_1",
+            session_id=SESSION_ID,
             expired_before=cutoff,
             allowed_refs=[expired.detail_id],
         )
     with pytest.raises(ValueError, match="时区"):
         detail_store.gc(
-            session_id="session_1",
+            session_id=SESSION_ID,
             expired_before=cutoff.replace(tzinfo=None),
             allowed_refs=[expired.detail_ref],
         )
     assert (
-        detail_store.gc(session_id="session_1", expired_before=cutoff, allowed_refs=[])
+        detail_store.gc(session_id=SESSION_ID, expired_before=cutoff, allowed_refs=[])
         == ()
     )
     assert target.exists()
     assert detail_store.gc(
-        session_id="session_1",
+        session_id=SESSION_ID,
         expired_before=cutoff,
         allowed_refs=[expired.detail_ref, retained.detail_ref, expired.detail_ref],
     ) == (expired.detail_ref,)
@@ -621,7 +624,7 @@ def test_gc_retries_tombstoned_exact_files_without_source_sharing(
     independent = detail_store.write(
         **{**detail_arguments, "assembly_id": "other-assembly"}, sensitive=True
     )
-    root = get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+    root = get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
     manifest = root / expired.relative_path
     protected = root / protected_detail_relative_path(expired.detail_ref)
     if missing in {"manifest", "both"}:
@@ -629,7 +632,7 @@ def test_gc_retries_tombstoned_exact_files_without_source_sharing(
     if missing in {"protected", "both"}:
         protected.unlink()
     removed = detail_store.gc(
-        session_id="session_1",
+        session_id=SESSION_ID,
         expired_before=datetime.now(UTC),
         allowed_refs=[expired.detail_ref],
     )
@@ -637,7 +640,7 @@ def test_gc_retries_tombstoned_exact_files_without_source_sharing(
     assert not manifest.exists() and not protected.exists()
     assert (
         detail_store.read(
-            session_id="session_1", record=independent, include_sensitive=True
+            session_id=SESSION_ID, record=independent, include_sensitive=True
         )["detail"]
         == detail_arguments["detail"]
     )
@@ -649,7 +652,7 @@ def test_symlink_preflight_preserves_other_files(
     detail_sessions, detail_store, detail_arguments, tmp_path, operation, location
 ):
     record = detail_store.write(**detail_arguments, sensitive=True)
-    root = get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+    root = get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
     manifest = root / record.relative_path
     protected = root / protected_detail_relative_path(record.detail_ref)
     victim = manifest if location == "manifest" else protected
@@ -663,14 +666,14 @@ def test_symlink_preflight_preserves_other_files(
     with pytest.raises(DetailUnavailableError, match="符号链接"):
         if operation == "gc":
             detail_store.gc(
-                session_id="session_1",
+                session_id=SESSION_ID,
                 expired_before=datetime.now(UTC) + timedelta(days=31),
                 allowed_refs=[record.detail_ref],
             )
         else:
             options = {"include_sensitive": True} if operation == "read" else {}
             getattr(detail_store, operation)(
-                session_id="session_1", record=record, **options
+                session_id=SESSION_ID, record=record, **options
             )
     assert victim.is_symlink() and saved.exists()
     assert manifest.exists() == manifest_exists
@@ -680,11 +683,11 @@ def test_missing_key_is_not_regenerated_during_read(
     detail_sessions, detail_store, detail_arguments
 ):
     record = detail_store.write(**detail_arguments, sensitive=True)
-    root = get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+    root = get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
     key_path = root / "rollout" / ".context-redaction-key"
     key_path.unlink()
     with pytest.raises(DetailUnavailableError, match="key 不存在"):
-        detail_store.read(session_id="session_1", record=record, include_sensitive=True)
+        detail_store.read(session_id=SESSION_ID, record=record, include_sensitive=True)
     assert not key_path.exists()
 
 
@@ -719,7 +722,7 @@ def test_publish_failure_preserves_existing_target_and_rolls_back_own_cipher(
     with pytest.raises((DetailUnavailableError, OSError)):
         detail_store.write(**detail_arguments, sensitive=True)
     assert len(attempted) == 1
-    root = get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+    root = get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
     public = root / detail_relative_path(attempted[0])
     assert not (root / protected_detail_relative_path(attempted[0])).exists()
     assert not list(root.rglob("*.tmp"))
@@ -739,7 +742,7 @@ def test_same_leaf_copy_cannot_replay_another_typed_owner(
     record = detail_store.write(**detail_arguments, sensitive=True)
     identity = {
         **record.detail_ref.to_dict(),
-        field: "other-assembly" if field == "assembly_id" else "session_2",
+        field: "other-assembly" if field == "assembly_id" else OTHER_SESSION_ID,
     }
     ref = DetailRef.from_dict(identity)
     changes = {
@@ -758,7 +761,7 @@ def test_same_leaf_copy_cannot_replay_another_typed_owner(
     detail_store.remove(session_id=ref.session_id, record=different)
     assert (
         detail_store.read(
-            session_id="session_1", record=record, include_sensitive=True
+            session_id=SESSION_ID, record=record, include_sensitive=True
         )["detail"]
         == detail_arguments["detail"]
     )
@@ -771,12 +774,12 @@ def test_invalid_file_gc_fails_without_deleting(
     detail_sessions, detail_store, detail_arguments, raw
 ):
     record = detail_store.write(**detail_arguments, retention_days=0)
-    root = get_session_path_resolver(detail_sessions).resolve_session_node("session_1")
+    root = get_session_path_resolver(detail_sessions).resolve_session_node(SESSION_ID)
     target = root / record.relative_path
     target.write_bytes(raw)
     with pytest.raises(DetailUnavailableError):
         detail_store.gc(
-            session_id="session_1",
+            session_id=SESSION_ID,
             expired_before=datetime.now(UTC),
             allowed_refs=[record.detail_ref],
         )
@@ -792,5 +795,5 @@ def test_missing_files_fail_without_recreating_paths(
     target.unlink()
     target.parent.rmdir()
     with pytest.raises(DetailUnavailableError, match="缺失"):
-        detail_store.read(session_id="session_1", record=record, include_sensitive=True)
+        detail_store.read(session_id=SESSION_ID, record=record, include_sensitive=True)
     assert not target.parent.exists()

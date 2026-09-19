@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ from app.abstractions.session_changes import (
     SessionChangesRecorderProtocol,
     StoredFileEdit,
 )
-from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tools.apply_patch import (
     APPLY_PATCH_TOOL_NAME,
     load_apply_patch_journal_from_result,
@@ -28,6 +29,31 @@ from app.services.orchestration.event_stream.contracts import ToolEventDisplayCo
 
 FILE_EDIT_TOOL_NAMES = {"write_file", "edit_file", APPLY_PATCH_TOOL_NAME}
 SUBAGENT_TOOL_NAMES = frozenset({"task"})
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceActivityBinding:
+    """由实际资源 owner 附带到工具事件的已确认资源身份。"""
+
+    resource_id: str
+
+
+def resource_activity_binding_from_metadata(
+    metadata: object,
+) -> ResourceActivityBinding | None:
+    """解析 typed owner event；绝不从工具参数猜测资源。"""
+    if not isinstance(metadata, Mapping) or "resource_activity" not in metadata:
+        return None
+    raw_binding = metadata["resource_activity"]
+    if not isinstance(raw_binding, Mapping):
+        raise TypeError("resource_activity 必须是对象")
+    unknown = set(raw_binding) - {"resource_id"}
+    if unknown:
+        raise TypeError(f"resource_activity 含未知字段: {sorted(unknown)}")
+    resource_id = raw_binding.get("resource_id")
+    if not isinstance(resource_id, str) or not resource_id.strip():
+        raise TypeError("resource_activity.resource_id 必须是非空字符串")
+    return ResourceActivityBinding(resource_id=resource_id.strip())
 
 
 def tool_message_from_output(
@@ -59,24 +85,6 @@ def tool_message_from_output(
         f"execution_id={execution_id} tool={tool_name} "
         f"output_type={type(output).__name__}"
     )
-
-
-def system_skill_event_metadata(output: ToolMessage) -> dict[str, str]:
-    """把精确系统 Skill 读取标记为元数据，不伪装成工作区源码读取。"""
-    additional_kwargs = output.additional_kwargs
-    if additional_kwargs.get("workspace_path_scope") != "system_skill":
-        return {}
-    metadata: dict[str, str] = {}
-    for key in (
-        "workspace_path_scope",
-        "workspace_file_kind",
-        "skill_source",
-        "skill_name",
-    ):
-        value = additional_kwargs.get(key)
-        if isinstance(value, str) and value:
-            metadata[key] = value
-    return metadata
 
 
 def tool_output_status(output: Any) -> str:
@@ -163,7 +171,7 @@ def build_tool_display_context(
     raw_tool_name: str,
     raw_tool_args: dict[str, Any],
 ) -> ToolEventDisplayContext:
-    if raw_tool_name == CUSTOM_TOOL_INVOKER_NAME:
+    if raw_tool_name == EXTENSION_TOOL_INVOKER_NAME:
         target_tool_name = raw_tool_args.get("tool_name")
         if isinstance(target_tool_name, str) and target_tool_name.strip():
             return ToolEventDisplayContext(
@@ -214,7 +222,7 @@ def activity_result_detail(
         ):
             detail["timeout_ms"] = timeout_ms
     if tool_name in SUBAGENT_TOOL_NAMES and isinstance(parsed, Mapping):
-        child_session_id = parsed.get("child_session_id")
-        if isinstance(child_session_id, str) and child_session_id:
-            detail["child_turn_id"] = child_session_id
+        child_thread_id = parsed.get("child_thread_id")
+        if isinstance(child_thread_id, str) and child_thread_id:
+            detail["child_turn_id"] = child_thread_id
     return detail

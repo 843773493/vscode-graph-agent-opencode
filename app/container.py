@@ -15,6 +15,7 @@ from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
 from app.agents.context_compaction_adapter import AgentSummarizationCompactor
+from app.agents.graph_binding import JsonFileGraphBindingStore
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.env import get_project_root
@@ -24,6 +25,7 @@ from app.core.path_utils import (
     get_user_config_root,
     get_workspace_root,
 )
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
 from app.runtime.session_orchestrator import SessionOrchestrator
@@ -60,6 +62,9 @@ from app.services.business.session_resource_registry import (
 )
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.business.session_service import SessionService
+from app.services.business.session_skill_tracking_service import (
+    SessionSkillTrackingService,
+)
 from app.services.business.session_target_resolver import SessionTargetResolver
 from app.services.business.session_turn_history import (
     SessionTurnHistoryService,
@@ -75,6 +80,12 @@ from app.services.infrastructure.browser_manager_client import BrowserManagerCli
 from app.services.infrastructure.config import WorkspaceSourceOwner
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.context_history_store import ContextHistoryStore
+from app.services.infrastructure.events.channel_events import (
+    ResourceStateEventPublisher,
+)
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
@@ -89,12 +100,21 @@ from app.services.infrastructure.historical_terminal_record_reader import (
 )
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
-from app.services.infrastructure.mcp import McpRuntimeManager
+from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug_service import NodeDebugService
+from app.services.infrastructure.node_debug_session_admission import (
+    NodeDebugSessionAdmission,
+)
 from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
 from app.services.infrastructure.pending_request_store import PendingRequestStore
-from app.services.infrastructure.resource_manager import ResourceManager
+from app.services.infrastructure.resource_platform.bootstrap import (
+    ResourcePlatform,
+    bootstrap_resource_platform,
+)
+from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
+    WorkspaceFileResourceRegistry,
+)
 from app.services.infrastructure.rollout_checkpoint_runtime import (
     RolloutCheckpointRuntime,
 )
@@ -124,9 +144,15 @@ from app.services.mapping.session_resource_mapper import SessionResourceMapper
 from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 from app.services.orchestration.job_execution_service import JobExecutionService
-from app.services.orchestration.session_subagent_service import SessionSubagentService
+from app.services.orchestration.owner_thread_creation_factory import (
+    OwnerThreadCreationFactory,
+)
+from app.services.orchestration.session_subagent_service import (
+    SessionSubagentService,
+)
 from app.services.orchestration.session_title_service import SessionTitleService
 from app.services.orchestration.terminal_steering_service import TerminalSteeringService
+from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from app.tool_testing import ToolTestRegistry, ToolTestService, ToolTestStore
 
 
@@ -142,7 +168,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         session_context_query_service: SessionContextQueryService,
         workspace_session_context_client: WorkspaceSessionContextClientProtocol,
         session_target_resolver: SessionTargetResolverProtocol,
-        mcp_runtime_manager: McpRuntimeManager,
+        mcp_catalog_owner: McpCatalogOwner,
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service
@@ -152,7 +178,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._session_context_query_service = session_context_query_service
         self._workspace_session_context_client = workspace_session_context_client
         self._session_target_resolver = session_target_resolver
-        self._mcp_runtime_manager = mcp_runtime_manager
+        self._mcp_catalog_owner = mcp_catalog_owner
         self._node_debug_service: NodeDebugService | None = None
         self._job_service: JobServiceProtocol | None = None
         self._session_orchestrator: SessionOrchestrator | None = None
@@ -209,7 +235,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         return self._session_message_delivery_service
 
     def get_mcp_tools(self) -> list[BaseTool]:
-        return self._mcp_runtime_manager.get_tools()
+        return self._mcp_catalog_owner.get_tools()
 
     def set_node_debug_service(self, node_debug_service: NodeDebugService) -> None:
         self._node_debug_service = node_debug_service
@@ -270,6 +296,7 @@ class AppContainer:
     goal_service: SessionGoalService
     goal_runtime_service: GoalRuntimeService
     session_interrupt_service: SessionInterruptService
+    session_skill_tracking_service: SessionSkillTrackingService
     session_context_fork_service: SessionContextForkService
     session_turn_replay_service: SessionTurnReplayService
     session_turn_history_service: SessionTurnHistoryService
@@ -291,7 +318,9 @@ class AppContainer:
     tool_test_service: ToolTestService
     tool_selection_store: ToolSelectionStore
     workspace_service: WorkspaceService
+    resource_platform: ResourcePlatform
     workspace_file_watch_service: WorkspaceFileWatchService
+    workspace_file_resource_registry: WorkspaceFileResourceRegistry
     file_tree_settings_service: FileTreeSettingsService
     agent_execution_service: AgentExecutionService
     node_debug_service: NodeDebugService
@@ -302,7 +331,7 @@ class AppContainer:
     trace_event_recorder: TraceEventRecorder
     rollout_checkpoint_runtime: RolloutCheckpointRuntime
     checkpointer: RolloutCheckpointSaver
-    mcp_runtime_manager: McpRuntimeManager
+    mcp_catalog_owner: McpCatalogOwner
     pending_request_store: PendingRequestStore
     workspace_activity_service: WorkspaceActivityService
     message_stream_store: MessageStreamStore
@@ -342,14 +371,22 @@ def build_app_container(
         path_resolver=session_path_resolver,
         workspace_id=workspace_id,
     )
-    resource_manager = ResourceManager(
-        state_path=resolved_boxteam_root / "resources.json"
+    # resource.state producer：账本在 settle/reconcile 等语义上等于「owner 已核实
+    # 资源终态」的转换点发布轻量状态；通知失败不回滚 durable 账本事实。
+    external_resource_state_events = ResourceStateEventPublisher(
+        event_service=job_event_bus.event_channel_service,
+        owner_domain="external_resource_leases",
+    )
+    external_resource_leases = ExternalResourceLeaseLedger(
+        state_path=resolved_boxteam_root / "resources.json",
+        state_events=external_resource_state_events,
     )
     config_service = ConfigService(
         workspace_root=resolved_workspace_root,
         workspace_state_store=workspace_activity_service.store,
         source_owner=workspace_source_owner,
         source_owner_workspace_id=workspace_id,
+        event_channel_service=job_event_bus.event_channel_service,
     )
     workspace_service = WorkspaceService(
         config_service=config_service,
@@ -372,9 +409,10 @@ def build_app_container(
     )
     checkpointer = rollout_checkpoint_runtime.saver
 
-    mcp_runtime_manager = McpRuntimeManager(
+    mcp_catalog_owner = McpCatalogOwner(
         raw_config=config_service.get_mcp_config(),
         workspace_root=resolved_workspace_root,
+        event_service=job_event_bus.event_channel_service,
     )
     session_attachment_store = SessionAttachmentStore(resolved_workspace_root)
     message_service = MessageService(
@@ -420,6 +458,13 @@ def build_app_container(
         store=session_changes_store,
     )
     tool_selection_store = ToolSelectionStore(boxteam_root=resolved_boxteam_root)
+    resource_platform = bootstrap_resource_platform(
+        workspace_root=resolved_workspace_root,
+        project_root=resolved_project_root,
+        event_service=job_event_bus.event_channel_service,
+    )
+    workspace_file_watch_service = resource_platform.file_watch_service
+    workspace_file_resource_registry = resource_platform.file_registry
     dependency_provider = _AgentRuntimeDependencyProvider(
         message_service=message_service,
         session_service=session_service,
@@ -429,14 +474,33 @@ def build_app_container(
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,
         session_target_resolver=session_target_resolver,
-        mcp_runtime_manager=mcp_runtime_manager,
+        mcp_catalog_owner=mcp_catalog_owner,
     )
     dependency_provider.set_goal_service(goal_service)
+    # ThreadResidency：30 分钟 idle 卸载判定器（OpenSpec 2.8/8.8-A）。debug 服务把
+    # 已核实的 claim 相位单向推送为 thread 的 idle blocker；tracker 评估时再通过
+    # ResidencyBlockerSource 拉取磁盘 durable claim 兜底（重启恢复），不建第二套
+    # dispose/LifetimeScope 抽象，卸载回调由真实 ThreadRuntime owner（8.4/8.5）注册。
+    thread_residency_tracker = ThreadResidencyTracker()
     node_debug_service = NodeDebugService(
         workspace_root=resolved_workspace_root,
         config_service=config_service,
         session_store=NodeDebugSessionStore(session_path_resolver),
+        session_admission=NodeDebugSessionAdmission(
+            session_service=session_service,
+            path_resolver=session_path_resolver,
+        ),
+        # 与 Agent 执行共用唯一 external_resource_leases 账本：调试进程以 typed
+        # node_debug_process 身份登记跨 Turn 占用，不新建第二套 lease 管理。
+        external_resource_leases=external_resource_leases,
+        state_events=ResourceStateEventPublisher(
+            event_service=job_event_bus.event_channel_service,
+            owner_domain="node_debug",
+        ),
+        residency_tracker=thread_residency_tracker,
     )
+    # 重启恢复兜底：tracker 评估时向 debug owner 拉取 durable claim 的活跃 blocker。
+    thread_residency_tracker.add_blocker_source(node_debug_service)
     dependency_provider.set_node_debug_service(node_debug_service)
     agent_execution_service = AgentExecutionService(
         config_service=config_service,
@@ -448,7 +512,21 @@ def build_app_container(
         tool_selection_store=tool_selection_store,
         message_stream_store=message_stream_store,
         workspace_root=resolved_workspace_root,
-        resource_manager=resource_manager,
+        external_resource_leases=external_resource_leases,
+        workspace_file_resource_registry=workspace_file_resource_registry,
+        # OpenSpec 8.4：GraphBinding 持久化装配。store 是 workspace 级唯一实例
+        # （多会话单文档，按 (session_id, thread_id) 键控），目录使用 .boxteam/
+        # 下的专用附属目录，不与会话/导航数据混放。
+        graph_binding_store=JsonFileGraphBindingStore(
+            directory=resolved_boxteam_root / "graph-bindings",
+        ),
+        # OpenSpec 2.8：runtime owner 的 residency 记账与 idle unload 回调。
+        residency_tracker=thread_residency_tracker,
+    )
+    # unload 回调装配：idle 卸载只释放该 thread 可重建 runtime 资源（agent 缓存
+    # 条目与 context source 订阅），经 generation fence 拒绝迟到 callback。
+    thread_residency_tracker.set_unload_callback(
+        agent_execution_service.unload_thread_runtime
     )
     session_title_service = SessionTitleService(
         session_service=session_service,
@@ -515,9 +593,16 @@ def build_app_container(
         trace_event_store=trace_event_store,
         providers=[AgentPromptGenerationProvider()],
     )
+    thread_creation_factory = OwnerThreadCreationFactory(
+        sessions_root=resolved_sessions_root,
+        workspace_id=workspace_id,
+        path_resolver=session_path_resolver
+        if isinstance(session_path_resolver, SessionCatalogPathResolver)
+        else None,
+    )
     session_subagent_service = SessionSubagentService(
-        session_service=session_service,
-        session_orchestrator=session_orchestrator,
+        parent_session_reader=session_service,
+        thread_creation_factory=thread_creation_factory,
     )
     dependency_provider.set_session_subagent_service(session_subagent_service)
     team_service = TeamCoordinationService(
@@ -560,6 +645,10 @@ def build_app_container(
         message_stream_store=message_stream_store,
         execution_scope_registry=agent_execution_service.execution_scope_registry,
     )
+    session_skill_tracking_service = SessionSkillTrackingService(
+        checkpointer=checkpointer,
+        session_service=session_service,
+    )
     historical_terminal_reader = HistoricalTerminalRecordReader(
         sessions_dir=resolved_sessions_root,
     )
@@ -589,9 +678,6 @@ def build_app_container(
         provider_registry=session_resource_provider_registry,
     )
     session_catalog_service.bind_session_resource_service(session_resource_service)
-    workspace_file_watch_service = WorkspaceFileWatchService(
-        workspace_root=resolved_workspace_root,
-    )
     session_information_service = SessionInformationService(
         session_service=session_service,
         session_resource_service=session_resource_service,
@@ -654,6 +740,7 @@ def build_app_container(
         goal_service=goal_service,
         goal_runtime_service=goal_runtime_service,
         session_interrupt_service=session_interrupt_service,
+        session_skill_tracking_service=session_skill_tracking_service,
         session_context_fork_service=session_context_fork_service,
         session_turn_replay_service=session_turn_replay_service,
         session_turn_history_service=session_turn_history_service,
@@ -676,6 +763,8 @@ def build_app_container(
         tool_selection_store=tool_selection_store,
         workspace_service=workspace_service,
         workspace_file_watch_service=workspace_file_watch_service,
+        workspace_file_resource_registry=workspace_file_resource_registry,
+        resource_platform=resource_platform,
         file_tree_settings_service=file_tree_settings_service,
         agent_execution_service=agent_execution_service,
         node_debug_service=node_debug_service,
@@ -686,7 +775,7 @@ def build_app_container(
         trace_event_recorder=trace_event_recorder,
         rollout_checkpoint_runtime=rollout_checkpoint_runtime,
         checkpointer=checkpointer,
-        mcp_runtime_manager=mcp_runtime_manager,
+        mcp_catalog_owner=mcp_catalog_owner,
         pending_request_store=pending_request_store,
         workspace_activity_service=workspace_activity_service,
         message_stream_store=message_stream_store,

@@ -12,7 +12,10 @@ import httpx
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app.agents.tools.custom_invocation import create_custom_tool_invoker_tool
+from app.agents.tools.custom_invocation import (
+    create_extension_tool_invoker_tool,
+    seal_extension_catalog_binding_from_tools,
+)
 from app.agents.tools.session_history import (
     create_read_context_tool,
     create_search_context_tool,
@@ -68,6 +71,60 @@ def _copy_workspace_config(source_workspace: Path, target_workspace: Path) -> No
     )
 
 
+def _isolated_gateway_state_roots(workspace_root: Path) -> tuple[Path, ...]:
+    """返回本测试文件会用到的全部隔离 BOXTEAM_HOME 的 Gateway 状态目录。"""
+
+    test_root = workspace_root.resolve().parent
+    return (
+        test_root / "boxteam-home" / "state" / "gateway",
+        test_root / "remote-gateway-host" / "boxteam-home" / "state" / "gateway",
+    )
+
+
+def _remove_remote_gateway_registration(
+    *,
+    registry: GatewayWorkspaceRegistry | None,
+    gateway_root: Path,
+    connection_id: str,
+) -> None:
+    """移除测试注册的远程 Gateway 投影与连接，避免残留污染共享 BOXTEAM_HOME。
+
+    远程投影工作区引用连接；连接定义由测试直接写入 registry，不会随用户配置
+    重建。若删除投影时留下孤儿投影，下一次 Gateway 启动会按 fail-closed 拒绝
+    加载（引用未知连接），因此测试必须在退出时把两者一起清理掉。
+    """
+
+    if registry is not None:
+        for target in registry.targets():
+            if target.remote_gateway_connection_id == connection_id:
+                # owner="registry" 让这条清理写入 registry 自身的完整快照，
+                # 从而把已无人引用的连接从持久化元数据里一并移除。
+                registry.remove(target.workspace_id, owner="registry")
+    FederationCredentialStore(
+        storage_path=gateway_root / "credentials" / "federation.json"
+    ).remove(connection_id)
+
+
+@pytest.fixture(autouse=True)
+def isolated_gateway_state(
+    integration_workspace_root_path: str,
+) -> None:
+    """每个测试函数都从干净的 Gateway 持久状态开始。
+
+    同一个测试内会多次调用 `start_gateway_process` 重启 Gateway，并依赖
+    `state/gateway` 中的持久化状态（pending 恢复、stale pending 等），因此
+    这里只在测试函数开始前重置；测试函数内部产生的状态仍然跨进程保留。
+    上一次运行或上一个用例遗留的远程投影、连接和 pending 候选不会让后续
+    用例启动失败或读到过期 pending。
+    """
+
+    for gateway_root in _isolated_gateway_state_roots(
+        Path(integration_workspace_root_path)
+    ):
+        if gateway_root.exists():
+            shutil.rmtree(gateway_root)
+
+
 async def _write_session_context_checkpoint(
     *,
     workspace_root: Path,
@@ -108,7 +165,7 @@ async def _write_session_context_checkpoint(
                 ),
             ]
         },
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": checkpoint_id,
     }
@@ -116,7 +173,7 @@ async def _write_session_context_checkpoint(
         build_checkpoint_config(session_id),
         checkpoint,
         {"source": "e2e_fixture", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
 
@@ -528,7 +585,12 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         assert gateway_search_payload["total_matches"] >= 2
         assert gateway_search_payload["partial_errors"] == []
 
-        invoker = create_custom_tool_invoker_tool([read_tool, search_tool])
+        invoker = create_extension_tool_invoker_tool(
+            [read_tool, search_tool],
+            catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+                [read_tool, search_tool]
+            ),
+        )
         await _write_session_context_checkpoint(
             workspace_root=secondary_workspace,
             session_id=source_session_id,
@@ -701,7 +763,11 @@ async def test_gateway_pending_restart_is_loaded_by_new_gateway_process(
         primary_workspace.parent / "boxteam-home" / "config" / "gateway.jsonc"
     )
     gateway_state_path = (
-        primary_workspace / ".boxteam" / "gateway" / "gateway.sqlite"
+        primary_workspace.parent
+        / "boxteam-home"
+        / "state"
+        / "gateway"
+        / "gateway.sqlite"
     )
 
     try:
@@ -819,7 +885,11 @@ async def test_gateway_expired_pending_requires_explicit_retry_before_startup(
         primary_workspace.parent / "boxteam-home" / "config" / "gateway.jsonc"
     )
     gateway_state_path = (
-        primary_workspace / ".boxteam" / "gateway" / "gateway.sqlite"
+        primary_workspace.parent
+        / "boxteam-home"
+        / "state"
+        / "gateway"
+        / "gateway.sqlite"
     )
 
     try:
@@ -935,7 +1005,11 @@ async def test_gateway_pending_startup_failure_keeps_active_snapshot_recoverable
         primary_workspace.parent / "boxteam-home" / "config" / "gateway.jsonc"
     )
     gateway_state_path = (
-        primary_workspace / ".boxteam" / "gateway" / "gateway.sqlite"
+        primary_workspace.parent
+        / "boxteam-home"
+        / "state"
+        / "gateway"
+        / "gateway.sqlite"
     )
 
     try:
@@ -1074,7 +1148,11 @@ async def test_gateway_stale_pending_startup_cannot_mutate_restart_state(
         primary_workspace.parent / "boxteam-home" / "config" / "gateway.jsonc"
     )
     gateway_state_path = (
-        primary_workspace / ".boxteam" / "gateway" / "gateway.sqlite"
+        primary_workspace.parent
+        / "boxteam-home"
+        / "state"
+        / "gateway"
+        / "gateway.sqlite"
     )
 
     try:
@@ -1191,16 +1269,20 @@ async def test_gateway_federation_reconciles_pending_restart_offline_and_cursor_
         default_backend_url=f"http://127.0.0.1:{remote_backend.port}",
         port=port_block.port(31),
     )
-    local_gateway_root = local_workspace / ".boxteam" / "gateway"
-    remote_gateway_root = remote_workspace / ".boxteam" / "gateway"
+    local_gateway_root = (
+        local_workspace.parent / "boxteam-home" / "state" / "gateway"
+    )
+    remote_gateway_root = (
+        remote_workspace.parent / "boxteam-home" / "state" / "gateway"
+    )
     local_state = GatewayStateStore(path=local_gateway_root / "gateway.sqlite")
     local_registry: GatewayWorkspaceRegistry | None = None
+    connection_id = "rgw_real_process_federation"
     try:
         monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(local_gateway_root))
         remote_gateway_id = load_or_create_gateway_id(
             remote_gateway_root / "identity.json"
         )
-        connection_id = "rgw_real_process_federation"
         credential = FederationCredentialStore(
             storage_path=local_gateway_root / "credentials" / "federation.json"
         ).issue(
@@ -1406,6 +1488,11 @@ async def test_gateway_federation_reconciles_pending_restart_offline_and_cursor_
             assert gap_response.status_code == 410, gap_response.text
             assert gap_response.json()["detail"]["code"] == "snapshot_required"
     finally:
+        _remove_remote_gateway_registration(
+            registry=local_registry,
+            gateway_root=local_gateway_root,
+            connection_id=connection_id,
+        )
         if local_registry is not None:
             local_registry.close()
         local_state.close()

@@ -8,7 +8,7 @@ allowed-tools: web_search, fetch_webpage
 
 ## 调用约定
 
-- 所有工具都必须通过固定入口 `invoke_custom_tool` 调用。
+- 所有工具都必须通过固定入口 `invoke_extension_tool` 调用。
 - `tool_name` 必须使用 `web_search` 或 `fetch_webpage`；`arguments` 必须符合对应的 `arguments_schema`。
 - `web_search` 用于发现公开网页 URL；搜索摘要不能替代网页正文。
 - 需要引用、核实或总结页面内容时，必须把搜索结果中的 `url` 传给 `fetch_webpage`。
@@ -18,7 +18,7 @@ allowed-tools: web_search, fetch_webpage
 
 ## 工具参数 schema
 
-以下每段是目标工具的参数描述，不是新的模型工具入口。实际调用时，必须把它放入 `invoke_custom_tool.arguments`。
+以下每段是目标工具的参数描述，不是新的模型工具入口。实际调用时，必须把它放入 `invoke_extension_tool.arguments`。
 
 ### web_search
 

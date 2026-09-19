@@ -9,6 +9,7 @@ from typing import TypeVar
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_paths import (
     FOLDER_MANIFEST_NAME,
     SessionPathResolver,
@@ -210,6 +211,14 @@ class SessionCatalogService:
                     parent_node_id=parent_node_id,
                     name=name,
                 )
+            if (
+                name != folder.name
+                and isinstance(self._path_resolver, SessionCatalogPathResolver)
+            ):
+                # 新模型：move_node 只承担逻辑挂载变更，不重命名；纯改名
+                # 走 update_node_name（切换期已接受的语义拆分，见
+                # session_service._relocate_folder_tree_catalog docstring）。
+                self._path_resolver.update_node_name(folder_id, name)
             return self._path_resolver.move_node(
                 node_id=folder_id,
                 parent_node_id=parent_node_id,
@@ -320,7 +329,7 @@ class SessionCatalogService:
         try:
             await self._delete_frozen_folder_tree(folder_id)
         finally:
-            self._path_resolver.finish_subtree_delete(folder_id)
+            await self._path_resolver.finish_subtree_delete(folder_id)
 
     async def _delete_frozen_folder_tree(self, folder_id: str) -> None:
         nodes = self._path_resolver.list_nodes()
@@ -565,9 +574,14 @@ class SessionCatalogService:
             session_id=node.node_id if node.kind == "session" else None,
             folder_id=node.node_id if node.kind == "folder" else None,
             has_children=node.node_id in child_parent_ids,
-            storage_relative_path=node.path.relative_to(
-                self._path_resolver.sessions_root
-            ).as_posix(),
+            # 新模型（8.2）folder 是 catalog-only 节点，物理投影 path=None，
+            # storage_relative_path 同为 None（DTO 可空，消费方以 or "" 兜底）；
+            # 旧 resolver 全部节点均有物理目录，行为不变。
+            storage_relative_path=(
+                node.path.relative_to(self._path_resolver.sessions_root).as_posix()
+                if node.path is not None
+                else None
+            ),
             created_at=node.created_at,
             updated_at=node.updated_at,
             session=session,

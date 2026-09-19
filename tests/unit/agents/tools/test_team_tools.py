@@ -22,14 +22,13 @@ def test_agent_collaboration_group_collects_cross_session_tools():
         agent_id="default",
         sender_agent_id="default",
         background_task_registry=MagicMock(),
-        background_message_bus=MagicMock(),
-        job_event_bus=MagicMock(),
         job_service=MagicMock(),
         session_service=MagicMock(),
         session_orchestrator=MagicMock(),
         session_subagent_service=MagicMock(),
         team_service=MagicMock(),
         invocation_context=ToolInvocationContext(),
+        communication_binding_lookup=MagicMock(),
         include_team_tools=True,
     )
 
@@ -62,7 +61,7 @@ def test_default_team_tool_group_exposes_board_and_session_reuse_operations():
     assert schemas["assign_team_task"]["cycle"]["minimum"] == 1
     create_member = next(tool for tool in tools if tool.name == "create_team_member")
     assert "runtime" not in create_member.get_input_schema().model_fields
-    assert "monitor_session_agent_end" in create_member.description
+    assert "禁止阻塞轮询等待" in create_member.description
     assign_task = next(tool for tool in tools if tool.name == "assign_team_task")
     assert "不要阻塞轮询" in assign_task.description
     assert schemas["update_team_task"]["team_id"]["pattern"] == r"^team_[0-9a-f]{32}$"

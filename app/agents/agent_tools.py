@@ -16,7 +16,6 @@ from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.apply_patch import create_apply_patch_tool
 from app.agents.tools.background import (
     create_background_message_collection_tool,
-    create_monitor_session_agent_end_tool,
     create_system_time_emitter_tool,
 )
 from app.agents.tools.collaboration import build_agent_collaboration_tools
@@ -27,6 +26,11 @@ from app.agents.tools.python_execution import (
 )
 from app.agents.tools.session_messaging import create_send_message_to_session_tool
 from app.agents.tools.session_subagent import create_session_subagent_tool
+from app.agents.tools.session_wait import (
+    CommunicationWaitBindingLookupPort,
+    create_wait_for_session_tool,
+)
+from app.agents.tools.skill_loading import create_skill_load_tool
 from app.agents.tools.team import create_team_tools
 from app.agents.tools.terminal import (
     create_exec_command_tool,
@@ -36,6 +40,9 @@ from app.agents.tools.terminal import (
 )
 from app.agents.tools.testing import create_test_tool
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+)
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 
 if TYPE_CHECKING:
@@ -62,8 +69,10 @@ def build_default_tools(
     workspace_root: Path | None = None,
     goal_service: SessionGoalService | None = None,
     session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
+    communication_binding_lookup: CommunicationWaitBindingLookupPort | None = None,
     include_test_tools: bool = False,
     include_team_tools: bool = False,
+    context_source_manager: ContextSourceManager | None = None,
 ) -> list[BaseTool]:
     """构建默认工具集。"""
     if session_orchestrator is None:
@@ -82,6 +91,11 @@ def build_default_tools(
         raise RuntimeError("build_default_tools 需要显式传入 TerminalManagerClient")
     if invocation_context is None:
         raise RuntimeError("build_default_tools 需要显式传入 ToolInvocationContext")
+    if communication_binding_lookup is None:
+        raise RuntimeError(
+            "build_default_tools 需要显式传入 communication binding lookup"
+            "（wait_for_session 的跨会话执行绑定解析）"
+        )
     tools = [
         create_apply_patch_tool(workspace_root=workspace_root),
         create_python_execution_tool(session_id=session_id, agent_id=agent_id),
@@ -119,8 +133,6 @@ def build_default_tools(
             agent_id=agent_id,
             sender_agent_id=sender_agent_id,
             background_task_registry=background_task_registry,
-            background_message_bus=background_message_bus,
-            job_event_bus=job_event_bus,
             job_service=job_service,
             session_service=session_service,
             session_orchestrator=session_orchestrator,
@@ -128,9 +140,12 @@ def build_default_tools(
             team_service=team_service,
             invocation_context=invocation_context,
             session_message_delivery_service=session_message_delivery_service,
+            communication_binding_lookup=communication_binding_lookup,
             include_team_tools=include_team_tools,
         ),
     ]
+    if context_source_manager is not None:
+        tools.append(create_skill_load_tool(context_source_manager))
     if goal_service is not None:
         tools.extend(
             create_goal_tools(session_id=session_id, goal_service=goal_service)
@@ -148,13 +163,13 @@ __all__ = [
     "create_exec_command_tool",
     "create_kill_terminal_tool",
     "create_list_terminal_sessions_tool",
-    "create_monitor_session_agent_end_tool",
     "create_python_execution_tool",
     "create_send_message_to_session_tool",
     "create_session_subagent_tool",
     "create_system_time_emitter_tool",
     "create_team_tools",
     "create_test_tool",
+    "create_wait_for_session_tool",
     "create_write_stdin_tool",
     "get_python_executable",
 ]

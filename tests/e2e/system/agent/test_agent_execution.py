@@ -114,21 +114,8 @@ async def test_llm_request_log_round_trip(
     )
     assert isinstance(request.get("tools"), list)
     assert request["tools"]
-    replay = request["replay"]
-    assert replay["schema_version"] == 1
-    assert replay["message_count"] == len(request["messages"])
-    assert replay["system_prompt_char_count"] > 0
-    assert replay["tools"]["count"] == len(request["tools"])
-    assert replay["tools"]["schema_char_count"] > 0
-    assert replay["prompt_components"]
-    assert replay["prompt_components"][0]["label"] == "默认指令"
-    assert "工作区 AGENTS.md" in {
-        component["label"] for component in replay["prompt_components"]
-    }
-    assert all(
-        component["block_count"] > 0 and component["char_count"] > 0
-        for component in replay["prompt_components"]
-    )
+    assert "replay" not in request
+    assert request.get("system_message")
     assert isinstance(response.get("result"), list)
     assert response["result"]
 

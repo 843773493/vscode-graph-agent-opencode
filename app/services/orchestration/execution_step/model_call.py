@@ -9,9 +9,6 @@ from datetime import UTC, datetime
 
 from langchain_core.messages import AIMessage
 
-from app.agents.request_replay_middleware import (
-    consume_request_replay_snapshot,
-)
 from app.domain.itemized.enums import CanonicalItemStatus, SemanticKind
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
@@ -100,8 +97,6 @@ class StepModelCallAdapter:
                 raise RuntimeError(
                     "prepared context dispatch handle 缺少 assembly_id/execution_id"
                 )
-            # replay snapshot 只消费其短生命周期登记，不再用于补建另一份 assembly。
-            consume_request_replay_snapshot(self._session_id, self._turn_id)
         await asyncio.to_thread(
             register,
             self._session_id,

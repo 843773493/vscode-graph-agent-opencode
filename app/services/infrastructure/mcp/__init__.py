@@ -1,3 +1,75 @@
-from app.services.infrastructure.mcp.runtime_manager import McpRuntimeManager
+from app.services.infrastructure.mcp.catalog_activation import (
+    McpCatalogActivationBinder,
+    McpCatalogActivationConflictError,
+    McpCatalogActivationError,
+    McpCatalogActivationSnapshot,
+    McpCatalogActivationSnapshotSaver,
+)
+from app.services.infrastructure.mcp.catalog_owner import (
+    McpCatalogError,
+    McpCatalogOwner,
+    McpCatalogRelistError,
+    McpCatalogSnapshot,
+    McpServerSnapshot,
+    McpToolDescriptor,
+    production_mcp_session_factory,
+)
+from app.services.infrastructure.mcp.extension_catalog import (
+    EXTENSION_TOOL_ENVELOPE_IDENTITY,
+    ExtensionCatalogBindingError,
+    ExtensionCatalogBindingRef,
+    ExtensionTargetBinding,
+    ExtensionTargetBindingInput,
+    ExtensionTargetConflictError,
+    ExtensionTargetResolutionError,
+    build_extension_catalog_binding,
+    extension_schema_hash,
+)
+from app.services.infrastructure.mcp.guidance_source_port import (
+    MCP_GUIDANCE_SOURCE_ID,
+    McpToolGuidanceSourcePort,
+    McpToolGuidanceSourceRegistration,
+)
+from app.services.infrastructure.mcp.tool_guidance import (
+    MAX_GUIDANCE_ARGS_FIELDS,
+    MAX_GUIDANCE_ARGS_SUMMARY_LENGTH,
+    MAX_GUIDANCE_DESCRIPTION_LENGTH,
+    McpToolGuidanceEntry,
+    McpToolGuidanceError,
+    McpToolGuidanceProducer,
+    McpToolGuidanceSnapshot,
+)
 
-__all__ = ["McpRuntimeManager"]
+__all__ = [
+    "EXTENSION_TOOL_ENVELOPE_IDENTITY",
+    "MAX_GUIDANCE_ARGS_FIELDS",
+    "MAX_GUIDANCE_ARGS_SUMMARY_LENGTH",
+    "MAX_GUIDANCE_DESCRIPTION_LENGTH",
+    "MCP_GUIDANCE_SOURCE_ID",
+    "ExtensionCatalogBindingError",
+    "ExtensionCatalogBindingRef",
+    "ExtensionTargetBinding",
+    "ExtensionTargetBindingInput",
+    "ExtensionTargetConflictError",
+    "ExtensionTargetResolutionError",
+    "McpCatalogActivationBinder",
+    "McpCatalogActivationConflictError",
+    "McpCatalogActivationError",
+    "McpCatalogActivationSnapshot",
+    "McpCatalogActivationSnapshotSaver",
+    "McpCatalogError",
+    "McpCatalogOwner",
+    "McpCatalogRelistError",
+    "McpCatalogSnapshot",
+    "McpServerSnapshot",
+    "McpToolDescriptor",
+    "McpToolGuidanceEntry",
+    "McpToolGuidanceError",
+    "McpToolGuidanceProducer",
+    "McpToolGuidanceSnapshot",
+    "McpToolGuidanceSourcePort",
+    "McpToolGuidanceSourceRegistration",
+    "build_extension_catalog_binding",
+    "extension_schema_hash",
+    "production_mcp_session_factory",
+]

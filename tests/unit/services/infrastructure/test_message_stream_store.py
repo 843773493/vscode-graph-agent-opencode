@@ -683,7 +683,7 @@ async def test_tool_call_projection_does_not_erase_known_name_or_arguments(
         "tool_call",
         {
             "tool_call_id": "call_1",
-            "tool_name": "invoke_custom_tool",
+            "tool_name": "invoke_extension_tool",
             "arguments": {"tool_name": "unknown_tool"},
             "status": "streaming",
         },
@@ -702,7 +702,7 @@ async def test_tool_call_projection_does_not_erase_known_name_or_arguments(
     assert len(state["tool_calls"]) == 1
     tool_call = state["tool_calls"][0]
     assert tool_call["tool_call_id"] == "call_1"
-    assert tool_call["tool_name"] == "invoke_custom_tool"
+    assert tool_call["tool_name"] == "invoke_extension_tool"
     assert tool_call["arguments"] == {"tool_name": "unknown_tool"}
     assert tool_call["status"] == "streaming"
     assert tool_call["started_seq"] == 2

@@ -9,7 +9,6 @@ from urllib.parse import urlparse
 
 from langchain_mcp_adapters.sessions import Connection
 
-
 McpTransport = Literal["stdio", "streamable_http"]
 _SERVER_ID_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
 _PLACEHOLDER_PATTERN = re.compile(r"\$\{([^}]+)\}")

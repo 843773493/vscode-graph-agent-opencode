@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from deepagents.backends.state import StateBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware
@@ -15,6 +16,9 @@ from app.agents.agent_factory import (
     _runtime_identity_system_prompt,
     _team_aware_system_prompt,
 )
+from app.agents.cache_preserving_summarization import (
+    NoDurableOwnerCompactionPreflight,
+)
 from app.agents.deep_agent_stack import build_deep_agent_middleware
 from app.agents.middleware_prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
@@ -25,7 +29,10 @@ from app.agents.middleware_prompts import (
     TODO_SYSTEM_PROMPT,
     TODO_TOOL_DESCRIPTION,
 )
-from app.agents.skill_runtime import WorkspaceSkillsMiddleware
+from app.agents.skill_runtime import (
+    WorkspaceSkillsMiddleware,
+    build_workspace_skill_catalog,
+)
 from app.agents.structured_memory_middleware import StructuredMemoryMiddleware
 from app.agents.structured_prompt_validation_middleware import (
     StructuredPromptValidationMiddleware,
@@ -34,13 +41,31 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
 )
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
+
+
+def _build_skill_catalog(tmp_path: Path) -> Any:
+    """在临时工作区构建最小 SkillCatalog,供装配断言使用。"""
+    skill_dir = tmp_path / ".boxteam" / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: 装配测试 Skill\n---\n# demo\n",
+        encoding="utf-8",
+    )
+    return build_workspace_skill_catalog(
+        tmp_path,
+        registry=ResourceRegistry(),
+        project_root=tmp_path,
+    )
 
 
 def _build_middleware(
     tmp_path: Path,
     *,
     denylist: set[str] | None = None,
-    skills: list[tuple[str, str]] | None = None,
+    skill_catalog: Any | None = None,
     memory: list[str] | None = None,
 ) -> list[AgentMiddleware]:
     invocation_context = ToolInvocationContext()
@@ -49,7 +74,8 @@ def _build_middleware(
         backend=StateBackend(),
         workspace_root=tmp_path,
         permissions=None,
-        resolved_skills=skills,
+        resolved_skills=skill_catalog,
+        compaction_preflight=NoDurableOwnerCompactionPreflight(),
         resolved_tool_denylist=set(denylist or set()),
         interrupt_on=None,
         runtime_middleware=[],
@@ -96,10 +122,9 @@ def test_middleware_uses_project_prompts_without_upstream_demo_agents(tmp_path):
     assert agent_memory.system_prompt == MEMORY_SYSTEM_PROMPT
 
 
-def test_workspace_skills_uses_compact_project_template():
+def test_workspace_skills_uses_compact_project_template(tmp_path):
     middleware = WorkspaceSkillsMiddleware(
-        backend=StateBackend(),
-        sources=[("/.boxteam/skills", "Workspace")],
+        catalog=_build_skill_catalog(tmp_path),
     )
 
     assert middleware.system_prompt_template == SKILLS_SYSTEM_PROMPT
@@ -123,7 +148,7 @@ def test_denylist_removes_tool_specific_middleware_and_prompts(tmp_path):
     middleware = _build_middleware(
         tmp_path,
         denylist={"write_todos", "task", "compact_conversation", "read_file"},
-        skills=[("/.boxteam/skills", "Workspace")],
+        skill_catalog=_build_skill_catalog(tmp_path),
     )
 
     assert not any(isinstance(item, TodoListMiddleware) for item in middleware)

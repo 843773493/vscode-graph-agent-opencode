@@ -108,6 +108,7 @@ async def test_start_endpoint_forwards_profile_and_working_directory(
     assert response.request_id == "req_start"
     node_debug_service.start.assert_awaited_once_with(
         session_id="ses_test",
+        thread_id="main",
         configuration_id=None,
         path="fixtures/debug.mjs",
         args=["23"],
@@ -146,6 +147,7 @@ async def test_configuration_endpoints_forward_session_and_portable_payload(
     node_debug_service.activate_configuration.assert_awaited_once_with(
         "ses_test",
         configuration_id,
+        thread_id="main",
     )
 
     copied = await copy_node_debug_configuration(

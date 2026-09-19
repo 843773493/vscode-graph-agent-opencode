@@ -23,6 +23,10 @@ from tests.integration.backend.sessions.itemized_migration_helpers import (
     prepare_migration_workspace,
 )
 
+SOURCE_SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+TARGET_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
+FORK_SESSION_ID = "ses_8bb1585f58a042dd8ae7bcdb18ad2c4c"
+
 
 @pytest.fixture
 def migration_workspace(request: pytest.FixtureRequest) -> Path:
@@ -36,14 +40,14 @@ def test_v1_report_is_read_only_and_migration_installs_target_v2(
     source_records = _accepted_records()
     source_lines = _write_v1_source(
         migration_workspace / ".boxteam" / "sessions",
-        session_id="source",
+        session_id=SOURCE_SESSION_ID,
         session_bundle_factory=session_bundle_factory,
         records=source_records,
     )
-    session_bundle_factory(migration_workspace / ".boxteam" / "sessions", "target")
+    session_bundle_factory(migration_workspace / ".boxteam" / "sessions", TARGET_SESSION_ID)
     storage = _storage(migration_workspace / ".boxteam" / "sessions")
 
-    report = storage.legacy_migration_report("source")
+    report = storage.legacy_migration_report(SOURCE_SESSION_ID)
     assert report["read_only"] is True
     assert report["source_format_version"] == 1
     assert report["dispatch_contract"] == {
@@ -60,25 +64,25 @@ def test_v1_report_is_read_only_and_migration_installs_target_v2(
     assert [candidate["candidate_status"] for candidate in report["candidates"]] == [
         "accepted"
     ]
-    source_rollout = storage.root("source")
+    source_rollout = storage.root(SOURCE_SESSION_ID)
     assert (source_rollout / "rollout.jsonl").read_bytes() == source_lines
 
-    result = storage.migrate_legacy_to_v2("source", target_thread_id="target")
+    result = storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
 
     assert result["status"] == "completed"
     assert len(result["migrated"]) == 1
     assert result["rejected"] == []
-    assert _table_counts(storage, "target") == {
+    assert _table_counts(storage, TARGET_SESSION_ID) == {
         "item_catalog": 2,
         "messages": 2,
         "turn_records": 1,
         "executions": 1,
         "legacy_migration_reports": 1,
     }
-    migrated_items = storage.read_items("target")
+    migrated_items = storage.read_items(TARGET_SESSION_ID)
     assert [item.payload for item in migrated_items] == ["迁移前的请求", "迁移后的回答"]
     assert all(item.item_id.startswith("item-legacy:") for item in migrated_items)
-    with storage._connect("target", "", read_only=True) as connection:
+    with storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
         format_version, state = connection.execute(
             "SELECT rollout_format_version, database_state FROM database_meta WHERE singleton_id = 1"
         ).fetchone()
@@ -96,14 +100,14 @@ def test_legacy_migration_rejects_same_source_and_target_session(
     sessions_root = migration_workspace / ".boxteam" / "sessions"
     _write_v1_source(
         sessions_root,
-        session_id="source",
+        session_id=SOURCE_SESSION_ID,
         session_bundle_factory=session_bundle_factory,
         records=_accepted_records(),
     )
     storage = _storage(sessions_root)
 
     with pytest.raises(ValueError, match="source/target.*同一个 session"):
-        storage.migrate_legacy_to_v2("source", target_thread_id="source")
+        storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=SOURCE_SESSION_ID)
 
 
 def test_full_copy_v1_source_requires_explicit_import_without_side_effects(
@@ -113,24 +117,24 @@ def test_full_copy_v1_source_requires_explicit_import_without_side_effects(
     sessions_root = migration_workspace / ".boxteam" / "sessions"
     source_lines = _write_v1_source(
         sessions_root,
-        session_id="source",
+        session_id=SOURCE_SESSION_ID,
         session_bundle_factory=session_bundle_factory,
         records=_accepted_records(),
     )
-    session_bundle_factory(sessions_root, "target")
+    session_bundle_factory(sessions_root, TARGET_SESSION_ID)
     storage = _storage(sessions_root)
-    source_index = storage.index_path("source").read_bytes()
+    source_index = storage.index_path(SOURCE_SESSION_ID).read_bytes()
 
     with pytest.raises(FormatDispatchError, match="v1_migration_required"):
         storage.clone_rollout(
-            source_thread_id="source",
-            target_thread_id="target",
+            source_thread_id=SOURCE_SESSION_ID,
+            target_thread_id=TARGET_SESSION_ID,
             source_checkpoint_id=None,
         )
-    assert not storage.root("target").exists()
+    assert not storage.root(TARGET_SESSION_ID).exists()
     assert migration_audits(storage) == []
-    assert storage.root("source").joinpath("rollout.jsonl").read_bytes() == source_lines
-    assert storage.index_path("source").read_bytes() == source_index
+    assert storage.root(SOURCE_SESSION_ID).joinpath("rollout.jsonl").read_bytes() == source_lines
+    assert storage.index_path(SOURCE_SESSION_ID).read_bytes() == source_index
 
 
 def test_explicit_v1_import_then_full_copy_records_v2_source_lineage(
@@ -140,27 +144,27 @@ def test_explicit_v1_import_then_full_copy_records_v2_source_lineage(
     sessions_root = migration_workspace / ".boxteam" / "sessions"
     _write_v1_source(
         sessions_root,
-        session_id="source",
+        session_id=SOURCE_SESSION_ID,
         session_bundle_factory=session_bundle_factory,
         records=_accepted_records(),
     )
-    session_bundle_factory(sessions_root, "target")
-    session_bundle_factory(sessions_root, "fork-target")
+    session_bundle_factory(sessions_root, TARGET_SESSION_ID)
+    session_bundle_factory(sessions_root, FORK_SESSION_ID)
     storage = _storage(sessions_root)
 
     result = storage.migrate_legacy_to_v2(
-        "source", target_thread_id="target", require_lossless=True
+        SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID, require_lossless=True
     )
     assert result["status"] == "completed"
-    source_items = storage.read_items("target")
+    source_items = storage.read_items(TARGET_SESSION_ID)
     source_view_id = storage.clone_rollout(
-        source_thread_id="target",
-        target_thread_id="fork-target",
+        source_thread_id=TARGET_SESSION_ID,
+        target_thread_id=FORK_SESSION_ID,
         source_checkpoint_id=None,
     )
     materialization_id, fork_id = storage.begin_fork_materialization(
-        target_session_id="fork-target",
-        source_session_id="target",
+        target_session_id=FORK_SESSION_ID,
+        source_session_id=TARGET_SESSION_ID,
         source_checkpoint_id=None,
         source_view_id=source_view_id,
         fork_mode="full_rollout_copy",
@@ -169,8 +173,8 @@ def test_explicit_v1_import_then_full_copy_records_v2_source_lineage(
     assert (
         storage.commit_fork_materialization(
             materialization_id,
-            target_session_id="fork-target",
-            source_session_id="target",
+            target_session_id=FORK_SESSION_ID,
+            source_session_id=TARGET_SESSION_ID,
             source_checkpoint_id=None,
             source_view_id=source_view_id,
             fork_mode="full_rollout_copy",
@@ -179,7 +183,7 @@ def test_explicit_v1_import_then_full_copy_records_v2_source_lineage(
         == fork_id
     )
 
-    with storage._connect("fork-target", "", read_only=True) as connection:
+    with storage._connect(FORK_SESSION_ID, "", read_only=True) as connection:
         mappings = connection.execute(
             "SELECT source_local_id, target_local_id "
             "FROM fork_identity_mappings WHERE fork_id = ? AND entity_type = 'item' "
@@ -191,12 +195,12 @@ def test_explicit_v1_import_then_full_copy_records_v2_source_lineage(
             "FROM fork_origins WHERE fork_id = ?",
             (fork_id,),
         ).fetchone()
-    fork_items = storage.read_items("fork-target")
+    fork_items = storage.read_items(FORK_SESSION_ID)
     assert len(mappings) == len(source_items) == len(fork_items)
     assert {row[0] for row in mappings} == {item.item_id for item in source_items}
     assert {row[1] for row in mappings} == {item.item_id for item in fork_items}
     assert all(not row[0].startswith("legacy:v1:") for row in mappings)
-    assert origin == ("target", source_view_id, "full_rollout_copy")
+    assert origin == (TARGET_SESSION_ID, source_view_id, "full_rollout_copy")
 
 
 @pytest.mark.parametrize("failure_point", ["projection", "validation", "installation"])
@@ -209,16 +213,16 @@ def test_migration_failure_quarantines_staging_without_creating_target(
     sessions = migration_workspace / ".boxteam" / "sessions"
     lines = _write_v1_source(
         sessions,
-        session_id="source",
+        session_id=SOURCE_SESSION_ID,
         session_bundle_factory=session_bundle_factory,
         records=_accepted_records(),
     )
-    session_bundle_factory(sessions, "target")
+    session_bundle_factory(sessions, TARGET_SESSION_ID)
     storage = _storage(sessions)
-    index = storage.index_path("source").read_bytes()
+    index = storage.index_path(SOURCE_SESSION_ID).read_bytes()
 
     def fail(*args: object, **kwargs: object) -> None:
-        assert not storage.root("target").exists()
+        assert not storage.root(TARGET_SESSION_ID).exists()
         raise RuntimeError("injected migration failure")
 
     owner, method = {
@@ -231,15 +235,15 @@ def test_migration_failure_quarantines_staging_without_creating_target(
     }[failure_point]
     monkeypatch.setattr(owner, method, fail)
     with pytest.raises(RuntimeError, match="injected migration failure"):
-        storage.migrate_legacy_to_v2("source", target_thread_id="target")
-    assert not storage.root("target").exists()
+        storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
+    assert not storage.root(TARGET_SESSION_ID).exists()
     audit = migration_audits(storage)[0]
     assert (audit["status"], audit["rollback"]) == (
         "failed",
         "uninstalled_staging_quarantined",
     )
-    assert storage.jsonl_path("source").read_bytes() == lines
-    assert storage.index_path("source").read_bytes() == index
+    assert storage.jsonl_path(SOURCE_SESSION_ID).read_bytes() == lines
+    assert storage.index_path(SOURCE_SESSION_ID).read_bytes() == index
 
 
 def test_migration_target_remains_absent_until_validated_directory_install(
@@ -250,11 +254,11 @@ def test_migration_target_remains_absent_until_validated_directory_install(
     sessions = migration_workspace / ".boxteam" / "sessions"
     _write_v1_source(
         sessions,
-        session_id="source",
+        session_id=SOURCE_SESSION_ID,
         session_bundle_factory=session_bundle_factory,
         records=_accepted_records(),
     )
-    session_bundle_factory(sessions, "target")
+    session_bundle_factory(sessions, TARGET_SESSION_ID)
     storage = _storage(sessions)
     install = migration_store.install_directory
 
@@ -268,8 +272,8 @@ def test_migration_target_remains_absent_until_validated_directory_install(
         install(staging, target)
 
     monkeypatch.setattr(migration_store, "install_directory", inspect)
-    storage.migrate_legacy_to_v2("source", target_thread_id="target")
-    assert len(storage.read_items("target")) == 2
+    storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
+    assert len(storage.read_items(TARGET_SESSION_ID)) == 2
     assert migration_audits(storage)[0]["status"] == "installed"
 
 
@@ -301,25 +305,25 @@ def test_corrupt_source_is_rejected_and_only_failure_audit_is_written(
     sessions = migration_workspace / ".boxteam" / "sessions"
     _write_v1_source(
         sessions,
-        session_id="source",
+        session_id=SOURCE_SESSION_ID,
         session_bundle_factory=session_bundle_factory,
         records=_accepted_records(),
     )
-    session_bundle_factory(sessions, "target")
+    session_bundle_factory(sessions, TARGET_SESSION_ID)
     storage = _storage(sessions)
-    with sqlite3.connect(storage.index_path("source")) as connection:
+    with sqlite3.connect(storage.index_path(SOURCE_SESSION_ID)) as connection:
         connection.execute(corruption)
     before = (
-        storage.index_path("source").read_bytes(),
-        storage.jsonl_path("source").read_bytes(),
+        storage.index_path(SOURCE_SESSION_ID).read_bytes(),
+        storage.jsonl_path(SOURCE_SESSION_ID).read_bytes(),
     )
     with pytest.raises((FormatDispatchError, RuntimeError), match=pattern):
-        storage.migrate_legacy_to_v2("source", target_thread_id="target")
-    assert not storage.root("target").exists()
+        storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
+    assert not storage.root(TARGET_SESSION_ID).exists()
     assert migration_audits(storage)[0]["status"] == "failed"
     assert before == (
-        storage.index_path("source").read_bytes(),
-        storage.jsonl_path("source").read_bytes(),
+        storage.index_path(SOURCE_SESSION_ID).read_bytes(),
+        storage.jsonl_path(SOURCE_SESSION_ID).read_bytes(),
     )
 
 
@@ -334,15 +338,15 @@ def test_unknown_or_mixed_envelope_format_is_not_coerced(
     records[1]["format_version"] = version
     _write_v1_source(
         sessions,
-        session_id="source",
+        session_id=SOURCE_SESSION_ID,
         session_bundle_factory=session_bundle_factory,
         records=records,
     )
-    session_bundle_factory(sessions, "target")
+    session_bundle_factory(sessions, TARGET_SESSION_ID)
     storage = _storage(sessions)
     with pytest.raises(FormatDispatchError, match="format_version"):
-        storage.migrate_legacy_to_v2("source", target_thread_id="target")
-    assert not storage.root("target").exists()
+        storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
+    assert not storage.root(TARGET_SESSION_ID).exists()
     assert migration_audits(storage)[0]["status"] == "failed"
 
 
@@ -368,15 +372,15 @@ def test_finalization_requires_unambiguous_legacy_evidence(
     records[1]["metadata"] = metadata
     _write_v1_source(
         sessions,
-        session_id="source",
+        session_id=SOURCE_SESSION_ID,
         session_bundle_factory=session_bundle_factory,
         records=records,
     )
-    session_bundle_factory(sessions, "target")
+    session_bundle_factory(sessions, TARGET_SESSION_ID)
     storage = _storage(sessions)
-    result = storage.migrate_legacy_to_v2("source", target_thread_id="target")
+    result = storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
     assert result["migrated"][0]["status"] == expected
-    with storage._connect("target", read_only=True) as connection:
+    with storage._connect(TARGET_SESSION_ID, read_only=True) as connection:
         turn, final = connection.execute(
             "SELECT status, final_item_id FROM turn_records"
         ).fetchone()

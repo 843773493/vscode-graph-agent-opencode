@@ -154,6 +154,37 @@ class StreamBlockAssemblyMixin:
             return current_model_call_id
         return model_call_id
 
+    def visible_text_for_model_call(self, model_call_id: str | None = None) -> str:
+        """返回消息流已经提交的当前模型调用可见正文。
+
+        Agent 事件流的 ``model.end`` 可能先于 ``model.stream`` 被消费。调用
+        方必须先看 canonical runtime，再决定是否使用 end 事件兜底，否则同一
+        份正文会被第二次提交。
+        """
+        effective_model_call_id = model_call_id or self.current_model_call_id
+        return "".join(
+            self._normalized_text_by_block[block_id]
+            for block_id in self._active_block_order
+            if (
+                self._normalized_block_model_call_ids.get(block_id)
+                == effective_model_call_id
+                and block_id in self._normalized_text_by_block
+            )
+        )
+
+    def model_call_has_carrier(
+        self,
+        model_call_id: str | None,
+        carrier_types: set[str],
+    ) -> bool:
+        """判断 canonical runtime 是否已提交指定模型调用的 carrier。"""
+        effective_model_call_id = model_call_id or self.current_model_call_id
+        return any(
+            self._block_model_call_ids.get(block_id) == effective_model_call_id
+            and self._block_metadata.get(block_id, (0, ""))[1] in carrier_types
+            for block_id in self._block_metadata
+        )
+
     async def _accept_content_block(
         self,
         block: Mapping[str, Any],

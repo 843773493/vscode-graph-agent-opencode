@@ -9,7 +9,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables.config import ensure_config, var_child_runnable_config
 from langchain_core.tools import BaseTool, tool
 from langgraph.prebuilt.tool_node import ToolRuntime
@@ -17,6 +17,7 @@ from langgraph.types import Command
 
 from app.core.job_context import get_active_tool_name, get_interruptible_phase
 from app.core.job_event_bus import EventType
+from app.core.model_delta_context import ModelRunIdentityCallbackHandler
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import (
     CancellationSignal,
@@ -38,6 +39,7 @@ from app.services.orchestration.event_stream.tool_events import (
     activity_result_detail,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.trace_observer import MessageStreamTraceObserver
 
 
 class FakeAgent:
@@ -610,10 +612,13 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
             content="",
             tool_call_chunks=[
                 {
-                    "index": 0,
-                    "id": "call_unknown_tool",
-                    "name": "invoke_custom_tool",
-                    "args": '{"tool_name":"totally_unknown_tool"}',
+                        "index": 0,
+                        "id": "call_unknown_tool",
+                        "name": "invoke_extension_tool",
+                        "args": (
+                            '{"tool_name":"totally_unknown_tool",'
+                            '"arguments":{}}'
+                        ),
                 }
             ],
         )
@@ -622,7 +627,7 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
         {
             "event": "on_tool_start",
             "run_id": "run_unknown_tool",
-            "name": "invoke_custom_tool",
+            "name": "invoke_extension_tool",
             "data": {
                 "input": {
                     "tool_name": "totally_unknown_tool",
@@ -634,12 +639,12 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
         {
             "event": "on_tool_end",
             "run_id": "run_unknown_tool",
-            "name": "invoke_custom_tool",
+            "name": "invoke_extension_tool",
             "data": {
                 "output": ToolMessage(
                     content="unknown tool",
                     tool_call_id="call_unknown_tool",
-                    name="invoke_custom_tool",
+                    name="invoke_extension_tool",
                 )
             },
             "metadata": {},
@@ -667,6 +672,64 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
     assert tool_started["tool_call_id"] == expected_tool_call_id
     assert tool_started["tool_name"] == "totally_unknown_tool"
     assert tool_completed["tool_call_id"] == expected_tool_call_id
+
+
+@pytest.mark.asyncio
+async def test_envelope_tool_claim_matches_target_and_never_guesses_latest_call() -> None:
+    writer = SimpleNamespace(commit=AsyncMock())
+    runtime = MessageStreamRuntime(writer)
+    await runtime.start_model("model_envelope_claim", "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_list_breakpoints",
+                    "name": "invoke_extension_tool",
+                    "args": (
+                        '{"tool_name":"list_breakpoints",'
+                        '"arguments":{}}'
+                    ),
+                },
+                {
+                    "index": 1,
+                    "id": "call_start_debugging",
+                    "name": "invoke_extension_tool",
+                    "args": (
+                        '{"tool_name":"start_debugging",'
+                        '"arguments":{"fileFullPath":"app.mjs",'
+                        '"workingDirectory":"."}}'
+                    ),
+                },
+            ],
+        )
+    )
+
+    assert (
+        runtime.claim_tool_call_id(
+            "invoke_extension_tool",
+            {},
+            target_tool_name="list_breakpoints",
+        )
+        == "model_envelope_claim:tool-call:call_list_breakpoints"
+    )
+    assert (
+        runtime.claim_tool_call_id(
+            "invoke_extension_tool",
+            {"fileFullPath": "app.mjs", "workingDirectory": "."},
+            target_tool_name="start_debugging",
+        )
+        == "model_envelope_claim:tool-call:call_start_debugging"
+    )
+    assert (
+        runtime.claim_tool_call_id(
+            "invoke_extension_tool",
+            {},
+            target_tool_name="missing_tool",
+        )
+        is None
+    )
 
 
 def test_last_model_token_usage_keeps_last_execution_request() -> None:
@@ -831,7 +894,11 @@ async def test_agent_stream_starts_with_isolated_callbacks_and_business_identity
 
     assert len(agent.received_configs) == 1
     stream_config = agent.received_configs[0]
-    assert stream_config["callbacks"] == []
+    assert len(stream_config["callbacks"]) == 1
+    assert isinstance(
+        stream_config["callbacks"][0],
+        ModelRunIdentityCallbackHandler,
+    )
     assert stream_config["metadata"]["boxteam_session_id"] == "ses_isolated"
     assert stream_config["metadata"]["boxteam_job_id"] == "job_isolated"
 
@@ -863,7 +930,11 @@ async def test_agent_stream_does_not_inherit_sender_callback_context(
         var_child_runnable_config.reset(context_token)
 
     assert len(agent.resolved_configs) == 1
-    assert agent.resolved_configs[0]["callbacks"] == []
+    assert len(agent.resolved_configs[0]["callbacks"]) == 1
+    assert isinstance(
+        agent.resolved_configs[0]["callbacks"][0],
+        ModelRunIdentityCallbackHandler,
+    )
 
 
 @pytest.mark.asyncio
@@ -1014,7 +1085,7 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
         {
             "event": "on_tool_start",
             "run_id": "run_failed",
-            "name": "invoke_custom_tool",
+            "name": "invoke_extension_tool",
             "data": {
                 "input": {
                     "tool_name": "read_context",
@@ -1028,12 +1099,12 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
         {
             "event": "on_tool_end",
             "run_id": "run_failed",
-            "name": "invoke_custom_tool",
+            "name": "invoke_extension_tool",
             "data": {
                 "output": ToolMessage(
                     content="Gateway 工作区不存在: gw_typo；请修正 workspace_id 后重试",
                     tool_call_id="call_failed",
-                    name="invoke_custom_tool",
+                    name="invoke_extension_tool",
                     status="error",
                 )
             },
@@ -1135,38 +1206,32 @@ async def test_structured_tool_error_is_not_treated_as_successful_apply_patch(
 
 
 @pytest.mark.asyncio
-async def test_system_skill_read_is_marked_as_metadata_not_workspace_source(
+async def test_skill_load_event_does_not_expose_internal_source_metadata(
     tmp_path: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     events = [
         {
             "event": "on_tool_start",
-            "run_id": "run_skill_read",
-            "name": "read_file",
+            "run_id": "run_skill_load",
+            "name": "skill_load",
             "data": {
                 "input": {
-                    "path": ".boxteam/bundled-skills/browser-control/SKILL.md",
-                    "line_offset": 1,
+                    "name": "browser-control",
+                    "mode": "snapshot",
                 }
             },
             "metadata": {},
         },
         {
             "event": "on_tool_end",
-            "run_id": "run_skill_read",
-            "name": "read_file",
+            "run_id": "run_skill_load",
+            "name": "skill_load",
             "data": {
                 "output": ToolMessage(
-                    content="# browser-control system skill",
-                    tool_call_id="call_skill_read",
-                    name="read_file",
-                    additional_kwargs={
-                        "workspace_path_scope": "system_skill",
-                        "workspace_file_kind": "skill_definition",
-                        "skill_source": "bundled",
-                        "skill_name": "browser-control",
-                    },
+                    content='{"status":"success","name":"browser-control","mode":"snapshot","revision":"sha256:test","queued":true,"tracked":false}',
+                    tool_call_id="call_skill_load",
+                    name="skill_load",
                 )
             },
             "metadata": {},
@@ -1190,10 +1255,10 @@ async def test_system_skill_read_is_marked_as_metadata_not_workspace_source(
         workspace_root=tmp_path,
     )
 
-    assert published[1][1]["workspace_path_scope"] == "system_skill"
-    assert published[1][1]["workspace_file_kind"] == "skill_definition"
-    assert published[1][1]["skill_source"] == "bundled"
-    assert published[1][1]["skill_name"] == "browser-control"
+    payload = published[1][1]
+    assert payload["tool_name"] == "skill_load"
+    assert "path" not in payload
+    assert "internal_locator" not in payload
 
 
 @pytest.mark.asyncio
@@ -1271,7 +1336,6 @@ async def test_successful_tool_call_keeps_arguments_for_delegation_validation(
                 "input": {
                     "target_session_id": "ses_parent",
                     "content": "完成",
-                    "simulate_user": False,
                 }
             },
             "metadata": {},
@@ -1311,7 +1375,6 @@ async def test_successful_tool_call_keeps_arguments_for_delegation_validation(
     call = result.successful_tool_calls[0]
     assert call.tool_name == "send_message_to_session"
     assert call.tool_args["target_session_id"] == "ses_parent"
-    assert call.tool_args["simulate_user"] is False
 
 
 @pytest.mark.asyncio
@@ -1413,6 +1476,159 @@ async def test_small_model_chunks_only_feed_final_text_aggregation(
 
     assert result.final_text == "abc"
     assert published == []
+
+
+@pytest.mark.asyncio
+async def test_model_end_output_recovers_text_missing_from_stream_callback(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    events = [
+        {
+            "event": "on_chat_model_start",
+            "run_id": "model_end_only",
+            "name": "BoxteamLiteLLMChatModel",
+            "data": {},
+            "metadata": {},
+        },
+        {
+            "event": "on_chat_model_end",
+            "run_id": "model_end_only",
+            "name": "BoxteamLiteLLMChatModel",
+            "data": {
+                "output": AIMessage(content="工具前的说明文字"),
+            },
+            "metadata": {},
+        },
+    ]
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    writer = SimpleNamespace(commit=AsyncMock())
+    runtime = MessageStreamRuntime(
+        writer,
+        normalized_block_observer=MessageStreamTraceObserver(publish).observe,
+    )
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_model_end_only",
+        turn_id="job_model_end_only",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+        message_stream_runtime=runtime,
+    )
+
+    assert result.final_text == "工具前的说明文字"
+    assert [
+        event_type
+        for event_type, _payload in published
+        if event_type != EventType.LLM_REQUEST
+    ] == [
+        EventType.TEXT_START,
+        EventType.TEXT_DELTA,
+        EventType.TEXT_END,
+    ]
+    text_delta_payloads = [
+        payload
+        for event_type, payload in published
+        if event_type == EventType.TEXT_DELTA
+    ]
+    assert len(text_delta_payloads) == 1
+    assert text_delta_payloads[0]["text"] == "工具前的说明文字"
+
+
+@pytest.mark.asyncio
+async def test_model_end_does_not_replay_text_already_committed_by_provider_hook(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_end_dedup")
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def trace_publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    runtime = MessageStreamRuntime(
+        writer,
+        normalized_block_observer=MessageStreamTraceObserver(trace_publish).observe,
+    )
+
+    class ProviderCommittedAgent:
+        async def astream_events(
+            self,
+            _input_payload: dict[str, Any],
+            *,
+            config: dict[str, Any],
+            version: str,
+        ) -> AsyncIterator[dict[str, Any]]:
+            del version
+            event_metadata = config["metadata"]
+            yield {
+                "event": "on_chat_model_start",
+                "run_id": "model_end_dedup",
+                "name": "BoxteamLiteLLMChatModel",
+                "data": {},
+                "metadata": event_metadata,
+            }
+            await runtime.accept_message_chunk(
+                AIMessageChunk(
+                    content=[
+                        {
+                            "type": "text",
+                            "id": "provider-text-1",
+                            "index": 0,
+                            "text": "已经提交的正文",
+                        }
+                    ]
+                ),
+                model_call_id="model_end_dedup",
+            )
+            yield {
+                "event": "on_chat_model_end",
+                "run_id": "model_end_dedup",
+                "name": "BoxteamLiteLLMChatModel",
+                "data": {
+                    "output": AIMessage(content="已经提交的正文"),
+                },
+                "metadata": event_metadata,
+            }
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    result = await process_agent_event_stream(
+        agent=ProviderCommittedAgent(),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_model_end_dedup",
+        turn_id="job_model_end_dedup",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+        message_stream_runtime=runtime,
+    )
+
+    assert result.final_text == "已经提交的正文"
+    assert [
+        payload["text"]
+        for event_type, payload in published
+        if event_type == EventType.TEXT_DELTA
+    ] == ["已经提交的正文"]
+    assert [
+        payload.get("text")
+        for call in writer.commit.await_args_list
+        if call.args and call.args[0] == "block.delta"
+        for payload in [call.args[1]]
+    ] == ["已经提交的正文"]
 
 
 @pytest.mark.asyncio
@@ -1678,7 +1894,11 @@ async def test_task_tool_is_projected_as_subagent_activity(
             "name": "task",
             "data": {
                 "output": ToolMessage(
-                    content='{"child_session_id":"ses_child","status":"accepted"}',
+                    content=(
+                        '{"child_thread_id":"thr_'
+                        + "a" * 32
+                        + '","status":"accepted"}'
+                    ),
                     tool_call_id="call_task",
                     name="task",
                 )
@@ -1712,7 +1932,7 @@ async def test_task_tool_is_projected_as_subagent_activity(
         "activity.completed",
     ]
     assert activity_events[0][1]["kind"] == "subagent.run"
-    assert activity_events[1][1]["detail"]["child_turn_id"] == "ses_child"
+    assert activity_events[1][1]["detail"]["child_turn_id"] == "thr_" + "a" * 32
 
 
 @pytest.mark.asyncio
@@ -1741,7 +1961,9 @@ async def test_resource_tool_is_projected_as_resource_activity(
             "run_id": "run_page",
             "name": "readPage",
             "data": {"input": {"pageId": "browser_1"}},
-            "metadata": {},
+            "metadata": {
+                "resource_activity": {"resource_id": "browser_1"},
+            },
         },
         {
             "event": "on_tool_end",
@@ -1839,7 +2061,9 @@ async def test_retryable_resource_failure_does_not_abort_event_stream(
             "run_id": "run_page_error",
             "name": "readPage",
             "data": {"input": {"pageId": "browser_1"}},
-            "metadata": {},
+            "metadata": {
+                "resource_activity": {"resource_id": "browser_1"},
+            },
         },
         {
             "event": "on_tool_end",

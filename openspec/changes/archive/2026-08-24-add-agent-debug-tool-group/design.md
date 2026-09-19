@@ -1,6 +1,6 @@
 ## Context
 
-当前 `NodeDebugService` 已经按 session 管理 Node Inspector 进程、WebSocket 命令、断点、调用栈、变量 hydration、求值和动作记录；Node 调试 HTTP API 也已经存在。Agent runtime 当前通过 `build_default_tools` 构建内置工具，并通过 `ConfigService` 解析工具策略和 `confirmation_required`。扩展工具链已有固定的 `invoke_custom_tool` 入口；本变更需要把 `NodeDebugService` 注入扩展工具 factory，而不是把调试目标工具加入默认工具列表。
+当前 `NodeDebugService` 已经按 session 管理 Node Inspector 进程、WebSocket 命令、断点、调用栈、变量 hydration、求值和动作记录；Node 调试 HTTP API 也已经存在。Agent runtime 当前通过 `build_default_tools` 构建内置工具，并通过 `ConfigService` 解析工具策略和 `confirmation_required`。扩展工具链已有固定的 `invoke_extension_tool` 入口；本变更需要把 `NodeDebugService` 注入扩展工具 factory，而不是把调试目标工具加入默认工具列表。
 
 本变更需要把已有 Node 调试能力映射为 Agent 工具，同时保留未来 adapter 的边界。当前不引入 VS Code 扩展或 debugpy 依赖，也不把调试端口、线程和 frame 标识交给模型。
 
@@ -8,7 +8,7 @@
 
 **Goals:**
 
-- 通过 `tools.custom` 扩展工具组注册 DebugMCP 风格的 16 个执行工具和 4 个会话方案工具，并只向模型暴露固定的 `invoke_custom_tool` 入口。
+- 通过 `tools.custom` 扩展工具组注册 DebugMCP 风格的 16 个执行工具和 4 个会话方案工具，并只向模型暴露固定的 `invoke_extension_tool` 入口。
 - 将工具调用的 session、workspace、tool call identity 和配置依赖由闭包/运行时容器注入。
 - 为 Node Inspector 实现生命周期、执行控制、普通/条件断点、变量检查和表达式求值。
 - 为 Node Inspector 实现命中次数断点和不会暂停目标程序的 logpoint，并将输出纳入调试控制台。
@@ -29,7 +29,7 @@
 
 ### 1. Use custom tools and the fixed invocation boundary
 
-在 `app/agents/tools/debugging.py` 中提供 20 个目标 `StructuredTool` factory，并通过 `tools.custom` 配置逐项注册。`build_custom_tool_bundle` 将它们构建为扩展目标工具，再由固定的 `invoke_custom_tool` 进行二次分发；`build_default_tools` 不接收或注册调试工具。
+在 `app/agents/tools/debugging.py` 中提供 20 个目标 `StructuredTool` factory，并通过 `tools.custom` 配置逐项注册。`build_custom_tool_bundle` 将它们构建为扩展目标工具，再由固定的 `invoke_extension_tool` 进行二次分发；`build_default_tools` 不接收或注册调试工具。
 
 工具组是否可调用仍由现有 `denylist`、`allowlist` 和 `confirmation_required` 解析；`evaluate_expression` 不做特殊的绕过路径。这样既满足 DebugMCP schema 兼容性，也沿用当前扩展工具策略的一致行为。工具目录展示 20 个目标工具的能力信息，但模型工具 schema 只包含固定入口。
 
@@ -82,7 +82,7 @@ Node Inspector 没有与 VS Code `SourceBreakpoint.logMessage` 等价的独立 A
 
 ### 8. Add the product Skill and model-driven verification
 
-产品级调试说明唯一维护在 `resources/skills/debugging/`，包含 20 个扩展目标工具的 `tool_name` + `arguments_schema` 契约、通过 `invoke_custom_tool` 调用的方式、基于 `state.status` 的最少调用决策树、并发操作处理、断点到结束的实际检查点、暂停上下文约束和 Inspector 内部字段脱敏规则。提示词优先告诉模型“先看状态再行动”：已有运行时就复用，人类推进后接受最新状态，`invalid_breakpoints` 只提醒不阻断。默认 E2E 工作区准备器把 `resources/skills/` 复制到隔离工作区的 `/.boxteam/skills`，因此 `asset/` 不维护一份会漂移的产品 Skill 副本。
+产品级调试说明唯一维护在 `resources/skills/debugging/`，包含 20 个扩展目标工具的 `tool_name` + `arguments_schema` 契约、通过 `invoke_extension_tool` 调用的方式、基于 `state.status` 的最少调用决策树、并发操作处理、断点到结束的实际检查点、暂停上下文约束和 Inspector 内部字段脱敏规则。提示词优先告诉模型“先看状态再行动”：已有运行时就复用，人类推进后接受最新状态，`invalid_breakpoints` 只提醒不阻断。默认 E2E 工作区准备器把 `resources/skills/` 复制到隔离工作区的 `/.boxteam/skills`，因此 `asset/` 不维护一份会漂移的产品 Skill 副本。
 
 新增 `test_debug_prompt_flow.py` 启动真实 Workspace 后端，通过本地 OpenAI-compatible HTTP 服务返回确定性的模型 tool calls。它必须经过用户 session prompt、Skill `read_file`、调试工具调用、真实 Node Inspector 状态和最终 assistant marker；这样验证的是完整 Agent/model 协议边界，而不是直接调用工具 factory。另有 `test_debug_prompt_live.py`，仅在 `BOXTEAM_RUN_LIVE_DEBUG_E2E=1` 时使用当前配置的外部模型，验证真实模型是否遵守同一流程。
 
@@ -119,7 +119,7 @@ Node Inspector 没有与 VS Code `SourceBreakpoint.logMessage` 等价的独立 A
 - [日志点依赖 Inspector 条件表达式副作用] → 生成表达式始终返回 false，输出使用内部前缀识别，并用真实 Node fixture 验证日志产生且程序不会暂停。
 - [命中计数可能跨重启产生歧义] → 计数只存在于当前目标进程，restart/start 明确从 0 重新计数，方案文件只保存目标次数。
 - [表达式求值可以执行副作用代码] → 复用工具确认策略、强制记录 tool call identity，并保持 Inspector loopback/session 绑定。
-- [扩展目标工具不能直接出现在模型工具列表] → 工具目录使用独立 `debugging` 分组，模型只看到固定 `invoke_custom_tool`；工具策略仍可整体或逐项 denylist。
+- [扩展目标工具不能直接出现在模型工具列表] → 工具目录使用独立 `debugging` 分组，模型只看到固定 `invoke_extension_tool`；工具策略仍可整体或逐项 denylist。
 - [配置 profile 可能与当前 Node 直接启动参数冲突] → 先定义规范化 profile 解析，未配置时完全回退到现有 Node 默认行为；固定端口和外部 adapter 不默认启用。
 - [运行时状态与异步 Inspector 事件存在竞态] → 所有工具动作等待后端 authoritative snapshot；变量 hydration 完成后才返回暂停快照；E2E 保持暂停状态并验证重复读取。
 - [错误结果需要同时满足 Agent 和现有工具错误处理] → 使用稳定错误 code 的 JSON 文本并保留异常边界；不返回虚假默认状态。

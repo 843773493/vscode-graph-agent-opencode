@@ -86,8 +86,9 @@ def _contribution_order_key(value: object) -> tuple[int, str]:
     """返回唯一稳定的 request hash contribution 顺序。"""
     ordinal = getattr(value, "contribution_ordinal", None)
     if ordinal is None:
-        metadata = getattr(value, "metadata", {})
-        raw = metadata.get("source_ordinal") if isinstance(metadata, Mapping) else None
+        # source_ordinal 只来自 itemized registry 分配的 typed 字段；自由
+        # metadata 的同名键不再参与 request hash 排序。
+        raw = getattr(value, "source_ordinal", None)
         if not isinstance(raw, int) or isinstance(raw, bool) or raw < 0:
             raise ItemSchemaError(
                 "request hash contribution 缺少稳定 ordinal: "

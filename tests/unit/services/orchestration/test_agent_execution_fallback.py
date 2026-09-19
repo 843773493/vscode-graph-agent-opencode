@@ -105,10 +105,6 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
         "app.services.orchestration.execution_step.runner.persist_standard_assistant_checkpoint",
         persist_final,
     )
-    monkeypatch.setattr(
-        "app.services.orchestration.execution_step.runner.persist_intermediate_assistant_reasoning_checkpoint",
-        MagicMock(return_value=True),
-    )
     dependency_provider.get_checkpointer.return_value = saver
     workspace_root = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
     workspace_root.mkdir(parents=True, exist_ok=True)
@@ -319,18 +315,8 @@ def test_delegated_report_requires_successful_parent_directed_system_message():
                 "send_message_to_session",
                 {
                     "target_session_id": parent,
-                    "simulate_user": False,
                     "kind": "progress",
                 },
-            )
-        ],
-        parent_session_id=parent,
-    )
-    assert not _has_valid_delegated_report(
-        [
-            SuccessfulToolCall(
-                "send_message_to_session",
-                {"target_session_id": parent, "simulate_user": True},
             )
         ],
         parent_session_id=parent,
@@ -341,7 +327,6 @@ def test_delegated_report_requires_successful_parent_directed_system_message():
                 "send_message_to_session",
                 {
                     "target_session_id": parent,
-                    "simulate_user": False,
                     "kind": "result",
                 },
             )
@@ -355,7 +340,6 @@ def test_session_question_reply_requires_matching_communication_id():
         "send_message_to_session",
         {
             "target_session_id": "ses_sender",
-            "simulate_user": False,
             "kind": "reply",
             "reply_to_communication_id": "comm_question",
         },
@@ -468,7 +452,6 @@ async def test_delegated_progress_only_cannot_replace_final_result(
         "send_message_to_session",
         {
             "target_session_id": "ses_parent",
-            "simulate_user": False,
             "kind": "progress",
         },
     )
@@ -528,7 +511,6 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
                     "send_message_to_session",
                     {
                         "target_session_id": "ses_questioner",
-                        "simulate_user": False,
                         "kind": "reply",
                         "reply_to_communication_id": "comm_question",
                     },
@@ -573,69 +555,6 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
         input_messages[1].response_metadata["source"]
         == "session_question_reply_retry"
     )
-
-
-@pytest.mark.parametrize("incoming_kind", ["reply", "progress", "result"])
-@pytest.mark.asyncio
-async def test_delegated_child_relays_cross_session_updates_to_its_parent(
-    mock_dependencies,
-    incoming_kind,
-):
-    deps = mock_dependencies
-    deps["config_service"].get_agent_runtime_config.return_value[
-        "require_delegated_report"
-    ] = True
-    delegated_session = MagicMock()
-    delegated_session.delegation.parent_session_id = "ses_parent"
-    session_service = MagicMock()
-    session_service.get = AsyncMock(return_value=delegated_session)
-    deps["dependency_provider"].get_session_service.return_value = session_service
-    service = _make_service(deps)
-    outgoing_kind = "progress" if incoming_kind == "progress" else "result"
-    stream_result = AgentEventStreamResult(
-        final_text="继续执行并完成",
-        latest_model_content_blocks=(),
-        last_tool_result_text="accepted",
-        successful_tool_calls=(
-            SuccessfulToolCall(
-                "send_message_to_session",
-                {
-                    "target_session_id": "ses_parent",
-                    "simulate_user": False,
-                    "kind": outgoing_kind,
-                },
-            ),
-        ),
-    )
-
-    with (
-        patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
-            new=AsyncMock(return_value=stream_result),
-        ),
-    ):
-        result = await service.run_step(
-            session_id="ses_child",
-            message="父会话答复",
-            agent_id="test_agent",
-            job_id="job_continue",
-            message_id="msg_reply",
-            message_created_at="2026-07-16T00:00:00+00:00",
-            message_metadata={
-                "source": "send_message_to_session",
-                "kind": incoming_kind,
-                "sender_session_id": "ses_parent",
-                "communication_id": "comm_reply",
-                "reply_to_communication_id": "comm_question",
-            },
-        )
-
-    assert result == "继续执行并完成"
-    session_service.get.assert_awaited_once_with("ses_child")
 
 
 @pytest.mark.asyncio
@@ -1619,7 +1538,7 @@ async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
         code="tool_dispatch_timeout",
         message=(
             "模型工具调用参数已完整，但工具执行分派在取消前没有启动: "
-            "tool_calls=['call_dispatch_timeout']"
+            "tool_calls=['model_dispatch_timeout:tool-call:call_dispatch_timeout']"
         ),
         resumable=False,
     )
@@ -1738,3 +1657,115 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
         after_interrupt_requested=False,
         resumable=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_step_reactor_release_is_isolated_per_run_step(
+    mock_dependencies,
+):
+    """跨会话并发 run_step 时，step 级 reactor 只随所属 step 精确释放。
+
+    覆盖审查 M1：全局前缀释放/淘汰会误伤其它会话在途 step 的订阅，
+    导致他方 before_model 的 sync_sources 硬失败。
+    """
+    service = _make_service(mock_dependencies)
+    reactors: dict[str, MagicMock] = {}
+    release_b = asyncio.Event()
+
+    def fake_build(*, session_id, agent_id, on_reactor_created, **kwargs):
+        # 模拟真实 agent_factory：reactor 在构建期间同步产生并回调登记。
+        reactor = MagicMock()
+        reactor.close = AsyncMock()
+        reactors[session_id] = reactor
+        on_reactor_created((session_id, agent_id), reactor)
+        return object()
+
+    async def fake_step_run(session_id, message, **kwargs):
+        service._build_step_agent(
+            session_id=session_id,
+            agent_id="test_agent",
+            execution_overrides={},
+            model_visibility_overrides={},
+            preferred_provider_id=None,
+            include_team_tools=False,
+        )
+        if session_id == "ses_a":
+            return "done_a"
+        if session_id == "ses_b":
+            await release_b.wait()
+            return "done_b"
+        return "done_c"
+
+    with patch(
+        "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+        side_effect=fake_build,
+    ), patch.object(
+        service._step_runner,
+        "run_step",
+        side_effect=fake_step_run,
+    ):
+        step_a = asyncio.create_task(
+            service.run_step(
+                "ses_a",
+                "hi",
+                job_id="job_a",
+                message_id="m_a",
+                message_created_at="2026-01-01T00:00:00+00:00",
+            )
+        )
+        step_b = asyncio.create_task(
+            service.run_step(
+                "ses_b",
+                "hi",
+                job_id="job_b",
+                message_id="m_b",
+                message_created_at="2026-01-01T00:00:00+00:00",
+            )
+        )
+        await step_a
+        # ses_a 的 step 已结束：只释放自己的 reactor，ses_b 在途订阅不受影响。
+        reactors["ses_a"].close.assert_awaited_once()
+        reactors["ses_b"].close.assert_not_awaited()
+
+        # ses_c 的 step 开始时执行淘汰收敛：ses_b 的 step 级 key 不在缓存，
+        # 但也不能被当作淘汰对象释放。
+        step_c = asyncio.create_task(
+            service.run_step(
+                "ses_c",
+                "hi",
+                job_id="job_c",
+                message_id="m_c",
+                message_created_at="2026-01-01T00:00:00+00:00",
+            )
+        )
+        await step_c
+        reactors["ses_b"].close.assert_not_awaited()
+
+        release_b.set()
+        assert await step_b == "done_b"
+        reactors["ses_b"].close.assert_awaited_once()
+
+
+def test_build_step_agent_fails_closed_without_run_step_collector(
+    mock_dependencies,
+) -> None:
+    """收集器缺失时必须 fail-closed：越界构建无法保证 step 订阅精确释放。
+
+    覆盖审查 M1 守卫本身：step 级 owner key 只能收集在 run_step 的执行边界内，
+    直接调用必须显式抛错，而不是静默登记一个永远不会被精确释放的订阅。
+    """
+    service = _make_service(mock_dependencies)
+    with patch(
+        "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+        return_value=MagicMock(),
+    ) as build_runtime, pytest.raises(RuntimeError, match="run_step 的执行边界"):
+        service._build_step_agent(
+            session_id="ses_outside_step",
+            agent_id="test_agent",
+            execution_overrides={},
+            model_visibility_overrides={},
+            preferred_provider_id=None,
+            include_team_tools=False,
+        )
+    # fail-closed 必须发生在构建之前：不得先构建 agent 再报错。
+    build_runtime.assert_not_called()

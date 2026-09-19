@@ -104,7 +104,9 @@ def prepare_messages(
         raise ValueError("一个 checkpoint 不能重复引用同一个 canonical message_id")
     current_turn: str | None = None
     with jsonl.open("rb") as stream:
-        for message_id, message in zip(identities, messages, strict=True):
+        for index, (message_id, message) in enumerate(
+            zip(identities, messages, strict=True)
+        ):
             indexed = connection.execute(
                 "SELECT message_sequence, turn_id FROM messages WHERE message_id = ?",
                 (message_id,),
@@ -135,6 +137,14 @@ def prepare_messages(
                 if stored and stored[-1].turn_id is not None
                 else codec.turn_id(message, current_turn, message_id)
             )
+            message_role = codec.message_role(message)
+            model_call_id = (
+                codec.tool_message_model_call_id(message, messages[:index])
+                if message_role == "tool"
+                else codec.model_call_id(message)
+                if codec.tool_calls(message)
+                else None
+            )
             group = codec.items_for_message(
                 message,
                 item_sequence=stored[0].item_sequence
@@ -143,6 +153,7 @@ def prepare_messages(
                 message_id=message_id,
                 turn_id=turn_id,
                 timestamp=datetime.now(UTC).isoformat(),
+                model_call_id=model_call_id,
             )
             # codec 自身验证 group 完整性；不能接受返回顺序与投影不一致的适配器。
             codec.project_message(group)

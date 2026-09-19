@@ -14,7 +14,7 @@ import commentjson
 import httpx
 import pytest
 
-from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.processes import close_backend_process, start_backend_process
@@ -48,19 +48,8 @@ def _message_tool_count(payload: dict[str, object]) -> int:
     )
 
 
-def _last_tool_content(payload: dict[str, object]) -> str:
-    messages = payload.get("messages")
-    if not isinstance(messages, list):
-        raise TypeError(f"模型请求缺少 messages 数组: {payload!r}")
-    tool_messages = [
-        message
-        for message in messages
-        if isinstance(message, dict) and message.get("role") == "tool"
-    ]
-    if not tool_messages:
-        return ""
-    content = tool_messages[-1].get("content")
-    return content if isinstance(content, str) else ""
+def _payload_text(payload: dict[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _tool_call(
@@ -190,12 +179,10 @@ def scripted_model_server() -> Iterator[tuple[ScriptedModelState, str]]:
                 skill_load_failed = False
 
                 if tool_count == 1:
-                    skill_content = _last_tool_content(payload)
+                    skill_content = _payload_text(payload)
                     if (
-                        not skill_content
-                        or skill_content.startswith("Error")
-                        or "# 源码调试工具" not in skill_content
-                        or "invoke_custom_tool" not in skill_content
+                        "# 源码调试工具" not in skill_content
+                        or "invoke_extension_tool" not in skill_content
                     ):
                         state.failure = (
                             "模型在进入调试动作前没有收到有效 debugging Skill 内容: "
@@ -281,10 +268,8 @@ def scripted_model_server() -> Iterator[tuple[ScriptedModelState, str]]:
             if tool_count == 0:
                 call = _tool_call(
                     call_index=tool_count,
-                    name="read_file",
-                    arguments={
-                        "path": ".boxteam/bundled-skills/debugging/SKILL.md"
-                    },
+                    name="skill_load",
+                    arguments={"name": "debugging"},
                 )
             elif tool_count - 1 < len(scripted_calls):
                 name, arguments, assistant_text = scripted_calls[tool_count - 1]
@@ -297,7 +282,7 @@ def scripted_model_server() -> Iterator[tuple[ScriptedModelState, str]]:
                 else:
                     call = _tool_call(
                         call_index=tool_count,
-                        name="invoke_custom_tool",
+                        name="invoke_extension_tool",
                         arguments={"tool_name": name, "arguments": arguments},
                     )
             else:
@@ -445,7 +430,8 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
 
     prompt = (
         "请在工作区里找到刚创建的计数程序入口和它依赖的相关 JavaScript 文件。"
-        "先读取 debugging Skill 和可用调试方案；如果没有匹配的具名方案就自己创建。"
+        "先使用 skill_load(name=debugging) 加载 debugging Skill 和可用调试方案；"
+        "如果没有匹配的具名方案就自己创建。"
         "在入口累加和相关模块累加处设置断点并启动。每次真实停住后，先说明当前代码作用，"
         "再通过调试表达式把当前帧里的 state.counter 加一，然后继续到下一个断点，"
         "最后重新读取状态确认程序正常结束。不要修改源码来伪造计数变化。"
@@ -485,7 +471,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         if trace.get("type") == "tool_call_start"
     ]
     expected_order = [
-        "read_file",
+        "skill_load",
         "glob",
         "read_file",
         "read_file",
@@ -520,7 +506,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     assert debug_start_traces
     assert all(
         get_trace_payload(trace).get("invocation_tool_name")
-        == CUSTOM_TOOL_INVOKER_NAME
+        == EXTENSION_TOOL_INVOKER_NAME
         for trace in debug_start_traces
     )
 
@@ -530,14 +516,10 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         if trace.get("type") == "tool_call_start"
         and get_trace_payload(trace).get("tool_name") == "read_file"
     ]
-    assert len(read_file_traces) == 3
-    assert (
-        get_trace_payload(read_file_traces[0]).get("args", {}).get("path")
-        == ".boxteam/bundled-skills/debugging/SKILL.md"
-    )
+    assert len(read_file_traces) == 2
     assert [
         get_trace_payload(trace).get("args", {}).get("path")
-        for trace in read_file_traces[1:]
+        for trace in read_file_traces
     ] == [state.fixture_path, state.worker_path]
     read_file_ends = [
         trace
@@ -545,11 +527,39 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         if trace.get("type") == "tool_call_end"
         and get_trace_payload(trace).get("tool_name") == "read_file"
     ]
-    assert len(read_file_ends) == 3
-    read_file_result = get_trace_payload(read_file_ends[0])
-    assert read_file_result.get("status") == "success"
-    assert "# 源码调试工具" in str(read_file_result.get("result"))
-    assert "invoke_custom_tool" in str(read_file_result.get("result"))
+    assert len(read_file_ends) == 2
+    assert all(
+        get_trace_payload(trace).get("status") == "success"
+        for trace in read_file_ends
+    )
+
+    skill_load_starts = [
+        trace
+        for trace in traces
+        if trace.get("type") == "tool_call_start"
+        and get_trace_payload(trace).get("tool_name") == "skill_load"
+    ]
+    assert len(skill_load_starts) == 1
+    skill_load_args = get_trace_payload(skill_load_starts[0]).get("args")
+    assert isinstance(skill_load_args, dict)
+    assert skill_load_args.get("name") == "debugging"
+    # mode 是可选参数；未传入时由 SkillLoadInput 的默认值生效。
+    assert skill_load_args.get("mode", "snapshot") == "snapshot"
+    skill_load_ends = [
+        trace
+        for trace in traces
+        if trace.get("type") == "tool_call_end"
+        and get_trace_payload(trace).get("tool_name") == "skill_load"
+    ]
+    assert len(skill_load_ends) == 1
+    skill_load_result = get_trace_payload(skill_load_ends[0])
+    assert skill_load_result.get("status") == "success"
+    skill_load_receipt = json.loads(str(skill_load_result.get("result")))
+    assert skill_load_receipt["mode"] == "snapshot"
+    assert skill_load_receipt["name"] == "debugging"
+    assert skill_load_receipt["queued"] is True
+    assert skill_load_receipt["tracked"] is False
+    assert skill_load_receipt["revision"]
 
     debug_end_traces = [
         trace
@@ -601,7 +611,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         and isinstance(tool.get("function"), dict)
         and isinstance(tool["function"].get("name"), str)
     }
-    assert "invoke_custom_tool" in model_tool_names
+    assert "invoke_extension_tool" in model_tool_names
     assert {"glob", "read_file"} <= model_tool_names
     assert not debug_tool_names & model_tool_names
     request_history = json.dumps(model_requests, ensure_ascii=False)

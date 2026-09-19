@@ -75,19 +75,19 @@ async def test_job_service_restores_only_messages_still_in_queue(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "ses_restart")
+    session_bundle_factory(sessions_dir, "ses_b76b381fb39f462c8ba0bf653ddd1f81")
     store = PendingRequestStore(sessions_dir=sessions_dir)
     await store.save(
-        "ses_restart",
+        "ses_b76b381fb39f462c8ba0bf653ddd1f81",
         [
             _request(
-                "ses_restart",
+                "ses_b76b381fb39f462c8ba0bf653ddd1f81",
                 job_id="job_first",
                 message_id="msg_first",
                 sequence=1,
             ),
             _request(
-                "ses_restart",
+                "ses_b76b381fb39f462c8ba0bf653ddd1f81",
                 job_id="job_second",
                 message_id="msg_second",
                 sequence=2,
@@ -99,7 +99,7 @@ async def test_job_service_restores_only_messages_still_in_queue(
     started_jobs: list[str] = []
     _prevent_background_execution(service, monkeypatch, started_jobs)
 
-    restored = await service.list_pending("ses_restart")
+    restored = await service.list_pending("ses_b76b381fb39f462c8ba0bf653ddd1f81")
 
     assert restored.active_job_id == "job_first"
     assert [item.message_id for item in restored.requests] == ["msg_second"]
@@ -114,12 +114,12 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "ses_restore_race")
+    session_bundle_factory(sessions_dir, "ses_9997e691555f4f8b8f26d8b6f14be16c")
     store = PendingRequestStore(sessions_dir=sessions_dir)
     await store.save(
-        "ses_restore_race",
+        "ses_9997e691555f4f8b8f26d8b6f14be16c",
         [_request(
-            "ses_restore_race",
+            "ses_9997e691555f4f8b8f26d8b6f14be16c",
             job_id="job_restored_first",
             message_id="msg_restored_first",
             sequence=1,
@@ -130,9 +130,9 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
     _prevent_background_execution(service, monkeypatch, started_jobs)
 
     _snapshot, new_dispatch = await asyncio.gather(
-        service.list_pending("ses_restore_race"),
+        service.list_pending("ses_9997e691555f4f8b8f26d8b6f14be16c"),
         service.start_job(
-            "ses_restore_race",
+            "ses_9997e691555f4f8b8f26d8b6f14be16c",
             "后发送",
             message_id="msg_new",
             message_created_at=datetime.now(UTC).isoformat(),
@@ -141,8 +141,8 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
 
     assert started_jobs == ["job_restored_first"]
     assert new_dispatch.job_status == "queued"
-    assert service._session_current_job["ses_restore_race"] == "job_restored_first"
-    assert service._pending_queue.ids("ses_restore_race") == (new_dispatch.job_id,)
+    assert service._session_current_job["ses_9997e691555f4f8b8f26d8b6f14be16c"] == "job_restored_first"
+    assert service._pending_queue.ids("ses_9997e691555f4f8b8f26d8b6f14be16c") == (new_dispatch.job_id,)
 
 
 @pytest.mark.asyncio
@@ -152,7 +152,7 @@ async def test_dispatch_removes_started_head_from_persistent_queue(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_dispatch_persistence"
+    session_id = "ses_4e7f9d1f94164ede8f4e7f15fbec36bb"
     session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
     await store.save(

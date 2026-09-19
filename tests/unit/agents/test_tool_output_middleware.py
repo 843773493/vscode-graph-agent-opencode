@@ -19,21 +19,26 @@ def test_tool_output_store_keeps_small_result_unchanged(tmp_path: Path) -> None:
     message = ToolMessage(content="small result", tool_call_id="call-small")
 
     result = store.bound(
-        session_id="ses_small",
+        session_id="ses_6b7c22ae4b5c4d3f87841c3bb6a74102",
         tool_name="small_tool",
         tool_call_id="call-small",
         message=message,
     )
 
     assert result is message
-    assert not (tmp_path / ".boxteam").exists()
+    if (tmp_path / ".boxteam").exists():
+        # catalog 模式：ToolOutputStore 构造经 path_utils 工厂装配 SQLite
+        # catalog（开关副作用），但不允许物化任何工具输出产物。
+        assert not list((tmp_path / ".boxteam").rglob("tool-results"))
+        assert not (tmp_path / ".boxteam" / "sessions").exists()
+    # 旧模式：构造零副作用（.boxteam 不存在即完整锁定）。
 
 
 def test_tool_output_store_persists_exact_large_result_and_returns_preview(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_large"
+    session_id = "ses_75e4d84bd24647908106cbb2ef144f6c"
     session_dir = session_bundle_factory(
         tmp_path / ".boxteam" / "sessions",
         session_id,
@@ -94,7 +99,7 @@ def test_tool_output_store_reuses_identical_tool_call_output(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_repeat"
+    session_id = "ses_2e07e8a2b56042cd865bdad76781ee91"
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     content = "x" * 2_000
     store = ToolOutputStore(
@@ -125,7 +130,7 @@ def test_tool_output_store_keeps_large_exec_command_result_valid_json(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_exec_command"
+    session_id = "ses_e079294ad930487d818408b9933965a1"
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     full_payload = {
         "chunk_id": "term_large",
@@ -161,7 +166,7 @@ def test_tool_output_middleware_uses_custom_target_name(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_custom"
+    session_id = "ses_55fff82be1004e378d2bee34abc56d9f"
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     store = ToolOutputStore(
         workspace_root=tmp_path,
@@ -175,7 +180,7 @@ def test_tool_output_middleware_uses_custom_target_name(
         {
             "tool_call": {
                 "id": "call-custom",
-                "name": "invoke_custom_tool",
+                "name": "invoke_extension_tool",
                 "args": {
                     "tool_name": "large_custom_tool",
                     "arguments": {},

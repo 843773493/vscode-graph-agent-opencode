@@ -142,7 +142,7 @@ def _tool_specs(turn_index: int) -> list[tuple[str, dict[str, object], str]]:
     if mode == 0:
         return [
             (
-                "invoke_custom_tool",
+                "invoke_extension_tool",
                 _large_tool_arguments(turn_index),
                 _large_tool_result(turn_index),
             )
@@ -174,7 +174,7 @@ def _tool_specs(turn_index: int) -> list[tuple[str, dict[str, object], str]]:
     if mode == 3:
         return [
             (
-                "invoke_custom_tool",
+                "invoke_extension_tool",
                 {
                     "tool_name": "test_tool_2",
                     "arguments": {"value": f"history-check-{turn_index:04d}"},

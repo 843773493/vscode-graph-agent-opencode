@@ -34,12 +34,12 @@ const customToolEvents: TraceEvent[] = [
   event(1, "tool_call_start", {
     tool_name: "test_tool_2",
     args: {},
-    invocation_tool_name: "invoke_custom_tool",
+    invocation_tool_name: "invoke_extension_tool",
   }, "run_test_tool_2"),
   event(2, "tool_call_end", {
     tool_name: "test_tool_2",
     result: "4568",
-    invocation_tool_name: "invoke_custom_tool",
+    invocation_tool_name: "invoke_extension_tool",
   }, "run_test_tool_2"),
   event(3, "text_start", { kind: "markdown" }, "final_1"),
   event(4, "text_delta", { kind: "markdown", text: "4568" }, "final_1"),
@@ -60,11 +60,11 @@ const eventSummary = buildKeyTraceSummary(
 assert(
   eventSummary.keyFlowToolResults.some(
     (result) =>
-      result.invocationToolName === "invoke_custom_tool" &&
+      result.invocationToolName === "invoke_extension_tool" &&
       result.toolName === "test_tool_2" &&
       result.resultText === "4568",
   ),
-  "事件视图关键链路应直接显示 invoke_custom_tool -> test_tool_2 -> 4568",
+  "事件视图关键链路应直接显示 invoke_extension_tool -> test_tool_2 -> 4568",
 );
 
 const failedItems = buildTraceTimelineItems([
@@ -77,7 +77,7 @@ const failedItems = buildTraceTimelineItems([
       event(5, "tool_call_start", {
         tool_name: "test_tool_2",
         args: {},
-        invocation_tool_name: "invoke_custom_tool",
+        invocation_tool_name: "invoke_extension_tool",
       }, "run_failed_tool"),
       event(6, "error", {
         error: "未知扩展工具: test_tool_2。当前可用扩展工具: 无",

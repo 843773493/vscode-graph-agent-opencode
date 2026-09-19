@@ -8,7 +8,7 @@
 ## 2. Agent runtime 与扩展调用
 
 - [x] 2.1 新增模型工具可见性 middleware：执行注册保留开启工具，但每次模型请求只携带可见且可执行的直接工具。
-- [x] 2.2 扩展 `invoke_custom_tool`，把普通扩展工具和 MCP 工具放入同一目标映射，调用前使用真实公开 schema 校验参数。
+- [x] 2.2 扩展 `invoke_extension_tool`，把普通扩展工具和 MCP 工具放入同一目标映射，调用前使用真实公开 schema 校验参数。
 - [x] 2.3 让固定扩展入口按 `model_visible` 选择性附带目标工具名称、描述和参数 schema，并保留无详细 schema 时的最小调用说明。
 - [x] 2.4 移除 MCP 工具直接注入模型工具集合的路径，保证 Agent graph 只通过固定扩展入口调用 MCP 目标工具。
 

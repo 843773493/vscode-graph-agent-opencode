@@ -23,6 +23,7 @@ from app.core.job_context import (
 )
 from app.core.job_event_bus import EventType
 from app.core.model_delta_context import (
+    clear_model_run_id_queue,
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
@@ -42,7 +43,6 @@ from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.message_display import DISPLAY_CONTENT_METADATA_KEY
 from app.services.business.reasoning_checkpoint_service import (
-    persist_intermediate_assistant_reasoning_checkpoint,
     persist_standard_assistant_checkpoint,
     persist_user_message_checkpoint,
 )
@@ -258,15 +258,14 @@ class StepRunner:
                 writer=message_stream_writer,
             ).run(control_loop_stop_event)
         )
-        if self.ports.resource_manager is not None:
+        if self.ports.external_resource_leases is not None:
             turn_scope.register_cleanup(
-                lambda: self.ports.resource_manager.cancel_turn(
+                lambda: self.ports.external_resource_leases.release_turn_leases(
                     message_stream_writer.turn_stream_id
                 )
             )
         turn_scope_token = set_current_turn_execution_scope(turn_scope)
         message_delta_token = set_current_model_delta_sink(message_stream_runtime)
-
         final_text = ""
         latest_model_content_blocks: tuple[dict[str, object], ...] = ()
         turn_token_usage_parts: list[ModelTokenUsagePayload] = []
@@ -338,16 +337,6 @@ class StepRunner:
             require_delegated_report and message_source == "session_subagent_delegation"
         )
         parent_session_id = resolved_message_metadata.get("parent_session_id")
-        if (
-            require_delegated_report
-            and message_source == "send_message_to_session"
-            and message_kind in {"reply", "progress", "result"}
-        ):
-            session_service = self.ports.session_service_provider()
-            current_session = await session_service.get(session_id)
-            if current_session.delegation is not None:
-                requires_delegated_report = True
-                parent_session_id = current_session.delegation.parent_session_id
         if requires_delegated_report and not isinstance(parent_session_id, str):
             raise RuntimeError(
                 "委派子会话首轮缺少 parent_session_id 元数据: "
@@ -433,7 +422,6 @@ class StepRunner:
             final_text = retry_result.final_text
             latest_model_content_blocks = retry_result.latest_model_content_blocks
             turn_token_usage_parts = list(retry_result.token_usage_parts)
-            stream_result = retry_result.stream_result
 
             if final_text:
                 SessionInterruptState.set(
@@ -469,25 +457,6 @@ class StepRunner:
                     "最终 assistant 消息未能写入 checkpoint: "
                     f"session_id={session_id} job_id={effective_job_id}"
                 )
-            # checkpoint 投影消费原有 normalized carrier，避免从 item payload
-            # 重建 reasoning 时丢失 provider 字段、保护状态或 block 顺序。
-            checkpoint_reasoning_blocks = stream_result.model_content_blocks
-            if checkpoint_reasoning_blocks:
-                projected_reasoning = await asyncio.to_thread(
-                    persist_intermediate_assistant_reasoning_checkpoint,
-                    checkpointer=checkpointer,
-                    session_id=session_id,
-                    model_content_blocks=checkpoint_reasoning_blocks,
-                )
-                logger.warning(
-                    "[itemized-context] checkpoint reasoning projection: "
-                    "session_id=%s turn_id=%s groups=%s changed=%s",
-                    session_id,
-                    effective_job_id,
-                    len(checkpoint_reasoning_blocks),
-                    projected_reasoning,
-                )
-
             await model_call_adapter.converge_final_checkpoint(
                 assistant_message_id if final_text else None
             )
@@ -566,6 +535,7 @@ class StepRunner:
                 control_loop_task.cancel()
             await asyncio.gather(control_loop_task, return_exceptions=True)
             reset_current_model_delta_sink(message_delta_token)
+            clear_model_run_id_queue(message_stream_runtime)
             reset_current_turn_execution_scope(turn_scope_token)
             await self.execution_scope_registry.close(
                 message_stream_writer.turn_stream_id

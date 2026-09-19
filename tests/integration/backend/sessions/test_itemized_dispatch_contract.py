@@ -15,9 +15,9 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
-from app.agents.itemized_context_middleware import ItemizedContextProjectionMiddleware
+from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
-from app.agents.request_replay_middleware import read_native_request_projection
+from app.agents.sealed_assembly_dispatch import read_sealed_native_projection
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.job_context import reset_current_job_id, set_current_job_id
 from app.domain.itemized.detail_ref import DetailRef
@@ -68,7 +68,7 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
         model,
         tools=[inspect_file],
         system_prompt="HTTP system prompt",
-        middleware=[ItemizedContextProjectionMiddleware(checkpointer=saver)],
+        middleware=[SealedAssemblyDispatchBridge(checkpointer=saver)],
         checkpointer=saver,
     )
     token = set_current_job_id(turn_id)
@@ -82,7 +82,7 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
     finally:
         reset_current_job_id(token)
     assert "native-http-result" in json.dumps(result["messages"][-1].content)
-    assert read_native_request_projection() is None
+    assert read_sealed_native_projection() is None
     assert len(state.requests) == 1
     (snapshot,) = saver.list_context_assemblies(session_id)
     with RolloutCheckpointSaver(sessions) as restarted:
@@ -123,7 +123,7 @@ async def test_concurrent_native_dispatch_does_not_share_context(
     dispatch_saver, native_http_server, session_bundle_factory
 ) -> None:
     saver, first_session, turn_id, sessions = dispatch_saver
-    second_session = f"ses_native_{uuid4().hex}"
+    second_session = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, second_session)
     seed_dispatch_history(saver, second_session)
     seed_dispatch_overlay(saver, second_session)
@@ -141,7 +141,7 @@ async def test_concurrent_native_dispatch_does_not_share_context(
         agent = create_agent(
             model,
             system_prompt=session_id,
-            middleware=[ItemizedContextProjectionMiddleware(checkpointer=saver)],
+            middleware=[SealedAssemblyDispatchBridge(checkpointer=saver)],
             checkpointer=saver,
         )
         token = set_current_job_id(turn_id)
@@ -164,7 +164,7 @@ async def test_concurrent_native_dispatch_does_not_share_context(
         ]
         assert len(matching) == 1
         assert matching[0]["input"] == expected["request"]["input"]
-    assert read_native_request_projection() is None
+    assert read_sealed_native_projection() is None
 
 
 @pytest.mark.asyncio
@@ -186,7 +186,7 @@ async def test_native_http_tool_loop_replays_canonical_call_and_result(
         model,
         tools=[inspect_file],
         system_prompt="HTTP tool loop",
-        middleware=[ItemizedContextProjectionMiddleware(checkpointer=saver)],
+        middleware=[SealedAssemblyDispatchBridge(checkpointer=saver)],
         checkpointer=saver,
     )
     token = set_current_job_id(turn_id)
@@ -240,7 +240,7 @@ async def test_missing_saver_owner_fails_before_provider_http(
     # 缺少强制 owner 是错误配置，不以替身伪造 prepare/supports 成功。
     agent = create_agent(
         model,
-        middleware=[ItemizedContextProjectionMiddleware(checkpointer=None)],
+        middleware=[SealedAssemblyDispatchBridge(checkpointer=None)],
         checkpointer=saver,
     )
     token = set_current_job_id(turn_id)
@@ -256,7 +256,7 @@ async def test_missing_saver_owner_fails_before_provider_http(
         reset_current_job_id(token)
     assert state.requests == []
     assert saver.list_context_assemblies(session_id) == ()
-    assert read_native_request_projection() is None
+    assert read_sealed_native_projection() is None
 
 
 @pytest.mark.asyncio
@@ -277,7 +277,7 @@ async def test_provider_parameters_cannot_override_sealed_input(
     agent = create_agent(
         model,
         system_prompt="sealed prompt",
-        middleware=[ItemizedContextProjectionMiddleware(checkpointer=saver)],
+        middleware=[SealedAssemblyDispatchBridge(checkpointer=saver)],
         checkpointer=saver,
     )
     token = set_current_job_id(turn_id)
@@ -287,7 +287,7 @@ async def test_provider_parameters_cannot_override_sealed_input(
     finally:
         reset_current_job_id(token)
     assert state.requests == []
-    assert read_native_request_projection() is None
+    assert read_sealed_native_projection() is None
 
 
 @pytest.mark.parametrize("empty", [False, True])
@@ -298,7 +298,7 @@ def test_foreign_session_plan_is_rejected_without_io(
     dispatch_saver, session_bundle_factory, monkeypatch, empty, port
 ) -> None:
     saver, source_id, turn_id, sessions = dispatch_saver
-    target_id = f"ses_foreign_{uuid4().hex}"
+    target_id = f"ses_{uuid4().hex}"
     target = session_bundle_factory(sessions, target_id)
     draft = saver.compose_committed_context_plan(
         source_id, plan_id=f"guard-{uuid4().hex}"
@@ -535,4 +535,4 @@ async def test_restart_rejects_corrupt_detail_owner_before_native_http(
             restarted, session_id, turn_id, endpoint, state.api_key
         )
     assert len(state.requests) == 1
-    assert read_native_request_projection() is None
+    assert read_sealed_native_projection() is None

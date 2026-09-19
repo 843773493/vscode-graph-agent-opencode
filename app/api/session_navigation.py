@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
+from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_request_id,
     get_session_catalog_service,
@@ -18,13 +19,12 @@ from app.schemas.internal_v2.session_navigation import (
     SessionFolderAssignmentRequest,
     SessionFolderCreateRequest,
     SessionFolderUpdateRequest,
+    SessionGenerationCapabilitiesDTO,
     SessionGenerationExecuteRequest,
     SessionGenerationExecuteResultDTO,
-    SessionGenerationCapabilitiesDTO,
 )
 from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_navigation import SessionCatalogService
-
 
 router = APIRouter(tags=["session-navigation"])
 
@@ -228,7 +228,7 @@ async def delete_session_folder(
     response_model=APIResponse[SessionCatalogBreadcrumbDTO],
 )
 async def assign_session_folder(
-    session_id: str,
+    session_id: CanonicalSessionId,
     payload: SessionFolderAssignmentRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),

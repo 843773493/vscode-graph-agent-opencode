@@ -735,7 +735,7 @@ describe("ChatTurn 轮次动作", () => {
       status: "failed",
       source: { message_sequence: 2, call_index: 0 },
       tool_call_id: "call-without-response",
-      tool_name: "invoke_custom_tool",
+      tool_name: "invoke_extension_tool",
       outcome_unknown: true,
       final: false,
     }];

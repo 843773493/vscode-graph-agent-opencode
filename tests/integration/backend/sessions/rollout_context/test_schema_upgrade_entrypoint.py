@@ -27,7 +27,7 @@ from tests.integration.backend.sessions.rollout_context.schema_v3_helpers import
 def source(request, session_bundle_factory):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"entrypoint-{uuid4().hex}"
+    session_id = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session_id)
     with RolloutCheckpointSaver(sessions) as saver:
         artifact = create_schema2_artifact(saver, session_id)

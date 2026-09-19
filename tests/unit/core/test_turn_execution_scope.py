@@ -43,6 +43,18 @@ async def test_local_scope_deadline_does_not_cancel_parent() -> None:
     assert parent.cancellation_signal.is_cancelled is False
 
 
+@pytest.mark.asyncio
+async def test_closing_child_detaches_parent_cancellation_hook() -> None:
+    parent = TurnExecutionScope("stream_1")
+    child = parent.child("tool_1")
+
+    await child.close()
+    assert await parent.cancel("user_requested") is True
+    assert child.cancellation_signal.is_cancelled is False
+
+    await parent.close()
+
+
 def test_control_inbox_is_idempotent_and_ordered() -> None:
     inbox = AgentControlInbox("stream_1")
     first = inbox.accept(

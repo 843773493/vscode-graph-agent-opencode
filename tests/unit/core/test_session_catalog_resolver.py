@@ -24,12 +24,12 @@ from app.core.session_catalog_resolver import (
     SessionChildSummary,
 )
 from app.core.session_catalog_store import (
-    NavigationTopologyGate,
     SessionCatalogStore,
     validate_session_id,
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
+from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.session_paths import SessionPathResolver
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
 from app.core.session_tree.support import SESSION_ALLOCATION_MARKER_NAME
@@ -231,7 +231,7 @@ def creation_service(
         store=store,
         sessions_root=sessions_root,
         workspace_id=WORKSPACE_ID,
-        gate=NavigationTopologyGate(),
+        gate=NavigationTopologyGate(sessions_root),
     )
 
 
@@ -243,7 +243,7 @@ def delete_service(
         store=store,
         sessions_root=sessions_root,
         workspace_id=WORKSPACE_ID,
-        gate=NavigationTopologyGate(),
+        gate=NavigationTopologyGate(sessions_root),
     )
 
 
@@ -1155,7 +1155,8 @@ class TestSubtreeDelete:
         with pytest.raises(KeyError):
             resolver.begin_subtree_delete(make_node_id())
 
-    def test_finish_drains_and_tombstones(
+    @pytest.mark.asyncio
+    async def test_finish_drains_and_tombstones(
         self,
         resolver: SessionCatalogPathResolver,
         store: SessionCatalogStore,
@@ -1165,7 +1166,7 @@ class TestSubtreeDelete:
         s1_dir = resolver.resolve_session_node(ids["s1"])
         s2_dir = resolver.resolve_session_node(ids["s2"])
         resolver.begin_subtree_delete(ids["f1"])
-        resolver.finish_subtree_delete(ids["f1"])
+        await resolver.finish_subtree_delete(ids["f1"])
         # tombstone：全部冻结行删除。
         for node_id in (ids["f1"], ids["s1"], ids["f2"], ids["s2"]):
             with pytest.raises(KeyError):
@@ -1182,16 +1183,18 @@ class TestSubtreeDelete:
         assert not s2_dir.exists()
         # 无对应 begin 的 finish → RuntimeError。
         with pytest.raises(RuntimeError, match="删除锁不存在"):
-            resolver.finish_subtree_delete(ids["f1"])
+            await resolver.finish_subtree_delete(ids["f1"])
 
-    def test_finish_without_begin_rejected(
+    @pytest.mark.asyncio
+    async def test_finish_without_begin_rejected(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         folder = resolver.create_folder(name="目录", parent_node_id=None)
         with pytest.raises(RuntimeError, match="删除锁不存在"):
-            resolver.finish_subtree_delete(folder.node_id)
+            await resolver.finish_subtree_delete(folder.node_id)
 
-    def test_delete_session_subtree_single_call(
+    @pytest.mark.asyncio
+    async def test_delete_session_subtree_single_call(
         self,
         resolver: SessionCatalogPathResolver,
         store: SessionCatalogStore,
@@ -1201,7 +1204,7 @@ class TestSubtreeDelete:
         child_id, child_dir = allocated_session(
             resolver, title="子会话", parent_node_id=parent_id
         )
-        deleted = resolver.delete_session_subtree(parent_id)
+        deleted = await resolver.delete_session_subtree(parent_id)
         assert deleted == [child_id]
         with pytest.raises(KeyError):
             store.get_node(parent_id)
@@ -1216,14 +1219,15 @@ class TestSubtreeDelete:
         ]
         assert {entry.name for entry in isolated} == {parent_id, child_id}
 
-    def test_delete_session_subtree_rejects_folder_and_missing(
+    @pytest.mark.asyncio
+    async def test_delete_session_subtree_rejects_folder_and_missing(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         folder = resolver.create_folder(name="目录", parent_node_id=None)
         with pytest.raises(RuntimeError, match="节点不是会话"):
-            resolver.delete_session_subtree(folder.node_id)
+            await resolver.delete_session_subtree(folder.node_id)
         with pytest.raises(KeyError):
-            resolver.delete_session_subtree(make_node_id())
+            await resolver.delete_session_subtree(make_node_id())
 
 
 # ----------------------------------------------------------------------

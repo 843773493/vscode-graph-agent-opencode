@@ -9,7 +9,7 @@ import {
   skillKeyFlowSnapshot,
 } from "./skillKeyFlow";
 import {
-  CUSTOM_TOOL_INVOKER_NAME,
+  EXTENSION_TOOL_INVOKER_NAME,
   INVALID_CUSTOM_TOOL_CALL_NAME,
   UNKNOWN_CUSTOM_TOOL_NAME,
   customToolCallArgs,
@@ -113,7 +113,7 @@ function toolCalls(record: Record<string, unknown>): Record<string, unknown>[] {
 
 function isCustomInvokerValidationError(resultText: string): boolean {
   return (
-    resultText.includes("Error invoking tool 'invoke_custom_tool'") &&
+    resultText.includes("Error invoking tool 'invoke_extension_tool'") &&
     resultText.includes("tool_name: Field required")
   );
 }
@@ -157,7 +157,7 @@ export function buildAgentStateSummary(
   for (const record of records) {
     if (record.role === "tool") {
       const toolName = typeof record.name === "string" ? record.name : "";
-      if (toolName === CUSTOM_TOOL_INVOKER_NAME) {
+      if (toolName === EXTENSION_TOOL_INVOKER_NAME) {
         const callId = customToolCallId(record);
         const customToolName = callId
           ? customToolTargetsByCallId.get(callId)
@@ -175,7 +175,7 @@ export function buildAgentStateSummary(
           seenCustomToolResults.add(resultKey);
           customToolResults.push({
             toolName: displayToolName,
-            invocationToolName: CUSTOM_TOOL_INVOKER_NAME,
+            invocationToolName: EXTENSION_TOOL_INVOKER_NAME,
             resultText,
           });
         }

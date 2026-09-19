@@ -5,7 +5,18 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-NodeDebugStatus = Literal["idle", "starting", "running", "paused", "exited", "failed"]
+NodeDebugStatus = Literal[
+    "idle",
+    "starting",
+    "running",
+    "paused",
+    "stopping",
+    "exited",
+    "failed",
+    # 任务 3.2/3.5 状态机：停止/重启无法核实旧实例终态时保持该可观察状态，绝不虚报
+    # 终态。生产者与结清条件见 node_debug_service 的 claim 恢复路径。
+    "reconcile_required",
+]
 NodeDebugBreakpointRelocationStatus = Literal[
     "current",
     "relocated",
@@ -37,6 +48,7 @@ class NodeDebugBreakpointRequest(BaseModel):
 
 class NodeDebugStartRequest(BaseModel):
     session_id: str = Field(min_length=1)
+    thread_id: str = Field(default="main", min_length=1)
     configuration_id: str | None = Field(default=None, min_length=1)
     path: str = Field(min_length=1)
     working_directory: str | None = None
@@ -50,6 +62,7 @@ class NodeDebugStartRequest(BaseModel):
 
 class NodeDebugActionRequest(BaseModel):
     session_id: str = Field(min_length=1)
+    thread_id: str = Field(default="main", min_length=1)
     action: NodeDebugAction
     params: dict[str, object] = Field(default_factory=dict)
 
@@ -128,6 +141,8 @@ class NodeDebugEvaluationDTO(BaseModel):
 class NodeDebugActionRecordDTO(BaseModel):
     action_id: str
     session_id: str
+    #: 动作审计必须显式携带实际 SessionThread 归属，不提供隐式默认值。
+    thread_id: str = Field(min_length=1)
     action: str
     message: str
     actor: Literal["human", "ai", "system"] = "human"
@@ -187,6 +202,9 @@ class NodeDebugConfigurationDTO(BaseModel):
 
 class NodeDebugStateDTO(BaseModel):
     session_id: str
+    # TODO: 服务端所有构造点都已显式传入 thread_id；待调试工具的测试替身同步后，
+    # 删除该默认值，避免任何调用方再依赖隐式的 main thread。
+    thread_id: str = Field(default="main", min_length=1)
     status: NodeDebugStatus
     active_configuration_id: str | None = None
     active_configuration_name: str | None = None
@@ -217,13 +235,59 @@ class NodeDebugSessionManifestDTO(BaseModel):
 
     schema_version: Literal[1] = 1
     session_id: str
+    #: manifest 必须显式记录实际 SessionThread owner，不提供隐式默认值。
+    thread_id: str = Field(min_length=1)
     active_configuration_id: str | None = None
     actions: list[NodeDebugActionRecordDTO] = Field(default_factory=list)
     updated_at: datetime
 
 
+NodeDebugLaunchPhase = Literal[
+    "launch_pending",
+    "spawned",
+    "running",
+    "stopping",
+    "reconcile_required",
+    "settled",
+]
+
+
+class NodeDebugLaunchClaimDTO(BaseModel):
+    """thread 级 durable 启动登记；跨 Turn 保留，用于崩溃后的实例定点恢复。
+
+    门控语义：
+    - ``launch_pending``：已在 spawn 前登记 nonce，但尚未 spawn（无 PID），
+      崩溃后无法证明进程不存在，必须保持 ``reconcile_required``。
+    - ``spawned``：spawn 成功并记录了 OS 起始身份，用于崩溃后定点恢复；此时
+      PID/端口还不是权威运行属性。
+    - ``running``：OS 起始身份核对 + Inspector 握手都成功后才进入，PID/端口
+      作为可验证属性登记。
+    - ``stopping`` / ``settled``：停止中/已核实终结并结清。
+    - ``reconcile_required``：无法核实旧实例，必须阻断新启动直到人工/自动核实。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    session_id: str
+    thread_id: str = Field(min_length=1)
+    process_instance_id: str = Field(min_length=1)
+    nonce: str = Field(min_length=1)
+    phase: NodeDebugLaunchPhase
+    configuration_id: str = Field(min_length=1)
+    pid: int | None = Field(default=None, ge=1)
+    process_identity_source: str | None = None
+    process_start_marker: str | None = None
+    inspector_host: str = ""
+    inspector_port: int = Field(default=0, ge=0)
+    reconcile_reason: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class NodeDebugConfigurationCreateRequest(BaseModel):
     session_id: str = Field(min_length=1)
+    thread_id: str = Field(default="main", min_length=1)
     name: str = Field(min_length=1, max_length=80)
     script_path: str | None = None
     working_directory: str = ""
@@ -238,6 +302,7 @@ class NodeDebugConfigurationCreateRequest(BaseModel):
 
 class NodeDebugConfigurationUpdateRequest(BaseModel):
     session_id: str = Field(min_length=1)
+    thread_id: str = Field(default="main", min_length=1)
     name: str = Field(min_length=1, max_length=80)
     script_path: str | None = None
     working_directory: str = ""
@@ -251,16 +316,20 @@ class NodeDebugConfigurationUpdateRequest(BaseModel):
 
 class NodeDebugConfigurationActivateRequest(BaseModel):
     session_id: str = Field(min_length=1)
+    thread_id: str = Field(default="main", min_length=1)
 
 
 class NodeDebugConfigurationImportRequest(BaseModel):
     session_id: str = Field(min_length=1)
+    thread_id: str = Field(default="main", min_length=1)
     configuration: NodeDebugConfigurationDTO
     activate: bool = False
 
 
 class NodeDebugConfigurationCopyRequest(BaseModel):
     source_session_id: str = Field(min_length=1)
+    source_thread_id: str = Field(default="main", min_length=1)
     target_session_id: str = Field(min_length=1)
+    target_thread_id: str = Field(default="main", min_length=1)
     name: str | None = Field(default=None, min_length=1, max_length=80)
     activate: bool = False

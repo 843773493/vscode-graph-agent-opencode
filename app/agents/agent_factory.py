@@ -26,11 +26,20 @@ from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.agent_tools import build_default_tools
+from app.agents.cache_preserving_summarization import (
+    NoDurableOwnerCompactionPreflight,
+)
 from app.agents.custom_tools import build_custom_tool_bundle
 from app.agents.deep_agent_stack import (
     build_deep_agent_middleware,
 )
-from app.agents.itemized_context_middleware import ItemizedContextProjectionMiddleware
+from app.agents.graph_binding import (
+    DEEP_AGENT_GRAPH_BINDING,
+    GRAPH_FACTORY_REGISTRY,
+    GraphBindingOwnerKey,
+    GraphBindingStorePort,
+)
+from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.middleware_prompts import TEAM_COORDINATION_SYSTEM_PROMPT
 from app.agents.model_capability_routing import (
@@ -47,23 +56,58 @@ from app.agents.policy import (
 )
 from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.skill_runtime import (
+    PublishedSkillCatalog,
     append_skill_middlewares,
-    discover_workspace_skill_sources,
+    build_workspace_skill_catalog,
     resolve_bundled_skill_groups,
 )
 from app.agents.tool_invocation_context import (
+    ThreadRuntimeBinding,
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
 )
 from app.agents.tool_output_middleware import ToolOutputMiddleware
-from app.agents.tools.custom_invocation import create_custom_tool_invoker_tool
+from app.agents.tools.custom_invocation import (
+    create_extension_tool_invoker_tool,
+    seal_extension_catalog_binding_from_tools,
+)
+from app.agents.tools.session_wait import CommunicationWaitBindingLookupPort
+from app.agents.tools.skill_loading import create_skill_load_tool
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.events.channel_events import (
+    ContextSourceEvent,
+    ContextSourceEventPublisher,
+)
 from app.services.infrastructure.node_debug_service import NodeDebugService
-from app.services.infrastructure.resource_manager import ResourceManager
+from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
+    ContextSourceReactor,
+    ReactorCreatedCallback,
+)
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
+from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
+    WorkspaceFileResourceRegistry,
+)
+from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
+    CompactionPreflightPort,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    MAIN_THREAD_ID,
+    ContextSourceControlStatePort,
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+)
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 
@@ -345,6 +389,17 @@ def resolve_agent_id(agent_id: str | None, config_service: ConfigService | None 
     return service.resolve_agent_id(agent_id)
 
 
+# OpenSpec 8.4 缓存审计结论（R6a）：create_my_deep_agent 本体每次调用都全新
+# 执行 create_agent 并新建工具/middleware 闭包，本模块内不存在任何跨 invocation
+# 的已编译图缓存（无 lru_cache、无模块级实例表）。已知的调用方级例外：
+# AgentExecutionService._get_or_create_agent 以
+# (session_id, resolved_agent_id, config_revision, execution_overrides,
+# model_visibility_overrides) 为 key 缓存整个已编译 agent——key 含 session_id
+# 与配置 revision，不会跨 thread 泄漏闭包，且真实 step 路径每步全新构建不经
+# 该缓存；但被缓存的图仍捕获 session 闭包，与「只复用不捕获 thread 的
+# blueprint/topology」红线有差距。该缓存有专门回归测试
+# （test_agent_cache_rebuilds_after_config_revision_changes）锁定行为，blueprint
+# 与 invocation 依赖的拆分由 OpenSpec 8.4 后续轮次处理（TODO）。
 def create_my_deep_agent(
     *,
     model: BaseChatModel,
@@ -360,7 +415,7 @@ def create_my_deep_agent(
     custom_tool_specs: Sequence[object] | None = None,
     tools: Sequence[BaseTool | Callable[..., Any] | dict[str, Any]] | None = None,
     middleware: Sequence[AgentMiddleware] | None = None,
-    skills: list[Any] | None = None,
+    skill_catalog: PublishedSkillCatalog | None = None,
     memory: list[str] | None = None,
     permissions: list[FilesystemPermission] | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
@@ -387,11 +442,15 @@ def create_my_deep_agent(
     workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
     session_target_resolver: SessionTargetResolverProtocol | None = None,
     session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
+    communication_binding_lookup: CommunicationWaitBindingLookupPort | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
     tool_timeout_seconds: float | None = None,
-    resource_manager: ResourceManager | None = None,
+    workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
+    reactor_lifetime_scope: LifetimeScope | None = None,
+    on_reactor_created: ReactorCreatedCallback | None = None,
     workspace_root: Path,
     include_team_tools: bool = False,
+    graph_binding_store: GraphBindingStorePort | None = None,
 ) -> Any:
     if checkpointer is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 checkpointer")
@@ -405,7 +464,12 @@ def create_my_deep_agent(
     policy_resolver = config_service.get_tool_policy_resolver(agent_id)
     tool_invocation_context = ToolInvocationContext(
         tool_timeout_seconds=tool_timeout_seconds,
-        resource_manager=resource_manager,
+        # 单会话 Agent 运行在 main thread；这里把受信 (session_id, thread_id)
+        # 交给扩展工具，按 SessionThread 隔离的调试工具不再自行猜测归属。
+        thread_binding=ThreadRuntimeBinding(
+            session_id=session_id,
+            thread_id=MAIN_THREAD_ID,
+        ),
     )
 
     if background_task_registry is None:
@@ -433,6 +497,83 @@ def create_my_deep_agent(
 
     workspace_root = workspace_root.resolve()
 
+    resolved_bundled_skill_groups = resolve_bundled_skill_groups()
+    # SkillCatalog 的语义 revision 由 ResourceRegistry 唯一发布;catalog 是
+    # 不可变快照,重入装配时允许调用方复用已发布实例。
+    skill_registry = ResourceRegistry()
+    resolved_skills = (
+        build_workspace_skill_catalog(
+            workspace_root,
+            registry=skill_registry,
+            bundled_skill_groups=resolved_bundled_skill_groups,
+        )
+        if skill_catalog is None
+        else skill_catalog
+    )
+    backend = build_workspace_backend(
+        workspace_root,
+    )
+    # CSM 的控制状态必须经唯一 RolloutCheckpointSaver/ContextStore owner 持久化。
+    # 生产 checkpointer 就是该 owner；其它（测试替身）checkpointer 没有
+    # ContextStore，只能退化为纯内存 CSM。合成 session（例如工具清单检查用的
+    # tools_inspection_session）没有权威会话节点，同样没有 ContextStore，
+    # 不允许为它伪造持久化 owner。
+    context_source_owner: ContextSourceOwnerKey | None = None
+    context_source_control_port: ContextSourceControlStatePort | None = None
+    if isinstance(checkpointer, RolloutCheckpointSaver):
+        candidate_owner = ContextSourceOwnerKey(
+            session_id=session_id,
+            thread_id=MAIN_THREAD_ID,
+        )
+        if checkpointer.context_source_control_owner_available(candidate_owner):
+            context_source_owner = candidate_owner
+            context_source_control_port = checkpointer
+    # compaction preflight 端口：生产 checkpointer 即唯一 Saver owner；
+    # 测试替身按合成装配合同拿到显式失败端口，禁止静默跳过。
+    compaction_preflight: CompactionPreflightPort = (
+        checkpointer
+        if isinstance(checkpointer, RolloutCheckpointSaver)
+        else NoDurableOwnerCompactionPreflight()
+    )
+    # OpenSpec 3.8-C：CSM 的 commit/untrack 成功边界发布 context.source/* 轻量
+    # 内存事件。CSM 边界拿不到 workspace_id，channel 参数使用最近稳定 identity
+    # session_id（与 CSM owner 一致）；事件服务复用文件来源 registry 的进程级
+    # channel 服务（ResourcePlatformBootstrap 落地后应由 bootstrap 持有并注入）。
+    # OpenSpec 2.4-B4：commit 事件发布已随 commit_model_call_pending 落在
+    # durable 成功之后；channel 参数沿用最近稳定 identity session_id。
+    context_source_event_sink: Callable[[ContextSourceEvent], None] | None = None
+    if workspace_file_resource_registry is not None:
+        context_source_event_sink = ContextSourceEventPublisher(
+            event_service=(
+                workspace_file_resource_registry.observation_channel.event_service
+            ),
+            scope_id=session_id,
+        )
+    context_source_manager = ContextSourceManager(
+        owner=context_source_owner,
+        control_state_port=context_source_control_port,
+        lifecycle_event_sink=context_source_event_sink,
+    )
+    # 事件驱动 reaction：reactor 订阅来源 owner 的轻量 change 通知，并把
+    # 「有新 revision」标记为 CSM 的 pending observation；before_model 只消费
+    # 已排队的 observation，不再遍历 descriptor 轮询内存快照。
+    # 订阅必须随 agent 生命周期释放；调用方没有提供 scope 时在代码内留 TODO，
+    # 不允许在这里新建第二套 dispose 抽象。
+    context_source_reactor: ContextSourceReactor | None = None
+    if workspace_file_resource_registry is not None:
+        if reactor_lifetime_scope is None:
+            raise RuntimeError(
+                "启用事件驱动 context source reaction 时必须提供 "
+                "reactor_lifetime_scope；否则订阅无法随 agent 生命周期释放"
+            )
+        context_source_reactor = ContextSourceReactor(
+            sources=workspace_file_resource_registry,
+            context_sources=context_source_manager,
+            lifetime_scope=reactor_lifetime_scope,
+            reactor_id=f"agent:{agent_id}:session:{session_id}",
+        )
+        if on_reactor_created is not None:
+            on_reactor_created((session_id, agent_id), context_source_reactor)
     hidden_direct_tool_names: set[str] = set()
     extension_confirmation_names: set[str] = set()
     direct_confirmation_names: set[str] = set()
@@ -459,7 +600,14 @@ def create_my_deep_agent(
                 direct_confirmation_names.add(tool.name)
     else:
         if browser_manager_client is None:
-            raise RuntimeError("create_my_deep_agent 构建默认工具集时需要显式传入 BrowserManagerClient")
+            raise RuntimeError(
+                "create_my_deep_agent 构建默认工具集时需要显式传入 BrowserManagerClient"
+            )
+        if communication_binding_lookup is None:
+            raise RuntimeError(
+                "create_my_deep_agent 构建默认工具集时需要显式传入 communication "
+                "binding lookup（wait_for_session 的跨会话执行绑定解析）"
+            )
         visible_tools = build_default_tools(
             session_id=session_id,
             agent_id=agent_id,
@@ -479,8 +627,10 @@ def create_my_deep_agent(
             invocation_context=tool_invocation_context,
             workspace_root=workspace_root,
             session_message_delivery_service=session_message_delivery_service,
+            communication_binding_lookup=communication_binding_lookup,
             include_test_tools=config_service.development_test_tools_enabled(),
             include_team_tools=include_team_tools,
+            context_source_manager=context_source_manager,
         )
         custom_tool_bundle = build_custom_tool_bundle(
             custom_tool_specs or [],
@@ -577,25 +727,13 @@ def create_my_deep_agent(
                 direct_confirmation_names.add(tool.name)
         if extension_tools:
             resolved_tools.append(
-                create_custom_tool_invoker_tool(
+                create_extension_tool_invoker_tool(
                     extension_tools,
-                    model_visible_tool_names={
-                        tool.name
-                        for tool in extension_tools
-                        if _resolve_tool_policy(
-                            policy_resolver,
-                            tool,
-                            origin=(
-                                "mcp"
-                                if dict(getattr(tool, "metadata", None) or {}).get(
-                                    "mcp_server_id"
-                                )
-                                else "custom"
-                            ),
-                            execution_overrides=resolved_execution_overrides,
-                            model_visibility_overrides=resolved_model_visibility_overrides,
-                        ).model_visible
-                    },
+                    # E4：旧 tool call 只按装配期封存 binding 解析；
+                    # 正式 activation owner 接线前由快照封存承担 sealed ref。
+                    catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+                        extension_tools
+                    ),
                     is_tool_execution_enabled=lambda target: bool(
                         getattr(
                             extension_policies.get(target.name),
@@ -605,6 +743,12 @@ def create_my_deep_agent(
                     ),
                 )
             )
+    if context_source_manager is not None and not any(
+        getattr(tool, "name", None) == "skill_load" for tool in resolved_tools
+    ):
+        resolved_tools.append(
+            create_skill_load_tool(context_source_manager)
+        )
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
     resolved_interrupt_on = dict(interrupt_on or {})
@@ -627,11 +771,10 @@ def create_my_deep_agent(
     runtime_middleware: list[AgentMiddleware] = []
     append_skill_middlewares(
         runtime_middleware,
-        backend=None,
-        skills=None,
+        catalog=None,
     )
     runtime_middleware.append(
-        ItemizedContextProjectionMiddleware(checkpointer=checkpointer)
+        SealedAssemblyDispatchBridge(checkpointer=checkpointer)
     )
     runtime_middleware.extend(
         list(middleware) if middleware is not None else [LLMLoggingMiddleware()]
@@ -641,19 +784,6 @@ def create_my_deep_agent(
             item for item in runtime_middleware if item.__class__.__name__ in enabled_runtime_middleware_names
         ]
 
-    resolved_bundled_skill_groups = resolve_bundled_skill_groups()
-    resolved_skills = (
-        discover_workspace_skill_sources(
-            workspace_root,
-            bundled_skill_groups=resolved_bundled_skill_groups,
-        )
-        if skills is None
-        else list(skills)
-    )
-    backend = build_workspace_backend(
-        workspace_root,
-        bundled_skill_groups=resolved_bundled_skill_groups,
-    )
     tool_output_middleware = ToolOutputMiddleware(
         session_id=session_id,
         store=ToolOutputStore(workspace_root=workspace_root),
@@ -668,6 +798,10 @@ def create_my_deep_agent(
         workspace_root=workspace_root,
         permissions=permissions,
         resolved_skills=resolved_skills,
+        compaction_preflight=compaction_preflight,
+        context_source_manager=context_source_manager,
+        source_registry=workspace_file_resource_registry,
+        context_source_reactor=context_source_reactor,
         resolved_tool_denylist=resolved_tool_denylist,
         interrupt_on=resolved_interrupt_on,
         runtime_middleware=runtime_middleware,
@@ -695,6 +829,27 @@ def create_my_deep_agent(
         cache=None,
     )
 
+    # OpenSpec 8.4：deep agent 构建路径产出 GraphBinding。持久化的是 factory
+    # selector 四元组（见 app/agents/graph_binding.py），不是 CompiledStateGraph。
+    # 构建即 fail-fast 校验当前 revision 仍可被 registry 解析：descriptor 与
+    # 注册一旦脱节（改了图骨架却没 bump revision / 注册），立即失败而不是让
+    # 重启后的 resolve 才暴露。
+    GRAPH_FACTORY_REGISTRY.resolve(DEEP_AGENT_GRAPH_BINDING)
+    if graph_binding_store is not None:
+        # 持久化 owner 是精确 (session_id, thread_id)；当前单会话 Agent 运行在
+        # main thread。装配方（container）接线该 store 前保持 None，不伪造
+        # 持久化成功。
+        # TODO(OpenSpec 8.4 装配轮)：由 container.py 经统一会话路径解析器构造
+        # thread 节点附属目录的 JsonFileGraphBindingStore 并传入；本轮并行约束
+        # 禁止修改 container.py。
+        graph_binding_store.save_graph_binding(
+            GraphBindingOwnerKey(
+                session_id=session_id,
+                thread_id=MAIN_THREAD_ID,
+            ),
+            DEEP_AGENT_GRAPH_BINDING,
+        )
+
     if hasattr(agent, "with_config"):
         return agent.with_config(
             {
@@ -708,6 +863,13 @@ def create_my_deep_agent(
         )
 
     return agent
+
+
+# OpenSpec 8.4：代码内闭集注册 deep-agent graph family（不提供运行时可配置的
+# 注册扩展点）。resolve 命中即返回本 factory callable；进程重启后 runtime 以
+# 持久化 binding 重新解析到同一 callable，再以每次 invocation 的
+# ThreadRuntimeBinding 注入 session/thread 依赖，factory 自身不闭包捕获 thread。
+GRAPH_FACTORY_REGISTRY.register(DEEP_AGENT_GRAPH_BINDING, create_my_deep_agent)
 
 
 def create_runtime_deep_agent_for_session(
@@ -745,9 +907,12 @@ def create_runtime_deep_agent_for_session(
     model_routing_enabled: bool = True,
     preferred_provider_id: str | None = None,
     tool_timeout_seconds: float | None = None,
-    resource_manager: ResourceManager | None = None,
+    workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
+    reactor_lifetime_scope: LifetimeScope | None = None,
+    on_reactor_created: ReactorCreatedCallback | None = None,
     workspace_root: Path,
     include_team_tools: bool = False,
+    graph_binding_store: GraphBindingStorePort | None = None,
 ):
     if config_service is None:
         raise RuntimeError("create_runtime_deep_agent_for_session 需要显式传入 ConfigService")
@@ -815,10 +980,13 @@ def create_runtime_deep_agent_for_session(
         session_message_delivery_service=session_message_delivery_service,
         mcp_tools=mcp_tools,
         tool_timeout_seconds=tool_timeout_seconds,
-        resource_manager=resource_manager,
+        workspace_file_resource_registry=workspace_file_resource_registry,
+        reactor_lifetime_scope=reactor_lifetime_scope,
+        on_reactor_created=on_reactor_created,
         include_team_tools=include_team_tools,
         interrupt_on={tool_name: True for tool_name in direct_confirmation_tool_names},
         custom_tool_confirmation_names=custom_tool_confirmation_names,
         config_service=service,
         workspace_root=workspace_root,
+        graph_binding_store=graph_binding_store,
     )

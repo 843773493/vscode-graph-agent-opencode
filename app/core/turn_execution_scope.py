@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from app.core.lifecycle import LifetimeHandle, LifetimeScope
+
 
 class ScopeCancelledError(RuntimeError):
     """运行时操作收到结构化取消请求。"""
@@ -55,8 +57,10 @@ class CancellationSignal:
         self._event = asyncio.Event()
         self._hooks: dict[int, CancellationHook] = {}
         self._next_hook_id = 0
+        self._parent = parent
+        self._parent_hook_id: int | None = None
         if parent is not None:
-            parent.add_hook(self._cascade_from_parent)
+            self._parent_hook_id = parent.add_hook(self._cascade_from_parent)
             if parent.is_cancelled:
                 self._cancelled = True
                 self._reason = parent.reason or "parent_cancelled"
@@ -82,6 +86,12 @@ class CancellationSignal:
 
     def remove_hook(self, hook_id: int) -> None:
         self._hooks.pop(hook_id, None)
+
+    def detach_parent(self) -> None:
+        """关闭 child 时解除父取消信号引用，避免已关闭 child 被继续调用。"""
+        if self._parent is not None and self._parent_hook_id is not None:
+            self._parent.remove_hook(self._parent_hook_id)
+            self._parent_hook_id = None
 
     async def cancel(self, reason: str) -> bool:
         if self._cancelled:
@@ -124,16 +134,18 @@ class TurnExecutionScope:
     deadline: float | None = None
     parent: TurnExecutionScope | None = None
     cancellation_signal: CancellationSignal = field(init=False)
-    _children: set[TurnExecutionScope] = field(default_factory=set, init=False)
-    _cleanup_hooks: list[CleanupHook] = field(default_factory=list, init=False)
+    _lifetime_scope: LifetimeScope = field(init=False)
     _abort_hooks: dict[int, CancellationHook] = field(default_factory=dict, init=False)
     _next_abort_hook_id: int = field(default=0, init=False)
     _lease_ids: set[str] = field(default_factory=set, init=False)
     _active_operation: TurnExecutionScope | None = field(default=None, init=False)
     _deadline_handle: asyncio.TimerHandle | None = field(default=None, init=False)
-    _closed: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
+        self._lifetime_scope = LifetimeScope(
+            f"turn:{self.turn_stream_id}",
+            parent=self.parent._lifetime_scope if self.parent is not None else None,
+        )
         parent_signal = self.parent.cancellation_signal if self.parent else None
         self.cancellation_signal = CancellationSignal(parent_signal)
         self.cancellation_signal.add_hook(self._run_abort_hooks)
@@ -147,12 +159,14 @@ class TurnExecutionScope:
                     max(0.0, self.deadline - time.monotonic()),
                     self._schedule_deadline_cancel,
                 )
-        if self.parent is not None:
-            self.parent._children.add(self)
-
     @property
     def is_closed(self) -> bool:
-        return self._closed
+        return self._lifetime_scope.is_closed
+
+    @property
+    def lifetime_scope(self) -> LifetimeScope:
+        """暴露唯一通用释放 owner；不携带 Turn 业务状态。"""
+        return self._lifetime_scope
 
     @property
     def lease_ids(self) -> frozenset[str]:
@@ -173,14 +187,13 @@ class TurnExecutionScope:
             if timeout_seconds <= 0:
                 raise ValueError("child timeout_seconds 必须大于 0")
             deadline = time.monotonic() + timeout_seconds
-        if self._closed:
+        if self._lifetime_scope.state != "open":
             raise RuntimeError("已关闭的 TurnExecutionScope 不能创建 child scope")
         child_scope = TurnExecutionScope(
             turn_stream_id=f"{self.turn_stream_id}:{name}",
             deadline=deadline,
             parent=self,
         )
-        self._children.add(child_scope)
         return child_scope
 
     @property
@@ -201,7 +214,7 @@ class TurnExecutionScope:
             self._active_operation = None
 
     def register_abort(self, hook: CancellationHook) -> int:
-        if self._closed:
+        if self._lifetime_scope.state != "open":
             raise RuntimeError("已关闭的 TurnExecutionScope 不能注册 abort hook")
         hook_id = self._next_abort_hook_id
         self._next_abort_hook_id += 1
@@ -215,16 +228,18 @@ class TurnExecutionScope:
     def remove_abort(self, hook_id: int) -> None:
         self._abort_hooks.pop(hook_id, None)
 
-    def register_cleanup(self, hook: CleanupHook) -> int:
-        if self._closed:
-            raise RuntimeError("已关闭的 TurnExecutionScope 不能注册 cleanup")
-        self._cleanup_hooks.append(hook)
-        return len(self._cleanup_hooks) - 1
+    def register_cleanup(self, hook: CleanupHook) -> LifetimeHandle:
+        """登记 Turn 清理回调，返回可撤销句柄（OpenSpec 3.9）。
+
+        现有调用方只登记不撤销，返回值从 resource_id 变为
+        :class:`LifetimeHandle`；需要提前撤销时调用 ``handle.revoke()``。
+        """
+        return self._lifetime_scope.register(hook, label="turn-cleanup")
 
     def add_lease(self, lease_id: str) -> None:
         if not lease_id:
             raise ValueError("TurnExecutionScope.add_lease 缺少 lease_id")
-        if self._closed:
+        if self._lifetime_scope.state != "open":
             raise RuntimeError("已关闭的 TurnExecutionScope 不能持有 lease")
         self._lease_ids.add(lease_id)
 
@@ -263,35 +278,19 @@ class TurnExecutionScope:
             raise ExceptionGroup("scope abort hook 执行失败", errors)
 
     def _schedule_deadline_cancel(self) -> None:
-        if not self._closed and not self.cancellation_signal.is_cancelled:
+        if self._lifetime_scope.state == "open" and not self.cancellation_signal.is_cancelled:
             asyncio.create_task(self.cancel("scope_deadline_exceeded"))
 
     async def close(self) -> None:
-        if self._closed:
-            return
-        errors: list[Exception] = []
-        for child in tuple(self._children):
-            try:
-                await child.close()
-            except Exception as error:  # noqa: BLE001
-                errors.append(error)
-        for hook in reversed(self._cleanup_hooks):
-            try:
-                result = hook()
-                if inspect.isawaitable(result):
-                    await result
-            except Exception as error:  # noqa: BLE001
-                errors.append(error)
-        self._closed = True
-        if self.parent is not None:
-            self.parent._children.discard(self)
-        if self._deadline_handle is not None:
-            self._deadline_handle.cancel()
-            self._deadline_handle = None
-        self._abort_hooks.clear()
-        self._active_operation = None
-        if errors:
-            raise ExceptionGroup("TurnExecutionScope cleanup 失败", errors)
+        try:
+            await self._lifetime_scope.close()
+        finally:
+            self.cancellation_signal.detach_parent()
+            if self._deadline_handle is not None:
+                self._deadline_handle.cancel()
+                self._deadline_handle = None
+            self._abort_hooks.clear()
+            self._active_operation = None
 
 
 class TurnExecutionScopeRegistry:

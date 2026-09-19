@@ -438,7 +438,7 @@ describe("message stream reducer", () => {
     let state = createMessageStreamState("ses_1", "turn_1");
     state = applyMessageStreamEvent(state, event(1, "tool_call", {
       tool_call_id: "call_1",
-      tool_name: "invoke_custom_tool",
+      tool_name: "invoke_extension_tool",
       arguments: { tool_name: "unknown_tool" },
     }));
     state = applyMessageStreamEvent(state, event(2, "tool_call", {

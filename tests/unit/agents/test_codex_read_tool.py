@@ -543,7 +543,7 @@ async def test_filesystem_tools_reject_escaping_paths(
 
 
 @pytest.mark.asyncio
-async def test_read_file_resolves_agent_visible_bundled_skill_path(
+async def test_read_file_rejects_agent_visible_bundled_skill_path(
     tmp_path: Path,
 ) -> None:
     middleware = FilesystemMiddleware(
@@ -567,14 +567,8 @@ async def test_read_file_resolves_agent_visible_bundled_skill_path(
     )
 
     assert isinstance(result, ToolMessage)
-    assert result.status == "success"
-    assert "# 源码调试工具" in result.content
-    assert result.additional_kwargs == {
-        "workspace_path_scope": "system_skill",
-        "workspace_file_kind": "skill_definition",
-        "skill_source": "bundled",
-        "skill_name": "debugging",
-    }
+    assert result.status == "error"
+    assert "skill_load" in result.content
 
 
 @pytest.mark.asyncio
@@ -603,7 +597,7 @@ async def test_read_file_rejects_non_definition_system_skill_paths(
 
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
-    assert "精确 SKILL.md" in result.content
+    assert "skill_load" in result.content
 
 
 @pytest.mark.asyncio
@@ -611,7 +605,7 @@ async def test_read_file_resolves_model_visible_session_artifact_path(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_relative_artifact"
+    session_id = "ses_74af5c2d34f8436b8a00d59a9fdddb6d"
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     store = ToolOutputStore(
         workspace_root=tmp_path,
@@ -649,6 +643,56 @@ async def test_read_file_resolves_model_visible_session_artifact_path(
     assert isinstance(result, ToolMessage)
     assert result.status == "success"
     assert "MODEL_VISIBLE_ARTIFACT" in result.content
+
+
+@pytest.mark.asyncio
+async def test_grep_resolves_model_visible_session_artifact_path(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_id = "ses_aa2c03d86ae544448f7b390ed9c15dd3"
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
+    store = ToolOutputStore(
+        workspace_root=tmp_path,
+        max_lines=8,
+        max_bytes=1_024,
+    )
+    stored = store.bound(
+        session_id=session_id,
+        tool_name="large_tool",
+        tool_call_id="call_grep_artifact",
+        message=ToolMessage(
+            content="before\nretrieval-target=BOXTEAM_TEST\nafter\n" + "x" * 2_000,
+            tool_call_id="call_grep_artifact",
+        ),
+    )
+    reference = extract_tool_output_reference(stored)
+    assert reference is not None
+    read_path = reference["read_path"]
+    assert isinstance(read_path, str)
+
+    middleware = FilesystemMiddleware(
+        backend=build_workspace_backend(tmp_path),
+        tool_token_limit_before_evict=None,
+    )
+    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    grep_tool = next(item for item in middleware.tools if item.name == "grep")
+    runtime = cast(
+        "ToolRuntime[None, FilesystemState]",
+        SimpleNamespace(tool_call_id="call_grep_relative_artifact"),
+    )
+
+    result = await grep_tool.coroutine(
+        pattern="retrieval-target",
+        path=read_path,
+        output_mode="content",
+        runtime=runtime,
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert result.status == "success"
+    assert "retrieval-target=BOXTEAM_TEST" in result.content
+    assert read_path in result.content
 
 
 def test_all_filesystem_tool_schemas_require_relative_paths(tmp_path: Path) -> None:

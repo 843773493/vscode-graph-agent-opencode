@@ -1,6 +1,6 @@
 import { isRecord } from "../../utils/jsonDisplay";
 
-export const CUSTOM_TOOL_INVOKER_NAME = "invoke_custom_tool";
+export const EXTENSION_TOOL_INVOKER_NAME = "invoke_extension_tool";
 export const UNKNOWN_CUSTOM_TOOL_NAME = "unknown_custom_tool";
 export const INVALID_CUSTOM_TOOL_CALL_NAME = "invalid_custom_tool_call";
 
@@ -75,7 +75,7 @@ export function customToolTargetNameFromArgs(args: Record<string, unknown>): str
 }
 
 export function customToolTargetNameFromCall(call: unknown): string {
-  if (customToolCallName(call) !== CUSTOM_TOOL_INVOKER_NAME) {
+  if (customToolCallName(call) !== EXTENSION_TOOL_INVOKER_NAME) {
     return "";
   }
   return customToolTargetNameFromArgs(customToolCallArgs(call));
@@ -83,15 +83,15 @@ export function customToolTargetNameFromCall(call: unknown): string {
 
 export function customToolDisplayCallName(call: unknown): string {
   const name = customToolCallName(call);
-  if (name !== CUSTOM_TOOL_INVOKER_NAME) {
+  if (name !== EXTENSION_TOOL_INVOKER_NAME) {
     return name;
   }
   const targetName = customToolTargetNameFromCall(call);
-  return targetName ? `${CUSTOM_TOOL_INVOKER_NAME} -> ${targetName}` : name;
+  return targetName ? `${EXTENSION_TOOL_INVOKER_NAME} -> ${targetName}` : name;
 }
 
 export function customToolInvocationLabel(targetToolName: string): string {
   return targetToolName
-    ? `${CUSTOM_TOOL_INVOKER_NAME} -> ${targetToolName}`
-    : CUSTOM_TOOL_INVOKER_NAME;
+    ? `${EXTENSION_TOOL_INVOKER_NAME} -> ${targetToolName}`
+    : EXTENSION_TOOL_INVOKER_NAME;
 }

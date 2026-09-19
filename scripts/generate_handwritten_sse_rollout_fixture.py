@@ -37,10 +37,10 @@ from app.agents.providers.anthropic_messages import BoxteamAnthropicMessagesMode
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.session_paths import SessionPathResolver
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.core.session_paths import SessionPathResolver
 from app.testing.model_stream import (
     ModelStreamHTTPTransport,
     StreamScenario,
@@ -165,7 +165,7 @@ def _large_tool_interaction(
         function = call.get("function")
         if not isinstance(function, dict):
             continue
-        function["name"] = "invoke_custom_tool"
+        function["name"] = "invoke_extension_tool"
         function["arguments"] = json.dumps(args, ensure_ascii=False)
         replaced = True
         break
@@ -569,7 +569,7 @@ async def _generate_session(
             call_id = str(call["id"])
             tool_name = str(call.get("name") or "read_file")
             if large_tools:
-                call["name"] = "invoke_custom_tool"
+                call["name"] = "invoke_extension_tool"
                 call["args"] = {
                     "tool_name": "large_test_output",
                     "arguments": {
@@ -579,7 +579,7 @@ async def _generate_session(
                         "query_context": _large_payload(f"LARGE_CALL turn-{turn:04d}"),
                     },
                 }
-                tool_name = "invoke_custom_tool"
+                tool_name = "invoke_extension_tool"
                 tool_result = _large_payload(f"LARGE_RESULT turn-{turn:04d}")
             else:
                 tool_result = json.dumps(

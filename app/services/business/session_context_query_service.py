@@ -723,14 +723,21 @@ class SessionContextQueryService:
         await self._session_lookup.get(resource.session_id)
         state = await self._message_source.get_agent_context_state(resource.session_id)
         encoded = json.dumps(
-            state["records"],
+            {
+                "records": state["records"],
+                "raw_message_count": state["raw_message_count"],
+                "compacted": state["compacted"],
+                "compaction_cutoff": state["compaction_cutoff"],
+            },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        content_revision = hashlib.sha256(encoded).hexdigest()
-        checkpoint_id = state["checkpoint_id"].strip()
-        revision = checkpoint_id or f"content:{content_revision}"
+        # checkpoint_id 只用于 Saver 定位，不能作为查询 revision：同一份
+        # 有效快照可能通过不同查询入口返回，而 checkpoint id 不表示投影内容。
+        # revision 必须由查询面实际看到的快照计算，保证 read/search/locator
+        # 之间可以安全复用 expected_revision 和 cursor。
+        revision = f"content:{hashlib.sha256(encoded).hexdigest()}"
         return _SessionContextSnapshot(
             resource=resource.base,
             session_id=resource.session_id,

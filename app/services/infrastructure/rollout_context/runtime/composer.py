@@ -60,8 +60,10 @@ class ContextPlanComposer:
             # overlay base/delta contributions are manifest backing records for
             # an explicit overlay ref. They must not also become a second
             # request-only selection entry; the assembly selection carries the
-            # contribution_id binding exactly once.
-            if contribution.metadata.get("selection_only") is True:
+            # contribution_id binding exactly once. 角色由 typed
+            # contribution_kind 闭合集承载，metadata 中的 selection_only
+            # 历史 flag 不再拥有解释权。
+            if contribution.contribution_kind in {"overlay_base", "overlay_delta"}:
                 continue
             if contribution.content_length is None:
                 raise DetailUnavailableError(
@@ -232,6 +234,7 @@ class ContextPlanComposer:
                 redacted_stable_digest=contribution.redacted_stable_digest,
                 visibility=contribution.visibility,
                 protection=contribution.protection,
+                root_placement=contribution.root_placement,
                 assembly_id=assembly_id,
                 contribution_ordinal=ordinal,
             )

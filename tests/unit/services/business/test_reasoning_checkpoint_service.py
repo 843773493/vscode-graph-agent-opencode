@@ -72,7 +72,7 @@ async def test_persist_user_message_checkpoint_is_idempotent(
     session_bundle_factory,
     accept_previous_message,
 ):
-    session_id = "sess_user_checkpoint"
+    session_id = "ses_69da9815c55649f082b182e532a22367"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     previous_message = accept_previous_message(saver, session_id)
@@ -119,7 +119,7 @@ def test_persist_user_message_checkpoint_preserves_internal_acceptance_metadata(
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "sess_internal_acceptance"
+    session_id = "ses_3754dc4e89eb4a668c294421ee2ae558"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     message = HumanMessage(
@@ -173,7 +173,7 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
     session_bundle_factory,
     accept_previous_message,
 ):
-    session_id = "sess_checkpoint_stale_tasks"
+    session_id = "ses_7b2f2f84bc35456e8071c691db7f2ca8"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     previous_message = accept_previous_message(saver, session_id)
@@ -234,7 +234,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "sess_standard_assistant"
+    session_id = "ses_68b6d4ac434b450b8327ae2775447777"
     session_bundle_factory(tmp_path, session_id)
     reasoning_text = "用户只要求回复 OK。"
     final_text = "OK"
@@ -363,7 +363,7 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "sess_encrypted_reasoning"
+    session_id = "ses_d19bb63df7864d998bb7993f182b7426"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     config = build_checkpoint_config(session_id)
@@ -416,7 +416,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "sess_system_reminder_state"
+    session_id = "ses_718399a9bca34ffb8b970cc05f8bafca"
     session_bundle_factory(tmp_path, session_id)
     first_reasoning = "先调用工具。"
     final_reasoning = "只回复工具 stdout。"

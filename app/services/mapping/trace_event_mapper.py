@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from app.schemas.internal_v2.trace import TraceEventDTO
 
 
 class TraceEventMapper:
-    _SUPPORTED_TYPES = {
+    _SUPPORTED_TYPES: ClassVar[frozenset[str]] = frozenset({
         "agent_start",
         "agent_step",
         "llm_request",
@@ -29,7 +29,9 @@ class TraceEventMapper:
         "session_interrupted",
         "goal_updated",
         "goal_cleared",
-    }
+        "debug_stop",
+        "debug_action",
+    })
 
     def map_many(self, events: list[dict[str, Any]], session_id: str = "") -> list[TraceEventDTO]:
         mapped: list[TraceEventDTO] = []
@@ -149,6 +151,16 @@ class TraceEventMapper:
             return "text", "文本流", payload.get("text") or "助手正在流式输出", "running", None
         if event_type == "text_end":
             return "text", "文本结束", payload.get("text") or "助手文本生成结束", "completed", None
+        if event_type == "debug_stop":
+            tool_name = payload.get("tool_name")
+            reason = payload.get("reason") or "断点命中"
+            explanation = payload.get("explanation") or reason
+            return "debug", "调试暂停", str(explanation), "running", tool_name
+        if event_type == "debug_action":
+            tool_name = payload.get("tool_name")
+            action = payload.get("action") or "debug_action"
+            message = payload.get("message") or f"调试动作：{action}"
+            return "debug", "调试动作", str(message), "completed", tool_name
         if event_type == "session_interrupted":
             phase = payload.get("phase") or "text"
             tool_name = payload.get("tool_name")

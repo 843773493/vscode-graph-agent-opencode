@@ -15,6 +15,30 @@ from app.services.infrastructure.gateway_session_context_client import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
+    """R18 测试内 hermetic 修复：清掉本机代理环境变量。
+
+    本文件用例全部针对 127.0.0.1 假端点构造 httpx 客户端（request 均被
+    monkeypatch 替换），自身不经任何网络；而环境的 NO_PROXY 含 IPv6 字
+    面量（``::1``/``[::1]``）会让 httpx 客户端构造时的代理解析直接抛
+    ``InvalidURL: Invalid port: ':1]'``——属外部环境噪声混入测试。与
+    R17 的 /tmp→tmp_path 同类测试卫生修复（任务书 §2.2 许可的 monkeypatch
+    清 ``*_proxy`` 做法）；清掉后客户端不取代理，与用例意图一致。
+    """
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 def _read_request(workspace_id: str, session_id: str = "ses_target"):
     return SessionContextReadRequest(
         resource=f"boxteam://workspace/{workspace_id}/session/{session_id}"

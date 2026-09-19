@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +18,11 @@ FILE_WATCH_STEP_MS = 50
 FILE_WATCH_QUEUE_SIZE = 32
 WORKSPACE_FILE_WATCH_FILTER = DefaultFilter(
     ignore_dirs=[*DefaultFilter.ignore_dirs, ".boxteam"],
+)
+# 底层共享 watcher 必须能看到 ResourceRegistry 登记的内部资源；是否向
+# 订阅者暴露由 `_publish` 按订阅选项决定。
+_RESOURCE_FILE_WATCH_FILTER = DefaultFilter(
+    ignore_dirs=list(DefaultFilter.ignore_dirs),
 )
 
 
@@ -37,7 +42,7 @@ class WorkspaceFileChangeBatch:
 @dataclass(slots=True)
 class _SharedWatcher:
     task: asyncio.Task[None]
-    subscribers: set[asyncio.Queue[WorkspaceFileChangeBatch]]
+    subscribers: dict[asyncio.Queue[WorkspaceFileChangeBatch], bool]
     ready: asyncio.Event
 
 
@@ -73,25 +78,49 @@ class WorkspaceFileWatchService:
     async def subscribe(
         self,
         extra_paths: Iterable[str],
+        *,
+        include_internal_paths: bool = False,
     ) -> AsyncIterator[WorkspaceFileChangeBatch]:
         async for batch in self.subscribe_roots(
             self.resolve_watch_roots(extra_paths),
+            include_internal_paths=include_internal_paths,
         ):
             yield batch
 
     async def subscribe_roots(
         self,
         roots: tuple[Path, ...],
+        *,
+        include_internal_paths: bool = False,
     ) -> AsyncIterator[WorkspaceFileChangeBatch]:
         queue: asyncio.Queue[WorkspaceFileChangeBatch] = asyncio.Queue(
             maxsize=FILE_WATCH_QUEUE_SIZE,
         )
-        await self._acquire(roots, queue)
+        await self._acquire(
+            roots,
+            queue,
+            include_internal_paths=include_internal_paths,
+        )
         try:
             while True:
                 yield await queue.get()
         finally:
             await self._release(roots, queue)
+
+    async def wait_until_ready(self, roots: tuple[Path, ...]) -> None:
+        """等待指定共享 watcher 已完成首次底层监听初始化。"""
+        resolved_roots = tuple(path.resolve() for path in roots)
+        for root in resolved_roots:
+            while True:
+                async with self._lock:
+                    watcher = self._watchers.get(root)
+                if watcher is None:
+                    await asyncio.sleep(0)
+                    continue
+                await watcher.ready.wait()
+                if watcher.task.done():
+                    watcher.task.result()
+                break
 
     async def shutdown(self) -> None:
         async with self._lock:
@@ -111,6 +140,8 @@ class WorkspaceFileWatchService:
         self,
         roots: tuple[Path, ...],
         queue: asyncio.Queue[WorkspaceFileChangeBatch],
+        *,
+        include_internal_paths: bool,
     ) -> None:
         watchers_to_ready: list[_SharedWatcher] = []
         async with self._lock:
@@ -119,7 +150,7 @@ class WorkspaceFileWatchService:
                 if watcher is None or watcher.task.done():
                     if watcher is not None:
                         watcher.task.result()
-                    subscribers = {queue}
+                    subscribers = {queue: include_internal_paths}
                     ready = asyncio.Event()
                     task = asyncio.create_task(
                         self._watch_root(root, subscribers, ready),
@@ -132,7 +163,7 @@ class WorkspaceFileWatchService:
                     )
                     self._watchers[root] = watcher
                 else:
-                    watcher.subscribers.add(queue)
+                    watcher.subscribers[queue] = include_internal_paths
                 watchers_to_ready.append(watcher)
         for watcher in watchers_to_ready:
             await watcher.ready.wait()
@@ -150,7 +181,7 @@ class WorkspaceFileWatchService:
                 watcher = self._watchers.get(root)
                 if watcher is None:
                     continue
-                watcher.subscribers.discard(queue)
+                watcher.subscribers.pop(queue, None)
                 if watcher.subscribers:
                     continue
                 if self._watchers.get(root) is watcher:
@@ -165,7 +196,7 @@ class WorkspaceFileWatchService:
     async def _watch_root(
         self,
         root: Path,
-        subscribers: set[asyncio.Queue[WorkspaceFileChangeBatch]],
+        subscribers: dict[asyncio.Queue[WorkspaceFileChangeBatch], bool],
         ready: asyncio.Event,
     ) -> None:
         logger.info("开始共享文件监听: root=%s", root)
@@ -173,7 +204,9 @@ class WorkspaceFileWatchService:
             first_iteration = True
             async for raw_changes in awatch(
                 root,
-                watch_filter=WORKSPACE_FILE_WATCH_FILTER,
+                # 先接收内部资源，再按订阅者过滤；否则 ResourceRegistry
+                # 永远收不到 `.boxteam/skills` 的变化。
+                watch_filter=_RESOURCE_FILE_WATCH_FILTER,
                 debounce=FILE_WATCH_DEBOUNCE_MS,
                 step=FILE_WATCH_STEP_MS,
                 rust_timeout=FILE_WATCH_STEP_MS,
@@ -188,10 +221,13 @@ class WorkspaceFileWatchService:
                         path=str(Path(path).resolve()),
                     )
                     for change, path in sorted(raw_changes, key=lambda item: item[1])
-                    if not self._is_internal_workspace_path(Path(path))
                 )
                 if changes:
-                    self._publish(subscribers, WorkspaceFileChangeBatch(changes=changes))
+                    self._publish(
+                        subscribers,
+                        WorkspaceFileChangeBatch(changes=changes),
+                        internal_root=self._workspace_root / ".boxteam",
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -206,20 +242,47 @@ class WorkspaceFileWatchService:
 
     @staticmethod
     def _publish(
-        subscribers: set[asyncio.Queue[WorkspaceFileChangeBatch]],
+        subscribers: (
+            Mapping[asyncio.Queue[WorkspaceFileChangeBatch], bool]
+            | set[asyncio.Queue[WorkspaceFileChangeBatch]]
+        ),
         batch: WorkspaceFileChangeBatch,
+        *,
+        internal_root: Path | None = None,
     ) -> None:
-        for queue in tuple(subscribers):
+        if isinstance(subscribers, set):
+            subscriber_items = tuple((queue, True) for queue in subscribers)
+        else:
+            subscriber_items = tuple(subscribers.items())
+        for queue, include_internal_paths in subscriber_items:
+            if (
+                internal_root is not None
+                and not include_internal_paths
+                and batch.error is None
+                and not batch.overflow
+            ):
+                changes = tuple(
+                    change
+                    for change in batch.changes
+                    if not _is_path_under(change.path, internal_root)
+                )
+                if not changes:
+                    continue
+                batch_for_subscriber = WorkspaceFileChangeBatch(
+                    changes=changes,
+                )
+            else:
+                batch_for_subscriber = batch
             if queue.full():
                 while not queue.empty():
                     queue.get_nowait()
                 queue.put_nowait(
-                    batch
-                    if batch.error is not None
+                    batch_for_subscriber
+                    if batch_for_subscriber.error is not None
                     else WorkspaceFileChangeBatch(overflow=True)
                 )
                 continue
-            queue.put_nowait(batch)
+            queue.put_nowait(batch_for_subscriber)
 
     @staticmethod
     def _change_kind(change: Change) -> Literal["create", "edit", "delete"]:
@@ -231,11 +294,9 @@ class WorkspaceFileWatchService:
             return "edit"
         raise ValueError(f"未知文件变更类型: {change}")
 
-    def _is_internal_workspace_path(self, path: Path) -> bool:
-        """过滤工作区内部状态，避免会话状态刷新文件树。"""
-        internal_root = self._workspace_root / ".boxteam"
-        try:
-            path.resolve().relative_to(internal_root)
-        except ValueError:
-            return False
-        return True
+def _is_path_under(path: str, root: Path) -> bool:
+    try:
+        Path(path).resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True

@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_file, get_session_path, get_sessions_dir
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import (
     SessionCreateRequest,
     SessionUpdateRequest,
@@ -20,6 +21,10 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 class TestSessionService:
     """测试会话服务功能"""
 
+    # R17：不再硬编码假 workspace_id——catalog 模式下 resolver 的
+    # workspace_id 来自 identity API（load_or_create_workspace_id），
+    # register 会校验 manifest workspace_id 与分配一致；service 必须与
+    # resolver 同源。真实值在 setup_method 按同一来源计算（实例属性遮蔽）。
     workspace_id = "00000000-0000-4000-8000-000000000001"
 
     def setup_method(self):
@@ -31,6 +36,13 @@ class TestSessionService:
         os.environ["WORKSPACE_ROOT"] = self.temp_dir
 
         get_sessions_dir().mkdir(exist_ok=True, parents=True)
+        # 与 path_utils._build_session_catalog_resolver 同源：标准布局下
+        # 工作区根 = sessions 目录上溯两级（temp_dir/.boxteam/sessions）。
+        from app.core.workspace_identity import load_or_create_workspace_id
+
+        self.workspace_id = load_or_create_workspace_id(
+            get_sessions_dir().parent.parent
+        )
         self.trace_event_store = TraceEventStore(sessions_dir=get_sessions_dir())
         self.service = SessionService(
             config_service=ConfigService(),
@@ -72,8 +84,18 @@ class TestSessionService:
         data = json.loads(session_file.read_text(encoding="utf-8"))
         assert data["session_id"] == session.session_id
         assert data["workspace_id"] == self.workspace_id
-        assert data["title"] == "Test Session"
-        assert data["title_source"] == "user"
+        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
+            # 新模型：title/title_source 权威在 catalog（display_name），
+            # manifest 按 8.2 剥离口径不承载两键。
+            assert "title" not in data
+            assert "title_source" not in data
+            assert (
+                self.service.path_resolver.get_node(session.session_id).name
+                == "Test Session"
+            )
+        else:
+            assert data["title"] == "Test Session"
+            assert data["title_source"] == "user"
         assert data["current_agent_id"] == session.current_agent_id
         assert data["current_provider_id"] == "primary"
 
@@ -92,9 +114,19 @@ class TestSessionService:
         result = await self.service.list()
 
         assert [item.session_id for item in result.items] == [session.session_id]
-        assert self.service.path_resolver.resolve_session_node_for_runtime(
+        resolved = self.service.path_resolver.resolve_session_node_for_runtime(
             session.session_id
-        ) == get_sessions_dir() / folder.node_id / session.session_id
+        )
+        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
+            # 新模型：folder 无物理目录，session 物理目录是日期桶；孤立
+            # 物理目录不进入 catalog 读模型（语义等价锁定：仍按 ID 解析）。
+            assert resolved.name == session.session_id
+            assert resolved.is_relative_to(get_sessions_dir())
+        else:
+            assert (
+                resolved
+                == get_sessions_dir() / folder.node_id / session.session_id
+            )
 
     @pytest.mark.asyncio
     async def test_update_session_provider_is_persisted(self):
@@ -244,64 +276,15 @@ class TestSessionService:
         assert session.current_agent_id == "default"
 
     @pytest.mark.asyncio
-    async def test_create_delegated_session_persists_provenance(self):
-        parent = await self.service.create(SessionCreateRequest(title="Parent"))
-
-        child = await self.service.create_delegated(
-            title="Delegated",
-            agent_id=parent.current_agent_id,
-            parent_session_id=parent.session_id,
-            parent_job_id="job_parent",
-            parent_tool_call_id="call_task",
-            subagent_type="general-purpose",
-        )
-
-        assert child.parent_session_id == parent.session_id
-        assert child.kind == "delegated"
-        assert child.delegation is not None
-        assert child.delegation.parent_tool_call_id == "call_task"
-        persisted = await self.service.get(child.session_id)
-        assert persisted == child
-
-        failed = await self.service.set_delegation_start_result(
-            child.session_id,
-            status="failed",
-            error="调度器不可用",
-        )
-        assert failed.delegation is not None
-        assert failed.delegation.start_status == "failed"
-        assert failed.delegation.start_error == "调度器不可用"
-        assert await self.service.get(child.session_id) == failed
-
-    @pytest.mark.asyncio
     async def test_public_create_rejects_internal_session_kind(self):
         with pytest.raises(ValidationError, match="kind"):
             SessionCreateRequest.model_validate(
-                {"title": "Broken", "kind": "delegated"}
+                {"title": "Broken", "kind": "context_fork"}
             )
 
     def test_generic_update_rejects_parent_change(self):
         with pytest.raises(ValidationError, match="parent_session_id"):
             SessionUpdateRequest.model_validate({"parent_session_id": None})
-
-    @pytest.mark.asyncio
-    async def test_detaching_delegated_session_keeps_immutable_provenance(self):
-        parent = await self.service.create(SessionCreateRequest(title="Parent"))
-        child = await self.service.create_delegated(
-            title="Delegated",
-            agent_id=parent.current_agent_id,
-            parent_session_id=parent.session_id,
-            parent_job_id="job_parent",
-            parent_tool_call_id="call_task",
-            subagent_type="general-purpose",
-        )
-
-        detached = await self.service.move_session(child.session_id, None)
-
-        assert detached.parent_session_id is None
-        assert detached.kind == "delegated"
-        assert detached.delegation is not None
-        assert detached.delegation.parent_session_id == parent.session_id
 
     @pytest.mark.asyncio
     async def test_update_session_can_switch_agent(self):
@@ -326,6 +309,12 @@ class TestSessionService:
         session_file = get_session_file(session.session_id)
         data = json.loads(session_file.read_text(encoding="utf-8"))
         data["workspace_id"] = "ws_local"
+        # catalog 模式下落盘 manifest 是剥离形态（缺 title/title_source），
+        # 迁移入口只对「完整旧形态」做 SessionDTO 校验与重写（剥离形态 +
+        # legacy ID 组合在生产不可达，见 _migrate_legacy_workspace_ids）；
+        # 此处补齐构造完整旧形态再触发迁移。
+        data.setdefault("title", "迁移旧 ID")
+        data.setdefault("title_source", "user")
         session_file.write_text(json.dumps(data), encoding="utf-8")
 
         restarted_service = SessionService(
@@ -366,8 +355,18 @@ class TestSessionService:
 
         session_file = get_session_file(created.session_id)
         data = json.loads(session_file.read_text(encoding="utf-8"))
-        assert data["title"] == "Updated Title"
-        assert data["title_source"] == "user"
+        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
+            # 新模型：title/title_source 是 catalog 权威字段，manifest 按
+            # 8.2 剥离口径不再承载（R16 切片3b-1 换源语义）。
+            assert "title" not in data
+            assert "title_source" not in data
+            assert (
+                self.service.path_resolver.get_node(created.session_id).name
+                == "Updated Title"
+            )
+        else:
+            assert data["title"] == "Updated Title"
+            assert data["title_source"] == "user"
 
     @pytest.mark.asyncio
     async def test_update_session_can_mark_auto_title_source(self):
@@ -395,11 +394,21 @@ class TestSessionService:
 
         assert bound_child.parent_session_id == parent.session_id
         assert (await self.service.get(child.session_id)).parent_session_id == parent.session_id
-        parent_path = self.service.path_resolver.resolve_session_node(parent.session_id)
-        assert (
-            self.service.path_resolver.resolve_session_node(child.session_id).parent
-            == parent_path / "children"
-        )
+        resolver = self.service.path_resolver
+        parent_path = resolver.resolve_session_node(parent.session_id)
+        if isinstance(resolver, SessionCatalogPathResolver):
+            # 新模型：父子是 catalog 逻辑关系，物理目录都在日期桶下（无
+            # children/ 物理子树），父会话目录物理上不包含子会话目录。
+            child_path = resolver.resolve_session_node(child.session_id)
+            assert child_path.parent == parent_path.parent
+            assert resolver.get_node(child.session_id).parent_node_id == (
+                parent.session_id
+            )
+        else:
+            assert (
+                resolver.resolve_session_node(child.session_id).parent
+                == parent_path / "children"
+            )
 
         unbound_child = await self.service.move_session(child.session_id, None)
 
@@ -409,9 +418,15 @@ class TestSessionService:
             self.service.path_resolver.resolve_session_node(child.session_id).parent
             == parent_path.parent
         )
-        assert self.service.path_resolver.resolve_session_node(
-            grandchild.session_id
-        ).is_relative_to(self.service.path_resolver.resolve_session_node(child.session_id))
+        if isinstance(resolver, SessionCatalogPathResolver):
+            # 新模型等价锁定：grandchild 仍是 child 的逻辑后代。
+            assert grandchild.session_id in resolver.descendant_session_ids(
+                child.session_id, include_self=True
+            )
+        else:
+            assert self.service.path_resolver.resolve_session_node(
+                grandchild.session_id
+            ).is_relative_to(self.service.path_resolver.resolve_session_node(child.session_id))
 
     @pytest.mark.asyncio
     async def test_moving_parent_session_carries_complete_child_tree(self):
@@ -442,8 +457,21 @@ class TestSessionService:
             child.session_id
         )
         assert moved.parent_session_id is None
-        assert moved_parent_path.parent == target_folder.path
-        assert moved_child_path.parent == moved_parent_path / "children"
+        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
+            # 新模型：逻辑移动不搬磁盘——parent 挂到 folder 是 catalog 关系
+            # （folder 无物理目录），物理目录保持在日期桶；子会话仍是父的
+            # 逻辑后代。
+            assert moved_parent_path.parent == child_path_before.parent
+            assert moved_child_path.parent == moved_parent_path.parent
+            assert self.service.path_resolver.get_node(
+                parent.session_id
+            ).parent_node_id == target_folder.node_id
+            assert self.service.path_resolver.get_node(
+                child.session_id
+            ).parent_node_id == parent.session_id
+        else:
+            assert moved_parent_path.parent == target_folder.path
+            assert moved_child_path.parent == moved_parent_path / "children"
         assert moved_child_path.name == child_path_before.name
 
     @pytest.mark.asyncio
@@ -466,7 +494,15 @@ class TestSessionService:
         moved_path = self.service.path_resolver.resolve_session_node(
             session.session_id
         )
-        assert moved_path.parent == target_folder.path
+        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
+            # 新模型：物理叶名稳定（日期桶内目录名 == session_id），与
+            # folder 的挂载关系由 catalog 承载（folder 无物理目录）。
+            assert moved_path.name == session.session_id
+            assert self.service.path_resolver.get_node(
+                session.session_id
+            ).parent_node_id == target_folder.node_id
+        else:
+            assert moved_path.parent == target_folder.path
         assert moved_path.name == original_path.name
         assert (await self.service.get(session.session_id)).title == "Updated Title"
 
@@ -495,8 +531,13 @@ class TestSessionService:
         grandchild_path = self.service.path_resolver.resolve_session_node(
             grandchild.session_id
         )
-        assert child_path.parent == parent_path / "children"
-        assert grandchild_path.parent == child_path / "children"
+        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
+            # 新模型：物理目录均在同一日期桶，级联父子关系由 catalog 承载。
+            assert child_path.parent == parent_path.parent
+            assert grandchild_path.parent == child_path.parent
+        else:
+            assert child_path.parent == parent_path / "children"
+            assert grandchild_path.parent == child_path / "children"
 
         with pytest.raises(RuntimeError, match="显式确认级联删除"):
             await self.service.delete(parent.session_id)

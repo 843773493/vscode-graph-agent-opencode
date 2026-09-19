@@ -21,10 +21,6 @@ NormalizedBlockObserver = Callable[[str, Mapping[str, object]], Awaitable[None]]
 CanonicalItemSink = Callable[[Sequence[CanonicalItemRecord]], Awaitable[None]]
 ModelCallRegistrar = Callable[[str, int, str], Awaitable[str | None]]
 ModelCallOutcomeSink = Callable[[str, str], Awaitable[None]]
-
-
-
-
 class MessageStreamRuntime(
     StreamBlockAssemblyMixin,
     StreamToolRegistryMixin,
@@ -83,7 +79,9 @@ class MessageStreamRuntime(
         self._tool_invocation_ids_by_call_id: dict[str, str] = {}
         self._tool_call_model_call_ids: dict[str, str | None] = {}
         self._claimed_tool_call_ids: set[str] = set()
+        self._reconciled_late_claimed_tool_call_ids: set[str] = set()
         self._completed_tool_call_ids: set[str] = set()
+        self._reconciled_tool_call_ids: set[str] = set()
         self._completed_tool_result_call_ids: set[str] = set()
         self._completed_tool_result_execution_by_call_id: dict[str, str] = {}
         self._completed_tool_execution_ids: set[str] = set()

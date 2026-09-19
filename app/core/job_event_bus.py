@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Any, Deque, Dict, Set
+from typing import Any, Final
 
 from app.abstractions.job_event_bus import (
     DurableEventListener,
@@ -23,6 +22,10 @@ from app.schemas.event import (
     AgentStepEvent,
     AgentStepPayload,
     BaseEvent,
+    DebugActionEvent,
+    DebugActionPayload,
+    DebugStopEvent,
+    DebugStopPayload,
     ErrorEvent,
     ErrorPayload,
     Event,
@@ -62,7 +65,22 @@ from app.schemas.event import (
     ToolCallStartPayload,
 )
 
+# OpenSpec 3.8-B：Job event bus 是通用 EventChannelService 之上的 typed
+# adapter；该依赖方向由 OpenSpec 指定（events 基础设施位于
+# app/services/infrastructure/events/，channel 队列/溢出/历史语义由它承载）。
+from app.services.infrastructure.events.event_channel_service import (
+    JOB_EVENTS_CHANNEL_KIND,
+    EventChannel,
+    EventChannelService,
+    EventChannelSpec,
+    channel_name,
+)
+
 logger = logging.getLogger(__name__)
+
+# 临时订阅队列上限与短期历史长度保持既有行为不变。
+JOB_EVENT_QUEUE_SIZE: Final[int] = 100
+JOB_EVENT_HISTORY_SIZE: Final[int] = 1000
 
 
 class EventSubscription(asyncio.Queue[Event]):
@@ -157,6 +175,10 @@ class EventType:
     # Session 打断
     SESSION_INTERRUPTED = "session_interrupted"
 
+    # 调试动作审计
+    DEBUG_ACTION = "debug_action"
+    DEBUG_STOP = "debug_stop"
+
 @dataclass(frozen=True)
 class EventFactorySpec:
     event_type: str
@@ -167,7 +189,7 @@ class EventFactorySpec:
         self,
         *,
         job_id: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         step_id: str | None,
         agent_id: str | None,
     ) -> Event:
@@ -179,7 +201,7 @@ class EventFactorySpec:
             job_id=job_id,
             step_id=step_id,
             agent_id=agent_id,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             type=self.event_type,
             payload=self.payload_class(**event_payload),
         )
@@ -207,23 +229,76 @@ EVENT_FACTORY_REGISTRY: dict[str, EventFactorySpec] = {
     EventType.TOOL_CALL_END: EventFactorySpec(EventType.TOOL_CALL_END, ToolCallEndEvent, ToolCallEndPayload),
     EventType.ERROR: EventFactorySpec(EventType.ERROR, ErrorEvent, ErrorPayload),
     EventType.SESSION_INTERRUPTED: EventFactorySpec(EventType.SESSION_INTERRUPTED, SessionInterruptedEvent, SessionInterruptedPayload),
+    EventType.DEBUG_ACTION: EventFactorySpec(EventType.DEBUG_ACTION, DebugActionEvent, DebugActionPayload),
+    EventType.DEBUG_STOP: EventFactorySpec(EventType.DEBUG_STOP, DebugStopEvent, DebugStopPayload),
 }
 
 
+class _EventSubscriptionSink:
+    """把 :class:`EventSubscription` 适配成 channel 的 fail_closed sink 合同。
+
+    溢出时 ``EventSubscription.offer`` 自己记录 :class:`EventSubscriberOverflowError`；
+    这里负责把溢出显式写入日志后返回 False，由 channel 把订阅者从后续投递移除。
+    """
+
+    __slots__ = ("subscription",)
+
+    def __init__(self, subscription: EventSubscription) -> None:
+        self.subscription = subscription
+
+    def offer(self, event: Event, *, sequence: int) -> bool:
+        accepted = self.subscription.offer(event)
+        if not accepted:
+            error = self.subscription.overflow_error
+            if error is not None:
+                logger.error(
+                    "%s metadata=%s created_at=%s",
+                    error,
+                    dict(self.subscription.metadata),
+                    self.subscription.created_at.isoformat(),
+                )
+        return accepted
+
+
 class JobEventBus:
-    def __init__(self):
-        self._job_events: Dict[str, Deque[Event]] = {}
-        self._subscribers: Dict[str, Set[EventSubscription]] = {}
-        self._durable_listeners: Set[DurableEventListener] = set()
-        self._max_history: int = 1000
+    """`job.events/{job_id}` channel 的 typed adapter（OpenSpec 3.8-B）。
+
+    订阅者队列、溢出移除与短期历史由通用 :class:`EventChannelService` 承载；
+    本类只保留 Job 域职责：事件工厂（``EVENT_FACTORY_REGISTRY``）、durable
+    listener 发布事务顺序（先持久化监听器，后内存历史与临时订阅者广播）和
+    per-job publish 锁串行化。durable listener 属于 Job 事件的持久化适配，
+    不是通用 channel 合同的一部分；资源事件不得进入本总线。
+    """
+
+    def __init__(self, *, event_service: EventChannelService | None = None) -> None:
+        self._event_service = event_service or EventChannelService()
+        self._durable_listeners: set[DurableEventListener] = set()
         self._lock = asyncio.Lock()
-        self._job_publish_locks: Dict[str, asyncio.Lock] = {}
+        self._job_publish_locks: dict[str, asyncio.Lock] = {}
+
+    @property
+    def event_channel_service(self) -> EventChannelService:
+        """暴露进程内 channel 服务，供组合根共享同一条事件基础设施。"""
+        return self._event_service
+
+    def _channel_for(self, job_id: str) -> EventChannel[Event]:
+        """取得或创建 `job.events/{job_id}` channel（fail_closed + 短期历史）。"""
+        if not isinstance(job_id, str) or not job_id:
+            raise ValueError("job_id 必须是非空字符串")
+        return self._event_service.ensure_channel(
+            EventChannelSpec(
+                name=channel_name(JOB_EVENTS_CHANNEL_KIND, job_id),
+                overflow_policy="fail_closed",
+                max_queue_size=JOB_EVENT_QUEUE_SIZE,
+                history_size=JOB_EVENT_HISTORY_SIZE,
+            )
+        )
 
     async def publish(
         self,
         job_id: str,
         event_type: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         step_id: str | None = None,
         agent_id: str | None = None,
     ) -> Event:
@@ -236,6 +311,7 @@ class JobEventBus:
 
         # 根据 event_type 构建具体的事件对象
         event = self._build_event(job_id, event_type, payload, step_id, agent_id)
+        channel = self._channel_for(job_id)
         async with self._lock:
             publish_lock = self._job_publish_locks.setdefault(job_id, asyncio.Lock())
 
@@ -248,25 +324,10 @@ class JobEventBus:
             for listener in durable_listeners:
                 await listener(event)
 
-            # 持久化成功后再更新内存历史并广播给临时订阅者。
-            async with self._lock:
-                if job_id not in self._job_events:
-                    self._job_events[job_id] = deque(maxlen=self._max_history)
-                self._job_events[job_id].append(event)
-
-                subscribers = self._subscribers.get(job_id)
-                if subscribers:
-                    overflowed = [subscription for subscription in subscribers if not subscription.offer(event)]
-                    for subscription in overflowed:
-                        subscribers.remove(subscription)
-                        logger.error(
-                            "%s metadata=%s created_at=%s",
-                            subscription.overflow_error,
-                            dict(subscription.metadata),
-                            subscription.created_at.isoformat(),
-                        )
-                    if not subscribers:
-                        del self._subscribers[job_id]
+            # 持久化成功后写短期历史并广播给临时订阅者；「先历史、后订阅者」
+            # 的顺序由 channel.publish 保证。channel 操作是同步的，不会与其它
+            # 协程交错；溢出的临时订阅者由 channel 按 fail_closed 移除。
+            channel.publish(event)
 
         return event
 
@@ -274,7 +335,7 @@ class JobEventBus:
         self,
         job_id: str,
         event_type: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         step_id: str | None,
         agent_id: str | None,
     ) -> Event:
@@ -299,17 +360,21 @@ class JobEventBus:
     ) -> EventSubscription:
         if not subscriber_kind:
             raise ValueError("subscriber_kind 不能为空")
+        channel = self._channel_for(job_id)
         subscription = EventSubscription(
             job_id=job_id,
             subscriber_kind=subscriber_kind,
             metadata=metadata,
-            maxsize=100,
+            maxsize=JOB_EVENT_QUEUE_SIZE,
             event_types=event_types,
         )
-        async with self._lock:
-            if job_id not in self._subscribers:
-                self._subscribers[job_id] = set()
-            self._subscribers[job_id].add(subscription)
+        # 临时订阅以 fail_closed sink 形式接入 job.events/{job_id} channel：
+        # 溢出时 sink 记录显式错误并返回 False，channel 负责把订阅者移除。
+        channel.subscribe_with_sink(
+            _EventSubscriptionSink(subscription),
+            label=subscriber_kind,
+            subscription_id=subscription.subscription_id,
+        )
         logger.info(
             "事件订阅已创建: subscription_id=%s subscriber_kind=%s job_id=%s "
             "event_types=%s created_at=%s metadata=%s",
@@ -329,14 +394,12 @@ class JobEventBus:
         *,
         reason: str,
     ) -> None:
-        async with self._lock:
-            removed = False
-            if job_id in self._subscribers:
-                if subscription in self._subscribers[job_id]:
-                    self._subscribers[job_id].remove(subscription)
-                    removed = True
-                if not self._subscribers[job_id]:
-                    del self._subscribers[job_id]
+        channel = self._event_service.find_channel(
+            channel_name(JOB_EVENTS_CHANNEL_KIND, job_id)
+        )
+        removed = False
+        if channel is not None:
+            removed = channel.unsubscribe(subscription.subscription_id)
         logger.info(
             "事件订阅已解除: subscription_id=%s subscriber_kind=%s job_id=%s "
             "reason=%s removed=%s metadata=%s",
@@ -358,8 +421,10 @@ class JobEventBus:
 
     async def list_events(self, job_id: str, after: str | None = None, limit: int = 20) -> list[Event]:
         """获取事件列表（返回 discriminated union 类型）"""
-        async with self._lock:
-            events = list(self._job_events.get(job_id, []))
+        channel = self._event_service.find_channel(
+            channel_name(JOB_EVENTS_CHANNEL_KIND, job_id)
+        )
+        events = list(channel.history) if channel is not None else []
 
         if after:
             for index, event in enumerate(events):
@@ -371,11 +436,8 @@ class JobEventBus:
 
     async def get_event(self, event_id: str) -> Event | None:
         """按事件 ID 查询单个事件。"""
-        async with self._lock:
-            event_groups = [list(events) for events in self._job_events.values()]
-
-        for events in event_groups:
-            for event in events:
+        for channel in self._event_service.channels:
+            for event in channel.history:
                 if event.event_id == event_id:
                     return event
         return None

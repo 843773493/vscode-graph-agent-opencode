@@ -40,7 +40,7 @@ from tests.harness.python.run_context import TestRunContext
 def registry_db(request, session_bundle_factory):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"registry-{uuid4().hex}"
+    session_id = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session_id)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(
@@ -73,7 +73,8 @@ def draft(registry_db):
         source_revision="revision-1",
         content_hash=contribution_content_hash("prompt", body),
         body=body,
-        metadata={"source_ordinal": 0, "source_ref": "source-contribution"},
+        metadata={"source_ref": "source-contribution"},
+        source_ordinal=0,
     )
     ref = ContextRef.request_only_ref(
         "request-ref",
@@ -473,7 +474,9 @@ def test_recovery_rejects_tampered_manifest(registry_db, draft, mutation):
 def test_saver_registry_restarts_and_revises_through_one_owner(registry_db, draft):
     saver, session, _connection, _accepted = registry_db
     original = saver.create_context_plan(session, draft)
-    restarted = RolloutCheckpointSaver(saver._storage.root(session).parent.parent)
+    # catalog 模式下 rollout 物理路径带日期分层，sessions 根必须取 storage
+    # 的权威值，不能用 rollout 路径反向推导。
+    restarted = RolloutCheckpointSaver(saver._storage.sessions_dir)
     assert (
         restarted.get_context_plan_registration(session, plan_id=draft.plan_id)
         == original

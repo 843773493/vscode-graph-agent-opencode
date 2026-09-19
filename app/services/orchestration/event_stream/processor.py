@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.tools import BaseTool
 
 from app.abstractions.session_changes import (
@@ -17,10 +17,11 @@ from app.abstractions.session_changes import (
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
 from app.agents.model_tool_schema import normalize_model_tool_arguments
-from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tools.apply_patch import APPLY_PATCH_TOOL_NAME
 from app.core.job_context import set_active_tool_name, set_interruptible_phase
 from app.core.job_event_bus import EventType
+from app.core.model_delta_context import ModelRunIdentityCallbackHandler
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import (
     CancellationSignal,
@@ -30,7 +31,6 @@ from app.core.turn_execution_scope import (
     set_current_turn_execution_scope,
 )
 from app.schemas.event import ModelTokenUsagePayload
-from app.services.infrastructure.resource_manager import resource_refs_from_tool_payload
 from app.services.infrastructure.tool_output_store import (
     ToolOutputStore,
     extract_tool_output_reference,
@@ -70,13 +70,40 @@ from app.services.orchestration.event_stream.tool_events import (
     apply_patch_snapshots_from_result,
     build_tool_display_context,
     file_paths_from_tool_args,
+    resource_activity_binding_from_metadata,
     stored_edit_payload,
-    system_skill_event_metadata,
     tool_message_from_output,
     tool_output_status,
     tool_output_succeeded,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+
+
+def _field_value(value: object, field_name: str) -> object | None:
+    if isinstance(value, Mapping):
+        return value.get(field_name)
+    return getattr(value, field_name, None)
+
+
+def _model_output_content(output: object) -> object | None:
+    """从 LangChain 的 model.end 输出中提取消息正文。
+
+    流式 ChatModel 的 end 事件在不同 LangChain 版本和 provider 实现中可能
+    携带 AIMessage、AIMessageChunk，或 ChatResult/字典形式的 generations。
+    这些都是同一次模型调用的同一个事实来源，不能因为外层类型不同而丢弃。
+    """
+    content = _field_value(output, "content")
+    if content is not None:
+        return content
+    generations = _field_value(output, "generations")
+    if not isinstance(generations, (list, tuple)):
+        return None
+    for generation in generations:
+        message = _field_value(generation, "message")
+        content = _field_value(message, "content")
+        if content is not None:
+            return content
+    return None
 
 
 async def process_agent_event_stream(
@@ -111,7 +138,8 @@ async def process_agent_event_stream(
     collected_text_parts: list[str] = []
     latest_model_part_order: list[str] = []
     latest_model_parts: dict[str, dict[str, object]] = {}
-    completed_model_content_blocks: list[tuple[dict[str, object], ...]] = []
+    latest_model_visible_text_seen = False
+    latest_model_reasoning_seen = False
     tool_contexts_by_run_id: dict[str, ToolEventDisplayContext] = {}
     activity_bindings_by_run_id: dict[str, tuple[tuple[str, str, str | None], ...]] = {}
     tool_scopes_by_run_id: dict[str, TurnExecutionScope] = {}
@@ -135,6 +163,18 @@ async def process_agent_event_stream(
         session_id=session_id,
         job_id=turn_id,
     )
+    stream_callbacks = stream_config.get("callbacks")
+    if stream_callbacks is None:
+        stream_config["callbacks"] = [
+            ModelRunIdentityCallbackHandler(message_stream_runtime)
+        ]
+    elif isinstance(stream_callbacks, list):
+        stream_config["callbacks"] = [
+            *stream_callbacks,
+            ModelRunIdentityCallbackHandler(message_stream_runtime),
+        ]
+    else:
+        raise TypeError("Agent 事件流 config.callbacks 必须是 list")
 
     def track_model_run(run_id: str) -> None:
         if run_id in tracked_model_run_ids:
@@ -148,6 +188,73 @@ async def process_agent_event_stream(
             part_order=latest_model_part_order,
             parts=latest_model_parts,
         )
+
+    def record_model_content_parts(parts: list[AgentStreamContentPart]) -> None:
+        nonlocal latest_model_reasoning_seen, latest_model_visible_text_seen
+        for part in parts:
+            if part.kind == "reasoning":
+                latest_model_reasoning_seen = True
+                record_latest_model_part(part)
+                continue
+            if part.text and (part.text.strip() or collected_text_parts):
+                latest_model_visible_text_seen = True
+                record_latest_model_part(part)
+                collected_text_parts.append(part.text)
+                SessionInterruptState.set(
+                    session_id,
+                    current_text="".join(collected_text_parts),
+                )
+
+    def normalize_end_output_content(
+        content: object,
+        *,
+        model_call_id: str | None,
+    ) -> list[dict[str, object]]:
+        """为缺少 stream 正文的 model.end 输出补齐 block 身份。"""
+        fallback_prefix = model_call_id or "unbound-model-call"
+        if isinstance(content, str):
+            return [
+                {
+                    "type": "text",
+                    "text": content,
+                    "id": f"{fallback_prefix}:end-output:text:0",
+                    "index": 0,
+                }
+            ] if content else []
+        if not isinstance(content, (list, tuple)):
+            return []
+        normalized: list[dict[str, object]] = []
+        for index, raw_block in enumerate(content):
+            if isinstance(raw_block, str):
+                if raw_block:
+                    normalized.append(
+                        {
+                            "type": "text",
+                            "text": raw_block,
+                            "id": f"{fallback_prefix}:end-output:text:{index}",
+                            "index": index,
+                        }
+                    )
+                continue
+            if not isinstance(raw_block, Mapping):
+                continue
+            block_type = raw_block.get("type")
+            if block_type not in {
+                "reasoning",
+                "reasoning_content",
+                "reasoning_items",
+                "thinking",
+                "redacted_thinking",
+                "text",
+                "output_text",
+                "refusal",
+            }:
+                continue
+            block = dict(raw_block)
+            block.setdefault("id", f"{fallback_prefix}:end-output:{index}")
+            block.setdefault("index", index)
+            normalized.append(block)
+        return normalized
 
     async for event in iter_agent_events(
         agent=agent,
@@ -225,6 +332,8 @@ async def process_agent_event_stream(
         if event_type == "on_chat_model_start" and is_tracked_chat_model_event(name):
             latest_model_part_order.clear()
             latest_model_parts.clear()
+            latest_model_visible_text_seen = False
+            latest_model_reasoning_seen = False
             model_run_id = event_run_id(event)
             if model_run_id:
                 track_model_run(model_run_id)
@@ -270,42 +379,76 @@ async def process_agent_event_stream(
                     raise RuntimeError("带 usage_metadata 的模型流事件缺少 run_id")
                 track_model_run(model_run_id)
                 model_usage_by_run_id[model_run_id] = chunk_token_usage
-            chunk_message = getattr(chunk, "message", None)
+            chunk_message = _field_value(chunk, "message")
             if chunk_message is not None:
-                content = getattr(chunk_message, "content", None) or ""
+                content = _field_value(chunk_message, "content") or ""
             else:
-                content = getattr(chunk, "content", None) or ""
+                content = _field_value(chunk, "content") or ""
 
-            for part in extract_agent_stream_content_parts(content):
-                if part.kind == "reasoning":
-                    if not part.text.strip():
-                        if part.extras:
-                            record_latest_model_part(part)
-                        continue
-                    record_latest_model_part(part)
-                    SessionInterruptState.set(
-                        session_id,
-                        current_text="".join(collected_text_parts),
-                    )
-                    continue
-                if part.text and (part.text.strip() or collected_text_parts):
-                    record_latest_model_part(part)
-                    collected_text_parts.append(part.text)
-                    SessionInterruptState.set(
-                        session_id,
-                        current_text="".join(collected_text_parts),
-                    )
+            record_model_content_parts(extract_agent_stream_content_parts(content))
 
             continue
 
         if event_type == "on_chat_model_end" and is_tracked_chat_model_event(name):
-            completed_model_content_blocks.append(
-                tuple(
-                    part
-                    for part_id in latest_model_part_order
-                    if (part := latest_model_parts.get(part_id)) is not None
+            model_run_id = event_run_id(event)
+            if not latest_model_visible_text_seen:
+                canonical_visible_text = (
+                    message_stream_runtime.visible_text_for_model_call(model_run_id)
+                    if message_stream_runtime is not None
+                    else ""
                 )
-            )
+                if canonical_visible_text:
+                    # provider hook 已经提交了权威正文。这里仅把同一份已提交
+                    # 内容补进 AgentLoop 的本地结果，不再次写入消息流。
+                    record_model_content_parts(
+                        extract_agent_stream_content_parts(
+                            [
+                                {
+                                    "type": "text",
+                                    "text": canonical_visible_text,
+                                    "id": f"{model_run_id or 'model'}:canonical:text",
+                                    "index": 0,
+                                }
+                            ]
+                        )
+                    )
+                else:
+                    model_output = data.get("output")
+                    output_content = _model_output_content(model_output)
+                    end_output_blocks = normalize_end_output_content(
+                        output_content,
+                        model_call_id=model_run_id,
+                    )
+                    canonical_has_reasoning = (
+                        message_stream_runtime.model_call_has_carrier(
+                            model_run_id,
+                            {
+                                "reasoning",
+                                "reasoning_content",
+                                "reasoning_items",
+                                "thinking",
+                                "redacted_thinking",
+                            },
+                        )
+                        if message_stream_runtime is not None
+                        else False
+                    )
+                    if latest_model_reasoning_seen or canonical_has_reasoning:
+                        end_output_blocks = [
+                            block
+                            for block in end_output_blocks
+                            if block.get("type")
+                            in {"text", "output_text", "refusal"}
+                        ]
+                    if end_output_blocks:
+                        if message_stream_runtime is not None:
+                            await message_stream_runtime.accept_message_chunk(
+                                AIMessageChunk(content=end_output_blocks),
+                                model_call_id=model_run_id,
+                            )
+                        record_model_content_parts(
+                            extract_agent_stream_content_parts(end_output_blocks)
+                        )
             if message_stream_runtime is not None:
                 await message_stream_runtime.finish_model()
             model_scope = model_scopes_by_run_id.pop(event_run_id(event), None)
@@ -401,6 +544,7 @@ async def process_agent_event_stream(
                 message_stream_tool_call_id = message_stream_runtime.claim_tool_call_id(
                     provider_tool_name,
                     display_context.tool_args,
+                    target_tool_name=display_context.tool_name,
                 )
                 if message_stream_tool_call_id is None:
                     raise RuntimeError(
@@ -434,31 +578,31 @@ async def process_agent_event_stream(
                         },
                     )
                     activity_bindings.append((activity_id, "subagent.run", None))
-                resource_refs = resource_refs_from_tool_payload(
-                    display_context.tool_name,
-                    display_context.tool_args,
+                resource_binding = resource_activity_binding_from_metadata(
+                    event.get("metadata")
                 )
-                for resource_id, _resource_kind in resource_refs:
+                if resource_binding is not None:
                     activity_id = (
                         f"{message_stream_runtime.writer.turn_stream_id}:"
-                        f"resource:{run_id}:{resource_id}"
+                        f"resource:{run_id}"
                     )
                     await message_stream_runtime.activities.started(
                         activity_id=activity_id,
                         kind="resource.operation",
-                        summary=f"资源操作：{display_context.tool_name}",
+                        summary="资源操作执行中",
                         cancellable=True,
                         resumable=False,
                         side_effect_policy="external",
-                        resource_refs=(resource_id,),
+                        resource_refs=(resource_binding.resource_id,),
                         detail={
-                            "resource_id": resource_id,
+                            "resource_id": resource_binding.resource_id,
                             "operation": display_context.tool_name,
-                            "phase": "started",
+                            "phase": "starting",
+                            "agent_id": agent_id,
                         },
                     )
                     activity_bindings.append(
-                        (activity_id, "resource.operation", resource_id)
+                        (activity_id, "resource.operation", resource_binding.resource_id)
                     )
                 if activity_bindings:
                     activity_bindings_by_run_id[run_id] = tuple(activity_bindings)
@@ -509,7 +653,7 @@ async def process_agent_event_stream(
                         tool_args=dict(display_context.tool_args),
                     )
                 )
-            if display_context.invocation_tool_name == CUSTOM_TOOL_INVOKER_NAME:
+            if display_context.invocation_tool_name == EXTENSION_TOOL_INVOKER_NAME:
                 completed_custom_tool_names.append(display_context.tool_name)
             stored_edits: list[StoredFileEdit] = []
             if run_id:
@@ -555,7 +699,6 @@ async def process_agent_event_stream(
                 "failed": effective_tool_status == "error",
                 "agent_id": agent_id,
             }
-            payload.update(system_skill_event_metadata(raw_output))
             tool_output_reference = extract_tool_output_reference(output)
             if tool_output_reference is not None:
                 payload["tool_output"] = tool_output_reference
@@ -670,7 +813,6 @@ async def process_agent_event_stream(
         successful_tool_calls=tuple(successful_tool_calls),
         completed_custom_tool_names=tuple(completed_custom_tool_names),
         token_usage=token_usage,
-        model_content_blocks=tuple(completed_model_content_blocks),
     )
 
 

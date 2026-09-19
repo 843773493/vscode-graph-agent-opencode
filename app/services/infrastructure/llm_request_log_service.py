@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_paths import SessionPathResolver
 from app.schemas.internal_v2.llm_request_log import LLMRequestLogRecordDTO
 
@@ -15,9 +17,15 @@ class LLMRequestLogService:
         self,
         sessions_dir: Path,
         *,
-        path_resolver: SessionPathResolver | None = None,
+        path_resolver: SessionPathResolver | SessionCatalogPathResolver | None = None,
     ) -> None:
-        self._path_resolver = path_resolver or SessionPathResolver(sessions_dir)
+        # R18 catalog 模式适配：默认经 path_utils 开关工厂取 resolver（与
+        # trace_event_store / background_task_history_store 等同族一致）——
+        # catalog 模式走 SQLite catalog 链，旧模式工厂返回原 legacy
+        # resolver，行为不变。生产 container 仍显式注入装配好的 resolver。
+        # R19：签名注解从 Any | None 收紧为工厂返回的联合类型
+        # （R18 审查非阻断 4：Any 放宽了类型收窄能力）。
+        self._path_resolver = path_resolver or get_session_path_resolver(sessions_dir)
 
     def list_session_logs(self, session_id: str) -> list[LLMRequestLogRecordDTO]:
         session_dir = (

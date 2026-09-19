@@ -426,11 +426,12 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                     )
             self._deleting_subtrees.add(folder_id)
 
-    @session_tree_operation_locked
-    def finish_subtree_delete(self, folder_id: str) -> None:
-        with self._lock:
+    async def finish_subtree_delete(self, folder_id: str) -> None:
+        with self._session_tree_operation_lock, self._lock:
             if folder_id not in self._deleting_subtrees:
-                raise RuntimeError(f"会话文件夹子树删除锁不存在: {folder_id}")
+                raise RuntimeError(
+                    f"会话文件夹子树删除锁不存在: {folder_id}"
+                )
             self._deleting_subtrees.remove(folder_id)
 
     @session_tree_operation_locked
@@ -489,10 +490,9 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
             self._write_index_locked()
             self._refresh_locked()
 
-    @session_tree_operation_locked
-    def delete_session_subtree(self, session_id: str) -> list[str]:
+    async def delete_session_subtree(self, session_id: str) -> list[str]:
         """删除完整会话子树，并在同一 resolver 临界区更新权威索引。"""
-        with self._lock:
+        with self._session_tree_operation_lock, self._lock:
             self._ensure_loaded()
             node = self.get_node(session_id)
             if node.kind != "session":
@@ -501,7 +501,8 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
             descendant_session_ids = sorted(
                 node_id
                 for node_id in subtree_ids
-                if node_id != session_id and self._nodes[node_id].kind == "session"
+                if node_id != session_id
+                and self._nodes[node_id].kind == "session"
             )
             shutil.rmtree(node.path)
             for node_id in subtree_ids:

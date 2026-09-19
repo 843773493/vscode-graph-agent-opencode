@@ -38,7 +38,7 @@ def restore_case(
 ) -> RestoreCase:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session = f"restore-reader-{uuid4().hex}"
+    session = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session)
     saver = RolloutCheckpointSaver(sessions)
     saver.accept_turn(

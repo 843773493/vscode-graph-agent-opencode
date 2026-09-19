@@ -31,10 +31,31 @@ from app.agents.upstream_request_trace import (
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
+    prefix_has_open_tool_group,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.support.api_waiters import wait_for_job_done
+
+
+class _E2ECompactionPreflight:
+    """e2e 合成装配端口：无 durable Saver，按内存闭合初筛给安全切点。"""
+
+    def safe_compaction_prefix_cutoffs(
+        self,
+        session_id: str,
+        *,
+        checkpoint_ns: str,
+        state_messages: object,
+        cutoff_indexes: object,
+    ) -> frozenset[int]:
+        return frozenset(
+            index
+            for index in cutoff_indexes  # type: ignore[arg-type]
+            if not prefix_has_open_tool_group(state_messages, index)  # type: ignore[arg-type]
+        )
 
 
 def _seed_checkpoint_messages(
@@ -323,10 +344,11 @@ async def test_session_context_compact_writes_summarization_event(
 
 
 @pytest.mark.asyncio
-async def test_workspace_agents_change_preserves_system_prompt_until_compaction(
+async def test_workspace_agents_change_flows_through_context_source_items(
     client: httpx.AsyncClient,
     e2e_workspace_root_path: str,
 ):
+    # D3-B 合同：AGENTS 不再进入 system prompt；首帧与 delta 均为 CSM 上下文 item。
     workspace_root = Path(e2e_workspace_root_path)
     agents_path = workspace_root / "AGENTS.md"
     initial_content = "# E2E AGENTS\n\n始终遵循 agents-cache-version-one。\n"
@@ -335,7 +357,7 @@ async def test_workspace_agents_change_preserves_system_prompt_until_compaction(
 
     create_response = await client.post(
         "/api/v1/sessions",
-        json={"title": "AGENTS Prompt Cache E2E"},
+        json={"title": "AGENTS Context Source E2E"},
     )
     assert create_response.status_code == 200
     session_id = create_response.json()["data"]["session_id"]
@@ -348,7 +370,11 @@ async def test_workspace_agents_change_preserves_system_prompt_until_compaction(
     first_request = await _job_request_log(client, session_id, first_job_id)
     first_system = first_request["system_message"]
     assert first_system is not None
-    assert "agents-cache-version-one" in _message_content_text(first_system)
+    assert "agents-cache-version-one" not in _message_content_text(first_system)
+    first_messages_text = "\n".join(
+        _message_content_text(message) for message in first_request["messages"]
+    )
+    assert "agents-cache-version-one" in first_messages_text
 
     agents_path.write_text(changed_content, encoding="utf-8")
     second_job_id = await _send_message(
@@ -357,49 +383,11 @@ async def test_workspace_agents_change_preserves_system_prompt_until_compaction(
         "请只回复 SECOND_OK，不要调用工具。",
     )
     second_request = await _job_request_log(client, session_id, second_job_id)
-    assert second_request["system_message"] == first_system
     second_messages_text = "\n".join(
         _message_content_text(message) for message in second_request["messages"]
     )
-    assert "<system_reminder>" in second_messages_text
-    assert "workspace_agents_md_change" in second_messages_text
+    assert "工作区 AGENTS.md 指令来源已按 delta 注入" in second_messages_text
     assert "+始终遵循 agents-cache-version-two。" in second_messages_text
-
-    _append_checkpoint_messages(
-        workspace_root=e2e_workspace_root_path,
-        session_id=session_id,
-        pair_count=5,
-    )
-    compact_response = await client.post(
-        f"/api/v1/sessions/{session_id}/compact",
-        timeout=120,
-    )
-    assert compact_response.status_code == 200
-    assert compact_response.json()["data"]["status"] == "scheduled"
-
-    third_job_id = await _send_message(
-        client,
-        session_id,
-        "请只回复 THIRD_OK，不要调用工具。",
-    )
-    third_request = await _job_request_log(client, session_id, third_job_id)
-    third_system = third_request["system_message"]
-    assert third_system is not None
-    third_system_text = _message_content_text(third_system)
-    assert "agents-cache-version-one" in third_system_text
-
-    fourth_job_id = await _send_message(
-        client,
-        session_id,
-        "请只回复 FOURTH_OK，不要调用工具。",
-    )
-    fourth_request = await _job_request_log(client, session_id, fourth_job_id)
-    fourth_system = fourth_request["system_message"]
-    assert fourth_system is not None
-    fourth_system_text = _message_content_text(fourth_system)
-    assert "agents-cache-version-two" in fourth_system_text
-    assert "agents-cache-version-one" not in fourth_system_text
-    assert fourth_system != first_system
 
 
 @pytest.mark.skipif(
@@ -535,6 +523,7 @@ async def test_cache_preserving_middleware_forked_summary_hits_main_prompt_cache
         trigger=("messages", 7),
         keep=("messages", 1),
         trim_tokens_to_summarize=None,
+        compaction_preflight=_E2ECompactionPreflight(),
     )
     system_message = SystemMessage(
         content="\n".join(
@@ -754,6 +743,7 @@ async def test_luna_image_reasoning_compaction_hits_prompt_cache(
         trigger=("messages", 7),
         keep=("messages", 1),
         trim_tokens_to_summarize=None,
+        compaction_preflight=_E2ECompactionPreflight(),
     )
     stable_nonce = uuid.uuid4().hex
     system_message = SystemMessage(

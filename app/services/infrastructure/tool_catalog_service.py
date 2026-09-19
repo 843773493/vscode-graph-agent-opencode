@@ -42,7 +42,7 @@ class ToolCatalogService:
                 "kind": item.get("kind", DEFAULT_TOOL_GROUP.kind),
             }
             for item in self._runtime_catalog.get_available_tools(agent_id)
-            if item["id"] != "invoke_custom_tool"
+            if item["id"] != "invoke_extension_tool"
         ]
         tool_config = self._config_service.get_agent_tool_config(agent_id)
         for spec in parse_custom_tool_specs(

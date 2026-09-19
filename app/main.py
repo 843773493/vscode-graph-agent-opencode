@@ -98,8 +98,9 @@ async def lifespan(_: FastAPI):
         workspace_root or path_utils.get_runtime_workspace_root(),
     )
 
-    await container.mcp_runtime_manager.start()
+    await container.mcp_catalog_owner.start()
     try:
+        await container.workspace_file_resource_registry.start()
         removed_activity_events = container.workspace_activity_service.prune()
         if removed_activity_events:
             logger.info(
@@ -107,7 +108,7 @@ async def lifespan(_: FastAPI):
                 removed_activity_events,
             )
         container.config_service.set_mcp_tool_names(
-            container.mcp_runtime_manager.get_tool_ids()
+            container.mcp_catalog_owner.get_tool_ids()
         )
 
         async def apply_config_candidate(
@@ -135,7 +136,7 @@ async def lifespan(_: FastAPI):
                 )
             container.config_service.validate_candidate(
                 candidate,
-                mcp_tool_names=container.mcp_runtime_manager.get_tool_ids(),
+                mcp_tool_names=container.mcp_catalog_owner.get_tool_ids(),
             )
 
         await container.config_service.start_watching(
@@ -201,13 +202,16 @@ async def lifespan(_: FastAPI):
             await container.job_event_bus.unregister_durable_listener(
                 record_session_activity
             )
-            await container.config_service.stop_watching()
-            await container.workspace_file_watch_service.shutdown()
+            await container.config_service.close()
+            # 进程根 scope 按登记逆序释放资源平台：registry -> watch service -> monitor。
+            await container.resource_platform.close()
+            # 释放随 agent 缓存持有的 context source 订阅。
+            await container.agent_execution_service.shutdown()
             await container.tool_test_service.shutdown()
             await container.trace_event_recorder.stop()
             container.workspace_activity_service.close()
     finally:
-        await container.mcp_runtime_manager.shutdown()
+        await container.mcp_catalog_owner.shutdown()
         container.workspace_source_owner.close()
         if _model_stream_controller is not None:
             await _model_stream_controller.aclose()

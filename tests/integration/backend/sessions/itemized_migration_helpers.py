@@ -18,6 +18,8 @@ from app.services.infrastructure.rollout_context.migration.store import (
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
 
+TARGET_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
+
 
 def prepare_migration_workspace(request: pytest.FixtureRequest) -> Path:
     from app.core.path_utils import _cached_session_path_resolver
@@ -171,5 +173,5 @@ def _table_counts(storage: LegacyMigrationStorage, session_id: str) -> dict[str,
 
 
 def migration_audits(storage: LegacyMigrationStorage) -> list[dict[str, object]]:
-    root = storage.root("target").parent / "legacy-import"
+    root = storage.root(TARGET_SESSION_ID).parent / "legacy-import"
     return [json.loads(path.read_text()) for path in sorted(root.glob("*/report.json"))]

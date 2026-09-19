@@ -19,7 +19,6 @@ from app.abstractions.embeddings import EmbeddingComputerProtocol
 from app.agents.custom_tools import CustomToolFactoryContext
 from app.runtime.embeddings import LiteLLMEmbeddingComputer
 
-
 _MAX_DOWNLOAD_BYTES = 2_000_000
 _CHUNK_CHARS = 1_400
 _EMBEDDING_BATCH_SIZE = 100

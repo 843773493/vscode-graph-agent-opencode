@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import ClassVar
 
@@ -11,17 +11,14 @@ from langchain_core.tools import tool
 
 from app.agents.agent_tools import (
     build_default_tools,
-    create_background_message_collection_tool,
-    create_monitor_session_agent_end_tool,
     create_send_message_to_session_tool,
     create_system_time_emitter_tool,
+    create_wait_for_session_tool,
 )
 from app.agents.tool_invocation_context import ToolInvocationContext
-from app.core.background_message_bus import BackgroundMessageBus
+from app.agents.tools.session_wait import CommunicationWaitBindingLookupPort
 from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.job_event_bus import EventType
 from app.runtime.agent_runtime import build_agent_tool_definitions
-from app.schemas.event import AgentEndEvent, AgentEndPayload
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.services.infrastructure.background_task_history_store import (
     BackgroundTaskHistoryStore,
@@ -187,6 +184,54 @@ class _FakeJobService:
         return []
 
 
+class _FakeWaitJobService:
+    """wait_for_session 观察 fake：可编程状态序列，观察即推进。"""
+
+    def __init__(self, *, session_id: str, job_id: str, states: list[str]) -> None:
+        self._session_id = session_id
+        self._job_id = job_id
+        self._states = states
+        self._cursor = 0
+
+    async def list(self, session_id=None):
+        state = self._states[min(self._cursor, len(self._states) - 1)]
+        self._cursor += 1
+
+        class _FakeJob:
+            job_id = self._job_id
+            created_at = datetime.now(UTC)
+            status = state
+
+        if session_id == self._session_id:
+            return [_FakeJob()]
+        return []
+
+
+class _FakeCommunicationBindingLookup(CommunicationWaitBindingLookupPort):
+    """communication → target execution binding fake。"""
+
+    def __init__(
+        self,
+        *,
+        target_session_id: str,
+        job_id: str | None,
+        turn_id: str | None = None,
+    ) -> None:
+        self._target_session_id = target_session_id
+        self._job_id = job_id
+        self._turn_id = turn_id
+
+    async def resolve(self, *, communication_id: str):
+        from app.agents.tools.session_wait import CommunicationWaitBinding
+
+        return CommunicationWaitBinding(
+            target_session_id=self._target_session_id,
+            target_main_thread_id=f"thr_{communication_id}",
+            job_id=self._job_id,
+            turn_id=self._turn_id,
+        )
+
+
 class _FakeSessionService:
     def __init__(self, *, kind: str = "normal") -> None:
         self.kind = kind
@@ -199,7 +244,6 @@ class _FakeSessionService:
 
         session = _Session()
         session.kind = kind
-        session.delegation = object() if kind == "delegated" else None
         return session
 
 
@@ -371,7 +415,7 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
     job_service = _FakeJobService()
 
     tools = build_default_tools(
-        session_id="session_test",
+        session_id="ses_6b0aece551ec486f8ccdb4c861329748",
         agent_id="deep_agent",
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
@@ -385,6 +429,9 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
         config_service=config_service,
         terminal_manager_client=_FakeTerminalManagerClient(),
         invocation_context=ToolInvocationContext(),
+        communication_binding_lookup=_FakeCommunicationBindingLookup(
+            target_session_id="target_session", job_id="job_target_1"
+        ),
         include_test_tools=True,
         include_team_tools=True,
     )
@@ -394,7 +441,7 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
     assert "apply_patch" in tool_names
     assert "python_exec" in tool_names
     assert "emit_system_time_messages" in tool_names
-    assert "monitor_session_agent_end" in tool_names
+    assert "wait_for_session" in tool_names
     assert "collect_background_messages" in tool_names
     assert "exec_command" in tool_names
     assert "write_stdin" in tool_names
@@ -426,6 +473,9 @@ async def test_agent_omits_test_tool_without_development_config(monkeypatch, tmp
         config_service=_DummyConfigService(),
         terminal_manager_client=_FakeTerminalManagerClient(),
         invocation_context=ToolInvocationContext(),
+        communication_binding_lookup=_FakeCommunicationBindingLookup(
+            target_session_id="target_session", job_id="job_target_1"
+        ),
         include_team_tools=True,
     )
 
@@ -448,6 +498,9 @@ async def test_single_agent_tool_set_omits_team_board_tools(monkeypatch, tmp_pat
         config_service=_DummyConfigService(),
         terminal_manager_client=_FakeTerminalManagerClient(),
         invocation_context=ToolInvocationContext(),
+        communication_binding_lookup=_FakeCommunicationBindingLookup(
+            target_session_id="target_session", job_id="job_target_1"
+        ),
         include_team_tools=False,
     )
 
@@ -496,6 +549,9 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         config_service=config_service,
         terminal_manager_client=_FakeTerminalManagerClient(),
         invocation_context=ToolInvocationContext(),
+        communication_binding_lookup=_FakeCommunicationBindingLookup(
+            target_session_id="target_session", job_id="job_target_1"
+        ),
         include_test_tools=True,
         include_team_tools=True,
     )
@@ -511,7 +567,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         "write_stdin",
         "list_terminal_sessions",
         "kill_terminal",
-        "monitor_session_agent_end",
+        "wait_for_session",
         "send_message_to_session",
         "task",
         "create_team",
@@ -532,7 +588,7 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
 ):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     sessions_dir = tmp_path / ".boxteam" / "sessions"
-    session_bundle_factory(sessions_dir, "session_test")
+    session_bundle_factory(sessions_dir, "ses_6b0aece551ec486f8ccdb4c861329748")
     background_message_bus = _FakeBackgroundMessageBus()
     background_task_registry = BackgroundTaskRegistry(
         history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
@@ -544,7 +600,7 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
     monkeypatch.setattr("app.agents.tools.background.asyncio.sleep", fake_sleep)
 
     tool = create_system_time_emitter_tool(
-        "session_test",
+        "ses_6b0aece551ec486f8ccdb4c861329748",
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
     )
@@ -552,11 +608,11 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
     result = await tool.ainvoke({"interval_seconds": 0.01, "message_count": 3, "source_id": "clock-stream"})
 
     assert result["task_name"] == "emit_system_time_messages"
-    task = background_task_registry.get_task("session_test", result["task_id"])
+    task = background_task_registry.get_task("ses_6b0aece551ec486f8ccdb4c861329748", result["task_id"])
     assert task is not None
     await task
 
-    handle = background_task_registry.get_handle("session_test", result["task_id"])
+    handle = background_task_registry.get_handle("ses_6b0aece551ec486f8ccdb4c861329748", result["task_id"])
     assert handle is not None
     assert handle.status == "completed"
     assert handle.metadata["message_count"] == 3
@@ -569,163 +625,119 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
 
 
 @pytest.mark.asyncio
-async def test_monitor_session_agent_end_tool_emits_interrupt_message(monkeypatch, tmp_path):
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    background_message_bus = _FakeBackgroundMessageBus()
-    background_task_registry = _FakeBackgroundTaskRegistry()
-    job_event_bus = _FakeJobEventBus()
-    job_service = _FakeJobService()
-
-    tool = create_monitor_session_agent_end_tool(
-        "monitor_session",
-        background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
-        job_event_bus=job_event_bus,
+async def test_wait_for_session_waits_job_to_terminal_state():
+    job_service = _FakeWaitJobService(
+        session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+        job_id="job_wait_1",
+        states=["running", "running", "completed"],
+    )
+    tool = create_wait_for_session_tool(
+        "ses_f069fa2e62504cbd8364d7244de5d138",
         job_service=job_service,
-        session_service=_FakeSessionService(),
-    )
-
-    result = await tool.ainvoke(
-        {
-            "target_session_id": "target_session",
-            "timeout_seconds": 1,
-            "poll_interval_seconds": 0.01,
-            "max_events": 1,
-        }
-    )
-
-    assert result["status"] == "running"
-    assert result["task_name"] == "monitor_session_agent_end"
-    assert result["metadata"]["target_session_id"] == "target_session"
-    assert result["metadata"]["max_events"] == 1
-    assert result["metadata"]["source_id"].startswith("monitor:target_session:")
-
-    task = background_task_registry.get_task("monitor_session", result["task_id"])
-    assert task is not None
-
-    if callable(task):
-        await task()
-    else:
-        await task
-
-    # 这里只验证任务已被成功装配，monitor 的完整事件循环在集成测试中覆盖
-    assert result["status"] == "running"
-
-
-@pytest.mark.asyncio
-async def test_monitor_session_agent_end_accepts_zero_as_unlimited(tmp_path):
-    tool = create_monitor_session_agent_end_tool(
-        "monitor_session",
-        background_task_registry=_FakeBackgroundTaskRegistry(),
-        background_message_bus=_FakeBackgroundMessageBus(),
-        job_event_bus=_FakeJobEventBus(),
-        job_service=_FakeJobService(),
-        session_service=_FakeSessionService(),
-    )
-
-    result = await tool.ainvoke(
-        {
-            "target_session_id": "target_session",
-            "timeout_seconds": 0,
-            "max_events": 0,
-        }
-    )
-
-    assert result["metadata"]["timeout_seconds"] is None
-    assert result["metadata"]["max_events"] is None
-
-
-@pytest.mark.asyncio
-async def test_monitor_and_collect_forward_agent_end_final_text(
-    tmp_path,
-    session_bundle_factory,
-):
-    sessions_dir = tmp_path / ".boxteam" / "sessions"
-    session_bundle_factory(sessions_dir, "monitor_session")
-    background_message_bus = BackgroundMessageBus()
-    background_task_registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
-    )
-    job_event_bus = _FakeJobEventBus()
-    job_service = _FakeJobService()
-    monitor_tool = create_monitor_session_agent_end_tool(
-        "monitor_session",
-        agent_id="deep_agent",
-        background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
-        job_event_bus=job_event_bus,
-        job_service=job_service,
-        session_service=_FakeSessionService(),
-    )
-    collect_tool = create_background_message_collection_tool(
-        "monitor_session",
-        agent_id="deep_agent",
-        background_message_bus=background_message_bus,
-    )
-
-    monitor_result = await monitor_tool.ainvoke(
-        {
-            "target_session_id": "target_session",
-            "timeout_seconds": 1,
-            "poll_interval_seconds": 0.01,
-            "max_events": 1,
-        }
-    )
-    await asyncio.wait_for(job_event_bus.subscribed.wait(), timeout=1)
-    assert job_event_bus.subscription_event_types["job_target_1"] == frozenset({EventType.AGENT_END})
-
-    collect_task = asyncio.create_task(
-        collect_tool.ainvoke(
-            {
-                "source_id": monitor_result["metadata"]["source_id"],
-                "timeout_seconds": 1,
-            }
-        )
-    )
-    await job_event_bus.emit(
-        "job_target_1",
-        AgentEndEvent(
-            event_id="evt_target_end",
-            job_id="job_target_1",
-            step_id=None,
-            agent_id="deep_agent",
-            payload=AgentEndPayload(
-                response={"text": "答案是 56088"},
-                final_text="答案是 56088",
-                agent_id="deep_agent",
-            ),
-            timestamp=datetime.now().astimezone() + timedelta(seconds=1),
+        binding_lookup=_FakeCommunicationBindingLookup(
+            target_session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+            job_id="job_wait_1",
         ),
     )
 
-    collected = await asyncio.wait_for(collect_task, timeout=1)
-    monitor_task = background_task_registry.get_task(
-        "monitor_session",
-        monitor_result["task_id"],
+    result = await tool.ainvoke(
+        {
+            "target_session_id": "ses_f069fa2e62504cbd8364d7244de5d138",
+            "job_id": "job_wait_1",
+            "until": "terminal",
+            "timeout_seconds": 10,
+        }
     )
-    assert monitor_task is not None
-    await asyncio.wait_for(monitor_task, timeout=1)
 
-    assert collected["interrupted"] is True
-    assert collected["timed_out"] is False
-    assert [message["content"] for message in collected["messages"]] == [
-        "答案是 56088"
-    ]
+    assert result["status"] == "completed"
+    assert result["observed"][0]["selector_id"] == "job_wait_1"
+    assert result["observed"][0]["state"] == "completed"
 
 
 @pytest.mark.asyncio
-async def test_monitor_rejects_delegated_session_final_text_forwarding():
-    tool = create_monitor_session_agent_end_tool(
-        "monitor_session",
-        background_task_registry=_FakeBackgroundTaskRegistry(),
-        background_message_bus=_FakeBackgroundMessageBus(),
-        job_event_bus=_FakeJobEventBus(),
-        job_service=_FakeJobService(),
-        session_service=_FakeSessionService(kind="delegated"),
+async def test_wait_for_session_times_out_with_real_observed_states():
+    job_service = _FakeWaitJobService(
+        session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+        job_id="job_wait_2",
+        states=["running"],
+    )
+    tool = create_wait_for_session_tool(
+        "ses_f069fa2e62504cbd8364d7244de5d138",
+        job_service=job_service,
+        binding_lookup=_FakeCommunicationBindingLookup(
+            target_session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+            job_id="job_wait_2",
+        ),
     )
 
-    with pytest.raises(ValueError, match="必须通过 send_message_to_session"):
-        await tool.ainvoke({"target_session_id": "target_session"})
+    result = await tool.ainvoke(
+        {
+            "target_session_id": "ses_f069fa2e62504cbd8364d7244de5d138",
+            "job_id": "job_wait_2",
+            "until": "terminal",
+            "timeout_seconds": 1,
+        }
+    )
+
+    assert result["status"] == "timed_out"
+    assert result["observed"][0]["state"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_session_rejects_multiple_selectors():
+    tool = create_wait_for_session_tool(
+        "ses_f069fa2e62504cbd8364d7244de5d138",
+        job_service=_FakeWaitJobService(
+            session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+            job_id="job_wait_3",
+            states=["running"],
+        ),
+        binding_lookup=_FakeCommunicationBindingLookup(
+            target_session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+            job_id="job_wait_3",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="至多传一个"):
+        await tool.ainvoke(
+            {
+                "target_session_id": "ses_f069fa2e62504cbd8364d7244de5d138",
+                "job_id": "job_wait_3",
+                "communication_id": "comm_extra",
+                "timeout_seconds": 10,
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_wait_for_session_communication_selector_waits_binding():
+    lookup = _FakeCommunicationBindingLookup(
+        target_session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+        job_id=None,
+    )
+    job_service = _FakeWaitJobService(
+        session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+        job_id="job_bound_late",
+        states=["completed"],
+    )
+    tool = create_wait_for_session_tool(
+        "ses_f069fa2e62504cbd8364d7244de5d138",
+        job_service=job_service,
+        binding_lookup=lookup,
+    )
+
+    result = await tool.ainvoke(
+        {
+            "target_session_id": "ses_f069fa2e62504cbd8364d7244de5d138",
+            "communication_id": "comm_pending",
+            "until": "terminal",
+            "timeout_seconds": 1,
+        }
+    )
+
+    # communication 已接受但未 execution-bound：不误报 idle，timeout 观察保留 pending。
+    assert result["status"] == "timed_out"
+    assert result["observed"][0]["state"] == "pending"
 
 
 @pytest.mark.asyncio
@@ -760,7 +772,6 @@ async def test_send_message_to_session_defaults_to_trusted_reminder_sender(
         "enqueue_sequence": None,
         "queue_snapshot_version": 0,
     }
-    assert result["simulate_user"] is False
     assert result["sender_session_id"] == "ses_sender"
     assert result["kind"] == "result"
     assert result["reply_required"] is False
@@ -768,9 +779,7 @@ async def test_send_message_to_session_defaults_to_trusted_reminder_sender(
     assert result["communication_id"].startswith("comm_")
     schema = tool.args_schema.model_json_schema()
     assert "role" not in schema["properties"]
-    simulate_user_schema = schema["properties"]["simulate_user"]
-    assert simulate_user_schema["default"] is False
-    assert simulate_user_schema["type"] == "boolean"
+    assert "simulate_user" not in schema["properties"]
     submitted_content = orchestrator.calls[0]["content"]
     assert isinstance(submitted_content, str)
     assert submitted_content.startswith("<system_reminder>\n")
@@ -789,7 +798,6 @@ async def test_send_message_to_session_defaults_to_trusted_reminder_sender(
     metadata = orchestrator.calls[0]["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["source"] == "send_message_to_session"
-    assert metadata["simulate_user"] is False
     assert metadata["communication_id"] == result["communication_id"]
     assert metadata["kind"] == "result"
     assert metadata["reply_required"] is False
@@ -817,7 +825,7 @@ async def test_send_message_to_session_uses_shared_delivery_route():
     assert delivery.calls[0]["session_id"] == "ses_remote"
     assert delivery.calls[0]["workspace_id"] == "gw_target"
     assert delivery.calls[0]["idempotency_key"] == "comm_retryable"
-    assert delivery.calls[0]["simulate_user"] is False
+    assert delivery.calls[0]["simulate_user"] is False  # 受信 ingress Protocol 恒为 False
 
 
 @pytest.mark.asyncio
@@ -956,7 +964,8 @@ async def test_send_message_to_session_reply_requires_correlation_id():
 
 
 @pytest.mark.asyncio
-async def test_send_message_to_session_simulated_user_preserves_plain_content():
+async def test_send_message_to_session_ignores_untrusted_user_semantics():
+    """模型侧工具无模拟用户 ingress：外部传入的同名字段不改变系统注入语义。"""
     orchestrator = _FakeSessionOrchestrator()
     tool = create_send_message_to_session_tool(
         sender_session_id="ses_sender",
@@ -972,28 +981,7 @@ async def test_send_message_to_session_simulated_user_preserves_plain_content():
         }
     )
 
-    assert result["simulate_user"] is True
-    assert orchestrator.calls == [
-        {
-            "session_id": "ses_target",
-            "content": "普通用户消息",
-            "delivery_policy": "after_turn",
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_send_message_to_session_rejects_session_id_as_simulate_user():
-    tool = create_send_message_to_session_tool(
-        sender_session_id="ses_sender",
-        session_orchestrator=_FakeSessionOrchestrator(),
-    )
-
-    with pytest.raises(ValueError, match="boolean"):
-        await tool.ainvoke(
-            {
-                "target_session_id": "ses_target",
-                "content": "不应发送",
-                "simulate_user": "ses_sender",
-            }
-        )
+    assert result["kind"] == "result"
+    assert "simulate_user" not in result
+    assert len(orchestrator.calls) == 1
+    assert orchestrator.calls[0]["content"].startswith("<system_reminder>")

@@ -234,6 +234,37 @@ class SessionInterruptedPayload(BaseModel):
     resumable: bool = False
 
 
+class DebugActionPayload(BaseModel):
+    """DEBUG_ACTION 事件的 payload（调试动作审计）"""
+    session_id: str
+    action_id: str
+    action: str
+    actor: str
+    mode: str
+    message: str
+    breakpoint_id: str | None = None
+    breakpoint_kind: str | None = None
+    tool_name: str | None = None
+    created_at: datetime
+
+
+class DebugStopPayload(BaseModel):
+    """DEBUG_STOP 事件的 payload（调试断点暂停快照）"""
+    stop_id: str
+    job_id: str
+    session_id: str
+    point: str
+    reason: str
+    tool_name: str | None = None
+    args: dict[str, Any] = Field(default_factory=dict)
+    result: str | None = None
+    breakpoint_id: str | None = None
+    mode: str
+    explanation: str
+    stopped_at: datetime
+    sequence: int = Field(ge=1)
+
+
 class TextDeltaPayload(BaseModel):
     """TEXT_DELTA 事件的 payload"""
     text: str
@@ -368,6 +399,18 @@ class SessionInterruptedEvent(BaseEvent):
     payload: SessionInterruptedPayload
 
 
+class DebugActionEvent(BaseEvent):
+    """调试动作审计事件"""
+    type: Literal["debug_action"] = "debug_action"
+    payload: DebugActionPayload
+
+
+class DebugStopEvent(BaseEvent):
+    """调试断点暂停事件"""
+    type: Literal["debug_stop"] = "debug_stop"
+    payload: DebugStopPayload
+
+
 class TextStartEvent(BaseEvent):
     """Assistant 文本开始事件"""
     type: Literal["text_start"] = "text_start"
@@ -417,6 +460,8 @@ Event = (
     | LLMRequestEvent
     | ModelFailedEvent
     | SessionInterruptedEvent
+    | DebugActionEvent
+    | DebugStopEvent
     | TextStartEvent
     | TextDeltaEvent
     | TextEndEvent

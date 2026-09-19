@@ -228,6 +228,9 @@ class _BlockDeltaBarrierStore(MessageStreamStore):
         model_call_id: str | None = None,
         block_id: str | None = None,
         tool_execution_id: str | None = None,
+        tool_call_id: str | None = None,
+        tool_invocation_id: str | None = None,
+        tool_attempt_id: str | None = None,
         job_id: str | None = None,
         event_id: str | None = None,
     ) -> dict[str, Any]:
@@ -242,6 +245,9 @@ class _BlockDeltaBarrierStore(MessageStreamStore):
             model_call_id=model_call_id,
             block_id=block_id,
             tool_execution_id=tool_execution_id,
+            tool_call_id=tool_call_id,
+            tool_invocation_id=tool_invocation_id,
+            tool_attempt_id=tool_attempt_id,
             job_id=job_id,
             event_id=event_id,
         )

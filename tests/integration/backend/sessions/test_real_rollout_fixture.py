@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from collections.abc import Callable
@@ -8,10 +9,13 @@ from itertools import pairwise
 from pathlib import Path
 from statistics import median
 from time import perf_counter
+from uuid import uuid4
 
 import pytest
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_migration import migrate_workspace_session_catalog
 from app.domain.itemized.errors import FormatDispatchError
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
@@ -50,7 +54,7 @@ def assert_fixture_import_rejected(
     storage = LegacyMigrationStorage(sessions)
 
     def import_source(source_id: str) -> None:
-        target_id = f"imported-{source_id}"
+        target_id = f"ses_{uuid4().hex}"
         source = storage.root(source_id)
         template = (
             Path.cwd()
@@ -112,6 +116,9 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
+    # 模板是旧 JSON 权威索引形态；副本经产品一次性迁移机建立完整 SQLite
+    # catalog authority（默认 fail-closed 拒绝"旧 JSON 在而 catalog 缺"）。
+    asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
     return str(workspace_root)
 
 
@@ -135,23 +142,24 @@ def test_custom_tool_fixture_asset_contract(
     assert REAL_SESSION_ID != STATIC_MOCK_SESSION_ID
 
     sessions_root = real_rollout_workspace / ".boxteam" / "sessions"
+    resolver = get_session_path_resolver(sessions_root)
     for item in sessions:
         session_id = item["session_id"]
+        session_node = resolver.resolve_session_node(session_id)
         session_manifest = json.loads(
-            (sessions_root / session_id / "session.json").read_text(encoding="utf-8")
+            (session_node / "session.json").read_text(encoding="utf-8")
         )
         assert session_manifest["workspace_id"] == "ws_local"
-        rollout_root = sessions_root / session_id / "rollout"
+        rollout_root = session_node / "rollout"
         assert {child.name for child in rollout_root.iterdir()} == {
             "index.sqlite",
             "rollout.jsonl",
         }
         assert not list(rollout_root.glob("segment-*.jsonl"))
-        assert not (sessions_root / session_id / "payloads").exists()
+        assert not (session_node / "payloads").exists()
 
     compact_index = (
-        sessions_root
-        / "ses_4c0a1d6e7f8b49a2b5c6d7e8f9012345"
+        resolver.resolve_session_node("ses_4c0a1d6e7f8b49a2b5c6d7e8f9012345")
         / "rollout"
         / "index.sqlite"
     )
@@ -234,7 +242,10 @@ def test_legacy_128_turn_fixture_is_preserved_and_explicitly_rejected(
     assert_fixture_import_rejected: Callable[[str], None],
 ) -> None:
     sessions_dir = real_rollout_workspace / ".boxteam" / "sessions"
-    rollout_root = sessions_dir / REAL_SESSION_ID / "rollout"
+    rollout_root = (
+        get_session_path_resolver(sessions_dir).resolve_session_node(REAL_SESSION_ID)
+        / "rollout"
+    )
     jsonl_path = rollout_root / "rollout.jsonl"
     sqlite_path = rollout_root / "index.sqlite"
     assert jsonl_path.is_file()

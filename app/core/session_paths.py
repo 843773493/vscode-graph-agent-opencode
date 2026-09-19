@@ -717,6 +717,26 @@ class SessionPathResolver(SessionPathMutationSupport):
         return node.path
 
     @session_tree_operation_locked
+    def resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
+        """按受检 SessionThread 解析调试等线程资源的实际节点目录。
+
+        Session 产品入口的 ``main`` 使用会话绑定的主节点；子 thread 必须
+        传入目录索引中的真实节点 ID，并验证它属于目标 session，不能按磁盘
+        扫描或按名称猜测。
+        """
+        if not thread_id or thread_id == "main" or thread_id == session_id:
+            return self.resolve_session_node(session_id)
+        node = self.get_node(thread_id)
+        if node.kind != "session":
+            raise RuntimeError(f"thread 节点不是会话节点: thread_id={thread_id}")
+        if self.nearest_session_ancestor(node.parent_node_id) != session_id:
+            raise RuntimeError(
+                "thread 不属于目标 session: "
+                f"session_id={session_id}, thread_id={thread_id}"
+            )
+        return node.path
+
+    @session_tree_operation_locked
     def resolve_session_node_for_runtime(self, session_id: str) -> Path:
         """按索引定位运行时会话，但不扫描无关物理兄弟节点。
 

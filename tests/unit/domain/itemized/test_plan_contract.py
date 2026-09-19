@@ -81,7 +81,7 @@ def prompt_contribution() -> ContextContribution:
         source_revision="rev-1",
         body="prompt",
         content_hash=contribution_content_hash("prompt", "prompt"),
-        metadata={"source_ordinal": 0},
+        source_ordinal=0,
     )
 
 
@@ -90,7 +90,8 @@ def test_contribution_alias_is_resolved_from_explicit_source_metadata(
 ) -> None:
     contribution = replace(
         prompt_contribution,
-        metadata={"source_ref": "workspace:policy", "source_ordinal": 0},
+        metadata={"source_ref": "workspace:policy"},
+        source_ordinal=0,
     )
     ref = ContextRef.request_only_ref(
         "plan-item-alias",
@@ -118,11 +119,11 @@ def test_overlay_binding_requires_ref_role_and_epoch(
         contribution_kind=kind,
         content_hash=contribution_content_hash(kind, prompt_contribution.body),
         metadata={
-            "source_ordinal": 0,
             "overlay_ref": "overlay-1",
             "overlay_role": role,
             "source_overlay_epoch": 2,
         },
+        source_ordinal=0,
     )
     ref = ContextRef.request_only_ref(
         "overlay-1",
@@ -273,7 +274,7 @@ def test_sealed_plan_freezes_selection_and_contribution_ordinals(
         content_hash=contribution_content_hash("prompt", body),
         body=body,
         content_length=len(canonical_json_bytes(body)),
-        metadata={"source_ordinal": 0},
+        source_ordinal=0,
     )
     request_ref = ContextRef.request_only_ref(
         "contribution-1",
@@ -348,7 +349,7 @@ def test_contribution_security_manifest_survives_plan_serialization_and_hash_sco
         content_length=42,
         visibility="private",
         protection="redacted",
-        metadata={"source_ordinal": 0},
+        source_ordinal=0,
     )
     plan = ContextRequestPlan(
         session_id="session-protected-contribution",
@@ -391,7 +392,7 @@ def test_seal_rejects_included_contribution_binding_drift(
         content_hash=contribution_content_hash("prompt", body),
         body=body,
         content_length=len(canonical_json_bytes(body)),
-        metadata={"source_ordinal": 0},
+        source_ordinal=0,
     )
     request_ref = ContextRef.request_only_ref(
         contribution.contribution_id,

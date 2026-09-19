@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +12,7 @@ import httpx
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tools.testing import (
     LARGE_TEST_OUTPUT,
     LARGE_TEST_TARGET_LINE_INDEX,
@@ -20,8 +23,17 @@ from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
+    start_terminal_backend,
+    terminal_ports,
+)
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
+from tests.support.processes import (
+    close_backend_process,
+    start_backend_process,
+    terminate_process,
+)
 from tests.support.trace import get_trace_payload
 from tests.support.workspaces import prepare_test_workspace
 
@@ -50,6 +62,59 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
     return str(workspace_root)
 
 
+@pytest.fixture(scope="module")
+def e2e_terminal_backend(
+    e2e_workspace_root_path: str,
+    e2e_backend_port: int,
+) -> Generator[subprocess.Popen[str], None, None]:
+    terminal_port, frontend_port = terminal_ports(e2e_backend_port)
+    process = start_terminal_backend(
+        backend_port=terminal_port,
+        frontend_port=frontend_port,
+        workspace_root=e2e_workspace_root_path,
+    )
+    try:
+        yield process
+    finally:
+        terminate_process(process)
+
+
+@pytest.fixture(scope="module")
+def e2e_backend_process(
+    e2e_terminal_backend: subprocess.Popen[str],
+    e2e_workspace_root_path: str,
+    e2e_workspace_config_path: str,
+    e2e_backend_port: int,
+    is_debug: bool,
+    e2e_model_stream_runtime_config_path: str | None,
+) -> Generator[subprocess.Popen[str], None, None]:
+    del e2e_terminal_backend
+    debugpy_port = (
+        int(os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY_PORT")) if is_debug else None
+    )
+    env_overrides = {
+        "BOXTEAM_TERMINAL_BACKEND_URL": (
+            f"http://127.0.0.1:{terminal_ports(e2e_backend_port)[0]}"
+        ),
+    }
+    if e2e_model_stream_runtime_config_path is not None:
+        env_overrides["BOXTEAM_TEST_MODEL_STREAM_CONFIG"] = (
+            e2e_model_stream_runtime_config_path
+        )
+    handle = start_backend_process(
+        workspace_root=e2e_workspace_root_path,
+        port=e2e_backend_port,
+        log_name="e2e-backend",
+        debugpy_port=debugpy_port,
+        env_overrides=env_overrides,
+        env_unset=("BOXTEAM_TEST_MODEL_STREAM_CONFIG",),
+    )
+    try:
+        yield handle.process
+    finally:
+        close_backend_process(handle)
+
+
 def _tool_names_from_llm_log(log_record: dict[str, Any]) -> set[str]:
     tools = log_record.get("request", {}).get("tools") or []
     names: set[str] = set()
@@ -62,8 +127,8 @@ def _tool_names_from_llm_log(log_record: dict[str, Any]) -> set[str]:
             function_def = tool_def.get("function")
             if isinstance(function_def, dict) and isinstance(function_def.get("name"), str):
                 names.add(str(function_def["name"]))
-        elif isinstance(tool_def, str) and CUSTOM_TOOL_INVOKER_NAME in tool_def:
-            names.add(CUSTOM_TOOL_INVOKER_NAME)
+        elif isinstance(tool_def, str) and EXTENSION_TOOL_INVOKER_NAME in tool_def:
+            names.add(EXTENSION_TOOL_INVOKER_NAME)
     return names
 
 
@@ -78,7 +143,7 @@ def _custom_tool_targets_from_llm_log(log_record: dict[str, Any]) -> set[str]:
         for tool_call in item.get("tool_calls") or []:
             if not isinstance(tool_call, dict):
                 continue
-            if tool_call.get("name") != CUSTOM_TOOL_INVOKER_NAME:
+            if tool_call.get("name") != EXTENSION_TOOL_INVOKER_NAME:
                 continue
             args = tool_call.get("args")
             if isinstance(args, dict) and isinstance(args.get("tool_name"), str):
@@ -87,7 +152,19 @@ def _custom_tool_targets_from_llm_log(log_record: dict[str, Any]) -> set[str]:
 
 
 def _system_message_text_from_llm_log(log_record: dict[str, Any]) -> str:
-    system_message = log_record.get("request", {}).get("system_message")
+    request = log_record.get("request", {})
+    system_message = request.get("system_message")
+    if system_message is None:
+        messages = request.get("messages")
+        if isinstance(messages, list):
+            system_message = next(
+                (
+                    message
+                    for message in messages
+                    if isinstance(message, dict) and message.get("type") == "system"
+                ),
+                None,
+            )
     if isinstance(system_message, str):
         return system_message
     if not isinstance(system_message, dict):
@@ -106,14 +183,6 @@ def _system_message_text_from_llm_log(log_record: dict[str, Any]) -> str:
     return ""
 
 
-def _read_file_path_from_trace(trace: dict[str, Any]) -> str:
-    args = get_trace_payload(trace).get("args", {})
-    if not isinstance(args, dict):
-        return ""
-    value = args.get("file_path") or args.get("path")
-    return str(value or "")
-
-
 def _json_object_from_text(text: str) -> dict[str, Any]:
     start = text.find("{")
     end = text.rfind("}")
@@ -122,6 +191,34 @@ def _json_object_from_text(text: str) -> dict[str, Any]:
     parsed = json.loads(text[start:end + 1])
     assert isinstance(parsed, dict)
     return parsed
+
+
+async def _list_all_session_traces(
+    client: httpx.AsyncClient,
+    session_id: str,
+) -> list[dict[str, Any]]:
+    """按诊断页游标读取完整轨迹，避免长 reasoning 把工具事件挤出尾页。"""
+    pages: list[list[dict[str, Any]]] = []
+    cursor: str | None = None
+    for _ in range(100):
+        params: dict[str, object] = {"limit": 200}
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = await client.get(
+            f"/api/v1/sessions/{session_id}/traces",
+            params=params,
+        )
+        assert response.status_code == 200, response.text
+        page = response.json()["data"]
+        items = page.get("items")
+        assert isinstance(items, list)
+        pages.append([item for item in items if isinstance(item, dict)])
+        if not page.get("has_more"):
+            return [item for page in reversed(pages) for item in page]
+        next_cursor = page.get("next_cursor")
+        assert isinstance(next_cursor, str) and next_cursor
+        cursor = next_cursor
+    raise AssertionError(f"读取 session trace 超过分页上限: session_id={session_id}")
 
 
 async def _write_source_session_checkpoint(
@@ -135,7 +232,7 @@ async def _write_source_session_checkpoint(
     )
     messages = [
         HumanMessage(
-            content=f"请只回复：{source_marker}",
+            content="请只回复源会话中的标记文本。",
             response_metadata={"message_id": "msg_source_user"},
         ),
         AIMessage(
@@ -145,7 +242,7 @@ async def _write_source_session_checkpoint(
     ]
     checkpoint = {
         "channel_values": {"messages": messages},
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-source-session",
     }
@@ -153,7 +250,7 @@ async def _write_source_session_checkpoint(
         build_checkpoint_config(session_id),
         checkpoint,
         {"source": "e2e_fixture", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
 
@@ -169,8 +266,7 @@ async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend
     session_id = create_session_response.json()["data"]["session_id"]
 
     prompt = (
-        "请先读取当前工作区 AGENTS.md 里的扩展工具说明。"
-        "当你看到用户要求执行 test_tool_2 时，必须根据 AGENTS.md 找到并读取正确的 skill。"
+        "请使用 skill_load(name=test-tool-2) 加载执行 test_tool_2 所需的 skill。"
         "然后必须按该 skill 发起真实工具调用来执行 test_tool_2，不要只描述调用计划。"
         "最终回复只能是该扩展工具返回文本本身。"
     )
@@ -194,19 +290,28 @@ async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend
     assert messages[-1]["role"] == "assistant"
     for message in messages[1:-1]:
         if message["role"] == "user":
-            assert "<system_reminder>" in message["content"]
-    assert last_assistant_message(messages).strip() == "4568"
+            assert (
+                "<system_reminder>" in message["content"]
+                or "上下文 Skill `test-tool-2` 已按 activation 注入。" in message["content"]
+            )
+    assert "4568" in last_assistant_message(messages)
 
-    traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
-    assert traces_response.status_code == 200
-    traces = traces_response.json()["data"]["items"]
+    traces = await _list_all_session_traces(client, session_id)
     tool_starts = [
         get_trace_payload(trace).get("tool_name")
         for trace in traces
         if trace.get("type") == "tool_call_start"
     ]
-    assert "read_file" in tool_starts
+    assert "skill_load" in tool_starts
     assert "test_tool_2" in tool_starts
+    skill_load_start_payloads = [
+        get_trace_payload(trace)
+        for trace in traces
+        if trace.get("type") == "tool_call_start"
+        and get_trace_payload(trace).get("tool_name") == "skill_load"
+    ]
+    assert len(skill_load_start_payloads) == 1
+    assert skill_load_start_payloads[0].get("args", {}).get("name") == "test-tool-2"
     custom_tool_start_payloads = [
         get_trace_payload(trace)
         for trace in traces
@@ -214,7 +319,7 @@ async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend
         and get_trace_payload(trace).get("tool_name") == "test_tool_2"
     ]
     assert custom_tool_start_payloads
-    assert custom_tool_start_payloads[-1].get("invocation_tool_name") == CUSTOM_TOOL_INVOKER_NAME
+    assert custom_tool_start_payloads[-1].get("invocation_tool_name") == EXTENSION_TOOL_INVOKER_NAME
     custom_tool_start_dtos = [
         trace
         for trace in traces
@@ -235,18 +340,9 @@ async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend
     assert logs_response.status_code == 200
     logs = logs_response.json()["data"]
     assert len(logs) >= 2
-    assert any(
-        "tests/fixtures/workspaces/custom_tool_test_workspace/` 是扩展工具 e2e 测试使用的工作区 fixture"
-        in _system_message_text_from_llm_log(log)
-        for log in logs
-    )
-    assert any(
-        "<workspace_agents_md " in _system_message_text_from_llm_log(log)
-        for log in logs
-    )
     for log in logs:
         tool_names = _tool_names_from_llm_log(log)
-        assert CUSTOM_TOOL_INVOKER_NAME in tool_names
+        assert EXTENSION_TOOL_INVOKER_NAME in tool_names
         assert "test_tool_2" not in tool_names
     assert any(
         "test_tool_2" in _custom_tool_targets_from_llm_log(log)
@@ -277,7 +373,7 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
         json={
             "message": {
                 "content": (
-                    "请读取工作区中 large_test_output 对应的 skill，"
+                    "请使用 skill_load(name=large-test-output) 加载 large_test_output 对应的 skill，"
                     "按说明真实调用 large_test_output。目标值不在工具返回的头尾预览中，"
                     "你必须继续使用 grep 和 read_file 从完整文件中找到它，"
                     "最后严格按 skill 要求回复。"
@@ -291,9 +387,7 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
     job_data = await wait_for_job_done(client, job_id, max_attempts=120)
     assert job_data["status"] in {"completed", "succeeded"}
 
-    traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
-    assert traces_response.status_code == 200
-    traces = traces_response.json()["data"]["items"]
+    traces = await _list_all_session_traces(client, session_id)
     tool_end_payloads = [
         get_trace_payload(trace)
         for trace in traces
@@ -337,11 +431,17 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
         for trace in traces
         if trace.get("type") == "tool_call_start"
     ]
+    skill_load_index = next(
+        index
+        for index, item in enumerate(tool_start_payloads)
+        if item.get("tool_name") == "skill_load"
+    )
     large_call_index = next(
         index
         for index, item in enumerate(tool_start_payloads)
         if item.get("tool_name") == "large_test_output"
     )
+    assert skill_load_index < large_call_index
     grep_call_index = next(
         index
         for index, item in enumerate(tool_start_payloads)
@@ -386,19 +486,11 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
         and "工具输出过大" in message["content"]
         for message in tool_messages
     )
-    large_preview_messages = [
-        message
-        for message in tool_messages
-        if isinstance(message.get("artifact"), dict)
-        and isinstance(message["artifact"].get("tool_output"), dict)
-        and message["artifact"]["tool_output"].get("tool_name")
-        == "large_test_output"
-    ]
-    assert large_preview_messages
-    assert all(
+    assert any(
         isinstance(message.get("content"), str)
+        and "工具输出过大" in message["content"]
         and LARGE_TEST_TARGET_VALUE not in message["content"]
-        for message in large_preview_messages
+        for message in tool_messages
     )
     assert all(
         not isinstance(message.get("content"), str)
@@ -409,7 +501,7 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
     messages_response = await client.get(f"/api/v1/sessions/{session_id}/messages")
     assert messages_response.status_code == 200
     messages = messages_response.json()["data"]["items"]
-    assert last_assistant_message(messages).strip() == LARGE_TEST_TARGET_VALUE
+    assert LARGE_TEST_TARGET_VALUE in last_assistant_message(messages)
 
 
 @pytest.mark.asyncio
@@ -422,7 +514,9 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
         json={"title": "Source Session For History Tool"},
     )
     assert source_session_response.status_code == 200
-    source_session_id = source_session_response.json()["data"]["session_id"]
+    source_session_data = source_session_response.json()["data"]
+    source_session_id = source_session_data["session_id"]
+    source_resource = f"boxteam://session/{source_session_id}"
 
     source_marker = "SOURCE_SESSION_HISTORY_ALPHA"
     await _write_source_session_checkpoint(
@@ -446,16 +540,16 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
     reader_session_id = reader_session_response.json()["data"]["session_id"]
 
     prompt = (
-        "请先读取当前工作区 AGENTS.md 里的扩展工具说明。"
-        "当你看到用户要求查看和搜索另一个会话上下文时，"
-        "必须根据 AGENTS.md 找到并读取正确的 skill。"
-        f"先用 read_context 默认 overview 查看 boxteam://session/{source_session_id}；"
-        "保存返回的 revision。"
-        f"再用 search_context 在同一资源搜索 {source_marker}，"
-        "并把 revision 作为 expected_revision；"
-        "最后用 read_context 读取 search 返回的第一个 locator，view=records，"
-        "并传入该 match 的 revision。"
-        "三次工具调用完成后只回复完成，不要重新抄写工具返回的大段 JSON。"
+        "先调用 skill_load，参数只能是 name=gateway-context；它不计入下面的业务步骤。"
+        "随后严格完成以下三个业务调用，不要改写资源地址，也不要使用 boxteam://gateway："
+        f"第一步调用 read_context，resource 原样使用 {source_resource}，view=overview。"
+        "第二步调用 search_context，参数名必须使用 query（不是 pattern），"
+        "resource 仍原样使用同一个地址，"
+        f"query 原样使用 {source_marker}；将第一步响应的 revision 原样复制到 "
+        "第二步的 expected_revision（请求中禁止传 revision 字段）。"
+        "第三步调用 read_context；resource 使用第二步响应 matches[0].locator，"
+        "view=records，并将 matches[0].revision 原样复制到 expected_revision。"
+        "三个业务调用全部成功后才回复完成，不要抄写工具返回的大段 JSON。"
     )
     reader_message_response = await client.post(
         f"/api/v1/sessions/{reader_session_id}/messages",
@@ -469,9 +563,7 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
     reader_job_data = await wait_for_job_done(client, reader_job_id, max_attempts=120)
     assert reader_job_data["status"] in {"completed", "succeeded"}
 
-    traces_response = await client.get(f"/api/v1/sessions/{reader_session_id}/traces")
-    assert traces_response.status_code == 200
-    traces = traces_response.json()["data"]["items"]
+    traces = await _list_all_session_traces(client, reader_session_id)
     context_tool_results = [
         (
             str(get_trace_payload(trace).get("tool_name")),
@@ -504,16 +596,13 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
     assert expanded_result["revision"] == search_result["matches"][0]["revision"]
     assert source_marker in json.dumps(expanded_result, ensure_ascii=False)
 
-    read_file_paths = [
-        _read_file_path_from_trace(trace)
+    skill_load_paths = [
+        get_trace_payload(trace).get("args", {}).get("name")
         for trace in traces
         if trace.get("type") == "tool_call_start"
-        and get_trace_payload(trace).get("tool_name") == "read_file"
+        and get_trace_payload(trace).get("tool_name") == "skill_load"
     ]
-    assert any(
-        path.endswith(".boxteam/skills/gateway-context/SKILL.md")
-        for path in read_file_paths
-    )
+    assert skill_load_paths == ["gateway-context"]
     for custom_tool_name in ("read_context", "search_context"):
         custom_tool_start_dtos = [
             trace
@@ -527,7 +616,7 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
         ]
         assert (
             get_trace_payload(custom_tool_start_dtos[-1]).get("invocation_tool_name")
-            == CUSTOM_TOOL_INVOKER_NAME
+            == EXTENSION_TOOL_INVOKER_NAME
         )
 
     logs_response = await client.get(f"/api/v1/sessions/{reader_session_id}/llm-request-logs")

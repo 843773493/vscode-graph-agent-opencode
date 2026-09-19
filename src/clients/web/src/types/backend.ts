@@ -316,6 +316,32 @@ export interface SessionActivity {
   occurred_at: string;
 }
 
+/**
+ * ChildThreadSummaryDTO 的前端镜像（app/schemas/internal_v2/session.py）。
+ * 该 DTO 尚未进入生成协议，按本文件 SessionActivity 的先例手写维护；
+ * 当前后端把 child thread 实现为 delegated child session。
+ */
+export type ChildThreadDelegationStartStatus = "pending" | "running" | "failed";
+
+export interface ChildThreadSummary {
+  session_id: string;
+  title: string;
+  created_at: string;
+  delegation_start_status: ChildThreadDelegationStartStatus;
+  start_error: string | null;
+  parent_session_id: string;
+  subagent_type: string;
+  /** 后端当前固定返回 null 的降级字段；展示层必须容忍 null。 */
+  latest_job_status: string | null;
+}
+
+/** ChildThreadListDTO 的前端镜像。 */
+export interface ChildThreadList {
+  parent_session_id: string;
+  items: ChildThreadSummary[];
+  total: number;
+}
+
 type DeepRequired<T> = T extends null
   ? null
   : T extends readonly (infer Item)[]

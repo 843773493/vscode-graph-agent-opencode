@@ -103,7 +103,7 @@ def create_python_execution_tool(session_id: str, agent_id: str = "default") -> 
                     process.communicate(),
                     timeout=timeout_seconds,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 process.kill()
                 stdout_bytes, stderr_bytes = await process.communicate()
                 raise RuntimeError(

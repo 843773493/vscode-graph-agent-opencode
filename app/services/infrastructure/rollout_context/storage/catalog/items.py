@@ -23,6 +23,7 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.tool_call_identity import provider_tool_call_id
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
@@ -70,7 +71,11 @@ def _strict_db_optional_text(value: object, *, field: str) -> str | None:
     return _strict_db_text(value, field=field)
 
 
-def _comparable_tool_result_payload(value: object) -> object:
+def _comparable_tool_result_payload(
+    value: object,
+    *,
+    metadata: Mapping[str, object] | None = None,
+) -> object:
     """提取工具结果正文，排除每个 producer 独有的生命周期 ID。"""
 
     if not isinstance(value, Mapping):
@@ -78,11 +83,125 @@ def _comparable_tool_result_payload(value: object) -> object:
     # on_tool_end 与下一次 model call 的 ToolMessage 可能分别生成 canonical
     # result。result_id、tool invocation/attempt ID 是 producer 生命周期身份，
     # 不是用户可见结果正文；同一 tool_call_id 的这些字段不同不应制造冲突。
-    return {
+    comparable = {
         key: item
         for key, item in value.items()
         if key not in {"result_id", "tool_invocation_id", "tool_attempt_id"}
     }
+    # 固定信封和信封内部目标工具可能各自产生一个 checkpoint shadow。
+    # 两者共享一次 provider tool call，信封层 name 与内部目标 name 不同，
+    # 但只要正文相同就必须复用同一个 canonical tool_result，不能制造重复
+    # item；非信封工具仍保留 name 参与正文一致性校验。
+    names = {
+        str(name)
+        for name in (value.get("name"), comparable.get("name"))
+        if isinstance(name, str) and name
+    }
+    if "invoke_extension_tool" in names:
+        comparable.pop("name", None)
+    tool_call_id = comparable.get("tool_call_id")
+    if isinstance(tool_call_id, str) and tool_call_id:
+        comparable["tool_call_id"] = provider_tool_call_id(
+            metadata or {}, tool_call_id
+        )
+    return comparable
+
+
+def _tool_result_identity(
+    item: CanonicalItemRecord,
+) -> tuple[str, str] | None:
+    """返回 tool result 的原始与 provider 规范化调用身份。"""
+
+    payload = item.payload if isinstance(item.payload, Mapping) else {}
+    raw_tool_call_id = payload.get("tool_call_id")
+    if not isinstance(raw_tool_call_id, str) or not raw_tool_call_id:
+        raw_tool_call_id = item.metadata.get("tool_call_id")
+    if not isinstance(raw_tool_call_id, str) or not raw_tool_call_id:
+        return None
+    return (
+        raw_tool_call_id,
+        provider_tool_call_id(item.metadata, raw_tool_call_id),
+    )
+
+
+def _tool_result_scope(metadata: Mapping[str, object]) -> str | None:
+    """读取 tool_result 的可验证 model-call provenance。"""
+    model_call_id = metadata.get("model_call_id")
+    if isinstance(model_call_id, str) and model_call_id:
+        return f"model-call:{model_call_id}"
+    projection_message_id = metadata.get("projection_message_id")
+    if (
+        isinstance(projection_message_id, str)
+        and projection_message_id.startswith("lc_run--")
+    ):
+        return f"model-call:{projection_message_id.removeprefix('lc_run--')}"
+    return None
+
+
+def _select_existing_tool_result(
+    connection: sqlite3.Connection,
+    item: CanonicalItemRecord,
+) -> sqlite3.Row | None:
+    """按 turn 与规范化 provider call identity 选择既有结果。
+
+    checkpoint carrier 通常只保存原始 call ID，而 stream carrier 可能保存
+    ``{model_call_id}:tool-call:{call_id}``。两者是同一次工具结果；但同一
+    Turn 允许 provider 重用原始 ID，因此多候选时必须用显式 model provenance
+    消歧，无法消歧就失败。
+    """
+
+    identity = _tool_result_identity(item)
+    if identity is None or item.turn_id is None:
+        return None
+    raw_tool_call_id, normalized_tool_call_id = identity
+    rows = connection.execute(
+        "SELECT item_id, content_hash, commit_id, jsonl_offset, jsonl_length, "
+        "metadata_json FROM item_catalog "
+        "WHERE semantic_kind = 'tool_result' AND turn_id = ? "
+        "ORDER BY item_sequence",
+        (item.turn_id,),
+    ).fetchall()
+    candidates: list[sqlite3.Row] = []
+    exact_candidates: list[sqlite3.Row] = []
+    incoming_scope = _tool_result_scope(item.metadata)
+    scoped_candidates: list[sqlite3.Row] = []
+    for row in rows:
+        metadata_value = json.loads(row[5])
+        if not isinstance(metadata_value, Mapping):
+            raise TypeError(
+                f"既有 tool_result metadata 不是 object: {row[0]}"
+            )
+        existing_raw_tool_call_id = metadata_value.get("tool_call_id")
+        if not isinstance(existing_raw_tool_call_id, str) or not existing_raw_tool_call_id:
+            continue
+        if (
+            provider_tool_call_id(metadata_value, existing_raw_tool_call_id)
+            != normalized_tool_call_id
+        ):
+            continue
+        candidates.append(row)
+        if existing_raw_tool_call_id == raw_tool_call_id:
+            exact_candidates.append(row)
+        if incoming_scope is not None and _tool_result_scope(metadata_value) == incoming_scope:
+            scoped_candidates.append(row)
+    if incoming_scope is not None:
+        # 有明确 model-call scope 时，裸 provider ID 相同但属于另一次
+        # model call 的结果绝不能复用；这正是 provider 允许重用短 ID 时
+        # 防止正文冲突和错误覆盖的边界。
+        preferred_candidates = scoped_candidates
+    else:
+        # 没有 provenance 的旧结果只能在整个候选集合唯一时复用；保留
+        # exact 优先仅用于同一旧消息的重复提交。
+        preferred_candidates = exact_candidates or candidates
+    for preferred in (preferred_candidates,):
+        if len(preferred) == 1:
+            return preferred[0]
+        if len(preferred) > 1:
+            raise RuntimeError(
+                "tool_result canonical identity 歧义，拒绝猜测复用: "
+                f"turn_id={item.turn_id}, tool_call_id={raw_tool_call_id}"
+            )
+    return None
 
 
 class RolloutItemsMixin:
@@ -236,80 +355,104 @@ class RolloutItemsMixin:
                     ).fetchone()
                     if existing is None:
                         if item.semantic_kind == SemanticKind.TOOL_RESULT:
-                            payload = (
-                                item.payload
-                                if isinstance(item.payload, Mapping)
-                                else {}
+                            existing_result = _select_existing_tool_result(
+                                connection, item
                             )
-                            tool_call_id = payload.get("tool_call_id")
-                            if isinstance(tool_call_id, str) and tool_call_id:
-                                existing_result = connection.execute(
-                                    "SELECT item_id, content_hash, commit_id, jsonl_offset, jsonl_length FROM item_catalog "
-                                    "WHERE semantic_kind = 'tool_result' "
-                                    "AND json_extract(metadata_json, '$.tool_call_id') = ? "
-                                    "ORDER BY item_sequence LIMIT 1",
-                                    (tool_call_id,),
-                                ).fetchone()
-                                if existing_result is not None:
-                                    result_item_id = _strict_db_text(
-                                        existing_result[0],
-                                        field="item_catalog.item_id",
+                            if existing_result is not None:
+                                result_item_id = _strict_db_text(
+                                    existing_result[0],
+                                    field="item_catalog.item_id",
+                                )
+                                result_offset = _strict_non_negative_int(
+                                    existing_result[3],
+                                    field="item_catalog.jsonl_offset",
+                                )
+                                result_length = _strict_non_negative_int(
+                                    existing_result[4],
+                                    field="item_catalog.jsonl_length",
+                                )
+                                result_commit_id = _strict_non_negative_int(
+                                    existing_result[2],
+                                    field="item_catalog.commit_id",
+                                )
+                                if result_length == 0:
+                                    raise RuntimeError(
+                                        "既有 tool_result canonical locator 长度非法: "
+                                        f"{result_item_id}"
                                     )
-                                    result_offset = _strict_non_negative_int(
-                                        existing_result[3],
-                                        field="item_catalog.jsonl_offset",
+                                result_path = self.jsonl_path(
+                                    thread_id,
+                                    checkpoint_ns,
+                                )
+                                raw_result = result_path.read_bytes()[
+                                    result_offset : result_offset + result_length
+                                ]
+                                try:
+                                    existing_envelope = json.loads(
+                                        raw_result.decode("utf-8")
                                     )
-                                    result_length = _strict_non_negative_int(
-                                        existing_result[4],
-                                        field="item_catalog.jsonl_length",
+                                except (
+                                    UnicodeDecodeError,
+                                    json.JSONDecodeError,
+                                ) as error:
+                                    raise RuntimeError(
+                                        "既有 tool_result canonical envelope 无法读取: "
+                                        f"{result_item_id}"
+                                    ) from error
+                                if not isinstance(existing_envelope, Mapping):
+                                    raise RuntimeError(
+                                        "既有 tool_result canonical envelope 非 object: "
+                                        f"{result_item_id}"
                                     )
-                                    result_commit_id = _strict_non_negative_int(
-                                        existing_result[2],
-                                        field="item_catalog.commit_id",
+                                existing_payload = existing_envelope.get("payload")
+                                existing_metadata = json.loads(existing_result[5])
+                                if not isinstance(existing_metadata, Mapping):
+                                    raise RuntimeError(
+                                        "既有 tool_result metadata 不是 object: "
+                                        f"{result_item_id}"
                                     )
-                                    if result_length == 0:
-                                        raise RuntimeError(
-                                            "既有 tool_result canonical locator 长度非法: "
-                                            f"{result_item_id}"
-                                        )
-                                    existing_payload: object | None = None
-                                    result_path = self.jsonl_path(
-                                        thread_id,
-                                        checkpoint_ns,
+                                comparable_existing = _comparable_tool_result_payload(
+                                    existing_payload,
+                                    metadata=existing_metadata,
+                                )
+                                comparable_new = _comparable_tool_result_payload(
+                                    item.payload,
+                                    metadata=item.metadata,
+                                )
+                                if comparable_existing != comparable_new:
+                                    identity = _tool_result_identity(item)
+                                    raise ItemSchemaError(
+                                        "同一 tool_call_id 的 tool_result 正文发生变化: "
+                                        f"{identity[0] if identity is not None else 'unknown'}"
                                     )
-                                    raw_result = result_path.read_bytes()[
-                                        result_offset : result_offset + result_length
-                                    ]
-                                    try:
-                                        existing_envelope = json.loads(
-                                            raw_result.decode("utf-8")
-                                        )
-                                    except (
-                                        UnicodeDecodeError,
-                                        json.JSONDecodeError,
-                                    ) as error:
-                                        raise RuntimeError(
-                                            "既有 tool_result canonical envelope 无法读取: "
-                                            f"{result_item_id}"
-                                        ) from error
-                                    if isinstance(existing_envelope, Mapping):
-                                        existing_payload = existing_envelope.get(
-                                            "payload"
-                                        )
-                                    comparable_existing = _comparable_tool_result_payload(
-                                        existing_payload
-                                    )
-                                    comparable_new = _comparable_tool_result_payload(
-                                        item.payload
-                                    )
-                                    if comparable_existing != comparable_new:
-                                        raise ItemSchemaError(
-                                            "同一 tool_call_id 的 tool_result 正文发生变化: "
-                                            f"{tool_call_id}"
-                                        )
-                                    existing_commit_ids.append(result_commit_id)
-                                    resolved_item_ids.append(result_item_id)
+                                # request 侧 tool_result carrier 不得被工具执行侧
+                                # live item 等价复用。委派（task 工具）后的下一次
+                                # 模型请求装配存在竞态：确认 carrier 可能先于 plan
+                                # 创建落入 active view；若把带 projection_message_id
+                                # 的 request 侧 carrier“等价复用”成无该身份的 live
+                                # item，则不会产生新 commit，投影层的 carrier_dedup
+                                # 会把 live tool_result 连同 stream 组一起判为
+                                # shadow，且没有任何替代 carrier，最终 provider wire
+                                # 缺失尾部 ToolMessage。因此正文等价通过后，incoming
+                                # 是 request 侧 carrier 而既有 item 不是时，必须照常
+                                # 持久化新 carrier；投影层靠 projection_message_id
+                                # 保留它并过滤 live shadow。
+                                incoming_is_request_carrier = isinstance(
+                                    item.metadata.get("projection_message_id"), str
+                                )
+                                existing_is_request_carrier = isinstance(
+                                    existing_metadata.get("projection_message_id"),
+                                    str,
+                                )
+                                if (
+                                    incoming_is_request_carrier
+                                    and not existing_is_request_carrier
+                                ):
+                                    pending.append(item)
                                     continue
+                                existing_commit_ids.append(result_commit_id)
+                                resolved_item_ids.append(result_item_id)
+                                continue
                         pending.append(item)
                         continue
                     stored_identity = (
@@ -411,7 +554,7 @@ class RolloutItemsMixin:
                 self._commit_connection(connection)
                 return tuple(dict.fromkeys((*existing_commit_ids, commit_id)))
 
-    def ensure_request_tool_result_items(
+    def ensure_request_items(
         self,
         thread_id: str,
         *,
@@ -419,12 +562,14 @@ class RolloutItemsMixin:
         messages: Sequence[object],
         checkpoint_ns: str = "",
     ) -> tuple[str, ...]:
-        """在下一个 LangGraph checkpoint 产生前固化请求中的工具消息。
+        """在下一个 LangGraph checkpoint 产生前固化请求中的动态消息。
 
         LangGraph 的 ``on_chat_model_start`` 可能先于外层 ``on_tool_end`` 事件
         到达。此时 AIMessage(tool_calls=...) 和 ToolMessage 已经是本次模型请求
         的输入，但 stream/checkpoint sink 可能尚未将其中一个写入 rollout。这里
         由 Saver 调用 storage owner，把这两个请求事实先写成完整 immutable item；
+        上下文来源 middleware 追加的 user item 也在这里固化，避免 sealed
+        assembly 只从旧 checkpoint 读取而丢掉本次请求前生成的上下文增量；
         随后标准 checkpoint 和 stream sink 通过 message/tool-call identity 幂等
         复用它们，避免已 seal 的 assembly 缺少 assistant tool-call 或 ToolMessage。
         """
@@ -434,20 +579,49 @@ class RolloutItemsMixin:
             with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
                 self._require_v2_runtime(connection)
                 for index, message in enumerate(messages):
-                    is_tool_result = self._codec().message_role(message) == "tool"
-                    is_tool_call = bool(self._codec().tool_calls(message))
-                    if not is_tool_result and not is_tool_call:
+                    codec = self._codec()
+                    message_role = codec.message_role(message)
+                    is_tool_result = message_role == "tool"
+                    is_tool_call = bool(codec.tool_calls(message))
+                    response_metadata = getattr(message, "response_metadata", {})
+                    is_context_source = (
+                        message_role == "user"
+                        and isinstance(response_metadata, Mapping)
+                        and isinstance(
+                            response_metadata.get("context_source_kind"), str
+                        )
+                        and isinstance(response_metadata.get("context_revision"), str)
+                    )
+                    if (
+                        not is_tool_result
+                        and not is_tool_call
+                        and not is_context_source
+                    ):
                         continue
                     message_id = self._codec().message_id(message, index)
-                    message_turn_id = self._codec().turn_id(
-                        message, turn_id, message_id
+                    indexed_turn = connection.execute(
+                        "SELECT turn_id FROM messages WHERE message_id = ?",
+                        (message_id,),
+                    ).fetchone()
+                    message_turn_id = (
+                        indexed_turn[0]
+                        if indexed_turn is not None
+                        else self._codec().turn_id(message, turn_id, message_id)
                     )
-                    group = self._codec().items_for_message(
+                    model_call_id = (
+                        codec.tool_message_model_call_id(message, messages[:index])
+                        if is_tool_result
+                        else codec.model_call_id(message)
+                        if is_tool_call
+                        else None
+                    )
+                    group = codec.items_for_message(
                         message,
                         item_sequence=1,
                         message_id=message_id,
                         turn_id=message_turn_id,
                         timestamp=_now(),
+                        model_call_id=model_call_id,
                     )
                     projected = self._codec().project_message(group)
                     anchor = connection.execute(

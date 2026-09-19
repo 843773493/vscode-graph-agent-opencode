@@ -1,18 +1,18 @@
 ---
 name: debugging
-description: 用户要求调试 JavaScript/Node.js 源码、设置断点、查看调用栈或变量、求值、单步执行和确认程序结束时使用。
+description: 用户要求调试 JavaScript/Node.js 源码、设置断点、查看调用栈或变量、求值、单步执行和确认程序结束时使用；目标工具不在模型 tools 列表中，必须先用 skill_load(name="debugging") 加载本 Skill，再通过固定信封 invoke_extension_tool 调用。
 allowed-tools: list_debug_configurations, create_debug_configuration, activate_debug_configuration, delete_debug_configuration, start_debugging, stop_debugging, step_over, step_into, step_out, continue_execution, pause_execution, restart_debugging, add_breakpoint, add_logpoint, remove_breakpoint, clear_all_breakpoints, list_breakpoints, list_variable_names, get_variables_values, evaluate_expression
 ---
 
 # 源码调试工具
 
-这是通过固定扩展入口 invoke_custom_tool 提供给 Agent 的源码级调试工具组。目标工具不会直接出现在 Agent 的模型工具列表中，也不是让模型连接 Inspector 的底层接口。所有动作都会进入 Agent 工具轨迹和调试 session 审计记录。
+这是通过固定扩展入口 invoke_extension_tool 提供给 Agent 的源码级调试工具组。目标工具不会直接出现在 Agent 的模型工具列表中，也不是让模型连接 Inspector 的底层接口。所有动作都会进入 Agent 工具轨迹和调试 session 审计记录。
 
 ## 给模型的最短决策流程
 
 你是在替用户观察和控制目标 JavaScript 程序，不是在管理 Inspector 连接。先看状态再行动：每次动作都以工具返回的最新 `state` 为准，优先少调用、少重复和少假设。
 
-1. 用户请求匹配本 Skill 后，先用 `read_file` 读取 `.boxteam/bundled-skills/debugging/SKILL.md`，再通过 `invoke_custom_tool` 调用目标调试工具。
+1. 用户请求匹配本 Skill 后，先调用 `skill_load(name="debugging")` 激活本 Skill，再通过 `invoke_extension_tool` 调用目标调试工具；不要用 `read_file` 读取 Skill 正文。
 2. 首次进入调试时，先调用一次 `list_debug_configurations`。它的返回 `state` 同时包含活动方案、方案列表、断点和运行状态；只有状态可能已被人类改变、返回不完整或需要单独确认断点时，才追加 `list_breakpoints`。一个会话可保存多套方案，但同时只激活一套。
 3. 根据这次返回做分支：
    - `running` 或 `paused`：复用当前运行时，直接处理用户目标；不要为了“取得控制权”重启，也不要重新创建方案。
@@ -31,7 +31,7 @@ allowed-tools: list_debug_configurations, create_debug_configuration, activate_d
 
 ## 并发、人类操作和安全边界
 
-- 人类和 Agent 始终共享同一个 session 调试运行时，不存在接管、交接或权限模式；不需要先交接控制权。人类可能在两次工具调用之间继续、暂停、单步、停止、增删断点、在终端输入、修改源码或发送新消息。
+- 人类和 Agent 共享同一个当前 SessionThread 的调试运行时，不存在接管、交接或权限模式；不需要先交接控制权。同一 Session 的 main 与 child thread 各自拥有独立的进程、方案和断点，后端按受信 (session_id, thread_id) 归属解析，模型不能选择或传入 thread。人类可能在两次工具调用之间继续、暂停、单步、停止、增删断点、在终端输入、修改源码或发送新消息。
 - 用户新消息不是“等待授权”的信号，而是对当前最新状态的新指令：先读取或使用下一次工具返回的权威状态，接受已经发生的推进，不回滚、不抢占、不重启来夺回控制权。
 - `call_stack` 只提供栈结构，不包含变量值。先用 `list_variable_names`，再用 `get_variables_values` 读取最多 50 个必要变量。
 - 变量和求值中的疑似密钥、令牌、密码或凭据会替换为 `<redacted: possible secret>`；看到 `redaction_notice` 后只能使用类型、长度或空值判断，不得尝试编码、切片或其他表达式绕过脱敏。
@@ -44,7 +44,7 @@ allowed-tools: list_debug_configurations, create_debug_configuration, activate_d
 
 ## 工具参数契约
 
-以下对象是 invoke_custom_tool.arguments 中目标工具的参数 JSON Schema。固定入口的外层 schema 由 Agent 工具定义提供，不要把目标工具名称注册成模型的直接工具。
+以下对象是 invoke_extension_tool.arguments 中目标工具的参数 JSON Schema。固定入口的外层 schema 由 Agent 工具定义提供，不要把目标工具名称注册成模型的直接工具。
 
 {
   "tool_name": "list_debug_configurations",
@@ -104,6 +104,8 @@ allowed-tools: list_debug_configurations, create_debug_configuration, activate_d
 }
 
 testName 目前不支持 Node 单测试启动；不要为了满足请求而猜测测试命令。需要使用 launch profile 时，把已存在的 profile 名称放入 configurationName。
+
+启动按“显式 debugConfigurationId → 当前 SessionThread 活动方案 → 无方案时安全创建”的顺序选方案。显式 ID 在当前 SessionThread 中不存在时返回 `debug_configuration_not_found`（不会读取其它 thread 的方案）；fileFullPath、workingDirectory 或显式 configurationName 与选中方案的有效入口、工作目录或解析后的 profile 不一致时返回 `debug_launch_parameter_conflict`，并在 error.fields 中列出冲突字段、在 error.conflicts 中给出期望值。这两种失败都发生在激活方案、停止旧进程和启动新进程之前；要改变入口或 profile，先显式 create_debug_configuration 或 activate_debug_configuration，不要用临时参数覆盖方案。
 
 {
   "tool_name": "stop_debugging",

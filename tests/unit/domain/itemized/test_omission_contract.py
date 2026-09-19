@@ -164,8 +164,8 @@ def overlay_chain() -> tuple[ContextRequestPlan, tuple[ContextSelectionEntry, ..
                 "overlay_ref": f"ref-{role}",
                 "overlay_role": role,
                 "source_overlay_epoch": 1,
-                "source_ordinal": ordinal,
             },
+            source_ordinal=ordinal,
         )
         ref = ContextRef.request_only_ref(
             f"ref-{role}",

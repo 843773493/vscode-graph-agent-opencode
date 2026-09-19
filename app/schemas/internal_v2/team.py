@@ -76,9 +76,9 @@ class TeamListDTO(BaseModel):
 class TeamMemberOperationDTO(BaseModel):
     board: TeamBoardDTO
     member: TeamMemberDTO
-    child_session_id: str | None = None
-    child_message_id: str | None = None
-    child_job_id: str | None = None
+    child_thread_id: str | None = None
+    child_delegation_id: str | None = None
+    child_admission_state: str | None = None
 
 
 class TeamTaskOperationDTO(BaseModel):

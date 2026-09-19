@@ -19,6 +19,9 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.services.infrastructure.rollout_context.fork.full_copy.preflight import (
     read_source_format,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutTurnAnchor,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
@@ -55,7 +58,7 @@ class ForkCompactionMixin:
             source_checkpoint,
             source_checkpoint_id,
             source_view_id,
-            _turn_anchor,
+            turn_anchor,
         ) = await self._resolve_fork_source(
             source_session_id=source_session_id,
             mode=mode,
@@ -69,9 +72,46 @@ class ForkCompactionMixin:
             source_checkpoint is None or source_checkpoint_id is None
         ):
             raise KeyError("fork source checkpoint 不存在")
+        if mode in {"context_fork", "history_prefix_fork"}:
+            self._validate_fork_boundary(
+                source_session_id=source_session_id,
+                turn_anchor=turn_anchor,
+                source_checkpoint=source_checkpoint,
+                checkpoint_ns=checkpoint_ns,
+            )
         return RolloutForkResult(
             source_checkpoint_id=source_checkpoint_id,
             source_view_id=source_view_id,
+        )
+
+    def _validate_fork_boundary(
+        self,
+        *,
+        source_session_id: str,
+        turn_anchor: RolloutTurnAnchor | None,
+        source_checkpoint: CheckpointTuple | None,
+        checkpoint_ns: str,
+    ) -> None:
+        """target staging/durable mutation 前验证 source view 闭合。"""
+        if source_checkpoint is None:
+            return
+        if turn_anchor is not None:
+            self._storage.validate_fork_source_closure(
+                source_session_id,
+                checkpoint_ns=checkpoint_ns,
+                source_checkpoint_id=turn_anchor.checkpoint_id,
+                cutoff_message_sequence=turn_anchor.cutoff_message_sequence,
+            )
+            return
+        source_checkpoint_id = strict_text(
+            source_checkpoint.checkpoint.get("id"),
+            field="fork.source_checkpoint.id",
+        )
+        self._storage.validate_fork_source_closure(
+            source_session_id,
+            checkpoint_ns=checkpoint_ns,
+            source_checkpoint_id=source_checkpoint_id,
+            cutoff_message_sequence=None,
         )
 
     async def _resolve_fork_source(
@@ -216,6 +256,16 @@ class ForkCompactionMixin:
                 turn_id=turn_id,
                 anchor_mode=anchor_mode,
                 require_completed=True,
+            )
+
+        if mode in {"context_fork", "history_prefix_fork"}:
+            # 冲突必须发生在 begin_fork_materialization（target staging）
+            # 与任何 target durable mutation 之前。
+            self._validate_fork_boundary(
+                source_session_id=source_session_id,
+                turn_anchor=turn_anchor,
+                source_checkpoint=source_checkpoint,
+                checkpoint_ns=checkpoint_ns,
             )
 
         if mode == "full_rollout_copy":

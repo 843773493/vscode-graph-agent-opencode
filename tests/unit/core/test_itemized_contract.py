@@ -266,7 +266,11 @@ def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -
             "invocation_id": "turn-tool",
         },
         payload="工具返回后的 reasoning",
-        metadata={"block_id": "part-after-tool-reasoning", "block_index": 0},
+        metadata={
+            "block_id": "model-call-after-tool:block:part-after-tool-reasoning",
+            "block_index": 0,
+            "model_call_id": "model-call-after-tool",
+        },
         turn_id="turn-tool",
         turn_scope="turn_member",
         message_group_id="message-stream-after-tool",
@@ -280,7 +284,11 @@ def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -
         status=CanonicalItemStatus.COMPLETED,
         producer_ref=stream_reasoning.producer_ref,
         payload="最终文本",
-        metadata={"block_id": "part-after-tool-text", "block_index": 1},
+        metadata={
+            "block_id": "model-call-after-tool:block:part-after-tool-text",
+            "block_index": 1,
+            "model_call_id": "model-call-after-tool",
+        },
         turn_id="turn-tool",
         turn_scope="turn_member",
         message_group_id="message-stream-after-tool",
@@ -304,6 +312,7 @@ def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -
         metadata={
             "execution_confirmed": True,
             "projection_message_id": "lc-run-after-tool",
+            "model_call_id": "model-call-after-tool",
         },
         turn_id="turn-tool",
         turn_scope="turn_member",
@@ -345,6 +354,131 @@ def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -
     assert messages[2].content == [
         {"reasoning_content": "工具返回后的 reasoning", "type": "reasoning_content"},
         {"text": "最终文本", "type": "text"},
+    ]
+
+
+def test_provider_projection_does_not_remove_reused_part_id_from_another_model_call() -> None:
+    def stream_item(
+        *, item_sequence: int, item_id: str, model_call_id: str, text: str
+    ) -> CanonicalItemRecord:
+        return CanonicalItemRecord.create(
+            item_sequence=item_sequence,
+            item_id=item_id,
+            semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+            payload_kind=PayloadKind.TEXT,
+            status=CanonicalItemStatus.COMPLETED,
+            producer_ref={
+                "producer_kind": "provider",
+                "producer_id": model_call_id,
+                "invocation_id": "turn-reused-part-id",
+            },
+            payload=text,
+            metadata={
+                "block_id": f"{model_call_id}:block:part-reused",
+                "block_index": 0,
+                "model_call_id": model_call_id,
+            },
+            turn_id="turn-reused-part-id",
+            turn_scope="turn_member",
+            message_group_id=f"message-{model_call_id}",
+            wire_role="assistant",
+        )
+
+    first_call = stream_item(
+        item_sequence=1,
+        item_id="stream-first-reused-part",
+        model_call_id="model-call-first",
+        text="第一调用的 shadow",
+    )
+    second_call = stream_item(
+        item_sequence=2,
+        item_id="stream-second-reused-part",
+        model_call_id="model-call-second",
+        text="第二调用的独立内容",
+    )
+    final_carrier = CanonicalItemRecord.create(
+        item_sequence=3,
+        item_id="final-reused-part-carrier",
+        semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+        payload_kind=PayloadKind.STRUCTURED_CONTENT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "final-reused-part-carrier",
+            "invocation_id": "turn-reused-part-id",
+        },
+        payload=[{"text": "最终内容", "type": "text"}],
+        metadata={
+            "content_part_refs": [{"id": "part-reused", "index": 0}],
+            "execution_confirmed": True,
+        },
+        turn_id="turn-reused-part-id",
+        turn_scope="turn_member",
+        message_group_id="message-final-reused-part-carrier",
+        wire_role="assistant",
+    )
+
+    messages = project_canonical_items((first_call, second_call, final_carrier))
+
+    assert [message.content for message in messages] == [
+        "第一调用的 shadow",
+        "第二调用的独立内容",
+        [{"text": "最终内容", "type": "text"}],
+    ]
+
+
+def test_provider_projection_uses_superseded_checkpoint_identity_without_loading_shadow() -> None:
+    """最终 carrier 自带 lc_run producer identity 时，不依赖未选中的 checkpoint item。"""
+    model_call_id = "model-call-selected-only"
+    stream = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="selected-stream-shadow",
+        semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+        payload_kind=PayloadKind.TEXT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": model_call_id,
+            "invocation_id": "turn-selected-only",
+        },
+        payload="stream shadow",
+        metadata={
+            "model_call_id": model_call_id,
+            "block_id": f"{model_call_id}:block:part-selected",
+            "block_index": 0,
+        },
+        turn_id="turn-selected-only",
+        turn_scope="turn_member",
+        message_group_id="message-selected-only-stream",
+        wire_role="assistant",
+    )
+    final = CanonicalItemRecord.create(
+        item_sequence=2,
+        item_id="selected-final-carrier",
+        semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+        payload_kind=PayloadKind.STRUCTURED_CONTENT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "provider",
+            "producer_id": "final-selected-only",
+            "invocation_id": "turn-selected-only",
+        },
+        payload=[{"text": "final", "type": "text"}],
+        metadata={
+            "content_part_refs": [{"id": "part-selected", "index": 0}],
+            "supersedes_message_id": f"lc_run--{model_call_id}",
+            "execution_confirmed": True,
+        },
+        turn_id="turn-selected-only",
+        turn_scope="turn_member",
+        message_group_id="message-selected-only-final",
+        wire_role="assistant",
+    )
+
+    messages = project_canonical_items((stream, final))
+
+    assert [message.content for message in messages] == [
+        [{"text": "final", "type": "text"}]
     ]
 
 
@@ -876,6 +1010,36 @@ def test_internal_execution_input_remains_turn_root_during_checkpoint_roundtrip(
     assert item.metadata["internal"] is True
 
 
+def test_context_source_provenance_survives_canonical_roundtrip() -> None:
+    codec = LangChainMessageCodec()
+    message = HumanMessage(
+        content="Skill 增量",
+        id="context-source-skill-revision-delta",
+        response_metadata={
+            "context_source_kind": "skill",
+            "context_source_id": "skill:debugging",
+            "context_source_name": "debugging",
+            "context_wire_role": "user",
+            "context_revision": "sha256:revision",
+        },
+    )
+
+    (item,) = codec.items_for_message(
+        message,
+        item_sequence=1,
+        message_id=str(message.id),
+        turn_id="turn-1",
+        timestamp="2026-09-09T00:00:00+00:00",
+    )
+    restored = codec.from_dict(codec.project_message((item,)))
+
+    assert item.metadata["context_source_id"] == "skill:debugging"
+    assert restored.response_metadata["context_source_kind"] == "skill"
+    assert restored.response_metadata["context_source_name"] == "debugging"
+    assert restored.response_metadata["context_wire_role"] == "user"
+    assert restored.response_metadata["context_revision"] == "sha256:revision"
+
+
 def test_history_and_provider_consume_the_same_sealed_selection_order(
     user_item: CanonicalItemRecord,
 ) -> None:
@@ -889,7 +1053,9 @@ def test_history_and_provider_consume_the_same_sealed_selection_order(
         content_hash=contribution_content_hash("prompt", body),
         body=body,
         content_length=len(canonical_json_bytes(body)),
-        metadata={"source_ordinal": 0},
+        source_ordinal=0,
+        # system policy 属于 root 内容；显式声明 root_eligible 进 system root。
+        root_placement="root_eligible",
     )
     request_ref = ContextRef.request_only_ref(
         contribution.contribution_id,

@@ -23,6 +23,9 @@ from app.services.business.session_interrupt_service import SessionInterruptServ
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.business.session_service import SessionService
+from app.services.business.session_skill_tracking_service import (
+    SessionSkillTrackingService,
+)
 from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.event_service import EventService
@@ -33,7 +36,7 @@ from app.services.infrastructure.file_tree_settings_service import (
 )
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
-from app.services.infrastructure.mcp import McpRuntimeManager
+from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.runtime_service import RuntimeService
@@ -65,6 +68,7 @@ class _AppContainerProtocol:
     goal_service: SessionGoalService
     goal_runtime_service: GoalRuntimeService
     session_interrupt_service: SessionInterruptService
+    session_skill_tracking_service: SessionSkillTrackingService
     session_context_fork_service: SessionContextForkService
     session_turn_replay_service: SessionTurnReplayService
     session_turn_history_service: SessionTurnHistoryService
@@ -87,7 +91,7 @@ class _AppContainerProtocol:
     session_orchestrator: SessionOrchestrator
     session_catalog_service: SessionCatalogService
     session_generation_service: SessionGenerationService
-    mcp_runtime_manager: McpRuntimeManager
+    mcp_catalog_owner: McpCatalogOwner
     workspace_activity_service: WorkspaceActivityService
     message_stream_store: MessageStreamStore
 
@@ -219,6 +223,15 @@ def get_session_interrupt_service(request: Request) -> SessionInterruptService:
     return service
 
 
+def get_session_skill_tracking_service(
+    request: Request,
+) -> SessionSkillTrackingService:
+    service = getattr(_get_container(request), "session_skill_tracking_service", None)
+    if not isinstance(service, SessionSkillTrackingService):
+        raise RuntimeError("SessionSkillTrackingService 尚未在应用启动阶段初始化")
+    return service
+
+
 def get_message_stream_store(request: Request) -> MessageStreamStore:
     service = getattr(_get_container(request), "message_stream_store", None)
     if not isinstance(service, MessageStreamStore):
@@ -324,10 +337,10 @@ def get_tool_selection_store(request: Request) -> ToolSelectionStore:
     return service
 
 
-def get_mcp_runtime_manager(request: Request) -> McpRuntimeManager:
-    service = getattr(_get_container(request), "mcp_runtime_manager", None)
-    if not isinstance(service, McpRuntimeManager):
-        raise RuntimeError("McpRuntimeManager 尚未在应用启动阶段初始化")
+def get_mcp_catalog_owner(request: Request) -> McpCatalogOwner:
+    service = getattr(_get_container(request), "mcp_catalog_owner", None)
+    if not isinstance(service, McpCatalogOwner):
+        raise RuntimeError("McpCatalogOwner 尚未在应用启动阶段初始化")
     return service
 
 

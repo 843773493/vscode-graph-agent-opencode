@@ -242,7 +242,7 @@ def test_persisted_source_manifest_and_indexes_are_verified(
         value["contributions"][0]["body"] = "never-persist-secret"
         raw = json_text(value)
     elif mutation == "safe_metadata":
-        value["contributions"][0]["metadata"]["source_ordinal"] += 1
+        value["contributions"][0]["source_ordinal"] += 1
         raw = json_text(value)
     with connection:
         if mutation == "index_missing":
@@ -262,7 +262,7 @@ def test_persisted_source_manifest_and_indexes_are_verified(
 
 def test_import_v2_binds_even_unselected_source_metadata(snapshot, provenance, source_manifest):
     changed = deepcopy(source_manifest)
-    changed["contributions"][0]["metadata"]["source_ordinal"] += 1
+    changed["contributions"][0]["source_ordinal"] += 1
     inputs = {"detail_key": None, "origin": "schema3_import", "source_provenance": provenance}
     assert imported_registration_hash(snapshot, source_manifest=source_manifest, **inputs) != (
         imported_registration_hash(snapshot, source_manifest=changed, **inputs)

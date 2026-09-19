@@ -39,26 +39,31 @@ from app.services.infrastructure.rollout_context.runtime.protected_detail import
     ProtectedDetailError,
 )
 
-# 冻结的是历史 writer 实际执行结果，不调用当前实现生成 expected blob/AAD。
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+
+# 冻结旧 writer 的 wire 格式与独立密文向量，不调用当前实现生成 expected blob/AAD。
 # 来源：2026-09-07T19:49:03.790Z 源码读取，rollout continuation
 # 01a07c06-50e8-73e0-9051-93b47e7529ae_01a07c34-8cda-7d63-af12-1afc6f76e347:13789。
 # 旧 protected_detail.py SHA-256:
 # 62916f2b5898ae0ec51635887bef470ac59c8e9c96214da45d8cc76db6056955。
 # writer 输入使用非生产测试 key p*32、session key s*32、nonce 000102...0b。
-_OLD_AAD = b'{"assembly_id":"old-assembly","content_length":60,"detail_ref":"detail-old","format_version":1,"session_id":"upgrade-session","source_revision":"producer-v1"}'
+# R21 离线用独立 AESGCM 认证原始向量后，仅将 AAD/明文 session_id 迁为 canonical，
+# 再用原 key/nonce 固定新密文；正文、摘要、旧 wire 格式不变。
+_OLD_AAD = b'{"assembly_id":"old-assembly","content_length":60,"detail_ref":"detail-old","format_version":1,"session_id":"ses_e6d2707870e54cab8c135193c0802532","source_revision":"producer-v1"}'
 _OLD_BLOB = bytes.fromhex(
-    "626f787465616d2d636f6e746578742d64657461696c2d763100000102030405060708090a0b393eba760746"
-    "af6e44b0d3a47064681fe088ca115bb7945a26faaa8a47cb545cf45c9d0a6d0985e985a54499265abd52d256"
-    "46397d94a016646f78206a3c1d49335c0aa58ac1738a009be22aae92c656ff0be42a1edb55a658eb3b1c4404"
-    "6b8631f70205fcc856c0a79e3751276488d132b1d5a5b4293f58a735039d7f030649a566be8405b26c353437"
-    "1ac118969579e5bdfc524903c347dcd386ca8571b52faa1bfa9711fa998d83fa7327b26f567b7925ffa85c00"
-    "4281aee8bf70a91685b3633f39bc05c34a5a9285dfb0967d641e73508cad33dfa5d73b993c667006984212c3"
-    "f70c1c0f0430ad0bba408a13c13879203d562ff9cd9e3180d224be667285a0008c12d61527ff6f064f29575d"
-    "4f6428289d5f6297b0aa6f8636539b36b38a85314bb7ae34f7db44a1a383ca0890eab2977e31b4be622d1482"
-    "d8b604acfbcd56fb304d28629730815607a9be920fb279a191056532b8b98a00cadc7fdb4fee53e14b6b9d48"
-    "8545574ae2da7e45eb255ec8d8b9d5ed8cd94a8721881a4f56e0fbc8359ba3eddea914695bbf230a09ddb780"
-    "eddb1aa1b24041a0c38f439dda6dcc2aff504e4c9fb70401bc2d2743b597daa85811fd1644867e99aaf5dc8d"
-    "d4cae4a9f33ac42c833c63c3220c661a"
+    "626f787465616d2d636f6e746578742d64657461696c2d763100000102030405060708090a0b393eba76"
+    "0746af6e44b0d3a47064681fe088ca115bb7945a26faaa8a47cb545cf45c9d0a6d0985e985a54499265a"
+    "bd52d25646397d94a016646f78206a3c1d49335c0aa58ac1738a009be22aae92c656ff0be42a1edb55a6"
+    "58eb3b1c44046b8631f70205fcc856c0a79e3751276488d132b1d5a5b4293f58a735039d7f030649a566"
+    "be8405b26c3534371ac118969579e5bdfc524903c347dcd386ca8571b52faa1bfa9711fa998d83fa7327"
+    "b26f567b7925ffa85c004281aee8bf70a91685b3633f39bc05c34a5a9285dfb0967d641e73508cad33df"
+    "a5d73b993c667006984212c3f70c1c0f0430ad0bba408a13c13879203d562ff9cd9e3180d224be667285"
+    "a0008c12d61527ff6f064f29575d4f6428289d5f6297b0aa6f8636539b36b38a85314bb7ae34f7db44a1"
+    "a383ca0890eab2977e31b4be622d1482d8b604acfbcd56fb304d28629730815607a9be920fb279a19105"
+    "6532b8b98a00cadc7fdb4fee53e14b6b9d488545574ae2da7e45eb255ec8d8b9d5ed8cd94a8721881a4f"
+    "56e0fbc8359ba3eddea914695bbf230c1cc99a84bfda05e5e7040afe9c8454859b7fc167ee021826dceb"
+    "410bff7c781fa29ecafa065cea0c52916fd183b69b865cf517f29d521536d1f7024151bb83f20b936126"
+    "10f55a8b115a01e041a2ecac786c34903e"
 )
 _DIGEST = "hmac-sha256:session:v1:569a6c4d3895f5fd60c239576b71e424eddeb8df426065d9eda8e3b22922614c"
 _BODY_HASH = (
@@ -78,7 +83,7 @@ def upgrade_root(integration_workspace_root_path, request) -> Path:
 @pytest.fixture
 def sessions_dir(upgrade_root, session_bundle_factory) -> Path:
     sessions = upgrade_root / ".boxteam" / "sessions"
-    session_root = session_bundle_factory(sessions, "upgrade-session")
+    session_root = session_bundle_factory(sessions, SESSION_ID)
     rollout = session_root / "rollout"
     rollout.mkdir()
     key = rollout / ".context-redaction-key"
@@ -93,7 +98,7 @@ def sessions_dir(upgrade_root, session_bundle_factory) -> Path:
 @pytest.fixture
 def session_root(sessions_dir) -> Path:
     return get_session_path_resolver(sessions_dir).resolve_session_node(
-        "upgrade-session"
+        SESSION_ID
     )
 
 
@@ -108,7 +113,7 @@ def upgrade_arguments() -> dict[str, object]:
         "legacy_blob": _OLD_BLOB,
         "legacy_aad": _OLD_AAD,
         "expected_digest": _DIGEST,
-        "target_ref": DetailRef("upgrade-session", "new-assembly", "new-detail"),
+        "target_ref": DetailRef(SESSION_ID, "new-assembly", "new-detail"),
         "detail_kind": "request_source",
         "retention_class": "request_replay",
         "visibility": "private",
@@ -123,7 +128,7 @@ def upgrade_arguments() -> dict[str, object]:
 def old_plaintext() -> dict[str, object]:
     return {
         "format_version": 1,
-        "session_id": "upgrade-session",
+        "session_id": SESSION_ID,
         "assembly_id": "old-assembly",
         "detail_ref": "detail-old",
         "source_revision": "producer-v1",
@@ -157,7 +162,7 @@ def capability_arguments(legacy_envelope, upgrade_arguments):
     return {
         "legacy_envelope": legacy_envelope,
         "legacy_blob": _OLD_BLOB,
-        "legacy_session_id": "upgrade-session",
+        "legacy_session_id": SESSION_ID,
         "legacy_detail_id": "detail-old",
         **{
             key: upgrade_arguments[key]
@@ -250,7 +255,7 @@ def test_prepare_is_memory_only_and_new_record_roundtrips(
     restarted = ContextPlanDetailStore(sessions_dir, protected_key=b"p" * 32)
     assert (
         restarted.read(
-            session_id="upgrade-session", record=record, include_sensitive=True
+            session_id=SESSION_ID, record=record, include_sensitive=True
         )["detail"]
         == old_plaintext["detail"]
     )
@@ -539,7 +544,7 @@ def test_preparation_preserves_expiry_and_is_retryable(
     assert first.record.expires_at == args["expires_at"]
     with pytest.raises(DetailUnavailableError, match="已过期"):
         upgrade_store.read(
-            session_id="upgrade-session", record=first.record, include_sensitive=True
+            session_id=SESSION_ID, record=first.record, include_sensitive=True
         )
 
 
@@ -551,7 +556,7 @@ def test_normal_write_uses_same_new_envelope_without_old_ingress(
 ):
     body = {"text": "normal-new-write"}
     record = upgrade_store.write(
-        session_id="upgrade-session",
+        session_id=SESSION_ID,
         assembly_id="normal-assembly",
         detail_kind="request_source",
         retention_class="request_replay",
@@ -568,12 +573,12 @@ def test_normal_write_uses_same_new_envelope_without_old_ingress(
     if protection == "redacted":
         with pytest.raises(DetailUnavailableError, match="没有 protected body"):
             upgrade_store.read(
-                session_id="upgrade-session", record=record, include_sensitive=True
+                session_id=SESSION_ID, record=record, include_sensitive=True
             )
     else:
         assert (
             upgrade_store.read(
-                session_id="upgrade-session", record=record, include_sensitive=True
+                session_id=SESSION_ID, record=record, include_sensitive=True
             )["detail"]
             == body
         )
@@ -671,7 +676,7 @@ def test_volta_upgrade_detail_consumes_real_capability(
     path.write_bytes(raw)
     row = {
         "detail_ref": "detail-old",
-        "session_id": "upgrade-session",
+        "session_id": SESSION_ID,
         "checkpoint_ns": "branch",
         "assembly_id": "old-assembly",
         "relative_path": "rollout/" + relative,
@@ -691,7 +696,7 @@ def test_volta_upgrade_detail_consumes_real_capability(
     upgraded = upgrade_detail(
         row,
         rollout_root=session_root / "rollout",
-        session_id="upgrade-session",
+        session_id=SESSION_ID,
         checkpoint_ns="branch",
         purpose=("request_source", "request_replay", "private"),
         detail_capability=upgrade_store.schema_v3_detail_capability(),

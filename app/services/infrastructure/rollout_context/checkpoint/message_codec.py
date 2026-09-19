@@ -151,6 +151,42 @@ class LangChainMessageCodec:
         value = self.to_dict(message) if not isinstance(message, Mapping) else message
         return _serialized_tool_calls(value)
 
+    def model_call_id(self, message: object) -> str | None:
+        """从消息自身的持久 identity 读取所属模型调用。"""
+        metadata = self._metadata(message)
+        for value in (
+            metadata.get("model_call_id"),
+            self._message_metadata(message).get("model_call_id"),
+        ):
+            if isinstance(value, str) and value:
+                return value
+        message_id = getattr(message, "id", None)
+        if isinstance(message_id, str) and message_id.startswith("lc_run--"):
+            return message_id.removeprefix("lc_run--") or None
+        return None
+
+    def tool_message_model_call_id(
+        self, message: object, preceding_messages: Sequence[object]
+    ) -> str | None:
+        """按消息顺序把 ToolMessage 绑定到它前面的 assistant carrier。"""
+        direct = self.model_call_id(message)
+        if direct is not None:
+            return direct
+        tool_call_id = getattr(message, "tool_call_id", None)
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            return None
+        for preceding in reversed(preceding_messages):
+            model_call_id = self.model_call_id(preceding)
+            if model_call_id is None:
+                continue
+            if any(
+                call.get("id") == tool_call_id
+                or call.get("tool_call_id") == tool_call_id
+                for call in self.tool_calls(preceding)
+            ):
+                return model_call_id
+        return None
+
     def items_for_message(
         self,
         message: object,
@@ -159,6 +195,7 @@ class LangChainMessageCodec:
         message_id: str,
         turn_id: str,
         timestamp: str,
+        model_call_id: str | None = None,
     ) -> tuple[CanonicalItemRecord, ...]:
         message_value = self.to_dict(message)
         data = message_value.get("data")
@@ -170,6 +207,8 @@ class LangChainMessageCodec:
             "wire_role": role,
             "execution_confirmed": True,
         }
+        if isinstance(model_call_id, str) and model_call_id:
+            item_metadata["model_call_id"] = model_call_id
         response_metadata = self._metadata(message)
         item_metadata.update(semantic_metadata(response_metadata))
         for key in (

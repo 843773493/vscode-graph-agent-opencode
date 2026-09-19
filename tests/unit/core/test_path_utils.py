@@ -12,6 +12,7 @@ from app.core.path_utils import (
     get_boxteam_home,
     get_gateway_root,
     get_session_path,
+    get_sessions_dir,
     get_user_config_root,
     get_user_gateway_config_path,
     get_user_gateway_local_config_path,
@@ -23,6 +24,7 @@ from app.core.path_utils import (
     initialize_directories,
     safe_join,
 )
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_paths import SessionPathResolver, physical_segment
 from app.core.storage_migration import (
     migrate_legacy_trace_timestamps,
@@ -137,7 +139,10 @@ class TestPathUtils:
         folder_name = '项目/会话:*?"<>'
         session_title = '测试/会话:*?"<>'
         folder = resolver.create_folder(name=folder_name, parent_node_id=None)
-        session_id = "ses_test_session_12345678"
+        # R17：canonical ID（一次性 uuid4 形态常量，直接写入；非任务书
+        # md5 映射 ses_test_session_12345678 的产物——该函数反算不出此值，
+        # 生成脚本未留存，R17 审查 E3/处置必改 2 更正）
+        session_id = "ses_58a5607fd562454a932d851c95b73cc4"
         session_dir = resolver.allocate_session_dir(
             session_id=session_id,
             title=session_title,
@@ -161,15 +166,30 @@ class TestPathUtils:
         path = get_session_path(session_id)
 
         assert path == session_dir
-        assert path.parent == folder.path
-        assert folder.path.name == folder.node_id
         assert path.name == session_id
         assert path != workspace_root / ".boxteam" / "sessions" / session_id
-        stored_index = json.loads(resolver.index_path.read_text(encoding="utf-8"))
-        assert stored_index["schema_version"] == 3
-        names_by_id = {node["node_id"]: node["name"] for node in stored_index["nodes"]}
-        assert names_by_id[folder.node_id] == folder_name
-        assert names_by_id[session_id] == session_title
+        if isinstance(resolver, SessionCatalogPathResolver):
+            # 新模型：folder 无物理目录（catalog-only 节点），session 物理
+            # 目录在日期桶下；权威索引是 SQLite catalog，JSON 断言不适用。
+            node = resolver.get_node(session_id)
+            assert node.parent_node_id == folder.node_id
+            assert node.name == session_title
+            assert folder.path is None
+            # 新模型：物理目录在日期桶（sessions/YYYY/MM/DD/<session_id>）。
+            assert path.parent.parent.parent.parent == get_sessions_dir()
+            assert resolver.get_node(folder.node_id).updated_at is None
+        else:
+            assert path.parent == folder.path
+            assert folder.path.name == folder.node_id
+            stored_index = json.loads(
+                resolver.index_path.read_text(encoding="utf-8")
+            )
+            assert stored_index["schema_version"] == 3
+            names_by_id = {
+                node["node_id"]: node["name"] for node in stored_index["nodes"]
+            }
+            assert names_by_id[folder.node_id] == folder_name
+            assert names_by_id[session_id] == session_title
 
     def test_get_session_path_rejects_unknown_session(self, tmp_path, monkeypatch):
         workspace_root = tmp_path / "workspace"
@@ -203,7 +223,9 @@ class TestPathUtils:
         resolver = get_session_path_resolver()
         source_folder = resolver.create_folder(name="移动前", parent_node_id=None)
         target_folder = resolver.create_folder(name="移动后", parent_node_id=None)
-        session_id = "ses_manual_move_12345678"
+        # R17：canonical ID（一次性 uuid4 形态常量，直接写入；非任务书
+        # md5 映射 ses_manual_move_12345678 的产物，R17 处置必改 2 更正）
+        session_id = "ses_5ce2590d35c74fd9a71e8d7526be328c"
         source = resolver.allocate_session_dir(
             session_id=session_id,
             title="手工移动",
@@ -222,12 +244,21 @@ class TestPathUtils:
             encoding="utf-8",
         )
         resolver.register_session(session_id, source)
-        target = target_folder.path / source.name
-
+        if isinstance(resolver, SessionCatalogPathResolver):
+            # 新模型：folder 无物理目录；手工挪走日期桶目录后解析必须
+            # fail closed（防篡改收敛到物理解析点，不扫盘比对）。
+            target = tmp_path / "手工挪走" / source.name
+        else:
+            target = target_folder.path / source.name
+        target.parent.mkdir(parents=True, exist_ok=True)
         source.replace(target)
 
-        with pytest.raises(RuntimeError, match="绕过软件修改会话目录结构"):
-            get_session_path(session_id)
+        if isinstance(resolver, SessionCatalogPathResolver):
+            with pytest.raises(RuntimeError, match="会话物理目录缺失"):
+                get_session_path(session_id)
+        else:
+            with pytest.raises(RuntimeError, match="绕过软件修改会话目录结构"):
+                get_session_path(session_id)
 
     def test_safe_join_case_sensitivity(self):
         """测试大小写敏感路径处理"""
@@ -301,7 +332,11 @@ class TestPathUtils:
     ):
         workspace_root = tmp_path / "workspace"
         monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
-        session_id = "ses_migrate"
+        # R17：session ID 按 canonical 口径取值（一次性 uuid4 形态常量，
+        # 非任务书 md5 映射 ses_migrate 的产物，R17 处置必改 2 更正）——
+        # catalog 模式迁移机器对非 canonical ID 的会话 quarantine（illegal_id），
+        # 该用例的语义（布局迁移收拢 + catalog 化）要求 canonical ID。
+        session_id = "ses_8bb1585f58a042dd8ae7bcdb18ad2c4c"
         boxteam_root = workspace_root / ".boxteam"
         session_root = boxteam_root / "sessions" / "迁移会话--migrate"
         session_root.mkdir(parents=True)
@@ -344,6 +379,28 @@ class TestPathUtils:
         (orphaned_checkpoint / "checkpoints.jsonl").write_text("{}\n", encoding="utf-8")
 
         initialize_directories()
+        if os.environ.get("BOXTEAM_SESSION_CATALOG_RESOLVER") not in ("0", "legacy"):
+            # catalog 模式引导（R19 起为默认，仅显式 legacy opt-in 时跳过）：
+            # 布局迁移后先以旧 resolver 吸收物理树建旧权威 index，再用
+            # SessionCatalogMigrator 一次性导入 SQLite（与生产切换的维护
+            # 窗口顺序一致）；legacy 模式无需此段。
+            import asyncio
+
+            from app.core.session_catalog_migration import SessionCatalogMigrator
+            from app.core.session_paths import SessionPathResolver
+            from app.core.workspace_identity import load_or_create_workspace_id
+
+            SessionPathResolver(boxteam_root / "sessions").initialize()
+            migrator = SessionCatalogMigrator(
+                workspace_id=load_or_create_workspace_id(workspace_root),
+                sessions_root=boxteam_root / "sessions",
+                database_path=(
+                    boxteam_root / "navigation" / "session-catalog.sqlite"
+                ),
+                maintenance_root=boxteam_root / "maintenance",
+            )
+            migration_result = asyncio.run(migrator.migrate())
+            assert migration_result.migrated_session_nodes == 1
 
         migrated_session_root = get_session_path(session_id)
         assert migrated_session_root != session_root
@@ -784,7 +841,8 @@ class TestPathUtils:
 
         assert not session_dir.exists()
 
-    def test_subtree_delete_freezes_create_allocate_and_move(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_subtree_delete_freezes_create_allocate_and_move(self, tmp_path):
         sessions_root = tmp_path / ".boxteam" / "sessions"
         resolver = SessionPathResolver(sessions_root)
         resolver.initialize()
@@ -818,7 +876,7 @@ class TestPathUtils:
             with pytest.raises(RuntimeError, match="正在递归删除"):
                 resolver.delete_folder(deleting.node_id)
         finally:
-            resolver.finish_subtree_delete(deleting.node_id)
+            await resolver.finish_subtree_delete(deleting.node_id)
 
         created = resolver.create_folder(
             name="删除失败后可继续",

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.abstractions.internal_message import PreparedInternalMessage
 from app.abstractions.job_service import JobServiceProtocol
+from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_job_service,
     get_message_service,
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
     summary="获取会话待处理消息",
 )
 async def list_pending_requests(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
@@ -61,7 +62,7 @@ async def list_pending_requests(
     summary="编辑待处理消息",
 )
 async def update_pending_request(
-    session_id: str,
+    session_id: CanonicalSessionId,
     message_id: str,
     payload: PendingRequestUpdateRequest,
     _: str = Depends(verify_local_token),
@@ -96,7 +97,7 @@ async def update_pending_request(
     summary="从队列撤回消息",
 )
 async def remove_pending_request(
-    session_id: str,
+    session_id: CanonicalSessionId,
     message_id: str,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -117,7 +118,7 @@ async def remove_pending_request(
     summary="清空会话待处理消息",
 )
 async def clear_pending_requests(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
@@ -135,7 +136,7 @@ async def clear_pending_requests(
     summary="修改待处理消息投递策略",
 )
 async def update_pending_request_policy(
-    session_id: str,
+    session_id: CanonicalSessionId,
     message_id: str,
     payload: PendingRequestPolicyUpdateRequest,
     _: str = Depends(verify_local_token),
@@ -162,7 +163,7 @@ async def update_pending_request_policy(
     summary="发送消息并创建任务",
 )
 async def create_message_and_run(
-    session_id: str,
+    session_id: CanonicalSessionId,
     payload: MessageRunRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -184,7 +185,7 @@ async def create_message_and_run(
     summary="通过 Gateway 派发跨会话消息",
 )
 async def dispatch_inter_agent_message(
-    session_id: str,
+    session_id: CanonicalSessionId,
     payload: SessionMessageDispatchRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -221,7 +222,7 @@ async def dispatch_inter_agent_message(
     summary="获取消息列表",
 )
 async def list_messages(
-    session_id: str,
+    session_id: CanonicalSessionId,
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = None,
     _: str = Depends(verify_local_token),
@@ -241,7 +242,7 @@ async def list_messages(
 
 @router.get("/{session_id}/attachments/content", summary="读取会话附件")
 async def get_session_attachment_content(
-    session_id: str,
+    session_id: CanonicalSessionId,
     file_id: str = Query(min_length=1),
     variant: str = Query(default="original", pattern="^(original|thumbnail)$"),
     max_edge: int = Query(default=512, ge=64, le=1024),
@@ -284,7 +285,7 @@ async def get_session_attachment_content(
     summary="获取 Agent State messages 快照",
 )
 async def get_agent_state_messages(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
@@ -299,7 +300,7 @@ async def get_agent_state_messages(
     summary="获取单条消息",
 )
 async def get_message(
-    session_id: str,
+    session_id: CanonicalSessionId,
     message_id: str,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -315,7 +316,7 @@ async def get_message(
     summary="重试、重新生成或编辑指定用户轮次",
 )
 async def replay_message_turn(
-    session_id: str,
+    session_id: CanonicalSessionId,
     message_id: str,
     payload: MessageReplayRequest,
     _: str = Depends(verify_local_token),
@@ -341,7 +342,7 @@ async def replay_message_turn(
     summary="重试、重新生成或编辑指定 Turn",
 )
 async def replay_turn(
-    session_id: str,
+    session_id: CanonicalSessionId,
     turn_id: str,
     payload: MessageReplayRequest,
     _: str = Depends(verify_local_token),

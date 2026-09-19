@@ -27,6 +27,11 @@ class _SessionPathResolverStub:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
+        path = self._root / session_id / "threads" / thread_id
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
 
 def _write_debug_fixture(workspace_root: Path) -> tuple[Path, int]:
     source = """const globalValue = 11;
@@ -176,7 +181,7 @@ async def test_backend_catalog_exposes_debug_custom_tool_group(
     assert tools["start_debugging"]["kind"] == "debugging"
     assert tools["start_debugging"]["parameters"] == {}
     assert tools["start_debugging"]["description"].endswith(
-        "必须通过 invoke_custom_tool 调用。"
+        "必须通过 invoke_extension_tool 调用。"
     )
 
 

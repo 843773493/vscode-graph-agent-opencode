@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "kind": "model_stream_cassette",
+  "metadata": {
+    "source": "handwritten",
+    "asset_id": "child-thread-delegate",
+    "protocol": "openai_chat_sse",
+    "provider": "openai_compatible",
+    "model": "big-pickle"
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user"]
+        }
+      },
+      "replay": { "sequence_id": "child-thread-delegate", "step": 0 },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "text/event-stream" },
+        "frames": [
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "role": "assistant", "reasoning_content": "先确认会话本身可用，再给出明确回复。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "确认当前任务状态后，向对方给出可继续执行的确认。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "现在输出确认文本。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "收到，" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "会话运行正常，我可以继续执行任务。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] } },
+          { "kind": "done", "encoding": "text", "payload": "[DONE]" }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user", "assistant", "user"]
+        }
+      },
+      "replay": { "sequence_id": "child-thread-delegate", "step": 1 },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "text/event-stream" },
+        "frames": [
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "role": "assistant", "reasoning_content": "用户要求委派子代理，示例任务可以独立执行。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "先整理完整任务说明，再发起 task 工具调用。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "现在创建持久化子会话并立即启动。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "id": "child-thread-task-call", "type": "function", "function": { "name": "task", "arguments": "{\"description\":" } }] }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": "\"完成示例任务并输出结果\"" } }] }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": ", \"subagent_type\": \"general-purpose\"}" } }] }, "finish_reason": "tool_calls" }] } },
+          { "kind": "done", "encoding": "text", "payload": "[DONE]" }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user", "assistant", "user", "assistant", "tool"]
+        }
+      },
+      "replay": { "sequence_id": "child-thread-delegate", "step": 2 },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "text/event-stream" },
+        "frames": [
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "role": "assistant", "reasoning_content": "task 工具已返回子会话标识，委派已被接受。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "子会话独立执行，父子通过 send_message_to_session 继续通信。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "现在向用户给出委派结论。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "子代理" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "任务已完成。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] } },
+          { "kind": "done", "encoding": "text", "payload": "[DONE]" }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user", "assistant", "user", "assistant"]
+        }
+      },
+      "replay": { "sequence_id": "child-thread-delegate", "step": 3 },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "text/event-stream" },
+        "frames": [
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "role": "assistant", "reasoning_content": "task 工具已返回子会话标识，委派已被接受。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "子会话独立执行，父子通过 send_message_to_session 继续通信。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "现在向用户给出委派结论。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "子代理" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "任务已完成。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] } },
+          { "kind": "done", "encoding": "text", "payload": "[DONE]" }
+        ]
+      }
+    }
+  ]
+}

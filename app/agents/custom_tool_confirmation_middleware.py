@@ -15,7 +15,7 @@ from langchain_core.messages import AIMessage, ToolCall, ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
-from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.services.orchestration.activity_runtime import ActivityRuntime
 
@@ -23,7 +23,7 @@ _ALLOWED_DECISIONS = ["approve", "edit", "reject", "respond"]
 
 
 class CustomToolConfirmationMiddleware(AgentMiddleware):
-    """按 invoke_custom_tool 内部目标名触发现有 HITL 确认协议。"""
+    """按 invoke_extension_tool 内部目标名触发现有 HITL 确认协议。"""
 
     def __init__(self, confirmation_tool_names: frozenset[str]) -> None:
         super().__init__()
@@ -31,7 +31,7 @@ class CustomToolConfirmationMiddleware(AgentMiddleware):
 
     @staticmethod
     def _target(tool_call: ToolCall) -> tuple[str, dict[str, object]] | None:
-        if tool_call["name"] != CUSTOM_TOOL_INVOKER_NAME:
+        if tool_call["name"] != EXTENSION_TOOL_INVOKER_NAME:
             return None
         tool_name = tool_call["args"].get("tool_name")
         arguments = tool_call["args"].get("arguments", {})
@@ -55,7 +55,7 @@ class CustomToolConfirmationMiddleware(AgentMiddleware):
             return (
                 ToolCall(
                     type="tool_call",
-                    name=CUSTOM_TOOL_INVOKER_NAME,
+                    name=EXTENSION_TOOL_INVOKER_NAME,
                     args={
                         "tool_name": edited_action["name"],
                         "arguments": edited_action["args"],
@@ -72,7 +72,7 @@ class CustomToolConfirmationMiddleware(AgentMiddleware):
                 tool_call,
                 ToolMessage(
                     content=content,
-                    name=CUSTOM_TOOL_INVOKER_NAME,
+                    name=EXTENSION_TOOL_INVOKER_NAME,
                     tool_call_id=tool_call["id"],
                     status="error",
                 ),
@@ -82,7 +82,7 @@ class CustomToolConfirmationMiddleware(AgentMiddleware):
                 tool_call,
                 ToolMessage(
                     content=decision["message"],
-                    name=CUSTOM_TOOL_INVOKER_NAME,
+                    name=EXTENSION_TOOL_INVOKER_NAME,
                     tool_call_id=tool_call["id"],
                     status="success",
                 ),

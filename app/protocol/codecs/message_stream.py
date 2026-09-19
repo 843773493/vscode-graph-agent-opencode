@@ -7,6 +7,7 @@ from typing import Any, cast
 from google.protobuf import json_format
 from google.protobuf.message import Message
 
+from app.protocol.canonical import validate_session_id
 from app.protocol.codecs.json import message_to_json, timestamp_from_datetime
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 
@@ -41,6 +42,8 @@ def message_stream_to_proto(
     value: Mapping[str, Any],
 ) -> message_stream_pb2.MessageStreamEvent:
     """把内部事件字典转换为严格的 v1 Protobuf 消息。"""
+    # 2.1：wire 上的 session_id 必须过唯一 canonical 验证器（encode 边界）。
+    validate_session_id(_required_string(value, "session_id"))
     event = message_stream_pb2.MessageStreamEvent(
         event_id=_required_string(value, "event_id"),
         session_id=_required_string(value, "session_id"),

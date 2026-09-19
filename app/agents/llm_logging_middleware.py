@@ -13,14 +13,6 @@ from langchain_core.tools import BaseTool
 from langgraph.runtime import Runtime
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter
 
-from app.agents.request_replay_middleware import (
-    RequestReplaySnapshot,
-    discard_request_replay_snapshot,
-    publish_request_replay_snapshot,
-    read_prompt_replay_components,
-    reset_active_request_snapshot,
-    set_active_request_snapshot,
-)
 from app.agents.upstream_request_trace import (
     begin_upstream_capture,
     end_upstream_capture,
@@ -52,31 +44,6 @@ class _ToolLog(RootModel[dict[str, JsonValue]]):
     """一项保持原有字段结构的 JSON 工具定义。"""
 
 
-class _PromptReplayComponentLog(BaseModel):
-    source: str
-    label: str
-    operation: str
-    order: int
-    content_blocks: list[dict[str, JsonValue]]
-    block_count: int
-    char_count: int
-
-
-class _ToolReplayLog(BaseModel):
-    source: str = "ModelRequest.tools"
-    count: int
-    names: list[str]
-    schema_char_count: int
-
-
-class _LLMRequestReplayLog(BaseModel):
-    schema_version: int = 1
-    prompt_components: list[_PromptReplayComponentLog]
-    tools: _ToolReplayLog
-    message_count: int
-    system_prompt_char_count: int
-
-
 class _LLMRequestLog(BaseModel):
     timestamp: int
     session_id: str
@@ -85,7 +52,6 @@ class _LLMRequestLog(BaseModel):
     messages: list[_MessageLog]
     tools: list[_ToolLog] | None = None
     system_message: _MessageLog | None = None
-    replay: _LLMRequestReplayLog
 
 
 class _LLMResponseLog(BaseModel):
@@ -135,64 +101,6 @@ def _serialize_tool(tool: BaseTool | dict[str, Any]) -> _ToolLog:
     else:
         raise TypeError(f"不支持的模型工具定义类型: {type(tool).__name__}")
     return _ToolLog(root=_json_object(payload, label="模型工具定义"))
-
-
-def _json_char_count(value: object) -> int:
-    return len(
-        json.dumps(
-            _json_value(value),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-    )
-
-
-def _build_request_replay(
-    request: ModelRequest[Any],
-    tools: list[_ToolLog],
-) -> _LLMRequestReplayLog:
-    component_logs: list[_PromptReplayComponentLog] = []
-    for order, component in enumerate(
-        read_prompt_replay_components(),
-        start=1,
-    ):
-        content_blocks = [
-            _json_object(block, label="Prompt replay content block")
-            for block in component["content_blocks"]
-        ]
-        component_logs.append(
-            _PromptReplayComponentLog(
-                source=component["source"],
-                label=component["label"],
-                operation=component["operation"],
-                order=order,
-                content_blocks=content_blocks,
-                block_count=len(content_blocks),
-                char_count=_json_char_count(content_blocks),
-            )
-        )
-
-    tool_payloads = [tool.root for tool in tools]
-    tool_names = [
-        name
-        for tool in tool_payloads
-        if isinstance((name := tool.get("name")), str) and name
-    ]
-    system_prompt_char_count = _json_char_count(
-        request.system_message.content_blocks
-        if request.system_message is not None
-        else []
-    )
-    return _LLMRequestReplayLog(
-        prompt_components=component_logs,
-        tools=_ToolReplayLog(
-            count=len(tools),
-            names=tool_names,
-            schema_char_count=_json_char_count(tool_payloads),
-        ),
-        message_count=len(request.messages),
-        system_prompt_char_count=system_prompt_char_count,
-    )
 
 
 def _response_messages(
@@ -302,7 +210,6 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
                 if request.system_message is not None
                 else None
             ),
-            replay=_build_request_replay(request, serialized_tools),
         )
         response_messages = _response_messages(response) if response is not None else []
         response_log = _LLMResponseLog(
@@ -375,15 +282,6 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         if request.runtime is None:
             raise RuntimeError("模型请求缺少 runtime，无法确定日志会话")
         session_id = self._get_session_id(request.runtime)
-        request_snapshot_token = set_active_request_snapshot(request)
-        turn_id = self._get_job_id(request.runtime)
-        request_replay_snapshot: RequestReplaySnapshot | None = None
-        if turn_id is not None:
-            request_replay_snapshot = publish_request_replay_snapshot(
-                session_id,
-                turn_id,
-                request,
-            )
         capture_token = begin_upstream_capture()
         try:
             response = handler(request)
@@ -401,15 +299,6 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         else:
             self._save_log(session_id, request, response, upstream_attempts)
             return response
-        finally:
-            if turn_id is not None and request_replay_snapshot is not None:
-                discard_request_replay_snapshot(
-                    session_id,
-                    turn_id,
-                    request_replay_snapshot,
-                )
-            reset_active_request_snapshot(request_snapshot_token)
-
     async def awrap_model_call(
         self,
         request: ModelRequest[Any],
@@ -418,15 +307,6 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         if request.runtime is None:
             raise RuntimeError("模型请求缺少 runtime，无法确定日志会话")
         session_id = self._get_session_id(request.runtime)
-        request_snapshot_token = set_active_request_snapshot(request)
-        turn_id = self._get_job_id(request.runtime)
-        request_replay_snapshot: RequestReplaySnapshot | None = None
-        if turn_id is not None:
-            request_replay_snapshot = publish_request_replay_snapshot(
-                session_id,
-                turn_id,
-                request,
-            )
         capture_token = begin_upstream_capture()
         try:
             response = await handler(request)
@@ -444,11 +324,3 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         else:
             self._save_log(session_id, request, response, upstream_attempts)
             return response
-        finally:
-            if turn_id is not None and request_replay_snapshot is not None:
-                discard_request_replay_snapshot(
-                    session_id,
-                    turn_id,
-                    request_replay_snapshot,
-                )
-            reset_active_request_snapshot(request_snapshot_token)

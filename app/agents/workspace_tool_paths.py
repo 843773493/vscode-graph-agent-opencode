@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from deepagents.backends.utils import validate_path
 
@@ -60,6 +61,10 @@ def normalize_workspace_relative_path(
         raise ValueError(f"{field_name} 不能为空")
     if "\x00" in normalized_input:
         raise ValueError(f"{field_name} 不能包含 NUL 字符")
+    normalized_input = _normalize_virtual_uri(
+        normalized_input,
+        field_name=field_name,
+    )
     normalized_input = normalized_input.replace("\\", "/")
     if _looks_absolute(normalized_input):
         normalized_input = _absolute_to_workspace_relative(
@@ -73,6 +78,23 @@ def normalize_workspace_relative_path(
     if normalized == "/.":
         return "."
     return normalized.lstrip("/")
+
+
+def _normalize_virtual_uri(raw_path: str, *, field_name: str) -> str:
+    """把受支持的虚拟 URI 转换成内部虚拟路径。"""
+
+    if not raw_path.startswith("boxteam-session://"):
+        return raw_path
+    parsed = urlsplit(raw_path)
+    if (
+        parsed.scheme != "boxteam-session"
+        or not parsed.netloc
+        or not parsed.path.strip("/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(f"{field_name} 不是有效的 BoxTeam Session URI")
+    return f"session-artifacts/{parsed.netloc}/{parsed.path.lstrip('/')}"
 
 
 @dataclass(frozen=True, slots=True)

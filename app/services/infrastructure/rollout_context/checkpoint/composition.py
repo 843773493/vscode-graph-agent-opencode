@@ -143,13 +143,9 @@ class ContextPlanCompositionMixin:
                 persisted.get("source_ordinal") if persisted is not None else None
             )
             if isinstance(source_ordinal, int) and not isinstance(source_ordinal, bool):
-                contribution = replace(
-                    contribution,
-                    metadata={
-                        **dict(contribution.metadata),
-                        "source_ordinal": source_ordinal,
-                    },
-                )
+                # source_ordinal 只由 itemized registry 列分配；这里把
+                # registry 值映射到 typed 字段，不再写回 metadata。
+                contribution = replace(contribution, source_ordinal=source_ordinal)
             if replaceable:
                 composer.ledger.replace_contribution(contribution)
             else:
@@ -411,15 +407,13 @@ class ContextPlanCompositionMixin:
                         "source_overlay_epoch": overlay_epoch,
                         "selection_only": True,
                     }
-                # source_ordinal 是 registry 的稳定持久化顺序，不能在重启后
+                # source_ordinal 是 registry 列的稳定持久化顺序，不能在重启后
                 # 退回 created_at 排序；assembly 内的 contribution_ordinal
-                # 仍由 seal 单独分配，二者不能混用。
-                metadata = {
-                    **dict(metadata),
-                    "source_ordinal": _manifest_non_negative_int(
-                        raw.get("source_ordinal"), field="source_ordinal"
-                    ),
-                }
+                # 仍由 seal 单独分配，二者不能混用。registry 值只映射 typed
+                # 字段，metadata 中的同名历史键保持 inert 透传。
+                restored_source_ordinal = _manifest_non_negative_int(
+                    raw.get("source_ordinal"), field="source_ordinal"
+                )
                 loaded_contributions.append(
                     ContextContribution(
                         contribution_id=contribution_id,
@@ -468,6 +462,7 @@ class ContextPlanCompositionMixin:
                         protection=_manifest_string(
                             raw.get("protection"), field="protection"
                         ),
+                        source_ordinal=restored_source_ordinal,
                     )
                 )
             loaded_ids = {item.contribution_id for item in loaded_contributions}

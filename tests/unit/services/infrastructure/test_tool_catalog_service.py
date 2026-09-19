@@ -19,8 +19,8 @@ class _RuntimeCatalog:
                 "parameters": {"type": "object"},
             },
             {
-                "id": "invoke_custom_tool",
-                "name": "invoke_custom_tool",
+                "id": "invoke_extension_tool",
+                "name": "invoke_extension_tool",
                 "description": "调用扩展工具",
                 "parameters": {"type": "object"},
             },

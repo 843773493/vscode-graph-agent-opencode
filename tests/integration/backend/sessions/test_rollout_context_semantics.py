@@ -16,6 +16,8 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+
 
 def _checkpoint(
     checkpoint_id: str, messages: list[object], **channels: object
@@ -36,7 +38,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     user = HumanMessage(content="读取配置", id="user-1")
     internal_steering = HumanMessage(
@@ -60,7 +62,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
     )
     first_messages = [user, internal_steering, tool_call, tool_result]
     first_config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("checkpoint-1", first_messages, scratchpad={"job": "parent"}),
         {"source": "job", "step": 1},
         {"messages": "1", "scratchpad": "1"},
@@ -76,7 +78,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
         {"messages": "2", "scratchpad": "2"},
     )
 
-    restored = saver.get_tuple(build_checkpoint_config("session_1"))
+    restored = saver.get_tuple(build_checkpoint_config(SESSION_ID))
     assert restored is not None
     assert [
         message.id for message in restored.checkpoint["channel_values"]["messages"]
@@ -95,7 +97,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
     )
 
     root = (
-        get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
         / "rollout"
     )
     records = [
@@ -111,7 +113,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
     assert all("kind" not in record for record in records)
 
     rewind_config = saver.rewind(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         checkpoint_id="checkpoint-1",
         source_anchor="user-1",
     )
@@ -128,7 +130,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
         {"source": "replay", "step": 3},
         {"messages": "3", "scratchpad": "3"},
     )
-    current = saver.get_tuple(build_checkpoint_config("session_1"))
+    current = saver.get_tuple(build_checkpoint_config(SESSION_ID))
     assert current is not None
     assert [
         message.content for message in current.checkpoint["channel_values"]["messages"]
@@ -146,7 +148,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
         {"source": "compaction", "step": 4},
         {"messages": "4", "_summarization_event": "4"},
     )
-    compacted = saver.get_tuple(build_checkpoint_config("session_1"))
+    compacted = saver.get_tuple(build_checkpoint_config(SESSION_ID))
     assert compacted is not None
     assert [
         message.content
@@ -177,10 +179,10 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
 ) -> None:
     """增量 checkpoint 不能只恢复 ToolMessage 而丢掉其 assistant call。"""
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     first_config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint(
             "checkpoint-tool-call",
             [
@@ -225,7 +227,7 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
         {"messages": "2"},
     )
 
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         view_id = connection.execute(
             "SELECT view_id FROM checkpoints WHERE checkpoint_id = 'checkpoint-tool-result'"
@@ -239,7 +241,7 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
             (view_id,),
         ).fetchone()[0] == 1
 
-    restored = saver.get_tuple(build_checkpoint_config("session_1"))
+    restored = saver.get_tuple(build_checkpoint_config(SESSION_ID))
     assert restored is not None
     assert [message.id for message in restored.checkpoint["channel_values"]["messages"]] == [
         "user-tool-call",
@@ -264,7 +266,7 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
         )
         connection.commit()
     with pytest.raises(FormatDispatchError, match="parent range"):
-        saver.get_tuple(build_checkpoint_config("session_1"))
+        saver.get_tuple(build_checkpoint_config(SESSION_ID))
 
 
 def test_parallel_tool_continuation_restores_all_call_declarations(
@@ -273,7 +275,7 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
 ) -> None:
     """并行工具组之后的 continuation 不能只携带 ToolMessage 结果。"""
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     parallel_calls = [
         {
@@ -302,7 +304,7 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
         ],
     ]
     parent_config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("parallel-parent", parent_messages),
         {"source": "parallel-continuation-test", "step": 1},
         {"messages": "1"},
@@ -320,7 +322,7 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
         {"messages": "2"},
     )
 
-    restored = saver.get_tuple(build_checkpoint_config("session_1"))
+    restored = saver.get_tuple(build_checkpoint_config(SESSION_ID))
     assert restored is not None
     restored_messages = restored.checkpoint["channel_values"]["messages"]
     assert [message.id for message in restored_messages] == [
@@ -337,7 +339,7 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
         call["id"] for call in restored_messages[1].tool_calls
     } == {f"call-parallel-{index}" for index in range(4)}
 
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         child_view = connection.execute(
             "SELECT view_id FROM checkpoints WHERE checkpoint_id = 'parallel-continuation'"
@@ -371,7 +373,7 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
         connection.commit()
 
     with pytest.raises(FormatDispatchError, match="parent range"):
-        saver.get_tuple(build_checkpoint_config("session_1"))
+        saver.get_tuple(build_checkpoint_config(SESSION_ID))
 
 
 def test_context_view_validation_accepts_single_message_range(
@@ -380,23 +382,23 @@ def test_context_view_validation_accepts_single_message_range(
 ) -> None:
     """单消息 view range 的起止序号相同，校验时仍应视为完整范围。"""
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("single-message", [HumanMessage(content="单条消息", id="single")]),
         {"source": "single-message-range"},
         {"messages": "1"},
     )
 
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         view_id = connection.execute(
             "SELECT view_id FROM checkpoints WHERE checkpoint_id = 'single-message'"
         ).fetchone()[0]
 
     RolloutStorage(sessions_dir).validate_context_view_chain(
-        "session_1", "", str(view_id)
+        SESSION_ID, "", str(view_id)
     )
 
 
@@ -405,10 +407,10 @@ def test_compaction_control_event_keeps_message_cutoff_identity(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint(
             "cp-1",
             [
@@ -432,7 +434,7 @@ def test_compaction_control_event_keeps_message_cutoff_identity(
         {"source": "compaction"},
         {"messages": "2", "_summarization_event": "2"},
     )
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         payload = connection.execute(
             "SELECT payload_json FROM control_events WHERE checkpoint_id = 'cp-2'"
@@ -446,10 +448,10 @@ def test_turn_anchor_reports_unreachable_when_no_complete_view_remains(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint(
             "cp-1",
             [
@@ -464,7 +466,7 @@ def test_turn_anchor_reports_unreachable_when_no_complete_view_remains(
         {"source": "unreachable-test"},
         {"messages": "1"},
     )
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         connection.execute(
             "DELETE FROM context_view_turns WHERE turn_id = 'turn-unreachable'"
@@ -472,7 +474,7 @@ def test_turn_anchor_reports_unreachable_when_no_complete_view_remains(
 
     with pytest.raises(KeyError, match="不包含可恢复的完整 Turn"):
         saver.resolve_turn_anchor(
-            build_checkpoint_config("session_1"),
+            build_checkpoint_config(SESSION_ID),
             turn_id="turn-unreachable",
         )
 
@@ -482,7 +484,7 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     turn_messages = [
         HumanMessage(
@@ -499,7 +501,7 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
         AIMessage(content="部署配置正常", id="turn-1-final"),
     ]
     config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-1", turn_messages),
         {"source": "anchor-test", "step": 1},
         {"messages": "1"},
@@ -576,7 +578,7 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
     assert before.view_id == original.view_id
     assert before.cutoff_message_sequence == before.user_message_sequence - 1
 
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         assert (
             connection.execute(
@@ -596,7 +598,7 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
         turn_id="turn-1",
         anchor_mode="before",
     )
-    active = saver.get_tuple(build_checkpoint_config("session_1"))
+    active = saver.get_tuple(build_checkpoint_config(SESSION_ID))
     assert active is not None
     assert active.checkpoint["channel_values"]["messages"] == []
 
@@ -606,9 +608,9 @@ def test_logical_pruning_marks_unreferenced_checkpoints_without_touching_jsonl(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    config = build_checkpoint_config("session_1")
+    config = build_checkpoint_config(SESSION_ID)
     messages: list[object] = []
     for index in range(3):
         user = HumanMessage(content=f"问题 {index}", id=f"user-{index}")
@@ -622,28 +624,28 @@ def test_logical_pruning_marks_unreferenced_checkpoints_without_touching_jsonl(
         )
 
     plan = saver.plan_pruning(
-        "session_1",
+        SESSION_ID,
         retain_checkpoint_ids=("cp-0",),
     )
     assert {candidate.checkpoint_id for candidate in plan.candidates} == {"cp-1"}
     assert all(candidate.view_id.startswith("view-") for candidate in plan.candidates)
 
     rollout_path = (
-        get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
         / "rollout"
         / "rollout.jsonl"
     )
     original_jsonl = rollout_path.read_bytes()
-    assert saver.execute_pruning("session_1", plan) == ("cp-1",)
+    assert saver.execute_pruning(SESSION_ID, plan) == ("cp-1",)
     assert rollout_path.read_bytes() == original_jsonl
     assert [
         item.checkpoint["id"]
-        for item in saver.list(build_checkpoint_config("session_1"))
+        for item in saver.list(build_checkpoint_config(SESSION_ID))
     ] == [
         "cp-2",
         "cp-0",
     ]
-    assert saver.get_tuple(build_checkpoint_config("session_1")) is not None
+    assert saver.get_tuple(build_checkpoint_config(SESSION_ID)) is not None
 
 
 def test_context_view_jump_validation_rejects_cycle_or_wrong_ancestor(
@@ -651,10 +653,10 @@ def test_context_view_jump_validation_rejects_cycle_or_wrong_ancestor(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-1", [HumanMessage(content="一", id="u1")]),
         {"source": "jump-test"},
         {"messages": "1"},
@@ -671,7 +673,7 @@ def test_context_view_jump_validation_rejects_cycle_or_wrong_ancestor(
         {"source": "jump-test"},
         {"messages": "2"},
     )
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         view_id, parent_view_id = connection.execute(
             "SELECT view_id, parent_view_id FROM context_views WHERE parent_view_id IS NOT NULL LIMIT 1"
@@ -684,7 +686,7 @@ def test_context_view_jump_validation_rejects_cycle_or_wrong_ancestor(
 
     with pytest.raises(RuntimeError, match="jump 非法"):
         RolloutStorage(sessions_dir).validate_context_view_chain(
-            "session_1", "", view_id
+            SESSION_ID, "", view_id
         )
 
 
@@ -693,10 +695,10 @@ def test_pruning_preserves_all_canonical_bytes_and_item_offsets(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "session_1")
+    session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     first_config = saver.put(
-        build_checkpoint_config("session_1"),
+        build_checkpoint_config(SESSION_ID),
         _checkpoint(
             "cp-1",
             [
@@ -740,21 +742,21 @@ def test_pruning_preserves_all_canonical_bytes_and_item_offsets(
         {"source": "compaction-test", "step": 3},
         {"messages": "3"},
     )
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
     rollout_path = root / "rollout" / "rollout.jsonl"
     before = rollout_path.read_bytes()
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         catalog_before = connection.execute(
             "SELECT item_id, item_sequence, jsonl_offset, jsonl_length FROM item_catalog ORDER BY item_sequence"
         ).fetchall()
-    plan = saver.plan_pruning("session_1", retain_checkpoint_ids=("cp-1",))
+    plan = saver.plan_pruning(SESSION_ID, retain_checkpoint_ids=("cp-1",))
     assert {candidate.checkpoint_id for candidate in plan.candidates} == {"cp-2"}
-    saver.execute_pruning("session_1", plan)
+    saver.execute_pruning(SESSION_ID, plan)
     assert rollout_path.read_bytes() == before
     assert not hasattr(saver, "compact_jsonl_offline")
     assert not list((root / "rollout").glob(".*compaction-*"))
 
-    current = saver.get_tuple(build_checkpoint_config("session_1"))
+    current = saver.get_tuple(build_checkpoint_config(SESSION_ID))
     assert current is not None
     assert [
         message.id for message in current.checkpoint["channel_values"]["messages"]

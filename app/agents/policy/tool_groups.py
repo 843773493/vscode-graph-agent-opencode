@@ -60,8 +60,8 @@ DEBUGGING_TOOL_NAMES = frozenset(
 
 DIRECT_AGENT_COLLABORATION_TOOL_NAMES = frozenset(
     {
-        "monitor_session_agent_end",
         "send_message_to_session",
+        "wait_for_session",
         "task",
         "create_team",
         "list_my_teams",

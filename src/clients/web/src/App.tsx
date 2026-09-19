@@ -11,6 +11,7 @@ import PortForwardPanel from "./components/PortForwardPanel";
 import TerminalPanel from "./components/TerminalPanel";
 import RequestLogPanel from "./components/RequestLogPanel";
 import ResourcePanel from "./components/ResourcePanel";
+import ChildThreadPanel from "./components/ChildThreadPanel";
 import GatewayExtensionResourcePanel from "./components/GatewayExtensionResourcePanel";
 import SessionNameDialog from "./components/SessionNameDialog";
 import { useWarmConfirm } from "./components/WarmConfirmProvider";
@@ -47,6 +48,7 @@ import {
 } from "./hooks";
 import { useWorkspacePreviewTabs } from "./hooks/useWorkspacePreviewTabs";
 import { useNodeDebugController } from "./hooks/useNodeDebugController";
+import { useChildThreadLoader } from "./hooks/useChildThreadLoader";
 import { useGatewayExtensionResources } from "./hooks/useGatewayExtensionResources";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import { buildSessionCatalogSyncKeys } from "./hooks/sessionResourceExplorer/resourceTreeSync";
@@ -596,6 +598,69 @@ export default function AppShell() {
     auxiliaryVisible
     && auxiliaryTab === "resources"
     && state.gatewayUserAccess !== null;
+
+  // 右侧侧边栏「运行与连接」标签中的子会话线程面板：会话层级资源。
+  const childThreadPanelActive = resourcePanelActive;
+  const childThreads = useChildThreadLoader({
+    apiPort: resolvedApiPort,
+    workspaceId: activeSessionWorkspaceId,
+    sessionId: activeSession?.session_id ?? null,
+    enabled: childThreadPanelActive,
+  });
+
+  // 打开 child thread 对应的子会话：复用现有「打开工作区会话」导航流
+  // （本地列表命中直接用，未命中由其后端 getSession 回填，后端为权威）。
+  const openChildThreadSession = useCallback((childSessionId: string) => {
+    const workspaceId = activeSessionWorkspaceId;
+    if (!workspaceId) {
+      setStatus("打开子会话失败：当前会话缺少 Gateway workspace_id");
+      return;
+    }
+    void openWorkspaceSession(workspaceId, childSessionId).catch(
+      (error: unknown) => {
+        setStatus(
+          `打开子会话失败: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
+    );
+  }, [
+    activeSessionWorkspaceId,
+    openWorkspaceSession,
+    setStatus,
+  ]);
+
+  // 子会话线程静默轮询：对齐会话资源面板的轮询口径（5s，页面不可见时跳过）。
+  useEffect(() => {
+    if (!childThreadPanelActive || !activeSession?.session_id) {
+      return;
+    }
+    let disposed = false;
+    let pollInFlight = false;
+    const poll = async (silent: boolean) => {
+      if (
+        disposed
+        || pollInFlight
+        || (silent && document.visibilityState !== "visible")
+      ) {
+        return;
+      }
+      pollInFlight = true;
+      try {
+        await childThreads.refresh({ silent });
+      } finally {
+        pollInFlight = false;
+      }
+    };
+    const timerId = window.setInterval(() => void poll(true), 5000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timerId);
+    };
+  }, [
+    activeSession?.session_id,
+    childThreadPanelActive,
+    childThreads.refresh,
+  ]);
 
   const sharedPreviewTab = auxiliaryTab === "files" || auxiliaryTab === "changes" || (
     auxiliaryTab === "debug" && (extensionWindowRequested || extensionWindowFallback)
@@ -1872,51 +1937,68 @@ export default function AppShell() {
                           onCreateReplacement={createExtensionReplacement}
                         />
                       ) : (
-                        <ResourcePanel
-                          resources={state.sessionResources}
-                          loading={state.sessionResourcesLoading || state.gatewayUserAccess === null}
-                          error={state.sessionResourcesError}
-                          loadedAt={state.sessionResourcesLoadedAt}
-                          sessionId={activeSession?.session_id ?? ""}
-                          workspaceId={activeSessionWorkspaceId}
-                          extensionWindow={extensionWindowVisible}
-                          activePreviewPath={activeRuntimePreview?.path ?? null}
-                          onRefresh={() => {
-                            if (activeSession) {
-                              void refreshSessionResources(activeSession.session_id);
+                        <>
+                          <ResourcePanel
+                            resources={state.sessionResources}
+                            loading={state.sessionResourcesLoading || state.gatewayUserAccess === null}
+                            error={state.sessionResourcesError}
+                            loadedAt={state.sessionResourcesLoadedAt}
+                            sessionId={activeSession?.session_id ?? ""}
+                            workspaceId={activeSessionWorkspaceId}
+                            extensionWindow={extensionWindowVisible}
+                            activePreviewPath={activeRuntimePreview?.path ?? null}
+                            onRefresh={() => {
+                              if (activeSession) {
+                                void refreshSessionResources(activeSession.session_id);
+                              }
+                            }}
+                            onControl={controlSessionResource}
+                            onOpenTerminalPreview={(terminalId) => {
+                              openTerminalPanel(terminalId);
+                            }}
+                            onOpenTerminalExtension={(terminalId) => {
+                              openExtensionWindow("terminal", terminalId);
+                            }}
+                            onOpenBrowserPreview={(browserId) => {
+                              openExtensionWindow("browser", browserId);
+                            }}
+                            onCloseResourcePreview={(kind, resourceId) =>
+                              workspacePreview.closeWorkspaceFilePreview(`${kind}://${resourceId}`)
                             }
-                          }}
-                          onControl={controlSessionResource}
-                          onOpenTerminalPreview={(terminalId) => {
-                            openTerminalPanel(terminalId);
-                          }}
-                          onOpenTerminalExtension={(terminalId) => {
-                            openExtensionWindow("terminal", terminalId);
-                          }}
-                          onOpenBrowserPreview={(browserId) => {
-                            openExtensionWindow("browser", browserId);
-                          }}
-                          onCloseResourcePreview={(kind, resourceId) =>
-                            workspacePreview.closeWorkspaceFilePreview(`${kind}://${resourceId}`)
-                          }
-                          onCreateConnection={async (kind) => {
-                            if (!activeSession || !activeSessionWorkspaceId) {
-                              throw new Error("新建连接需要当前会话和 Gateway workspace_id");
-                            }
-                            const created = await createSessionConnection(
-                              resolvedApiPort,
-                              activeSessionWorkspaceId,
-                              activeSession.session_id,
-                              kind,
-                            );
-                            await refreshSessionResources(activeSession.session_id);
-                            if (created.kind === "terminal") {
-                              openTerminalPanel(created.resourceId);
-                            } else {
-                              openExtensionWindow("browser", created.resourceId);
-                            }
-                          }}
-                        />
+                            onCreateConnection={async (kind) => {
+                              if (!activeSession || !activeSessionWorkspaceId) {
+                                throw new Error("新建连接需要当前会话和 Gateway workspace_id");
+                              }
+                              const created = await createSessionConnection(
+                                resolvedApiPort,
+                                activeSessionWorkspaceId,
+                                activeSession.session_id,
+                                kind,
+                              );
+                              await refreshSessionResources(activeSession.session_id);
+                              if (created.kind === "terminal") {
+                                openTerminalPanel(created.resourceId);
+                              } else {
+                                openExtensionWindow("browser", created.resourceId);
+                              }
+                            }}
+                          />
+                          <ChildThreadPanel
+                            threads={childThreads.threads}
+                            total={childThreads.total}
+                            loading={childThreads.loading}
+                            error={childThreads.error}
+                            loadedAt={childThreads.loadedAt}
+                            sessionId={activeSession?.session_id ?? ""}
+                            activeSessionId={activeSession?.session_id ?? null}
+                            onRefresh={() => {
+                              void childThreads.refresh();
+                            }}
+                            onOpenSession={(childSessionId) => {
+                              void openChildThreadSession(childSessionId);
+                            }}
+                          />
+                        </>
                       )
                     )}
                     runtimePreview={runtimePreviewTab ? (

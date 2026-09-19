@@ -225,22 +225,6 @@ TAG_SPECS = (
         "system_reminder",
     ),
     PromptTagSpec(
-        "workspace_agents_md_change",
-        PromptTrustLevel.workspace_instruction,
-        PromptContentCodec.text,
-        PromptPlacement.internal_human,
-        "system_reminder",
-        frozenset({"path"}),
-    ),
-    PromptTagSpec(
-        "workspace_agents_md",
-        PromptTrustLevel.workspace_instruction,
-        PromptContentCodec.text,
-        PromptPlacement.system_prompt,
-        None,
-        frozenset({"path"}),
-    ),
-    PromptTagSpec(
         "agent_memory",
         PromptTrustLevel.untrusted_reference,
         PromptContentCodec.text,
@@ -299,11 +283,6 @@ INTERNAL_MESSAGE_KIND_SPECS = (
         "team_task_update",
         frozenset({"control_context", "team_task_update"}),
         frozenset({"control_context", "team_task_update"}),
-    ),
-    InternalMessageKindSpec(
-        "workspace_agents_change",
-        frozenset({"workspace_agents_md_change"}),
-        frozenset({"workspace_agents_md_change"}),
     ),
     InternalMessageKindSpec("checkpoint_reminder", frozenset()),
     InternalMessageKindSpec(

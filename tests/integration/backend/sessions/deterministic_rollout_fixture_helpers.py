@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.base import empty_checkpoint
@@ -17,7 +18,7 @@ def seed_deterministic_v2_rollout(
     workspace: Path, session_bundle_factory
 ) -> tuple[str, dict[str, str]]:
     sessions = workspace / ".boxteam" / "sessions"
-    session_id = "ses_deterministic_v2_history"
+    session_id = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session_id)
     messages = []
     tool_bodies = {}

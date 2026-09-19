@@ -31,7 +31,7 @@ from tests.integration.backend.sessions.rollout_context.schema_v3_helpers import
 @pytest.fixture
 def schema2_artifact(request, session_bundle_factory):
     sessions = prepare_migration_workspace(request) / ".boxteam" / "sessions"
-    session_id = "schema2-" + uuid4().hex
+    session_id = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session_id)
     with RolloutCheckpointSaver(sessions) as saver:
         artifact = create_schema2_artifact(saver, session_id)

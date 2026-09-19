@@ -5,11 +5,16 @@ from functools import lru_cache
 from pathlib import Path
 
 from app.core.exceptions import ForbiddenError
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_catalog_store import SessionCatalogStore
+from app.core.session_creation import SessionCreationService
 from app.core.session_paths import SessionPathResolver
+from app.core.session_subtree_delete import SessionSubtreeDeleteService
 from app.core.storage_migration import (
     migrate_legacy_trace_timestamps,
     migrate_workspace_storage_layout,
 )
+from app.core.workspace_identity import load_or_create_workspace_id
 
 
 def resolve_boxteam_home(home: Path | None = None) -> Path:
@@ -116,14 +121,127 @@ def get_sessions_dir() -> Path:
     return get_boxteam_root() / "sessions"
 
 
+# TODO(8.5/迁移期结束后移除): 8.2-切片3b-1 装配切换开关——R19 起 catalog
+# resolver 已是默认权威，本开关仅保留 legacy 显式 opt-in（迁移期 legacy
+# 行为验证用），8.5 收口时连同 _session_catalog_switch_enabled 与
+# _build_session_catalog_resolver 一起移除。
+_SESSION_CATALOG_RESOLVER_SWITCH_ENV = "BOXTEAM_SESSION_CATALOG_RESOLVER"
+# 显式 opt-in 旧 JSON index resolver 的 legacy 值闭集（迁移期验证/回退用）。
+_SESSION_CATALOG_RESOLVER_LEGACY_VALUES = ("0", "legacy")
+
+
+def _session_catalog_switch_enabled() -> bool:
+    """读取会话目录 resolver 切换开关（R19 起默认启用新 SQLite authority）。
+
+    **默认（环境变量未设置或为任何非 legacy 值）返回 True**，生产路径走
+    ``navigation/session-catalog.sqlite`` 权威的新 resolver 链；仅当
+    ``BOXTEAM_SESSION_CATALOG_RESOLVER`` 明确为 legacy 值（``"0"`` 或
+    ``"legacy"``）时返回 False，保留旧 JSON index resolver 供迁移期
+    legacy 行为验证与显式回退使用。
+    TODO(8.5/迁移期结束后移除)：legacy 分支与开关随 8.5 收口一并删除。
+    """
+    return (
+        os.environ.get(_SESSION_CATALOG_RESOLVER_SWITCH_ENV)
+        not in _SESSION_CATALOG_RESOLVER_LEGACY_VALUES
+    )
+
+
+def _build_session_catalog_resolver(
+    sessions_root: Path,
+) -> SessionCatalogPathResolver:
+    """构造新 resolver 链（store→creation/delete service→resolver）。
+
+    探测逻辑（同一工作区单数据源，不做双读；与开关取值无关，只要
+    legacy 未显式 opt-in 即走本链）：
+
+    - ``navigation/session-catalog.sqlite`` 存在 → 构造 store（打开时
+      fail-closed 校验 ``user_version``）→ creation/delete service → 新
+      resolver；
+    - SQLite catalog 不存在且旧 ``navigation/session-catalog-index.json``
+      存在 → ``RuntimeError``（提示先经 ``SessionCatalogMigrator`` 维护
+      操作完成一次性迁移，拒绝双读旧 JSON）；
+    - 两者都不存在（全新工作区）→ store 初始化建空 catalog → services →
+      新 resolver。
+
+    workspace_id 取自 ``app/core/workspace_identity.py`` 的
+    ``load_or_create_workspace_id``（与 container 装配使用同一份
+    ``.boxteam/workspace-identity.json``，保证同一工作区后端 UUID 一致）。
+    store 的 SQLite 连接随 lru_cache 的 resolver 实例常开，进程生命周期
+    内复用，不提供单独关闭入口。
+    """
+    if sessions_root.name == "sessions":
+        navigation_root = sessions_root.parent / "navigation"
+        if sessions_root.parent.name == ".boxteam":
+            workspace_root = sessions_root.parent.parent
+        else:
+            # 非标准布局（如测试把 sessions 根直接放在临时目录下）：
+            # 会话数据根的父目录即视作工作区根。
+            workspace_root = sessions_root.parent
+    else:
+        # TODO: 测试与嵌入式调用仍允许传入任意 sessions 根目录；目录约定
+        # 对齐旧 resolver 的索引放置规则，规范化调用后一并删除。
+        navigation_root = (
+            sessions_root.parent / f".{sessions_root.name}-session-navigation"
+        )
+        workspace_root = sessions_root.parent
+
+    database_path = navigation_root / "session-catalog.sqlite"
+    legacy_index_path = navigation_root / "session-catalog-index.json"
+    if not database_path.is_file() and legacy_index_path.is_file():
+        raise RuntimeError(
+            "检测到旧形态会话目录权威索引但 SQLite session catalog 缺失，"
+            "开关模式拒绝双读旧 JSON；请先通过 SessionCatalogMigrator 维护"
+            f"操作完成一次性迁移: legacy_index={legacy_index_path}, "
+            f"catalog={database_path}"
+        )
+    # catalog 已存在时打开并 fail-closed 校验 user_version；全新工作区则
+    # 建表初始化空 catalog（store 构造即完成建表与版本检查）。
+    store = SessionCatalogStore(database_path, sessions_root)
+    workspace_id = load_or_create_workspace_id(workspace_root)
+    creation_service = SessionCreationService(
+        store=store,
+        sessions_root=sessions_root,
+        workspace_id=workspace_id,
+    )
+    delete_service = SessionSubtreeDeleteService(
+        store=store,
+        sessions_root=sessions_root,
+        workspace_id=workspace_id,
+    )
+    return SessionCatalogPathResolver(
+        store=store,
+        sessions_root=sessions_root,
+        workspace_id=workspace_id,
+        creation_service=creation_service,
+        delete_service=delete_service,
+    )
+
+
 @lru_cache(maxsize=32)
-def _cached_session_path_resolver(sessions_root: str) -> SessionPathResolver:
+def _cached_session_path_resolver(
+    sessions_root: str,
+) -> SessionPathResolver | SessionCatalogPathResolver:
+    # legacy opt-in 读取位于工厂入口：lru_cache 以 sessions_root 为键，同
+    # 一根目录进程内首次构造后模式固定，后续调用直接复用实例（docstring
+    # 见 get_session_path_resolver）。
+    if _session_catalog_switch_enabled():
+        return _build_session_catalog_resolver(Path(sessions_root))
     return SessionPathResolver(Path(sessions_root))
 
 
 def get_session_path_resolver(
     sessions_root: Path | None = None,
-) -> SessionPathResolver:
+) -> SessionPathResolver | SessionCatalogPathResolver:
+    """获取会话路径解析器（默认新 SQLite catalog 权威；legacy 显式 opt-in）。
+
+    自 R19 起**默认**返回 SQLite catalog 权威的新 resolver 链；仅当环境
+    变量 ``BOXTEAM_SESSION_CATALOG_RESOLVER`` 明确为 legacy 值（``"0"`` 或
+    ``"legacy"``）时返回旧 JSON index resolver（迁移期 legacy 行为验证/
+    显式回退用，8.5 后移除）。开关在该根目录进程内首次构造时读取并固定
+    （lru_cache 复用实例）；两个 resolver 面向调用方呈同一 duck-typing
+    接口面。
+    TODO(8.5/迁移期结束后移除)：开关语义随后续切片删除。
+    """
     resolved_root = (sessions_root or get_sessions_dir()).resolve()
     return _cached_session_path_resolver(str(resolved_root))
 
@@ -210,7 +328,13 @@ def allocate_session_dir(
     *,
     parent_node_id: str | None = None,
 ) -> Path:
-    """为新会话分配物理目录；写入 session manifest 后必须注册该节点。"""
+    """为新会话分配物理目录；写入 session manifest 后必须注册该节点。
+
+    注意：开关切到新 catalog resolver 后，传入 ``session_id`` 仅保持签名
+    兼容（新创建流由软件分配 ID），调用方必须从返回目录内的 allocation
+    marker（``SESSION_ALLOCATION_MARKER_NAME``）回读真实 session_id 再写
+    manifest 并注册。
+    """
     return get_session_path_resolver().allocate_session_dir(
         session_id=session_id,
         title=title,

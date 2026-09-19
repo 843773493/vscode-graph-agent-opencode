@@ -53,7 +53,7 @@ def test_saver_seal_restores_same_selection_across_projections_and_process(
     projection_saver,
     projection_plan,
 ) -> None:
-    saver, session_id, session = projection_saver
+    saver, session_id, _ = projection_saver
     snapshot = projection_plan
     plan = snapshot.as_sealed_plan()
     messages = saver.project_context_plan_to_messages(session_id, plan)
@@ -109,7 +109,7 @@ def test_saver_seal_restores_same_selection_across_projections_and_process(
                 "saver=RolloutCheckpointSaver(Path(sys.argv[1])); "
                 "print(json.dumps(_project(saver,sys.argv[2],sys.argv[3]),ensure_ascii=False))"
             ),
-            str(session.parent),
+            str(saver._storage.sessions_dir),
             session_id,
             snapshot.assembly_id,
         ],
@@ -233,7 +233,7 @@ def test_omission_keeps_selection_without_resolving_body_or_tools(
         omitted_ref_ids=omitted,
         request_only_content=bodies,
     )
-    with RolloutCheckpointSaver(session.parent) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         result = _project(restarted, session_id, snapshot.assembly_id)
     omitted_entries = [entry for entry in snapshot.selection if not entry.included]
     assert len(omitted_entries) == len(omitted)
@@ -284,7 +284,7 @@ def test_persisted_manifest_mismatch_rejects_every_projection(
     field: str,
     value: object,
 ) -> None:
-    _, session_id, session = projection_saver
+    saver, session_id, session = projection_saver
     plan = projection_plan.as_sealed_plan()
     # 参数仅来自上面的固定测试矩阵；故障注入修改真实 seal 后的独立测试数据库。
     where = " WHERE plan_ordinal = 1" if table == "context_assembly_selections" else ""
@@ -298,7 +298,7 @@ def test_persisted_manifest_mismatch_rejects_every_projection(
             )
         else:
             connection.execute(f"UPDATE {table} SET {field} = ?{where}", (value,))
-    with RolloutCheckpointSaver(session.parent) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         for projector in (
             restarted.project_context_plan_to_messages,
             restarted.project_context_plan_to_native,
@@ -316,7 +316,7 @@ def test_missing_or_changed_sealed_detail_cannot_fall_back_to_inline_body(
     projection_plan,
     damage: str,
 ) -> None:
-    _, session_id, session = projection_saver
+    saver, session_id, session = projection_saver
     plan = projection_plan.as_sealed_plan()
     detail = plan.selection[1].detail_ref
     target = session / detail_relative_path(detail)
@@ -332,7 +332,7 @@ def test_missing_or_changed_sealed_detail_cannot_fall_back_to_inline_body(
         }[damage]
         payload[field] = value
         target.write_bytes(canonical_json_bytes(payload))
-    with RolloutCheckpointSaver(session.parent) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         for projector in (
             restarted.project_context_plan_to_messages,
             restarted.project_context_plan_to_native,
@@ -371,7 +371,7 @@ def test_overlay_reuses_source_after_history_rewind_and_restart(
     projection_saver,
     overlay_source,
 ) -> None:
-    saver, session_id, session = projection_saver
+    saver, session_id, _ = projection_saver
     checkpoint = empty_checkpoint()
     checkpoint["id"] = "cp-tail"
     checkpoint["channel_values"] = {
@@ -403,7 +403,7 @@ def test_overlay_reuses_source_after_history_rewind_and_restart(
     assert [entry.ref.ref_id for entry in first_overlay] == ["z-base", "a-delta"]
     assert [entry.contribution_ordinal for entry in first_overlay] == [0, 1]
     saver.rewind(build_checkpoint_config(session_id), checkpoint_id="cp-initial")
-    with RolloutCheckpointSaver(session.parent) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         draft = restarted.compose_committed_context_plan(
             session_id, plan_id="overlay-after"
         )
@@ -493,7 +493,7 @@ def test_gc_tombstone_survives_file_delete_failure_and_restart(
         with pytest.raises(OSError, match="injected detail deletion failure"):
             saver.gc_context_plan_details(session_id, expired_before=expired)
     assert target.is_file()
-    with RolloutCheckpointSaver(session.parent) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         assert restarted.gc_context_plan_details(
             session_id, expired_before=expired
         ) == (record.detail_ref,)
@@ -501,7 +501,7 @@ def test_gc_tombstone_survives_file_delete_failure_and_restart(
 
 
 def test_protected_reasoning_reports_loss_in_all_projections(projection_saver) -> None:
-    saver, session_id, session = projection_saver
+    saver, session_id, _ = projection_saver
     opaque = CanonicalItemRecord.create(
         item_id="opaque-reasoning",
         item_sequence=3,
@@ -531,7 +531,7 @@ def test_protected_reasoning_reports_loss_in_all_projections(projection_saver) -
         execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
         provider_version="contract-provider",
     )
-    with RolloutCheckpointSaver(session.parent) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         result = _project(restarted, session_id, snapshot.assembly_id)
     assert (
         result["losses"]
@@ -551,7 +551,7 @@ def test_overlay_omission_preserves_role_without_allocating_contribution(
     overlay_source,
     omission: str,
 ) -> None:
-    saver, session_id, session = projection_saver
+    saver, session_id, _ = projection_saver
     draft = saver.compose_committed_context_plan(
         session_id, plan_id=f"omit-overlay-{omission}"
     )
@@ -579,7 +579,7 @@ def test_overlay_omission_preserves_role_without_allocating_contribution(
         provider_version="contract-provider",
         omitted_ref_ids=omitted,
     )
-    with RolloutCheckpointSaver(session.parent) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         result = _project(restarted, session_id, snapshot.assembly_id)
     for entry in snapshot.selection:
         if entry.ref.ref_id in omitted:
@@ -598,10 +598,10 @@ def test_protected_request_digest_restores_with_backend_and_rejects_missing_key(
     projection_saver,
     backed: bool,
 ) -> None:
-    _, session_id, session = projection_saver
+    saver, session_id, session = projection_saver
     key = b"projection-contract-test-key-001"
     body = [{"type": "text", "text": "protected-source-only-42"}]
-    with RolloutCheckpointSaver(session.parent, protected_detail_key=key) as saver:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir, protected_detail_key=key) as saver:
         # 用真实 protected writer 取得该 session 的 HMAC source manifest；
         # source 只传 metadata，正文经显式 Saver seal 输入，不构造 sealed snapshot。
         source = saver._detail_store.write(
@@ -662,7 +662,7 @@ def test_protected_request_digest_restores_with_backend_and_rejects_missing_key(
             request_only_content={"protected-plan-ref": body} if not backed else None,
         )
         before = _project(saver, session_id, snapshot.assembly_id)
-    with RolloutCheckpointSaver(session.parent, protected_detail_key=key) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir, protected_detail_key=key) as restarted:
         assert _project(restarted, session_id, snapshot.assembly_id) == before
     assert "protected-source-only-42" in json.dumps(before["native"]["request"])
     public_files = [
@@ -677,7 +677,7 @@ def test_protected_request_digest_restores_with_backend_and_rejects_missing_key(
         b"protected-source-only-42"
         not in (session / "rollout/index.sqlite").read_bytes()
     )
-    with RolloutCheckpointSaver(session.parent) as without_key:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as without_key:
         for projector in (
             without_key.project_context_plan_to_messages,
             without_key.project_context_plan_to_native,
@@ -726,7 +726,7 @@ def test_invalid_request_body_does_not_leave_partial_seal_details(
 def test_native_tool_calls_and_results_keep_saver_selection_order(
     projection_saver,
 ) -> None:
-    saver, session_id, session = projection_saver
+    saver, session_id, _ = projection_saver
     args = {"path": "目录/README.md"}
     checkpoint = empty_checkpoint()
     checkpoint["id"] = "cp-tool-result"
@@ -769,7 +769,7 @@ def test_native_tool_calls_and_results_keep_saver_selection_order(
         execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
         provider_version="contract-provider",
     )
-    with RolloutCheckpointSaver(session.parent) as restarted:
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         result = _project(restarted, session_id, snapshot.assembly_id)
     inputs = result["native"]["request"]["input"]
     call, output = inputs[-2:]

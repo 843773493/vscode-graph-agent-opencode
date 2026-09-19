@@ -75,6 +75,7 @@ export {
   forkSessionContext,
   getSession,
   getSessionInformation,
+  listChildThreads,
   listSessions,
   updateSession,
   updateSessionAgent,

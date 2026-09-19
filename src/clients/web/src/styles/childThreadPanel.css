@@ -1,0 +1,194 @@
+/* 主窗口右侧侧边栏「运行与连接」标签：子会话线程面板样式。
+   面板骨架（.panel-view/.panel-header/.empty-state）复用 panelShared.css。 */
+
+.child-thread-panel {
+  border-top: var(--bt-surface-border);
+}
+
+.child-thread-notice {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 6px 8px 0;
+  padding: 6px 8px;
+  border: var(--bt-surface-border);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bt-text-primary) 5%, transparent);
+  color: var(--bt-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.child-thread-notice.is-error {
+  color: var(--bt-status-danger);
+}
+
+.child-thread-notice > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.child-thread-notice-close {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--bt-text-muted);
+  cursor: pointer;
+}
+
+.child-thread-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  margin: 6px 8px 8px;
+  overflow: auto;
+}
+
+.child-thread-item {
+  border: var(--bt-surface-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bt-text-primary) 3%, transparent);
+}
+
+.child-thread-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.child-thread-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 4px 7px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--bt-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.child-thread-main:hover:not(:disabled) {
+  background: var(--bt-hover-background);
+}
+
+.child-thread-icon {
+  flex: 0 0 auto;
+  color: var(--bt-text-muted);
+  font-size: 14px;
+}
+
+.child-thread-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.child-thread-copy strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.child-thread-copy small {
+  overflow: hidden;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.child-thread-status {
+  flex: 0 0 auto;
+  max-width: 74px;
+  overflow: hidden;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bt-text-primary) 8%, transparent);
+  color: var(--bt-text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态配色与 resource-status-* 一致：pending=警告、running=成功、failed=危险。 */
+.child-thread-status-pending {
+  color: var(--bt-status-warning);
+  background: color-mix(in srgb, var(--bt-status-warning) 18%, transparent);
+}
+
+.child-thread-status-running {
+  color: var(--bt-status-success);
+  background: color-mix(in srgb, var(--bt-status-success) 18%, transparent);
+}
+
+.child-thread-status-failed {
+  color: var(--bt-status-danger);
+  background: color-mix(in srgb, var(--bt-status-danger) 18%, transparent);
+}
+
+.child-thread-copy-id {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--bt-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.child-thread-copy-id:hover {
+  background: var(--bt-toolbar-hover-background);
+  color: var(--bt-text-primary);
+}
+
+.child-thread-error {
+  margin: 0 8px 7px 29px;
+}
+
+.child-thread-error summary {
+  width: max-content;
+  color: var(--bt-status-danger);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.child-thread-error code {
+  display: block;
+  max-height: 90px;
+  margin-top: 4px;
+  overflow: auto;
+  padding: 5px 6px;
+  border: var(--bt-surface-border);
+  border-radius: 5px;
+  color: var(--bt-text-primary);
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.child-thread-job-status {
+  margin: 0 8px 7px 29px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}

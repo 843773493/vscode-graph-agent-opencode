@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 
 from app.domain.itemized.request_plan import ContextContribution
@@ -18,11 +18,12 @@ def ordered_contributions(
     pending = set(pending_ids)
 
     def key(value: object) -> tuple[int, int, str]:
-        metadata = getattr(value, "metadata", {})
-        raw = metadata.get("source_ordinal") if isinstance(metadata, Mapping) else None
+        # source_ordinal 只由 itemized registry 分配并经 typed 字段承载；
+        # 自由 metadata 的同名键不再参与排序。
+        raw = getattr(value, "source_ordinal", None)
         if not isinstance(raw, int) or isinstance(raw, bool) or raw < 0:
             raise ValueError(
-                "context contribution 缺少稳定 source_ordinal；"
+                "context contribution 缺少 registry 分配的 typed source_ordinal；"
                 f" contribution_id={getattr(value, 'contribution_id', '')}"
             )
         identifier = str(getattr(value, "contribution_id", ""))
@@ -38,14 +39,12 @@ class RuntimeContextLedger:
     contributions: dict[str, ContextContribution]
     edges: list[ProvenanceEdge]
     pending_notice_ids: list[str]
-    _next_source_ordinal: int
 
     def __init__(self) -> None:
         self.drafts = {}
         self.contributions = {}
         self.edges = []
         self.pending_notice_ids = []
-        self._next_source_ordinal = 0
 
     def _with_source_ordinal(
         self,
@@ -53,30 +52,25 @@ class RuntimeContextLedger:
         *,
         preserve_from: ContextContribution | None = None,
     ) -> ContextContribution:
-        """为每个实时 contribution 分配稳定的 registry 对齐序号。
+        """保留 itemized registry 已分配的 typed source_ordinal slot。
 
-        source_ordinal 是 middleware source 在当前 session registry 中的
-        顺序，不属于 contribution 的业务 payload，也不会被复制进 sealed
-        assembly。没有显式序号的新 contribution 只能在首次登记时分配；
-        replacement 则保留原 slot，避免 source revision 更新导致排序漂移。
+        source_ordinal 只由 registry（SQLite context_contributions 列）
+        分配；ledger 不从事件到达顺序、内存计数或 metadata/extensions
+        补造序号，只做 slot 保留：replacement 沿用原 slot，避免 source
+        revision 更新导致排序漂移。没有 registry 序号的 contribution 在
+        这里 fail closed。
         """
-        raw = contribution.metadata.get("source_ordinal")
+        raw = contribution.source_ordinal
         if raw is None and preserve_from is not None:
-            raw = preserve_from.metadata.get("source_ordinal")
-        if raw is None:
-            raw = self._next_source_ordinal
+            raw = preserve_from.source_ordinal
         if not isinstance(raw, int) or isinstance(raw, bool) or raw < 0:
             raise ValueError(
-                "context contribution source_ordinal 必须是非负整数: "
+                "context contribution 缺少 registry 分配的 typed source_ordinal: "
                 f"{contribution.contribution_id}"
             )
-        self._next_source_ordinal = max(self._next_source_ordinal, raw + 1)
-        if contribution.metadata.get("source_ordinal") == raw:
+        if contribution.source_ordinal == raw:
             return contribution
-        return replace(
-            contribution,
-            metadata={**dict(contribution.metadata), "source_ordinal": raw},
-        )
+        return replace(contribution, source_ordinal=raw)
 
     def add_draft(self, draft: ItemDraft) -> None:
         if draft.item_id in self.drafts:
@@ -128,15 +122,6 @@ class RuntimeContextLedger:
                 preserve_from=self.contributions.get(contribution.contribution_id),
             )
         self.contributions = reconciled
-        self._next_source_ordinal = max(
-            (
-                int(item.metadata["source_ordinal"]) + 1
-                for item in reconciled.values()
-                if isinstance(item.metadata.get("source_ordinal"), int)
-                and not isinstance(item.metadata.get("source_ordinal"), bool)
-            ),
-            default=self._next_source_ordinal,
-        )
 
     def add_edge(self, edge: ProvenanceEdge) -> None:
         if any(existing.edge_id == edge.edge_id and existing != edge for existing in self.edges):

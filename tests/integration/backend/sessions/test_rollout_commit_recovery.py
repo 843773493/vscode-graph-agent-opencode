@@ -40,7 +40,7 @@ def committed_rollout(
 ) -> CommittedRollout:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"session-{uuid4().hex}"
+    session_id = f"ses_{uuid4().hex}"
     session_node = session_bundle_factory(sessions, session_id)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(

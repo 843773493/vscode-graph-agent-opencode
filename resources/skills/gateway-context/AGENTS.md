@@ -13,7 +13,7 @@
 
 # 规范
 
-- Skill 必须说明目标扩展工具通过固定入口 `invoke_custom_tool` 调用。
+- Skill 必须说明目标扩展工具通过固定入口 `invoke_extension_tool` 调用。
 - 工具参数使用 `tool_name` + `arguments_schema` 描述，并保持最小且可被模型直接用于真实工具调用。
-- 不添加冗余的完整 `invoke_custom_tool` 调用示例。
+- 不添加冗余的完整 `invoke_extension_tool` 调用示例。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

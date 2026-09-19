@@ -8,7 +8,7 @@ import {
   skillKeyFlowSnapshot,
 } from "./skillKeyFlow";
 import {
-  CUSTOM_TOOL_INVOKER_NAME,
+  EXTENSION_TOOL_INVOKER_NAME,
   INVALID_CUSTOM_TOOL_CALL_NAME,
   UNKNOWN_CUSTOM_TOOL_NAME,
   customToolCallArgs,
@@ -528,7 +528,7 @@ function collectToolResultMessages(
 
 function isCustomInvokerValidationError(resultText: string): boolean {
   return (
-    resultText.includes("Error invoking tool 'invoke_custom_tool'") &&
+    resultText.includes("Error invoking tool 'invoke_extension_tool'") &&
     resultText.includes("tool_name: Field required")
   );
 }
@@ -561,14 +561,14 @@ export function buildRequestLogKeyFlow(logs: LLMRequestLogRecord[]): RequestLogK
 
   for (const log of orderedLogs) {
     for (const toolName of requestToolNames(log)) {
-      if (toolName === CUSTOM_TOOL_INVOKER_NAME) {
+      if (toolName === EXTENSION_TOOL_INVOKER_NAME) {
         uniquePush(customInvokerNames, seenCustomInvokers, toolName);
       }
     }
 
     for (const call of collectToolCallsFromLog(log)) {
       const name = customToolCallName(call);
-      if (name === CUSTOM_TOOL_INVOKER_NAME) {
+      if (name === EXTENSION_TOOL_INVOKER_NAME) {
         const customToolName = customToolTargetNameFromArgs(customToolCallArgs(call));
         uniquePush(customToolNames, seenCustomTools, customToolName);
         const callId = customToolCallId(call);
@@ -590,7 +590,7 @@ export function buildRequestLogKeyFlow(logs: LLMRequestLogRecord[]): RequestLogK
 
   for (const log of orderedLogs) {
     for (const result of collectToolResultMessages(log)) {
-      if (result.toolName !== CUSTOM_TOOL_INVOKER_NAME) {
+      if (result.toolName !== EXTENSION_TOOL_INVOKER_NAME) {
         continue;
       }
       const customToolName = result.toolCallId
@@ -600,14 +600,14 @@ export function buildRequestLogKeyFlow(logs: LLMRequestLogRecord[]): RequestLogK
         (isCustomInvokerValidationError(result.resultText)
           ? INVALID_CUSTOM_TOOL_CALL_NAME
           : UNKNOWN_CUSTOM_TOOL_NAME);
-      const key = `${result.toolCallId || "missing-id"}\u0000${displayToolName}\u0000${CUSTOM_TOOL_INVOKER_NAME}\u0000${result.resultText}`;
+      const key = `${result.toolCallId || "missing-id"}\u0000${displayToolName}\u0000${EXTENSION_TOOL_INVOKER_NAME}\u0000${result.resultText}`;
       if (seenResults.has(key)) {
         continue;
       }
       seenResults.add(key);
       customToolResults.push({
         toolName: displayToolName,
-        invocationToolName: CUSTOM_TOOL_INVOKER_NAME,
+        invocationToolName: EXTENSION_TOOL_INVOKER_NAME,
         resultText: result.resultText,
       });
     }

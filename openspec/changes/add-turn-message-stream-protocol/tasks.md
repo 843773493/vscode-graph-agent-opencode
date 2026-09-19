@@ -25,7 +25,7 @@
 - [x] 3.1 将 LiteLLM 同步和异步流改为逐 chunk 消费，不再先收集完整 raw stream 后才生成 AIMessageChunk
 - [x] 3.2 实现统一的 NormalizedModelDelta，按 carrier 顺序维护 block_id/block_index/local_seq，并保留 reasoning_items 的结构化 patch 与 redacted 状态
 - [x] 3.3 在规范化 delta 与 LangChain AIMessageChunk 转换之间接入消息流提交 hook，固定 raw chunk → NormalizedModelDelta → event/checkpoint commit → fanout → AIMessageChunk → LangChain 聚合顺序，使消息流和最终 AIMessage 使用同一份规范化输入；hook/提交失败时禁止下游继续聚合
-- [x] 3.4 保留最终 AIMessage 的 carrier 顺序、tool_calls 独立字段和 provider state，同时禁止最终聚合结果反向充当实时消息源
+- [x] 3.4 保留最终 AIMessage 的 carrier 顺序、tool_calls 独立字段和 provider state，同时禁止最终聚合结果反向充当实时消息源；最终 carrier 引用的 stream shadow 按 `<model_call_id>:block:<provider_part_id>` 精确身份从 provider context 排除，不按正文、后缀或时间猜测
 - [x] 3.5 为首个 reasoning/text delta、carrier 切换、结构化 reasoning、tool call delta、上游异常和异步取消补充 provider 单元测试
 - [x] 3.6 固化不同 Provider 的 carrier/block 归一化规则：carrier 切换先闭合旧 block，空 metadata/usage/finish chunk 不产生可见 delta，缺失 reasoning item ID 时生成稳定本地 key，tool_call 参数始终按 provider tool_call_id 合并
 

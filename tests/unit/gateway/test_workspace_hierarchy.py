@@ -4,10 +4,34 @@ from pathlib import Path
 
 import httpx
 import pytest
-from app.gateway.auth import get_gateway_local_token
 
+from app.gateway.auth import get_gateway_local_token
 from app.gateway.main import app, get_registry
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
+    """R19 测试内 hermetic 修复：清掉本机代理环境变量。
+
+    本文件用例不经外部网络；而环境的 NO_PROXY 含 IPv6 字面量（``::1``/
+    ``[::1]``）会让用例内（或被测 gateway 代码内）构造的 httpx 客户端在
+    代理解析时直接抛 ``InvalidURL: Invalid port: ':1]'``——属外部环境噪
+    声混入测试。与 R18 对 gateway 会话上下文客户端的同类修复一致（任务
+    书许可的 monkeypatch 清 ``*_proxy`` 做法）；清掉后客户端不取代理，
+    与用例意图一致。
+    """
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _target(workspace_id: str) -> WorkspaceTarget:

@@ -17,6 +17,41 @@ from tests.support.workspaces import (
     prepare_default_test_workspace,
 )
 
+_PROXY_ENV_NAMES = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _hermetic_proxy_env():
+    """R19 测试内 hermetic 修复：整个 integration 会话清掉本机代理变量。
+
+    integration 用例全部经 127.0.0.1 本地端口访问真实后端子进程，不经
+    任何外部网络；而环境的 NO_PROXY 含 IPv6 字面量（``::1``/``[::1]``）
+    会让测试进程与后端子进程内的 httpx 客户端在代理解析时直接抛
+    ``InvalidURL: Invalid port: ':1]'``——属外部环境噪声混入测试。与
+    R18/R19 对 unit 层 gateway 客户端的同类修复一致（任务书许可的清
+    ``*_proxy`` 做法）。session 级在最先装配，保证后端子进程
+    （``start_backend_process`` 继承 os.environ）同样拿到干净环境；
+    会话结束后原样恢复。
+    """
+    saved = {
+        name: os.environ.pop(name)
+        for name in _PROXY_ENV_NAMES
+        if name in os.environ
+    }
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
 
 @pytest.fixture(scope="session", autouse=True)
 def integration_is_debug() -> bool:

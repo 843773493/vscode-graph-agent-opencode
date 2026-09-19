@@ -59,7 +59,7 @@ async def test_fork_context_creates_child_without_copying_session_side_data(
                 ],
             "scratchpad": {"project_code": "ORBIT"},
         },
-        "channel_versions": {"messages": 1, "scratchpad": 1},
+        "channel_versions": {"messages": "1", "scratchpad": "1"},
         "versions_seen": {},
         "pending_sends": [],
         "updated_channels": ["messages", "scratchpad"],
@@ -68,7 +68,7 @@ async def test_fork_context_creates_child_without_copying_session_side_data(
         build_checkpoint_config(source_session_id),
         checkpoint,
         {"source": "loop", "step": 1, "parents": {}},
-        {"messages": 1, "scratchpad": 1},
+        {"messages": "1", "scratchpad": "1"},
     )
     checkpointer.finalize_turn(
         session_id=source_session_id,

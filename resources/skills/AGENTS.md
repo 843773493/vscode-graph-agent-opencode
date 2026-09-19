@@ -20,6 +20,6 @@
 - 每个 Skill 必须包含 `SKILL.md`，frontmatter 必须声明 `name`、`description`；本项目额外使用 `allowed-tools` 映射隐藏扩展工具，因此不能删除、改名为 `allowed_tools` 或写入工具正文。
 - Skill 只能描述已经由 Workspace 配置启用的工具；工具调用必须遵守固定入口和参数约定。
 - 隐藏扩展工具的参数契约必须使用 JSON Schema 描述对象：每个目标工具声明 `tool_name` 和 `arguments_schema`；不要用 Markdown 表格作为规范格式。
-- `invoke_custom_tool` 的固定外层 schema 已由模型工具定义提供，Skill 不重复展开；Skill 只补充目标工具的 `arguments_schema` 和语义约束，不添加冗余的完整调用示例。
+- `invoke_extension_tool` 的固定外层 schema 已由模型工具定义提供，Skill 不重复展开；Skill 只补充目标工具的 `arguments_schema` 和语义约束，不添加冗余的完整调用示例。
 - 默认启用列表由 `configs/gateway_inline.jsonc` 的 Workspace runtime 配置控制，不在 Skill 文件中自行声明启用状态。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

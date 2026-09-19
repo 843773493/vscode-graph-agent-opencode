@@ -177,6 +177,21 @@ def workspace_root_from_response(response: httpx.Response) -> str:
     return str(response.json()["data"]["root_path"])
 
 
+def reset_gateway_user_configuration(*, workspace_root: Path) -> None:
+    """重建测试 BOXTEAM_HOME 的用户配置，移除测试写入的远程 Gateway 声明。
+
+    测试声明的远程 Gateway 会留在用户配置里跨运行生效；只有显式重建用户配置
+    才能让它不再被后续 Gateway 启动重新加载。
+    """
+
+    install_user_configuration(
+        config_root=_test_boxteam_home(workspace_root) / "config",
+        profile="default",
+        project_root=Path.cwd(),
+        force=True,
+    )
+
+
 def write_gateway_remote_gateway_config(
     *,
     workspace_root: Path,

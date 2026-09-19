@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.abstractions.job_service import JobServiceProtocol
+from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_config_service,
     get_context_compaction_service,
@@ -22,6 +23,7 @@ from app.api.deps import (
     get_session_context_fork_service,
     get_session_information_service,
     get_session_interrupt_service,
+    get_session_skill_tracking_service,
     get_session_resource_service,
     get_session_service,
     verify_local_token,
@@ -36,6 +38,7 @@ from app.schemas.internal_v2.goal import (
 )
 from app.schemas.internal_v2.llm_request_log import LLMRequestLogRecordDTO
 from app.schemas.internal_v2.session import (
+    ChildThreadListDTO,
     DeleteSessionResultDTO,
     SessionCompactResultDTO,
     SessionCreateRequest,
@@ -43,6 +46,8 @@ from app.schemas.internal_v2.session import (
     SessionForkRequest,
     SessionInformationSnapshotDTO,
     SessionInterruptResultDTO,
+    SessionSkillUntrackRequest,
+    SessionSkillUntrackResultDTO,
     SessionUpdateRequest,
 )
 from app.schemas.internal_v2.session_changes import (
@@ -72,6 +77,9 @@ from app.services.business.session_goal_service import (
 )
 from app.services.business.session_information_service import SessionInformationService
 from app.services.business.session_interrupt_service import SessionInterruptService
+from app.services.business.session_skill_tracking_service import (
+    SessionSkillTrackingService,
+)
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
@@ -95,7 +103,7 @@ TRACE_STREAM_HEARTBEAT_INTERVAL_SECONDS = 15.0
     summary="获取会话 Goal",
 )
 async def get_session_goal(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     goal_service: SessionGoalService = Depends(get_goal_service),
@@ -109,7 +117,7 @@ async def get_session_goal(
     summary="设置会话 Goal",
 )
 async def set_session_goal(
-    session_id: str,
+    session_id: CanonicalSessionId,
     payload: SessionGoalSetRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -154,7 +162,7 @@ async def set_session_goal(
     summary="清除会话 Goal",
 )
 async def clear_session_goal(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     goal_service: SessionGoalService = Depends(get_goal_service),
@@ -207,7 +215,7 @@ async def list_sessions(
     "/{session_id}", response_model=APIResponse[SessionDTO], summary="获取会话详情"
 )
 async def get_session(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
@@ -222,12 +230,64 @@ async def get_session(
 
 
 @router.get(
+    "/{session_id}/child-threads",
+    response_model=APIResponse[ChildThreadListDTO],
+    summary="获取会话的 child thread 列表",
+)
+async def list_session_child_threads(
+    session_id: CanonicalSessionId,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    session_service: SessionService = Depends(get_session_service),
+):
+    try:
+        result = await session_service.list_child_threads(session_id)
+    except NotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error.detail)) from error
+    except (RuntimeError, TimeoutError) as error:
+        # 目录索引/物理树异常属于可恢复的工作区状态，不能伪装成空列表。
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/threads/{thread_id}/skills/untrack",
+    response_model=APIResponse[SessionSkillUntrackResultDTO],
+    summary="受信停止跟踪会话 Skill",
+)
+async def untrack_session_skill(
+    session_id: CanonicalSessionId,
+    thread_id: str,
+    payload: SessionSkillUntrackRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    skill_tracking_service: SessionSkillTrackingService = Depends(
+        get_session_skill_tracking_service
+    ),
+):
+    try:
+        result = await skill_tracking_service.untrack(
+            session_id=session_id,
+            thread_id=thread_id,
+            name=payload.name,
+        )
+    except NotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error.detail)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except (RuntimeError, TimeoutError) as error:
+        # rollout 目录/控制状态存储异常（含 owner CAS 冲突）不能伪装成功。
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
     "/{session_id}/information",
     response_model=APIResponse[SessionInformationSnapshotDTO],
     summary="获取通用会话信息",
 )
 async def get_session_information(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     information_service: SessionInformationService = Depends(
@@ -244,7 +304,7 @@ async def get_session_information(
     summary="复制 Agent 上下文状态并创建子会话",
 )
 async def fork_session_context(
-    session_id: str,
+    session_id: CanonicalSessionId,
     payload: SessionForkRequest | None = None,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -268,7 +328,7 @@ async def fork_session_context(
     summary="分页获取会话执行轨迹",
 )
 async def list_session_traces(
-    session_id: str,
+    session_id: CanonicalSessionId,
     cursor: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=200),
     _: str = Depends(verify_local_token),
@@ -294,7 +354,7 @@ async def list_session_traces(
     summary="获取会话完整 LLM 请求响应日志",
 )
 async def list_session_llm_request_logs(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     llm_request_log_service: LLMRequestLogService = Depends(
@@ -311,7 +371,7 @@ async def list_session_llm_request_logs(
     summary="获取会话后台连接列表",
 )
 async def list_session_resources(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     include_history: bool = Query(default=True),
@@ -335,7 +395,7 @@ async def list_session_resources(
     summary="获取会话文件变更视图列表",
 )
 async def list_session_changesets(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     session_changes_service: SessionChangesService = Depends(
@@ -352,7 +412,7 @@ async def list_session_changesets(
     summary="获取会话文件变更详情",
 )
 async def get_session_changeset(
-    session_id: str,
+    session_id: CanonicalSessionId,
     changeset_id: str,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -376,7 +436,7 @@ async def get_session_changeset(
     summary="标记或取消标记会话文件变更已审查",
 )
 async def review_session_changeset_file(
-    session_id: str,
+    session_id: CanonicalSessionId,
     changeset_id: str,
     payload: SessionFileReviewRequest,
     _: str = Depends(verify_local_token),
@@ -403,7 +463,7 @@ async def review_session_changeset_file(
     summary="控制会话后台连接",
 )
 async def control_session_resource(
-    session_id: str,
+    session_id: CanonicalSessionId,
     kind: SessionResourceKind,
     resource_id: str,
     payload: SessionResourceControlRequest,
@@ -432,7 +492,7 @@ async def control_session_resource(
     responses=sse_responses("SSE Trace 事件流", {"trace": TraceEventDTO}),
 )
 async def stream_session_traces(
-    session_id: str,
+    session_id: CanonicalSessionId,
     after_event_id: str | None = Query(default=None),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     _: str = Depends(verify_local_token),
@@ -530,7 +590,7 @@ def _trace_cursor_gone_http_error(exc: TraceCursorGoneError) -> HTTPException:
     summary="获取会话文件树快捷路径配置",
 )
 async def get_session_file_tree_settings(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
@@ -548,7 +608,7 @@ async def get_session_file_tree_settings(
     summary="添加会话级文件树快捷路径",
 )
 async def add_session_file_tree_shortcut(
-    session_id: str,
+    session_id: CanonicalSessionId,
     payload: FileTreeShortcutRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -573,7 +633,7 @@ async def add_session_file_tree_shortcut(
     summary="删除会话级文件树快捷路径",
 )
 async def remove_session_file_tree_shortcut(
-    session_id: str,
+    session_id: CanonicalSessionId,
     path: str = Query(min_length=1, max_length=4096),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -594,7 +654,7 @@ async def remove_session_file_tree_shortcut(
     summary="将会话快捷路径设为新会话默认值",
 )
 async def apply_file_tree_shortcut_to_workspace(
-    session_id: str,
+    session_id: CanonicalSessionId,
     payload: FileTreeShortcutRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -619,7 +679,7 @@ async def apply_file_tree_shortcut_to_workspace(
     summary="删除新会话默认文件树快捷路径",
 )
 async def remove_workspace_file_tree_shortcut(
-    session_id: str,
+    session_id: CanonicalSessionId,
     path: str = Query(min_length=1, max_length=4096),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -638,7 +698,7 @@ async def remove_workspace_file_tree_shortcut(
     "/{session_id}", response_model=APIResponse[SessionDTO], summary="更新会话"
 )
 async def update_session(
-    session_id: str,
+    session_id: CanonicalSessionId,
     payload: SessionUpdateRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -659,7 +719,7 @@ async def update_session(
     summary="删除会话",
 )
 async def delete_session(
-    session_id: str,
+    session_id: CanonicalSessionId,
     cascade: bool = Query(default=False),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
@@ -710,7 +770,7 @@ async def delete_session(
     summary="压缩会话上下文",
 )
 async def compact_session_context(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     context_compaction_service: ContextCompactionService = Depends(
@@ -727,7 +787,7 @@ async def compact_session_context(
     summary="打断会话正在执行的任务",
 )
 async def interrupt_session(
-    session_id: str,
+    session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     session_interrupt_service: SessionInterruptService = Depends(

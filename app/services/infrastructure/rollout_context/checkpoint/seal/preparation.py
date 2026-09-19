@@ -75,7 +75,7 @@ def prepare_registered_context(
         owner._storage.ensure_active_view_contains_turn_root(
             session_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns
         )
-        owner._storage.ensure_request_tool_result_items(
+        owner._storage.ensure_request_items(
             session_id,
             turn_id=turn_id,
             messages=request_messages,

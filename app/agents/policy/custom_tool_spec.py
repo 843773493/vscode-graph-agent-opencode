@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-import re
 
 from app.agents.builtin_tool_registry import resolve_builtin_tool_factory
-
+from app.agents.skill_frontmatter import SKILL_NAME_PATTERN
 
 _CUSTOM_TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
 _FACTORY_PATH_PATTERN = re.compile(
@@ -13,7 +13,7 @@ _FACTORY_PATH_PATTERN = re.compile(
     r"[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$"
 )
 _SUPPORTED_FIELDS = frozenset(
-    {"tool_id", "name", "factory", "options", "description"}
+    {"tool_id", "name", "factory", "options", "description", "skills"}
 )
 
 
@@ -24,6 +24,7 @@ class ParsedCustomToolSpec:
     name: str
     factory_path: str
     options: dict[str, object]
+    skills: tuple[str, ...] = ()
     description: str | None = None
     tool_id: str | None = None
 
@@ -35,6 +36,8 @@ class ParsedCustomToolSpec:
             result = {"name": self.name, "factory": self.factory_path}
         if self.options:
             result["options"] = dict(self.options)
+        if self.skills:
+            result["skills"] = list(self.skills)
         if self.description is not None:
             result["description"] = self.description
         return result
@@ -96,6 +99,21 @@ def parse_custom_tool_spec(
     if not all(isinstance(key, str) for key in options):
         raise TypeError(f"{context}[{name}].options 的键必须是字符串")
 
+    raw_skills = raw_spec.get("skills", [])
+    if not isinstance(raw_skills, list):
+        raise TypeError(f"{context}[{name}].skills 必须是字符串数组")
+    skills = tuple(
+        _stripped_string(item, field=f"{context}[{name}].skills 条目")
+        for item in raw_skills
+    )
+    if len(set(skills)) != len(skills):
+        raise ValueError(f"{context}[{name}].skills 包含重复 Skill 名")
+    for skill_name in skills:
+        if not SKILL_NAME_PATTERN.fullmatch(skill_name):
+            raise ValueError(
+                f"{context}[{name}].skills 条目格式无效: {skill_name!r}"
+            )
+
     raw_description = raw_spec.get("description")
     description = (
         None
@@ -109,6 +127,7 @@ def parse_custom_tool_spec(
         name=name,
         factory_path=factory_path,
         options=dict(options),
+        skills=skills,
         description=description,
         tool_id=tool_id,
     )

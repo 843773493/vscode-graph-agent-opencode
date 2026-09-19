@@ -13,7 +13,7 @@
 
 # 规范
 
-- 工具调用必须通过固定入口 `invoke_custom_tool`。
+- 工具调用必须通过固定入口 `invoke_extension_tool`。
 - 搜索摘要只用于发现 URL；需要引用或核实时必须继续调用 `fetch_webpage`。
 - 每个工具使用 `tool_name` + `arguments_schema` 描述参数；不要添加冗余的完整调用示例。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

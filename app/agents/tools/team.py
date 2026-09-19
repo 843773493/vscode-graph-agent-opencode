@@ -11,7 +11,7 @@ from app.core.job_context import get_current_job_id
 
 TEAM_COORDINATION_NOTICE = (
     "团队任务采用事件驱动协作：成员完成、阻塞或失败后会更新团队面板，并自动为协调者启动通知 Job。"
-    "不要对团队成员调用 monitor_session_agent_end 或 collect_background_messages；当前 Job 应在分派后结束，"
+    "不要对团队成员调用 wait_for_session 或 collect_background_messages 阻塞轮询；当前 Job 应在分派后结束，"
     "收到团队更新通知时再调用 get_team_board 汇总最新状态。"
 )
 TEAM_ID_PATTERN = r"^team_[0-9a-f]{32}$"
@@ -147,7 +147,7 @@ def create_team_tools(
             Field(description="团队职责模式；审查和测试通常用 read_only，但它不是文件沙箱"),
         ] = "read_only",
     ) -> dict[str, object]:
-        """创建持久化团队成员 Session；后续由团队面板自动通知，禁止用 monitor_session_agent_end 或 collect_background_messages 等待。"""
+        """创建持久化团队成员 Session；后续由团队面板自动通知，禁止阻塞轮询等待。"""
         parent_job_id = get_current_job_id()
         if not parent_job_id:
             raise RuntimeError("create_team_member 缺少当前 job_id")
@@ -197,7 +197,7 @@ def create_team_tools(
         depends_on_task_ids: list[str] | None = None,
         start_assignee: bool = True,
     ) -> dict[str, object]:
-        """登记并启动成员任务；完成状态会自动通知协调者，分派后不要阻塞轮询或调用 monitor_session_agent_end/collect_background_messages。"""
+        """登记并启动成员任务；完成状态会自动通知协调者，分派后不要阻塞轮询等待。"""
         result = await team_service.assign_task(
             requester_session_id=current_session_id,
             team_id=team_id,

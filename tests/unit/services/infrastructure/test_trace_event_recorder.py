@@ -11,7 +11,7 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 
 @pytest.mark.asyncio
 async def test_recorder_persists_job_events(tmp_path: Path, session_bundle_factory):
-    session_bundle_factory(tmp_path, "ses_1")
+    session_bundle_factory(tmp_path, "ses_739ec3cc97674aaa8e48e6eb77fa520c")
     bus = JobEventBus()
     store = TraceEventStore(sessions_dir=tmp_path)
     recorder = TraceEventRecorder(bus=bus, store=store)
@@ -21,13 +21,13 @@ async def test_recorder_persists_job_events(tmp_path: Path, session_bundle_facto
         await bus.publish(
             job_id="job_1",
             event_type=EventType.JOB_CREATED,
-            payload={"session_id": "ses_1", "message": "hi", "agent_id": "default"},
+            payload={"session_id": "ses_739ec3cc97674aaa8e48e6eb77fa520c", "message": "hi", "agent_id": "default"},
             agent_id="test",
         )
         await bus.publish(
             job_id="job_1",
             event_type=EventType.JOB_STARTED,
-            payload={"session_id": "ses_1"},
+            payload={"session_id": "ses_739ec3cc97674aaa8e48e6eb77fa520c"},
             agent_id="job_service",
         )
         await bus.publish(
@@ -37,7 +37,7 @@ async def test_recorder_persists_job_events(tmp_path: Path, session_bundle_facto
             agent_id="default",
         )
 
-        events = store.read_events("ses_1")
+        events = store.read_events("ses_739ec3cc97674aaa8e48e6eb77fa520c")
         assert [event.type for event in events] == [
             "job_created",
             "job_started",
@@ -52,7 +52,7 @@ async def test_recorder_resolves_lifecycle_event_without_job_created_mapping(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    session_bundle_factory(tmp_path, "ses_direct")
+    session_bundle_factory(tmp_path, "ses_ea8a78cc685846888aef5d4990bb91e3")
     bus = JobEventBus()
     store = TraceEventStore(sessions_dir=tmp_path)
     recorder = TraceEventRecorder(bus=bus, store=store)
@@ -62,21 +62,21 @@ async def test_recorder_resolves_lifecycle_event_without_job_created_mapping(
         await bus.publish(
             job_id="job_direct",
             event_type=EventType.JOB_STARTED,
-            payload={"session_id": "ses_direct"},
+            payload={"session_id": "ses_ea8a78cc685846888aef5d4990bb91e3"},
             agent_id="job_service",
         )
         await bus.publish(
             job_id="job_direct",
             event_type=EventType.JOB_FAILED,
             payload={
-                "session_id": "ses_direct",
+                "session_id": "ses_ea8a78cc685846888aef5d4990bb91e3",
                 "error": "startup timeout",
                 "code": "job_startup_timeout",
             },
             agent_id="job_service",
         )
 
-        events = store.read_events("ses_direct")
+        events = store.read_events("ses_ea8a78cc685846888aef5d4990bb91e3")
         assert [event.type for event in events] == ["job_started", "job_failed"]
     finally:
         await recorder.stop()

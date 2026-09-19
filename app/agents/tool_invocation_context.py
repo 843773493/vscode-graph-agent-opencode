@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
@@ -11,15 +12,29 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
 from app.core.turn_execution_scope import (
-    TurnExecutionScope,
     get_current_turn_execution_scope,
     reset_current_turn_execution_scope,
     set_current_turn_execution_scope,
 )
-from app.services.infrastructure.resource_manager import (
-    ResourceManager,
-    resource_refs_from_tool_payload,
-)
+
+
+@dataclass(frozen=True, slots=True)
+class ThreadRuntimeBinding:
+    """Agent 运行时绑定的精确 SessionThread 归属。
+
+    归属只能由 Agent 后端在装配时提供，模型参数和工具 schema 都不携带它。
+    调试等按 SessionThread 隔离的扩展工具通过该绑定把精确 owner 传给服务层，
+    不再依赖服务层“裸 session 等价 main”的隐式归一。
+    """
+
+    session_id: str
+    thread_id: str
+
+    def __post_init__(self) -> None:
+        if not self.session_id.strip():
+            raise ValueError("ThreadRuntimeBinding.session_id 不能为空")
+        if not self.thread_id.strip():
+            raise ValueError("ThreadRuntimeBinding.thread_id 不能为空")
 
 
 class ToolInvocationContext:
@@ -29,7 +44,7 @@ class ToolInvocationContext:
         self,
         *,
         tool_timeout_seconds: float | None = None,
-        resource_manager: ResourceManager | None = None,
+        thread_binding: ThreadRuntimeBinding | None = None,
     ) -> None:
         self._tool_call_id: contextvars.ContextVar[str | None] = (
             contextvars.ContextVar("agent_tool_call_id", default=None)
@@ -37,7 +52,9 @@ class ToolInvocationContext:
         if tool_timeout_seconds is not None and tool_timeout_seconds <= 0:
             raise ValueError("tool_timeout_seconds 必须大于 0")
         self.tool_timeout_seconds = tool_timeout_seconds
-        self.resource_manager = resource_manager
+        #: 受信线程归属；为 None 时调用方（如直接构造 factory 的后端测试）
+        #: 必须自行给出显式归属，不允许业务工具再退回裸 session_id。
+        self.thread_binding = thread_binding
 
     def set_tool_call_id(
         self,
@@ -100,10 +117,6 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
             if tool_scope is not None
             else None
         )
-        resource_leases = self._acquire_resource_leases(
-            request,
-            parent_scope=parent_scope,
-        )
         task = asyncio.create_task(handler(request))
         abort_hook_id = (
             tool_scope.register_abort(lambda _reason: _cancel_task(task))
@@ -140,51 +153,7 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
                 reset_current_turn_execution_scope(scope_token)
             if tool_scope is not None:
                 await tool_scope.close()
-            keep_leases_for_reconcile = bool(
-                tool_scope is not None
-                and tool_scope.cancellation_signal.is_cancelled
-                and tool_scope.cancellation_signal.reason
-                in {"user_requested", "execution_lost"}
-            )
-            if not keep_leases_for_reconcile:
-                for lease_id in resource_leases:
-                    self._context.resource_manager.release(lease_id)
-                    if parent_scope is not None:
-                        parent_scope.remove_lease(lease_id)
             self._context.reset_tool_call_id(token)
-
-    def _acquire_resource_leases(
-        self,
-        request: ToolCallRequest,
-        *,
-        parent_scope: TurnExecutionScope | None,
-    ) -> list[str]:
-        manager = self._context.resource_manager
-        if manager is None or parent_scope is None:
-            return []
-        resource_refs = _resource_refs_from_tool_call(request)
-        lease_ids: list[str] = []
-        operation_id = str(request.tool_call["id"])
-        try:
-            for resource_id, kind in resource_refs:
-                manager.register_external(
-                    resource_id=resource_id,
-                    kind=kind,
-                    created_by_turn_id=parent_scope.turn_stream_id,
-                )
-                lease = manager.acquire_operation(
-                    resource_id=resource_id,
-                    turn_stream_id=parent_scope.turn_stream_id,
-                    operation_id=operation_id,
-                )
-                parent_scope.add_lease(lease.lease_id)
-                lease_ids.append(lease.lease_id)
-        except Exception:
-            for lease_id in lease_ids:
-                manager.release(lease_id, reason="operation_setup_failed")
-                parent_scope.remove_lease(lease_id)
-            raise
-        return lease_ids
 
     def _bind(
         self,
@@ -204,15 +173,6 @@ async def _cancel_task(task: asyncio.Task[object]) -> None:
     if not task.done():
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-
-
-def _resource_refs_from_tool_call(
-    request: ToolCallRequest,
-) -> tuple[tuple[str, str], ...]:
-    return resource_refs_from_tool_payload(
-        request.tool_call.get("name"),
-        request.tool_call.get("args"),
-    )
 
 
 def _timeout_tool_message(
@@ -247,6 +207,7 @@ def _timeout_tool_message(
 
 
 __all__ = [
+    "ThreadRuntimeBinding",
     "ToolInvocationContext",
     "ToolInvocationContextMiddleware",
 ]
