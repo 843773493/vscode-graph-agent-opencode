@@ -16,6 +16,7 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_migration import migrate_workspace_session_catalog
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -129,6 +130,13 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
+    # 模板是旧 JSON 权威索引形态；默认（catalog 权威）副本经产品一次性
+    # 迁移机建立 SQLite catalog authority，否则后端启动 fail-closed。
+    # legacy 显式 opt-in 模式保持旧 JSON 布局，不迁移；模式判定读环境
+    # 开关而不是构造 resolver：未迁移工作区上 catalog resolver 构造本身
+    # 即 fail-closed。
+    if os.environ.get("BOXTEAM_SESSION_CATALOG_RESOLVER") not in ("0", "legacy"):
+        asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
     _seed_v2_partial_text_turn(workspace_root)
     return str(workspace_root)
 
@@ -212,11 +220,10 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
     )
     assert build.returncode == 0, f"Web 构建失败:\n{build.stdout}\n{build.stderr}"
 
+    sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     rollout_path = (
-        Path(integration_workspace_root_path)
-        / ".boxteam"
-        / "sessions"
-        / PARTIAL_TEXT_SESSION_ID
+        get_session_path_resolver(sessions_dir)
+        .resolve_session_node(PARTIAL_TEXT_SESSION_ID)
         / "rollout"
         / "rollout.jsonl"
     )

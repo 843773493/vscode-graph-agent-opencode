@@ -139,8 +139,16 @@ def _activity_parts_from_projection(
             "reasoning_encrypted",
             "tool_call",
             "tool_result",
+            "text",
         }:
             raise ValueError(f"未知 Turn activity item kind: {raw_kind!r}")
+        if kind == "text" and not include & {
+            "text",
+            "assistant_text",
+            "assistant",
+            "final_response",
+        }:
+            continue
         if kind == "reasoning" and not include & {"thinking", "reasoning_detail"}:
             continue
         if kind == "reasoning_summary" and not include & {
@@ -233,6 +241,11 @@ def _activity_parts_from_projection(
                     tool_call_id if isinstance(tool_call_id, str) else None
                 ),
                 tool_name=tool_name if isinstance(tool_name, str) else None,
+                completion_reason=(
+                    raw.get("completion_reason")
+                    if kind == "text" and isinstance(raw.get("completion_reason"), str)
+                    else None
+                ),
                 truncated=raw.get("truncated") is True,
                 partial=raw.get("status") in {"partial", "incomplete"},
             )

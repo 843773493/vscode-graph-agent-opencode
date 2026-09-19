@@ -130,8 +130,10 @@ try {
   const partialTextVisible = boundaryText.includes(
     "我已经开始分析这个问题，但回答在这里被用户中断……",
   );
+  // completion_reason=user_interrupt 的 Turn 按产品契约渲染为
+  // user-interrupted 状态（优先于通用 cancelled），见 ChatTurn.test.tsx。
   const cancelledStatusVisible = await boundaryTurn
-    .locator('[data-status-kind="cancelled"]')
+    .locator('[data-status-kind="user-interrupted"]')
     .count()
     .then((count) => count > 0);
   const independentRetryVisible = (await boundaryTurn

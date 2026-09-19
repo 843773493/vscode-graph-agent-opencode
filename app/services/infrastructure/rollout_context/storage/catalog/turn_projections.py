@@ -100,6 +100,11 @@ def _finalize_activity_projection(projection: dict[str, object]) -> None:
                     "status": item.get("status"),
                 }
             )
+        elif item.get("kind") == "text":
+            # PARTIAL assistant_output 只作为非 final text part 进入时间线；
+            # 不进入 thinking/tool 统计。completed 中间正文仍由 final pointer
+            # 与 assistant_text 承载，避免同一正文投影两次。
+            pass
         else:
             raise RuntimeError(f"未知 activity item kind: {item.get('kind')!r}")
     projection["thinking_blocks"] = thinking_blocks
@@ -210,6 +215,8 @@ def _logical_activity_key(item: dict[str, object]) -> tuple[object, ...]:
             kind,
             strict_text(item.get("tool_call_id"), field="tool_call_id"),
         )
+    if kind == "text":
+        return (kind, strict_text(item.get("item_id"), field="item_id"))
     if kind == "compaction_summary":
         return (kind, strict_text(item.get("item_id"), field="item_id"))
     producer_ref = item.get("producer_ref")
@@ -467,6 +474,7 @@ class TurnProjectionQueryMixin:
             "ON ip.item_id = ic.item_id AND ip.item_sequence = ic.item_sequence "
             f"WHERE ic.turn_id IN ({placeholders}) AND ic.semantic_kind IN "
             "('reasoning','tool_call','tool_result','compaction_summary') "
+            "OR (ic.semantic_kind = 'assistant_output' AND ic.status = 'partial') "
             "ORDER BY ic.turn_id, ic.item_sequence",
             ids,
         ).fetchall()
@@ -874,6 +882,10 @@ class TurnProjectionQueryMixin:
                             ),
                         }
                     activity_tools = [selected_tool]
+                elif semantic_kind == "assistant_output":
+                    # PARTIAL assistant_output 不携带工具身份，直接按单一
+                    # text part 投影；工具 identity 归属 tool_call item。
+                    pass
                 elif matching_tools:
                     # 一个 assistant_output carrier 可以包含多个 tool_calls；
                     # 它们共享物理 item offset，但每个 call 都是独立逻辑 Item。
@@ -939,6 +951,9 @@ class TurnProjectionQueryMixin:
                             f"canonical {semantic_kind} 缺少稳定 tool_call_id: {item_id}"
                         )
             kind = (
+                "text"
+                if semantic_kind == "assistant_output"
+                else
                 "reasoning_summary"
                 if semantic_kind == "reasoning" and payload_kind == "summary"
                 else "reasoning_encrypted"
@@ -980,6 +995,7 @@ class TurnProjectionQueryMixin:
                         if isinstance(source_part_id, str) and source_part_id
                         else None
                     ),
+                    "completion_reason": metadata.get("completion_reason"),
                     "message_sequence": 0,
                 }
                 if activity_tool is not None:
