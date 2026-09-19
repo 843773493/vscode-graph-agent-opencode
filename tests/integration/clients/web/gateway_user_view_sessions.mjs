@@ -12,6 +12,8 @@ const baseUrl = requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
 const workspaceId = requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
 const sessionId = requiredEnvironment("BOXTEAM_BROWSER_SESSION_ID");
 const unopenedSessionId = requiredEnvironment("BOXTEAM_BROWSER_UNOPENED_SESSION_ID");
+const userAId = requiredEnvironment("BOXTEAM_BROWSER_USER_A_ID");
+const userBId = requiredEnvironment("BOXTEAM_BROWSER_USER_B_ID");
 const resultPath = requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
 const screenshotPath = requiredEnvironment("BOXTEAM_BROWSER_SCREENSHOT_PATH");
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
@@ -85,10 +87,13 @@ async function waitUntil(predicate, label, timeout = 20_000) {
 }
 
 async function waitForCurrentUser(page, userId) {
-  await waitUntil(
-    async () => (await currentAccess(page))?.user_id === userId,
-    `当前用户 ${userId}`,
-  );
+  let lastResponse = "无响应";
+  await waitUntil(async () => {
+    const response = await rawApi(page, "/api/gateway/users/current");
+    lastResponse = `${response.status} ${response.body.slice(0, 200)}`;
+    if (response.status !== 200) return false;
+    return JSON.parse(response.body).data.user_id === userId;
+  }, `当前用户 ${userId}，最后响应: ${lastResponse}`);
 }
 
 async function waitForGuest(page) {
@@ -115,7 +120,6 @@ try {
     throw new Error("Playwright 默认入口没有进入游客视图");
   }
 
-  const userAId = "user-browser-view-a";
   await api(pageA, "/api/gateway/users", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -124,13 +128,13 @@ try {
   await api(pageA, "/api/gateway/users", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ display_name: "浏览器用户 B", user_id: "user-browser-view-b" }),
+    body: JSON.stringify({ display_name: "浏览器用户 B", user_id: userBId }),
   });
 
   contextC = await browser.newContext({ viewport: { width: 1024, height: 768 } });
   const pageC = await contextC.newPage();
   await pageC.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  await api(pageC, "/api/gateway/users/user-browser-view-b/access", {
+  await api(pageC, `/api/gateway/users/${encodeURIComponent(userBId)}/access`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_label: "过期测试浏览器" }),
@@ -140,12 +144,13 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 46_000));
 
   await pageA.getByRole("button", { name: "用户视图" }).click();
-  const expiredUserRow = pageA.locator(".gateway-user-row").filter({ hasText: "浏览器用户 B" });
+  // 行定位必须用每运行唯一的 user_id：残留用户与新用户可能同显示名。
+  const expiredUserRow = pageA.locator(".gateway-user-row").filter({ hasText: userBId });
   await expiredUserRow.waitFor({ state: "visible", timeout: 20_000 });
   const expiredUserLeaseReacquired = !(await expiredUserRow.innerText()).includes("占用中");
   if (!expiredUserLeaseReacquired) throw new Error("浏览器用户 B 的过期租约仍显示为占用");
   await expiredUserRow.getByRole("button", { name: "选择", exact: true }).click();
-  await waitForCurrentUser(pageA, "user-browser-view-b");
+  await waitForCurrentUser(pageA, userBId);
 
   await api(pageA, `/api/gateway/users/${encodeURIComponent(userAId)}/access`, {
     method: "POST",
@@ -173,7 +178,7 @@ try {
   await pageA.locator('[data-turn-id="job-0008"]').waitFor({ state: "visible", timeout: 30_000 });
 
   await pageB.getByRole("button", { name: "用户视图" }).click();
-  const userARowB = pageB.locator(".gateway-user-row").filter({ hasText: "浏览器用户 A" });
+  const userARowB = pageB.locator(".gateway-user-row").filter({ hasText: userAId });
   await userARowB.waitFor({ state: "visible", timeout: 20_000 });
   await waitUntil(
     async () => (await userARowB.innerText()).includes("占用中"),
@@ -184,7 +189,12 @@ try {
   await waitForCurrentUser(pageB, userAId);
 
   const oldPageAccess = await rawApi(pageA, "/api/gateway/users/current");
-  const oldPageExitedAfterTakeover = oldPageAccess.status === 401;
+  // /users/current 对失效 cookie 按首载契约建立游客态（不返回 401）；
+  // 接管后旧页面只需不再持有用户 A 的身份。
+  const oldPageExitedAfterTakeover =
+    oldPageAccess.status === 401 ||
+    (oldPageAccess.status === 200 &&
+      JSON.parse(oldPageAccess.body).data.user_id !== userAId);
   await pageB.locator('[data-turn-id="job-0008"]').waitFor({ state: "visible", timeout: 30_000 });
 
   const jobResponse = await api(pageB, `/api/v1/sessions/${encodeURIComponent(unopenedSessionId)}/messages`, {
