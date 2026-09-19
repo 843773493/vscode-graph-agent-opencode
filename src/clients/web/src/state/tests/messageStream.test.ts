@@ -328,6 +328,67 @@ describe("message stream reducer", () => {
     expect(changed.protocolError).toContain("turn_stream_id");
   });
 
+  test("同一 tool_call 的 reconciled 收口 execution 不再渲染第二个工具", () => {
+    // 复现后端竞态契约：请求边界 ToolMessage 先完成 canonical 结果，
+    // 迟到的 on_tool_start/on_tool_end 再写一条 reconciled_tool_message
+    // 收口事件。投影必须折叠成一个逻辑工具。
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "model.started", {
+      model_call_id: "mc_1",
+      attempt: 1,
+    }));
+    state = applyMessageStreamEvent(state, event(2, "tool_call.delta", {
+      tool_call_id: "call_1",
+      tool_name: "read_file",
+      arguments: { path: "README.md" },
+      status: "accumulating",
+    }));
+    state = applyMessageStreamEvent(state, event(3, "tool.completed", {
+      tool_execution_id: "exec_canonical",
+      tool_call_id: "call_1",
+      tool_name: "read_file",
+      status: "completed",
+      outcome: "success",
+      completion_reason: "tool_completed",
+      result: "README 内容",
+    }));
+    state = applyMessageStreamEvent(state, event(4, "block.started", {
+      block_id: "b1",
+      carrier_type: "text",
+      model_call_id: "mc_1",
+    }));
+    state = applyMessageStreamEvent(state, event(5, "block.delta", {
+      block_id: "b1",
+      carrier_type: "text",
+      operation: "append",
+      text: "已读取 README。",
+    }));
+    state = applyMessageStreamEvent(state, event(6, "tool.started", {
+      tool_execution_id: "exec_late",
+      tool_call_id: "call_1",
+      tool_name: "read_file",
+    }));
+    state = applyMessageStreamEvent(state, event(7, "tool.completed", {
+      tool_execution_id: "exec_late",
+      tool_call_id: "call_1",
+      tool_name: "read_file",
+      status: "completed",
+      outcome: "success",
+      completion_reason: "reconciled_tool_message",
+      result: "README 内容",
+    }));
+    const parts = messageStreamToResponseParts(state);
+    const kinds = parts.map((part) => part.kind);
+    expect(kinds.filter((kind) => kind === "tool_call")).toHaveLength(1);
+    expect(kinds.filter((kind) => kind === "tool_result")).toHaveLength(1);
+    expect(parts.find((part) => part.kind === "tool_call")?.tool_name).toBe("read_file");
+    expect(parts.find((part) => part.kind === "tool_call")?.arguments).toBe(
+      '{"path":"README.md"}',
+    );
+    // 折叠后保留 canonical execution 的时序位置：工具在最终正文之前。
+    expect(kinds).toEqual(["tool_call", "tool_result", "text"]);
+  });
+
   test("工具结果未知时保留可展示的未知事实", () => {
     let state = createMessageStreamState("ses_1", "turn_1");
     state = applyMessageStreamEvent(state, event(1, "tool_call", {

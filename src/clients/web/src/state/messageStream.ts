@@ -612,7 +612,7 @@ export function messageStreamToResponseParts(
       fallback: block.block_index,
       id: block.block_id,
     })),
-    ...sortToolExecutions(state.toolExecutions).map((execution) => ({
+    ...projectableToolExecutions(state.toolExecutions).map((execution) => ({
       kind: "tool_execution" as const,
       value: execution,
       fallback: 0,
@@ -738,6 +738,33 @@ export function messageStreamToResponseParts(
     });
   }
   return parts;
+}
+
+/**
+ * 后端在请求边界 ToolMessage 先完成 canonical 结果、外层事件流的
+ * on_tool_start/on_tool_end 迟到时，会为同一 tool_call_id 写第二条
+ * execution（completion_reason=reconciled_tool_message 的生命周期收口事件，
+ * 见后端 complete_tool 的 reconciled 契约：只闭合生命周期，不是第二次
+ * 工具执行）。投影必须按 tool_call_id 折叠成一个逻辑工具，否则同一工具
+ * 会在聊天时间线中渲染两次。
+ */
+function projectableToolExecutions(
+  executions: readonly MessageStreamToolExecution[],
+): MessageStreamToolExecution[] {
+  const selectedByCallId = new Map<string, MessageStreamToolExecution>();
+  for (const execution of sortToolExecutions(executions)) {
+    const current = selectedByCallId.get(execution.tool_call_id);
+    if (current === undefined || toolExecutionRank(execution) < toolExecutionRank(current)) {
+      selectedByCallId.set(execution.tool_call_id, execution);
+    }
+  }
+  return [...selectedByCallId.values()];
+}
+
+/** 权威 execution 优先：非 reconciled 终态 > 非 reconciled running > reconciled 收口。 */
+function toolExecutionRank(execution: MessageStreamToolExecution): number {
+  if (execution.completion_reason === "reconciled_tool_message") return 2;
+  return execution.status === "running" ? 1 : 0;
 }
 
 type MessageStreamResponseEntity =
