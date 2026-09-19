@@ -320,7 +320,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     )
     popup_state = _json_tool_result(await read_page.ainvoke({"pageId": page_id}))
     assert len(popup_state["pages"]) == 2
-    popup_tab_id = str(popup_state["active_page_id"])
+    popup_tab_id = str(popup_state["activePageId"])
     assert popup_tab_id != page_id
     assert "Popup Tab" in {str(page["title"]) for page in popup_state["pages"]}
 
@@ -329,7 +329,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
             {"pageId": page_id, "type": "activate_tab", "tabId": page_id}
         )
     )
-    assert activated["active_page_id"] == page_id
+    assert activated["activePageId"] == page_id
     closed_popup = _json_tool_result(
         await navigate_page.ainvoke(
             {"pageId": page_id, "type": "close_tab", "tabId": popup_tab_id}
