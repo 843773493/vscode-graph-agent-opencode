@@ -17,25 +17,33 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_session_service
 from app.api.sessions import list_session_child_threads, router
 from app.core.session_control_store import SessionControlStore
-from app.core.session_paths import SessionPathResolver
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 SUBAGENT_TYPE = "general-purpose"
 
 
 @pytest.fixture()
-def service(tmp_path: Path) -> SessionService:
-    sessions_dir = tmp_path / ".boxteam" / "sessions"
+def workspace(tmp_path: Path):
+    context = build_catalog_workspace(tmp_path, workspace_id=WORKSPACE_ID)
+    try:
+        yield context
+    finally:
+        context.close()
+
+
+@pytest.fixture()
+def service(workspace) -> SessionService:
     return SessionService(
         config_service=ConfigService(),
-        trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
+        trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root),
         workspace_id=WORKSPACE_ID,
-        path_resolver=SessionPathResolver(sessions_dir),
+        path_resolver=workspace.resolver,
     )
 
 

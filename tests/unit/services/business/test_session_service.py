@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_file, get_session_path, get_sessions_dir
-from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import (
     SessionCreateRequest,
     SessionUpdateRequest,
@@ -84,18 +83,12 @@ class TestSessionService:
         data = json.loads(session_file.read_text(encoding="utf-8"))
         assert data["session_id"] == session.session_id
         assert data["workspace_id"] == self.workspace_id
-        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
-            # 新模型：title/title_source 权威在 catalog（display_name），
-            # manifest 按 8.2 剥离口径不承载两键。
-            assert "title" not in data
-            assert "title_source" not in data
-            assert (
-                self.service.path_resolver.get_node(session.session_id).name
-                == "Test Session"
-            )
-        else:
-            assert data["title"] == "Test Session"
-            assert data["title_source"] == "user"
+        assert "title" not in data
+        assert "title_source" not in data
+        assert (
+            self.service.path_resolver.get_node(session.session_id).name
+            == "Test Session"
+        )
         assert data["current_agent_id"] == session.current_agent_id
         assert data["current_provider_id"] == "primary"
 
@@ -117,16 +110,10 @@ class TestSessionService:
         resolved = self.service.path_resolver.resolve_session_node_for_runtime(
             session.session_id
         )
-        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
-            # 新模型：folder 无物理目录，session 物理目录是日期桶；孤立
-            # 物理目录不进入 catalog 读模型（语义等价锁定：仍按 ID 解析）。
-            assert resolved.name == session.session_id
-            assert resolved.is_relative_to(get_sessions_dir())
-        else:
-            assert (
-                resolved
-                == get_sessions_dir() / folder.node_id / session.session_id
-            )
+        # folder 无物理目录，session 物理目录是日期桶；孤立物理目录不进入
+        # catalog 读模型（仍按权威 ID 解析）。
+        assert resolved.name == session.session_id
+        assert resolved.is_relative_to(get_sessions_dir())
 
     @pytest.mark.asyncio
     async def test_update_session_provider_is_persisted(self):
@@ -355,18 +342,12 @@ class TestSessionService:
 
         session_file = get_session_file(created.session_id)
         data = json.loads(session_file.read_text(encoding="utf-8"))
-        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
-            # 新模型：title/title_source 是 catalog 权威字段，manifest 按
-            # 8.2 剥离口径不再承载（R16 切片3b-1 换源语义）。
-            assert "title" not in data
-            assert "title_source" not in data
-            assert (
-                self.service.path_resolver.get_node(created.session_id).name
-                == "Updated Title"
-            )
-        else:
-            assert data["title"] == "Updated Title"
-            assert data["title_source"] == "user"
+        assert "title" not in data
+        assert "title_source" not in data
+        assert (
+            self.service.path_resolver.get_node(created.session_id).name
+            == "Updated Title"
+        )
 
     @pytest.mark.asyncio
     async def test_update_session_can_mark_auto_title_source(self):
@@ -396,19 +377,12 @@ class TestSessionService:
         assert (await self.service.get(child.session_id)).parent_session_id == parent.session_id
         resolver = self.service.path_resolver
         parent_path = resolver.resolve_session_node(parent.session_id)
-        if isinstance(resolver, SessionCatalogPathResolver):
-            # 新模型：父子是 catalog 逻辑关系，物理目录都在日期桶下（无
-            # children/ 物理子树），父会话目录物理上不包含子会话目录。
-            child_path = resolver.resolve_session_node(child.session_id)
-            assert child_path.parent == parent_path.parent
-            assert resolver.get_node(child.session_id).parent_node_id == (
-                parent.session_id
-            )
-        else:
-            assert (
-                resolver.resolve_session_node(child.session_id).parent
-                == parent_path / "children"
-            )
+        # 父子是 catalog 逻辑关系，物理目录都在日期桶下。
+        child_path = resolver.resolve_session_node(child.session_id)
+        assert child_path.parent == parent_path.parent
+        assert resolver.get_node(child.session_id).parent_node_id == (
+            parent.session_id
+        )
 
         unbound_child = await self.service.move_session(child.session_id, None)
 
@@ -418,15 +392,10 @@ class TestSessionService:
             self.service.path_resolver.resolve_session_node(child.session_id).parent
             == parent_path.parent
         )
-        if isinstance(resolver, SessionCatalogPathResolver):
-            # 新模型等价锁定：grandchild 仍是 child 的逻辑后代。
-            assert grandchild.session_id in resolver.descendant_session_ids(
-                child.session_id, include_self=True
-            )
-        else:
-            assert self.service.path_resolver.resolve_session_node(
-                grandchild.session_id
-            ).is_relative_to(self.service.path_resolver.resolve_session_node(child.session_id))
+        # grandchild 仍是 child 的逻辑后代。
+        assert grandchild.session_id in resolver.descendant_session_ids(
+            child.session_id, include_self=True
+        )
 
     @pytest.mark.asyncio
     async def test_moving_parent_session_carries_complete_child_tree(self):
@@ -457,21 +426,15 @@ class TestSessionService:
             child.session_id
         )
         assert moved.parent_session_id is None
-        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
-            # 新模型：逻辑移动不搬磁盘——parent 挂到 folder 是 catalog 关系
-            # （folder 无物理目录），物理目录保持在日期桶；子会话仍是父的
-            # 逻辑后代。
-            assert moved_parent_path.parent == child_path_before.parent
-            assert moved_child_path.parent == moved_parent_path.parent
-            assert self.service.path_resolver.get_node(
-                parent.session_id
-            ).parent_node_id == target_folder.node_id
-            assert self.service.path_resolver.get_node(
-                child.session_id
-            ).parent_node_id == parent.session_id
-        else:
-            assert moved_parent_path.parent == target_folder.path
-            assert moved_child_path.parent == moved_parent_path / "children"
+        # 逻辑移动不搬磁盘，folder 关系由 catalog 承载，物理目录保持在日期桶。
+        assert moved_parent_path.parent == child_path_before.parent
+        assert moved_child_path.parent == moved_parent_path.parent
+        assert self.service.path_resolver.get_node(
+            parent.session_id
+        ).parent_node_id == target_folder.node_id
+        assert self.service.path_resolver.get_node(
+            child.session_id
+        ).parent_node_id == parent.session_id
         assert moved_child_path.name == child_path_before.name
 
     @pytest.mark.asyncio
@@ -494,15 +457,12 @@ class TestSessionService:
         moved_path = self.service.path_resolver.resolve_session_node(
             session.session_id
         )
-        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
-            # 新模型：物理叶名稳定（日期桶内目录名 == session_id），与
-            # folder 的挂载关系由 catalog 承载（folder 无物理目录）。
-            assert moved_path.name == session.session_id
-            assert self.service.path_resolver.get_node(
-                session.session_id
-            ).parent_node_id == target_folder.node_id
-        else:
-            assert moved_path.parent == target_folder.path
+        # 物理叶名稳定（日期桶内目录名 == session_id），folder 挂载关系由
+        # catalog 承载。
+        assert moved_path.name == session.session_id
+        assert self.service.path_resolver.get_node(
+            session.session_id
+        ).parent_node_id == target_folder.node_id
         assert moved_path.name == original_path.name
         assert (await self.service.get(session.session_id)).title == "Updated Title"
 
@@ -531,13 +491,9 @@ class TestSessionService:
         grandchild_path = self.service.path_resolver.resolve_session_node(
             grandchild.session_id
         )
-        if isinstance(self.service.path_resolver, SessionCatalogPathResolver):
-            # 新模型：物理目录均在同一日期桶，级联父子关系由 catalog 承载。
-            assert child_path.parent == parent_path.parent
-            assert grandchild_path.parent == child_path.parent
-        else:
-            assert child_path.parent == parent_path / "children"
-            assert grandchild_path.parent == child_path / "children"
+        # 物理目录均在同一日期桶，级联父子关系由 catalog 承载。
+        assert child_path.parent == parent_path.parent
+        assert grandchild_path.parent == child_path.parent
 
         with pytest.raises(RuntimeError, match="显式确认级联删除"):
             await self.service.delete(parent.session_id)

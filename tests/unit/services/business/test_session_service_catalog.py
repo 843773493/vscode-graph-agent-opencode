@@ -141,6 +141,51 @@ async def test_move_session_uses_logical_relocation(catalog_service) -> None:
 
 
 @pytest.mark.asyncio
+async def test_folder_move_persists_context_fork_demotion_across_restart(
+    catalog_service,
+    tmp_path: Path,
+) -> None:
+    service, workspace = catalog_service
+    parent = await service.create(SessionCreateRequest(title="父会话"))
+    child = await service.create_context_fork(
+        title="上下文副本",
+        agent_id=parent.current_agent_id,
+        parent_session_id=parent.session_id,
+        context_source_session_id=parent.session_id,
+    )
+    folder = workspace.create_folder("子目录", parent=parent.session_id)
+    await service.move_session(child.session_id, folder)
+
+    await service.relocate_folder_tree(
+        folder_id=folder,
+        parent_node_id=None,
+        name="根目录",
+    )
+
+    assert (await service.get(child.session_id)).kind == "normal"
+    assert workspace.manifest(child.session_id)["kind"] == "normal"
+
+    restarted_workspace = build_catalog_workspace(
+        tmp_path,
+        workspace_id=WORKSPACE_ID,
+    )
+    try:
+        restarted = SessionService(
+            config_service=ConfigService(),
+            trace_event_store=TraceEventStore(
+                sessions_dir=restarted_workspace.sessions_root
+            ),
+            workspace_id=WORKSPACE_ID,
+            path_resolver=restarted_workspace.resolver,
+        )
+        restored = await restarted.get(child.session_id)
+        assert restored.kind == "normal"
+        assert restarted_workspace.manifest(child.session_id)["kind"] == "normal"
+    finally:
+        restarted_workspace.close()
+
+
+@pytest.mark.asyncio
 async def test_list_projects_resolver_titles(catalog_service) -> None:
     service, _ = catalog_service
     await service.create(SessionCreateRequest(title="会话甲"))

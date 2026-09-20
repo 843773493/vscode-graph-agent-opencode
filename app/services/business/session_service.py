@@ -15,8 +15,10 @@ from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_store import SessionControlStore
-from app.core.session_paths import SessionPathResolver, SessionPhysicalNode
-from app.core.session_tree.support import SESSION_ALLOCATION_MARKER_NAME
+from app.core.session_tree.support import (
+    SESSION_ALLOCATION_MARKER_NAME,
+    SessionPhysicalNode,
+)
 from app.core.workspace_identity import (
     LEGACY_BACKEND_WORKSPACE_IDS,
     validate_workspace_id,
@@ -47,9 +49,7 @@ class ForkRelationshipChecker(Protocol):
     def release_fork_retentions(self, child_session_id: str) -> None: ...
 
 
-# 新模型口径（R12/R13 剥离对齐）：catalog 权威模式下 session.json 不再承载
-# 可变导航字段，唯一权威 = resolver index/catalog；仅在开关切到新 catalog
-# resolver 时于写入侧剥离。TODO(切换收口后删除)：旧 resolver 分支随开关移除。
+# SQLite catalog 是导航字段的唯一权威，session manifest 只保存会话业务字段。
 _MANIFEST_NAVIGATION_KEYS = ("title", "title_source", "parent_session_id")
 
 
@@ -62,7 +62,7 @@ class SessionService:
         config_service: ConfigService,
         trace_event_store: TraceEventStore,
         workspace_id: str,
-        path_resolver: SessionPathResolver | None = None,
+        path_resolver: SessionCatalogPathResolver | None = None,
         fork_relationship_checker: ForkRelationshipChecker | None = None,
     ):
         self._workspace_id = validate_workspace_id(workspace_id)
@@ -70,19 +70,13 @@ class SessionService:
         self._trace_event_store = trace_event_store
         self._path_resolver = path_resolver or get_session_path_resolver()
         self._fork_relationship_checker = fork_relationship_checker
-        # TODO(切换收口后删除): 8.2-切片3b-1 换源模式判定。新 catalog
-        # resolver 的 manifest 不承载可变导航字段（title/title_source/
-        # parent_session_id，register 剥离口径）：写入时剥离三键、移动走
-        # 逻辑移动签名；旧 resolver 的物理校验强制 manifest 携带这些字段，
-        # 写入口径保持现状不变。
-        self._catalog_mode = isinstance(self._path_resolver, SessionCatalogPathResolver)
         self._path_resolver.initialize()
         self._migrate_legacy_workspace_ids()
         self._job_service: JobServiceProtocol | None = None
         self._change_listeners: list[Callable[[str, str], None]] = []
 
     @property
-    def path_resolver(self) -> SessionPathResolver:
+    def path_resolver(self) -> SessionCatalogPathResolver:
         return self._path_resolver
 
     @property
@@ -167,16 +161,11 @@ class SessionService:
         self,
         session_id: str,
     ) -> tuple[SessionPhysicalNode, dict[str, SessionPhysicalNode]]:
-        """返回会话节点在权威索引上的投影与全量节点表（模式无关读源）。
+        """返回会话节点在 SQLite catalog 权威索引上的投影与全量节点表。
 
-        换源依据（OpenSpec 8.2-切片3b-1）：title/parent_session_id 不再读
-        manifest——title 取节点显示名（旧 resolver=索引 name，新 resolver=
-        catalog display_name），parent_session_id 由父链派生。这里使用
-        ``list_authoritative_nodes``（只投影权威索引，不做物理树严格校验）
-        而非 ``get_node``/``nearest_session_ancestor``：后两者在旧 resolver
-        下会因无关物理漂移抛 RuntimeError，会破坏
-        ``resolve_session_node_for_runtime`` 建立的「运行时解析容忍无关
-        物理漂移」契约；健康树下两者结果完全一致。
+        title 取 catalog display_name，parent_session_id 沿 catalog 父链派生。
+        使用 ``list_authoritative_nodes`` 读取目录投影，避免把 manifest 中
+        已剥离的导航字段重新当作业务状态。
         """
         nodes = self._path_resolver.list_authoritative_nodes()
         nodes_by_id = {node.node_id: node for node in nodes}
@@ -190,13 +179,10 @@ class SessionService:
         parent_node_id: str | None,
         nodes_by_id: dict[str, SessionPhysicalNode],
     ) -> str | None:
-        """在权威索引投影上派生最近 session 祖先（语义含传入节点本身）。
+        """在 catalog 权威投影上派生最近 session 祖先（含传入节点本身）。
 
-        与旧 resolver ``nearest_session_ancestor`` 同语义：传入 session
-        直接返回它，folder 沿父链向上找第一个 session，None 返回 None。
-        旧 resolver 的物理校验保证 manifest parent_session_id 恒等于该
-        派生值，新 resolver 由 catalog 父链直接派生，因此两种模式下
-        parent_session_id 读源一致。
+        传入 session 直接返回它，folder 沿父链向上找第一个 session，None
+        返回 None。
         """
         current_id = parent_node_id
         visited: set[str] = set()
@@ -251,12 +237,7 @@ class SessionService:
         cursor: str | None = None,
     ) -> SessionListResultDTO:
         sessions = []
-        try:
-            nodes = self._path_resolver.list_nodes()
-        except RuntimeError:
-            # 业务读只投影权威索引，保留物理树错误供目录刷新入口报告；
-            # 不扫描或吸收未登记的物理目录。
-            nodes = self._path_resolver.list_authoritative_nodes()
+        nodes = self._path_resolver.list_nodes()
         nodes_by_id = {node.node_id: node for node in nodes}
         for node in nodes:
             if node.kind != "session":
@@ -479,11 +460,7 @@ class SessionService:
             title=session_data.title,
             parent_node_id=resolved_parent_node_id,
         )
-        # 模式无关回读分配 marker：旧 resolver 的 marker 记录传入的
-        # session_id（恒等于上方生成值，此处为幂等校正）；新 catalog
-        # resolver 自 R17 起 honor 传入 canonical ID（非 canonical 传入
-        # 直接拒绝），上方传入的恒为软件生成 canonical ID，此处为幂等
-        # 校正（切换期兼容契约，TODO(切换轮) 随 journal 原生创建流移除）。
+        # 从 catalog 创建流写入的 marker 回读最终 session_id。
         allocated_session_id = str(
             json.loads(
                 (session_dir / SESSION_ALLOCATION_MARKER_NAME).read_text(
@@ -504,24 +481,12 @@ class SessionService:
             self._path_resolver.abandon_session_allocation(session_dir)
             raise
 
-        # register 是创建可见性提交点：新 resolver 会以创建流冻结的 UTC
-        # 时间规范化 manifest created_at；旧 resolver 从 manifest 读回同值。
-        # 这里把返回 DTO 的 created_at 对齐到 resolver 权威投影（旧模式恒等）。
+        # register 是创建可见性提交点；以 resolver 权威投影的时间为准。
         session_data.created_at = self._path_resolver.get_node(
             allocated_session_id
         ).created_at
-        # 新模式下 created_at 被冻结值改写后，DTO 的 updated_at（构造时的
-        # 本地时刻）会早于 created_at，违背「创建时 updated==created」且与
-        # 落盘 manifest 不一致；随 created_at 一并对齐到创建时刻（旧模式
-        # 两者本就同值，恒等）。
         session_data.updated_at = session_data.created_at
-        # TODO(切换收口后删除)：catalog 模式 register 只规范化 created_at
-        # （updated_at 走 setdefault 保留调用方本地时刻），落盘 manifest 的
-        # updated_at 停留在对齐前的值——这里以对齐后的 DTO 重写一次，使
-        # 磁盘 manifest 与权威投影一致；旧模式对齐恒等、不重写，行为
-        # 逐字节保持。
-        if self._catalog_mode:
-            self._write_session_file(session_dir / "session.json", session_data)
+        self._write_session_file(session_dir / "session.json", session_data)
 
         self._notify_changed("create", allocated_session_id)
         return session_data
@@ -529,13 +494,7 @@ class SessionService:
     async def update(
         self, session_id: str, session: SessionUpdateRequest
     ) -> SessionDTO:
-        """更新会话；title/parent_session_id 读源自 resolver（8.2-切片3b-1 换源）。
-
-        换源后重命名的持久化路径为：manifest 写入（catalog 模式下剥离
-        title/title_source）+ ``resolver.update_node_name`` 同步权威显示名。
-        旧 resolver 下 index name 与 manifest title 由该流程保持同步；
-        R18 默认切新 resolver 后旧分支随开关一并移除。
-        """
+        """更新会话并同步 catalog 显示名。"""
         existing = await self.get(session_id)
 
         if session.agent_id is not None:
@@ -608,26 +567,16 @@ class SessionService:
         existing.updated_at = datetime.now(UTC)
 
         async def move() -> None:
-            if self._catalog_mode:
-                # 新 resolver：逻辑移动只改 catalog 父关系，不搬磁盘也不改
-                # 写 manifest（design.md §9）；context_fork 降级 normal 属于
-                # 业务规则，由服务层在此补写剥离版 manifest。
-                self._path_resolver.relocate_session(
-                    session_id=session_id,
-                    parent_node_id=parent_node_id,
-                )
-                if kind_demoted_to_normal:
-                    session_file = (
-                        self._path_resolver.resolve_session_node(session_id)
-                        / "session.json"
-                    )
-                    self._write_session_file(session_file, existing)
-                return
             self._path_resolver.relocate_session(
                 session_id=session_id,
                 parent_node_id=parent_node_id,
-                manifest=existing.model_dump(mode="json"),
             )
+            if kind_demoted_to_normal:
+                session_file = (
+                    self._path_resolver.resolve_session_node(session_id)
+                    / "session.json"
+                )
+                self._write_session_file(session_file, existing)
 
         affected_session_ids = self._path_resolver.descendant_session_ids(
             session_id,
@@ -661,77 +610,7 @@ class SessionService:
         parent_node_id: str | None,
         name: str,
     ) -> SessionPhysicalNode:
-        """准备文件夹子树中的会话父关系，再交给 resolver 原子移动。"""
-        if self._catalog_mode:
-            return await self._relocate_folder_tree_catalog(
-                folder_id=folder_id,
-                parent_node_id=parent_node_id,
-                name=name,
-            )
-        expected_parents = (
-            self._path_resolver.expected_session_parents_after_folder_move(
-                folder_id=folder_id,
-                parent_node_id=parent_node_id,
-            )
-        )
-        manifests: dict[str, dict[str, object]] = {}
-        changed_session_ids: list[str] = []
-        for session_id, expected_parent_id in expected_parents.items():
-            existing = await self.get(session_id)
-            await self._validate_parent_session(
-                session_id=session_id,
-                workspace_id=existing.workspace_id,
-                parent_session_id=expected_parent_id,
-            )
-            if (
-                existing.kind != "normal"
-                and expected_parent_id is not None
-                and expected_parent_id != existing.parent_session_id
-            ):
-                raise ValueError(
-                    f"{existing.kind} 会话不能随文件夹改绑到另一个父会话: "
-                    f"session_id={session_id}"
-                )
-            if existing.parent_session_id != expected_parent_id:
-                existing.parent_session_id = expected_parent_id
-                existing.updated_at = datetime.now(UTC)
-                changed_session_ids.append(session_id)
-            if existing.kind == "context_fork" and expected_parent_id is None:
-                existing.kind = "normal"
-                if session_id not in changed_session_ids:
-                    existing.updated_at = datetime.now(UTC)
-                    changed_session_ids.append(session_id)
-            manifests[session_id] = existing.model_dump(mode="json")
-
-        moved = self._path_resolver.relocate_folder_tree(
-            folder_id=folder_id,
-            parent_node_id=parent_node_id,
-            name=name,
-            session_manifests=manifests,
-        )
-        for session_id in changed_session_ids:
-            self._notify_changed("update", session_id)
-        return moved
-
-    async def _relocate_folder_tree_catalog(
-        self,
-        *,
-        folder_id: str,
-        parent_node_id: str | None,
-        name: str,
-    ) -> SessionPhysicalNode:
-        """新模型文件夹子树移动：逻辑移动不搬磁盘（TODO(切换收口后删除)）。
-
-        与旧路径的业务规则对齐：
-
-        - 仍按 ``expected_session_parents_after_folder_move`` 预检每个
-          session 的父子绑定与 kind 改绑约束（catalog 父关系移动后立即
-          派生生效）；
-        - 新 resolver 的 ``relocate_folder_tree`` 不再接受 ``name``——显示
-          名变更走 ``update_node_name``（非原子：重命名成功后移动失败会
-          保留新显示名，属切换期已接受的语义拆分）；
-        - context_fork 移出父会话降级 normal 由服务层补写剥离版 manifest。
-        """
+        """校验并逻辑移动文件夹子树，导航字段统一落在 catalog。"""
         expected_parents = (
             self._path_resolver.expected_session_parents_after_folder_move(
                 folder_id=folder_id,
@@ -865,14 +744,7 @@ class SessionService:
         return DeleteSessionResultDTO(session_id=session_id, status="deleted")
 
     def _write_session_file(self, path: Path, session: SessionDTO) -> None:
-        payload = session.model_dump()
-        if self._catalog_mode:
-            # 新模型口径：catalog 是 title/title_source/parent_session_id 的
-            # 唯一权威，manifest 剥离可变导航字段（与新 resolver register
-            # 的剥离重写一致）。旧 resolver 依赖 manifest 携带这些字段
-            # （物理校验强制 parent_session_id），写入保持现状。
-            for key in _MANIFEST_NAVIGATION_KEYS:
-                payload.pop(key, None)
+        payload = session.model_dump(exclude=set(_MANIFEST_NAVIGATION_KEYS))
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{path.name}.",
             dir=path.parent,
