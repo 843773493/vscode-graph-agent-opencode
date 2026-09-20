@@ -1,5 +1,10 @@
 import React from "react";
 import { Virtuoso } from "react-virtuoso";
+import type {
+  Components as VirtuosoComponents,
+  ComputeItemKey,
+  ItemContent,
+} from "react-virtuoso";
 import type { TurnHistoryInclude } from "../api/sessionTurnHistory";
 import type {
   AttachmentRef,
@@ -17,6 +22,147 @@ import ChatHistoryPageHeader from "./chat/ChatHistoryPageHeader";
 import ChatTurn from "./chat/ChatTurn";
 import ChatTurnErrorBoundary from "./chat/ChatTurnErrorBoundary";
 import { useTurnVirtualScroller } from "./chat/useTurnVirtualScroller";
+
+interface ChatPanelRenderState {
+  apiPort: number;
+  workspaceId?: string | null;
+  expandDetails: boolean;
+  firstItemIndex: number;
+  transcriptLength: number;
+  sessionBusy: boolean;
+  onLoadAgentStateMessageRawContent: (
+    sessionId: string,
+    messageId: string,
+  ) => Promise<string>;
+  onLoadTurnDetails: (
+    turnIds: string[],
+    requestIdentity?: string | null,
+    refreshAfterInFlight?: boolean,
+    include?: TurnHistoryInclude[],
+    toolCallIds?: string[],
+  ) => Promise<void>;
+  onLoadToolDetails?: (turnId: string, toolCallId: string) => Promise<void>;
+  onReplayTurn: (
+    targetMessageId: string,
+    action: MessageReplayRequest["action"],
+    displayContent: string,
+    content?: string,
+    attachments?: AttachmentRef[],
+  ) => Promise<void>;
+  onUpdatePending: (
+    messageId: string,
+    content: string,
+    attachments?: AttachmentRef[],
+  ) => Promise<void>;
+  onRemovePending: (messageId: string) => Promise<void>;
+  onChangePendingPolicy: (
+    messageId: string,
+    policy: DeliveryPolicy,
+  ) => Promise<void>;
+  onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
+  projectionState: TurnProjectionState;
+  hasOlderMessages: boolean;
+  loadingOlderMessages: boolean;
+  historyError: string | null;
+  onRetryHistory: () => void;
+  pendingActionError: string | null;
+}
+
+interface ChatPanelVirtuosoContext {
+  stateRef: React.MutableRefObject<ChatPanelRenderState | null>;
+}
+
+function currentChatPanelRenderState(
+  context: ChatPanelVirtuosoContext,
+): ChatPanelRenderState {
+  const state = context.stateRef.current;
+  if (!state) {
+    throw new Error("ChatPanel Virtuoso 渲染上下文尚未初始化");
+  }
+  return state;
+}
+
+function ChatPanelHistoryHeader({
+  context,
+}: {
+  context: ChatPanelVirtuosoContext;
+}): React.ReactNode {
+  const state = currentChatPanelRenderState(context);
+  const retryHistory = React.useCallback(() => {
+    currentChatPanelRenderState(context).onRetryHistory();
+  }, [context]);
+  return (
+    <ChatHistoryPageHeader
+      projectionState={state.projectionState}
+      hasOlderMessages={state.hasOlderMessages}
+      loadingOlderMessages={state.loadingOlderMessages}
+      error={state.historyError}
+      onRetry={retryHistory}
+    />
+  );
+}
+
+function ChatPanelFooter({
+  context,
+}: {
+  context: ChatPanelVirtuosoContext;
+}): React.ReactNode {
+  const { pendingActionError } = currentChatPanelRenderState(context);
+  return pendingActionError ? (
+    <div className="chat-turn-action-error" role="alert">
+      {pendingActionError}
+    </div>
+  ) : null;
+}
+
+const CHAT_PANEL_VIRTUOSO_COMPONENTS: VirtuosoComponents<
+  ConversationView,
+  ChatPanelVirtuosoContext
+> = {
+  Header: ChatPanelHistoryHeader,
+  Footer: ChatPanelFooter,
+};
+
+const computeChatPanelItemKey: ComputeItemKey<
+  ConversationView,
+  ChatPanelVirtuosoContext
+> = (_, conversation) => conversationTurnKey(conversation);
+
+const renderChatPanelItem: ItemContent<
+  ConversationView,
+  ChatPanelVirtuosoContext
+> = (index, conversation, context) => {
+  const state = currentChatPanelRenderState(context);
+  return (
+    <div
+      className="chat-virtual-turn"
+      data-turn-id={conversationTurnKey(conversation)}
+    >
+      <div>
+        <ChatTurnErrorBoundary
+          conversationId={conversation.conversationId}
+        >
+          <ChatTurn
+            apiPort={state.apiPort}
+            workspaceId={state.workspaceId}
+            conversation={conversation}
+            showRawDetails={state.expandDetails}
+            isLastTurn={index === state.firstItemIndex + state.transcriptLength - 1}
+            sessionBusy={state.sessionBusy}
+            onLoadAgentStateMessageRawContent={state.onLoadAgentStateMessageRawContent}
+            onLoadTurnDetails={state.onLoadTurnDetails}
+            onLoadToolDetails={state.onLoadToolDetails}
+            onReplayTurn={state.onReplayTurn}
+            onUpdatePending={state.onUpdatePending}
+            onRemovePending={state.onRemovePending}
+            onChangePendingPolicy={state.onChangePendingPolicy}
+            onOpenAttachment={state.onOpenAttachment}
+          />
+        </ChatTurnErrorBoundary>
+      </div>
+    </div>
+  );
+};
 
 export function transcriptConversationsForDisplay(
   conversations: readonly ConversationView[],
@@ -214,6 +360,43 @@ export default function ChatPanel({
   const retryHistory = React.useCallback(() => {
     onRetryHistory();
   }, [onRetryHistory]);
+  const renderStateRef = React.useRef<ChatPanelRenderState | null>(null);
+  const virtuosoContext = React.useMemo<ChatPanelVirtuosoContext>(
+    () => ({ stateRef: renderStateRef }),
+    [
+      expandDetails,
+      firstItemIndex,
+      transcriptConversations.length,
+      sessionBusy,
+      projectionState,
+      hasOlderMessages,
+      loadingOlderMessages,
+      historyError,
+      pendingActionError,
+    ],
+  );
+  renderStateRef.current = {
+    apiPort,
+    workspaceId,
+    expandDetails,
+    firstItemIndex,
+    transcriptLength: transcriptConversations.length,
+    sessionBusy,
+    onLoadAgentStateMessageRawContent,
+    onLoadTurnDetails,
+    onLoadToolDetails,
+    onReplayTurn,
+    onUpdatePending: updatePending,
+    onRemovePending: removePending,
+    onChangePendingPolicy: updatePendingPolicy,
+    onOpenAttachment,
+    projectionState,
+    hasOlderMessages,
+    loadingOlderMessages,
+    historyError,
+    onRetryHistory: retryHistory,
+    pendingActionError,
+  };
 
   return (
     <section className="chat-stream-shell">
@@ -243,59 +426,17 @@ export default function ChatPanel({
         ref={streamRef}
         scrollerRef={bindScroller}
         className="chat-stream chat-transcript chat-virtual-list"
+        context={virtuosoContext}
         data={transcriptConversations}
         firstItemIndex={firstItemIndex}
         initialTopMostItemIndex={transcriptConversations.length - 1}
-        computeItemKey={(_, conversation) => conversationTurnKey(conversation)}
+        computeItemKey={computeChatPanelItemKey}
         startReached={handleStartReached}
         endReached={handleEndReached}
         followOutput={followOutput}
         atBottomStateChange={handleAtBottomChange}
-        components={{
-          Header: () => (
-            <ChatHistoryPageHeader
-              projectionState={projectionState}
-              hasOlderMessages={hasOlderMessages}
-              loadingOlderMessages={loadingOlderMessages}
-              error={historyError}
-              onRetry={retryHistory}
-            />
-          ),
-          Footer: () => pendingActionError ? (
-            <div className="chat-turn-action-error" role="alert">
-              {pendingActionError}
-            </div>
-          ) : null,
-        }}
-        itemContent={(index, conversation) => (
-            <div
-              className="chat-virtual-turn"
-              data-turn-id={conversationTurnKey(conversation)}
-            >
-              <div>
-                <ChatTurnErrorBoundary
-                  conversationId={conversation.conversationId}
-                >
-                  <ChatTurn
-                    apiPort={apiPort}
-                    workspaceId={workspaceId}
-                    conversation={conversation}
-                    showRawDetails={expandDetails}
-                    isLastTurn={index === firstItemIndex + transcriptConversations.length - 1}
-                    sessionBusy={sessionBusy}
-                    onLoadAgentStateMessageRawContent={onLoadAgentStateMessageRawContent}
-                    onLoadTurnDetails={onLoadTurnDetails}
-                    onLoadToolDetails={onLoadToolDetails}
-                    onReplayTurn={onReplayTurn}
-                    onUpdatePending={updatePending}
-                    onRemovePending={removePending}
-                    onChangePendingPolicy={updatePendingPolicy}
-                    onOpenAttachment={onOpenAttachment}
-                  />
-                </ChatTurnErrorBoundary>
-              </div>
-            </div>
-        )}
+        components={CHAT_PANEL_VIRTUOSO_COMPONENTS}
+        itemContent={renderChatPanelItem}
       />
       )}
       </section>
