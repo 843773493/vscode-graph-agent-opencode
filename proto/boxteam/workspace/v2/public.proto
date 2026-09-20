@@ -95,6 +95,23 @@ message ConfigUpdateRequest {
   optional bool auto_summarize = 6;
 }
 
+message ChildThreadListDTO {
+  string parent_session_id = 1;
+  repeated ChildThreadSummaryDTO items = 2;
+  int64 total = 3;
+}
+
+message ChildThreadSummaryDTO {
+  string thread_id = 1;
+  google.protobuf.Timestamp created_at = 2;
+  optional string delegation_id = 3;
+  optional string role = 4;
+  optional string subagent_type = 5;
+  optional string title = 6;
+  optional string collaboration_state = 7;
+  optional string admission_state = 8;
+}
+
 message CursorPage {
   repeated google.protobuf.Struct items = 1;
   optional string next_cursor = 2;

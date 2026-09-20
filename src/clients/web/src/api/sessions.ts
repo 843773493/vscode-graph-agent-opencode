@@ -81,9 +81,8 @@ export async function getSessionInformation(
 }
 
 /**
- * 读取会话的 child thread 列表（当前架构下即 delegated child session）。
- * 404（父会话不存在）与 409（目录树异常）由 requestJson 以 HttpRequestError
- * 透明抛出，由调用方决定展示方式；本函数不做静默降级。
+ * 读取 Session 内的 durable child thread 列表。
+ * 404（Session 不存在）与 409（目录树异常）由 requestJson 透明抛出。
  */
 export async function listChildThreads(
   port: number,

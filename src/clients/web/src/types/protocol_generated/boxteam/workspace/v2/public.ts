@@ -95,6 +95,23 @@ export interface ConfigUpdateRequest {
   auto_summarize?: boolean | undefined;
 }
 
+export interface ChildThreadListDTO {
+  parent_session_id: string;
+  items: ChildThreadSummaryDTO[];
+  total: number;
+}
+
+export interface ChildThreadSummaryDTO {
+  thread_id: string;
+  created_at: string | undefined;
+  delegation_id?: string | undefined;
+  role?: string | undefined;
+  subagent_type?: string | undefined;
+  title?: string | undefined;
+  collaboration_state?: string | undefined;
+  admission_state?: string | undefined;
+}
+
 export interface CursorPage {
   items: { [key: string]: any }[];
   next_cursor?: string | undefined;
@@ -2312,6 +2329,122 @@ export const ConfigUpdateRequest: MessageFns<ConfigUpdateRequest> = {
     message.allow_shell_tools = object.allow_shell_tools ?? undefined;
     message.ignored_paths = object.ignored_paths?.map((e) => e) || [];
     message.auto_summarize = object.auto_summarize ?? undefined;
+    return message;
+  },
+};
+
+function createBaseChildThreadListDTO(): ChildThreadListDTO {
+  return { parent_session_id: "", items: [], total: 0 };
+}
+
+export const ChildThreadListDTO: MessageFns<ChildThreadListDTO> = {
+  fromJSON(object: any): ChildThreadListDTO {
+    return {
+      parent_session_id: isSet(object.parent_session_id) ? globalThis.String(object.parent_session_id) : "",
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => ChildThreadSummaryDTO.fromJSON(e))
+        : [],
+      total: isSet(object.total) ? globalThis.Number(object.total) : 0,
+    };
+  },
+
+  toJSON(message: ChildThreadListDTO): unknown {
+    const obj: any = {};
+    if (message.parent_session_id !== "") {
+      obj.parent_session_id = message.parent_session_id;
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => ChildThreadSummaryDTO.toJSON(e));
+    }
+    if (message.total !== 0) {
+      obj.total = Math.round(message.total);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ChildThreadListDTO>, I>>(base?: I): ChildThreadListDTO {
+    return ChildThreadListDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ChildThreadListDTO>, I>>(object: I): ChildThreadListDTO {
+    const message = createBaseChildThreadListDTO();
+    message.parent_session_id = object.parent_session_id ?? "";
+    message.items = object.items?.map((e) => ChildThreadSummaryDTO.fromPartial(e)) || [];
+    message.total = object.total ?? 0;
+    return message;
+  },
+};
+
+function createBaseChildThreadSummaryDTO(): ChildThreadSummaryDTO {
+  return {
+    thread_id: "",
+    created_at: undefined,
+    delegation_id: undefined,
+    role: undefined,
+    subagent_type: undefined,
+    title: undefined,
+    collaboration_state: undefined,
+    admission_state: undefined,
+  };
+}
+
+export const ChildThreadSummaryDTO: MessageFns<ChildThreadSummaryDTO> = {
+  fromJSON(object: any): ChildThreadSummaryDTO {
+    return {
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      delegation_id: isSet(object.delegation_id) ? globalThis.String(object.delegation_id) : undefined,
+      role: isSet(object.role) ? globalThis.String(object.role) : undefined,
+      subagent_type: isSet(object.subagent_type) ? globalThis.String(object.subagent_type) : undefined,
+      title: isSet(object.title) ? globalThis.String(object.title) : undefined,
+      collaboration_state: isSet(object.collaboration_state)
+        ? globalThis.String(object.collaboration_state)
+        : undefined,
+      admission_state: isSet(object.admission_state) ? globalThis.String(object.admission_state) : undefined,
+    };
+  },
+
+  toJSON(message: ChildThreadSummaryDTO): unknown {
+    const obj: any = {};
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.created_at !== undefined) {
+      obj.created_at = message.created_at;
+    }
+    if (message.delegation_id !== undefined) {
+      obj.delegation_id = message.delegation_id;
+    }
+    if (message.role !== undefined) {
+      obj.role = message.role;
+    }
+    if (message.subagent_type !== undefined) {
+      obj.subagent_type = message.subagent_type;
+    }
+    if (message.title !== undefined) {
+      obj.title = message.title;
+    }
+    if (message.collaboration_state !== undefined) {
+      obj.collaboration_state = message.collaboration_state;
+    }
+    if (message.admission_state !== undefined) {
+      obj.admission_state = message.admission_state;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ChildThreadSummaryDTO>, I>>(base?: I): ChildThreadSummaryDTO {
+    return ChildThreadSummaryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ChildThreadSummaryDTO>, I>>(object: I): ChildThreadSummaryDTO {
+    const message = createBaseChildThreadSummaryDTO();
+    message.thread_id = object.thread_id ?? "";
+    message.created_at = object.created_at ?? undefined;
+    message.delegation_id = object.delegation_id ?? undefined;
+    message.role = object.role ?? undefined;
+    message.subagent_type = object.subagent_type ?? undefined;
+    message.title = object.title ?? undefined;
+    message.collaboration_state = object.collaboration_state ?? undefined;
+    message.admission_state = object.admission_state ?? undefined;
     return message;
   },
 };

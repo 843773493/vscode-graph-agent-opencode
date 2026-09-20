@@ -35,6 +35,28 @@ export type ControlAction =
   | "append_instruction"
   | "retry";
 
+export type ChildThreadSummary = Omit<
+  WorkspaceProtocol.ChildThreadSummaryDTO,
+  | "created_at"
+  | "delegation_id"
+  | "role"
+  | "subagent_type"
+  | "title"
+  | "collaboration_state"
+  | "admission_state"
+> & {
+  created_at: string;
+  delegation_id?: string | null;
+  role?: string | null;
+  subagent_type?: string | null;
+  title?: string | null;
+  collaboration_state?: string | null;
+  admission_state?: string | null;
+};
+export type ChildThreadList = Omit<WorkspaceProtocol.ChildThreadListDTO, "items"> & {
+  items: ChildThreadSummary[];
+};
+
 export type AttachmentRef = Omit<GeneratedAttachmentRef, "name" | "content_type" | "data_url"> & {
   name?: string | null;
   content_type?: string | null;

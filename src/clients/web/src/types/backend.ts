@@ -7,6 +7,8 @@ export type {
   AgentStateMessages,
   ControlAction,
   ControlScope,
+  ChildThreadList,
+  ChildThreadSummary,
   DeleteSessionResult,
   Job,
   JobControlRequest,
@@ -314,24 +316,6 @@ export interface SessionActivity {
   status: "completed" | "failed" | "cancelled" | string;
   summary: string;
   occurred_at: string;
-}
-
-export interface ChildThreadSummary {
-  thread_id: string;
-  created_at: string;
-  delegation_id?: string | null;
-  role?: string | null;
-  subagent_type?: string | null;
-  title?: string | null;
-  collaboration_state?: string | null;
-  admission_state?: string | null;
-}
-
-/** ChildThreadListDTO 的前端镜像。 */
-export interface ChildThreadList {
-  parent_session_id: string;
-  items: ChildThreadSummary[];
-  total: number;
 }
 
 type DeepRequired<T> = T extends null
