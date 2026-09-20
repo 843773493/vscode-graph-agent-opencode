@@ -199,7 +199,7 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
         raise _SpawnPidBarrier("backend 在 PID 登记前退出")
 
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service.probe_process_identity",
+        "app.services.infrastructure.node_debug.launch_orchestrator.probe_process_identity",
         crash_after_spawn,
     )
 

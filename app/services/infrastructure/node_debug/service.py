@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -67,11 +67,13 @@ from app.services.infrastructure.node_debug.launch_claim import (
     ACTIVE_CLAIM_PHASES,
     claim_marked,
     claim_running,
-    claim_with_spawn_identity,
-    new_launch_claim,
 )
-from app.services.infrastructure.node_debug.process_identity import (
-    probe_process_identity,
+from app.services.infrastructure.node_debug.launch_orchestrator import (
+    NodeDebugLaunchContext,
+    NodeDebugLaunchOrchestrator,
+    NodeDebugLaunchRequest,
+    NodeDebugLaunchSelection,
+    NodeDebugRuntimeConfig,
 )
 from app.services.infrastructure.node_debug.process_lifecycle import (
     NodeDebugProcessLifecycle,
@@ -141,14 +143,6 @@ _NODE_DEBUG_BLOCKER_REASON: dict[str, str] = {
 _RESIDENCY_ACTIVE_RUNTIME_STATUSES = frozenset(
     {"starting", "running", "paused", "stopping", "reconcile_required"}
 )
-
-
-@dataclass(slots=True)
-class _NodeDebugLaunchSelection:
-    script_path: str | None = None
-    working_directory: str | None = None
-    launch_profile_name: str | None = None
-    args: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,7 +220,7 @@ class NodeDebugService:
         self._owner_locks: dict[NodeDebugOwner, asyncio.Lock] = {}
         self._pending_breakpoints: dict[NodeDebugOwner, list[NodeDebugBreakpointDTO]] = {}
         self._pending_actions: dict[NodeDebugOwner, list[NodeDebugActionRecordDTO]] = {}
-        self._launch_selections: dict[NodeDebugOwner, _NodeDebugLaunchSelection] = {}
+        self._launch_selections: dict[NodeDebugOwner, NodeDebugLaunchSelection] = {}
         self._configuration_factory = NodeDebugConfigurationFactory(
             workspace_root=self._workspace_root
         )
@@ -268,6 +262,38 @@ class NodeDebugService:
             clear_stop_snapshot=self._clear_stop_snapshot,
         )
 
+    def _create_launch_orchestrator(self) -> NodeDebugLaunchOrchestrator:
+        """为本次启动读取最新 service 回调，避免缓存旧的 monkeypatch/运行态。"""
+        return NodeDebugLaunchOrchestrator(
+            NodeDebugLaunchContext(
+                workspace_root=self._workspace_root,
+                node_bin=self._node_bin,
+                configuration_factory=self._configuration_factory,
+                breakpoint_mutations=self._breakpoint_mutations,
+                inspector=self._inspector,
+                lifecycle=self._lifecycle,
+                runtimes=self._runtimes,
+                pending_breakpoints=self._pending_breakpoints,
+                pending_actions=self._pending_actions,
+                launch_selections=self._launch_selections,
+                runtimes_lock=self._runtimes_lock,
+                max_actions=_MAX_ACTIONS,
+                load_session=self._ensure_session_loaded,
+                reconcile_sources=self._reconcile_session_sources,
+                select_configuration=self._select_configuration_for_start,
+                read_configuration=self._configuration,
+                read_runtime_config=self._get_typed_debug_runtime_config,
+                read_source_digests=self._source_digests_for_runtime,
+                persist_state=self._persist_session_state,
+                write_claim=self._write_launch_claim,
+                mark_claim_running=self._mark_claim_running,
+                append_action=self._append_action,
+                is_paused_at_breakpoint=self._paused_at_breakpoint,
+                read_stream=self._read_stream,
+                monitor_process=self._monitor_process,
+            )
+        )
+
     async def get_state(
         self, session_id: str, thread_id: str
     ) -> NodeDebugStateDTO:
@@ -283,7 +309,7 @@ class NodeDebugService:
         if runtime is None:
             selection = self._launch_selections.get(
                 owner,
-                _NodeDebugLaunchSelection(),
+                NodeDebugLaunchSelection(),
             )
             claim = self._active_claim(session_id, thread_id)
             return NodeDebugStateDTO(
@@ -329,46 +355,26 @@ class NodeDebugService:
 
     def get_capabilities(self) -> NodeDebugCapabilitiesDTO:
         """返回供客户端选择启动配置的脱敏调试能力。"""
-        debug_config = self._get_debug_runtime_config()
-        raw_profiles = debug_config.get("launch_profiles")
-        if not isinstance(raw_profiles, dict):
-            raise TypeError("runtime.debug.launch_profiles 配置无效")
+        debug_config = self._get_typed_debug_runtime_config()
         profiles: list[NodeDebugLaunchProfileDTO] = []
-        for name, raw_profile in raw_profiles.items():
-            if not isinstance(name, str) or not isinstance(raw_profile, dict):
-                raise TypeError("runtime.debug.launch_profiles 配置无效")
-            adapter = raw_profile.get("adapter")
-            runtime = raw_profile.get("runtime")
-            program = raw_profile.get("program", "")
-            working_directory = raw_profile.get("working_directory", "")
-            args = raw_profile.get("args", [])
-            if (
-                not isinstance(adapter, str)
-                or not isinstance(runtime, str)
-                or not isinstance(program, str)
-                or not isinstance(working_directory, str)
-                or not isinstance(args, list)
-                or not all(isinstance(argument, str) for argument in args)
-            ):
-                raise TypeError(f"runtime.debug.launch_profiles.{name} 规范化结果无效")
+        for name, profile in debug_config.launch_profiles.items():
             profiles.append(
                 NodeDebugLaunchProfileDTO(
                     name=name,
-                    adapter=adapter,
-                    runtime=runtime,
-                    supported=adapter == "node_inspector" and runtime == "node",
-                    program=program,
-                    working_directory=working_directory,
-                    args=list(args),
+                    adapter=profile.adapter,
+                    runtime=profile.runtime,
+                    supported=(
+                        profile.adapter == "node_inspector"
+                        and profile.runtime == "node"
+                    ),
+                    program=profile.program,
+                    working_directory=profile.working_directory,
+                    args=list(profile.args),
                 )
             )
-        default_adapter = debug_config.get("default_adapter")
-        enabled = debug_config.get("enabled")
-        if not isinstance(default_adapter, str) or not isinstance(enabled, bool):
-            raise TypeError("runtime.debug 规范化结果无效")
         return NodeDebugCapabilitiesDTO(
-            enabled=enabled,
-            default_adapter=default_adapter,
+            enabled=debug_config.enabled,
+            default_adapter=debug_config.default_adapter,
             supported_adapters=["node_inspector"],
             launch_profiles=profiles,
         )
@@ -377,12 +383,11 @@ class NodeDebugService:
         """把方案/请求里的 profile 名称解析为实际生效的 profile 名称。
 
         Agent 工具面需要在启动前核对“显式 profile 与方案解析结果一致”，
-        因此复用唯一的 ``_resolve_launch_profile`` 解析规则，避免在工具层
+        因此复用唯一的 typed 启动配置解析规则，避免在工具层
         复制默认 profile 名称形成第二套语义。本方法只读配置，不触碰运行时。
         """
-        resolved_name, _ = self._resolve_launch_profile(
-            self._get_debug_runtime_config(),
-            launch_profile_name,
+        resolved_name, _ = self._get_typed_debug_runtime_config().resolve_profile(
+            launch_profile_name
         )
         return resolved_name
 
@@ -705,18 +710,21 @@ class NodeDebugService:
         session_id, thread_id = await self._admit_mutation(session_id, thread_id)
         owner = self._owner_key(session_id, thread_id)
         async with self._owner_lock(owner):
-            return await self._launch_under_claim_gate(
-                owner=owner,
-                path=path,
-                args=args,
-                breakpoints=breakpoints,
-                configuration_id=configuration_id,
-                launch_profile_name=launch_profile_name,
-                working_directory=working_directory,
-                actor=actor,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
+            result = await self._create_launch_orchestrator().launch(
+                NodeDebugLaunchRequest(
+                    owner=owner,
+                    path=path,
+                    args=args,
+                    breakpoints=breakpoints,
+                    configuration_id=configuration_id,
+                    launch_profile_name=launch_profile_name,
+                    working_directory=working_directory,
+                    actor=actor,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                )
             )
+            return await self.get_state(*result.owner)
 
     def _owner_lock(self, owner: NodeDebugOwner) -> asyncio.Lock:
         """取（或懒建）该 owner 的临界区：串行化 start/stop/restart/close 的整段序列。
@@ -731,317 +739,6 @@ class NodeDebugService:
             lock = asyncio.Lock()
             self._owner_locks[owner] = lock
         return lock
-
-    async def _launch_under_claim_gate(
-        self,
-        *,
-        owner: NodeDebugOwner,
-        path: str,
-        args: list[str],
-        breakpoints: list[NodeDebugBreakpointRequest],
-        configuration_id: str | None,
-        launch_profile_name: str | None,
-        working_directory: str | None,
-        actor: Literal["human", "ai", "system"],
-        tool_name: str | None,
-        tool_call_id: str | None,
-    ) -> NodeDebugStateDTO:
-        """已在 owner 临界区内的启动主体；``owner`` 是入口归一/折叠后的精确归属。"""
-        session_id, thread_id = owner
-        self._ensure_session_loaded(session_id, thread_id)
-        await self._lifecycle.assert_claim_recoverable(owner)
-        await self._reconcile_session_sources(
-            session_id,
-            thread_id,
-            self._runtimes.get(owner),
-        )
-        selected_configuration_id = self._select_configuration_for_start(
-            session_id=session_id,
-            thread_id=thread_id,
-            configuration_id=configuration_id,
-            path=path,
-            working_directory=working_directory,
-            launch_profile_name=launch_profile_name,
-            args=args,
-        )
-        selected_configuration = self._configuration(
-            session_id,
-            thread_id,
-            selected_configuration_id,
-        )
-        if selected_configuration.script_path is None:
-            raise ValueError(f"调试方案没有目标文件: {selected_configuration.name}")
-        # 一旦会话存在活动方案，方案文件就是启动参数的唯一权威来源。
-        # Web 或 Agent 若要改变入口、工作目录、profile 或参数，必须先显式保存方案。
-        path = selected_configuration.script_path
-        working_directory = selected_configuration.working_directory
-        launch_profile_name = selected_configuration.launch_profile_name
-        args = list(selected_configuration.args)
-        debug_config = self._get_debug_runtime_config()
-        if not debug_config["enabled"]:
-            raise RuntimeError("源码调试能力未启用: runtime.debug.enabled=false")
-        profile_name, profile = self._resolve_launch_profile(
-            debug_config,
-            launch_profile_name,
-        )
-        adapter = profile["adapter"]
-        if adapter != "node_inspector":
-            raise RuntimeError(
-                f"当前版本不支持调试 adapter: {adapter}; 仅支持 node_inspector"
-            )
-        if profile["runtime"] != "node":
-            raise RuntimeError(
-                f"Node Inspector profile 的 runtime 必须是 node: {profile['runtime']!r}"
-            )
-        resolved_working_directory = self._configuration_factory.resolve_working_directory(
-            working_directory or profile["working_directory"]
-        )
-        script_path, relative_path = self._configuration_factory.resolve_script_path(path)
-        normalized_args = self._configuration_factory.normalize_args(
-            args if args else profile["args"]
-        )
-        node_config = debug_config["node"]
-        configured_node_bin = node_config["executable"].strip()
-        node_bin = configured_node_bin or self._node_bin
-        if not node_bin:
-            raise RuntimeError(
-                "未找到 Node.js，可通过 runtime.debug.node.executable 或 "
-                "BOXTEAM_NODE_BIN 指定"
-            )
-        pending_breakpoints = list(self._pending_breakpoints.get(owner, []))
-        pending_actions = list(self._pending_actions.get(owner, []))
-        async with self._runtimes_lock:
-            previous = self._runtimes.get(owner)
-            previous_breakpoints: list[NodeDebugBreakpointDTO] = []
-            previous_actions: list[NodeDebugActionRecordDTO] = []
-            if previous is not None:
-                async with previous.state_lock:
-                    previous_breakpoints = [
-                        breakpoint.model_copy(deep=True)
-                        for breakpoint in previous.breakpoints.values()
-                    ]
-                    previous_actions = [
-                        action.model_copy(deep=True)
-                        for action in previous.actions[-_MAX_ACTIONS:]
-                    ]
-            if previous is not None and previous.status in {
-                "starting",
-                "running",
-                "paused",
-                "stopping",
-                "reconcile_required",
-            }:
-                previous_outcome = await self._lifecycle.stop_runtime(previous)
-                if previous_outcome == "reconcile_required":
-                    raise RuntimeError(
-                        "旧调试实例无法核实终态，已保持 reconcile_required；"
-                        "核实并结清前拒绝启动新实例: "
-                        f"session_id={session_id}, thread_id={thread_id}"
-                    )
-            runtime = NodeDebugRuntime(
-                session_id=session_id,
-                thread_id=thread_id,
-                configuration_id=selected_configuration_id,
-                workspace_root=self._workspace_root,
-                script_path=script_path,
-                relative_script_path=relative_path,
-                args=list(normalized_args),
-                working_directory=resolved_working_directory,
-                launch_profile_name=profile_name,
-                node_bin=node_bin,
-                inspector_host=node_config["inspector_host"],
-                inspector_port=node_config["inspector_port"],
-                command_timeout_seconds=debug_config["command_timeout_seconds"],
-            )
-            requested_breakpoints = [
-                breakpoint.model_copy(deep=True) for breakpoint in pending_breakpoints
-            ]
-            if (
-                previous is not None
-                and previous.configuration_id == selected_configuration_id
-            ):
-                requested_breakpoints.extend(previous_breakpoints)
-            requested_breakpoints.extend(
-                self._configuration_factory.create_breakpoint(
-                    path=breakpoint.path,
-                    line=breakpoint.line,
-                    column=breakpoint.column,
-                    condition=breakpoint.condition,
-                    hit_condition=breakpoint.hit_condition,
-                    log_message=breakpoint.log_message,
-                )
-                for breakpoint in breakpoints
-            )
-            unique_breakpoints = {
-                (
-                    breakpoint.path,
-                    breakpoint.line,
-                    breakpoint.column,
-                ): breakpoint
-                for breakpoint in requested_breakpoints
-            }
-            for requested_breakpoint in unique_breakpoints.values():
-                breakpoint = requested_breakpoint.model_copy(
-                    update={
-                        "verified": False,
-                        "actual_line": None,
-                        "inspector_id": None,
-                    }
-                )
-                runtime.breakpoints[breakpoint.breakpoint_id] = breakpoint
-            source_actions = (
-                previous_actions if previous is not None else pending_actions
-            )
-            runtime.actions.extend(
-                action.model_copy(deep=True) for action in source_actions
-            )
-            del runtime.actions[:-_MAX_ACTIONS]
-            self._runtimes[owner] = runtime
-            self._pending_breakpoints.pop(owner, None)
-            self._pending_actions.pop(owner, None)
-            self._launch_selections[owner] = _NodeDebugLaunchSelection(
-                script_path=relative_path,
-                working_directory=(
-                    resolved_working_directory.relative_to(
-                        self._workspace_root
-                    ).as_posix()
-                    if resolved_working_directory != self._workspace_root
-                    else ""
-                ),
-                launch_profile_name=profile_name,
-                args=list(normalized_args),
-            )
-            runtime.loaded_source_digests = self._source_digests_for_runtime(runtime)
-            self._persist_session_state(session_id, thread_id, runtime)
-
-        # spawn 前先 durable 登记唯一 process_instance_id + nonce；该登记独立于本次
-        # 调用，跨 Turn 保留，崩溃后可据此定点恢复。
-        claim = new_launch_claim(
-            session_id=session_id,
-            thread_id=thread_id,
-            configuration_id=selected_configuration_id,
-            inspector_host=runtime.inspector_host,
-            inspector_port=runtime.inspector_port,
-        )
-        runtime.process_instance_id = claim.process_instance_id
-        self._write_launch_claim(claim)
-        try:
-            # spawn 前的 closing 守卫（R3b 复核残留项）：stop 已把该 runtime 置为
-            # closing（停止序列已接管，可能已按"进程尚未 spawn"核实终结并置 exited）
-            # 时，启动序列绝不能再 spawn 出游离进程，否则会留下"内存态 exited +
-            # 进程存活 + claim running"的假终态。守卫抛错走下方统一的失败收口
-            # （状态 failed、claim 结清），绝不虚报启动成功。
-            async with runtime.state_lock:
-                if runtime.closing:
-                    raise RuntimeError(
-                        "并发的停止请求已接管该调试运行时，取消 spawn: "
-                        f"session_id={session_id}, thread_id={thread_id}"
-                    )
-            # spawn 必须在登记之后、且在统一的失败收口之内：`create_subprocess_exec`
-            # 抛错时 `runtime.process` 仍为 None，`_terminate_and_verify` 据此可证明
-            # 没有产生任何进程实例，从而把 claim 结清；否则该 owner 会留下永远无法
-            # 核实的 launch_pending 登记，把后续启动全部错误阻断。
-            runtime.process = await asyncio.create_subprocess_exec(
-                node_bin,
-                f"--inspect-brk={runtime.inspector_host}:{runtime.inspector_port}",
-                str(script_path),
-                *normalized_args,
-                cwd=str(resolved_working_directory),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            runtime.stderr_task = asyncio.create_task(self._read_stream(runtime, "stderr"))
-            runtime.stdout_task = asyncio.create_task(self._read_stream(runtime, "stdout"))
-            runtime.process_task = asyncio.create_task(self._monitor_process(runtime))
-            # spawn 后立刻核对 OS 进程起始身份；PID 会被复用，绝不能只凭 PID 认领。
-            spawn_identity = probe_process_identity(runtime.process.pid)
-            if spawn_identity is None:
-                raise RuntimeError(
-                    "spawn 后无法读取进程起始身份（进程可能已立即退出）: "
-                    f"pid={runtime.process.pid}"
-                )
-            runtime.process_identity_source = spawn_identity.source
-            runtime.process_start_marker = spawn_identity.start_marker
-            self._write_launch_claim(
-                claim_with_spawn_identity(
-                    claim,
-                    pid=runtime.process.pid,
-                    identity=spawn_identity,
-                )
-            )
-            await asyncio.wait_for(
-                runtime.inspector.inspector_ready.wait(),
-                timeout=runtime.command_timeout_seconds,
-            )
-            if runtime.inspector.inspector_url is None:
-                raise RuntimeError("Node Inspector 已报告就绪，但缺少 WebSocket 地址")
-            await self._inspector.connect(runtime)
-            await self._inspector.command(runtime, "Runtime.enable")
-            await self._inspector.command(runtime, "Debugger.enable")
-            await self._inspector.command(
-                runtime,
-                "NodeRuntime.notifyWhenWaitingForDisconnect",
-                {"enabled": True},
-            )
-            # 起始身份核对 + Inspector 握手都成功，才把 PID/端口登记为权威运行属性。
-            self._mark_claim_running(runtime)
-            for breakpoint in runtime.breakpoints.values():
-                if breakpoint.relocation_status != "current":
-                    continue
-                await self._breakpoint_mutations.install_breakpoint(runtime, breakpoint)
-            async with runtime.state_lock:
-                runtime.status = "starting"
-            await self._inspector.command(runtime, "Runtime.runIfWaitingForDebugger")
-            await self._inspector.wait_for_execution_state(runtime)
-            resume_initial_pause = False
-            async with runtime.state_lock:
-                if runtime.status == "paused" and not self._paused_at_breakpoint(
-                    runtime
-                ):
-                    runtime.status = "running"
-                    self._inspector.clear_paused_snapshot(runtime)
-                    # `--inspect-brk` 的入口暂停不是用户设置的源码断点，不能让它
-                    # 覆盖右侧调试预览所展示的最后一次真实停止位置。
-                    runtime.last_stopped_frame = None
-                    resume_initial_pause = True
-            if resume_initial_pause:
-                await self._inspector.command(runtime, "Debugger.resume")
-                await self._inspector.wait_for_execution_state(runtime)
-            await self._inspector.wait_for_frame_variables(runtime)
-            async with runtime.state_lock:
-                if runtime.status not in {"exited", "failed", "paused"} and (
-                    runtime.process is None or runtime.process.returncode is None
-                ):
-                    runtime.status = "running"
-                runtime.error_message = runtime.logpoint_error_message
-                self._append_action(
-                    runtime,
-                    "start",
-                    "已启动 Node Inspector",
-                    actor=actor,
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                )
-            self._persist_session_state(session_id, thread_id, runtime)
-        except Exception as error:
-            message = f"启动 Node Inspector 失败: {error}"
-            async with runtime.state_lock:
-                runtime.status = "failed"
-                runtime.error_message = message
-                self._append_action(
-                    runtime,
-                    "start_failed",
-                    message,
-                    actor=actor,
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                    result="error",
-                )
-            self._persist_session_state(session_id, thread_id, runtime)
-            await self._lifecycle.stop_runtime(runtime, clear_error=False)
-            raise RuntimeError(message) from error
-        return await self.get_state(session_id, thread_id)
 
     async def apply_action(
         self,
@@ -1161,8 +858,8 @@ class NodeDebugService:
         owner = self._owner_key(session_id, thread_id)
         # 重启 = 停止旧实例 + 启动新实例，必须整体处于 per-owner 临界区内（R3b 复核
         # 残留项）：否则 stop 落在另一并发启动的 spawn 窗口时会得到假终态。临界区内
-        # 直接调 `_launch_under_claim_gate`，绝不能再经 `start()` 重入同一把
-        # asyncio.Lock（不可重入，重入即自锁）。
+        # 直接调用启动编排器，绝不能再经 `start()` 重入同一把 asyncio.Lock
+        # （不可重入，重入即自锁）。
         async with self._owner_lock(owner):
             self._ensure_session_loaded(session_id, thread_id)
             runtime = self._runtimes.get(owner)
@@ -1203,18 +900,21 @@ class NodeDebugService:
                 )
             async with runtime.state_lock:
                 runtime.status = "exited"
-            return await self._launch_under_claim_gate(
-                owner=owner,
-                path=path,
-                args=args,
-                breakpoints=breakpoints,
-                configuration_id=configuration_id,
-                launch_profile_name=launch_profile_name,
-                working_directory=working_directory,
-                actor=actor,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
+            result = await self._create_launch_orchestrator().launch(
+                NodeDebugLaunchRequest(
+                    owner=owner,
+                    path=path,
+                    args=args,
+                    breakpoints=breakpoints,
+                    configuration_id=configuration_id,
+                    launch_profile_name=launch_profile_name,
+                    working_directory=working_directory,
+                    actor=actor,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                )
             )
+            return await self.get_state(*result.owner)
 
     async def clear_all_breakpoints(
         self,
@@ -1769,14 +1469,14 @@ class NodeDebugService:
         configuration_id = self._configuration_registry.active_id(session_id, thread_id)
         selection = self._launch_selections.get(
             owner,
-            _NodeDebugLaunchSelection(),
+            NodeDebugLaunchSelection(),
         )
         if runtime is not None:
             configuration_id = runtime.configuration_id
             self._configuration_registry.set_active(
                 session_id, configuration_id, thread_id
             )
-            selection = _NodeDebugLaunchSelection(
+            selection = NodeDebugLaunchSelection(
                 script_path=runtime.relative_script_path,
                 working_directory=(
                     runtime.working_directory.relative_to(
@@ -1915,7 +1615,7 @@ class NodeDebugService:
                 f"会话没有活动调试方案: session_id={session_id}, thread_id={thread_id}"
             )
         configuration = self._configuration(session_id, thread_id, configuration_id)
-        self._launch_selections[owner] = _NodeDebugLaunchSelection(
+        self._launch_selections[owner] = NodeDebugLaunchSelection(
             script_path=configuration.script_path,
             working_directory=configuration.working_directory,
             launch_profile_name=configuration.launch_profile_name,
@@ -2168,30 +1868,10 @@ class NodeDebugService:
         if should_persist:
             self._persist_session_state(session_id, thread_id, runtime)
 
-    def _get_debug_runtime_config(self) -> dict[str, object]:
-        return self._config_service.get_debug_runtime_config()
-
-    @staticmethod
-    def _resolve_launch_profile(
-        debug_config: dict[str, object],
-        launch_profile_name: str | None,
-    ) -> tuple[str, dict[str, object]]:
-        raw_profiles = debug_config.get("launch_profiles")
-        if not isinstance(raw_profiles, dict):
-            raise TypeError("runtime.debug.launch_profiles 配置无效")
-        profile_name = launch_profile_name or "node-default"
-        raw_profile = raw_profiles.get(profile_name)
-        if raw_profile is None and launch_profile_name is None:
-            raw_profile = {
-                "adapter": debug_config.get("default_adapter", "node_inspector"),
-                "runtime": "node",
-                "program": "",
-                "working_directory": "",
-                "args": [],
-            }
-        if not isinstance(raw_profile, dict):
-            raise TypeError(f"调试启动配置不存在: {profile_name}")
-        return profile_name, raw_profile
+    def _get_typed_debug_runtime_config(self) -> NodeDebugRuntimeConfig:
+        return NodeDebugRuntimeConfig.from_mapping(
+            self._config_service.get_debug_runtime_config()
+        )
 
     async def _evaluate(
         self,
