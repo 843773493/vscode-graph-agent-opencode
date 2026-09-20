@@ -14,6 +14,7 @@ from app.agents.model_tool_schema import (
     validate_model_tool_arguments,
 )
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.agents.tool_invocation_context import ToolInvocationContext
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingRef,
     ExtensionTargetBinding,
@@ -183,6 +184,7 @@ def create_extension_tool_invoker_tool(
     *,
     is_tool_execution_enabled: Callable[[BaseTool], bool] | None = None,
     catalog_binding_resolver: ExtensionCatalogBindingResolver | None = None,
+    invocation_context: ToolInvocationContext | None = None,
 ) -> BaseTool:
     """创建固定扩展工具入口，通过参数分发到工作区配置的自定义工具。"""
     tools_by_name: dict[str, BaseTool] = {}
@@ -228,10 +230,19 @@ def create_extension_tool_invoker_tool(
             # 权限撤销在执行点拒绝，并按 envelope 合同返回真实 paired result。
             raise ToolException(f"扩展工具 {resolved_tool_name!r} 已被策略禁用")
 
-        return await _invoke_target_tool_without_nested_callbacks(
-            target_tool,
-            arguments,
+        binding_token = (
+            invocation_context.set_extension_catalog_binding(binding_ref)
+            if invocation_context is not None
+            else None
         )
+        try:
+            return await _invoke_target_tool_without_nested_callbacks(
+                target_tool,
+                arguments,
+            )
+        finally:
+            if invocation_context is not None and binding_token is not None:
+                invocation_context.reset_extension_catalog_binding(binding_token)
 
     description = (
         "调用工作区配置的扩展工具。"

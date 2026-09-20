@@ -747,6 +747,7 @@ def create_my_deep_agent(
                 False,
             )
         ),
+        invocation_context=tool_invocation_context,
     )
     resolved_tools.append(extension_invoker)
     if context_source_manager is not None and not any(

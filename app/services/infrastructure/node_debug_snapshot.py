@@ -6,6 +6,7 @@ from typing import Literal, Protocol
 
 from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.node_debug import (
+    ExtensionCatalogBindingAuditDTO,
     NodeDebugActionRecordDTO,
     NodeDebugBreakpointDTO,
     NodeDebugEvaluationDTO,
@@ -58,6 +59,7 @@ def append_pending_debug_action(
     tool_call_id: str | None,
     result: Literal["success", "error"],
     max_actions: int,
+    extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
 ) -> None:
     actions.append(
         NodeDebugActionRecordDTO(
@@ -69,6 +71,7 @@ def append_pending_debug_action(
             actor=actor,
             tool_name=tool_name,
             tool_call_id=tool_call_id,
+            extension_catalog_binding=extension_catalog_binding,
             result=result,
             created_at=datetime.now(UTC),
         )
@@ -86,6 +89,7 @@ def append_runtime_debug_action(
     tool_call_id: str | None,
     result: Literal["success", "error"],
     max_actions: int,
+    extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
 ) -> None:
     append_pending_debug_action(
         runtime.actions,
@@ -96,6 +100,7 @@ def append_runtime_debug_action(
         actor=actor,
         tool_name=tool_name,
         tool_call_id=tool_call_id,
+        extension_catalog_binding=extension_catalog_binding,
         result=result,
         max_actions=max_actions,
     )

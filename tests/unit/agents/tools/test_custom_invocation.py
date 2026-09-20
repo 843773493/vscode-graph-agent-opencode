@@ -399,6 +399,7 @@ async def test_envelope_preserves_original_tool_call_id_pairing(
     envelope = create_extension_tool_invoker_tool(
         tools,
         catalog_binding_resolver=seal_extension_catalog_binding_from_tools(tools),
+        invocation_context=context,
     )
     middleware = ToolInvocationContextMiddleware(context)
     request = type(
@@ -434,6 +435,17 @@ async def test_envelope_preserves_original_tool_call_id_pairing(
         call_args.kwargs["thread_id"] == "main"
         for call_args in service.record_tool_action.await_args_list
     )
+    recorded_bindings = [
+        call_args.kwargs["extension_catalog_binding"]
+        for call_args in service.record_tool_action.await_args_list
+    ]
+    assert len(recorded_bindings) == 1
+    recorded_binding = recorded_bindings[0]
+    assert recorded_binding is not None
+    assert recorded_binding.target_id == "list_breakpoints"
+    assert recorded_binding.binding_id.startswith("ext-catalog:v1:")
+    assert recorded_binding.binding_hash.startswith("sha256:")
+    assert recorded_binding.target_schema_hash.startswith("sha256:")
 
 
 # ---------------------------------------------------------------------------

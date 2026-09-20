@@ -16,6 +16,9 @@ from app.core.turn_execution_scope import (
     reset_current_turn_execution_scope,
     set_current_turn_execution_scope,
 )
+from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionCatalogBindingRef,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +52,9 @@ class ToolInvocationContext:
         self._tool_call_id: contextvars.ContextVar[str | None] = (
             contextvars.ContextVar("agent_tool_call_id", default=None)
         )
+        self._extension_catalog_binding: contextvars.ContextVar[
+            ExtensionCatalogBindingRef | None
+        ] = contextvars.ContextVar("extension_catalog_binding", default=None)
         if tool_timeout_seconds is not None and tool_timeout_seconds <= 0:
             raise ValueError("tool_timeout_seconds 必须大于 0")
         self.tool_timeout_seconds = tool_timeout_seconds
@@ -75,6 +81,23 @@ class ToolInvocationContext:
         if not tool_call_id:
             raise RuntimeError("当前工具执行上下文缺少 tool_call_id")
         return tool_call_id
+
+    def set_extension_catalog_binding(
+        self,
+        binding: ExtensionCatalogBindingRef,
+    ) -> contextvars.Token[ExtensionCatalogBindingRef | None]:
+        return self._extension_catalog_binding.set(binding)
+
+    def reset_extension_catalog_binding(
+        self,
+        token: contextvars.Token[ExtensionCatalogBindingRef | None],
+    ) -> None:
+        self._extension_catalog_binding.reset(token)
+
+    def current_extension_catalog_binding(
+        self,
+    ) -> ExtensionCatalogBindingRef | None:
+        return self._extension_catalog_binding.get()
 
 
 class ToolInvocationContextMiddleware(AgentMiddleware):

@@ -20,6 +20,7 @@ from websockets.exceptions import ConnectionClosed
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import safe_join
 from app.schemas.internal_v2.node_debug import (
+    ExtensionCatalogBindingAuditDTO,
     NodeDebugAction,
     NodeDebugActionRecordDTO,
     NodeDebugBreakpointDTO,
@@ -1295,6 +1296,7 @@ class NodeDebugService:
         result: Literal["success", "error"],
         message: str,
         thread_id: str | None = None,
+        extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
     ) -> NodeDebugStateDTO:
         session_id, thread_id = await self._admit_mutation(session_id, thread_id)
         owner = self._owner_key(session_id, thread_id)
@@ -1313,7 +1315,12 @@ class NodeDebugService:
             )
             if existing_index is not None:
                 pending[existing_index] = pending[existing_index].model_copy(
-                    update={"message": message, "result": result, "actor": "ai"}
+                    update={
+                        "message": message,
+                        "result": result,
+                        "actor": "ai",
+                        "extension_catalog_binding": extension_catalog_binding,
+                    }
                 )
             else:
                 self._append_pending_action(
@@ -1324,6 +1331,7 @@ class NodeDebugService:
                     actor="ai",
                     tool_name=tool_name,
                     tool_call_id=tool_call_id,
+                    extension_catalog_binding=extension_catalog_binding,
                     result=result,
                 )
             self._persist_session_state(session_id, thread_id, None)
@@ -1341,7 +1349,12 @@ class NodeDebugService:
             if existing_index is not None:
                 existing = runtime.actions[existing_index]
                 runtime.actions[existing_index] = existing.model_copy(
-                    update={"message": message, "result": result, "actor": "ai"}
+                    update={
+                        "message": message,
+                        "result": result,
+                        "actor": "ai",
+                        "extension_catalog_binding": extension_catalog_binding,
+                    }
                 )
             else:
                 latest = runtime.actions[-1] if runtime.actions else None
@@ -1357,6 +1370,7 @@ class NodeDebugService:
                             "actor": "ai",
                             "tool_name": tool_name,
                             "tool_call_id": tool_call_id,
+                            "extension_catalog_binding": extension_catalog_binding,
                             "result": result,
                         }
                     )
@@ -1368,6 +1382,7 @@ class NodeDebugService:
                         actor="ai",
                         tool_name=tool_name,
                         tool_call_id=tool_call_id,
+                        extension_catalog_binding=extension_catalog_binding,
                         result=result,
                     )
         self._persist_session_state(session_id, thread_id, runtime)
@@ -3610,6 +3625,7 @@ class NodeDebugService:
         actor: Literal["human", "ai", "system"],
         tool_name: str | None = None,
         tool_call_id: str | None = None,
+        extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
         result: Literal["success", "error"] = "success",
     ) -> None:
         actions = self._pending_actions.setdefault(
@@ -3624,6 +3640,7 @@ class NodeDebugService:
             actor=actor,
             tool_name=tool_name,
             tool_call_id=tool_call_id,
+            extension_catalog_binding=extension_catalog_binding,
             result=result,
             max_actions=_MAX_ACTIONS,
         )
@@ -3637,6 +3654,7 @@ class NodeDebugService:
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
+        extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
         result: Literal["success", "error"] = "success",
     ) -> None:
         append_runtime_debug_action(
@@ -3646,6 +3664,7 @@ class NodeDebugService:
             actor=actor,
             tool_name=tool_name,
             tool_call_id=tool_call_id,
+            extension_catalog_binding=extension_catalog_binding,
             result=result,
             max_actions=_MAX_ACTIONS,
         )

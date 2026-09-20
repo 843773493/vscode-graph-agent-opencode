@@ -138,6 +138,18 @@ class NodeDebugEvaluationDTO(BaseModel):
     evaluated_at: datetime
 
 
+class ExtensionCatalogBindingAuditDTO(BaseModel):
+    """产生 Agent 调试动作的 sealed 扩展目录 binding 身份。"""
+
+    binding_id: str = Field(min_length=1)
+    binding_hash: str = Field(pattern=r"^sha256:")
+    catalog_revision: str = Field(pattern=r"^sha256:")
+    generation: int = Field(ge=1)
+    provider_binding_identity: str = Field(min_length=1)
+    target_id: str = Field(min_length=1)
+    target_schema_hash: str = Field(pattern=r"^sha256:")
+
+
 class NodeDebugActionRecordDTO(BaseModel):
     action_id: str
     session_id: str
@@ -148,6 +160,7 @@ class NodeDebugActionRecordDTO(BaseModel):
     actor: Literal["human", "ai", "system"] = "human"
     tool_name: str | None = None
     tool_call_id: str | None = None
+    extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None
     result: Literal["success", "error"] = "success"
     created_at: datetime
 

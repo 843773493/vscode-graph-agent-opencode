@@ -23,6 +23,7 @@ from app.agents.tools.debug_redaction import (
 )
 from app.agents.workspace_tool_paths import WorkspaceToolPathResolver
 from app.schemas.internal_v2.node_debug import (
+    ExtensionCatalogBindingAuditDTO,
     NodeDebugConfigurationCreateRequest,
     NodeDebugConfigurationDTO,
     NodeDebugStateDTO,
@@ -572,12 +573,26 @@ class DebuggingToolFactory:
     ) -> None:
         session_id, thread_id = self._owner
         resolved_tool_call_id = tool_call_id or self._tool_call_id()
+        binding = self._invocation_context.current_extension_catalog_binding()
+        binding_audit: ExtensionCatalogBindingAuditDTO | None = None
+        if binding is not None:
+            target = binding.resolve(tool_name)
+            binding_audit = ExtensionCatalogBindingAuditDTO(
+                binding_id=binding.binding_id,
+                binding_hash=binding.binding_hash,
+                catalog_revision=binding.catalog_revision,
+                generation=binding.generation,
+                provider_binding_identity=binding.provider_binding_identity,
+                target_id=target.target_id,
+                target_schema_hash=target.schema_hash,
+            )
         try:
             await self._node_debug_service.record_tool_action(
                 session_id=session_id,
                 thread_id=thread_id,
                 tool_name=tool_name,
                 tool_call_id=resolved_tool_call_id,
+                extension_catalog_binding=binding_audit,
                 result=result,
                 message=message,
             )
