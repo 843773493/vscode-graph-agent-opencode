@@ -31,7 +31,7 @@
 ## 5. 纯后端 E2E 测试
 
 - [x] 5.1 核对并扩展既有隔离JS调试fixture和后端E2E资源准备逻辑；Session/main/child经正常创建/catalog路径取得，不把项目根注册为测试工作区
-- [ ] 5.2 通过固定`invoke_extension_tool`与sealed目录binding验收16个内层目标名/兼容参数schema、指定`debugConfigurationId`与当前thread活动方案/无方案创建顺序、普通/日志点第N次命中、未知参数明确失败；补测路径相对/绝对归一化相等可启动、路径/profile冲突明确错误且旧进程/方案不变、无效ID先报not-found。Provider `tools`不含16个直接定义，启停前后ToolSetRef和同epoch父wire bytes不变；直接`ainvoke`仅作单元/契约覆盖
+- [x] 5.2 通过固定`invoke_extension_tool`与sealed目录binding验收16个内层目标名/兼容参数schema、指定`debugConfigurationId`与当前thread活动方案/无方案创建顺序、普通/日志点第N次命中、未知参数明确失败；补测路径相对/绝对归一化相等可启动、路径/profile冲突明确错误且旧进程/方案不变、无效ID先报not-found。Provider `tools`不含16个直接定义，启停前后ToolSetRef和同epoch父wire bytes不变；直接`ainvoke`仅作单元/契约覆盖
 - [x] 5.3 使用真实 Node Inspector 验证断点暂停、继续、单步、调用栈、变量和表达式求值
 - [x] 5.4 验证条件/命中次数断点、Node Logpoint输出且不暂停、插值错误、其它不支持adapter的明确拒绝、非法/未知参数和无暂停上下文错误；同时验收变量/求值/Logpoint输出脱敏及真实失败与原tool_call_id配对
 - [ ] 5.5 验证同一Session main/child及跨Session两个以上thread的进程、动态/冲突固定端口、断点、方案、状态、动作审计与stop/restart严格隔离；Session产品API只到main，显式child API校验归属；fake clock覆盖`launch_pending|starting|running|paused|stopping`跨过30分钟仍resident、终态且lease结清后重新计时、无阻断后cold、stop失败/重启`reconcile_required`、thread删除定点停止及旧generation callback拒绝。用注入phase barrier在claim提交后spawn前、spawn后登记PID前和stop核实前终止backend并重启，验证nonce/OS起始身份、PID/端口复用不误接管/误杀、同一实例只恢复一次及未知状态始终阻断
