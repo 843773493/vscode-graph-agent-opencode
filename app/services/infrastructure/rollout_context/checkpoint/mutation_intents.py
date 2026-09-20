@@ -7,9 +7,10 @@ RolloutCheckpointSaver/ContextStore owner 消费。本模块只提供该端口�
 合同与 facade：owner 校验、幂等键去重和 failure outcome 显式化；不新建第二套
 intent union，也不在这里实现持久化事务。
 
-TODO(OpenSpec 2.3-B4)：saver owner 对该端口的 append/toolset/epoch 分支生产
-实现与 CSM source 子端口的 typed decision 映射属 B4 后续切片；source pending
-提交已由 ContextSourceManager.commit_model_call_pending 承载。
+append 分支已由 RolloutCheckpointSaver.append_items 生产接线（intent 构造 →
+facade 消费 → owner 单事务提交整批）。TODO(OpenSpec 2.3-B4)：toolset/epoch
+分支的生产接线与 CSM source 子端口的 typed decision 映射属后续切片；source
+pending 提交已由 ContextSourceManager.commit_model_call_pending 承载。
 """
 
 from __future__ import annotations

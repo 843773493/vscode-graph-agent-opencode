@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self
@@ -20,6 +21,12 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.history_loading import HistoryLoadingConfig
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.enums import SemanticKind
+from app.domain.itemized.mutation_intents import (
+    AppendCanonicalItemIntent,
+    ContextMutationIntent,
+    MutationIntentOwner,
+)
 from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.runtime import ProvenanceEdge
@@ -28,6 +35,7 @@ from app.schemas.internal_v2.turn import (
     TurnHistoryPageDTO,
     TurnSummaryDTO,
 )
+from app.services.infrastructure.node_debug_thread_owner import MAIN_THREAD_ID
 from app.services.infrastructure.rollout_context.checkpoint.async_api import (
     RolloutLangGraphAsyncMixin,
 )
@@ -58,6 +66,11 @@ from app.services.infrastructure.rollout_context.checkpoint.langgraph_api import
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
+from app.services.infrastructure.rollout_context.checkpoint.mutation_intents import (
+    MutationIntentOwnerMismatch,
+    MutationIntentPortError,
+    SessionThreadMutationIntents,
+)
 from app.services.infrastructure.rollout_context.checkpoint.reader import (
     RolloutContextReader,
 )
@@ -79,6 +92,93 @@ from app.services.infrastructure.rollout_context.storage.service import (
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+
+
+# SemanticKind → AppendCanonicalItemIntent.item_kind 的闭合映射；
+# runtime_notice/compaction_summary/extension 不属于 canonical append intent，
+# 走各自 owner 端口。
+_APPEND_ITEM_KINDS: Mapping[str, str] = {
+    SemanticKind.USER_INPUT: "user_message",
+    SemanticKind.ATTACHMENT: "attachment",
+    SemanticKind.ASSISTANT_OUTPUT: "assistant_message",
+    SemanticKind.REASONING: "reasoning",
+    SemanticKind.TOOL_CALL: "tool_call",
+    SemanticKind.TOOL_RESULT: "tool_result",
+}
+
+
+def _append_intent_for(
+    owner: MutationIntentOwner,
+    item: CanonicalItemRecord,
+) -> AppendCanonicalItemIntent:
+    """从 canonical record 构造 append intent；字段不完整时显式失败。"""
+    item_kind = _APPEND_ITEM_KINDS.get(item.semantic_kind)
+    if item_kind is None:
+        raise ValueError(
+            "semantic_kind 不在 append intent 闭合集内: "
+            f"{item.semantic_kind!r} (item_id={item.item_id!r})"
+        )
+    tool_call_id: str | None = None
+    if item_kind in {"tool_call", "tool_result"}:
+        tool_call_id = _tool_call_id_for_intent(item)
+    if not item.turn_id:
+        raise ValueError(f"append intent 需要非空 origin turn_id: {item.item_id!r}")
+    return AppendCanonicalItemIntent(
+        owner=owner,
+        item_id=item.item_id,
+        item_kind=item_kind,
+        origin_turn_id=item.turn_id,
+        tool_call_id=tool_call_id,
+    )
+
+
+def _tool_call_id_for_intent(item: CanonicalItemRecord) -> str:
+    """提取 tool_call/tool_result 与 intent 配对的 tool_call_id。
+
+    - tool_call 接受单 call 形态与单元素 tool_calls 列表（checkpoint
+      shadow 投影形态）；多元素列表无法映射为单个 append intent 的
+      配对身份，显式拒绝。
+    - tool_result 的身份按 v2 合同位于 typed payload；text payload 的
+      身份由 metadata 携带，二者都支持。
+    """
+    payload = item.payload if isinstance(item.payload, Mapping) else {}
+    if item.semantic_kind == SemanticKind.TOOL_CALL:
+        if isinstance(payload.get("tool_calls"), list):
+            calls = payload["tool_calls"]
+            if len(calls) != 1:
+                raise ValueError(
+                    "多 call 批式 tool_call 不能构造 append intent: "
+                    f"{item.item_id!r} (tool_calls={len(calls)})"
+                )
+            call = calls[0] if isinstance(calls[0], Mapping) else {}
+            raw_tool_call_id = call.get("id")
+        else:
+            raw_tool_call_id = payload.get("tool_call_id")
+    else:
+        raw_tool_call_id = payload.get("tool_call_id")
+        if raw_tool_call_id is None:
+            raw_tool_call_id = item.metadata.get("tool_call_id")
+    if not isinstance(raw_tool_call_id, str) or not raw_tool_call_id:
+        raise ValueError(
+            f"{item.semantic_kind} 缺少配对 tool_call_id: {item.item_id!r}"
+        )
+    return raw_tool_call_id
+
+
+@dataclass(slots=True)
+class _AppendIntentBatch:
+    """一次 append_items 调用的 in-flight 批上下文。
+
+    批内 intent 先全部构造、再逐个经 facade 消费；首个 intent 消费时由
+    owner 端口单事务提交整批，后续 intent 只做校验，保持 storage 既有的
+    同批原子提交边界。
+    """
+
+    owner: MutationIntentOwner
+    checkpoint_ns: str
+    records: tuple[CanonicalItemRecord, ...]
+    item_ids: frozenset[str]
+    commit_ids: tuple[int, ...] | None = None
 
 
 class RolloutCheckpointSaver(
@@ -155,6 +255,15 @@ class RolloutCheckpointSaver(
         # assembly；这不是第二份事实，SQLite snapshot 才是权威。
         self._prepared_dispatches: dict[
             tuple[str, str, str], list[dict[str, object]]
+        ] = {}
+        # SessionThread mutation intent 的 per-owner facade 注册表；saver 是多
+        # session 单例，facade 只服务单个 (session_id, thread_id) owner。
+        self._mutation_intent_facades: dict[
+            MutationIntentOwner, SessionThreadMutationIntents
+        ] = {}
+        # 正在经 intent 端口消费的 append 批；由 append_items 持锁注册/清理。
+        self._append_intent_batches: dict[
+            MutationIntentOwner, _AppendIntentBatch
         ] = {}
         self._lock = threading.RLock()
 
@@ -240,14 +349,84 @@ class RolloutCheckpointSaver(
         *,
         checkpoint_ns: str = "",
     ) -> tuple[int, ...]:
-        """由 Saver owner 追加 provider/tool canonical items。"""
+        """由 Saver owner 以 AppendCanonicalItemIntent 追加 canonical items。
+
+        真实 append 调用点在此表达为 typed intent，经唯一 SessionThread
+        mutation owner 校验（owner 一致 + 幂等键去重）后进入同一 storage
+        事务；重复消费、owner 不匹配、intent 构造失败都显式抛出。
+        """
         if not all(isinstance(item, CanonicalItemRecord) for item in items):
             raise TypeError("canonical item sink 只接受 CanonicalItemRecord")
-        return self._storage.append_items(
-            session_id,
-            tuple(item for item in items if isinstance(item, CanonicalItemRecord)),
-            checkpoint_ns=checkpoint_ns,
-        )
+        typed_items = tuple(items)
+        if not typed_items:
+            raise ValueError("append_items 至少需要一个 canonical item")
+        if checkpoint_ns:
+            # SessionThread owner 身份是 (session_id, thread_id)；生产 canonical
+            # append 只发生在 main thread，checkpoint_ns 不得参与 owner 身份。
+            raise ValueError(
+                "canonical append intent 不接受非空 checkpoint_ns: "
+                f"{checkpoint_ns!r} (session_id={session_id!r})"
+            )
+        owner = MutationIntentOwner(session_id=session_id, thread_id=MAIN_THREAD_ID)
+        # 先构造全部 intent：任一字段不合法都在触碰 storage 前显式失败。
+        intents = tuple(_append_intent_for(owner, item) for item in typed_items)
+        with self._lock:
+            facade = self._mutation_intent_facades.get(owner)
+            if facade is None:
+                facade = SessionThreadMutationIntents(owner=owner, port=self)
+                self._mutation_intent_facades[owner] = facade
+            batch = _AppendIntentBatch(
+                owner=owner,
+                checkpoint_ns=checkpoint_ns,
+                records=typed_items,
+                item_ids=frozenset(item.item_id for item in typed_items),
+            )
+            self._append_intent_batches[owner] = batch
+            try:
+                for intent in intents:
+                    facade.consume(intent)
+            finally:
+                self._append_intent_batches.pop(owner, None)
+        if batch.commit_ids is None:
+            raise RuntimeError("append intent 批未被 owner 端口提交")
+        return batch.commit_ids
+
+    def consume_mutation_intent(self, intent: ContextMutationIntent) -> None:
+        """SessionThreadMutationIntentPort 的 append 分支生产实现。
+
+        TODO(OpenSpec 2.3-B4)：toolset/epoch 分支的生产接线属后续切片，
+        当前显式拒绝，不静默降级。
+        """
+        if not isinstance(intent, AppendCanonicalItemIntent):
+            raise NotImplementedError(
+                "TODO(OpenSpec 2.3-B4): mutation intent 分支尚未接线: "
+                + type(intent).__name__
+            )
+        batch = self._append_intent_batches.get(intent.owner)
+        if batch is None:
+            raise MutationIntentOwnerMismatch(
+                "mutation-intent-owner-mismatch: append intent 没有对应的"
+                "活动 owner 批: expected="
+                + ",".join(
+                    f"({owner.session_id},{owner.thread_id})"
+                    for owner in self._append_intent_batches
+                )
+                + f" actual=({intent.owner.session_id},{intent.owner.thread_id})"
+            )
+        if intent.item_id not in batch.item_ids:
+            raise MutationIntentPortError(
+                "append intent 不属于当前 owner 批: "
+                f"item_id={intent.item_id!r}, "
+                f"batch=({batch.owner.session_id},{batch.owner.thread_id})"
+            )
+        if batch.commit_ids is None:
+            # 首个 intent 消费时单事务提交整批，保持与直写路径完全一致的
+            # storage 批提交边界；后续 intent 消费时批已提交。
+            batch.commit_ids = self._storage.append_items(
+                intent.owner.session_id,
+                batch.records,
+                checkpoint_ns=batch.checkpoint_ns,
+            )
 
     def execution_for_turn(
         self, session_id: str, *, turn_id: str, checkpoint_ns: str = ""
