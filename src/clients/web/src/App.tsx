@@ -48,6 +48,7 @@ import {
 } from "./hooks";
 import { useWorkspacePreviewTabs } from "./hooks/useWorkspacePreviewTabs";
 import { useNodeDebugController } from "./hooks/useNodeDebugController";
+import { useNodeDebugOwner } from "./hooks/useNodeDebugOwner";
 import { useChildThreadLoader } from "./hooks/useChildThreadLoader";
 import { useGatewayExtensionResources } from "./hooks/useGatewayExtensionResources";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
@@ -259,38 +260,18 @@ export default function AppShell() {
     sessionId: string;
     attachment: AttachmentRef;
   } | null>(null);
-  const [nodeDebugOwnerSelection, setNodeDebugOwnerSelection] = useState<{
-    workspaceId: string | null;
-    sessionId: string | null;
-    threadId: string;
-  }>({ workspaceId: null, sessionId: null, threadId: "main" });
   const lastOpenedChangesPreviewKeyRef = useRef<string | null>(null);
   const cleanupLayoutResizeRef = useRef<(() => void) | null>(null);
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
-  const nodeDebugThreadId =
-    nodeDebugOwnerSelection.workspaceId === activeSessionWorkspaceId
-    && nodeDebugOwnerSelection.sessionId === (activeSession?.session_id ?? null)
-      ? nodeDebugOwnerSelection.threadId
-      : "main";
-  useEffect(() => {
-    setNodeDebugOwnerSelection((previous) => {
-      const nextWorkspaceId = activeSessionWorkspaceId;
-      const nextSessionId = activeSession?.session_id ?? null;
-      if (
-        previous.workspaceId === nextWorkspaceId
-        && previous.sessionId === nextSessionId
-      ) {
-        return previous;
-      }
-      return {
-        workspaceId: nextWorkspaceId,
-        sessionId: nextSessionId,
-        threadId: "main",
-      };
-    });
-  }, [activeSession?.session_id, activeSessionWorkspaceId]);
+  const {
+    threadId: nodeDebugThreadId,
+    selectThread: selectNodeDebugThread,
+  } = useNodeDebugOwner({
+    workspaceId: activeSessionWorkspaceId,
+    sessionId: activeSession?.session_id ?? null,
+  });
   useEffect(() => {
     if (
       selectedAttachmentPreview
@@ -637,18 +618,14 @@ export default function AppShell() {
   });
 
   const selectDebugThread = useCallback((threadId: string) => {
-    setNodeDebugOwnerSelection({
-      workspaceId: activeSessionWorkspaceId,
-      sessionId: activeSession?.session_id ?? null,
-      threadId,
-    });
+    selectNodeDebugThread(threadId);
     setAuxiliaryVisible(true);
     setAuxiliaryTab("debug");
     if (!extensionWindowRequested) {
       persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: "debug" });
     }
     setStatus(threadId === "main" ? "已切换到主线程调试" : `已切换调试 owner: ${threadId}`);
-  }, [activeSession?.session_id, activeSessionWorkspaceId, extensionWindowRequested, persistLayoutSettings, setStatus]);
+  }, [extensionWindowRequested, persistLayoutSettings, selectNodeDebugThread, setStatus]);
 
   // 子会话线程静默轮询：对齐会话资源面板的轮询口径（5s，页面不可见时跳过）。
   useEffect(() => {
