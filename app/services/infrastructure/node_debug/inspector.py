@@ -2,61 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Literal, cast
 from urllib.parse import unquote, urlparse
 
-from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 
 from app.schemas.internal_v2.node_debug import (
     NodeDebugAction,
-    NodeDebugBreakpointDTO,
-    NodeDebugEvaluationDTO,
     NodeDebugStackFrameDTO,
-    NodeDebugStatus,
     NodeDebugVariableDTO,
 )
-
-
-@dataclass(slots=True)
-class NodeDebugInspectorState:
-    """单个调试运行时的 Inspector 连接、命令和暂停上下文。"""
-
-    socket: ClientConnection | None = None
-    inspector_url: str | None = None
-    script_urls: dict[str, str] = field(default_factory=dict)
-    scope_object_ids: dict[str, dict[str, list[str]]] = field(default_factory=dict)
-    next_command_id: int = 1
-    pending_commands: dict[int, asyncio.Future[dict[str, object]]] = field(
-        default_factory=dict
-    )
-    command_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    inspector_ready: asyncio.Event = field(default_factory=asyncio.Event)
-    receiver_task: asyncio.Task[None] | None = None
-    variable_hydration_task: asyncio.Task[None] | None = None
-
-
-class NodeDebugInspectorRuntime(Protocol):
-    """Inspector 链路需要的运行时字段契约。"""
-
-    inspector: NodeDebugInspectorState
-    process: asyncio.subprocess.Process | None
-    closing: bool
-    status: NodeDebugStatus
-    command_timeout_seconds: float
-    error_message: str | None
-    logpoint_error_message: str | None
-    paused_reason: str | None
-    paused_breakpoint_ids: set[str]
-    call_stack: list[NodeDebugStackFrameDTO]
-    last_stopped_frame: NodeDebugStackFrameDTO | None
-    breakpoints: dict[str, NodeDebugBreakpointDTO]
-    inspector_breakpoint_ids: dict[str, str]
-    last_evaluation: NodeDebugEvaluationDTO | None
-    state_lock: asyncio.Lock
+from app.services.infrastructure.node_debug.runtime_state import (
+    NodeDebugActionAppender,
+    NodeDebugRuntime,
+    NodeDebugStopSnapshotClearer,
+)
 
 
 class NodeDebugInspector:
@@ -66,14 +27,14 @@ class NodeDebugInspector:
         self,
         *,
         workspace_root: Path,
-        append_action: Callable[..., None],
-        clear_stop_snapshot: Callable[[NodeDebugInspectorRuntime], None],
+        append_action: NodeDebugActionAppender,
+        clear_stop_snapshot: NodeDebugStopSnapshotClearer,
     ) -> None:
         self._workspace_root = workspace_root
         self._append_action = append_action
         self._clear_stop_snapshot = clear_stop_snapshot
 
-    async def connect(self, runtime: NodeDebugInspectorRuntime) -> None:
+    async def connect(self, runtime: NodeDebugRuntime) -> None:
         inspector_url = runtime.inspector.inspector_url
         if inspector_url is None:
             raise RuntimeError("Node Inspector 已报告就绪，但缺少 WebSocket 地址")
@@ -91,7 +52,7 @@ class NodeDebugInspector:
 
     async def debugger_command(
         self,
-        runtime: NodeDebugInspectorRuntime,
+        runtime: NodeDebugRuntime,
         action: NodeDebugAction,
         *,
         actor: Literal["human", "ai", "system"],
@@ -136,7 +97,7 @@ class NodeDebugInspector:
 
     async def command(
         self,
-        runtime: NodeDebugInspectorRuntime,
+        runtime: NodeDebugRuntime,
         method: str,
         params: dict[str, object] | None = None,
     ) -> dict[str, object]:
@@ -172,7 +133,7 @@ class NodeDebugInspector:
             raise TypeError(f"Node Inspector 响应 result 不是对象: {result!r}")
         return cast(dict[str, object], result)
 
-    async def receive_messages(self, runtime: NodeDebugInspectorRuntime) -> None:
+    async def receive_messages(self, runtime: NodeDebugRuntime) -> None:
         socket = runtime.inspector.socket
         if socket is None:
             return
@@ -221,7 +182,7 @@ class NodeDebugInspector:
 
     async def _handle_event(
         self,
-        runtime: NodeDebugInspectorRuntime,
+        runtime: NodeDebugRuntime,
         method: str,
         params: dict[str, object],
     ) -> None:
@@ -289,7 +250,7 @@ class NodeDebugInspector:
 
     async def _hydrate_frame_variables_safe(
         self,
-        runtime: NodeDebugInspectorRuntime,
+        runtime: NodeDebugRuntime,
         frame: NodeDebugStackFrameDTO,
     ) -> None:
         try:
@@ -307,7 +268,7 @@ class NodeDebugInspector:
 
     async def _hydrate_frame_variables(
         self,
-        runtime: NodeDebugInspectorRuntime,
+        runtime: NodeDebugRuntime,
         frame: NodeDebugStackFrameDTO,
     ) -> None:
         object_ids = runtime.inspector.scope_object_ids.get(frame.call_frame_id, {})
@@ -370,14 +331,14 @@ class NodeDebugInspector:
                     "读取局部变量失败：暂停期间 Inspector 变量对象已经失效"
                 )
 
-    async def wait_for_execution_state(self, runtime: NodeDebugInspectorRuntime) -> None:
+    async def wait_for_execution_state(self, runtime: NodeDebugRuntime) -> None:
         for _ in range(200):
             async with runtime.state_lock:
                 if runtime.status in {"paused", "exited", "failed"}:
                     return
             await asyncio.sleep(0.01)
 
-    async def wait_for_frame_variables(self, runtime: NodeDebugInspectorRuntime) -> None:
+    async def wait_for_frame_variables(self, runtime: NodeDebugRuntime) -> None:
         for _ in range(100):
             task = runtime.inspector.variable_hydration_task
             if task is not None:
@@ -391,7 +352,7 @@ class NodeDebugInspector:
                     return
             await asyncio.sleep(0.01)
 
-    def clear_paused_snapshot(self, runtime: NodeDebugInspectorRuntime) -> None:
+    def clear_paused_snapshot(self, runtime: NodeDebugRuntime) -> None:
         runtime.paused_reason = None
         runtime.paused_breakpoint_ids.clear()
         runtime.call_stack.clear()
@@ -401,7 +362,7 @@ class NodeDebugInspector:
 
     def _parse_call_frames(
         self,
-        runtime: NodeDebugInspectorRuntime,
+        runtime: NodeDebugRuntime,
         value: object,
     ) -> list[NodeDebugStackFrameDTO]:
         if not isinstance(value, list):

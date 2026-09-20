@@ -1,43 +1,24 @@
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable, Iterable, MutableMapping
+from collections.abc import Iterable, MutableMapping
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal
 
 from app.core.path_utils import safe_join
-from app.schemas.internal_v2.node_debug import (
-    NodeDebugBreakpointDTO,
-    NodeDebugStatus,
-)
+from app.schemas.internal_v2.node_debug import NodeDebugBreakpointDTO
 from app.services.infrastructure.node_debug.breakpoint_expressions import (
     inspector_breakpoint_condition,
 )
 from app.services.infrastructure.node_debug.configuration_factory import (
     NodeDebugConfigurationFactory,
 )
-from app.services.infrastructure.node_debug.inspector import NodeDebugInspectorState
+from app.services.infrastructure.node_debug.runtime_state import (
+    NodeDebugActionAppender,
+    NodeDebugCommandSender,
+    NodeDebugPendingActionAppender,
+    NodeDebugRuntime,
+)
 from app.services.infrastructure.node_debug.thread_owner import NodeDebugOwner
-
-
-class NodeDebugBreakpointMutationRuntime(Protocol):
-    """断点 mutation 只依赖的运行时字段契约。"""
-
-    workspace_root: Path
-    relative_script_path: str
-    status: NodeDebugStatus
-    state_lock: asyncio.Lock
-    inspector: NodeDebugInspectorState
-    breakpoints: dict[str, NodeDebugBreakpointDTO]
-    inspector_breakpoint_ids: dict[str, str]
-
-
-CommandSender = Callable[
-    [NodeDebugBreakpointMutationRuntime, str, dict[str, object] | None],
-    Awaitable[dict[str, object]],
-]
-ActionRecorder = Callable[..., None]
-PendingActionRecorder = Callable[..., None]
 
 
 class NodeDebugBreakpointMutations:
@@ -51,9 +32,9 @@ class NodeDebugBreakpointMutations:
         pending_breakpoints: MutableMapping[
             NodeDebugOwner, list[NodeDebugBreakpointDTO]
         ],
-        command: CommandSender,
-        append_action: ActionRecorder,
-        append_pending_action: PendingActionRecorder,
+        command: NodeDebugCommandSender,
+        append_action: NodeDebugActionAppender,
+        append_pending_action: NodeDebugPendingActionAppender,
     ) -> None:
         self._workspace_root = workspace_root
         self._configuration_factory = configuration_factory
@@ -65,7 +46,7 @@ class NodeDebugBreakpointMutations:
     async def set_breakpoint(
         self,
         owner: NodeDebugOwner,
-        runtime: NodeDebugBreakpointMutationRuntime | None,
+        runtime: NodeDebugRuntime | None,
         params: dict[str, object],
         *,
         actor: Literal["human", "ai", "system"],
@@ -133,7 +114,7 @@ class NodeDebugBreakpointMutations:
     async def update_breakpoint(
         self,
         owner: NodeDebugOwner,
-        runtime: NodeDebugBreakpointMutationRuntime | None,
+        runtime: NodeDebugRuntime | None,
         params: dict[str, object],
         *,
         actor: Literal["human", "ai", "system"],
@@ -242,7 +223,7 @@ class NodeDebugBreakpointMutations:
     async def clear_breakpoint(
         self,
         owner: NodeDebugOwner,
-        runtime: NodeDebugBreakpointMutationRuntime | None,
+        runtime: NodeDebugRuntime | None,
         params: dict[str, object],
         *,
         actor: Literal["human", "ai", "system"],
@@ -294,7 +275,7 @@ class NodeDebugBreakpointMutations:
 
     async def install_breakpoint(
         self,
-        runtime: NodeDebugBreakpointMutationRuntime,
+        runtime: NodeDebugRuntime,
         breakpoint: NodeDebugBreakpointDTO,
         *,
         script_path: Path | None = None,

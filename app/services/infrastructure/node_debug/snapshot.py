@@ -1,50 +1,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal
 
 from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.node_debug import (
     ExtensionCatalogBindingAuditDTO,
     NodeDebugActionRecordDTO,
-    NodeDebugBreakpointDTO,
-    NodeDebugEvaluationDTO,
-    NodeDebugStackFrameDTO,
     NodeDebugStateDTO,
-    NodeDebugStatus,
 )
 from app.services.infrastructure.node_debug.configuration_registry import (
     NodeDebugConfigurationRegistry,
 )
-
-
-class _DebugProcess(Protocol):
-    pid: int
-
-
-class NodeDebugSnapshotRuntime(Protocol):
-    session_id: str
-    thread_id: str
-    status: NodeDebugStatus
-    configuration_id: str
-    process: _DebugProcess | None
-    workspace_root: Path
-    working_directory: Path
-    relative_script_path: str
-    launch_profile_name: str | None
-    args: list[str]
-    paused_reason: str | None
-    error_message: str | None
-    call_stack: list[NodeDebugStackFrameDTO]
-    last_stopped_frame: NodeDebugStackFrameDTO | None
-    breakpoints: dict[str, NodeDebugBreakpointDTO]
-    output: list[str]
-    last_evaluation: NodeDebugEvaluationDTO | None
-    evaluations: list[NodeDebugEvaluationDTO]
-    actions: list[NodeDebugActionRecordDTO]
-    requires_restart: bool
-    source_changed_paths: set[str]
+from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 
 
 def append_pending_debug_action(
@@ -80,7 +48,7 @@ def append_pending_debug_action(
 
 
 def append_runtime_debug_action(
-    runtime: NodeDebugSnapshotRuntime,
+    runtime: NodeDebugRuntime,
     *,
     action: str,
     message: str,
@@ -107,7 +75,7 @@ def append_runtime_debug_action(
 
 
 def build_node_debug_snapshot(
-    runtime: NodeDebugSnapshotRuntime,
+    runtime: NodeDebugRuntime,
     registry: NodeDebugConfigurationRegistry,
 ) -> NodeDebugStateDTO:
     process_id = runtime.process.pid if runtime.process is not None else None

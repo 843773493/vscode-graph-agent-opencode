@@ -19,10 +19,8 @@ from app.services.infrastructure.node_debug.breakpoints import (
     anchor_breakpoint,
     reconcile_breakpoint,
 )
-from app.services.infrastructure.node_debug.service import (
-    NodeDebugService,
-    _NodeDebugRuntime,
-)
+from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
@@ -131,7 +129,7 @@ async def test_stopping_state_remains_visible_until_process_exits(tmp_path: Path
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
     process = _BlockingProcess()
-    runtime = _NodeDebugRuntime(
+    runtime = NodeDebugRuntime(
         session_id="session-stopping",
         thread_id="main",
         configuration_id="configuration-stopping",

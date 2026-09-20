@@ -3,11 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-from collections.abc import Callable, Mapping
-from typing import Literal, Protocol
+from collections.abc import Mapping
+from typing import Literal
 
-from app.schemas.internal_v2.node_debug import NodeDebugLaunchClaimDTO, NodeDebugStatus
-from app.services.infrastructure.node_debug.inspector import NodeDebugInspectorState
 from app.services.infrastructure.node_debug.launch_claim import (
     NodeDebugClaimRecoveryDecision,
     claim_marked,
@@ -16,31 +14,23 @@ from app.services.infrastructure.node_debug.launch_claim import (
 from app.services.infrastructure.node_debug.process_identity import (
     probe_process_identity,
 )
+from app.services.infrastructure.node_debug.runtime_state import (
+    NodeDebugActionAppender,
+    NodeDebugClaimPhaseMarker,
+    NodeDebugLaunchClaimReader,
+    NodeDebugLaunchClaimWriter,
+    NodeDebugPendingActionAppender,
+    NodeDebugProcessLeaseSettler,
+    NodeDebugReleaseFailureNotifier,
+    NodeDebugRuntime,
+    NodeDebugSessionManifestWriter,
+    NodeDebugStopSnapshotClearer,
+)
 from app.services.infrastructure.node_debug.thread_owner import NodeDebugOwner
 
 _TERMINATE_TIMEOUT_SECONDS = 3.0
 _KILL_TIMEOUT_SECONDS = 3.0
 _RECONCILE_TERMINATE_TIMEOUT_SECONDS = 5.0
-
-
-class NodeDebugProcessLifecycleRuntime(Protocol):
-    """进程生命周期链路需要的运行时字段契约。"""
-
-    session_id: str
-    thread_id: str
-    process_instance_id: str | None
-    process_identity_source: str | None
-    process_start_marker: str | None
-    process: asyncio.subprocess.Process | None
-    inspector: NodeDebugInspectorState
-    status: NodeDebugStatus
-    closing: bool
-    error_message: str | None
-    state_lock: asyncio.Lock
-    stderr_task: asyncio.Task[None] | None
-    stdout_task: asyncio.Task[None] | None
-    process_task: asyncio.Task[None] | None
-    inspector_breakpoint_ids: dict[str, str]
 
 
 class NodeDebugProcessLifecycle:
@@ -49,18 +39,16 @@ class NodeDebugProcessLifecycle:
     def __init__(
         self,
         *,
-        runtimes: Mapping[NodeDebugOwner, NodeDebugProcessLifecycleRuntime],
-        read_launch_claim: Callable[
-            [str, str], NodeDebugLaunchClaimDTO | None
-        ],
-        write_launch_claim: Callable[[NodeDebugLaunchClaimDTO], None],
-        mark_claim_phase: Callable[..., None],
-        settle_process_lease: Callable[..., None],
-        notify_release_failed: Callable[..., None],
-        append_action: Callable[..., None],
-        append_pending_action: Callable[..., None],
-        write_session_manifest: Callable[[str, str], None],
-        clear_stop_snapshot: Callable[[NodeDebugProcessLifecycleRuntime], None],
+        runtimes: Mapping[NodeDebugOwner, NodeDebugRuntime],
+        read_launch_claim: NodeDebugLaunchClaimReader,
+        write_launch_claim: NodeDebugLaunchClaimWriter,
+        mark_claim_phase: NodeDebugClaimPhaseMarker,
+        settle_process_lease: NodeDebugProcessLeaseSettler,
+        notify_release_failed: NodeDebugReleaseFailureNotifier,
+        append_action: NodeDebugActionAppender,
+        append_pending_action: NodeDebugPendingActionAppender,
+        write_session_manifest: NodeDebugSessionManifestWriter,
+        clear_stop_snapshot: NodeDebugStopSnapshotClearer,
     ) -> None:
         self._runtimes = runtimes
         self._read_launch_claim = read_launch_claim
@@ -260,7 +248,7 @@ class NodeDebugProcessLifecycle:
 
     async def stop_runtime(
         self,
-        runtime: NodeDebugProcessLifecycleRuntime,
+        runtime: NodeDebugRuntime,
         *,
         clear_error: bool = True,
     ) -> Literal["stopped", "reconcile_required"]:
@@ -314,7 +302,7 @@ class NodeDebugProcessLifecycle:
         return "reconcile_required"
 
     async def terminate_and_verify(
-        self, runtime: NodeDebugProcessLifecycleRuntime
+        self, runtime: NodeDebugRuntime
     ) -> str | None:
         """终止 runtime 进程并核实终结；None 表示已核实不存在。"""
         process = runtime.process
@@ -369,7 +357,7 @@ class NodeDebugProcessLifecycle:
         return self.verify_process_gone(runtime)
 
     def verify_process_gone(
-        self, runtime: NodeDebugProcessLifecycleRuntime
+        self, runtime: NodeDebugRuntime
     ) -> str | None:
         """按已登记的 OS 起始身份核实进程是否终结。"""
         process = runtime.process

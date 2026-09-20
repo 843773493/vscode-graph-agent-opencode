@@ -27,9 +27,7 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugLaunchClaimDTO,
     NodeDebugLaunchProfileDTO,
     NodeDebugSessionManifestDTO,
-    NodeDebugStackFrameDTO,
     NodeDebugStateDTO,
-    NodeDebugStatus,
     NodeDebugVariableDTO,
 )
 from app.services.infrastructure.events.channel_events import (
@@ -57,7 +55,6 @@ from app.services.infrastructure.node_debug.configuration_registry import (
 )
 from app.services.infrastructure.node_debug.inspector import (
     NodeDebugInspector,
-    NodeDebugInspectorState,
 )
 from app.services.infrastructure.node_debug.launch_claim import (
     ACTIVE_CLAIM_PHASES,
@@ -72,6 +69,7 @@ from app.services.infrastructure.node_debug.process_identity import (
 from app.services.infrastructure.node_debug.process_lifecycle import (
     NodeDebugProcessLifecycle,
 )
+from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.session_admission import (
     NodeDebugSessionAdmission,
 )
@@ -104,7 +102,6 @@ _INSPECTOR_URL_PATTERN = re.compile(r"Debugger listening on (ws://\S+)")
 logger = logging.getLogger(__name__)
 _MAX_ACTIONS = 100
 _MAX_OUTPUT_LINES = 100
-_COMMAND_TIMEOUT_SECONDS = 10.0
 _TOOL_ACTION_SOURCES: dict[str, frozenset[str]] = {
     "create_debug_configuration": frozenset({"create_configuration"}),
     "activate_debug_configuration": frozenset({"activate_configuration"}),
@@ -137,50 +134,6 @@ _NODE_DEBUG_BLOCKER_REASON: dict[str, str] = {
 _RESIDENCY_ACTIVE_RUNTIME_STATUSES = frozenset(
     {"starting", "running", "paused", "stopping", "reconcile_required"}
 )
-
-
-@dataclass(slots=True)
-class _NodeDebugRuntime:
-    session_id: str
-    thread_id: str
-    configuration_id: str
-    workspace_root: Path
-    script_path: Path
-    relative_script_path: str
-    args: list[str] = field(default_factory=list)
-    working_directory: Path | None = None
-    launch_profile_name: str | None = None
-    node_bin: str | None = None
-    inspector_host: str = "127.0.0.1"
-    inspector_port: int = 0
-    command_timeout_seconds: float = _COMMAND_TIMEOUT_SECONDS
-    process: asyncio.subprocess.Process | None = None
-    status: NodeDebugStatus = "starting"
-    #: 本次启动唯一的 process instance 身份；旧 generation 的回调不得写新实例。
-    process_instance_id: str | None = None
-    process_identity_source: str | None = None
-    process_start_marker: str | None = None
-    paused_reason: str | None = None
-    paused_breakpoint_ids: set[str] = field(default_factory=set)
-    error_message: str | None = None
-    call_stack: list[NodeDebugStackFrameDTO] = field(default_factory=list)
-    last_stopped_frame: NodeDebugStackFrameDTO | None = None
-    inspector: NodeDebugInspectorState = field(default_factory=NodeDebugInspectorState)
-    breakpoints: dict[str, NodeDebugBreakpointDTO] = field(default_factory=dict)
-    inspector_breakpoint_ids: dict[str, str] = field(default_factory=dict)
-    output: list[str] = field(default_factory=list)
-    logpoint_error_message: str | None = None
-    last_evaluation: NodeDebugEvaluationDTO | None = None
-    evaluations: list[NodeDebugEvaluationDTO] = field(default_factory=list)
-    actions: list[NodeDebugActionRecordDTO] = field(default_factory=list)
-    state_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    stderr_task: asyncio.Task[None] | None = None
-    stdout_task: asyncio.Task[None] | None = None
-    process_task: asyncio.Task[None] | None = None
-    loaded_source_digests: dict[str, str | None] = field(default_factory=dict)
-    requires_restart: bool = False
-    source_changed_paths: set[str] = field(default_factory=set)
-    closing: bool = False
 
 
 @dataclass(slots=True)
@@ -259,7 +212,7 @@ class NodeDebugService:
         #: 释放失败（进入 reconcile_required）时发布 release_failed；成功终态
         #: 由账本 settle 发布 released。通知失败不改变 durable claim 事实。
         self._state_events = state_events
-        self._runtimes: dict[NodeDebugOwner, _NodeDebugRuntime] = {}
+        self._runtimes: dict[NodeDebugOwner, NodeDebugRuntime] = {}
         #: per-owner 启动临界区：串行化“核实旧 claim → durable 登记 → spawn → 握手”。
         #: 条目数与 ``_runtimes`` 同量级（每个被触达过的 owner 一把锁）；不做回收，
         #: 以免丢弃仍被并发任务持有的锁。
@@ -878,7 +831,7 @@ class NodeDebugService:
                         "核实并结清前拒绝启动新实例: "
                         f"session_id={session_id}, thread_id={thread_id}"
                     )
-            runtime = _NodeDebugRuntime(
+            runtime = NodeDebugRuntime(
                 session_id=session_id,
                 thread_id=thread_id,
                 configuration_id=selected_configuration_id,
@@ -1536,7 +1489,7 @@ class NodeDebugService:
     # 一致而虚报终态。
 
     def _process_lease_identity(
-        self, runtime: _NodeDebugRuntime
+        self, runtime: NodeDebugRuntime
     ) -> NodeDebugProcessLeaseIdentity | None:
         """按 runtime 的实例身份派生账本 identity；没有实例身份时不登记。"""
         process_instance_id = runtime.process_instance_id
@@ -1548,7 +1501,7 @@ class NodeDebugService:
             process_instance_id=process_instance_id,
         )
 
-    def _ensure_process_lease(self, runtime: _NodeDebugRuntime) -> None:
+    def _ensure_process_lease(self, runtime: NodeDebugRuntime) -> None:
         """登记 typed ``node_debug_process`` 资源并取得该实例的跨 Turn 占用 lease。
 
         只在握手成功、claim 进入 running 时调用，且以 lease_id（owner +
@@ -1685,7 +1638,7 @@ class NodeDebugService:
         return claim
 
     def _claim_for_runtime(
-        self, runtime: _NodeDebugRuntime
+        self, runtime: NodeDebugRuntime
     ) -> NodeDebugLaunchClaimDTO | None:
         """按 ``process_instance_id`` 取当前实例的 claim，旧 generation 回调不写新实例。"""
         claim = self._read_launch_claim(runtime.session_id, runtime.thread_id)
@@ -1698,7 +1651,7 @@ class NodeDebugService:
             return None
         return claim
 
-    def _mark_claim_running(self, runtime: _NodeDebugRuntime) -> None:
+    def _mark_claim_running(self, runtime: NodeDebugRuntime) -> None:
         claim = self._claim_for_runtime(runtime)
         if claim is None:
             return
@@ -1714,7 +1667,7 @@ class NodeDebugService:
         self._ensure_process_lease(runtime)
 
     @staticmethod
-    def _authoritative_inspector_port(runtime: _NodeDebugRuntime) -> int:
+    def _authoritative_inspector_port(runtime: NodeDebugRuntime) -> int:
         """握手成功后的权威 Inspector 端口。
 
         Workspace 模板默认使用动态端口（``0``），真实端口只有 Node 上报的握手 URL
@@ -1729,7 +1682,7 @@ class NodeDebugService:
 
     def _mark_claim_phase(
         self,
-        runtime: _NodeDebugRuntime,
+        runtime: NodeDebugRuntime,
         phase: Literal["stopping", "reconcile_required", "settled"],
         reason: str | None = None,
     ) -> None:
@@ -1794,7 +1747,7 @@ class NodeDebugService:
         self,
         session_id: str,
         thread_id: str,
-        runtime: _NodeDebugRuntime | None,
+        runtime: NodeDebugRuntime | None,
     ) -> None:
         owner = self._owner_key(session_id, thread_id)
         configuration_id = self._configuration_registry.active_id(session_id, thread_id)
@@ -2077,7 +2030,7 @@ class NodeDebugService:
 
     def _source_digests_for_runtime(
         self,
-        runtime: _NodeDebugRuntime,
+        runtime: NodeDebugRuntime,
     ) -> dict[str, str | None]:
         paths = {
             runtime.relative_script_path,
@@ -2092,7 +2045,7 @@ class NodeDebugService:
         self,
         session_id: str,
         thread_id: str,
-        runtime: _NodeDebugRuntime | None,
+        runtime: NodeDebugRuntime | None,
     ) -> None:
         owner = self._owner_key(session_id, thread_id)
         breakpoints = (
@@ -2229,7 +2182,7 @@ class NodeDebugService:
 
     async def _evaluate(
         self,
-        runtime: _NodeDebugRuntime,
+        runtime: NodeDebugRuntime,
         params: dict[str, object],
         *,
         actor: Literal["human", "ai", "system"],
@@ -2283,7 +2236,7 @@ class NodeDebugService:
 
     async def _read_stream(
         self,
-        runtime: _NodeDebugRuntime,
+        runtime: NodeDebugRuntime,
         stream_name: str,
     ) -> None:
         process = runtime.process
@@ -2326,7 +2279,7 @@ class NodeDebugService:
                     runtime.output.append(text)
                     del runtime.output[:-_MAX_OUTPUT_LINES]
 
-    async def _monitor_process(self, runtime: _NodeDebugRuntime) -> None:
+    async def _monitor_process(self, runtime: NodeDebugRuntime) -> None:
         process = runtime.process
         if process is None:
             return
@@ -2351,7 +2304,7 @@ class NodeDebugService:
             )
 
     @staticmethod
-    def _paused_at_breakpoint(runtime: _NodeDebugRuntime) -> bool:
+    def _paused_at_breakpoint(runtime: NodeDebugRuntime) -> bool:
         if runtime.paused_breakpoint_ids:
             return bool(
                 runtime.paused_breakpoint_ids
@@ -2369,7 +2322,7 @@ class NodeDebugService:
             for breakpoint in runtime.breakpoints.values()
         )
 
-    def _clear_stop_snapshot(self, runtime: _NodeDebugRuntime) -> None:
+    def _clear_stop_snapshot(self, runtime: NodeDebugRuntime) -> None:
         self._inspector.clear_paused_snapshot(runtime)
         runtime.inspector_breakpoint_ids.clear()
         runtime.breakpoints = {
@@ -2415,7 +2368,7 @@ class NodeDebugService:
 
     @staticmethod
     def _append_action(
-        runtime: _NodeDebugRuntime,
+        runtime: NodeDebugRuntime,
         action: str,
         message: str,
         *,
@@ -2437,7 +2390,7 @@ class NodeDebugService:
             max_actions=_MAX_ACTIONS,
         )
 
-    def _snapshot(self, runtime: _NodeDebugRuntime) -> NodeDebugStateDTO:
+    def _snapshot(self, runtime: NodeDebugRuntime) -> NodeDebugStateDTO:
         return build_node_debug_snapshot(
             runtime,
             self._configuration_registry,
