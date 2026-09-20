@@ -7,12 +7,12 @@ import {
   childThreadStatusLabel,
 } from "../state/childThreadDisplay";
 
-/** 委托子会话在列表中的图标；用分支语义表达“从父会话派生”。 */
+/** child thread 在列表中的图标；用分支语义表达“从 owner 会话派生”。 */
 const CHILD_THREAD_ICON = "codicon-git-branch";
 
 /**
  * 主窗口右侧侧边栏「运行与连接」标签中的子会话线程面板。
- * 这是会话层级资源：展示当前会话委派的 child thread（delegated child session），
+ * 这是会话层级资源：展示当前会话委派的 child thread，
  * 数据由 App 层加载后通过 props 传入，组件本身不持有业务状态权威。
  */
 export default function ChildThreadPanel({

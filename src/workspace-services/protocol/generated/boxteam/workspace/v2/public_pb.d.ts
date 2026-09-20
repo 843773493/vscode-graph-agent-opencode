@@ -4034,11 +4034,6 @@ export declare type SessionDTO = Message<"boxteam.workspace.v2.SessionDTO"> & {
   kind?: string | undefined;
 
   /**
-   * @generated from field: optional boxteam.workspace.v2.SessionDelegationDTO delegation = 12;
-   */
-  delegation?: SessionDelegationDTO | undefined;
-
-  /**
    * @generated from field: optional boxteam.workspace.v2.SessionGenerationOriginDTO generation_origin = 13;
    */
   generationOrigin?: SessionGenerationOriginDTO | undefined;
@@ -4049,47 +4044,6 @@ export declare type SessionDTO = Message<"boxteam.workspace.v2.SessionDTO"> & {
  * Use `create(SessionDTOSchema)` to create a new message.
  */
 export declare const SessionDTOSchema: GenMessage<SessionDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.SessionDelegationDTO
- */
-export declare type SessionDelegationDTO = Message<"boxteam.workspace.v2.SessionDelegationDTO"> & {
-  /**
-   * @generated from field: string parent_session_id = 1;
-   */
-  parentSessionId: string;
-
-  /**
-   * @generated from field: string parent_job_id = 2;
-   */
-  parentJobId: string;
-
-  /**
-   * @generated from field: string parent_tool_call_id = 3;
-   */
-  parentToolCallId: string;
-
-  /**
-   * @generated from field: string subagent_type = 4;
-   */
-  subagentType: string;
-
-  /**
-   * @generated from field: optional string start_status = 5;
-   */
-  startStatus?: string | undefined;
-
-  /**
-   * @generated from field: optional string start_error = 6;
-   */
-  startError?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.SessionDelegationDTO.
- * Use `create(SessionDelegationDTOSchema)` to create a new message.
- */
-export declare const SessionDelegationDTOSchema: GenMessage<SessionDelegationDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.SessionErrorExecutionEventDTO

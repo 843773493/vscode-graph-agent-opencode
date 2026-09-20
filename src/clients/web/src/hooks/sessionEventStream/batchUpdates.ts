@@ -20,7 +20,6 @@ import {
 import type { SessionStreamEvent } from "../../types/backend";
 import {
   refreshSessionMetadata,
-  refreshWorkspaceSessionList,
   type SetAppState,
 } from "./sessionRefresh";
 
@@ -128,20 +127,6 @@ export function flushSessionStreamEventBatch(
       context.setState,
     ).catch((error: unknown) => {
       setRefreshError(context.setState, "刷新会话标题失败", error);
-    });
-  }
-  const delegatedSessionCreated = events.some(
-    (event, index) =>
-      event.type === "tool_call_end"
-      && tracePayloadString(traceEvents[index], "tool_name") === "task",
-  );
-  if (delegatedSessionCreated) {
-    void refreshWorkspaceSessionList(
-      context.apiPort,
-      context.workspaceId,
-      context.setState,
-    ).catch((error: unknown) => {
-      setRefreshError(context.setState, "刷新委派子会话失败", error);
     });
   }
   const pendingQueueChanged = events.some(

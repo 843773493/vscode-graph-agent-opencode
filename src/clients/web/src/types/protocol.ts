@@ -243,15 +243,14 @@ export type PendingRequestUpdateRequest = Omit<WorkspaceProtocol.PendingRequestU
   attachments?: AttachmentRef[];
 };
 
-export type Session = Omit<WorkspaceProtocol.SessionDTO, "created_at" | "updated_at" | "title_source" | "current_provider_id" | "parent_session_id" | "context_source_session_id" | "kind" | "delegation" | "generation_origin"> & {
+export type Session = Omit<WorkspaceProtocol.SessionDTO, "created_at" | "updated_at" | "title_source" | "current_provider_id" | "parent_session_id" | "context_source_session_id" | "kind" | "generation_origin"> & {
   created_at: string;
   updated_at: string;
   title_source?: "default" | "user" | "auto";
   current_provider_id?: string | null;
   parent_session_id?: string | null;
   context_source_session_id?: string | null;
-  kind?: "normal" | "context_fork" | "delegated";
-  delegation?: WorkspaceProtocol.SessionDelegationDTO | null;
+  kind?: "normal" | "context_fork";
   generation_origin?: WorkspaceProtocol.SessionGenerationOriginDTO | null;
 };
 export type SessionUpdateRequest = WorkspaceProtocol.SessionUpdateRequest;

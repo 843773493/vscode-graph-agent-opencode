@@ -58,7 +58,7 @@ export async function refreshWorkspaceSessionList(
   options: { force?: boolean } = {},
 ): Promise<void> {
   if (!workspaceId) {
-    throw new Error("刷新委派子会话时缺少 workspace_id");
+    throw new Error("刷新工作区会话列表时缺少 workspace_id");
   }
   const snapshot = await fetchWorkspaceSessionListSnapshot(
     apiPort,

@@ -887,17 +887,7 @@ export interface SessionDTO {
   parent_session_id?: string | undefined;
   context_source_session_id?: string | undefined;
   kind?: string | undefined;
-  delegation?: SessionDelegationDTO | undefined;
   generation_origin?: SessionGenerationOriginDTO | undefined;
-}
-
-export interface SessionDelegationDTO {
-  parent_session_id: string;
-  parent_job_id: string;
-  parent_tool_call_id: string;
-  subagent_type: string;
-  start_status?: string | undefined;
-  start_error?: string | undefined;
 }
 
 export interface SessionErrorExecutionEventDTO {
@@ -7599,7 +7589,6 @@ function createBaseSessionDTO(): SessionDTO {
     parent_session_id: undefined,
     context_source_session_id: undefined,
     kind: undefined,
-    delegation: undefined,
     generation_origin: undefined,
   };
 }
@@ -7622,7 +7611,6 @@ export const SessionDTO: MessageFns<SessionDTO> = {
         ? globalThis.String(object.context_source_session_id)
         : undefined,
       kind: isSet(object.kind) ? globalThis.String(object.kind) : undefined,
-      delegation: isSet(object.delegation) ? SessionDelegationDTO.fromJSON(object.delegation) : undefined,
       generation_origin: isSet(object.generation_origin)
         ? SessionGenerationOriginDTO.fromJSON(object.generation_origin)
         : undefined,
@@ -7664,9 +7652,6 @@ export const SessionDTO: MessageFns<SessionDTO> = {
     if (message.kind !== undefined) {
       obj.kind = message.kind;
     }
-    if (message.delegation !== undefined) {
-      obj.delegation = SessionDelegationDTO.toJSON(message.delegation);
-    }
     if (message.generation_origin !== undefined) {
       obj.generation_origin = SessionGenerationOriginDTO.toJSON(message.generation_origin);
     }
@@ -7689,73 +7674,9 @@ export const SessionDTO: MessageFns<SessionDTO> = {
     message.parent_session_id = object.parent_session_id ?? undefined;
     message.context_source_session_id = object.context_source_session_id ?? undefined;
     message.kind = object.kind ?? undefined;
-    message.delegation = (object.delegation !== undefined && object.delegation !== null)
-      ? SessionDelegationDTO.fromPartial(object.delegation)
-      : undefined;
     message.generation_origin = (object.generation_origin !== undefined && object.generation_origin !== null)
       ? SessionGenerationOriginDTO.fromPartial(object.generation_origin)
       : undefined;
-    return message;
-  },
-};
-
-function createBaseSessionDelegationDTO(): SessionDelegationDTO {
-  return {
-    parent_session_id: "",
-    parent_job_id: "",
-    parent_tool_call_id: "",
-    subagent_type: "",
-    start_status: undefined,
-    start_error: undefined,
-  };
-}
-
-export const SessionDelegationDTO: MessageFns<SessionDelegationDTO> = {
-  fromJSON(object: any): SessionDelegationDTO {
-    return {
-      parent_session_id: isSet(object.parent_session_id) ? globalThis.String(object.parent_session_id) : "",
-      parent_job_id: isSet(object.parent_job_id) ? globalThis.String(object.parent_job_id) : "",
-      parent_tool_call_id: isSet(object.parent_tool_call_id) ? globalThis.String(object.parent_tool_call_id) : "",
-      subagent_type: isSet(object.subagent_type) ? globalThis.String(object.subagent_type) : "",
-      start_status: isSet(object.start_status) ? globalThis.String(object.start_status) : undefined,
-      start_error: isSet(object.start_error) ? globalThis.String(object.start_error) : undefined,
-    };
-  },
-
-  toJSON(message: SessionDelegationDTO): unknown {
-    const obj: any = {};
-    if (message.parent_session_id !== "") {
-      obj.parent_session_id = message.parent_session_id;
-    }
-    if (message.parent_job_id !== "") {
-      obj.parent_job_id = message.parent_job_id;
-    }
-    if (message.parent_tool_call_id !== "") {
-      obj.parent_tool_call_id = message.parent_tool_call_id;
-    }
-    if (message.subagent_type !== "") {
-      obj.subagent_type = message.subagent_type;
-    }
-    if (message.start_status !== undefined) {
-      obj.start_status = message.start_status;
-    }
-    if (message.start_error !== undefined) {
-      obj.start_error = message.start_error;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<SessionDelegationDTO>, I>>(base?: I): SessionDelegationDTO {
-    return SessionDelegationDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SessionDelegationDTO>, I>>(object: I): SessionDelegationDTO {
-    const message = createBaseSessionDelegationDTO();
-    message.parent_session_id = object.parent_session_id ?? "";
-    message.parent_job_id = object.parent_job_id ?? "";
-    message.parent_tool_call_id = object.parent_tool_call_id ?? "";
-    message.subagent_type = object.subagent_type ?? "";
-    message.start_status = object.start_status ?? undefined;
-    message.start_error = object.start_error ?? undefined;
     return message;
   },
 };

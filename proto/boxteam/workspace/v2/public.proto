@@ -876,6 +876,8 @@ message SessionCreateRequest {
 }
 
 message SessionDTO {
+  reserved 12;
+  reserved "delegation";
   google.protobuf.Timestamp created_at = 1;
   google.protobuf.Timestamp updated_at = 2;
   string session_id = 3;
@@ -887,17 +889,7 @@ message SessionDTO {
   optional string parent_session_id = 9;
   optional string context_source_session_id = 10;
   optional string kind = 11;
-  optional SessionDelegationDTO delegation = 12;
   optional SessionGenerationOriginDTO generation_origin = 13;
-}
-
-message SessionDelegationDTO {
-  string parent_session_id = 1;
-  string parent_job_id = 2;
-  string parent_tool_call_id = 3;
-  string subagent_type = 4;
-  optional string start_status = 5;
-  optional string start_error = 6;
 }
 
 message SessionErrorExecutionEventDTO {

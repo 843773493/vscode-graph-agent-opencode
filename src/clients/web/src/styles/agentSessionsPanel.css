@@ -315,17 +315,6 @@
   gap: 8px;
 }
 
-.session-kind-icon {
-  flex: 0 0 14px;
-  color: var(--bt-text-muted);
-  font-size: 13px;
-  text-align: center;
-}
-
-.session-kind-icon.failed {
-  color: var(--bt-status-danger);
-}
-
 /* 滚动条按需显示，不为未出现的滚动条永久预留空间。 */
 .agent-sessions-panel-body {
   scrollbar-color: var(--bt-scrollbar-background) transparent;

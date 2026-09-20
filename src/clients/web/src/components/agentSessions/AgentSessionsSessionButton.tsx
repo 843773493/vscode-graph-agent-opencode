@@ -48,10 +48,6 @@ export default function AgentSessionsSessionButton({
   unread?: boolean;
 }): React.ReactNode {
   const relativeTime = formatRelativeTime(session.updated_at || session.created_at);
-  const delegationFailed = session.delegation?.start_status === 'failed';
-  const delegatedStatusTitle = delegationFailed
-    ? `Agent 委派启动失败${session.delegation?.start_error ? `：${session.delegation.start_error}` : ''}`
-    : 'Agent 委派子会话';
   return (
     <button
       type="button"
@@ -63,17 +59,8 @@ export default function AgentSessionsSessionButton({
         event.stopPropagation();
         onOpenMenu(session, event.clientX, event.clientY);
       }}
-      title={`${session.title || '未命名'}\n${session.session_id}${
-        session.kind === 'delegated' ? `\n${delegatedStatusTitle}` : ''
-      }`}
+      title={`${session.title || '未命名'}\n${session.session_id}`}
     >
-      {session.kind === 'delegated' ? (
-        <span
-          className={`codicon codicon-${delegationFailed ? 'error' : 'robot'} session-kind-icon${delegationFailed ? ' failed' : ''}`}
-          aria-label={delegatedStatusTitle}
-          title={delegatedStatusTitle}
-        />
-      ) : null}
       <span className="session-title">{session.title || '未命名'}</span>
       <SessionActivityIndicator running={running} unread={unread} />
       <span className="session-time">
