@@ -162,6 +162,38 @@ class EvaluateExpressionInput(_StrictDebugInput):
     expression: str = Field(min_length=1, description="当前暂停上下文中的表达式。")
 
 
+_DEBUGGING_TOOL_INPUT_MODELS: dict[str, type[_StrictDebugInput]] = {
+    "list_debug_configurations": _NoArgumentInput,
+    "create_debug_configuration": CreateDebugConfigurationInput,
+    "activate_debug_configuration": DebugConfigurationIdInput,
+    "delete_debug_configuration": DebugConfigurationIdInput,
+    "start_debugging": StartDebuggingInput,
+    "stop_debugging": _NoArgumentInput,
+    "step_over": _NoArgumentInput,
+    "step_into": _NoArgumentInput,
+    "step_out": _NoArgumentInput,
+    "continue_execution": _NoArgumentInput,
+    "pause_execution": _NoArgumentInput,
+    "restart_debugging": _NoArgumentInput,
+    "add_breakpoint": BreakpointInput,
+    "add_logpoint": LogpointInput,
+    "remove_breakpoint": RemoveBreakpointInput,
+    "clear_all_breakpoints": _NoArgumentInput,
+    "list_breakpoints": _NoArgumentInput,
+    "list_variable_names": VariableNamesInput,
+    "get_variables_values": VariableValuesInput,
+    "evaluate_expression": EvaluateExpressionInput,
+}
+
+
+def debugging_tool_input_json_schema(tool_name: str) -> dict[str, object]:
+    """导出扩展目录与信封分发共同使用的调试目标参数 schema。"""
+    input_model = _DEBUGGING_TOOL_INPUT_MODELS.get(tool_name)
+    if input_model is None:
+        raise ValueError(f"未知源码调试扩展工具: {tool_name}")
+    return input_model.model_json_schema()
+
+
 def _json_result(payload: dict[str, object]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -1156,4 +1188,8 @@ def create_debugging_tool(context: CustomToolFactoryContext) -> BaseTool:
     raise ValueError(f"未知源码调试扩展工具: {raw_tool_name}")
 
 
-__all__ = ["create_debugging_tool", "create_debugging_tools"]
+__all__ = [
+    "create_debugging_tool",
+    "create_debugging_tools",
+    "debugging_tool_input_json_schema",
+]

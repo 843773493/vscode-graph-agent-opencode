@@ -299,9 +299,15 @@ def test_catalog_keeps_debugging_targets_in_inner_directory(
         definition = definitions[target_name]
         assert definition["group_id"] == DEBUGGING_TOOL_GROUP.group_id
         assert definition["kind"] == DEBUGGING_TOOL_GROUP.kind
-        # 内层目录不携带模型可见参数 schema，参数契约只在 Skill 中作为
-        # tool_name + arguments_schema 出现。
-        assert definition["parameters"] == {}
+        assert definition["parameters"]["type"] == "object"
+        assert definition["parameters"]["additionalProperties"] is False
+    assert set(definitions["start_debugging"]["parameters"]["properties"]) == {
+        "fileFullPath",
+        "workingDirectory",
+        "testName",
+        "configurationName",
+        "debugConfigurationId",
+    }
     assert EXTENSION_TOOL_INVOKER_NAME not in definitions
 
 

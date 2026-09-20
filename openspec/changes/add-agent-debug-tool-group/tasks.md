@@ -39,7 +39,7 @@
 
 ## 6. 验证与交付
 
-- [ ] 6.1 运行受影响的 Python 静态检查、类型/编译检查和 focused unit tests
+- [x] 6.1 运行受影响的 Python 静态检查、类型/编译检查和 focused unit tests
 - [ ] 6.2 运行受影响纯后端E2E与信封/ThreadRuntimeBinding/fork/删除集成测试；迁移既有`test_debug_prompt_flow.py`和`test_debug_prompt_live.py`为确定性ModelStream下的`skill_load`→固定信封→真实tool result/刷新链，验证thread归属、权限、旧名称与读文件指引消失，并保留规定目录下产物；现有直接目标测试不能代替模型可发现与信封运行证据
-- [ ] 6.3 运行 `openspec validate --change add-agent-debug-tool-group --strict`
+- [x] 6.3 运行 `openspec validate --change add-agent-debug-tool-group --strict`
 - [ ] 6.4 更新任务状态并确认实现与 proposal、spec、design 一致

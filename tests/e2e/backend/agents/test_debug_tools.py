@@ -81,6 +81,7 @@ async def test_backend_catalog_exposes_debug_tool_group_and_schema(
         "workingDirectory",
         "testName",
         "configurationName",
+        "debugConfigurationId",
     }
     assert tools["start_debugging"]["test_supported"] is False
 

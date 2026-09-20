@@ -10,6 +10,7 @@ from app.agents.policy import (
     catalog_group_for_tool,
     parse_custom_tool_specs,
 )
+from app.agents.tools.debugging import debugging_tool_input_json_schema
 from app.services.infrastructure.config_service import ConfigService
 
 
@@ -68,12 +69,17 @@ class ToolCatalogService:
                 "group_name": f"扩展工具 · {module_name}",
                 "kind": "extension",
             }
+        parameters = (
+            debugging_tool_input_json_schema(spec.name)
+            if known_group == DEBUGGING_TOOL_GROUP
+            else {}
+        )
         return {
             "id": spec.name,
             "name": spec.name,
             "origin": "custom",
             "description": spec.description or f"工作区扩展工具 {spec.name}",
-            "parameters": {},
+            "parameters": parameters,
             "category": group_fields["kind"],
             **group_fields,
         }
