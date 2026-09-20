@@ -16,9 +16,9 @@
 ## 3. Agent 调试工具组
 
 - [x] 3.1 核对并补齐16个DebugMCP风格内层目标输入模型和JSON结果包装，保留`start_debugging.debugConfigurationId`、`add_breakpoint.hitCondition`、`add_logpoint.hitCondition`；严格拒绝未知/多余参数而不静默丢弃。启动顺序为显式ID→当前thread活动方案→无方案时安全路径创建；ID仅在受信thread解析。两个必填路径须在选中方案后与有效入口/工作目录规范化相等，显式profile须与方案解析结果一致；否则在任何方案激活/旧进程停止/新进程启动前返回带字段的`debug_launch_parameter_conflict`，不存在ID先报`debug_configuration_not_found`。目标schema由固定`invoke_extension_tool(tool_name, arguments)`在后端校验，不生成16份Provider tool定义，现有方案管理目标也走该信封
-- [ ] 3.2 保留启动、停止、重启、继续、暂停和三种单步目标，返回authoritative debug state；补齐`stopping`可观察状态，在进程真实终结前不解除idle blocker或提前报告stopped
-- [ ] 3.3 实现普通断点、条件断点、断点移除、断点列举和全部清理工具
-- [ ] 3.4 实现变量名、指定变量值和表达式求值工具，支持 scope 校验和暂停上下文校验
+- [x] 3.2 保留启动、停止、重启、继续、暂停和三种单步目标，返回authoritative debug state；补齐`stopping`可观察状态，在进程真实终结前不解除idle blocker或提前报告stopped
+- [x] 3.3 实现普通断点、条件断点、断点移除、断点列举和全部清理工具
+- [x] 3.4 实现变量名、指定变量值和表达式求值工具，支持 scope 校验和暂停上下文校验
 - [ ] 3.5 从受信`ThreadRuntimeBinding`/ToolInvocationContext注入精确SessionThread、原model-callExtensionCatalogBindingRef和NodeDebugService；模型不能选择product thread、DAP frame或Inspector连接，旧generation回调不得写新owner，tool result保留原tool_call_id；debug owner按每次启动唯一process_instance_id在spawn前登记独立于短期调用的durable launch_pending claim/nonce，spawn后核对OS进程起始身份和Inspector握手才登记PID/端口，跨Turn保留typed lease及idle blocker。重启/停止失败或无法核实旧实例保持`reconcile_required`，不得以PID/端口单独认领或停止新进程；核实终态并结清lease后才解除
 
 ## 4. Agent 注册与策略
