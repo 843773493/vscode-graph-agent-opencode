@@ -14,6 +14,9 @@ from app.agents.tools.debugging import create_debugging_tools
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.node_debug_session_store import (
     NodeDebugSessionStore,
@@ -22,6 +25,9 @@ from app.services.infrastructure.node_debug_thread_owner import (
     MAIN_THREAD_ID,
     NodeDebugThreadOwner,
     resolve_node_debug_owner,
+)
+from tests.support.node_debug_dependencies import (
+    permissive_node_debug_session_admission,
 )
 
 
@@ -88,10 +94,12 @@ async def _create_catalog_debug_owners(
     main_owner = resolve_node_debug_owner(
         resolver,
         session_id=main_session_id,
+        thread_id=MAIN_THREAD_ID,
     )
     child_owner = resolve_node_debug_owner(
         resolver,
         session_id=child_session_id,
+        thread_id=MAIN_THREAD_ID,
     )
     assert main_owner.key == (main_session_id, MAIN_THREAD_ID)
     assert child_owner.key == (child_session_id, MAIN_THREAD_ID)
@@ -116,6 +124,8 @@ def _build_debug_service(
         workspace_root=workspace_root,
         config_service=config_service,
         session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     ), store
 
 

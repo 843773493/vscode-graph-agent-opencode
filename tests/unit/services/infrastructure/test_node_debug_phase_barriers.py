@@ -23,6 +23,9 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugLaunchClaimDTO,
 )
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.node_debug_launch_claim import (
     claim_with_spawn_identity,
     new_launch_claim,
@@ -33,6 +36,9 @@ from app.services.infrastructure.node_debug_process_identity import (
 )
 from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+from tests.support.node_debug_dependencies import (
+    permissive_node_debug_session_admission,
+)
 
 _PARENT_SESSION_ID = "ses_phase_parent"
 _OTHER_SESSION_ID = "ses_phase_other"
@@ -117,6 +123,8 @@ def _service(
         workspace_root=workspace_root,
         config_service=_FixedPortConfig(port, timeout=timeout),
         session_store=NodeDebugSessionStore(resolver),
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
 
 
@@ -138,6 +146,7 @@ async def test_fixed_inspector_port_conflict_is_owner_isolated(tmp_path: Path) -
             created = await service.create_configuration(
                 NodeDebugConfigurationCreateRequest(
                     session_id=session_id,
+                    thread_id="main",
                     name=name,
                     script_path="entry.mjs",
                 )
@@ -146,6 +155,7 @@ async def test_fixed_inspector_port_conflict_is_owner_isolated(tmp_path: Path) -
 
         first = await service.start(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             path="entry.mjs",
             args=[],
             breakpoints=[],
@@ -156,12 +166,13 @@ async def test_fixed_inspector_port_conflict_is_owner_isolated(tmp_path: Path) -
         with pytest.raises(RuntimeError, match="启动 Node Inspector 失败"):
             await service.start(
                 session_id=_OTHER_SESSION_ID,
+                thread_id="main",
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],
             )
 
-        first_after_conflict = await service.get_state(_PARENT_SESSION_ID)
+        first_after_conflict = await service.get_state(_PARENT_SESSION_ID, "main")
         assert first_after_conflict.status == "running"
         assert first_after_conflict.pid == first.pid
         assert first_after_conflict.session_id == _PARENT_SESSION_ID
@@ -194,6 +205,7 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             name="phase barrier",
             script_path="entry.mjs",
         )
@@ -212,6 +224,7 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
     start_task = asyncio.create_task(
         service.start(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             path="entry.mjs",
             args=[],
             breakpoints=[],
@@ -234,7 +247,7 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
     # 新 backend 只能把“无 PID 的 launch_pending”提升为
     # reconcile_required，不能把同端口上碰巧存在的实例当成旧 owner。
     restored = _service(tmp_path, resolver, port=port, timeout=0.5)
-    blocked = await restored.get_state(_PARENT_SESSION_ID)
+    blocked = await restored.get_state(_PARENT_SESSION_ID, "main")
     assert blocked.status == "reconcile_required"
     blocked_claim = restored._session_store.read_launch_claim(  # type: ignore[union-attr]
         _PARENT_SESSION_ID, "main"
@@ -260,7 +273,7 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
     try:
         await asyncio.sleep(0.1)
         assert foreign.returncode is None
-        still_blocked = await restored.get_state(_PARENT_SESSION_ID)
+        still_blocked = await restored.get_state(_PARENT_SESSION_ID, "main")
         assert still_blocked.status == "reconcile_required"
         assert foreign.returncode is None
     finally:

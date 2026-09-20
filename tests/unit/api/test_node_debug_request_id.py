@@ -19,7 +19,7 @@ def test_node_debug_http_error_contains_authoritative_request_id() -> None:
     try:
         response = TestClient(app).get(
             "/api/v1/debug/node",
-            params={"session_id": "missing"},
+            params={"session_id": "missing", "thread_id": "main"},
             headers={
                 "X-Local-Token": "local-dev-token",
                 "X-Request-ID": "req_node_debug_missing",
@@ -44,7 +44,7 @@ def test_node_debug_validation_error_contains_authoritative_request_id() -> None
     try:
         response = TestClient(app).get(
             "/api/v1/debug/node",
-            params={"session_id": ""},
+            params={"session_id": "ses_test"},
             headers={
                 "X-Local-Token": "local-dev-token",
                 "X-Request-ID": "req_node_debug_validation",
@@ -57,7 +57,7 @@ def test_node_debug_validation_error_contains_authoritative_request_id() -> None
     assert response.headers["X-Request-ID"] == "req_node_debug_validation"
     body = response.json()
     assert body["request_id"] == "req_node_debug_validation"
-    assert body["detail"][0]["loc"] == ["query", "session_id"]
+    assert body["detail"][0]["loc"] == ["query", "thread_id"]
 
 
 def test_http_exception_preserves_protocol_headers_and_structured_detail() -> None:
@@ -79,7 +79,7 @@ def test_http_exception_preserves_protocol_headers_and_structured_detail() -> No
     try:
         response = TestClient(app).get(
             "/api/v1/debug/node",
-            params={"session_id": "ses_test"},
+            params={"session_id": "ses_test", "thread_id": "main"},
             headers={
                 "X-Local-Token": "local-dev-token",
                 "X-Request-ID": "req_node_debug_protocol_error",

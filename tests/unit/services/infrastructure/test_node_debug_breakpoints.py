@@ -11,6 +11,10 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugConfigurationCreateRequest,
 )
+from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.node_debug_breakpoints import (
     anchor_breakpoint,
     reconcile_breakpoint,
@@ -20,6 +24,9 @@ from app.services.infrastructure.node_debug_service import (
     _NodeDebugRuntime,
 )
 from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+from tests.support.node_debug_dependencies import (
+    permissive_node_debug_session_admission,
+)
 
 
 class _SessionPathResolverStub:
@@ -117,7 +124,12 @@ def test_breakpoint_marks_ambiguous_and_deleted_source(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_stopping_state_remains_visible_until_process_exits(tmp_path: Path) -> None:
-    service = NodeDebugService(workspace_root=tmp_path)
+    service = NodeDebugService(
+        workspace_root=tmp_path,
+        config_service=ConfigService(workspace_root=tmp_path),
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
     process = _BlockingProcess()
     runtime = _NodeDebugRuntime(
         session_id="session-stopping",
@@ -150,16 +162,24 @@ async def test_pending_breakpoints_are_restored_from_session_store(
     store = NodeDebugSessionStore(resolver)
     session_id = "session-debug-store"
 
-    first = NodeDebugService(workspace_root=workspace_root, session_store=store)
+    first = NodeDebugService(
+        workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
+        session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
     created = await first.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=session_id,
+            thread_id="main",
             name="入口调试",
             script_path="entry.mjs",
         )
     )
     first_state = await first.apply_action(
         session_id=session_id,
+        thread_id="main",
         action="set_breakpoint",
         params={
             "path": "entry.mjs",
@@ -172,8 +192,14 @@ async def test_pending_breakpoints_are_restored_from_session_store(
     assert first_state.configuration_revision > 0
     assert first_state.active_configuration_id == created.active_configuration_id
 
-    restored = NodeDebugService(workspace_root=workspace_root, session_store=store)
-    restored_state = await restored.get_state(session_id)
+    restored = NodeDebugService(
+        workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
+        session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
+    restored_state = await restored.get_state(session_id, "main")
     assert restored_state.status == "idle"
     assert restored_state.breakpoints[0].path == "entry.mjs"
     assert restored_state.breakpoints[0].line == 2
@@ -197,11 +223,18 @@ async def test_multiple_configurations_are_isolated_and_portable(
     )
     resolver = _SessionPathResolverStub(tmp_path / "sessions")
     store = NodeDebugSessionStore(resolver)
-    service = NodeDebugService(workspace_root=workspace_root, session_store=store)
+    service = NodeDebugService(
+        workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
+        session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
 
     first = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id="source-session",
+            thread_id="main",
             name="第一套",
             script_path="first.mjs",
         )
@@ -210,12 +243,14 @@ async def test_multiple_configurations_are_isolated_and_portable(
     assert first_id is not None
     await service.apply_action(
         session_id="source-session",
+        thread_id="main",
         action="set_breakpoint",
         params={"path": "first.mjs", "line": 1},
     )
     second = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id="source-session",
+            thread_id="main",
             name="第二套",
             script_path="second.mjs",
         )
@@ -228,6 +263,7 @@ async def test_multiple_configurations_are_isolated_and_portable(
     restored_first = await service.activate_configuration(
         "source-session",
         first_id,
+        thread_id="main",
     )
     assert [breakpoint.path for breakpoint in restored_first.breakpoints] == [
         "first.mjs"
@@ -238,9 +274,11 @@ async def test_multiple_configurations_are_isolated_and_portable(
         source_session_id="source-session",
         target_session_id="target-session",
         configuration_id=first_id,
+        source_thread_id="main",
+        target_thread_id="main",
         activate=True,
     )
-    target = await service.get_state("target-session")
+    target = await service.get_state("target-session", "main")
     assert target.active_configuration_id == copied.configuration_id
     assert target.active_configuration_name == "第一套"
     assert copied.model_dump().keys().isdisjoint({"session_id", "pid", "actions"})
@@ -273,7 +311,10 @@ async def test_main_and_child_thread_have_independent_debug_state(
     resolver = _SessionPathResolverStub(tmp_path / "sessions")
     service = NodeDebugService(
         workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
 
     main = await service.create_configuration(
@@ -328,9 +369,12 @@ async def test_legacy_single_configuration_file_is_not_loaded(tmp_path: Path) ->
 
     service = NodeDebugService(
         workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
-    state = await service.get_state("legacy-session")
+    state = await service.get_state("legacy-session", "main")
     assert state.configurations == []
     assert state.active_configuration_id is None
 
@@ -348,11 +392,18 @@ async def test_configuration_file_can_be_copied_directly_into_loaded_session(
     sessions_root = tmp_path / "sessions"
     resolver = _SessionPathResolverStub(sessions_root)
     store = NodeDebugSessionStore(resolver)
-    service = NodeDebugService(workspace_root=workspace_root, session_store=store)
+    service = NodeDebugService(
+        workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
+        session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
 
     source_state = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id="source-session",
+            thread_id="main",
             name="可复制方案",
             script_path="portable.mjs",
         )
@@ -360,7 +411,7 @@ async def test_configuration_file_can_be_copied_directly_into_loaded_session(
     configuration_id = source_state.active_configuration_id
     assert configuration_id is not None
 
-    empty_target = await service.get_state("target-session")
+    empty_target = await service.get_state("target-session", "main")
     assert empty_target.configurations == []
     source_file = (
         sessions_root
@@ -376,7 +427,7 @@ async def test_configuration_file_can_be_copied_directly_into_loaded_session(
     target_directory.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_file, target_directory / source_file.name)
 
-    discovered = await service.get_state("target-session")
+    discovered = await service.get_state("target-session", "main")
     assert [item.configuration_id for item in discovered.configurations] == [
         configuration_id
     ]
@@ -384,6 +435,7 @@ async def test_configuration_file_can_be_copied_directly_into_loaded_session(
     activated = await service.activate_configuration(
         "target-session",
         configuration_id,
+        thread_id="main",
     )
     assert activated.active_configuration_name == "可复制方案"
     assert activated.script_path == "portable.mjs"
@@ -399,10 +451,16 @@ async def test_duplicate_breakpoint_is_rejected_for_shared_operators(
         "const value = 23;\nconsole.log(value);\n",
         encoding="utf-8",
     )
-    service = NodeDebugService(workspace_root=workspace_root)
+    service = NodeDebugService(
+        workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
 
     await service.apply_action(
         session_id="shared-session",
+        thread_id="main",
         action="set_breakpoint",
         params={"path": "shared.mjs", "line": 2},
         actor="human",
@@ -410,6 +468,7 @@ async def test_duplicate_breakpoint_is_rejected_for_shared_operators(
     with pytest.raises(ValueError, match="源码断点已存在"):
         await service.apply_action(
             session_id="shared-session",
+            thread_id="main",
             action="set_breakpoint",
             params={
                 "path": "shared.mjs",
@@ -419,7 +478,7 @@ async def test_duplicate_breakpoint_is_rejected_for_shared_operators(
             actor="ai",
         )
 
-    state = await service.get_state("shared-session")
+    state = await service.get_state("shared-session", "main")
     assert [(item.path, item.line) for item in state.breakpoints] == [("shared.mjs", 2)]
 
 
@@ -433,16 +492,23 @@ async def test_pending_breakpoint_can_be_atomically_changed_to_logpoint(
         "const value = 23;\nconsole.log(value);\n",
         encoding="utf-8",
     )
-    service = NodeDebugService(workspace_root=workspace_root)
+    service = NodeDebugService(
+        workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
 
     created = await service.apply_action(
         session_id="editable-session",
+        thread_id="main",
         action="set_breakpoint",
         params={"path": "editable.mjs", "line": 2},
     )
     breakpoint_id = created.breakpoints[0].breakpoint_id
     updated = await service.apply_action(
         session_id="editable-session",
+        thread_id="main",
         action="update_breakpoint",
         params={
             "breakpoint_id": breakpoint_id,

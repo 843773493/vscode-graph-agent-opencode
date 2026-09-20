@@ -20,8 +20,14 @@ from app.agents.tools.custom_invocation import (
 from app.agents.tools.debugging import create_debugging_tools
 from app.schemas.internal_v2.node_debug import NodeDebugConfigurationCreateRequest
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+from tests.support.node_debug_dependencies import (
+    permissive_node_debug_session_admission,
+)
 
 DEBUG_TARGET_NAMES = frozenset(
     {
@@ -162,7 +168,7 @@ async def _wait_for_debug_state(
     expected_status: str,
     output_fragment: str | None = None,
 ):
-    state = await service.get_state(session_id)
+    state = await service.get_state(session_id, "main")
     for _ in range(300):
         if state.status == expected_status and (
             output_fragment is None
@@ -170,7 +176,7 @@ async def _wait_for_debug_state(
         ):
             return state
         await asyncio.sleep(0.01)
-        state = await service.get_state(session_id)
+        state = await service.get_state(session_id, "main")
     raise AssertionError(
         f"等待调试状态失败: status={state.status}, output={state.output!r}"
     )
@@ -285,6 +291,8 @@ async def test_node_inspector_tool_adapter_integration_session(
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=config_service,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
     tools = _tool_map(workspace_root, service)
 
@@ -398,6 +406,8 @@ async def test_node_inspector_tool_adapter_integration_isolation(
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=config_service,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
     tools = create_debugging_tools(
         session_id="ses_e2e_debug_isolated",
@@ -479,7 +489,7 @@ async def test_node_inspector_tool_adapter_integration_isolation(
         )
         assert removed_logpoint["ok"] is True
 
-        other_session = await service.get_state("ses_other_debug_session")
+        other_session = await service.get_state("ses_other_debug_session", "main")
         assert other_session.status == "idle"
         assert other_session.breakpoints == []
         assert other_session.actions == []
@@ -529,8 +539,8 @@ async def test_node_inspector_tool_adapter_integration_isolation(
         )
         assert other_start_result["ok"] is True
         assert other_start_result["state"]["status"] == "paused"
-        state = await service.get_state("ses_e2e_debug_isolated")
-        other_state = await service.get_state("ses_other_debug_session")
+        state = await service.get_state("ses_e2e_debug_isolated", "main")
+        other_state = await service.get_state("ses_other_debug_session", "main")
         assert state.pid is not None
         assert other_state.pid is not None
         assert state.pid != other_state.pid
@@ -559,6 +569,8 @@ async def test_node_inspector_hit_count_and_logpoint_runtime_semantics(
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=config_service,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
     tools = _tool_map(workspace_root, service)
 
@@ -640,6 +652,8 @@ async def test_node_logpoint_reports_invalid_interpolation_without_pausing(
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=config_service,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
     tools = _tool_map(workspace_root, service)
 
@@ -731,6 +745,8 @@ async def test_node_debug_rejects_unimplemented_adapter(
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=config_service,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
     tools = {
         tool.name: tool
@@ -776,6 +792,8 @@ async def test_node_inspector_agent_results_enforce_least_privilege_and_redactio
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=config_service,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
     tools = _tool_map(workspace_root, service)
 
@@ -845,6 +863,8 @@ async def test_human_and_agent_share_cross_file_debug_runtime(
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=config_service,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
     tools = _tool_map(workspace_root, service)
 
@@ -876,6 +896,7 @@ async def test_human_and_agent_share_cross_file_debug_runtime(
         # 人类通过 Web API 使用的同一服务直接继续，不需要接管或交接。
         human_state = await service.apply_action(
             session_id="ses_e2e_debug",
+            thread_id="main",
             action="continue",
             params={},
         )
@@ -914,6 +935,8 @@ async def test_active_debug_session_invalidates_changed_source_without_blocking_
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=config_service,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
     tools = _tool_map(workspace_root, service)
 
@@ -948,7 +971,7 @@ async def test_active_debug_session_invalidates_changed_source_without_blocking_
 
         original = worker_path.read_text(encoding="utf-8")
         worker_path.write_text("// 已插入说明\n" + original, encoding="utf-8")
-        changed = await service.get_state("ses_e2e_debug")
+        changed = await service.get_state("ses_e2e_debug", "main")
         assert changed.requires_restart is True
         assert changed.source_changed_paths == ["debug-worker.mjs"]
         assert changed.breakpoints[0].line == worker_line
@@ -957,6 +980,7 @@ async def test_active_debug_session_invalidates_changed_source_without_blocking_
         # 源码变化只让断点失效，不阻止人类继续当前已经加载的 Node 代码。
         continued = await service.apply_action(
             session_id="ses_e2e_debug",
+            thread_id="main",
             action="continue",
             params={},
         )
@@ -996,6 +1020,8 @@ async def test_start_and_finish_report_invalid_breakpoints_at_both_boundaries(
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=config_service,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
     tools = _tool_map(workspace_root, service)
 
@@ -1061,7 +1087,7 @@ async def test_start_and_finish_report_invalid_breakpoints_at_both_boundaries(
             "// 运行中新增说明\n" + entry_path.read_text(encoding="utf-8"),
             encoding="utf-8",
         )
-        changed = await service.get_state("ses_e2e_debug")
+        changed = await service.get_state("ses_e2e_debug", "main")
         assert changed.status == "paused"
         assert {breakpoint.relocation_status for breakpoint in changed.breakpoints} == {
             "pending_update"
@@ -1112,12 +1138,15 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
         workspace_root=workspace_root,
         config_service=config_service,
         session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
 
     try:
         configured = await first.create_configuration(
             NodeDebugConfigurationCreateRequest(
                 session_id=session_id,
+                thread_id="main",
                 name="可恢复方案",
                 script_path="debug-entry.mjs",
                 working_directory="",
@@ -1135,6 +1164,7 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
         assert configuration_id is not None
         started = await first.start(
             session_id=session_id,
+            thread_id="main",
             configuration_id=configuration_id,
             path=str(worker_path),
             working_directory=str(workspace_root),
@@ -1152,8 +1182,10 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
         workspace_root=workspace_root,
         config_service=config_service,
         session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
-    restored_state = await restored.get_state(session_id)
+    restored_state = await restored.get_state(session_id, "main")
     assert restored_state.status == "idle"
     assert restored_state.script_path == "debug-entry.mjs"
     assert restored_state.working_directory == ""

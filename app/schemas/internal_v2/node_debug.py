@@ -48,7 +48,7 @@ class NodeDebugBreakpointRequest(BaseModel):
 
 class NodeDebugStartRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(default="main", min_length=1)
+    thread_id: str = Field(min_length=1)
     configuration_id: str | None = Field(default=None, min_length=1)
     path: str = Field(min_length=1)
     working_directory: str | None = None
@@ -62,7 +62,7 @@ class NodeDebugStartRequest(BaseModel):
 
 class NodeDebugActionRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(default="main", min_length=1)
+    thread_id: str = Field(min_length=1)
     action: NodeDebugAction
     params: dict[str, object] = Field(default_factory=dict)
 
@@ -302,7 +302,7 @@ class NodeDebugLaunchClaimDTO(BaseModel):
 
 class NodeDebugConfigurationCreateRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(default="main", min_length=1)
+    thread_id: str = Field(min_length=1)
     name: str = Field(min_length=1, max_length=80)
     script_path: str | None = None
     working_directory: str = ""
@@ -317,7 +317,7 @@ class NodeDebugConfigurationCreateRequest(BaseModel):
 
 class NodeDebugConfigurationUpdateRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(default="main", min_length=1)
+    thread_id: str = Field(min_length=1)
     name: str = Field(min_length=1, max_length=80)
     script_path: str | None = None
     working_directory: str = ""
@@ -331,20 +331,20 @@ class NodeDebugConfigurationUpdateRequest(BaseModel):
 
 class NodeDebugConfigurationActivateRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(default="main", min_length=1)
+    thread_id: str = Field(min_length=1)
 
 
 class NodeDebugConfigurationImportRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(default="main", min_length=1)
+    thread_id: str = Field(min_length=1)
     configuration: NodeDebugConfigurationDTO
     activate: bool = False
 
 
 class NodeDebugConfigurationCopyRequest(BaseModel):
     source_session_id: str = Field(min_length=1)
-    source_thread_id: str = Field(default="main", min_length=1)
+    source_thread_id: str = Field(min_length=1)
     target_session_id: str = Field(min_length=1)
-    target_thread_id: str = Field(default="main", min_length=1)
+    target_thread_id: str = Field(min_length=1)
     name: str | None = Field(default=None, min_length=1, max_length=80)
     activate: bool = False

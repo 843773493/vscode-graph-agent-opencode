@@ -1,9 +1,8 @@
 """Node 调试 owner 的精确归属解析。
 
-本模块把 Session 级产品入口（裸 ``session_id``）与显式 thread 统一成精确的
-``(session_id, thread_id)`` owner，并通过权威会话目录索引解析 thread 节点的
-绝对路径。服务层不再保留任何隐式的 ``thread_id="main"`` 默认值：只有本模块
-负责“裸 session_id 等价 main thread”这一条产品语义。
+本模块把显式 ``(session_id, thread_id)`` owner 通过权威会话目录索引解析为
+thread 节点的绝对路径。服务层和 API 均要求显式 thread_id；``main`` 只表示
+会话自身节点，不再承载裸 session_id 的兼容入口。
 
 约束：
 - 不拼接会话/线程物理路径；``main`` 节点就是会话自身节点，child thread 必须
@@ -23,7 +22,7 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from app.schemas.internal_v2.session import SessionDTO
 
-#: Session 级产品入口（裸 session_id）对应的 main thread 标识。
+#: 会话自身节点对应的 main thread 标识。
 MAIN_THREAD_ID = "main"
 
 #: 精确到 SessionThread 的调试 owner key。
@@ -57,16 +56,13 @@ class NodeDebugThreadOwner:
         return (self.session_id, self.thread_id)
 
 
-def normalize_thread_id(session_id: str, thread_id: str | None) -> str:
+def normalize_thread_id(session_id: str, thread_id: str) -> str:
     """把 Session 级入口与显式 thread 归一成精确 thread_id。
 
-    Session 级产品 API 的裸 ``session_id``（``thread_id`` 为 ``None``）等价于
-    main thread；显式传入 ``main`` 或会话自身 ID 同样归一为 main thread。
+    显式传入 ``main`` 或会话自身 ID 归一为 main thread。
     """
     if not session_id:
         raise ValueError("Node 调试 owner 必须包含非空 session_id")
-    if thread_id is None:
-        return MAIN_THREAD_ID
     normalized = thread_id.strip()
     if not normalized:
         raise ValueError("Node 调试 owner 的 thread_id 不能为空")
@@ -96,7 +92,7 @@ def resolve_node_debug_owner(
     path_resolver: SessionNodePathResolver,
     *,
     session_id: str,
-    thread_id: str | None = None,
+    thread_id: str,
 ) -> NodeDebugThreadOwner:
     """归一 owner key 并解析其受检 thread 节点。
 
@@ -142,7 +138,7 @@ def resolve_node_debug_owner(
 
 def normalize_node_debug_owner(
     session_id: str,
-    thread_id: str | None = None,
+    thread_id: str,
 ) -> NodeDebugOwner:
     """只做 owner key 归一，不触碰目录索引（无持久化场景使用）。"""
     return (session_id, normalize_thread_id(session_id, thread_id))

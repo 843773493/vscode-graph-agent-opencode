@@ -39,6 +39,9 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugLaunchClaimDTO,
 )
 from app.services.infrastructure import node_debug_process_identity
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.node_debug_launch_claim import (
     claim_marked,
     claim_running,
@@ -59,6 +62,9 @@ from app.services.orchestration.thread_residency import (
     ResidencyBlocker,
     ThreadResidencyTracker,
     ThreadUnloadRequest,
+)
+from tests.support.node_debug_dependencies import (
+    permissive_node_debug_session_admission,
 )
 
 _PARENT_SESSION_ID = "ses_residency_parent"
@@ -411,7 +417,10 @@ async def test_restart_recovery_active_durable_claim_is_not_cold_eligible(
     tracker = _make_tracker(clock, unload_callback=fired.append)
     service = NodeDebugService(
         workspace_root=tmp_path / "workspace",
+        config_service=_DebugConfigStub(),
         session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
         residency_tracker=tracker,
     )
     tracker.add_blocker_source(service)  # 生产接线形态（app/container.py）
@@ -470,7 +479,10 @@ async def test_all_active_debug_phases_remain_resident_past_thirty_minutes(
     tracker = _make_tracker(clock)
     service = NodeDebugService(
         workspace_root=tmp_path / "workspace",
+        config_service=_DebugConfigStub(),
         session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
         residency_tracker=tracker,
     )
     tracker.add_blocker_source(service)
@@ -515,7 +527,10 @@ async def test_restart_recovery_settled_claim_restarts_idle_counting(
         tracker = _make_tracker(clock)
         service = NodeDebugService(
             workspace_root=tmp_path / "workspace",
+            config_service=_DebugConfigStub(),
             session_store=store,
+            session_admission=permissive_node_debug_session_admission(),
+            external_resource_leases=ExternalResourceLeaseLedger(),
             residency_tracker=tracker,
         )
         tracker.add_blocker_source(service)
@@ -525,7 +540,7 @@ async def test_restart_recovery_settled_claim_restarts_idle_counting(
         assert blocked.cold_eligible is False
 
         # owner 的常规读路径核实"登记实例已不存在"并结清 claim（R5a/R3b 既有语义）。
-        state = await service.get_state(_PARENT_SESSION_ID)
+        state = await service.get_state(_PARENT_SESSION_ID, _THREAD_ID)
         assert state.status == "idle"
         persisted = store.read_launch_claim(_PARENT_SESSION_ID, _THREAD_ID)
         assert persisted is not None
@@ -642,6 +657,8 @@ def _make_wired_service(
     (workspace_root / "entry.mjs").write_text("console.log(1);\n", encoding="utf-8")
     service = NodeDebugService(
         workspace_root=workspace_root,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
         session_store=NodeDebugSessionStore(session_tree),
         config_service=_DebugConfigStub(),
         residency_tracker=tracker,
@@ -679,7 +696,11 @@ async def test_start_pushes_blocker_and_verified_stop_releases_it(
         tracker.register_generation(*_OWNER)  # owner 侧 resident runtime 代
         tracker.record_activity(*_OWNER)
         await service.start(
-            session_id=_PARENT_SESSION_ID, path="entry.mjs", args=[], breakpoints=[]
+            session_id=_PARENT_SESSION_ID,
+            thread_id=_THREAD_ID,
+            path="entry.mjs",
+            args=[],
+            breakpoints=[],
         )
 
         running = tracker.snapshot(*_OWNER)
@@ -691,7 +712,10 @@ async def test_start_pushes_blocker_and_verified_stop_releases_it(
         assert fired == []
 
         stopped = await service.apply_action(
-            session_id=_PARENT_SESSION_ID, action="stop", params={}
+            session_id=_PARENT_SESSION_ID,
+            thread_id=_THREAD_ID,
+            action="stop",
+            params={},
         )
         assert stopped.status == "exited"
         released = tracker.snapshot(*_OWNER)
@@ -720,12 +744,15 @@ async def test_reconcile_required_claim_keeps_blocker_registered(
     tracker = _make_tracker(clock)
     service = NodeDebugService(
         workspace_root=tmp_path / "workspace",
+        config_service=_DebugConfigStub(),
         session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
         residency_tracker=tracker,
     )
     tracker.add_blocker_source(service)
 
-    state = await service.get_state(_PARENT_SESSION_ID)
+    state = await service.get_state(_PARENT_SESSION_ID, _THREAD_ID)
     assert state.status == "reconcile_required"
 
     snapshot = tracker.snapshot(*_OWNER)
@@ -748,7 +775,10 @@ async def test_snapshot_fields_complete_and_blocker_reasons_sanitized(
     tracker = _make_tracker(_FakeMonotonicClock())
     service = NodeDebugService(
         workspace_root=tmp_path / "workspace",
+        config_service=_DebugConfigStub(),
         session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
         residency_tracker=tracker,
     )
     tracker.add_blocker_source(service)
@@ -826,7 +856,11 @@ async def test_spawn_aborts_when_stop_already_took_over_runtime(
 
     with pytest.raises(RuntimeError, match="取消 spawn"):
         await service.start(
-            session_id=_PARENT_SESSION_ID, path="entry.mjs", args=[], breakpoints=[]
+            session_id=_PARENT_SESSION_ID,
+            thread_id=_THREAD_ID,
+            path="entry.mjs",
+            args=[],
+            breakpoints=[],
         )
     assert spawn_calls == []  # 游离进程没有产生
     persisted = store.read_launch_claim(_PARENT_SESSION_ID, _THREAD_ID)
@@ -860,21 +894,28 @@ async def test_stop_during_spawn_window_is_serialized_per_owner(
     try:
         start_task = asyncio.create_task(
             service.start(
-                session_id=_PARENT_SESSION_ID, path="entry.mjs", args=[], breakpoints=[]
+                session_id=_PARENT_SESSION_ID,
+                thread_id=_THREAD_ID,
+                path="entry.mjs",
+                args=[],
+                breakpoints=[],
             )
         )
         await asyncio.wait_for(spawn_started.wait(), timeout=5)
 
         stop_task = asyncio.create_task(
             service.apply_action(
-                session_id=_PARENT_SESSION_ID, action="stop", params={}
+                session_id=_PARENT_SESSION_ID,
+                thread_id=_THREAD_ID,
+                action="stop",
+                params={},
             )
         )
         # 给 stop 多次让出事件循环的机会：它必须一直卡在 owner 锁上。
         for _ in range(20):
             await asyncio.sleep(0.01)
         assert not stop_task.done()  # 串行化：stop 等待启动序列完成
-        mid_state = await service.get_state(_PARENT_SESSION_ID)
+        mid_state = await service.get_state(_PARENT_SESSION_ID, _THREAD_ID)
         assert mid_state.status == "starting"  # 绝不出现 exited 假终态
         assert child.poll() is None  # 进程仍存活，没有被"已停止"的假象掩盖
 
@@ -925,12 +966,18 @@ async def test_restart_holds_owner_lock_across_stop_and_relaunch(
     try:
         start_task = asyncio.create_task(
             service.start(
-                session_id=_PARENT_SESSION_ID, path="entry.mjs", args=[], breakpoints=[]
+                session_id=_PARENT_SESSION_ID,
+                thread_id=_THREAD_ID,
+                path="entry.mjs",
+                args=[],
+                breakpoints=[],
             )
         )
         await asyncio.wait_for(spawn_started.wait(), timeout=5)
 
-        restart_task = asyncio.create_task(service.restart(_PARENT_SESSION_ID))
+        restart_task = asyncio.create_task(
+            service.restart(_PARENT_SESSION_ID, thread_id=_THREAD_ID)
+        )
         for _ in range(20):
             await asyncio.sleep(0.01)
         assert not restart_task.done()  # restart 串行等待启动序列完成
@@ -984,10 +1031,18 @@ async def test_concurrent_starts_are_serialized_and_claim_not_overwritten(
     try:
         first, second = await asyncio.gather(
             service.start(
-                session_id=_PARENT_SESSION_ID, path="entry.mjs", args=[], breakpoints=[]
+                session_id=_PARENT_SESSION_ID,
+                thread_id=_THREAD_ID,
+                path="entry.mjs",
+                args=[],
+                breakpoints=[],
             ),
             service.start(
-                session_id=_PARENT_SESSION_ID, path="entry.mjs", args=[], breakpoints=[]
+                session_id=_PARENT_SESSION_ID,
+                thread_id=_THREAD_ID,
+                path="entry.mjs",
+                args=[],
+                breakpoints=[],
             ),
         )
         assert first.status == "running"
@@ -1022,11 +1077,15 @@ async def test_configuration_mutation_blocked_by_unsettled_claim(
     store = NodeDebugSessionStore(session_tree)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        config_service=_DebugConfigStub(),
         session_store=store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id=_THREAD_ID,
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -1042,11 +1101,15 @@ async def test_configuration_mutation_blocked_by_unsettled_claim(
         inspector_port=0,
     )
     store.write_launch_claim(claim)  # launch_pending 无 PID：重启后无法核实
-    state = await service.get_state(_PARENT_SESSION_ID)
+    state = await service.get_state(_PARENT_SESSION_ID, _THREAD_ID)
     assert state.status == "reconcile_required"
 
     with pytest.raises(RuntimeError, match="修改或删除当前调试方案被未结清"):
-        await service.delete_configuration(_PARENT_SESSION_ID, configuration_id)
+        await service.delete_configuration(
+            _PARENT_SESSION_ID,
+            configuration_id,
+            thread_id=_THREAD_ID,
+        )
 
 
 def test_linux_proc_identity_handles_vanishing_entry_between_probe_steps(

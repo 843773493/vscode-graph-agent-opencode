@@ -4,7 +4,7 @@
 - main/child thread 的断点、活动方案与动作时间线严格隔离；
 - child thread 调试数据落在受检 thread 节点目录的 ``debug/node/`` 下；
 - thread 节点只按权威目录索引解析（不拼路径、不扫盘、不按 session 猜目标）；
-- 裸 session_id 等价 main thread 的归一语义；
+- 显式 ``thread_id="main"`` 的 main owner 归一语义；
 - mutation 的 Session 生命周期准入（Session 存在且未删除）。
 """
 
@@ -21,6 +21,10 @@ import pytest
 from app.core.exceptions import NotFoundError
 from app.core.session_paths import SessionPathResolver
 from app.schemas.internal_v2.node_debug import NodeDebugConfigurationCreateRequest
+from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.node_debug_session_admission import (
     NodeDebugSessionAdmission,
@@ -127,15 +131,17 @@ def workspace_root(tmp_path: Path) -> Path:
 def _service(workspace_root: Path, resolver: SessionPathResolver) -> NodeDebugService:
     return NodeDebugService(
         workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
+        session_admission=NodeDebugSessionAdmission(
+            session_service=_ResolverSessionLifecycle(resolver),
+            path_resolver=resolver,
+        ),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
 
 
-def test_bare_session_entry_normalizes_to_main_thread() -> None:
-    assert normalize_node_debug_owner(_PARENT_SESSION_ID, None) == (
-        _PARENT_SESSION_ID,
-        MAIN_THREAD_ID,
-    )
+def test_explicit_session_thread_entry_normalizes_to_main_thread() -> None:
     assert normalize_node_debug_owner(_PARENT_SESSION_ID, "main") == (
         _PARENT_SESSION_ID,
         MAIN_THREAD_ID,
@@ -148,7 +154,7 @@ def test_bare_session_entry_normalizes_to_main_thread() -> None:
     ) == (_PARENT_SESSION_ID, _CHILD_SESSION_ID)
 
     with pytest.raises(ValueError, match="非空 session_id"):
-        normalize_node_debug_owner("", None)
+        normalize_node_debug_owner("", MAIN_THREAD_ID)
     with pytest.raises(ValueError, match="thread_id 不能为空"):
         normalize_node_debug_owner(_PARENT_SESSION_ID, "   ")
 
@@ -172,7 +178,11 @@ def test_thread_node_resolution_follows_catalog_ownership(
 ) -> None:
     resolver, parent_dir, child_dir = session_tree
 
-    main_owner = resolve_node_debug_owner(resolver, session_id=_PARENT_SESSION_ID)
+    main_owner = resolve_node_debug_owner(
+        resolver,
+        session_id=_PARENT_SESSION_ID,
+        thread_id=MAIN_THREAD_ID,
+    )
     assert main_owner.thread_id == MAIN_THREAD_ID
     assert main_owner.thread_node == parent_dir
     assert main_owner.key == (_PARENT_SESSION_ID, MAIN_THREAD_ID)
@@ -190,7 +200,9 @@ def test_thread_node_resolution_follows_catalog_ownership(
     assert child_owner.session_id == _CHILD_SESSION_ID
     assert child_owner.thread_id == MAIN_THREAD_ID
     assert child_owner.key == resolve_node_debug_owner(
-        resolver, session_id=_CHILD_SESSION_ID
+        resolver,
+        session_id=_CHILD_SESSION_ID,
+        thread_id=MAIN_THREAD_ID,
     ).key
     assert child_owner.key == (_CHILD_SESSION_ID, MAIN_THREAD_ID)
 
@@ -248,6 +260,7 @@ async def test_main_and_child_thread_state_is_isolated(
     main_state = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id=MAIN_THREAD_ID,
             name="主线程方案",
             script_path="main.mjs",
         )
@@ -274,6 +287,7 @@ async def test_main_and_child_thread_state_is_isolated(
 
     main_state = await service.apply_action(
         session_id=_PARENT_SESSION_ID,
+        thread_id=MAIN_THREAD_ID,
         action="set_breakpoint",
         params={"path": "main.mjs", "line": 1, "condition": "true"},
     )
@@ -303,10 +317,10 @@ async def test_main_and_child_thread_state_is_isolated(
         {item.action_id for item in child_state.actions}
     )
 
-    stored_main = await service.get_state(_PARENT_SESSION_ID)
+    stored_main = await service.get_state(_PARENT_SESSION_ID, MAIN_THREAD_ID)
     stored_child = await service.get_state(_PARENT_SESSION_ID, _CHILD_SESSION_ID)
     # 子会话自身裸入口命中同一 owner，返回完全一致的状态。
-    stored_child_bare = await service.get_state(_CHILD_SESSION_ID)
+    stored_child_bare = await service.get_state(_CHILD_SESSION_ID, MAIN_THREAD_ID)
     assert stored_child == stored_child_bare
     assert [item.path for item in stored_main.breakpoints] == ["main.mjs"]
     assert [item.path for item in stored_child.breakpoints] == ["child.mjs"]
@@ -317,6 +331,7 @@ async def test_main_and_child_thread_state_is_isolated(
         service.get_configuration(
             _PARENT_SESSION_ID,
             child_state.active_configuration_id or "",
+            MAIN_THREAD_ID,
         )
 
 
@@ -332,6 +347,7 @@ async def test_child_thread_debug_data_lands_in_thread_node_directory(
     main_state = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id=MAIN_THREAD_ID,
             name="主线程方案",
             script_path="main.mjs",
         )
@@ -416,7 +432,7 @@ async def test_child_thread_and_child_session_main_address_share_one_owner(
     from_child_thread = await service.get_state(
         _PARENT_SESSION_ID, _CHILD_SESSION_ID
     )
-    from_child_session = await service.get_state(_CHILD_SESSION_ID)
+    from_child_session = await service.get_state(_CHILD_SESSION_ID, MAIN_THREAD_ID)
     from_child_session_explicit_main = await service.get_state(
         _CHILD_SESSION_ID, MAIN_THREAD_ID
     )
@@ -430,7 +446,8 @@ async def test_child_thread_and_child_session_main_address_share_one_owner(
         for item in service.list_configurations(_PARENT_SESSION_ID, _CHILD_SESSION_ID)
     ] == [configuration_id]
     assert [
-        item.configuration_id for item in service.list_configurations(_CHILD_SESSION_ID)
+        item.configuration_id
+        for item in service.list_configurations(_CHILD_SESSION_ID, MAIN_THREAD_ID)
     ] == [configuration_id]
 
     # 经 (parent, child) 加断点，经 (child, main) 必须看到同一条时间线。
@@ -440,7 +457,7 @@ async def test_child_thread_and_child_session_main_address_share_one_owner(
         action="set_breakpoint",
         params={"path": "child.mjs", "line": 1},
     )
-    after_first = await service.get_state(_CHILD_SESSION_ID)
+    after_first = await service.get_state(_CHILD_SESSION_ID, MAIN_THREAD_ID)
     assert [(item.path, item.line) for item in after_first.breakpoints] == [
         ("child.mjs", 1)
     ]
@@ -448,6 +465,7 @@ async def test_child_thread_and_child_session_main_address_share_one_owner(
     # 经 (child, main) 再加一个断点，反向地址同样看到两个断点，且无覆盖写。
     await service.apply_action(
         session_id=_CHILD_SESSION_ID,
+        thread_id=MAIN_THREAD_ID,
         action="set_breakpoint",
         params={"path": "child.mjs", "line": 2},
     )
@@ -486,16 +504,19 @@ async def test_mutation_admission_rejects_missing_and_deleted_session(
     resolver, _parent_dir, _child_dir = session_tree
     service = NodeDebugService(
         workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=NodeDebugSessionAdmission(
             session_service=_ResolverSessionLifecycle(resolver),
             path_resolver=resolver,
         ),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
 
     admitted = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id=MAIN_THREAD_ID,
             name="准入方案",
             script_path="main.mjs",
         )
@@ -506,6 +527,7 @@ async def test_mutation_admission_rejects_missing_and_deleted_session(
         await service.create_configuration(
             NodeDebugConfigurationCreateRequest(
                 session_id="ses_missing",
+                thread_id=MAIN_THREAD_ID,
                 name="缺失方案",
                 script_path="main.mjs",
             )
@@ -516,10 +538,12 @@ async def test_mutation_admission_rejects_missing_and_deleted_session(
         await service.activate_configuration(
             _PARENT_SESSION_ID,
             admitted.active_configuration_id or "",
+            thread_id=MAIN_THREAD_ID,
         )
     with pytest.raises(FileNotFoundError, match="不存在或已删除"):
         await service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id=MAIN_THREAD_ID,
             action="set_breakpoint",
             params={"path": "main.mjs", "line": 1},
         )
@@ -534,11 +558,13 @@ async def test_mutation_admission_rejects_foreign_thread(
     _create_session(resolver, "ses_other")
     service = NodeDebugService(
         workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=NodeDebugSessionAdmission(
             session_service=_ResolverSessionLifecycle(resolver),
             path_resolver=resolver,
         ),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
 
     with pytest.raises(RuntimeError, match="thread 不属于目标 session"):
@@ -567,7 +593,17 @@ async def test_drain_session_stops_exact_main_runtime_before_delete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """删除 drain 只停止目标 Session 的 main owner，并核实 claim 已收敛。"""
-    service = NodeDebugService(workspace_root=tmp_path)
+    resolver = SessionPathResolver(tmp_path / "sessions")
+    resolver.initialize()
+    service = NodeDebugService(
+        workspace_root=tmp_path,
+        config_service=ConfigService(workspace_root=tmp_path),
+        session_admission=NodeDebugSessionAdmission(
+            session_service=_ResolverSessionLifecycle(resolver),
+            path_resolver=resolver,
+        ),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
     runtime = SimpleNamespace(
         session_id=_PARENT_SESSION_ID,
         thread_id=MAIN_THREAD_ID,

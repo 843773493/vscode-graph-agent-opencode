@@ -147,7 +147,8 @@ async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_pref
     )
 
     debug_response = await scripted_client.get(
-        "/api/v1/debug/node", params={"session_id": session_id}
+        "/api/v1/debug/node",
+        params={"session_id": session_id, "thread_id": "main"},
     )
     assert debug_response.status_code == 200, debug_response.text
     actions = debug_response.json()["data"]["actions"]

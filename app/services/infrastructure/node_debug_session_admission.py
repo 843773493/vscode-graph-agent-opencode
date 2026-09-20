@@ -13,7 +13,6 @@ from app.services.infrastructure.node_debug_thread_owner import (
     NodeDebugThreadOwner,
     SessionLifecycleReader,
     SessionNodePathResolver,
-    normalize_thread_id,
     resolve_node_debug_owner,
 )
 
@@ -33,10 +32,9 @@ class NodeDebugSessionAdmission:
     async def admit(
         self,
         session_id: str,
-        thread_id: str | None = None,
+        thread_id: str,
     ) -> NodeDebugThreadOwner:
         """返回受检的精确 owner；Session 缺失/已删除或 thread 不合法时直接失败。"""
-        canonical_thread_id = normalize_thread_id(session_id, thread_id)
         try:
             await self._session_service.get(session_id)
         except NotFoundError as error:
@@ -47,12 +45,12 @@ class NodeDebugSessionAdmission:
             return resolve_node_debug_owner(
                 self._path_resolver,
                 session_id=session_id,
-                thread_id=canonical_thread_id,
+                thread_id=thread_id,
             )
         except KeyError as error:
             raise FileNotFoundError(
                 "调试目标 thread 不存在: "
-                f"session_id={session_id}, thread_id={canonical_thread_id}"
+                f"session_id={session_id}, thread_id={thread_id}"
             ) from error
 
 

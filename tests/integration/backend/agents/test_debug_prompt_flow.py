@@ -538,7 +538,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
 
     debug_state_response = await scripted_client.get(
         "/api/v1/debug/node",
-        params={"session_id": session_id},
+        params={"session_id": session_id, "thread_id": "main"},
     )
     assert debug_state_response.status_code == 200, debug_state_response.text
     debug_state = debug_state_response.json()["data"]
@@ -577,6 +577,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         "/api/v1/debug/node/start",
         json={
             "session_id": session_id,
+            "thread_id": "main",
             "configuration_id": configuration_id,
             "path": fixture_path.name,
         },
@@ -597,6 +598,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
             "/api/v1/debug/node/action",
             json={
                 "session_id": session_id,
+                "thread_id": "main",
                 "action": "evaluate",
                 "params": {"expression": "state.counter += 1"},
             },
@@ -607,6 +609,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
             "/api/v1/debug/node/action",
             json={
                 "session_id": session_id,
+                "thread_id": "main",
                 "action": "continue",
                 "params": {},
             },

@@ -55,6 +55,9 @@ from app.services.infrastructure.node_debug_service import (
     _NodeDebugRuntime,
 )
 from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+from tests.support.node_debug_dependencies import (
+    permissive_node_debug_session_admission,
+)
 
 _PARENT_SESSION_ID = "ses_lease_parent"
 _CONFIGURATION_ID = "dbgcfg_22222222222222222222222222222222"
@@ -229,6 +232,7 @@ def _make_service(
             None if inspector_port is None else _DebugConfigStub(inspector_port)
         ),
         external_resource_leases=external_resource_leases,
+        session_admission=permissive_node_debug_session_admission(),
         state_events=state_events,
     )
     # 真实 spawn 由测试替身接管，二进制名只用于通过“必须能找到 Node”的前置检查，
@@ -269,6 +273,7 @@ async def test_release_failure_publishes_release_failed_state_event(
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -308,6 +313,7 @@ async def test_release_failure_publishes_release_failed_state_event(
 
         blocked = await service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             action="stop",
             params={},
         )
@@ -328,6 +334,7 @@ async def test_release_failure_publishes_release_failed_state_event(
         child.wait(timeout=10)
         await service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             action="stop",
             params={},
         )
@@ -445,6 +452,7 @@ async def test_handshake_registers_typed_lease_and_verified_stop_settles_it(
     try:
         state = await service.start(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             path="entry.mjs",
             args=[],
             breakpoints=[],
@@ -469,6 +477,7 @@ async def test_handshake_registers_typed_lease_and_verified_stop_settles_it(
 
         stopped = await service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             action="stop",
             params={},
         )
@@ -512,6 +521,7 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -551,6 +561,7 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
 
         blocked = await service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             action="stop",
             params={},
         )
@@ -567,6 +578,7 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
         child.wait(timeout=10)
         released = await service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             action="stop",
             params={},
         )
@@ -612,7 +624,7 @@ async def test_restart_recovery_keeps_active_lease_without_duplicate_acquire(
             manager_after,
         )
 
-        first = await service.get_state(_PARENT_SESSION_ID)
+        first = await service.get_state(_PARENT_SESSION_ID, "main")
         assert first.status == "reconcile_required"
         assert child.poll() is None
         kept = manager_after.get_lease(identity.lease_id)
@@ -620,7 +632,7 @@ async def test_restart_recovery_keeps_active_lease_without_duplicate_acquire(
         assert kept.status == "active"
 
         # 轮询读接口幂等：不重复 acquire、不新增占用行、也不虚报终态。
-        second = await service.get_state(_PARENT_SESSION_ID)
+        second = await service.get_state(_PARENT_SESSION_ID, "main")
         assert second.status == "reconcile_required"
         leases = manager_after.leases_for_turn(identity.holder_id)
         assert [lease.lease_id for lease in leases] == [identity.lease_id]
@@ -661,7 +673,7 @@ async def test_restart_recovery_settles_lease_only_after_instance_verified_gone(
         manager_after,
     )
 
-    state = await service.get_state(_PARENT_SESSION_ID)
+    state = await service.get_state(_PARENT_SESSION_ID, "main")
     assert state.status == "idle"
     persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
     assert persisted is not None
@@ -685,12 +697,13 @@ async def test_active_lease_without_claim_or_process_reports_idle(
     service, _store, _workspace_root = _make_service(tmp_path, session_tree, manager)
     ghost = _seed_active_lease(manager, "node-debug-proc_ghost")
 
-    state = await service.get_state(_PARENT_SESSION_ID)
+    state = await service.get_state(_PARENT_SESSION_ID, "main")
     assert state.status == "idle"
     # 也不会阻断 owner 级操作：lease 不驱动任何服务行为。
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             name="账本孤儿占用不阻断",
             script_path="entry.mjs",
         )
@@ -726,6 +739,7 @@ async def test_ledger_settlement_does_not_change_verified_running_report(
     try:
         await service.start(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             path="entry.mjs",
             args=[],
             breakpoints=[],
@@ -737,12 +751,13 @@ async def test_ledger_settlement_does_not_change_verified_running_report(
         manager.settle(identity.lease_id)
         assert manager.get_lease(identity.lease_id).status == "settled"
 
-        state = await service.get_state(_PARENT_SESSION_ID)
+        state = await service.get_state(_PARENT_SESSION_ID, "main")
         assert state.status == "running"
         assert state.pid == child.pid
 
         stopped = await service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             action="stop",
             params={},
         )
@@ -789,6 +804,7 @@ async def test_ledger_conflict_fails_start_closed_without_fake_registration(
         with pytest.raises(RuntimeError, match="资源类型发生冲突"):
             await service.start(
                 session_id=_PARENT_SESSION_ID,
+                thread_id="main",
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],

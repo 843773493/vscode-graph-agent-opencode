@@ -20,8 +20,7 @@ from app.schemas.internal_v2.node_debug import (
 )
 from app.services.infrastructure.node_debug_service import NodeDebugService
 
-# Session 级产品入口语义：裸 session_id 等价于 main thread（DTO/query 的
-# thread_id 默认值就是该映射），显式传入 thread_id 才定位 child thread。
+# Session 级产品入口要求显式 thread_id；main thread 使用值 "main"。
 # 所有 mutation 的 Session 生命周期准入（Session 存在且未删除）由
 # NodeDebugService 入口的 NodeDebugSessionAdmission 统一执行，准入失败在此
 # 映射为 404，不从 API 层重复读取 Session。
@@ -65,7 +64,7 @@ async def get_node_debug_state(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
-    thread_id: Annotated[str, Query(min_length=1)] = "main",
+    thread_id: Annotated[str, Query(min_length=1)],
 ):
     try:
         result = await node_debug_service.get_state(session_id, thread_id)
@@ -84,7 +83,7 @@ async def list_node_debug_configurations(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
-    thread_id: Annotated[str, Query(min_length=1)] = "main",
+    thread_id: Annotated[str, Query(min_length=1)],
 ):
     try:
         result = node_debug_service.list_configurations(session_id, thread_id)
@@ -104,7 +103,7 @@ async def get_node_debug_configuration(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
-    thread_id: Annotated[str, Query(min_length=1)] = "main",
+    thread_id: Annotated[str, Query(min_length=1)],
 ):
     try:
         result = node_debug_service.get_configuration(
@@ -189,7 +188,7 @@ async def delete_node_debug_configuration(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
-    thread_id: Annotated[str, Query(min_length=1)] = "main",
+    thread_id: Annotated[str, Query(min_length=1)],
 ):
     try:
         result = await node_debug_service.delete_configuration(

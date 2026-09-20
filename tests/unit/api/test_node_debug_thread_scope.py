@@ -1,7 +1,7 @@
 """Node 调试 API 的 Session/Thread 语义单元测试。
 
-覆盖架构原则“Session 级产品 API 的裸 session_id 等价于 main thread”：
-- 不传 thread_id 时映射 main thread；
+覆盖 Node 调试 API 的显式 SessionThread owner 契约：
+- main thread 必须显式传入 ``thread_id="main"``；
 - 显式 thread_id 定位 child thread；
 - API mutation 经 NodeDebugService 的 Session 生命周期准入，Session 缺失或
   已删除时返回 404，不会落到磁盘上凭空创建调试数据。
@@ -32,6 +32,10 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugStartRequest,
     NodeDebugStateDTO,
+)
+from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.node_debug_session_admission import (
@@ -90,9 +94,9 @@ class _ResolverSessionLifecycle:
 def node_debug_service() -> MagicMock:
     service = MagicMock(spec=NodeDebugService)
     service.get_state = AsyncMock(
-        side_effect=lambda session_id, thread_id=None: NodeDebugStateDTO(
+        side_effect=lambda session_id, thread_id: NodeDebugStateDTO(
             session_id=session_id,
-            thread_id=thread_id or "main",
+            thread_id=thread_id,
             status="idle",
         )
     )
@@ -115,11 +119,12 @@ def node_debug_service() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_bare_session_reads_map_to_main_thread(
+async def test_explicit_main_thread_reads_main_owner(
     node_debug_service: MagicMock,
 ) -> None:
     response = await get_node_debug_state(
         session_id=_SESSION_ID,
+        thread_id="main",
         _="local-token",
         request_id="req_state_main",
         node_debug_service=node_debug_service,
@@ -130,6 +135,7 @@ async def test_bare_session_reads_map_to_main_thread(
 
     listed = await list_node_debug_configurations(
         session_id=_SESSION_ID,
+        thread_id="main",
         _="local-token",
         request_id="req_configurations_main",
         node_debug_service=node_debug_service,
@@ -187,16 +193,19 @@ async def test_mutation_requires_existing_session(
     _create_session(resolver, _SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=NodeDebugSessionAdmission(
             session_service=_ResolverSessionLifecycle(resolver),
             path_resolver=resolver,
         ),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
 
     admitted = await create_node_debug_configuration(
         payload=NodeDebugConfigurationCreateRequest(
             session_id=_SESSION_ID,
+            thread_id="main",
             name="API 准入方案",
             script_path="entry.mjs",
         ),
@@ -212,6 +221,7 @@ async def test_mutation_requires_existing_session(
         await create_node_debug_configuration(
             payload=NodeDebugConfigurationCreateRequest(
                 session_id="ses_api_missing",
+                thread_id="main",
                 name="缺失方案",
                 script_path="entry.mjs",
             ),
@@ -226,6 +236,7 @@ async def test_mutation_requires_existing_session(
         await create_node_debug_configuration(
             payload=NodeDebugConfigurationCreateRequest(
                 session_id=_SESSION_ID,
+                thread_id="main",
                 name="已删除方案",
                 script_path="entry.mjs",
             ),
@@ -238,6 +249,7 @@ async def test_mutation_requires_existing_session(
     with pytest.raises(HTTPException) as deleted_state:
         await get_node_debug_state(
             session_id=_SESSION_ID,
+            thread_id="main",
             _="local-token",
             request_id="req_state_deleted",
             node_debug_service=service,
@@ -248,6 +260,7 @@ async def test_mutation_requires_existing_session(
         await apply_node_debug_action(
             payload=NodeDebugActionRequest(
                 session_id=_SESSION_ID,
+                thread_id="main",
                 action="set_breakpoint",
                 params={"path": "entry.mjs", "line": 1},
             ),
@@ -274,11 +287,13 @@ async def test_child_thread_address_folds_to_child_session_main_owner(
     _create_session(resolver, _CHILD_THREAD_ID, parent_session_id=_SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=NodeDebugSessionAdmission(
             session_service=_ResolverSessionLifecycle(resolver),
             path_resolver=resolver,
         ),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
 
     created = await create_node_debug_configuration(
@@ -305,6 +320,7 @@ async def test_child_thread_address_folds_to_child_session_main_owner(
     )
     via_child_session = await get_node_debug_state(
         session_id=_CHILD_THREAD_ID,
+        thread_id="main",
         _="local-token",
         request_id="req_state_via_child",
         node_debug_service=service,

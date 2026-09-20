@@ -33,6 +33,9 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugSessionManifestDTO,
 )
 from app.services.infrastructure import node_debug_service
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.node_debug_launch_claim import (
     claim_marked,
     claim_running,
@@ -51,6 +54,9 @@ from app.services.infrastructure.node_debug_service import (
     _NodeDebugRuntime,
 )
 from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+from tests.support.node_debug_dependencies import (
+    permissive_node_debug_session_admission,
+)
 
 _PARENT_SESSION_ID = "ses_claim_parent"
 _CHILD_SESSION_ID = "ses_claim_child"
@@ -530,8 +536,10 @@ def _make_service(
         workspace_root=workspace_root,
         session_store=store,
         config_service=(
-            None if inspector_port is None else _DebugConfigStub(inspector_port)
+            _DebugConfigStub(inspector_port or 0)
         ),
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
     return service, store, workspace_root
 
@@ -586,6 +594,7 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -624,13 +633,14 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
     stop_task = asyncio.create_task(
         service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             action="stop",
             params={},
         )
     )
     await process.terminate_called.wait()
 
-    stopping = await service.get_state(_PARENT_SESSION_ID)
+    stopping = await service.get_state(_PARENT_SESSION_ID, "main")
     assert stopping.status == "stopping"
     assert stopping.pid == 4242
     assert stopping.error_message is None
@@ -643,6 +653,7 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
             configuration_id,
             NodeDebugConfigurationUpdateRequest(
                 session_id=_PARENT_SESSION_ID,
+                thread_id="main",
                 name="停止中改名",
                 script_path="entry.mjs",
             ),
@@ -659,6 +670,7 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
         configuration_id,
         NodeDebugConfigurationUpdateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             name="结清后改名",
             script_path="entry.mjs",
         ),
@@ -683,7 +695,7 @@ async def test_cold_launch_pending_claim_surfaces_reconcile_required_and_blocks_
         )
     )
 
-    state = await service.get_state(_PARENT_SESSION_ID)
+    state = await service.get_state(_PARENT_SESSION_ID, "main")
     assert state.status == "reconcile_required"
     assert state.error_message is not None
     assert "launch_pending" in state.error_message
@@ -694,7 +706,8 @@ async def test_cold_launch_pending_claim_surfaces_reconcile_required_and_blocks_
 
     # 轮询读接口不得每次追加动作或反复重写登记。
     reconcile_actions = [
-        action for action in (await service.get_state(_PARENT_SESSION_ID)).actions
+        action
+        for action in (await service.get_state(_PARENT_SESSION_ID, "main")).actions
         if action.action == "reconcile_required"
     ]
     assert len(reconcile_actions) == 1
@@ -702,15 +715,17 @@ async def test_cold_launch_pending_claim_surfaces_reconcile_required_and_blocks_
     with pytest.raises(RuntimeError, match="拒绝启动新实例"):
         await service.start(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             path="entry.mjs",
             args=[],
             breakpoints=[],
         )
     with pytest.raises(RuntimeError, match="未结清"):
-        await service.restart(_PARENT_SESSION_ID)
+        await service.restart(_PARENT_SESSION_ID, thread_id="main")
     with pytest.raises(RuntimeError, match="未结清"):
         await service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             action="continue",
             params={},
         )
@@ -739,7 +754,7 @@ async def test_cold_recovery_terminates_only_the_verified_orphan(
             )
         )
 
-        state = await service.get_state(_PARENT_SESSION_ID)
+        state = await service.get_state(_PARENT_SESSION_ID, "main")
         assert state.status == "idle"
         # SIGTERM 后子进程需要一点时间被回收，断言给有界等待而不是瞬时假设。
         for _ in range(200):
@@ -754,6 +769,7 @@ async def test_cold_recovery_terminates_only_the_verified_orphan(
         await service.create_configuration(
             NodeDebugConfigurationCreateRequest(
                 session_id=_PARENT_SESSION_ID,
+                thread_id="main",
                 name="恢复后新建方案",
                 script_path="entry.mjs",
             )
@@ -785,7 +801,7 @@ async def test_cold_recovery_never_kills_a_process_on_a_reused_pid(
             )
         )
 
-        state = await service.get_state(_PARENT_SESSION_ID)
+        state = await service.get_state(_PARENT_SESSION_ID, "main")
         assert state.status == "idle"
         assert squatter.poll() is None
         persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
@@ -824,12 +840,13 @@ async def test_reconcile_required_releases_only_after_termination_is_verified(
             )
         )
 
-        blocked = await service.get_state(_PARENT_SESSION_ID)
+        blocked = await service.get_state(_PARENT_SESSION_ID, "main")
         assert blocked.status == "reconcile_required"
         assert live.poll() is None
         with pytest.raises(RuntimeError, match="拒绝启动新实例"):
             await service.start(
                 session_id=_PARENT_SESSION_ID,
+                thread_id="main",
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],
@@ -838,7 +855,7 @@ async def test_reconcile_required_releases_only_after_termination_is_verified(
         # 人工核实并让旧实例真正终结后，下一次读取核实到进程不存在即结清。
         live.terminate()
         live.wait(timeout=10)
-        released = await service.get_state(_PARENT_SESSION_ID)
+        released = await service.get_state(_PARENT_SESSION_ID, "main")
         assert released.status == "idle"
         persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
         assert persisted is not None
@@ -883,6 +900,7 @@ async def test_start_registers_claim_before_spawn_and_running_only_after_handsha
     try:
         state = await service.start(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             path="entry.mjs",
             args=[],
             breakpoints=[],
@@ -983,6 +1001,7 @@ async def test_spawn_failure_settles_prewrite_and_leaves_no_blocker(
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -993,6 +1012,7 @@ async def test_spawn_failure_settles_prewrite_and_leaves_no_blocker(
     with pytest.raises(RuntimeError, match="启动 Node Inspector 失败"):
         await service.start(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             path="entry.mjs",
             args=[],
             breakpoints=[],
@@ -1011,7 +1031,7 @@ async def test_spawn_failure_settles_prewrite_and_leaves_no_blocker(
     assert persisted.phase == "settled"
     assert persisted.process_instance_id == observed[0].process_instance_id
 
-    failed = await service.get_state(_PARENT_SESSION_ID)
+    failed = await service.get_state(_PARENT_SESSION_ID, "main")
     assert failed.status == "failed"
     assert failed.actions[-1].action == "start_failed"
 
@@ -1019,6 +1039,7 @@ async def test_spawn_failure_settles_prewrite_and_leaves_no_blocker(
     second = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             name="第二个方案",
             script_path="entry.mjs",
             activate=True,
@@ -1072,6 +1093,7 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -1110,6 +1132,7 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
 
         blocked = await service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             action="stop",
             params={},
         )
@@ -1123,12 +1146,13 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
         # 未被核实终结前，owner 级操作仍被阻断，且绝不自动去动这个进程。
         assert child.poll() is None
         with pytest.raises(RuntimeError, match="拒绝重启"):
-            await service.restart(_PARENT_SESSION_ID)
+            await service.restart(_PARENT_SESSION_ID, thread_id="main")
         with pytest.raises(RuntimeError, match="运行中"):
             await service.update_configuration(
                 configuration_id,
                 NodeDebugConfigurationUpdateRequest(
                     session_id=_PARENT_SESSION_ID,
+                    thread_id="main",
                     name="阻断期间改名",
                     script_path="entry.mjs",
                 ),
@@ -1139,6 +1163,7 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
         child.wait(timeout=10)
         released = await service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             action="stop",
             params={},
         )
@@ -1172,6 +1197,7 @@ async def test_cross_source_identity_cannot_report_termination(
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -1210,6 +1236,7 @@ async def test_cross_source_identity_cannot_report_termination(
 
         stopped = await service.apply_action(
             session_id=_PARENT_SESSION_ID,
+            thread_id="main",
             action="stop",
             params={},
         )
@@ -1376,12 +1403,14 @@ async def test_concurrent_starts_are_serialized_per_owner(
         await asyncio.gather(
             service.start(
                 session_id=_PARENT_SESSION_ID,
+                thread_id="main",
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],
             ),
             service.start(
                 session_id=_PARENT_SESSION_ID,
+                thread_id="main",
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],

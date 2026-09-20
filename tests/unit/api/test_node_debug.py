@@ -98,6 +98,7 @@ async def test_start_endpoint_forwards_profile_and_working_directory(
 ) -> None:
     payload = NodeDebugStartRequest(
         session_id="ses_test",
+        thread_id="main",
         path="fixtures/debug.mjs",
         working_directory="fixtures",
         launch_profile_name="node-test",
@@ -130,6 +131,7 @@ async def test_configuration_endpoints_forward_session_and_portable_payload(
 ) -> None:
     create_payload = NodeDebugConfigurationCreateRequest(
         session_id="ses_test",
+        thread_id="main",
         name="测试方案",
         script_path="fixtures/debug.mjs",
     )
@@ -145,7 +147,10 @@ async def test_configuration_endpoints_forward_session_and_portable_payload(
     configuration_id = "dbgcfg_11111111111111111111111111111111"
     await activate_node_debug_configuration(
         configuration_id=configuration_id,
-        payload=NodeDebugConfigurationActivateRequest(session_id="ses_test"),
+        payload=NodeDebugConfigurationActivateRequest(
+            session_id="ses_test",
+            thread_id="main",
+        ),
         _="local-token",
         request_id="req_activate",
         node_debug_service=node_debug_service,
@@ -160,7 +165,9 @@ async def test_configuration_endpoints_forward_session_and_portable_payload(
         configuration_id=configuration_id,
         payload=NodeDebugConfigurationCopyRequest(
             source_session_id="ses_test",
+            source_thread_id="main",
             target_session_id="ses_target",
+            target_thread_id="main",
         ),
         _="local-token",
         request_id="req_copy",

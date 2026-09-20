@@ -7,7 +7,13 @@ import jsonschema
 import pytest
 
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.node_debug_service import NodeDebugService
+from tests.support.node_debug_dependencies import (
+    permissive_node_debug_session_admission,
+)
 
 
 def _write_config(tmp_path: Path, debug: dict) -> Path:
@@ -107,6 +113,8 @@ def test_node_debug_capabilities_hide_runtime_endpoints_and_mark_support(
     service = NodeDebugService(
         workspace_root=tmp_path,
         config_service=config_service,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
     )
 
     capabilities = service.get_capabilities()

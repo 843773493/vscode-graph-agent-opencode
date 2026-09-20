@@ -241,8 +241,8 @@ class NodeDebugService:
     """通过 Node Inspector 提供 SessionThread 级 JavaScript 源码调试。
 
     运行时、断点、活动方案和动作时间线全部以精确 ``(session_id, thread_id)``
-    owner key 隔离。Session 级产品入口允许省略 ``thread_id``（等价 main thread），
-    该映射只由 :mod:`node_debug_thread_owner` 定义，服务内部不再有隐式默认值。
+    owner key 隔离。所有产品入口都要求显式 ``thread_id``；main thread 使用值
+    ``"main"``，owner 别名折叠只由 :mod:`node_debug_thread_owner` 定义。
     同一实体的别名地址（``(parent_session, child_session)`` 与
     ``(child_session, main)``）在入口折叠为同一个 owner key。
     """
@@ -251,10 +251,10 @@ class NodeDebugService:
         self,
         *,
         workspace_root: Path,
-        config_service: ConfigService | None = None,
+        config_service: ConfigService,
         session_store: NodeDebugSessionStore | None = None,
-        session_admission: NodeDebugSessionAdmission | None = None,
-        external_resource_leases: ExternalResourceLeaseLedger | None = None,
+        session_admission: NodeDebugSessionAdmission,
+        external_resource_leases: ExternalResourceLeaseLedger,
         residency_tracker: ThreadResidencyTracker | None = None,
         state_events: ResourceStateEventPublisher | None = None,
     ) -> None:
@@ -293,7 +293,7 @@ class NodeDebugService:
         self._node_bin = os.environ.get("BOXTEAM_NODE_BIN") or shutil.which("node")
 
     async def get_state(
-        self, session_id: str, thread_id: str | None = None
+        self, session_id: str, thread_id: str
     ) -> NodeDebugStateDTO:
         owner = self._resolve_owner(session_id, thread_id)
         session_id, thread_id = owner
@@ -413,7 +413,7 @@ class NodeDebugService:
     def list_configurations(
         self,
         session_id: str,
-        thread_id: str | None = None,
+        thread_id: str,
     ) -> list[NodeDebugConfigurationDTO]:
         session_id, thread_id = self._resolve_owner(session_id, thread_id)
         self._ensure_session_loaded(session_id, thread_id)
@@ -424,7 +424,7 @@ class NodeDebugService:
         self,
         session_id: str,
         configuration_id: str,
-        thread_id: str | None = None,
+        thread_id: str,
     ) -> NodeDebugConfigurationDTO:
         session_id, thread_id = self._resolve_owner(session_id, thread_id)
         self._ensure_session_loaded(session_id, thread_id)
@@ -536,7 +536,7 @@ class NodeDebugService:
         session_id: str,
         configuration_id: str,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
@@ -565,7 +565,7 @@ class NodeDebugService:
         session_id: str,
         configuration_id: str,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
@@ -600,7 +600,7 @@ class NodeDebugService:
         session_id: str,
         configuration: NodeDebugConfigurationDTO,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         activate: bool = False,
         actor: Literal["human", "ai", "system"] = "human",
     ) -> NodeDebugStateDTO:
@@ -646,8 +646,8 @@ class NodeDebugService:
         source_session_id: str,
         target_session_id: str,
         configuration_id: str,
-        source_thread_id: str | None = None,
-        target_thread_id: str | None = None,
+        source_thread_id: str,
+        target_thread_id: str,
         name: str | None = None,
         activate: bool = False,
     ) -> NodeDebugConfigurationDTO:
@@ -707,7 +707,7 @@ class NodeDebugService:
         path: str,
         args: list[str],
         breakpoints: list[NodeDebugBreakpointRequest],
-        thread_id: str | None = None,
+        thread_id: str,
         configuration_id: str | None = None,
         launch_profile_name: str | None = None,
         working_directory: str | None = None,
@@ -1079,7 +1079,7 @@ class NodeDebugService:
         session_id: str,
         action: NodeDebugAction,
         params: dict[str, object],
-        thread_id: str | None = None,
+        thread_id: str,
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
@@ -1173,7 +1173,7 @@ class NodeDebugService:
         self,
         session_id: str,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
@@ -1241,7 +1241,7 @@ class NodeDebugService:
         self,
         session_id: str,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
@@ -1295,7 +1295,7 @@ class NodeDebugService:
         tool_call_id: str,
         result: Literal["success", "error"],
         message: str,
-        thread_id: str | None = None,
+        thread_id: str,
         extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
     ) -> NodeDebugStateDTO:
         session_id, thread_id = await self._admit_mutation(session_id, thread_id)
@@ -1392,7 +1392,7 @@ class NodeDebugService:
         self,
         *,
         session_id: str,
-        thread_id: str | None = None,
+        thread_id: str,
         variable_names: list[str] | None = None,
         scope: str = "all",
     ) -> list[NodeDebugVariableDTO]:
@@ -1441,7 +1441,7 @@ class NodeDebugService:
         回调，因此这里不扫描父 Session 的 thread 目录，也不凭 PID/端口猜
         测其它 owner。
         """
-        owner = self._owner_key(session_id, None)
+        owner = self._owner_key(session_id, "main")
         async with self._owner_lock(owner):
             runtime = self._runtimes.get(owner)
             if runtime is not None:
@@ -1479,17 +1479,14 @@ class NodeDebugService:
                 )
 
     @staticmethod
-    def _owner_key(session_id: str, thread_id: str | None) -> NodeDebugOwner:
-        """纯 owner key 归一；裸 session_id（``None``）等价 main thread。
-
-        只用于已经过入口归一（含别名折叠）的精确 owner 参数，不触碰目录索引。
-        """
+    def _owner_key(session_id: str, thread_id: str) -> NodeDebugOwner:
+        """纯 owner key 归一，只用于精确 owner 参数，不触碰目录索引。"""
         return normalize_node_debug_owner(session_id, thread_id)
 
     def _resolve_owner(
         self,
         session_id: str,
-        thread_id: str | None,
+        thread_id: str,
     ) -> NodeDebugOwner:
         """读入口的 owner 归一：有目录索引时按受检 thread 节点折叠别名地址。"""
         if self._thread_path_resolver is None:
@@ -1503,19 +1500,14 @@ class NodeDebugService:
     async def _admit_mutation(
         self,
         session_id: str,
-        thread_id: str | None,
+        thread_id: str,
     ) -> NodeDebugOwner:
         """调试 mutation 的 Session 生命周期准入，并返回受检的精确 owner。
 
         准入同时收口持久 launch claim：能核实旧实例已终结的当场结清，无法核实的保持
         ``reconcile_required`` 并在后续断言中阻断。
         """
-        if self._session_admission is None:
-            # TODO: 所有调用方都注入 session_admission 后删除该分支；生产接线已由
-            # app/container.py 提供，未注入时仍按目录索引归一 owner，但不校验 Session。
-            owner = self._resolve_owner(session_id, thread_id)
-        else:
-            owner = (await self._session_admission.admit(session_id, thread_id)).key
+        owner = (await self._session_admission.admit(session_id, thread_id)).key
         await self._reconcile_persisted_claim(owner)
         return owner
 
@@ -1553,10 +1545,6 @@ class NodeDebugService:
         process_instance_id 派生）幂等：同一实例重复调用返回既有占用，不会新增
         第二行，也不会重复 spawn。账本操作失败显式抛出，绝不被吞成“看起来已登记”。
         """
-        if self._external_resource_leases is None:
-            # TODO: 所有调用方都注入 external_resource_leases 后删除该分支；生产接线已由
-            # app/container.py 提供，未注入时（嵌入式/单测）不登记账本占用。
-            return
         identity = self._process_lease_identity(runtime)
         if identity is None:
             return
@@ -1584,8 +1572,6 @@ class NodeDebugService:
         ``reconcile_required`` 与任何“无法核实”的中间态都不调用本方法：占用保持
         active/reconcile_required，作为跨 Turn 的恢复引用供重启后的 owner 读取。
         """
-        if self._external_resource_leases is None:
-            return
         lease_id = NodeDebugProcessLeaseIdentity.for_process_instance(
             session_id=session_id,
             thread_id=thread_id,
@@ -2519,32 +2505,6 @@ class NodeDebugService:
             self._persist_session_state(session_id, thread_id, runtime)
 
     def _get_debug_runtime_config(self) -> dict[str, object]:
-        if self._config_service is None:
-            # TODO: 删除无 ConfigService 直连场景的兼容默认值，统一从 workspace 配置读取。
-            return {
-                "enabled": True,
-                "default_adapter": "node_inspector",
-                "command_timeout_seconds": _COMMAND_TIMEOUT_SECONDS,
-                "node": {
-                    "inspector_host": "127.0.0.1",
-                    "inspector_port": 0,
-                    "executable": "",
-                },
-                "python": {
-                    "adapter": "debugpy",
-                    "debugpy_host": "127.0.0.1",
-                    "debugpy_port": 0,
-                },
-                "launch_profiles": {
-                    "node-default": {
-                        "adapter": "node_inspector",
-                        "runtime": "node",
-                        "program": "",
-                        "working_directory": "",
-                        "args": [],
-                    }
-                },
-            }
         return self._config_service.get_debug_runtime_config()
 
     @staticmethod
