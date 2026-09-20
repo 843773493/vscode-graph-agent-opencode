@@ -22,10 +22,6 @@ from app.schemas.event import (
     AgentStepEvent,
     AgentStepPayload,
     BaseEvent,
-    DebugActionEvent,
-    DebugActionPayload,
-    DebugStopEvent,
-    DebugStopPayload,
     ErrorEvent,
     ErrorPayload,
     Event,
@@ -175,10 +171,6 @@ class EventType:
     # Session 打断
     SESSION_INTERRUPTED = "session_interrupted"
 
-    # 调试动作审计
-    DEBUG_ACTION = "debug_action"
-    DEBUG_STOP = "debug_stop"
-
 @dataclass(frozen=True)
 class EventFactorySpec:
     event_type: str
@@ -229,8 +221,6 @@ EVENT_FACTORY_REGISTRY: dict[str, EventFactorySpec] = {
     EventType.TOOL_CALL_END: EventFactorySpec(EventType.TOOL_CALL_END, ToolCallEndEvent, ToolCallEndPayload),
     EventType.ERROR: EventFactorySpec(EventType.ERROR, ErrorEvent, ErrorPayload),
     EventType.SESSION_INTERRUPTED: EventFactorySpec(EventType.SESSION_INTERRUPTED, SessionInterruptedEvent, SessionInterruptedPayload),
-    EventType.DEBUG_ACTION: EventFactorySpec(EventType.DEBUG_ACTION, DebugActionEvent, DebugActionPayload),
-    EventType.DEBUG_STOP: EventFactorySpec(EventType.DEBUG_STOP, DebugStopEvent, DebugStopPayload),
 }
 
 

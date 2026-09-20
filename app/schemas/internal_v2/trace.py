@@ -33,10 +33,8 @@ class TraceEventDTO(BaseModel):
         "session_interrupted",
         "goal_updated",
         "goal_cleared",
-        "debug_stop",
-        "debug_action",
     ]
-    phase: Literal["agent", "llm", "tool", "error", "job", "text", "system", "status", "message", "session", "goal", "debug"]
+    phase: Literal["agent", "llm", "tool", "error", "job", "text", "system", "status", "message", "session", "goal"]
     title: str
     content: str
     status: str | None = None
