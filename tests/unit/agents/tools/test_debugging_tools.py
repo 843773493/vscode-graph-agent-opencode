@@ -582,6 +582,34 @@ async def test_start_debugging_reports_missing_explicit_configuration_first(
 
 
 @pytest.mark.asyncio
+async def test_start_debugging_reports_missing_id_before_invalid_paths(
+    tmp_path: Path,
+) -> None:
+    state = NodeDebugStateDTO(
+        session_id="ses_debug_launch",
+        thread_id="main",
+        status="idle",
+    )
+    service = _service_for_launch(state=state, configurations=[])
+    tools = _tool_map(tmp_path, service)
+
+    payload = json.loads(
+        await tools["start_debugging"].ainvoke(
+            {
+                "fileFullPath": "",
+                "workingDirectory": "../outside",
+                "debugConfigurationId": _MISSING_CONFIGURATION_ID,
+            }
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "debug_configuration_not_found"
+    assert payload["error"]["configuration_id"] == _MISSING_CONFIGURATION_ID
+    service.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_start_debugging_rejects_launch_parameter_conflict_with_fields(
     tmp_path: Path,
 ) -> None:

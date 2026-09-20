@@ -702,14 +702,6 @@ class DebuggingToolFactory:
                 include_invalid_breakpoints=True,
             )
         try:
-            path = self._relative_workspace_path(fileFullPath, "fileFullPath")
-            working_directory = self._canonical_directory(
-                workingDirectory,
-                "workingDirectory",
-            )
-        except Exception as error:  # noqa: BLE001 - 参数错误也必须返回可审计的工具结果
-            return await self._failure_from_error("start_debugging", error)
-        try:
             state = await self._node_debug_service.get_state(session_id, thread_id)
             selection = await self._select_launch_configuration(
                 session_id=session_id,
@@ -734,6 +726,11 @@ class DebuggingToolFactory:
                     },
                 )
             selected_configuration = selection.configuration
+            path = self._relative_workspace_path(fileFullPath, "fileFullPath")
+            working_directory = self._canonical_directory(
+                workingDirectory,
+                "workingDirectory",
+            )
             if selected_configuration is not None:
                 conflicts = self._launch_parameter_conflicts(
                     selected_configuration,

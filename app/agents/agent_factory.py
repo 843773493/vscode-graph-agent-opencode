@@ -586,6 +586,8 @@ def create_my_deep_agent(
     extension_confirmation_names: set[str] = set()
     direct_confirmation_names: set[str] = set()
     extension_policies: dict[str, object] = {}
+    extension_tools: list[BaseTool] = []
+    extension_invoker: BaseTool | None = None
     if tools is not None:
         resolved_tools = []
         for tool in tools:
@@ -733,24 +735,24 @@ def create_my_deep_agent(
                 hidden_direct_tool_names.add(tool.name)
             if policy.confirmation_required:
                 direct_confirmation_names.add(tool.name)
-        if extension_tools:
-            resolved_tools.append(
-                create_extension_tool_invoker_tool(
-                    extension_tools,
-                    # E4：旧 tool call 只按装配期封存 binding 解析；
-                    # 正式 activation owner 接线前由快照封存承担 sealed ref。
-                    catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
-                        extension_tools
-                    ),
-                    is_tool_execution_enabled=lambda target: bool(
-                        getattr(
-                            extension_policies.get(target.name),
-                            "execution_enabled",
-                            False,
-                        )
-                    ),
-                )
+    # 固定信封即使当前没有可执行 target 也必须存在；target 的启停只改变
+    # 封存目录与执行准入，不改变 Provider 工具面。
+    extension_invoker = create_extension_tool_invoker_tool(
+        extension_tools,
+        # E4：旧 tool call 只按装配期封存 binding 解析；
+        # 正式 activation owner 接线前由快照封存承担 sealed ref。
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            extension_tools
+        ),
+        is_tool_execution_enabled=lambda target: bool(
+            getattr(
+                extension_policies.get(target.name),
+                "execution_enabled",
+                False,
             )
+        ),
+    )
+    resolved_tools.append(extension_invoker)
     if context_source_manager is not None and not any(
         getattr(tool, "name", None) == "skill_load" for tool in resolved_tools
     ):
@@ -759,6 +761,8 @@ def create_my_deep_agent(
         )
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
+        if extension_invoker is not None and extension_invoker not in resolved_tools:
+            resolved_tools.append(extension_invoker)
     resolved_interrupt_on = dict(interrupt_on or {})
     resolved_interrupt_on.update(
         {tool_name: True for tool_name in direct_confirmation_names}
