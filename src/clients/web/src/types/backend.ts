@@ -9,6 +9,7 @@ export type {
   ControlScope,
   ChildThreadList,
   ChildThreadSummary,
+  ExtensionCatalogBindingAudit,
   DeleteSessionResult,
   Job,
   JobControlRequest,

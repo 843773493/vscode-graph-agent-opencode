@@ -333,6 +333,16 @@ message MessageUpdatedExecutionEventDTO {
   MessageObservationDTO payload = 6;
 }
 
+message ExtensionCatalogBindingAuditDTO {
+  string binding_id = 1;
+  string binding_hash = 2;
+  string catalog_revision = 3;
+  int64 generation = 4;
+  string provider_binding_identity = 5;
+  string target_id = 6;
+  string target_schema_hash = 7;
+}
+
 message NodeDebugActionRecordDTO {
   string action_id = 1;
   string session_id = 2;
@@ -344,6 +354,7 @@ message NodeDebugActionRecordDTO {
   optional string result = 8;
   google.protobuf.Timestamp created_at = 9;
   string thread_id = 10;
+  optional ExtensionCatalogBindingAuditDTO extension_catalog_binding = 11;
 }
 
 message NodeDebugActionRequest {
@@ -502,6 +513,7 @@ message NodeDebugSessionManifestDTO {
   repeated NodeDebugActionRecordDTO actions = 4;
   google.protobuf.Timestamp updated_at = 5;
   string thread_id = 6;
+  repeated string configuration_ids = 7;
 }
 
 message NodeDebugStackFrameDTO {

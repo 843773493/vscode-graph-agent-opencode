@@ -333,6 +333,16 @@ export interface MessageUpdatedExecutionEventDTO {
   payload: MessageObservationDTO | undefined;
 }
 
+export interface ExtensionCatalogBindingAuditDTO {
+  binding_id: string;
+  binding_hash: string;
+  catalog_revision: string;
+  generation: number;
+  provider_binding_identity: string;
+  target_id: string;
+  target_schema_hash: string;
+}
+
 export interface NodeDebugActionRecordDTO {
   action_id: string;
   session_id: string;
@@ -344,6 +354,7 @@ export interface NodeDebugActionRecordDTO {
   result?: string | undefined;
   created_at: string | undefined;
   thread_id: string;
+  extension_catalog_binding?: ExtensionCatalogBindingAuditDTO | undefined;
 }
 
 export interface NodeDebugActionRequest {
@@ -502,6 +513,7 @@ export interface NodeDebugSessionManifestDTO {
   actions: NodeDebugActionRecordDTO[];
   updated_at: string | undefined;
   thread_id: string;
+  configuration_ids: string[];
 }
 
 export interface NodeDebugStackFrameDTO {
@@ -3899,6 +3911,77 @@ export const MessageUpdatedExecutionEventDTO: MessageFns<MessageUpdatedExecution
   },
 };
 
+function createBaseExtensionCatalogBindingAuditDTO(): ExtensionCatalogBindingAuditDTO {
+  return {
+    binding_id: "",
+    binding_hash: "",
+    catalog_revision: "",
+    generation: 0,
+    provider_binding_identity: "",
+    target_id: "",
+    target_schema_hash: "",
+  };
+}
+
+export const ExtensionCatalogBindingAuditDTO: MessageFns<ExtensionCatalogBindingAuditDTO> = {
+  fromJSON(object: any): ExtensionCatalogBindingAuditDTO {
+    return {
+      binding_id: isSet(object.binding_id) ? globalThis.String(object.binding_id) : "",
+      binding_hash: isSet(object.binding_hash) ? globalThis.String(object.binding_hash) : "",
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.String(object.catalog_revision) : "",
+      generation: isSet(object.generation) ? globalThis.Number(object.generation) : 0,
+      provider_binding_identity: isSet(object.provider_binding_identity)
+        ? globalThis.String(object.provider_binding_identity)
+        : "",
+      target_id: isSet(object.target_id) ? globalThis.String(object.target_id) : "",
+      target_schema_hash: isSet(object.target_schema_hash) ? globalThis.String(object.target_schema_hash) : "",
+    };
+  },
+
+  toJSON(message: ExtensionCatalogBindingAuditDTO): unknown {
+    const obj: any = {};
+    if (message.binding_id !== "") {
+      obj.binding_id = message.binding_id;
+    }
+    if (message.binding_hash !== "") {
+      obj.binding_hash = message.binding_hash;
+    }
+    if (message.catalog_revision !== "") {
+      obj.catalog_revision = message.catalog_revision;
+    }
+    if (message.generation !== 0) {
+      obj.generation = Math.round(message.generation);
+    }
+    if (message.provider_binding_identity !== "") {
+      obj.provider_binding_identity = message.provider_binding_identity;
+    }
+    if (message.target_id !== "") {
+      obj.target_id = message.target_id;
+    }
+    if (message.target_schema_hash !== "") {
+      obj.target_schema_hash = message.target_schema_hash;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionCatalogBindingAuditDTO>, I>>(base?: I): ExtensionCatalogBindingAuditDTO {
+    return ExtensionCatalogBindingAuditDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionCatalogBindingAuditDTO>, I>>(
+    object: I,
+  ): ExtensionCatalogBindingAuditDTO {
+    const message = createBaseExtensionCatalogBindingAuditDTO();
+    message.binding_id = object.binding_id ?? "";
+    message.binding_hash = object.binding_hash ?? "";
+    message.catalog_revision = object.catalog_revision ?? "";
+    message.generation = object.generation ?? 0;
+    message.provider_binding_identity = object.provider_binding_identity ?? "";
+    message.target_id = object.target_id ?? "";
+    message.target_schema_hash = object.target_schema_hash ?? "";
+    return message;
+  },
+};
+
 function createBaseNodeDebugActionRecordDTO(): NodeDebugActionRecordDTO {
   return {
     action_id: "",
@@ -3911,6 +3994,7 @@ function createBaseNodeDebugActionRecordDTO(): NodeDebugActionRecordDTO {
     result: undefined,
     created_at: undefined,
     thread_id: "",
+    extension_catalog_binding: undefined,
   };
 }
 
@@ -3927,6 +4011,9 @@ export const NodeDebugActionRecordDTO: MessageFns<NodeDebugActionRecordDTO> = {
       result: isSet(object.result) ? globalThis.String(object.result) : undefined,
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      extension_catalog_binding: isSet(object.extension_catalog_binding)
+        ? ExtensionCatalogBindingAuditDTO.fromJSON(object.extension_catalog_binding)
+        : undefined,
     };
   },
 
@@ -3962,6 +4049,9 @@ export const NodeDebugActionRecordDTO: MessageFns<NodeDebugActionRecordDTO> = {
     if (message.thread_id !== "") {
       obj.thread_id = message.thread_id;
     }
+    if (message.extension_catalog_binding !== undefined) {
+      obj.extension_catalog_binding = ExtensionCatalogBindingAuditDTO.toJSON(message.extension_catalog_binding);
+    }
     return obj;
   },
 
@@ -3980,6 +4070,10 @@ export const NodeDebugActionRecordDTO: MessageFns<NodeDebugActionRecordDTO> = {
     message.result = object.result ?? undefined;
     message.created_at = object.created_at ?? undefined;
     message.thread_id = object.thread_id ?? "";
+    message.extension_catalog_binding =
+      (object.extension_catalog_binding !== undefined && object.extension_catalog_binding !== null)
+        ? ExtensionCatalogBindingAuditDTO.fromPartial(object.extension_catalog_binding)
+        : undefined;
     return message;
   },
 };
@@ -5016,6 +5110,7 @@ function createBaseNodeDebugSessionManifestDTO(): NodeDebugSessionManifestDTO {
     actions: [],
     updated_at: undefined,
     thread_id: "",
+    configuration_ids: [],
   };
 }
 
@@ -5032,6 +5127,9 @@ export const NodeDebugSessionManifestDTO: MessageFns<NodeDebugSessionManifestDTO
         : [],
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      configuration_ids: globalThis.Array.isArray(object?.configuration_ids)
+        ? object.configuration_ids.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -5055,6 +5153,9 @@ export const NodeDebugSessionManifestDTO: MessageFns<NodeDebugSessionManifestDTO
     if (message.thread_id !== "") {
       obj.thread_id = message.thread_id;
     }
+    if (message.configuration_ids?.length) {
+      obj.configuration_ids = message.configuration_ids;
+    }
     return obj;
   },
 
@@ -5069,6 +5170,7 @@ export const NodeDebugSessionManifestDTO: MessageFns<NodeDebugSessionManifestDTO
     message.actions = object.actions?.map((e) => NodeDebugActionRecordDTO.fromPartial(e)) || [];
     message.updated_at = object.updated_at ?? undefined;
     message.thread_id = object.thread_id ?? "";
+    message.configuration_ids = object.configuration_ids?.map((e) => e) || [];
     return message;
   },
 };

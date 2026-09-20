@@ -1477,6 +1477,52 @@ export declare type MessageUpdatedExecutionEventDTO = Message<"boxteam.workspace
 export declare const MessageUpdatedExecutionEventDTOSchema: GenMessage<MessageUpdatedExecutionEventDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.ExtensionCatalogBindingAuditDTO
+ */
+export declare type ExtensionCatalogBindingAuditDTO = Message<"boxteam.workspace.v2.ExtensionCatalogBindingAuditDTO"> & {
+  /**
+   * @generated from field: string binding_id = 1;
+   */
+  bindingId: string;
+
+  /**
+   * @generated from field: string binding_hash = 2;
+   */
+  bindingHash: string;
+
+  /**
+   * @generated from field: string catalog_revision = 3;
+   */
+  catalogRevision: string;
+
+  /**
+   * @generated from field: int64 generation = 4;
+   */
+  generation: bigint;
+
+  /**
+   * @generated from field: string provider_binding_identity = 5;
+   */
+  providerBindingIdentity: string;
+
+  /**
+   * @generated from field: string target_id = 6;
+   */
+  targetId: string;
+
+  /**
+   * @generated from field: string target_schema_hash = 7;
+   */
+  targetSchemaHash: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ExtensionCatalogBindingAuditDTO.
+ * Use `create(ExtensionCatalogBindingAuditDTOSchema)` to create a new message.
+ */
+export declare const ExtensionCatalogBindingAuditDTOSchema: GenMessage<ExtensionCatalogBindingAuditDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.NodeDebugActionRecordDTO
  */
 export declare type NodeDebugActionRecordDTO = Message<"boxteam.workspace.v2.NodeDebugActionRecordDTO"> & {
@@ -1529,6 +1575,11 @@ export declare type NodeDebugActionRecordDTO = Message<"boxteam.workspace.v2.Nod
    * @generated from field: string thread_id = 10;
    */
   threadId: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ExtensionCatalogBindingAuditDTO extension_catalog_binding = 11;
+   */
+  extensionCatalogBinding?: ExtensionCatalogBindingAuditDTO | undefined;
 };
 
 /**
@@ -2259,6 +2310,11 @@ export declare type NodeDebugSessionManifestDTO = Message<"boxteam.workspace.v2.
    * @generated from field: string thread_id = 6;
    */
   threadId: string;
+
+  /**
+   * @generated from field: repeated string configuration_ids = 7;
+   */
+  configurationIds: string[];
 };
 
 /**

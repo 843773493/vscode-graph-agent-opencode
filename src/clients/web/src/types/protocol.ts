@@ -65,13 +65,15 @@ export type AttachmentRef = Omit<GeneratedAttachmentRef, "name" | "content_type"
 export type Agent = Omit<WorkspaceProtocol.AgentDTO, "description"> & {
   description?: string | null;
 };
+export type ExtensionCatalogBindingAudit = WorkspaceProtocol.ExtensionCatalogBindingAuditDTO;
 export type NodeDebugActionRecord = Omit<
   WorkspaceProtocol.NodeDebugActionRecordDTO,
-  "actor" | "tool_name" | "tool_call_id" | "result" | "created_at"
+  "actor" | "tool_name" | "tool_call_id" | "extension_catalog_binding" | "result" | "created_at"
 > & {
   actor?: "human" | "ai" | "system";
   tool_name?: string | null;
   tool_call_id?: string | null;
+  extension_catalog_binding?: ExtensionCatalogBindingAudit | null;
   result?: "success" | "error";
   created_at: string;
 };
