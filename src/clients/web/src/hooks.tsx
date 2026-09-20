@@ -27,17 +27,12 @@ import {
   startManagedGatewayWorkspaceBackend as apiStartManagedGatewayWorkspaceBackend,
   stopManagedGatewayWorkspaceBackend as apiStopManagedGatewayWorkspaceBackend,
 } from "./gatewayApi";
-import {
-  getGatewayUserViewState,
-  putGatewayUserViewState,
-} from "./gatewayApi";
 import type { TurnHistoryInclude } from "./api/sessionTurnHistory";
 import type {
   AddManagedGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
   GatewayRuntimeRestartResult,
   AttachmentRef,
-  GatewayUserViewState,
   MessageReplayRequest,
   DeliveryPolicy,
   SessionResourceAction,
@@ -68,10 +63,11 @@ import { useBackgroundSessionActivity } from "./hooks/useBackgroundSessionActivi
 import { useWorkspaceSessionActivity } from "./hooks/useWorkspaceSessionActivity";
 import { useSessionInformationClipboard } from "./hooks/useSessionInformationClipboard";
 import { useSessionActions } from "./hooks/useSessionActions";
+import { useWorkspaceBootstrap } from "./hooks/useWorkspaceBootstrap";
 import {
-  canAcceptUserViewStateMutation,
-  useWorkspaceBootstrap,
-} from "./hooks/useWorkspaceBootstrap";
+  useSessionViewState,
+  type SessionViewStatePayload,
+} from "./hooks/useSessionViewState";
 import { useWorkspaceInformationClipboard } from "./hooks/useWorkspaceInformationClipboard";
 import { useGatewayWorkspaceHierarchy } from "./hooks/useGatewayWorkspaceHierarchy";
 import { useUiSettingsController } from "./hooks/useUiSettingsController";
@@ -101,21 +97,6 @@ export { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
 
 const CACHED_UI_SETTINGS = readCachedUiSettings();
 const CACHED_UNREAD_SESSION_KEYS = readUnreadSessionKeys();
-const SESSION_VIEW_STATE_CACHE_LIMIT = 64;
-
-function writeSessionViewStateCache(
-  cache: Map<string, GatewayUserViewState | null>,
-  key: string,
-  value: GatewayUserViewState | null,
-): void {
-  cache.delete(key);
-  cache.set(key, value);
-  while (cache.size > SESSION_VIEW_STATE_CACHE_LIMIT) {
-    const oldestKey = cache.keys().next().value;
-    if (typeof oldestKey !== "string") break;
-    cache.delete(oldestKey);
-  }
-}
 
 const INITIAL_STATE: AppState = {
   apiPort: DEFAULT_BACKEND_PORT,
@@ -327,12 +308,7 @@ interface AppContextType {
   updateUiSettings: (
     input: WebUiSettingsUpdate | ((current: WebUiSettings) => WebUiSettingsUpdate),
   ) => Promise<void>;
-  saveSessionViewState: (payload: {
-    turn_anchor: string | null;
-    scroll_offset: number;
-    follow_latest: boolean;
-    tool_details_expanded?: boolean;
-  }) => void;
+  saveSessionViewState: (payload: SessionViewStatePayload) => void;
 }
 
 type HotReloadContextStore = {
@@ -400,12 +376,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const latestStateRef = useRef(state);
   latestStateRef.current = state;
-  const sessionViewStateCacheRef = useRef(
-    new Map<string, GatewayUserViewState | null>(),
-  );
-  const sessionViewStateRequestsRef = useRef(
-    new Map<string, Promise<GatewayUserViewState | null>>(),
-  );
   const workspaceActivationQueueRef = useRef(createLatestSerialTaskQueue());
   const workspaceSessionSelectionQueueRef = useRef(createLatestSerialTaskQueue());
   const workspaceSessionSelectionIntentRef = useRef(0);
@@ -668,192 +638,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     refreshAgentStateSnapshot,
   });
 
-  const applyLoadedSessionViewState = useCallback((
-    viewState: GatewayUserViewState | null,
-    workspaceId: string,
-    sessionId: string,
-    expectedUserId: string,
-    expectedLeaseGeneration: number,
-  ) => {
-    setState((previous) => {
-      if (
-        !canAcceptUserViewStateMutation({
-          currentUserId: previous.gatewayUserAccess?.user_id,
-          responseUserId: viewState?.user_id ?? expectedUserId,
-          currentLeaseGeneration: previous.gatewayUserAccess?.lease_generation,
-          requestLeaseGeneration: expectedLeaseGeneration,
-        })
-        || previous.gatewayUserAccess?.user_id !== expectedUserId
-      ) {
-        return previous;
-      }
-      const next = cloneMaps(previous);
-      const cacheKey = sessionScopeKey(workspaceId, sessionId);
-      if (viewState) {
-        next.gatewayUserViewStates.set(cacheKey, viewState);
-      } else {
-        next.gatewayUserViewStates.delete(cacheKey);
-      }
-      if (
-        previous.currentSession?.session_id === sessionId
-        && previous.currentSessionWorkspaceId === workspaceId
-      ) {
-        next.expandDetails = viewState?.tool_details_expanded ?? false;
-      }
-      return next;
-    });
-  }, []);
-
-  const loadSessionViewState = useCallback(
-    async (workspaceId: string | null, sessionId: string) => {
-      const latest = latestStateRef.current;
-      if (!workspaceId || latest.gatewayUserAccess?.kind !== "user") return;
-      const userId = latest.gatewayUserAccess.user_id;
-      if (!userId) return;
-      const leaseGeneration = latest.gatewayUserAccess.lease_generation;
-      const cacheKey = sessionScopeKey(workspaceId, sessionId);
-      const requestKey = [
-        latest.apiPort ?? DEFAULT_BACKEND_PORT,
-        userId,
-        leaseGeneration,
-        cacheKey,
-      ].join(":");
-      const existingState = latest.gatewayUserViewStates.get(cacheKey);
-      if (existingState) {
-        writeSessionViewStateCache(
-          sessionViewStateCacheRef.current,
-          requestKey,
-          existingState,
-        );
-        applyLoadedSessionViewState(
-          existingState,
-          workspaceId,
-          sessionId,
-          userId,
-          leaseGeneration,
-        );
-        return existingState;
-      }
-      const cached = sessionViewStateCacheRef.current.get(requestKey);
-      if (sessionViewStateCacheRef.current.has(requestKey)) {
-        applyLoadedSessionViewState(
-          cached ?? null,
-          workspaceId,
-          sessionId,
-          userId,
-          leaseGeneration,
-        );
-        return cached ?? null;
-      }
-      const existingRequest = sessionViewStateRequestsRef.current.get(requestKey);
-      if (existingRequest) {
-        return await existingRequest;
-      }
-      const requestLeaseGeneration = latest.gatewayUserAccess.lease_generation;
-      const request = getGatewayUserViewState(
-        latest.apiPort ?? DEFAULT_BACKEND_PORT,
-        workspaceId,
-        sessionId,
-      ).then((viewState) => {
-        writeSessionViewStateCache(
-          sessionViewStateCacheRef.current,
-          requestKey,
-          viewState,
-        );
-        applyLoadedSessionViewState(
-          viewState,
-          workspaceId,
-          sessionId,
-          userId,
-          leaseGeneration,
-        );
-        return viewState;
-      }, (error: unknown) => {
-        setState((previous) => ({
-          ...previous,
-          ...(previous.gatewayUserAccess?.lease_generation === requestLeaseGeneration
-            ? {
-                status: `读取用户视图位置失败: ${error instanceof Error ? error.message : String(error)}`,
-              }
-            : {}),
-        }));
-        return null;
-      });
-      sessionViewStateRequestsRef.current.set(requestKey, request);
-      void request.then(() => {
-        if (sessionViewStateRequestsRef.current.get(requestKey) === request) {
-          sessionViewStateRequestsRef.current.delete(requestKey);
-        }
-      });
-      return await request;
+  const { loadSessionViewState, saveSessionViewState, toggleExpandDetails } = useSessionViewState({
+    host: {
+      apiPort: state.apiPort,
+      currentWorkspaceId: state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId,
+      currentSessionId: state.currentSession?.session_id ?? null,
+      gatewayUserAccess: state.gatewayUserAccess,
+      gatewayUserViewStates: state.gatewayUserViewStates,
+      expandDetails: state.expandDetails,
     },
-    [applyLoadedSessionViewState],
-  );
-
-  const saveSessionViewState = useCallback((payload: {
-    turn_anchor: string | null;
-    scroll_offset: number;
-    follow_latest: boolean;
-    tool_details_expanded?: boolean;
-  }) => {
-    const latest = latestStateRef.current;
-    const workspaceId = latest.currentSessionWorkspaceId ?? latest.activeGatewayWorkspaceId;
-    const sessionId = latest.currentSession?.session_id;
-    if (!workspaceId || !sessionId || latest.gatewayUserAccess?.kind !== "user") return;
-    const requestLeaseGeneration = latest.gatewayUserAccess.lease_generation;
-    const cacheKey = sessionScopeKey(workspaceId, sessionId);
-    const existing = latest.gatewayUserViewStates.get(cacheKey);
-    void putGatewayUserViewState(
-      latest.apiPort ?? DEFAULT_BACKEND_PORT,
-      workspaceId,
-      sessionId,
-      {
-        turn_anchor: payload.turn_anchor,
-        scroll_offset: payload.scroll_offset,
-        follow_latest: payload.follow_latest,
-        projection_version: existing?.projection_version ?? 1,
-        tool_details_expanded: payload.tool_details_expanded
-          ?? existing?.tool_details_expanded
-          ?? latest.expandDetails,
-      },
-    ).then((updated) => {
-      writeSessionViewStateCache(
-        sessionViewStateCacheRef.current,
-        [
-          latest.apiPort ?? DEFAULT_BACKEND_PORT,
-          updated.user_id,
-          requestLeaseGeneration,
-          cacheKey,
-        ].join(":"),
-        updated,
-      );
+    onApplyViewState: ({ workspaceId, sessionId, viewState, toolDetailsExpanded }) => {
       setState((previous) => {
-        if (
-          !canAcceptUserViewStateMutation({
-            currentUserId: previous.gatewayUserAccess?.user_id,
-            responseUserId: updated.user_id,
-            currentLeaseGeneration:
-              previous.gatewayUserAccess?.lease_generation,
-            requestLeaseGeneration,
-          })
-        ) {
-          return previous;
-        }
         const next = cloneMaps(previous);
-        next.gatewayUserViewStates.set(cacheKey, updated);
+        const cacheKey = sessionScopeKey(workspaceId, sessionId);
+        if (viewState) next.gatewayUserViewStates.set(cacheKey, viewState);
+        else next.gatewayUserViewStates.delete(cacheKey);
+        if (
+          toolDetailsExpanded !== undefined
+          && previous.currentSession?.session_id === sessionId
+          && previous.currentSessionWorkspaceId === workspaceId
+        ) {
+          next.expandDetails = toolDetailsExpanded;
+        }
         return next;
       });
-    }).catch((error: unknown) => {
-      setState((previous) => ({
-        ...previous,
-        ...(previous.gatewayUserAccess?.lease_generation === requestLeaseGeneration
-          ? {
-              status: `保存用户视图位置失败: ${error instanceof Error ? error.message : String(error)}`,
-            }
-          : {}),
-      }));
-    });
-  }, []);
+    },
+    onSetExpandDetails: (expand) => {
+      setState((previous) => ({ ...previous, expandDetails: expand }));
+    },
+    onStatusChange: setStatus,
+  });
 
   const selectSession = useCallback((sessionId: string) => {
     selectSessionCallback(sessionId);
@@ -889,22 +703,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       );
     }
   }, [updateUiSettings]);
-
-  const toggleExpandDetails = useCallback((expand: boolean) => {
-    setState((prev) => ({ ...prev, expandDetails: expand }));
-    const latest = latestStateRef.current;
-    const workspaceId = latest.currentSessionWorkspaceId ?? latest.activeGatewayWorkspaceId;
-    const sessionId = latest.currentSession?.session_id;
-    const existing = workspaceId && sessionId
-      ? latest.gatewayUserViewStates.get(sessionScopeKey(workspaceId, sessionId))
-      : null;
-    saveSessionViewState({
-      turn_anchor: existing?.turn_anchor ?? null,
-      scroll_offset: existing?.scroll_offset ?? 0,
-      follow_latest: existing?.follow_latest ?? true,
-      tool_details_expanded: expand,
-    });
-  }, [saveSessionViewState]);
 
   const {
     invalidateWorkspaceRefreshes,
