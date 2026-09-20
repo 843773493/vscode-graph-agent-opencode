@@ -104,18 +104,19 @@ def _build_debug_service(
     workspace_root: Path,
     config_path: Path,
     resolver: SessionCatalogPathResolver,
-) -> NodeDebugService:
+) -> tuple[NodeDebugService, NodeDebugSessionStore]:
     config_service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=config_path,
         workspace_root=workspace_root,
     )
     config_service.validate_workspace_config()
+    store = NodeDebugSessionStore(resolver)
     return NodeDebugService(
         workspace_root=workspace_root,
         config_service=config_service,
-        session_store=NodeDebugSessionStore(resolver),
-    )
+        session_store=store,
+    ), store
 
 
 def _payload(result: object) -> dict[str, object]:
@@ -175,7 +176,7 @@ async def test_agent_debug_tools_drive_real_node_inspector_session(
         workspace_root,
     )
     fixture_path, breakpoint_line = _write_debug_fixture(workspace_root)
-    service = _build_debug_service(
+    service, _store = _build_debug_service(
         workspace_root,
         Path(e2e_workspace_config_path),
         resolver,
@@ -260,7 +261,7 @@ async def test_debug_tools_keep_sessions_isolated_and_support_node_logpoints(
         workspace_root,
     )
     fixture_path, breakpoint_line = _write_debug_fixture(workspace_root)
-    service = _build_debug_service(
+    service, store = _build_debug_service(
         workspace_root,
         Path(e2e_workspace_config_path),
         resolver,
@@ -371,6 +372,19 @@ async def test_debug_tools_keep_sessions_isolated_and_support_node_logpoints(
         assert state.pid is not None
         assert other_state.pid is not None
         assert state.pid != other_state.pid
+        main_claim = store.read_launch_claim(
+            main_owner.session_id,
+            main_owner.thread_id,
+        )
+        child_claim = store.read_launch_claim(
+            child_owner.session_id,
+            child_owner.thread_id,
+        )
+        assert main_claim is not None
+        assert child_claim is not None
+        assert main_claim.inspector_port > 0
+        assert child_claim.inspector_port > 0
+        assert main_claim.inspector_port != child_claim.inspector_port
         stop_result = _payload(await by_name["stop_debugging"].ainvoke({}))
         assert stop_result["ok"] is True
         other_stop_result = _payload(await other_tools["stop_debugging"].ainvoke({}))
