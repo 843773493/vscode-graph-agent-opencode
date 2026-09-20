@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.identifier import create_prefixed_id
-from app.core.session_paths import validate_generator_physical_segment
+from app.core.path_segments import validate_generator_physical_segment
 from app.schemas.gateway_control import (
     GenerationRunDTO,
     GenerationRunListDTO,

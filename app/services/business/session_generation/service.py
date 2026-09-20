@@ -12,7 +12,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
-from app.core.session_paths import validate_generator_physical_segment
+from app.core.path_segments import validate_generator_physical_segment
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.session import (
     SessionDTO,
