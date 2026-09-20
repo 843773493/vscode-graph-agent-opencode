@@ -179,6 +179,14 @@ def build_source_lifecycle_decision(
     if decision_kind == "untrack":
         # untrack 只声明冻结；不携带新 revision 事实。
         revision = None
+    content = observation.content
+    item_id: str | None = None
+    if content is not None:
+        revision_token = revision or "pending"
+        item_id = (
+            "item-context-source:"
+            f"{observation.source_id}:{revision_token}:{decision_kind}"
+        )
     return ApplySourceLifecycleDecision(
         owner=MutationIntentOwner(
             session_id=observation.owner.session_id,
@@ -193,6 +201,8 @@ def build_source_lifecycle_decision(
         activation_boundary=observation.activation_boundary,
         tracking_status=tracking_status,
         pending_only=pending_only,
+        content=content,
+        item_id=item_id,
     )
 
 

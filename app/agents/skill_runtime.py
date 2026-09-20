@@ -241,17 +241,15 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         )
 
     def _build_source_delta_message(self, delta: ContextSourceDelta) -> HumanMessage:
-        header_template = _SOURCE_DELTA_HEADER_TEMPLATES.get(delta.source_kind)
-        if header_template is None:
+        if delta.source_kind not in _SOURCE_DELTA_HEADER_TEMPLATES:
             raise RuntimeError(
                 "未知 context source kind，拒绝构造注入消息: "
                 f"source_id={delta.source_id} kind={delta.source_kind}"
             )
         return HumanMessage(
-            content=(
-                header_template.format(name=delta.source_name, kind=delta.kind)
-                + f"\n\n{delta.content}"
-            ),
+            # source 正文已经由 ApplySourceLifecycleDecision 封存；这里仅为
+            # LangGraph state 提供同一正文的临时 projection，不再承担写入。
+            content=delta.content,
             id=(
                 f"context-source:{delta.source_id}:"
                 f"{delta.revision}:{delta.kind}"
@@ -262,6 +260,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
                 "context_source_name": delta.source_name,
                 "context_wire_role": delta.wire_role,
                 "context_revision": delta.revision,
+                "internal": True,
             },
         )
 

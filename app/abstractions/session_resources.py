@@ -223,15 +223,14 @@ class SessionResourceMessageProtocol(Protocol):
         strict: bool = False,
     ) -> list[dict[str, object]]: ...
 
-    def append_system_reminder(
+    def submit_system_reminder(
         self,
         *,
         session_id: str,
         reminder: str,
         response_metadata: dict[str, object],
         checkpoint_source: str,
-        assistant_text: str = "",
-        assistant_response_metadata: dict[str, object] | None = None,
+        event_identity: str | None = None,
     ) -> bool: ...
 
 

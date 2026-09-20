@@ -89,6 +89,8 @@ class TestApplySourceLifecycleDecision:
             decision_kind="delta",
             revision="rev-2",
             from_revision="rev-1",
+            content="delta",
+            item_id="item-src-delta",
         )
         assert decision.from_revision == "rev-1"
         assert decision.revision == "rev-2"
@@ -103,6 +105,8 @@ class TestApplySourceLifecycleDecision:
                 decision_kind="delta",
                 revision="rev-2",
                 from_revision="rev-2",
+                content="delta",
+                item_id="item-src-delta",
             )
 
     def test_base_rejects_from_revision(self) -> None:
@@ -115,6 +119,8 @@ class TestApplySourceLifecycleDecision:
                 decision_kind="base",
                 revision="rev-1",
                 from_revision="rev-0",
+                content="base",
+                item_id="item-src-base",
             )
 
     def test_untrack_carries_no_revision(self) -> None:
@@ -136,6 +142,8 @@ class TestApplySourceLifecycleDecision:
             name="alpha",
             decision_kind="base",
             revision="rev-1",
+            content="base",
+            item_id="item-src-base",
         )
         advanced = ApplySourceLifecycleDecision(
             owner=_owner(),
@@ -145,6 +153,8 @@ class TestApplySourceLifecycleDecision:
             decision_kind="delta",
             revision="rev-2",
             from_revision="rev-1",
+            content="delta",
+            item_id="item-src-delta",
         )
         assert base.idempotency_key != advanced.idempotency_key
         assert base.failure_outcome == "keep_pending"
@@ -210,6 +220,7 @@ class TestIntentDispatch:
             ApplySourceLifecycleDecision(
                 owner=_owner(), source_id="s", source_kind="skill",
                 name="alpha", decision_kind="base", revision="r",
+                content="base", item_id="item-src",
             ),
             SwitchToolSetIntent(
                 owner=_owner(), desired_revision="ts",

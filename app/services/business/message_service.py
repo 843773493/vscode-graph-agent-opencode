@@ -24,7 +24,7 @@ from app.schemas.internal_v2.message import (
 )
 from app.services.business.session_turn_history.visible_page import visible_message_page
 from app.services.business.system_reminder_checkpoint_service import (
-    append_system_reminder_checkpoint,
+    submit_checkpoint_reminder,
 )
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.mapping.itemized.message_reasoning_merge import (
@@ -221,26 +221,24 @@ class MessageService(MessageContentProjectionMixin):
             ),
         )
 
-    def append_system_reminder(
+    def submit_system_reminder(
         self,
         *,
         session_id: str,
         reminder: str,
         response_metadata: dict[str, object],
         checkpoint_source: str,
-        assistant_text: str = "",
-        assistant_response_metadata: dict[str, object] | None = None,
+        event_identity: str | None = None,
     ) -> bool:
         if self._checkpointer is None:
             raise RuntimeError("MessageService 未配置 checkpointer，无法写入 system_reminder")
-        return append_system_reminder_checkpoint(
+        return submit_checkpoint_reminder(
             checkpointer=self._checkpointer,
             session_id=session_id,
             reminder=reminder,
             response_metadata=response_metadata,
-            assistant_text=assistant_text,
-            assistant_response_metadata=assistant_response_metadata,
             checkpoint_source=checkpoint_source,
+            event_identity=event_identity,
         )
 
     async def _load_raw_messages(

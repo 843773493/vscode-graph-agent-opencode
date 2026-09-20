@@ -21,7 +21,8 @@ infrastructure 侧 owner 实现，本模块不得反向导入它们。
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Literal
 
 IntentFailureOutcome = Literal[
@@ -64,6 +65,10 @@ SourceDecisionKind = Literal[
 
 SourceActivationBoundary = Literal["turn", "model_call"]
 """source 激活边界：默认 Turn 快照或显式 model_call 快照。"""
+
+
+SourceItemTurnScope = Literal["ambient", "pending_next_turn"]
+"""source item 的非 Turn 作用域；source 不得伪装成真实用户 Turn。"""
 
 
 EpochRebuildReason = Literal["compaction", "rewind"]
@@ -181,6 +186,12 @@ class ApplySourceLifecycleDecision:
     activation_boundary: SourceActivationBoundary = "turn"
     tracking_status: Literal["tracked", "untracked"] | None = None
     pending_only: bool = False
+    # source 正文是 intent 的 typed 载体。它不进入 extensions，也不允许 owner
+    # 从当前文件/事件重新读取；None 仅用于 track/untrack 等没有 item 的决策。
+    content: str | None = None
+    item_id: str | None = None
+    turn_scope: SourceItemTurnScope = "pending_next_turn"
+    metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _require_non_empty(self.source_id, "ApplySourceLifecycleDecision.source_id")
@@ -241,6 +252,34 @@ class ApplySourceLifecycleDecision:
             raise ValueError(
                 "ApplySourceLifecycleDecision.tracking_status 只能是 tracked/"
                 "untracked/None"
+            )
+        if self.content is not None and not isinstance(self.content, str):
+            raise TypeError("ApplySourceLifecycleDecision.content 必须是字符串或 None")
+        if self.item_id is not None and (
+            not isinstance(self.item_id, str) or not self.item_id
+        ):
+            raise ValueError(
+                "ApplySourceLifecycleDecision.item_id 必须是非空字符串或 None"
+            )
+        if self.turn_scope not in {"ambient", "pending_next_turn"}:
+            raise ValueError(
+                "ApplySourceLifecycleDecision.turn_scope 只能是 ambient/"
+                f"pending_next_turn: {self.turn_scope!r}"
+            )
+        if not isinstance(self.metadata, Mapping):
+            raise TypeError("ApplySourceLifecycleDecision.metadata 必须是 object")
+        if self.decision_kind in {"base", "delta", "rebuild", "observe_pending"}:
+            if self.content is None:
+                raise ValueError(
+                    "ApplySourceLifecycleDecision 的 source item 决策必须携带 content"
+                )
+            if self.item_id is None:
+                raise ValueError(
+                    "ApplySourceLifecycleDecision 的 source item 决策必须携带 item_id"
+                )
+        elif self.content is not None or self.item_id is not None:
+            raise ValueError(
+                "ApplySourceLifecycleDecision 的 track/untrack 不得携带 source item"
             )
 
     @property
@@ -369,6 +408,7 @@ __all__ = [
     "RebuildContextEpochIntent",
     "SourceActivationBoundary",
     "SourceDecisionKind",
+    "SourceItemTurnScope",
     "SwitchToolSetIntent",
     "intent_kind",
 ]

@@ -20,7 +20,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 # OpenSpec 3.8-C：commit/untrack 成功边界把轻量事件发布到 context.source/*
@@ -31,6 +31,10 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceControlStatePort,
     ContextSourceOwnerKey,
     ContextSourceTrackingStatus,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.source_observation import (
+    SourceObservation,
+    build_source_lifecycle_decision,
 )
 
 SkillLoadMode = Literal["snapshot", "tracked", "untrack"]
@@ -338,6 +342,7 @@ class ContextSourceManager:
         *,
         owner: ContextSourceOwnerKey | None = None,
         control_state_port: ContextSourceControlStatePort | None = None,
+        mutation_intent_port: object | None = None,
         lifecycle_event_sink: Callable[[ContextSourceEvent], None] | None = None,
     ) -> None:
         if (owner is None) != (control_state_port is None):
@@ -346,6 +351,11 @@ class ContextSourceManager:
             )
         self._owner = owner
         self._control_state_port = control_state_port
+        if mutation_intent_port is not None and owner is None:
+            raise ValueError(
+                "ContextSourceManager 的 mutation_intent_port 需要 owner"
+            )
+        self._mutation_intent_port = mutation_intent_port
         # OpenSpec 3.8-C：commit/untrack 成功边界的轻量事件出口（可选）。
         # OpenSpec 2.4-B4：before_model 已直接调用唯一原子实现
         # commit_model_call_pending，迁移入口已物理删除。
@@ -852,9 +862,9 @@ class ContextSourceManager:
         - 事件只在 durable truth 成功后发布；纯内存 CSM（无 owner）在内存
           真值推进后发布。
 
-        TODO(OpenSpec 2.4-B4)：与 canonical item 追加的同一 owner 事务合并、
-        ApplySourceLifecycleDecision typed 决策映射与唯一 mutation facade
-        接线属 B4 后续切片；本切片先固化 commit 顺序与 fail-closed 合同。
+        有 Saver owner 时，delta 会先映射为
+        ``ApplySourceLifecycleDecision``，再由 owner 在 source item/control state
+        的同一事务中提交；无 owner 的纯内存测试仍只验证 CSM 控制状态顺序。
         """
         last = self._last_model_call_receipt
         if last is not None and last.deltas == batch.deltas:
@@ -877,11 +887,60 @@ class ContextSourceManager:
                     "Context source pending 与 registration 状态不一致"
                     f"（fence drift），拒绝提交: source_id={delta.source_id}"
                 )
-        # 先持久化全部提交后状态；任何失败都让整批失败且内存零变化。
-        # 已持久化的 source 在重试时按 durable fields 幂等跳过。
-        for delta in batch.deltas:
-            state = self._sources[delta.source_id]
-            self._persist_control_state(state, applied_revision=state.latest_revision)
+        # 先经唯一 owner intent 端口提交全部 source item/control state；任何
+        # 失败都让内存 applied/diff 基准保持不变。纯内存/旧测试装配没有
+        # mutation_intent_port 时仍使用注入的控制状态替身，不触碰生产 Saver。
+        mutation_consume = (
+            getattr(self._mutation_intent_port, "consume_mutation_intent", None)
+            if self._mutation_intent_port is not None
+            else None
+        )
+        if mutation_consume is not None:
+            if self._owner is None:
+                raise RuntimeError(
+                    "ContextSourceManager source intent 提交缺少 owner"
+                )
+            decisions = []
+            for delta in batch.deltas:
+                state = self._sources[delta.source_id]
+                decision_kind = delta.kind
+                observation = SourceObservation(
+                    owner=self._owner,
+                    source_id=delta.source_id,
+                    source_kind=delta.source_kind,
+                    name=delta.source_name,
+                    revision=delta.revision,
+                    tracking_mode=("tracked" if state.tracked else "untrack"),
+                    from_revision=(
+                        delta.previous_revision
+                        if decision_kind == "delta"
+                        else None
+                    ),
+                    content=delta.content,
+                )
+                decision = build_source_lifecycle_decision(
+                    observation,
+                    decision_kind=decision_kind,
+                )
+                decisions.append(
+                    replace(
+                        decision,
+                        item_id=(
+                            f"item-context-source:{delta.source_id}:"
+                            f"{delta.revision}:{delta.kind}"
+                        ),
+                    )
+                )
+            for decision in decisions:
+                mutation_consume(decision)
+        else:
+            # 已持久化的 source 在重试时按 durable fields 幂等跳过。
+            for delta in batch.deltas:
+                state = self._sources[delta.source_id]
+                self._persist_control_state(
+                    state,
+                    applied_revision=state.latest_revision,
+                )
         # durable truth 成功后才推进内存真值并清空 pending。
         for delta in batch.deltas:
             state = self._sources[delta.source_id]

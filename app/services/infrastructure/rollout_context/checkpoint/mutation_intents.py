@@ -8,11 +8,11 @@ RolloutCheckpointSaver/ContextStore owner 消费。本模块只提供该端口�
 intent union，也不在这里实现持久化事务。
 
 append 分支已由 RolloutCheckpointSaver.append_items 生产接线（intent 构造 →
-facade 消费 → owner 单事务提交整批）；toolset 分支由 model-call 安全边界的
-desired/applied 比较（prepare_registered_context）生产接线。TODO(OpenSpec
-2.3-B4)：epoch 分支的生产接线与 CSM source 子端口的 typed decision 映射属
-后续切片；source pending 提交已由 ContextSourceManager.commit_model_call_pending
-承载。
+facade 消费 → owner 单事务提交整批）；source 分支由
+ContextSourceManager.commit_model_call_pending 与 runtime reminder producer
+提交 ApplySourceLifecycleDecision，Saver 将 source item/control state 放入同一
+owner transaction；toolset 分支由 model-call 安全边界的 desired/applied 比较
+（prepare_registered_context）生产接线。epoch 分支仍保持显式拒绝。
 """
 
 from __future__ import annotations

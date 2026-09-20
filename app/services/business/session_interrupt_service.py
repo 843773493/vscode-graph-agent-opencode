@@ -59,7 +59,6 @@ class SessionInterruptService:
         state = SessionInterruptState.get(session_id)
         phase = state.phase or "text"
         tool_name = state.tool_name
-        current_text = state.current_text
         interrupted_at = datetime.now(UTC)
         interrupt_request_id = create_prefixed_id("intr")
 
@@ -126,7 +125,6 @@ class SessionInterruptService:
             session_id=session_id,
             phase=phase,
             tool_name=tool_name,
-            current_text=current_text,
             interrupted_at=interrupted_at,
         )
         if reminder_injected:
@@ -176,7 +174,6 @@ class SessionInterruptService:
         session_id: str,
         phase: str,
         tool_name: str | None,
-        current_text: str,
         interrupted_at: datetime,
     ) -> bool:
         reminder = build_user_interrupt_reminder(
@@ -184,21 +181,22 @@ class SessionInterruptService:
             active_tool_name=tool_name,
             interrupted_at=interrupted_at,
         )
-        assistant_text = current_text if phase == "text" else ""
         metadata: dict[str, object] = {
             "phase": phase,
             "tool_name": tool_name,
             "source": "user_interrupt",
             "user_initiated": True,
             "interrupted_at": interrupted_at.isoformat(),
+            "checkpoint_event_id": (
+                SessionInterruptState.get(session_id).interrupt_request_id
+            ),
         }
-        injected = self._message_service.append_system_reminder(
+        injected = self._message_service.submit_system_reminder(
             session_id=session_id,
             reminder=reminder,
             response_metadata=metadata,
-            assistant_text=assistant_text,
-            assistant_response_metadata=metadata,
             checkpoint_source="user_interrupt",
+            event_identity=str(metadata["checkpoint_event_id"]),
         )
         if not injected:
             raise RuntimeError(

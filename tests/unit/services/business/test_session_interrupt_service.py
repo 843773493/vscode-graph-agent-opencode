@@ -165,35 +165,52 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     assert event_bus.events
     assert event_bus.events[-1]["event_type"] == "session_interrupted"
 
-    state = await message_service.get_agent_state_messages(session_id)
-    records = [
-        json.loads(line)
-        for line in state.jsonl.splitlines()
-        if line.strip()
+    projections = saver._storage.read_item_projections(session_id)
+    reminders = [
+        projection
+        for projection in projections
+        if projection["semantic_kind"] == "runtime_notice"
     ]
-    reminder = records[-1]
-    assert reminder["role"] == "user"
-    assert reminder["type"] == "human"
-    assert "<system_reminder>" in reminder["content"]
-    assert "主动取消" in reminder["content"]
-    assert reminder["response_metadata"]["source"] == "user_interrupt"
-    assert reminder["response_metadata"]["user_initiated"] is True
-    assert reminder["response_metadata"]["phase"] == phase
-
-    assistant_records = [record for record in records if record["role"] == "assistant"]
+    assert len(reminders) == 1
+    reminder = reminders[0]
+    assert reminder["turn_id"] is None
+    assert reminder["turn_scope"] == "pending_next_turn"
+    assert reminder["wire_role"] == "user"
+    reminder_content = str(reminder["content"])
+    assert "<system_reminder>" in reminder_content
+    assert "主动取消" in reminder_content
     if expected_assistant_text is None:
-        assert assistant_records == []
         assert tool_name is not None
-        assert tool_name in reminder["content"]
+        assert tool_name in reminder_content
     else:
-        assert assistant_records[-1]["content"] == expected_assistant_text
-        assert "<system_reminder>" not in assistant_records[-1]["content"]
+        assert "文本生成" in reminder_content
+
+    with saver._storage._connect(session_id, "", read_only=True) as connection:
+        metadata_json = connection.execute(
+            "SELECT metadata_json FROM item_catalog WHERE item_id = ?",
+            (reminder["item_id"],),
+        ).fetchone()[0]
+    metadata = json.loads(metadata_json)
+    assert metadata["source"] == "user_interrupt"
+    assert metadata["user_initiated"] is True
+    assert metadata["phase"] == phase
+    assert metadata["tool_name"] == tool_name
+    assert metadata["checkpoint_event_id"] == result.interrupt_request_id
+
+    # 半成品 assistant 正文由 stream/canonical producer 收敛，reminder owner
+    # 不得把当前文本再次伪造为 assistant item。
+    assistant_contents = [
+        projection["content"]
+        for projection in projections
+        if projection["semantic_kind"] == "assistant_output"
+    ]
+    assert current_text not in assistant_contents
 
     SessionInterruptState.clear(session_id)
 
 
 @pytest.mark.asyncio
-async def test_user_interrupt_fails_when_system_reminder_checkpoint_missing(
+async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
     tmp_path,
     session_bundle_factory,
 ) -> None:
@@ -231,9 +248,21 @@ async def test_user_interrupt_fails_when_system_reminder_checkpoint_missing(
         message_stream_store=message_stream_store,
     )
 
-    with pytest.raises(RuntimeError, match="system_reminder"):
-        await service.interrupt(session_id=session_id)
+    result = await service.interrupt(session_id=session_id)
 
-    assert job_service.control_requests == []
-    assert SessionInterruptState.get(session_id).user_interrupt_reminder_injected is False
+    assert result.job_id == job_id
+    assert job_service.control_requests
+    assert SessionInterruptState.get(session_id).user_interrupt_reminder_injected is True
+    projections = saver._storage.read_item_projections(session_id)
+    reminders = [
+        projection
+        for projection in projections
+        if projection["semantic_kind"] == "runtime_notice"
+    ]
+    assert len(reminders) == 1
+    assert reminders[0]["turn_id"] is None
+    assert reminders[0]["turn_scope"] == "pending_next_turn"
+    assert reminders[0]["wire_role"] == "user"
+    assert "<system_reminder>" in str(reminders[0]["content"])
+    assert "文本生成" in str(reminders[0]["content"])
     SessionInterruptState.clear(session_id)

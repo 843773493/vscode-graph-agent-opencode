@@ -20,7 +20,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.system_reminder_checkpoint_service import (
-    append_system_reminder_checkpoint,
+    submit_checkpoint_reminder,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
@@ -754,7 +754,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
     )
 
     assert (
-        append_system_reminder_checkpoint(
+        submit_checkpoint_reminder(
             checkpointer=saver,
             session_id=SESSION_ID,
             reminder="任务已超时，请根据已完成结果明确报告失败。",
@@ -773,8 +773,8 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
             "SELECT turn_id, status FROM turns ORDER BY turn_ordinal"
         ).fetchall()
         reminder = connection.execute(
-            "SELECT turn_id, visibility FROM messages WHERE role = 'user' AND message_id != ?",
-            ("user-job-1",),
+            "SELECT turn_id, turn_scope, wire_role, content FROM item_projections "
+            "WHERE semantic_kind = 'runtime_notice'"
         ).fetchone()
         reminder_item = connection.execute(
             "SELECT semantic_kind, turn_id, turn_scope, status FROM item_catalog "
@@ -783,8 +783,10 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
 
     assert turns == [("job-1", "running")]
     assert reminder is not None
-    assert reminder[0].startswith("internal-")
-    assert reminder[1] == "internal"
+    assert reminder[0] is None
+    assert reminder[1] == "pending_next_turn"
+    assert reminder[2] == "user"
+    assert "任务已超时" in reminder[3]
     assert reminder_item is not None
     assert reminder_item[0:3] == ("runtime_notice", None, "pending_next_turn")
     assert reminder_item[3] == "completed"
@@ -803,6 +805,111 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
     )
     assert [item.turn_id for item in page.items] == ["job-1"]
     assert page.items[0].status.value == "failed"
+
+
+def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+
+    assert submit_checkpoint_reminder(
+        checkpointer=saver,
+        session_id=SESSION_ID,
+        reminder="请继续处理超时任务。",
+        response_metadata={"source": "job_timeout", "attempt": "first"},
+        checkpoint_source="job_timeout",
+        event_identity="timeout-event-1",
+    )
+    # metadata key 顺序变化不能破坏同一事件的 canonical identity。
+    assert submit_checkpoint_reminder(
+        checkpointer=saver,
+        session_id=SESSION_ID,
+        reminder="请继续处理超时任务。",
+        response_metadata={"attempt": "first", "source": "job_timeout"},
+        checkpoint_source="job_timeout",
+        event_identity="timeout-event-1",
+    )
+    assert submit_checkpoint_reminder(
+        checkpointer=saver,
+        session_id=SESSION_ID,
+        reminder="请继续处理超时任务。",
+        response_metadata={"source": "job_timeout", "attempt": "other"},
+        checkpoint_source="job_timeout",
+        event_identity="timeout-event-2",
+    )
+
+    with sqlite3.connect(
+        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        / "rollout"
+        / "index.sqlite"
+    ) as connection:
+        rows = connection.execute(
+            "SELECT item_id, content FROM item_projections "
+            "WHERE semantic_kind = 'runtime_notice' ORDER BY item_sequence"
+        ).fetchall()
+
+    assert len(rows) == 2
+    assert rows[0][0] != rows[1][0]
+    assert rows[0][1] == rows[1][1]
+
+
+def test_checkpoint_reminder_source_transaction_rolls_back_jsonl_on_sqlite_failure(
+    tmp_path: Path,
+    session_bundle_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    saver.put(
+        build_checkpoint_config(SESSION_ID),
+        _checkpoint("cp-before-reminder-failure", [HumanMessage(content="用户输入")]),
+        {"source": "test"},
+        {"messages": "1"},
+    )
+    rollout_root = saver._storage.root(SESSION_ID, "")
+    jsonl_path = saver._storage.jsonl_path(SESSION_ID, "")
+    before_jsonl_size = jsonl_path.stat().st_size
+    with saver._storage._connect(SESSION_ID, "", read_only=True) as connection:
+        before_meta = connection.execute(
+            "SELECT last_item_sequence, committed_jsonl_offset "
+            "FROM database_meta WHERE singleton_id = 1"
+        ).fetchone()
+
+    def fail_view_membership(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("injected SQLite view failure")
+
+    monkeypatch.setattr(
+        saver._storage,
+        "_append_context_view_items",
+        fail_view_membership,
+    )
+    with pytest.raises(RuntimeError, match="injected SQLite view failure"):
+        submit_checkpoint_reminder(
+            checkpointer=saver,
+            session_id=SESSION_ID,
+            reminder="故障注入提醒",
+            response_metadata={"source": "injected"},
+            checkpoint_source="injected",
+            event_identity="projection-failure",
+        )
+
+    assert rollout_root.is_dir()
+    assert jsonl_path.stat().st_size == before_jsonl_size
+    with sqlite3.connect(rollout_root / "index.sqlite") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind = 'runtime_notice'"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM item_projections WHERE semantic_kind = 'runtime_notice'"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT last_item_sequence, committed_jsonl_offset "
+            "FROM database_meta WHERE singleton_id = 1"
+        ).fetchone() == before_meta
 
 
 def test_legacy_hidden_reminder_turn_is_excluded_from_history(

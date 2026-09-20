@@ -1,14 +1,24 @@
+"""checkpoint/runtime reminder 的 source lifecycle producer。
+
+提醒是 runtime source，不是 LangGraph message checkpoint。该模块只构造稳定的
+``ApplySourceLifecycleDecision``，由唯一 Saver/ContextStore owner 写入
+``runtime_notice`` pending item；本模块不读取或改写 checkpoint。
+"""
+
 from __future__ import annotations
 
-import uuid
+import hashlib
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.checkpoint.base import BaseCheckpointSaver
-
-from app.core.checkpoint_config import build_checkpoint_config
+from app.domain.itemized.mutation_intents import (
+    ApplySourceLifecycleDecision,
+    MutationIntentOwner,
+)
 from app.prompting import internal_message_factory
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    MAIN_THREAD_ID,
+)
 
 
 def build_user_interrupt_reminder(
@@ -33,98 +43,115 @@ def build_user_interrupt_reminder(
     )
 
 
-def _message_has_content(message: object) -> bool:
-    content = getattr(message, "content", None)
-    if content is None:
-        return False
-    if isinstance(content, list):
-        return any(bool(part) for part in content)
-    return bool(str(content).strip())
+def _revision(content: str) -> str:
+    return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def append_system_reminder_checkpoint(
+def _event_identity(
     *,
-    checkpointer: BaseCheckpointSaver,
+    session_id: str,
+    checkpoint_source: str,
+    response_metadata: Mapping[str, object],
+    explicit: str | None,
+) -> str:
+    if explicit is not None:
+        if not isinstance(explicit, str) or not explicit:
+            raise ValueError("checkpoint reminder event_identity 必须是非空字符串")
+        return explicit
+    for key in (
+        "checkpoint_event_id",
+        "execution_id",
+        "turn_id",
+        "interrupt_request_id",
+        "job_id",
+        "tool_invocation_id",
+    ):
+        value = response_metadata.get(key)
+        if isinstance(value, str) and value:
+            return value
+    # 调用方没有提供执行身份时只能把 session+reason 作为稳定边界；重复事件
+    # 将按 item identity 幂等复用，不从当前 checkpoint 内容猜测新 ID。
+    return f"{session_id}:{checkpoint_source}"
+
+
+def submit_checkpoint_reminder(
+    *,
+    checkpointer: object,
     session_id: str,
     reminder: str,
-    response_metadata: dict[str, Any],
-    assistant_text: str = "",
-    assistant_response_metadata: dict[str, Any] | None = None,
-    checkpoint_source: str = "system_reminder",
+    response_metadata: Mapping[str, object],
+    checkpoint_source: str,
+    event_identity: str | None = None,
 ) -> bool:
-    config = build_checkpoint_config(session_id)
-    tup = checkpointer.get_tuple(config)
-    if tup is None:
-        return False
+    """向唯一 source intent owner 提交一次 pending runtime reminder。"""
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("checkpoint reminder session_id 必须是非空字符串")
+    if not isinstance(reminder, str):
+        raise TypeError("checkpoint reminder reminder 必须是字符串")
+    if not isinstance(response_metadata, Mapping):
+        raise TypeError("checkpoint reminder response_metadata 必须是 object")
+    if not isinstance(checkpoint_source, str) or not checkpoint_source:
+        raise ValueError("checkpoint reminder checkpoint_source 必须是非空字符串")
 
-    checkpoint = tup.checkpoint.copy()
-    channel_values = dict(checkpoint.get("channel_values", {}))
-    raw_messages = channel_values.get("messages", [])
-    if not isinstance(raw_messages, list):
-        raise TypeError(
-            f"LangGraph checkpoint messages 应为 list，实际类型: {type(raw_messages).__name__}"
-        )
-
-    messages = [
-        msg for msg in raw_messages
-        if not (isinstance(msg, AIMessage) and not _message_has_content(msg))
-    ]
-
-    if assistant_text.strip():
-        messages.append(
-            AIMessage(
-                content=assistant_text,
-                tool_calls=[],
-                response_metadata=assistant_response_metadata or {},
-            )
-        )
-
-    prepared_reminder = internal_message_factory.build(
+    prepared = internal_message_factory.build(
         kind="checkpoint_reminder",
         control=reminder,
         metadata={
-            **response_metadata,
+            **dict(response_metadata),
             "checkpoint_source": checkpoint_source,
         },
     )
-    messages.append(
-        HumanMessage(
-            content=prepared_reminder.content,
-            response_metadata=prepared_reminder.metadata,
+    identity = _event_identity(
+        session_id=session_id,
+        checkpoint_source=checkpoint_source,
+        response_metadata=response_metadata,
+        explicit=event_identity,
+    )
+    source_id = f"checkpoint:{checkpoint_source}:{identity}"
+    revision = _revision(prepared.content)
+    decision = ApplySourceLifecycleDecision(
+        owner=MutationIntentOwner(
+            session_id=session_id,
+            thread_id=MAIN_THREAD_ID,
+        ),
+        source_id=source_id,
+        source_kind="checkpoint_reminder",
+        name=checkpoint_source,
+        decision_kind="observe_pending",
+        revision=revision,
+        pending_only=True,
+        content=prepared.content,
+        # reminder 的 item identity 绑定稳定事件，而不是正文 revision。这样
+        # 同一事件重试时复用同一个 immutable item；若正文真的变化，owner 会
+        # 以 identity/content 冲突显式拒绝，而不是悄悄追加第二条提醒。
+        item_id=f"item-{source_id}",
+        metadata=prepared.metadata,
+    )
+    consume = getattr(checkpointer, "consume_mutation_intent", None)
+    if not callable(consume):
+        raise TypeError(
+            "checkpoint reminder owner 缺少 consume_mutation_intent 端口"
         )
-    )
-
-    channel_values["messages"] = messages
-    checkpoint["channel_values"] = channel_values
-    checkpoint["id"] = str(uuid.uuid4())
-
-    channel_versions = dict(checkpoint.get("channel_versions", {}))
-    messages_version = checkpointer.get_next_version(
-        channel_versions.get("messages"), None
-    )
-    channel_versions["messages"] = messages_version
-    checkpoint["channel_versions"] = channel_versions
-
-    checkpointer.put(
-        config=tup.config,
-        checkpoint=checkpoint,
-        metadata={"source": checkpoint_source, "step": -1, "writes": {}},
-        new_versions={"messages": messages_version},
-    )
+    consume(decision)
     return True
 
 
 def persist_interrupt_checkpoint(
     *,
-    checkpointer: BaseCheckpointSaver | None,
+    checkpointer: object | None,
     session_id: str,
-    current_text: str,
     active_tool_name: str | None,
     checkpoint_source: str = "interrupt",
+    event_identity: str | None = None,
 ) -> None:
-    """任务被取消时，保存部分结果并记录真实的取消来源。"""
+    """任务被取消时提交 pending runtime reminder。
+
+    半成品 assistant 文本由 stream/canonical producer 独立收敛；本函数只负责
+    reminder source，避免把半成品 assistant 与 reminder 拼成第二份 checkpoint
+    history。
+    """
     if checkpointer is None:
-        raise RuntimeError("任务取消时无法写入 checkpoint：checkpointer 未配置")
+        raise RuntimeError("任务取消时无法提交 runtime reminder：owner 未配置")
 
     phase = "tool" if active_tool_name else "text"
     interrupted_at = datetime.now(UTC).isoformat()
@@ -144,8 +171,7 @@ def persist_interrupt_checkpoint(
             f"AgentLoop 在 {interrupted_at} 因内部执行丢失而停止，未收到用户中断请求。"
             "请保留此前已完成的工具结果，根据最新用户请求继续或明确报告失败。"
         )
-    content = current_text if phase == "text" else ""
-    injected = append_system_reminder_checkpoint(
+    submit_checkpoint_reminder(
         checkpointer=checkpointer,
         session_id=session_id,
         reminder=reminder,
@@ -154,13 +180,13 @@ def persist_interrupt_checkpoint(
             "tool_name": active_tool_name,
             "source": checkpoint_source,
         },
-        assistant_text=content,
-        assistant_response_metadata={
-            "phase": phase,
-            "tool_name": active_tool_name,
-            "source": checkpoint_source,
-        },
         checkpoint_source=checkpoint_source,
+        event_identity=event_identity,
     )
-    if not injected:
-        raise RuntimeError(f"任务取消时未找到可写入的 checkpoint: session_id={session_id}")
+
+
+__all__ = [
+    "build_user_interrupt_reminder",
+    "persist_interrupt_checkpoint",
+    "submit_checkpoint_reminder",
+]

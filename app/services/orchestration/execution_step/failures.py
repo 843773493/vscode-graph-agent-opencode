@@ -78,12 +78,12 @@ async def handle_step_cancelled(
     if not (user_interrupt and state.user_interrupt_reminder_injected):
         try:
             await asyncio.to_thread(
-                persist_interrupt_checkpoint,
-                checkpointer=checkpointer,
-                session_id=session_id,
-                current_text=state.current_text,
-                active_tool_name=state.tool_name,
+            persist_interrupt_checkpoint,
+            checkpointer=checkpointer,
+            session_id=session_id,
+            active_tool_name=state.tool_name,
                 checkpoint_source=("interrupt" if user_interrupt else failure_code),
+                event_identity=turn_id,
             )
             logger.info(
                 "[agent_execution_service] cancellation checkpoint persisted: "
@@ -159,12 +159,12 @@ async def handle_step_failure(
     if isinstance(error, ScopeCancelledError):
         try:
             await asyncio.to_thread(
-                persist_interrupt_checkpoint,
-                checkpointer=checkpointer,
-                session_id=session_id,
-                current_text=interrupt_state.current_text,
-                active_tool_name=interrupt_state.tool_name,
+            persist_interrupt_checkpoint,
+            checkpointer=checkpointer,
+            session_id=session_id,
+            active_tool_name=interrupt_state.tool_name,
                 checkpoint_source=failure_code,
+                event_identity=turn_id,
             )
         except Exception:
             logger.exception(

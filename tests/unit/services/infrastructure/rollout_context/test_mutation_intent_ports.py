@@ -52,6 +52,8 @@ def _four_branch_intents() -> tuple[ContextMutationIntent, ...]:
             name="demo",
             decision_kind="base",
             revision="rev-1",
+            content="base",
+            item_id="item-src-1",
         ),
         SwitchToolSetIntent(
             owner=OWNER,
