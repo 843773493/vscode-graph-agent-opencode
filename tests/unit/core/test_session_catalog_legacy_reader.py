@@ -8,14 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from app.core.session_catalog_legacy_reader import (
-    SessionCatalogLegacyReader,
-    SessionCatalogLegacyReaderError,
-)
-from app.core.session_tree.support import (
+from app.core.session_catalog_legacy_layout import (
     FOLDER_MANIFEST_NAME,
     SESSION_CHILDREN_DIR_NAME,
     SESSION_MANIFEST_NAME,
+)
+from app.core.session_catalog_legacy_reader import (
+    SessionCatalogLegacyReader,
+    SessionCatalogLegacyReaderError,
 )
 
 CREATED_AT = datetime(2026, 6, 1, 12, tzinfo=UTC).isoformat()

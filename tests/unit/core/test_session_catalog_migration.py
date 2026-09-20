@@ -19,6 +19,11 @@ from pathlib import Path
 
 import pytest
 
+from app.core.session_catalog_legacy_layout import (
+    FOLDER_MANIFEST_NAME,
+    SESSION_CHILDREN_DIR_NAME,
+    SESSION_MANIFEST_NAME,
+)
 from app.core.session_catalog_migration import (
     QuarantinedNode,
     SessionCatalogMigrationError,
@@ -26,11 +31,6 @@ from app.core.session_catalog_migration import (
 )
 from app.core.session_catalog_store import SessionCatalogStore, validate_thread_id
 from app.core.session_control_store import SessionControlStore
-from app.core.session_tree.support import (
-    FOLDER_MANIFEST_NAME,
-    SESSION_CHILDREN_DIR_NAME,
-    SESSION_MANIFEST_NAME,
-)
 
 WORKSPACE_ID = "ws-primary"
 
