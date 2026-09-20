@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from app.core.path_utils import get_session_path_resolver
+from app.services.infrastructure.node_debug_fork import NodeDebugWorkspaceForkConfig
+from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -42,6 +46,8 @@ class RolloutCheckpointRuntime:
         *,
         serde: JsonPlusSerializer | None = None,
         protected_detail_key: bytes | None = None,
+        node_debug_workspace_config: Callable[[], NodeDebugWorkspaceForkConfig]
+        | None = None,
     ) -> None:
         self.sessions_dir = Path(sessions_dir).resolve()
         self.serde = serde or JsonPlusSerializer()
@@ -69,6 +75,10 @@ class RolloutCheckpointRuntime:
             context_reader=self.context_reader,
             history_reader=self.history_reader,
             detail_store=self.context_plan_detail_store,
+            node_debug_store=NodeDebugSessionStore(
+                get_session_path_resolver(self.sessions_dir)
+            ),
+            node_debug_workspace_config=node_debug_workspace_config,
         )
 
 

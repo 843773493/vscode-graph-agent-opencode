@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.services.infrastructure.node_debug_thread_owner import MAIN_THREAD_ID
+from app.services.infrastructure.rollout_context.fork.node_debug_materialization import (
+    publish_target_snapshot,
+    remove_target_snapshot,
+    verify_published_target_snapshot,
+)
 from app.services.infrastructure.rollout_context.fork.validation import (
     one_of_text,
     optional_text,
@@ -108,6 +115,68 @@ class RolloutRecoveryMixin:
             field="fork_materializations.status",
         )
         if status == "target_committed":
+            debug_row = connection.execute(
+                "SELECT lineage_json FROM fork_identity_mappings "
+                "WHERE fork_id = ? AND entity_type = 'debug_snapshot'",
+                (fork_id,),
+            ).fetchone()
+            if debug_row is not None:
+                lineage = json.loads(
+                    required_text(debug_row[0], field="debug_snapshot.lineage")
+                )
+                if not isinstance(lineage, dict) or lineage.get("state") not in {
+                    "ready",
+                    "published",
+                }:
+                    raise RuntimeError("fork target_committed 的 debug snapshot 状态非法")
+                target_node = self._path_resolver.resolve_session_node_for_runtime(
+                    thread_id
+                )
+                if lineage["state"] == "ready":
+                    relative = Path(
+                        required_text(
+                            lineage.get("target_debug_staging_path"),
+                            field="debug_snapshot.target_debug_staging_path",
+                        )
+                    )
+                    if relative.is_absolute() or ".." in relative.parts:
+                        raise RuntimeError("fork debug staging journal 路径非法")
+                    staging_root = target_node / relative
+                    published_root = target_node / "debug" / "node"
+                    if staging_root.is_dir() and not staging_root.is_symlink():
+                        publish_target_snapshot(staging_root, target_node)
+                    elif not published_root.is_dir() or published_root.is_symlink():
+                        raise RuntimeError(
+                            "fork target_committed 缺少 ready debug staging/published artifact"
+                        )
+                verify_published_target_snapshot(
+                    target_node,
+                    target_session_id=thread_id,
+                    target_thread_id=MAIN_THREAD_ID,
+                    manifest_sha256=required_text(
+                        lineage.get("target_manifest_sha256"),
+                        field="debug_snapshot.target_manifest_sha256",
+                    ),
+                    source_configurations_json=json.dumps(
+                        lineage.get("source_configurations")
+                    ),
+                    configuration_id_map_json=json.dumps(
+                        lineage.get("target_configuration_id_map")
+                    ),
+                )
+                if lineage["state"] == "ready":
+                    lineage["state"] = "published"
+                    lineage["published_at"] = _now()
+                    result = connection.execute(
+                        "UPDATE fork_identity_mappings SET lineage_json = ? "
+                        "WHERE fork_id = ? AND entity_type = 'debug_snapshot'",
+                        (
+                            json.dumps(lineage, ensure_ascii=False, sort_keys=True),
+                            fork_id,
+                        ),
+                    )
+                    if result.rowcount != 1:
+                        raise RuntimeError("fork recovery 未收敛 debug published journal")
             if relationship == "pinned":
                 source_root = self.root(source_session_id, checkpoint_ns)
                 if not source_root.is_dir() or not self.index_path(
@@ -147,6 +216,61 @@ class RolloutRecoveryMixin:
             return
 
         connection.execute("BEGIN IMMEDIATE")
+        debug_row = connection.execute(
+            "SELECT lineage_json FROM fork_identity_mappings "
+            "WHERE fork_id = ? AND entity_type = 'debug_snapshot'",
+            (fork_id,),
+        ).fetchone()
+        if debug_row is not None:
+            lineage = json.loads(
+                required_text(debug_row[0], field="debug_snapshot.lineage")
+            )
+            if not isinstance(lineage, dict) or lineage.get("state") not in {
+                "prepared",
+                "ready",
+                "published",
+            }:
+                raise RuntimeError("prepared fork 的 debug snapshot journal 损坏")
+            target_node = self._path_resolver.resolve_session_node_for_runtime(thread_id)
+            relative = Path(
+                required_text(
+                    lineage.get("target_debug_staging_path"),
+                    field="debug_snapshot.target_debug_staging_path",
+                )
+            )
+            if relative.is_absolute() or ".." in relative.parts:
+                raise RuntimeError("fork debug staging journal 路径非法")
+            staging_root = target_node / relative
+            published_root = target_node / "debug" / "node"
+            has_staging = staging_root.exists() or staging_root.is_symlink()
+            has_published = published_root.exists() or published_root.is_symlink()
+            if lineage["state"] == "prepared" and not has_staging:
+                raise RuntimeError("prepared fork 缺少 debug staging")
+            if lineage["state"] == "ready" and has_staging == has_published:
+                raise RuntimeError("ready fork 的 debug staging/published 状态不唯一")
+            if lineage["state"] == "published" and not has_published:
+                raise RuntimeError("published fork 缺少 debug artifact")
+            if has_published:
+                verify_published_target_snapshot(
+                    target_node,
+                    target_session_id=thread_id,
+                    target_thread_id=MAIN_THREAD_ID,
+                    manifest_sha256=required_text(
+                        lineage.get("target_manifest_sha256"),
+                        field="debug_snapshot.target_manifest_sha256",
+                    ),
+                    source_configurations_json=json.dumps(
+                        lineage.get("source_configurations")
+                    ),
+                    configuration_id_map_json=json.dumps(
+                        lineage.get("target_configuration_id_map")
+                    ),
+                )
+            remove_target_snapshot(
+                staging_root,
+                target_node,
+                remove_published=has_published,
+            )
         if not jsonl_path.is_file() or jsonl_path.is_symlink():
             raise RuntimeError(
                 f"prepared fork recovery 缺少安全的 JSONL 文件: {jsonl_path}"

@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import os
 import secrets
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from app.services.infrastructure.node_debug_fork import (
+    NodeDebugSourceCopySnapshot,
+    NodeDebugWorkspaceForkConfig,
+)
 from app.services.infrastructure.rollout_context.fork.assembly_copy import (
     validate_source_assemblies,
 )
@@ -16,6 +21,12 @@ from app.services.infrastructure.rollout_context.fork.full_copy.details import (
 )
 from app.services.infrastructure.rollout_context.fork.full_copy.staging import (
     FullCopyStagingStorage,
+)
+from app.services.infrastructure.rollout_context.fork.node_debug_materialization import (
+    PreparedNodeDebugFork,
+    prepare_node_debug_fork,
+    publish_ready_node_debug_fork,
+    ready_node_debug_fork,
 )
 from app.services.infrastructure.rollout_context.fork.validation import (
     one_of_text,
@@ -39,6 +50,8 @@ def full_rollout_copy(
     relationship: str,
     checkpoint_ns: str,
     detail_capability: ForkDetailCapability,
+    debug_snapshot: NodeDebugSourceCopySnapshot | None = None,
+    debug_workspace_config: Callable[[], NodeDebugWorkspaceForkConfig] | None = None,
 ) -> tuple[str | None, str]:
     source_session_id = required_text(source_session_id, field="fork.source_session_id")
     target_session_id = required_text(target_session_id, field="fork.target_session_id")
@@ -91,6 +104,25 @@ def full_rollout_copy(
                     "checkpoint_ns": checkpoint_ns,
                 }
                 materialization, fork_id = stage.begin_fork_materialization(**fields)
+                prepared_debug = prepare_node_debug_fork(
+                    stage,
+                    debug_snapshot,
+                    debug_workspace_config,
+                    materialization_id=materialization,
+                    fork_id=fork_id,
+                    target_session_id=target_session_id,
+                    checkpoint_ns=checkpoint_ns,
+                )
+                if debug_snapshot is not None and prepared_debug is not None:
+                    ready_node_debug_fork(
+                        stage,
+                        debug_snapshot,
+                        prepared_debug,
+                        debug_workspace_config,
+                        materialization_id=materialization,
+                        target_session_id=target_session_id,
+                        checkpoint_ns=checkpoint_ns,
+                    )
                 stage.commit_fork_materialization(
                     materialization, **fields, defer_completion=True
                 )
@@ -110,6 +142,24 @@ def full_rollout_copy(
                 ):
                     raise RuntimeError("fork staging SQLite checkpoint failed")
             install_staging(stage_root, target)
+            if debug_snapshot is not None and prepared_debug is not None:
+                installed_prepared = PreparedNodeDebugFork(
+                    staging_root=target
+                    / ".fork-debug-staging"
+                    / materialization
+                    / "node",
+                    target_node=prepared_debug.target_node,
+                    target_manifest_sha256=prepared_debug.target_manifest_sha256,
+                )
+                # rollout 与 ready journal 已先原子安装。后续任意崩溃都能由
+                # target recovery 清理 staging/debug，不会形成无 journal 半发布。
+                publish_ready_node_debug_fork(
+                    storage,
+                    installed_prepared,
+                    materialization_id=materialization,
+                    target_session_id=target_session_id,
+                    checkpoint_ns=checkpoint_ns,
+                )
         # 安装后 journal 为 target_committed；retention 失败由既有恢复链重试。
         storage.commit_fork_materialization(materialization, **fields)
     return source_view, fork_id

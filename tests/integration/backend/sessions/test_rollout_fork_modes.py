@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,16 +13,31 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.schemas.internal_v2.node_debug import (
+    NodeDebugActionRecordDTO,
+    NodeDebugConfigurationBreakpointDTO,
+    NodeDebugConfigurationDTO,
+    NodeDebugLaunchClaimDTO,
+    NodeDebugSessionManifestDTO,
+)
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.node_debug_fork import (
+    NodeDebugTargetValidationError,
+    build_workspace_fork_config,
+)
+from app.services.infrastructure.node_debug_thread_owner import MAIN_THREAD_ID
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.fork.full_copy import (
+    operation as full_copy_operation,
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.trace_event_store import TraceEventStore
@@ -31,6 +48,7 @@ from tests.integration.backend.sessions.itemized_migration_helpers import (
 
 @dataclass(frozen=True, slots=True)
 class ForkIntegrationContext:
+    workspace: Path
     sessions: SessionService
     saver: RolloutCheckpointSaver
     forks: SessionContextForkService
@@ -43,14 +61,21 @@ def fork_context(
     workspace = prepare_migration_workspace(request)
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
     sessions_dir = workspace / ".boxteam" / "sessions"
-    saver = RolloutCheckpointSaver(sessions_dir)
+    config_service = ConfigService(workspace_root=workspace)
+    saver = RolloutCheckpointSaver(
+        sessions_dir,
+        node_debug_workspace_config=lambda: build_workspace_fork_config(
+            workspace, config_service.get_debug_runtime_config()
+        ),
+    )
     sessions = SessionService(
-        config_service=ConfigService(workspace_root=workspace),
+        config_service=config_service,
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         workspace_id=load_or_create_workspace_id(workspace),
         fork_relationship_checker=saver,
     )
     return ForkIntegrationContext(
+        workspace=workspace,
         sessions=sessions,
         saver=saver,
         forks=SessionContextForkService(session_service=sessions, checkpointer=saver),
@@ -136,6 +161,78 @@ async def _seed_source(context: ForkIntegrationContext):
     return source
 
 
+def _seed_debug_configurations(
+    context: ForkIntegrationContext, source_session_id: str
+) -> tuple[str, str]:
+    script = context.workspace / "app.mjs"
+    script.write_text("const value = 1;\nconsole.log(value);\n", encoding="utf-8")
+    created_at = datetime(2026, 8, 15, tzinfo=UTC)
+    active_id = "dbgcfg_11111111111111111111111111111111"
+    saved_id = "dbgcfg_22222222222222222222222222222222"
+    for configuration_id, name in (
+        (active_id, "活动方案"),
+        (saved_id, "保存方案"),
+    ):
+        context.saver._node_debug_store.write_configuration(
+            source_session_id,
+            NodeDebugConfigurationDTO(
+                configuration_id=configuration_id,
+                name=name,
+                script_path="app.mjs",
+                working_directory="",
+                launch_profile_name="node-default",
+                breakpoints=[
+                    NodeDebugConfigurationBreakpointDTO(
+                        breakpoint_id=f"bp_{configuration_id[-4:]}",
+                        path="app.mjs",
+                        line=1,
+                        created_at=created_at,
+                    )
+                ],
+                created_at=created_at,
+                updated_at=created_at,
+            ),
+            MAIN_THREAD_ID,
+        )
+    context.saver._node_debug_store.write_manifest(
+        NodeDebugSessionManifestDTO(
+            session_id=source_session_id,
+            thread_id=MAIN_THREAD_ID,
+            active_configuration_id=active_id,
+            actions=[
+                NodeDebugActionRecordDTO(
+                    action_id="act_source_only",
+                    session_id=source_session_id,
+                    thread_id=MAIN_THREAD_ID,
+                    action="continue",
+                    message="source runtime only",
+                    result="success",
+                    created_at=created_at,
+                )
+            ],
+            updated_at=created_at,
+        )
+    )
+    context.saver._node_debug_store.write_launch_claim(
+        NodeDebugLaunchClaimDTO(
+            session_id=source_session_id,
+            thread_id=MAIN_THREAD_ID,
+            process_instance_id="node-debug-proc_source",
+            nonce="source-nonce",
+            phase="running",
+            configuration_id=active_id,
+            pid=4242,
+            process_identity_source="test",
+            process_start_marker="source-marker",
+            inspector_host="127.0.0.1",
+            inspector_port=9311,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+    )
+    return active_id, saved_id
+
+
 def _fork_origins(
     context: ForkIntegrationContext, session_id: str
 ) -> list[tuple[object, ...]]:
@@ -190,6 +287,282 @@ def _identity_mapping_rows(
             "source_local_id, target_local_id, source_offset, target_offset, lineage_json "
             "FROM fork_identity_mappings ORDER BY entity_type, source_local_id"
         ).fetchall()
+
+
+@pytest.mark.asyncio
+async def test_public_fork_modes_copy_only_portable_debug_configurations(
+    fork_context: ForkIntegrationContext,
+) -> None:
+    source = await _seed_source(fork_context)
+    active_id, saved_id = _seed_debug_configurations(
+        fork_context, source.session_id
+    )
+
+    context_child = await fork_context.forks.fork(
+        source.session_id,
+        mode="context_fork",
+        checkpoint_id="cp2",
+        anchor="u1",
+    )
+    prefix_child = await fork_context.forks.fork(
+        source.session_id,
+        mode="history_prefix_fork",
+        checkpoint_id="cp2",
+    )
+    full_child = await fork_context.forks.fork(
+        source.session_id,
+        mode="full_rollout_copy",
+        checkpoint_id="cp2",
+    )
+
+    store = fork_context.saver._node_debug_store
+    context_manifest = store.read_manifest(
+        context_child.session_id, MAIN_THREAD_ID
+    )
+    assert context_manifest is not None
+    assert context_manifest.active_configuration_id is None
+    assert context_manifest.actions == []
+    context_configurations = store.list_configurations(
+        context_child.session_id, MAIN_THREAD_ID
+    )
+    assert [item.name for item in context_configurations] == ["活动方案"]
+    assert context_configurations[0].configuration_id != active_id
+
+    assert store.read_manifest(prefix_child.session_id, MAIN_THREAD_ID) is None
+    assert store.list_configurations(prefix_child.session_id, MAIN_THREAD_ID) == []
+
+    full_manifest = store.read_manifest(full_child.session_id, MAIN_THREAD_ID)
+    assert full_manifest is not None
+    assert full_manifest.active_configuration_id is None
+    assert full_manifest.actions == []
+    full_configurations = store.list_configurations(
+        full_child.session_id, MAIN_THREAD_ID
+    )
+    assert {item.name for item in full_configurations} == {"活动方案", "保存方案"}
+    assert {item.configuration_id for item in full_configurations}.isdisjoint(
+        {active_id, saved_id}
+    )
+
+    for child, expected_count in (
+        (context_child, 1),
+        (full_child, 2),
+    ):
+        rollout_root = fork_context.sessions.path_resolver.resolve_session_node(
+            child.session_id
+        )
+        with sqlite3.connect(
+            rollout_root / "rollout" / "index.sqlite"
+        ) as connection:
+            row = connection.execute(
+                "SELECT lineage_json FROM fork_identity_mappings "
+                "WHERE entity_type = 'debug_snapshot'"
+            ).fetchone()
+            mapping_rows = connection.execute(
+                "SELECT source_local_id, target_local_id, lineage_json "
+                "FROM fork_identity_mappings "
+                "WHERE entity_type = 'debug_configuration'"
+            ).fetchall()
+        assert row is not None
+        lineage = json.loads(row[0])
+        assert lineage["state"] == "published"
+        assert len(lineage["source_configurations"]) == expected_count
+        assert len(lineage["target_configuration_id_map"]) == expected_count
+        assert len(mapping_rows) == expected_count
+        assert all(
+            json.loads(mapping[2])["source_revision"] == 1
+            for mapping in mapping_rows
+        )
+        assert store.read_launch_claim(child.session_id, MAIN_THREAD_ID) is None
+    source_claim = store.read_launch_claim(source.session_id, MAIN_THREAD_ID)
+    assert source_claim is not None
+    assert (source_claim.pid, source_claim.inspector_port, source_claim.phase) == (
+        4242,
+        9311,
+        "running",
+    )
+
+
+@pytest.mark.asyncio
+async def test_debug_config_drift_aborts_entire_public_fork(
+    fork_context: ForkIntegrationContext,
+) -> None:
+    source = await _seed_source(fork_context)
+    _seed_debug_configurations(fork_context, source.session_id)
+    provider = fork_context.saver._node_debug_workspace_config
+    assert provider is not None
+    stable = provider()
+    drifted = replace(
+        stable,
+        revision="f" * 64,
+        content_hash=f"sha256:{'f' * 64}",
+    )
+    calls = 0
+
+    def drifting_provider():
+        nonlocal calls
+        calls += 1
+        return stable if calls <= 2 else drifted
+
+    fork_context.saver._node_debug_workspace_config = drifting_provider
+    before = {item.session_id for item in (await fork_context.sessions.list()).items}
+
+    with pytest.raises(NodeDebugTargetValidationError, match="配置 revision 已漂移"):
+        await fork_context.forks.fork(
+            source.session_id,
+            mode="context_fork",
+            checkpoint_id="cp2",
+            anchor="u1",
+        )
+
+    after = {item.session_id for item in (await fork_context.sessions.list()).items}
+    assert after == before
+    source_node = fork_context.sessions.path_resolver.resolve_session_node(
+        source.session_id
+    )
+    assert not (source_node / ".fork-debug-staging").exists()
+
+
+@pytest.mark.asyncio
+async def test_restart_recovers_debug_published_before_materialization_commit(
+    fork_context: ForkIntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = await _seed_source(fork_context)
+    _seed_debug_configurations(fork_context, source.session_id)
+    target = await fork_context.sessions.create(
+        SessionCreateRequest(title="debug fork crash target")
+    )
+    storage = fork_context.saver._storage
+    original_commit = storage.commit_fork_materialization
+
+    def crash_before_materialization_commit(*_args, **_kwargs):
+        raise RuntimeError("injected crash before materialization commit")
+
+    monkeypatch.setattr(
+        storage,
+        "commit_fork_materialization",
+        crash_before_materialization_commit,
+    )
+    with pytest.raises(RuntimeError, match="injected crash"):
+        await fork_context.saver.afork(
+            source_session_id=source.session_id,
+            target_session_id=target.session_id,
+            mode="context_fork",
+            checkpoint_id="cp2",
+            anchor="u1",
+        )
+    assert (
+        fork_context.saver._node_debug_store.read_manifest(
+            target.session_id, MAIN_THREAD_ID
+        )
+        is not None
+    )
+
+    monkeypatch.setattr(storage, "commit_fork_materialization", original_commit)
+    provider = fork_context.saver._node_debug_workspace_config
+    with RolloutCheckpointSaver(
+        storage.sessions_dir,
+        node_debug_workspace_config=provider,
+    ) as restarted:
+        restarted._storage.initialize(target.session_id)
+        assert (
+            restarted._node_debug_store.read_manifest(
+                target.session_id, MAIN_THREAD_ID
+            )
+            is None
+        )
+        with restarted._storage._connect(
+            target.session_id, "", read_only=True
+        ) as connection:
+            assert connection.execute(
+                "SELECT status FROM fork_materializations"
+            ).fetchall() == [("aborted",)]
+            assert connection.execute(
+                "SELECT COUNT(*) FROM fork_identity_mappings "
+                "WHERE entity_type IN ('debug_snapshot', 'debug_configuration')"
+            ).fetchone() == (0,)
+
+
+@pytest.mark.asyncio
+async def test_full_copy_restart_publishes_ready_debug_after_rollout_install(
+    fork_context: ForkIntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = await _seed_source(fork_context)
+    _seed_debug_configurations(fork_context, source.session_id)
+    target = await fork_context.sessions.create(
+        SessionCreateRequest(title="full copy debug crash target")
+    )
+
+    original_publish = full_copy_operation.publish_ready_node_debug_fork
+
+    def crash_after_rollout_install(*_args, **_kwargs):
+        raise RuntimeError("injected crash after rollout install")
+
+    monkeypatch.setattr(
+        full_copy_operation,
+        "publish_ready_node_debug_fork",
+        crash_after_rollout_install,
+    )
+    with pytest.raises(RuntimeError, match="injected crash after rollout install"):
+        await fork_context.saver.afork(
+            source_session_id=source.session_id,
+            target_session_id=target.session_id,
+            mode="full_rollout_copy",
+            checkpoint_id="cp2",
+        )
+
+    target_node = fork_context.sessions.path_resolver.resolve_session_node(
+        target.session_id
+    )
+    assert not (target_node / "debug" / "node").exists()
+    with sqlite3.connect(target_node / "rollout" / "index.sqlite") as connection:
+        assert connection.execute(
+            "SELECT status FROM fork_materializations"
+        ).fetchall() == [("target_committed",)]
+        lineage = json.loads(
+            connection.execute(
+                "SELECT lineage_json FROM fork_identity_mappings "
+                "WHERE entity_type = 'debug_snapshot'"
+            ).fetchone()[0]
+        )
+    assert lineage["state"] == "ready"
+    staging = target_node / lineage["target_debug_staging_path"]
+    assert staging.is_dir()
+
+    monkeypatch.setattr(
+        full_copy_operation,
+        "publish_ready_node_debug_fork",
+        original_publish,
+    )
+    provider = fork_context.saver._node_debug_workspace_config
+    with RolloutCheckpointSaver(
+        fork_context.saver._storage.sessions_dir,
+        node_debug_workspace_config=provider,
+    ) as restarted:
+        restarted._storage.initialize(target.session_id)
+        manifest = restarted._node_debug_store.read_manifest(
+            target.session_id, MAIN_THREAD_ID
+        )
+        assert manifest is not None
+        assert manifest.session_id == target.session_id
+        assert manifest.thread_id == MAIN_THREAD_ID
+        assert manifest.active_configuration_id is None
+        assert manifest.actions == []
+        assert not staging.exists()
+        with restarted._storage._connect(
+            target.session_id, "", read_only=True
+        ) as connection:
+            assert connection.execute(
+                "SELECT status FROM fork_materializations"
+            ).fetchall() == [("committed",)]
+            recovered_lineage = json.loads(
+                connection.execute(
+                    "SELECT lineage_json FROM fork_identity_mappings "
+                    "WHERE entity_type = 'debug_snapshot'"
+                ).fetchone()[0]
+            )
+        assert recovered_lineage["state"] == "published"
 
 
 @pytest.mark.asyncio

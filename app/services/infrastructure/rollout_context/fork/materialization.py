@@ -10,6 +10,9 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.domain.itemized.enums import CommitKind, CommitMode, ControlOutcome
+from app.services.infrastructure.rollout_context.fork.node_debug_journal import (
+    NodeDebugForkJournalMixin,
+)
 from app.services.infrastructure.rollout_context.fork.overlay_copy import (
     ForkOverlayCopyMixin,
 )
@@ -25,7 +28,7 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-class ForkMaterializationMixin(ForkOverlayCopyMixin):
+class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
     """fork journal、overlay copy 和 target materialization owner。"""
 
     def begin_fork_materialization(
@@ -284,6 +287,12 @@ class ForkMaterializationMixin(ForkOverlayCopyMixin):
                 )
             else:
                 connection.execute("BEGIN IMMEDIATE")
+                self._assert_fork_debug_snapshot_ready(
+                    connection,
+                    materialization_id,
+                    allow_ready=defer_completion
+                    and fork_mode == "full_rollout_copy",
+                )
                 timestamp = _now()
                 transaction_id = f"fork:{materialization_id}"
                 active_branch_row = connection.execute(

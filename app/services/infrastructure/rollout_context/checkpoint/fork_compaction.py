@@ -16,8 +16,20 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.checkpoint.base import Checkpoint, CheckpointTuple
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.session_lifecycle_gate import SessionLifecycleGate
+from app.services.infrastructure.node_debug_fork import (
+    NodeDebugSourceCopySnapshot,
+    capture_source_copy_snapshot,
+)
+from app.services.infrastructure.node_debug_thread_owner import (
+    MAIN_THREAD_ID,
+)
 from app.services.infrastructure.rollout_context.fork.full_copy.preflight import (
     read_source_format,
+)
+from app.services.infrastructure.rollout_context.fork.node_debug_materialization import (
+    prepare_node_debug_fork,
+    publish_node_debug_fork,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutTurnAnchor,
@@ -37,6 +49,33 @@ class RolloutForkResult:
 
 
 class ForkCompactionMixin:
+    async def _capture_fork_debug_snapshot(
+        self, source_session_id: str, mode: str
+    ) -> NodeDebugSourceCopySnapshot | None:
+        if mode == "history_prefix_fork":
+            return None
+        _payload, manifest = self._node_debug_store.read_manifest_payload(
+            source_session_id, MAIN_THREAD_ID
+        )
+        if manifest is None:
+            return None
+        if self._node_debug_workspace_config is None:
+            raise RuntimeError(
+                "source 存在调试方案，但 RolloutCheckpointSaver 未注入 Workspace debug 配置"
+            )
+        workspace_config = self._node_debug_workspace_config()
+        gate = SessionLifecycleGate(self._storage.sessions_dir)
+        async with gate.shared(source_session_id):
+            return capture_source_copy_snapshot(
+                self._node_debug_store,
+                session_id=source_session_id,
+                thread_id=MAIN_THREAD_ID,
+                capture_mode=mode,
+                workspace_config_revision=workspace_config.revision,
+                workspace_config_hash=workspace_config.content_hash,
+                workspace_id=workspace_config.workspace_id,
+            )
+
     async def preflight_fork(
         self,
         *,
@@ -79,6 +118,7 @@ class ForkCompactionMixin:
                 source_checkpoint=source_checkpoint,
                 checkpoint_ns=checkpoint_ns,
             )
+
         return RolloutForkResult(
             source_checkpoint_id=source_checkpoint_id,
             source_view_id=source_view_id,
@@ -268,6 +308,14 @@ class ForkCompactionMixin:
                 checkpoint_ns=checkpoint_ns,
             )
 
+        debug_snapshot: NodeDebugSourceCopySnapshot | None = None
+        if mode != "full_rollout_copy" or read_source_format(
+            self._storage, source_session_id, checkpoint_ns
+        ) != 1:
+            debug_snapshot = await self._capture_fork_debug_snapshot(
+                source_session_id, mode
+            )
+
         if mode == "full_rollout_copy":
             source_format = read_source_format(
                 self._storage, source_session_id, checkpoint_ns
@@ -293,6 +341,8 @@ class ForkCompactionMixin:
                     source_checkpoint_id=source_checkpoint_id,
                     relationship=relationship,
                     detail_capability=self._detail_store.fork_detail_capability(),
+                    debug_snapshot=debug_snapshot,
+                    debug_workspace_config=self._node_debug_workspace_config,
                 )
                 if turn_anchor is not None:
                     # full copy 先完成 target-local 安装；cutoff 必须随后使用
@@ -328,6 +378,15 @@ class ForkCompactionMixin:
             source_view_id=source_view_id,
             fork_mode=mode,
             relationship=relationship,
+            checkpoint_ns=checkpoint_ns,
+        )
+        debug_staged = prepare_node_debug_fork(
+            self._storage,
+            debug_snapshot,
+            self._node_debug_workspace_config,
+            materialization_id=materialization_id,
+            fork_id=fork_id,
+            target_session_id=target_session_id,
             checkpoint_ns=checkpoint_ns,
         )
 
@@ -373,6 +432,17 @@ class ForkCompactionMixin:
                 target_thread_id=target_session_id,
                 checkpoint_ns=checkpoint_ns,
                 fork_id=fork_id,
+            )
+
+        if debug_snapshot is not None and debug_staged is not None:
+            publish_node_debug_fork(
+                self._storage,
+                debug_snapshot,
+                debug_staged,
+                self._node_debug_workspace_config,
+                materialization_id=materialization_id,
+                target_session_id=target_session_id,
+                checkpoint_ns=checkpoint_ns,
             )
 
         self._storage.commit_fork_materialization(

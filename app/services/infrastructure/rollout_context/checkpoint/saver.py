@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +41,8 @@ from app.schemas.internal_v2.turn import (
     TurnHistoryPageDTO,
     TurnSummaryDTO,
 )
+from app.services.infrastructure.node_debug_fork import NodeDebugWorkspaceForkConfig
+from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
 from app.services.infrastructure.node_debug_thread_owner import MAIN_THREAD_ID
 from app.services.infrastructure.rollout_context.checkpoint.async_api import (
     RolloutLangGraphAsyncMixin,
@@ -214,6 +216,9 @@ class RolloutCheckpointSaver(
         history_reader: RolloutHistoryReader | None = None,
         detail_store: ContextPlanDetailStore | None = None,
         protected_detail_key: bytes | None = None,
+        node_debug_store: NodeDebugSessionStore | None = None,
+        node_debug_workspace_config: Callable[[], NodeDebugWorkspaceForkConfig]
+        | None = None,
     ) -> None:
         super().__init__(serde=serde)
         self._serde = serde or JsonPlusSerializer()
@@ -243,6 +248,10 @@ class RolloutCheckpointSaver(
             sessions_dir,
             protected_key=protected_detail_key,
         )
+        self._node_debug_store = node_debug_store or NodeDebugSessionStore(
+            get_session_path_resolver(Path(sessions_dir).resolve())
+        )
+        self._node_debug_workspace_config = node_debug_workspace_config
         self._context_plan_composers: dict[tuple[str, str], ContextPlanComposer] = {}
         # 这是当前进程的 context view 变化记录，不是第二份持久化事实。
         # storage manifest/source_overlays 仍是恢复后的权威状态；每次对外暴露

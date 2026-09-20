@@ -185,12 +185,14 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
         capture_mode="context_fork",
         workspace_config_revision="workspace-debug-v1",
         workspace_config_hash="config-hash-v1",
+        workspace_id="workspace-a",
     )
     result = validate_target_prepublication(
         snapshot,
         target_workspace_root=tmp_path,
         target_workspace_config_revision="workspace-debug-v1",
         target_workspace_config_hash="config-hash-v1",
+        target_workspace_id="workspace-a",
         launch_profiles={
             "node-default": NodeDebugLaunchProfileDTO(
                 name="node-default",
@@ -209,5 +211,16 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
             target_workspace_root=tmp_path,
             target_workspace_config_revision="workspace-debug-v2",
             target_workspace_config_hash="config-hash-v1",
+            target_workspace_id="workspace-a",
+            launch_profiles={},
+        )
+
+    with pytest.raises(RuntimeError, match="不支持跨 Workspace"):
+        validate_target_prepublication(
+            snapshot,
+            target_workspace_root=tmp_path,
+            target_workspace_config_revision="workspace-debug-v1",
+            target_workspace_config_hash="config-hash-v1",
+            target_workspace_id="workspace-b",
             launch_profiles={},
         )

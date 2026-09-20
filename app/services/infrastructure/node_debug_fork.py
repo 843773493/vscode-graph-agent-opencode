@@ -13,8 +13,9 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal
 
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugLaunchProfileDTO,
@@ -31,7 +32,6 @@ NodeDebugForkCaptureMode = Literal[
     "context_fork",
     "history_prefix_fork",
     "full_rollout_copy",
-    "materialize_thread_copy",
 ]
 
 
@@ -45,6 +45,62 @@ class NodeDebugSourceDriftError(NodeDebugSourceCaptureError):
 
 class NodeDebugTargetValidationError(RuntimeError):
     """target staging 中的方案或 Workspace debug 配置无法通过预发布校验。"""
+
+
+@dataclass(frozen=True, slots=True)
+class NodeDebugWorkspaceForkConfig:
+    """公开 fork capture/发布共同冻结的 Workspace debug 有效配置。"""
+
+    workspace_root: Path
+    workspace_id: str
+    revision: str
+    content_hash: str
+    launch_profiles: Mapping[str, NodeDebugLaunchProfileDTO]
+
+
+def build_workspace_fork_config(
+    workspace_root: Path, debug_config: Mapping[str, object]
+) -> NodeDebugWorkspaceForkConfig:
+    canonical = json.dumps(
+        debug_config,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    revision = hashlib.sha256(canonical).hexdigest()
+    raw_profiles = debug_config.get("launch_profiles")
+    if not isinstance(raw_profiles, Mapping):
+        raise TypeError("runtime.debug.launch_profiles 必须是 mapping")
+    profiles: dict[str, NodeDebugLaunchProfileDTO] = {}
+    for name, raw in raw_profiles.items():
+        if not isinstance(name, str) or not isinstance(raw, Mapping):
+            raise TypeError("runtime.debug.launch_profiles 结构非法")
+        adapter = raw.get("adapter")
+        runtime = raw.get("runtime")
+        args = raw.get("args", [])
+        if (
+            not isinstance(adapter, str)
+            or not isinstance(runtime, str)
+            or not isinstance(args, list)
+            or not all(isinstance(item, str) for item in args)
+        ):
+            raise TypeError(f"runtime.debug.launch_profiles.{name} 结构非法")
+        profiles[name] = NodeDebugLaunchProfileDTO(
+            name=name,
+            adapter=adapter,
+            runtime=runtime,
+            supported=adapter == "node_inspector" and runtime == "node",
+            program=str(raw.get("program", "")),
+            working_directory=str(raw.get("working_directory", "")),
+            args=args,
+        )
+    return NodeDebugWorkspaceForkConfig(
+        workspace_root=workspace_root.resolve(),
+        workspace_id=load_or_create_workspace_id(workspace_root),
+        revision=revision,
+        content_hash=f"sha256:{revision}",
+        launch_profiles=profiles,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,15 +138,6 @@ class NodeDebugConfigurationCopyArtifact:
         ):
             raise ValueError("调试方案 artifact source_lineage 必须是非空字符串元组")
 
-    @property
-    def bytes(self) -> bytes:
-        """兼容 artifact 端口使用的简短正文属性。"""
-        return self.payload_bytes
-
-    @property
-    def content_hash(self) -> str:
-        return f"sha256:{self.sha256}"
-
     def configuration(self) -> NodeDebugConfigurationDTO:
         """从冻结正文解析 portable DTO；正文损坏时直接失败。"""
         try:
@@ -115,10 +162,6 @@ class NodeDebugConfigurationCopyArtifact:
         return configuration
 
 
-# 较短的 domain 名称供 fork journal/上层 port 使用。
-NodeDebugConfigurationArtifact = NodeDebugConfigurationCopyArtifact
-
-
 @dataclass(frozen=True, slots=True)
 class NodeDebugSourceCopySnapshot:
     """一次 source debug capture 的不可变 manifest/artifact 清单。"""
@@ -135,6 +178,7 @@ class NodeDebugSourceCopySnapshot:
     source_lineage: tuple[tuple[str, str], ...] = ()
     workspace_config_revision: str | None = None
     workspace_config_hash: str | None = None
+    workspace_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.source_snapshot_id:
@@ -158,6 +202,8 @@ class NodeDebugSourceCopySnapshot:
             raise ValueError("workspace_config_revision 不能为空")
         if self.workspace_config_hash is not None and not self.workspace_config_hash:
             raise ValueError("workspace_config_hash 不能为空")
+        if self.workspace_id is not None and not self.workspace_id:
+            raise ValueError("workspace_id 不能为空")
         if any(
             not isinstance(item, tuple)
             or len(item) != 2
@@ -165,18 +211,6 @@ class NodeDebugSourceCopySnapshot:
             for item in self.source_lineage
         ):
             raise ValueError("source snapshot source_lineage 必须是非空字符串元组")
-
-    @property
-    def manifest_content_hash(self) -> str:
-        return f"sha256:{self.manifest_sha256}"
-
-    @property
-    def config_revision_proof(self) -> tuple[str | None, str | None]:
-        return (self.workspace_config_revision, self.workspace_config_hash)
-
-    @property
-    def configurations(self) -> tuple[NodeDebugConfigurationCopyArtifact, ...]:
-        return self.configuration_artifacts
 
     @property
     def active_configuration_id(self) -> None:
@@ -201,20 +235,6 @@ class NodeDebugTargetPrepublication:
     @property
     def active_configuration_id(self) -> None:
         return None
-
-
-class NodeDebugTargetStagingPort(Protocol):
-    """materialization 实现可接入的 target prepublish port。"""
-
-    def validate_debug_source(
-        self,
-        snapshot: NodeDebugSourceCopySnapshot,
-        *,
-        target_workspace_root: Path,
-        target_workspace_config_revision: str,
-        target_workspace_config_hash: str | None,
-        launch_profiles: Mapping[str, NodeDebugLaunchProfileDTO],
-    ) -> NodeDebugTargetPrepublication: ...
 
 
 def _raw_sha256(value: bytes) -> str:
@@ -249,7 +269,7 @@ def _selected_configuration_ids(
     active_configuration_id: str | None,
     configuration_ids: tuple[str, ...],
 ) -> tuple[str, ...]:
-    if capture_mode in {"history_prefix_fork", "materialize_thread_copy"}:
+    if capture_mode == "history_prefix_fork":
         return ()
     if capture_mode == "context_fork":
         if active_configuration_id is None:
@@ -273,6 +293,7 @@ def capture_source_copy_snapshot(
     capture_mode: NodeDebugForkCaptureMode,
     workspace_config_revision: str | None = None,
     workspace_config_hash: str | None = None,
+    workspace_id: str | None = None,
     source_lineage: tuple[tuple[str, str], ...] = (),
 ) -> NodeDebugSourceCopySnapshot:
     """在 source store 上执行一次 manifest/方案 bytes 前后漂移校验。
@@ -362,6 +383,7 @@ def capture_source_copy_snapshot(
         ),
         workspace_config_revision=workspace_config_revision,
         workspace_config_hash=workspace_config_hash,
+        workspace_id=workspace_id,
     )
 
 
@@ -388,11 +410,14 @@ def validate_target_prepublication(
     target_workspace_root: Path,
     target_workspace_config_revision: str,
     target_workspace_config_hash: str | None,
+    target_workspace_id: str | None = None,
     launch_profiles: Mapping[str, NodeDebugLaunchProfileDTO],
     configuration_id_mapper: Callable[[str], str] | None = None,
 ) -> NodeDebugTargetPrepublication:
     """在 target 不可见 staging 中重验配置；失败时整个操作 fail-closed。"""
 
+    if snapshot.workspace_id is not None and snapshot.workspace_id != target_workspace_id:
+        raise NodeDebugTargetValidationError("公开 fork 不支持跨 Workspace 调试方案复制")
     if snapshot.workspace_config_revision is not None and (
         target_workspace_config_revision != snapshot.workspace_config_revision
     ):
@@ -406,25 +431,7 @@ def validate_target_prepublication(
     validated: list[str] = []
     for artifact in snapshot.configuration_artifacts:
         configuration = artifact.configuration()
-        if configuration.script_path:
-            script = _workspace_path(root, configuration.script_path, field="script_path")
-            if not script.is_file():
-                raise NodeDebugTargetValidationError(
-                    f"target 调试入口不存在: {configuration.script_path}"
-                )
-        working_directory = _workspace_path(
-            root, configuration.working_directory, field="working_directory"
-        )
-        if not working_directory.is_dir():
-            raise NodeDebugTargetValidationError(
-                f"target 调试工作目录不存在: {configuration.working_directory}"
-            )
-        for breakpoint in configuration.breakpoints:
-            path = _workspace_path(root, breakpoint.path, field="breakpoint.path")
-            if not path.is_file():
-                raise NodeDebugTargetValidationError(
-                    f"target 断点路径不存在: {breakpoint.path}"
-                )
+        profile: NodeDebugLaunchProfileDTO | None = None
         profile_name = configuration.launch_profile_name
         if profile_name is not None:
             profile = launch_profiles.get(profile_name)
@@ -432,9 +439,39 @@ def validate_target_prepublication(
                 raise NodeDebugTargetValidationError(
                     f"target launch profile 不存在: {profile_name}"
                 )
-            if not profile.supported or profile.adapter != "node_inspector" or profile.runtime != "node":
+            if (
+                not profile.supported
+                or profile.adapter != "node_inspector"
+                or profile.runtime != "node"
+            ):
                 raise NodeDebugTargetValidationError(
                     f"target launch profile 不支持 Node Inspector: {profile_name}"
+                )
+        script_value = configuration.script_path or (
+            profile.program if profile is not None else ""
+        )
+        if not script_value:
+            raise NodeDebugTargetValidationError("target 调试方案缺少有效入口")
+        script = _workspace_path(root, script_value, field="script_path")
+        if not script.is_file():
+            raise NodeDebugTargetValidationError(
+                f"target 调试入口不存在: {script_value}"
+            )
+        working_directory_value = configuration.working_directory or (
+            profile.working_directory if profile is not None else ""
+        )
+        working_directory = _workspace_path(
+            root, working_directory_value, field="working_directory"
+        )
+        if not working_directory.is_dir():
+            raise NodeDebugTargetValidationError(
+                f"target 调试工作目录不存在: {working_directory_value}"
+            )
+        for breakpoint in configuration.breakpoints:
+            path = _workspace_path(root, breakpoint.path, field="breakpoint.path")
+            if not path.is_file():
+                raise NodeDebugTargetValidationError(
+                    f"target 断点路径不存在: {breakpoint.path}"
                 )
         target_id = (
             configuration_id_mapper(artifact.configuration_id)
@@ -458,38 +495,16 @@ def validate_target_prepublication(
     )
 
 
-class DefaultNodeDebugTargetStagingPort:
-    """默认的纯校验 staging port；不执行 materialization 或 target publish。"""
-
-    def validate_debug_source(
-        self,
-        snapshot: NodeDebugSourceCopySnapshot,
-        *,
-        target_workspace_root: Path,
-        target_workspace_config_revision: str,
-        target_workspace_config_hash: str | None,
-        launch_profiles: Mapping[str, NodeDebugLaunchProfileDTO],
-    ) -> NodeDebugTargetPrepublication:
-        return validate_target_prepublication(
-            snapshot,
-            target_workspace_root=target_workspace_root,
-            target_workspace_config_revision=target_workspace_config_revision,
-            target_workspace_config_hash=target_workspace_config_hash,
-            launch_profiles=launch_profiles,
-        )
-
-
 __all__ = [
-    "DefaultNodeDebugTargetStagingPort",
-    "NodeDebugConfigurationArtifact",
     "NodeDebugConfigurationCopyArtifact",
     "NodeDebugForkCaptureMode",
     "NodeDebugSourceCaptureError",
     "NodeDebugSourceCopySnapshot",
     "NodeDebugSourceDriftError",
     "NodeDebugTargetPrepublication",
-    "NodeDebugTargetStagingPort",
     "NodeDebugTargetValidationError",
+    "NodeDebugWorkspaceForkConfig",
+    "build_workspace_fork_config",
     "capture_source_copy_snapshot",
     "validate_target_prepublication",
 ]
