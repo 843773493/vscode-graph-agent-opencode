@@ -3,6 +3,12 @@ import type {
   NodeDebugActionRequest,
   NodeDebugCapabilities,
   NodeDebugConfiguration,
+  NodeDebugConfigurationActivateRequest,
+  NodeDebugConfigurationCopyRequest,
+  NodeDebugConfigurationCreateRequest,
+  NodeDebugConfigurationImportRequest,
+  NodeDebugConfigurationUpdateRequest,
+  NodeDebugStartRequest,
   NodeDebugState,
 } from "../types/backend";
 import { requestJson, unwrapApiData, workspaceHeader } from "./http";
@@ -45,23 +51,7 @@ export async function getNodeDebugState(
 
 export async function startNodeDebug(
   port: number,
-  payload: {
-    session_id: string;
-    thread_id: string;
-    configuration_id?: string | null;
-    path: string;
-    working_directory?: string | null;
-    launch_profile_name?: string | null;
-    args?: string[];
-    breakpoints?: Array<{
-      path: string;
-      line: number;
-      column?: number;
-      condition?: string | null;
-      hit_condition?: number | null;
-      log_message?: string | null;
-    }>;
-  },
+  payload: NodeDebugStartRequest,
   workspaceId?: string | null,
 ): Promise<NodeDebugState> {
   return unwrapApiData(
@@ -80,16 +70,7 @@ export async function startNodeDebug(
 
 export async function createNodeDebugConfiguration(
   port: number,
-  payload: {
-    session_id: string;
-    thread_id: string;
-    name: string;
-    script_path?: string | null;
-    working_directory?: string;
-    launch_profile_name?: string | null;
-    args?: string[];
-    activate?: boolean;
-  },
+  payload: NodeDebugConfigurationCreateRequest,
   workspaceId?: string | null,
 ): Promise<NodeDebugState> {
   return unwrapApiData(
@@ -109,23 +90,7 @@ export async function createNodeDebugConfiguration(
 export async function updateNodeDebugConfiguration(
   port: number,
   configurationId: string,
-  payload: {
-    session_id: string;
-    thread_id: string;
-    name: string;
-    script_path?: string | null;
-    working_directory?: string;
-    launch_profile_name?: string | null;
-    args?: string[];
-    breakpoints?: Array<{
-      path: string;
-      line: number;
-      column?: number;
-      condition?: string | null;
-      hit_condition?: number | null;
-      log_message?: string | null;
-    }>;
-  },
+  payload: NodeDebugConfigurationUpdateRequest,
   workspaceId?: string | null,
 ): Promise<NodeDebugState> {
   return unwrapApiData(
@@ -144,9 +109,8 @@ export async function updateNodeDebugConfiguration(
 
 export async function activateNodeDebugConfiguration(
   port: number,
-  sessionId: string,
-  threadId: string,
   configurationId: string,
+  payload: NodeDebugConfigurationActivateRequest,
   workspaceId?: string | null,
 ): Promise<NodeDebugState> {
   return unwrapApiData(
@@ -156,7 +120,7 @@ export async function activateNodeDebugConfiguration(
       {
         method: "POST",
         headers: workspaceHeader(workspaceId),
-        body: JSON.stringify({ session_id: sessionId, thread_id: threadId }),
+        body: JSON.stringify(payload),
         timeoutMs: NODE_DEBUG_TIMEOUT_MS,
       },
     ),
@@ -204,9 +168,7 @@ export async function getNodeDebugConfiguration(
 
 export async function importNodeDebugConfiguration(
   port: number,
-  sessionId: string,
-  threadId: string,
-  configuration: NodeDebugConfiguration,
+  payload: NodeDebugConfigurationImportRequest,
   workspaceId?: string | null,
 ): Promise<NodeDebugState> {
   return unwrapApiData(
@@ -216,7 +178,7 @@ export async function importNodeDebugConfiguration(
       {
         method: "POST",
         headers: workspaceHeader(workspaceId),
-        body: JSON.stringify({ session_id: sessionId, thread_id: threadId, configuration, activate: false }),
+        body: JSON.stringify(payload),
         timeoutMs: NODE_DEBUG_TIMEOUT_MS,
       },
     ),
@@ -225,11 +187,8 @@ export async function importNodeDebugConfiguration(
 
 export async function copyNodeDebugConfiguration(
   port: number,
-  sourceSessionId: string,
-  sourceThreadId: string,
-  targetSessionId: string,
-  targetThreadId: string,
   configurationId: string,
+  payload: NodeDebugConfigurationCopyRequest,
   workspaceId?: string | null,
 ): Promise<NodeDebugConfiguration> {
   return unwrapApiData(
@@ -239,13 +198,7 @@ export async function copyNodeDebugConfiguration(
       {
         method: "POST",
         headers: workspaceHeader(workspaceId),
-        body: JSON.stringify({
-          source_session_id: sourceSessionId,
-          source_thread_id: sourceThreadId,
-          target_session_id: targetSessionId,
-          target_thread_id: targetThreadId,
-          activate: false,
-        }),
+        body: JSON.stringify(payload),
         timeoutMs: NODE_DEBUG_TIMEOUT_MS,
       },
     ),

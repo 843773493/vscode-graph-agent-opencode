@@ -450,9 +450,8 @@ export function useNodeDebugController({
     try {
       const nextState = await activateNodeDebugConfiguration(
         apiPort,
-        sessionId,
-        threadId,
         configurationId,
+        { session_id: sessionId, thread_id: threadId },
         workspaceId,
       );
       if (!isCurrentMutation(mutationOwnerKey, mutationOwnerGeneration, mutationGeneration)) {

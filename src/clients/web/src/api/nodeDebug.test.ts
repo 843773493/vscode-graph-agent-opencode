@@ -154,9 +154,8 @@ describe("Node Debug API client", () => {
     )).toEqual(state(sessionId, threadId));
     expect(await activateNodeDebugConfiguration(
       nodeDebugTestPort,
-      sessionId,
-      threadId,
       configurationId,
+      { session_id: sessionId, thread_id: threadId },
       workspaceId,
     )).toEqual(state(sessionId, threadId));
     expect(await deleteNodeDebugConfiguration(
@@ -168,18 +167,24 @@ describe("Node Debug API client", () => {
     )).toEqual(state(sessionId, threadId));
     expect(await importNodeDebugConfiguration(
       nodeDebugTestPort,
-      sessionId,
-      threadId,
-      configuration(configurationId),
+      {
+        session_id: sessionId,
+        thread_id: threadId,
+        configuration: configuration(configurationId),
+        activate: false,
+      },
       workspaceId,
     )).toEqual(state(sessionId, threadId));
     expect(await copyNodeDebugConfiguration(
       nodeDebugTestPort,
-      "source session / 需要编码",
-      "source thread / 需要编码",
-      "target session / 需要编码",
-      "target thread / 需要编码",
       configurationId,
+      {
+        source_session_id: "source session / 需要编码",
+        source_thread_id: "source thread / 需要编码",
+        target_session_id: "target session / 需要编码",
+        target_thread_id: "target thread / 需要编码",
+        activate: false,
+      },
       workspaceId,
     )).toEqual(configuration(configurationId));
     const action: NodeDebugActionRequest = {

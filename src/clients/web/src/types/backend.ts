@@ -69,11 +69,19 @@ export type {
   WorkspaceFileUpdateRequest,
   WorkspaceFileWatchRequest,
   WorkspaceInfo,
+  NodeDebugAction,
+  NodeDebugActionRequest,
   NodeDebugActionRecord,
   NodeDebugBreakpoint,
+  NodeDebugBreakpointRequest,
   NodeDebugCapabilities,
   NodeDebugConfiguration,
+  NodeDebugConfigurationActivateRequest,
+  NodeDebugConfigurationCopyRequest,
+  NodeDebugConfigurationCreateRequest,
+  NodeDebugConfigurationImportRequest,
   NodeDebugConfigurationSummary,
+  NodeDebugConfigurationUpdateRequest,
   NodeDebugEvaluation,
   NodeDebugLaunchProfile,
   NodeDebugStackFrame,
@@ -81,7 +89,6 @@ export type {
   NodeDebugState,
 } from "./protocol";
 export type {
-  NodeDebugActionRequest,
   NodeDebugVariableDTO as NodeDebugVariable,
 } from "./protocol_generated/boxteam/workspace/v2/public";
 export type { AttachmentRef } from "./protocol";

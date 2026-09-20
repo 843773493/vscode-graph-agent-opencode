@@ -9,6 +9,7 @@ import {
 import type { NodeDebugController } from "../../hooks/useNodeDebugController";
 import type {
   NodeDebugCapabilities,
+  NodeDebugConfiguration,
   NodeDebugLaunchProfile,
   NodeDebugState,
   Session,
@@ -211,12 +212,15 @@ export default function NodeDebugConfigurationView({
     const mutationOwnerKey = transferOwnerKey;
     setLocalNotice(null);
     try {
-      const configuration = JSON.parse(await file.text()) as Parameters<typeof importNodeDebugConfiguration>[3];
+      const configuration = JSON.parse(await file.text()) as NodeDebugConfiguration;
       const nextState = await importNodeDebugConfiguration(
         apiPort,
-        sessionId,
-        threadId,
-        configuration,
+        {
+          session_id: sessionId,
+          thread_id: threadId,
+          configuration,
+          activate: false,
+        },
         workspaceId,
       );
       if (transferOwnerKeyRef.current !== mutationOwnerKey) return;
@@ -246,11 +250,14 @@ export default function NodeDebugConfigurationView({
     try {
       const copied = await copyNodeDebugConfiguration(
         apiPort,
-        sessionId,
-        threadId,
-        copyTargetSessionId,
-        "main",
         configurationId,
+        {
+          source_session_id: sessionId,
+          source_thread_id: threadId,
+          target_session_id: copyTargetSessionId,
+          target_thread_id: "main",
+          activate: false,
+        },
         workspaceId,
       );
       if (transferOwnerKeyRef.current === mutationOwnerKey) {

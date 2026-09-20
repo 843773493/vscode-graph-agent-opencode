@@ -66,6 +66,24 @@ export type Agent = Omit<WorkspaceProtocol.AgentDTO, "description"> & {
   description?: string | null;
 };
 export type ExtensionCatalogBindingAudit = WorkspaceProtocol.ExtensionCatalogBindingAuditDTO;
+export type NodeDebugAction =
+  | "continue"
+  | "pause"
+  | "step_over"
+  | "step_into"
+  | "step_out"
+  | "set_breakpoint"
+  | "update_breakpoint"
+  | "clear_breakpoint"
+  | "evaluate"
+  | "stop";
+export type NodeDebugActionRequest = Omit<
+  WorkspaceProtocol.NodeDebugActionRequest,
+  "action" | "params"
+> & {
+  action: NodeDebugAction;
+  params?: JsonObject;
+};
 export type NodeDebugActionRecord = Omit<
   WorkspaceProtocol.NodeDebugActionRecordDTO,
   "actor" | "tool_name" | "tool_call_id" | "extension_catalog_binding" | "result" | "created_at"
@@ -95,6 +113,14 @@ export type NodeDebugBreakpoint = Omit<
   relocation_message?: string | null;
   created_at: string;
 };
+export type NodeDebugBreakpointRequest = Omit<
+  WorkspaceProtocol.NodeDebugBreakpointRequest,
+  "condition" | "hit_condition" | "log_message"
+> & {
+  condition?: string | null;
+  hit_condition?: number | null;
+  log_message?: string | null;
+};
 export type NodeDebugCapabilities = Omit<WorkspaceProtocol.NodeDebugCapabilitiesDTO, "supported_adapters" | "launch_profiles"> & {
   supported_adapters?: string[];
   launch_profiles?: WorkspaceProtocol.NodeDebugLaunchProfileDTO[];
@@ -109,10 +135,50 @@ export type NodeDebugConfiguration = Omit<WorkspaceProtocol.NodeDebugConfigurati
   updated_at: string;
 };
 export type NodeDebugConfigurationSummary = WorkspaceProtocol.NodeDebugConfigurationSummaryDTO;
+export type NodeDebugConfigurationActivateRequest = WorkspaceProtocol.NodeDebugConfigurationActivateRequest;
+export type NodeDebugConfigurationCopyRequest = Omit<
+  WorkspaceProtocol.NodeDebugConfigurationCopyRequest,
+  "name"
+> & {
+  name?: string | null;
+};
+export type NodeDebugConfigurationCreateRequest = Omit<
+  WorkspaceProtocol.NodeDebugConfigurationCreateRequest,
+  "script_path" | "launch_profile_name" | "args" | "breakpoints"
+> & {
+  script_path?: string | null;
+  launch_profile_name?: string | null;
+  args?: string[];
+  breakpoints?: NodeDebugBreakpointRequest[];
+};
+export type NodeDebugConfigurationImportRequest = Omit<
+  WorkspaceProtocol.NodeDebugConfigurationImportRequest,
+  "configuration"
+> & {
+  configuration: NodeDebugConfiguration;
+};
+export type NodeDebugConfigurationUpdateRequest = Omit<
+  WorkspaceProtocol.NodeDebugConfigurationUpdateRequest,
+  "script_path" | "launch_profile_name" | "args" | "breakpoints"
+> & {
+  script_path?: string | null;
+  launch_profile_name?: string | null;
+  args?: string[];
+  breakpoints?: NodeDebugBreakpointRequest[];
+};
 export type NodeDebugEvaluation = WorkspaceProtocol.NodeDebugEvaluationDTO;
 export type NodeDebugLaunchProfile = WorkspaceProtocol.NodeDebugLaunchProfileDTO;
 export type NodeDebugStackFrame = WorkspaceProtocol.NodeDebugStackFrameDTO;
-export type NodeDebugStartRequest = WorkspaceProtocol.NodeDebugStartRequest;
+export type NodeDebugStartRequest = Omit<
+  WorkspaceProtocol.NodeDebugStartRequest,
+  "configuration_id" | "working_directory" | "launch_profile_name" | "args" | "breakpoints"
+> & {
+  configuration_id?: string | null;
+  working_directory?: string | null;
+  launch_profile_name?: string | null;
+  args?: string[];
+  breakpoints?: NodeDebugBreakpointRequest[];
+};
 export type NodeDebugState = Omit<WorkspaceProtocol.NodeDebugStateDTO, "status" | "active_configuration_id" | "active_configuration_name" | "script_path" | "working_directory" | "launch_profile_name" | "pid" | "paused_reason" | "error_message" | "call_stack" | "last_stopped_frame" | "breakpoints" | "last_evaluation" | "evaluations" | "actions" | "source_changed_paths"> & {
   status:
     | "idle"
