@@ -2,14 +2,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { NodeDebugController } from "../../hooks/useNodeDebugController";
 import type { Session } from "../../types/backend";
-import NodeDebugSourcePreview from "./NodeDebugSourcePreview";
 import NodeDebugConfigurationView from "./NodeDebugConfigurationView";
 import NodeDebugConsoleView from "./NodeDebugConsoleView";
 import NodeDebugContextView from "./NodeDebugContextView";
-import {
-  nodeDebugBreakpointLabel,
-  type NodeDebugBreakpointDefinition,
-} from "./NodeDebugBreakpointGutter";
+import type { NodeDebugBreakpointDefinition } from "./NodeDebugBreakpointGutter";
+import NodeDebugSourceView from "./NodeDebugSourceView";
 import {
   nodeDebugPauseReasonLabel,
   nodeDebugStatusLabel,
@@ -338,71 +335,30 @@ export default function NodeDebugPanel({
       </nav>
 
       {view === "source" ? (
-        <div className="node-debug-view node-debug-source-view" role="tabpanel">
-          {!sourcePath ? (
-            <div className="debug-empty-state compact" role="status">
-              <span>尚未选择 JavaScript 入口。</span>
-              <button type="button" onClick={() => setView("configuration")}>
-                配置调试入口
-              </button>
-            </div>
-          ) : null}
-          <NodeDebugSourcePreview
-            apiPort={apiPort}
-            workspaceId={workspaceId}
-            path={sourcePath}
-            focusLine={sourceFocusLine}
-            sourceRevision={state?.configuration_revision ?? 0}
-            breakpoints={breakpoints}
-            disabled={!sessionId || actionBusy}
-            onChangeBreakpoint={changeBreakpoint}
-            onOpenWorkspacePath={onOpenWorkspacePath}
-          />
-          {status === "paused" && activeFrame ? (
-            <div className="debug-empty-state compact" role="status">
-              <span>已暂停在 {activeFrame.path ?? activeFrame.url}:{activeFrame.line}，{localVariables.length} 个局部变量。</span>
-              <button type="button" onClick={() => setView("context")}>查看调用栈与变量</button>
-            </div>
-          ) : null}
-          {status === "exited" && (state?.output?.length ?? 0) > 0 ? (
-            <div className="debug-empty-state compact" role="status">
-              <span>调试已结束，保留 {state?.output?.length ?? 0} 行程序输出。</span>
-              <button type="button" onClick={() => setView("console")}>查看控制台</button>
-            </div>
-          ) : null}
-          <details className="node-debug-secondary" open={extensionWindow}>
-            <summary>断点列表与高级设置 <span>{breakpoints.length}</span></summary>
-            <div className="node-debug-breakpoint-form">
-              <input value={breakpointLine} onChange={(event) => setBreakpointLine(event.target.value)} inputMode="numeric" placeholder="行" aria-label="源码断点行号" />
-              <input value={breakpointCondition} onChange={(event) => setBreakpointCondition(event.target.value)} placeholder="条件（可选）" aria-label="源码断点条件" />
-              <button type="button" onClick={addBreakpointFromForm} disabled={!sessionId || actionBusy}>添加</button>
-            </div>
-            <div className="node-debug-breakpoint-list">
-              {breakpoints.length === 0 ? <span className="debug-muted">尚未设置源码断点</span> : null}
-              {breakpoints.map((breakpoint) => (
-                <div className="node-debug-breakpoint-row" key={breakpoint.breakpoint_id}>
-                  <span className={breakpoint.relocation_status === "pending_update" || breakpoint.relocation_status === "source_deleted" ? "stale" : breakpoint.verified ? "verified" : "unverified"} aria-hidden="true" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedSourceLocation({ path: breakpoint.path, line: breakpoint.line });
-                    }}
-                    title={breakpoint.relocation_message ?? breakpoint.path}
-                  >
-                    {breakpoint.path}:{breakpoint.line}
-                    {` · ${nodeDebugBreakpointLabel(breakpoint)}`}
-                    {breakpoint.relocation_status === "relocated" ? " · 已重定位" : ""}
-                    {breakpoint.relocation_status === "pending_update" ? " · 待更新" : ""}
-                    {breakpoint.relocation_status === "source_deleted" ? " · 文件已删除" : ""}
-                  </button>
-                  <button type="button" onClick={() => void runAction("clear_breakpoint", { breakpoint_id: breakpoint.breakpoint_id })} aria-label="清除断点">
-                    <span className="codicon codicon-close" aria-hidden="true" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </details>
-        </div>
+        <NodeDebugSourceView
+          apiPort={apiPort}
+          workspaceId={workspaceId}
+          sessionId={sessionId}
+          state={state}
+          status={status}
+          sourcePath={sourcePath}
+          sourceFocusLine={sourceFocusLine}
+          breakpoints={breakpoints}
+          actionBusy={actionBusy}
+          extensionWindow={extensionWindow}
+          breakpointLine={breakpointLine}
+          setBreakpointLine={setBreakpointLine}
+          breakpointCondition={breakpointCondition}
+          setBreakpointCondition={setBreakpointCondition}
+          onChangeBreakpoint={changeBreakpoint}
+          onAddBreakpoint={addBreakpointFromForm}
+          onClearBreakpoint={(breakpointId) => void runAction("clear_breakpoint", { breakpoint_id: breakpointId })}
+          onSelectSource={(path, line) => setSelectedSourceLocation({ path, line })}
+          onShowConfiguration={() => setView("configuration")}
+          onShowContext={() => setView("context")}
+          onShowConsole={() => setView("console")}
+          onOpenWorkspacePath={onOpenWorkspacePath}
+        />
       ) : null}
 
       {view === "context" ? (
