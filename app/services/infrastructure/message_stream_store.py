@@ -14,7 +14,7 @@ from typing import Any
 
 from app.core.bounded_json import bound_json_value
 from app.core.identifier import create_prefixed_id
-from app.core.session_paths import SessionPathResolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +182,7 @@ class MessageStreamStore:
     def __init__(
         self,
         *,
-        path_resolver: SessionPathResolver,
+        path_resolver: SessionCatalogPathResolver,
         workspace_id: str | None = None,
         subscriber_queue_size: int = 256,
     ) -> None:

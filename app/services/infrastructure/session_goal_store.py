@@ -4,14 +4,14 @@ import json
 import os
 from pathlib import Path
 
-from app.core.session_paths import SessionPathResolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.goal import SessionGoalDTO
 
 
 class SessionGoalStore:
     FILE_NAME = "goal.json"
 
-    def __init__(self, path_resolver: SessionPathResolver) -> None:
+    def __init__(self, path_resolver: SessionCatalogPathResolver) -> None:
         self._path_resolver = path_resolver
 
     def _path(self, session_id: str) -> Path:

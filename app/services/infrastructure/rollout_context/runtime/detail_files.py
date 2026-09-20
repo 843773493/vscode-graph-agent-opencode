@@ -7,10 +7,8 @@ import secrets
 import stat
 from pathlib import Path
 
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.domain.itemized.detail_ref import DetailRef
-from app.services.infrastructure.rollout_context.runtime.detail_keys import (
-    SessionPathResolver,
-)
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
     detail_relative_path,
@@ -19,7 +17,7 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 
 
 class DetailFiles:
-    def __init__(self, resolver: SessionPathResolver) -> None:
+    def __init__(self, resolver: SessionCatalogPathResolver) -> None:
         self._resolver = resolver
 
     @staticmethod

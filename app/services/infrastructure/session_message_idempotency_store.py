@@ -5,7 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from app.core.session_paths import SessionPathResolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.message import MessageRunAccepted
 
 
@@ -14,7 +14,7 @@ class SessionMessageIdempotencyStore:
 
     _FILE_NAME = "inter-agent-idempotency.json"
 
-    def __init__(self, *, path_resolver: SessionPathResolver) -> None:
+    def __init__(self, *, path_resolver: SessionCatalogPathResolver) -> None:
         self._path_resolver = path_resolver
 
     def get(self, session_id: str, idempotency_key: str) -> MessageRunAccepted | None:

@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
-from app.core.session_paths import SessionPathResolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.workspace import (
     FileTreeShortcutDTO,
     SessionFileTreeSettingsDTO,
@@ -20,7 +20,7 @@ class FileTreeSettingsService:
         self,
         *,
         workspace_root: Path,
-        path_resolver: SessionPathResolver,
+        path_resolver: SessionCatalogPathResolver,
     ) -> None:
         self._workspace_root = workspace_root.resolve()
         self._path_resolver = path_resolver

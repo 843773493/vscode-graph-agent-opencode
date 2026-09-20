@@ -5,7 +5,7 @@ from pathlib import Path
 from deepagents.backends import CompositeBackend, FilesystemBackend
 
 from app.core.path_utils import get_session_path_resolver, safe_join
-from app.core.session_paths import SessionPathResolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 
 BOXTEAM_ARTIFACTS_ROOT = "/.boxteam"
 SESSION_ARTIFACT_ROUTE = "/session-artifacts/"
@@ -17,7 +17,7 @@ class SessionArtifactBackend(FilesystemBackend):
     def __init__(self, workspace_root: Path) -> None:
         sessions_root = workspace_root / ".boxteam" / "sessions"
         super().__init__(root_dir=sessions_root, virtual_mode=True)
-        self._path_resolver: SessionPathResolver = get_session_path_resolver(
+        self._path_resolver: SessionCatalogPathResolver = get_session_path_resolver(
             sessions_root
         )
 

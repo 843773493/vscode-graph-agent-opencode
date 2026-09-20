@@ -54,7 +54,7 @@ def _workspace_root(sessions_root: Path) -> Path:
 
 def _navigation_root(sessions_root: Path) -> Path:
     resolved = sessions_root.expanduser().resolve()
-    if resolved.name == "sessions" and resolved.parent.name == ".boxteam":
+    if resolved.name == "sessions":
         return resolved.parent / "navigation"
     return resolved.parent / f".{resolved.name}-session-navigation"
 

@@ -6,21 +6,17 @@ import os
 import secrets
 import stat
 from pathlib import Path
-from typing import Protocol
 
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
 )
 
 
-class SessionPathResolver(Protocol):
-    def resolve_session_node_for_runtime(self, session_id: str) -> Path: ...
-
-
 class ContextDetailKeyStore:
     """只负责 session detail redaction key 的安全读取与首次创建。"""
 
-    def __init__(self, resolver: SessionPathResolver) -> None:
+    def __init__(self, resolver: SessionCatalogPathResolver) -> None:
         self._resolver = resolver
 
     @staticmethod
@@ -101,4 +97,4 @@ class ContextDetailKeyStore:
         return key
 
 
-__all__ = ["ContextDetailKeyStore", "SessionPathResolver"]
+__all__ = ["ContextDetailKeyStore"]

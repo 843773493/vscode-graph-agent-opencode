@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.core.session_paths import SessionPathResolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionInformationErrorDTO,
@@ -61,7 +61,7 @@ class SessionInformationService:
         session_service: SessionService,
         session_resource_service: SessionResourceService,
         workspace_service: WorkspaceService,
-        path_resolver: SessionPathResolver,
+        path_resolver: SessionCatalogPathResolver,
     ) -> None:
         self._session_service = session_service
         self._session_resource_service = session_resource_service
