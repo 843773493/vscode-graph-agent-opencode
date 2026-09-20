@@ -3,16 +3,73 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from langchain.agents import create_agent
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
+from app.agents.graph_tool_adapter import extract_agent_tools_by_name
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import ToolInvocationContext
+from app.agents.tools.custom_invocation import (
+    create_extension_tool_invoker_tool,
+    seal_extension_catalog_binding_from_tools,
+)
 from app.agents.tools.debugging import create_debugging_tools
 from app.schemas.internal_v2.node_debug import NodeDebugConfigurationCreateRequest
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+
+DEBUG_TARGET_NAMES = frozenset(
+    {
+        "start_debugging",
+        "stop_debugging",
+        "step_over",
+        "step_into",
+        "step_out",
+        "continue_execution",
+        "pause_execution",
+        "restart_debugging",
+        "add_breakpoint",
+        "add_logpoint",
+        "remove_breakpoint",
+        "clear_all_breakpoints",
+        "list_breakpoints",
+        "list_variable_names",
+        "get_variables_values",
+        "evaluate_expression",
+    }
+)
+DEBUG_CONFIGURATION_TOOL_NAMES = frozenset(
+    {
+        "list_debug_configurations",
+        "create_debug_configuration",
+        "activate_debug_configuration",
+        "delete_debug_configuration",
+    }
+)
+FORBIDDEN_RUNTIME_FIELDS = frozenset(
+    {
+        "session_id",
+        "sessionId",
+        "thread_id",
+        "threadId",
+        "job_id",
+        "jobId",
+        "adapter",
+        "launch",
+        "runtime",
+        "program",
+        "inspectorPort",
+        "debugpyPort",
+        "vscodeSessionId",
+        "frameId",
+        "callFrameId",
+    }
+)
 
 # 本文件中的 catalog 检查走真实后端 HTTP；下面直接调用工具 factory 的用例是
 # Node Inspector 适配器集成检查，不把它们当作“提示词驱动的完整 E2E”。
@@ -153,35 +210,62 @@ async def test_backend_catalog_exposes_debug_custom_tool_group(
 
     assert response.status_code == 200, response.text
     tools = {item["tool_id"]: item for item in response.json()["data"]}
-    expected_names = {
-        "list_debug_configurations",
-        "create_debug_configuration",
-        "activate_debug_configuration",
-        "delete_debug_configuration",
-        "start_debugging",
-        "stop_debugging",
-        "step_over",
-        "step_into",
-        "step_out",
-        "continue_execution",
-        "pause_execution",
-        "restart_debugging",
-        "add_breakpoint",
-        "add_logpoint",
-        "remove_breakpoint",
-        "clear_all_breakpoints",
-        "list_breakpoints",
-        "list_variable_names",
-        "get_variables_values",
-        "evaluate_expression",
+    expected_names = DEBUG_TARGET_NAMES | DEBUG_CONFIGURATION_TOOL_NAMES
+    assert expected_names <= tools.keys()
+    assert EXTENSION_TOOL_INVOKER_NAME not in tools
+    catalog_text = json.dumps(response.json()["data"], ensure_ascii=False)
+    assert "invoke_custom_tool" not in catalog_text
+
+    for target_name in expected_names:
+        definition = tools[target_name]
+        assert definition["group_id"] == "debugging"
+        assert definition["kind"] == "debugging"
+        parameters = definition["parameters"]
+        assert parameters["type"] == "object"
+        assert parameters["additionalProperties"] is False
+        properties = parameters.get("properties", {})
+        assert isinstance(properties, dict)
+        assert not FORBIDDEN_RUNTIME_FIELDS.intersection(properties)
+
+    assert set(tools["start_debugging"]["parameters"]["properties"]) == {
+        "fileFullPath",
+        "workingDirectory",
+        "testName",
+        "configurationName",
+        "debugConfigurationId",
     }
 
-    assert expected_names <= tools.keys()
-    assert tools["start_debugging"]["group_id"] == "debugging"
-    assert tools["start_debugging"]["kind"] == "debugging"
-    assert tools["start_debugging"]["parameters"] == {}
-    assert tools["start_debugging"]["description"].endswith(
-        "必须通过 invoke_extension_tool 调用。"
+
+def test_provider_model_schema_keeps_only_fixed_extension_envelope(
+    tmp_path: Path,
+) -> None:
+    """Provider 只看固定信封；调试目标只存在于内层目录。"""
+
+    debug_tools = create_debugging_tools(
+        session_id="ses_api_envelope",
+        workspace_root=tmp_path,
+        node_debug_service=MagicMock(),
+        invocation_context=ToolInvocationContext(),
+    )
+    envelope = create_extension_tool_invoker_tool(
+        debug_tools,
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(debug_tools),
+    )
+    provider_agent = create_agent(
+        FakeListChatModel(responses=["ok"]),
+        tools=[envelope],
+    )
+    provider_tools = extract_agent_tools_by_name(provider_agent)
+
+    assert set(provider_tools) == {EXTENSION_TOOL_INVOKER_NAME}
+    schema = provider_tools[EXTENSION_TOOL_INVOKER_NAME].tool_call_schema.model_json_schema()
+    assert set(schema["properties"]) == {"tool_name", "arguments"}
+    assert schema["required"] == ["tool_name", "arguments"]
+    assert "invoke_custom_tool" not in json.dumps(schema, ensure_ascii=False)
+    exposed_text = envelope.description + json.dumps(schema, ensure_ascii=False)
+    assert all(target_name not in exposed_text for target_name in DEBUG_TARGET_NAMES)
+    assert all(
+        target_name not in exposed_text for target_name in DEBUG_CONFIGURATION_TOOL_NAMES
     )
 
 
