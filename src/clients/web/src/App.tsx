@@ -47,8 +47,7 @@ import {
   useAppState,
 } from "./hooks";
 import { useWorkspacePreviewTabs } from "./hooks/useWorkspacePreviewTabs";
-import { useNodeDebugController } from "./hooks/nodeDebug/useNodeDebugController";
-import { useNodeDebugOwner } from "./hooks/nodeDebug/useNodeDebugOwner";
+import { useNodeDebugWorkbench } from "./hooks/nodeDebug/useNodeDebugWorkbench";
 import { useChildThreadLoader } from "./hooks/useChildThreadLoader";
 import { useGatewayExtensionResources } from "./hooks/useGatewayExtensionResources";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
@@ -265,13 +264,6 @@ export default function AppShell() {
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
-  const {
-    threadId: nodeDebugThreadId,
-    selectThread: selectNodeDebugThread,
-  } = useNodeDebugOwner({
-    workspaceId: activeSessionWorkspaceId,
-    sessionId: activeSession?.session_id ?? null,
-  });
   useEffect(() => {
     if (
       selectedAttachmentPreview
@@ -515,13 +507,22 @@ export default function AppShell() {
     onPersistLayout: persistLayoutSettings,
     onStatusChange: setStatus,
   });
-  const nodeDebugController = useNodeDebugController({
+  const {
+    threadId: nodeDebugThreadId,
+    controller: nodeDebugController,
+    activeFrame: nodeDebugActiveFrame,
+    selectThread: selectDebugThread,
+    changeBreakpoint: changeNodeDebugBreakpoint,
+  } = useNodeDebugWorkbench({
     apiPort: resolvedApiPort,
     workspaceId: activeSessionWorkspaceId,
     sessionId: activeSession?.session_id ?? null,
-    threadId: nodeDebugThreadId,
     enabled: auxiliaryVisible && auxiliaryTab === "debug",
     onStatusChange: setStatus,
+    extensionWindowRequested,
+    setAuxiliaryVisible,
+    setAuxiliaryTab,
+    persistLayoutSettings,
   });
   const extensionResourceKey = extensionWindowRequest?.workspaceId &&
     extensionWindowRequest.sessionId &&
@@ -617,16 +618,6 @@ export default function AppShell() {
     enabled: childThreadPanelActive,
   });
 
-  const selectDebugThread = useCallback((threadId: string) => {
-    selectNodeDebugThread(threadId);
-    setAuxiliaryVisible(true);
-    setAuxiliaryTab("debug");
-    if (!extensionWindowRequested) {
-      persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: "debug" });
-    }
-    setStatus(threadId === "main" ? "已切换到主线程调试" : `已切换调试 owner: ${threadId}`);
-  }, [extensionWindowRequested, persistLayoutSettings, selectNodeDebugThread, setStatus]);
-
   const sharedPreviewTab = auxiliaryTab === "files" || auxiliaryTab === "changes" || (
     auxiliaryTab === "debug" && (extensionWindowRequested || extensionWindowFallback)
   );
@@ -636,7 +627,6 @@ export default function AppShell() {
     codePreviewError !== null
   );
   const auxiliaryLeftVisible = sharedPreviewTab && sharedPreviewVisible;
-  const nodeDebugActiveFrame = nodeDebugController.state?.call_stack?.[0] ?? null;
   const debugPanel = (
     <NodeDebugWorkbench
       apiPort={resolvedApiPort}
@@ -1794,28 +1784,7 @@ export default function AppShell() {
                         debugExecutionLine={nodeDebugActiveFrame?.line ?? null}
                         debugBreakpoints={nodeDebugController.state?.breakpoints ?? []}
                         debugActionBusy={nodeDebugController.actionBusy}
-                        onChangeDebugBreakpoint={(path, line, breakpointId, definition) => {
-                          if (!definition) {
-                            if (breakpointId) {
-                              void nodeDebugController.runAction(
-                                "clear_breakpoint",
-                                { breakpoint_id: breakpointId },
-                              );
-                            }
-                            return;
-                          }
-                          void nodeDebugController.runAction(
-                            breakpointId ? "update_breakpoint" : "set_breakpoint",
-                            {
-                              ...(breakpointId ? { breakpoint_id: breakpointId } : {}),
-                              path,
-                              line,
-                              condition: definition.condition,
-                              hit_condition: definition.hit_condition,
-                              log_message: definition.log_message,
-                            },
-                          );
-                        }}
+                        onChangeDebugBreakpoint={changeNodeDebugBreakpoint}
                       />
                     ) : null
                   ) : null}
