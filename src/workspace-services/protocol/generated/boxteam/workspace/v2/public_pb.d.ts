@@ -523,21 +523,6 @@ export declare type DeleteSessionResultDTO = Message<"boxteam.workspace.v2.Delet
    * @generated from field: string status = 2;
    */
   status: string;
-
-  /**
-   * @generated from field: optional int64 cleaned_execution_runs = 3;
-   */
-  cleanedExecutionRuns?: bigint | undefined;
-
-  /**
-   * @generated from field: optional int64 cleaned_background_tasks = 4;
-   */
-  cleanedBackgroundTasks?: bigint | undefined;
-
-  /**
-   * @generated from field: optional int64 cleaned_terminals = 5;
-   */
-  cleanedTerminals?: bigint | undefined;
 };
 
 /**

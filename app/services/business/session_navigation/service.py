@@ -22,7 +22,6 @@ from app.schemas.internal_v2.session_navigation import (
     SessionFolderCreateRequest,
     SessionFolderUpdateRequest,
 )
-from app.services.business.session_resource_service import SessionResourceService
 from app.services.business.session_service import SessionService
 
 T = TypeVar("T")
@@ -42,7 +41,6 @@ class SessionCatalogService:
         self._path_resolver: SessionCatalogPathResolver = session_service.path_resolver
         self._job_service = job_service
         self._background_task_registry = background_task_registry
-        self._session_resource_service: SessionResourceService | None = None
         self._cached_nodes: list[SessionCatalogNodeDTO] | None = None
         self._cached_revision: str | None = None
         self._cached_physical_revision: int | None = None
@@ -295,12 +293,6 @@ class SessionCatalogService:
         self.invalidate()
         return parent_node_id
 
-    def bind_session_resource_service(
-        self,
-        session_resource_service: SessionResourceService,
-    ) -> None:
-        self._session_resource_service = session_resource_service
-
     async def delete_folder(
         self,
         folder_id: str,
@@ -327,10 +319,6 @@ class SessionCatalogService:
         # 才能取得本次操作的 session 集合并做资源依赖校验。
         self._path_resolver.begin_subtree_delete(folder_id)
         frozen_session_ids = self._path_resolver.descendant_session_ids(folder_id)
-        if frozen_session_ids and (
-            self._job_service is None or self._session_resource_service is None
-        ):
-            raise RuntimeError("递归删除会话文件夹缺少 Job 或资源清理服务")
 
         async def delete_prepared() -> None:
             if self._background_task_registry is not None:
@@ -348,11 +336,9 @@ class SessionCatalogService:
                             for handle in blockers
                         )
                     )
-            if self._session_resource_service is not None:
-                for session_id in frozen_session_ids:
-                    await self._session_resource_service.cleanup_session(session_id)
-            # finish 只在所有冻结 session 的资源清理成功后执行。任一步骤
-            # 失败都保留 catalog deleting 状态和 resolver 删除锁，供同一
+            # finish 通过 resolver 绑定的逐 session drain 回调完成资源清理，
+            # 然后才执行 fence、物理隔离和 drain 进度记录。任一步骤失败
+            # 都保留 catalog deleting 状态和 resolver 删除锁，供同一
             # resolver 实例显式重试；不得回滚 active 或扫盘恢复。
             await self._path_resolver.finish_subtree_delete(folder_id)
 

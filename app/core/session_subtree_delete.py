@@ -11,8 +11,8 @@
    逻辑可见性关闭点**，「正常导航/业务 reader 不得看到部分子树仍
    active」由该事务原子性保证）→ 出 gate。
 2. **drain（逐 session 按冻结顺序）**：对每个未记录进度的 session，先在
-   对应 ``SessionLifecycleGate`` exclusive 临界区内排空已绑定的运行时 owner，
-   再 CAS 关闭其 session-control fence（``(active, 1)`` →
+   对应 ``SessionLifecycleGate`` exclusive 临界区内执行已绑定的运行时与
+   外部资源复合 drain 回调，再 CAS 关闭其 session-control fence（``(active, 1)`` →
    ``(deleting, 2)``；已 deleting 幂等跳过；generation 不符 fail
    closed），再把日期桶目录原子 rename 到
    ``sessions_root/.deleting/<idempotency_key>/<session_id>/`` 并做目录
@@ -25,9 +25,9 @@
 
 红线（模块边界，违反即失去本轮资格）：
 
-- **不切权威、不装配**：生产删除路径仍走旧 resolver
-  （``app/core/session_paths.py`` + JSON index）；本流是新 resolver（下一
-  轮）删除方法的支撑件，本轮不装配 container/main.py/path_utils。
+- **不切权威**：生产路径由 ``SessionCatalogPathResolver`` 装配，SQLite
+  catalog 仍是唯一权威；本流只负责编排冻结子树、资源 drain、物理隔离
+  与 tombstone，不直接承载导航业务规则。
 - **单/批同一协议**：单 Session 删除也走本流，避免单/批两种互相矛盾的
   线性化点；非空 folder 的非递归删除仍由
   ``SessionCatalogStore.delete_empty_folder`` 明确拒绝（design.md §9 约
@@ -175,13 +175,14 @@ class SessionSubtreeDeleteService:
         self,
         callback: Callable[[str], Awaitable[None]],
     ) -> None:
-        """绑定删除前的 Session 运行时排空回调。
+        """绑定删除前的 Session 运行时与资源复合排空回调。
 
-        回调属于共享删除协议的一部分：它必须在对应
+        回调属于共享删除协议的一部分，调用方负责在一个显式回调中按
+        固定顺序收敛各类 owner；它必须在对应
         :class:`SessionLifecycleGate` exclusive 临界区内完成，且抛错时
         删除流立即停止，绝不能继续 fence、物理隔离或 finish。生产装配
-        在 NodeDebugService 创建后绑定；未绑定时仅用于没有调试运行时的
-        低层存储测试。
+        在 NodeDebugService 与 SessionResourceService 都创建后绑定；未
+        绑定时仅用于没有运行时/资源服务的低层存储测试。
         """
         if not callable(callback):
             raise TypeError(f"session_drain_callback 必须可调用: {callback!r}")
@@ -299,14 +300,14 @@ class SessionSubtreeDeleteService:
         按冻结顺序（node_id 排序）遍历冻结 session 集合；folder 跳过
         （无物理目录，由 finish 的行删除承担）；已在
         ``drained_session_ids`` 的 session 跳过（崩溃重入定点继续）。
-        每个 session 在 SessionLifecycleGate exclusive 内完成运行时排空、
+        每个 session 在 SessionLifecycleGate exclusive 内完成复合资源回调、
         lease 收敛与隔离（2.3-D：删除等待原 reader/收敛旧 lease 后才隔离目录）。
         """
         for session_id in sorted(record.frozen_session_locators):
             if session_id in record.drained_session_ids:
                 continue
             async with self._session_gate.exclusive(session_id):
-                # 运行时排空必须先于 fence CAS 与物理 rename。回调失败时
+                # 复合资源回调必须先于 fence CAS 与物理 rename。回调失败时
                 # 保留源目录与 catalog deleting 状态，供同一 record 定点
                 # 重试；不得制造“目录已删但进程/claim 未收敛”的伪成功。
                 if self._session_drain_callback is not None:

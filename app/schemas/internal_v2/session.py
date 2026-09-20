@@ -203,12 +203,6 @@ class SessionInformationSnapshotDTO(BaseModel):
 class DeleteSessionResultDTO(BaseModel):
     session_id: str
     status: str
-    cleaned_execution_runs: int = Field(
-        default=0,
-        description="删除会话时清理的一次性 agent 执行记录数量；这些记录不属于后台连接。",
-    )
-    cleaned_background_tasks: int = 0
-    cleaned_terminals: int = 0
 
 
 class SessionControlResultDTO(BaseModel):

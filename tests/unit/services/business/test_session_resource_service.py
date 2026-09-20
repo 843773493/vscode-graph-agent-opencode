@@ -505,12 +505,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
         ),
     )
 
-    result = await service.cleanup_session(session_id)
-
-    assert result.cleaned_execution_runs == 2
-    assert result.cleaned_background_tasks == 1
-    assert result.cleaned_terminals == 1
-    assert result.cleaned_browsers == 1
+    assert await service.cleanup_session(session_id) is None
     assert job_service.deleted_session_id == session_id
     assert registry.list_handles(session_id) == []
     assert terminal_client.deleted_terminal_ids == ["term_cleanup"]

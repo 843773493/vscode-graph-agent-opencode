@@ -546,7 +546,6 @@ class TestSessionService:
 
         assert result.session_id == created.session_id
         assert result.status == "deleted"
-        assert result.cleaned_execution_runs == 0
         assert not session_dir.exists()
 
         with pytest.raises(NotFoundError):

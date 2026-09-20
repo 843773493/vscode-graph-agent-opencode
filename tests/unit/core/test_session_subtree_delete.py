@@ -31,6 +31,7 @@ from app.core.session_subtree_delete import (
     SessionSubtreeDeleteService,
     SubtreeDeleteResult,
 )
+from app.services.business.session_resource_service import SessionResourceService
 
 WORKSPACE_ID = "ws-delete"
 
@@ -323,6 +324,155 @@ async def test_runtime_drain_failure_blocks_physical_isolation(
         store.get_subtree_delete_record("del-key-runtime-blocked").drained_session_ids
         == ()
     )
+
+
+async def test_composite_drain_retries_only_undrained_session(
+    service: SessionSubtreeDeleteService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+    tree: DeleteTree,
+) -> None:
+    """资源复合回调失败后，重试不重复已完成 session 的资源收敛。"""
+    record = prepare_and_mark(store, key="del-key-composite", root_node_id=tree.root)
+    ordered = sorted(record.frozen_session_locators)
+    first, second = ordered[:2]
+    events: list[tuple[str, str]] = []
+    fail_session_id = second
+
+    async def composite_drain(session_id: str) -> None:
+        events.append(("node_debug", session_id))
+        await asyncio.sleep(0)
+        events.append(("resources", session_id))
+        if session_id == fail_session_id:
+            raise RuntimeError(f"资源清理失败: {session_id}")
+
+    service.set_session_drain_callback(composite_drain)
+
+    with pytest.raises(RuntimeError, match="资源清理失败"):
+        await asyncio.wait_for(
+            service.delete(
+                idempotency_key="del-key-composite",
+                root_node_id=tree.root,
+            ),
+            timeout=2,
+        )
+
+    assert store.get_subtree_delete_record("del-key-composite").drained_session_ids == (
+        first,
+    )
+    assert events == [
+        ("node_debug", first),
+        ("resources", first),
+        ("node_debug", second),
+        ("resources", second),
+    ]
+    assert (
+        sessions_root / _DELETING_DIR_NAME / "del-key-composite" / first
+    ).is_dir()
+
+    fail_session_id = ""
+    result = await asyncio.wait_for(
+        service.delete(
+            idempotency_key="del-key-composite",
+            root_node_id=tree.root,
+        ),
+        timeout=2,
+    )
+
+    assert result.record_state == "completed"
+    assert events == [
+        ("node_debug", first),
+        ("resources", first),
+        ("node_debug", second),
+        ("resources", second),
+        ("node_debug", second),
+        ("resources", second),
+        ("node_debug", ordered[2]),
+        ("resources", ordered[2]),
+    ]
+    assert result.drained_session_ids == tuple(ordered)
+
+
+async def test_resource_cleanup_reads_deleting_session_before_physical_isolation(
+    service: SessionSubtreeDeleteService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+    tree: DeleteTree,
+) -> None:
+    """资源清理在 catalog deleting 后、fence/rename 前读取仍存在的源目录。"""
+    record = prepare_and_mark(
+        store,
+        key="del-key-resource-order",
+        root_node_id=tree.root,
+    )
+    events: list[tuple[str, str]] = []
+
+    class ObservingSessionService:
+        async def get(self, session_id: str) -> object:
+            node = store.get_node(session_id)
+            assert node.state == "deleting"
+            source = date_bucket_dir(
+                sessions_root,
+                record.frozen_session_locators[session_id],
+            )
+            assert source.is_dir()
+            events.append(("resource_get", session_id))
+            return object()
+
+    class ObservingJobService:
+        async def delete_session_jobs(self, session_id: str) -> None:
+            events.append(("jobs", session_id))
+
+    class ObservingProviderRegistry:
+        async def cleanup_session(self, session_id: str) -> dict[str, int]:
+            events.append(("providers", session_id))
+            return {}
+
+    resource_service = SessionResourceService(
+        session_service=ObservingSessionService(),
+        job_service=ObservingJobService(),
+        provider_registry=ObservingProviderRegistry(),
+    )
+
+    async def composite_drain(session_id: str) -> None:
+        events.append(("node_debug", session_id))
+        await resource_service.cleanup_session(session_id)
+        events.append(("resource_done", session_id))
+
+    service.set_session_drain_callback(composite_drain)
+    result = await asyncio.wait_for(
+        service.delete(
+            idempotency_key="del-key-resource-order",
+            root_node_id=tree.root,
+        ),
+        timeout=2,
+    )
+
+    ordered = sorted(record.frozen_session_locators)
+    assert result.record_state == "completed"
+    assert events == [
+        event
+        for session_id in ordered
+        for event in (
+            ("node_debug", session_id),
+            ("resource_get", session_id),
+            ("jobs", session_id),
+            ("providers", session_id),
+            ("resource_done", session_id),
+        )
+    ]
+    for session_id in ordered:
+        source = date_bucket_dir(
+            sessions_root,
+            record.frozen_session_locators[session_id],
+        )
+        assert not source.exists()
+        assert (
+            sessions_root
+            / _DELETING_DIR_NAME
+            / "del-key-resource-order"
+            / session_id
+        ).is_dir()
 
 
 async def test_delete_leaves_outside_subtree_untouched(

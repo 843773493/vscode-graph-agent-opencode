@@ -23,9 +23,9 @@ from app.api.deps import (
     get_session_context_fork_service,
     get_session_information_service,
     get_session_interrupt_service,
-    get_session_skill_tracking_service,
     get_session_resource_service,
     get_session_service,
+    get_session_skill_tracking_service,
     verify_local_token,
 )
 from app.core.exceptions import NotFoundError
@@ -77,11 +77,11 @@ from app.services.business.session_goal_service import (
 )
 from app.services.business.session_information_service import SessionInformationService
 from app.services.business.session_interrupt_service import SessionInterruptService
+from app.services.business.session_resource_service import SessionResourceService
+from app.services.business.session_service import SessionService
 from app.services.business.session_skill_tracking_service import (
     SessionSkillTrackingService,
 )
-from app.services.business.session_resource_service import SessionResourceService
-from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
@@ -724,30 +724,8 @@ async def delete_session(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
-    session_resource_service: SessionResourceService = Depends(
-        get_session_resource_service
-    ),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ):
-    async def cleanup_and_delete() -> DeleteSessionResultDTO:
-        cleaned_execution_runs = 0
-        cleaned_background_tasks = 0
-        cleaned_terminals = 0
-        for target_session_id in session_ids:
-            cleanup_result = await session_resource_service.cleanup_session(
-                target_session_id
-            )
-            cleaned_execution_runs += cleanup_result.cleaned_execution_runs
-            cleaned_background_tasks += cleanup_result.cleaned_background_tasks
-            cleaned_terminals += cleanup_result.cleaned_terminals
-        return (await session_service.delete(session_id, cascade=cascade)).model_copy(
-            update={
-                "cleaned_execution_runs": cleaned_execution_runs,
-                "cleaned_background_tasks": cleaned_background_tasks,
-                "cleaned_terminals": cleaned_terminals,
-            }
-        )
-
     try:
         session_ids = session_service.path_resolver.descendant_session_ids(
             session_id,
@@ -755,7 +733,7 @@ async def delete_session(
         )
         result = await job_service.run_sessions_delete_operation(
             session_ids,
-            cleanup_and_delete,
+            lambda: session_service.delete(session_id, cascade=cascade),
         )
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error

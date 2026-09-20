@@ -122,9 +122,6 @@ message CursorPage {
 message DeleteSessionResultDTO {
   string session_id = 1;
   string status = 2;
-  optional int64 cleaned_execution_runs = 3;
-  optional int64 cleaned_background_tasks = 4;
-  optional int64 cleaned_terminals = 5;
 }
 
 message EntityRef {

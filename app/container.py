@@ -507,13 +507,6 @@ def build_app_container(
         ),
         residency_tracker=thread_residency_tracker,
     )
-    if isinstance(session_path_resolver, SessionCatalogPathResolver):
-        # 子树删除的共享 drain 必须在物理隔离前定点收敛 Node 调试 owner。
-        # resolver 先于 NodeDebugService 创建，因此在两者就绪后完成一次性
-        # 绑定；删除协议本身仍由 SessionSubtreeDeleteService 统一编排。
-        session_path_resolver.bind_session_drain_callback(
-            node_debug_service.drain_session
-        )
     # 重启恢复兜底：tracker 评估时向 debug owner 拉取 durable claim 的活跃 blocker。
     thread_residency_tracker.add_blocker_source(node_debug_service)
     dependency_provider.set_node_debug_service(node_debug_service)
@@ -692,7 +685,18 @@ def build_app_container(
         job_service=job_service,
         provider_registry=session_resource_provider_registry,
     )
-    session_catalog_service.bind_session_resource_service(session_resource_service)
+    if isinstance(session_path_resolver, SessionCatalogPathResolver):
+        # 子树删除的单一 drain 回调按固定顺序收敛所有运行时 owner：先
+        # NodeDebug，再清理终端、浏览器和后台任务资源。该回调在每个
+        # session 的生命周期 gate 内执行，并且先于 fence、物理隔离和
+        # drain 进度记录，保证部分失败可按 record 定点重试。
+        async def drain_session_resources(session_id: str) -> None:
+            await node_debug_service.drain_session(session_id)
+            await session_resource_service.cleanup_session(session_id)
+
+        session_path_resolver.bind_session_drain_callback(
+            drain_session_resources
+        )
     session_information_service = SessionInformationService(
         session_service=session_service,
         session_resource_service=session_resource_service,

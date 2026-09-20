@@ -122,9 +122,6 @@ export interface CursorPage {
 export interface DeleteSessionResultDTO {
   session_id: string;
   status: string;
-  cleaned_execution_runs?: number | undefined;
-  cleaned_background_tasks?: number | undefined;
-  cleaned_terminals?: number | undefined;
 }
 
 export interface EntityRef {
@@ -2498,13 +2495,7 @@ export const CursorPage: MessageFns<CursorPage> = {
 };
 
 function createBaseDeleteSessionResultDTO(): DeleteSessionResultDTO {
-  return {
-    session_id: "",
-    status: "",
-    cleaned_execution_runs: undefined,
-    cleaned_background_tasks: undefined,
-    cleaned_terminals: undefined,
-  };
+  return { session_id: "", status: "" };
 }
 
 export const DeleteSessionResultDTO: MessageFns<DeleteSessionResultDTO> = {
@@ -2512,13 +2503,6 @@ export const DeleteSessionResultDTO: MessageFns<DeleteSessionResultDTO> = {
     return {
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
-      cleaned_execution_runs: isSet(object.cleaned_execution_runs)
-        ? globalThis.Number(object.cleaned_execution_runs)
-        : undefined,
-      cleaned_background_tasks: isSet(object.cleaned_background_tasks)
-        ? globalThis.Number(object.cleaned_background_tasks)
-        : undefined,
-      cleaned_terminals: isSet(object.cleaned_terminals) ? globalThis.Number(object.cleaned_terminals) : undefined,
     };
   },
 
@@ -2530,15 +2514,6 @@ export const DeleteSessionResultDTO: MessageFns<DeleteSessionResultDTO> = {
     if (message.status !== "") {
       obj.status = message.status;
     }
-    if (message.cleaned_execution_runs !== undefined) {
-      obj.cleaned_execution_runs = Math.round(message.cleaned_execution_runs);
-    }
-    if (message.cleaned_background_tasks !== undefined) {
-      obj.cleaned_background_tasks = Math.round(message.cleaned_background_tasks);
-    }
-    if (message.cleaned_terminals !== undefined) {
-      obj.cleaned_terminals = Math.round(message.cleaned_terminals);
-    }
     return obj;
   },
 
@@ -2549,9 +2524,6 @@ export const DeleteSessionResultDTO: MessageFns<DeleteSessionResultDTO> = {
     const message = createBaseDeleteSessionResultDTO();
     message.session_id = object.session_id ?? "";
     message.status = object.status ?? "";
-    message.cleaned_execution_runs = object.cleaned_execution_runs ?? undefined;
-    message.cleaned_background_tasks = object.cleaned_background_tasks ?? undefined;
-    message.cleaned_terminals = object.cleaned_terminals ?? undefined;
     return message;
   },
 };
