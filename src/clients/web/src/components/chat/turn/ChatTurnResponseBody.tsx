@@ -13,7 +13,6 @@ import type { ConversationView } from "../../../types/frontend";
 import type { MessageStreamActivity } from "../../../state/messageStream";
 import MarkdownContent from "../MarkdownContent";
 import ResponseActionToolbar from "../ResponseActionToolbar";
-import ThinkingSection from "../ThinkingSection";
 import ToolRow from "../ToolRow";
 import { activityRendererRegistry } from "./activityRenderers";
 import type { ChatTurnActions } from "./useChatTurnActions";
@@ -438,12 +437,8 @@ function ExecutionLostRecoveryPart({
 
 function ResponsePart({
   item,
-  showRawDetails,
-  onLoadToolDetails,
 }: {
   item: TimelineItem;
-  showRawDetails: boolean;
-  onLoadToolDetails?: (toolCallId: string) => Promise<void>;
 }): React.ReactNode {
   if (item.kind === "aggregated_text" && item.partKind === "markdown") {
     return (
@@ -451,15 +446,6 @@ function ResponsePart({
         value={item.text}
         className={item.active ? "is-streaming" : ""}
         streaming={item.active}
-      />
-    );
-  }
-  if (item.kind === "aggregated_tool") {
-    return (
-      <ToolRow
-        item={item}
-        showRawDetails={showRawDetails}
-        onLoadDetails={onLoadToolDetails}
       />
     );
   }
@@ -600,6 +586,43 @@ function activityPreviewForItems(
     && !latestTool.failed
     ? `${workItemStatusPreview(latestTool)} · ${statsPreview}`
     : statsPreview;
+}
+
+function ConversationWorkSummary({
+  conversation,
+  items,
+  running,
+}: {
+  conversation: ConversationView;
+  items: WorkItem[];
+  running: boolean;
+}): React.ReactNode {
+  if (running) {
+    if (!conversation.messageStream) return null;
+    const status = buildPendingStatusItem(conversation);
+    if (!status) return null;
+    return (
+      <div className="chat-working" role="status" data-status-kind="work-summary">
+        <span className="codicon codicon-sync codicon-modifier-spin" aria-hidden="true" />
+        <span>{status.title}</span>
+        <span className="chat-working-detail">{status.detail}</span>
+      </div>
+    );
+  }
+
+  const preview = activityPreviewForItems(items, conversation.activityStats);
+  return (
+    <section className="chat-thinking chat-turn-activity is-complete" data-status-kind="work-summary">
+      <div
+        className="chat-thinking-toggle is-static"
+        role="status"
+        aria-label={`Turn 中间消息：${preview}`}
+      >
+        <span className="codicon codicon-check" aria-hidden="true" />
+        <span className="chat-thinking-preview">{preview}</span>
+      </div>
+    </section>
+  );
 }
 
 function ActivityDetails({
@@ -827,6 +850,8 @@ export default function ChatTurnResponseBody({
         .filter((group): group is Extract<RenderGroup, { kind: "work" }> => group.kind === "work")
         .flatMap((group) => group.items),
     ];
+  const showConversationWorkSummary = !historyTurn
+    && (activityItems.length > 0 || (!running && Boolean(conversation.activityStats)));
   const responseTextPart = [...visibleParts].reverse().find(
     (item): item is Extract<TimelineItem, { kind: "aggregated_text" }> =>
       item.kind === "aggregated_text" && item.partKind === "markdown",
@@ -843,6 +868,7 @@ export default function ChatTurnResponseBody({
     && Boolean(conversation.messageStream)
     && !hasActiveWork
     && !hasStreamingMarkdown
+    && !showConversationWorkSummary
     ? buildPendingStatusItem(conversation)
     : null;
   const showResponseActions = !running && !conversation.pending;
@@ -858,28 +884,21 @@ export default function ChatTurnResponseBody({
           onLoadToolDetails={onLoadToolDetails}
         />
       ) : null}
-      {renderGroups.map((group) => group.kind === "work" ? (
-        historyTurn ? null : (
-          <ThinkingSection
-            key={group.id}
-            items={group.items}
-            active={running && group.items.some((item) => item.active)}
-            completedPreview={activityPreviewForItems(group.items, conversation.activityStats)}
-            showRawDetails={showRawDetails}
-          />
-        )
-      ) : (
-        <ResponsePart
-          key={group.id}
-          item={group.item}
-          showRawDetails={showRawDetails}
-          onLoadToolDetails={
-            historyTurn && onLoadToolDetails && conversation.turnId
-              ? (toolCallId) => onLoadToolDetails(conversation.turnId!, toolCallId)
-              : undefined
-          }
+      {showConversationWorkSummary ? (
+        <ConversationWorkSummary
+          conversation={conversation}
+          items={activityItems}
+          running={running}
         />
-      ))}
+      ) : null}
+      {renderGroups
+        .filter((group): group is Extract<RenderGroup, { kind: "response" }> => group.kind === "response")
+        .map((group) => (
+          <ResponsePart
+            key={group.id}
+            item={group.item}
+          />
+        ))}
       {summaryOnly && !historyTurn ? (
         <div className="chat-turn-detail-loading" role="status">
           <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />

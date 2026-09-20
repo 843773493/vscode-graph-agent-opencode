@@ -251,6 +251,46 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).not.toContain("旧历史正文");
   });
 
+  test("默认主线流式 reasoning 只显示可信状态，不挂载原始正文", () => {
+    const value = conversation("running");
+    value.displayMode = "live";
+    value.source = "pending";
+    value.assistantMessages = [];
+    value.messageStream = {
+      connectionStatus: "connected",
+      streamStatus: "open",
+      lastEventSeq: 4,
+      failure: null,
+      activeState: {
+        kind: "model_output",
+        phase: "reasoning",
+        entity_id: "reasoning_block_1",
+        carrier_type: "reasoning_items",
+        block_id: "reasoning_block_1",
+        status: "running",
+      },
+      resumable: true,
+    };
+    const rawReasoning = "I am checking the repository before answering.";
+    value.responseParts = [{
+      part_id: "reasoning-live",
+      kind: "reasoning",
+      projection: "streaming",
+      status: "running",
+      source: { message_sequence: 1, content_block_index: 0 },
+      text: rawReasoning,
+      carrier_type: "reasoning_items",
+      final: false,
+    }];
+
+    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+
+    expect(html).toContain('data-status-kind="work-summary"');
+    expect(html).toContain("正在思考");
+    expect(html).not.toContain(rawReasoning);
+    expect(html).not.toContain("chat-thinking-body");
+  });
+
   test("用户中断显示为中性状态且不重复渲染取消事件", () => {
     const value = conversation("error", "session_interrupted");
   value.displayMode = "live";
@@ -592,7 +632,7 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).not.toContain("生成已中断");
   });
 
-  test("完成态工具折叠行显示统计，展开后显示未知结果", () => {
+  test("完成态工具只显示统计而不暴露结果正文", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
@@ -621,21 +661,7 @@ describe("ChatTurn 轮次动作", () => {
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
     expect(html).toContain("耗时 — · Item 计数同步中");
     expect(html).not.toContain("shell 结果未知");
-
-    let renderer: ReactTestRenderer;
-    act(() => {
-      renderer = create(<ChatTurn {...chatTurnProps(value)} />);
-    });
-    const toggle = renderer!.root.findAllByType("button").find(
-      (button) => button.props.className === "chat-thinking-toggle",
-    );
-    expect(toggle).toBeDefined();
-    act(() => toggle!.props.onClick());
-    const expanded = renderer!.toJSON();
-    expect(JSON.stringify(expanded)).toContain("shell 结果未知");
-    expect(JSON.stringify(expanded)).not.toContain("正在运行 shell");
-    expect(JSON.stringify(expanded)).not.toContain("已运行 shell");
-    renderer!.unmount();
+    expect(html).not.toContain("chat-thinking-body");
   });
 
   test("完成态 reasoning 折叠行只显示耗时和 Item 计数", () => {
@@ -671,8 +697,9 @@ describe("ChatTurn 轮次动作", () => {
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
     expect(html).toContain("耗时 7.1s · Item 4 项");
-    expect(html).toContain('aria-label="展开 Turn 中间消息：耗时 7.1s · Item 4 项"');
+    expect(html).toContain('aria-label="Turn 中间消息：耗时 7.1s · Item 4 项"');
     expect(html).not.toContain("Confirming test tool success with results");
+    expect(html).not.toContain("chat-thinking-body");
     expect(html).toContain("OK");
   });
 
@@ -1223,7 +1250,7 @@ describe("ChatTurn 轮次动作", () => {
     renderer!.unmount();
   });
 
-  test("同一模型消息中的普通文本和 tool_call 分别展示", () => {
+  test("默认主线同一模型消息只展示普通文本，不展开 tool_call 正文", () => {
     const value = conversation("done");
     value.displayMode = "live";
     value.source = "pending";
@@ -1261,8 +1288,8 @@ describe("ChatTurn 轮次动作", () => {
     const textIndex = html.indexOf("我先读取文件");
     const thinkingBodyIndex = html.indexOf('class="chat-thinking-body"');
     expect(textIndex).toBeGreaterThanOrEqual(0);
-    expect(thinkingBodyIndex).toBeGreaterThan(textIndex);
-    expect(html).toContain("read_file");
+    expect(thinkingBodyIndex).toBe(-1);
+    expect(html).not.toContain("read_file");
   });
 
   test("空内部用户消息默认隐藏原文并提供消息操作菜单", () => {
