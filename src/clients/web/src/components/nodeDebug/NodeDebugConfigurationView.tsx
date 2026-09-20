@@ -6,7 +6,7 @@ import {
   getNodeDebugConfiguration,
   importNodeDebugConfiguration,
 } from "../../api";
-import type { NodeDebugController } from "../../hooks/useNodeDebugController";
+import type { NodeDebugController } from "../../hooks/nodeDebug/useNodeDebugController";
 import type {
   NodeDebugCapabilities,
   NodeDebugConfiguration,

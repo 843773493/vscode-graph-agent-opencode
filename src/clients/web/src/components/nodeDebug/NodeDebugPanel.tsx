@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import type { NodeDebugController } from "../../hooks/useNodeDebugController";
+import type { NodeDebugController } from "../../hooks/nodeDebug/useNodeDebugController";
 import type { Session } from "../../types/backend";
 import NodeDebugConfigurationView from "./NodeDebugConfigurationView";
 import NodeDebugConsoleView from "./NodeDebugConsoleView";

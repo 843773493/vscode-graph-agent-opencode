@@ -47,8 +47,8 @@ import {
   useAppState,
 } from "./hooks";
 import { useWorkspacePreviewTabs } from "./hooks/useWorkspacePreviewTabs";
-import { useNodeDebugController } from "./hooks/useNodeDebugController";
-import { useNodeDebugOwner } from "./hooks/useNodeDebugOwner";
+import { useNodeDebugController } from "./hooks/nodeDebug/useNodeDebugController";
+import { useNodeDebugOwner } from "./hooks/nodeDebug/useNodeDebugOwner";
 import { useChildThreadLoader } from "./hooks/useChildThreadLoader";
 import { useGatewayExtensionResources } from "./hooks/useGatewayExtensionResources";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";

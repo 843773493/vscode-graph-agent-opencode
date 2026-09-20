@@ -9,12 +9,12 @@ import {
   getNodeDebugState,
   startNodeDebug,
   updateNodeDebugConfiguration,
-} from "../api";
+} from "../../api";
 import type {
   NodeDebugActionRequest,
   NodeDebugCapabilities,
   NodeDebugState,
-} from "../types/backend";
+} from "../../types/backend";
 import {
   NodeDebugMutationGate,
   type NodeDebugMutation,

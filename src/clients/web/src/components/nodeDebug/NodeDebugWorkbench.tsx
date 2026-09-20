@@ -1,4 +1,4 @@
-import type { NodeDebugController } from "../../hooks/useNodeDebugController";
+import type { NodeDebugController } from "../../hooks/nodeDebug/useNodeDebugController";
 import type { Session } from "../../types/backend";
 import NodeDebugPanel from "./NodeDebugPanel";
 
