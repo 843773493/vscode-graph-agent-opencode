@@ -848,9 +848,11 @@ class TestSubtreeDelete:
             assert store.get_node(node_id).state == "deleting"
         # 子树外节点不受影响。
         assert store.get_node(ids["s3"]).state == "active"
-        # 删除中子树拒绝新的 begin。
-        with pytest.raises(RuntimeError):
-            resolver.begin_subtree_delete(ids["f1"])
+        # 同一 resolver 实例重入时复用既有删除锁，供 drain/finish 失败后
+        # 继续处理原 record；不得重新冻结或创建第二条删除记录。
+        resolver.begin_subtree_delete(ids["f1"])
+        for node_id in (ids["f1"], ids["s1"], ids["f2"], ids["s2"]):
+            assert store.get_node(node_id).state == "deleting"
 
     @pytest.mark.asyncio
     async def test_begin_rejects_non_folder_and_missing(

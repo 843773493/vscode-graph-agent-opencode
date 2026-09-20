@@ -725,11 +725,12 @@ class SessionCatalogPathResolver:
 
         mark 的单事务 CAS（active→deleting + revision+1）是唯一逻辑可见
         性关闭点；idempotency_key=uuid4 记入实例表，供
-        :meth:`finish_subtree_delete` 定位。
+        :meth:`finish_subtree_delete` 定位。同一 resolver 实例在 drain 或
+        finish 失败后重入时复用既有删除锁，继续处理原 record。
         """
         with self._lock:
             if folder_id in self._subtree_delete_keys:
-                raise RuntimeError(f"会话文件夹子树已有删除操作: {folder_id}")
+                return
             node = self._store.get_node(folder_id)
             if node.kind != "folder":
                 raise RuntimeError(f"节点不是会话文件夹: {folder_id}")

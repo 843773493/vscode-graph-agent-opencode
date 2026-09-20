@@ -10,11 +10,7 @@ from typing import TypeVar
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
-from app.core.session_paths import (
-    FOLDER_MANIFEST_NAME,
-    SessionPathResolver,
-    SessionPhysicalNode,
-)
+from app.core.session_paths import SessionPhysicalNode
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
@@ -43,7 +39,7 @@ class SessionCatalogService:
         background_task_registry: BackgroundTaskRegistry | None = None,
     ) -> None:
         self._session_service = session_service
-        self._path_resolver: SessionPathResolver = session_service.path_resolver
+        self._path_resolver: SessionCatalogPathResolver = session_service.path_resolver
         self._job_service = job_service
         self._background_task_registry = background_task_registry
         self._session_resource_service: SessionResourceService | None = None
@@ -60,7 +56,7 @@ class SessionCatalogService:
         self._consistency_error = None
 
     @property
-    def path_resolver(self) -> SessionPathResolver:
+    def path_resolver(self) -> SessionCatalogPathResolver:
         return self._path_resolver
 
     def _on_session_changed(self, action: str, session_id: str) -> None:
@@ -325,44 +321,24 @@ class SessionCatalogService:
         self.invalidate()
 
     async def _delete_folder_tree(self, folder_id: str) -> None:
+        # 递归删除统一走 catalog 子树协议。folder 没有物理路径，不能再
+        # 通过 ``node.path`` 遍历或逐个调用旧的 session/folder 删除接口。
+        # begin 的 mark CAS 是唯一拓扑快照和可见性关闭点；只有冻结完成后
+        # 才能取得本次操作的 session 集合并做资源依赖校验。
         self._path_resolver.begin_subtree_delete(folder_id)
-        try:
-            await self._delete_frozen_folder_tree(folder_id)
-        finally:
-            await self._path_resolver.finish_subtree_delete(folder_id)
-
-    async def _delete_frozen_folder_tree(self, folder_id: str) -> None:
-        nodes = self._path_resolver.list_nodes()
-        nodes_by_id = {node.node_id: node for node in nodes}
-        descendant_ids: set[str] = {folder_id}
-        pending = [folder_id]
-        while pending:
-            parent_id = pending.pop()
-            for node in nodes:
-                if node.parent_node_id != parent_id:
-                    continue
-                if node.node_id in descendant_ids:
-                    raise RuntimeError(
-                        f"会话物理目录包含循环或重复子节点: {node.node_id}"
-                    )
-                descendant_ids.add(node.node_id)
-                pending.append(node.node_id)
-        subtree = [nodes_by_id[node_id] for node_id in descendant_ids]
-        session_nodes = [node for node in subtree if node.kind == "session"]
-        folder_nodes = [node for node in subtree if node.kind == "folder"]
-        self._validate_managed_folder_tree(folder_nodes, subtree)
-        session_ids = sorted(node.node_id for node in session_nodes)
-        if session_ids and (
+        frozen_session_ids = self._path_resolver.descendant_session_ids(folder_id)
+        if frozen_session_ids and (
             self._job_service is None or self._session_resource_service is None
         ):
             raise RuntimeError("递归删除会话文件夹缺少 Job 或资源清理服务")
 
         async def delete_prepared() -> None:
             if self._background_task_registry is not None:
+                target_ids = set(frozen_session_ids)
                 blockers = [
                     handle
                     for handle in self._background_task_registry.list_active_handles()
-                    if handle.session_id in set(session_ids)
+                    if handle.session_id in target_ids
                 ]
                 if blockers:
                     raise RuntimeError(
@@ -373,50 +349,23 @@ class SessionCatalogService:
                         )
                     )
             if self._session_resource_service is not None:
-                for session_id in session_ids:
+                for session_id in frozen_session_ids:
                     await self._session_resource_service.cleanup_session(session_id)
-            for node in sorted(
-                subtree,
-                key=lambda node: len(node.path.parts),
-                reverse=True,
-            ):
-                if node.kind == "session":
-                    await self._session_service.delete(node.node_id)
-                else:
-                    self._path_resolver.delete_folder(
-                        node.node_id,
-                        deleting_subtree_id=folder_id,
-                    )
+            # finish 只在所有冻结 session 的资源清理成功后执行。任一步骤
+            # 失败都保留 catalog deleting 状态和 resolver 删除锁，供同一
+            # resolver 实例显式重试；不得回滚 active 或扫盘恢复。
+            await self._path_resolver.finish_subtree_delete(folder_id)
 
         if self._job_service is None:
             await delete_prepared()
         else:
+            # JobService 在进入 operation 前登记删除 admission，operation
+            # 执行期间保持该 admission，避免资源清理与 finish 之间重新创建
+            # Job；其内部 dispatch lock 不跨 await operation 持有。
             await self._job_service.run_sessions_delete_operation(
-                session_ids,
+                frozen_session_ids,
                 delete_prepared,
             )
-
-    @staticmethod
-    def _validate_managed_folder_tree(
-        folder_nodes: list[SessionPhysicalNode],
-        subtree: list[SessionPhysicalNode],
-    ) -> None:
-        children_by_parent: dict[str, list[SessionPhysicalNode]] = {}
-        for node in subtree:
-            if node.parent_node_id is not None:
-                children_by_parent.setdefault(node.parent_node_id, []).append(node)
-        for folder in folder_nodes:
-            allowed = {
-                folder.path / FOLDER_MANIFEST_NAME,
-                *(child.path for child in children_by_parent.get(folder.node_id, [])),
-            }
-            unmanaged = [entry for entry in folder.path.iterdir() if entry not in allowed]
-            if unmanaged:
-                raise RuntimeError(
-                    "会话文件夹包含未托管内容，拒绝递归删除: "
-                    f"folder_id={folder.node_id}, entries="
-                    f"{','.join(str(entry) for entry in unmanaged)}"
-                )
 
     async def _run_sessions_idle(
         self,
@@ -453,25 +402,7 @@ class SessionCatalogService:
         )
 
     def _descendant_session_ids(self, node_id: str) -> list[str]:
-        nodes = self._path_resolver.list_nodes()
-        children_by_parent: dict[str, list[SessionPhysicalNode]] = {}
-        for node in nodes:
-            if node.parent_node_id is None:
-                continue
-            children_by_parent.setdefault(node.parent_node_id, []).append(node)
-        session_ids: list[str] = []
-        pending = [node_id]
-        visited: set[str] = set()
-        while pending:
-            current_id = pending.pop()
-            if current_id in visited:
-                raise RuntimeError(f"会话物理目录包含循环关系: {current_id}")
-            visited.add(current_id)
-            for child in children_by_parent.get(current_id, []):
-                if child.kind == "session":
-                    session_ids.append(child.node_id)
-                pending.append(child.node_id)
-        return sorted(session_ids)
+        return self._path_resolver.descendant_session_ids(node_id)
 
     async def _snapshot(
         self,

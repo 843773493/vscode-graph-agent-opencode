@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
@@ -86,6 +87,32 @@ class _JobService:
     ) -> T:
         self.locked_session_ids = list(session_ids)
         return await operation()
+
+
+class _DeleteJobService(_JobService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.deleted_session_ids: list[str] = []
+
+    async def run_sessions_delete_operation(
+        self,
+        session_ids: list[str],
+        operation: Callable[[], Awaitable[T]],
+    ) -> T:
+        self.deleted_session_ids = list(session_ids)
+        return await operation()
+
+
+class _ResourceCleanup:
+    def __init__(self, *, fail_session_id: str | None = None) -> None:
+        self.fail_session_id = fail_session_id
+        self.cleaned_session_ids: list[str] = []
+
+    async def cleanup_session(self, session_id: str) -> None:
+        self.cleaned_session_ids.append(session_id)
+        await asyncio.sleep(0)
+        if session_id == self.fail_session_id:
+            raise RuntimeError(f"资源清理失败: {session_id}")
 
 
 @pytest.mark.asyncio
@@ -287,3 +314,89 @@ async def test_deep_search_builds_breadcrumbs_only_for_returned_page(
     assert len(result.items) == 2
     assert result.cursor is not None
     assert breadcrumb_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_recursive_delete_uses_catalog_subtree_protocol_without_folder_paths(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    sessions_root = tmp_path / "sessions"
+    session_service = _SessionService(sessions_root)
+    resolver = session_service.path_resolver
+    parent = resolver.create_folder(name="删除父目录", parent_node_id=None)
+    nested = resolver.create_folder(name="删除子目录", parent_node_id=parent.node_id)
+    session_ids = [
+        canonical("delete_catalog_alpha"),
+        canonical("delete_catalog_beta"),
+    ]
+    session_dirs: list[Path] = []
+    for session_id in session_ids:
+        session_dir = session_bundle_factory(sessions_root, session_id)
+        session_dirs.append(session_dir)
+        _relocate(resolver, session_id, nested.node_id, session_dir)
+
+    job_service = _DeleteJobService()
+    resources = _ResourceCleanup()
+    catalog = SessionCatalogService(
+        session_service=session_service,
+        job_service=job_service,
+    )
+    catalog.bind_session_resource_service(resources)  # type: ignore[arg-type]
+
+    await asyncio.wait_for(
+        catalog.delete_folder(parent.node_id, recursive=True),
+        timeout=2,
+    )
+
+    assert job_service.deleted_session_ids == sorted(session_ids)
+    assert resources.cleaned_session_ids == sorted(session_ids)
+    assert not any(session_dir.exists() for session_dir in session_dirs)
+    assert all(
+        node.node_id not in {parent.node_id, nested.node_id, *session_ids}
+        for node in resolver.list_nodes()
+    )
+    deleting_root = sessions_root / ".deleting"
+    deleting_keys = sorted(path.name for path in deleting_root.iterdir())
+    assert len(deleting_keys) == 1
+    assert sorted(
+        path.name for path in (deleting_root / deleting_keys[0]).iterdir()
+    ) == sorted(session_ids)
+
+
+@pytest.mark.asyncio
+async def test_recursive_delete_failure_keeps_catalog_deleting_and_retries(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    sessions_root = tmp_path / "sessions"
+    session_service = _SessionService(sessions_root)
+    resolver = session_service.path_resolver
+    folder = resolver.create_folder(name="可恢复删除", parent_node_id=None)
+    session_id = canonical("delete_catalog_retry")
+    session_dir = session_bundle_factory(sessions_root, session_id)
+    _relocate(resolver, session_id, folder.node_id, session_dir)
+
+    job_service = _DeleteJobService()
+    resources = _ResourceCleanup(fail_session_id=session_id)
+    catalog = SessionCatalogService(
+        session_service=session_service,
+        job_service=job_service,
+    )
+    catalog.bind_session_resource_service(resources)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="资源清理失败"):
+        await asyncio.wait_for(
+            catalog.delete_folder(folder.node_id, recursive=True),
+            timeout=2,
+        )
+    assert resolver.catalog_store.get_node(folder.node_id).state == "deleting"
+
+    resources.fail_session_id = None
+    await asyncio.wait_for(
+        catalog.delete_folder(folder.node_id, recursive=True),
+        timeout=2,
+    )
+    with pytest.raises(KeyError):
+        resolver.catalog_store.get_node(folder.node_id)
+    assert not session_dir.exists()
