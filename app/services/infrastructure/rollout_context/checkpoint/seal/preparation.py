@@ -72,6 +72,9 @@ def prepare_registered_context(
     )
     registered = owner._find_runtime_context_plan(session_id, plan_id, checkpoint_ns)
     if registered is None or registered.plan_state == "unsealed":
+        # 5.4：新 plan 组装前先在 model-call 安全边界收敛 desired/applied
+        # ToolSet；已 sealed 的在飞请求不做二次比较。
+        owner._switch_tool_set_if_needed(session_id, tool_snapshot=tool_snapshot)
         owner._storage.ensure_active_view_contains_turn_root(
             session_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns
         )

@@ -20,12 +20,17 @@ from langgraph.checkpoint.base import (
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.history_loading import HistoryLoadingConfig
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import SemanticKind
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import (
     AppendCanonicalItemIntent,
     ContextMutationIntent,
     MutationIntentOwner,
+    SwitchToolSetIntent,
 )
 from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.records import CanonicalItemRecord
@@ -371,10 +376,7 @@ class RolloutCheckpointSaver(
         # 先构造全部 intent：任一字段不合法都在触碰 storage 前显式失败。
         intents = tuple(_append_intent_for(owner, item) for item in typed_items)
         with self._lock:
-            facade = self._mutation_intent_facades.get(owner)
-            if facade is None:
-                facade = SessionThreadMutationIntents(owner=owner, port=self)
-                self._mutation_intent_facades[owner] = facade
+            facade = self._mutation_intent_facade(owner)
             batch = _AppendIntentBatch(
                 owner=owner,
                 checkpoint_ns=checkpoint_ns,
@@ -392,16 +394,24 @@ class RolloutCheckpointSaver(
         return batch.commit_ids
 
     def consume_mutation_intent(self, intent: ContextMutationIntent) -> None:
-        """SessionThreadMutationIntentPort 的 append 分支生产实现。
+        """SessionThreadMutationIntentPort 的 append/toolset 分支生产实现。
 
-        TODO(OpenSpec 2.3-B4)：toolset/epoch 分支的生产接线属后续切片，
-        当前显式拒绝，不静默降级。
+        TODO(OpenSpec 2.3-B4)：epoch 分支（rewind/compaction rebuild）的
+        生产接线属后续切片，当前显式拒绝，不静默降级。
         """
-        if not isinstance(intent, AppendCanonicalItemIntent):
-            raise NotImplementedError(
-                "TODO(OpenSpec 2.3-B4): mutation intent 分支尚未接线: "
-                + type(intent).__name__
-            )
+        if isinstance(intent, AppendCanonicalItemIntent):
+            self._consume_append_intent(intent)
+            return
+        if isinstance(intent, SwitchToolSetIntent):
+            self._consume_switch_tool_set_intent(intent)
+            return
+        raise NotImplementedError(
+            "TODO(OpenSpec 2.3-B4): mutation intent 分支尚未接线: "
+            + type(intent).__name__
+        )
+
+    def _consume_append_intent(self, intent: AppendCanonicalItemIntent) -> None:
+        """append 分支：批内首个 intent 消费时单事务提交整批。"""
         batch = self._append_intent_batches.get(intent.owner)
         if batch is None:
             raise MutationIntentOwnerMismatch(
@@ -420,13 +430,107 @@ class RolloutCheckpointSaver(
                 f"batch=({batch.owner.session_id},{batch.owner.thread_id})"
             )
         if batch.commit_ids is None:
-            # 首个 intent 消费时单事务提交整批，保持与直写路径完全一致的
-            # storage 批提交边界；后续 intent 消费时批已提交。
             batch.commit_ids = self._storage.append_items(
                 intent.owner.session_id,
                 batch.records,
                 checkpoint_ns=batch.checkpoint_ns,
             )
+
+    def _consume_switch_tool_set_intent(self, intent: SwitchToolSetIntent) -> None:
+        """toolset 分支：把 desired ToolSet 状态应用到 main thread owner binding。
+
+        TODO(OpenSpec 5.4)：outstanding tool call 收敛与 toolset_changed
+        epoch bump 属后续切片；本分支只推进 durable desired/applied 状态。
+        """
+        if intent.owner.thread_id != MAIN_THREAD_ID:
+            raise MutationIntentOwnerMismatch(
+                "mutation-intent-owner-mismatch: ToolSet 切换当前只接 main "
+                f"thread owner: expected=(*,{MAIN_THREAD_ID}) actual=("
+                f"{intent.owner.session_id},{intent.owner.thread_id})"
+            )
+        control_path, main_thread_id = self._resolve_main_thread_control(
+            intent.owner.session_id
+        )
+        store = SessionControlStore(control_path)
+        try:
+            binding = store.ensure_thread_owner_binding(thread_id=main_thread_id)
+            if binding.toolset_compatibility_key == intent.desired_revision:
+                # 跨进程同 identity 重放：applied 历史不可覆盖，不产生新 revision。
+                return
+            next_revision = (binding.applied_toolset_revision or 0) + 1
+            store.update_thread_owner_binding(
+                main_thread_id,
+                desired_toolset_revision=next_revision,
+                applied_toolset_revision=next_revision,
+                toolset_compatibility_key=intent.desired_revision,
+            )
+        finally:
+            store.close()
+
+    def _mutation_intent_facade(
+        self, owner: MutationIntentOwner
+    ) -> SessionThreadMutationIntents:
+        """取得（或建立）owner 的 mutation intent facade；调用方需持 self._lock。"""
+        facade = self._mutation_intent_facades.get(owner)
+        if facade is None:
+            facade = SessionThreadMutationIntents(owner=owner, port=self)
+            self._mutation_intent_facades[owner] = facade
+        return facade
+
+    def _switch_tool_set_if_needed(
+        self,
+        session_id: str,
+        *,
+        tool_snapshot: Sequence[Mapping[str, object]],
+    ) -> None:
+        """model-call 安全边界：desired ToolSet 变化时经 intent 端口切换。
+
+        比较基准是 durable applied 状态（跨进程一致）；相同时不构造
+        intent，已 sealed 的在飞请求不受影响。
+        """
+        desired_revision = sha256_jcs(
+            {"tools": [dict(tool) for tool in tool_snapshot]}
+        )
+        if self._applied_toolset_key(session_id) == desired_revision:
+            return
+        owner = MutationIntentOwner(session_id=session_id, thread_id=MAIN_THREAD_ID)
+        intent = SwitchToolSetIntent(
+            owner=owner,
+            desired_revision=desired_revision,
+            tool_set_snapshot_id="tool-set:" + desired_revision,
+        )
+        with self._lock:
+            self._mutation_intent_facade(owner).consume(intent)
+
+    def _applied_toolset_key(self, session_id: str) -> str | None:
+        """只读读取 main thread 当前 applied ToolSet compatibility key。"""
+        control_path, main_thread_id = self._resolve_main_thread_control(session_id)
+        store = SessionControlStore(control_path)
+        try:
+            binding = store.get_thread_owner_binding(main_thread_id)
+        except KeyError:
+            # owner binding 行尚未建立：等价于从未 applied。
+            return None
+        finally:
+            store.close()
+        return binding.toolset_compatibility_key
+
+    def _resolve_main_thread_control(self, session_id: str) -> tuple[Path, str]:
+        """解析 main thread 的 session-control 路径与 catalog main_thread_id。"""
+        resolver = get_session_path_resolver(self._storage.sessions_dir)
+        if not isinstance(resolver, SessionCatalogPathResolver):
+            raise RuntimeError(  # noqa: TRY004 —— 运行时模式错误，非参数类型错误
+                "ToolSet owner 状态要求 catalog resolver（当前 legacy resolver，"
+                f"fail closed）: sessions_dir={self._storage.sessions_dir}"
+            )
+        node = resolver.catalog_store.get_node(session_id)
+        if node.main_thread_id is None:
+            raise RuntimeError(
+                "catalog 节点缺 main_thread_id（fail closed）: "
+                f"session_id={session_id!r}"
+            )
+        session_dir = resolver.resolve_session_node(session_id)
+        return session_dir / "session-control.sqlite", node.main_thread_id
 
     def execution_for_turn(
         self, session_id: str, *, turn_id: str, checkpoint_ns: str = ""
