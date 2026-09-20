@@ -47,12 +47,14 @@ from app.services.infrastructure.node_debug.breakpoint_expressions import (
     parse_logpoint_output,
 )
 from app.services.infrastructure.node_debug.breakpoints import (
-    anchor_breakpoint,
     persistable_breakpoint,
     portable_breakpoint,
     reconcile_breakpoint,
     runtime_breakpoint,
     source_digest,
+)
+from app.services.infrastructure.node_debug.configuration_factory import (
+    NodeDebugConfigurationFactory,
 )
 from app.services.infrastructure.node_debug.configuration_registry import (
     NodeDebugConfigurationRegistry,
@@ -99,7 +101,6 @@ from app.services.infrastructure.node_debug.snapshot import (
 _INSPECTOR_URL_PATTERN = re.compile(r"Debugger listening on (ws://\S+)")
 
 logger = logging.getLogger(__name__)
-_SUPPORTED_EXTENSIONS = {".cjs", ".js", ".mjs"}
 _MAX_ACTIONS = 100
 _MAX_OUTPUT_LINES = 100
 _COMMAND_TIMEOUT_SECONDS = 10.0
@@ -279,9 +280,12 @@ class NodeDebugService:
         self._pending_breakpoints: dict[NodeDebugOwner, list[NodeDebugBreakpointDTO]] = {}
         self._pending_actions: dict[NodeDebugOwner, list[NodeDebugActionRecordDTO]] = {}
         self._launch_selections: dict[NodeDebugOwner, _NodeDebugLaunchSelection] = {}
+        self._configuration_factory = NodeDebugConfigurationFactory(
+            workspace_root=self._workspace_root
+        )
         self._configuration_registry = NodeDebugConfigurationRegistry(
             store=session_store,
-            validate_configuration=self._validate_configuration,
+            validate_configuration=self._configuration_factory.validate_configuration,
         )
         self._session_admission = session_admission
         # 入口别名折叠需要目录索引；无持久化会话树场景（嵌入式/单测）没有可折叠的
@@ -452,7 +456,7 @@ class NodeDebugService:
         )
         if request.activate:
             self._assert_no_running_target(session_id, thread_id)
-        configuration = self._configuration_from_request(
+        configuration = self._configuration_factory.configuration_from_request(
             configuration_id=create_prefixed_id("dbgcfg"),
             name=request.name,
             script_path=request.script_path,
@@ -503,7 +507,7 @@ class NodeDebugService:
             thread_id=thread_id,
             exclude_configuration_id=configuration_id,
         )
-        replacement = self._configuration_from_request(
+        replacement = self._configuration_factory.configuration_from_request(
             configuration_id=configuration_id,
             name=request.name,
             script_path=request.script_path,
@@ -621,7 +625,7 @@ class NodeDebugService:
             configuration.name,
             thread_id=thread_id,
         )
-        imported = self._validate_configuration(configuration)
+        imported = self._configuration_factory.validate_configuration(configuration)
         self._configuration_registry.put(session_id, imported, thread_id)
         if activate:
             self._assert_no_running_target(session_id, thread_id)
@@ -670,7 +674,7 @@ class NodeDebugService:
             thread_id=target_thread_id,
         )
         now = datetime.now(UTC)
-        copied = self._validate_configuration(
+        copied = self._configuration_factory.validate_configuration(
             source.model_copy(
                 update={
                     "configuration_id": create_prefixed_id("dbgcfg"),
@@ -817,11 +821,13 @@ class NodeDebugService:
             raise RuntimeError(
                 f"Node Inspector profile 的 runtime 必须是 node: {profile['runtime']!r}"
             )
-        resolved_working_directory = self._resolve_working_directory(
+        resolved_working_directory = self._configuration_factory.resolve_working_directory(
             working_directory or profile["working_directory"]
         )
-        script_path, relative_path = self._resolve_script_path(path)
-        normalized_args = self._normalize_args(args if args else profile["args"])
+        script_path, relative_path = self._configuration_factory.resolve_script_path(path)
+        normalized_args = self._configuration_factory.normalize_args(
+            args if args else profile["args"]
+        )
         node_config = debug_config["node"]
         configured_node_bin = node_config["executable"].strip()
         node_bin = configured_node_bin or self._node_bin
@@ -884,7 +890,7 @@ class NodeDebugService:
             ):
                 requested_breakpoints.extend(previous_breakpoints)
             requested_breakpoints.extend(
-                self._create_breakpoint(
+                self._configuration_factory.create_breakpoint(
                     path=breakpoint.path,
                     line=breakpoint.line,
                     column=breakpoint.column,
@@ -2053,88 +2059,6 @@ class NodeDebugService:
                 )
         self._write_session_manifest(session_id, thread_id)
 
-    def _validate_configuration(
-        self,
-        configuration: NodeDebugConfigurationDTO,
-    ) -> NodeDebugConfigurationDTO:
-        if configuration.script_path is not None:
-            _, relative_path = self._resolve_script_path(configuration.script_path)
-            configuration = configuration.model_copy(
-                update={"script_path": relative_path}
-            )
-        resolved_directory = self._resolve_working_directory(
-            configuration.working_directory
-        )
-        relative_directory = (
-            resolved_directory.relative_to(self._workspace_root).as_posix()
-            if resolved_directory != self._workspace_root
-            else ""
-        )
-        normalized_breakpoints: list[NodeDebugBreakpointDTO] = []
-        for breakpoint in configuration.breakpoints:
-            breakpoint_path, relative_path = self._resolve_script_path(breakpoint.path)
-            normalized_breakpoints.append(
-                persistable_breakpoint(
-                    reconcile_breakpoint(
-                        runtime_breakpoint(
-                            breakpoint.model_copy(update={"path": relative_path})
-                        ),
-                        breakpoint_path,
-                    )
-                )
-            )
-        return configuration.model_copy(
-            update={
-                "name": configuration.name.strip(),
-                "working_directory": relative_directory,
-                "args": self._normalize_args(configuration.args),
-                "breakpoints": [
-                    portable_breakpoint(breakpoint)
-                    for breakpoint in normalized_breakpoints
-                ],
-            }
-        )
-
-    def _configuration_from_request(
-        self,
-        *,
-        configuration_id: str,
-        name: str,
-        script_path: str | None,
-        working_directory: str,
-        launch_profile_name: str | None,
-        args: list[str],
-        breakpoints: list[NodeDebugBreakpointRequest],
-        revision: int = 1,
-        created_at: datetime | None = None,
-    ) -> NodeDebugConfigurationDTO:
-        now = datetime.now(UTC)
-        configuration = NodeDebugConfigurationDTO(
-            configuration_id=configuration_id,
-            name=name.strip(),
-            revision=revision,
-            script_path=script_path,
-            working_directory=working_directory,
-            launch_profile_name=launch_profile_name,
-            args=list(args),
-            breakpoints=[
-                portable_breakpoint(
-                    self._create_breakpoint(
-                        path=breakpoint.path,
-                        line=breakpoint.line,
-                        column=breakpoint.column,
-                        condition=breakpoint.condition,
-                        hit_condition=breakpoint.hit_condition,
-                        log_message=breakpoint.log_message,
-                    )
-                )
-                for breakpoint in breakpoints
-            ],
-            created_at=created_at or now,
-            updated_at=now,
-        )
-        return self._validate_configuration(configuration)
-
     def _select_configuration_for_start(
         self,
         *,
@@ -2150,8 +2074,8 @@ class NodeDebugService:
             session_id, thread_id
         )
         if selected_id is None:
-            _, relative_path = self._resolve_script_path(path)
-            configuration = self._configuration_from_request(
+            _, relative_path = self._configuration_factory.resolve_script_path(path)
+            configuration = self._configuration_factory.configuration_from_request(
                 configuration_id=create_prefixed_id("dbgcfg"),
                 name=f"调试 {Path(relative_path).name}",
                 script_path=relative_path,
@@ -2178,8 +2102,8 @@ class NodeDebugService:
         raw_path = params.get("path")
         if not isinstance(raw_path, str):
             raise TypeError("首次设置源码断点必须提供 path")
-        _, relative_path = self._resolve_script_path(raw_path)
-        configuration = self._configuration_from_request(
+        _, relative_path = self._configuration_factory.resolve_script_path(raw_path)
+        configuration = self._configuration_factory.configuration_from_request(
             configuration_id=create_prefixed_id("dbgcfg"),
             name=f"调试 {Path(relative_path).name}",
             script_path=relative_path,
@@ -2347,36 +2271,6 @@ class NodeDebugService:
             f"reason={claim.reconcile_reason or '等待核实旧实例终态'}"
         )
 
-    def _create_breakpoint(
-        self,
-        *,
-        path: str,
-        line: int,
-        column: int,
-        condition: str | None,
-        hit_condition: int | None = None,
-        log_message: str | None = None,
-    ) -> NodeDebugBreakpointDTO:
-        script_path, relative_path = self._resolve_script_path(path)
-        breakpoint = NodeDebugBreakpointDTO(
-            breakpoint_id=create_prefixed_id("node-bp"),
-            path=relative_path,
-            line=line,
-            column=column,
-            condition=condition.strip() or None if condition is not None else None,
-            hit_condition=hit_condition,
-            log_message=log_message,
-            original_line=line,
-            created_at=datetime.now(UTC),
-        )
-        inspector_breakpoint_condition(
-            breakpoint_id=breakpoint.breakpoint_id,
-            condition=breakpoint.condition,
-            hit_condition=breakpoint.hit_condition,
-            log_message=breakpoint.log_message,
-        )
-        return anchor_breakpoint(breakpoint, script_path)
-
     def _source_digests_for_runtime(
         self,
         runtime: _NodeDebugRuntime,
@@ -2529,27 +2423,6 @@ class NodeDebugService:
             raise TypeError(f"调试启动配置不存在: {profile_name}")
         return profile_name, raw_profile
 
-    def _resolve_working_directory(self, raw_path: str) -> Path:
-        normalized = raw_path.strip()
-        if not normalized:
-            return self._workspace_root
-        candidate = Path(normalized)
-        if candidate.is_absolute():
-            resolved = candidate.resolve()
-            try:
-                resolved.relative_to(self._workspace_root)
-            except ValueError as error:
-                raise ValueError(
-                    f"调试工作目录必须位于当前 workspace 内: {normalized}"
-                ) from error
-            if not resolved.is_dir():
-                raise FileNotFoundError(f"调试工作目录不存在: {normalized}")
-            return resolved
-        resolved = safe_join(self._workspace_root, normalized)
-        if not resolved.is_dir():
-            raise FileNotFoundError(f"调试工作目录不存在: {normalized}")
-        return resolved
-
     async def _set_breakpoint(
         self,
         owner: NodeDebugOwner,
@@ -2577,7 +2450,7 @@ class NodeDebugService:
         log_message = params.get("log_message")
         if log_message is not None and not isinstance(log_message, str):
             raise TypeError("源码断点 log_message 必须是字符串")
-        breakpoint = self._create_breakpoint(
+        breakpoint = self._configuration_factory.create_breakpoint(
             path=raw_path,
             line=line,
             column=column,
@@ -2688,7 +2561,7 @@ class NodeDebugService:
         log_message = params.get("log_message", current.log_message)
         if log_message is not None and not isinstance(log_message, str):
             raise TypeError("源码断点 log_message 必须是字符串")
-        updated = self._create_breakpoint(
+        updated = self._configuration_factory.create_breakpoint(
             path=raw_path,
             line=line,
             column=column,
@@ -3470,27 +3343,6 @@ class NodeDebugService:
             )
             for breakpoint_id, breakpoint in runtime.breakpoints.items()
         }
-
-    def _resolve_script_path(self, raw_path: str) -> tuple[Path, str]:
-        normalized = raw_path.strip().replace("\\", "/")
-        if not normalized:
-            raise ValueError("Node 调试脚本路径不能为空")
-        script_path = safe_join(self._workspace_root, normalized)
-        if script_path.suffix.lower() not in _SUPPORTED_EXTENSIONS:
-            raise ValueError("Node 调试目前只支持 .js、.mjs 和 .cjs 文件")
-        if not script_path.is_file():
-            raise FileNotFoundError(f"Node 调试脚本不存在: {normalized}")
-        relative_path = script_path.relative_to(self._workspace_root).as_posix()
-        return script_path, relative_path
-
-    @staticmethod
-    def _normalize_args(args: list[str]) -> list[str]:
-        if len(args) > 20:
-            raise ValueError("Node 调试参数最多 20 个")
-        for argument in args:
-            if not isinstance(argument, str):
-                raise TypeError("Node 调试参数必须全部是字符串")
-        return args
 
     @staticmethod
     def _positive_int(value: object, name: str) -> int:
