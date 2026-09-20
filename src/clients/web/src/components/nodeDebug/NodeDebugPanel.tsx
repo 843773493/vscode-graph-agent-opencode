@@ -1,18 +1,16 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { NodeDebugController } from "../../hooks/useNodeDebugController";
-import type {
-  NodeDebugVariable,
-  Session,
-} from "../../types/backend";
+import type { Session } from "../../types/backend";
 import NodeDebugSourcePreview from "./NodeDebugSourcePreview";
 import NodeDebugConfigurationView from "./NodeDebugConfigurationView";
+import NodeDebugConsoleView from "./NodeDebugConsoleView";
+import NodeDebugContextView from "./NodeDebugContextView";
 import {
   nodeDebugBreakpointLabel,
   type NodeDebugBreakpointDefinition,
 } from "./NodeDebugBreakpointGutter";
 import {
-  nodeDebugActionActor,
   nodeDebugPauseReasonLabel,
   nodeDebugStatusLabel,
 } from "./nodeDebugPresentation";
@@ -35,8 +33,6 @@ interface NodeDebugPanelProps {
 
 type NodeDebugView = "source" | "context" | "console" | "configuration";
 
-const GLOBAL_VARIABLE_PREVIEW_LIMIT = 80;
-
 const DEBUG_VIEWS: ReadonlyArray<{
   id: NodeDebugView;
   label: string;
@@ -47,20 +43,6 @@ const DEBUG_VIEWS: ReadonlyArray<{
   { id: "console", label: "控制台", icon: "codicon-terminal" },
   { id: "configuration", label: "配置", icon: "codicon-settings-gear" },
 ];
-
-function DebugVariableRows({ variables }: { variables: NodeDebugVariable[] }) {
-  return (
-    <div className="node-debug-variable-list">
-      {variables.map((variable) => (
-        <div key={`${variable.scope}-${variable.name}-${variable.object_id ?? variable.value}`}>
-          <span>{variable.name}</span>
-          <code title={variable.value}>{variable.value}</code>
-          <small>{variable.type ?? variable.scope}</small>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 export default function NodeDebugPanel({
   apiPort,
@@ -121,10 +103,6 @@ export default function NodeDebugPanel({
     () => (activeFrame?.variables ?? []).filter((variable) => variable.scope !== "global"),
     [activeFrame?.variables],
   );
-  const globalVariables = useMemo(
-    () => (activeFrame?.variables ?? []).filter((variable) => variable.scope === "global"),
-    [activeFrame?.variables],
-  );
   const breakpoints = state?.breakpoints ?? [];
   const sourceSelection = resolveNodeDebugSourceSelection({
     state,
@@ -155,10 +133,6 @@ export default function NodeDebugPanel({
         || normalizedDraftArgs.length !== currentArgs.length
         || normalizedDraftArgs.some((argument, index) => argument !== currentArgs[index])
       ),
-  );
-  const recentActions = useMemo(
-    () => [...(state?.actions ?? [])].reverse().slice(0, extensionWindow ? 40 : 12),
-    [extensionWindow, state?.actions],
   );
 
   useEffect(() => {
@@ -432,93 +406,27 @@ export default function NodeDebugPanel({
       ) : null}
 
       {view === "context" ? (
-        <div className="node-debug-view node-debug-context-view" role="tabpanel">
-          <section className="node-debug-section">
-            <div className="debug-section-title-row"><h3>调用栈</h3><span>{state?.call_stack?.length ?? 0} 帧</span></div>
-            {(state?.call_stack ?? []).map((frame, index) => (
-              <button
-                type="button"
-                className={`node-debug-frame-card${index === 0 ? " active" : ""}`}
-                onClick={() => frame.path && void onOpenWorkspacePath(frame.path)}
-                key={frame.call_frame_id}
-              >
-                <strong>{frame.function_name || "(anonymous)"}</strong>
-                <span>{frame.path ?? frame.url}:{frame.line}</span>
-              </button>
-            ))}
-            {!activeFrame ? <div className="debug-empty-state compact">命中源码断点后显示调用栈和变量。</div> : null}
-          </section>
-          <section className="node-debug-section">
-            <div className="debug-section-title-row"><h3>Watch / 求值</h3><span>{status === "paused" ? "可用" : "需暂停"}</span></div>
-            <div className="node-debug-evaluate-row">
-              <input value={expression} onChange={(event) => setExpression(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") evaluate(); }} placeholder="输入表达式" />
-              <button type="button" onClick={evaluate} disabled={actionBusy || status !== "paused"}>求值</button>
-            </div>
-            {state?.last_evaluation ? <pre>{state.last_evaluation.error ?? state.last_evaluation.value ?? state.last_evaluation.description ?? "undefined"}</pre> : null}
-          </section>
-          <section className="node-debug-section node-debug-variable-section">
-            <div className="debug-section-title-row"><h3>局部变量</h3><span>{localVariables.length}</span></div>
-            {localVariables.length > 0 ? (
-              <DebugVariableRows variables={localVariables} />
-            ) : (
-              <span className="debug-muted">当前栈帧没有可展示的局部变量</span>
-            )}
-            {globalVariables.length > 0 ? (
-              <details className="node-debug-variable-group">
-                <summary>全局变量 <span>{globalVariables.length}</span></summary>
-                <DebugVariableRows variables={globalVariables.slice(0, GLOBAL_VARIABLE_PREVIEW_LIMIT)} />
-                {globalVariables.length > GLOBAL_VARIABLE_PREVIEW_LIMIT ? (
-                  <small>仅显示前 {GLOBAL_VARIABLE_PREVIEW_LIMIT} 项；可在上方 Watch 中按名称求值。</small>
-                ) : null}
-              </details>
-            ) : null}
-          </section>
-        </div>
+        <NodeDebugContextView
+          state={state}
+          status={status}
+          actionBusy={actionBusy}
+          expression={expression}
+          setExpression={setExpression}
+          onEvaluate={evaluate}
+          onOpenWorkspacePath={onOpenWorkspacePath}
+        />
       ) : null}
 
       {view === "console" ? (
-        <div className="node-debug-view node-debug-console-view" role="tabpanel">
-          <section className="node-debug-section">
-            <div className="debug-section-title-row"><h3>表达式控制台</h3><span>{status === "paused" ? "可用" : "需暂停"}</span></div>
-            <div className="node-debug-evaluate-row">
-              <input
-                value={expression}
-                onChange={(event) => setExpression(event.target.value)}
-                onKeyDown={(event) => { if (event.key === "Enter") evaluate(); }}
-                placeholder="例如 counter += 1"
-                aria-label="调试控制台表达式"
-              />
-              <button type="button" onClick={evaluate} disabled={actionBusy || status !== "paused"}>求值</button>
-            </div>
-            <div className="node-debug-evaluation-list">
-              {(state?.evaluations ?? []).length === 0 ? <span className="debug-muted">暂无表达式求值</span> : null}
-              {[...(state?.evaluations ?? [])].reverse().map((evaluation) => (
-                <div key={`${evaluation.evaluated_at}-${evaluation.expression}`}>
-                  <code>{evaluation.expression}</code>
-                  <strong>{evaluation.error ?? evaluation.value ?? evaluation.description ?? "undefined"}</strong>
-                </div>
-              ))}
-            </div>
-          </section>
-          <section className="node-debug-section">
-            <div className="debug-section-title-row"><h3>调试控制台</h3><span>{state?.output?.length ?? 0} 行</span></div>
-            <pre className="node-debug-output">{(state?.output ?? []).join("\n") || "暂无程序输出"}</pre>
-          </section>
-          <section className="node-debug-section">
-            <div className="debug-section-title-row"><h3>模型 / 用户动作</h3><span>{state?.actions?.length ?? 0}</span></div>
-            <div className="node-debug-action-list">
-              {recentActions.length === 0 ? <span className="debug-muted">暂无调试动作</span> : null}
-              {recentActions.map((action) => (
-                <div key={action.action_id}>
-                  <span className={action.actor === "ai" ? "agent" : "human"}>{nodeDebugActionActor(action)}</span>
-                  <strong>{action.tool_name ?? action.action}</strong>
-                  <small title={action.message}>{action.message}</small>
-                  <time>{new Date(action.created_at).toLocaleTimeString()}</time>
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
+        <NodeDebugConsoleView
+          state={state}
+          status={status}
+          actionBusy={actionBusy}
+          extensionWindow={extensionWindow}
+          expression={expression}
+          setExpression={setExpression}
+          onEvaluate={evaluate}
+        />
       ) : null}
 
       {view === "configuration" ? (
