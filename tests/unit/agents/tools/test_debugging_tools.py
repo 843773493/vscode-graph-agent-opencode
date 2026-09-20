@@ -185,7 +185,11 @@ def test_debug_tool_names_and_model_schemas_match_debug_mcp_shape(
 async def test_logpoint_maps_to_non_pausing_breakpoint_definition(
     tmp_path: Path,
 ) -> None:
-    state = NodeDebugStateDTO(session_id="ses_debug_logpoint", status="idle")
+    state = NodeDebugStateDTO(
+        session_id="ses_debug_logpoint",
+        thread_id="main",
+        status="idle",
+    )
     service = MagicMock()
     service.get_state = AsyncMock(return_value=state)
     service.record_tool_action = AsyncMock()
@@ -241,6 +245,7 @@ async def test_start_and_final_control_result_include_invalid_breakpoints(
     )
     started_state = NodeDebugStateDTO(
         session_id="ses_debug_invalid_breakpoint",
+        thread_id="main",
         status="paused",
         breakpoints=[invalid_breakpoint],
     )
@@ -290,6 +295,7 @@ async def test_start_and_final_control_result_include_invalid_breakpoints(
 def paused_debug_state() -> NodeDebugStateDTO:
     return NodeDebugStateDTO(
         session_id="ses_debug_redaction",
+        thread_id="main",
         status="paused",
         pid=43210,
         call_stack=[
@@ -550,7 +556,11 @@ async def test_model_state_and_tool_schemas_hide_runtime_identity(
 async def test_start_debugging_reports_missing_explicit_configuration_first(
     tmp_path: Path,
 ) -> None:
-    state = NodeDebugStateDTO(session_id="ses_debug_launch", status="idle")
+    state = NodeDebugStateDTO(
+        session_id="ses_debug_launch",
+        thread_id="main",
+        status="idle",
+    )
     service = _service_for_launch(state=state, configurations=[])
     tools = _tool_map(tmp_path, service)
 
@@ -582,6 +592,7 @@ async def test_start_debugging_rejects_launch_parameter_conflict_with_fields(
     )
     state = NodeDebugStateDTO(
         session_id="ses_debug_launch",
+        thread_id="main",
         status="idle",
         active_configuration_id=configuration.configuration_id,
         active_configuration_name=configuration.name,
@@ -629,6 +640,7 @@ async def test_start_debugging_accepts_normalized_paths_matching_active_configur
     configuration = _debug_configuration()
     state = NodeDebugStateDTO(
         session_id="ses_debug_launch",
+        thread_id="main",
         status="idle",
         active_configuration_id=configuration.configuration_id,
         configurations=[_configuration_summary(configuration)],
@@ -671,6 +683,7 @@ async def test_start_debugging_prefers_explicit_id_then_active_configuration(
     )
     state = NodeDebugStateDTO(
         session_id="ses_debug_launch",
+        thread_id="main",
         status="idle",
         active_configuration_id=active.configuration_id,
         configurations=[
@@ -710,7 +723,11 @@ async def test_start_debugging_prefers_explicit_id_then_active_configuration(
 async def test_start_debugging_without_configuration_uses_safe_creation_path(
     tmp_path: Path,
 ) -> None:
-    state = NodeDebugStateDTO(session_id="ses_debug_launch", status="idle")
+    state = NodeDebugStateDTO(
+        session_id="ses_debug_launch",
+        thread_id="main",
+        status="idle",
+    )
     service = _service_for_launch(state=state, configurations=[])
     tools = _tool_map(tmp_path, service)
 

@@ -103,7 +103,11 @@ class _RuntimeCatalog:
 
 
 def _idle_state() -> NodeDebugStateDTO:
-    return NodeDebugStateDTO(session_id="ses_envelope", status="idle")
+    return NodeDebugStateDTO(
+        session_id="ses_envelope",
+        thread_id="main",
+        status="idle",
+    )
 
 
 def _debug_tools(tmp_path: Path) -> list:

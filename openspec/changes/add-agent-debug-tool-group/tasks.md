@@ -7,7 +7,7 @@
 
 ## 2. Node 调试服务扩展
 
-- [ ] 2.1 将NodeDebugService运行时、断点、活动方案、动作索引从裸session迁为精确`(session_id, thread_id)`，保留Workspace级debug模板和每thread动态Inspector端口；受检thread catalog/path resolver定位`<thread_node>/debug/node/`，不得拼路径、扫盘或按session猜目标；Web/API独立调试mutation遵守Session生命周期准入
+- [x] 2.1 将NodeDebugService运行时、断点、活动方案、动作索引从裸session迁为精确`(session_id, thread_id)`，保留Workspace级debug模板和每thread动态Inspector端口；受检thread catalog/path resolver定位`<thread_node>/debug/node/`，不得拼路径、扫盘或按session猜目标；Web/API独立调试mutation遵守Session生命周期准入
 - [ ] 2.2 保留并验证现有普通/条件/命中次数断点，`hitCondition`为正整数且在本次进程内计数，重启重置；信封目标参数不退化
 - [ ] 2.3 保留Node条件表达式实现的不暂停Logpoint、`logMessage`插值/条件/`hitCondition`及可识别输出；Node不得返回伪“不支持”，其它缺少能力的adapter才明确拒绝，补充真实Inspector回归
 - [ ] 2.4 将归属manifest、运行状态和动作审计绑定实际SessionThread并显式校验`session_id`、`thread_id`；可移植方案正文不含owner，由目标目录/manifest关联。同Workspace复制只按公开fork固定模式，source方案manifest/revision/bytes/hash进入同一SourceCopySnapshot；target发布前校验入口、工作目录、每个断点路径、有效profile/adapter/runtime并按需映射本地ID/lineage，失败使整个fork不可见，且不复制活动指针。Agent动作记录tool_call/ExtensionCatalogBindingRef，Web/API动作记录principal/request_id；同Session main/child不得共享活动状态、断点或动作时间线

@@ -44,6 +44,7 @@ def node_debug_service() -> MagicMock:
     service.start = AsyncMock(
         return_value=NodeDebugStateDTO(
             session_id="ses_test",
+            thread_id="main",
             status="running",
             script_path="fixtures/debug.mjs",
             launch_profile_name="node-test",
@@ -53,12 +54,17 @@ def node_debug_service() -> MagicMock:
     service.create_configuration = AsyncMock(
         return_value=NodeDebugStateDTO(
             session_id="ses_test",
+            thread_id="main",
             status="idle",
             active_configuration_id="dbgcfg_11111111111111111111111111111111",
         )
     )
     service.activate_configuration = AsyncMock(
-        return_value=NodeDebugStateDTO(session_id="ses_test", status="idle")
+        return_value=NodeDebugStateDTO(
+            session_id="ses_test",
+            thread_id="main",
+            status="idle",
+        )
     )
     service.copy_configuration = AsyncMock(
         return_value=NodeDebugConfigurationDTO(

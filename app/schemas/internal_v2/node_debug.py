@@ -202,9 +202,8 @@ class NodeDebugConfigurationDTO(BaseModel):
 
 class NodeDebugStateDTO(BaseModel):
     session_id: str
-    # TODO: 服务端所有构造点都已显式传入 thread_id；待调试工具的测试替身同步后，
-    # 删除该默认值，避免任何调用方再依赖隐式的 main thread。
-    thread_id: str = Field(default="main", min_length=1)
+    #: 运行状态必须显式携带实际 SessionThread 归属，不提供隐式默认值。
+    thread_id: str = Field(min_length=1)
     status: NodeDebugStatus
     active_configuration_id: str | None = None
     active_configuration_name: str | None = None
