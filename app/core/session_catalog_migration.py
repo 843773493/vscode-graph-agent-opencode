@@ -42,7 +42,6 @@ import shutil
 import sqlite3
 import tempfile
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -69,11 +68,6 @@ from app.core.workspace_identity import (
     validate_workspace_id,
     workspace_identity_path,
 )
-from app.services.infrastructure.node_debug_legacy_migration import (
-    NodeDebugLegacyDirectoryMigrator,
-    NodeDebugLegacyMigrationJournalPort,
-    NodeDebugLegacyMigrationSummary,
-)
 
 __all__ = [
     "QuarantinedNode",
@@ -83,8 +77,7 @@ __all__ = [
     "migrate_workspace_session_catalog",
 ]
 
-# journal 落盘位置:maintenance_root / "session-catalog-migration" / "journal.json"
-# (对齐 R3c node-debug 迁移的 maintenance 子目录惯例)。
+# journal 落盘位置:maintenance_root / "session-catalog-migration" / "journal.json"。
 _JOURNAL_DIRECTORY_NAME = "session-catalog-migration"
 _JOURNAL_FILE_NAME = "journal.json"
 
@@ -111,7 +104,6 @@ _SESSION_PHYSICAL_STATES = frozenset(
 )
 _FOLDER_PHYSICAL_STATES = frozenset({"pending", "deleted", "quarantine_isolated"})
 _CONTROL_STATES = frozenset({"pending", "initialized"})
-_DEBUG_PHASE_STATES = frozenset({"pending", "running", "completed", "failed"})
 
 # migration_id 形态:uuid4().hex,32 位小写 hex(staging 目录名,安全单段)。
 _MIGRATION_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
@@ -181,82 +173,10 @@ class _MigrationContext:
     quarantined: list[QuarantinedNode]
     migration_id: str
     physical: dict[str, object]
-    debug: dict[str, object]
 
 
 class SessionCatalogMigrationError(RuntimeError):
     """迁移 fail-closed 总类:旧权威不一致、journal 冲突、恢复无法证明、备份复验失败。"""
-
-
-class _SharedNodeDebugMigrationJournal:
-    """把调试域记录投影到 SessionCatalogMigrator 的同一份 journal。
-
-    该适配器只提供调试迁移器需要的记录端口；真正的 durable 写入仍由
-    ``SessionCatalogMigrator._write_journal_context`` 完成，因此不会再产生
-    ``node-debug-legacy-migration/journal.json`` 第二事实源。
-    """
-
-    def __init__(
-        self,
-        records: dict[str, dict[str, object]],
-        journal_path: Path,
-        save_callback: Callable[[], None],
-    ) -> None:
-        self._records = records
-        self._journal_path = journal_path
-        self._save_callback = save_callback
-
-    @property
-    def journal_path(self) -> Path:
-        return self._journal_path
-
-    def get_record(self, session_id: str) -> dict[str, object] | None:
-        record = self._records.get(session_id)
-        return dict(record) if isinstance(record, dict) else None
-
-    def upsert_record(self, session_id: str, record: dict[str, object]) -> None:
-        self._records[session_id] = dict(record)
-
-    def save(self) -> None:
-        self._save_callback()
-
-
-class _FrozenNodeDebugMigrationSessionIndex:
-    """按 catalog 冻结映射提供旧 Session 节点，禁止调试步骤重新扫盘。"""
-
-    def __init__(
-        self,
-        nodes: list[SessionPhysicalNode],
-        sessions_root: Path,
-        physical_sessions: dict[str, dict[str, object]],
-    ) -> None:
-        self._nodes_by_id = {
-            node.node_id: node for node in nodes if node.kind == "session"
-        }
-        self._sessions_root = sessions_root
-        self._physical_sessions = physical_sessions
-
-    def list_authoritative_nodes(self) -> list[SessionPhysicalNode]:
-        return [self._nodes_by_id[node_id] for node_id in sorted(self._nodes_by_id)]
-
-    def resolve_session_node(self, session_id: str) -> Path:
-        node = self._nodes_by_id.get(session_id)
-        if node is None:
-            raise KeyError(f"冻结调试迁移映射缺少 Session: {session_id}")
-        record = self._physical_sessions.get(session_id)
-        if record is None:
-            raise KeyError(f"冻结调试迁移 physical 记录缺少 Session: {session_id}")
-        relative = record.get("old_relative_path")
-        if not isinstance(relative, str) or not relative:
-            raise RuntimeError(
-                f"冻结调试迁移映射的 old_relative_path 非法: session_id={session_id}"
-            )
-        path = (self._sessions_root / relative).resolve()
-        if not path.is_relative_to(self._sessions_root):
-            raise RuntimeError(
-                f"冻结调试迁移映射越界: session_id={session_id}, path={relative!r}"
-            )
-        return path
 
 
 def _fsync_directory(directory: Path) -> None:
@@ -754,12 +674,6 @@ class SessionCatalogMigrator:
             frozen = self._frozen_nodes_from_journal(journal)
             quarantined = self._quarantined_from_journal(journal)
             context = self._context_from_journal(journal, frozen, quarantined)
-            if context.debug.get("status") != "completed":
-                raise self._fail(
-                    "journal-恢复调试phase",
-                    "catalog journal 已标记 completed，但 debug phase 未完成，"
-                    "拒绝报告 completed",
-                )
             self._verify_post_physical(context, stage="备份复验(completed 短路)")
             return self._result_from_completed_journal(journal)
         assert state in ("preparing", "catalog_rebuilt", "physical_migrated")
@@ -780,166 +694,12 @@ class SessionCatalogMigrator:
         backup = self._backup_from_journal(journal)
         migration_id = self._migration_id_from_journal(journal)
         physical = self._physical_from_journal(journal, frozen, quarantined)
-        debug = self._debug_from_journal(journal, frozen)
         return _MigrationContext(
             backup=backup,
             frozen=frozen,
             quarantined=quarantined,
             migration_id=migration_id,
             physical=physical,
-            debug=debug,
-        )
-
-    def _debug_from_journal(
-        self, journal: dict[str, object], frozen: list[_FrozenNode]
-    ) -> dict[str, object]:
-        """恢复共享 journal 中的调试迁移 phase，并校验冻结 main 映射。"""
-        raw = journal.get("debug")
-        if raw is None:
-            raise self._fail(
-                "journal-恢复调试phase",
-                "catalog journal 缺少必需 debug 节，拒绝按旧格式猜测或双读",
-            )
-        if not isinstance(raw, dict):
-            raise self._fail("journal-恢复调试phase", "debug 节必须是 object")
-        status = raw.get("status")
-        if status not in _DEBUG_PHASE_STATES:
-            raise self._fail(
-                "journal-恢复调试phase",
-                f"debug.status 非法: {status!r}",
-            )
-        owner_map = raw.get("owner_map")
-        records = raw.get("records")
-        if not isinstance(owner_map, dict) or not isinstance(records, dict):
-            raise self._fail(
-                "journal-恢复调试phase",
-                "debug.owner_map/records 必须是 object",
-            )
-        expected_owner_map = {
-            item.node_id: {
-                "thread_id": "main",
-                "main_thread_id": item.main_thread_id,
-            }
-            for item in frozen
-            if item.kind == "session"
-        }
-        if owner_map != expected_owner_map:
-            raise self._fail(
-                "journal-恢复调试phase",
-                "debug owner_map 与冻结 Session→main 映射不一致: "
-                f"expected={expected_owner_map!r}, actual={owner_map!r}",
-            )
-        for session_id, record in records.items():
-            if session_id not in expected_owner_map or not isinstance(record, dict):
-                raise self._fail(
-                    "journal-恢复调试phase",
-                    f"debug.records[{session_id!r}] 非法或不属于冻结 Session",
-                )
-            if record.get("session_id") != session_id:
-                raise self._fail(
-                    "journal-恢复调试phase",
-                    f"debug.records[{session_id!r}].session_id 不一致",
-                )
-            if record.get("status") not in {
-                "migrated",
-                "applying",
-                "skipped",
-                "failed",
-            }:
-                raise self._fail(
-                    "journal-恢复调试phase",
-                    f"debug.records[{session_id!r}].status 非法",
-                )
-            self._validate_debug_record(session_id, record)
-        if status == "completed":
-            if set(records) != set(expected_owner_map):
-                raise self._fail(
-                    "journal-恢复调试phase",
-                    "completed debug phase 必须覆盖全部冻结 Session",
-                )
-            non_terminal = {
-                session_id: record.get("status")
-                for session_id, record in records.items()
-                if record.get("status") not in {"migrated", "skipped"}
-            }
-            if non_terminal:
-                raise self._fail(
-                    "journal-恢复调试phase",
-                    "completed debug phase 含非成功终态记录: "
-                    f"{non_terminal!r}",
-                )
-        return {
-            "status": status,
-            "owner_map": owner_map,
-            "records": records,
-            "summary": raw.get("summary"),
-            "error": raw.get("error"),
-        }
-
-    def _validate_debug_record(
-        self, session_id: str, record: dict[str, object]
-    ) -> None:
-        """校验共享 journal item 的闭集；applying 必须携带完整恢复证据。"""
-        status = record.get("status")
-        if status == "failed" and "manifest_before_base64" not in record:
-            if not isinstance(record.get("reason"), str):
-                raise self._fail(
-                    "journal-恢复调试phase",
-                    f"debug.records[{session_id!r}] failed 缺少 reason",
-                )
-            return
-        if status not in {"applying", "failed"}:
-            return
-        before = record.get("manifest_before")
-        after = record.get("manifest_after")
-        preimage = record.get("manifest_before_base64")
-        configurations = record.get("configurations")
-        if (
-            not self._valid_debug_file_digest(before, expected_file="manifest.json")
-            or not self._valid_debug_file_digest(after, expected_file="manifest.json")
-            or not isinstance(preimage, str)
-            or not isinstance(configurations, list)
-        ):
-            raise self._fail(
-                "journal-恢复调试phase",
-                f"debug.records[{session_id!r}] applying 恢复证据损坏",
-            )
-        files: set[str] = set()
-        for item in configurations:
-            if not isinstance(item, dict):
-                raise self._fail(
-                    "journal-恢复调试phase",
-                    f"debug.records[{session_id!r}] configuration 证据必须是 object",
-                )
-            file = item.get("file")
-            configuration_id = item.get("configuration_id")
-            revision = item.get("revision")
-            if (
-                not isinstance(file, str)
-                or file in files
-                or not isinstance(configuration_id, str)
-                or file != f"{configuration_id}.json"
-                or type(revision) is not int
-                or revision < 1
-                or not self._valid_debug_file_digest(item, expected_file=file)
-            ):
-                raise self._fail(
-                    "journal-恢复调试phase",
-                    f"debug.records[{session_id!r}] configuration 证据损坏",
-                )
-            files.add(file)
-
-    @staticmethod
-    def _valid_debug_file_digest(value: object, *, expected_file: str) -> bool:
-        if not isinstance(value, dict) or value.get("file") != expected_file:
-            return False
-        size = value.get("size_bytes")
-        sha256 = value.get("sha256")
-        return (
-            type(size) is int
-            and size >= 0
-            and isinstance(sha256, str)
-            and re.fullmatch(r"[0-9a-f]{64}", sha256) is not None
         )
 
     def _result_from_completed_journal(
@@ -1102,34 +862,15 @@ class SessionCatalogMigrator:
         frozen, quarantined = self._freeze_and_quarantine(nodes)
         migration_id = uuid.uuid4().hex
         physical = self._build_initial_physical(nodes, frozen, quarantined)
-        debug = self._build_initial_debug(frozen)
         context = _MigrationContext(
             backup=backup,
             frozen=frozen,
             quarantined=quarantined,
             migration_id=migration_id,
             physical=physical,
-            debug=debug,
         )
         self._write_journal_context(context, state="preparing", result=None)
         return await self._run_pipeline(context, entry_state="preparing")
-
-    @staticmethod
-    def _build_initial_debug(frozen: list[_FrozenNode]) -> dict[str, object]:
-        """冻结每个合法 Session 到 canonical main owner 的映射。"""
-        return {
-            "status": "pending",
-            "owner_map": {
-                item.node_id: {
-                    "thread_id": "main",
-                    "main_thread_id": item.main_thread_id,
-                }
-                for item in frozen
-                if item.kind == "session"
-            },
-            "records": {},
-            "summary": None,
-        }
 
     def _build_initial_physical(
         self,
@@ -1542,7 +1283,6 @@ class SessionCatalogMigrator:
                 _quarantined_to_dict(item) for item in context.quarantined
             ],
             "physical": context.physical,
-            "debug": context.debug,
         }
         if result is not None:
             payload["result"] = result
@@ -1570,27 +1310,22 @@ class SessionCatalogMigrator:
                 context, state="catalog_rebuilt", result=None
             )
         # 阶段2:物理迁移前完整复验(R11 语义;物理已开始则只复验 index)。
-        if self._physical_started(context.physical) or self._debug_files_touched(
-            context.debug
-        ):
+        if self._physical_started(context.physical):
             self._verify_index_only(
                 context.backup,
-                stage="备份复验(调试文件已迁移或物理迁移已开始,分层 index-only)",
+                stage="备份复验(物理迁移已开始,分层 index-only)",
             )
         else:
             self._verify_backup_full(context.backup, stage="备份复验(物理迁移前)")
-        # 阶段3:调试域旧目录定点迁移。它使用同一 topology maintenance gate
-        # 和 catalog journal，成功前不得进入物理发布/完成态。
-        await self._run_debug_migration_in_gate(context)
-        # 阶段4:物理树迁移 + session-control 初始化(按 physical 节定点继续)。
+        # 阶段3:物理树迁移 + session-control 初始化(按 physical 节定点继续)。
         self._run_physical_stage(context)
         if entry_state in ("preparing", "catalog_rebuilt"):
             self._write_journal_context(
                 context, state="physical_migrated", result=None
             )
-        # 阶段5:分层终验(index + 新位置 sha/清单 + 隔离/删除布局)。
+        # 阶段4:分层终验(index + 新位置 sha/清单 + 隔离/删除布局)。
         self._verify_post_physical(context, stage="终验(物理迁移后)")
-        # 阶段6:completed。debug phase 非 completed 时前一步已 fail-closed。
+        # 阶段5:completed。
         result = SessionCatalogMigrationResult(
             migrated_session_nodes=sum(
                 1 for item in context.frozen if item.kind == "session"
@@ -1605,99 +1340,6 @@ class SessionCatalogMigrator:
             context, state="completed", result=_result_to_dict(result)
         )
         return result
-
-    @staticmethod
-    def _debug_files_touched(debug: dict[str, object]) -> bool:
-        records = debug.get("records")
-        if not isinstance(records, dict):
-            return False
-        return any(
-            isinstance(record, dict) and record.get("status") == "migrated"
-            for record in records.values()
-        )
-
-    async def _run_debug_migration_in_gate(
-        self, context: _MigrationContext
-    ) -> None:
-        """在共享 maintenance gate 内运行 Node 调试旧数据迁移步骤。"""
-        status = context.debug.get("status")
-        if status == "completed":
-            return
-        if status not in {"pending", "running", "failed"}:
-            raise self._fail(
-                "调试迁移",
-                f"debug phase 状态非法: {status!r}",
-            )
-        raw_records = context.debug.get("records")
-        if not isinstance(raw_records, dict):
-            raise self._fail("调试迁移", "debug.records 必须是 object")
-        physical_sessions, _ = self._typed_physical(context.physical)
-        frozen_sessions = [
-            item for item in context.frozen if item.kind == "session"
-        ]
-        frozen_nodes = [
-            SessionPhysicalNode(
-                node_id=item.node_id,
-                kind="session",
-                path=self._old_path_for(
-                    physical_sessions[item.node_id], stage="调试迁移"
-                ),
-                parent_node_id=item.parent_node_id,
-                name=item.display_name,
-                created_at=item.created_at or datetime.now(UTC),
-                updated_at=item.created_at or datetime.now(UTC),
-            )
-            for item in frozen_sessions
-        ]
-        index = _FrozenNodeDebugMigrationSessionIndex(
-            frozen_nodes,
-            self._resolved_sessions_root,
-            physical_sessions,
-        )
-        context.debug["status"] = "running"
-        self._write_journal_context(context, state="catalog_rebuilt", result=None)
-        shared_journal = _SharedNodeDebugMigrationJournal(
-            cast(dict[str, dict[str, object]], raw_records),
-            self._journal_path,
-            lambda: self._write_journal_context(
-                context, state="catalog_rebuilt", result=None
-            ),
-        )
-        migrator = NodeDebugLegacyDirectoryMigrator(
-            index,
-            cast(NodeDebugLegacyMigrationJournalPort, shared_journal),
-        )
-        gate = NavigationTopologyGate(self._sessions_root)
-        try:
-            async with gate.exclusive():
-                summary = migrator.run()
-        except Exception as error:
-            context.debug["status"] = "failed"
-            context.debug["error"] = str(error)
-            last_summary = migrator.last_summary
-            if last_summary is not None:
-                context.debug["summary"] = self._debug_summary_to_dict(last_summary)
-            self._write_journal_context(context, state="catalog_rebuilt", result=None)
-            raise self._fail(
-                "调试迁移",
-                "Node 调试旧目录迁移失败，catalog 不得进入 completed: "
-                f"{error}",
-            ) from error
-        context.debug["status"] = "completed"
-        context.debug["summary"] = self._debug_summary_to_dict(summary)
-        context.debug.pop("error", None)
-        self._write_journal_context(context, state="catalog_rebuilt", result=None)
-
-    @staticmethod
-    def _debug_summary_to_dict(
-        summary: NodeDebugLegacyMigrationSummary,
-    ) -> dict[str, object]:
-        return {
-            "migrated": list(summary.migrated),
-            "skipped": list(summary.skipped),
-            "noop": list(summary.noop),
-            "failed": [list(item) for item in summary.failed],
-        }
 
     async def _rebuild_catalog_in_gate(self, context: _MigrationContext) -> None:
         """gate 内幂等重建 SQLite 目标树并全量对账(复用切片1 语义)。"""
