@@ -48,6 +48,10 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 from app.core.identifier import create_prefixed_id
+from app.core.session_catalog_legacy_reader import (
+    SessionCatalogLegacyReader,
+    SessionCatalogLegacyReaderError,
+)
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -57,7 +61,6 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import NavigationTopologyGate
-from app.core.session_paths import SessionPathResolver
 from app.core.session_tree.support import (
     FOLDER_MANIFEST_NAME,
     SESSION_MANIFEST_NAME,
@@ -946,24 +949,26 @@ class SessionCatalogMigrator:
                 stage, f"旧权威 index 无法读取: {self._index_path}: {error}"
             ) from error
         version = raw.get("schema_version") if isinstance(raw, dict) else None
-        if version != SessionPathResolver.INDEX_SCHEMA_VERSION:
+        if version != SessionCatalogLegacyReader.INDEX_SCHEMA_VERSION:
             raise self._fail(
                 stage,
                 "旧权威 index schema 版本非法: "
                 f"path={self._index_path}, schema_version={version!r}, "
-                f"expected={SessionPathResolver.INDEX_SCHEMA_VERSION}",
+                f"expected={SessionCatalogLegacyReader.INDEX_SCHEMA_VERSION}",
             )
 
     def _read_old_authority(self) -> list[SessionPhysicalNode]:
-        """通过旧权威 resolver 读取并校验旧树;resolver fail-closed 错误包迁移语义。"""
-        resolver = SessionPathResolver(self._sessions_root)
+        """只读读取旧权威 index 与物理树；失败时原树保持不变。"""
+        reader = SessionCatalogLegacyReader(
+            self._sessions_root,
+            self._index_path,
+        )
         try:
-            resolver.initialize()
-            return resolver.list_nodes()
-        except (RuntimeError, TypeError, ValueError, OSError) as error:
+            return reader.read()
+        except (SessionCatalogLegacyReaderError, RuntimeError, TypeError, ValueError, OSError) as error:
             raise self._fail(
                 "读取旧权威",
-                "旧权威 resolver fail-closed 校验未通过(index 内部一致性或物理树"
+                "旧权威只读 reader fail-closed 校验未通过(index 内部一致性或物理树"
                 f"对账失败),旧树保持原样: {error}",
             ) from error
 
@@ -1196,9 +1201,9 @@ class SessionCatalogMigrator:
         判定顺序(拓扑序保证 parent 先判):级联 parent_quarantined →
         illegal_id → illegal_date(folder 无 created_at 要求,不检查)。
 
-        口径记录(审查 N3):created_at 缺失/无法解析在 resolver 加载层
-        (`_parse_optional_datetime` 要求非空可解析,``SessionPathResolver``
-        对解析失败直接 fail closed)已被拒绝,到达本分类的 session
+        口径记录(审查 N3):created_at 缺失/无法解析在旧权威 reader 加载层
+        (`_parse_optional_datetime` 要求非空可解析,对解析失败直接 fail
+        closed)已被拒绝,到达本分类的 session
         created_at 必为已解析的 datetime;本迁移机的 ``illegal_date``
         quarantine 只覆盖 naive(无 tzinfo)与无法定位 UTC 日期桶的场景。
         """
