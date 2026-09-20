@@ -145,3 +145,38 @@ def test_metadata_facet_payload_hides_locator_and_ignored_fields(layered_workspa
         "entry_identity": entry.entry_identity,
     }
     assert metadata.source_lineage[0][0] == "skill-source:workspace:shared"
+
+
+def test_published_snapshot_does_not_reresolve_current_file(layered_workspace):
+    """已发布快照是冻结事实：当前 URI 指向的文件变化不得影响旧 snapshot。
+
+    OpenSpec add-context-injection-lifecycle 6.6：历史 snapshot 不按当前
+    URI 重新解析正文；URI 是 locator/provenance，不是内容来源。
+    """
+    registry = ResourceRegistry()
+    catalog = _build(layered_workspace, registry)
+    entry = next(item for item in catalog.entries if item.name == "shared")
+    frozen = registry.snapshot(entry.activation_resource_id)
+    frozen_revision = frozen.revision
+    frozen_payload = frozen.payload
+
+    # 当前 display URI 指向的文件被整篇改写。
+    skill_file = layered_workspace / ".boxteam" / "skills" / "shared" / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: shared\ndescription: 改写版本\n---\nrewritten body\n",
+        encoding="utf-8",
+    )
+
+    # 不重新 build/发布时，registry 只返回已发布快照；
+    # 不得按当前 URI 重新读取正文（对象同一性 + revision + payload 全部不变）。
+    reread = registry.snapshot(entry.activation_resource_id)
+    assert reread is frozen
+    assert reread.revision == frozen_revision
+    assert reread.payload == frozen_payload
+
+    # 只有显式 rebuild 才发布新 revision；先前持有的 snapshot 对象保持冻结。
+    rebuilt = _build(layered_workspace, registry)
+    rebuilt_entry = next(item for item in rebuilt.entries if item.name == "shared")
+    assert rebuilt_entry.activation_revision != frozen_revision
+    assert frozen.revision == frozen_revision
+    assert frozen.payload == frozen_payload

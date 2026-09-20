@@ -131,6 +131,66 @@ def test_build_workspace_skill_catalog_prefers_workspace_over_gateway(
     assert entry.display_uri.startswith("boxteam://workspace/")
 
 
+def test_gateway_layer_build_writes_nothing_into_workspace_storage(
+    tmp_path,
+    monkeypatch,
+):
+    """Gateway 全局 Skill catalog 解析不写工作区 Session 存储。
+
+    OpenSpec add-context-injection-lifecycle 4.1/6.6：Gateway 负责全局
+    catalog 发现，但不得写工作区 Session 状态；workspace bootstrap 身份
+    （workspace-identity.json）是允许的工作区初始化副作用，不属于
+    Session 存储。
+    """
+    boxteam_home = tmp_path / "boxteam-home"
+    gateway_skill = boxteam_home / "skills" / "shared"
+    gateway_skill.mkdir(parents=True)
+    (gateway_skill / "SKILL.md").write_text(
+        "---\nname: shared\ndescription: Gateway skill\n---\n# shared\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+
+    def workspace_storage_tree():
+        root = tmp_path / ".boxteam"
+        if not root.exists():
+            return None
+        return {
+            str(path.relative_to(root)): (
+                path.read_bytes() if path.is_file() else None
+            )
+            for path in sorted(root.rglob("*"))
+        }
+
+    session_storage_paths = (
+        tmp_path / ".boxteam" / "sessions",
+        tmp_path / ".boxteam" / "navigation",
+    )
+
+    def session_storage_snapshot():
+        return {
+            str(path.relative_to(tmp_path)): (
+                path.read_bytes() if path.is_file() else None
+            )
+            for path in sorted(tmp_path.glob(".boxteam/**/*.sqlite"))
+        }
+
+    before_sqlite = session_storage_snapshot()
+    catalog = build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+    assert len(catalog.entries) == 1
+    assert catalog.entries[0].layer == "gateway"
+
+    # catalog 解析读取了 gateway 层，但 Session 存储未被创建或修改。
+    for session_path in session_storage_paths:
+        assert not session_path.exists()
+    assert session_storage_snapshot() == before_sqlite
+    # 允许的 bootstrap 副作用只有 workspace 身份文件本身。
+    created = workspace_storage_tree()
+    assert created is not None
+    assert set(created) == {"workspace-identity.json"}
+    assert not (tmp_path / ".boxteam" / "sessions").exists()
+
+
 def test_build_workspace_skill_catalog_uses_bundled_manifest(tmp_path, monkeypatch):
     monkeypatch.setenv("BOXTEAM_DEFAULT_SKILL_GROUPS", '["gateway-context"]')
 
