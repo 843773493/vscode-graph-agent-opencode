@@ -10,8 +10,8 @@
 - [x] 2.1 将NodeDebugService运行时、断点、活动方案、动作索引从裸session迁为精确`(session_id, thread_id)`，保留Workspace级debug模板和每thread动态Inspector端口；受检thread catalog/path resolver定位`<thread_node>/debug/node/`，不得拼路径、扫盘或按session猜目标；Web/API独立调试mutation遵守Session生命周期准入
 - [x] 2.2 保留并验证现有普通/条件/命中次数断点，`hitCondition`为正整数且在本次进程内计数，重启重置；信封目标参数不退化
 - [x] 2.3 保留Node条件表达式实现的不暂停Logpoint、`logMessage`插值/条件/`hitCondition`及可识别输出；Node不得返回伪“不支持”，其它缺少能力的adapter才明确拒绝，补充真实Inspector回归
-- [ ] 2.4 将归属manifest、运行状态和动作审计绑定实际SessionThread并显式校验`session_id`、`thread_id`；可移植方案正文不含owner，由目标目录/manifest关联。同Workspace复制只按公开fork固定模式，source方案manifest/revision/bytes/hash进入同一SourceCopySnapshot；target发布前校验入口、工作目录、每个断点路径、有效profile/adapter/runtime并按需映射本地ID/lineage，失败使整个fork不可见，且不复制活动指针。Agent动作记录tool_call/ExtensionCatalogBindingRef，Web/API动作记录principal/request_id；同Session main/child不得共享活动状态、断点或动作时间线
-- [ ] 2.5 调试domain提供旧Session`debug/node/`的静态接线显式迁移步骤，接入itemized共享maintenance gate/journal并按冻结映射定点归入main；校验文件bytes/hash、方案ID/revision/lineage、恢复/失败原件，普通runtime无旧目录alias；公开fork限同Workspace，跨Workspace方案export/import留待独立授权协议，migration-only child copy不自动携带方案；不复制进程/端口且不停止source进程
+- [x] 2.4 将归属manifest、运行状态和动作审计绑定实际SessionThread并显式校验`session_id`、`thread_id`；可移植方案正文不含owner，由目标目录/manifest关联。同Workspace复制只按公开fork固定模式，source方案manifest/revision/bytes/hash进入同一SourceCopySnapshot；target发布前校验入口、工作目录、每个断点路径、有效profile/adapter/runtime并按需映射本地ID/lineage，失败使整个fork不可见，且不复制活动指针。Agent动作记录tool_call/ExtensionCatalogBindingRef，Web/API动作记录principal/request_id；同Session main/child不得共享活动状态、断点或动作时间线
+- [x] 2.5 调试domain提供旧Session`debug/node/`的静态接线显式迁移步骤，接入itemized共享maintenance gate/journal并按冻结映射定点归入main；校验文件bytes/hash、方案ID/revision/lineage、恢复/失败原件，普通runtime无旧目录alias；公开fork限同Workspace，跨Workspace方案export/import留待独立授权协议，migration-only child copy不自动携带方案；不复制进程/端口且不停止source进程
 
 ## 3. Agent 调试工具组
 
@@ -35,7 +35,7 @@
 - [x] 5.3 使用真实 Node Inspector 验证断点暂停、继续、单步、调用栈、变量和表达式求值
 - [x] 5.4 验证条件/命中次数断点、Node Logpoint输出且不暂停、插值错误、其它不支持adapter的明确拒绝、非法/未知参数和无暂停上下文错误；同时验收变量/求值/Logpoint输出脱敏及真实失败与原tool_call_id配对
 - [ ] 5.5 验证同一Session main/child及跨Session两个以上thread的进程、动态/冲突固定端口、断点、方案、状态、动作审计与stop/restart严格隔离；Session产品API只到main，显式child API校验归属；fake clock覆盖`launch_pending|starting|running|paused|stopping`跨过30分钟仍resident、终态且lease结清后重新计时、无阻断后cold、stop失败/重启`reconcile_required`、thread删除定点停止及旧generation callback拒绝。用注入phase barrier在claim提交后spawn前、spawn后登记PID前和stop核实前终止backend并重启，验证nonce/OS起始身份、PID/端口复用不误接管/误杀、同一实例只恢复一次及未知状态始终阻断
-- [ ] 5.6 验证Workspace debug模板/profile覆盖和旧配置无debug字段时的行为，并在itemized共享maintenance gate/journal下核对旧Session方案→main thread的bytes/hash、ID/revision/lineage、失败/重试/原件保留；同Workspace`context_fork`只复制capture时活动方案、`history_prefix_fork`不复制方案、`full_rollout_copy`复制全部当前方案、migration-only child copy不自动复制。冻结目标有效debug配置revision/hash并逐项重验入口/工作目录/全部断点路径和profile/adapter/runtime，发布前配置漂移或方案缺失使整个fork不发布，目标ID/lineage映射且不带active指针；崩溃恢复不半发布，跨Workspace公开copy明确拒绝，不复制活连接且不停止source进程；history/Web刷新与无旧路径alias
+- [x] 5.6 验证Workspace debug模板/profile覆盖和旧配置无debug字段时的行为，并在itemized共享maintenance gate/journal下核对旧Session方案→main thread的bytes/hash、ID/revision/lineage、失败/重试/原件保留；同Workspace`context_fork`只复制capture时活动方案、`history_prefix_fork`不复制方案、`full_rollout_copy`复制全部当前方案、migration-only child copy不自动复制。冻结目标有效debug配置revision/hash并逐项重验入口/工作目录/全部断点路径和profile/adapter/runtime，发布前配置漂移或方案缺失使整个fork不发布，目标ID/lineage映射且不带active指针；崩溃恢复不半发布，跨Workspace公开copy明确拒绝，不复制活连接且不停止source进程；history/Web刷新与无旧路径alias
 
 ## 6. 验证与交付
 
