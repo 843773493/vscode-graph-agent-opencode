@@ -94,6 +94,33 @@ export function useChildThreadLoader({
     void refresh();
   }, [enabled, refresh]);
 
+  // 列表轮询属于加载器生命周期；页面不可见时跳过，且不允许请求重叠。
+  useEffect(() => {
+    if (!enabled || !sessionId) return undefined;
+    let disposed = false;
+    let pollInFlight = false;
+    const poll = async () => {
+      if (
+        disposed
+        || pollInFlight
+        || document.visibilityState !== "visible"
+      ) {
+        return;
+      }
+      pollInFlight = true;
+      try {
+        await refresh({ silent: true });
+      } finally {
+        pollInFlight = false;
+      }
+    };
+    const timerId = window.setInterval(() => void poll(), 5000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timerId);
+    };
+  }, [enabled, refresh, sessionId]);
+
   return {
     ...snapshot,
     refresh,

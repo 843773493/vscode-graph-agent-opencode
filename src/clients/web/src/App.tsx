@@ -627,39 +627,6 @@ export default function AppShell() {
     setStatus(threadId === "main" ? "已切换到主线程调试" : `已切换调试 owner: ${threadId}`);
   }, [extensionWindowRequested, persistLayoutSettings, selectNodeDebugThread, setStatus]);
 
-  // 子会话线程静默轮询：对齐会话资源面板的轮询口径（5s，页面不可见时跳过）。
-  useEffect(() => {
-    if (!childThreadPanelActive || !activeSession?.session_id) {
-      return;
-    }
-    let disposed = false;
-    let pollInFlight = false;
-    const poll = async (silent: boolean) => {
-      if (
-        disposed
-        || pollInFlight
-        || (silent && document.visibilityState !== "visible")
-      ) {
-        return;
-      }
-      pollInFlight = true;
-      try {
-        await childThreads.refresh({ silent });
-      } finally {
-        pollInFlight = false;
-      }
-    };
-    const timerId = window.setInterval(() => void poll(true), 5000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timerId);
-    };
-  }, [
-    activeSession?.session_id,
-    childThreadPanelActive,
-    childThreads.refresh,
-  ]);
-
   const sharedPreviewTab = auxiliaryTab === "files" || auxiliaryTab === "changes" || (
     auxiliaryTab === "debug" && (extensionWindowRequested || extensionWindowFallback)
   );
