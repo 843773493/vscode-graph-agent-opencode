@@ -2,7 +2,7 @@ import type { NodeDebugController } from "../../hooks/useNodeDebugController";
 import type { Session } from "../../types/backend";
 import NodeDebugPanel from "./NodeDebugPanel";
 
-interface DebugPanelProps {
+interface NodeDebugWorkbenchProps {
   apiPort: number;
   workspaceId: string | null;
   sessionId: string | null;
@@ -17,7 +17,7 @@ interface DebugPanelProps {
   onStatusChange: (message: string) => void;
 }
 
-export default function DebugPanel({
+export default function NodeDebugWorkbench({
   apiPort,
   workspaceId,
   sessionId,
@@ -30,7 +30,7 @@ export default function DebugPanel({
   onSelectThread,
   onOpenWorkspacePath,
   onStatusChange,
-}: DebugPanelProps) {
+}: NodeDebugWorkbenchProps) {
   return (
     <aside className="debug-panel" aria-label="目标程序调试工作台">
       <header className="debug-workbench-header">

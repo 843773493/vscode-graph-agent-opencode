@@ -7,7 +7,7 @@ import type {
 import type { WorkspaceFileSelection } from "../../utils/workspaceFileReferences";
 import NodeDebugBreakpointGutter, {
   type NodeDebugBreakpointDefinition,
-} from "./NodeDebugBreakpointGutter";
+} from "../nodeDebug/NodeDebugBreakpointGutter";
 import WorkspaceMarkdownPreview from "./preview/WorkspaceMarkdownPreview";
 
 export type WorkspacePreviewTab =

@@ -19,7 +19,7 @@ import Toolbar, { type WorkbenchView } from "./components/Toolbar";
 import GatewayControlCenter from "./components/workspace/GatewayControlCenter";
 import WorkspaceEditorHeader from "./components/workspace/WorkspaceEditorHeader";
 import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";
-import DebugPanel from "./components/workspace/DebugPanel";
+import NodeDebugWorkbench from "./components/nodeDebug/NodeDebugWorkbench";
 import WorkspaceRuntimePreviewArea, {
   type WorkspaceRuntimePreviewTab,
 } from "./components/workspace/WorkspaceRuntimePreviewArea";
@@ -694,7 +694,7 @@ export default function AppShell() {
   const auxiliaryLeftVisible = sharedPreviewTab && sharedPreviewVisible;
   const nodeDebugActiveFrame = nodeDebugController.state?.call_stack?.[0] ?? null;
   const debugPanel = (
-    <DebugPanel
+    <NodeDebugWorkbench
       apiPort={resolvedApiPort}
       workspaceId={activeSessionWorkspaceId}
       sessionId={activeSession?.session_id ?? null}
