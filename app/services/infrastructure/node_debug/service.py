@@ -73,10 +73,12 @@ from app.services.infrastructure.node_debug.launch_orchestrator import (
     NodeDebugLaunchOrchestrator,
     NodeDebugLaunchRequest,
     NodeDebugLaunchSelection,
-    NodeDebugRuntimeConfig,
 )
 from app.services.infrastructure.node_debug.process_lifecycle import (
     NodeDebugProcessLifecycle,
+)
+from app.services.infrastructure.node_debug.runtime_config import (
+    NodeDebugRuntimeConfig,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.session_admission import (
