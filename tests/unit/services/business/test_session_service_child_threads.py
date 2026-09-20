@@ -82,7 +82,9 @@ def _insert_child_thread(
             ),
         )
     if admission_state is not None:
-        binding_id, job_id = derive_initial_execution_identity(delegation_id or thread_id)
+        binding_id, job_id = derive_initial_execution_identity(
+            delegation_id or thread_id
+        )
         session_row = connection.execute(
             "SELECT revision FROM collaboration_ledger WHERE id = 1"
         ).fetchone()
@@ -151,7 +153,61 @@ async def test_list_child_threads_projects_control_store_state(
     assert item.title == "委派：做一件事"
     assert item.collaboration_state == "published"
     assert item.admission_state == "pending"
+    assert item.status == "pending"
     assert item.role == "delegated_subagent"
+
+
+async def test_list_child_threads_derives_one_authoritative_status(
+    service: SessionService,
+) -> None:
+    parent = await service.create(SessionCreateRequest(title="状态派生"))
+    control = _control_for(service, parent.session_id)
+    try:
+        _insert_child_thread(
+            control,
+            thread_id="thr_" + "a" * 32,
+            created_at="2026-06-01T12:00:00+00:00",
+            delegation_id="del_" + "a" * 32,
+            subagent_type=SUBAGENT_TYPE,
+            title="运行中",
+            state="published",
+            admission_state="bound",
+            coordinator_session_id=parent.session_id,
+        )
+        _insert_child_thread(
+            control,
+            thread_id="thr_" + "b" * 32,
+            created_at="2026-06-01T12:01:00+00:00",
+            delegation_id="del_" + "b" * 32,
+            subagent_type=SUBAGENT_TYPE,
+            title="已取消",
+            state="cancelled",
+            admission_state="pending",
+            coordinator_session_id=parent.session_id,
+        )
+        _insert_child_thread(
+            control,
+            thread_id="thr_" + "c" * 32,
+            created_at="2026-06-01T12:02:00+00:00",
+            delegation_id=None,
+            subagent_type=None,
+            title=None,
+            state="registering",
+            admission_state=None,
+        )
+    finally:
+        control.close()
+
+    result = await service.list_child_threads(parent.session_id)
+
+    assert {
+        item.thread_id: item.status
+        for item in result.items
+    } == {
+        "thr_" + "a" * 32: "running",
+        "thr_" + "b" * 32: "failed",
+        "thr_" + "c" * 32: "pending",
+    }
 
 
 async def test_list_child_threads_empty_without_control_database(
@@ -211,6 +267,7 @@ async def test_list_child_threads_orders_by_created_at_desc(
     # 无 member/intent 的 child row 仍可见，协作/执行字段为 None。
     assert result.items[0].collaboration_state is None
     assert result.items[0].admission_state is None
+    assert result.items[0].status == "pending"
 
 
 async def test_list_child_threads_filters_by_coordinator_session(
@@ -253,4 +310,3 @@ async def test_list_child_threads_filters_by_coordinator_session(
     foreign = [item for item in result.items if item.thread_id == "thr_" + "e" * 32]
     assert own[0].collaboration_state == "published"
     assert foreign[0].collaboration_state is None
-

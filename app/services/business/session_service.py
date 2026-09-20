@@ -349,6 +349,13 @@ class SessionService:
                     title=member.title if member is not None else None,
                     collaboration_state=(member.state if member is not None else None),
                     admission_state=(intent.state if intent is not None else None),
+                    status=(
+                        "running"
+                        if intent is not None and intent.state == "bound"
+                        else "failed"
+                        if member is not None and member.state == "cancelled"
+                        else "pending"
+                    ),
                 )
             )
         items.sort(key=lambda item: (item.created_at, item.thread_id), reverse=True)

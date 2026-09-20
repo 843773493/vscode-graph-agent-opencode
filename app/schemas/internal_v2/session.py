@@ -11,6 +11,7 @@ from .session_resource import SessionResourceKind
 TitleSource = Literal["default", "user", "auto"]
 SessionKind = Literal["normal", "context_fork"]
 SessionForkMode = Literal["context_fork", "history_prefix_fork", "full_rollout_copy"]
+ChildThreadStatus = Literal["pending", "running", "failed"]
 
 
 class SessionGenerationOriginDTO(BaseModel):
@@ -80,8 +81,8 @@ class ChildThreadSummaryDTO(BaseModel):
 
     数据来自 owner session-control.sqlite 的 thread_catalog（child
     row）+ collaboration ledger/member + initial execution intent；
-    admission_state 为 pending|bound（R25 只会看到 pending，bound 由
-    R26 binder 推进）。
+    status 是面向调用方的唯一运行状态；admission_state 与
+    collaboration_state 继续保留为诊断字段。
     """
 
     thread_id: str
@@ -92,6 +93,7 @@ class ChildThreadSummaryDTO(BaseModel):
     title: str | None = None
     collaboration_state: str | None = None
     admission_state: str | None = None
+    status: ChildThreadStatus
 
 
 class ChildThreadListDTO(BaseModel):

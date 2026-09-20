@@ -110,6 +110,7 @@ export interface ChildThreadSummaryDTO {
   title?: string | undefined;
   collaboration_state?: string | undefined;
   admission_state?: string | undefined;
+  status: string;
 }
 
 export interface CursorPage {
@@ -2386,6 +2387,7 @@ function createBaseChildThreadSummaryDTO(): ChildThreadSummaryDTO {
     title: undefined,
     collaboration_state: undefined,
     admission_state: undefined,
+    status: "",
   };
 }
 
@@ -2402,6 +2404,7 @@ export const ChildThreadSummaryDTO: MessageFns<ChildThreadSummaryDTO> = {
         ? globalThis.String(object.collaboration_state)
         : undefined,
       admission_state: isSet(object.admission_state) ? globalThis.String(object.admission_state) : undefined,
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
     };
   },
 
@@ -2431,6 +2434,9 @@ export const ChildThreadSummaryDTO: MessageFns<ChildThreadSummaryDTO> = {
     if (message.admission_state !== undefined) {
       obj.admission_state = message.admission_state;
     }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
     return obj;
   },
 
@@ -2447,6 +2453,7 @@ export const ChildThreadSummaryDTO: MessageFns<ChildThreadSummaryDTO> = {
     message.title = object.title ?? undefined;
     message.collaboration_state = object.collaboration_state ?? undefined;
     message.admission_state = object.admission_state ?? undefined;
+    message.status = object.status ?? "";
     return message;
   },
 };

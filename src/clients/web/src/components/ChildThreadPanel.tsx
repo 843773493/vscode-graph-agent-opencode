@@ -146,17 +146,12 @@ export default function ChildThreadPanel({
           ) : null}
           {threads.map((thread) => {
             const isCurrent = thread.thread_id === activeThreadId;
-            const status = thread.admission_state === "bound"
-              ? "running"
-              : thread.collaboration_state === "cancelled"
-                ? "failed"
-                : "pending";
             return (
               <article
                 key={thread.thread_id}
                 className="child-thread-item"
                 role="listitem"
-                data-start-status={status}
+                data-start-status={thread.status}
               >
                 <div className="child-thread-row">
                   <button
@@ -176,9 +171,9 @@ export default function ChildThreadPanel({
                       </small>
                     </span>
                     <span
-                      className={`child-thread-status ${childThreadStatusClass(status)}`}
+                      className={`child-thread-status ${childThreadStatusClass(thread.status)}`}
                     >
-                      {isCurrent ? "当前调试" : childThreadStatusLabel(status)}
+                      {isCurrent ? "当前调试" : childThreadStatusLabel(thread.status)}
                     </span>
                   </button>
                   <button

@@ -31,6 +31,7 @@ function thread(
     created_at: "2026-09-15T12:00:00Z",
     collaboration_state: "published",
     admission_state: "bound",
+    status: "running",
     subagent_type: "general-purpose",
     ...overrides,
   };
@@ -62,11 +63,13 @@ describe("子会话线程面板", () => {
           thread(1),
           thread(2, {
             admission_state: "pending",
+            status: "pending",
             title: "委派：等待中任务",
           }),
           thread(3, {
             collaboration_state: "cancelled",
             admission_state: "pending",
+            status: "failed",
           }),
         ]}
         total={3}
@@ -220,16 +223,12 @@ describe("子会话线程面板", () => {
 });
 
 describe("子会话线程状态展示口径", () => {
-  test("已知状态映射中文标签，未知状态透出原始值", () => {
+  test("协议状态映射中文标签和配色", () => {
     expect(childThreadStatusLabel("pending")).toBe("等待启动");
     expect(childThreadStatusLabel("running")).toBe("运行中");
     expect(childThreadStatusLabel("failed")).toBe("启动失败");
-    expect(childThreadStatusLabel("future_status")).toBe("future_status");
     expect(childThreadStatusClass("pending")).toBe("child-thread-status-pending");
     expect(childThreadStatusClass("running")).toBe("child-thread-status-running");
     expect(childThreadStatusClass("failed")).toBe("child-thread-status-failed");
-    expect(childThreadStatusClass("future_status")).toBe(
-      "child-thread-status-unknown",
-    );
   });
 });

@@ -44,6 +44,7 @@ describe("child thread 列表 API", () => {
               created_at: "2026-09-15T12:00:00Z",
               collaboration_state: "published",
               admission_state: "bound",
+              status: "running",
               subagent_type: "general-purpose",
             },
           ],
@@ -58,11 +59,31 @@ describe("child thread 列表 API", () => {
     expect(list.total).toBe(1);
     expect(list.items[0]?.thread_id).toBe("thr_child_1");
     expect(list.items[0]?.admission_state).toBe("bound");
+    expect(list.items[0]?.status).toBe("running");
     expect(requestUrl).toContain(
       "/api/v1/sessions/ses%2Fneeds%20encoding/child-threads",
     );
     expect(new Headers(requestInit?.headers).get("X-BoxTeam-Workspace-Id"))
       .toBe("workspace-1");
+  });
+
+  test("协议状态未知时直接失败", async () => {
+    installFetchMock(() => Response.json({
+      data: {
+        parent_session_id: "ses_parent",
+        items: [{
+          thread_id: "thr_child_1",
+          created_at: "2026-09-15T12:00:00Z",
+          status: "stalled",
+        }],
+        total: 1,
+      },
+      request_id: "req-child-threads-invalid-status",
+    }));
+
+    await expect(
+      listChildThreads(48_304, "ses_parent", "workspace-1"),
+    ).rejects.toThrow("child thread status 协议值无效");
   });
 
   test("404：父会话不存在时透明抛出 HttpRequestError", async () => {

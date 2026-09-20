@@ -117,6 +117,7 @@ async def test_child_threads_api_returns_thread_payload(
     assert item.title == "分析 child"
     assert item.subagent_type == SUBAGENT_TYPE
     assert item.collaboration_state == "published"
+    assert item.status == "pending"
     assert item.created_at is not None
 
 
@@ -169,5 +170,5 @@ def test_child_threads_api_http_envelope_and_auth(
     assert data["total"] == 1
     assert data["items"][0]["thread_id"] == thread_id
     assert data["items"][0]["collaboration_state"] == "published"
+    assert data["items"][0]["status"] == "pending"
     assert "session_id" not in data["items"][0]
-

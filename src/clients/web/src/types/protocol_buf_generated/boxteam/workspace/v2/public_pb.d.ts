@@ -471,6 +471,11 @@ export declare type ChildThreadSummaryDTO = Message<"boxteam.workspace.v2.ChildT
    * @generated from field: optional string admission_state = 8;
    */
   admissionState?: string | undefined;
+
+  /**
+   * @generated from field: string status = 9;
+   */
+  status: string;
 };
 
 /**

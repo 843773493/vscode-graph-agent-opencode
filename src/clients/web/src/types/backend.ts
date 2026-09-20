@@ -7,6 +7,7 @@ export type {
   AgentStateMessages,
   ControlAction,
   ControlScope,
+  ChildThreadStatus,
   ChildThreadList,
   ChildThreadSummary,
   ExtensionCatalogBindingAudit,

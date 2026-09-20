@@ -110,6 +110,7 @@ message ChildThreadSummaryDTO {
   optional string title = 6;
   optional string collaboration_state = 7;
   optional string admission_state = 8;
+  string status = 9;
 }
 
 message CursorPage {

@@ -35,6 +35,15 @@ export type ControlAction =
   | "append_instruction"
   | "retry";
 
+export type ChildThreadStatus = "pending" | "running" | "failed";
+
+export function parseChildThreadStatus(value: unknown): ChildThreadStatus {
+  if (value === "pending" || value === "running" || value === "failed") {
+    return value;
+  }
+  throw new Error(`child thread status 协议值无效: ${String(value)}`);
+}
+
 export type ChildThreadSummary = Omit<
   WorkspaceProtocol.ChildThreadSummaryDTO,
   | "created_at"
@@ -44,6 +53,7 @@ export type ChildThreadSummary = Omit<
   | "title"
   | "collaboration_state"
   | "admission_state"
+  | "status"
 > & {
   created_at: string;
   delegation_id?: string | null;
@@ -52,6 +62,7 @@ export type ChildThreadSummary = Omit<
   title?: string | null;
   collaboration_state?: string | null;
   admission_state?: string | null;
+  status: ChildThreadStatus;
 };
 export type ChildThreadList = Omit<WorkspaceProtocol.ChildThreadListDTO, "items"> & {
   items: ChildThreadSummary[];

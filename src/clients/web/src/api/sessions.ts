@@ -1,6 +1,7 @@
 import type {
   APIResponse,
   ChildThreadList,
+  ChildThreadSummary,
   CursorPage,
   DeleteSessionResult,
   Session,
@@ -8,6 +9,7 @@ import type {
   SessionInformationSnapshot,
   SessionUpdateRequest,
 } from "../types/backend";
+import { parseChildThreadStatus } from "../types/protocol";
 import {
   DEFAULT_API_REQUEST_TIMEOUT_MS,
   requestJson,
@@ -16,6 +18,39 @@ import {
 } from "./http";
 
 export const DEFAULT_SESSION_TITLE = "新会话";
+
+function parseChildThreadList(value: unknown): ChildThreadList {
+  if (!value || typeof value !== "object") {
+    throw new Error("child thread 协议响应必须是对象");
+  }
+  const record = value as {
+    parent_session_id?: unknown;
+    items?: unknown;
+    total?: unknown;
+  };
+  if (
+    typeof record.parent_session_id !== "string"
+    || !Array.isArray(record.items)
+    || typeof record.total !== "number"
+  ) {
+    throw new Error("child thread 协议响应缺少 parent_session_id、items 或 total");
+  }
+  const items = record.items.map((item, index): ChildThreadSummary => {
+    if (!item || typeof item !== "object") {
+      throw new Error(`child thread 协议项 ${index} 必须是对象`);
+    }
+    const child = item as Record<string, unknown>;
+    return {
+      ...child,
+      status: parseChildThreadStatus(child.status),
+    } as ChildThreadSummary;
+  });
+  return {
+    parent_session_id: record.parent_session_id,
+    items,
+    total: record.total,
+  };
+}
 
 function normalizePageResult<T>(value: unknown): CursorPage<T> {
   if (!value || typeof value !== "object") {
@@ -89,11 +124,13 @@ export async function listChildThreads(
   sessionId: string,
   workspaceId?: string | null,
 ): Promise<ChildThreadList> {
-  return unwrapApiData(
-    await requestJson<APIResponse<ChildThreadList>>(
-      port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/child-threads`,
-      { headers: workspaceHeader(workspaceId) },
+  return parseChildThreadList(
+    unwrapApiData(
+      await requestJson<APIResponse<unknown>>(
+        port,
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/child-threads`,
+        { headers: workspaceHeader(workspaceId) },
+      ),
     ),
   );
 }
