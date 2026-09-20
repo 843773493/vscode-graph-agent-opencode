@@ -34,12 +34,12 @@
 - [x] 5.2 通过固定`invoke_extension_tool`与sealed目录binding验收16个内层目标名/兼容参数schema、指定`debugConfigurationId`与当前thread活动方案/无方案创建顺序、普通/日志点第N次命中、未知参数明确失败；补测路径相对/绝对归一化相等可启动、路径/profile冲突明确错误且旧进程/方案不变、无效ID先报not-found。Provider `tools`不含16个直接定义，启停前后ToolSetRef和同epoch父wire bytes不变；直接`ainvoke`仅作单元/契约覆盖
 - [x] 5.3 使用真实 Node Inspector 验证断点暂停、继续、单步、调用栈、变量和表达式求值
 - [x] 5.4 验证条件/命中次数断点、Node Logpoint输出且不暂停、插值错误、其它不支持adapter的明确拒绝、非法/未知参数和无暂停上下文错误；同时验收变量/求值/Logpoint输出脱敏及真实失败与原tool_call_id配对
-- [ ] 5.5 验证同一Session main/child及跨Session两个以上thread的进程、动态/冲突固定端口、断点、方案、状态、动作审计与stop/restart严格隔离；Session产品API只到main，显式child API校验归属；fake clock覆盖`launch_pending|starting|running|paused|stopping`跨过30分钟仍resident、终态且lease结清后重新计时、无阻断后cold、stop失败/重启`reconcile_required`、thread删除定点停止及旧generation callback拒绝。用注入phase barrier在claim提交后spawn前、spawn后登记PID前和stop核实前终止backend并重启，验证nonce/OS起始身份、PID/端口复用不误接管/误杀、同一实例只恢复一次及未知状态始终阻断
+- [x] 5.5 验证同一Session main/child及跨Session两个以上thread的进程、动态/冲突固定端口、断点、方案、状态、动作审计与stop/restart严格隔离；Session产品API只到main，显式child API校验归属；fake clock覆盖`launch_pending|starting|running|paused|stopping`跨过30分钟仍resident、终态且lease结清后重新计时、无阻断后cold、stop失败/重启`reconcile_required`、thread删除定点停止及旧generation callback拒绝。用注入phase barrier在claim提交后spawn前、spawn后登记PID前和stop核实前终止backend并重启，验证nonce/OS起始身份、PID/端口复用不误接管/误杀、同一实例只恢复一次及未知状态始终阻断
 - [x] 5.6 验证Workspace debug模板/profile覆盖和旧配置无debug字段时的行为，并在itemized共享maintenance gate/journal下核对旧Session方案→main thread的bytes/hash、ID/revision/lineage、失败/重试/原件保留；同Workspace`context_fork`只复制capture时活动方案、`history_prefix_fork`不复制方案、`full_rollout_copy`复制全部当前方案、migration-only child copy不自动复制。冻结目标有效debug配置revision/hash并逐项重验入口/工作目录/全部断点路径和profile/adapter/runtime，发布前配置漂移或方案缺失使整个fork不发布，目标ID/lineage映射且不带active指针；崩溃恢复不半发布，跨Workspace公开copy明确拒绝，不复制活连接且不停止source进程；history/Web刷新与无旧路径alias
 
 ## 6. 验证与交付
 
 - [x] 6.1 运行受影响的 Python 静态检查、类型/编译检查和 focused unit tests
-- [ ] 6.2 运行受影响纯后端E2E与信封/ThreadRuntimeBinding/fork/删除集成测试；迁移既有`test_debug_prompt_flow.py`和`test_debug_prompt_live.py`为确定性ModelStream下的`skill_load`→固定信封→真实tool result/刷新链，验证thread归属、权限、旧名称与读文件指引消失，并保留规定目录下产物；现有直接目标测试不能代替模型可发现与信封运行证据
+- [x] 6.2 运行受影响纯后端E2E与信封/ThreadRuntimeBinding/fork/删除集成测试；迁移既有`test_debug_prompt_flow.py`和`test_debug_prompt_live.py`为确定性ModelStream下的`skill_load`→固定信封→真实tool result/刷新链，验证thread归属、权限、旧名称与读文件指引消失，并保留规定目录下产物；现有直接目标测试不能代替模型可发现与信封运行证据
 - [x] 6.3 运行 `openspec validate --change add-agent-debug-tool-group --strict`
-- [ ] 6.4 更新任务状态并确认实现与 proposal、spec、design 一致
+- [x] 6.4 更新任务状态并确认实现与 proposal、spec、design 一致
