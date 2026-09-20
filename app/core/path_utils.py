@@ -151,8 +151,8 @@ def _build_session_catalog_components(
             # 会话数据根的父目录即视作工作区根。
             workspace_root = sessions_root.parent
     else:
-        # TODO: 测试与嵌入式调用仍允许传入任意 sessions 根目录；目录约定
-        # 对齐旧 resolver 的索引放置规则，规范化调用后一并删除。
+        # TODO: 测试与嵌入式调用仍允许传入任意 sessions 根目录；统一工作区
+        # 根目录约定后删除该分支。
         navigation_root = (
             sessions_root.parent / f".{sessions_root.name}-session-navigation"
         )

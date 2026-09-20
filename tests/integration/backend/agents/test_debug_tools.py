@@ -84,7 +84,7 @@ FORBIDDEN_RUNTIME_FIELDS = frozenset(
 # Node Inspector 适配器集成检查，不把它们当作“提示词驱动的完整 E2E”。
 
 
-class _SessionPathResolverStub:
+class _SessionCatalogResolverStub:
     def __init__(self, root: Path) -> None:
         self._root = root
 
@@ -1134,7 +1134,7 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
         workspace_root=workspace_root,
     )
     config_service.validate_workspace_config()
-    resolver = _SessionPathResolverStub(
+    resolver = _SessionCatalogResolverStub(
         workspace_root / ".boxteam" / "test-debug-session-nodes"
     )
     store = NodeDebugSessionStore(resolver)

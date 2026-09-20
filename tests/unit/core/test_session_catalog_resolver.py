@@ -287,15 +287,6 @@ class TestInitializeAndProperties:
         with pytest.raises(RuntimeError, match="循环"):
             resolver.initialize()
 
-    def test_legacy_inline_attachment_migration_record_empty(
-        self, resolver: SessionCatalogPathResolver
-    ) -> None:
-        assert resolver.legacy_inline_attachment_migration_record == {}
-        # 每次返回独立空 dict，调用方改动不污染实例状态。
-        record = resolver.legacy_inline_attachment_migration_record
-        record["x"] = 1
-        assert resolver.legacy_inline_attachment_migration_record == {}
-
     def test_revision_sums_and_bumps_after_rename(
         self, resolver: SessionCatalogPathResolver
     ) -> None:

@@ -1,8 +1,8 @@
 """SessionCatalogPathResolver —— 新模型（SQLite catalog 权威）会话路径解析器。
 
-OpenSpec add-itemized-rollout-context 8.2-切片3a（R15）。以
-``SessionCatalogStore``（workspace ``navigation/session-catalog.sqlite``）为
-数据源，实现会话路径、导航和删除所需的权威查询接口。
+以 ``SessionCatalogStore``（workspace
+``navigation/session-catalog.sqlite``）为数据源，实现会话路径、导航和删除
+所需的权威查询接口。
 
 红线（模块边界，违反即失去本轮资格）：
 
@@ -119,7 +119,7 @@ class SessionCatalogPathResolver:
             )
         self.sessions_root = sessions_root.expanduser().resolve()
         # resolver 与 catalog store 必须指向同一物理根（locator 解析、
-        # staging/隔离区定位一致的前提），不一致 fail fast（对齐 R13/R14）。
+        # staging/隔离区定位一致的前提），不一致 fail fast。
         if self.sessions_root != store.sessions_root:
             raise ValueError(
                 "sessions_root 与 catalog store 的 sessions_root 不一致: "
@@ -454,8 +454,8 @@ class SessionCatalogPathResolver:
     ) -> tuple[int, list[SessionChildSummary], bool]:
         """返回直接逻辑子会话摘要。
 
-        「直接逻辑子会话」沿用旧语义：最近 session 祖先等于目标 session
-        的全部 session 节点（含经 folder 间接挂载者）。items 元素升级为
+        「直接逻辑子会话」按最近 session 祖先归属：目标 session 的全部
+        session 节点（含经 folder 间接挂载者）。items 元素为
         :class:`SessionChildSummary`（id/title/created_at，title 即
         catalog display_name）。
         """
@@ -536,11 +536,6 @@ class SessionCatalogPathResolver:
         每次读取执行一次 BFS 分页聚合。
         """
         return sum(node.revision for node in self._list_all_catalog_nodes())
-
-    @property
-    def legacy_inline_attachment_migration_record(self) -> dict[str, object]:
-        """空 dict：旧 inline 附件迁移已完成，新工作区无此概念。"""
-        return {}
 
     # ------------------------------------------------------------------
     # 导航写方法（SQLite-only，不动物理）
@@ -671,12 +666,11 @@ class SessionCatalogPathResolver:
     def delete_folder(self, folder_id: str) -> None:
         """删除空 folder（非递归）；非空/非 folder/非 active 均 RuntimeError。
 
-        旧签名的 ``deleting_subtree_id`` 形参整体移除：新模型递归删除统一
-        走子树删除协议（:meth:`begin_subtree_delete` /
-        :meth:`finish_subtree_delete`），切换轮适配。
+        递归删除统一走子树删除协议（:meth:`begin_subtree_delete` /
+        :meth:`finish_subtree_delete`)。
         """
         self._store.delete_empty_folder(folder_id)
-    # 删除适配（R14 子树删除协议）
+    # 子树删除协议
     # ------------------------------------------------------------------
 
     def begin_subtree_delete(self, folder_id: str) -> None:
@@ -721,7 +715,7 @@ class SessionCatalogPathResolver:
             self._subtree_delete_keys.pop(folder_id, None)
 
     async def delete_session_subtree(self, session_id: str) -> list[str]:
-        """删除完整会话子树（R14 协议单调用版），返回被删后代 session ID。"""
+        """删除完整会话子树，返回被删后代 session ID。"""
         with self._lock:
             node = self._store.get_node(session_id)
             if node.kind != "session":

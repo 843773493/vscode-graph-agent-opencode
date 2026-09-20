@@ -1,21 +1,13 @@
 """session-catalog.sqlite 基础设施：nodes 表、验证器、gate/fence 原语与 CTE 查询。
 
-本模块只建立 workspace 导航 SQLite catalog 的基础设施层，**不切换权威**——
-现有 JSON index（``app/core/session_paths.py``）仍是唯一权威；装配、数据
-迁移与权威切换属 OpenSpec add-itemized-rollout-context 任务 8.2。
+本模块实现 workspace 导航 SQLite catalog 的基础设施层。SQLite ``nodes``
+表是目录关系、显示名和物理 locator 的唯一权威；物理目录只按 locator
+受检解析，不能反向重建或覆盖 catalog。一次性迁移模块可以读取旧 JSON
+索引，但生产读写链路不再双读。
 
-R13（任务 8.1-A）加法扩展：新增 ``session_creation_records`` 表与 record
-方法（新模型 Session 创建流的 create-or-get journal，state 机
-preparing/published/aborted），journal 与导航 node 同库、不是第二权威；
-nodes 表 DDL 与既有方法行为不变。
-
-R14（任务 8.1-B）加法扩展：新增 ``subtree_delete_records`` 表与 record
-方法（NavigationSubtreeDeleteRecord 子树删除流 journal，state 机
-preparing/deleting/draining/completed/aborted，含 ``drained_session_ids``
-drain 进度列）与 ``delete_empty_folder``（空 folder 非递归删除允许面）。
-本表随 ``_initialize`` 以 ``CREATE TABLE IF NOT EXISTS`` 对既有 v2 库幂等
-**加法补建**（不改 user_version、不动 nodes 表 DDL 与既有行）；
-nodes 表 DDL 与既有方法行为不变。
+``session_creation_records`` 与 ``subtree_delete_records`` 是同一 SQLite
+数据库中的操作 journal，用于创建和删除流程的恢复进度，不是第二套目录
+权威。打开旧 schema 时只执行已声明的幂等 schema 升级，未知版本直接拒绝。
 
 错误分类约定：
 
@@ -496,18 +488,9 @@ def _parse_drained_session_ids(raw: str) -> tuple[str, ...]:
 class SessionCatalogStore:
     """session-catalog.sqlite 的 nodes 表与 creation record journal 基础设施。
 
-    只建基础设施，不切换权威：现有 JSON index 仍是唯一权威。构造时创建
-    database_path 的父目录，但**不创建** sessions_root 目录（store 只管
-    catalog，不管物理树）。
-
-    Schema v2（R13，8.1-A）：在 v1 nodes 表之上**加法**新增
-    ``session_creation_records`` 表；v1 库打开时在同一事务内建新表并升
-    ``user_version``（不动 nodes 表 DDL 与既有行）。
-
-    R14（8.1-B）加法补表：v2 库打开时以 ``CREATE TABLE IF NOT EXISTS``
-    幂等补建 ``subtree_delete_records`` 表（含 ``drained_session_ids``
-    drain 进度列）；这是加法式补表——不改 ``user_version``（保持 2）、
-    不动 nodes/session_creation_records 表 DDL 与既有行。
+    SQLite ``nodes`` 表是唯一目录权威。构造时创建 database_path 的父目录，
+    但**不创建** sessions_root 目录（store 只管 catalog，不管物理树）。
+    创建和删除 journal 与 nodes 同库，由事务保证目录可见性和恢复进度的一致性。
     """
 
     SCHEMA_VERSION = 2
@@ -838,7 +821,8 @@ class SessionCatalogStore:
     ) -> SessionCatalogNode:
         """创建 folder 节点；folder 无物理 locator/manifest。
 
-        folder 节点 ID 与现有 JSON 索引一致，同样用 ``ses_`` 前缀形态验证。
+        folder 节点 ID 使用与 session 相同的 canonical ``ses_`` 前缀形态，
+        但 folder 本身不分配物理 locator。
         """
         validate_session_id(node_id)
         self._validate_common_fields(workspace_id, display_name)
@@ -1048,9 +1032,8 @@ class SessionCatalogStore:
         - 同 key 已存在：``preimage_hash`` 一致 → 返回既有 record（幂等，
           created_at 等冻结值以既有 record 为准）；不一致 → ``RuntimeError``
           （同 key 不同 preimage 冲突）。
-        - ``session_id`` 可选传入（R17 兼容加法）：调用方传入**已验证
-          canonical** session ID（兼容旧 API「自选 ID 创建」形态；生产主
-          路径 ``session_service._create`` 本就软件生成 canonical ID）。
+        - ``session_id`` 可选传入已验证的 canonical session ID，仅供固定
+          ID 的测试 fixture 使用；生产创建服务始终由 store 分配 ID。
           提供时先过 ``validate_session_id``（非法形态直接 ``ValueError``，
           不清洗不改写），并以该 ID 作为分配结果（不再软件分配）；未提供
           时保持软件分配现状。幂等语义不变：同 key 同 preimage 返回既有
@@ -1892,8 +1875,7 @@ class SessionCatalogStore:
     def nearest_session_ancestor(self, node_id: str) -> str | None:
         """返回最近的 session 祖先 ID（不含自身；传 parent 语义）。
 
-        与 ``session_paths.SessionPathResolver.nearest_session_ancestor``
-        语义一致：从父节点开始向上找第一个 kind 为 session 的祖先。
+        从父节点开始向上找第一个 kind 为 session 的祖先。
         """
         with self._read_transaction() as connection:
             row = self._require_node(connection, node_id)

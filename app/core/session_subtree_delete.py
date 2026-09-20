@@ -25,9 +25,9 @@
 
 红线（模块边界，违反即失去本轮资格）：
 
-- **不切权威**：生产路径由 ``SessionCatalogPathResolver`` 装配，SQLite
-  catalog 仍是唯一权威；本流只负责编排冻结子树、资源 drain、物理隔离
-  与 tombstone，不直接承载导航业务规则。
+- **单一权威**：生产路径由 ``SessionCatalogPathResolver`` 装配；SQLite
+  catalog 是唯一权威。本流只负责编排冻结子树、资源 drain、物理隔离与
+  tombstone，不直接承载导航业务规则。
 - **单/批同一协议**：单 Session 删除也走本流，避免单/批两种互相矛盾的
   线性化点；非空 folder 的非递归删除仍由
   ``SessionCatalogStore.delete_empty_folder`` 明确拒绝（design.md §9 约
@@ -105,7 +105,7 @@ class SubtreeDeleteResult:
 
 
 class SessionSubtreeDeleteService:
-    """子树删除流编排（不切权威，供切换轮装配）。
+    """SQLite catalog 子树删除流编排。
 
     ``delete`` 状态机（幂等：同 key 重入按 record 状态分支收敛）：
 

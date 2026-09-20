@@ -11,8 +11,8 @@ from app.core.session_control_store import SessionControlStore
 from app.services.business.communication.wait import CommunicationWaitBinding
 
 
-class SessionPathResolverPort(Protocol):
-    """只依赖 session-control 冷读所需的路径解析能力。"""
+class CatalogSessionResolverPort(Protocol):
+    """只依赖 session-control 冷读所需的 catalog 路径解析能力。"""
 
     def resolve_session_node(self, session_id: str) -> Path: ...
 
@@ -20,7 +20,7 @@ class SessionPathResolverPort(Protocol):
 class SessionControlStoreWaitBindingLookup:
     """按显式 target session 冷读 communication inbox，不加载目标 runtime。"""
 
-    def __init__(self, *, path_resolver: SessionPathResolverPort) -> None:
+    def __init__(self, *, path_resolver: CatalogSessionResolverPort) -> None:
         self._path_resolver = path_resolver
 
     async def resolve(

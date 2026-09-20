@@ -31,7 +31,7 @@ from tests.support.node_debug_dependencies import (
 )
 
 
-class _SessionPathResolverStub:
+class _SessionCatalogResolverStub:
     def __init__(self, session_root: Path) -> None:
         self._session_root = session_root
 
@@ -160,7 +160,7 @@ async def test_pending_breakpoints_are_restored_from_session_store(
     workspace_root.mkdir()
     source = workspace_root / "entry.mjs"
     source.write_text("const answer = 42;\nconsole.log(answer);\n", encoding="utf-8")
-    resolver = _SessionPathResolverStub(tmp_path / "sessions")
+    resolver = _SessionCatalogResolverStub(tmp_path / "sessions")
     store = NodeDebugSessionStore(resolver)
     session_id = "session-debug-store"
 
@@ -225,7 +225,7 @@ async def test_multiple_configurations_are_isolated_and_portable(
     (workspace_root / "second.mjs").write_text(
         "console.log('second');\n", encoding="utf-8"
     )
-    resolver = _SessionPathResolverStub(tmp_path / "sessions")
+    resolver = _SessionCatalogResolverStub(tmp_path / "sessions")
     store = NodeDebugSessionStore(resolver)
     service = NodeDebugService(
         workspace_root=workspace_root,
@@ -314,7 +314,7 @@ async def test_main_and_child_thread_have_independent_debug_state(
     workspace_root.mkdir()
     (workspace_root / "main.mjs").write_text("console.log('main');\n", encoding="utf-8")
     (workspace_root / "child.mjs").write_text("console.log('child');\n", encoding="utf-8")
-    resolver = _SessionPathResolverStub(tmp_path / "sessions")
+    resolver = _SessionCatalogResolverStub(tmp_path / "sessions")
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=ConfigService(workspace_root=workspace_root),
@@ -364,7 +364,7 @@ async def test_main_and_child_thread_have_independent_debug_state(
 async def test_legacy_single_configuration_file_is_not_loaded(tmp_path: Path) -> None:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
-    resolver = _SessionPathResolverStub(tmp_path / "sessions")
+    resolver = _SessionCatalogResolverStub(tmp_path / "sessions")
     session_node = resolver.resolve_session_node("legacy-session")
     legacy_file = session_node / "debug" / "node.json"
     legacy_file.parent.mkdir(parents=True)
@@ -396,7 +396,7 @@ async def test_configuration_file_can_be_copied_directly_into_loaded_session(
         encoding="utf-8",
     )
     sessions_root = tmp_path / "sessions"
-    resolver = _SessionPathResolverStub(sessions_root)
+    resolver = _SessionCatalogResolverStub(sessions_root)
     store = NodeDebugSessionStore(resolver)
     service = NodeDebugService(
         workspace_root=workspace_root,

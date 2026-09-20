@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import base64
-import json
-from datetime import UTC, datetime
 from io import BytesIO
 
 import pytest
 from PIL import Image
 
-from app.core.session_catalog_migration import SessionCatalogMigrator
-from app.core.session_paths import SessionPathResolver, physical_segment
-from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 
@@ -239,95 +233,3 @@ def test_persist_rejects_mismatched_content_type(tmp_path, session_bundle_factor
                 )
             ],
         )
-
-
-def test_startup_migrates_legacy_inline_image_and_runtime_rejects_inline_id(
-    tmp_path,
-):
-    sessions_root = tmp_path / ".boxteam" / "sessions"
-    session_id = "ses_4a2c165f3f3345448447f8e9fe15a9ea"
-    session_dir = sessions_root / physical_segment("历史附件", session_id)
-    session_dir.mkdir(parents=True)
-    now = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": "历史附件",
-                "created_at": now,
-                "updated_at": now,
-            }
-        ),
-        encoding="utf-8",
-    )
-    file_id = "inline:legacy:test.jpg"
-    data_url = _data_url("image/jpeg", b"legacy-image")
-    logs_root = session_dir / "logs" / "llm_requests"
-    logs_root.mkdir(parents=True)
-    (logs_root / "100.json").write_text(
-        json.dumps(
-            {
-                "request": {
-                    "messages": [
-                        {
-                            "content": [
-                                {"type": "text", "text": "附件 1"},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": data_url},
-                                },
-                            ],
-                            "response_metadata": {
-                                "attachments": [
-                                    {
-                                        "file_id": file_id,
-                                        "name": "test.jpg",
-                                        "content_type": "image/jpeg",
-                                    }
-                                ]
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    pending_path = session_dir / "pending_requests.json"
-    pending_path.write_text(
-        json.dumps({"attachments": [{"file_id": file_id}]}),
-        encoding="utf-8",
-    )
-
-    SessionPathResolver(sessions_root).initialize()
-    migrated_file_id = json.loads(pending_path.read_text(encoding="utf-8"))[
-        "attachments"
-    ][0]["file_id"]
-
-    # 旧形态 inline 迁移由上面的 legacy initialize 完成；随后必须经
-    # SessionCatalogMigrator 建立唯一 SQLite authority，工厂 resolver 才能
-    # 解析该会话。
-    workspace_id = load_or_create_workspace_id(tmp_path)
-    asyncio.run(
-        SessionCatalogMigrator(
-            workspace_id=workspace_id,
-            sessions_root=sessions_root,
-            database_path=tmp_path
-            / ".boxteam"
-            / "navigation"
-            / "session-catalog.sqlite",
-            maintenance_root=tmp_path / "maintenance",
-        ).migrate()
-    )
-
-    store = SessionAttachmentStore(tmp_path)
-
-    recovered = store.read(session_id, migrated_file_id)
-
-    assert recovered.data == b"legacy-image"
-    assert recovered.content_type == "image/jpeg"
-    assert migrated_file_id.startswith(
-        f"boxteam-session://{session_id}/attachments/"
-    )
-    with pytest.raises(ValueError, match="必须使用会话逻辑定位符"):
-        store.read(session_id, file_id)

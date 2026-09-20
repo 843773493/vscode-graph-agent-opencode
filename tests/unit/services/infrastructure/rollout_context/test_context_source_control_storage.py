@@ -118,10 +118,8 @@ def _install_debugging_snapshot(
 def sessions_root(tmp_path: Path) -> Path:
     """建立隔离的 sessions 根目录，并注册 main session 与 child thread 节点。
 
-    R18 catalog 模式适配：节点构造经 path_utils 开关工厂（catalog 模式走
-    SQLite catalog 链，旧模式返回原 legacy resolver，行为逐字节不变）。
-    直连旧 ``SessionPathResolver`` 会在 catalog 模式留下「旧形态 index 无
-    SQLite catalog」的 fail-closed 工作区，后续 RolloutStorage 解析即被拒。
+    R18 catalog 模式适配：节点构造经 path_utils 工厂走 SQLite catalog
+    链，直连非 catalog 构造会被 fail closed，后续 RolloutStorage 解析即被拒。
     """
     root = tmp_path / ".boxteam" / "sessions"
     root.mkdir(parents=True)

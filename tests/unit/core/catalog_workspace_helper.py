@@ -3,7 +3,7 @@
 为 R17 的 30+ 测试文件适配提供机械替换友好的构造入口：把「store →
 creation/delete service → 新 resolver → session/folder 树」的装配收敛为
 ``build_catalog_workspace(tmp_path)`` 一个调用，旧测试中
-``SessionPathResolver(sessions_dir)`` + 手写 manifest + register 的样板
+手写 manifest + register 的样板
 替换为 ``workspace.create_session(title, parent)`` /
 ``workspace.create_folder(name, parent)``。
 
@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Self
 from uuid import UUID, uuid4
 
+from app.core.session_catalog_legacy_layout import SESSION_MANIFEST_NAME
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
     SessionCatalogPathResolver,
@@ -30,7 +31,6 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_creation import SessionCreationService
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
-from app.core.session_tree.support import SESSION_MANIFEST_NAME
 
 # 与 R15 resolver 测试同款默认 workspace_id（标准 UUID 文本）。
 DEFAULT_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"

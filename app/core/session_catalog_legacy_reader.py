@@ -60,8 +60,8 @@ class SessionCatalogLegacyReader:
     def read(self) -> list[SessionPhysicalNode]:
         """读取并严格校验旧权威，成功时返回索引顺序的节点投影。"""
         records = self._read_index_records()
-        # 空权威树没有任何需要对账的物理节点；旧 resolver 会在此场景初始化
-        # 根目录，迁移 reader 不能写盘，因此允许根目录尚未创建的空树继续。
+        # 空权威树没有任何需要对账的物理节点；迁移 reader 不能写盘，
+        # 因此允许根目录尚未创建的空树继续。
         if not records and not self.sessions_root.exists():
             return []
         self._validate_sessions_root()

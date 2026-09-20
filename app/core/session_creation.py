@@ -1,15 +1,15 @@
 """SessionCreationRecord 新模型 Session 创建流编排（OpenSpec 8.1-A，R13）。
 
-本模块实现 design.md §9（约 774 行）定义的新模型创建流：
+本模块实现 design.md §9 定义的 Session 创建流：
 **gate 内 create-or-get record（冻结身份/locator/preimage）→ staging 完整
 准备（剥离版 session.json + session-control.sqlite）→ durability barrier →
 原子 rename 到冻结日期桶 → gate 内 CAS publish（唯一可见性提交点）**。
 
 红线（模块边界，违反即失去本轮资格）：
 
-- **不切权威**：生产 Session 创建仍走旧 resolver
-  （``app/core/session_paths.py`` + JSON index）；本流是权威切换
-  （切片3）的前置件，供切换轮装配，本轮**不装配**
+- **单一权威**：生产 Session 创建通过 SQLite catalog 写入
+  ``nodes``，publish 是 catalog 可见性提交点；物理目录只按冻结 locator
+  落盘，不能反向成为导航来源。
   container/main.py/path_utils。
 - **publish 是唯一可见性提交点**：「任何 reader 不得看到缺 main、双 main
   或非法初始 fence 的 Session」由此保证——``publish_creation_record``
@@ -73,7 +73,7 @@ __all__ = [
     "validate_session_metadata_keys",
 ]
 
-# session.json 文件名（新模型创建流自用常量；不 import session_tree 私有件）。
+# session.json 文件名（创建流自用常量）。
 _SESSION_MANIFEST_NAME = "session.json"
 
 # 控制库文件名（与 R12 迁移机器一致）。
@@ -127,7 +127,7 @@ def _fsync_file(path: Path) -> None:
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     """tempfile + fsync + os.replace 的原子写（模式对齐 R12 迁移机器，
-    自行实现、不 import session_tree 私有函数）。"""
+    自行实现）。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
@@ -247,7 +247,7 @@ class SessionCreationResult:
 
 
 class SessionCreationService:
-    """新模型 Session 创建流编排（不切权威，供切换轮装配）。
+    """SQLite catalog Session 创建流编排。
 
     ``create`` 状态机（幂等：同 key 重入按 record 状态分支收敛）：
 

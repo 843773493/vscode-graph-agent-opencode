@@ -8,10 +8,8 @@ owner Session 目录惰性建立并缓存，gate 为工厂级共享实例（同�
 
 红线：
 
-- legacy resolver（``SessionPathResolver```）不支持 child thread 创建：
-  取得 owner Session 的 ThreadCreationService 时明确报错，不做降级、不扫
-  盘、不建任何目录；工厂构造本身不报错，保证 legacy opt-in 模式下后端与
-  其余服务可正常启动。
+- child thread 创建必须绑定 catalog resolver；取得 owner Session 的
+  ThreadCreationService 时直接校验，不做降级、不扫盘、不猜测目录。
 - control store 只按 owner Session 的 ``session-control.sqlite``` 建立
   （8.5-A 契约），不触碰 workspace 级其他状态。
 """
@@ -96,11 +94,9 @@ class OwnerThreadCreationFactory:
     def _require_catalog_resolver(self) -> SessionCatalogPathResolver:
         """child thread 唯一入口的 resolver 模式校验（fail closed）。"""
         if not isinstance(self._resolver, SessionCatalogPathResolver):
-            # 运行时模式错误（legacy resolver 不支持 thread 创建），不是
-            # 参数类型错误，不适用 TypeError。
-            raise RuntimeError(  # noqa: TRY004 —— 运行时模式错误，非类型错误
-                "child thread 创建要求新 catalog resolver（当前为 legacy "
-                "resolver，不支持 durable child thread，明确报错不降级）: "
+            # 运行时模式错误，不是参数类型错误，不适用 TypeError。
+            raise RuntimeError(
+                "child thread 创建要求 catalog resolver: "
                 f"sessions_root={self._sessions_root}"
             )
         return self._resolver

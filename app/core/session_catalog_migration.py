@@ -192,7 +192,7 @@ def _fsync_directory(directory: Path) -> None:
 
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
-    """tempfile + fsync + os.replace 的原子写(对齐 session_tree/support 的模式)。"""
+    """tempfile + fsync + os.replace 的原子写。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
