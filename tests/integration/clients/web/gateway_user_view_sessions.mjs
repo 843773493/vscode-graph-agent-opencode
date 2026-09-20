@@ -83,17 +83,18 @@ async function waitUntil(predicate, label, timeout = 20_000) {
     if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error(`等待${label}超时`);
+  const text = typeof label === "function" ? label() : label;
+  throw new Error(`等待${text}超时`);
 }
 
 async function waitForCurrentUser(page, userId) {
-  let lastResponse = "无响应";
+  const responses = [];
   await waitUntil(async () => {
     const response = await rawApi(page, "/api/gateway/users/current");
-    lastResponse = `${response.status} ${response.body.slice(0, 200)}`;
+    responses.push(`${response.status} ${response.body.slice(0, 200)}`);
     if (response.status !== 200) return false;
     return JSON.parse(response.body).data.user_id === userId;
-  }, `当前用户 ${userId}，最后响应: ${lastResponse}`);
+  }, () => `当前用户 ${userId}，最近响应: ${responses.at(-1) ?? "无"}`);
 }
 
 async function waitForGuest(page) {
@@ -110,6 +111,15 @@ const pageA = await contextA.newPage();
 const pageB = await contextB.newPage();
 let contextC = null;
 let result;
+// 用户视图请求留档，失败时随诊断输出，定位接管竞态。
+const userApiLog = [];
+for (const page of [pageA, pageB]) {
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (!url.pathname.startsWith("/api/gateway/users")) return;
+    userApiLog.push(`${page === pageA ? "A" : "B"} ${response.request().method()} ${url.pathname} -> ${response.status()}`);
+  });
+}
 
 try {
   await ensureGuest(pageA);
@@ -152,11 +162,16 @@ try {
   await expiredUserRow.getByRole("button", { name: "选择", exact: true }).click();
   await waitForCurrentUser(pageA, userBId);
 
-  await api(pageA, `/api/gateway/users/${encodeURIComponent(userAId)}/access`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ client_label: "Web 浏览器" }),
-  });
+  // 用户 A 的重新获取必须走 UI「选择」按钮（与用户 B 相同的真实路径），
+  // 让 acquire 进入前端 gatewayApi 的会话写串行锁；裸 fetch 会绕过锁并与
+  // 401 恢复链的游客 Set-Cookie 产生 last-write-wins 覆盖（接管竞态实证）。
+  // 先等待「选择」user B 的 runAccessChange 完成收尾（菜单关闭）：current
+  // 轮询通过早于 runAccessChange 结束，若抢跑点击按钮会把菜单反向关闭。
+  await pageA.locator(".gateway-user-access-menu").waitFor({ state: "hidden", timeout: 20_000 });
+  await pageA.getByRole("button", { name: "用户视图" }).click();
+  const userARowA = pageA.locator(".gateway-user-row").filter({ hasText: userAId });
+  await userARowA.waitFor({ state: "visible", timeout: 20_000 });
+  await userARowA.getByRole("button", { name: "选择", exact: true }).click();
   await waitForCurrentUser(pageA, userAId);
 
   await api(
@@ -248,6 +263,15 @@ try {
   await writeFile(resultPath, JSON.stringify(result, null, 2));
 } catch (error) {
   await pageA.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
+  console.error("用户视图请求留档:\n" + userApiLog.join("\n"));
+  const menuDiagnostics = await pageA.evaluate(() => {
+    const menu = document.querySelector(".gateway-user-access-menu");
+    const rows = [...document.querySelectorAll(".gateway-user-row")].map((row) => row.textContent ?? "");
+    const errorText = document.querySelector(".gateway-user-access-error")?.textContent ?? null;
+    const expanded = document.querySelector(".gateway-user-access-button")?.getAttribute("aria-expanded") ?? null;
+    return { menuOpen: menu !== null, rowCount: rows.length, rows, errorText, expanded };
+  }).catch(() => "不可用");
+  console.error("用户视图菜单留档: " + JSON.stringify(menuDiagnostics));
   throw error;
 } finally {
   await contextC?.close();

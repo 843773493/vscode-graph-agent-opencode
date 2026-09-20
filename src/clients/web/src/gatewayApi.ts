@@ -56,6 +56,7 @@ import {
   registerGatewayUserSessionInitializer,
   requestJson,
   unwrapApiData,
+  withGatewayUserSessionWrite,
 } from "./api/http";
 import type { CreatableSessionConnectionKind } from "./types/frontend";
 
@@ -167,22 +168,26 @@ export async function ensureGatewayUserAccess(
   if (pending) return pending;
 
   const initialization = (async () => {
-    try {
-      return await getCurrentGatewayUser(port);
-    } catch (error: unknown) {
-      if (!(error instanceof HttpRequestError) || error.status !== 401) throw error;
-      return unwrapApiData(
-        await requestJson<APIResponse<GatewayUserAccess>>(
-          port,
-          "/api/gateway/users/guest",
-          {
-            method: "POST",
-            body: JSON.stringify(WEB_GUEST_REQUEST),
-            skipGatewayUserSession: true,
-          },
-        ),
-      );
-    }
+    // current 判定与游客重建必须整体进入会话写串行锁，避免锁外的 401
+    // 结论与并发 acquire 互相覆盖 cookie。
+    return await withGatewayUserSessionWrite(port, async () => {
+      try {
+        return await getCurrentGatewayUser(port);
+      } catch (error: unknown) {
+        if (!(error instanceof HttpRequestError) || error.status !== 401) throw error;
+        return unwrapApiData(
+          await requestJson<APIResponse<GatewayUserAccess>>(
+            port,
+            "/api/gateway/users/guest",
+            {
+              method: "POST",
+              body: JSON.stringify(WEB_GUEST_REQUEST),
+              skipGatewayUserSession: true,
+            },
+          ),
+        );
+      }
+    });
   })();
   pendingGatewayUserAccessByPort.set(port, initialization);
   void initialization.then(() => {
@@ -206,15 +211,17 @@ export async function acquireGatewayGuest(
 ): Promise<GatewayUserAccess> {
   invalidatePendingGatewayUserAccess(port);
   invalidateGatewayUserSession(port);
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewayUserAccess>>(
-      port,
-      "/api/gateway/users/guest",
-      {
-        method: "POST",
-        body: JSON.stringify(WEB_GUEST_REQUEST),
-        skipGatewayUserSession: true,
-      },
+  return await withGatewayUserSessionWrite(port, async () =>
+    unwrapApiData(
+      await requestJson<APIResponse<GatewayUserAccess>>(
+        port,
+        "/api/gateway/users/guest",
+        {
+          method: "POST",
+          body: JSON.stringify(WEB_GUEST_REQUEST),
+          skipGatewayUserSession: true,
+        },
+      ),
     ),
   );
 }
@@ -253,17 +260,19 @@ async function acquireGatewayUser(
 ): Promise<GatewayUserAccess> {
   invalidatePendingGatewayUserAccess(port);
   invalidateGatewayUserSession(port);
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewayUserAccess>>(
-      port,
-      `/api/gateway/users/${encodeURIComponent(userId)}/${path}`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          client_label: clientLabel ?? null,
-        } satisfies AcquireGatewayUserRequest),
-        skipGatewayUserSession: true,
-      },
+  return await withGatewayUserSessionWrite(port, async () =>
+    unwrapApiData(
+      await requestJson<APIResponse<GatewayUserAccess>>(
+        port,
+        `/api/gateway/users/${encodeURIComponent(userId)}/${path}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            client_label: clientLabel ?? null,
+          } satisfies AcquireGatewayUserRequest),
+          skipGatewayUserSession: true,
+        },
+      ),
     ),
   );
 }

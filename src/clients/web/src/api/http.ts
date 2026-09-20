@@ -189,6 +189,27 @@ type GatewayUserSessionInitializer = (
 let gatewayUserSessionInitializer: GatewayUserSessionInitializer | null = null;
 const gatewayUserSessionReadyByPort = new Map<number, Promise<void>>();
 const gatewayUserSessionRecoveryByPort = new Map<number, Promise<void>>();
+const gatewayUserSessionWritesByPort = new Map<number, Promise<void>>();
+
+// Gateway 用户会话 cookie 的写入必须按端口串行：acquire/takeover/游客重建
+// 与 401 恢复链并发时，后到达的 Set-Cookie 会按 last-write-wins 覆盖新身份，
+// 把刚完成的用户切换拉回游客态（gateway_user_view 双浏览器集成实证）。
+// 条件性游客重建必须在锁内重新判定 current，不得沿用锁外的 401 结论。
+export function withGatewayUserSessionWrite<T>(
+  port: number,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = gatewayUserSessionWritesByPort.get(port) ?? Promise.resolve();
+  const result = previous.then(operation, operation);
+  const guarded = result.then(() => undefined, () => undefined);
+  gatewayUserSessionWritesByPort.set(port, guarded);
+  void guarded.then(() => {
+    if (gatewayUserSessionWritesByPort.get(port) === guarded) {
+      gatewayUserSessionWritesByPort.delete(port);
+    }
+  });
+  return result;
+}
 
 export function registerGatewayUserSessionInitializer(
   initializer: GatewayUserSessionInitializer,
@@ -210,20 +231,22 @@ async function initializeGatewayUserSessionFallback(
   port: number,
   signal: AbortSignal | undefined,
 ): Promise<void> {
-  try {
-    await requestJson<unknown>(port, "/api/gateway/users/current", {
-      signal,
-      skipGatewayUserSession: true,
-    });
-  } catch (error: unknown) {
-    if (!(error instanceof HttpRequestError) || error.status !== 401) throw error;
-    await requestJson<unknown>(port, "/api/gateway/users/guest", {
-      method: "POST",
-      body: JSON.stringify({}),
-      signal,
-      skipGatewayUserSession: true,
-    });
-  }
+  await withGatewayUserSessionWrite(port, async () => {
+    try {
+      await requestJson<unknown>(port, "/api/gateway/users/current", {
+        signal,
+        skipGatewayUserSession: true,
+      });
+    } catch (error: unknown) {
+      if (!(error instanceof HttpRequestError) || error.status !== 401) throw error;
+      await requestJson<unknown>(port, "/api/gateway/users/guest", {
+        method: "POST",
+        body: JSON.stringify({}),
+        signal,
+        skipGatewayUserSession: true,
+      });
+    }
+  });
 }
 
 async function recoverGatewayUserSession(port: number): Promise<void> {

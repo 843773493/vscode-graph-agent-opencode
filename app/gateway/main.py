@@ -2352,7 +2352,14 @@ async def current_gateway_user(
         raise HTTPException(status_code=401, detail="invalid local token")
     context = service.resolve_cookie(request.cookies.get(USER_ACCESS_COOKIE_NAME))
     if context is None:
-        # 本机 Web 首次加载默认进入游客态，避免业务初始化先看到一次无意义的 401。
+        # 首次页面加载完全没有 cookie 时按首载契约建立游客态，避免业务
+        # 初始化先看到一次无意义的 401；cookie 存在但已失效（被接管/释放/
+        # 过期）时必须返回 401，不得静默重建游客态——否则并发到达的陈旧
+        # 请求会让游客 Set-Cookie 覆盖同客户端刚完成的用户切换（takeover
+        # 竞态，gateway_user_view 双浏览器集成实证：接管 POST 200 后轮询
+        # /users/current 的陈旧 cookie 把刚写入的用户 cookie 覆盖回游客）。
+        if USER_ACCESS_COOKIE_NAME in request.cookies:
+            raise HTTPException(status_code=401, detail="user_session_required")
         context = service.acquire_guest()
         _set_user_access_cookie(response, context)
     return APIResponse(
