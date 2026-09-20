@@ -7,7 +7,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.exceptions import NotFoundError
-from app.core.path_utils import get_session_file, get_session_path, get_sessions_dir
+from app.core.path_utils import (
+    get_session_creation_service,
+    get_session_file,
+    get_session_path,
+    get_session_path_resolver,
+    get_sessions_dir,
+)
 from app.schemas.internal_v2.session import (
     SessionCreateRequest,
     SessionUpdateRequest,
@@ -42,11 +48,15 @@ class TestSessionService:
         self.workspace_id = load_or_create_workspace_id(
             get_sessions_dir().parent.parent
         )
+        self.path_resolver = get_session_path_resolver(get_sessions_dir())
+        self.creation_service = get_session_creation_service(get_sessions_dir())
         self.trace_event_store = TraceEventStore(sessions_dir=get_sessions_dir())
         self.service = SessionService(
             config_service=ConfigService(),
             trace_event_store=self.trace_event_store,
             workspace_id=self.workspace_id,
+            path_resolver=self.path_resolver,
+            creation_service=self.creation_service,
         )
 
     def teardown_method(self):
@@ -155,6 +165,8 @@ class TestSessionService:
             config_service=config_service,
             trace_event_store=self.trace_event_store,
             workspace_id=self.workspace_id,
+            path_resolver=self.path_resolver,
+            creation_service=self.creation_service,
         )
         created = await service.create(SessionCreateRequest(title="模型持久化"))
 
@@ -168,6 +180,8 @@ class TestSessionService:
             config_service=config_service,
             trace_event_store=self.trace_event_store,
             workspace_id=self.workspace_id,
+            path_resolver=self.path_resolver,
+            creation_service=self.creation_service,
         )
         restored = await restarted_service.get(created.session_id)
         assert restored.current_provider_id == "backup"
@@ -233,6 +247,8 @@ class TestSessionService:
             config_service=config_service,
             trace_event_store=self.trace_event_store,
             workspace_id=self.workspace_id,
+            path_resolver=self.path_resolver,
+            creation_service=self.creation_service,
         )
         existing = await service.create(SessionCreateRequest(title="Existing"))
 
@@ -308,6 +324,8 @@ class TestSessionService:
             config_service=ConfigService(),
             trace_event_store=self.trace_event_store,
             workspace_id=self.workspace_id,
+            path_resolver=self.path_resolver,
+            creation_service=self.creation_service,
         )
 
         restored = await restarted_service.get(session.session_id)

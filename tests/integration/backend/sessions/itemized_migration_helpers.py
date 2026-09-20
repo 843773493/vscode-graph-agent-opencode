@@ -22,10 +22,10 @@ TARGET_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
 
 
 def prepare_migration_workspace(request: pytest.FixtureRequest) -> Path:
-    from app.core.path_utils import _cached_session_path_resolver
+    from app.core.path_utils import _cached_session_catalog_components
 
     # 每个 case 重建同一正式 workspace；旧实例不能跨 case 保留目录索引。
-    _cached_session_path_resolver.cache_clear()
+    _cached_session_catalog_components.cache_clear()
     context = TestRunContext.from_test_file(Path(request.node.path))
     return prepare_default_test_workspace(
         workspace_root=context.workspace_root,

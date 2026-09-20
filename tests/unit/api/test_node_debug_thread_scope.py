@@ -9,8 +9,6 @@
 
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -26,7 +24,8 @@ from app.api.node_debug import (
     start_node_debug,
 )
 from app.core.exceptions import NotFoundError
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRequest,
     NodeDebugConfigurationCreateRequest,
@@ -42,45 +41,29 @@ from app.services.infrastructure.node_debug.session_admission import (
     NodeDebugSessionAdmission,
 )
 from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
-_SESSION_ID = "ses_api_debug"
-_CHILD_THREAD_ID = "ses_api_debug_child"
+_SESSION_ID = "ses_00000000400040008000000000000001"
+_CHILD_THREAD_ID = "ses_00000000400040008000000000000002"
 
 
 def _create_session(
-    resolver: SessionPathResolver,
+    resolver: SessionCatalogPathResolver,
     session_id: str,
     *,
     parent_session_id: str | None = None,
 ) -> Path:
-    title = f"测试会话 {session_id}"
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
-        title=title,
+    return seed_catalog_session_bundle(
+        resolver.sessions_root,
+        session_id,
         parent_node_id=parent_session_id,
-    )
-    now = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": title,
-                "parent_session_id": parent_session_id,
-                "created_at": now,
-                "updated_at": now,
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
-    return session_dir
+    ).directory
 
 
 class _ResolverSessionLifecycle:
     """以权威目录索引模拟 SessionService.get 的“存在且未删除”语义。"""
 
-    def __init__(self, resolver: SessionPathResolver) -> None:
+    def __init__(self, resolver: SessionCatalogPathResolver) -> None:
         self._resolver = resolver
 
     async def get(self, session_id: str) -> object:
@@ -188,8 +171,7 @@ async def test_mutation_requires_existing_session(
     (workspace_root / "entry.mjs").write_text(
         "console.log('entry');\n", encoding="utf-8"
     )
-    resolver = SessionPathResolver(tmp_path / ".boxteam" / "sessions")
-    resolver.initialize()
+    resolver = get_session_path_resolver(tmp_path / ".boxteam" / "sessions")
     _create_session(resolver, _SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
@@ -281,8 +263,7 @@ async def test_child_thread_address_folds_to_child_session_main_owner(
     (workspace_root / "child.mjs").write_text(
         "console.log('child');\n", encoding="utf-8"
     )
-    resolver = SessionPathResolver(tmp_path / ".boxteam" / "sessions")
-    resolver.initialize()
+    resolver = get_session_path_resolver(tmp_path / ".boxteam" / "sessions")
     _create_session(resolver, _SESSION_ID)
     _create_session(resolver, _CHILD_THREAD_ID, parent_session_id=_SESSION_ID)
     service = NodeDebugService(

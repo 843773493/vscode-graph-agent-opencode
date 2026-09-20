@@ -11,7 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from app.core.path_utils import get_session_path_resolver
+from app.core.path_utils import (
+    get_session_creation_service,
+    get_session_path_resolver,
+)
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionCreateRequest, SessionUpdateRequest
 from app.services.business.session_service import SessionService
@@ -32,6 +35,7 @@ def catalog_service(tmp_path: Path) -> tuple[SessionService, object]:
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         workspace_id=WORKSPACE_ID,
         path_resolver=workspace.resolver,
+        creation_service=workspace.creation_service,
     )
     try:
         yield service, workspace
@@ -54,6 +58,7 @@ def factory_resolver(tmp_path: Path):
         trace_event_store=TraceEventStore(sessions_dir=sessions_root),
         workspace_id=workspace_id,
         path_resolver=resolver,
+        creation_service=get_session_creation_service(sessions_root),
     )
     return service, resolver, workspace_id
 
@@ -177,6 +182,7 @@ async def test_folder_move_persists_context_fork_demotion_across_restart(
             ),
             workspace_id=WORKSPACE_ID,
             path_resolver=restarted_workspace.resolver,
+            creation_service=restarted_workspace.creation_service,
         )
         restored = await restarted.get(child.session_id)
         assert restored.kind == "normal"
@@ -232,7 +238,7 @@ async def test_get_parent_derivation_none_for_session_in_root_folder(
     service, workspace = catalog_service
 
     folder_id = workspace.create_folder("根目录")
-    session_id = workspace.create_session("目录内会话", parent=folder_id)
+    session_id = await workspace.create_session("目录内会话", parent=folder_id)
 
     got = await service.get(session_id)
 
@@ -252,11 +258,11 @@ async def test_get_parent_derivation_walks_to_session_ancestor_through_folders(
     """
     service, workspace = catalog_service
 
-    anchor_id = workspace.create_session("锚点会话")
+    anchor_id = await workspace.create_session("锚点会话")
     folder_a_id = workspace.create_folder("目录A", parent=anchor_id)
-    sibling_id = workspace.create_session("目录A内会话", parent=folder_a_id)
+    sibling_id = await workspace.create_session("目录A内会话", parent=folder_a_id)
     folder_b_id = workspace.create_folder("目录B", parent=folder_a_id)
-    deep_id = workspace.create_session("深层会话", parent=folder_b_id)
+    deep_id = await workspace.create_session("深层会话", parent=folder_b_id)
 
     got_deep = await service.get(deep_id)
     got_sibling = await service.get(sibling_id)
@@ -284,9 +290,9 @@ async def test_get_parent_derivation_none_without_session_ancestor(
     service, workspace = catalog_service
 
     folder_a_id = workspace.create_folder("目录A")
-    sibling_id = workspace.create_session("目录A内会话", parent=folder_a_id)
+    sibling_id = await workspace.create_session("目录A内会话", parent=folder_a_id)
     folder_b_id = workspace.create_folder("目录B", parent=folder_a_id)
-    deep_id = workspace.create_session("深层会话", parent=folder_b_id)
+    deep_id = await workspace.create_session("深层会话", parent=folder_b_id)
 
     got_deep = await service.get(deep_id)
     got_sibling = await service.get(sibling_id)

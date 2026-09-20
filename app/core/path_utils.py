@@ -120,10 +120,10 @@ def get_sessions_dir() -> Path:
     return get_boxteam_root() / "sessions"
 
 
-def _build_session_catalog_resolver(
+def _build_session_catalog_components(
     sessions_root: Path,
-) -> SessionCatalogPathResolver:
-    """构造新 resolver 链（store→creation/delete service→resolver）。
+) -> tuple[SessionCatalogPathResolver, SessionCreationService]:
+    """构造 SQLite catalog 的 resolver 与原子创建服务（共享同一 store）。
 
     探测逻辑（同一工作区单数据源，不做双读）：
 
@@ -181,21 +181,21 @@ def _build_session_catalog_resolver(
         sessions_root=sessions_root,
         workspace_id=workspace_id,
     )
-    return SessionCatalogPathResolver(
+    resolver = SessionCatalogPathResolver(
         store=store,
         sessions_root=sessions_root,
         workspace_id=workspace_id,
-        creation_service=creation_service,
         delete_service=delete_service,
     )
+    return resolver, creation_service
 
 
 @lru_cache(maxsize=32)
-def _cached_session_path_resolver(
+def _cached_session_catalog_components(
     sessions_root: str,
-) -> SessionCatalogPathResolver:
-    """按会话根目录缓存唯一的 SQLite catalog resolver。"""
-    return _build_session_catalog_resolver(Path(sessions_root))
+) -> tuple[SessionCatalogPathResolver, SessionCreationService]:
+    """按会话根目录缓存共享的 catalog resolver 与创建服务。"""
+    return _build_session_catalog_components(Path(sessions_root))
 
 
 def get_session_path_resolver(
@@ -203,7 +203,15 @@ def get_session_path_resolver(
 ) -> SessionCatalogPathResolver:
     """获取会话路径解析器；SQLite catalog 是唯一权威数据源。"""
     resolved_root = (sessions_root or get_sessions_dir()).resolve()
-    return _cached_session_path_resolver(str(resolved_root))
+    return _cached_session_catalog_components(str(resolved_root))[0]
+
+
+def get_session_creation_service(
+    sessions_root: Path | None = None,
+) -> SessionCreationService:
+    """获取与路径解析器共享 store 的原子 Session 创建服务。"""
+    resolved_root = (sessions_root or get_sessions_dir()).resolve()
+    return _cached_session_catalog_components(str(resolved_root))[1]
 
 
 def get_logs_dir() -> Path:
@@ -280,25 +288,6 @@ def get_session_path(session_id: str) -> Path:
 def get_session_file(session_id: str) -> Path:
     """Get the JSON metadata file path for a session"""
     return get_session_path(session_id) / "session.json"
-
-
-def allocate_session_dir(
-    session_id: str,
-    title: str,
-    *,
-    parent_node_id: str | None = None,
-) -> Path:
-    """为新会话分配物理目录；写入 session manifest 后必须注册该节点。
-
-    新创建流由 catalog 软件分配 ID；调用方必须从返回目录内的 allocation
-    marker（``SESSION_ALLOCATION_MARKER_NAME``）回读真实 session_id，再写
-    manifest 并注册。
-    """
-    return get_session_path_resolver().allocate_session_dir(
-        session_id=session_id,
-        title=title,
-        parent_node_id=parent_node_id,
-    )
 
 
 def validate_workspace_path(path: str) -> Path:

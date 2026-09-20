@@ -44,6 +44,7 @@ def service(workspace) -> SessionService:
         trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root),
         workspace_id=WORKSPACE_ID,
         path_resolver=workspace.resolver,
+        creation_service=workspace.creation_service,
     )
 
 

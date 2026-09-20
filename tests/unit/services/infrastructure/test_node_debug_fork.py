@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugLaunchProfileDTO,
@@ -21,29 +21,15 @@ from app.services.infrastructure.node_debug.fork import (
     validate_target_prepublication,
 )
 from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
-_SESSION_ID = "ses_fork_source"
+_SESSION_ID = "ses_00000000400040008000000000000001"
 _CONFIGURATION_ID = "dbgcfg_11111111111111111111111111111111"
 _CONFIGURATION_ID_2 = "dbgcfg_22222222222222222222222222222222"
 
 
-def _create_session(resolver: SessionPathResolver, session_id: str) -> Path:
-    session_dir = resolver.allocate_session_dir(session_id=session_id, title=session_id)
-    now = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": session_id,
-                "parent_session_id": None,
-                "created_at": now,
-                "updated_at": now,
-            }
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
-    return session_dir
+def _create_session(sessions_root: Path, session_id: str) -> Path:
+    return seed_catalog_session_bundle(sessions_root, session_id, title=session_id).directory
 
 
 def _configuration(configuration_id: str, name: str, path: str) -> NodeDebugConfigurationDTO:
@@ -60,9 +46,10 @@ def _configuration(configuration_id: str, name: str, path: str) -> NodeDebugConf
 
 @pytest.fixture
 def source_store(tmp_path: Path) -> tuple[NodeDebugSessionStore, Path]:
-    resolver = SessionPathResolver(tmp_path / ".boxteam" / "sessions")
+    sessions_root = tmp_path / ".boxteam" / "sessions"
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
-    session_dir = _create_session(resolver, _SESSION_ID)
+    session_dir = _create_session(sessions_root, _SESSION_ID)
     store = NodeDebugSessionStore(resolver)
     store.write_configuration(
         _SESSION_ID,

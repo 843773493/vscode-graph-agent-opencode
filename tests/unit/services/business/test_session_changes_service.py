@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 
 from app.core.path_utils import (
+    get_session_creation_service,
     get_session_changes_dir,
     get_sessions_dir,
+    get_session_path_resolver,
     initialize_directories,
 )
 from app.schemas.internal_v2.session import SessionCreateRequest
@@ -30,6 +32,8 @@ def session_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SessionS
         config_service=ConfigService(),
         trace_event_store=TraceEventStore(sessions_dir=get_sessions_dir()),
         workspace_id=load_or_create_workspace_id(tmp_path),
+        path_resolver=get_session_path_resolver(get_sessions_dir()),
+        creation_service=get_session_creation_service(get_sessions_dir()),
     )
 
 

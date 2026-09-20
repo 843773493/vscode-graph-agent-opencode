@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.core.turn_execution_scope import (
     AgentControlInbox,
     AgentLoopControlCoordinator,
@@ -18,10 +17,11 @@ from app.services.infrastructure.external_resource_leases import (
 )
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
 @pytest.fixture
-def runtime_context() -> tuple[MessageStreamStore, SessionPathResolver, str, Path]:
+def runtime_context() -> tuple[MessageStreamStore, object, str, Path]:
     output_root = (
         Path.cwd()
         / "out/tests/integration/backend/agents/test_turn_message_stream_runtime"
@@ -29,20 +29,10 @@ def runtime_context() -> tuple[MessageStreamStore, SessionPathResolver, str, Pat
     if output_root.exists():
         shutil.rmtree(output_root)
     sessions_root = output_root / "workspace" / ".boxteam" / "sessions"
-    resolver = SessionPathResolver(sessions_root)
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
-    session_id = "ses_turn_runtime_integration"
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
-        title=session_id,
-    )
-    now = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        f'{{"session_id":"{session_id}","title":"{session_id}",'
-        f'"created_at":"{now}","updated_at":"{now}"}}',
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
+    session_id = "ses_" + "a" * 32
+    seed_catalog_session_bundle(sessions_root, session_id)
     return (
         MessageStreamStore(path_resolver=resolver),
         resolver,
@@ -53,7 +43,7 @@ def runtime_context() -> tuple[MessageStreamStore, SessionPathResolver, str, Pat
 
 @pytest.mark.asyncio
 async def test_model_tool_scopes_share_turn_cancellation_and_close_provider(
-    runtime_context: tuple[MessageStreamStore, SessionPathResolver, str, Path],
+    runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     store, _, session_id, _ = runtime_context
     writer = await store.open(session_id=session_id, turn_id="job_scope_propagation")
@@ -105,7 +95,7 @@ async def test_model_tool_scopes_share_turn_cancellation_and_close_provider(
 
 @pytest.mark.asyncio
 async def test_concurrent_turn_events_allocate_contiguous_event_sequences(
-    runtime_context: tuple[MessageStreamStore, SessionPathResolver, str, Path],
+    runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     store, _, session_id, _ = runtime_context
     writer = await store.open(session_id=session_id, turn_id="job_concurrent_events")
@@ -136,7 +126,7 @@ async def test_concurrent_turn_events_allocate_contiguous_event_sequences(
 
 @pytest.mark.asyncio
 async def test_model_call_local_deadline_does_not_cancel_turn(
-    runtime_context: tuple[MessageStreamStore, SessionPathResolver, str, Path],
+    runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     turn_scope = TurnExecutionScope("stream_timeout")
     model_scope = turn_scope.child("model-1", timeout_seconds=0.001)
@@ -150,7 +140,7 @@ async def test_model_call_local_deadline_does_not_cancel_turn(
 
 @pytest.mark.asyncio
 async def test_resource_cancel_stop_and_crash_reconcile_are_independent(
-    runtime_context: tuple[MessageStreamStore, SessionPathResolver, str, Path],
+    runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     _, _, _, output_root = runtime_context
     manager = ExternalResourceLeaseLedger(state_path=output_root / "resources.json")
@@ -188,7 +178,7 @@ async def test_resource_cancel_stop_and_crash_reconcile_are_independent(
 
 @pytest.mark.asyncio
 async def test_control_race_accepts_interrupt_once_and_rejects_steer(
-    runtime_context: tuple[MessageStreamStore, SessionPathResolver, str, Path],
+    runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     store, _, session_id, _ = runtime_context
     writer = await store.open(session_id=session_id, turn_id="job_control_race")
@@ -223,7 +213,7 @@ async def test_control_race_accepts_interrupt_once_and_rejects_steer(
 
 @pytest.mark.asyncio
 async def test_disconnect_does_not_cancel_background_turn_and_snapshot_recovers(
-    runtime_context: tuple[MessageStreamStore, SessionPathResolver, str, Path],
+    runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     store, resolver, session_id, _ = runtime_context
     writer = await store.open(session_id=session_id, turn_id="job_disconnect")
@@ -258,7 +248,7 @@ async def test_disconnect_does_not_cancel_background_turn_and_snapshot_recovers(
 
 @pytest.mark.asyncio
 async def test_crash_after_interrupt_request_recovers_execution_lost(
-    runtime_context: tuple[MessageStreamStore, SessionPathResolver, str, Path],
+    runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     store, resolver, session_id, _ = runtime_context
     writer = await store.open(session_id=session_id, turn_id="job_crash_recovery")

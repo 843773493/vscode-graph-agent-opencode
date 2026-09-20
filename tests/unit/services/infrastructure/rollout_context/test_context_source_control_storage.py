@@ -6,18 +6,15 @@ main/child thread 隔离，以及幂等写入与乐观版本冲突。
 
 from __future__ import annotations
 
-import json
 import shutil
 import sqlite3
 import threading
 from contextlib import closing
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from app.core.session_paths import SessionPathResolver
 from app.services.infrastructure.rollout_context.checkpoint.context_source_control import (
     ContextSourceControlOwnerMixin,
     ContextSourceControlStorageMixin,
@@ -38,36 +35,24 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     _revision,
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 SESSION_ID = "ses_1cb2d44643ae45818a69dc2c654c06c7"
 CHILD_THREAD_ID = "ses_29399ea68ac24d0d8dfbb63d746c985e"
 
 
 def _create_session_node(
-    resolver: SessionPathResolver,
+    sessions_root: Path,
     session_id: str,
     *,
     parent_node_id: str | None = None,
 ) -> None:
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
+    seed_catalog_session_bundle(
+        sessions_root,
+        session_id,
         title="控制状态测试",
         parent_node_id=parent_node_id,
     )
-    timestamp = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": "控制状态测试",
-                "parent_session_id": parent_node_id,
-                "created_at": timestamp,
-                "updated_at": timestamp,
-            }
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
 
 
 def _descriptor() -> ContextSourceDescriptor:
@@ -140,9 +125,8 @@ def sessions_root(tmp_path: Path) -> Path:
     """
     root = tmp_path / ".boxteam" / "sessions"
     root.mkdir(parents=True)
-    resolver = get_session_path_resolver(root)
-    _create_session_node(resolver, SESSION_ID)
-    _create_session_node(resolver, CHILD_THREAD_ID, parent_node_id=SESSION_ID)
+    _create_session_node(root, SESSION_ID)
+    _create_session_node(root, CHILD_THREAD_ID, parent_node_id=SESSION_ID)
     return root
 
 

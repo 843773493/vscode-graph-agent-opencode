@@ -12,6 +12,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.path_utils import get_session_creation_service, get_session_path_resolver
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRecordDTO,
@@ -72,6 +73,8 @@ def fork_context(
         config_service=config_service,
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         workspace_id=load_or_create_workspace_id(workspace),
+        path_resolver=get_session_path_resolver(sessions_dir),
+        creation_service=get_session_creation_service(sessions_dir),
         fork_relationship_checker=saver,
     )
     return ForkIntegrationContext(

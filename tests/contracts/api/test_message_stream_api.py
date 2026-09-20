@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -11,9 +10,10 @@ from fastapi import FastAPI
 
 from app.api.deps import get_message_stream_store
 from app.api.message_stream import router as message_stream_router
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.core.trace_middleware import TraceMiddleware
 from app.services.infrastructure.message_stream_store import MessageStreamStore
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
 @pytest.fixture
@@ -22,28 +22,12 @@ def message_stream_api() -> tuple[FastAPI, MessageStreamStore, str, str]:
     if output_root.exists():
         shutil.rmtree(output_root)
     sessions_root = output_root / "workspace" / ".boxteam" / "sessions"
-    resolver = SessionPathResolver(sessions_root)
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     # API 路径参数强制 canonical session_id（OpenSpec 2.1）。
     session_id = "ses_12345678123446788234567812345678"
     turn_id = "job_message_stream_api"
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
-        title=session_id,
-    )
-    now = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": session_id,
-                "created_at": now,
-                "updated_at": now,
-            }
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
+    seed_catalog_session_bundle(sessions_root, session_id)
 
     store = MessageStreamStore(path_resolver=resolver)
     api = FastAPI()

@@ -39,14 +39,15 @@ def test_build_catalog_workspace_wires_full_chain(tmp_path: pytest.TempdirFactor
         workspace.close()
 
 
-def test_create_session_and_folder_builds_tree_with_derived_parents(
+@pytest.mark.asyncio
+async def test_create_session_and_folder_builds_tree_with_derived_parents(
     tmp_path,
 ) -> None:
     """create_session/create_folder 构造树；父关系按 catalog 派生。"""
     with build_catalog_workspace(tmp_path) as workspace:
         folder_id = workspace.create_folder("团队")
-        parent_id = workspace.create_session("根会话", folder_id)
-        child_id = workspace.create_session("子会话", parent_id)
+        parent_id = await workspace.create_session("根会话", folder_id)
+        child_id = await workspace.create_session("子会话", parent_id)
 
         parent_node = workspace.node(parent_id)
         child_node = workspace.node(child_id)
@@ -71,14 +72,15 @@ def test_create_session_and_folder_builds_tree_with_derived_parents(
         assert workspace.node(child_id).name == "子会话"
 
 
-def test_logical_move_keeps_manifest_and_updates_catalog_parents(
+@pytest.mark.asyncio
+async def test_logical_move_keeps_manifest_and_updates_catalog_parents(
     tmp_path,
 ) -> None:
     """逻辑移动只改 catalog 父关系：不搬磁盘、不改 manifest 字节。"""
     with build_catalog_workspace(tmp_path) as workspace:
         first_folder = workspace.create_folder("目录一")
         second_folder = workspace.create_folder("目录二")
-        session_id = workspace.create_session("移动会话", first_folder)
+        session_id = await workspace.create_session("移动会话", first_folder)
         manifest_before = workspace.manifest(session_id)
         session_dir = workspace.session_dir(session_id)
 

@@ -30,10 +30,7 @@ from app.core.session_catalog_store import (
 from app.core.session_creation import SessionCreationService
 from app.core.session_paths import SessionPhysicalNode
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
-from app.core.session_tree.support import (
-    SESSION_ALLOCATION_MARKER_NAME,
-    SESSION_MANIFEST_NAME,
-)
+from app.core.session_tree.support import SESSION_MANIFEST_NAME
 
 # 与 R15 resolver 测试同款默认 workspace_id（标准 UUID 文本）。
 DEFAULT_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
@@ -70,7 +67,7 @@ def complete_manifest(
     parent_session_id: str | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
-    """构造旧调用方风格「完整版」session.json 内容（register 会剥离三键）。"""
+    """构造测试读取用的完整 session.json 内容。"""
     now = datetime.now(UTC).isoformat()
     manifest: dict[str, Any] = {
         **make_session_metadata(),
@@ -94,7 +91,7 @@ def read_manifest(directory: Path) -> dict[str, Any]:
 
 
 def write_manifest(directory: Path, manifest: dict[str, Any]) -> None:
-    """写 session.json（完整版；register_session 负责剥离重写）。"""
+    """写入测试用 session.json。"""
     (directory / SESSION_MANIFEST_NAME).write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -117,7 +114,7 @@ class CatalogWorkspaceContext:
     # 机械替换友好的树构造入口
     # ------------------------------------------------------------------
 
-    def create_session(
+    async def create_session(
         self,
         title: str,
         parent: str | None = None,
@@ -127,48 +124,15 @@ class CatalogWorkspaceContext:
 
         ``parent`` 是父节点 ID（session 或 folder 均可，None=根）。
         ``metadata`` 覆盖六字段闭集（kind/delegation/...）。
-        走完整旧调用方兼容流：allocate → marker 回读 session_id → 写完整
-        manifest → register 剥离重写发布。
+        所有会话创建统一走原子 ``SessionCreationService`` 流。
         """
-        session_id, session_dir = self.allocate_session(title, parent, **metadata)
-        self.register_session(session_id, session_dir)
-        return session_id
-
-    def allocate_session(
-        self,
-        title: str,
-        parent: str | None = None,
-        **metadata: Any,
-    ) -> tuple[str, Path]:
-        """分配会话目录并写完整 manifest（未注册发布），返回 (id, 目录)。
-
-        供需要模拟「分配后崩溃/放弃」等中断形态的测试使用；正常创建走
-        :meth:`create_session`。
-        """
-        session_dir = self.resolver.allocate_session_dir(
-            session_id=f"ses_{uuid4().hex}",  # canonical 随机占位（R17 起被 honor）
+        result = await self.creation_service.create(
+            idempotency_key=f"test-session-{uuid4().hex}",
             title=title,
             parent_node_id=parent,
+            session_metadata=make_session_metadata(**metadata),
         )
-        marker = json.loads(
-            (session_dir / SESSION_ALLOCATION_MARKER_NAME).read_text(
-                encoding="utf-8"
-            )
-        )
-        session_id = str(marker["session_id"])
-        manifest = complete_manifest(
-            session_id,
-            title,
-            workspace_id=self.workspace_id,
-            parent_session_id=self.resolver.nearest_session_ancestor(parent),
-            **metadata,
-        )
-        write_manifest(session_dir, manifest)
-        return session_id, session_dir
-
-    def register_session(self, session_id: str, session_dir: Path) -> None:
-        """注册分配的会话（剥离重写 manifest 后 CAS 发布）。"""
-        self.resolver.register_session(session_id, session_dir)
+        return result.session_id
 
     def create_folder(self, name: str, parent: str | None = None) -> str:
         """创建 folder（SQLite-only 节点，无物理目录），返回 folder_id。"""
@@ -237,7 +201,6 @@ def build_catalog_workspace(
         store=store,
         sessions_root=sessions_root,
         workspace_id=resolved_workspace_id,
-        creation_service=creation_service,
         delete_service=delete_service,
     )
     return CatalogWorkspaceContext(

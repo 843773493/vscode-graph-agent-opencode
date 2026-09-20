@@ -8,17 +8,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar, Protocol
+from uuid import uuid4
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.exceptions import NotFoundError
-from app.core.identifier import create_prefixed_id
-from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_store import SessionControlStore
-from app.core.session_tree.support import (
-    SESSION_ALLOCATION_MARKER_NAME,
-    SessionPhysicalNode,
-)
+from app.core.session_creation import SessionCreationService
+from app.core.session_tree.support import SessionPhysicalNode
 from app.core.workspace_identity import (
     LEGACY_BACKEND_WORKSPACE_IDS,
     validate_workspace_id,
@@ -62,13 +59,15 @@ class SessionService:
         config_service: ConfigService,
         trace_event_store: TraceEventStore,
         workspace_id: str,
-        path_resolver: SessionCatalogPathResolver | None = None,
+        path_resolver: SessionCatalogPathResolver,
+        creation_service: SessionCreationService,
         fork_relationship_checker: ForkRelationshipChecker | None = None,
     ):
         self._workspace_id = validate_workspace_id(workspace_id)
         self._config_service = config_service
         self._trace_event_store = trace_event_store
-        self._path_resolver = path_resolver or get_session_path_resolver()
+        self._path_resolver = path_resolver
+        self._creation_service = creation_service
         self._fork_relationship_checker = fork_relationship_checker
         self._path_resolver.initialize()
         self._migrate_legacy_workspace_ids()
@@ -405,8 +404,6 @@ class SessionService:
         generation_origin: SessionGenerationOriginDTO | None = None,
         parent_node_id: str | None = None,
     ) -> SessionDTO:
-        session_id = create_prefixed_id("ses")
-        now = datetime.now(UTC)
         if self._config_service is None:
             raise RuntimeError("SessionService 未绑定 ConfigService")
         config_service = self._config_service
@@ -414,8 +411,9 @@ class SessionService:
         resolved_provider_id = config_service.resolve_new_session_provider_id(
             resolved_agent_id
         )
+        idempotency_key = f"session-{uuid4().hex}"
         await self._validate_parent_session(
-            session_id=session_id,
+            session_id=idempotency_key,
             workspace_id=self._workspace_id,
             parent_session_id=parent_session_id,
         )
@@ -437,10 +435,29 @@ class SessionService:
         else:
             parent_session_id = physical_parent_session_id
 
+        resolved_title = title or "新会话"
+        result = await self._creation_service.create(
+            idempotency_key=idempotency_key,
+            title=resolved_title,
+            parent_node_id=resolved_parent_node_id,
+            session_metadata={
+                "kind": kind,
+                "delegation": None,
+                "generation_origin": (
+                    generation_origin.model_dump(mode="json")
+                    if generation_origin is not None
+                    else None
+                ),
+                "current_agent_id": resolved_agent_id,
+                "current_provider_id": resolved_provider_id,
+                "context_source_session_id": context_source_session_id,
+            },
+        )
+        created_at = datetime.fromisoformat(result.node.created_at or "")
         session_data = SessionDTO(
-            session_id=session_id,
+            session_id=result.session_id,
             workspace_id=self._workspace_id,
-            title=title or "新会话",
+            title=resolved_title,
             title_source=self._infer_created_title_source(
                 title,
                 title_source,
@@ -451,44 +468,11 @@ class SessionService:
             context_source_session_id=context_source_session_id,
             kind=kind,
             generation_origin=generation_origin,
-            created_at=now,
-            updated_at=now,
+            created_at=created_at,
+            updated_at=created_at,
         )
 
-        session_dir = self._path_resolver.allocate_session_dir(
-            session_id=session_data.session_id,
-            title=session_data.title,
-            parent_node_id=resolved_parent_node_id,
-        )
-        # 从 catalog 创建流写入的 marker 回读最终 session_id。
-        allocated_session_id = str(
-            json.loads(
-                (session_dir / SESSION_ALLOCATION_MARKER_NAME).read_text(
-                    encoding="utf-8"
-                )
-            )["session_id"]
-        )
-        if allocated_session_id != session_data.session_id:
-            session_data = session_data.model_copy(
-                update={"session_id": allocated_session_id}
-            )
-
-        session_file = session_dir / "session.json"
-        try:
-            self._write_session_file(session_file, session_data)
-            self._path_resolver.register_session(allocated_session_id, session_dir)
-        except Exception:
-            self._path_resolver.abandon_session_allocation(session_dir)
-            raise
-
-        # register 是创建可见性提交点；以 resolver 权威投影的时间为准。
-        session_data.created_at = self._path_resolver.get_node(
-            allocated_session_id
-        ).created_at
-        session_data.updated_at = session_data.created_at
-        self._write_session_file(session_dir / "session.json", session_data)
-
-        self._notify_changed("create", allocated_session_id)
+        self._notify_changed("create", result.session_id)
         return session_data
 
     async def update(

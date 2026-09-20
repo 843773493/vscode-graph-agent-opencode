@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
 import pytest
 
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
 class FileTreeFixture(NamedTuple):
@@ -20,7 +20,7 @@ class FileTreeFixture(NamedTuple):
     first_session_id: str
     second_session_id: str
     workspace_root: Path
-    resolver: SessionPathResolver
+    resolver: object
 
 
 @pytest.fixture
@@ -33,28 +33,17 @@ def file_tree_settings() -> FileTreeFixture:
         shutil.rmtree(output_root)
     workspace_root = output_root / "workspace"
     sessions_root = workspace_root / ".boxteam" / "sessions"
-    resolver = SessionPathResolver(sessions_root)
+    from app.core.path_utils import _cached_session_catalog_components
+
+    _cached_session_catalog_components.cache_clear()
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
-    session_ids = ("ses_shortcut_first", "ses_shortcut_second")
-    now = datetime.now(UTC).isoformat()
+    session_ids = (
+        "ses_00000000400040008000000000000011",
+        "ses_00000000400040008000000000000012",
+    )
     for session_id in session_ids:
-        session_dir = resolver.allocate_session_dir(
-            session_id=session_id,
-            title=session_id,
-            parent_node_id=None,
-        )
-        (session_dir / "session.json").write_text(
-            json.dumps(
-                {
-                    "session_id": session_id,
-                    "title": session_id,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            ),
-            encoding="utf-8",
-        )
-        resolver.register_session(session_id, session_dir)
+        seed_catalog_session_bundle(sessions_root, session_id, title=session_id)
     service = FileTreeSettingsService(
         workspace_root=workspace_root,
         path_resolver=resolver,
@@ -159,25 +148,12 @@ def test_default_shortcut_only_applies_to_sessions_created_after_change(
     )
     existing = service.get(second_session_id)
 
-    third_session_id = "ses_shortcut_third"
-    third_session_dir = file_tree_settings.resolver.allocate_session_dir(
-        session_id=third_session_id,
+    third_session_id = "ses_00000000400040008000000000000013"
+    seed_catalog_session_bundle(
+        file_tree_settings.workspace_root / ".boxteam" / "sessions",
+        third_session_id,
         title=third_session_id,
-        parent_node_id=None,
     )
-    now = datetime.now(UTC).isoformat()
-    (third_session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": third_session_id,
-                "title": third_session_id,
-                "created_at": now,
-                "updated_at": now,
-            }
-        ),
-        encoding="utf-8",
-    )
-    file_tree_settings.resolver.register_session(third_session_id, third_session_dir)
     service.handle_session_change("create", third_session_id)
     inherited = service.get(third_session_id)
 
@@ -208,27 +184,11 @@ def test_removing_default_does_not_change_existing_session_snapshots(
     )
     service.apply_to_workspace(first_session_id, path=str(shortcut_path))
 
-    inherited_session_id = "ses_shortcut_inherited"
-    inherited_session_dir = file_tree_settings.resolver.allocate_session_dir(
-        session_id=inherited_session_id,
-        title=inherited_session_id,
-        parent_node_id=None,
-    )
-    now = datetime.now(UTC).isoformat()
-    (inherited_session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": inherited_session_id,
-                "title": inherited_session_id,
-                "created_at": now,
-                "updated_at": now,
-            }
-        ),
-        encoding="utf-8",
-    )
-    file_tree_settings.resolver.register_session(
+    inherited_session_id = "ses_00000000400040008000000000000014"
+    seed_catalog_session_bundle(
+        file_tree_settings.workspace_root / ".boxteam" / "sessions",
         inherited_session_id,
-        inherited_session_dir,
+        title=inherited_session_id,
     )
     service.initialize_session(inherited_session_id)
 

@@ -9,16 +9,14 @@ PID 认领/误杀其它进程。其余 launch claim 决策矩阵由
 from __future__ import annotations
 
 import asyncio
-import json
 import shutil
 import socket
 import subprocess
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugLaunchClaimDTO,
@@ -36,12 +34,13 @@ from app.services.infrastructure.node_debug.process_identity import (
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )
 
-_PARENT_SESSION_ID = "ses_phase_parent"
-_OTHER_SESSION_ID = "ses_phase_other"
+_PARENT_SESSION_ID = "ses_00000000400040008000000000000001"
+_OTHER_SESSION_ID = "ses_00000000400040008000000000000002"
 _CONFIGURATION_ID = "dbgcfg_44444444444444444444444444444444"
 
 
@@ -83,32 +82,13 @@ def _free_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _create_session(resolver: SessionPathResolver, session_id: str) -> Path:
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
-        title=session_id,
-        parent_node_id=None,
-    )
-    now = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": session_id,
-                "parent_session_id": None,
-                "created_at": now,
-                "updated_at": now,
-            }
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
-    return session_dir
+def _create_session(sessions_root: Path, session_id: str) -> Path:
+    return seed_catalog_session_bundle(sessions_root, session_id, title=session_id).directory
 
 
 def _service(
     tmp_path: Path,
-    resolver: SessionPathResolver,
+    resolver: object,
     *,
     port: int,
     timeout: float = 0.5,
@@ -132,10 +112,11 @@ def _service(
 @pytest.mark.skipif(shutil.which("node") is None, reason="需要 Node.js Inspector")
 async def test_fixed_inspector_port_conflict_is_owner_isolated(tmp_path: Path) -> None:
     """固定端口冲突只失败当前 owner，先启动的 owner 保持运行。"""
-    resolver = SessionPathResolver(tmp_path / ".boxteam" / "sessions")
+    sessions_root = tmp_path / ".boxteam" / "sessions"
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
-    _create_session(resolver, _PARENT_SESSION_ID)
-    _create_session(resolver, _OTHER_SESSION_ID)
+    _create_session(sessions_root, _PARENT_SESSION_ID)
+    _create_session(sessions_root, _OTHER_SESSION_ID)
     service = _service(tmp_path, resolver, port=_free_port())
 
     try:
@@ -197,9 +178,10 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """launch_pending 无 PID 时重启保持阻断，端口复用进程不得被误杀。"""
-    resolver = SessionPathResolver(tmp_path / ".boxteam" / "sessions")
+    sessions_root = tmp_path / ".boxteam" / "sessions"
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
-    _create_session(resolver, _PARENT_SESSION_ID)
+    _create_session(sessions_root, _PARENT_SESSION_ID)
     port = _free_port()
     service = _service(tmp_path, resolver, port=port, timeout=0.5)
     created = await service.create_configuration(

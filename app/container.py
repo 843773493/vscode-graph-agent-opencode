@@ -21,6 +21,7 @@ from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.env import get_project_root
 from app.core.job_event_bus import JobEventBus
 from app.core.path_utils import (
+    get_session_creation_service,
     get_session_path_resolver,
     get_user_config_root,
     get_workspace_root,
@@ -357,6 +358,7 @@ def build_app_container(
         workspace_root=resolved_workspace_root,
     )
     session_path_resolver = get_session_path_resolver(resolved_sessions_root)
+    session_creation_service = get_session_creation_service(resolved_sessions_root)
     session_path_resolver.initialize()
     job_event_bus = JobEventBus()
     background_task_registry = BackgroundTaskRegistry(
@@ -430,6 +432,7 @@ def build_app_container(
         trace_event_store=trace_event_store,
         workspace_id=workspace_service.workspace_id,
         path_resolver=session_path_resolver,
+        creation_service=session_creation_service,
         fork_relationship_checker=checkpointer,
     )
     file_tree_settings_service = FileTreeSettingsService(

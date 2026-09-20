@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from app.core.exceptions import NotFoundError
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.node_debug import NodeDebugConfigurationCreateRequest
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
@@ -35,46 +34,36 @@ from app.services.infrastructure.node_debug.thread_owner import (
     normalize_node_debug_owner,
     resolve_node_debug_owner,
 )
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
-_PARENT_SESSION_ID = "ses_parent"
-_CHILD_SESSION_ID = "ses_child"
+_PARENT_SESSION_ID = "ses_00000000400040008000000000000001"
+_CHILD_SESSION_ID = "ses_00000000400040008000000000000002"
+_OTHER_SESSION_ID = "ses_00000000400040008000000000000003"
+_GRANDCHILD_SESSION_ID = "ses_00000000400040008000000000000004"
+_UNKNOWN_SESSION_ID = "ses_00000000400040008000000000000005"
+_MISSING_SESSION_ID = "ses_00000000400040008000000000000006"
 
 
 def _create_session(
-    resolver: SessionPathResolver,
+    resolver: object,
     session_id: str,
     *,
     parent_session_id: str | None = None,
 ) -> Path:
     """在权威目录索引中创建最小合法会话节点（child 必须显式声明父会话）。"""
     title = f"测试会话 {session_id}"
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
+    return seed_catalog_session_bundle(
+        resolver.sessions_root,
+        session_id,
         title=title,
         parent_node_id=parent_session_id,
-    )
-    now = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": title,
-                "parent_session_id": parent_session_id,
-                "created_at": now,
-                "updated_at": now,
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
-    return session_dir
+    ).directory
 
 
 class _ResolverSessionLifecycle:
     """以权威目录索引模拟 SessionService.get 的“存在且未删除”语义。"""
 
-    def __init__(self, resolver: SessionPathResolver) -> None:
+    def __init__(self, resolver: object) -> None:
         self._resolver = resolver
 
     async def get(self, session_id: str) -> object:
@@ -87,7 +76,7 @@ class _ResolverSessionLifecycle:
 class _ThreadsDirectoryResolver:
     """独立 thread 节点形态（``<session>/threads/<thread_id>``）的解析器替身。
 
-    生产 ``SessionPathResolver`` 把 child thread 解析为子会话自身节点（因此会折叠
+    生产 ``object`` 把 child thread 解析为子会话自身节点（因此会折叠
     owner）；该替身用于固定“非会话形态 thread 保持 (session_id, thread_id) 原样”
     这一协议分支。
     """
@@ -103,9 +92,10 @@ class _ThreadsDirectoryResolver:
 
 
 @pytest.fixture
-def session_tree(tmp_path: Path) -> tuple[SessionPathResolver, Path, Path]:
+def session_tree(tmp_path: Path) -> tuple[object, Path, Path]:
     """建立 ``ses_parent`` 与其直接子会话 ``ses_child`` 的权威物理树。"""
-    resolver = SessionPathResolver(tmp_path / ".boxteam" / "sessions")
+    sessions_root = tmp_path / ".boxteam" / "sessions"
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     parent_dir = _create_session(resolver, _PARENT_SESSION_ID)
     child_dir = _create_session(
@@ -128,7 +118,7 @@ def workspace_root(tmp_path: Path) -> Path:
     return root
 
 
-def _service(workspace_root: Path, resolver: SessionPathResolver) -> NodeDebugService:
+def _service(workspace_root: Path, resolver: object) -> NodeDebugService:
     return NodeDebugService(
         workspace_root=workspace_root,
         config_service=ConfigService(workspace_root=workspace_root),
@@ -161,7 +151,7 @@ def test_explicit_session_thread_entry_normalizes_to_main_thread() -> None:
 
 def test_launch_profile_name_resolution_matches_start_semantics(
     workspace_root: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
 ) -> None:
     """工具面启动前核对的 profile 解析必须复用启动解析规则。"""
     resolver, _parent_dir, _child_dir = session_tree
@@ -174,7 +164,7 @@ def test_launch_profile_name_resolution_matches_start_semantics(
 
 
 def test_thread_node_resolution_follows_catalog_ownership(
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
 ) -> None:
     resolver, parent_dir, child_dir = session_tree
 
@@ -210,27 +200,27 @@ def test_thread_node_resolution_follows_catalog_ownership(
         resolve_node_debug_owner(
             resolver,
             session_id=_PARENT_SESSION_ID,
-            thread_id="ses_unknown_thread",
+            thread_id=_UNKNOWN_SESSION_ID,
         )
 
-    _create_session(resolver, "ses_other")
+    _create_session(resolver, _OTHER_SESSION_ID)
     with pytest.raises(RuntimeError, match="thread 不属于目标 session"):
         resolve_node_debug_owner(
             resolver,
             session_id=_PARENT_SESSION_ID,
-            thread_id="ses_other",
+            thread_id=_OTHER_SESSION_ID,
         )
 
     _create_session(
         resolver,
-        "ses_grandchild",
+        _GRANDCHILD_SESSION_ID,
         parent_session_id=_CHILD_SESSION_ID,
     )
     with pytest.raises(RuntimeError, match="thread 不属于目标 session"):
         resolve_node_debug_owner(
             resolver,
             session_id=_PARENT_SESSION_ID,
-            thread_id="ses_grandchild",
+            thread_id=_GRANDCHILD_SESSION_ID,
         )
 
 
@@ -251,7 +241,7 @@ def test_independent_thread_node_keeps_thread_owner_form(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_main_and_child_thread_state_is_isolated(
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     workspace_root: Path,
 ) -> None:
     resolver, _parent_dir, _child_dir = session_tree
@@ -337,7 +327,7 @@ async def test_main_and_child_thread_state_is_isolated(
 
 @pytest.mark.asyncio
 async def test_child_thread_debug_data_lands_in_thread_node_directory(
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     workspace_root: Path,
 ) -> None:
     resolver, parent_dir, child_dir = session_tree
@@ -410,7 +400,7 @@ async def test_child_thread_debug_data_lands_in_thread_node_directory(
 
 @pytest.mark.asyncio
 async def test_child_thread_and_child_session_main_address_share_one_owner(
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     workspace_root: Path,
 ) -> None:
     """两个地址命中同一 owner：状态一致、断点/方案同源、无覆盖写。"""
@@ -498,7 +488,7 @@ async def test_child_thread_and_child_session_main_address_share_one_owner(
 
 @pytest.mark.asyncio
 async def test_mutation_admission_rejects_missing_and_deleted_session(
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     workspace_root: Path,
 ) -> None:
     resolver, _parent_dir, _child_dir = session_tree
@@ -526,7 +516,7 @@ async def test_mutation_admission_rejects_missing_and_deleted_session(
     with pytest.raises(FileNotFoundError, match="不存在或已删除"):
         await service.create_configuration(
             NodeDebugConfigurationCreateRequest(
-                session_id="ses_missing",
+                session_id=_MISSING_SESSION_ID,
                 thread_id=MAIN_THREAD_ID,
                 name="缺失方案",
                 script_path="main.mjs",
@@ -551,11 +541,11 @@ async def test_mutation_admission_rejects_missing_and_deleted_session(
 
 @pytest.mark.asyncio
 async def test_mutation_admission_rejects_foreign_thread(
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     workspace_root: Path,
 ) -> None:
     resolver, _parent_dir, _child_dir = session_tree
-    _create_session(resolver, "ses_other")
+    _create_session(resolver, _OTHER_SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=ConfigService(workspace_root=workspace_root),
@@ -571,7 +561,7 @@ async def test_mutation_admission_rejects_foreign_thread(
         await service.create_configuration(
             NodeDebugConfigurationCreateRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="ses_other",
+                thread_id=_OTHER_SESSION_ID,
                 name="越界方案",
                 script_path="main.mjs",
             )
@@ -580,7 +570,7 @@ async def test_mutation_admission_rejects_foreign_thread(
         await service.create_configuration(
             NodeDebugConfigurationCreateRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="ses_unknown_thread",
+                thread_id=_UNKNOWN_SESSION_ID,
                 name="未知线程方案",
                 script_path="main.mjs",
             )
@@ -593,7 +583,7 @@ async def test_drain_session_stops_exact_main_runtime_before_delete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """删除 drain 只停止目标 Session 的 main owner，并核实 claim 已收敛。"""
-    resolver = SessionPathResolver(tmp_path / "sessions")
+    resolver = get_session_path_resolver(tmp_path / "sessions")
     resolver.initialize()
     service = NodeDebugService(
         workspace_root=tmp_path,

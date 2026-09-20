@@ -2,17 +2,11 @@
 
 OpenSpec add-itemized-rollout-context 8.2-切片3a（R15）。以
 ``SessionCatalogStore``（workspace ``navigation/session-catalog.sqlite``）为
-数据源，实现旧 ``SessionPathResolver``（``app/core/session_paths.py``）的全部
-公开接口面，使 30+ 调用方可在切换轮 duck-typing 平滑迁移。
+数据源，实现会话路径、导航和删除所需的权威查询接口。
 
 红线（模块边界，违反即失去本轮资格）：
 
-- **不装配**：本模块不接入 ``path_utils`` / ``container`` / ``main.py``，
-  生产仍使用旧 resolver（JSON index 权威）；本模块是切换轮（下一轮）的
-  主体件，当前仅测试直接构造。
-- **不切权威**：现有 JSON index 仍是唯一权威；本模块以 SQLite catalog
-  直读为数据源（无进程内节点缓存），``invalidate``/``refresh`` 退化为
-  签名兼容适配。
+- **唯一权威**：SQLite catalog 是唯一目录数据源；节点读取不依赖进程内缓存。
 - **folder 无物理目录**：新模型 folder 是 SQLite-only 节点——投影
   ``path=None``（``created_at``/``updated_at`` 同为 None，catalog 中 folder
   无时间字段，不伪造时间值）；``resolve_folder_dir`` 恒 ``RuntimeError``。
@@ -22,12 +16,6 @@ OpenSpec add-itemized-rollout-context 8.2-切片3a（R15）。以
   ``relocate_folder_tree`` 只改 SQLite ``parent_node_id``，不搬任何物理
   目录、不改写 ``session.json``、不改 fork/delegation lineage/Session kind
   或已封存 context；执行中 Session 可移动（design.md §9）。
-- **allocate/register 的 marker 兼容层是切换期过渡**（TODO 标注）：旧调用
-  方「自选 session_id → 写完整 manifest → register」的创建签名由
-  「honor canonical 传入 ID（非 canonical 拒绝）+ 目录内 marker 回读 +
-  register 剥离重写」兼容；切换轮调用方改造为 journal 原生流后应整体
-  移除该兼容层。
-
 语义基准：design.md §9（统一两级 resolver；逻辑导航移动不搬磁盘；
 folder 无物理目录；Gateway 只消费受控 catalog export）。
 
@@ -38,35 +26,22 @@ folder 无物理目录；Gateway 只消费受控 catalog export）。
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 import threading
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
-    SessionCreationRecord,
-    validate_session_id,
     validate_thread_id,
 )
 from app.core.session_control_store import SessionControlStore
-from app.core.session_creation import (
-    SessionCreationService,
-    compute_session_creation_preimage_hash,
-)
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
-from app.core.session_tree.support import (
-    SESSION_ALLOCATION_MARKER_NAME,
-    SESSION_MANIFEST_NAME,
-    SessionPhysicalNode,
-)
+from app.core.session_tree.support import SessionPhysicalNode
 
 __all__ = [
     "SessionCatalogPathResolver",
@@ -77,22 +52,6 @@ __all__ = [
 _LIST_CHILDREN_PAGE_LIMIT = 512
 _CONTROL_DATABASE_NAME = "session-control.sqlite"
 
-# 调用方完整 manifest 中禁止落盘的可变导航字段（catalog 是唯一权威）；
-# register_session 剥离重写。
-_FORBIDDEN_NAVIGATION_KEYS = ("title", "title_source", "parent_session_id")
-
-# allocate 阶段写入 journal 的占位元数据（调用方六字段闭集的初值）；
-# register 剥离重写 manifest 时被调用方真实值整体覆盖，不会进入已发布形态。
-_ALLOCATION_PLACEHOLDER_METADATA: dict[str, object] = {
-    "kind": "normal",
-    "delegation": None,
-    "generation_origin": None,
-    "current_agent_id": None,
-    "current_provider_id": None,
-    "context_source_session_id": None,
-}
-
-
 @dataclass(frozen=True, slots=True)
 class SessionChildSummary:
     """直接逻辑子会话摘要（title 即 catalog display_name）。"""
@@ -100,56 +59,6 @@ class SessionChildSummary:
     session_id: str
     title: str
     created_at: str
-
-
-@dataclass(frozen=True, slots=True)
-class _PendingRegistration:
-    """allocate→register 兼容窗口的实例内分配记录。"""
-
-    idempotency_key: str
-    session_dir: Path
-
-
-def _fsync_directory(directory: Path) -> None:
-    """fsync 目录项，保证新建/改名条目的持久性（模式对齐 R13/R14）。"""
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _atomic_write_bytes(path: Path, payload: bytes) -> None:
-    """tempfile + fsync + os.replace 的原子写（模式对齐 R13 创建流）。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        dir=path.parent,
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-    _fsync_directory(path.parent)
-
-
-def _read_json_object(path: Path) -> dict[str, object]:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise RuntimeError(f"JSON 文件无法读取: {path}: {error}") from error
-    if not isinstance(raw, dict):
-        # JSON 结构被篡改属「外部改动 fail closed」语义冲突，按模块错误
-        # 分类抛 RuntimeError 而非调用方输入类型错误（TRY004 不适用）。
-        raise RuntimeError(  # noqa: TRY004
-            f"JSON 文件必须是 object: {path}"
-        )
-    return {str(key): value for key, value in raw.items()}
 
 
 class SessionCatalogPathResolver:
@@ -166,7 +75,6 @@ class SessionCatalogPathResolver:
         store: SessionCatalogStore,
         sessions_root: Path,
         workspace_id: str,
-        creation_service: SessionCreationService,
         delete_service: SessionSubtreeDeleteService,
     ) -> None:
         if not isinstance(store, SessionCatalogStore):
@@ -175,11 +83,6 @@ class SessionCatalogPathResolver:
             raise TypeError(f"sessions_root 必须是 Path: {sessions_root!r}")
         if not isinstance(workspace_id, str) or not workspace_id:
             raise ValueError(f"workspace_id 不能为空: {workspace_id!r}")
-        if not isinstance(creation_service, SessionCreationService):
-            raise TypeError(
-                f"creation_service 必须是 SessionCreationService: "
-                f"{creation_service!r}"
-            )
         if not isinstance(delete_service, SessionSubtreeDeleteService):
             raise TypeError(
                 f"delete_service 必须是 SessionSubtreeDeleteService: "
@@ -195,10 +98,8 @@ class SessionCatalogPathResolver:
             )
         self._store = store
         self._workspace_id = workspace_id
-        self._creation_service = creation_service
         self._delete_service = delete_service
         self._lock = threading.RLock()
-        self._pending_registrations: dict[str, _PendingRegistration] = {}
         self._subtree_delete_keys: dict[str, str] = {}
         self._consistency_verified = False
 
@@ -440,6 +341,28 @@ class SessionCatalogPathResolver:
             or thread_id == node.main_thread_id
         ):
             return session_dir
+        # child Session 节点是 NodeDebug 的折叠 thread owner：父会话地址携带
+        # 子会话 ID 时，直接返回子会话自身目录。该别名由 catalog 子树约束，
+        # 不扫描磁盘，也不把任意字符串当作 thread_id 接受。
+        try:
+            child_node = self._store.get_node(thread_id)
+        except KeyError:
+            if thread_id.startswith("ses_"):
+                raise KeyError(
+                    "目标 child session 不存在: "
+                    f"session_id={session_id}, thread_id={thread_id}"
+                ) from None
+            child_node = None
+        if (
+            child_node is not None
+            and child_node.kind == "session"
+        ):
+            if child_node.parent_node_id != session_id:
+                raise RuntimeError(
+                    "thread 不属于目标 session: "
+                    f"session_id={session_id}, thread_id={thread_id}"
+                )
+            return self.resolve_session_node(thread_id)
         validate_thread_id(thread_id)
         control_path = session_dir / _CONTROL_DATABASE_NAME
         if not control_path.is_file() or control_path.is_symlink():
@@ -794,332 +717,6 @@ class SessionCatalogPathResolver:
         :meth:`finish_subtree_delete`），切换轮适配。
         """
         self._store.delete_empty_folder(folder_id)
-
-    # ------------------------------------------------------------------
-    # 创建适配（旧「allocate → 写 manifest → register」签名兼容层）
-    # ------------------------------------------------------------------
-
-    def allocate_session_dir(
-        self,
-        *,
-        session_id: str,
-        title: str,
-        parent_node_id: str | None = None,
-    ) -> Path:
-        """分配新会话目录并返回其日期桶路径（签名兼容适配层）。
-
-        **兼容契约（切换期过渡，TODO(切换轮) 整体移除）**：
-
-        - 传入 ``session_id`` 为 canonical（``ses_`` + 32 位小写 hex +
-          UUIDv4 位 profile）时被 **honor**：它就是本次分配的真实
-          session ID（R17 起兼容旧 API「自选 ID 创建」形态，journal record
-          以传入 ID 冻结身份）；非 canonical 传入直接抛 ``ValueError``
-          （消息含非法值，fail loud，不静默忽略、不清洗改写）。调用方仍须
-          从返回目录内的 ``.boxteam-session-allocating.json`` marker 回读
-          真实 ``session_id``（honor 时即传入值），并用它写 manifest 与调用
-          :meth:`register_session`。
-        - 本方法执行创建流 journal 的 preparing 段（record → staging 剥离
-          manifest + session-control → 原子 rename 日期桶 → 写 marker），
-          **不发布可见节点**；publish 是 :meth:`register_session` 的职责
-          （保持旧模型「register 时可见」契约，并使
-          :meth:`abandon_session_allocation` 精确复用 R13 CAS 失败回收
-          路径）。
-        - staging 内的 session.json 为剥离版（不含 title/title_source/
-          parent_session_id）；调用方随后写入的完整版 manifest 由
-          register 剥离重写。
-        """
-        # R17：honor canonical 传入 ID——先做形态校验（非法 fail loud），
-        # 再传入 create_or_get_creation_record 冻结为分配身份。
-        validate_session_id(session_id)
-        if not isinstance(title, str) or not title:
-            raise ValueError(f"title 不能为空: {title!r}")
-        if parent_node_id is not None and not isinstance(parent_node_id, str):
-            raise TypeError(
-                f"parent_node_id 必须是字符串或 None: {parent_node_id!r}"
-            )
-        with self._lock:
-            self._ensure_consistency_verified()
-            idempotency_key = uuid.uuid4().hex
-            metadata = dict(_ALLOCATION_PLACEHOLDER_METADATA)
-            preimage_hash = compute_session_creation_preimage_hash(
-                workspace_id=self._workspace_id,
-                parent_node_id=parent_node_id,
-                title=title,
-                session_metadata=metadata,
-            )
-            record = self._store.create_or_get_creation_record(
-                idempotency_key=idempotency_key,
-                workspace_id=self._workspace_id,
-                parent_node_id=parent_node_id,
-                display_name=title,
-                created_at=datetime.now(UTC),
-                preimage_hash=preimage_hash,
-                session_id=session_id,
-            )
-            # TODO(切换轮): 复用 SessionCreationService 非公开实现
-            # （_prepare_staging/_rename_staging_to_target/_quarantine_target）
-            # ——R13 文件本轮冻结无漂移风险；切换轮应把「staging 准备 +
-            # rename + 定点回收」提升为服务公开 API 后移除对私有的依赖。
-            self._creation_service._prepare_staging(
-                record, metadata, idempotency_key
-            )
-            self._creation_service._rename_staging_to_target(
-                record, metadata, idempotency_key
-            )
-            target = self._store.resolve_session_locator(
-                record.storage_relative_locator
-            )
-            marker = {
-                "session_id": record.session_id,
-                "main_thread_id": record.main_thread_id,
-                "idempotency_key": idempotency_key,
-                "parent_node_id": parent_node_id,
-                "title": title,
-                "created_at": record.created_at,
-                "compat_layer": (
-                    "session_catalog_resolver allocate/register 切换期兼容层；"
-                    "调用方须回读本 marker 的 session_id"
-                ),
-            }
-            _atomic_write_bytes(
-                target / SESSION_ALLOCATION_MARKER_NAME,
-                (
-                    json.dumps(marker, ensure_ascii=False, indent=2, sort_keys=True)
-                    + "\n"
-                ).encode("utf-8"),
-            )
-            self._pending_registrations[record.session_id] = _PendingRegistration(
-                idempotency_key=idempotency_key,
-                session_dir=target,
-            )
-            return target
-
-    def register_session(
-        self,
-        session_id: str,
-        session_dir: Path,
-    ) -> SessionPhysicalNode:
-        """注册分配的会话：剥离重写 manifest → CAS publish（可见性提交点）。
-
-        兼容契约（见 :meth:`allocate_session_dir` docstring）：
-
-        - ``session_dir`` 必须命中 ``_pending_registrations`` 且创建流
-          record 可推进为 published；
-        - 读取调用方写的 ``session.json``，剥离
-          ``title``/``title_source``/``parent_session_id`` 三键后原子重写；
-          ``title`` 若存在必须与 catalog display_name 一致（防调用方绕过
-          catalog 权威）；``session_id``/``workspace_id`` 以 record 冻结值
-          规范化（调用方写旧自选 ID 一律拒绝）；
-        - publish CAS 失败（父节点漂移/删除等）复用 R13 定点回收：日期桶
-          隔离到 orphaned + abort record + RuntimeError（调用方换新分配
-          重试）；
-        - 幂等：record 已 published 时只做 manifest 复核与实例表清理；
-          无 pending 但节点已发布且 manifest 已剥离时为 no-op。
-        """
-        resolved_dir = session_dir.resolve()
-        with self._lock:
-            pending = self._pending_registrations.get(session_id)
-            if pending is not None and pending.session_dir != resolved_dir:
-                raise RuntimeError(
-                    "注册会话目录与分配记录不一致: "
-                    f"session_id={session_id}, expected={pending.session_dir}, "
-                    f"actual={resolved_dir}"
-                )
-            record = self._require_creation_record(session_id, pending)
-            if record.session_id != session_id:
-                raise RuntimeError(
-                    "创建流 record 与注册 session_id 不一致（外部改动，"
-                    f"fail closed）: expected={record.session_id}, "
-                    f"actual={session_id}"
-                )
-            manifest_path = resolved_dir / SESSION_MANIFEST_NAME
-            if not manifest_path.is_file():
-                raise RuntimeError(f"注册会话时缺少 session.json: {manifest_path}")
-            manifest = _read_json_object(manifest_path)
-            manifest_session_id = manifest.get("session_id")
-            if manifest_session_id not in (None, session_id):
-                raise RuntimeError(
-                    "注册会话时 manifest session_id 与分配不一致；调用方必须"
-                    "改用 marker 回读的软件分配 ID 重写 manifest（切换期兼容"
-                    f"契约）: expected={session_id}, "
-                    f"actual={manifest_session_id!r}"
-                )
-            manifest_workspace_id = manifest.get("workspace_id")
-            if manifest_workspace_id not in (None, record.workspace_id):
-                raise RuntimeError(
-                    "注册会话时 manifest workspace_id 与分配不一致: "
-                    f"expected={record.workspace_id}, "
-                    f"actual={manifest_workspace_id!r}"
-                )
-            title = manifest.get("title")
-            if title is not None and title != record.display_name:
-                raise RuntimeError(
-                    "注册会话时 manifest title 与 catalog display_name 不一致，"
-                    f"拒绝绕过 catalog 权威: session_id={session_id}, "
-                    f"display_name={record.display_name!r}, title={title!r}"
-                )
-            stripped = {
-                key: value
-                for key, value in manifest.items()
-                if key not in _FORBIDDEN_NAVIGATION_KEYS
-            }
-            stripped["session_id"] = session_id
-            stripped["workspace_id"] = record.workspace_id
-            stripped["created_at"] = record.created_at
-            stripped.setdefault("updated_at", record.created_at)
-            _atomic_write_bytes(
-                manifest_path,
-                (
-                    json.dumps(
-                        stripped, ensure_ascii=False, indent=2, sort_keys=True
-                    )
-                    + "\n"
-                ).encode("utf-8"),
-            )
-            (resolved_dir / SESSION_ALLOCATION_MARKER_NAME).unlink(missing_ok=True)
-            if pending is not None and record.state != "published":
-                try:
-                    self._store.publish_creation_record(pending.idempotency_key)
-                except RuntimeError as error:
-                    # CAS 失败：定点回收日期桶目录 + abort record（对齐
-                    # R13 创建流 CAS 失败路径；回收失败保持 preparing 并
-                    # 直接抛错，人工核账）。
-                    self._creation_service._quarantine_target(
-                        record, pending.idempotency_key
-                    )
-                    self._store.abort_creation_record(
-                        pending.idempotency_key, str(error)
-                    )
-                    raise RuntimeError(
-                        "session creation publish CAS 失败，已定点回收日期桶"
-                        "目录并 abort record，调用方须重新分配重试: "
-                        f"session_id={session_id}: {error}"
-                    ) from error
-            self._pending_registrations.pop(session_id, None)
-            return self.get_node(session_id)
-
-    def abandon_session_allocation(self, session_dir: Path) -> None:
-        """回收尚未注册发布的会话分配（R13 CAS 失败路径复用）。
-
-        - 按 ``session_dir`` 查找 ``_pending_registrations``；无命中 →
-          ``RuntimeError``；
-        - record ``preparing``：日期桶目录（或未 rename 的 staging）隔离
-          到 ``.boxteam/orphaned/session-creation/<key>/``（对齐 R13 回收
-          选型）后 abort record；
-        - record ``aborted``：幂等补齐隔离（目录已不在则为 no-op）；
-        - record ``published``：拒绝（会话已可见，回收须走子树删除协议）。
-        """
-        resolved_dir = session_dir.resolve()
-        with self._lock:
-            pending_session_id = next(
-                (
-                    candidate_id
-                    for candidate_id, candidate in (
-                        self._pending_registrations.items()
-                    )
-                    if candidate.session_dir == resolved_dir
-                ),
-                None,
-            )
-            if pending_session_id is None:
-                raise RuntimeError(
-                    f"无待注册的会话分配，拒绝回收: path={resolved_dir}"
-                )
-            pending = self._pending_registrations.pop(pending_session_id)
-        try:
-            record = self._store.get_creation_record(pending.idempotency_key)
-        except KeyError as error:
-            raise RuntimeError(
-                "分配对应的 creation record 缺失（外部改动，fail closed）: "
-                f"key={pending.idempotency_key!r}"
-            ) from error
-        if record.state == "published":
-            raise RuntimeError(
-                "会话分配已发布，abandon 不可撤销（回收须走子树删除协议）: "
-                f"session_id={record.session_id}"
-            )
-        # TODO(切换轮): 与 allocate 同款——复用服务非公开定点回收实现。
-        target = self._store.resolve_session_locator(
-            record.storage_relative_locator
-        )
-        if target.exists() or target.is_symlink():
-            self._creation_service._quarantine_target(
-                record, pending.idempotency_key
-            )
-        else:
-            self._quarantine_staging(pending.idempotency_key)
-        if record.state != "aborted":
-            self._store.abort_creation_record(
-                pending.idempotency_key,
-                "abandon_session_allocation：调用方放弃未注册的分配",
-            )
-
-    def _quarantine_staging(self, idempotency_key: str) -> None:
-        """rename 未发生时把 staging 目录隔离到 orphaned（幂等）。
-
-        与 ``SessionCreationService._quarantine_target`` 同布局：
-        ``.boxteam/orphaned/session-creation/<key>/``。
-        """
-        staging = self.sessions_root / ".staging" / idempotency_key
-        if not staging.is_dir() or staging.is_symlink():
-            return  # staging 与日期桶均已不在：视为已回收（幂等）。
-        quarantine_target = (
-            self.sessions_root.parent
-            / "orphaned"
-            / "session-creation"
-            / idempotency_key
-        )
-        if quarantine_target.exists() or quarantine_target.is_symlink():
-            raise RuntimeError(
-                "staging 隔离目标已存在，拒绝覆盖: "
-                f"key={idempotency_key!r}, target={quarantine_target}"
-            )
-        quarantine_target.parent.mkdir(parents=True, exist_ok=True)
-        os.rename(staging, quarantine_target)
-        _fsync_directory(quarantine_target.parent)
-        _fsync_directory(staging.parent)
-
-    def _require_creation_record(
-        self,
-        session_id: str,
-        pending: _PendingRegistration | None,
-    ) -> SessionCreationRecord | _PublishedRecordProbe:
-        """register 的 record 获取：无 pending 时按幂等/防绕过分支处理。
-
-        无 pending 且节点已发布、manifest 已剥离 → 返回已发布行的最小
-        投影（幂等重入）；其余无 pending 形态一律拒绝（防绕过分配流程）。
-        """
-        if pending is None:
-            try:
-                node = self._store.get_node(session_id)
-            except KeyError as error:
-                raise RuntimeError(
-                    f"无待注册的会话分配，拒绝注册: session_id={session_id}"
-                ) from error
-            if node.kind != "session" or node.storage_relative_locator is None:
-                raise RuntimeError(
-                    f"无待注册的会话分配，拒绝注册: session_id={session_id}"
-                )
-            manifest_path = (
-                self._store.resolve_session_locator(node.storage_relative_locator)
-                / SESSION_MANIFEST_NAME
-            )
-            manifest = _read_json_object(manifest_path)
-            if any(key in manifest for key in _FORBIDDEN_NAVIGATION_KEYS):
-                raise RuntimeError(
-                    "无待注册分配且 manifest 含可变导航字段（疑似绕过"
-                    f"分配流程，fail closed）: session_id={session_id}"
-                )
-            return _PublishedRecordProbe.from_node(node)
-        try:
-            return self._store.get_creation_record(pending.idempotency_key)
-        except KeyError as error:
-            raise RuntimeError(
-                "分配对应的 creation record 缺失（外部改动，fail closed）: "
-                f"key={pending.idempotency_key!r}"
-            ) from error
-
-    # ------------------------------------------------------------------
     # 删除适配（R14 子树删除协议）
     # ------------------------------------------------------------------
 
@@ -1178,33 +775,4 @@ class SessionCatalogPathResolver:
             candidate_id
             for candidate_id in result.drained_session_ids
             if candidate_id != session_id
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class _PublishedRecordProbe:
-    """register 幂等重入（无 pending）时的最小 record 替身。
-
-    仅携带 register 后续步骤实际读取的字段（display_name/workspace_id/
-    created_at/state），全部取自已发布的 catalog 行。
-    """
-
-    session_id: str
-    display_name: str
-    workspace_id: str
-    created_at: str
-    state: str
-
-    @classmethod
-    def from_node(cls, node: SessionCatalogNode) -> _PublishedRecordProbe:
-        if node.kind != "session":
-            raise RuntimeError(
-                f"注册目标不是 session 节点: session_id={node.node_id}"
-            )
-        return cls(
-            session_id=node.node_id,
-            display_name=node.display_name,
-            workspace_id=node.workspace_id,
-            created_at=node.created_at or "",
-            state="published",
         )

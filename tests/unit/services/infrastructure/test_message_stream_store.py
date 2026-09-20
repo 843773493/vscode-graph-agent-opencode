@@ -5,13 +5,12 @@ import json
 import os
 import shutil
 import threading
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 import app.services.infrastructure.message_stream_store as message_stream_store_module
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.message_stream_store import (
     MessageStreamCursorGoneError,
     MessageStreamError,
@@ -22,10 +21,11 @@ from app.services.orchestration.activity_runtime import (
     ActivityHandlerRegistry,
     ActivityRuntime,
 )
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
 @pytest.fixture
-def message_stream_store() -> tuple[MessageStreamStore, SessionPathResolver, str]:
+def message_stream_store() -> tuple[MessageStreamStore, object, str]:
     output_root = (
         Path.cwd()
         / "out/tests/unit/services/infrastructure/test_message_stream_store"
@@ -33,32 +33,19 @@ def message_stream_store() -> tuple[MessageStreamStore, SessionPathResolver, str
     if output_root.exists():
         shutil.rmtree(output_root)
     sessions_root = output_root / "workspace" / ".boxteam" / "sessions"
-    resolver = SessionPathResolver(sessions_root)
+    from app.core.path_utils import _cached_session_catalog_components
+
+    _cached_session_catalog_components.cache_clear()
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
-    session_id = "ses_message_stream_test"
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
-        title=session_id,
-    )
-    now = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": session_id,
-                "created_at": now,
-                "updated_at": now,
-            }
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
+    session_id = "ses_00000000400040008000000000000011"
+    seed_catalog_session_bundle(sessions_root, session_id)
     return MessageStreamStore(path_resolver=resolver), resolver, session_id
 
 
 @pytest.mark.asyncio
 async def test_event_commit_is_idempotent_and_terminal_gate_is_strict(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_message_stream_test")
@@ -126,7 +113,7 @@ async def test_event_commit_is_idempotent_and_terminal_gate_is_strict(
 
 @pytest.mark.asyncio
 async def test_tool_event_identity_is_persisted_and_mismatch_is_rejected(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     _, resolver, session_id = message_stream_store
     store = MessageStreamStore(path_resolver=resolver, workspace_id="workspace_1")
@@ -169,7 +156,7 @@ async def test_tool_event_identity_is_persisted_and_mismatch_is_rejected(
 
 @pytest.mark.asyncio
 async def test_stream_terminal_event_survives_unrelated_catalog_drift(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
     session_dir = resolver.resolve_session_node(session_id)
@@ -192,7 +179,7 @@ async def test_stream_terminal_event_survives_unrelated_catalog_drift(
 
 @pytest.mark.asyncio
 async def test_stream_events_do_not_duplicate_full_checkpoint_on_disk(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_compact_checkpoint")
@@ -231,7 +218,7 @@ async def test_stream_events_do_not_duplicate_full_checkpoint_on_disk(
 
 @pytest.mark.asyncio
 async def test_live_projection_bounds_large_text_until_canonical_history_is_ready(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_large_live_text")
@@ -294,7 +281,7 @@ async def test_live_projection_bounds_large_text_until_canonical_history_is_read
 
 @pytest.mark.asyncio
 async def test_fanout_does_not_wait_for_slow_state_snapshot(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, _, session_id = message_stream_store
@@ -351,7 +338,7 @@ async def test_fanout_does_not_wait_for_slow_state_snapshot(
 
 @pytest.mark.asyncio
 async def test_oversized_stream_retains_tail_and_recovers_from_snapshot(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, resolver, session_id = message_stream_store
@@ -407,7 +394,7 @@ async def test_oversized_stream_retains_tail_and_recovers_from_snapshot(
     ],
 )
 async def test_restart_rejects_corrupt_event_log_identity_and_order(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
     mutation: str,
     error_pattern: str,
 ) -> None:
@@ -457,7 +444,7 @@ async def test_restart_rejects_corrupt_event_log_identity_and_order(
 
 @pytest.mark.asyncio
 async def test_restart_rejects_state_snapshot_with_foreign_identity(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
     writer = await store.open(
@@ -491,7 +478,7 @@ async def test_restart_rejects_state_snapshot_with_foreign_identity(
 
 @pytest.mark.asyncio
 async def test_restart_rejects_damaged_state_snapshot(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
     writer = await store.open(
@@ -519,7 +506,7 @@ async def test_restart_rejects_damaged_state_snapshot(
 
 @pytest.mark.asyncio
 async def test_completed_stream_rejects_unfinished_entities(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
 
@@ -570,7 +557,7 @@ async def test_completed_stream_rejects_unfinished_entities(
 
 @pytest.mark.asyncio
 async def test_existing_stream_ids_skip_legacy_turns_without_creating_streams(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_with_stream")
@@ -590,7 +577,7 @@ async def test_existing_stream_ids_skip_legacy_turns_without_creating_streams(
 
 @pytest.mark.asyncio
 async def test_existing_stream_ids_does_not_materialize_historical_snapshots(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_with_snapshot")
@@ -611,7 +598,7 @@ async def test_existing_stream_ids_does_not_materialize_historical_snapshots(
 
 @pytest.mark.asyncio
 async def test_terminal_stream_cache_is_bounded_and_evicted_state_reloads(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, _, session_id = message_stream_store
@@ -654,7 +641,7 @@ async def test_terminal_stream_cache_is_bounded_and_evicted_state_reloads(
 
 @pytest.mark.asyncio
 async def test_restart_does_not_retain_terminal_history_in_memory(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
     for index in range(4):
@@ -674,7 +661,7 @@ async def test_restart_does_not_retain_terminal_history_in_memory(
 
 @pytest.mark.asyncio
 async def test_tool_call_projection_does_not_erase_known_name_or_arguments(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_tool_call_merge")
@@ -715,7 +702,7 @@ async def test_tool_call_projection_does_not_erase_known_name_or_arguments(
 
 @pytest.mark.asyncio
 async def test_validation_retry_marks_previous_model_blocks_intermediate(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_retry_projection")
@@ -771,7 +758,7 @@ async def test_validation_retry_marks_previous_model_blocks_intermediate(
 
 @pytest.mark.asyncio
 async def test_restart_reconciles_interrupt_and_unknown_tool_result(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_restart_test")
@@ -801,7 +788,7 @@ async def test_restart_reconciles_interrupt_and_unknown_tool_result(
 
 @pytest.mark.asyncio
 async def test_terminal_stream_conservatively_closes_running_activities(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
     writer = await store.open(
@@ -842,7 +829,7 @@ async def test_terminal_stream_conservatively_closes_running_activities(
 
 @pytest.mark.asyncio
 async def test_interrupt_gate_rejects_late_delta_and_preserves_request(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_interrupt_gate")
@@ -897,7 +884,7 @@ async def test_interrupt_gate_rejects_late_delta_and_preserves_request(
     [("reasoning",), ("text",), ("tool_call",), ("tool_execution",)],
 )
 async def test_delta_boundary_interrupt_matrix_has_same_live_checkpoint_snapshot_terminal(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
     stage: str,
 ) -> None:
     store, resolver, session_id = message_stream_store
@@ -990,7 +977,7 @@ async def test_delta_boundary_interrupt_matrix_has_same_live_checkpoint_snapshot
 
 @pytest.mark.asyncio
 async def test_interrupt_and_model_completion_race_has_one_terminal_winner(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_interrupt_completion_race")
@@ -1026,7 +1013,7 @@ async def test_interrupt_and_model_completion_race_has_one_terminal_winner(
 
 @pytest.mark.asyncio
 async def test_restart_keeps_event_idempotence_and_open_is_serialized(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
     writers = await asyncio.gather(*(
@@ -1055,7 +1042,7 @@ async def test_restart_keeps_event_idempotence_and_open_is_serialized(
 
 @pytest.mark.asyncio
 async def test_commit_failure_before_persist_does_not_publish_or_recover_delta(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, resolver, session_id = message_stream_store
@@ -1089,7 +1076,7 @@ async def test_commit_failure_before_persist_does_not_publish_or_recover_delta(
 
 @pytest.mark.asyncio
 async def test_event_application_failure_does_not_consume_event_seq(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_apply_failure")
@@ -1109,7 +1096,7 @@ async def test_event_application_failure_does_not_consume_event_seq(
 
 @pytest.mark.asyncio
 async def test_fsync_failure_reloads_uncertain_append_before_next_commit(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, resolver, session_id = message_stream_store
@@ -1173,7 +1160,7 @@ async def test_fsync_failure_reloads_uncertain_append_before_next_commit(
 
 @pytest.mark.asyncio
 async def test_fanout_failure_keeps_durable_event(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, resolver, session_id = message_stream_store
@@ -1201,7 +1188,7 @@ async def test_fanout_failure_keeps_durable_event(
 
 @pytest.mark.asyncio
 async def test_snapshot_control_frame_uses_checkpoint_high_water_without_new_event(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
     writer = await store.open(
@@ -1236,7 +1223,7 @@ async def test_snapshot_control_frame_uses_checkpoint_high_water_without_new_eve
 
 @pytest.mark.asyncio
 async def test_activity_lifecycle_is_replayable_and_snapshot_safe(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_activity_lifecycle")
@@ -1288,7 +1275,7 @@ async def test_activity_lifecycle_is_replayable_and_snapshot_safe(
 
 @pytest.mark.asyncio
 async def test_repeated_compaction_keeps_ordered_lifecycles_across_snapshot_and_restart(
-    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
     writer = await store.open(session_id=session_id, turn_id="job_repeated_compaction")

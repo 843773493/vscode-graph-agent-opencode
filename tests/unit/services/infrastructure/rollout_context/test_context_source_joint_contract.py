@@ -9,15 +9,12 @@ watch 乱序/重连、rewind/compaction、fork 恢复只消费已封存 typed �
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.detail_ref import DetailRef
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
@@ -62,6 +59,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.source_
 from app.services.infrastructure.rollout_context.runtime.ledger import (
     RuntimeContextLedger,
 )
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.unit.services.infrastructure.test_context_source_reactor import (
     _write_skill,
 )
@@ -106,26 +104,12 @@ def _install_demo_snapshot(manager: ContextSourceManager, content: str) -> None:
 
 
 def _create_session_node(root: Path, session_id: str, parent_node_id: str | None = None):
-    resolver = get_session_path_resolver(root)
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
+    seed_catalog_session_bundle(
+        root,
+        session_id,
         title="联合合同测试",
         parent_node_id=parent_node_id,
     )
-    timestamp = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": "联合合同测试",
-                "parent_session_id": parent_node_id,
-                "created_at": timestamp,
-                "updated_at": timestamp,
-            }
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
 
 
 @pytest.fixture

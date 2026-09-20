@@ -30,6 +30,7 @@ from app.core.storage_migration import (
     migrate_legacy_trace_timestamps,
     migrate_user_storage_layout,
 )
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
 class TestPathUtils:
@@ -143,25 +144,12 @@ class TestPathUtils:
         # md5 映射 ses_test_session_12345678 的产物——该函数反算不出此值，
         # 生成脚本未留存，R17 审查 E3/处置必改 2 更正）
         session_id = "ses_58a5607fd562454a932d851c95b73cc4"
-        session_dir = resolver.allocate_session_dir(
-            session_id=session_id,
+        session_dir = seed_catalog_session_bundle(
+            workspace_root / ".boxteam" / "sessions",
+            session_id,
             title=session_title,
             parent_node_id=folder.node_id,
-        )
-        now = datetime.now(UTC).isoformat()
-        (session_dir / "session.json").write_text(
-            json.dumps(
-                {
-                    "session_id": session_id,
-                    "title": session_title,
-                    "created_at": now,
-                    "updated_at": now,
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        resolver.register_session(session_id, session_dir)
+        ).directory
 
         path = get_session_path(session_id)
 
@@ -226,24 +214,12 @@ class TestPathUtils:
         # R17：canonical ID（一次性 uuid4 形态常量，直接写入；非任务书
         # md5 映射 ses_manual_move_12345678 的产物，R17 处置必改 2 更正）
         session_id = "ses_5ce2590d35c74fd9a71e8d7526be328c"
-        source = resolver.allocate_session_dir(
-            session_id=session_id,
+        source = seed_catalog_session_bundle(
+            workspace_root / ".boxteam" / "sessions",
+            session_id,
             title="手工移动",
             parent_node_id=source_folder.node_id,
-        )
-        now = datetime.now(UTC).isoformat()
-        (source / "session.json").write_text(
-            json.dumps(
-                {
-                    "session_id": session_id,
-                    "title": "手工移动",
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            ),
-            encoding="utf-8",
-        )
-        resolver.register_session(session_id, source)
+        ).directory
         if isinstance(resolver, SessionCatalogPathResolver):
             # 新模型：folder 无物理目录；手工挪走日期桶目录后解析必须
             # fail closed（防篡改收敛到物理解析点，不扫盘比对）。

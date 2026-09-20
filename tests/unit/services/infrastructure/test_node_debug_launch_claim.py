@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 import websockets
 
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugConfigurationDTO,
@@ -54,48 +54,35 @@ from app.services.infrastructure.node_debug.service import (
     _NodeDebugRuntime,
 )
 from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )
 
-_PARENT_SESSION_ID = "ses_claim_parent"
-_CHILD_SESSION_ID = "ses_claim_child"
+_PARENT_SESSION_ID = "ses_00000000400040008000000000000001"
+_CHILD_SESSION_ID = "ses_00000000400040008000000000000002"
 _CONFIGURATION_ID = "dbgcfg_11111111111111111111111111111111"
 
 
 def _create_session(
-    resolver: SessionPathResolver,
+    resolver: object,
     session_id: str,
     *,
     parent_session_id: str | None = None,
 ) -> Path:
     title = f"测试会话 {session_id}"
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
+    return seed_catalog_session_bundle(
+        resolver.sessions_root,
+        session_id,
         title=title,
         parent_node_id=parent_session_id,
-    )
-    now = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": title,
-                "parent_session_id": parent_session_id,
-                "created_at": now,
-                "updated_at": now,
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
-    return session_dir
+    ).directory
 
 
 @pytest.fixture
-def session_tree(tmp_path: Path) -> tuple[SessionPathResolver, Path, Path]:
-    resolver = SessionPathResolver(tmp_path / ".boxteam" / "sessions")
+def session_tree(tmp_path: Path) -> tuple[object, Path, Path]:
+    sessions_root = tmp_path / ".boxteam" / "sessions"
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     parent_dir = _create_session(resolver, _PARENT_SESSION_ID)
     child_dir = _create_session(
@@ -134,7 +121,7 @@ def _claim(
 
 
 def test_launch_claim_round_trip_and_owner_validation(
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
 ) -> None:
     resolver, parent_dir, _child_dir = session_tree
     store = NodeDebugSessionStore(resolver)
@@ -177,7 +164,7 @@ def test_launch_claim_round_trip_and_owner_validation(
 
 
 def test_store_write_paths_reject_alias_owner(
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
 ) -> None:
     resolver, parent_dir, child_dir = session_tree
     store = NodeDebugSessionStore(resolver)
@@ -521,7 +508,7 @@ class _BlockingProcess:
 
 def _make_service(
     tmp_path: Path,
-    resolver: SessionPathResolver,
+    resolver: object,
     *,
     inspector_port: int | None = None,
 ) -> tuple[NodeDebugService, NodeDebugSessionStore, Path]:
@@ -575,7 +562,7 @@ def _runtime_for(
 @pytest.mark.asyncio
 async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termination(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``stopping`` 期间状态可查询、不报终态，且 durable claim 不得提前结清。"""
@@ -680,7 +667,7 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
 @pytest.mark.asyncio
 async def test_cold_launch_pending_claim_surfaces_reconcile_required_and_blocks_owner(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
 ) -> None:
     """登记后、spawn 前崩溃：读接口如实报告无法核实，并阻断启动/重启/动作。"""
     resolver, _parent_dir, _child_dir = session_tree
@@ -734,7 +721,7 @@ async def test_cold_launch_pending_claim_surfaces_reconcile_required_and_blocks_
 @pytest.mark.asyncio
 async def test_cold_recovery_terminates_only_the_verified_orphan(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
 ) -> None:
     """崩溃后按 claim 恢复：身份匹配才定点停止，结清后才允许 owner 级操作。"""
     resolver, _parent_dir, _child_dir = session_tree
@@ -783,7 +770,7 @@ async def test_cold_recovery_terminates_only_the_verified_orphan(
 @pytest.mark.asyncio
 async def test_cold_recovery_never_kills_a_process_on_a_reused_pid(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
 ) -> None:
     """PID 已被回收复用：不能认领，更绝不能将新进程当旧实例停止。"""
     resolver, _parent_dir, _child_dir = session_tree
@@ -816,7 +803,7 @@ async def test_cold_recovery_never_kills_a_process_on_a_reused_pid(
 @pytest.mark.asyncio
 async def test_reconcile_required_releases_only_after_termination_is_verified(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
 ) -> None:
     """reconcile_required 既不自动接管也不自动终止；核实终结后才解除阻断。"""
     resolver, _parent_dir, _child_dir = session_tree
@@ -870,7 +857,7 @@ async def test_reconcile_required_releases_only_after_termination_is_verified(
 @pytest.mark.asyncio
 async def test_start_registers_claim_before_spawn_and_running_only_after_handshake(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """spawn 前 durable 登记 launch_pending；握手成功才登记权威 PID/端口。"""
@@ -942,7 +929,7 @@ async def test_start_registers_claim_before_spawn_and_running_only_after_handsha
 @pytest.mark.asyncio
 async def test_stale_generation_callback_cannot_write_new_instance_claim(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
 ) -> None:
     """旧 generation 的回调只能认到自己的登记，绝不能改写新实例。"""
     resolver, _parent_dir, _child_dir = session_tree
@@ -983,7 +970,7 @@ async def test_stale_generation_callback_cannot_write_new_instance_claim(
 @pytest.mark.asyncio
 async def test_spawn_failure_settles_prewrite_and_leaves_no_blocker(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """spawn 调用本身失败：可证明没有产生实例，登记必须当场结清而不是永久阻断。"""
@@ -1076,7 +1063,7 @@ class _UnstoppableProcess:
 @pytest.mark.asyncio
 async def test_stop_failure_enters_reconcile_required_and_releases_after_verification(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """停止失败且进程仍存活：保持 reconcile_required 不虚报终态，核实终结后才解除。"""
@@ -1180,7 +1167,7 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
 @pytest.mark.asyncio
 async def test_cross_source_identity_cannot_report_termination(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """登记来源与当前探测来源不同构：事实不足，不得判为已终结（否则会虚报 exited）。"""
@@ -1256,7 +1243,7 @@ async def test_cross_source_identity_cannot_report_termination(
 @pytest.mark.asyncio
 async def test_reconcile_terminate_rechecks_identity_before_sigkilling(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """等待窗口内 PID 被回收复用：只接受复用/消失作为证据，绝不升级 SIGKILL。"""
@@ -1356,7 +1343,7 @@ async def test_reconcile_terminate_rechecks_identity_before_sigkilling(
 @pytest.mark.asyncio
 async def test_concurrent_starts_are_serialized_per_owner(
     tmp_path: Path,
-    session_tree: tuple[SessionPathResolver, Path, Path],
+    session_tree: tuple[object, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """同一 owner 并发 start：登记与 spawn 必须串行，不得留下无登记的游离进程。"""

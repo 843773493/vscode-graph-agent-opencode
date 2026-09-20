@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 
 import commentjson
@@ -37,33 +36,10 @@ def use_config(name: str) -> str:
 @pytest.fixture
 def session_bundle_factory() -> Callable[[Path, str], Path]:
     """在显式 sessions 根目录中创建最小合法会话 bundle。"""
-    from app.core.path_utils import get_session_path_resolver
+    from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
     def create(sessions_root: Path, session_id: str) -> Path:
-        resolver = get_session_path_resolver(sessions_root)
-        resolver.initialize()
-        try:
-            return resolver.resolve_session_node(session_id)
-        except KeyError:
-            pass
-        session_dir = resolver.allocate_session_dir(
-            session_id=session_id,
-            title=f"测试会话 {session_id}",
-        )
-        now = datetime.now(UTC).isoformat()
-        manifest: dict[str, object] = {
-            "session_id": session_id,
-            "workspace_id": resolver._workspace_id,
-            "title": f"测试会话 {session_id}",
-            "created_at": now,
-            "updated_at": now,
-        }
-        (session_dir / "session.json").write_text(
-            json.dumps(manifest, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        resolver.register_session(session_id, session_dir)
-        return session_dir
+        return seed_catalog_session_bundle(sessions_root, session_id).directory
 
     return create
 

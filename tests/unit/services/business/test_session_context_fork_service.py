@@ -7,6 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.path_utils import get_session_creation_service, get_session_path_resolver
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_context_fork_service import (
     SessionContextForkService,
@@ -39,6 +40,8 @@ def fork_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ForkServic
         config_service=ConfigService(workspace_root=tmp_path),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         workspace_id=load_or_create_workspace_id(tmp_path),
+        path_resolver=get_session_path_resolver(sessions_dir),
+        creation_service=get_session_creation_service(sessions_dir),
         fork_relationship_checker=checkpointer,
     )
     return ForkServices(

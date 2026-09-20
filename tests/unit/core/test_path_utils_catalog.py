@@ -15,6 +15,7 @@ from app.core.path_utils import (
     initialize_directories,
 )
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
 def make_standard_workspace(tmp_path: Path) -> tuple[Path, Path]:
@@ -135,29 +136,13 @@ def test_convenience_functions_route_through_catalog_factory(tmp_path, monkeypat
     workspace_root, _ = make_standard_workspace(tmp_path)
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
     initialize_directories()
-    resolver = get_session_path_resolver()
-    session_dir = resolver.allocate_session_dir(
-        session_id="ses_7c9c9b4ad4c54c0eb9dcd4dabb96e67d",
+    get_session_path_resolver()
+    session_id = "ses_7c9c9b4ad4c54c0eb9dcd4dabb96e67d"
+    session_dir = seed_catalog_session_bundle(
+        workspace_root / ".boxteam" / "sessions",
+        session_id,
         title="便捷函数会话",
-    )
-    marker = json.loads(
-        (session_dir / ".boxteam-session-allocating.json").read_text(encoding="utf-8")
-    )
-    session_id = str(marker["session_id"])
-    workspace_id = resolver._workspace_id
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "workspace_id": workspace_id,
-                "created_at": "2026-01-01T00:00:00+00:00",
-                "updated_at": "2026-01-01T00:00:00+00:00",
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
+    ).directory
 
     assert get_session_path(session_id) == session_dir
     assert get_session_file(session_id) == session_dir / "session.json"

@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 import websockets
 
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugLaunchClaimDTO,
@@ -55,42 +55,28 @@ from app.services.infrastructure.node_debug.service import (
     _NodeDebugRuntime,
 )
 from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )
 
-_PARENT_SESSION_ID = "ses_lease_parent"
+_PARENT_SESSION_ID = "ses_00000000400040008000000000000001"
 _CONFIGURATION_ID = "dbgcfg_22222222222222222222222222222222"
 
 
-def _create_session(resolver: SessionPathResolver, session_id: str) -> Path:
+def _create_session(resolver: object, session_id: str) -> Path:
     title = f"测试会话 {session_id}"
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
+    return seed_catalog_session_bundle(
+        resolver.sessions_root,
+        session_id,
         title=title,
-        parent_node_id=None,
-    )
-    now = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": title,
-                "parent_session_id": None,
-                "created_at": now,
-                "updated_at": now,
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
-    return session_dir
+    ).directory
 
 
 @pytest.fixture
-def session_tree(tmp_path: Path) -> SessionPathResolver:
-    resolver = SessionPathResolver(tmp_path / ".boxteam" / "sessions")
+def session_tree(tmp_path: Path) -> object:
+    sessions_root = tmp_path / ".boxteam" / "sessions"
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     _create_session(resolver, _PARENT_SESSION_ID)
     return resolver
@@ -212,7 +198,7 @@ class _DebugConfigStub:
 
 def _make_service(
     tmp_path: Path,
-    resolver: SessionPathResolver,
+    resolver: object,
     external_resource_leases: ExternalResourceLeaseLedger,
     *,
     inspector_port: int | None = None,
@@ -244,7 +230,7 @@ def _make_service(
 @pytest.mark.asyncio
 async def test_release_failure_publishes_release_failed_state_event(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """owner 停止失败进入 reconcile_required 时发布 release_failed 事件。"""
@@ -428,7 +414,7 @@ def _claim(
 @pytest.mark.asyncio
 async def test_handshake_registers_typed_lease_and_verified_stop_settles_it(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """running→active lease；核实终态→同一 lease 结清，并 durable 落盘。"""
@@ -504,7 +490,7 @@ async def test_handshake_registers_typed_lease_and_verified_stop_settles_it(
 @pytest.mark.asyncio
 async def test_reconcile_required_keeps_lease_active_until_termination_verified(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """无法核实终态时占用保持 active；再次核实终结后才结清同一 lease。"""
@@ -596,7 +582,7 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
 @pytest.mark.asyncio
 async def test_restart_recovery_keeps_active_lease_without_duplicate_acquire(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
 ) -> None:
     """重启恢复：账本已有 active 占用时保持，不重复 acquire，也不误杀进程。"""
     child = _sleeper_child()
@@ -646,7 +632,7 @@ async def test_restart_recovery_keeps_active_lease_without_duplicate_acquire(
 @pytest.mark.asyncio
 async def test_restart_recovery_settles_lease_only_after_instance_verified_gone(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
 ) -> None:
     """重启恢复：只有在核实登记实例确已不存在之后才结清 claim 与 lease。"""
     gone = _sleeper_child()
@@ -690,7 +676,7 @@ async def test_restart_recovery_settles_lease_only_after_instance_verified_gone(
 @pytest.mark.asyncio
 async def test_active_lease_without_claim_or_process_reports_idle(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
 ) -> None:
     """账本里的 active 占用不是进程状态来源：没有 claim/进程时必须报 idle。"""
     manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
@@ -715,7 +701,7 @@ async def test_active_lease_without_claim_or_process_reports_idle(
 @pytest.mark.asyncio
 async def test_ledger_settlement_does_not_change_verified_running_report(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """反向证据：账本占用被外部结清时，服务仍按 claim + OS 事实报告 running 并可停止。"""
@@ -773,7 +759,7 @@ async def test_ledger_settlement_does_not_change_verified_running_report(
 @pytest.mark.asyncio
 async def test_ledger_conflict_fails_start_closed_without_fake_registration(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """账本操作失败必须显式抛出，且不得留下“看起来已登记”的占用。"""

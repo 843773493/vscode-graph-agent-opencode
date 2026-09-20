@@ -20,7 +20,7 @@ from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.core.turn_execution_scope import (
     AgentControlInbox,
     AgentLoopControlCoordinator,
@@ -37,6 +37,7 @@ from app.services.infrastructure.message_stream_store import (
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from app.testing.model_stream import StreamFrame, get_protocol_codec, load_scenario
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 ProviderKind = Literal["chat", "responses"]
 InterruptStage = Literal["reasoning", "text", "tool_call"]
@@ -256,26 +257,16 @@ class _BlockDeltaBarrierStore(MessageStreamStore):
 @pytest.fixture
 def message_stream_context() -> tuple[
     MessageStreamStore,
-    SessionPathResolver,
+    object,
     str,
 ]:
     if OUTPUT_ROOT.exists():
         shutil.rmtree(OUTPUT_ROOT)
     sessions_root = OUTPUT_ROOT / "workspace" / ".boxteam" / "sessions"
-    resolver = SessionPathResolver(sessions_root)
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
-    session_id = "ses_provider_interrupt_integration"
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
-        title=session_id,
-    )
-    now = "2026-08-27T00:00:00Z"
-    (session_dir / "session.json").write_text(
-        f'{{"session_id":"{session_id}","title":"{session_id}",'
-        f'"created_at":"{now}","updated_at":"{now}"}}',
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
+    session_id = "ses_" + "a" * 32
+    seed_catalog_session_bundle(sessions_root, session_id)
     return MessageStreamStore(path_resolver=resolver), resolver, session_id
 
 
@@ -434,7 +425,7 @@ async def _read_reconnect_terminal_event(
 
 
 async def _wait_for_event_on_disk(
-    resolver: SessionPathResolver,
+    resolver: object,
     *,
     session_id: str,
     turn_stream_id: str,
@@ -504,7 +495,7 @@ async def _consume_model(model) -> None:
     ],
 )
 async def test_handwritten_provider_interrupt_stops_pending_sse_read(
-    message_stream_context: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_context: tuple[MessageStreamStore, object, str],
     provider: ProviderKind,
     stage: InterruptStage,
 ) -> None:
@@ -664,7 +655,7 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["chat", "responses"])
 async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_result(
-    message_stream_context: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_context: tuple[MessageStreamStore, object, str],
     provider: ProviderKind,
 ) -> None:
     store, resolver, session_id = message_stream_context
@@ -806,7 +797,7 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["chat", "responses"])
 async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
-    message_stream_context: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_context: tuple[MessageStreamStore, object, str],
     provider: ProviderKind,
 ) -> None:
     """真实 TCP 连接在 pending read 时必须被客户端主动关闭。"""
@@ -882,7 +873,7 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
 
 @pytest.mark.asyncio
 async def test_interrupt_during_block_delta_persistence_closes_started_block(
-    message_stream_context: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_context: tuple[MessageStreamStore, object, str],
 ) -> None:
     """delta 尚未线性化时中断，不能留下只有 block.started 的运行块。"""
     _, resolver, session_id = message_stream_context
@@ -958,7 +949,7 @@ async def test_interrupt_during_block_delta_persistence_closes_started_block(
 
 @pytest.mark.asyncio
 async def test_tool_interrupt_reaps_real_subprocess_and_projects_unknown_result(
-    message_stream_context: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_context: tuple[MessageStreamStore, object, str],
 ) -> None:
     """真实工具子进程被打断后必须回收，结果仍投影为未知。"""
     store, resolver, session_id = message_stream_context
@@ -1054,7 +1045,7 @@ async def test_tool_interrupt_reaps_real_subprocess_and_projects_unknown_result(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["chat", "responses"])
 async def test_provider_pending_read_crash_recovers_execution_lost(
-    message_stream_context: tuple[MessageStreamStore, SessionPathResolver, str],
+    message_stream_context: tuple[MessageStreamStore, object, str],
     provider: ProviderKind,
 ) -> None:
     """Provider pending read 时进程消失，重启只能投影 execution_lost。"""

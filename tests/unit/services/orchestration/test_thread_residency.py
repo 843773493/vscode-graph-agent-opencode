@@ -33,7 +33,7 @@ from unittest.mock import MagicMock
 import pytest
 import websockets
 
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugLaunchClaimDTO,
@@ -65,11 +65,12 @@ from app.services.orchestration.thread_residency import (
     ThreadResidencyTracker,
     ThreadUnloadRequest,
 )
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )
 
-_PARENT_SESSION_ID = "ses_residency_parent"
+_PARENT_SESSION_ID = "ses_00000000400040008000000000000001"
 _THREAD_ID = "main"
 _OWNER = (_PARENT_SESSION_ID, _THREAD_ID)
 _CONFIGURATION_ID = "dbgcfg_33333333333333333333333333333333"
@@ -103,37 +104,22 @@ class _FixedWallClock:
         return self.moment
 
 
-def _create_session(resolver: SessionPathResolver, session_id: str) -> Path:
+def _create_session(sessions_root: Path, session_id: str) -> Path:
     """在权威目录索引中创建最小合法会话节点。"""
     title = f"测试会话 {session_id}"
-    session_dir = resolver.allocate_session_dir(
-        session_id=session_id,
+    return seed_catalog_session_bundle(
+        sessions_root,
+        session_id,
         title=title,
-        parent_node_id=None,
-    )
-    now = datetime.now(UTC).isoformat()
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "title": title,
-                "parent_session_id": None,
-                "created_at": now,
-                "updated_at": now,
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    resolver.register_session(session_id, session_dir)
-    return session_dir
+    ).directory
 
 
 @pytest.fixture
-def session_tree(tmp_path: Path) -> SessionPathResolver:
-    resolver = SessionPathResolver(tmp_path / ".boxteam" / "sessions")
+def session_tree(tmp_path: Path):
+    sessions_root = tmp_path / ".boxteam" / "sessions"
+    resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
-    _create_session(resolver, _PARENT_SESSION_ID)
+    _create_session(sessions_root, _PARENT_SESSION_ID)
     return resolver
 
 
@@ -408,7 +394,7 @@ def _launch_pending_claim() -> NodeDebugLaunchClaimDTO:
 @pytest.mark.asyncio
 async def test_restart_recovery_active_durable_claim_is_not_cold_eligible(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
 ) -> None:
     """重启恢复（pull）：全新 tracker + 磁盘活跃 claim → 该 thread 不 cold-eligible。"""
     store = NodeDebugSessionStore(session_tree)
@@ -454,7 +440,7 @@ async def test_restart_recovery_active_durable_claim_is_not_cold_eligible(
 )
 async def test_all_active_debug_phases_remain_resident_past_thirty_minutes(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     runtime_status: str,
     claim_phase: str,
 ) -> None:
@@ -505,7 +491,7 @@ async def test_all_active_debug_phases_remain_resident_past_thirty_minutes(
 @pytest.mark.asyncio
 async def test_restart_recovery_settled_claim_restarts_idle_counting(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
 ) -> None:
     """重启恢复结清后 blocker 消失，从结清后的观察时刻重新起算 idle。"""
     child = _sleeper_child()
@@ -650,7 +636,7 @@ class _DebugConfigStub:
 
 def _make_wired_service(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     tracker: ThreadResidencyTracker | None,
 ) -> NodeDebugService:
     """带 session_store + tracker 的服务；真实 spawn 由测试替身接管。"""
@@ -676,7 +662,7 @@ def _sleeper_child() -> subprocess.Popen[bytes]:
 @pytest.mark.asyncio
 async def test_start_pushes_blocker_and_verified_stop_releases_it(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """P1-B push：running → blocker 登记；核实终态（settled）→ 解除并重新起算。"""
@@ -737,7 +723,7 @@ async def test_start_pushes_blocker_and_verified_stop_releases_it(
 @pytest.mark.asyncio
 async def test_reconcile_required_claim_keeps_blocker_registered(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
 ) -> None:
     """reconcile_required → blocker 保持登记，绝不进入 cold-eligible。"""
     store = NodeDebugSessionStore(session_tree)
@@ -768,7 +754,7 @@ async def test_reconcile_required_claim_keeps_blocker_registered(
 @pytest.mark.asyncio
 async def test_snapshot_fields_complete_and_blocker_reasons_sanitized(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
 ) -> None:
     """快照字段齐全（2.8 清单）且 blocker 脱敏：无 PID/端口/路径/实例 ID 正文。"""
     store = NodeDebugSessionStore(session_tree)
@@ -800,8 +786,8 @@ async def test_snapshot_fields_complete_and_blocker_reasons_sanitized(
 
     # 未阻断 thread 的展示字段：deadline 与 idle 正常展示。
     # pull 源按权威目录索引解析 thread，第二个 thread 用真实会话节点。
-    other_session = "ses_residency_other"
-    _create_session(session_tree, other_session)
+    other_session = "ses_00000000400040008000000000000007"
+    _create_session(session_tree.sessions_root, other_session)
     tracker.record_activity(other_session, "main")
     unblocked = tracker.snapshot(other_session, "main")
     assert unblocked.blockers == ()
@@ -828,7 +814,7 @@ async def test_snapshot_fields_complete_and_blocker_reasons_sanitized(
 @pytest.mark.asyncio
 async def test_spawn_aborts_when_stop_already_took_over_runtime(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """P1-C.1 closing 守卫：stop 已接管 runtime（closing）后启动序列绝不 spawn。"""
@@ -873,7 +859,7 @@ async def test_spawn_aborts_when_stop_already_took_over_runtime(
 @pytest.mark.asyncio
 async def test_stop_during_spawn_window_is_serialized_per_owner(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """P1-C.2 stop 落在 spawn 窗口：被 owner 锁串行化，不产生"exited + 进程存活"假终态。"""
@@ -937,7 +923,7 @@ async def test_stop_during_spawn_window_is_serialized_per_owner(
 @pytest.mark.asyncio
 async def test_restart_holds_owner_lock_across_stop_and_relaunch(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """P1-C.2 restart：停止旧实例与启动新实例整体处于 owner 临界区，登记不互相覆盖。"""
@@ -1009,7 +995,7 @@ async def test_restart_holds_owner_lock_across_stop_and_relaunch(
 @pytest.mark.asyncio
 async def test_concurrent_starts_are_serialized_and_claim_not_overwritten(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """P1-C.3 并发 start 同一 owner：串行执行，磁盘 claim 不互相覆盖、无游离进程。"""
@@ -1070,7 +1056,7 @@ async def test_concurrent_starts_are_serialized_and_claim_not_overwritten(
 @pytest.mark.asyncio
 async def test_configuration_mutation_blocked_by_unsettled_claim(
     tmp_path: Path,
-    session_tree: SessionPathResolver,
+    session_tree: object,
 ) -> None:
     """R3b 建议 3：冷场景下未结清 durable claim 阻断方案修改/删除（与运行态阻面对齐）。"""
     workspace_root = tmp_path / "workspace"
