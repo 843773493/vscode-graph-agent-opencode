@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -22,7 +21,6 @@ class TurnBootstrapBatch(BaseModel):
     event_cursor: str | None = None
     event_offset: int | None = Field(default=None, ge=1)
     has_older_events: bool = False
-    index_available: bool = True
 
 
 class TurnRecoveryBatch(BaseModel):

@@ -13,7 +13,6 @@ from app.abstractions.turn_history import (
 from app.schemas.event import Event
 
 from .trace_index_compaction import MAX_COMPACT_LINE_BYTES, compact_event
-from .trace_index_legacy import read_legacy_bootstrap
 from .trace_index_models import (
     PreparedTraceTurnEntry,
     TraceTurnIndexEntry,
@@ -129,19 +128,18 @@ class TraceTurnIndex:
     ) -> TurnBootstrapBatch:
         manifest = self._load_manifest()
         if manifest is None:
-            return read_legacy_bootstrap(
-                self._trace_dir / "messages.jsonl",
-                max_events=max_events,
-                max_bytes=max_bytes,
+            raise RuntimeError(
+                "Trace Turn bootstrap 阶段缺少索引 manifest: "
+                f"path={self._trace_dir / 'turn-events.index.json'}"
             )
         manifest = self._recover()
+        if manifest.has_unindexed_prefix:
+            raise RuntimeError(
+                "Trace Turn bootstrap 阶段存在未索引语义事件: "
+                f"path={self._trace_dir}, "
+                "请先显式重建 turn-events index"
+            )
         if manifest.latest_job_index_offset is None:
-            if manifest.has_unindexed_prefix:
-                return read_legacy_bootstrap(
-                    self._trace_dir / "messages.jsonl",
-                    max_events=max_events,
-                    max_bytes=max_bytes,
-                )
             return TurnBootstrapBatch(
                 event_cursor=manifest.event_cursor,
                 event_offset=(

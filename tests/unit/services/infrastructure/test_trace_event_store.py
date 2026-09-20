@@ -646,46 +646,25 @@ async def test_turn_bootstrap_uses_compact_index_without_parsing_huge_trace_line
     assert (session_dir / "logs" / "traces" / "events.jsonl").stat().st_size > 2 * 1024 * 1024
 
 
-def test_legacy_huge_line_returns_partial_shell_without_reading_payload(
+def test_turn_bootstrap_fails_closed_when_manifest_is_missing(
     tmp_path: Path,
     session_bundle_factory,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = "ses_532420813a6340a2889a2e83dd8f9bde"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
-    event = JobCreatedEvent(
-        event_id="evt_huge_legacy",
-        job_id="job_huge_legacy",
-        timestamp=datetime.now(UTC),
-        payload=JobCreatedPayload(
-            session_id=session_id,
-            message="x" * (2 * 1024 * 1024),
-            agent_id="default",
-        ),
-    )
     traces = session_dir / "logs" / "traces"
     traces.mkdir(parents=True)
-    line = event.model_dump_json().encode("utf-8") + b"\n"
-    (traces / "events.jsonl").write_bytes(line)
-    message_path = traces / "messages.jsonl"
-    message_path.write_bytes(line)
-    original_read_bytes = Path.read_bytes
+    (traces / "messages.jsonl").write_bytes(b'{"event_id":"unindexed"}\n')
 
-    def bounded_read(path: Path) -> bytes:
-        if path == message_path:
-            raise AssertionError("超预算 legacy 大行不得 read_bytes")
-        return original_read_bytes(path)
+    with pytest.raises(RuntimeError) as error:
+        store.read_turn_bootstrap_batch(
+            session_id,
+            max_events=128,
+            max_bytes=64 * 1024,
+        )
 
-    monkeypatch.setattr(Path, "read_bytes", bounded_read)
-    batch = store.read_turn_bootstrap_batch(
-        session_id,
-        max_events=128,
-        max_bytes=64 * 1024,
-    )
-
-    assert batch.events == []
-    assert batch.has_older_events is True
-    assert batch.index_available is False
+    assert "Trace Turn bootstrap 阶段缺少索引 manifest" in str(error.value)
+    assert str(traces / "turn-events.index.json") in str(error.value)
 
 
 @pytest.mark.asyncio
@@ -1443,6 +1422,15 @@ async def test_legacy_prefix_is_rebuilt_after_non_semantic_append_for_resume(
     assert unready is not None
     assert unready.has_unindexed_prefix is True
     assert unready.event_cursor is None
+
+    with pytest.raises(RuntimeError) as error:
+        store.read_turn_bootstrap_batch(
+            session_id,
+            max_events=128,
+            max_bytes=64 * 1024,
+        )
+    assert "Trace Turn bootstrap 阶段存在未索引语义事件" in str(error.value)
+    assert str(traces) in str(error.value)
 
     store.ensure_turn_index(session_id)
     ready = TraceTurnIndex(traces).snapshot()
