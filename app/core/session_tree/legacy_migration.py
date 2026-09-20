@@ -5,6 +5,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.path_segments import physical_segment
 from app.core.session_tree.nodes import write_folder_manifest
 from app.core.session_tree.support import (
     FOLDER_MANIFEST_NAME,
@@ -13,7 +14,6 @@ from app.core.session_tree.support import (
     _parse_optional_datetime,
     _process_identity,
     _read_json_object,
-    physical_segment,
 )
 
 

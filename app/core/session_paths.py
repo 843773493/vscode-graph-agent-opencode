@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.path_segments import physical_segment
 from app.core.session_tree.support import (
     FOLDER_MANIFEST_NAME,
     SESSION_ALLOCATION_MARKER_NAME,
@@ -18,19 +19,13 @@ from app.core.session_tree.support import (
     _navigation_signature,
     _parse_optional_datetime,
     _read_json_object,
-    physical_display_segment,
-    physical_segment,
     session_tree_operation_locked,
-    validate_generator_physical_segment,
 )
 
 __all__ = [
     "FOLDER_MANIFEST_NAME",
     "SessionPathResolver",
     "SessionPhysicalNode",
-    "physical_display_segment",
-    "physical_segment",
-    "validate_generator_physical_segment",
 ]
 from app.core.session_tree.mutations import SessionPathMutationSupport
 from app.core.session_tree.nodes import (

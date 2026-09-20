@@ -9,6 +9,7 @@ from pathlib import Path
 from app.core.legacy_inline_attachment_migration import (
     materialize_legacy_inline_attachments,
 )
+from app.core.path_segments import physical_segment
 from app.core.session_tree.legacy_migration import (
     SessionLegacyLayoutMigrationSupport,
 )
@@ -22,7 +23,6 @@ from app.core.session_tree.support import (
     _read_json_object,
     _rewrite_checkpoint_blob,
     _rewrite_legacy_locator_value,
-    physical_segment,
 )
 
 logger = logging.getLogger(__name__)

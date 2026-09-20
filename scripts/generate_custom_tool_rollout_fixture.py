@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import shutil
 import sys
@@ -19,9 +20,12 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_migration import migrate_workspace_session_catalog
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 FIXTURE_VERSION: Final = 3
 STATIC_LONG_SESSION_ID: Final = "ses_a1b2c3d4e5f6478899aabbccddeeff00"
@@ -336,6 +340,25 @@ def _turn_messages(turn_index: int, *, long_fixture: bool = False) -> list[BaseM
     return messages
 
 
+def _catalog_resolver(sessions_dir: Path) -> SessionCatalogPathResolver:
+    """取得 fixture 专用 catalog resolver，旧 JSON 只走显式迁移入口。"""
+    resolved_sessions = sessions_dir.expanduser().resolve()
+    boxteam_root = resolved_sessions.parent
+    workspace_root = boxteam_root.parent
+    navigation_root = boxteam_root / "navigation"
+    database_path = navigation_root / "session-catalog.sqlite"
+    legacy_index_path = navigation_root / "session-catalog-index.json"
+    if not database_path.is_file() and legacy_index_path.is_file():
+        asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
+    resolver = get_session_path_resolver(resolved_sessions)
+    if not isinstance(resolver, SessionCatalogPathResolver):
+        raise RuntimeError(
+            "fixture 生成要求 SQLite catalog resolver: "
+            f"sessions_root={resolved_sessions}"
+        )
+    return resolver
+
+
 def _write_session_manifest(
     session_dir: Path,
     session_id: str,
@@ -344,18 +367,21 @@ def _write_session_manifest(
     created_at: str,
     context_source_session_id: str | None = None,
 ) -> None:
+    existing = json.loads(
+        (session_dir / "session.json").read_text(encoding="utf-8")
+    )
+    persisted_created_at = existing.get("created_at")
+    if not isinstance(persisted_created_at, str) or not persisted_created_at:
+        persisted_created_at = created_at
     (session_dir / "session.json").write_text(
         json.dumps(
             {
-                "created_at": created_at,
+                "created_at": persisted_created_at,
                 "updated_at": created_at,
                 "session_id": session_id,
                 "workspace_id": "ws_local",
-                "title": title,
-                "title_source": "user",
                 "current_agent_id": "default",
                 "current_provider_id": "primary",
-                "parent_session_id": None,
                 "context_source_session_id": context_source_session_id,
                 "kind": "normal",
                 "delegation": None,
@@ -379,8 +405,14 @@ def _create_session(
     compaction_points: tuple[int, ...] = (),
     fork_source: tuple[str, str] | None = None,
 ) -> None:
-    resolver = get_session_path_resolver(sessions_dir)
-    session_dir = resolver.allocate_session_dir(session_id=session_id, title=title)
+    resolver = _catalog_resolver(sessions_dir)
+    seed_catalog_session_bundle(
+        sessions_dir,
+        session_id,
+        workspace_id="ws_local",
+        title=title,
+    )
+    session_dir = resolver.resolve_session_node(session_id)
     created_at = _stamp(0)
     _write_session_manifest(
         session_dir,
@@ -389,7 +421,6 @@ def _create_session(
         created_at=created_at,
         context_source_session_id=fork_source[0] if fork_source else None,
     )
-    resolver.register_session(session_id, session_dir)
     saver = RolloutCheckpointSaver(sessions_dir)
     if fork_source is not None:
         source_session_id, source_checkpoint_id = fork_source
@@ -486,14 +517,15 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
             + "\n",
             encoding="utf-8",
         )
-    resolver = get_session_path_resolver(sessions_dir)
-    resolver.initialize()
+    resolver = _catalog_resolver(sessions_dir)
     if clean:
         # 只删除本生成器拥有的确定性 mock；真实模型快照必须作为长期测试资源保留。
         for session_id in MOCK_SESSION_IDS:
-            if any(node.node_id == session_id for node in resolver.list_nodes()):
-                resolver.delete_session_subtree(session_id)
-        resolver.initialize()
+            try:
+                resolver.catalog_store.get_node(session_id)
+            except KeyError:
+                continue
+            asyncio.run(resolver.delete_session_subtree(session_id))
     _create_session(
         sessions_dir=sessions_dir,
         session_id=STATIC_LONG_SESSION_ID,
@@ -613,10 +645,13 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
 def _write_static_long_session(workspace_root: Path) -> None:
     """只重建确定性 mock 长会话，不触碰真实模型会话。"""
     sessions_dir = workspace_root / ".boxteam" / "sessions"
-    resolver = get_session_path_resolver(sessions_dir)
-    resolver.initialize()
-    if any(node.node_id == STATIC_LONG_SESSION_ID for node in resolver.list_nodes()):
-        resolver.delete_session_subtree(STATIC_LONG_SESSION_ID)
+    resolver = _catalog_resolver(sessions_dir)
+    try:
+        resolver.catalog_store.get_node(STATIC_LONG_SESSION_ID)
+    except KeyError:
+        pass
+    else:
+        asyncio.run(resolver.delete_session_subtree(STATIC_LONG_SESSION_ID))
     _create_session(
         sessions_dir=sessions_dir,
         session_id=STATIC_LONG_SESSION_ID,
@@ -663,10 +698,13 @@ def main() -> None:
         _write_static_long_session(workspace_root)
     elif args.only_large_session:
         sessions_dir = workspace_root / ".boxteam" / "sessions"
-        resolver = get_session_path_resolver(sessions_dir)
-        resolver.initialize()
-        if any(node.node_id == LARGE_LONG_SESSION_ID for node in resolver.list_nodes()):
-            resolver.delete_session_subtree(LARGE_LONG_SESSION_ID)
+        resolver = _catalog_resolver(sessions_dir)
+        try:
+            resolver.catalog_store.get_node(LARGE_LONG_SESSION_ID)
+        except KeyError:
+            pass
+        else:
+            asyncio.run(resolver.delete_session_subtree(LARGE_LONG_SESSION_ID))
         _create_session(
             sessions_dir=sessions_dir,
             session_id=LARGE_LONG_SESSION_ID,

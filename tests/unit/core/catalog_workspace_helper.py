@@ -28,9 +28,8 @@ from app.core.session_catalog_store import (
     SessionCatalogStore,
 )
 from app.core.session_creation import SessionCreationService
-from app.core.session_paths import SessionPhysicalNode
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
-from app.core.session_tree.support import SESSION_MANIFEST_NAME
+from app.core.session_tree.support import SESSION_MANIFEST_NAME, SessionPhysicalNode
 
 # 与 R15 resolver 测试同款默认 workspace_id（标准 UUID 文本）。
 DEFAULT_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"

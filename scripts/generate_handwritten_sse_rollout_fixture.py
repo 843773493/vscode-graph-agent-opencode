@@ -37,7 +37,9 @@ from app.agents.providers.anthropic_messages import BoxteamAnthropicMessagesMode
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_migration import migrate_workspace_session_catalog
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -47,6 +49,7 @@ from app.testing.model_stream import (
     load_cassette_from_object,
     load_scenario,
 )
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 TARGET_WORKSPACE = (
     PROJECT_ROOT
@@ -445,6 +448,23 @@ def _checkpoint(
     return checkpoint
 
 
+async def _catalog_resolver(workspace_root: Path) -> SessionCatalogPathResolver:
+    """取得 fixture 专用 catalog resolver，旧 JSON 只走显式迁移入口。"""
+    sessions_dir = workspace_root / ".boxteam" / "sessions"
+    navigation_root = sessions_dir.parent / "navigation"
+    database_path = navigation_root / "session-catalog.sqlite"
+    legacy_index_path = navigation_root / "session-catalog-index.json"
+    if not database_path.is_file() and legacy_index_path.is_file():
+        await migrate_workspace_session_catalog(workspace_root=workspace_root)
+    resolver = get_session_path_resolver(sessions_dir)
+    if not isinstance(resolver, SessionCatalogPathResolver):
+        raise RuntimeError(
+            "fixture 生成要求 SQLite catalog resolver: "
+            f"sessions_root={sessions_dir}"
+        )
+    return resolver
+
+
 def _write_session_manifest(
     session_dir: Path,
     *,
@@ -452,19 +472,22 @@ def _write_session_manifest(
     title: str,
     provider_id: str,
 ) -> None:
+    existing = json.loads(
+        (session_dir / "session.json").read_text(encoding="utf-8")
+    )
+    persisted_created_at = existing.get("created_at")
+    if not isinstance(persisted_created_at, str) or not persisted_created_at:
+        persisted_created_at = _stamp(0)
     stamp = _stamp(0)
     (session_dir / "session.json").write_text(
         json.dumps(
             {
-                "created_at": stamp,
+                "created_at": persisted_created_at,
                 "updated_at": stamp,
                 "session_id": session_id,
                 "workspace_id": "ws_local",
-                "title": title,
-                "title_source": "user",
                 "current_agent_id": "default",
                 "current_provider_id": provider_id,
-                "parent_session_id": None,
                 "context_source_session_id": None,
                 "kind": "normal",
                 "delegation": None,
@@ -486,7 +509,7 @@ def _write_session_manifest(
 
 async def _generate_session(
     *,
-    resolver: SessionPathResolver,
+    resolver: SessionCatalogPathResolver,
     saver: RolloutCheckpointSaver,
     providers: tuple[HandwrittenProvider, ...],
     session_id: str,
@@ -499,14 +522,19 @@ async def _generate_session(
     turn_id_prefix: str = "job",
     fork_source: tuple[str, str] | None = None,
 ) -> None:
-    session_dir = resolver.allocate_session_dir(session_id=session_id, title=title)
+    seed_catalog_session_bundle(
+        resolver.sessions_root,
+        session_id,
+        workspace_id="ws_local",
+        title=title,
+    )
+    session_dir = resolver.resolve_session_node(session_id)
     _write_session_manifest(
         session_dir,
         session_id=session_id,
         title=title,
         provider_id=providers[0].provider_id,
     )
-    resolver.register_session(session_id, session_dir)
     if fork_source is not None:
         saver.record_fork_origin(
             target_thread_id=session_id,
@@ -685,10 +713,12 @@ async def _generate_session(
         )
 
 
-def _delete_all_sessions(resolver: SessionPathResolver) -> list[str]:
+async def _delete_all_sessions(resolver: SessionCatalogPathResolver) -> list[str]:
     deleted: list[str] = []
-    for node in sorted(resolver.list_nodes(refresh=True), key=lambda item: item.node_id):
-        resolver.delete_session_subtree(node.node_id)
+    for node in sorted(resolver.list_nodes(), key=lambda item: item.node_id):
+        if node.kind != "session":
+            continue
+        await resolver.delete_session_subtree(node.node_id)
         deleted.append(node.node_id)
     return deleted
 
@@ -757,9 +787,8 @@ def _write_fixture_manifest(workspace_root: Path) -> None:
 
 async def _generate(workspace_root: Path) -> None:
     sessions_dir = workspace_root / ".boxteam" / "sessions"
-    resolver = SessionPathResolver(sessions_dir)
-    resolver.initialize()
-    deleted = _delete_all_sessions(resolver)
+    resolver = await _catalog_resolver(workspace_root)
+    deleted = await _delete_all_sessions(resolver)
     print(f"deleted sessions: {deleted}")
 
     scenario = _cassette()

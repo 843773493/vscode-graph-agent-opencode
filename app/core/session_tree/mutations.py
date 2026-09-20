@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.identifier import create_prefixed_id
+from app.core.path_segments import physical_segment
 from app.core.session_tree.metadata_migration import (
     SessionMetadataMigrationSupport,
 )
@@ -22,7 +23,6 @@ from app.core.session_tree.support import (
     _parse_datetime,
     _process_identity,
     _read_json_object,
-    physical_segment,
     session_tree_operation_locked,
 )
 

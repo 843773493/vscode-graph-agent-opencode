@@ -6,7 +6,6 @@ import re
 import tempfile
 import threading
 import time
-import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,16 +21,6 @@ SESSION_ALLOCATION_TEMP_PREFIX = ".boxteam-session-allocating-"
 PHYSICAL_LAYOUT_VERSION = 1
 SESSION_TREE_LOCK_TIMEOUT_SECONDS = 5.0
 SESSION_TREE_LOCK_POLL_INTERVAL_SECONDS = 0.01
-_INVALID_SEGMENT_CHARS = re.compile(r"[<>:\"/\\|?*\x00-\x1f]")
-_STABLE_ID_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
-_WINDOWS_RESERVED_NAMES = {
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    *(f"COM{index}" for index in range(1, 10)),
-    *(f"LPT{index}" for index in range(1, 10)),
-}
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -184,38 +173,6 @@ class SessionPhysicalNode:
     name: str
     created_at: datetime
     updated_at: datetime
-
-def physical_segment(name: str, stable_id: str) -> str:
-    """返回由稳定 ID 独占的物理路径段；显示名不得参与路径。"""
-    del name
-    if _STABLE_ID_SEGMENT.fullmatch(stable_id) is None:
-        raise ValueError(f"稳定 ID 不能作为物理路径段: {stable_id!r}")
-    return stable_id
-
-def physical_display_segment(name: str) -> str:
-    """返回物理路径段的显示名部分，预留固定稳定 ID 后缀空间。"""
-    normalized = unicodedata.normalize("NFKC", name).strip().rstrip(". ")
-    normalized = _INVALID_SEGMENT_CHARS.sub("_", normalized)
-    normalized = re.sub(r"\s+", " ", normalized).strip().rstrip(". ")
-    if not normalized:
-        normalized = "未命名"
-    if normalized.upper() in _WINDOWS_RESERVED_NAMES:
-        normalized = f"_{normalized}"
-    max_name_length = 96 - len("--12345678")
-    normalized = normalized[:max_name_length].rstrip(". ") or "未命名"
-    return normalized
-
-def validate_generator_physical_segment(value: str) -> None:
-    """校验生成器显示名；显示名不再参与物理路径。"""
-    normalized = value.strip()
-    if not normalized or normalized in {".", ".."}:
-        raise ValueError(f"命名路径段非法: {value!r}")
-
-def display_name_from_segment(segment: str, stable_id: str) -> str:
-    for suffix in (f"--{stable_id}", f"--{stable_id[-8:]}"):
-        if segment.endswith(suffix):
-            return segment[: -len(suffix)] or "未命名"
-    return segment
 
 def _process_identity(pid: int) -> str | None:
     """在支持 `/proc` 的系统上读取可抵御 PID 重用的进程启动标识。"""

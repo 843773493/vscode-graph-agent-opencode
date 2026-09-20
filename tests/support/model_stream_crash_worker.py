@@ -19,7 +19,8 @@ from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
-from app.core.session_paths import SessionPathResolver
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.turn_execution_scope import (
     TurnExecutionScope,
     reset_current_turn_execution_scope,
@@ -27,6 +28,7 @@ from app.core.turn_execution_scope import (
 )
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 ProviderKind = Literal["chat", "responses"]
 
@@ -87,7 +89,14 @@ async def _run(args: argparse.Namespace) -> None:
     litellm_http_handler.get_async_httpx_client = get_injected_async_client
     litellm.aclient_session = client
 
-    resolver = SessionPathResolver(Path(args.sessions_root))
+    sessions_root = Path(args.sessions_root)
+    seed_catalog_session_bundle(sessions_root, args.session_id)
+    resolver = get_session_path_resolver(sessions_root)
+    if not isinstance(resolver, SessionCatalogPathResolver):
+        raise RuntimeError(
+            "崩溃 worker 要求 SQLite catalog resolver: "
+            f"sessions_root={args.sessions_root}"
+        )
     resolver.initialize()
     store = MessageStreamStore(path_resolver=resolver)
     writer = await store.open(

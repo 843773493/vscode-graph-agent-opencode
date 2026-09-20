@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.path_segments import display_name_from_segment
 from app.core.session_tree.support import (
     FOLDER_MANIFEST_NAME,
     PHYSICAL_LAYOUT_VERSION,
@@ -13,7 +14,6 @@ from app.core.session_tree.support import (
     _parse_datetime,
     _process_matches_identity,
     _read_json_object,
-    display_name_from_segment,
 )
 
 
