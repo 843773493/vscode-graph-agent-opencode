@@ -612,3 +612,41 @@ async def test_sealed_resolution_failure_keeps_tool_call_id_pairing():
     assert result.status == "error"
     assert result.tool_call_id == "call_sealed_miss"
     assert "not_in_sealed_ref" in result.text
+
+
+@pytest.mark.asyncio
+async def test_execution_revocation_fails_at_sealed_target_execution_point():
+    """封存调用在执行点重验最新策略，撤权时返回配对失败。"""
+    from langchain_core.tools import tool
+
+    @tool
+    def revocable_target() -> str:
+        """可撤权的 sealed target。"""
+        return "should-not-run"
+
+    resolver, _binding = _sealed_binding_resolver([revocable_target])
+    enabled = True
+    invoker = create_extension_tool_invoker_tool(
+        [revocable_target],
+        catalog_binding_resolver=resolver,
+        is_tool_execution_enabled=lambda _target: enabled,
+    )
+
+    enabled_result = await invoker.ainvoke(
+        {"tool_name": "revocable_target", "arguments": {}}
+    )
+    assert enabled_result == "should-not-run"
+
+    enabled = False
+    revoked_result = await invoker.ainvoke(
+        {
+            "type": "tool_call",
+            "id": "call_revoked_target",
+            "name": invoker.name,
+            "args": {"tool_name": "revocable_target", "arguments": {}},
+        }
+    )
+    assert isinstance(revoked_result, ToolMessage)
+    assert revoked_result.status == "error"
+    assert revoked_result.tool_call_id == "call_revoked_target"
+    assert "已被策略禁用" in revoked_result.text

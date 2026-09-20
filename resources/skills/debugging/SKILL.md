@@ -22,6 +22,8 @@ allowed-tools: list_debug_configurations, create_debug_configuration, activate_d
 5. 每次返回后先看 `state.status`，再决定下一步：
    - `paused`：依据最新 `call_stack[0]` 的文件、函数和行号向用户解释当前代码作用；只有用户目标或分析确实需要时才读取变量、求值或单步，然后再继续。
    - `running`：不要读取变量、求值或单步；如用户要求停下，调用 `pause_execution`，否则等待下一次状态或用户消息。
+   - `starting` 或 `stopping`：调试进程仍在建立或真实终止核实中；不要报告已经运行或已经结束，也不要重复启动/停止，等待下一次权威状态。
+   - `reconcile_required`：后端无法核实旧实例终态；保留阻断事实，不重启、不接管其它进程，等待明确核实后再操作。
    - `exited`：程序已结束；`failed`：调试失败。两者都不能描述成暂停或成功运行。
 6. 用户要求把暂停位置的计数变量加一时，先确认真实变量名，再用 `evaluate_expression` 执行 `<变量> += 1`，检查返回值后继续。它只改变目标进程内存，不修改源码；表达式有副作用时遵守确认策略。
 7. 不要预先解释尚未命中的断点。每次单步、继续、暂停或重启后都只陈述返回的实际位置；没有 `paused` 和调用栈就不要声称命中了断点。
@@ -239,7 +241,7 @@ testName 目前不支持 Node 单测试启动；不要为了满足请求而猜�
 
 所有工具都返回 JSON 文本，包含 ok、message 或稳定的 error.code，成功和失败都尽可能包含当前完整 state。重点字段是：
 
-- status：idle、starting、running、paused、exited 或 failed。
+- status：idle、starting、running、paused、stopping、reconcile_required、exited 或 failed。
 - call_stack：后端确认的调用栈结构；通用 state 不携带变量值，顶层 frame 是显式变量读取和表达式求值的上下文。
 - breakpoints：断点的相对路径、行号、condition、hit_condition、log_message 和验证状态。
 - breakpoints.relocation_status：`current`、`pending_update` 或 `source_deleted`；后两者不会安装到猜测位置，也不会自动恢复。源码变化后的断点会保留原请求行号，必须显式重新设置后才恢复为 `current`。
