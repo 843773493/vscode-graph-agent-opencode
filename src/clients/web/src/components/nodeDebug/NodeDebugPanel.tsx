@@ -231,16 +231,35 @@ export default function NodeDebugPanel({
     setSelectedSourceLocation({ path, line });
     if (!definition) {
       if (!breakpointId) return;
-      void runAction("clear_breakpoint", { breakpoint_id: breakpointId });
+      void runAction({
+        action: "clear_breakpoint",
+        params: { breakpoint_id: breakpointId },
+      });
       return;
     }
-    void runAction(breakpointId ? "update_breakpoint" : "set_breakpoint", {
-      ...(breakpointId ? { breakpoint_id: breakpointId } : {}),
-      path,
-      line,
-      condition: definition.condition,
-      hit_condition: definition.hit_condition,
-      log_message: definition.log_message,
+    if (breakpointId) {
+      void runAction({
+        action: "update_breakpoint",
+        params: {
+          breakpoint_id: breakpointId,
+          path,
+          line,
+          condition: definition.condition,
+          hit_condition: definition.hit_condition,
+          log_message: definition.log_message,
+        },
+      });
+      return;
+    }
+    void runAction({
+      action: "set_breakpoint",
+      params: {
+        path,
+        line,
+        condition: definition.condition,
+        hit_condition: definition.hit_condition,
+        log_message: definition.log_message,
+      },
     });
   };
 
@@ -251,17 +270,23 @@ export default function NodeDebugPanel({
       onStatusChange("设置源码断点失败：需要有效文件和正整数行号");
       return;
     }
-    void runAction("set_breakpoint", {
-      path,
-      line,
-      ...(breakpointCondition.trim() ? { condition: breakpointCondition.trim() } : {}),
+    void runAction({
+      action: "set_breakpoint",
+      params: {
+        path,
+        line,
+        ...(breakpointCondition.trim() ? { condition: breakpointCondition.trim() } : {}),
+      },
     });
   };
 
   const evaluate = () => {
     const normalized = expression.trim();
     if (!normalized) return;
-    void runAction("evaluate", { expression: normalized });
+    void runAction({
+      action: "evaluate",
+      params: { expression: normalized },
+    });
   };
 
   return (
@@ -296,23 +321,23 @@ export default function NodeDebugPanel({
             {loading ? "启动中" : "启动"}
           </button>
         ) : (
-          <button type="button" onClick={() => void runAction("continue")} disabled={actionBusy || status !== "paused"} title="继续">
+          <button type="button" onClick={() => void runAction({ action: "continue" })} disabled={actionBusy || status !== "paused"} title="继续">
             <span className="codicon codicon-debug-continue" aria-hidden="true" />
           </button>
         )}
-        <button type="button" onClick={() => void runAction("pause")} disabled={actionBusy || status !== "running"} title="暂停">
+        <button type="button" onClick={() => void runAction({ action: "pause" })} disabled={actionBusy || status !== "running"} title="暂停">
           <span className="codicon codicon-debug-pause" aria-hidden="true" />
         </button>
-        <button type="button" onClick={() => void runAction("step_over")} disabled={actionBusy || status !== "paused"} title="单步跳过">
+        <button type="button" onClick={() => void runAction({ action: "step_over" })} disabled={actionBusy || status !== "paused"} title="单步跳过">
           <span className="codicon codicon-debug-step-over" aria-hidden="true" />
         </button>
-        <button type="button" onClick={() => void runAction("step_into")} disabled={actionBusy || status !== "paused"} title="单步进入">
+        <button type="button" onClick={() => void runAction({ action: "step_into" })} disabled={actionBusy || status !== "paused"} title="单步进入">
           <span className="codicon codicon-debug-step-into" aria-hidden="true" />
         </button>
-        <button type="button" onClick={() => void runAction("step_out")} disabled={actionBusy || status !== "paused"} title="单步跳出">
+        <button type="button" onClick={() => void runAction({ action: "step_out" })} disabled={actionBusy || status !== "paused"} title="单步跳出">
           <span className="codicon codicon-debug-step-out" aria-hidden="true" />
         </button>
-        <button type="button" onClick={() => void runAction("stop")} disabled={actionBusy || !processCanStop} title="停止">
+        <button type="button" onClick={() => void runAction({ action: "stop" })} disabled={actionBusy || !processCanStop} title="停止">
           <span className="codicon codicon-debug-stop" aria-hidden="true" />
         </button>
       </div>
@@ -352,7 +377,10 @@ export default function NodeDebugPanel({
           setBreakpointCondition={setBreakpointCondition}
           onChangeBreakpoint={changeBreakpoint}
           onAddBreakpoint={addBreakpointFromForm}
-          onClearBreakpoint={(breakpointId) => void runAction("clear_breakpoint", { breakpoint_id: breakpointId })}
+          onClearBreakpoint={(breakpointId) => void runAction({
+            action: "clear_breakpoint",
+            params: { breakpoint_id: breakpointId },
+          })}
           onSelectSource={(path, line) => setSelectedSourceLocation({ path, line })}
           onShowConfiguration={() => setView("configuration")}
           onShowContext={() => setView("context")}

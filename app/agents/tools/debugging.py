@@ -24,8 +24,15 @@ from app.agents.tools.debug_redaction import (
 from app.agents.workspace_tool_paths import WorkspaceToolPathResolver
 from app.schemas.internal_v2.node_debug import (
     ExtensionCatalogBindingAuditDTO,
+    NodeDebugClearBreakpointActionRequest,
+    NodeDebugClearBreakpointParams,
     NodeDebugConfigurationCreateRequest,
     NodeDebugConfigurationDTO,
+    NodeDebugControlActionRequest,
+    NodeDebugEvaluateActionRequest,
+    NodeDebugEvaluateParams,
+    NodeDebugSetBreakpointActionRequest,
+    NodeDebugSetBreakpointParams,
     NodeDebugStateDTO,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
@@ -910,10 +917,11 @@ class DebuggingToolFactory:
         return await self._invoke(
             "stop_debugging",
             lambda tool_call_id: self._node_debug_service.apply_action(
-                session_id=session_id,
-                thread_id=thread_id,
-                action="stop",
-                params={},
+                command=NodeDebugControlActionRequest(
+                    session_id=session_id,
+                    thread_id=thread_id,
+                    action="stop",
+                ),
                 actor="ai",
                 tool_name="stop_debugging",
                 tool_call_id=tool_call_id,
@@ -948,15 +956,20 @@ class DebuggingToolFactory:
     async def step_out(self) -> str:
         return await self._control("step_out", "step_out")
 
-    async def _control(self, tool_name: str, action: str) -> str:
+    async def _control(
+        self,
+        tool_name: str,
+        action: Literal["continue", "pause", "step_over", "step_into", "step_out"],
+    ) -> str:
         session_id, thread_id = self._owner
         return await self._invoke(
             tool_name,
             lambda tool_call_id: self._node_debug_service.apply_action(
-                session_id=session_id,
-                thread_id=thread_id,
-                action=action,  # type: ignore[arg-type]
-                params={},
+                command=NodeDebugControlActionRequest(
+                    session_id=session_id,
+                    thread_id=thread_id,
+                    action=action,
+                ),
                 actor="ai",
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
@@ -976,15 +989,17 @@ class DebuggingToolFactory:
             return await self._invoke(
                 "add_breakpoint",
                 lambda tool_call_id: self._node_debug_service.apply_action(
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    action="set_breakpoint",
-                    params={
-                        "path": path,
-                        "line": line,
-                        "condition": condition,
-                        "hit_condition": hitCondition,
-                    },
+                    command=NodeDebugSetBreakpointActionRequest(
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        action="set_breakpoint",
+                        params=NodeDebugSetBreakpointParams(
+                            path=path,
+                            line=line,
+                            condition=condition,
+                            hit_condition=hitCondition,
+                        ),
+                    ),
                     actor="ai",
                     tool_name="add_breakpoint",
                     tool_call_id=tool_call_id,
@@ -1007,16 +1022,18 @@ class DebuggingToolFactory:
             return await self._invoke(
                 "add_logpoint",
                 lambda tool_call_id: self._node_debug_service.apply_action(
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    action="set_breakpoint",
-                    params={
-                        "path": path,
-                        "line": line,
-                        "condition": condition,
-                        "hit_condition": hitCondition,
-                        "log_message": logMessage,
-                    },
+                    command=NodeDebugSetBreakpointActionRequest(
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        action="set_breakpoint",
+                        params=NodeDebugSetBreakpointParams(
+                            path=path,
+                            line=line,
+                            condition=condition,
+                            hit_condition=hitCondition,
+                            log_message=logMessage,
+                        ),
+                    ),
                     actor="ai",
                     tool_name="add_logpoint",
                     tool_call_id=tool_call_id,
@@ -1043,10 +1060,14 @@ class DebuggingToolFactory:
             return await self._invoke(
                 "remove_breakpoint",
                 lambda tool_call_id: self._node_debug_service.apply_action(
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    action="clear_breakpoint",
-                    params={"breakpoint_id": breakpoint.breakpoint_id},
+                    command=NodeDebugClearBreakpointActionRequest(
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        action="clear_breakpoint",
+                        params=NodeDebugClearBreakpointParams(
+                            breakpoint_id=breakpoint.breakpoint_id,
+                        ),
+                    ),
                     actor="ai",
                     tool_name="remove_breakpoint",
                     tool_call_id=tool_call_id,
@@ -1155,10 +1176,12 @@ class DebuggingToolFactory:
         return await self._invoke(
             "evaluate_expression",
             lambda tool_call_id: self._node_debug_service.apply_action(
-                session_id=session_id,
-                thread_id=thread_id,
-                action="evaluate",
-                params={"expression": expression},
+                command=NodeDebugEvaluateActionRequest(
+                    session_id=session_id,
+                    thread_id=thread_id,
+                    action="evaluate",
+                    params=NodeDebugEvaluateParams(expression=expression),
+                ),
                 actor="ai",
                 tool_name="evaluate_expression",
                 tool_call_id=tool_call_id,

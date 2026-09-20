@@ -355,11 +355,52 @@ message NodeDebugActionRecordDTO {
   optional ExtensionCatalogBindingAuditDTO extension_catalog_binding = 11;
 }
 
+message NodeDebugNoActionParams {
+}
+
+message NodeDebugSetBreakpointParams {
+  string path = 1;
+  int64 line = 2;
+  optional int64 column = 3;
+  optional string condition = 4;
+  optional int64 hit_condition = 5;
+  optional string log_message = 6;
+}
+
+message NodeDebugUpdateBreakpointParams {
+  string breakpoint_id = 1;
+  optional string path = 2;
+  optional int64 line = 3;
+  optional int64 column = 4;
+  optional string condition = 5;
+  optional int64 hit_condition = 6;
+  optional string log_message = 7;
+}
+
+message NodeDebugClearBreakpointParams {
+  string breakpoint_id = 1;
+}
+
+message NodeDebugEvaluateParams {
+  string expression = 1;
+  optional string call_frame_id = 2;
+}
+
 message NodeDebugActionRequest {
   string session_id = 1;
-  string action = 2;
-  optional google.protobuf.Struct params = 3;
-  string thread_id = 4;
+  oneof action {
+    NodeDebugNoActionParams continue = 2;
+    NodeDebugNoActionParams pause = 3;
+    NodeDebugNoActionParams step_over = 4;
+    NodeDebugNoActionParams step_into = 5;
+    NodeDebugNoActionParams step_out = 6;
+    NodeDebugSetBreakpointParams set_breakpoint = 7;
+    NodeDebugUpdateBreakpointParams update_breakpoint = 8;
+    NodeDebugClearBreakpointParams clear_breakpoint = 9;
+    NodeDebugEvaluateParams evaluate = 10;
+    NodeDebugNoActionParams stop = 11;
+  }
+  string thread_id = 12;
 }
 
 message NodeDebugBreakpointDTO {

@@ -15,19 +15,26 @@ from app.core.identifier import create_prefixed_id
 from app.core.path_utils import safe_join
 from app.schemas.internal_v2.node_debug import (
     ExtensionCatalogBindingAuditDTO,
-    NodeDebugAction,
     NodeDebugActionRecordDTO,
+    NodeDebugActionRequest,
     NodeDebugBreakpointDTO,
     NodeDebugBreakpointRequest,
     NodeDebugCapabilitiesDTO,
+    NodeDebugClearBreakpointActionRequest,
     NodeDebugConfigurationCreateRequest,
     NodeDebugConfigurationDTO,
     NodeDebugConfigurationUpdateRequest,
+    NodeDebugControlActionRequest,
+    NodeDebugEvaluateActionRequest,
+    NodeDebugEvaluateParams,
     NodeDebugEvaluationDTO,
     NodeDebugLaunchClaimDTO,
     NodeDebugLaunchProfileDTO,
     NodeDebugSessionManifestDTO,
+    NodeDebugSetBreakpointActionRequest,
+    NodeDebugSetBreakpointParams,
     NodeDebugStateDTO,
+    NodeDebugUpdateBreakpointActionRequest,
     NodeDebugVariableDTO,
 )
 from app.services.infrastructure.events.channel_events import (
@@ -1039,66 +1046,83 @@ class NodeDebugService:
     async def apply_action(
         self,
         *,
-        session_id: str,
-        action: NodeDebugAction,
-        params: dict[str, object],
-        thread_id: str,
+        command: NodeDebugActionRequest,
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
     ) -> NodeDebugStateDTO:
+        session_id, thread_id = command.session_id, command.thread_id
         session_id, thread_id = await self._admit_mutation(session_id, thread_id)
         owner = self._owner_key(session_id, thread_id)
         self._ensure_session_loaded(session_id, thread_id)
         runtime = self._runtimes.get(owner)
         await self._reconcile_session_sources(session_id, thread_id, runtime)
-        if runtime is None and action == "set_breakpoint":
-            self._ensure_configuration_for_breakpoint(session_id, thread_id, params)
-        if runtime is None and action not in {
-            "set_breakpoint",
-            "update_breakpoint",
-            "clear_breakpoint",
-        }:
-            self._assert_no_unsettled_claim(owner, operation=f"调试动作 {action}")
+        if runtime is None and not isinstance(
+            command,
+            (
+                NodeDebugSetBreakpointActionRequest,
+                NodeDebugUpdateBreakpointActionRequest,
+                NodeDebugClearBreakpointActionRequest,
+            ),
+        ):
+            self._assert_no_unsettled_claim(
+                owner,
+                operation=f"调试动作 {command.action}",
+            )
             raise RuntimeError(
                 f"Node 调试会话不存在: session_id={session_id}, thread_id={thread_id}"
             )
-        if action == "set_breakpoint":
+        if isinstance(command, NodeDebugSetBreakpointActionRequest):
+            self._ensure_configuration_for_breakpoint(
+                session_id,
+                thread_id,
+                command.params,
+            )
             await self._breakpoint_mutations.set_breakpoint(
                 owner,
                 runtime,
-                params,
+                command.params,
                 actor=actor,
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
             )
-        elif action == "update_breakpoint":
+        elif isinstance(command, NodeDebugUpdateBreakpointActionRequest):
             await self._breakpoint_mutations.update_breakpoint(
                 owner,
                 runtime,
-                params,
+                command.params,
                 actor=actor,
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
             )
-        elif action == "clear_breakpoint":
+        elif isinstance(command, NodeDebugClearBreakpointActionRequest):
             await self._breakpoint_mutations.clear_breakpoint(
                 owner,
                 runtime,
-                params,
+                command.params,
                 actor=actor,
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
             )
-        elif action == "evaluate":
+        elif isinstance(command, NodeDebugEvaluateActionRequest):
             await self._evaluate(
                 runtime,
-                params,
+                command.params,
                 actor=actor,
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
             )
-        elif action == "stop":
+        elif isinstance(command, NodeDebugControlActionRequest):
+            if command.action != "stop":
+                await self._inspector.debugger_command(
+                    runtime,
+                    command.action,
+                    actor=actor,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                )
+                self._persist_session_state(session_id, thread_id, runtime)
+                return await self.get_state(session_id, thread_id)
             # stop 与 start 共用 per-owner 临界区（R3b 复核残留项）：否则 stop 落在
             # "runtime 已登记、进程尚未 spawn"的窗口会以 process is None 判定
             # "已停止/可证明不存在"，随后启动序列仍会 spawn，形成"exited + 进程
@@ -1121,14 +1145,6 @@ class NodeDebugService:
                 # 无法核实终态：保持 reconcile_required，不报告 stopped。
                 self._persist_session_state(session_id, thread_id, runtime)
                 return await self.get_state(session_id, thread_id)
-        else:
-            await self._inspector.debugger_command(
-                runtime,
-                action,
-                actor=actor,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-            )
         self._persist_session_state(session_id, thread_id, runtime)
         return await self.get_state(session_id, thread_id)
 
@@ -1852,14 +1868,11 @@ class NodeDebugService:
         self,
         session_id: str,
         thread_id: str,
-        params: dict[str, object],
+        params: NodeDebugSetBreakpointParams,
     ) -> None:
         if self._configuration_registry.active_id(session_id, thread_id) is not None:
             return
-        raw_path = params.get("path")
-        if not isinstance(raw_path, str):
-            raise TypeError("首次设置源码断点必须提供 path")
-        _, relative_path = self._configuration_factory.resolve_script_path(raw_path)
+        _, relative_path = self._configuration_factory.resolve_script_path(params.path)
         configuration = self._configuration_factory.configuration_from_request(
             configuration_id=create_prefixed_id("dbgcfg"),
             name=f"调试 {Path(relative_path).name}",
@@ -2183,19 +2196,21 @@ class NodeDebugService:
     async def _evaluate(
         self,
         runtime: NodeDebugRuntime,
-        params: dict[str, object],
+        params: NodeDebugEvaluateParams,
         *,
         actor: Literal["human", "ai", "system"],
         tool_name: str | None,
         tool_call_id: str | None,
     ) -> None:
-        expression = params.get("expression")
-        if not isinstance(expression, str) or not expression.strip():
-            raise ValueError("表达式不能为空")
+        expression = params.expression
         async with runtime.state_lock:
             if runtime.status != "paused" or not runtime.call_stack:
                 raise RuntimeError("只有暂停在源码断点时才能求值")
-            call_frame_id = runtime.call_stack[0].call_frame_id
+            call_frame_id = params.call_frame_id or runtime.call_stack[0].call_frame_id
+            if not any(
+                frame.call_frame_id == call_frame_id for frame in runtime.call_stack
+            ):
+                raise ValueError("求值 call_frame_id 不属于当前暂停调用栈")
         result = await self._inspector.command(
             runtime,
             "Debugger.evaluateOnCallFrame",

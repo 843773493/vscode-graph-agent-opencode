@@ -75,21 +75,37 @@ export function useNodeDebugWorkbench({
   ): void => {
     if (!definition) {
       if (breakpointId) {
-        void controller.runAction("clear_breakpoint", { breakpoint_id: breakpointId });
+        void controller.runAction({
+          action: "clear_breakpoint",
+          params: { breakpoint_id: breakpointId },
+        });
       }
       return;
     }
-    void controller.runAction(
-      breakpointId ? "update_breakpoint" : "set_breakpoint",
-      {
-        ...(breakpointId ? { breakpoint_id: breakpointId } : {}),
+    if (breakpointId) {
+      void controller.runAction({
+        action: "update_breakpoint",
+        params: {
+          breakpoint_id: breakpointId,
+          path,
+          line,
+          condition: definition.condition,
+          hit_condition: definition.hit_condition,
+          log_message: definition.log_message,
+        },
+      });
+      return;
+    }
+    void controller.runAction({
+      action: "set_breakpoint",
+      params: {
         path,
         line,
         condition: definition.condition,
         hit_condition: definition.hit_condition,
         log_message: definition.log_message,
       },
-    );
+    });
   }, [controller]);
 
   return {

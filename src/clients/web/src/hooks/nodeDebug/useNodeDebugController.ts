@@ -9,6 +9,7 @@ import {
   updateNodeDebugConfiguration,
 } from "../../api";
 import type {
+  NodeDebugActionCommand,
   NodeDebugActionRequest,
   NodeDebugState,
 } from "../../types/backend";
@@ -33,6 +34,26 @@ interface StartNodeDebugOptions {
   launchProfileName?: string | null;
   configurationId?: string | null;
   args?: string[];
+}
+
+function actionRequest(
+  sessionId: string,
+  threadId: string,
+  command: NodeDebugActionCommand,
+): NodeDebugActionRequest {
+  if (command.action === "set_breakpoint") {
+    return { ...command, session_id: sessionId, thread_id: threadId };
+  }
+  if (command.action === "update_breakpoint") {
+    return { ...command, session_id: sessionId, thread_id: threadId };
+  }
+  if (command.action === "clear_breakpoint") {
+    return { ...command, session_id: sessionId, thread_id: threadId };
+  }
+  if (command.action === "evaluate") {
+    return { ...command, session_id: sessionId, thread_id: threadId };
+  }
+  return { ...command, session_id: sessionId, thread_id: threadId };
 }
 
 export function useNodeDebugController({
@@ -93,17 +114,17 @@ export function useNodeDebugController({
   };
 
   const runAction = useCallback(async (
-    action: NodeDebugActionRequest["action"],
-    params: Record<string, unknown> = {},
+    command: NodeDebugActionCommand,
   ): Promise<NodeDebugState | null> => {
     if (!enabled || !sessionId) return null;
     const mutation = beginMutation("action");
     if (!mutation) return null;
     setError(null);
     try {
+      const payload = actionRequest(sessionId, threadId, command);
       const nextState = await applyNodeDebugAction(
         apiPort,
-        { session_id: sessionId, thread_id: threadId, action, params },
+        payload,
         workspaceId,
       );
       if (!isCurrentMutation(mutation)) {
@@ -111,7 +132,7 @@ export function useNodeDebugController({
       }
       setState(nextState);
       publishStateChange();
-      onStatusChange(`源码调试：${action}`);
+      onStatusChange(`源码调试：${command.action}`);
       return nextState;
     } catch (cause: unknown) {
       const message = cause instanceof Error ? cause.message : String(cause);

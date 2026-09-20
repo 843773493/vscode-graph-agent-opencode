@@ -19,7 +19,11 @@ import pytest
 
 from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_path_resolver
-from app.schemas.internal_v2.node_debug import NodeDebugConfigurationCreateRequest
+from app.schemas.internal_v2.node_debug import (
+    NodeDebugConfigurationCreateRequest,
+    NodeDebugSetBreakpointActionRequest,
+    NodeDebugSetBreakpointParams,
+)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -276,16 +280,24 @@ async def test_main_and_child_thread_state_is_isolated(
     assert main_state.active_configuration_id != child_state.active_configuration_id
 
     main_state = await service.apply_action(
-        session_id=_PARENT_SESSION_ID,
-        thread_id=MAIN_THREAD_ID,
-        action="set_breakpoint",
-        params={"path": "main.mjs", "line": 1, "condition": "true"},
+        command=NodeDebugSetBreakpointActionRequest(
+            session_id=_PARENT_SESSION_ID,
+            thread_id=MAIN_THREAD_ID,
+            action="set_breakpoint",
+            params=NodeDebugSetBreakpointParams(
+                path="main.mjs",
+                line=1,
+                condition="true",
+            ),
+        ),
     )
     child_state = await service.apply_action(
-        session_id=_PARENT_SESSION_ID,
-        thread_id=_CHILD_SESSION_ID,
-        action="set_breakpoint",
-        params={"path": "child.mjs", "line": 1},
+        command=NodeDebugSetBreakpointActionRequest(
+            session_id=_PARENT_SESSION_ID,
+            thread_id=_CHILD_SESSION_ID,
+            action="set_breakpoint",
+            params=NodeDebugSetBreakpointParams(path="child.mjs", line=1),
+        ),
     )
 
     assert [(item.path, item.line) for item in main_state.breakpoints] == [
@@ -442,10 +454,12 @@ async def test_child_thread_and_child_session_main_address_share_one_owner(
 
     # 经 (parent, child) 加断点，经 (child, main) 必须看到同一条时间线。
     await service.apply_action(
-        session_id=_PARENT_SESSION_ID,
-        thread_id=_CHILD_SESSION_ID,
-        action="set_breakpoint",
-        params={"path": "child.mjs", "line": 1},
+        command=NodeDebugSetBreakpointActionRequest(
+            session_id=_PARENT_SESSION_ID,
+            thread_id=_CHILD_SESSION_ID,
+            action="set_breakpoint",
+            params=NodeDebugSetBreakpointParams(path="child.mjs", line=1),
+        ),
     )
     after_first = await service.get_state(_CHILD_SESSION_ID, MAIN_THREAD_ID)
     assert [(item.path, item.line) for item in after_first.breakpoints] == [
@@ -454,10 +468,12 @@ async def test_child_thread_and_child_session_main_address_share_one_owner(
 
     # 经 (child, main) 再加一个断点，反向地址同样看到两个断点，且无覆盖写。
     await service.apply_action(
-        session_id=_CHILD_SESSION_ID,
-        thread_id=MAIN_THREAD_ID,
-        action="set_breakpoint",
-        params={"path": "child.mjs", "line": 2},
+        command=NodeDebugSetBreakpointActionRequest(
+            session_id=_CHILD_SESSION_ID,
+            thread_id=MAIN_THREAD_ID,
+            action="set_breakpoint",
+            params=NodeDebugSetBreakpointParams(path="child.mjs", line=2),
+        ),
     )
     after_second = await service.get_state(
         _PARENT_SESSION_ID, _CHILD_SESSION_ID
@@ -532,10 +548,12 @@ async def test_mutation_admission_rejects_missing_and_deleted_session(
         )
     with pytest.raises(FileNotFoundError, match="不存在或已删除"):
         await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id=MAIN_THREAD_ID,
-            action="set_breakpoint",
-            params={"path": "main.mjs", "line": 1},
+            command=NodeDebugSetBreakpointActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id=MAIN_THREAD_ID,
+                action="set_breakpoint",
+                params=NodeDebugSetBreakpointParams(path="main.mjs", line=1),
+            ),
         )
 
 

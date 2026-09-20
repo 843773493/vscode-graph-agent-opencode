@@ -18,7 +18,10 @@ from app.agents.tools.custom_invocation import (
     seal_extension_catalog_binding_from_tools,
 )
 from app.agents.tools.debugging import create_debugging_tools
-from app.schemas.internal_v2.node_debug import NodeDebugConfigurationCreateRequest
+from app.schemas.internal_v2.node_debug import (
+    NodeDebugConfigurationCreateRequest,
+    NodeDebugControlActionRequest,
+)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -895,10 +898,11 @@ async def test_human_and_agent_share_cross_file_debug_runtime(
 
         # 人类通过 Web API 使用的同一服务直接继续，不需要接管或交接。
         human_state = await service.apply_action(
-            session_id="ses_e2e_debug",
-            thread_id="main",
-            action="continue",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id="ses_e2e_debug",
+                thread_id="main",
+                action="continue",
+            ),
         )
         assert human_state.status == "paused"
         assert human_state.call_stack[0].path == "debug-worker.mjs"
@@ -979,10 +983,11 @@ async def test_active_debug_session_invalidates_changed_source_without_blocking_
 
         # 源码变化只让断点失效，不阻止人类继续当前已经加载的 Node 代码。
         continued = await service.apply_action(
-            session_id="ses_e2e_debug",
-            thread_id="main",
-            action="continue",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id="ses_e2e_debug",
+                thread_id="main",
+                action="continue",
+            ),
         )
         if continued.status == "running":
             continued = await _wait_for_debug_state(

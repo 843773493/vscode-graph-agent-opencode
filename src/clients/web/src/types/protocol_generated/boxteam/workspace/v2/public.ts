@@ -355,10 +355,51 @@ export interface NodeDebugActionRecordDTO {
   extension_catalog_binding?: ExtensionCatalogBindingAuditDTO | undefined;
 }
 
+export interface NodeDebugNoActionParams {
+}
+
+export interface NodeDebugSetBreakpointParams {
+  path: string;
+  line: number;
+  column?: number | undefined;
+  condition?: string | undefined;
+  hit_condition?: number | undefined;
+  log_message?: string | undefined;
+}
+
+export interface NodeDebugUpdateBreakpointParams {
+  breakpoint_id: string;
+  path?: string | undefined;
+  line?: number | undefined;
+  column?: number | undefined;
+  condition?: string | undefined;
+  hit_condition?: number | undefined;
+  log_message?: string | undefined;
+}
+
+export interface NodeDebugClearBreakpointParams {
+  breakpoint_id: string;
+}
+
+export interface NodeDebugEvaluateParams {
+  expression: string;
+  call_frame_id?: string | undefined;
+}
+
 export interface NodeDebugActionRequest {
   session_id: string;
-  action: string;
-  params?: { [key: string]: any } | undefined;
+  action:
+    | { $case: "continue"; continue: NodeDebugNoActionParams }
+    | { $case: "pause"; pause: NodeDebugNoActionParams }
+    | { $case: "step_over"; step_over: NodeDebugNoActionParams }
+    | { $case: "step_into"; step_into: NodeDebugNoActionParams }
+    | { $case: "step_out"; step_out: NodeDebugNoActionParams }
+    | { $case: "set_breakpoint"; set_breakpoint: NodeDebugSetBreakpointParams }
+    | { $case: "update_breakpoint"; update_breakpoint: NodeDebugUpdateBreakpointParams }
+    | { $case: "clear_breakpoint"; clear_breakpoint: NodeDebugClearBreakpointParams }
+    | { $case: "evaluate"; evaluate: NodeDebugEvaluateParams }
+    | { $case: "stop"; stop: NodeDebugNoActionParams }
+    | undefined;
   thread_id: string;
 }
 
@@ -4057,16 +4098,257 @@ export const NodeDebugActionRecordDTO: MessageFns<NodeDebugActionRecordDTO> = {
   },
 };
 
+function createBaseNodeDebugNoActionParams(): NodeDebugNoActionParams {
+  return {};
+}
+
+export const NodeDebugNoActionParams: MessageFns<NodeDebugNoActionParams> = {
+  fromJSON(_: any): NodeDebugNoActionParams {
+    return {};
+  },
+
+  toJSON(_: NodeDebugNoActionParams): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NodeDebugNoActionParams>, I>>(base?: I): NodeDebugNoActionParams {
+    return NodeDebugNoActionParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NodeDebugNoActionParams>, I>>(_: I): NodeDebugNoActionParams {
+    const message = createBaseNodeDebugNoActionParams();
+    return message;
+  },
+};
+
+function createBaseNodeDebugSetBreakpointParams(): NodeDebugSetBreakpointParams {
+  return {
+    path: "",
+    line: 0,
+    column: undefined,
+    condition: undefined,
+    hit_condition: undefined,
+    log_message: undefined,
+  };
+}
+
+export const NodeDebugSetBreakpointParams: MessageFns<NodeDebugSetBreakpointParams> = {
+  fromJSON(object: any): NodeDebugSetBreakpointParams {
+    return {
+      path: isSet(object.path) ? globalThis.String(object.path) : "",
+      line: isSet(object.line) ? globalThis.Number(object.line) : 0,
+      column: isSet(object.column) ? globalThis.Number(object.column) : undefined,
+      condition: isSet(object.condition) ? globalThis.String(object.condition) : undefined,
+      hit_condition: isSet(object.hit_condition) ? globalThis.Number(object.hit_condition) : undefined,
+      log_message: isSet(object.log_message) ? globalThis.String(object.log_message) : undefined,
+    };
+  },
+
+  toJSON(message: NodeDebugSetBreakpointParams): unknown {
+    const obj: any = {};
+    if (message.path !== "") {
+      obj.path = message.path;
+    }
+    if (message.line !== 0) {
+      obj.line = Math.round(message.line);
+    }
+    if (message.column !== undefined) {
+      obj.column = Math.round(message.column);
+    }
+    if (message.condition !== undefined) {
+      obj.condition = message.condition;
+    }
+    if (message.hit_condition !== undefined) {
+      obj.hit_condition = Math.round(message.hit_condition);
+    }
+    if (message.log_message !== undefined) {
+      obj.log_message = message.log_message;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NodeDebugSetBreakpointParams>, I>>(base?: I): NodeDebugSetBreakpointParams {
+    return NodeDebugSetBreakpointParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NodeDebugSetBreakpointParams>, I>>(object: I): NodeDebugSetBreakpointParams {
+    const message = createBaseNodeDebugSetBreakpointParams();
+    message.path = object.path ?? "";
+    message.line = object.line ?? 0;
+    message.column = object.column ?? undefined;
+    message.condition = object.condition ?? undefined;
+    message.hit_condition = object.hit_condition ?? undefined;
+    message.log_message = object.log_message ?? undefined;
+    return message;
+  },
+};
+
+function createBaseNodeDebugUpdateBreakpointParams(): NodeDebugUpdateBreakpointParams {
+  return {
+    breakpoint_id: "",
+    path: undefined,
+    line: undefined,
+    column: undefined,
+    condition: undefined,
+    hit_condition: undefined,
+    log_message: undefined,
+  };
+}
+
+export const NodeDebugUpdateBreakpointParams: MessageFns<NodeDebugUpdateBreakpointParams> = {
+  fromJSON(object: any): NodeDebugUpdateBreakpointParams {
+    return {
+      breakpoint_id: isSet(object.breakpoint_id) ? globalThis.String(object.breakpoint_id) : "",
+      path: isSet(object.path) ? globalThis.String(object.path) : undefined,
+      line: isSet(object.line) ? globalThis.Number(object.line) : undefined,
+      column: isSet(object.column) ? globalThis.Number(object.column) : undefined,
+      condition: isSet(object.condition) ? globalThis.String(object.condition) : undefined,
+      hit_condition: isSet(object.hit_condition) ? globalThis.Number(object.hit_condition) : undefined,
+      log_message: isSet(object.log_message) ? globalThis.String(object.log_message) : undefined,
+    };
+  },
+
+  toJSON(message: NodeDebugUpdateBreakpointParams): unknown {
+    const obj: any = {};
+    if (message.breakpoint_id !== "") {
+      obj.breakpoint_id = message.breakpoint_id;
+    }
+    if (message.path !== undefined) {
+      obj.path = message.path;
+    }
+    if (message.line !== undefined) {
+      obj.line = Math.round(message.line);
+    }
+    if (message.column !== undefined) {
+      obj.column = Math.round(message.column);
+    }
+    if (message.condition !== undefined) {
+      obj.condition = message.condition;
+    }
+    if (message.hit_condition !== undefined) {
+      obj.hit_condition = Math.round(message.hit_condition);
+    }
+    if (message.log_message !== undefined) {
+      obj.log_message = message.log_message;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NodeDebugUpdateBreakpointParams>, I>>(base?: I): NodeDebugUpdateBreakpointParams {
+    return NodeDebugUpdateBreakpointParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NodeDebugUpdateBreakpointParams>, I>>(
+    object: I,
+  ): NodeDebugUpdateBreakpointParams {
+    const message = createBaseNodeDebugUpdateBreakpointParams();
+    message.breakpoint_id = object.breakpoint_id ?? "";
+    message.path = object.path ?? undefined;
+    message.line = object.line ?? undefined;
+    message.column = object.column ?? undefined;
+    message.condition = object.condition ?? undefined;
+    message.hit_condition = object.hit_condition ?? undefined;
+    message.log_message = object.log_message ?? undefined;
+    return message;
+  },
+};
+
+function createBaseNodeDebugClearBreakpointParams(): NodeDebugClearBreakpointParams {
+  return { breakpoint_id: "" };
+}
+
+export const NodeDebugClearBreakpointParams: MessageFns<NodeDebugClearBreakpointParams> = {
+  fromJSON(object: any): NodeDebugClearBreakpointParams {
+    return { breakpoint_id: isSet(object.breakpoint_id) ? globalThis.String(object.breakpoint_id) : "" };
+  },
+
+  toJSON(message: NodeDebugClearBreakpointParams): unknown {
+    const obj: any = {};
+    if (message.breakpoint_id !== "") {
+      obj.breakpoint_id = message.breakpoint_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NodeDebugClearBreakpointParams>, I>>(base?: I): NodeDebugClearBreakpointParams {
+    return NodeDebugClearBreakpointParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NodeDebugClearBreakpointParams>, I>>(
+    object: I,
+  ): NodeDebugClearBreakpointParams {
+    const message = createBaseNodeDebugClearBreakpointParams();
+    message.breakpoint_id = object.breakpoint_id ?? "";
+    return message;
+  },
+};
+
+function createBaseNodeDebugEvaluateParams(): NodeDebugEvaluateParams {
+  return { expression: "", call_frame_id: undefined };
+}
+
+export const NodeDebugEvaluateParams: MessageFns<NodeDebugEvaluateParams> = {
+  fromJSON(object: any): NodeDebugEvaluateParams {
+    return {
+      expression: isSet(object.expression) ? globalThis.String(object.expression) : "",
+      call_frame_id: isSet(object.call_frame_id) ? globalThis.String(object.call_frame_id) : undefined,
+    };
+  },
+
+  toJSON(message: NodeDebugEvaluateParams): unknown {
+    const obj: any = {};
+    if (message.expression !== "") {
+      obj.expression = message.expression;
+    }
+    if (message.call_frame_id !== undefined) {
+      obj.call_frame_id = message.call_frame_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NodeDebugEvaluateParams>, I>>(base?: I): NodeDebugEvaluateParams {
+    return NodeDebugEvaluateParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NodeDebugEvaluateParams>, I>>(object: I): NodeDebugEvaluateParams {
+    const message = createBaseNodeDebugEvaluateParams();
+    message.expression = object.expression ?? "";
+    message.call_frame_id = object.call_frame_id ?? undefined;
+    return message;
+  },
+};
+
 function createBaseNodeDebugActionRequest(): NodeDebugActionRequest {
-  return { session_id: "", action: "", params: undefined, thread_id: "" };
+  return { session_id: "", action: undefined, thread_id: "" };
 }
 
 export const NodeDebugActionRequest: MessageFns<NodeDebugActionRequest> = {
   fromJSON(object: any): NodeDebugActionRequest {
     return {
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      action: isSet(object.action) ? globalThis.String(object.action) : "",
-      params: isObject(object.params) ? object.params : undefined,
+      action: isSet(object.continue)
+        ? { $case: "continue", continue: NodeDebugNoActionParams.fromJSON(object.continue) }
+        : isSet(object.pause)
+        ? { $case: "pause", pause: NodeDebugNoActionParams.fromJSON(object.pause) }
+        : isSet(object.step_over)
+        ? { $case: "step_over", step_over: NodeDebugNoActionParams.fromJSON(object.step_over) }
+        : isSet(object.step_into)
+        ? { $case: "step_into", step_into: NodeDebugNoActionParams.fromJSON(object.step_into) }
+        : isSet(object.step_out)
+        ? { $case: "step_out", step_out: NodeDebugNoActionParams.fromJSON(object.step_out) }
+        : isSet(object.set_breakpoint)
+        ? { $case: "set_breakpoint", set_breakpoint: NodeDebugSetBreakpointParams.fromJSON(object.set_breakpoint) }
+        : isSet(object.update_breakpoint)
+        ? {
+          $case: "update_breakpoint",
+          update_breakpoint: NodeDebugUpdateBreakpointParams.fromJSON(object.update_breakpoint),
+        }
+        : isSet(object.clear_breakpoint)
+        ? {
+          $case: "clear_breakpoint",
+          clear_breakpoint: NodeDebugClearBreakpointParams.fromJSON(object.clear_breakpoint),
+        }
+        : isSet(object.evaluate)
+        ? { $case: "evaluate", evaluate: NodeDebugEvaluateParams.fromJSON(object.evaluate) }
+        : isSet(object.stop)
+        ? { $case: "stop", stop: NodeDebugNoActionParams.fromJSON(object.stop) }
+        : undefined,
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
@@ -4076,11 +4358,26 @@ export const NodeDebugActionRequest: MessageFns<NodeDebugActionRequest> = {
     if (message.session_id !== "") {
       obj.session_id = message.session_id;
     }
-    if (message.action !== "") {
-      obj.action = message.action;
-    }
-    if (message.params !== undefined) {
-      obj.params = message.params;
+    if (message.action?.$case === "continue") {
+      obj.continue = NodeDebugNoActionParams.toJSON(message.action.continue);
+    } else if (message.action?.$case === "pause") {
+      obj.pause = NodeDebugNoActionParams.toJSON(message.action.pause);
+    } else if (message.action?.$case === "step_over") {
+      obj.step_over = NodeDebugNoActionParams.toJSON(message.action.step_over);
+    } else if (message.action?.$case === "step_into") {
+      obj.step_into = NodeDebugNoActionParams.toJSON(message.action.step_into);
+    } else if (message.action?.$case === "step_out") {
+      obj.step_out = NodeDebugNoActionParams.toJSON(message.action.step_out);
+    } else if (message.action?.$case === "set_breakpoint") {
+      obj.set_breakpoint = NodeDebugSetBreakpointParams.toJSON(message.action.set_breakpoint);
+    } else if (message.action?.$case === "update_breakpoint") {
+      obj.update_breakpoint = NodeDebugUpdateBreakpointParams.toJSON(message.action.update_breakpoint);
+    } else if (message.action?.$case === "clear_breakpoint") {
+      obj.clear_breakpoint = NodeDebugClearBreakpointParams.toJSON(message.action.clear_breakpoint);
+    } else if (message.action?.$case === "evaluate") {
+      obj.evaluate = NodeDebugEvaluateParams.toJSON(message.action.evaluate);
+    } else if (message.action?.$case === "stop") {
+      obj.stop = NodeDebugNoActionParams.toJSON(message.action.stop);
     }
     if (message.thread_id !== "") {
       obj.thread_id = message.thread_id;
@@ -4094,8 +4391,83 @@ export const NodeDebugActionRequest: MessageFns<NodeDebugActionRequest> = {
   fromPartial<I extends Exact<DeepPartial<NodeDebugActionRequest>, I>>(object: I): NodeDebugActionRequest {
     const message = createBaseNodeDebugActionRequest();
     message.session_id = object.session_id ?? "";
-    message.action = object.action ?? "";
-    message.params = object.params ?? undefined;
+    switch (object.action?.$case) {
+      case "continue": {
+        if (object.action?.continue !== undefined && object.action?.continue !== null) {
+          message.action = { $case: "continue", continue: NodeDebugNoActionParams.fromPartial(object.action.continue) };
+        }
+        break;
+      }
+      case "pause": {
+        if (object.action?.pause !== undefined && object.action?.pause !== null) {
+          message.action = { $case: "pause", pause: NodeDebugNoActionParams.fromPartial(object.action.pause) };
+        }
+        break;
+      }
+      case "step_over": {
+        if (object.action?.step_over !== undefined && object.action?.step_over !== null) {
+          message.action = {
+            $case: "step_over",
+            step_over: NodeDebugNoActionParams.fromPartial(object.action.step_over),
+          };
+        }
+        break;
+      }
+      case "step_into": {
+        if (object.action?.step_into !== undefined && object.action?.step_into !== null) {
+          message.action = {
+            $case: "step_into",
+            step_into: NodeDebugNoActionParams.fromPartial(object.action.step_into),
+          };
+        }
+        break;
+      }
+      case "step_out": {
+        if (object.action?.step_out !== undefined && object.action?.step_out !== null) {
+          message.action = { $case: "step_out", step_out: NodeDebugNoActionParams.fromPartial(object.action.step_out) };
+        }
+        break;
+      }
+      case "set_breakpoint": {
+        if (object.action?.set_breakpoint !== undefined && object.action?.set_breakpoint !== null) {
+          message.action = {
+            $case: "set_breakpoint",
+            set_breakpoint: NodeDebugSetBreakpointParams.fromPartial(object.action.set_breakpoint),
+          };
+        }
+        break;
+      }
+      case "update_breakpoint": {
+        if (object.action?.update_breakpoint !== undefined && object.action?.update_breakpoint !== null) {
+          message.action = {
+            $case: "update_breakpoint",
+            update_breakpoint: NodeDebugUpdateBreakpointParams.fromPartial(object.action.update_breakpoint),
+          };
+        }
+        break;
+      }
+      case "clear_breakpoint": {
+        if (object.action?.clear_breakpoint !== undefined && object.action?.clear_breakpoint !== null) {
+          message.action = {
+            $case: "clear_breakpoint",
+            clear_breakpoint: NodeDebugClearBreakpointParams.fromPartial(object.action.clear_breakpoint),
+          };
+        }
+        break;
+      }
+      case "evaluate": {
+        if (object.action?.evaluate !== undefined && object.action?.evaluate !== null) {
+          message.action = { $case: "evaluate", evaluate: NodeDebugEvaluateParams.fromPartial(object.action.evaluate) };
+        }
+        break;
+      }
+      case "stop": {
+        if (object.action?.stop !== undefined && object.action?.stop !== null) {
+          message.action = { $case: "stop", stop: NodeDebugNoActionParams.fromPartial(object.action.stop) };
+        }
+        break;
+      }
+    }
     message.thread_id = object.thread_id ?? "";
     return message;
   },

@@ -29,6 +29,7 @@ import websockets
 from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
+    NodeDebugControlActionRequest,
     NodeDebugLaunchClaimDTO,
 )
 from app.services.infrastructure.events.channel_events import (
@@ -298,10 +299,11 @@ async def test_release_failure_publishes_release_failed_state_event(
         service._runtimes[(_PARENT_SESSION_ID, "main")] = runtime
 
         blocked = await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id="main",
-            action="stop",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                action="stop",
+            ),
         )
         assert blocked.status == "reconcile_required"
         # 通知只携带轻量身份字段，不夹带 reason 正文或进程细节。
@@ -319,10 +321,11 @@ async def test_release_failure_publishes_release_failed_state_event(
         child.terminate()
         child.wait(timeout=10)
         await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id="main",
-            action="stop",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                action="stop",
+            ),
         )
         assert subscription.pending() == ()
     finally:
@@ -462,10 +465,11 @@ async def test_handshake_registers_typed_lease_and_verified_stop_settles_it(
         assert leases[0].operation_id == claim.process_instance_id
 
         stopped = await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id="main",
-            action="stop",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                action="stop",
+            ),
         )
         assert stopped.status == "exited"
         persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
@@ -546,10 +550,11 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
         service._runtimes[(_PARENT_SESSION_ID, "main")] = runtime
 
         blocked = await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id="main",
-            action="stop",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                action="stop",
+            ),
         )
         assert blocked.status == "reconcile_required"
         persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
@@ -563,10 +568,11 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
         child.terminate()
         child.wait(timeout=10)
         released = await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id="main",
-            action="stop",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                action="stop",
+            ),
         )
         assert released.status == "exited"
         persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, "main")
@@ -742,10 +748,11 @@ async def test_ledger_settlement_does_not_change_verified_running_report(
         assert state.pid == child.pid
 
         stopped = await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id="main",
-            action="stop",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                action="stop",
+            ),
         )
         assert stopped.status == "exited"
         assert child.poll() is not None

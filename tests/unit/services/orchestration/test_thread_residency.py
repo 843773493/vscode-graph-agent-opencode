@@ -36,6 +36,7 @@ import websockets
 from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
+    NodeDebugControlActionRequest,
     NodeDebugLaunchClaimDTO,
 )
 from app.services.infrastructure.external_resource_leases import (
@@ -700,10 +701,11 @@ async def test_start_pushes_blocker_and_verified_stop_releases_it(
         assert fired == []
 
         stopped = await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id=_THREAD_ID,
-            action="stop",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id=_THREAD_ID,
+                action="stop",
+            ),
         )
         assert stopped.status == "exited"
         released = tracker.snapshot(*_OWNER)
@@ -893,10 +895,11 @@ async def test_stop_during_spawn_window_is_serialized_per_owner(
 
         stop_task = asyncio.create_task(
             service.apply_action(
-                session_id=_PARENT_SESSION_ID,
-                thread_id=_THREAD_ID,
-                action="stop",
-                params={},
+                command=NodeDebugControlActionRequest(
+                    session_id=_PARENT_SESSION_ID,
+                    thread_id=_THREAD_ID,
+                    action="stop",
+                ),
             )
         )
         # 给 stop 多次让出事件循环的机会：它必须一直卡在 owner 锁上。

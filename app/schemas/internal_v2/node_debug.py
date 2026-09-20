@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,13 +37,107 @@ NodeDebugAction = Literal[
 ]
 
 
-class NodeDebugBreakpointRequest(BaseModel):
+class NodeDebugNoActionParams(BaseModel):
+    """无需额外参数的 Node Debug 动作参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NodeDebugSetBreakpointParams(BaseModel):
+    """设置源码断点的参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
     path: str = Field(min_length=1)
     line: int = Field(ge=1)
     column: int = Field(default=1, ge=1)
     condition: str | None = None
     hit_condition: int | None = Field(default=None, ge=1)
     log_message: str | None = Field(default=None, min_length=1)
+
+
+class NodeDebugUpdateBreakpointParams(BaseModel):
+    """编辑源码断点的参数；未提供的字段保持原值。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    breakpoint_id: str = Field(min_length=1)
+    path: str | None = Field(default=None, min_length=1)
+    line: int | None = Field(default=None, ge=1)
+    column: int | None = Field(default=None, ge=1)
+    condition: str | None = None
+    hit_condition: int | None = Field(default=None, ge=1)
+    log_message: str | None = Field(default=None, min_length=1)
+
+
+class NodeDebugClearBreakpointParams(BaseModel):
+    """清除源码断点的参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    breakpoint_id: str = Field(min_length=1)
+
+
+class NodeDebugEvaluateParams(BaseModel):
+    """暂停上下文求值的参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expression: str = Field(min_length=1)
+    call_frame_id: str | None = Field(default=None, min_length=1)
+
+
+class _NodeDebugActionRequestBase(BaseModel):
+    session_id: str = Field(min_length=1)
+    thread_id: str = Field(min_length=1)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NodeDebugControlActionRequest(_NodeDebugActionRequestBase):
+    action: Literal[
+        "continue",
+        "pause",
+        "step_over",
+        "step_into",
+        "step_out",
+        "stop",
+    ]
+    params: NodeDebugNoActionParams = Field(default_factory=NodeDebugNoActionParams)
+
+
+class NodeDebugSetBreakpointActionRequest(_NodeDebugActionRequestBase):
+    action: Literal["set_breakpoint"]
+    params: NodeDebugSetBreakpointParams
+
+
+class NodeDebugUpdateBreakpointActionRequest(_NodeDebugActionRequestBase):
+    action: Literal["update_breakpoint"]
+    params: NodeDebugUpdateBreakpointParams
+
+
+class NodeDebugClearBreakpointActionRequest(_NodeDebugActionRequestBase):
+    action: Literal["clear_breakpoint"]
+    params: NodeDebugClearBreakpointParams
+
+
+class NodeDebugEvaluateActionRequest(_NodeDebugActionRequestBase):
+    action: Literal["evaluate"]
+    params: NodeDebugEvaluateParams
+
+
+NodeDebugActionRequest = Annotated[
+    NodeDebugControlActionRequest
+    | NodeDebugSetBreakpointActionRequest
+    | NodeDebugUpdateBreakpointActionRequest
+    | NodeDebugClearBreakpointActionRequest
+    | NodeDebugEvaluateActionRequest,
+    Field(discriminator="action"),
+]
+
+
+class NodeDebugBreakpointRequest(NodeDebugSetBreakpointParams):
+    """启动配置中的源码断点参数。"""
 
 
 class NodeDebugStartRequest(BaseModel):
@@ -58,13 +152,6 @@ class NodeDebugStartRequest(BaseModel):
         default_factory=list,
         max_length=50,
     )
-
-
-class NodeDebugActionRequest(BaseModel):
-    session_id: str = Field(min_length=1)
-    thread_id: str = Field(min_length=1)
-    action: NodeDebugAction
-    params: dict[str, object] = Field(default_factory=dict)
 
 
 class NodeDebugBreakpointDTO(BaseModel):

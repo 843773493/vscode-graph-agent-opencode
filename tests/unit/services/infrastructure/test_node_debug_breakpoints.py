@@ -10,6 +10,10 @@ import pytest
 from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugConfigurationCreateRequest,
+    NodeDebugSetBreakpointActionRequest,
+    NodeDebugSetBreakpointParams,
+    NodeDebugUpdateBreakpointActionRequest,
+    NodeDebugUpdateBreakpointParams,
 )
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
@@ -176,16 +180,18 @@ async def test_pending_breakpoints_are_restored_from_session_store(
         )
     )
     first_state = await first.apply_action(
-        session_id=session_id,
-        thread_id="main",
-        action="set_breakpoint",
-        params={
-            "path": "entry.mjs",
-            "line": 2,
-            "condition": "answer > 0",
-            "hit_condition": 2,
-            "log_message": "answer={answer}",
-        },
+        command=NodeDebugSetBreakpointActionRequest(
+            session_id=session_id,
+            thread_id="main",
+            action="set_breakpoint",
+            params=NodeDebugSetBreakpointParams(
+                path="entry.mjs",
+                line=2,
+                condition="answer > 0",
+                hit_condition=2,
+                log_message="answer={answer}",
+            ),
+        ),
     )
     assert first_state.configuration_revision > 0
     assert first_state.active_configuration_id == created.active_configuration_id
@@ -240,10 +246,12 @@ async def test_multiple_configurations_are_isolated_and_portable(
     first_id = first.active_configuration_id
     assert first_id is not None
     await service.apply_action(
-        session_id="source-session",
-        thread_id="main",
-        action="set_breakpoint",
-        params={"path": "first.mjs", "line": 1},
+        command=NodeDebugSetBreakpointActionRequest(
+            session_id="source-session",
+            thread_id="main",
+            action="set_breakpoint",
+            params=NodeDebugSetBreakpointParams(path="first.mjs", line=1),
+        ),
     )
     second = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
@@ -457,22 +465,26 @@ async def test_duplicate_breakpoint_is_rejected_for_shared_operators(
     )
 
     await service.apply_action(
-        session_id="shared-session",
-        thread_id="main",
-        action="set_breakpoint",
-        params={"path": "shared.mjs", "line": 2},
+        command=NodeDebugSetBreakpointActionRequest(
+            session_id="shared-session",
+            thread_id="main",
+            action="set_breakpoint",
+            params=NodeDebugSetBreakpointParams(path="shared.mjs", line=2),
+        ),
         actor="human",
     )
     with pytest.raises(ValueError, match="源码断点已存在"):
         await service.apply_action(
-            session_id="shared-session",
-            thread_id="main",
-            action="set_breakpoint",
-            params={
-                "path": "shared.mjs",
-                "line": 2,
-                "condition": "value > 0",
-            },
+            command=NodeDebugSetBreakpointActionRequest(
+                session_id="shared-session",
+                thread_id="main",
+                action="set_breakpoint",
+                params=NodeDebugSetBreakpointParams(
+                    path="shared.mjs",
+                    line=2,
+                    condition="value > 0",
+                ),
+            ),
             actor="ai",
         )
 
@@ -498,22 +510,26 @@ async def test_pending_breakpoint_can_be_atomically_changed_to_logpoint(
     )
 
     created = await service.apply_action(
-        session_id="editable-session",
-        thread_id="main",
-        action="set_breakpoint",
-        params={"path": "editable.mjs", "line": 2},
+        command=NodeDebugSetBreakpointActionRequest(
+            session_id="editable-session",
+            thread_id="main",
+            action="set_breakpoint",
+            params=NodeDebugSetBreakpointParams(path="editable.mjs", line=2),
+        ),
     )
     breakpoint_id = created.breakpoints[0].breakpoint_id
     updated = await service.apply_action(
-        session_id="editable-session",
-        thread_id="main",
-        action="update_breakpoint",
-        params={
-            "breakpoint_id": breakpoint_id,
-            "condition": "value > 10",
-            "hit_condition": 3,
-            "log_message": "value={value}",
-        },
+        command=NodeDebugUpdateBreakpointActionRequest(
+            session_id="editable-session",
+            thread_id="main",
+            action="update_breakpoint",
+            params=NodeDebugUpdateBreakpointParams(
+                breakpoint_id=breakpoint_id,
+                condition="value > 10",
+                hit_condition=3,
+                log_message="value={value}",
+            ),
+        ),
     )
 
     assert len(updated.breakpoints) == 1

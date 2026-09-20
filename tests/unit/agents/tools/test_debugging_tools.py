@@ -19,6 +19,8 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugConfigurationSummaryDTO,
     NodeDebugEvaluationDTO,
+    NodeDebugSetBreakpointActionRequest,
+    NodeDebugSetBreakpointParams,
     NodeDebugStackFrameDTO,
     NodeDebugStateDTO,
     NodeDebugVariableDTO,
@@ -214,16 +216,18 @@ async def test_logpoint_maps_to_non_pausing_breakpoint_definition(
 
     assert payload["ok"] is True
     service.apply_action.assert_awaited_once_with(
-        session_id="ses_debug_logpoint",
-        thread_id=_MAIN_THREAD_ID,
-        action="set_breakpoint",
-        params={
-            "path": "fixture.mjs",
-            "line": 2,
-            "condition": "value > 0",
-            "hit_condition": 3,
-            "log_message": "value={value}",
-        },
+        command=NodeDebugSetBreakpointActionRequest(
+            session_id="ses_debug_logpoint",
+            thread_id=_MAIN_THREAD_ID,
+            action="set_breakpoint",
+            params=NodeDebugSetBreakpointParams(
+                path="fixture.mjs",
+                line=2,
+                condition="value > 0",
+                hit_condition=3,
+                log_message="value={value}",
+            ),
+        ),
         actor="ai",
         tool_name="add_logpoint",
         tool_call_id="direct-backend-test",

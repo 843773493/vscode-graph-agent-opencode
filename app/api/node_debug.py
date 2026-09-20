@@ -287,10 +287,7 @@ async def apply_node_debug_action(
 ):
     try:
         result = await node_debug_service.apply_action(
-            session_id=payload.session_id,
-            thread_id=payload.thread_id,
-            action=payload.action,
-            params=payload.params,
+            command=payload,
         )
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error

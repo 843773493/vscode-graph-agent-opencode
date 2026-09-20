@@ -29,6 +29,7 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugConfigurationDTO,
     NodeDebugConfigurationUpdateRequest,
+    NodeDebugControlActionRequest,
     NodeDebugLaunchClaimDTO,
     NodeDebugSessionManifestDTO,
 )
@@ -617,10 +618,11 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
 
     stop_task = asyncio.create_task(
         service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id="main",
-            action="stop",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                action="stop",
+            ),
         )
     )
     await process.terminate_called.wait()
@@ -709,10 +711,11 @@ async def test_cold_launch_pending_claim_surfaces_reconcile_required_and_blocks_
         await service.restart(_PARENT_SESSION_ID, thread_id="main")
     with pytest.raises(RuntimeError, match="未结清"):
         await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id="main",
-            action="continue",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                action="continue",
+            ),
         )
 
 
@@ -1116,10 +1119,11 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
         service._runtimes[(_PARENT_SESSION_ID, "main")] = runtime
 
         blocked = await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id="main",
-            action="stop",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                action="stop",
+            ),
         )
         assert blocked.status == "reconcile_required"
         assert blocked.error_message is not None
@@ -1147,10 +1151,11 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
         child.terminate()
         child.wait(timeout=10)
         released = await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id="main",
-            action="stop",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                action="stop",
+            ),
         )
         assert released.status == "exited"
         persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, "main")
@@ -1220,10 +1225,11 @@ async def test_cross_source_identity_cannot_report_termination(
         service._runtimes[(_PARENT_SESSION_ID, "main")] = runtime
 
         stopped = await service.apply_action(
-            session_id=_PARENT_SESSION_ID,
-            thread_id="main",
-            action="stop",
-            params={},
+            command=NodeDebugControlActionRequest(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                action="stop",
+            ),
         )
         # 进程句柄没报告终态、身份又不可比对 ⇒ 只能保持 reconcile_required。
         assert stopped.status == "reconcile_required"

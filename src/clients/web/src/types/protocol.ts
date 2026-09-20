@@ -88,13 +88,69 @@ export type NodeDebugAction =
   | "clear_breakpoint"
   | "evaluate"
   | "stop";
-export type NodeDebugActionRequest = Omit<
-  WorkspaceProtocol.NodeDebugActionRequest,
-  "action" | "params"
-> & {
-  action: NodeDebugAction;
-  params?: JsonObject;
+
+export type NodeDebugNoActionParams = Record<string, never>;
+export interface NodeDebugSetBreakpointParams {
+  path: string;
+  line: number;
+  column?: number;
+  condition?: string | null;
+  hit_condition?: number | null;
+  log_message?: string | null;
+}
+export interface NodeDebugUpdateBreakpointParams {
+  breakpoint_id: string;
+  path?: string | null;
+  line?: number | null;
+  column?: number | null;
+  condition?: string | null;
+  hit_condition?: number | null;
+  log_message?: string | null;
+}
+export interface NodeDebugClearBreakpointParams {
+  breakpoint_id: string;
+}
+export interface NodeDebugEvaluateParams {
+  expression: string;
+  call_frame_id?: string | null;
+}
+
+interface NodeDebugActionRequestBase {
+  session_id: string;
+  thread_id: string;
+}
+export type NodeDebugControlActionRequest = NodeDebugActionRequestBase & {
+  action: Extract<NodeDebugAction, "continue" | "pause" | "step_over" | "step_into" | "step_out" | "stop">;
+  params?: NodeDebugNoActionParams;
 };
+export type NodeDebugSetBreakpointActionRequest = NodeDebugActionRequestBase & {
+  action: "set_breakpoint";
+  params: NodeDebugSetBreakpointParams;
+};
+export type NodeDebugUpdateBreakpointActionRequest = NodeDebugActionRequestBase & {
+  action: "update_breakpoint";
+  params: NodeDebugUpdateBreakpointParams;
+};
+export type NodeDebugClearBreakpointActionRequest = NodeDebugActionRequestBase & {
+  action: "clear_breakpoint";
+  params: NodeDebugClearBreakpointParams;
+};
+export type NodeDebugEvaluateActionRequest = NodeDebugActionRequestBase & {
+  action: "evaluate";
+  params: NodeDebugEvaluateParams;
+};
+export type NodeDebugActionRequest =
+  | NodeDebugControlActionRequest
+  | NodeDebugSetBreakpointActionRequest
+  | NodeDebugUpdateBreakpointActionRequest
+  | NodeDebugClearBreakpointActionRequest
+  | NodeDebugEvaluateActionRequest;
+export type NodeDebugActionCommand =
+  | Omit<NodeDebugControlActionRequest, "session_id" | "thread_id">
+  | Omit<NodeDebugSetBreakpointActionRequest, "session_id" | "thread_id">
+  | Omit<NodeDebugUpdateBreakpointActionRequest, "session_id" | "thread_id">
+  | Omit<NodeDebugClearBreakpointActionRequest, "session_id" | "thread_id">
+  | Omit<NodeDebugEvaluateActionRequest, "session_id" | "thread_id">;
 export type NodeDebugActionRecord = Omit<
   WorkspaceProtocol.NodeDebugActionRecordDTO,
   "actor" | "tool_name" | "tool_call_id" | "extension_catalog_binding" | "result" | "created_at"

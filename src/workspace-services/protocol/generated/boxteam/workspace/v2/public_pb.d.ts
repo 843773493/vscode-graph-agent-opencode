@@ -1579,6 +1579,142 @@ export declare type NodeDebugActionRecordDTO = Message<"boxteam.workspace.v2.Nod
 export declare const NodeDebugActionRecordDTOSchema: GenMessage<NodeDebugActionRecordDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.NodeDebugNoActionParams
+ */
+export declare type NodeDebugNoActionParams = Message<"boxteam.workspace.v2.NodeDebugNoActionParams"> & {
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.NodeDebugNoActionParams.
+ * Use `create(NodeDebugNoActionParamsSchema)` to create a new message.
+ */
+export declare const NodeDebugNoActionParamsSchema: GenMessage<NodeDebugNoActionParams>;
+
+/**
+ * @generated from message boxteam.workspace.v2.NodeDebugSetBreakpointParams
+ */
+export declare type NodeDebugSetBreakpointParams = Message<"boxteam.workspace.v2.NodeDebugSetBreakpointParams"> & {
+  /**
+   * @generated from field: string path = 1;
+   */
+  path: string;
+
+  /**
+   * @generated from field: int64 line = 2;
+   */
+  line: bigint;
+
+  /**
+   * @generated from field: optional int64 column = 3;
+   */
+  column?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string condition = 4;
+   */
+  condition?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 hit_condition = 5;
+   */
+  hitCondition?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string log_message = 6;
+   */
+  logMessage?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.NodeDebugSetBreakpointParams.
+ * Use `create(NodeDebugSetBreakpointParamsSchema)` to create a new message.
+ */
+export declare const NodeDebugSetBreakpointParamsSchema: GenMessage<NodeDebugSetBreakpointParams>;
+
+/**
+ * @generated from message boxteam.workspace.v2.NodeDebugUpdateBreakpointParams
+ */
+export declare type NodeDebugUpdateBreakpointParams = Message<"boxteam.workspace.v2.NodeDebugUpdateBreakpointParams"> & {
+  /**
+   * @generated from field: string breakpoint_id = 1;
+   */
+  breakpointId: string;
+
+  /**
+   * @generated from field: optional string path = 2;
+   */
+  path?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 line = 3;
+   */
+  line?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 column = 4;
+   */
+  column?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string condition = 5;
+   */
+  condition?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 hit_condition = 6;
+   */
+  hitCondition?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string log_message = 7;
+   */
+  logMessage?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.NodeDebugUpdateBreakpointParams.
+ * Use `create(NodeDebugUpdateBreakpointParamsSchema)` to create a new message.
+ */
+export declare const NodeDebugUpdateBreakpointParamsSchema: GenMessage<NodeDebugUpdateBreakpointParams>;
+
+/**
+ * @generated from message boxteam.workspace.v2.NodeDebugClearBreakpointParams
+ */
+export declare type NodeDebugClearBreakpointParams = Message<"boxteam.workspace.v2.NodeDebugClearBreakpointParams"> & {
+  /**
+   * @generated from field: string breakpoint_id = 1;
+   */
+  breakpointId: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.NodeDebugClearBreakpointParams.
+ * Use `create(NodeDebugClearBreakpointParamsSchema)` to create a new message.
+ */
+export declare const NodeDebugClearBreakpointParamsSchema: GenMessage<NodeDebugClearBreakpointParams>;
+
+/**
+ * @generated from message boxteam.workspace.v2.NodeDebugEvaluateParams
+ */
+export declare type NodeDebugEvaluateParams = Message<"boxteam.workspace.v2.NodeDebugEvaluateParams"> & {
+  /**
+   * @generated from field: string expression = 1;
+   */
+  expression: string;
+
+  /**
+   * @generated from field: optional string call_frame_id = 2;
+   */
+  callFrameId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.NodeDebugEvaluateParams.
+ * Use `create(NodeDebugEvaluateParamsSchema)` to create a new message.
+ */
+export declare const NodeDebugEvaluateParamsSchema: GenMessage<NodeDebugEvaluateParams>;
+
+/**
  * @generated from message boxteam.workspace.v2.NodeDebugActionRequest
  */
 export declare type NodeDebugActionRequest = Message<"boxteam.workspace.v2.NodeDebugActionRequest"> & {
@@ -1588,17 +1724,72 @@ export declare type NodeDebugActionRequest = Message<"boxteam.workspace.v2.NodeD
   sessionId: string;
 
   /**
-   * @generated from field: string action = 2;
+   * @generated from oneof boxteam.workspace.v2.NodeDebugActionRequest.action
    */
-  action: string;
+  action: {
+    /**
+     * @generated from field: boxteam.workspace.v2.NodeDebugNoActionParams continue = 2;
+     */
+    value: NodeDebugNoActionParams;
+    case: "continue";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.NodeDebugNoActionParams pause = 3;
+     */
+    value: NodeDebugNoActionParams;
+    case: "pause";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.NodeDebugNoActionParams step_over = 4;
+     */
+    value: NodeDebugNoActionParams;
+    case: "stepOver";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.NodeDebugNoActionParams step_into = 5;
+     */
+    value: NodeDebugNoActionParams;
+    case: "stepInto";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.NodeDebugNoActionParams step_out = 6;
+     */
+    value: NodeDebugNoActionParams;
+    case: "stepOut";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.NodeDebugSetBreakpointParams set_breakpoint = 7;
+     */
+    value: NodeDebugSetBreakpointParams;
+    case: "setBreakpoint";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.NodeDebugUpdateBreakpointParams update_breakpoint = 8;
+     */
+    value: NodeDebugUpdateBreakpointParams;
+    case: "updateBreakpoint";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.NodeDebugClearBreakpointParams clear_breakpoint = 9;
+     */
+    value: NodeDebugClearBreakpointParams;
+    case: "clearBreakpoint";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.NodeDebugEvaluateParams evaluate = 10;
+     */
+    value: NodeDebugEvaluateParams;
+    case: "evaluate";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.NodeDebugNoActionParams stop = 11;
+     */
+    value: NodeDebugNoActionParams;
+    case: "stop";
+  } | { case: undefined; value?: undefined };
 
   /**
-   * @generated from field: optional google.protobuf.Struct params = 3;
-   */
-  params?: JsonObject | undefined;
-
-  /**
-   * @generated from field: string thread_id = 4;
+   * @generated from field: string thread_id = 12;
    */
   threadId: string;
 };

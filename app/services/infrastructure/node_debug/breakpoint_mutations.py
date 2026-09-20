@@ -5,7 +5,12 @@ from pathlib import Path
 from typing import Literal
 
 from app.core.path_utils import safe_join
-from app.schemas.internal_v2.node_debug import NodeDebugBreakpointDTO
+from app.schemas.internal_v2.node_debug import (
+    NodeDebugBreakpointDTO,
+    NodeDebugClearBreakpointParams,
+    NodeDebugSetBreakpointParams,
+    NodeDebugUpdateBreakpointParams,
+)
 from app.services.infrastructure.node_debug.breakpoint_expressions import (
     inspector_breakpoint_condition,
 )
@@ -47,29 +52,18 @@ class NodeDebugBreakpointMutations:
         self,
         owner: NodeDebugOwner,
         runtime: NodeDebugRuntime | None,
-        params: dict[str, object],
+        params: NodeDebugSetBreakpointParams,
         *,
         actor: Literal["human", "ai", "system"],
         tool_name: str | None,
         tool_call_id: str | None,
     ) -> None:
-        raw_path = params.get(
-            "path",
-            runtime.relative_script_path if runtime is not None else None,
-        )
-        if not isinstance(raw_path, str):
-            raise TypeError("源码断点 path 必须是字符串")
-        line = self._positive_int(params.get("line"), "line")
-        column = self._positive_int(params.get("column", 1), "column")
-        condition = params.get("condition")
-        if condition is not None and not isinstance(condition, str):
-            raise TypeError("源码断点 condition 必须是字符串")
-        hit_condition = params.get("hit_condition")
-        if hit_condition is not None:
-            hit_condition = self._positive_int(hit_condition, "hit_condition")
-        log_message = params.get("log_message")
-        if log_message is not None and not isinstance(log_message, str):
-            raise TypeError("源码断点 log_message 必须是字符串")
+        raw_path = params.path
+        line = params.line
+        column = params.column
+        condition = params.condition
+        hit_condition = params.hit_condition
+        log_message = params.log_message
         breakpoint = self._configuration_factory.create_breakpoint(
             path=raw_path,
             line=line,
@@ -115,15 +109,13 @@ class NodeDebugBreakpointMutations:
         self,
         owner: NodeDebugOwner,
         runtime: NodeDebugRuntime | None,
-        params: dict[str, object],
+        params: NodeDebugUpdateBreakpointParams,
         *,
         actor: Literal["human", "ai", "system"],
         tool_name: str | None,
         tool_call_id: str | None,
     ) -> None:
-        breakpoint_id = params.get("breakpoint_id")
-        if not isinstance(breakpoint_id, str) or not breakpoint_id.strip():
-            raise ValueError("编辑源码断点必须提供 breakpoint_id")
+        breakpoint_id = params.breakpoint_id
         session_id, thread_id = owner
         breakpoints: Iterable[NodeDebugBreakpointDTO] = (
             runtime.breakpoints.values()
@@ -141,20 +133,28 @@ class NodeDebugBreakpointMutations:
         if current is None:
             raise ValueError(f"源码断点不存在: {breakpoint_id}")
 
-        raw_path = params.get("path", current.path)
-        if not isinstance(raw_path, str):
-            raise TypeError("源码断点 path 必须是字符串")
-        line = self._positive_int(params.get("line", current.line), "line")
-        column = self._positive_int(params.get("column", current.column), "column")
-        condition = params.get("condition", current.condition)
-        if condition is not None and not isinstance(condition, str):
-            raise TypeError("源码断点 condition 必须是字符串")
-        hit_condition = params.get("hit_condition", current.hit_condition)
-        if hit_condition is not None:
-            hit_condition = self._positive_int(hit_condition, "hit_condition")
-        log_message = params.get("log_message", current.log_message)
-        if log_message is not None and not isinstance(log_message, str):
-            raise TypeError("源码断点 log_message 必须是字符串")
+        raw_path = params.path if "path" in params.model_fields_set else current.path
+        line = params.line if "line" in params.model_fields_set else current.line
+        column = (
+            params.column if "column" in params.model_fields_set else current.column
+        )
+        condition = (
+            params.condition
+            if "condition" in params.model_fields_set
+            else current.condition
+        )
+        hit_condition = (
+            params.hit_condition
+            if "hit_condition" in params.model_fields_set
+            else current.hit_condition
+        )
+        log_message = (
+            params.log_message
+            if "log_message" in params.model_fields_set
+            else current.log_message
+        )
+        if raw_path is None or line is None or column is None:
+            raise ValueError("编辑源码断点的 path、line、column 不能为 null")
         updated = self._configuration_factory.create_breakpoint(
             path=raw_path,
             line=line,
@@ -224,15 +224,13 @@ class NodeDebugBreakpointMutations:
         self,
         owner: NodeDebugOwner,
         runtime: NodeDebugRuntime | None,
-        params: dict[str, object],
+        params: NodeDebugClearBreakpointParams,
         *,
         actor: Literal["human", "ai", "system"],
         tool_name: str | None,
         tool_call_id: str | None,
     ) -> None:
-        breakpoint_id = params.get("breakpoint_id")
-        if not isinstance(breakpoint_id, str) or not breakpoint_id.strip():
-            raise ValueError("清除源码断点必须提供 breakpoint_id")
+        breakpoint_id = params.breakpoint_id
         if runtime is None:
             session_id, thread_id = owner
             pending = self._pending_breakpoints.get(owner, [])
@@ -333,9 +331,3 @@ class NodeDebugBreakpointMutations:
             ):
                 return breakpoint
         return None
-
-    @staticmethod
-    def _positive_int(value: object, name: str) -> int:
-        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-            raise ValueError(f"源码断点 {name} 必须是正整数: {value!r}")
-        return value

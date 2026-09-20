@@ -71,6 +71,7 @@ export type {
   WorkspaceFileWatchRequest,
   WorkspaceInfo,
   NodeDebugAction,
+  NodeDebugActionCommand,
   NodeDebugActionRequest,
   NodeDebugActionRecord,
   NodeDebugBreakpoint,

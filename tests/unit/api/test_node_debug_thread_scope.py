@@ -27,8 +27,9 @@ from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.node_debug import (
-    NodeDebugActionRequest,
     NodeDebugConfigurationCreateRequest,
+    NodeDebugSetBreakpointActionRequest,
+    NodeDebugSetBreakpointParams,
     NodeDebugStartRequest,
     NodeDebugStateDTO,
 )
@@ -240,11 +241,11 @@ async def test_mutation_requires_existing_session(
 
     with pytest.raises(HTTPException) as deleted_action:
         await apply_node_debug_action(
-            payload=NodeDebugActionRequest(
+            payload=NodeDebugSetBreakpointActionRequest(
                 session_id=_SESSION_ID,
                 thread_id="main",
                 action="set_breakpoint",
-                params={"path": "entry.mjs", "line": 1},
+                params=NodeDebugSetBreakpointParams(path="entry.mjs", line=1),
             ),
             _="local-token",
             request_id="req_action_deleted",
