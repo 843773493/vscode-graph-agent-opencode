@@ -46,20 +46,42 @@ class NodeDebugSessionStore:
     def read_manifest(
         self, session_id: str, thread_id: str
     ) -> NodeDebugSessionManifestDTO | None:
+        _payload, manifest = self.read_manifest_payload(session_id, thread_id)
+        return manifest
+
+    def read_manifest_payload(
+        self, session_id: str, thread_id: str
+    ) -> tuple[bytes | None, NodeDebugSessionManifestDTO | None]:
+        """读取 manifest 原始 bytes 与 DTO，供 source capture 做前后漂移校验。"""
         path = self._manifest_path(session_id, thread_id)
         if not path.exists():
-            return None
-        manifest = self._read_model(path, NodeDebugSessionManifestDTO)
+            return None, None
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError(f"源码调试 manifest 必须是普通文件: {path}")
+        payload = path.read_bytes()
+        manifest = self._read_model_bytes(path, payload, NodeDebugSessionManifestDTO)
         if manifest.session_id != session_id or manifest.thread_id != thread_id:
             raise RuntimeError(
                 "源码调试 manifest 的 SessionThread 不匹配: "
                 f"path={path}, expected=({session_id}, {thread_id}), "
                 f"actual=({manifest.session_id}, {manifest.thread_id})"
             )
-        return manifest
+        return payload, manifest
 
     def write_manifest(self, manifest: NodeDebugSessionManifestDTO) -> None:
         self._assert_canonical_owner(manifest.session_id, manifest.thread_id)
+        # manifest 是方案登记的唯一清单；每次写入都从当前持久方案重新生成，
+        # 避免新增/删除方案后沿用旧 manifest 的陈旧 ID。source capture 只读取
+        # 已落盘清单，不在 capture 阶段扫描目录补齐。
+        configuration_ids = tuple(
+            item.configuration_id
+            for item in self.list_configurations(
+                manifest.session_id, manifest.thread_id
+            )
+        )
+        manifest = manifest.model_copy(
+            update={"configuration_ids": configuration_ids}
+        )
         self._atomic_write(
             self._manifest_path(manifest.session_id, manifest.thread_id),
             manifest.model_copy(update={"updated_at": datetime.now(UTC)}),
@@ -106,6 +128,44 @@ class NodeDebugSessionStore:
                 )
             configurations.append(configuration)
         return configurations
+
+    def read_registered_configuration_payloads(
+        self,
+        session_id: str,
+        thread_id: str,
+        configuration_ids: tuple[str, ...],
+    ) -> dict[str, tuple[NodeDebugConfigurationDTO, bytes]]:
+        """只按 manifest 已登记 ID 定点读取配置正文及 bytes。
+
+        该方法禁止 glob/目录枚举；登记缺失、文件名漂移、symlink 或 DTO
+        owner/ID 不一致都会直接失败，供 source capture 前后两次调用比较。
+        """
+        result: dict[str, tuple[NodeDebugConfigurationDTO, bytes]] = {}
+        for configuration_id in configuration_ids:
+            if configuration_id in result:
+                raise RuntimeError(
+                    f"source manifest 登记重复调试方案 ID: {configuration_id}"
+                )
+            path = self._configuration_path(session_id, thread_id, configuration_id)
+            if not path.exists():
+                raise RuntimeError(
+                    "source manifest 登记的调试方案文件不存在: "
+                    f"configuration_id={configuration_id}, path={path}"
+                )
+            if path.is_symlink() or not path.is_file():
+                raise RuntimeError(f"调试方案文件必须是普通文件: {path}")
+            payload = path.read_bytes()
+            configuration = self._read_model_bytes(
+                path, payload, NodeDebugConfigurationDTO
+            )
+            if configuration.configuration_id != configuration_id:
+                raise RuntimeError(
+                    "调试方案文件内容与 manifest 登记不匹配: "
+                    f"path={path}, expected={configuration_id}, "
+                    f"actual={configuration.configuration_id}"
+                )
+            result[configuration_id] = (configuration, payload)
+        return result
 
     def read_configuration(
         self,
@@ -196,8 +256,16 @@ class NodeDebugSessionStore:
 
     @staticmethod
     def _read_model(path: Path, model_type: type[ModelT]) -> ModelT:
+        return NodeDebugSessionStore._read_model_bytes(
+            path, path.read_bytes(), model_type
+        )
+
+    @staticmethod
+    def _read_model_bytes(
+        path: Path, payload: bytes, model_type: type[ModelT]
+    ) -> ModelT:
         try:
-            return model_type.model_validate_json(path.read_text(encoding="utf-8"))
+            return model_type.model_validate_json(payload)
         except (json.JSONDecodeError, ValueError) as error:
             raise RuntimeError(f"会话源码调试数据损坏: {path}: {error}") from error
 

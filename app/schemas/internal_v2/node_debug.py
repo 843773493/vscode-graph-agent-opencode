@@ -250,6 +250,9 @@ class NodeDebugSessionManifestDTO(BaseModel):
     #: manifest 必须显式记录实际 SessionThread owner，不提供隐式默认值。
     thread_id: str = Field(min_length=1)
     active_configuration_id: str | None = None
+    # 方案文件由 owner manifest 显式登记。fork source capture 只读取这份清单，
+    # 不得通过扫描 configurations/ 目录猜测未登记文件。
+    configuration_ids: tuple[str, ...] = Field(default_factory=tuple)
     actions: list[NodeDebugActionRecordDTO] = Field(default_factory=list)
     updated_at: datetime
 
