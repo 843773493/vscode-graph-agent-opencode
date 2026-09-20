@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import os
 from datetime import UTC, datetime
 from io import BytesIO
 
@@ -305,27 +304,21 @@ def test_startup_migrates_legacy_inline_image_and_runtime_rejects_inline_id(
         "attachments"
     ][0]["file_id"]
 
-    # R18 catalog 模式适配：catalog 模式拒绝双读旧 JSON，工厂要求先经
-    # SessionCatalogMigrator 完成一次性迁移（错误信息指示的维护路径）。
-    # 旧形态 inline 迁移由上面的 legacy initialize 完成（本用例被测特性），
-    # 之后 catalog 模式补做权威迁移，使 SessionAttachmentStore（经工厂
-    # resolver）可解析该会话；旧模式无此步骤，行为逐字节不变。
-    # 注意模式探测用开关环境变量本身：此时旧 index 在场而 SQLite 尚未建，
-    # 经工厂探测会提前触发 fail-closed。（R19 起默认即 catalog 模式，仅
-    # 显式 legacy opt-in（"0"/"legacy"）跳过引导。）
-    if os.environ.get("BOXTEAM_SESSION_CATALOG_RESOLVER") not in ("0", "legacy"):
-        workspace_id = load_or_create_workspace_id(tmp_path)
-        asyncio.run(
-            SessionCatalogMigrator(
-                workspace_id=workspace_id,
-                sessions_root=sessions_root,
-                database_path=tmp_path
-                / ".boxteam"
-                / "navigation"
-                / "session-catalog.sqlite",
-                maintenance_root=tmp_path / "maintenance",
-            ).migrate()
-        )
+    # 旧形态 inline 迁移由上面的 legacy initialize 完成；随后必须经
+    # SessionCatalogMigrator 建立唯一 SQLite authority，工厂 resolver 才能
+    # 解析该会话。
+    workspace_id = load_or_create_workspace_id(tmp_path)
+    asyncio.run(
+        SessionCatalogMigrator(
+            workspace_id=workspace_id,
+            sessions_root=sessions_root,
+            database_path=tmp_path
+            / ".boxteam"
+            / "navigation"
+            / "session-catalog.sqlite",
+            maintenance_root=tmp_path / "maintenance",
+        ).migrate()
+    )
 
     store = SessionAttachmentStore(tmp_path)
 

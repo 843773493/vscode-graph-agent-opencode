@@ -379,28 +379,24 @@ class TestPathUtils:
         (orphaned_checkpoint / "checkpoints.jsonl").write_text("{}\n", encoding="utf-8")
 
         initialize_directories()
-        if os.environ.get("BOXTEAM_SESSION_CATALOG_RESOLVER") not in ("0", "legacy"):
-            # catalog 模式引导（R19 起为默认，仅显式 legacy opt-in 时跳过）：
-            # 布局迁移后先以旧 resolver 吸收物理树建旧权威 index，再用
-            # SessionCatalogMigrator 一次性导入 SQLite（与生产切换的维护
-            # 窗口顺序一致）；legacy 模式无需此段。
-            import asyncio
+        # 布局迁移后先以旧 resolver 吸收物理树建旧权威 index，再用
+        # SessionCatalogMigrator 一次性导入 SQLite，随后只由 catalog resolver
+        # 读取会话路径。
+        import asyncio
 
-            from app.core.session_catalog_migration import SessionCatalogMigrator
-            from app.core.session_paths import SessionPathResolver
-            from app.core.workspace_identity import load_or_create_workspace_id
+        from app.core.session_catalog_migration import SessionCatalogMigrator
+        from app.core.session_paths import SessionPathResolver
+        from app.core.workspace_identity import load_or_create_workspace_id
 
-            SessionPathResolver(boxteam_root / "sessions").initialize()
-            migrator = SessionCatalogMigrator(
-                workspace_id=load_or_create_workspace_id(workspace_root),
-                sessions_root=boxteam_root / "sessions",
-                database_path=(
-                    boxteam_root / "navigation" / "session-catalog.sqlite"
-                ),
-                maintenance_root=boxteam_root / "maintenance",
-            )
-            migration_result = asyncio.run(migrator.migrate())
-            assert migration_result.migrated_session_nodes == 1
+        SessionPathResolver(boxteam_root / "sessions").initialize()
+        migrator = SessionCatalogMigrator(
+            workspace_id=load_or_create_workspace_id(workspace_root),
+            sessions_root=boxteam_root / "sessions",
+            database_path=boxteam_root / "navigation" / "session-catalog.sqlite",
+            maintenance_root=boxteam_root / "maintenance",
+        )
+        migration_result = asyncio.run(migrator.migrate())
+        assert migration_result.migrated_session_nodes == 1
 
         migrated_session_root = get_session_path(session_id)
         assert migrated_session_root != session_root

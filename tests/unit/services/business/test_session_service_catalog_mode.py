@@ -1,9 +1,8 @@
-"""SessionService 在开关开启（新 catalog resolver）模式下的换源冒烟测试。
+"""SessionService 在 SQLite catalog authority 下的换源冒烟测试。
 
 8.2-切片3b-1 的 §2.1 换源目标态验证：title/parent_session_id 从 resolver
-读、manifest 剥离三键、marker 回读 session_id、逻辑移动签名。默认开关
-关闭的既有回归由 test_session_service*.py 覆盖；本文件显式开启开关，
-验证同一服务代码在新 resolver 链上的行为。只使用 tmp_path。
+读、manifest 剥离三键、marker 回读 session_id、逻辑移动签名。只使用
+tmp_path。
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
-SWITCH_ENV = "BOXTEAM_SESSION_CATALOG_RESOLVER"
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 
 
@@ -42,11 +40,9 @@ def catalog_service(tmp_path: Path) -> tuple[SessionService, object]:
 
 
 @pytest.fixture()
-def switch_on_resolver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """经 path_utils 工厂（环境变量开关）取得新 resolver 的冒烟入口。"""
-    monkeypatch.setenv(SWITCH_ENV, "1")
+def factory_resolver(tmp_path: Path):
+    """经 path_utils 唯一 catalog 工厂取得 resolver 的冒烟入口。"""
     workspace_root = tmp_path / "workspace"
-    monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
     sessions_root = workspace_root / ".boxteam" / "sessions"
     resolver = get_session_path_resolver(sessions_root)
     assert isinstance(resolver, SessionCatalogPathResolver)
@@ -156,9 +152,9 @@ async def test_list_projects_resolver_titles(catalog_service) -> None:
 
 
 @pytest.mark.asyncio
-async def test_factory_wired_service_end_to_end(switch_on_resolver) -> None:
-    """经 path_utils 工厂 + 容器同款接线（initialize）的全链路冒烟。"""
-    service, resolver, workspace_id = switch_on_resolver
+async def test_factory_wired_service_end_to_end(factory_resolver) -> None:
+    """经 path_utils 工厂 + 容器同款接线的全链路冒烟。"""
+    service, resolver, workspace_id = factory_resolver
 
     session = await service.create(SessionCreateRequest(title="工厂会话"))
     got = await service.get(session.session_id)

@@ -332,11 +332,9 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
-    # 模板 rollout 是 v1 dispatch 旧格式，runtime 与 legacy 导入器都拒绝
-    # 读取；catalog 权威模式先迁移布局，legacy 模式保持旧 JSON 布局，
+    # 模板 rollout 是 v1 dispatch 旧格式；先完成一次性 catalog 迁移，
     # 然后统一在副本上以当前 Saver 重写 schema-4 数据。
-    if os.environ.get("BOXTEAM_SESSION_CATALOG_RESOLVER") not in ("0", "legacy"):
-        asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
+    asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
     seed_long_rollout_history(workspace_root)
     return str(workspace_root)
 

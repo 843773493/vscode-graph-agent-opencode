@@ -7,8 +7,8 @@ creation/delete service → 新 resolver → session/folder 树」的装配收�
 替换为 ``workspace.create_session(title, parent)`` /
 ``workspace.create_folder(name, parent)``。
 
-只直接构造新链（不经 path_utils 开关与 lru_cache，避免环境变量与缓存
-串扰）；path_utils 开关行为由 test_path_utils_catalog_switch.py 覆盖。
+只直接构造新链（不经 path_utils 工厂与 lru_cache，避免缓存串扰）；path_utils
+唯一 catalog 工厂行为由 test_path_utils_catalog.py 覆盖。
 只使用调用方传入的 tmp_path，不触碰真实工作区。
 """
 

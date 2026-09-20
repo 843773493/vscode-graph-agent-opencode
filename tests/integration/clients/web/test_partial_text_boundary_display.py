@@ -130,13 +130,9 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
-    # 模板是旧 JSON 权威索引形态；默认（catalog 权威）副本经产品一次性
-    # 迁移机建立 SQLite catalog authority，否则后端启动 fail-closed。
-    # legacy 显式 opt-in 模式保持旧 JSON 布局，不迁移；模式判定读环境
-    # 开关而不是构造 resolver：未迁移工作区上 catalog resolver 构造本身
-    # 即 fail-closed。
-    if os.environ.get("BOXTEAM_SESSION_CATALOG_RESOLVER") not in ("0", "legacy"):
-        asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
+    # 模板是旧 JSON 权威索引形态；先建立 SQLite catalog authority，
+    # 否则后端启动会按唯一 resolver 契约 fail-closed。
+    asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
     _seed_v2_partial_text_turn(workspace_root)
     return str(workspace_root)
 
