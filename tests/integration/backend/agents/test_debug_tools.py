@@ -520,6 +520,7 @@ async def test_node_inspector_hit_count_and_logpoint_runtime_semantics(
                     "fileFullPath": _relative_path(workspace_root, fixture_path),
                     "line": breakpoint_line,
                     "logMessage": "index={index}",
+                    "condition": "index % 2 === 0",
                     "hitCondition": 2,
                 }
             )
@@ -536,6 +537,141 @@ async def test_node_inspector_hit_count_and_logpoint_runtime_semantics(
         )
         assert completed.call_stack == []
         assert any(line == "total=10" for line in completed.output)
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_node_logpoint_reports_invalid_interpolation_without_pausing(
+    integration_workspace_root_path: str,
+    integration_workspace_config_path: str,
+) -> None:
+    workspace_root = Path(integration_workspace_root_path).resolve()
+    fixture_path, breakpoint_line = _write_special_breakpoint_fixture(workspace_root)
+    config_service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=Path(integration_workspace_config_path),
+        workspace_root=workspace_root,
+    )
+    service = NodeDebugService(
+        workspace_root=workspace_root,
+        config_service=config_service,
+    )
+    tools = _tool_map(workspace_root, service)
+
+    try:
+        malformed = _payload(
+            await tools["add_logpoint"].ainvoke(
+                {
+                    "fileFullPath": _relative_path(workspace_root, fixture_path),
+                    "line": breakpoint_line,
+                    "logMessage": "index={",
+                }
+            )
+        )
+        assert malformed["ok"] is False
+        assert malformed["error"]["code"] == "INVALID_DEBUG_ARGUMENT"
+        assert malformed["state"]["breakpoints"] == []
+
+        added = _payload(
+            await tools["add_logpoint"].ainvoke(
+                {
+                    "fileFullPath": _relative_path(workspace_root, fixture_path),
+                    "line": breakpoint_line,
+                    "logMessage": "missing={doesNotExist}",
+                }
+            )
+        )
+        assert added["ok"] is True
+
+        started = _payload(
+            await tools["start_debugging"].ainvoke(
+                {
+                    "fileFullPath": _relative_path(workspace_root, fixture_path),
+                    "workingDirectory": ".",
+                }
+            )
+        )
+        assert started["ok"] is True
+        completed = await _wait_for_debug_state(
+            service,
+            "ses_e2e_debug",
+            expected_status="exited",
+            output_fragment="[日志点错误]",
+        )
+        assert completed.call_stack == []
+        assert completed.error_message is not None
+        assert "日志点求值失败" in completed.error_message
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_node_debug_rejects_unimplemented_adapter(
+    integration_workspace_root_path: str,
+) -> None:
+    workspace_root = Path(integration_workspace_root_path).resolve() / "adapter-fixture"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    fixture_path, _ = _write_debug_fixture(workspace_root)
+    boxteam_root = workspace_root / ".boxteam"
+    boxteam_root.mkdir(parents=True, exist_ok=True)
+    config_path = workspace_root / "base.jsonc"
+    config_path.write_text(json.dumps({"runtime": {}}), encoding="utf-8")
+    workspace_config_path = boxteam_root / "workspace.jsonc"
+    workspace_config_path.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "debug": {
+                        "launch_profiles": {
+                            "python-debugpy": {
+                                "adapter": "debugpy",
+                                "runtime": "python",
+                                "program": "debug-fixture.py",
+                                "working_directory": "",
+                                "args": [],
+                            }
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=config_path,
+        workspace_root=workspace_root,
+    )
+    config_service.validate_workspace_config()
+    service = NodeDebugService(
+        workspace_root=workspace_root,
+        config_service=config_service,
+    )
+    tools = {
+        tool.name: tool
+        for tool in create_debugging_tools(
+            session_id="ses_debugpy_rejection",
+            workspace_root=workspace_root,
+            node_debug_service=service,
+            invocation_context=ToolInvocationContext(),
+        )
+    }
+
+    try:
+        result = _payload(
+            await tools["start_debugging"].ainvoke(
+                {
+                    "fileFullPath": _relative_path(workspace_root, fixture_path),
+                    "workingDirectory": ".",
+                    "configurationName": "python-debugpy",
+                }
+            )
+        )
+        assert result["ok"] is False
+        assert result["error"]["code"] == "UNSUPPORTED_DEBUG_FEATURE"
+        assert "debugpy" in result["error"]["message"]
+        assert result["state"]["status"] == "idle"
     finally:
         await service.close()
 

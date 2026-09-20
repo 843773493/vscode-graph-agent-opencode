@@ -171,7 +171,7 @@ async def test_agent_debug_tools_drive_real_node_inspector_session(
 
 
 @pytest.mark.asyncio
-async def test_debug_tools_keep_sessions_isolated_and_report_unsupported_logpoints(
+async def test_debug_tools_keep_sessions_isolated_and_support_node_logpoints(
     e2e_workspace_root_path: str,
     e2e_workspace_config_path: str,
 ) -> None:
@@ -237,10 +237,19 @@ async def test_debug_tools_keep_sessions_isolated_and_report_unsupported_logpoin
                 }
             )
         )
-        assert logpoint_result["ok"] is False
-        assert logpoint_result["error"]["code"] == "UNSUPPORTED_DEBUG_FEATURE"
+        assert logpoint_result["ok"] is True
         assert logpoint_result["state"]["status"] == "idle"
+        assert logpoint_result["state"]["breakpoints"][0]["log_message"] == (
+            "localValue={localValue}"
+        )
         assert "inspector_url" not in logpoint_result["state"]
+
+        removed_logpoint = _payload(
+            await by_name["remove_breakpoint"].ainvoke(
+                {"fileFullPath": str(fixture_path), "line": breakpoint_line}
+            )
+        )
+        assert removed_logpoint["ok"] is True
 
         other_session = await service.get_state("ses_other_debug_session")
         assert other_session.status == "idle"
@@ -256,7 +265,7 @@ async def test_debug_tools_keep_sessions_isolated_and_report_unsupported_logpoin
                 }
             )
         )
-        assert add_result["state"]["session_id"] == "ses_e2e_debug_isolated"
+        assert add_result["state"]["status"] == "idle"
         assert add_result["state"]["breakpoints"][0]["path"] == (
             fixture_path.relative_to(workspace_root).as_posix()
         )
@@ -287,7 +296,11 @@ async def test_debug_tools_keep_sessions_isolated_and_report_unsupported_logpoin
         )
         assert other_start_result["ok"] is True
         assert other_start_result["state"]["status"] == "paused"
-        assert start_result["state"]["pid"] != other_start_result["state"]["pid"]
+        state = await service.get_state("ses_e2e_debug_isolated")
+        other_state = await service.get_state("ses_other_debug_session")
+        assert state.pid is not None
+        assert other_state.pid is not None
+        assert state.pid != other_state.pid
         stop_result = _payload(await by_name["stop_debugging"].ainvoke({}))
         assert stop_result["ok"] is True
         other_stop_result = _payload(await other_tools["stop_debugging"].ainvoke({}))

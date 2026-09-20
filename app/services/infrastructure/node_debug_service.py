@@ -42,6 +42,7 @@ from app.services.infrastructure.events.channel_events import (
 )
 from app.services.infrastructure.node_debug_breakpoint_expressions import (
     inspector_breakpoint_condition,
+    parse_logpoint_error,
     parse_logpoint_output,
 )
 from app.services.infrastructure.node_debug_breakpoints import (
@@ -171,6 +172,7 @@ class _NodeDebugRuntime:
     breakpoints: dict[str, NodeDebugBreakpointDTO] = field(default_factory=dict)
     inspector_breakpoint_ids: dict[str, str] = field(default_factory=dict)
     output: list[str] = field(default_factory=list)
+    logpoint_error_message: str | None = None
     last_evaluation: NodeDebugEvaluationDTO | None = None
     evaluations: list[NodeDebugEvaluationDTO] = field(default_factory=list)
     actions: list[NodeDebugActionRecordDTO] = field(default_factory=list)
@@ -1041,7 +1043,7 @@ class NodeDebugService:
                     runtime.process is None or runtime.process.returncode is None
                 ):
                     runtime.status = "running"
-                runtime.error_message = None
+                runtime.error_message = runtime.logpoint_error_message
                 self._append_action(
                     runtime,
                     "start",
@@ -2990,16 +2992,22 @@ class NodeDebugService:
                 async with runtime.state_lock:
                     if runtime.process is not None and runtime.process.returncode == 0:
                         runtime.status = "exited"
-                        runtime.error_message = None
+                        runtime.error_message = runtime.logpoint_error_message
                     else:
                         runtime.status = "failed"
-                        runtime.error_message = "Node Inspector WebSocket 已断开"
+                        runtime.error_message = (
+                            runtime.logpoint_error_message
+                            or "Node Inspector WebSocket 已断开"
+                        )
                     self._clear_stop_snapshot(runtime)
         except Exception as error:  # noqa: BLE001 - 接收循环必须将适配器故障写入状态
             if not runtime.closing:
                 async with runtime.state_lock:
                     runtime.status = "failed"
-                    runtime.error_message = f"读取 Node Inspector 事件失败: {error}"
+                    runtime.error_message = (
+                        runtime.logpoint_error_message
+                        or f"读取 Node Inspector 事件失败: {error}"
+                    )
                     self._clear_stop_snapshot(runtime)
         finally:
             error = RuntimeError("Node Inspector WebSocket 已关闭")
@@ -3034,7 +3042,7 @@ class NodeDebugService:
                     if isinstance(hit_breakpoints, list)
                     else set()
                 )
-                runtime.error_message = None
+                runtime.error_message = runtime.logpoint_error_message
                 runtime.scope_object_ids = self._scope_object_ids(call_frames)
                 runtime.call_stack = frames
                 if frames:
@@ -3067,7 +3075,7 @@ class NodeDebugService:
                     and runtime.process.returncode is not None
                     else "running"
                 )
-                runtime.error_message = None
+                runtime.error_message = runtime.logpoint_error_message
                 self._clear_paused_snapshot(runtime)
         elif method == "NodeRuntime.waitingForDisconnect":
             socket = runtime.socket
@@ -3144,7 +3152,7 @@ class NodeDebugService:
                 return
             runtime.call_stack[0] = frame.model_copy(update={"variables": variables})
             if variables:
-                runtime.error_message = None
+                runtime.error_message = runtime.logpoint_error_message
                 if expired_object_count:
                     self._append_action(
                         runtime,
@@ -3180,9 +3188,25 @@ class NodeDebugService:
                 runtime.inspector_ready.set()
                 continue
             if stream_name == "stdout" and text:
-                logpoint_output = parse_logpoint_output(text)
-                if logpoint_output is not None:
-                    text = f"[日志点] {logpoint_output}"
+                logpoint_error = parse_logpoint_error(text)
+                if logpoint_error is not None:
+                    text = f"[日志点错误] {logpoint_error}"
+                    async with runtime.state_lock:
+                        runtime.logpoint_error_message = (
+                            f"日志点求值失败: {logpoint_error}"
+                        )
+                        runtime.error_message = runtime.logpoint_error_message
+                        self._append_action(
+                            runtime,
+                            "logpoint_error",
+                            runtime.logpoint_error_message,
+                            actor="system",
+                            result="error",
+                        )
+                else:
+                    logpoint_output = parse_logpoint_output(text)
+                    if logpoint_output is not None:
+                        text = f"[日志点] {logpoint_output}"
                 async with runtime.state_lock:
                     runtime.output.append(text)
                     del runtime.output[:-_MAX_OUTPUT_LINES]
@@ -3202,9 +3226,13 @@ class NodeDebugService:
             runtime.status = "exited" if return_code == 0 else "failed"
             self._clear_stop_snapshot(runtime)
             runtime.error_message = (
-                None
-                if return_code == 0
-                else f"Node 调试进程退出，退出码: {return_code}"
+                runtime.logpoint_error_message
+                if runtime.logpoint_error_message is not None
+                else (
+                    None
+                    if return_code == 0
+                    else f"Node 调试进程退出，退出码: {return_code}"
+                )
             )
 
     async def _wait_for_execution_state(self, runtime: _NodeDebugRuntime) -> None:

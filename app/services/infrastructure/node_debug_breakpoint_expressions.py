@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 _LOGPOINT_OUTPUT_PREFIX = "__BOXTEAM_NODE_LOGPOINT__"
+_LOGPOINT_ERROR_PREFIX = "__BOXTEAM_NODE_LOGPOINT_ERROR__"
 _HIT_COUNT_SYMBOL = "boxteam.nodeDebug.hitCounts"
 
 
@@ -40,10 +41,18 @@ def inspector_breakpoint_condition(
     else:
         message_expression = _compile_log_message(log_message)
         prefix = json.dumps(_LOGPOINT_OUTPUT_PREFIX)
+        error_prefix = json.dumps(_LOGPOINT_ERROR_PREFIX)
         statements.extend(
             [
+                "try {",
                 f"if ({predicate}) {{",
                 f"process.stdout.write({prefix} + ({message_expression}) + '\\n');",
+                "}",
+                "} catch (error) {",
+                (
+                    f"process.stdout.write({error_prefix} + "
+                    "JSON.stringify(String(error && error.stack ? error.stack : error)) + '\\n');"
+                ),
                 "}",
                 "return false;",
             ]
@@ -55,6 +64,19 @@ def parse_logpoint_output(text: str) -> str | None:
     if not text.startswith(_LOGPOINT_OUTPUT_PREFIX):
         return None
     return text.removeprefix(_LOGPOINT_OUTPUT_PREFIX)
+
+
+def parse_logpoint_error(text: str) -> str | None:
+    """解析日志点条件或插值运行时错误，保留可识别诊断。"""
+
+    if not text.startswith(_LOGPOINT_ERROR_PREFIX):
+        return None
+    payload = text.removeprefix(_LOGPOINT_ERROR_PREFIX)
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError:
+        return payload
+    return decoded if isinstance(decoded, str) else payload
 
 
 def _compile_log_message(message: str) -> str:
@@ -124,4 +146,8 @@ def _find_expression_end(message: str, start: int) -> int:
     raise ValueError("日志点消息包含未闭合的插值表达式")
 
 
-__all__ = ["inspector_breakpoint_condition", "parse_logpoint_output"]
+__all__ = [
+    "inspector_breakpoint_condition",
+    "parse_logpoint_error",
+    "parse_logpoint_output",
+]

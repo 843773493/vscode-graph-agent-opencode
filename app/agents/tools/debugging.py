@@ -594,6 +594,8 @@ class DebuggingToolFactory:
             return "NO_ACTIVE_DEBUG_SESSION"
         if "暂停" in message:
             return "DEBUG_CONTEXT_REQUIRED"
+        if isinstance(error, FileNotFoundError):
+            return "INVALID_DEBUG_ARGUMENT"
         if isinstance(error, (ValueError, TypeError)):
             return "INVALID_DEBUG_ARGUMENT"
         return "DEBUG_TOOL_FAILED"
