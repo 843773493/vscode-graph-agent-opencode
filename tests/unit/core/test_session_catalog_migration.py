@@ -31,6 +31,7 @@ from app.core.session_tree.support import (
     SESSION_CHILDREN_DIR_NAME,
     SESSION_MANIFEST_NAME,
 )
+from app.services.infrastructure import node_debug_legacy_migration
 
 WORKSPACE_ID = "ws-primary"
 
@@ -487,6 +488,12 @@ def _base_journal(**overrides: object) -> dict[str, object]:
         "frozen_nodes": [],
         "quarantined_nodes": [],
         "physical": {"sessions": {}, "folders": {}},
+        "debug": {
+            "status": "pending",
+            "owner_map": {},
+            "records": {},
+            "summary": None,
+        },
     }
     payload.update(overrides)
     return payload
@@ -559,6 +566,171 @@ async def test_migrate_nested_tree_builds_sqlite_nodes(
         store.verify_workspace_consistency()
     finally:
         store.close()
+
+
+async def test_debug_phase_is_in_shared_journal_and_blocks_completed(
+    workspace: MigrationWorkspace,
+) -> None:
+    """旧调试 manifest 失败时共享 catalog journal 不得报告 completed，修复后可重试。"""
+    session_id = make_session_id()
+    _write_session_dir(
+        workspace.sessions_root,
+        session_id,
+        title="带旧调试数据",
+        parent_session_id=None,
+    )
+    _write_index(
+        workspace.index_path,
+        [_index_record(session_id, "session", "带旧调试数据", None)],
+    )
+    debug_manifest = workspace.sessions_root / session_id / "debug" / "node" / "manifest.json"
+    debug_manifest.parent.mkdir(parents=True)
+    debug_manifest.write_text("{broken", encoding="utf-8")
+
+    migrator = make_migrator(workspace)
+    with pytest.raises(SessionCatalogMigrationError, match="调试迁移"):
+        await migrator.migrate()
+    failed_journal = read_journal(workspace)
+    assert failed_journal["state"] == "catalog_rebuilt"
+    debug_phase = failed_journal["debug"]
+    assert isinstance(debug_phase, dict)
+    assert debug_phase["status"] == "failed"
+    assert failed_journal.get("result") is None
+
+    debug_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "session_id": session_id,
+                "active_configuration_id": None,
+                "actions": [],
+                "updated_at": DEFAULT_UPDATED_AT.isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = await migrator.migrate()
+    assert result.migrated_session_nodes == 1
+    completed = read_journal(workspace)
+    assert completed["state"] == "completed"
+    debug_phase = completed["debug"]
+    assert isinstance(debug_phase, dict)
+    assert debug_phase["status"] == "completed"
+    assert not (
+        workspace.maintenance_root
+        / "node-debug-legacy-migration"
+        / "journal.json"
+    ).exists()
+
+
+async def test_catalog_journal_without_debug_phase_fails_closed(
+    workspace: MigrationWorkspace,
+) -> None:
+    """缺少共享 debug phase 时拒绝把旧 journal 当作已完成。"""
+    build_legacy_tree(workspace)
+    await make_migrator(workspace).migrate()
+    raw = read_journal(workspace)
+    raw.pop("debug")
+    rewrite_journal_payload(workspace, raw)
+    with pytest.raises(SessionCatalogMigrationError, match="缺少必需 debug 节"):
+        await make_migrator(workspace).migrate()
+
+
+async def test_completed_catalog_journal_rejects_incomplete_debug_records(
+    workspace: MigrationWorkspace,
+) -> None:
+    """catalog completed 不能掩盖 applying/failed 或缺失的 debug item。"""
+    build_legacy_tree(workspace)
+    await make_migrator(workspace).migrate()
+    raw = read_journal(workspace)
+    debug = raw["debug"]
+    assert isinstance(debug, dict)
+    records = debug["records"]
+    assert isinstance(records, dict)
+    records.clear()
+    rewrite_journal_payload(workspace, raw)
+
+    with pytest.raises(
+        SessionCatalogMigrationError, match="必须覆盖全部冻结 Session"
+    ):
+        await make_migrator(workspace).migrate()
+
+
+async def test_debug_applying_intent_survives_catalog_migration_crash(
+    workspace: MigrationWorkspace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """manifest 替换后崩溃时，共享 catalog journal 保留 before/after 证据并恢复。"""
+    session_id = make_session_id()
+    _write_session_dir(
+        workspace.sessions_root,
+        session_id,
+        title="调试迁移崩溃恢复",
+        parent_session_id=None,
+    )
+    _write_index(
+        workspace.index_path,
+        [_index_record(session_id, "session", "调试迁移崩溃恢复", None)],
+    )
+    manifest_path = (
+        workspace.sessions_root / session_id / "debug" / "node" / "manifest.json"
+    )
+    manifest_path.parent.mkdir(parents=True)
+    before = json.dumps(
+        {
+            "schema_version": 1,
+            "session_id": session_id,
+            "active_configuration_id": None,
+            "actions": [],
+            "updated_at": DEFAULT_UPDATED_AT.isoformat(),
+        },
+        ensure_ascii=False,
+    ).encode()
+    manifest_path.write_bytes(before)
+    original_write = node_debug_legacy_migration._atomic_write_bytes
+
+    def crash_after_replace(path: Path, payload: bytes) -> None:
+        original_write(path, payload)
+        raise RuntimeError("injected shared-journal crash")
+
+    monkeypatch.setattr(
+        node_debug_legacy_migration,
+        "_atomic_write_bytes",
+        crash_after_replace,
+    )
+    with pytest.raises(SessionCatalogMigrationError, match="调试迁移"):
+        await make_migrator(workspace).migrate()
+
+    crashed = read_journal(workspace)
+    debug = crashed["debug"]
+    assert isinstance(debug, dict)
+    records = debug["records"]
+    assert isinstance(records, dict)
+    applying = records[session_id]
+    assert applying["status"] == "applying"
+    assert applying["manifest_before"]["sha256"] == hashlib.sha256(before).hexdigest()
+    assert applying["manifest_after"]["sha256"] == hashlib.sha256(
+        manifest_path.read_bytes()
+    ).hexdigest()
+
+    monkeypatch.setattr(
+        node_debug_legacy_migration,
+        "_atomic_write_bytes",
+        original_write,
+    )
+    await make_migrator(workspace).migrate()
+    completed = read_journal(workspace)
+    assert completed["state"] == "completed"
+    debug = completed["debug"]
+    assert isinstance(debug, dict)
+    records = debug["records"]
+    assert isinstance(records, dict)
+    recovered = records[session_id]
+    assert recovered["status"] == "migrated"
+    assert recovered.get("note") != "already-new-format"
+    assert "manifest_before_base64" not in recovered
+    assert recovered["manifest_before"] == applying["manifest_before"]
+    assert recovered["manifest_after"] == applying["manifest_after"]
 
 
 async def test_migrate_journal_records_frozen_mapping_and_completed(

@@ -9,14 +9,16 @@ manifest（无 ``thread_id``）对新 store 不可读。本模块提供**显式�
 职责边界：
 - 调试 domain 拥有方案语义（manifest/方案校验、hash 登记、staging 原子切换）；
   itemized（8.2-A）拥有共享 maintenance gate/journal/发布门槛。本模块通过
-  ``NodeDebugLegacyMigrationSessionIndex`` 最小 Protocol 与目录索引解耦，未来
-  共享 gate 接入时只替换 journal 与外层编排，不改动本模块的调试域语义。
+  ``NodeDebugLegacyMigrationSessionIndex`` 与 ``NodeDebugLegacyMigrationJournalPort``
+  接收冻结索引和共享 journal 投影，不创建独立协调器。
 - 只做纯文件操作：不触碰任何 Node/Inspector 进程或端口，不建立第二迁移
   协调器，不新增 runtime 旧路径 alias，不扫盘（索引外目录一律不触碰）。
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -35,18 +37,13 @@ from app.schemas.internal_v2.node_debug import (
 )
 from app.services.infrastructure.node_debug_thread_owner import MAIN_THREAD_ID
 
-#: journal 结构版本；结构不兼容时必须显式报错而不是重置台账。
-JOURNAL_SCHEMA_VERSION = 1
-
-#: journal 中标识本次迁移语义的固定名称。
-MIGRATION_NAME = "node-debug-legacy-main-thread"
-
 MANIFEST_FILE_NAME = "manifest.json"
 CONFIGURATIONS_DIRECTORY_NAME = "configurations"
 CONFIGURATION_ID_PATTERN = re.compile(r"^dbgcfg_[0-9a-f]{32}$")
 
 NodeDebugLegacyMigrationStatus = Literal[
     "pending",
+    "applying",
     "migrated",
     "failed",
     "skipped",
@@ -64,6 +61,19 @@ class NodeDebugLegacyMigrationSessionIndex(Protocol):
     def list_authoritative_nodes(self) -> list[SessionPhysicalNode]: ...
 
     def resolve_session_node(self, session_id: str) -> Path: ...
+
+
+class NodeDebugLegacyMigrationJournalPort(Protocol):
+    """共享 maintenance journal 对调试迁移器暴露的最小端口。"""
+
+    @property
+    def journal_path(self) -> Path: ...
+
+    def get_record(self, session_id: str) -> dict[str, object] | None: ...
+
+    def upsert_record(self, session_id: str, record: dict[str, object]) -> None: ...
+
+    def save(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,16 +101,6 @@ class NodeDebugLegacyMigrationSummary:
     skipped: tuple[str, ...] = ()
     noop: tuple[str, ...] = ()
     failed: tuple[tuple[str, str], ...] = ()
-
-
-def default_journal_path(boxteam_root: Path) -> Path:
-    """返回工作区 ``.boxteam/`` 下语义明确的迁移台账默认位置。"""
-    return (
-        boxteam_root
-        / "maintenance"
-        / "node-debug-legacy-migration"
-        / "journal.json"
-    )
 
 
 def _utc_now_iso() -> str:
@@ -155,6 +155,23 @@ def _digest_dict(
     return payload
 
 
+def _record_file_digest(
+    value: object, *, expected_file: str
+) -> tuple[int, str] | None:
+    if not isinstance(value, dict) or value.get("file") != expected_file:
+        return None
+    size = value.get("size_bytes")
+    sha256 = value.get("sha256")
+    if (
+        type(size) is not int
+        or size < 0
+        or not isinstance(sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+    ):
+        return None
+    return size, sha256
+
+
 def _fail(session_id: str, stage: str, detail: str) -> str:
     """构造带会话、阶段与明细的失败原因文本（journal 与异常共用）。"""
     return f"session={session_id}, stage={stage}: {detail}"
@@ -165,89 +182,7 @@ def _session_debug_directory(session_node: Path) -> Path:
     return session_node / "debug" / "node"
 
 
-class NodeDebugLegacyMigrationJournal:
-    """旧 ``debug/node/`` 迁移台账：每会话一条记录，原子持久化，可跨进程重读。
-
-    重跑语义：``migrated`` 直接跳过（journal 不重复记录）；``failed`` 可重试并
-    覆盖最新结果；``skipped`` 保持既有记录不重写；``pending``/缺失记录按待处理
-    检测。
-    """
-
-    def __init__(self, journal_path: Path) -> None:
-        self._journal_path = journal_path
-        self._records: dict[str, dict[str, object]] = {}
-        self._dirty = False
-        self._loaded = False
-
-    @property
-    def journal_path(self) -> Path:
-        return self._journal_path
-
-    def load(self) -> None:
-        """加载既有台账；结构不兼容时显式报错，绝不静默重置。"""
-        if not self._journal_path.exists():
-            self._records = {}
-            self._loaded = True
-            self._dirty = False
-            return
-        raw = json.loads(self._journal_path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            raise RuntimeError(  # noqa: TRY004 - 数据损坏语义对齐 store，不用 TypeError
-                f"调试迁移台账必须是 JSON object: {self._journal_path}"
-            )
-        if raw.get("schema_version") != JOURNAL_SCHEMA_VERSION:
-            raise RuntimeError(
-                "调试迁移台账 schema 版本不兼容，拒绝重置或静默升级: "
-                f"path={self._journal_path}, "
-                f"schema_version={raw.get('schema_version')!r}"
-            )
-        if raw.get("migration") != MIGRATION_NAME:
-            raise RuntimeError(
-                "调试迁移台账 migration 名称不匹配: "
-                f"path={self._journal_path}, expected={MIGRATION_NAME}"
-            )
-        records = raw.get("records")
-        if not isinstance(records, dict):
-            raise RuntimeError(  # noqa: TRY004 - 数据损坏语义对齐 store，不用 TypeError
-                f"调试迁移台账缺少 records 映射: {self._journal_path}"
-            )
-        self._records = records
-        self._loaded = True
-        self._dirty = False
-
-    def _ensure_loaded(self) -> None:
-        if not self._loaded:
-            self.load()
-
-    def get_record(self, session_id: str) -> dict[str, object] | None:
-        self._ensure_loaded()
-        record = self._records.get(session_id)
-        return dict(record) if isinstance(record, dict) else None
-
-    def upsert_record(self, session_id: str, record: dict[str, object]) -> None:
-        """写入会话记录（仅内存）；状态真正变化时由 :meth:`save` 原子落盘。"""
-        self._ensure_loaded()
-        self._records[session_id] = record
-        self._dirty = True
-
-    def save(self) -> None:
-        """只有存在状态变化时才重写台账文件，保证幂等重跑 bytes 不变。"""
-        self._ensure_loaded()
-        if not self._dirty:
-            return
-        payload = json.dumps(
-            {
-                "schema_version": JOURNAL_SCHEMA_VERSION,
-                "migration": MIGRATION_NAME,
-                "records": self._records,
-                "updated_at": _utc_now_iso(),
-            },
-            ensure_ascii=False,
-            indent=2,
-        ) + "\n"
-        _atomic_write_bytes(self._journal_path, payload.encode("utf-8"))
-        self._dirty = False
-
+"""调试域迁移步骤只消费共享 SessionCatalog journal。"""
 
 class NodeDebugLegacyDirectoryMigrator:
     """把旧格式 ``<session_node>/debug/node/manifest.json`` 显式定点迁入 main thread。
@@ -260,10 +195,20 @@ class NodeDebugLegacyDirectoryMigrator:
     def __init__(
         self,
         session_index: NodeDebugLegacyMigrationSessionIndex,
-        journal: NodeDebugLegacyMigrationJournal,
+        journal: NodeDebugLegacyMigrationJournalPort,
     ) -> None:
         self._session_index = session_index
         self._journal = journal
+        self._last_summary: NodeDebugLegacyMigrationSummary | None = None
+
+    @property
+    def last_summary(self) -> NodeDebugLegacyMigrationSummary | None:
+        """最近一次运行结果。
+
+        共享 catalog 迁移 journal 的适配器需要在迁移步骤失败时把失败摘要
+        一并写入同一份 journal。保留该投影不会引入第二份持久化事实源。
+        """
+        return self._last_summary
 
     def run(self) -> NodeDebugLegacyMigrationSummary:
         """枚举权威索引中的会话并逐个检测/迁移；存在失败会话时 fail-loud。"""
@@ -291,6 +236,10 @@ class NodeDebugLegacyDirectoryMigrator:
                 skipped.append(session_id)
                 continue
             self._journal.upsert_record(session_id, record)
+            # 每个 item 都先进入共享 catalog journal，再处理下一个 Session。
+            # 对会修改 manifest 的 item，_migrate_legacy_manifest 还会在替换前
+            # 单独持久化 applying intent，避免文件与 journal 之间出现崩溃空窗。
+            self._journal.save()
             status = str(record.get("status"))
             if status == "migrated":
                 migrated.append(session_id)
@@ -305,6 +254,7 @@ class NodeDebugLegacyDirectoryMigrator:
             noop=tuple(noop),
             failed=tuple(failed),
         )
+        self._last_summary = summary
         if summary.failed:
             details = "; ".join(
                 f"session={session_id}: {reason}"
@@ -329,6 +279,24 @@ class NodeDebugLegacyDirectoryMigrator:
         fail-loud，绝不静默吞掉。
         """
         manifest_path = _session_debug_directory(session_node) / MANIFEST_FILE_NAME
+        previous = self._journal.get_record(session_id)
+        if (
+            previous is not None
+            and (
+                previous.get("status") == "applying"
+                or (
+                    previous.get("status") == "failed"
+                    and "manifest_before_base64" in previous
+                )
+            )
+        ):
+            recovered = self._recover_applying_record(
+                session_id=session_id,
+                manifest_path=manifest_path,
+                record=previous,
+            )
+            if recovered is not None:
+                return recovered
         if not manifest_path.exists():
             record: dict[str, object] = {
                 "session_id": session_id,
@@ -336,7 +304,6 @@ class NodeDebugLegacyDirectoryMigrator:
                 "note": "no-debug-data",
                 "updated_at": _utc_now_iso(),
             }
-            previous = self._journal.get_record(session_id)
             if (
                 previous is not None
                 and previous.get("status") == "skipped"
@@ -485,6 +452,9 @@ class NodeDebugLegacyDirectoryMigrator:
             session_id=session_id,
             manifest_path=manifest_path,
             raw_manifest=raw_manifest,
+            configuration_ids=tuple(
+                digest.configuration_id for digest in configuration_digests
+            ),
         )
         if failure_reason is not None or migrated_manifest is None:
             return self._failed_record(
@@ -495,22 +465,205 @@ class NodeDebugLegacyDirectoryMigrator:
             )
 
         payload = migrated_manifest.model_dump_json(indent=2).encode("utf-8")
-        _atomic_write_bytes(manifest_path, payload)
         manifest_after = NodeDebugLegacyFileDigest(
             file=MANIFEST_FILE_NAME,
             size_bytes=len(payload),
             sha256=_digest_bytes(payload),
         )
-        return {
+        configuration_evidence = [
+            _digest_dict(digest) for digest in configuration_digests
+        ]
+        previous = self._journal.get_record(session_id)
+        if (
+            previous is not None
+            and (
+                previous.get("status") == "applying"
+                or (
+                    previous.get("status") == "failed"
+                    and "manifest_before_base64" in previous
+                )
+            )
+            and (
+                previous.get("manifest_after") != _digest_dict(manifest_after)
+                or previous.get("configurations") != configuration_evidence
+            )
+        ):
+            return self._failed_applying_record(
+                previous,
+                reason=_fail(
+                    session_id,
+                    "recover-applying",
+                    "重算的 expected after/configuration 证据与 durable intent 不一致",
+                ),
+            )
+        applying_record: dict[str, object] = {
             "session_id": session_id,
-            "status": "migrated",
+            "status": "applying",
             "manifest_before": _digest_dict(manifest_before),
+            "manifest_before_base64": base64.b64encode(
+                manifest_path.read_bytes()
+            ).decode("ascii"),
             "manifest_after": _digest_dict(manifest_after),
-            "configurations": [
-                _digest_dict(digest) for digest in configuration_digests
-            ],
+            "configurations": configuration_evidence,
             "updated_at": _utc_now_iso(),
         }
+        # intent 必须先通过共享 catalog journal durable 落盘，再替换原文件。
+        self._journal.upsert_record(session_id, applying_record)
+        self._journal.save()
+        _atomic_write_bytes(manifest_path, payload)
+        completed = dict(applying_record)
+        completed["status"] = "migrated"
+        completed.pop("manifest_before_base64")
+        completed["updated_at"] = _utc_now_iso()
+        self._journal.upsert_record(session_id, completed)
+        self._journal.save()
+        return completed
+
+    def _recover_applying_record(
+        self,
+        *,
+        session_id: str,
+        manifest_path: Path,
+        record: dict[str, object],
+    ) -> dict[str, object] | None:
+        """仅按 durable intent 的 before/after hash 恢复中断的单文件替换。"""
+        before = record.get("manifest_before")
+        after = record.get("manifest_after")
+        preimage_base64 = record.get("manifest_before_base64")
+        before_digest = _record_file_digest(
+            before, expected_file=MANIFEST_FILE_NAME
+        )
+        after_digest = _record_file_digest(after, expected_file=MANIFEST_FILE_NAME)
+        if (
+            before_digest is None
+            or after_digest is None
+            or not isinstance(preimage_base64, str)
+        ):
+            return self._failed_applying_record(
+                record,
+                reason=_fail(
+                    session_id, "recover-applying", "applying intent 结构损坏"
+                ),
+            )
+        try:
+            preimage = base64.b64decode(preimage_base64, validate=True)
+        except (binascii.Error, ValueError):
+            return self._failed_applying_record(
+                record,
+                reason=_fail(
+                    session_id, "recover-applying", "manifest preimage 编码损坏"
+                ),
+            )
+        before_size, before_sha256 = before_digest
+        after_size, after_sha256 = after_digest
+        if len(preimage) != before_size or _digest_bytes(preimage) != before_sha256:
+            return self._failed_applying_record(
+                record,
+                reason=_fail(
+                    session_id, "recover-applying", "manifest preimage hash 不一致"
+                ),
+            )
+        if not manifest_path.is_file() or manifest_path.is_symlink():
+            return self._failed_applying_record(
+                record,
+                reason=_fail(
+                    session_id,
+                    "recover-applying",
+                    "manifest 缺失或不是普通文件",
+                ),
+            )
+        current = _digest_file(manifest_path)
+        if current.size_bytes == after_size and current.sha256 == after_sha256:
+            configuration_error = self._verify_applying_configurations(
+                manifest_path=manifest_path,
+                record=record,
+            )
+            if configuration_error is not None:
+                return self._failed_applying_record(
+                    record,
+                    reason=_fail(
+                        session_id, "recover-applying", configuration_error
+                    ),
+                )
+            completed = dict(record)
+            completed["status"] = "migrated"
+            completed.pop("manifest_before_base64", None)
+            completed["updated_at"] = _utc_now_iso()
+            self._journal.upsert_record(session_id, completed)
+            self._journal.save()
+            return completed
+        if current.size_bytes == before_size and current.sha256 == before_sha256:
+            configuration_error = self._verify_applying_configurations(
+                manifest_path=manifest_path,
+                record=record,
+            )
+            if configuration_error is not None:
+                return self._failed_applying_record(
+                    record,
+                    reason=_fail(
+                        session_id, "recover-applying", configuration_error
+                    ),
+                )
+            # 替换尚未发生；保留同一 intent，重算结果必须与其完全一致。
+            return None
+        return self._failed_applying_record(
+            record,
+            reason=_fail(
+                session_id,
+                "recover-applying",
+                "manifest 既不匹配 intent before 也不匹配 expected after，拒绝猜测",
+            ),
+        )
+
+    @staticmethod
+    def _failed_applying_record(
+        record: dict[str, object], *, reason: str
+    ) -> dict[str, object]:
+        """保留 durable intent 全部证据，并显式转为失败态。"""
+        failed = dict(record)
+        failed["status"] = "failed"
+        failed["reason"] = reason
+        failed["updated_at"] = _utc_now_iso()
+        return failed
+
+    @staticmethod
+    def _verify_applying_configurations(
+        *, manifest_path: Path, record: dict[str, object]
+    ) -> str | None:
+        raw = record.get("configurations")
+        if not isinstance(raw, list):
+            return "applying intent 缺少 configurations 证据"
+        expected: dict[str, tuple[int, str]] = {}
+        for item in raw:
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item.get("file"), str)
+                or type(item.get("size_bytes")) is not int
+                or item["size_bytes"] < 0
+                or not isinstance(item.get("sha256"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
+                or not isinstance(item.get("configuration_id"), str)
+                or CONFIGURATION_ID_PATTERN.fullmatch(item["configuration_id"]) is None
+                or item["file"] != f"{item['configuration_id']}.json"
+                or type(item.get("revision")) is not int
+                or item["revision"] < 1
+            ):
+                return "applying intent 的 configuration 证据损坏"
+            if item["file"] in expected:
+                return "applying intent 包含重复 configuration 文件证据"
+            expected[item["file"]] = (item["size_bytes"], item["sha256"])
+        directory = manifest_path.parent / CONFIGURATIONS_DIRECTORY_NAME
+        actual_paths = sorted(directory.glob("*.json")) if directory.exists() else []
+        if {path.name for path in actual_paths} != set(expected):
+            return "configuration 文件集合与 applying intent 不一致"
+        for path in actual_paths:
+            if path.is_symlink() or not path.is_file():
+                return f"configuration 不是普通文件: {path.name}"
+            payload = path.read_bytes()
+            size, digest = expected[path.name]
+            if len(payload) != size or _digest_bytes(payload) != digest:
+                return f"configuration bytes 与 applying intent 不一致: {path.name}"
+        return None
 
     def _validate_configurations(
         self,
@@ -583,10 +736,12 @@ class NodeDebugLegacyDirectoryMigrator:
         session_id: str,
         manifest_path: Path,
         raw_manifest: dict[str, object],
+        configuration_ids: tuple[str, ...],
     ) -> tuple[NodeDebugSessionManifestDTO | None, str | None]:
         """构造 ``thread_id="main"`` 的新 manifest；其余字段语义逐项保留。"""
         migrated_raw = dict(raw_manifest)
         migrated_raw["thread_id"] = MAIN_THREAD_ID
+        migrated_raw["configuration_ids"] = configuration_ids
         raw_actions = migrated_raw.get("actions")
         if raw_actions is None:
             raw_actions = []
@@ -656,14 +811,11 @@ class NodeDebugLegacyDirectoryMigrator:
 
 __all__ = [
     "CONFIGURATION_ID_PATTERN",
-    "JOURNAL_SCHEMA_VERSION",
-    "MIGRATION_NAME",
     "NodeDebugLegacyConfigurationDigest",
     "NodeDebugLegacyDirectoryMigrator",
     "NodeDebugLegacyFileDigest",
-    "NodeDebugLegacyMigrationJournal",
+    "NodeDebugLegacyMigrationJournalPort",
     "NodeDebugLegacyMigrationSessionIndex",
     "NodeDebugLegacyMigrationStatus",
     "NodeDebugLegacyMigrationSummary",
-    "default_journal_path",
 ]

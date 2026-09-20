@@ -23,11 +23,11 @@ import pytest
 from app.core.session_paths import SessionPathResolver
 from app.core.session_tree.support import SessionPhysicalNode
 from app.schemas.internal_v2.node_debug import NodeDebugSessionManifestDTO
+from app.services.infrastructure import node_debug_legacy_migration
 from app.services.infrastructure.node_debug_legacy_migration import (
     NodeDebugLegacyDirectoryMigrator,
-    NodeDebugLegacyMigrationJournal,
+    NodeDebugLegacyMigrationJournalPort,
     NodeDebugLegacyMigrationSessionIndex,
-    default_journal_path,
 )
 from app.services.infrastructure.node_debug_session_store import (
     NodeDebugSessionStore,
@@ -196,11 +196,36 @@ def _sha256_of(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _read_journal_records(journal_path: Path) -> dict[str, dict[str, object]]:
-    raw = json.loads(journal_path.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 1
-    assert raw["migration"] == "node-debug-legacy-main-thread"
-    return raw["records"]
+class _MemoryJournal(NodeDebugLegacyMigrationJournalPort):
+    def __init__(self) -> None:
+        self.records: dict[str, dict[str, object]] = {}
+        self.saved_records: list[dict[str, dict[str, object]]] = []
+
+    @property
+    def journal_path(self) -> Path:
+        return Path("<shared-catalog-journal>")
+
+    def get_record(self, session_id: str) -> dict[str, object] | None:
+        record = self.records.get(session_id)
+        return dict(record) if record is not None else None
+
+    def upsert_record(self, session_id: str, record: dict[str, object]) -> None:
+        self.records[session_id] = dict(record)
+
+    def save(self) -> None:
+        self.saved_records.append(json.loads(json.dumps(self.records)))
+
+    def read_bytes(self) -> bytes:
+        return json.dumps(self.records, ensure_ascii=False, sort_keys=True).encode()
+
+
+def _read_journal_records(journal: _MemoryJournal) -> dict[str, dict[str, object]]:
+    return journal.records
+
+
+@pytest.fixture
+def journal_path() -> _MemoryJournal:
+    return _MemoryJournal()
 
 
 @pytest.fixture
@@ -229,24 +254,19 @@ def session_tree(tmp_path: Path) -> tuple[SessionPathResolver, Path, Path]:
     return resolver, legacy_dir, plain_dir
 
 
-@pytest.fixture
-def journal_path(tmp_path: Path) -> Path:
-    return default_journal_path(tmp_path / "workspace" / ".boxteam")
-
-
 def _migrator(
     session_index: NodeDebugLegacyMigrationSessionIndex,
-    journal_path: Path,
+    journal: _MemoryJournal,
 ) -> NodeDebugLegacyDirectoryMigrator:
     return NodeDebugLegacyDirectoryMigrator(
         session_index=session_index,
-        journal=NodeDebugLegacyMigrationJournal(journal_path),
+        journal=journal,
     )
 
 
 def test_legacy_manifest_migrates_to_main_and_new_store_reads_it(
     session_tree: tuple[SessionPathResolver, Path, Path],
-    journal_path: Path,
+    journal_path: _MemoryJournal,
 ) -> None:
     """旧格式 fixture → 迁移 → 新 store read_manifest(session, "main") 成功。"""
     resolver, legacy_dir, _plain_dir = session_tree
@@ -315,7 +335,7 @@ def test_legacy_manifest_migrates_to_main_and_new_store_reads_it(
 
 def test_configuration_corruption_fails_without_touching_originals(
     session_tree: tuple[SessionPathResolver, Path, Path],
-    journal_path: Path,
+    journal_path: _MemoryJournal,
 ) -> None:
     """方案文件损坏 → journal 记 failed、原件逐字节不变、fail-loud 抛错。"""
     resolver, legacy_dir, _plain_dir = session_tree
@@ -357,7 +377,7 @@ def test_configuration_corruption_fails_without_touching_originals(
 
 def test_manifest_session_id_mismatch_fails_and_keeps_original(
     session_tree: tuple[SessionPathResolver, Path, Path],
-    journal_path: Path,
+    journal_path: _MemoryJournal,
 ) -> None:
     """manifest session_id 与所属会话不一致 → failed、原件不动。"""
     resolver, legacy_dir, _plain_dir = session_tree
@@ -380,7 +400,7 @@ def test_manifest_session_id_mismatch_fails_and_keeps_original(
 
 def test_non_main_thread_id_is_corruption_and_fails_loud(
     session_tree: tuple[SessionPathResolver, Path, Path],
-    journal_path: Path,
+    journal_path: _MemoryJournal,
 ) -> None:
     """会话节点级 manifest 携带 thread_id≠main 的损坏形态 → fail-loud 不迁移。"""
     resolver, legacy_dir, _plain_dir = session_tree
@@ -407,7 +427,7 @@ def test_non_main_thread_id_is_corruption_and_fails_loud(
 
 def test_rerun_after_migration_is_noop_and_journal_unchanged(
     session_tree: tuple[SessionPathResolver, Path, Path],
-    journal_path: Path,
+    journal_path: _MemoryJournal,
 ) -> None:
     """幂等：已迁移会话重跑 → no-op，journal 不重复记录（bytes 不变）。"""
     resolver, legacy_dir, _plain_dir = session_tree
@@ -433,9 +453,105 @@ def test_rerun_after_migration_is_noop_and_journal_unchanged(
     assert _read_journal_records(journal_path) == records_after_first
 
 
+def test_crash_after_manifest_replace_recovers_from_shared_applying_intent(
+    session_tree: tuple[SessionPathResolver, Path, Path],
+    journal_path: _MemoryJournal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """替换后崩溃只能按 durable before/after 证据完成，不能伪装既有新格式。"""
+    resolver, legacy_dir, _plain_dir = session_tree
+    manifest_path = legacy_dir / "debug" / "node" / "manifest.json"
+    manifest_before = manifest_path.read_bytes()
+    original_write = node_debug_legacy_migration._atomic_write_bytes
+
+    def crash_after_replace(path: Path, payload: bytes) -> None:
+        original_write(path, payload)
+        raise RuntimeError("injected crash after manifest replace")
+
+    monkeypatch.setattr(
+        node_debug_legacy_migration,
+        "_atomic_write_bytes",
+        crash_after_replace,
+    )
+    with pytest.raises(RuntimeError, match="injected crash"):
+        _migrator(resolver, journal_path).run()
+
+    applying = journal_path.records[_SESSION_ID]
+    assert applying["status"] == "applying"
+    assert applying["manifest_before"]["sha256"] == hashlib.sha256(
+        manifest_before
+    ).hexdigest()
+    assert applying["manifest_after"]["sha256"] == hashlib.sha256(
+        manifest_path.read_bytes()
+    ).hexdigest()
+
+    monkeypatch.setattr(
+        node_debug_legacy_migration,
+        "_atomic_write_bytes",
+        original_write,
+    )
+    summary = _migrator(resolver, journal_path).run()
+
+    assert summary.migrated == (_SESSION_ID,)
+    recovered = journal_path.records[_SESSION_ID]
+    assert recovered["status"] == "migrated"
+    assert recovered.get("note") != "already-new-format"
+    assert "manifest_before_base64" not in recovered
+    assert recovered["manifest_before"] == applying["manifest_before"]
+    assert recovered["manifest_after"] == applying["manifest_after"]
+    assert recovered["configurations"] == applying["configurations"]
+
+
+def test_applying_intent_rejects_configuration_drift_before_replace(
+    session_tree: tuple[SessionPathResolver, Path, Path],
+    journal_path: _MemoryJournal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """intent 已落盘但 manifest 未替换时，方案 bytes 漂移必须阻断重试。"""
+    resolver, legacy_dir, _plain_dir = session_tree
+    original_write = node_debug_legacy_migration._atomic_write_bytes
+
+    def crash_before_replace(_path: Path, _payload: bytes) -> None:
+        raise RuntimeError("injected crash before manifest replace")
+
+    monkeypatch.setattr(
+        node_debug_legacy_migration,
+        "_atomic_write_bytes",
+        crash_before_replace,
+    )
+    with pytest.raises(RuntimeError, match="injected crash"):
+        _migrator(resolver, journal_path).run()
+    assert journal_path.records[_SESSION_ID]["status"] == "applying"
+
+    configuration_path = (
+        legacy_dir
+        / "debug"
+        / "node"
+        / "configurations"
+        / f"{_CONFIGURATION_ID}.json"
+    )
+    configuration_path.write_bytes(configuration_path.read_bytes() + b"\n")
+    monkeypatch.setattr(
+        node_debug_legacy_migration,
+        "_atomic_write_bytes",
+        original_write,
+    )
+
+    with pytest.raises(RuntimeError, match="存在失败会话"):
+        _migrator(resolver, journal_path).run()
+    failed = journal_path.records[_SESSION_ID]
+    assert failed["status"] == "failed"
+    assert "configuration bytes" in failed["reason"]
+
+    # 保留 intent 的 failed 状态不能被合法 main manifest 或普通重试绕过。
+    with pytest.raises(RuntimeError, match="存在失败会话"):
+        _migrator(resolver, journal_path).run()
+    assert journal_path.records[_SESSION_ID]["status"] == "failed"
+
+
 def test_already_new_format_manifest_is_recorded_once(
     session_tree: tuple[SessionPathResolver, Path, Path],
-    journal_path: Path,
+    journal_path: _MemoryJournal,
 ) -> None:
     """已是新格式（thread_id=main）的会话 → 幂等 no-op，manifest 不改写。"""
     resolver, legacy_dir, _plain_dir = session_tree
@@ -489,7 +605,7 @@ def test_out_of_index_directory_is_not_touched(tmp_path: Path) -> None:
 
     # 替身没有任何扫盘能力：只返回手工登记的权威索引节点。
     session_index = _IndexOnlySessionIndex({_SESSION_ID: in_index_node})
-    journal_path = default_journal_path(tmp_path / "workspace" / ".boxteam")
+    journal_path = _MemoryJournal()
     summary = _migrator(session_index, journal_path).run()
 
     assert summary.migrated == (_SESSION_ID,)
@@ -502,7 +618,7 @@ def test_out_of_index_directory_is_not_touched(tmp_path: Path) -> None:
 
 def test_session_without_debug_data_is_skipped(
     session_tree: tuple[SessionPathResolver, Path, Path],
-    journal_path: Path,
+    journal_path: _MemoryJournal,
 ) -> None:
     """无调试数据的会话 → skipped，且重跑不重复记录。"""
     resolver, _legacy_dir, plain_dir = session_tree
@@ -527,7 +643,7 @@ def test_session_without_debug_data_is_skipped(
 
 def test_journal_state_survives_reload(
     session_tree: tuple[SessionPathResolver, Path, Path],
-    journal_path: Path,
+    journal_path: _MemoryJournal,
 ) -> None:
     """journal 持久性：模拟重启（重新加载台账）→ migrated 状态保留 → 重跑 no-op。"""
     resolver, legacy_dir, _plain_dir = session_tree
@@ -554,7 +670,7 @@ def test_journal_state_survives_reload(
 
 def test_configuration_files_bytes_unchanged_after_migration(
     session_tree: tuple[SessionPathResolver, Path, Path],
-    journal_path: Path,
+    journal_path: _MemoryJournal,
 ) -> None:
     """迁移后方案文件 bytes 不变（hash 对比），journal 登记相同 hash。"""
     resolver, legacy_dir, _plain_dir = session_tree
