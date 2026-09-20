@@ -23,17 +23,17 @@
 
 ## 4. Agent 注册与策略
 
-- [ ] 4.1 将16个目标和既有调试方案管理目标保留在ExtensionToolCatalog的`debugging`分组；Provider仅见少量直接工具与始终存在、schema/description固定的`invoke_extension_tool`，目录空或启停目标也不改信封
-- [ ] 4.2 AgentFactory按每次调用的ThreadRuntimeBinding接入NodeDebugService和封存的ExtensionCatalogBindingRef；移除16个直接Provider注册/`invoke_extension_tool`旧模型入口，更新bundled debugging Skill为`skill_load(name="debugging")`→固定信封指引，删除`read_file`加载Skill/按Session共享调试状态的旧描述；不把目标清单拼进信封description
-- [ ] 4.3 调试目标各自遵守denylist、allowlist和`confirmation_required`；`evaluate_expression`执行点重验最新权限/确认，撤权与非法调用返回原tool_call_id配对的真实失败，目标切换不触发Provider ToolSet hard rebase
+- [x] 4.1 将16个目标和既有调试方案管理目标保留在ExtensionToolCatalog的`debugging`分组；Provider仅见少量直接工具与始终存在、schema/description固定的`invoke_extension_tool`，目录空或启停目标也不改信封
+- [x] 4.2 AgentFactory按每次调用的ThreadRuntimeBinding接入NodeDebugService和封存的ExtensionCatalogBindingRef；移除16个直接Provider注册/`invoke_extension_tool`旧模型入口，更新bundled debugging Skill为`skill_load(name="debugging")`→固定信封指引，删除`read_file`加载Skill/按Session共享调试状态的旧描述；不把目标清单拼进信封description
+- [x] 4.3 调试目标各自遵守denylist、allowlist和`confirmation_required`；`evaluate_expression`执行点重验最新权限/确认，撤权与非法调用返回原tool_call_id配对的真实失败，目标切换不触发Provider ToolSet hard rebase
 - [ ] 4.4 更新目录、Provider工具schema、tool result、提示词和Web/API测试：16个目标名仅出现在内层目录/指引，固定信封仅接受tool_name/arguments，模型不能传session/thread、端口、DAP/VS Code字段；无旧`invoke_extension_tool`别名或提示
 
 ## 5. 纯后端 E2E 测试
 
 - [ ] 5.1 核对并扩展既有隔离JS调试fixture和后端E2E资源准备逻辑；Session/main/child经正常创建/catalog路径取得，不把项目根注册为测试工作区
 - [ ] 5.2 通过固定`invoke_extension_tool`与sealed目录binding验收16个内层目标名/兼容参数schema、指定`debugConfigurationId`与当前thread活动方案/无方案创建顺序、普通/日志点第N次命中、未知参数明确失败；补测路径相对/绝对归一化相等可启动、路径/profile冲突明确错误且旧进程/方案不变、无效ID先报not-found。Provider `tools`不含16个直接定义，启停前后ToolSetRef和同epoch父wire bytes不变；直接`ainvoke`仅作单元/契约覆盖
-- [ ] 5.3 使用真实 Node Inspector 验证断点暂停、继续、单步、调用栈、变量和表达式求值
-- [ ] 5.4 验证条件/命中次数断点、Node Logpoint输出且不暂停、插值错误、其它不支持adapter的明确拒绝、非法/未知参数和无暂停上下文错误；同时验收变量/求值/Logpoint输出脱敏及真实失败与原tool_call_id配对
+- [x] 5.3 使用真实 Node Inspector 验证断点暂停、继续、单步、调用栈、变量和表达式求值
+- [x] 5.4 验证条件/命中次数断点、Node Logpoint输出且不暂停、插值错误、其它不支持adapter的明确拒绝、非法/未知参数和无暂停上下文错误；同时验收变量/求值/Logpoint输出脱敏及真实失败与原tool_call_id配对
 - [ ] 5.5 验证同一Session main/child及跨Session两个以上thread的进程、动态/冲突固定端口、断点、方案、状态、动作审计与stop/restart严格隔离；Session产品API只到main，显式child API校验归属；fake clock覆盖`launch_pending|starting|running|paused|stopping`跨过30分钟仍resident、终态且lease结清后重新计时、无阻断后cold、stop失败/重启`reconcile_required`、thread删除定点停止及旧generation callback拒绝。用注入phase barrier在claim提交后spawn前、spawn后登记PID前和stop核实前终止backend并重启，验证nonce/OS起始身份、PID/端口复用不误接管/误杀、同一实例只恢复一次及未知状态始终阻断
 - [ ] 5.6 验证Workspace debug模板/profile覆盖和旧配置无debug字段时的行为，并在itemized共享maintenance gate/journal下核对旧Session方案→main thread的bytes/hash、ID/revision/lineage、失败/重试/原件保留；同Workspace`context_fork`只复制capture时活动方案、`history_prefix_fork`不复制方案、`full_rollout_copy`复制全部当前方案、migration-only child copy不自动复制。冻结目标有效debug配置revision/hash并逐项重验入口/工作目录/全部断点路径和profile/adapter/runtime，发布前配置漂移或方案缺失使整个fork不发布，目标ID/lineage映射且不带active指针；崩溃恢复不半发布，跨Workspace公开copy明确拒绝，不复制活连接且不停止source进程；history/Web刷新与无旧路径alias
 
