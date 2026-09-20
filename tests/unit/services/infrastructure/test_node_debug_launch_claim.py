@@ -949,8 +949,8 @@ async def test_stale_generation_callback_cannot_write_new_instance_claim(
         process_instance_id="node-debug-proc_stale_generation",
     )
 
-    service._mark_claim_phase(stale, "settled", "旧代际回调")
-    service._mark_claim_running(stale)
+    service._claim_runtime.mark_claim_phase(stale, "settled", "旧代际回调")
+    service._claim_runtime.mark_claim_running(stale)
 
     persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
     assert persisted is not None
@@ -962,7 +962,7 @@ async def test_stale_generation_callback_cannot_write_new_instance_claim(
         configuration_id=_CONFIGURATION_ID,
         process_instance_id=current.process_instance_id,
     )
-    service._mark_claim_phase(current_runtime, "settled", "本代际结清")
+    service._claim_runtime.mark_claim_phase(current_runtime, "settled", "本代际结清")
     persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, "main")
     assert persisted_after is not None
     assert persisted_after.phase == "settled"
@@ -1359,7 +1359,7 @@ async def test_concurrent_starts_are_serialized_per_owner(
     )
     children: list[subprocess.Popen[bytes]] = []
     written: list[tuple[str, str]] = []
-    original_write = service._write_launch_claim
+    original_write = service._claim_runtime.write_launch_claim
 
     def spy_write(claim: NodeDebugLaunchClaimDTO) -> None:
         original_write(claim)
@@ -1383,7 +1383,7 @@ async def test_concurrent_starts_are_serialized_per_owner(
     async def fake_background(runtime: NodeDebugRuntime) -> None:
         return None
 
-    monkeypatch.setattr(service, "_write_launch_claim", spy_write)
+    monkeypatch.setattr(service._claim_runtime, "write_launch_claim", spy_write)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr(websockets, "connect", fake_connect)
     monkeypatch.setattr(service._inspector, "command", fake_command)

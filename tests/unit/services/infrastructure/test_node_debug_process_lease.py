@@ -41,6 +41,9 @@ from app.services.infrastructure.events.event_channel_service import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+from app.services.infrastructure.node_debug.claim_runtime import (
+    NodeDebugProcessLeaseIdentity,
+)
 from app.services.infrastructure.node_debug.launch_claim import (
     claim_running,
     claim_with_spawn_identity,
@@ -51,10 +54,7 @@ from app.services.infrastructure.node_debug.process_identity import (
     probe_process_identity,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
-from app.services.infrastructure.node_debug.service import (
-    NodeDebugProcessLeaseIdentity,
-    NodeDebugService,
-)
+from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.node_debug_dependencies import (

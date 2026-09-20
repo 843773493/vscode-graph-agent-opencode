@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import re
 import shutil
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
-from urllib.parse import urlparse
 
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import safe_join
@@ -28,7 +25,6 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugEvaluateActionRequest,
     NodeDebugEvaluateParams,
     NodeDebugEvaluationDTO,
-    NodeDebugLaunchClaimDTO,
     NodeDebugLaunchProfileDTO,
     NodeDebugSessionManifestDTO,
     NodeDebugSetBreakpointActionRequest,
@@ -54,6 +50,7 @@ from app.services.infrastructure.node_debug.breakpoints import (
     runtime_breakpoint,
     source_digest,
 )
+from app.services.infrastructure.node_debug.claim_runtime import NodeDebugClaimRuntime
 from app.services.infrastructure.node_debug.configuration_factory import (
     NodeDebugConfigurationFactory,
 )
@@ -62,11 +59,6 @@ from app.services.infrastructure.node_debug.configuration_registry import (
 )
 from app.services.infrastructure.node_debug.inspector import (
     NodeDebugInspector,
-)
-from app.services.infrastructure.node_debug.launch_claim import (
-    ACTIVE_CLAIM_PHASES,
-    claim_marked,
-    claim_running,
 )
 from app.services.infrastructure.node_debug.launch_orchestrator import (
     NodeDebugLaunchContext,
@@ -110,7 +102,6 @@ from app.services.infrastructure.node_debug.snapshot import (
 
 _INSPECTOR_URL_PATTERN = re.compile(r"Debugger listening on (ws://\S+)")
 
-logger = logging.getLogger(__name__)
 _MAX_ACTIONS = 100
 _MAX_OUTPUT_LINES = 100
 _TOOL_ACTION_SOURCES: dict[str, frozenset[str]] = {
@@ -131,56 +122,6 @@ _TOOL_ACTION_SOURCES: dict[str, frozenset[str]] = {
     "clear_all_breakpoints": frozenset({"clear_all_breakpoints"}),
     "evaluate_expression": frozenset({"evaluate"}),
 }
-#: ThreadResidency idle blocker 的脱敏话术（按已核实的 claim 相位固定）。
-#: 绝不携带 PID/端口/路径/process_instance_id 正文，也不拷贝 claim.reconcile_reason
-#:（其中含诊断明细）；residency 快照对前端只暴露类别与这里的固定话术。
-_NODE_DEBUG_BLOCKER_REASON: dict[str, str] = {
-    "launch_pending": "Node 调试进程已登记启动，等待 spawn 与握手核实",
-    "spawned": "Node 调试进程已启动，等待 Inspector 握手核实",
-    "running": "Node 调试进程运行中",
-    "stopping": "Node 调试进程停止中，等待核实终结",
-    "reconcile_required": "Node 调试实例无法核实终态，需核实后才能解除占用",
-}
-#: 在册 runtime 的活跃状态（pull 源的安全网：claim 缺失时也绝不虚报可卸载）。
-_RESIDENCY_ACTIVE_RUNTIME_STATUSES = frozenset(
-    {"starting", "running", "paused", "stopping", "reconcile_required"}
-)
-
-
-@dataclass(frozen=True, slots=True)
-class NodeDebugProcessLeaseIdentity:
-    """typed ``node_debug_process`` 在唯一 external_resource_leases 账本中的身份。
-
-    由精确 debug owner 与本次启动唯一的 ``process_instance_id`` 派生：每次启动一个
-    占用 lease，holder 是 debug owner 本身，而不是发起本次操作的 tool_call / Web
-    request 或其短期 operation lease。``holder_id`` 写入 lease 记录的
-    ``turn_stream_id`` 字段（该字段在本账本中表达 holder identity），取值带专用
-    前缀，不会与真实 turn stream id 相等，因此 ``release_turn_leases`` 的 Turn 收尾
-    绝不会误释放跨 Turn 的调试进程占用。
-    """
-
-    resource_id: str
-    holder_id: str
-    lease_id: str
-    operation_id: str
-
-    @classmethod
-    def for_process_instance(
-        cls,
-        *,
-        session_id: str,
-        thread_id: str,
-        process_instance_id: str,
-    ) -> NodeDebugProcessLeaseIdentity:
-        resource_id = f"node_debug_process:{session_id}:{thread_id}"
-        return cls(
-            resource_id=resource_id,
-            holder_id=f"node-debug-owner:{session_id}:{thread_id}",
-            lease_id=f"{resource_id}:{process_instance_id}",
-            operation_id=process_instance_id,
-        )
-
-
 class NodeDebugService:
     """通过 Node Inspector 提供 SessionThread 级 JavaScript 源码调试。
 
@@ -206,7 +147,7 @@ class NodeDebugService:
         self._config_service = config_service
         self._session_store = session_store
         #: 唯一 external_resource_leases 账本。只登记/结清 typed ``node_debug_process``
-        #: 占用，不参与任何进程状态判断（见 _ensure_process_lease 的职责说明）。
+        #: 占用，不参与任何进程状态判断（见 claim_runtime 的职责说明）。
         self._external_resource_leases = external_resource_leases
         #: ThreadResidency 的 blocker 上报目标（R5b）：把已核实的 claim 相位变化单向
         #: 推送为 thread 的 idle blocker；本服务绝不反向读取 residency 推断进程状态。
@@ -251,13 +192,20 @@ class NodeDebugService:
             append_action=self._append_action,
             append_pending_action=self._append_pending_action,
         )
+        self._claim_runtime = NodeDebugClaimRuntime(
+            session_store=self._session_store,
+            external_resource_leases=self._external_resource_leases,
+            runtimes=self._runtimes,
+            residency_tracker=self._residency_tracker,
+            state_events=self._state_events,
+        )
         self._lifecycle = NodeDebugProcessLifecycle(
             runtimes=self._runtimes,
-            read_launch_claim=self._read_launch_claim,
-            write_launch_claim=self._write_launch_claim,
-            mark_claim_phase=self._mark_claim_phase,
-            settle_process_lease=self._settle_process_lease,
-            notify_release_failed=self._notify_release_failed,
+            read_launch_claim=self._claim_runtime.read_launch_claim,
+            write_launch_claim=self._claim_runtime.write_launch_claim,
+            mark_claim_phase=self._claim_runtime.mark_claim_phase,
+            settle_process_lease=self._claim_runtime.settle_process_lease,
+            notify_release_failed=self._claim_runtime.notify_release_failed,
             append_action=self._append_action,
             append_pending_action=self._append_pending_action,
             write_session_manifest=self._write_session_manifest,
@@ -287,8 +235,8 @@ class NodeDebugService:
                 read_runtime_config=self._get_typed_debug_runtime_config,
                 read_source_digests=self._source_digests_for_runtime,
                 persist_state=self._persist_session_state,
-                write_claim=self._write_launch_claim,
-                mark_claim_running=self._mark_claim_running,
+                write_claim=self._claim_runtime.write_launch_claim,
+                mark_claim_running=self._claim_runtime.mark_claim_running,
                 append_action=self._append_action,
                 is_paused_at_breakpoint=self._paused_at_breakpoint,
                 read_stream=self._read_stream,
@@ -313,7 +261,7 @@ class NodeDebugService:
                 owner,
                 NodeDebugLaunchSelection(),
             )
-            claim = self._active_claim(session_id, thread_id)
+            claim = self._claim_runtime.active_claim(session_id, thread_id)
             return NodeDebugStateDTO(
                 session_id=session_id,
                 thread_id=thread_id,
@@ -1150,7 +1098,7 @@ class NodeDebugService:
                     f"session_id={owner[0]}, thread_id={owner[1]}, "
                     f"reason={decision.reason}"
                 )
-            claim = self._active_claim(*owner)
+            claim = self._claim_runtime.active_claim(*owner)
             if claim is not None:
                 raise RuntimeError(
                     "删除 Session 前仍存在未结清的 Node 调试 claim，"
@@ -1192,263 +1140,12 @@ class NodeDebugService:
         await self._lifecycle.reconcile_persisted_claim(owner)
         return owner
 
-    # ---- typed node_debug_process lease：只记录跨 Turn 占用/恢复，不驱动服务行为 ----
-    #
-    # ThreadResidency 已接线（R5b，OpenSpec 2.8/8.8-A）：已核实的 claim 相位变化经
-    # `_sync_residency_blocker` 单向推送为该 (session_id, thread_id) 的 idle blocker
-    # （launch_pending/spawned/running/stopping/reconcile_required → 登记；核实终态
-    # 且 lease 已结清的 settled → 解除并重新起算 30 分钟 idle）。重启恢复由
-    # `residency_blockers`（ResidencyBlockerSource pull 源）兜底：tracker 评估时读
-    # 磁盘 durable claim 与在册 runtime 状态，全新 tracker 也不会虚报 cold-eligible。
-    #
-    # 职责边界（红线）：账本里的 lease 与 residency blocker 都只是占用/阻断上报；
-    # 服务判断进程实际状态始终以 durable launch claim + OS 起始身份核实为准。本模块
-    # 的读路径不得读取 lease/residency 来推断 running/stopped，也不得因账本缺失或不
-    # 一致而虚报终态。
-
-    def _process_lease_identity(
-        self, runtime: NodeDebugRuntime
-    ) -> NodeDebugProcessLeaseIdentity | None:
-        """按 runtime 的实例身份派生账本 identity；没有实例身份时不登记。"""
-        process_instance_id = runtime.process_instance_id
-        if process_instance_id is None:
-            return None
-        return NodeDebugProcessLeaseIdentity.for_process_instance(
-            session_id=runtime.session_id,
-            thread_id=runtime.thread_id,
-            process_instance_id=process_instance_id,
-        )
-
-    def _ensure_process_lease(self, runtime: NodeDebugRuntime) -> None:
-        """登记 typed ``node_debug_process`` 资源并取得该实例的跨 Turn 占用 lease。
-
-        只在握手成功、claim 进入 running 时调用，且以 lease_id（owner +
-        process_instance_id 派生）幂等：同一实例重复调用返回既有占用，不会新增
-        第二行，也不会重复 spawn。账本操作失败显式抛出，绝不被吞成“看起来已登记”。
-        """
-        identity = self._process_lease_identity(runtime)
-        if identity is None:
-            return
-        self._external_resource_leases.register_external(
-            resource_id=identity.resource_id,
-            kind="node_debug_process",
-            lifetime_scope="session",
-        )
-        self._external_resource_leases.acquire(
-            resource_id=identity.resource_id,
-            turn_stream_id=identity.holder_id,
-            lease_id=identity.lease_id,
-            operation_id=identity.operation_id,
-        )
-
-    def _settle_process_lease(
-        self,
-        *,
-        session_id: str,
-        thread_id: str,
-        process_instance_id: str,
-    ) -> None:
-        """debug owner 核实进程终态并结清 claim 时，结清同一实例的占用 lease。
-
-        ``reconcile_required`` 与任何“无法核实”的中间态都不调用本方法：占用保持
-        active/reconcile_required，作为跨 Turn 的恢复引用供重启后的 owner 读取。
-        """
-        lease_id = NodeDebugProcessLeaseIdentity.for_process_instance(
-            session_id=session_id,
-            thread_id=thread_id,
-            process_instance_id=process_instance_id,
-        ).lease_id
-        if self._external_resource_leases.get_lease(lease_id) is None:
-            # 该实例从未登记过占用（例如 spawn/握手前就终结，或登记本身失败）：
-            # 没有可结清的 lease，claim 的核实结果仍是唯一权威，不伪造账本记录。
-            return
-        self._external_resource_leases.settle(lease_id)
-
-    # ---- launch claim 持久化、代际保护与崩溃恢复 ----
-
-    def _write_launch_claim(self, claim: NodeDebugLaunchClaimDTO) -> None:
-        if self._session_store is None:
-            # TODO: 无持久化会话树的嵌入式/单测场景没有 thread 节点可登记 claim；
-            # 生产接线（app/container.py）始终提供 session_store。
-            return
-        self._session_store.write_launch_claim(claim)
-        # 每次 claim 落盘都是一次已核实的相位变化：同步把 blocker push 给 residency。
-        # settled 的写入点都保证先结清 lease 再写终态（见 _mark_claim_phase 与恢复
-        # 路径），因此这里的解除天然满足"核实终态 + lease 结清后才解除阻断"。
-        self._sync_residency_blocker(claim)
-
-    def _sync_residency_blocker(self, claim: NodeDebugLaunchClaimDTO) -> None:
-        """把已核实的 claim 相位变化映射为 ThreadResidency 的 idle blocker 登记/解除。
-
-        push 模型：``ACTIVE_CLAIM_PHASES`` 内的相位 → 按 key（process_instance_id 派生）
-        登记/更新 blocker；settled 或未知终态 → 解除同一 key 并从解除时刻重新起算
-        idle。reason 用固定脱敏话术，不携带 PID/端口/路径正文。
-        """
-        if self._residency_tracker is None:
-            return
-        blocker_key = f"node_debug_claim:{claim.process_instance_id}"
-        reason = _NODE_DEBUG_BLOCKER_REASON.get(claim.phase)
-        if reason is None:
-            # settled（或未来新增的终态）：解除该实例的 idle blocker。
-            self._residency_tracker.release_blocker(
-                claim.session_id,
-                claim.thread_id,
-                blocker_key=blocker_key,
-            )
-            return
-        self._residency_tracker.register_blocker(
-            claim.session_id,
-            claim.thread_id,
-            blocker_key=blocker_key,
-            kind="node_debug_process",
-            reason=reason,
-        )
-
     def residency_blockers(
         self, session_id: str, thread_id: str
     ) -> list[ResidencyBlocker]:
-        """ResidencyBlockerSource pull 源：上报该 owner 当前仍活跃的占用。
-
-        重启恢复路径：backend 重启后 tracker 没有任何 push 记录，评估时从这里读
-        磁盘 durable claim 与在册 runtime 状态，有活跃占用的 thread 绝不会被虚报为
-        cold-eligible。红线：这是"debug owner → residency"的单向占用上报，本服务的
-        进程状态判断仍只以 durable claim + OS 身份核实为准，绝不读取 residency。
-        """
+        """从 claim/runtime 投影读取该 owner 当前仍活跃的占用。"""
         owner = self._owner_key(session_id, thread_id)
-        blockers: list[ResidencyBlocker] = []
-        runtime = self._runtimes.get(owner)
-        if (
-            runtime is not None
-            and runtime.status in _RESIDENCY_ACTIVE_RUNTIME_STATUSES
-        ):
-            blockers.append(
-                ResidencyBlocker(
-                    kind="node_debug_process",
-                    reason="Node 调试运行时在册且未核实终态",
-                )
-            )
-        claim = self._active_claim(*owner)
-        if claim is not None:
-            blockers.append(
-                ResidencyBlocker(
-                    kind="node_debug_process",
-                    reason=_NODE_DEBUG_BLOCKER_REASON.get(
-                        claim.phase, "Node 调试进程占用该 thread"
-                    ),
-                )
-            )
-        return blockers
-
-    def _read_launch_claim(
-        self, session_id: str, thread_id: str
-    ) -> NodeDebugLaunchClaimDTO | None:
-        if self._session_store is None:
-            return None
-        return self._session_store.read_launch_claim(session_id, thread_id)
-
-    def _active_claim(
-        self, session_id: str, thread_id: str
-    ) -> NodeDebugLaunchClaimDTO | None:
-        """返回仍会阻断新启动的 claim；已结清/不存在时返回 ``None``。"""
-        claim = self._read_launch_claim(session_id, thread_id)
-        if claim is None or claim.phase not in ACTIVE_CLAIM_PHASES:
-            return None
-        return claim
-
-    def _claim_for_runtime(
-        self, runtime: NodeDebugRuntime
-    ) -> NodeDebugLaunchClaimDTO | None:
-        """按 ``process_instance_id`` 取当前实例的 claim，旧 generation 回调不写新实例。"""
-        claim = self._read_launch_claim(runtime.session_id, runtime.thread_id)
-        if claim is None:
-            return None
-        if (
-            runtime.process_instance_id is None
-            or claim.process_instance_id != runtime.process_instance_id
-        ):
-            return None
-        return claim
-
-    def _mark_claim_running(self, runtime: NodeDebugRuntime) -> None:
-        claim = self._claim_for_runtime(runtime)
-        if claim is None:
-            return
-        if claim.phase != "running":
-            self._write_launch_claim(
-                claim_running(
-                    claim,
-                    inspector_port=self._authoritative_inspector_port(runtime),
-                )
-            )
-        # 起始身份核对 + Inspector 握手成功之后，才把该 process instance 的占用
-        # 登记进唯一账本；重复标记（claim 已是 running）不会新增第二行占用。
-        self._ensure_process_lease(runtime)
-
-    @staticmethod
-    def _authoritative_inspector_port(runtime: NodeDebugRuntime) -> int:
-        """握手成功后的权威 Inspector 端口。
-
-        Workspace 模板默认使用动态端口（``0``），真实端口只有 Node 上报的握手 URL
-        才可信；因此优先取握手地址里的端口，取不到时退回模板配置值。
-        """
-        inspector_url = runtime.inspector.inspector_url
-        if inspector_url is not None:
-            port = urlparse(inspector_url).port
-            if isinstance(port, int) and port > 0:
-                return port
-        return runtime.inspector_port
-
-    def _mark_claim_phase(
-        self,
-        runtime: NodeDebugRuntime,
-        phase: Literal["stopping", "reconcile_required", "settled"],
-        reason: str | None = None,
-    ) -> None:
-        claim = self._claim_for_runtime(runtime)
-        if claim is None:
-            return
-        if claim.phase == "settled":
-            return
-        if phase == "reconcile_required":
-            self._notify_release_failed(
-                session_id=claim.session_id,
-                thread_id=claim.thread_id,
-                process_instance_id=claim.process_instance_id,
-            )
-        if phase == "settled":
-            # 先结清账本占用、再写 claim 终态：两步之间崩溃时宁可让 claim 保持
-            # active 交由恢复路径再次核实结清，也不能留下“claim 已结清但账本仍
-            # 显示占用”的孤儿；反过来则会让幂等的再次结清自然收敛。
-            self._settle_process_lease(
-                session_id=claim.session_id,
-                thread_id=claim.thread_id,
-                process_instance_id=claim.process_instance_id,
-            )
-        self._write_launch_claim(claim_marked(claim, phase=phase, reason=reason))
-
-    def _notify_release_failed(
-        self,
-        *,
-        session_id: str,
-        thread_id: str,
-        process_instance_id: str,
-    ) -> None:
-        """发布 release_failed 轻量通知；失败显式记录，不影响 claim 落盘。"""
-        if self._state_events is None:
-            return
-        resource_id = NodeDebugProcessLeaseIdentity.for_process_instance(
-            session_id=session_id,
-            thread_id=thread_id,
-            process_instance_id=process_instance_id,
-        ).resource_id
-        try:
-            self._state_events.publish(resource_id=resource_id, state="release_failed")
-        except (RuntimeError, ValueError) as error:
-            summary = f"resource_id={resource_id} error={error}"
-            logger.exception(
-                "resource.state release_failed 事件发布失败: %s",
-                summary,
-            )
+        return self._claim_runtime.residency_blockers(*owner)
 
     def _ensure_session_loaded(self, session_id: str, thread_id: str) -> None:
         owner = self._owner_key(session_id, thread_id)
@@ -1734,7 +1431,7 @@ class NodeDebugService:
         self, owner: NodeDebugOwner, *, operation: str
     ) -> None:
         """未结清的 durable claim（含 reconcile_required）必须阻断 owner 级操作。"""
-        claim = self._active_claim(*owner)
+        claim = self._claim_runtime.active_claim(*owner)
         if claim is None:
             return
         raise RuntimeError(
@@ -1982,7 +1679,7 @@ class NodeDebugService:
             return
         return_code = await process.wait()
         # 进程句柄已报告终态：这是可核实的终结，结清本实例的 claim。
-        self._mark_claim_phase(
+        self._claim_runtime.mark_claim_phase(
             runtime, "settled", f"进程已退出，退出码: {return_code}"
         )
         if runtime.closing:

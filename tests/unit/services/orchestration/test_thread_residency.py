@@ -831,7 +831,7 @@ async def test_spawn_aborts_when_stop_already_took_over_runtime(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    original_write = service._write_launch_claim
+    original_write = service._claim_runtime.write_launch_claim
 
     def stop_takes_over_before_spawn(claim: NodeDebugLaunchClaimDTO) -> None:
         # 在"claim 已落盘、进程尚未 spawn"的窗口注入并发 stop 的接管结果：
@@ -842,7 +842,11 @@ async def test_spawn_aborts_when_stop_already_took_over_runtime(
             runtime = service._runtimes[(_PARENT_SESSION_ID, _THREAD_ID)]
             runtime.closing = True
 
-    monkeypatch.setattr(service, "_write_launch_claim", stop_takes_over_before_spawn)
+    monkeypatch.setattr(
+        service._claim_runtime,
+        "write_launch_claim",
+        stop_takes_over_before_spawn,
+    )
 
     with pytest.raises(RuntimeError, match="取消 spawn"):
         await service.start(
