@@ -25,21 +25,20 @@ function thread(
   overrides: Partial<ChildThreadSummary> = {},
 ): ChildThreadSummary {
   return {
-    session_id: `ses_child_${index}`,
+    thread_id: `thr_child_${index}`,
+    delegation_id: `del_child_${index}`,
     title: `委派：子任务 ${index}`,
     created_at: "2026-09-15T12:00:00Z",
-    delegation_start_status: "running",
-    start_error: null,
-    parent_session_id: "ses_parent",
+    collaboration_state: "published",
+    admission_state: "bound",
     subagent_type: "general-purpose",
-    latest_job_status: null,
     ...overrides,
   };
 }
 
 function panelProps(overrides: {
   onRefresh?: () => void;
-  onOpenSession?: (sessionId: string) => void;
+  onSelectThread?: (threadId: string) => void;
 } = {}) {
   return {
     threads: [] as ChildThreadSummary[],
@@ -48,9 +47,9 @@ function panelProps(overrides: {
     error: null as string | null,
     loadedAt: "2026-09-15T12:30:00Z",
     sessionId: "ses_parent",
-    activeSessionId: "ses_parent" as string | null,
+    activeThreadId: "main",
     onRefresh: overrides.onRefresh ?? (() => {}),
-    onOpenSession: overrides.onOpenSession ?? (() => {}),
+    onSelectThread: overrides.onSelectThread ?? (() => {}),
   };
 }
 
@@ -62,13 +61,12 @@ describe("子会话线程面板", () => {
         threads={[
           thread(1),
           thread(2, {
-            delegation_start_status: "pending",
+            admission_state: "pending",
             title: "委派：等待中任务",
           }),
           thread(3, {
-            delegation_start_status: "failed",
-            start_error: "subagent 启动超时",
-            latest_job_status: null,
+            collaboration_state: "cancelled",
+            admission_state: "pending",
           }),
         ]}
         total={3}
@@ -86,11 +84,8 @@ describe("子会话线程面板", () => {
     expect(html).toContain('data-start-status="failed"');
     expect(html).toContain("child-thread-status-failed");
     expect(html).toContain("child-thread-status-pending");
-    // 失败原因可展开查看。
-    expect(html).toContain("启动失败详情");
-    expect(html).toContain("subagent 启动超时");
-    // 后端当前固定 null 的 latest_job_status 不渲染、不伪造。
-    expect(html).not.toContain("最近任务状态");
+    expect(html).toContain('data-thread-id="main"');
+    expect(html).toContain("主线程");
   });
 
   test("空态与错误态互斥展示", () => {
@@ -146,31 +141,38 @@ describe("子会话线程面板", () => {
     disabledRenderer!.unmount();
   });
 
-  test("点击 child 项回传 session_id，当前会话行标记“当前”", () => {
-    const opened: string[] = [];
+  test("点击 child 项回传 thread_id，并支持切回主线程", () => {
+    const selected: string[] = [];
     let renderer: ReactTestRenderer;
     act(() => {
       renderer = create(
         <ChildThreadPanel
           {...panelProps({
-            onOpenSession: (sessionId) => { opened.push(sessionId); },
+            onSelectThread: (threadId) => { selected.push(threadId); },
           })}
           threads={[thread(1), thread(2)]}
-          activeSessionId="ses_child_2"
+          activeThreadId="thr_child_2"
         />,
       );
     });
 
-    const rows = renderer!.root.findAllByProps({ className: "child-thread-main" });
+    const rows = renderer!.root.findAll(
+      (node) => node.props.className === "child-thread-main"
+        && node.props["aria-label"] !== "切换到主线程调试",
+    );
     expect(rows).toHaveLength(2);
     act(() => rows[0]!.props.onClick());
-    expect(opened).toEqual(["ses_child_1"]);
-    // 当前会话对应行的状态徽标显示“当前”。
+    const mainRow = renderer!.root.findByProps({
+      "aria-label": "切换到主线程调试",
+    });
+    act(() => mainRow.props.onClick());
+    expect(selected).toEqual(["thr_child_1", "main"]);
+    // 当前调试 owner 对应行标记“当前调试”。
     const statuses = renderer!.root.findAll(
       (node) => typeof node.props.className === "string"
         && node.props.className.split(" ").includes("child-thread-status"),
     );
-    expect(statuses.map((node) => textOf(node))).toEqual(["运行中", "当前"]);
+    expect(statuses.map((node) => textOf(node))).toEqual(["主线程", "运行中", "当前调试"]);
     renderer!.unmount();
   });
 
@@ -195,18 +197,18 @@ describe("子会话线程面板", () => {
         );
       });
       const copyButton = renderer!.root.findByProps({
-        "aria-label": "复制子会话 ID: ses_child_1",
+        "aria-label": "复制 child thread ID: thr_child_1",
       });
       await act(async () => {
         copyButton.props.onClick();
         // 复制链路经过若干微任务，等待一个宏任务确保状态落地。
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
-      expect(written).toEqual(["ses_child_1"]);
+      expect(written).toEqual(["thr_child_1"]);
       const notice = renderer!.root.findByProps({
         className: "child-thread-notice",
       });
-      expect(textOf(notice)).toContain("已复制子会话 ID");
+      expect(textOf(notice)).toContain("已复制 child thread ID");
       renderer!.unmount();
     } finally {
       Object.defineProperty(navigator, "clipboard", {

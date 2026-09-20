@@ -326,12 +326,14 @@ export interface NodeDebugActionRecordDTO {
   tool_call_id?: string | undefined;
   result?: string | undefined;
   created_at: string | undefined;
+  thread_id: string;
 }
 
 export interface NodeDebugActionRequest {
   session_id: string;
   action: string;
   params?: { [key: string]: any } | undefined;
+  thread_id: string;
 }
 
 export interface NodeDebugBreakpointDTO {
@@ -373,6 +375,7 @@ export interface NodeDebugCapabilitiesDTO {
 
 export interface NodeDebugConfigurationActivateRequest {
   session_id: string;
+  thread_id: string;
 }
 
 export interface NodeDebugConfigurationBreakpointDTO {
@@ -398,6 +401,8 @@ export interface NodeDebugConfigurationCopyRequest {
   target_session_id: string;
   name?: string | undefined;
   activate?: boolean | undefined;
+  source_thread_id: string;
+  target_thread_id: string;
 }
 
 export interface NodeDebugConfigurationCreateRequest {
@@ -409,6 +414,7 @@ export interface NodeDebugConfigurationCreateRequest {
   args: string[];
   breakpoints: NodeDebugBreakpointRequest[];
   activate?: boolean | undefined;
+  thread_id: string;
 }
 
 export interface NodeDebugConfigurationDTO {
@@ -429,6 +435,7 @@ export interface NodeDebugConfigurationImportRequest {
   session_id: string;
   configuration: NodeDebugConfigurationDTO | undefined;
   activate?: boolean | undefined;
+  thread_id: string;
 }
 
 export interface NodeDebugConfigurationSummaryDTO {
@@ -449,6 +456,7 @@ export interface NodeDebugConfigurationUpdateRequest {
   launch_profile_name?: string | undefined;
   args: string[];
   breakpoints: NodeDebugBreakpointRequest[];
+  thread_id: string;
 }
 
 export interface NodeDebugEvaluationDTO {
@@ -476,6 +484,7 @@ export interface NodeDebugSessionManifestDTO {
   active_configuration_id?: string | undefined;
   actions: NodeDebugActionRecordDTO[];
   updated_at: string | undefined;
+  thread_id: string;
 }
 
 export interface NodeDebugStackFrameDTO {
@@ -497,6 +506,7 @@ export interface NodeDebugStartRequest {
   launch_profile_name?: string | undefined;
   args: string[];
   breakpoints: NodeDebugBreakpointRequest[];
+  thread_id: string;
 }
 
 export interface NodeDebugStateDTO {
@@ -522,6 +532,7 @@ export interface NodeDebugStateDTO {
   configuration_revision?: number | undefined;
   requires_restart?: boolean | undefined;
   source_changed_paths: string[];
+  thread_id: string;
 }
 
 export interface NodeDebugVariableDTO {
@@ -3776,6 +3787,7 @@ function createBaseNodeDebugActionRecordDTO(): NodeDebugActionRecordDTO {
     tool_call_id: undefined,
     result: undefined,
     created_at: undefined,
+    thread_id: "",
   };
 }
 
@@ -3791,6 +3803,7 @@ export const NodeDebugActionRecordDTO: MessageFns<NodeDebugActionRecordDTO> = {
       tool_call_id: isSet(object.tool_call_id) ? globalThis.String(object.tool_call_id) : undefined,
       result: isSet(object.result) ? globalThis.String(object.result) : undefined,
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -3823,6 +3836,9 @@ export const NodeDebugActionRecordDTO: MessageFns<NodeDebugActionRecordDTO> = {
     if (message.created_at !== undefined) {
       obj.created_at = message.created_at;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -3840,12 +3856,13 @@ export const NodeDebugActionRecordDTO: MessageFns<NodeDebugActionRecordDTO> = {
     message.tool_call_id = object.tool_call_id ?? undefined;
     message.result = object.result ?? undefined;
     message.created_at = object.created_at ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
 
 function createBaseNodeDebugActionRequest(): NodeDebugActionRequest {
-  return { session_id: "", action: "", params: undefined };
+  return { session_id: "", action: "", params: undefined, thread_id: "" };
 }
 
 export const NodeDebugActionRequest: MessageFns<NodeDebugActionRequest> = {
@@ -3854,6 +3871,7 @@ export const NodeDebugActionRequest: MessageFns<NodeDebugActionRequest> = {
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       action: isSet(object.action) ? globalThis.String(object.action) : "",
       params: isObject(object.params) ? object.params : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -3868,6 +3886,9 @@ export const NodeDebugActionRequest: MessageFns<NodeDebugActionRequest> = {
     if (message.params !== undefined) {
       obj.params = message.params;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -3879,6 +3900,7 @@ export const NodeDebugActionRequest: MessageFns<NodeDebugActionRequest> = {
     message.session_id = object.session_id ?? "";
     message.action = object.action ?? "";
     message.params = object.params ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -4126,18 +4148,24 @@ export const NodeDebugCapabilitiesDTO: MessageFns<NodeDebugCapabilitiesDTO> = {
 };
 
 function createBaseNodeDebugConfigurationActivateRequest(): NodeDebugConfigurationActivateRequest {
-  return { session_id: "" };
+  return { session_id: "", thread_id: "" };
 }
 
 export const NodeDebugConfigurationActivateRequest: MessageFns<NodeDebugConfigurationActivateRequest> = {
   fromJSON(object: any): NodeDebugConfigurationActivateRequest {
-    return { session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "" };
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+    };
   },
 
   toJSON(message: NodeDebugConfigurationActivateRequest): unknown {
     const obj: any = {};
     if (message.session_id !== "") {
       obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
     }
     return obj;
   },
@@ -4152,6 +4180,7 @@ export const NodeDebugConfigurationActivateRequest: MessageFns<NodeDebugConfigur
   ): NodeDebugConfigurationActivateRequest {
     const message = createBaseNodeDebugConfigurationActivateRequest();
     message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -4276,7 +4305,14 @@ export const NodeDebugConfigurationBreakpointDTO: MessageFns<NodeDebugConfigurat
 };
 
 function createBaseNodeDebugConfigurationCopyRequest(): NodeDebugConfigurationCopyRequest {
-  return { source_session_id: "", target_session_id: "", name: undefined, activate: undefined };
+  return {
+    source_session_id: "",
+    target_session_id: "",
+    name: undefined,
+    activate: undefined,
+    source_thread_id: "",
+    target_thread_id: "",
+  };
 }
 
 export const NodeDebugConfigurationCopyRequest: MessageFns<NodeDebugConfigurationCopyRequest> = {
@@ -4286,6 +4322,8 @@ export const NodeDebugConfigurationCopyRequest: MessageFns<NodeDebugConfiguratio
       target_session_id: isSet(object.target_session_id) ? globalThis.String(object.target_session_id) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : undefined,
       activate: isSet(object.activate) ? globalThis.Boolean(object.activate) : undefined,
+      source_thread_id: isSet(object.source_thread_id) ? globalThis.String(object.source_thread_id) : "",
+      target_thread_id: isSet(object.target_thread_id) ? globalThis.String(object.target_thread_id) : "",
     };
   },
 
@@ -4303,6 +4341,12 @@ export const NodeDebugConfigurationCopyRequest: MessageFns<NodeDebugConfiguratio
     if (message.activate !== undefined) {
       obj.activate = message.activate;
     }
+    if (message.source_thread_id !== "") {
+      obj.source_thread_id = message.source_thread_id;
+    }
+    if (message.target_thread_id !== "") {
+      obj.target_thread_id = message.target_thread_id;
+    }
     return obj;
   },
 
@@ -4319,6 +4363,8 @@ export const NodeDebugConfigurationCopyRequest: MessageFns<NodeDebugConfiguratio
     message.target_session_id = object.target_session_id ?? "";
     message.name = object.name ?? undefined;
     message.activate = object.activate ?? undefined;
+    message.source_thread_id = object.source_thread_id ?? "";
+    message.target_thread_id = object.target_thread_id ?? "";
     return message;
   },
 };
@@ -4333,6 +4379,7 @@ function createBaseNodeDebugConfigurationCreateRequest(): NodeDebugConfiguration
     args: [],
     breakpoints: [],
     activate: undefined,
+    thread_id: "",
   };
 }
 
@@ -4351,6 +4398,7 @@ export const NodeDebugConfigurationCreateRequest: MessageFns<NodeDebugConfigurat
         ? object.breakpoints.map((e: any) => NodeDebugBreakpointRequest.fromJSON(e))
         : [],
       activate: isSet(object.activate) ? globalThis.Boolean(object.activate) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -4380,6 +4428,9 @@ export const NodeDebugConfigurationCreateRequest: MessageFns<NodeDebugConfigurat
     if (message.activate !== undefined) {
       obj.activate = message.activate;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -4400,6 +4451,7 @@ export const NodeDebugConfigurationCreateRequest: MessageFns<NodeDebugConfigurat
     message.args = object.args?.map((e) => e) || [];
     message.breakpoints = object.breakpoints?.map((e) => NodeDebugBreakpointRequest.fromPartial(e)) || [];
     message.activate = object.activate ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -4500,7 +4552,7 @@ export const NodeDebugConfigurationDTO: MessageFns<NodeDebugConfigurationDTO> = 
 };
 
 function createBaseNodeDebugConfigurationImportRequest(): NodeDebugConfigurationImportRequest {
-  return { session_id: "", configuration: undefined, activate: undefined };
+  return { session_id: "", configuration: undefined, activate: undefined, thread_id: "" };
 }
 
 export const NodeDebugConfigurationImportRequest: MessageFns<NodeDebugConfigurationImportRequest> = {
@@ -4509,6 +4561,7 @@ export const NodeDebugConfigurationImportRequest: MessageFns<NodeDebugConfigurat
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       configuration: isSet(object.configuration) ? NodeDebugConfigurationDTO.fromJSON(object.configuration) : undefined,
       activate: isSet(object.activate) ? globalThis.Boolean(object.activate) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -4522,6 +4575,9 @@ export const NodeDebugConfigurationImportRequest: MessageFns<NodeDebugConfigurat
     }
     if (message.activate !== undefined) {
       obj.activate = message.activate;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
     }
     return obj;
   },
@@ -4540,6 +4596,7 @@ export const NodeDebugConfigurationImportRequest: MessageFns<NodeDebugConfigurat
       ? NodeDebugConfigurationDTO.fromPartial(object.configuration)
       : undefined;
     message.activate = object.activate ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -4626,6 +4683,7 @@ function createBaseNodeDebugConfigurationUpdateRequest(): NodeDebugConfiguration
     launch_profile_name: undefined,
     args: [],
     breakpoints: [],
+    thread_id: "",
   };
 }
 
@@ -4643,6 +4701,7 @@ export const NodeDebugConfigurationUpdateRequest: MessageFns<NodeDebugConfigurat
       breakpoints: globalThis.Array.isArray(object?.breakpoints)
         ? object.breakpoints.map((e: any) => NodeDebugBreakpointRequest.fromJSON(e))
         : [],
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -4669,6 +4728,9 @@ export const NodeDebugConfigurationUpdateRequest: MessageFns<NodeDebugConfigurat
     if (message.breakpoints?.length) {
       obj.breakpoints = message.breakpoints.map((e) => NodeDebugBreakpointRequest.toJSON(e));
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -4688,6 +4750,7 @@ export const NodeDebugConfigurationUpdateRequest: MessageFns<NodeDebugConfigurat
     message.launch_profile_name = object.launch_profile_name ?? undefined;
     message.args = object.args?.map((e) => e) || [];
     message.breakpoints = object.breakpoints?.map((e) => NodeDebugBreakpointRequest.fromPartial(e)) || [];
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -4829,6 +4892,7 @@ function createBaseNodeDebugSessionManifestDTO(): NodeDebugSessionManifestDTO {
     active_configuration_id: undefined,
     actions: [],
     updated_at: undefined,
+    thread_id: "",
   };
 }
 
@@ -4844,6 +4908,7 @@ export const NodeDebugSessionManifestDTO: MessageFns<NodeDebugSessionManifestDTO
         ? object.actions.map((e: any) => NodeDebugActionRecordDTO.fromJSON(e))
         : [],
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -4864,6 +4929,9 @@ export const NodeDebugSessionManifestDTO: MessageFns<NodeDebugSessionManifestDTO
     if (message.updated_at !== undefined) {
       obj.updated_at = message.updated_at;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -4877,6 +4945,7 @@ export const NodeDebugSessionManifestDTO: MessageFns<NodeDebugSessionManifestDTO
     message.active_configuration_id = object.active_configuration_id ?? undefined;
     message.actions = object.actions?.map((e) => NodeDebugActionRecordDTO.fromPartial(e)) || [];
     message.updated_at = object.updated_at ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -4967,6 +5036,7 @@ function createBaseNodeDebugStartRequest(): NodeDebugStartRequest {
     launch_profile_name: undefined,
     args: [],
     breakpoints: [],
+    thread_id: "",
   };
 }
 
@@ -4984,6 +5054,7 @@ export const NodeDebugStartRequest: MessageFns<NodeDebugStartRequest> = {
       breakpoints: globalThis.Array.isArray(object?.breakpoints)
         ? object.breakpoints.map((e: any) => NodeDebugBreakpointRequest.fromJSON(e))
         : [],
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -5010,6 +5081,9 @@ export const NodeDebugStartRequest: MessageFns<NodeDebugStartRequest> = {
     if (message.breakpoints?.length) {
       obj.breakpoints = message.breakpoints.map((e) => NodeDebugBreakpointRequest.toJSON(e));
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -5025,6 +5099,7 @@ export const NodeDebugStartRequest: MessageFns<NodeDebugStartRequest> = {
     message.launch_profile_name = object.launch_profile_name ?? undefined;
     message.args = object.args?.map((e) => e) || [];
     message.breakpoints = object.breakpoints?.map((e) => NodeDebugBreakpointRequest.fromPartial(e)) || [];
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -5053,6 +5128,7 @@ function createBaseNodeDebugStateDTO(): NodeDebugStateDTO {
     configuration_revision: undefined,
     requires_restart: undefined,
     source_changed_paths: [],
+    thread_id: "",
   };
 }
 
@@ -5105,6 +5181,7 @@ export const NodeDebugStateDTO: MessageFns<NodeDebugStateDTO> = {
       source_changed_paths: globalThis.Array.isArray(object?.source_changed_paths)
         ? object.source_changed_paths.map((e: any) => globalThis.String(e))
         : [],
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -5176,6 +5253,9 @@ export const NodeDebugStateDTO: MessageFns<NodeDebugStateDTO> = {
     if (message.source_changed_paths?.length) {
       obj.source_changed_paths = message.source_changed_paths;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -5210,6 +5290,7 @@ export const NodeDebugStateDTO: MessageFns<NodeDebugStateDTO> = {
     message.configuration_revision = object.configuration_revision ?? undefined;
     message.requires_restart = object.requires_restart ?? undefined;
     message.source_changed_paths = object.source_changed_paths?.map((e) => e) || [];
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };

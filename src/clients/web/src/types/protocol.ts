@@ -90,7 +90,15 @@ export type NodeDebugLaunchProfile = WorkspaceProtocol.NodeDebugLaunchProfileDTO
 export type NodeDebugStackFrame = WorkspaceProtocol.NodeDebugStackFrameDTO;
 export type NodeDebugStartRequest = WorkspaceProtocol.NodeDebugStartRequest;
 export type NodeDebugState = Omit<WorkspaceProtocol.NodeDebugStateDTO, "status" | "active_configuration_id" | "active_configuration_name" | "script_path" | "working_directory" | "launch_profile_name" | "pid" | "paused_reason" | "error_message" | "call_stack" | "last_stopped_frame" | "breakpoints" | "last_evaluation" | "evaluations" | "actions" | "source_changed_paths"> & {
-  status: "idle" | "starting" | "running" | "paused" | "exited" | "failed";
+  status:
+    | "idle"
+    | "starting"
+    | "running"
+    | "paused"
+    | "stopping"
+    | "exited"
+    | "failed"
+    | "reconcile_required";
   active_configuration_id?: string | null;
   active_configuration_name?: string | null;
   script_path?: string | null;

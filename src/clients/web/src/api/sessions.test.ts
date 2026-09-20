@@ -38,14 +38,13 @@ describe("child thread 列表 API", () => {
           parent_session_id: "ses_parent",
           items: [
             {
-              session_id: "ses_child_1",
+              thread_id: "thr_child_1",
+              delegation_id: "del_child_1",
               title: "委派：修复构建",
               created_at: "2026-09-15T12:00:00Z",
-              delegation_start_status: "running",
-              start_error: null,
-              parent_session_id: "ses_parent",
+              collaboration_state: "published",
+              admission_state: "bound",
               subagent_type: "general-purpose",
-              latest_job_status: null,
             },
           ],
           total: 1,
@@ -57,8 +56,8 @@ describe("child thread 列表 API", () => {
     const list = await listChildThreads(48_301, "ses/needs encoding", "workspace-1");
     expect(list.parent_session_id).toBe("ses_parent");
     expect(list.total).toBe(1);
-    expect(list.items[0]?.session_id).toBe("ses_child_1");
-    expect(list.items[0]?.latest_job_status).toBeNull();
+    expect(list.items[0]?.thread_id).toBe("thr_child_1");
+    expect(list.items[0]?.admission_state).toBe("bound");
     expect(requestUrl).toContain(
       "/api/v1/sessions/ses%2Fneeds%20encoding/child-threads",
     );

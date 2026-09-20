@@ -1447,6 +1447,11 @@ export declare type NodeDebugActionRecordDTO = Message<"boxteam.workspace.v2.Nod
    * @generated from field: google.protobuf.Timestamp created_at = 9;
    */
   createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string thread_id = 10;
+   */
+  threadId: string;
 };
 
 /**
@@ -1473,6 +1478,11 @@ export declare type NodeDebugActionRequest = Message<"boxteam.workspace.v2.NodeD
    * @generated from field: optional google.protobuf.Struct params = 3;
    */
   params?: JsonObject | undefined;
+
+  /**
+   * @generated from field: string thread_id = 4;
+   */
+  threadId: string;
 };
 
 /**
@@ -1662,6 +1672,11 @@ export declare type NodeDebugConfigurationActivateRequest = Message<"boxteam.wor
    * @generated from field: string session_id = 1;
    */
   sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
 };
 
 /**
@@ -1779,6 +1794,16 @@ export declare type NodeDebugConfigurationCopyRequest = Message<"boxteam.workspa
    * @generated from field: optional bool activate = 4;
    */
   activate?: boolean | undefined;
+
+  /**
+   * @generated from field: string source_thread_id = 5;
+   */
+  sourceThreadId: string;
+
+  /**
+   * @generated from field: string target_thread_id = 6;
+   */
+  targetThreadId: string;
 };
 
 /**
@@ -1830,6 +1855,11 @@ export declare type NodeDebugConfigurationCreateRequest = Message<"boxteam.works
    * @generated from field: optional bool activate = 8;
    */
   activate?: boolean | undefined;
+
+  /**
+   * @generated from field: string thread_id = 9;
+   */
+  threadId: string;
 };
 
 /**
@@ -1922,6 +1952,11 @@ export declare type NodeDebugConfigurationImportRequest = Message<"boxteam.works
    * @generated from field: optional bool activate = 3;
    */
   activate?: boolean | undefined;
+
+  /**
+   * @generated from field: string thread_id = 4;
+   */
+  threadId: string;
 };
 
 /**
@@ -2014,6 +2049,11 @@ export declare type NodeDebugConfigurationUpdateRequest = Message<"boxteam.works
    * @generated from field: repeated boxteam.workspace.v2.NodeDebugBreakpointRequest breakpoints = 7;
    */
   breakpoints: NodeDebugBreakpointRequest[];
+
+  /**
+   * @generated from field: string thread_id = 8;
+   */
+  threadId: string;
 };
 
 /**
@@ -2137,6 +2177,11 @@ export declare type NodeDebugSessionManifestDTO = Message<"boxteam.workspace.v2.
    * @generated from field: google.protobuf.Timestamp updated_at = 5;
    */
   updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string thread_id = 6;
+   */
+  threadId: string;
 };
 
 /**
@@ -2234,6 +2279,11 @@ export declare type NodeDebugStartRequest = Message<"boxteam.workspace.v2.NodeDe
    * @generated from field: repeated boxteam.workspace.v2.NodeDebugBreakpointRequest breakpoints = 7;
    */
   breakpoints: NodeDebugBreakpointRequest[];
+
+  /**
+   * @generated from field: string thread_id = 8;
+   */
+  threadId: string;
 };
 
 /**
@@ -2355,6 +2405,11 @@ export declare type NodeDebugStateDTO = Message<"boxteam.workspace.v2.NodeDebugS
    * @generated from field: repeated string source_changed_paths = 22;
    */
   sourceChangedPaths: string[];
+
+  /**
+   * @generated from field: string thread_id = 23;
+   */
+  threadId: string;
 };
 
 /**

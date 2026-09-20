@@ -28,12 +28,13 @@ export async function getNodeDebugCapabilities(
 export async function getNodeDebugState(
   port: number,
   sessionId: string,
+  threadId: string,
   workspaceId?: string | null,
 ): Promise<NodeDebugState> {
   return unwrapApiData(
     await requestJson<APIResponse<NodeDebugState>>(
       port,
-      `/api/v1/debug/node?session_id=${encodeURIComponent(sessionId)}`,
+      `/api/v1/debug/node?session_id=${encodeURIComponent(sessionId)}&thread_id=${encodeURIComponent(threadId)}`,
       {
         headers: workspaceHeader(workspaceId),
         timeoutMs: NODE_DEBUG_TIMEOUT_MS,
@@ -46,6 +47,7 @@ export async function startNodeDebug(
   port: number,
   payload: {
     session_id: string;
+    thread_id: string;
     configuration_id?: string | null;
     path: string;
     working_directory?: string | null;
@@ -80,6 +82,7 @@ export async function createNodeDebugConfiguration(
   port: number,
   payload: {
     session_id: string;
+    thread_id: string;
     name: string;
     script_path?: string | null;
     working_directory?: string;
@@ -108,6 +111,7 @@ export async function updateNodeDebugConfiguration(
   configurationId: string,
   payload: {
     session_id: string;
+    thread_id: string;
     name: string;
     script_path?: string | null;
     working_directory?: string;
@@ -141,6 +145,7 @@ export async function updateNodeDebugConfiguration(
 export async function activateNodeDebugConfiguration(
   port: number,
   sessionId: string,
+  threadId: string,
   configurationId: string,
   workspaceId?: string | null,
 ): Promise<NodeDebugState> {
@@ -151,7 +156,7 @@ export async function activateNodeDebugConfiguration(
       {
         method: "POST",
         headers: workspaceHeader(workspaceId),
-        body: JSON.stringify({ session_id: sessionId }),
+        body: JSON.stringify({ session_id: sessionId, thread_id: threadId }),
         timeoutMs: NODE_DEBUG_TIMEOUT_MS,
       },
     ),
@@ -161,13 +166,14 @@ export async function activateNodeDebugConfiguration(
 export async function deleteNodeDebugConfiguration(
   port: number,
   sessionId: string,
+  threadId: string,
   configurationId: string,
   workspaceId?: string | null,
 ): Promise<NodeDebugState> {
   return unwrapApiData(
     await requestJson<APIResponse<NodeDebugState>>(
       port,
-      `/api/v1/debug/node/configurations/${encodeURIComponent(configurationId)}?session_id=${encodeURIComponent(sessionId)}`,
+      `/api/v1/debug/node/configurations/${encodeURIComponent(configurationId)}?session_id=${encodeURIComponent(sessionId)}&thread_id=${encodeURIComponent(threadId)}`,
       {
         method: "DELETE",
         headers: workspaceHeader(workspaceId),
@@ -180,13 +186,14 @@ export async function deleteNodeDebugConfiguration(
 export async function getNodeDebugConfiguration(
   port: number,
   sessionId: string,
+  threadId: string,
   configurationId: string,
   workspaceId?: string | null,
 ): Promise<NodeDebugConfiguration> {
   return unwrapApiData(
     await requestJson<APIResponse<NodeDebugConfiguration>>(
       port,
-      `/api/v1/debug/node/configurations/${encodeURIComponent(configurationId)}?session_id=${encodeURIComponent(sessionId)}`,
+      `/api/v1/debug/node/configurations/${encodeURIComponent(configurationId)}?session_id=${encodeURIComponent(sessionId)}&thread_id=${encodeURIComponent(threadId)}`,
       {
         headers: workspaceHeader(workspaceId),
         timeoutMs: NODE_DEBUG_TIMEOUT_MS,
@@ -198,6 +205,7 @@ export async function getNodeDebugConfiguration(
 export async function importNodeDebugConfiguration(
   port: number,
   sessionId: string,
+  threadId: string,
   configuration: NodeDebugConfiguration,
   workspaceId?: string | null,
 ): Promise<NodeDebugState> {
@@ -208,7 +216,7 @@ export async function importNodeDebugConfiguration(
       {
         method: "POST",
         headers: workspaceHeader(workspaceId),
-        body: JSON.stringify({ session_id: sessionId, configuration, activate: false }),
+        body: JSON.stringify({ session_id: sessionId, thread_id: threadId, configuration, activate: false }),
         timeoutMs: NODE_DEBUG_TIMEOUT_MS,
       },
     ),
@@ -218,7 +226,9 @@ export async function importNodeDebugConfiguration(
 export async function copyNodeDebugConfiguration(
   port: number,
   sourceSessionId: string,
+  sourceThreadId: string,
   targetSessionId: string,
+  targetThreadId: string,
   configurationId: string,
   workspaceId?: string | null,
 ): Promise<NodeDebugConfiguration> {
@@ -231,7 +241,9 @@ export async function copyNodeDebugConfiguration(
         headers: workspaceHeader(workspaceId),
         body: JSON.stringify({
           source_session_id: sourceSessionId,
+          source_thread_id: sourceThreadId,
           target_session_id: targetSessionId,
+          target_thread_id: targetThreadId,
           activate: false,
         }),
         timeoutMs: NODE_DEBUG_TIMEOUT_MS,

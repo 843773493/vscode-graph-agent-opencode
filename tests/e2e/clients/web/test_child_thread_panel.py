@@ -116,7 +116,7 @@ async def test_child_thread_panel_delegate_flow_through_real_web_surface(
         result = json.loads(result_path.read_text(encoding="utf-8"))
         assert result["sessionId"], "浏览器脚本未创建会话"
 
-        # parent 第一轮：纯文本确认回复（与 child 复用同一 replay interaction）。
+        # parent 第一轮：纯文本确认回复。
         assert result["confirmTurn"]["job"] in {"completed", "succeeded"}
         assert result["confirmTurn"]["finalText"] == "收到，会话运行正常，我可以继续执行任务。"
 
@@ -127,34 +127,29 @@ async def test_child_thread_panel_delegate_flow_through_real_web_surface(
 
         # 右侧侧边栏「运行与连接」标签中的子会话线程面板展示 child 项。
         child = result["childThread"]
-        assert child["childSessionId"], "面板未提供 child session_id"
+        assert child["childThreadId"], "面板未提供 child thread_id"
         assert child["title"].startswith("委派：")
         assert "完成示例任务并输出结果" in child["title"]
-        assert child["statusText"] == "运行中"
+        assert child["statusText"] == "等待启动"
         assert "general-purpose" in child["metaText"]
 
-        # 点击 child 项导航：聊天区切换为子会话内容（委派消息是内部消息，
-        # 不进入子会话可见用户消息投影，故用户气泡数为 0），面板切到 child 自身空列表。
+        # 点击 child 项切换当前 Session 内的 Node Debug owner。
         navigation = result["navigation"]
-        assert navigation["childUserTextCount"] == 0
-        assert navigation["childFinalText"] == "收到，会话运行正常，我可以继续执行任务。"
-        assert navigation["panelSwitchedToChild"] is True
+        assert navigation["selectedThreadId"] == child["childThreadId"]
+        assert navigation["debugOwnerVisible"] is True
 
-        # 后端持久化证据：parent 3 次、child 1 次上游请求；child-threads 列表一致。
+        # 后端持久化证据：parent 请求与 child-threads 列表一致。
         # 注意：委派工具结果后的 parent 第 3 次请求存在产品侧非确定性——
         # 消息列表可能带或不带尾部 tool 结果消息（见 R7 报告），两种形态都被 fixture 覆盖。
         persisted = result["persisted"]
         assert persisted["parentLlmRequestCount"] == 3
-        assert persisted["childLlmRequestCount"] == 1
-        assert persisted["childUpstreamMessageRoles"] == [["system", "user"]]
         third_call_roles = persisted["parentUpstreamMessageRoles"][2]
         assert third_call_roles in (
             ["system", "user", "assistant", "user", "assistant", "tool"],
             ["system", "user", "assistant", "user", "assistant"],
         )
         assert len(persisted["childThreads"]) == 1
-        assert persisted["childThreads"][0]["session_id"] == child["childSessionId"]
-        assert persisted["childThreads"][0]["delegation_start_status"] == "running"
+        assert persisted["childThreads"][0]["thread_id"] == child["childThreadId"]
 
         assert result["diagnostics"] == {
             "pageErrors": [],

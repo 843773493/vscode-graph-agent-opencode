@@ -110,7 +110,7 @@ async def get_node_debug_configuration(
         result = node_debug_service.get_configuration(
             session_id, configuration_id, thread_id
         )
-    except (FileNotFoundError, TypeError, ValueError, RuntimeError) as error:
+    except (FileNotFoundError, KeyError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 

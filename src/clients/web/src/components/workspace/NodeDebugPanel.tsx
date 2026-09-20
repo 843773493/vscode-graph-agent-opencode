@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
   copyNodeDebugConfiguration,
@@ -27,6 +27,7 @@ interface NodeDebugPanelProps {
   apiPort: number;
   workspaceId: string | null;
   sessionId: string | null;
+  threadId: string;
   activeFilePath: string | null;
   controller: NodeDebugController;
   sessions: Session[];
@@ -70,6 +71,7 @@ export default function NodeDebugPanel({
   apiPort,
   workspaceId,
   sessionId,
+  threadId,
   activeFilePath,
   controller,
   sessions,
@@ -101,6 +103,7 @@ export default function NodeDebugPanel({
   const [newConfigurationName, setNewConfigurationName] = useState("");
   const [copyTargetSessionId, setCopyTargetSessionId] = useState("");
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const scriptPathInputRef = useRef<HTMLInputElement | null>(null);
   const [breakpointLine, setBreakpointLine] = useState("");
   const [breakpointCondition, setBreakpointCondition] = useState("");
   const [expression, setExpression] = useState("");
@@ -111,6 +114,12 @@ export default function NodeDebugPanel({
   } | null>(null);
   const followedFrameRef = useRef<string | null>(null);
   const followedBreakpointRef = useRef<string | null>(null);
+  const transferOwnerKey = `${workspaceId ?? ""}:${sessionId ?? ""}:${threadId}`;
+  const transferOwnerKeyRef = useRef(transferOwnerKey);
+
+  useLayoutEffect(() => {
+    transferOwnerKeyRef.current = transferOwnerKey;
+  }, [transferOwnerKey]);
 
   const status = state?.status ?? "idle";
   const activeFrame = state?.call_stack?.[0] ?? null;
@@ -135,7 +144,9 @@ export default function NodeDebugPanel({
   const activeProfile = launchProfiles.find(
     (profile) => profile.name === configurationName,
   ) ?? null;
-  const processCanStop = status === "starting" || status === "running" || status === "paused";
+  const processCanRestart = status === "starting" || status === "running" || status === "paused";
+  const processCanStop = processCanRestart || status === "reconcile_required";
+  const configurationLocked = processCanStop || status === "stopping";
   const normalizedDraftArgs = useMemo(
     () => (scriptArgs.trim() ? scriptArgs.trim().split(/\s+/u) : []),
     [scriptArgs],
@@ -161,6 +172,8 @@ export default function NodeDebugPanel({
     setWorkingDirectory("");
     setScriptArgs("");
     setConfigurationName("");
+    setNewConfigurationName("");
+    setCopyTargetSessionId("");
     setBreakpointLine("");
     setBreakpointCondition("");
     setExpression("");
@@ -168,7 +181,7 @@ export default function NodeDebugPanel({
     setSelectedSourceLocation(null);
     followedFrameRef.current = null;
     followedBreakpointRef.current = null;
-  }, [sessionId, workspaceId]);
+  }, [sessionId, threadId, workspaceId]);
 
   useEffect(() => {
     if (!state) return;
@@ -225,9 +238,11 @@ export default function NodeDebugPanel({
     setLocalNotice(null);
     const path = scriptPath.trim();
     if (!path) {
-      const message = "启动源码调试失败：请选择或填写 JavaScript 文件";
+      const message = "请先在配置页选择或填写 JavaScript 文件，再启动源码调试";
       setLocalNotice(message);
       onStatusChange(message);
+      setView("configuration");
+      window.requestAnimationFrame(() => scriptPathInputRef.current?.focus());
       return;
     }
     if (activeProfile && !activeProfile.supported) {
@@ -298,10 +313,13 @@ export default function NodeDebugPanel({
   const exportActiveScheme = async () => {
     const configurationId = state?.active_configuration_id;
     if (!sessionId || !configurationId) return;
+    const mutationOwnerKey = transferOwnerKey;
+    setLocalNotice(null);
     try {
       const configuration = await getNodeDebugConfiguration(
         apiPort,
         sessionId,
+        threadId,
         configurationId,
         workspaceId,
       );
@@ -312,44 +330,90 @@ export default function NodeDebugPanel({
       anchor.download = `${configuration.configuration_id}.json`;
       anchor.click();
       URL.revokeObjectURL(url);
-      onStatusChange(`已导出调试方案: ${configuration.name}`);
+      if (transferOwnerKeyRef.current === mutationOwnerKey) {
+        onStatusChange(`已导出调试方案: ${configuration.name}`);
+      }
     } catch (cause: unknown) {
-      onStatusChange(`导出调试方案失败: ${cause instanceof Error ? cause.message : String(cause)}`);
+      const message = `导出调试方案失败: ${cause instanceof Error ? cause.message : String(cause)}`;
+      if (transferOwnerKeyRef.current === mutationOwnerKey) {
+        setLocalNotice(message);
+        onStatusChange(message);
+      }
+    }
+  };
+
+  const refreshAfterTransferFailure = async (
+    operation: string,
+    cause: unknown,
+    mutationOwnerKey: string,
+  ) => {
+    const message = `${operation}失败: ${cause instanceof Error ? cause.message : String(cause)}`;
+    if (transferOwnerKeyRef.current !== mutationOwnerKey) return;
+    setLocalNotice(message);
+    onStatusChange(message);
+    try {
+      await refresh();
+    } catch (refreshCause: unknown) {
+      const refreshMessage = `${message}；重新获取调试状态失败: ${refreshCause instanceof Error ? refreshCause.message : String(refreshCause)}`;
+      if (transferOwnerKeyRef.current === mutationOwnerKey) {
+        setLocalNotice(refreshMessage);
+        onStatusChange(refreshMessage);
+      }
     }
   };
 
   const importScheme = async (file: File) => {
     if (!sessionId) return;
+    const mutationOwnerKey = transferOwnerKey;
+    setLocalNotice(null);
     try {
-      const configuration = JSON.parse(await file.text()) as Parameters<typeof importNodeDebugConfiguration>[2];
+      const configuration = JSON.parse(await file.text()) as Parameters<typeof importNodeDebugConfiguration>[3];
       const nextState = await importNodeDebugConfiguration(
         apiPort,
         sessionId,
+        threadId,
         configuration,
         workspaceId,
       );
+      if (transferOwnerKeyRef.current !== mutationOwnerKey) return;
       onStatusChange(`已导入调试方案: ${configuration.name}`);
-      await refresh();
-      if (!nextState.active_configuration_id) setView("configuration");
+      try {
+        await refresh();
+      } catch (refreshCause: unknown) {
+        const refreshMessage = `已导入调试方案: ${configuration.name}；重新获取调试状态失败: ${refreshCause instanceof Error ? refreshCause.message : String(refreshCause)}`;
+        if (transferOwnerKeyRef.current === mutationOwnerKey) {
+          setLocalNotice(refreshMessage);
+          onStatusChange(refreshMessage);
+        }
+      }
+      if (transferOwnerKeyRef.current === mutationOwnerKey && !nextState.active_configuration_id) {
+        setView("configuration");
+      }
     } catch (cause: unknown) {
-      onStatusChange(`导入调试方案失败: ${cause instanceof Error ? cause.message : String(cause)}`);
+      await refreshAfterTransferFailure("导入调试方案", cause, mutationOwnerKey);
     }
   };
 
   const copyActiveScheme = async () => {
     const configurationId = state?.active_configuration_id;
     if (!sessionId || !configurationId || !copyTargetSessionId) return;
+    const mutationOwnerKey = transferOwnerKey;
+    setLocalNotice(null);
     try {
       const copied = await copyNodeDebugConfiguration(
         apiPort,
         sessionId,
+        threadId,
         copyTargetSessionId,
+        "main",
         configurationId,
         workspaceId,
       );
-      onStatusChange(`已复制调试方案到另一会话: ${copied.name}`);
+      if (transferOwnerKeyRef.current === mutationOwnerKey) {
+        onStatusChange(`已复制调试方案到另一会话: ${copied.name}`);
+      }
     } catch (cause: unknown) {
-      onStatusChange(`复制调试方案失败: ${cause instanceof Error ? cause.message : String(cause)}`);
+      await refreshAfterTransferFailure("复制调试方案", cause, mutationOwnerKey);
     }
   };
 
@@ -422,7 +486,7 @@ export default function NodeDebugPanel({
 
       <div className="node-debug-controls" aria-label="源码调试控制">
         {status === "idle" || status === "exited" || status === "failed" ? (
-          <button type="button" className="primary" onClick={startDebugging} disabled={!sessionId || loading || capabilities?.enabled === false}>
+          <button type="button" className="primary" onClick={startDebugging} disabled={!sessionId || loading || actionBusy || capabilities?.enabled === false}>
             <span className="codicon codicon-debug-start" aria-hidden="true" />
             {loading ? "启动中" : "启动"}
           </button>
@@ -467,6 +531,14 @@ export default function NodeDebugPanel({
 
       {view === "source" ? (
         <div className="node-debug-view node-debug-source-view" role="tabpanel">
+          {!sourcePath ? (
+            <div className="debug-empty-state compact" role="status">
+              <span>尚未选择 JavaScript 入口。</span>
+              <button type="button" onClick={() => setView("configuration")}>
+                配置调试入口
+              </button>
+            </div>
+          ) : null}
           <NodeDebugSourcePreview
             apiPort={apiPort}
             workspaceId={workspaceId}
@@ -478,6 +550,18 @@ export default function NodeDebugPanel({
             onChangeBreakpoint={changeBreakpoint}
             onOpenWorkspacePath={onOpenWorkspacePath}
           />
+          {status === "paused" && activeFrame ? (
+            <div className="debug-empty-state compact" role="status">
+              <span>已暂停在 {activeFrame.path ?? activeFrame.url}:{activeFrame.line}，{localVariables.length} 个局部变量。</span>
+              <button type="button" onClick={() => setView("context")}>查看调用栈与变量</button>
+            </div>
+          ) : null}
+          {status === "exited" && (state?.output?.length ?? 0) > 0 ? (
+            <div className="debug-empty-state compact" role="status">
+              <span>调试已结束，保留 {state?.output?.length ?? 0} 行程序输出。</span>
+              <button type="button" onClick={() => setView("console")}>查看控制台</button>
+            </div>
+          ) : null}
           <details className="node-debug-secondary" open={extensionWindow}>
             <summary>断点列表与高级设置 <span>{breakpoints.length}</span></summary>
             <div className="node-debug-breakpoint-form">
@@ -616,8 +700,8 @@ export default function NodeDebugPanel({
                   <button
                     type="button"
                     onClick={() => void activateConfiguration(configuration.configuration_id)}
-                    disabled={actionBusy || processCanStop || configuration.configuration_id === state?.active_configuration_id}
-                    title={processCanStop ? "目标程序运行中，停止后才能切换" : `切换到 ${configuration.name}`}
+                    disabled={actionBusy || configurationLocked || configuration.configuration_id === state?.active_configuration_id}
+                    title={configurationLocked ? "调试实例尚未结清，结清后才能切换" : `切换到 ${configuration.name}`}
                   >
                     <strong>{configuration.name}</strong>
                     <small>{configuration.script_path ?? "尚未选择入口"} · {configuration.breakpoint_count} 个断点</small>
@@ -626,7 +710,7 @@ export default function NodeDebugPanel({
                     type="button"
                     className="danger"
                     onClick={() => void deleteConfiguration(configuration.configuration_id)}
-                    disabled={actionBusy || (processCanStop && configuration.configuration_id === state?.active_configuration_id)}
+                    disabled={actionBusy || (configurationLocked && configuration.configuration_id === state?.active_configuration_id)}
                     aria-label={`删除调试方案 ${configuration.name}`}
                   >
                     <span className="codicon codicon-trash" aria-hidden="true" />
@@ -637,7 +721,7 @@ export default function NodeDebugPanel({
             </div>
             <div className="node-debug-scheme-create">
               <input value={newConfigurationName} onChange={(event) => setNewConfigurationName(event.target.value)} placeholder="新方案名称" />
-              <button type="button" onClick={createScheme} disabled={!sessionId || actionBusy || processCanStop}>新建方案</button>
+              <button type="button" onClick={createScheme} disabled={!sessionId || actionBusy || configurationLocked}>新建方案</button>
             </div>
             <p className="debug-muted">单个方案 JSON 可复制到另一会话；导入导出和跨会话复制放在扩展窗口的方案菜单。</p>
             {extensionWindow ? (
@@ -681,7 +765,7 @@ export default function NodeDebugPanel({
           <label>
             JavaScript 文件
             <div className="node-debug-path-field">
-              <input value={scriptPath} onChange={(event) => { setLocalNotice(null); setScriptPath(event.target.value); }} placeholder="选择当前编辑器文件或输入工作区相对路径" />
+              <input ref={scriptPathInputRef} value={scriptPath} onChange={(event) => { setLocalNotice(null); setScriptPath(event.target.value); }} placeholder="选择当前编辑器文件或输入工作区相对路径" />
               {activeFilePath ? <button type="button" onClick={() => { setLocalNotice(null); setScriptPath(activeFilePath); }}>当前文件</button> : null}
             </div>
           </label>
@@ -693,11 +777,11 @@ export default function NodeDebugPanel({
             参数
             <input value={scriptArgs} onChange={(event) => { setLocalNotice(null); setScriptArgs(event.target.value); }} placeholder="以空格分隔" />
           </label>
-          <button type="button" className="node-debug-start-button" onClick={startDebugging} disabled={!sessionId || loading || capabilities?.enabled === false || activeProfile?.supported === false}>
+          <button type="button" className="node-debug-start-button" onClick={startDebugging} disabled={!sessionId || loading || actionBusy || status === "stopping" || status === "reconcile_required" || capabilities?.enabled === false || activeProfile?.supported === false}>
             <span className="codicon codicon-debug-start" aria-hidden="true" />
-            {processCanStop ? "重启调试" : "启动调试"}
+            {processCanRestart ? "重启调试" : status === "stopping" ? "停止中" : status === "reconcile_required" ? "需先核实旧实例" : "启动调试"}
           </button>
-          <button type="button" onClick={saveActiveScheme} disabled={!state?.active_configuration_id || actionBusy || processCanStop}>
+          <button type="button" onClick={saveActiveScheme} disabled={!state?.active_configuration_id || actionBusy || configurationLocked}>
             保存当前方案
           </button>
           {activeProfile?.supported === false ? <div className="debug-error">当前版本未实现 {activeProfile.adapter}；不会回退成 Node 调试。</div> : null}

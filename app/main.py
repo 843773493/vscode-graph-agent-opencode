@@ -6,8 +6,11 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.agents import router as agents_router
 from app.api.artifacts import router as artifacts_router
@@ -29,7 +32,7 @@ from app.container import build_app_container
 from app.core.env import load_boxteam_env
 from app.core.logging_config import configure_application_logging
 from app.core.path_utils import get_runtime_workspace_root
-from app.core.trace_middleware import TraceMiddleware
+from app.core.trace_middleware import TraceMiddleware, get_request_id
 from app.schemas.internal_v2.sse import install_sse_openapi_components
 from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
@@ -239,6 +242,49 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(HTTPException)
+async def workspace_http_exception_handler(
+    request: Request,
+    error: HTTPException,
+) -> JSONResponse:
+    """让工作区 API 的 HTTP 错误也遵守 request_id 响应约定。"""
+    request_id = get_request_id(request)
+    # HTTPException.headers 允许业务错误附带 WWW-Authenticate 等协议 header。
+    # 复制后只覆盖可能伪造/过期的 X-Request-ID，保证异常响应自身也满足
+    # body.request_id == headers.X-Request-ID；TraceMiddleware 返回时会再次写入同一值。
+    response_headers = {
+        key: value
+        for key, value in (error.headers or {}).items()
+        if key.lower() != "x-request-id"
+    }
+    response_headers["X-Request-ID"] = request_id
+    return JSONResponse(
+        status_code=error.status_code,
+        headers=response_headers,
+        content={
+            "detail": error.detail,
+            "request_id": request_id,
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def workspace_request_validation_exception_handler(
+    request: Request,
+    error: RequestValidationError,
+) -> JSONResponse:
+    """让 FastAPI 参数校验错误返回同一权威 request_id。"""
+    request_id = get_request_id(request)
+    return JSONResponse(
+        status_code=422,
+        headers={"X-Request-ID": request_id},
+        content={
+            "detail": jsonable_encoder(error.errors()),
+            "request_id": request_id,
+        },
+    )
 
 
 @app.get("/api/v1/health", summary="健康检查")

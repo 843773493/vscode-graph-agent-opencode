@@ -10,8 +10,10 @@ export function nodeDebugStatusLabel(status: NodeDebugState["status"]): string {
     starting: "启动中",
     running: "运行中",
     paused: "已暂停",
+    stopping: "停止中",
     exited: "已退出",
     failed: "失败",
+    reconcile_required: "需要核实",
   }[status];
 }
 

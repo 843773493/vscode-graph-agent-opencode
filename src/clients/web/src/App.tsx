@@ -259,11 +259,38 @@ export default function AppShell() {
     sessionId: string;
     attachment: AttachmentRef;
   } | null>(null);
+  const [nodeDebugOwnerSelection, setNodeDebugOwnerSelection] = useState<{
+    workspaceId: string | null;
+    sessionId: string | null;
+    threadId: string;
+  }>({ workspaceId: null, sessionId: null, threadId: "main" });
   const lastOpenedChangesPreviewKeyRef = useRef<string | null>(null);
   const cleanupLayoutResizeRef = useRef<(() => void) | null>(null);
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
+  const nodeDebugThreadId =
+    nodeDebugOwnerSelection.workspaceId === activeSessionWorkspaceId
+    && nodeDebugOwnerSelection.sessionId === (activeSession?.session_id ?? null)
+      ? nodeDebugOwnerSelection.threadId
+      : "main";
+  useEffect(() => {
+    setNodeDebugOwnerSelection((previous) => {
+      const nextWorkspaceId = activeSessionWorkspaceId;
+      const nextSessionId = activeSession?.session_id ?? null;
+      if (
+        previous.workspaceId === nextWorkspaceId
+        && previous.sessionId === nextSessionId
+      ) {
+        return previous;
+      }
+      return {
+        workspaceId: nextWorkspaceId,
+        sessionId: nextSessionId,
+        threadId: "main",
+      };
+    });
+  }, [activeSession?.session_id, activeSessionWorkspaceId]);
   useEffect(() => {
     if (
       selectedAttachmentPreview
@@ -511,6 +538,7 @@ export default function AppShell() {
     apiPort: resolvedApiPort,
     workspaceId: activeSessionWorkspaceId,
     sessionId: activeSession?.session_id ?? null,
+    threadId: nodeDebugThreadId,
     enabled: auxiliaryVisible && auxiliaryTab === "debug",
     onStatusChange: setStatus,
   });
@@ -608,26 +636,19 @@ export default function AppShell() {
     enabled: childThreadPanelActive,
   });
 
-  // 打开 child thread 对应的子会话：复用现有「打开工作区会话」导航流
-  // （本地列表命中直接用，未命中由其后端 getSession 回填，后端为权威）。
-  const openChildThreadSession = useCallback((childSessionId: string) => {
-    const workspaceId = activeSessionWorkspaceId;
-    if (!workspaceId) {
-      setStatus("打开子会话失败：当前会话缺少 Gateway workspace_id");
-      return;
+  const selectDebugThread = useCallback((threadId: string) => {
+    setNodeDebugOwnerSelection({
+      workspaceId: activeSessionWorkspaceId,
+      sessionId: activeSession?.session_id ?? null,
+      threadId,
+    });
+    setAuxiliaryVisible(true);
+    setAuxiliaryTab("debug");
+    if (!extensionWindowRequested) {
+      persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: "debug" });
     }
-    void openWorkspaceSession(workspaceId, childSessionId).catch(
-      (error: unknown) => {
-        setStatus(
-          `打开子会话失败: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      },
-    );
-  }, [
-    activeSessionWorkspaceId,
-    openWorkspaceSession,
-    setStatus,
-  ]);
+    setStatus(threadId === "main" ? "已切换到主线程调试" : `已切换调试 owner: ${threadId}`);
+  }, [activeSession?.session_id, activeSessionWorkspaceId, extensionWindowRequested, persistLayoutSettings, setStatus]);
 
   // 子会话线程静默轮询：对齐会话资源面板的轮询口径（5s，页面不可见时跳过）。
   useEffect(() => {
@@ -677,11 +698,13 @@ export default function AppShell() {
       apiPort={resolvedApiPort}
       workspaceId={activeSessionWorkspaceId}
       sessionId={activeSession?.session_id ?? null}
+      threadId={nodeDebugThreadId}
       activeFilePath={activeFilePath}
       nodeDebugController={nodeDebugController}
       sessions={sortedSessions}
       compact={!extensionWindowRequested && !extensionWindowFallback}
       onOpenExtensionWindow={() => openExtensionWindow("debug")}
+      onSelectThread={selectDebugThread}
       onOpenWorkspacePath={workspacePreview.openWorkspaceFilePath}
       onStatusChange={setStatus}
     />
@@ -1990,13 +2013,11 @@ export default function AppShell() {
                             error={childThreads.error}
                             loadedAt={childThreads.loadedAt}
                             sessionId={activeSession?.session_id ?? ""}
-                            activeSessionId={activeSession?.session_id ?? null}
+                            activeThreadId={nodeDebugThreadId}
                             onRefresh={() => {
                               void childThreads.refresh();
                             }}
-                            onOpenSession={(childSessionId) => {
-                              void openChildThreadSession(childSessionId);
-                            }}
+                            onSelectThread={selectDebugThread}
                           />
                         </>
                       )

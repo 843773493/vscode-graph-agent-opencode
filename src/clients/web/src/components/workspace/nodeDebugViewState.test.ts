@@ -5,6 +5,7 @@ import { resolveNodeDebugSourceSelection } from "./nodeDebugViewState";
 function state(overrides: Partial<NodeDebugState> = {}): NodeDebugState {
   return {
     session_id: "ses_debug_view",
+    thread_id: "main",
     status: "idle",
     configurations: [],
     args: [],

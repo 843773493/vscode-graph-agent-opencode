@@ -195,8 +195,9 @@ async function openResourcesTab(page) {
 
 /** 等待 ChildThreadPanel 渲染出委派 child 项（面板 5s 静默轮询，给足窗口）。 */
 async function waitForChildThreadItem(panel) {
-  const item = panel.locator(".child-thread-item").first();
-  await waitUntil(async () => (await panel.locator(".child-thread-item").count()) >= 1, "子会话线程项出现", 45_000);
+  const childItems = panel.locator(".child-thread-item:not(.child-thread-owner-item)");
+  const item = childItems.first();
+  await waitUntil(async () => (await childItems.count()) >= 1, "子会话线程项出现", 45_000);
   await item.waitFor({ state: "visible", timeout: 30_000 });
   return item;
 }
@@ -210,9 +211,9 @@ const consoleErrors = [];
 const failedRequests = [];
 let expectedUnauthorizedProbeCount = 0;
 /** 失败时把页面关键状态转储到诊断 JSON，供离线排查（不影响正常断言路径）。 */
-async function dumpFailureDiagnostics(childSessionId) {
+async function dumpFailureDiagnostics() {
   const diagnosticsPath = resultPath.replace(/-result\.json$/, "-diagnostics.json");
-  const [bodyText, userTexts, markdownTexts, chatTurnCount, inputVisible, sessionListHtmlCount, childSessionMessages] =
+  const [bodyText, userTexts, markdownTexts, chatTurnCount, inputVisible, sessionListHtmlCount] =
     await Promise.all([
       page
         .locator("body")
@@ -224,20 +225,6 @@ async function dumpFailureDiagnostics(childSessionId) {
       page.locator(".chat-turn").count().catch(() => -1),
       page.locator("#input").isVisible().catch(() => false),
       page.locator(".session-list").count().catch(() => -1),
-      childSessionId
-        ? api(page, `/api/v1/sessions/${childSessionId}/history`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-BoxTeam-Workspace-Id": expectedWorkspaceId,
-            },
-            body: JSON.stringify({
-              direction: "tail",
-              turns: 5,
-              include: ["user", "final_response", "tool_call", "tool_result"],
-            }),
-          }).catch((error) => String(error))
-        : Promise.resolve(null),
     ]);
   await writeFile(
     diagnosticsPath,
@@ -250,7 +237,6 @@ async function dumpFailureDiagnostics(childSessionId) {
         chatTurnCount,
         inputVisible,
         sessionListCount: sessionListHtmlCount,
-        childSessionMessages,
         pageErrors,
         consoleErrors,
         failedRequests,
@@ -380,54 +366,33 @@ try {
   const copyIdLabel = await item
     .locator(".child-thread-copy-id")
     .getAttribute("aria-label");
-  assert.match(copyIdLabel ?? "", /^复制子会话 ID: /, "复制按钮缺少子会话 ID 标注");
-  const childSessionId = (copyIdLabel ?? "").replace(/^复制子会话 ID: /, "").trim();
+  assert.match(copyIdLabel ?? "", /^复制 child thread ID: /, "复制按钮缺少 child thread ID 标注");
+  const childThreadId = (copyIdLabel ?? "").replace(/^复制 child thread ID: /, "").trim();
   assert.match(title, /^委派：/, "child 项标题必须以「委派：」开头");
   assert.ok(title.includes(delegateDescription), `child 项标题缺少委派描述: ${title}`);
-  assert.equal(statusText, "运行中", "child 项状态徽标必须是「运行中」");
+  assert.equal(statusText, "等待启动", "pending admission 的 child 项必须显示「等待启动」");
   assert.ok(metaText.includes("general-purpose"), `child 项元信息缺少 subagent_type: ${metaText}`);
   result.childThread = {
-    childSessionId,
+    childThreadId,
     title,
     statusText,
     metaText,
   };
 
-  // 点击 child 项 → openWorkspaceSession 导航到子会话。
+  // 点击 child 项只切换当前 Session 内的 Node Debug owner，不切换聊天会话。
+  const debugStateRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/debug/node"
+      && url.searchParams.get("session_id") === result.sessionId
+      && url.searchParams.get("thread_id") === childThreadId;
+  }, { timeout: 30_000 });
   await item.locator(".child-thread-main").click();
-  // 证据 1：聊天区切换为子会话内容——委派消息是内部消息，不进入子会话的
-  // 可见用户消息投影（后端 history 投影过滤 internal HumanMessage），
-  // 因此子会话聊天区恰好 0 个用户气泡 + 1 个最终回复文本；
-  // parent 聊天区必有 2 个用户气泡，该组合是子会话独有的确定态。
-  await waitUntil(
-    async () => {
-      const userTextCount = await page.locator(".chat-user-text").count();
-      if (userTextCount !== 0) return false;
-      const finals = await page
-        .locator(".chat-markdown")
-        .filter({ hasText: sharedFinalText })
-        .count();
-      return finals >= 1;
-    },
-    "聊天区切换为子会话内容（无用户气泡 + 子会话最终回复可见）",
-    30_000,
-  );
-  // 证据 2：子会话最终回复（复用 cassette interaction 0 文本）可见。
-  const childFinalMessage = page.locator(".chat-markdown").filter({ hasText: sharedFinalText }).last();
-  await childFinalMessage.waitFor({ state: "visible", timeout: 30_000 });
-  // 证据 3：面板 sessionId 已切到 child，自身无委派子会话（空态文案）。
-  await waitUntil(
-    async () => {
-      const emptyStates = await panel.locator(".empty-state").allInnerTexts();
-      return emptyStates.some((text) => text.includes("还没有委托子会话"));
-    },
-    "面板切换为子会话自身的空 child-thread 列表",
-    15_000,
-  );
+  const request = await debugStateRequest;
+  const debugOwner = page.locator(".debug-workbench-header").filter({ hasText: `调试 owner: ${childThreadId}` });
+  await debugOwner.waitFor({ state: "visible", timeout: 30_000 });
   result.navigation = {
-    childUserTextCount: await page.locator(".chat-user-text").count(),
-    childFinalText: await childFinalMessage.innerText(),
-    panelSwitchedToChild: true,
+    selectedThreadId: new URL(request.url()).searchParams.get("thread_id"),
+    debugOwnerVisible: true,
   };
 
   // 持久化证据：父子两端的 LLM 请求日志与后端 child-threads 列表。
@@ -436,35 +401,27 @@ try {
     `/api/v1/sessions/${result.sessionId}/llm-request-logs`,
     { headers: workspaceHeaders },
   );
-  const childLogs = await api(
-    page,
-    `/api/v1/sessions/${childSessionId}/llm-request-logs`,
-    { headers: workspaceHeaders },
-  );
   const childThreads = await api(
     page,
     `/api/v1/sessions/${result.sessionId}/child-threads`,
     { headers: workspaceHeaders },
   );
   const parentLogItems = Array.isArray(parentLogs?.data) ? parentLogs.data : parentLogs?.data?.items ?? [];
-  const childLogItems = Array.isArray(childLogs?.data) ? childLogs.data : childLogs?.data?.items ?? [];
   const rolesOf = (item) => {
     const attempt = item?.upstream?.attempts?.[0];
     return (attempt?.request?.messages ?? []).map((message) => message.role);
   };
   const threadItems = childThreads?.data?.items ?? [];
   assert.equal(threadItems.length, 1, "后端 child-threads 必须返回 1 条委派子会话");
-  assert.equal(threadItems[0]?.session_id, childSessionId, "child-threads 的 session_id 与面板不一致");
-  assert.equal(threadItems[0]?.delegation_start_status, "running", "child-threads 的启动状态必须是 running");
+  assert.equal(threadItems[0]?.thread_id, childThreadId, "child-threads 的 thread_id 与面板不一致");
   result.persisted = {
     parentLlmRequestCount: parentLogItems.length,
     parentUpstreamMessageRoles: parentLogItems.map(rolesOf),
-    childLlmRequestCount: childLogItems.length,
-    childUpstreamMessageRoles: childLogItems.map(rolesOf),
     childThreads: threadItems.map((thread) => ({
-      session_id: thread.session_id,
+      thread_id: thread.thread_id,
       title: thread.title,
-      delegation_start_status: thread.delegation_start_status,
+      admission_state: thread.admission_state,
+      collaboration_state: thread.collaboration_state,
       subagent_type: thread.subagent_type,
     })),
   };
@@ -493,15 +450,13 @@ try {
     ),
     `parent 第三次请求角色形态不在预期集合内: ${JSON.stringify(result.persisted.parentUpstreamMessageRoles[2])}`,
   );
-  assert.equal(result.persisted.childLlmRequestCount, 1, "child 必须恰好产生 1 次上游模型请求");
-  assert.deepEqual(result.persisted.childUpstreamMessageRoles, [["system", "user"]]);
   assert.ok(result.streams.message >= 2, "两轮对话必须各自建立 message SSE 连接");
   assert.deepEqual(pageErrors, [], "浏览器 pageerror 出现");
   assert.deepEqual(consoleErrors, [], "浏览器 console error 出现");
   assert.deepEqual(failedRequests, [], "浏览器请求失败");
   await writeFile(resultPath, JSON.stringify(result, null, 2));
 } catch (error) {
-  await dumpFailureDiagnostics(result.childThread?.childSessionId ?? null);
+  await dumpFailureDiagnostics();
   await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   throw error;
 } finally {

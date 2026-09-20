@@ -326,12 +326,14 @@ message NodeDebugActionRecordDTO {
   optional string tool_call_id = 7;
   optional string result = 8;
   google.protobuf.Timestamp created_at = 9;
+  string thread_id = 10;
 }
 
 message NodeDebugActionRequest {
   string session_id = 1;
   string action = 2;
   optional google.protobuf.Struct params = 3;
+  string thread_id = 4;
 }
 
 message NodeDebugBreakpointDTO {
@@ -373,6 +375,7 @@ message NodeDebugCapabilitiesDTO {
 
 message NodeDebugConfigurationActivateRequest {
   string session_id = 1;
+  string thread_id = 2;
 }
 
 message NodeDebugConfigurationBreakpointDTO {
@@ -398,6 +401,8 @@ message NodeDebugConfigurationCopyRequest {
   string target_session_id = 2;
   optional string name = 3;
   optional bool activate = 4;
+  string source_thread_id = 5;
+  string target_thread_id = 6;
 }
 
 message NodeDebugConfigurationCreateRequest {
@@ -409,6 +414,7 @@ message NodeDebugConfigurationCreateRequest {
   repeated string args = 6;
   repeated NodeDebugBreakpointRequest breakpoints = 7;
   optional bool activate = 8;
+  string thread_id = 9;
 }
 
 message NodeDebugConfigurationDTO {
@@ -429,6 +435,7 @@ message NodeDebugConfigurationImportRequest {
   string session_id = 1;
   NodeDebugConfigurationDTO configuration = 2;
   optional bool activate = 3;
+  string thread_id = 4;
 }
 
 message NodeDebugConfigurationSummaryDTO {
@@ -449,6 +456,7 @@ message NodeDebugConfigurationUpdateRequest {
   optional string launch_profile_name = 5;
   repeated string args = 6;
   repeated NodeDebugBreakpointRequest breakpoints = 7;
+  string thread_id = 8;
 }
 
 message NodeDebugEvaluationDTO {
@@ -476,6 +484,7 @@ message NodeDebugSessionManifestDTO {
   optional string active_configuration_id = 3;
   repeated NodeDebugActionRecordDTO actions = 4;
   google.protobuf.Timestamp updated_at = 5;
+  string thread_id = 6;
 }
 
 message NodeDebugStackFrameDTO {
@@ -497,6 +506,7 @@ message NodeDebugStartRequest {
   optional string launch_profile_name = 5;
   repeated string args = 6;
   repeated NodeDebugBreakpointRequest breakpoints = 7;
+  string thread_id = 8;
 }
 
 message NodeDebugStateDTO {
@@ -522,6 +532,7 @@ message NodeDebugStateDTO {
   optional int64 configuration_revision = 20;
   optional bool requires_restart = 21;
   repeated string source_changed_paths = 22;
+  string thread_id = 23;
 }
 
 message NodeDebugVariableDTO {

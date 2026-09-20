@@ -22,9 +22,9 @@ export default function ChildThreadPanel({
   error,
   loadedAt,
   sessionId,
-  activeSessionId,
+  activeThreadId,
   onRefresh,
-  onOpenSession,
+  onSelectThread,
 }: {
   threads: ChildThreadSummary[];
   total: number;
@@ -32,19 +32,19 @@ export default function ChildThreadPanel({
   error: string | null;
   loadedAt: string | null;
   sessionId: string;
-  /** 当前主窗口打开的会话 id，用于把对应行标记为“当前”。 */
-  activeSessionId: string | null;
+  /** 当前调试 owner 的 thread id。 */
+  activeThreadId: string;
   onRefresh: () => void;
-  onOpenSession: (sessionId: string) => void;
+  onSelectThread: (threadId: string) => void;
 }) {
   const [notice, setNotice] = useState("");
   const [noticeError, setNoticeError] = useState(false);
 
-  const handleCopySessionId = (childSessionId: string) => {
-    void copyTextToClipboard(childSessionId)
+  const handleCopyThreadId = (threadId: string) => {
+    void copyTextToClipboard(threadId)
       .then(() => {
         setNoticeError(false);
-        setNotice(`已复制子会话 ID: ${childSessionId}`);
+        setNotice(`已复制 child thread ID: ${threadId}`);
       })
       .catch((copyError: unknown) => {
         setNoticeError(true);
@@ -113,61 +113,87 @@ export default function ChildThreadPanel({
         <div className="empty-state">选择会话后查看其子会话线程。</div>
       ) : null}
 
-      {!loading && !error && threads.length > 0 ? (
+      {!loading && !error && (threads.length > 0 || Boolean(sessionId)) ? (
         <div className="child-thread-list" role="list">
+          {sessionId ? (
+            <article
+              className="child-thread-item child-thread-owner-item"
+              role="listitem"
+              data-thread-id="main"
+            >
+              <div className="child-thread-row">
+                <button
+                  type="button"
+                  className="child-thread-main"
+                  onClick={() => onSelectThread("main")}
+                  title="切换调试 owner：主线程"
+                  aria-label="切换到主线程调试"
+                >
+                  <span
+                    className="child-thread-icon codicon codicon-home"
+                    aria-hidden="true"
+                  />
+                  <span className="child-thread-copy">
+                    <strong>主线程</strong>
+                    <small>main · 当前会话默认调试 owner</small>
+                  </span>
+                  <span className="child-thread-status child-thread-status-running">
+                    {activeThreadId === "main" ? "当前调试" : "主线程"}
+                  </span>
+                </button>
+              </div>
+            </article>
+          ) : null}
           {threads.map((thread) => {
-            const isCurrent = thread.session_id === activeSessionId;
+            const isCurrent = thread.thread_id === activeThreadId;
+            const status = thread.admission_state === "bound"
+              ? "running"
+              : thread.collaboration_state === "cancelled"
+                ? "failed"
+                : "pending";
             return (
               <article
-                key={thread.session_id}
+                key={thread.thread_id}
                 className="child-thread-item"
                 role="listitem"
-                data-start-status={thread.delegation_start_status}
+                data-start-status={status}
               >
                 <div className="child-thread-row">
                   <button
                     type="button"
                     className="child-thread-main"
-                    onClick={() => onOpenSession(thread.session_id)}
-                    title={`打开子会话：${thread.title}`}
+                    onClick={() => onSelectThread(thread.thread_id)}
+                    title={`切换调试 owner：${thread.title ?? thread.thread_id}`}
                   >
                     <span
                       className={`child-thread-icon codicon ${CHILD_THREAD_ICON}`}
                       aria-hidden="true"
                     />
                     <span className="child-thread-copy">
-                      <strong>{thread.title}</strong>
+                      <strong>{thread.title ?? thread.thread_id}</strong>
                       <small>
-                        {thread.subagent_type} · {formatDateTime(thread.created_at)}
+                        {thread.subagent_type ?? thread.role ?? "child thread"} · {formatDateTime(thread.created_at)}
                       </small>
                     </span>
                     <span
-                      className={`child-thread-status ${childThreadStatusClass(thread.delegation_start_status)}`}
+                      className={`child-thread-status ${childThreadStatusClass(status)}`}
                     >
-                      {isCurrent ? "当前" : childThreadStatusLabel(thread.delegation_start_status)}
+                      {isCurrent ? "当前调试" : childThreadStatusLabel(status)}
                     </span>
                   </button>
                   <button
                     type="button"
                     className="child-thread-copy-id"
-                    onClick={() => handleCopySessionId(thread.session_id)}
-                    title={`复制子会话 ID: ${thread.session_id}`}
-                    aria-label={`复制子会话 ID: ${thread.session_id}`}
+                    onClick={() => handleCopyThreadId(thread.thread_id)}
+                    title={`复制 child thread ID: ${thread.thread_id}`}
+                    aria-label={`复制 child thread ID: ${thread.thread_id}`}
                   >
                     <span className="codicon codicon-copy" aria-hidden="true" />
                   </button>
                 </div>
-                {/* 启动失败原因必须原样透出，供用户排查委派失败原因。 */}
-                {thread.start_error ? (
-                  <details className="child-thread-error">
-                    <summary>启动失败详情</summary>
-                    <code>{thread.start_error}</code>
-                  </details>
-                ) : null}
-                {/* latest_job_status 后端当前固定为 null；一旦接线，非空时展示。 */}
-                {thread.latest_job_status ? (
+                {thread.admission_state || thread.collaboration_state ? (
                   <div className="child-thread-job-status">
-                    最近任务状态：{thread.latest_job_status}
+                    admission: {thread.admission_state ?? "未知"} · collaboration: {thread.collaboration_state ?? "未知"}
                   </div>
                 ) : null}
               </article>
