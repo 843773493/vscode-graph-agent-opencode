@@ -35,7 +35,7 @@ from app.schemas.internal_v2.node_debug import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug import service as node_debug_service
+from app.services.infrastructure.node_debug import process_lifecycle
 from app.services.infrastructure.node_debug.launch_claim import (
     claim_marked,
     claim_running,
@@ -582,11 +582,11 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
     # 把终止/强杀超时放大：stopping 窗口必须由测试显式释放进程才结束，
     # 不能因为真实超时到点而把替身 kill 掉、让窗口在断言中途自己合上。
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service._TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
         60.0,
     )
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service._KILL_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process_lifecycle._KILL_TIMEOUT_SECONDS",
         60.0,
     )
     resolver, _parent_dir, _child_dir = session_tree
@@ -1083,11 +1083,11 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
     resolver, _parent_dir, _child_dir = session_tree
     service, store, workspace_root = _make_service(tmp_path, resolver)
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service._TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
         0.05,
     )
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service._KILL_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process_lifecycle._KILL_TIMEOUT_SECONDS",
         0.05,
     )
     created = await service.create_configuration(
@@ -1187,11 +1187,11 @@ async def test_cross_source_identity_cannot_report_termination(
     resolver, _parent_dir, _child_dir = session_tree
     service, store, workspace_root = _make_service(tmp_path, resolver)
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service._TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
         0.05,
     )
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service._KILL_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process_lifecycle._KILL_TIMEOUT_SECONDS",
         0.05,
     )
     created = await service.create_configuration(
@@ -1263,7 +1263,7 @@ async def test_reconcile_terminate_rechecks_identity_before_sigkilling(
     resolver, _parent_dir, _child_dir = session_tree
     service, _store, _workspace_root = _make_service(tmp_path, resolver)
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service._RECONCILE_TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process_lifecycle._RECONCILE_TERMINATE_TIMEOUT_SECONDS",
         0.05,
     )
     recorded_marker = "boot:100"
@@ -1299,14 +1299,14 @@ async def test_reconcile_terminate_rechecks_identity_before_sigkilling(
                 return self._entries[self.calls - 1]
             return self._entries[-1]
 
-    monkeypatch.setattr(node_debug_service, "os", _KillRecorder())
+    monkeypatch.setattr(process_lifecycle, "os", _KillRecorder())
     # 第一次核实＝同一实例 → 允许 SIGTERM；SIGTERM 后该 PID 被回收复用 → 不得再打 SIGKILL。
     monkeypatch.setattr(
-        node_debug_service,
+        process_lifecycle,
         "probe_process_identity",
         _ProbeScript([same_instance, reused_instance]),
     )
-    terminated = await service._terminate_verified_instance(
+    terminated = await service._lifecycle.terminate_verified_instance(
         pid=4321,
         recorded_source=IDENTITY_SOURCE_LINUX_PROC,
         recorded_start_marker=recorded_marker,
@@ -1323,8 +1323,8 @@ async def test_reconcile_terminate_rechecks_identity_before_sigkilling(
             return None
         return same_instance
 
-    monkeypatch.setattr(node_debug_service, "probe_process_identity", kill_aware_probe)
-    terminated = await service._terminate_verified_instance(
+    monkeypatch.setattr(process_lifecycle, "probe_process_identity", kill_aware_probe)
+    terminated = await service._lifecycle.terminate_verified_instance(
         pid=4321,
         recorded_source=IDENTITY_SOURCE_LINUX_PROC,
         recorded_start_marker=recorded_marker,
@@ -1340,11 +1340,11 @@ async def test_reconcile_terminate_rechecks_identity_before_sigkilling(
         start_marker=recorded_marker,
     )
     monkeypatch.setattr(
-        node_debug_service,
+        process_lifecycle,
         "probe_process_identity",
         _ProbeScript([same_instance, cross_source]),
     )
-    terminated = await service._terminate_verified_instance(
+    terminated = await service._lifecycle.terminate_verified_instance(
         pid=4321,
         recorded_source=IDENTITY_SOURCE_LINUX_PROC,
         recorded_start_marker=recorded_marker,

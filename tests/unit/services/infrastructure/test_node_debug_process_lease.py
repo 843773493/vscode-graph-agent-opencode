@@ -249,11 +249,11 @@ async def test_release_failure_publishes_release_failed_state_event(
 ) -> None:
     """owner 停止失败进入 reconcile_required 时发布 release_failed 事件。"""
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service._TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
         0.05,
     )
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service._KILL_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process_lifecycle._KILL_TIMEOUT_SECONDS",
         0.05,
     )
     manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
@@ -509,11 +509,11 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
 ) -> None:
     """无法核实终态时占用保持 active；再次核实终结后才结清同一 lease。"""
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service._TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
         0.05,
     )
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.service._KILL_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process_lifecycle._KILL_TIMEOUT_SECONDS",
         0.05,
     )
     manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")

@@ -142,7 +142,7 @@ async def test_stopping_state_remains_visible_until_process_exits(tmp_path: Path
         status="running",
     )
 
-    stop_task = asyncio.create_task(service._stop_runtime(runtime))
+    stop_task = asyncio.create_task(service._lifecycle.stop_runtime(runtime))
     await process.terminate_called.wait()
     assert runtime.status == "stopping"
     process.release_wait.set()

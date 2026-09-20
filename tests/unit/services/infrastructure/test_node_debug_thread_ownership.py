@@ -629,9 +629,9 @@ async def test_drain_session_stops_exact_main_runtime_before_delete(
     async def reconcile(candidate_owner: tuple[str, str]) -> None:
         reconciled.append(candidate_owner)
 
-    monkeypatch.setattr(service, "_stop_runtime", stop_runtime)
+    monkeypatch.setattr(service._lifecycle, "stop_runtime", stop_runtime)
     monkeypatch.setattr(service, "_persist_session_state", lambda *args: None)
-    monkeypatch.setattr(service, "_reconcile_persisted_claim", reconcile)
+    monkeypatch.setattr(service._lifecycle, "reconcile_persisted_claim", reconcile)
     monkeypatch.setattr(service, "_active_claim", lambda *_args: None)
 
     await service.drain_session(_PARENT_SESSION_ID)
