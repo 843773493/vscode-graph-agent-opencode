@@ -9,10 +9,12 @@ import tempfile
 from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
-from app.core.session_tree.support import LegacyInlineAttachmentMigrationError
-
 SUPPORTED_MEDIA_PREFIXES = ("image/", "audio/", "video/")
 SESSION_ATTACHMENT_SCHEME = "boxteam-session://"
+
+
+class LegacyInlineAttachmentMigrationError(RuntimeError):
+    """历史 inline 附件无法安全恢复或校验。"""
 
 
 def materialize_legacy_inline_attachments(

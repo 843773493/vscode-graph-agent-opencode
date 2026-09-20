@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.legacy_inline_attachment_migration import (
+    LegacyInlineAttachmentMigrationError,
     materialize_legacy_inline_attachments,
 )
 from app.core.path_segments import physical_segment
@@ -16,7 +17,6 @@ from app.core.session_tree.legacy_migration import (
 from app.core.session_tree.support import (
     SESSION_CHILDREN_DIR_NAME,
     SESSION_MANIFEST_NAME,
-    LegacyInlineAttachmentMigrationError,
     _atomic_write_json,
     _atomic_write_json_value,
     _atomic_write_text,

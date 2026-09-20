@@ -48,6 +48,11 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 from app.core.identifier import create_prefixed_id
+from app.core.session_catalog_legacy_layout import (
+    FOLDER_MANIFEST_NAME,
+    SESSION_MANIFEST_NAME,
+    SessionPhysicalNode,
+)
 from app.core.session_catalog_legacy_reader import (
     SessionCatalogLegacyReader,
     SessionCatalogLegacyReaderError,
@@ -61,11 +66,6 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import NavigationTopologyGate
-from app.core.session_tree.support import (
-    FOLDER_MANIFEST_NAME,
-    SESSION_MANIFEST_NAME,
-    SessionPhysicalNode,
-)
 from app.core.workspace_identity import (
     load_or_create_workspace_id,
     validate_workspace_id,

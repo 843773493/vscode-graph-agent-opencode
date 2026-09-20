@@ -11,15 +11,15 @@ from datetime import datetime
 from pathlib import Path
 
 from app.core.path_segments import physical_segment
-from app.core.session_tree.nodes import nearest_session_ancestor_from_nodes
-from app.core.session_tree.support import (
+from app.core.session_catalog_legacy_layout import (
     FOLDER_MANIFEST_NAME,
     PHYSICAL_LAYOUT_VERSION,
     SESSION_CHILDREN_DIR_NAME,
     SESSION_MANIFEST_NAME,
     SessionPhysicalNode,
-    _parse_optional_datetime,
-    _read_json_object,
+    nearest_session_ancestor_from_nodes,
+    parse_optional_datetime,
+    read_json_object,
 )
 
 __all__ = [
@@ -81,7 +81,7 @@ class SessionCatalogLegacyReader:
                 f"旧权威会话目录索引缺失或不是普通文件: {self.index_path}"
             )
         try:
-            raw = _read_json_object(self.index_path)
+            raw = read_json_object(self.index_path)
         except (OSError, ValueError, TypeError) as error:
             raise SessionCatalogLegacyReaderError(
                 f"旧权威会话目录索引无法读取: {self.index_path}: {error}"
@@ -212,7 +212,7 @@ class SessionCatalogLegacyReader:
         value: object, *, node_id: str, field: str
     ) -> datetime:
         try:
-            parsed = _parse_optional_datetime(value)
+            parsed = parse_optional_datetime(value)
         except (TypeError, ValueError) as error:
             raise SessionCatalogLegacyReaderError(
                 f"旧权威会话目录索引节点时间非法: node_id={node_id}, field={field}"
@@ -260,7 +260,7 @@ class SessionCatalogLegacyReader:
                     f"node_id={node.node_id}, manifest={manifest_path}"
                 )
             try:
-                manifest = _read_json_object(manifest_path)
+                manifest = read_json_object(manifest_path)
             except (OSError, ValueError, TypeError) as error:
                 raise SessionCatalogLegacyReaderError(
                     f"旧会话节点 manifest 无法读取: {manifest_path}: {error}"
@@ -358,7 +358,7 @@ class SessionCatalogLegacyReader:
         manifest: dict[str, object], field: str, manifest_path: Path
     ) -> datetime:
         try:
-            parsed = _parse_optional_datetime(manifest.get(field))
+            parsed = parse_optional_datetime(manifest.get(field))
         except (TypeError, ValueError) as error:
             raise SessionCatalogLegacyReaderError(
                 f"旧会话 manifest 时间字段非法: field={field}, path={manifest_path}"

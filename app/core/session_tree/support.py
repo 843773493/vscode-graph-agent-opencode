@@ -13,6 +13,10 @@ from functools import wraps
 from pathlib import Path
 from typing import BinaryIO, ClassVar, ParamSpec, Self, TypeVar
 
+from app.core.legacy_inline_attachment_migration import (
+    LegacyInlineAttachmentMigrationError,
+)
+
 FOLDER_MANIFEST_NAME = ".boxteam-folder.json"
 SESSION_MANIFEST_NAME = "session.json"
 SESSION_CHILDREN_DIR_NAME = "children"
@@ -35,10 +39,6 @@ class _SessionTreeLockState:
 
 class SessionTreeLockTimeoutError(RuntimeError):
     """会话目录锁在有界时间内未释放。"""
-
-
-class LegacyInlineAttachmentMigrationError(RuntimeError):
-    """历史 inline 附件无法安全恢复或校验。"""
 
 
 class SessionTreeOperationLock:
