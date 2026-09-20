@@ -49,10 +49,10 @@ from app.services.infrastructure.node_debug.process_identity import (
     IDENTITY_SOURCE_PSUTIL,
     probe_process_identity,
 )
+from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.service import (
     NodeDebugProcessLeaseIdentity,
     NodeDebugService,
-    _NodeDebugRuntime,
 )
 from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
@@ -369,8 +369,8 @@ def _runtime_for(
     configuration_id: str,
     process_instance_id: str,
     process: object | None = None,
-) -> _NodeDebugRuntime:
-    runtime = _NodeDebugRuntime(
+) -> NodeDebugRuntime:
+    runtime = NodeDebugRuntime(
         session_id=_PARENT_SESSION_ID,
         thread_id="main",
         configuration_id=configuration_id,

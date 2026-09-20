@@ -49,10 +49,8 @@ from app.services.infrastructure.node_debug.process_identity import (
     NodeDebugProcessIdentity,
     probe_process_identity,
 )
-from app.services.infrastructure.node_debug.service import (
-    NodeDebugService,
-    _NodeDebugRuntime,
-)
+from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.node_debug_dependencies import (
@@ -543,8 +541,8 @@ def _runtime_for(
     process_instance_id: str,
     process: object | None = None,
     status: str = "running",
-) -> _NodeDebugRuntime:
-    runtime = _NodeDebugRuntime(
+) -> NodeDebugRuntime:
+    runtime = NodeDebugRuntime(
         session_id=_PARENT_SESSION_ID,
         thread_id="main",
         configuration_id=configuration_id,
@@ -1370,13 +1368,13 @@ async def test_concurrent_starts_are_serialized_per_owner(
         return _FakeInspectorSocket()
 
     async def fake_command(
-        runtime: _NodeDebugRuntime,
+        runtime: NodeDebugRuntime,
         method: str,
         params: dict[str, object] | None = None,
     ) -> dict[str, object]:
         return {}
 
-    async def fake_background(runtime: _NodeDebugRuntime) -> None:
+    async def fake_background(runtime: NodeDebugRuntime) -> None:
         return None
 
     monkeypatch.setattr(service, "_write_launch_claim", spy_write)
