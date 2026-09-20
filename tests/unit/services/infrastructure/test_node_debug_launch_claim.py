@@ -1395,10 +1395,10 @@ async def test_concurrent_starts_are_serialized_per_owner(
     monkeypatch.setattr(service, "_write_launch_claim", spy_write)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr(websockets, "connect", fake_connect)
-    monkeypatch.setattr(service, "_command", fake_command)
-    monkeypatch.setattr(service, "_receive_messages", fake_background)
-    monkeypatch.setattr(service, "_wait_for_execution_state", fake_background)
-    monkeypatch.setattr(service, "_wait_for_frame_variables", fake_background)
+    monkeypatch.setattr(service._inspector, "command", fake_command)
+    monkeypatch.setattr(service._inspector, "receive_messages", fake_background)
+    monkeypatch.setattr(service._inspector, "wait_for_execution_state", fake_background)
+    monkeypatch.setattr(service._inspector, "wait_for_frame_variables", fake_background)
     try:
         await asyncio.gather(
             service.start(
