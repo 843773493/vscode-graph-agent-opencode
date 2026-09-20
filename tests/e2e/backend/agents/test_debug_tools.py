@@ -6,10 +6,23 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.agents.tool_invocation_context import ToolInvocationContext
+from app.agents.tool_invocation_context import (
+    ThreadRuntimeBinding,
+    ToolInvocationContext,
+)
 from app.agents.tools.debugging import create_debugging_tools
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.node_debug_service import NodeDebugService
+from app.services.infrastructure.node_debug_session_store import (
+    NodeDebugSessionStore,
+)
+from app.services.infrastructure.node_debug_thread_owner import (
+    MAIN_THREAD_ID,
+    NodeDebugThreadOwner,
+    resolve_node_debug_owner,
+)
 
 
 def _write_debug_fixture(workspace_root: Path) -> tuple[Path, int]:
@@ -29,16 +42,80 @@ console.log(JSON.stringify(result));"""
 def _tool_map(
     workspace_root: Path,
     service: NodeDebugService,
+    owner: NodeDebugThreadOwner,
 ) -> dict[str, object]:
+    binding = ThreadRuntimeBinding(
+        session_id=owner.session_id,
+        thread_id=owner.thread_id,
+    )
     return {
         tool.name: tool
         for tool in create_debugging_tools(
-            session_id="ses_e2e_debug",
+            session_id=owner.session_id,
             workspace_root=workspace_root,
             node_debug_service=service,
-            invocation_context=ToolInvocationContext(),
+            invocation_context=ToolInvocationContext(thread_binding=binding),
+            thread_binding=binding,
         )
     }
+
+
+async def _create_catalog_debug_owners(
+    client: httpx.AsyncClient,
+    workspace_root: Path,
+) -> tuple[SessionCatalogPathResolver, NodeDebugThreadOwner, NodeDebugThreadOwner]:
+    """通过真实 Session API 创建 main/child，再由 catalog resolver 解析 owner。"""
+    main_response = await client.post(
+        "/api/v1/sessions",
+        json={"title": "Debug main session"},
+    )
+    assert main_response.status_code == 200, main_response.text
+    main_session_id = main_response.json()["data"]["session_id"]
+
+    child_response = await client.post(
+        "/api/v1/sessions",
+        json={
+            "title": "Debug child session",
+            "folder_id": main_session_id,
+        },
+    )
+    assert child_response.status_code == 200, child_response.text
+    child_session_id = child_response.json()["data"]["session_id"]
+    assert child_response.json()["data"]["parent_session_id"] == main_session_id
+
+    resolver = get_session_path_resolver(workspace_root / ".boxteam" / "sessions")
+    assert isinstance(resolver, SessionCatalogPathResolver)
+    main_owner = resolve_node_debug_owner(
+        resolver,
+        session_id=main_session_id,
+    )
+    child_owner = resolve_node_debug_owner(
+        resolver,
+        session_id=child_session_id,
+    )
+    assert main_owner.key == (main_session_id, MAIN_THREAD_ID)
+    assert child_owner.key == (child_session_id, MAIN_THREAD_ID)
+    assert main_owner.thread_node != child_owner.thread_node
+    assert child_owner.thread_node == resolver.resolve_session_node(child_session_id)
+    return resolver, main_owner, child_owner
+
+
+def _build_debug_service(
+    workspace_root: Path,
+    config_path: Path,
+    resolver: SessionCatalogPathResolver,
+) -> NodeDebugService:
+    config_service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=config_path,
+        workspace_root=workspace_root,
+    )
+    config_service.validate_workspace_config()
+    return NodeDebugService(
+        workspace_root=workspace_root,
+        config_service=config_service,
+        session_store=NodeDebugSessionStore(resolver),
+    )
 
 
 def _payload(result: object) -> dict[str, object]:
@@ -88,22 +165,22 @@ async def test_backend_catalog_exposes_debug_tool_group_and_schema(
 
 @pytest.mark.asyncio
 async def test_agent_debug_tools_drive_real_node_inspector_session(
+    client: httpx.AsyncClient,
     e2e_workspace_root_path: str,
     e2e_workspace_config_path: str,
 ) -> None:
     workspace_root = Path(e2e_workspace_root_path).resolve()
+    resolver, _main_owner, child_owner = await _create_catalog_debug_owners(
+        client,
+        workspace_root,
+    )
     fixture_path, breakpoint_line = _write_debug_fixture(workspace_root)
-    config_service = ConfigService(
-        config_dir=Path.cwd() / "configs",
-        config_path=Path(e2e_workspace_config_path),
-        workspace_root=workspace_root,
+    service = _build_debug_service(
+        workspace_root,
+        Path(e2e_workspace_config_path),
+        resolver,
     )
-    config_service.validate_workspace_config()
-    service = NodeDebugService(
-        workspace_root=workspace_root,
-        config_service=config_service,
-    )
-    tools = _tool_map(workspace_root, service)
+    tools = _tool_map(workspace_root, service, child_owner)
 
     try:
         breakpoint_result = _payload(
@@ -173,37 +250,23 @@ async def test_agent_debug_tools_drive_real_node_inspector_session(
 
 @pytest.mark.asyncio
 async def test_debug_tools_keep_sessions_isolated_and_support_node_logpoints(
+    client: httpx.AsyncClient,
     e2e_workspace_root_path: str,
     e2e_workspace_config_path: str,
 ) -> None:
     workspace_root = Path(e2e_workspace_root_path).resolve()
+    resolver, main_owner, child_owner = await _create_catalog_debug_owners(
+        client,
+        workspace_root,
+    )
     fixture_path, breakpoint_line = _write_debug_fixture(workspace_root)
-    config_service = ConfigService(
-        config_dir=Path.cwd() / "configs",
-        config_path=Path(e2e_workspace_config_path),
-        workspace_root=workspace_root,
+    service = _build_debug_service(
+        workspace_root,
+        Path(e2e_workspace_config_path),
+        resolver,
     )
-    config_service.validate_workspace_config()
-    service = NodeDebugService(
-        workspace_root=workspace_root,
-        config_service=config_service,
-    )
-    tools = create_debugging_tools(
-        session_id="ses_e2e_debug_isolated",
-        workspace_root=workspace_root,
-        node_debug_service=service,
-        invocation_context=ToolInvocationContext(),
-    )
-    by_name = {tool.name: tool for tool in tools}
-    other_tools = {
-        tool.name: tool
-        for tool in create_debugging_tools(
-            session_id="ses_other_debug_session",
-            workspace_root=workspace_root,
-            node_debug_service=service,
-            invocation_context=ToolInvocationContext(),
-        )
-    }
+    by_name = _tool_map(workspace_root, service, main_owner)
+    other_tools = _tool_map(workspace_root, service, child_owner)
 
     try:
         unsupported_test_result = _payload(
@@ -252,7 +315,10 @@ async def test_debug_tools_keep_sessions_isolated_and_support_node_logpoints(
         )
         assert removed_logpoint["ok"] is True
 
-        other_session = await service.get_state("ses_other_debug_session")
+        other_session = await service.get_state(
+            child_owner.session_id,
+            child_owner.thread_id,
+        )
         assert other_session.status == "idle"
         assert other_session.breakpoints == []
         assert other_session.actions == []
@@ -297,8 +363,11 @@ async def test_debug_tools_keep_sessions_isolated_and_support_node_logpoints(
         )
         assert other_start_result["ok"] is True
         assert other_start_result["state"]["status"] == "paused"
-        state = await service.get_state("ses_e2e_debug_isolated")
-        other_state = await service.get_state("ses_other_debug_session")
+        state = await service.get_state(main_owner.session_id, main_owner.thread_id)
+        other_state = await service.get_state(
+            child_owner.session_id,
+            child_owner.thread_id,
+        )
         assert state.pid is not None
         assert other_state.pid is not None
         assert state.pid != other_state.pid
