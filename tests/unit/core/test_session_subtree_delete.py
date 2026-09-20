@@ -278,6 +278,53 @@ async def test_delete_full_flow_tombstones_and_isolates(
     assert record.abort_reason is None
 
 
+async def test_runtime_drain_failure_blocks_physical_isolation(
+    service: SessionSubtreeDeleteService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+    tree: DeleteTree,
+) -> None:
+    """运行时 owner 未收敛时，删除必须停在 deleting 且保留源目录。"""
+    calls: list[str] = []
+
+    async def reject_drain(session_id: str) -> None:
+        calls.append(session_id)
+        raise RuntimeError("Node 调试实例无法核实终态")
+
+    service.set_session_drain_callback(reject_drain)
+    record = store.create_or_get_subtree_delete_record(
+        idempotency_key="del-key-runtime-blocked",
+        workspace_id=WORKSPACE_ID,
+        root_node_id=tree.root,
+    )
+    first_session = min(record.frozen_session_locators)
+    source = date_bucket_dir(
+        sessions_root, record.frozen_session_locators[first_session]
+    )
+
+    with pytest.raises(RuntimeError, match="无法核实终态"):
+        await service.delete(
+            idempotency_key="del-key-runtime-blocked",
+            root_node_id=tree.root,
+        )
+
+    assert calls == [first_session]
+    assert source.is_dir()
+    assert not (
+        sessions_root
+        / _DELETING_DIR_NAME
+        / "del-key-runtime-blocked"
+        / first_session
+    ).exists()
+    assert store.get_subtree_delete_record("del-key-runtime-blocked").state == (
+        "deleting"
+    )
+    assert (
+        store.get_subtree_delete_record("del-key-runtime-blocked").drained_session_ids
+        == ()
+    )
+
+
 async def test_delete_leaves_outside_subtree_untouched(
     service: SessionSubtreeDeleteService,
     store: SessionCatalogStore,

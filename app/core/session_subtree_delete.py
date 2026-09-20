@@ -10,8 +10,9 @@
    ``mark_subtree_deleting``（单事务 CAS 整树 active→deleting——**唯一
    逻辑可见性关闭点**，「正常导航/业务 reader 不得看到部分子树仍
    active」由该事务原子性保证）→ 出 gate。
-2. **drain（gate 外，逐 session 按冻结顺序）**：对每个未记录进度的
-   session，先 CAS 关闭其 session-control fence（``(active, 1)`` →
+2. **drain（逐 session 按冻结顺序）**：对每个未记录进度的 session，先在
+   对应 ``SessionLifecycleGate`` exclusive 临界区内排空已绑定的运行时 owner，
+   再 CAS 关闭其 session-control fence（``(active, 1)`` →
    ``(deleting, 2)``；已 deleting 幂等跳过；generation 不符 fail
    closed），再把日期桶目录原子 rename 到
    ``sessions_root/.deleting/<idempotency_key>/<session_id>/`` 并做目录
@@ -57,6 +58,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -113,9 +115,10 @@ class SessionSubtreeDeleteService:
        record：``completed`` → 幂等返回；``aborted`` → RuntimeError（含
        reason，换新 key 重试）；``preparing`` → 重入从 mark 继续；
        ``deleting``/``draining`` → 重入从 drain 继续。
-    2. drain（gate 外）：对冻结集合内每个 session（folder 跳过——无物理
-       目录）按冻结顺序执行 fence CAS → rename 隔离 → durability
-       barrier → 进度记录；已在 ``drained_session_ids`` → 跳过。
+    2. drain：对冻结集合内每个 session（folder 跳过——无物理目录）按冻结
+       顺序在 SessionLifecycleGate exclusive 临界区内执行运行时排空 →
+       fence CAS → rename 隔离 → durability barrier → 进度记录；已在
+       ``drained_session_ids`` → 跳过。
     3. gate exclusive 内 ``finish_subtree_delete``（全树 tombstone）→
        出 gate。
     4. 返回 :class:`SubtreeDeleteResult`（frozen_node_ids、drained、
@@ -130,6 +133,7 @@ class SessionSubtreeDeleteService:
         workspace_id: str,
         gate: NavigationTopologyGate | None = None,
         session_gate: SessionLifecycleGate | None = None,
+        session_drain_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         if not isinstance(store, SessionCatalogStore):
             raise TypeError(f"store 必须是 SessionCatalogStore: {store!r}")
@@ -157,7 +161,33 @@ class SessionSubtreeDeleteService:
             if session_gate is not None
             else SessionLifecycleGate(self._sessions_root)
         )
+        if session_drain_callback is not None and not callable(
+            session_drain_callback
+        ):
+            raise TypeError(
+                "session_drain_callback 必须可调用: "
+                f"{session_drain_callback!r}"
+            )
+        self._session_drain_callback = session_drain_callback
         self._key_locks: dict[str, asyncio.Lock] = {}
+
+    def set_session_drain_callback(
+        self,
+        callback: Callable[[str], Awaitable[None]],
+    ) -> None:
+        """绑定删除前的 Session 运行时排空回调。
+
+        回调属于共享删除协议的一部分：它必须在对应
+        :class:`SessionLifecycleGate` exclusive 临界区内完成，且抛错时
+        删除流立即停止，绝不能继续 fence、物理隔离或 finish。生产装配
+        在 NodeDebugService 创建后绑定；未绑定时仅用于没有调试运行时的
+        低层存储测试。
+        """
+        if not callable(callback):
+            raise TypeError(f"session_drain_callback 必须可调用: {callback!r}")
+        if self._session_drain_callback is not None:
+            raise RuntimeError("Session 删除排空回调已绑定")
+        self._session_drain_callback = callback
 
     # ------------------------------------------------------------------
     # 公开入口
@@ -264,24 +294,30 @@ class SessionSubtreeDeleteService:
     async def _drain(
         self, record: SubtreeDeleteRecord, idempotency_key: str
     ) -> None:
-        """drain 阶段：逐 session fence CAS + 物理隔离 + 进度记录（gate 外）。
+        """drain 阶段：逐 session 运行时排空 + fence CAS + 物理隔离 + 进度记录。
 
         按冻结顺序（node_id 排序）遍历冻结 session 集合；folder 跳过
         （无物理目录，由 finish 的行删除承担）；已在
         ``drained_session_ids`` 的 session 跳过（崩溃重入定点继续）。
-        每个 session 在 SessionLifecycleGate exclusive 内完成 lease 收敛
-        与隔离（2.3-D：删除等待原 reader/收敛旧 lease 后才隔离目录）。
+        每个 session 在 SessionLifecycleGate exclusive 内完成运行时排空、
+        lease 收敛与隔离（2.3-D：删除等待原 reader/收敛旧 lease 后才隔离目录）。
         """
         for session_id in sorted(record.frozen_session_locators):
             if session_id in record.drained_session_ids:
                 continue
-            self._drain_session(
-                idempotency_key=idempotency_key,
-                session_id=session_id,
-                storage_relative_locator=record.frozen_session_locators[
-                    session_id
-                ],
-            )
+            async with self._session_gate.exclusive(session_id):
+                # 运行时排空必须先于 fence CAS 与物理 rename。回调失败时
+                # 保留源目录与 catalog deleting 状态，供同一 record 定点
+                # 重试；不得制造“目录已删但进程/claim 未收敛”的伪成功。
+                if self._session_drain_callback is not None:
+                    await self._session_drain_callback(session_id)
+                self._drain_session(
+                    idempotency_key=idempotency_key,
+                    session_id=session_id,
+                    storage_relative_locator=record.frozen_session_locators[
+                        session_id
+                    ],
+                )
             self._store.record_drain_progress(idempotency_key, session_id)
 
     def _drain_session(

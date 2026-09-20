@@ -43,6 +43,7 @@ import os
 import tempfile
 import threading
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -214,6 +215,13 @@ class SessionCatalogPathResolver:
     def catalog_store(self) -> SessionCatalogStore:
         """权威 catalog store 只读访问（8.5 装配面；不开放写事务）。"""
         return self._store
+
+    def bind_session_drain_callback(
+        self,
+        callback: Callable[[str], Awaitable[None]],
+    ) -> None:
+        """把运行时排空端口绑定到共享子树删除流。"""
+        self._delete_service.set_session_drain_callback(callback)
 
     # ------------------------------------------------------------------
     # 节点投影

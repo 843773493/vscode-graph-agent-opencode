@@ -10,9 +10,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -557,3 +559,48 @@ async def test_mutation_admission_rejects_foreign_thread(
                 script_path="main.mjs",
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_drain_session_stops_exact_main_runtime_before_delete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """删除 drain 只停止目标 Session 的 main owner，并核实 claim 已收敛。"""
+    service = NodeDebugService(workspace_root=tmp_path)
+    runtime = SimpleNamespace(
+        session_id=_PARENT_SESSION_ID,
+        thread_id=MAIN_THREAD_ID,
+        status="running",
+        error_message="running",
+        state_lock=asyncio.Lock(),
+    )
+    owner = (_PARENT_SESSION_ID, MAIN_THREAD_ID)
+    service._runtimes[owner] = runtime  # type: ignore[attr-defined]
+    stopped: list[tuple[str, str]] = []
+    reconciled: list[tuple[str, str]] = []
+
+    async def stop_runtime(
+        candidate: object,
+        *,
+        clear_error: bool = True,
+    ) -> str:
+        del clear_error
+        assert candidate is runtime
+        stopped.append((runtime.session_id, runtime.thread_id))
+        return "stopped"
+
+    async def reconcile(candidate_owner: tuple[str, str]) -> None:
+        reconciled.append(candidate_owner)
+
+    monkeypatch.setattr(service, "_stop_runtime", stop_runtime)
+    monkeypatch.setattr(service, "_persist_session_state", lambda *args: None)
+    monkeypatch.setattr(service, "_reconcile_persisted_claim", reconcile)
+    monkeypatch.setattr(service, "_active_claim", lambda *_args: None)
+
+    await service.drain_session(_PARENT_SESSION_ID)
+
+    assert stopped == [owner]
+    assert reconciled == [owner]
+    assert runtime.status == "exited"
+    assert runtime.error_message is None

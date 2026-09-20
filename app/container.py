@@ -499,6 +499,13 @@ def build_app_container(
         ),
         residency_tracker=thread_residency_tracker,
     )
+    if isinstance(session_path_resolver, SessionCatalogPathResolver):
+        # 子树删除的共享 drain 必须在物理隔离前定点收敛 Node 调试 owner。
+        # resolver 先于 NodeDebugService 创建，因此在两者就绪后完成一次性
+        # 绑定；删除协议本身仍由 SessionSubtreeDeleteService 统一编排。
+        session_path_resolver.bind_session_drain_callback(
+            node_debug_service.drain_session
+        )
     # 重启恢复兜底：tracker 评估时向 debug owner 拉取 durable claim 的活跃 blocker。
     thread_residency_tracker.add_blocker_source(node_debug_service)
     dependency_provider.set_node_debug_service(node_debug_service)
