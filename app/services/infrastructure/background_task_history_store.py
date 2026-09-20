@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.background_task_registry import BackgroundTaskHandle
@@ -29,11 +29,11 @@ class BackgroundTaskHistoryStore:
             return []
         value = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, list):
-            raise RuntimeError(f"后台任务历史必须是数组: {path}")
+            raise TypeError(f"后台任务历史必须是数组: {path}")
         records: list[BackgroundTaskHandle] = []
         for index, record in enumerate(value):
             if not isinstance(record, dict):
-                raise RuntimeError(f"后台任务历史第 {index} 项必须是对象: {path}")
+                raise TypeError(f"后台任务历史第 {index} 项必须是对象: {path}")
             records.append(BackgroundTaskHandle.from_dict(record))
         return records
 
@@ -42,7 +42,11 @@ class BackgroundTaskHistoryStore:
             if node.kind != "session":
                 continue
             session_id = node.node_id
-            path = node.path / "resources" / "background_tasks.json"
+            path = (
+                self._path_resolver.resolve_session_node(session_id)
+                / "resources"
+                / "background_tasks.json"
+            )
             if not path.exists():
                 continue
             records = self.list_session(session_id)
@@ -51,7 +55,7 @@ class BackgroundTaskHistoryStore:
                 if record.status not in {"pending", "running"}:
                     continue
                 record.status = "lost"
-                record.ended_at = datetime.now(timezone.utc)
+                record.ended_at = datetime.now(UTC)
                 record.metadata["status_note"] = "后端进程结束，后台任务已失去运行实体。"
                 changed = True
             if changed:

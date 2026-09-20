@@ -22,6 +22,7 @@ from typing import Any, Self
 from uuid import UUID, uuid4
 
 from app.core.session_catalog_resolver import (
+    SessionCatalogNodeProjection,
     SessionCatalogPathResolver,
 )
 from app.core.session_catalog_store import (
@@ -29,7 +30,7 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_creation import SessionCreationService
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
-from app.core.session_tree.support import SESSION_MANIFEST_NAME, SessionPhysicalNode
+from app.core.session_tree.support import SESSION_MANIFEST_NAME
 
 # 与 R15 resolver 测试同款默认 workspace_id（标准 UUID 文本）。
 DEFAULT_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
@@ -142,8 +143,8 @@ class CatalogWorkspaceContext:
     # 便捷读取
     # ------------------------------------------------------------------
 
-    def node(self, node_id: str) -> SessionPhysicalNode:
-        """读取节点投影（folder 的 path 为 None，属新模型语义）。"""
+    def node(self, node_id: str) -> SessionCatalogNodeProjection:
+        """读取 SQLite catalog 节点投影。"""
         return self.resolver.get_node(node_id)
 
     def session_dir(self, session_id: str) -> Path:

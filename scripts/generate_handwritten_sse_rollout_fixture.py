@@ -458,7 +458,7 @@ async def _catalog_resolver(workspace_root: Path) -> SessionCatalogPathResolver:
         await migrate_workspace_session_catalog(workspace_root=workspace_root)
     resolver = get_session_path_resolver(sessions_dir)
     if not isinstance(resolver, SessionCatalogPathResolver):
-        raise RuntimeError(
+        raise TypeError(
             "fixture 生成要求 SQLite catalog resolver: "
             f"sessions_root={sessions_dir}"
         )
@@ -961,7 +961,6 @@ async def _generate(workspace_root: Path) -> None:
     finally:
         _restore_transport(client, previous_session, previous_factory)
         await client.aclose()
-    resolver.refresh()
     _write_fixture_manifest(workspace_root)
 
 

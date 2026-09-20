@@ -538,43 +538,25 @@ async def test_store_rejects_manual_session_move_before_writing(
     session_id = "ses_937d497097414acb8bd4a086345a3de0"
     store, source = _create_store(tmp_path, session_bundle_factory, session_id)
     resolver = get_session_path_resolver(tmp_path)
-    from app.core.session_catalog_resolver import SessionCatalogPathResolver
 
-    folder = resolver.create_folder(name="手工移动目标", parent_node_id=None)
-    if isinstance(resolver, SessionCatalogPathResolver):
-        # 新模型：folder 无物理目录（SQLite-only 节点）；把会话日期桶目录
-        # 手工挪到 sessions 树外任意位置，解析必须 fail closed（防篡改
-        # 收敛到物理解析点，不扫盘比对）。与 test_path_utils R17 适配同款。
-        target = tmp_path / "手工挪走" / source.name
-    else:
-        target = folder.path / source.name
+    resolver.create_folder(name="手工移动目标", parent_node_id=None)
+    # SQLite catalog 是唯一权威；把日期桶目录手工挪到 sessions 树外，
+    # 解析必须 fail closed，不扫描物理树。
+    target = tmp_path / "手工挪走" / source.name
     target.parent.mkdir(parents=True, exist_ok=True)
     source.replace(target)
 
-    if isinstance(resolver, SessionCatalogPathResolver):
-        with pytest.raises(RuntimeError, match="会话物理目录缺失"):
-            await store.append(
-                session_id,
-                AgentStartEvent(
-                    event_id="evt_after_move",
-                    job_id="job_after_move",
-                    agent_id="default",
-                    timestamp=datetime.now(UTC),
-                    payload=AgentStartPayload(message="moved", agent_id="default"),
-                ),
-            )
-    else:
-        with pytest.raises(RuntimeError, match="绕过软件修改会话目录结构"):
-            await store.append(
-                session_id,
-                AgentStartEvent(
-                    event_id="evt_after_move",
-                    job_id="job_after_move",
-                    agent_id="default",
-                    timestamp=datetime.now(UTC),
-                    payload=AgentStartPayload(message="moved", agent_id="default"),
-                ),
-            )
+    with pytest.raises(RuntimeError, match="会话物理目录缺失"):
+        await store.append(
+            session_id,
+            AgentStartEvent(
+                event_id="evt_after_move",
+                job_id="job_after_move",
+                agent_id="default",
+                timestamp=datetime.now(UTC),
+                payload=AgentStartPayload(message="moved", agent_id="default"),
+            ),
+        )
 
     assert not (target / "logs" / "traces" / "events.jsonl").exists()
     assert not source.exists()

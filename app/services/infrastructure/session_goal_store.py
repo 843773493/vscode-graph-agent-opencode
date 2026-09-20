@@ -42,10 +42,13 @@ class SessionGoalStore:
 
     def list_existing(self) -> list[SessionGoalDTO]:
         goals: list[SessionGoalDTO] = []
-        for node in self._path_resolver.refresh():
+        for node in self._path_resolver.list_nodes():
             if node.kind != "session":
                 continue
-            path = node.path / self.FILE_NAME
+            path = (
+                self._path_resolver.resolve_session_node(node.node_id)
+                / self.FILE_NAME
+            )
             if path.is_file():
                 goals.append(
                     SessionGoalDTO.model_validate_json(path.read_text(encoding="utf-8"))

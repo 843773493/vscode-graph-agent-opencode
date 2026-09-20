@@ -38,18 +38,15 @@ class SessionArtifactBackend(FilesystemBackend):
 
     def _to_virtual_path(self, path: Path) -> str:
         resolved = path.resolve()
-        session_nodes = sorted(
-            (
-                node
-                for node in self._path_resolver.list_nodes()
-                if node.kind == "session"
-            ),
-            key=lambda node: len(node.path.parts),
-            reverse=True,
-        )
-        for node in session_nodes:
+        session_nodes = [
+            (node, self._path_resolver.resolve_session_node(node.node_id))
+            for node in self._path_resolver.list_nodes()
+            if node.kind == "session"
+        ]
+        session_nodes.sort(key=lambda item: len(item[1].parts), reverse=True)
+        for node, session_root in session_nodes:
             try:
-                tail = resolved.relative_to(node.path)
+                tail = resolved.relative_to(session_root)
             except ValueError:
                 continue
             return f"/{node.node_id}/{tail.as_posix()}"

@@ -12,10 +12,12 @@ from uuid import uuid4
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.exceptions import NotFoundError
-from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_catalog_resolver import (
+    SessionCatalogNodeProjection,
+    SessionCatalogPathResolver,
+)
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
-from app.core.session_tree.support import SessionPhysicalNode
 from app.core.workspace_identity import (
     LEGACY_BACKEND_WORKSPACE_IDS,
     validate_workspace_id,
@@ -91,10 +93,13 @@ class SessionService:
         manifest 做 SessionDTO 校验与重写，剥离形态在此处不参与校验。
         """
 
-        for node in self._path_resolver.list_authoritative_nodes():
+        for node in self._path_resolver.list_nodes():
             if node.kind != "session":
                 continue
-            session_file = node.path / "session.json"
+            session_file = (
+                self._path_resolver.resolve_session_node(node.node_id)
+                / "session.json"
+            )
             data = json.loads(session_file.read_text(encoding="utf-8"))
             if data.get("workspace_id") not in LEGACY_BACKEND_WORKSPACE_IDS:
                 continue
@@ -159,14 +164,14 @@ class SessionService:
     def _authoritative_navigation_projection(
         self,
         session_id: str,
-    ) -> tuple[SessionPhysicalNode, dict[str, SessionPhysicalNode]]:
+    ) -> tuple[SessionCatalogNodeProjection, dict[str, SessionCatalogNodeProjection]]:
         """返回会话节点在 SQLite catalog 权威索引上的投影与全量节点表。
 
         title 取 catalog display_name，parent_session_id 沿 catalog 父链派生。
-        使用 ``list_authoritative_nodes`` 读取目录投影，避免把 manifest 中
-        已剥离的导航字段重新当作业务状态。
+        使用 SQLite catalog 的唯一节点投影，避免把 manifest 中已剥离的
+        导航字段重新当作业务状态。
         """
-        nodes = self._path_resolver.list_authoritative_nodes()
+        nodes = self._path_resolver.list_nodes()
         nodes_by_id = {node.node_id: node for node in nodes}
         node = nodes_by_id.get(session_id)
         if node is None:
@@ -176,7 +181,7 @@ class SessionService:
     @staticmethod
     def _nearest_session_ancestor_in_projection(
         parent_node_id: str | None,
-        nodes_by_id: dict[str, SessionPhysicalNode],
+        nodes_by_id: dict[str, SessionCatalogNodeProjection],
     ) -> str | None:
         """在 catalog 权威投影上派生最近 session 祖先（含传入节点本身）。
 
@@ -241,7 +246,10 @@ class SessionService:
         for node in nodes:
             if node.kind != "session":
                 continue
-            session_file = node.path / "session.json"
+            session_file = (
+                self._path_resolver.resolve_session_node(node.node_id)
+                / "session.json"
+            )
             data = json.loads(
                 await asyncio.to_thread(session_file.read_text, encoding="utf-8")
             )
@@ -593,7 +601,7 @@ class SessionService:
         folder_id: str,
         parent_node_id: str | None,
         name: str,
-    ) -> SessionPhysicalNode:
+    ) -> SessionCatalogNodeProjection:
         """校验并逻辑移动文件夹子树，导航字段统一落在 catalog。"""
         expected_parents = (
             self._path_resolver.expected_session_parents_after_folder_move(

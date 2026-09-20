@@ -290,7 +290,6 @@ def generate(
             shutil.copytree(rollout_dir, previous_rollout_backup)
         shutil.rmtree(rollout_dir)
     _session_manifest(session_dir, SESSION_ID)
-    resolver.refresh()
 
     config_service = ConfigService(
         workspace_root=workspace_root,
@@ -490,7 +489,6 @@ def generate(
         if previous_rollout_backup is not None:
             shutil.rmtree(rollout_dir, ignore_errors=True)
             os.replace(previous_rollout_backup, rollout_dir)
-            resolver.refresh()
         raise RuntimeError(
             "真实模型 fixture 未同时成功使用两个 provider: "
             f"observed={sorted(observed_provider_ids)}"
@@ -503,7 +501,6 @@ def generate(
         if previous_rollout_backup is not None:
             shutil.rmtree(rollout_dir, ignore_errors=True)
             os.replace(previous_rollout_backup, rollout_dir)
-            resolver.refresh()
         raise RuntimeError(
             "真实模型 fixture 未同时形成 reasoning、summary、encrypted reasoning: "
             f"carriers={sorted(reasoning_carriers)}"
@@ -515,7 +512,6 @@ def generate(
         SESSION_ID,
         current_provider_id=last_provider_id,
     )
-    resolver.refresh()
 
 
 def main() -> None:

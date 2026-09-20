@@ -1,9 +1,8 @@
 """SessionCatalogPathResolver 新模型解析器测试（OpenSpec 8.2-切片3a，R15）。
 
 覆盖：读方法（SQLite 直读投影、fail closed）、节点投影（folder path=None、
-updated_at==created_at、name==display_name）、导航写（逻辑移动不搬磁盘）、
-删除适配（begin/finish 两阶段、单调用删除）、属性语义与
-新旧 resolver 在等价小树上的语义对照抽查。
+updated_at==created_at、name==display_name）、导航写（逻辑移动不搬磁盘）以及
+删除适配（begin/finish 两阶段、单调用删除）。
 只使用 tmp_path，不触碰真实工作区。
 """
 
@@ -19,7 +18,9 @@ from pathlib import Path
 import pytest
 
 from app.core.session_catalog_resolver import (
+    SessionCatalogFolderProjection,
     SessionCatalogPathResolver,
+    SessionCatalogSessionProjection,
     SessionChildSummary,
 )
 from app.core.session_catalog_store import (
@@ -29,7 +30,6 @@ from app.core.session_catalog_store import (
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
 from app.core.session_lifecycle_gate import NavigationTopologyGate
-from app.core.session_paths import SessionPathResolver
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
 
 WORKSPACE_ID = "ws-resolver"
@@ -251,10 +251,10 @@ class TestConstructor:
                 delete_service=delete_service,
             )
 
-    def test_index_path_is_store_database_path(
+    def test_catalog_store_is_exposed_for_storage_operations(
         self, resolver: SessionCatalogPathResolver, store: SessionCatalogStore
     ) -> None:
-        assert resolver.index_path == store.database_path
+        assert resolver.catalog_store is store
         assert resolver.sessions_root == store.sessions_root
 
 
@@ -287,11 +287,6 @@ class TestInitializeAndProperties:
         with pytest.raises(RuntimeError, match="循环"):
             resolver.initialize()
 
-    def test_physical_tree_error_is_none(
-        self, resolver: SessionCatalogPathResolver
-    ) -> None:
-        assert resolver.physical_tree_error is None
-
     def test_legacy_inline_attachment_migration_record_empty(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
@@ -310,21 +305,12 @@ class TestInitializeAndProperties:
         resolver.update_node_name(folder.node_id, "新名")
         assert resolver.revision == before + 1
 
-    def test_authoritative_revision_equals_revision(
+    def test_list_nodes_reads_latest_catalog_projection(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        resolver.create_folder(name="目录", parent_node_id=None)
-        assert resolver.authoritative_revision == resolver.revision
-
-    def test_invalidate_noop_and_refresh_returns_projection(
-        self, resolver: SessionCatalogPathResolver
-    ) -> None:
-        resolver.invalidate()
         folder = resolver.create_folder(name="目录", parent_node_id=None)
-        nodes = resolver.refresh()
+        nodes = resolver.list_nodes()
         assert [node.node_id for node in nodes] == [folder.node_id]
-        # refresh 形参保留签名兼容，行为与直读一致。
-        assert resolver.list_nodes(refresh=True) == nodes
 
 
 # ----------------------------------------------------------------------
@@ -339,10 +325,11 @@ class TestProjection:
     ) -> None:
         session_id, session_dir = await allocated_session(resolver)
         node = resolver.get_node(session_id)
+        assert isinstance(node, SessionCatalogSessionProjection)
         assert node.node_id == session_id
         assert node.kind == "session"
-        assert node.path == session_dir
-        assert node.path.is_absolute()
+        assert resolver.resolve_session_node(session_id) == session_dir
+        assert node.storage_relative_path.endswith(session_id)
         assert node.name == "测试会话"
         assert node.parent_node_id is None
         assert node.created_at == node.updated_at
@@ -353,15 +340,15 @@ class TestProjection:
     ) -> None:
         folder = resolver.create_folder(name="目录", parent_node_id=None)
         node = resolver.get_node(folder.node_id)
+        assert isinstance(node, SessionCatalogFolderProjection)
         assert node.kind == "folder"
-        assert node.path is None
-        # folder 在 catalog 中无时间字段，投影不伪造时间值。
-        assert node.created_at is None
-        assert node.updated_at is None
+        assert not hasattr(node, "path")
+        assert not hasattr(node, "created_at")
+        assert not hasattr(node, "storage_relative_path")
         assert node.name == "目录"
 
     @pytest.mark.asyncio
-    async def test_list_nodes_sorted_and_authoritative_equal(
+    async def test_list_nodes_sorted(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         ids = await build_catalog_tree(resolver)
@@ -369,7 +356,6 @@ class TestProjection:
         assert [node.node_id for node in nodes] == sorted(
             ids.values()
         )
-        assert resolver.list_authoritative_nodes() == nodes
 
 
 # ----------------------------------------------------------------------
@@ -698,20 +684,6 @@ class TestNavigationWrites:
         with pytest.raises(ValueError, match="relocate_session"):
             resolver.move_node(node_id=session_id, parent_node_id=None)
 
-    def test_move_node_rejects_renaming_name(
-        self, resolver: SessionCatalogPathResolver
-    ) -> None:
-        folder = resolver.create_folder(name="原名", parent_node_id=None)
-        with pytest.raises(ValueError, match="update_node_name"):
-            resolver.move_node(
-                node_id=folder.node_id, parent_node_id=None, name="改名"
-            )
-        # 同名 name 保持兼容放行。
-        moved = resolver.move_node(
-            node_id=folder.node_id, parent_node_id=None, name="原名"
-        )
-        assert moved.name == "原名"
-
     def test_move_node_cycle_rejected(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
@@ -751,8 +723,7 @@ class TestNavigationWrites:
         ids = await build_catalog_tree(resolver)
         f1_node_before = resolver.get_node(ids["f1"])
         # S2 在 F1 子树内，抓 S2 目录指纹验证不动磁盘。
-        s2_dir = resolver.get_node(ids["s2"]).path
-        assert s2_dir is not None
+        s2_dir = resolver.resolve_session_node(ids["s2"])
         s2_fingerprint = directory_fingerprint(s2_dir)
         moved = resolver.relocate_folder_tree(
             folder_id=ids["f1"], parent_node_id=target
@@ -762,7 +733,7 @@ class TestNavigationWrites:
         assert resolver.get_node(ids["s1"]).parent_node_id == ids["f1"]
         assert resolver.get_node(ids["s2"]).parent_node_id == ids["f2"]
         assert directory_fingerprint(s2_dir) == s2_fingerprint
-        assert f1_node_before.path == moved.path
+        assert f1_node_before.node_id == moved.node_id
 
     @pytest.mark.asyncio
     async def test_expected_session_parents_after_folder_move_derivation(
@@ -829,7 +800,7 @@ class TestNavigationWrites:
         # 无物理目录、无 manifest：sessions 树中不存在同名路径。
         assert not (sessions_root / folder.node_id).exists()
         assert not any(sessions_root.rglob(f"*{folder.node_id}*"))
-        assert folder.path is None
+        assert not hasattr(folder, "path")
 
 
 # ----------------------------------------------------------------------
@@ -937,95 +908,6 @@ class TestSubtreeDelete:
             await resolver.delete_session_subtree(folder.node_id)
         with pytest.raises(KeyError):
             await resolver.delete_session_subtree(make_node_id())
-
-
-# ----------------------------------------------------------------------
-# 语义对照抽查（旧 SessionPathResolver 在等价小树上）
-# ----------------------------------------------------------------------
-
-
-def build_equivalent_old_tree(
-    sessions_root: Path, ids: dict[str, str]
-) -> SessionPathResolver:
-    """用与新树相同的稳定 ID 构造旧模型（JSON index + 物理树）小树。"""
-    old = SessionPathResolver(sessions_root)
-    old.initialize()
-    old.create_folder(
-        name="团队", parent_node_id=None, folder_id=ids["f1"]
-    )
-    now = datetime.now(UTC).isoformat()
-
-    def register_old(session_id: str, title: str, parent_node_id: str | None) -> None:
-        session_dir = old.allocate_session_dir(
-            session_id=session_id,
-            title=title,
-            parent_node_id=parent_node_id,
-        )
-        manifest = {
-            "session_id": session_id,
-            "title": title,
-            "parent_session_id": old.nearest_session_ancestor(parent_node_id),
-            "created_at": now,
-            "updated_at": now,
-        }
-        (session_dir / "session.json").write_text(
-            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
-        )
-        old.register_session(session_id, session_dir)
-
-    register_old(ids["s1"], "根会话", ids["f1"])
-    old.create_folder(
-        name="子文件夹", parent_node_id=ids["s1"], folder_id=ids["f2"]
-    )
-    register_old(ids["s2"], "子会话", ids["f2"])
-    register_old(ids["s3"], "旁会话", None)
-    return old
-
-
-class TestSemanticParityWithLegacyResolver:
-    @pytest.mark.asyncio
-    async def test_list_nodes_node_id_sets_equal(
-        self,
-        resolver: SessionCatalogPathResolver,
-        tmp_path: Path,
-    ) -> None:
-        ids = await build_catalog_tree(resolver)
-        old = build_equivalent_old_tree(tmp_path / "legacy" / ".boxteam" / "sessions", ids)
-        assert {node.node_id for node in old.list_nodes()} == {
-            node.node_id for node in resolver.list_nodes()
-        }
-
-    @pytest.mark.asyncio
-    async def test_nearest_session_ancestor_parity(
-        self,
-        resolver: SessionCatalogPathResolver,
-        tmp_path: Path,
-    ) -> None:
-        ids = await build_catalog_tree(resolver)
-        old = build_equivalent_old_tree(tmp_path / "legacy" / ".boxteam" / "sessions", ids)
-        for probe in (*ids.values(), None):
-            assert old.nearest_session_ancestor(probe) == (
-                resolver.nearest_session_ancestor(probe)
-            )
-
-    @pytest.mark.asyncio
-    async def test_descendants_and_child_summary_parity(
-        self,
-        resolver: SessionCatalogPathResolver,
-        tmp_path: Path,
-    ) -> None:
-        ids = await build_catalog_tree(resolver)
-        old = build_equivalent_old_tree(tmp_path / "legacy" / ".boxteam" / "sessions", ids)
-        for root in (ids["f1"], ids["s1"], ids["f2"]):
-            assert old.descendant_session_ids(root) == (
-                resolver.descendant_session_ids(root)
-            )
-        old_summary = old.child_session_summary(ids["s1"], limit=10)
-        new_summary = resolver.child_session_summary(ids["s1"], limit=10)
-        assert old_summary[0] == new_summary[0]
-        assert set(old_summary[1]) == {
-            item.session_id for item in new_summary[1]
-        }
 
 
 # ----------------------------------------------------------------------

@@ -7,11 +7,9 @@ OpenSpec add-itemized-rollout-context 8.2-切片3a（R15）。以
 红线（模块边界，违反即失去本轮资格）：
 
 - **唯一权威**：SQLite catalog 是唯一目录数据源；节点读取不依赖进程内缓存。
-- **folder 无物理目录**：新模型 folder 是 SQLite-only 节点——投影
-  ``path=None``（``created_at``/``updated_at`` 同为 None，catalog 中 folder
-  无时间字段，不伪造时间值）；``resolve_folder_dir`` 恒 ``RuntimeError``。
-  旧调用方对 ``folder.path`` / ``resolve_folder_dir`` /
-  ``relative_path(folder)`` 的使用须在切换轮逐一核对适配。
+- **folder 无物理目录**：新模型 folder 是 SQLite-only 节点，使用独立的
+  ``SessionCatalogFolderProjection``；``resolve_folder_dir`` 恒
+  ``RuntimeError``。
 - **逻辑移动不搬磁盘**：``move_node``/``relocate_session``/
   ``relocate_folder_tree`` 只改 SQLite ``parent_node_id``，不搬任何物理
   目录、不改写 ``session.json``、不改 fork/delegation lineage/Session kind
@@ -32,6 +30,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal, TypeAlias
 
 from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_store import (
@@ -41,16 +40,19 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
-from app.core.session_tree.support import SessionPhysicalNode
 
 __all__ = [
+    "SessionCatalogFolderProjection",
+    "SessionCatalogNodeProjection",
     "SessionCatalogPathResolver",
+    "SessionCatalogSessionProjection",
     "SessionChildSummary",
 ]
 
 # store.list_children 单页上限（BFS 全量投影的分页粒度）。
 _LIST_CHILDREN_PAGE_LIMIT = 512
 _CONTROL_DATABASE_NAME = "session-control.sqlite"
+
 
 @dataclass(frozen=True, slots=True)
 class SessionChildSummary:
@@ -61,12 +63,39 @@ class SessionChildSummary:
     created_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class SessionCatalogFolderProjection:
+    """SQLite-only folder 节点投影。"""
+
+    node_id: str
+    kind: Literal["folder"]
+    parent_node_id: str | None
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class SessionCatalogSessionProjection:
+    """带稳定物理 locator 的 session 节点投影。"""
+
+    node_id: str
+    kind: Literal["session"]
+    parent_node_id: str | None
+    name: str
+    created_at: datetime
+    updated_at: datetime
+    storage_relative_path: str
+
+
+SessionCatalogNodeProjection: TypeAlias = (
+    SessionCatalogFolderProjection | SessionCatalogSessionProjection
+)
+
+
 class SessionCatalogPathResolver:
     """以 SessionCatalogStore（SQLite catalog）为数据源的会话路径解析器。
 
-    与旧 ``SessionPathResolver`` 的 duck-typing 契约见模块 docstring 红线。
-    进程内 ``threading.RLock`` 只保护自身实例表（待注册分配、子树删除
-    key）；节点读取全部走 store 的 SQLite 直读，天然进程内新鲜。
+    进程内 ``threading.RLock`` 只保护子树删除 idempotency key；节点读取
+    全部走 store 的 SQLite 直读，天然进程内新鲜。
     """
 
     def __init__(
@@ -104,13 +133,8 @@ class SessionCatalogPathResolver:
         self._consistency_verified = False
 
     # ------------------------------------------------------------------
-    # 兼容属性
+    # 公开装配属性
     # ------------------------------------------------------------------
-
-    @property
-    def index_path(self) -> Path:
-        """兼容属性名：新模型权威索引即 SQLite catalog 数据库文件。"""
-        return self._store.database_path
 
     @property
     def catalog_store(self) -> SessionCatalogStore:
@@ -121,36 +145,26 @@ class SessionCatalogPathResolver:
         self,
         callback: Callable[[str], Awaitable[None]],
     ) -> None:
-        """把运行时排空端口绑定到共享子树删除流。"""
+        """把单一运行时/资源复合 drain 回调绑定到共享子树删除流。"""
         self._delete_service.set_session_drain_callback(callback)
 
     # ------------------------------------------------------------------
     # 节点投影
     # ------------------------------------------------------------------
 
-    def _project_node(self, node: SessionCatalogNode) -> SessionPhysicalNode:
-        """把 catalog 行投影为 SessionPhysicalNode。
+    def _project_node(self, node: SessionCatalogNode) -> SessionCatalogNodeProjection:
+        """把 catalog 行投影为明确的 catalog 节点类型。
 
-        - ``name = display_name``（显示名只存 catalog）；
-        - session 的 ``path`` 由 storage locator 解析；folder 无物理目录，
-          ``path`` 投影为 ``None``——调用方不得对 folder 取 path（旧调用方
-          在切换轮逐一核对）；
-        - 新模型无节点级 ``updated_at``（revision 表达变更计数），投影
-          ``updated_at = created_at`` 保持字段完整；folder 在 catalog 中
-          无 ``created_at``，投影 ``None``（不伪造时间值）。
+        ``name`` 只来自 catalog；folder 无物理目录或时间字段，session 的
+        物理路径由受检 storage locator 解析。运行时需要路径时必须调用
+        ``resolve_session_node``，不能从可空 ``path`` 字段猜测。
         """
         if node.kind == "folder":
-            # SessionPhysicalNode 的 path/created_at/updated_at 注解为
-            # Path/datetime，folder 投影按本模块红线携带 None（无运行时
-            # 强制），与任务书 §2.1-B「folder.path 返回 None」决定一致。
-            return SessionPhysicalNode(  # type: ignore[arg-type]
+            return SessionCatalogFolderProjection(
                 node_id=node.node_id,
                 kind=node.kind,
-                path=None,  # type: ignore[arg-type]
                 parent_node_id=node.parent_node_id,
                 name=node.display_name,
-                created_at=None,  # type: ignore[arg-type]
-                updated_at=None,  # type: ignore[arg-type]
             )
         if node.storage_relative_locator is None:
             raise RuntimeError(
@@ -162,16 +176,16 @@ class SessionCatalogPathResolver:
                 "session 节点缺少 created_at"
                 f"（catalog 被外部改动，fail closed）: node_id={node.node_id}"
             )
-        path = self._store.resolve_session_locator(node.storage_relative_locator)
+        self._store.resolve_session_locator(node.storage_relative_locator)
         created_at = datetime.fromisoformat(node.created_at)
-        return SessionPhysicalNode(
+        return SessionCatalogSessionProjection(
             node_id=node.node_id,
             kind=node.kind,
-            path=path,
             parent_node_id=node.parent_node_id,
             name=node.display_name,
             created_at=created_at,
             updated_at=created_at,
+            storage_relative_path=node.storage_relative_locator[len("sessions/"):],
         )
 
     # ------------------------------------------------------------------
@@ -179,7 +193,7 @@ class SessionCatalogPathResolver:
     # ------------------------------------------------------------------
 
     def _ensure_consistency_verified(self) -> None:
-        """首次读取前做一次全表一致性校验（对齐旧 initialize 契约）。"""
+        """首次读取前做一次全表一致性校验。"""
         if self._consistency_verified:
             return
         self._store.verify_workspace_consistency()
@@ -236,10 +250,9 @@ class SessionCatalogPathResolver:
         parent_node_id: str | None,
         nodes_by_id: dict[str, SessionCatalogNode],
     ) -> str | None:
-        """旧 ``nearest_session_ancestor_from_nodes`` 语义的纯内存实现。
+        """按 catalog 父链计算最近 session 祖先。
 
-        注意：语义包含传入节点本身（传入 session 直接返回它）；store 的
-        同名方法从父链开始（不含自身），两者不同，不得混用。
+        传入 session 直接返回自身，folder 沿父链向上查找。
         """
         current_id = parent_node_id
         visited: set[str] = set()
@@ -262,42 +275,25 @@ class SessionCatalogPathResolver:
     def initialize(self) -> None:
         """校验 catalog 全表一致性（fail closed）。
 
-        store 已构造即视为初始化完成；SQLite 直读模型下无加载态，本方法
-        只保留旧接口契约（构造后调用一次）并做 fail-closed 校验。
+        store 已构造即视为可读；启动装配仍显式调用本方法，确保工作区
+        catalog 在业务服务接管前通过完整性校验。
         """
         with self._lock:
             self._store.verify_workspace_consistency()
             self._consistency_verified = True
 
-    def invalidate(self) -> None:
-        """no-op：SQLite 直读天然新鲜，保留旧签名兼容。"""
-        return
-
-    def list_nodes(self, *, refresh: bool = False) -> list[SessionPhysicalNode]:
-        """catalog 全量节点投影（按 node_id 排序稳定序）。
-
-        ``refresh`` 形参保留旧签名兼容；SQLite 直读下每次都读到最新提交，
-        刷新与否无差异。
-        """
-        del refresh  # 签名兼容：直读模型无缓存可刷新。
+    def list_nodes(self) -> list[SessionCatalogNodeProjection]:
+        """返回 SQLite catalog 全量节点投影（按 node_id 稳定排序）。"""
         return [
             self._project_node(node)
             for node in self._list_all_catalog_nodes()
         ]
 
-    def list_authoritative_nodes(self) -> list[SessionPhysicalNode]:
-        """同 :meth:`list_nodes`：catalog 即唯一权威投影。"""
-        return self.list_nodes()
-
-    def refresh(self) -> list[SessionPhysicalNode]:
-        """no-op 刷新后返回全量投影（旧签名兼容）。"""
-        return self.list_nodes()
-
     # ------------------------------------------------------------------
     # 读方法
     # ------------------------------------------------------------------
 
-    def get_node(self, node_id: str) -> SessionPhysicalNode:
+    def get_node(self, node_id: str) -> SessionCatalogNodeProjection:
         """返回节点投影；不存在抛 KeyError。"""
         self._ensure_consistency_verified()
         return self._project_node(self._store.get_node(node_id))
@@ -386,30 +382,24 @@ class SessionCatalogPathResolver:
         return thread_path
 
     def resolve_session_node_for_runtime(self, session_id: str) -> Path:
-        """运行时解析会话目录；语义同 :meth:`resolve_session_node`。
-
-        旧语义「运行时解析不触发迁移」：新模型无迁移语义，SQLite 直读
-        即最新权威，不做额外区分。
-        """
+        """运行时解析会话目录，统一走 SQLite catalog 路径校验。"""
         return self.resolve_session_node(session_id)
 
     def resolve_folder_dir(self, folder_id: str) -> Path:
         """恒 RuntimeError：新模型 folder 无物理目录（design.md §9）。
 
-        节点不存在仍先抛 KeyError（保留「目标不存在」信号），存在则一律
-        拒绝——旧调用方对 folder 物理目录的依赖须在切换轮适配。
+        节点不存在抛 KeyError；存在的 folder 一律拒绝物理路径解析。
         """
         self._store.get_node(folder_id)
         raise RuntimeError(
             "folder 无物理目录（新模型 folder 是 SQLite-only 节点，"
-            f"design.md §9），旧调用方须在切换轮适配: folder_id={folder_id}"
+            f"design.md §9）: folder_id={folder_id}"
         )
 
     def relative_path(self, node_id: str) -> str:
         """返回 session 的 storage locator 相对 sessions_root 的 POSIX 路径。
 
-        新模型仅支持 session 节点（folder 无物理目录，旧调用方对 folder
-        的 relative_path 使用须切换轮适配）。
+        仅 session 节点具有 storage locator；folder 无物理路径。
         """
         node = self._store.get_node(node_id)
         if node.kind != "session" or node.storage_relative_locator is None:
@@ -436,14 +426,13 @@ class SessionCatalogPathResolver:
             ) from error
         return f"{prefix}/{relative}"
 
-    def child_nodes(self, node_id: str) -> list[SessionPhysicalNode]:
+    def child_nodes(self, node_id: str) -> list[SessionCatalogNodeProjection]:
         """返回直接子节点投影（store.list_children 全量分页，稳定序）。
 
-        节点不存在抛 KeyError（旧实现对缺失节点静默返回空列表，此处按
-        fail-closed 收紧；调用方在切换轮核对）。
+        节点不存在抛 KeyError；目录结构异常直接 fail closed。
         """
         self._ensure_consistency_verified()
-        items: list[SessionPhysicalNode] = []
+        items: list[SessionCatalogNodeProjection] = []
         cursor: str | None = None
         while True:
             page, next_cursor, has_more = self._store.list_children(
@@ -463,13 +452,12 @@ class SessionCatalogPathResolver:
         *,
         limit: int,
     ) -> tuple[int, list[SessionChildSummary], bool]:
-        """返回直接逻辑子会话摘要，保持旧 ``(count, items, has_more)`` 分页形态。
+        """返回直接逻辑子会话摘要。
 
         「直接逻辑子会话」沿用旧语义：最近 session 祖先等于目标 session
         的全部 session 节点（含经 folder 间接挂载者）。items 元素升级为
         :class:`SessionChildSummary`（id/title/created_at，title 即
-        catalog display_name）；旧调用方读取 id 的位置须在切换轮改为
-        ``.session_id``。
+        catalog display_name）。
         """
         if limit < 1:
             raise ValueError("子会话摘要 limit 必须大于 0")
@@ -513,11 +501,10 @@ class SessionCatalogPathResolver:
         return ids
 
     def nearest_session_ancestor(self, node_id: str | None) -> str | None:
-        """返回最近 session 祖先 ID（旧语义：包含传入节点本身）。
+        """返回最近 session 祖先 ID（包含传入节点本身）。
 
         传入节点是 session 时直接返回它；否则沿父链向上找第一个
-        session。节点缺失保持旧 ``RuntimeError`` 契约（store 层为
-        KeyError，此处转换）。
+        session。节点缺失转换为 RuntimeError，并保留节点 ID 诊断信息。
         """
         if node_id is None:
             return None
@@ -530,7 +517,7 @@ class SessionCatalogPathResolver:
             return node.node_id
         return self._store.nearest_session_ancestor(node_id)
 
-    def breadcrumb(self, node_id: str) -> list[SessionPhysicalNode]:
+    def breadcrumb(self, node_id: str) -> list[SessionCatalogNodeProjection]:
         """返回从根到该节点（含自身）的节点投影链。"""
         self._ensure_consistency_verified()
         return [
@@ -538,30 +525,17 @@ class SessionCatalogPathResolver:
         ]
 
     # ------------------------------------------------------------------
-    # 兼容属性（旧接口面）
+    # Catalog 变更版本
     # ------------------------------------------------------------------
 
     @property
     def revision(self) -> int:
         """变更敏感计数：``sum(所有节点 revision)``。
 
-        与旧 index mtime 计数的语义差异：旧计数来自进程内物理树刷新
-        次数；新计数直接聚合 catalog 行 revision（每次导航写 +1）。
-        调用方仅用于缓存失效判定，SQLite 直读模型下该用途弱化。
-        性能注记：每次读取做一次 BFS 分页聚合（不装配轮无热点；切换轮
-        如需优化应由 store 提供聚合查询公开方法）。
+        该值由 catalog 行 revision 聚合得到，用于目录服务缓存失效判定。
+        每次读取执行一次 BFS 分页聚合。
         """
         return sum(node.revision for node in self._list_all_catalog_nodes())
-
-    @property
-    def physical_tree_error(self) -> str | None:
-        """恒 None：新模型无后台物理树校验，resolve 时点校验（fail closed）。"""
-        return None
-
-    @property
-    def authoritative_revision(self) -> int:
-        """同 :attr:`revision`：catalog 直读下无「权威/物理」二分。"""
-        return self.revision
 
     @property
     def legacy_inline_attachment_migration_record(self) -> dict[str, object]:
@@ -572,9 +546,8 @@ class SessionCatalogPathResolver:
     # 导航写方法（SQLite-only，不动物理）
     # ------------------------------------------------------------------
 
-    def update_node_name(self, node_id: str, name: str) -> SessionPhysicalNode:
-        """重命名节点显示名（仅 SQLite；旧语义 rename 物理目录名，新模型
-        显示名不参与路径，物理目录保持稳定）。"""
+    def update_node_name(self, node_id: str, name: str) -> SessionCatalogNodeProjection:
+        """重命名 catalog 显示名；物理目录保持稳定。"""
         return self._project_node(self._store.rename_node(node_id, name))
 
     def create_folder(
@@ -582,7 +555,7 @@ class SessionCatalogPathResolver:
         *,
         name: str,
         parent_node_id: str | None,
-    ) -> SessionPhysicalNode:
+    ) -> SessionCatalogNodeProjection:
         """创建 folder 节点：软件分配 ID、无物理目录、无 manifest。
 
         folder 与 session 共用 ``ses_`` ID profile（R10 口径）；显示名只
@@ -604,25 +577,13 @@ class SessionCatalogPathResolver:
         *,
         node_id: str,
         parent_node_id: str | None,
-        name: str | None = None,
-    ) -> SessionPhysicalNode:
-        """逻辑移动 folder（只改 parent_node_id，不搬磁盘）。
-
-        ``name`` 形参保留旧签名兼容；新模型重命名走
-        :meth:`update_node_name`——传入与当前 display_name 不同的 name
-        直接拒绝（fail closed，防止切换期静默丢失重命名）。
-        """
+    ) -> SessionCatalogNodeProjection:
+        """逻辑移动 folder，只改 ``parent_node_id``，不搬物理目录。"""
         node = self._store.get_node(node_id)
         if node.kind != "folder":
             raise ValueError(
                 f"move_node 只允许移动会话文件夹，会话必须走 relocate_session: "
                 f"{node_id}"
-            )
-        if name is not None and name != node.display_name:
-            raise ValueError(
-                "新模型 move_node 不承担重命名，显示名变更走 update_node_name: "
-                f"node_id={node_id}, current={node.display_name!r}, "
-                f"requested={name!r}"
             )
         return self._project_node(self._store.move_node(node_id, parent_node_id))
 
@@ -631,11 +592,10 @@ class SessionCatalogPathResolver:
         *,
         session_id: str,
         parent_node_id: str | None,
-    ) -> SessionPhysicalNode:
+    ) -> SessionCatalogNodeProjection:
         """逻辑移动 session（改 parent；不搬目录、不改 manifest）。
 
-        新模型 ``parent_session_id`` 是 catalog 派生关系，不再改写
-        session.json（旧签名的 ``manifest`` 形参整体移除，切换轮适配）；
+        ``parent_session_id`` 是 catalog 派生关系，不改写 session.json；
         fork/delegation lineage 与 Session kind 不受逻辑移动影响。
         """
         node = self._store.get_node(session_id)
@@ -648,10 +608,9 @@ class SessionCatalogPathResolver:
         *,
         folder_id: str,
         parent_node_id: str | None,
-    ) -> SessionPhysicalNode:
+    ) -> SessionCatalogNodeProjection:
         """逻辑移动 folder 子树（根节点改 parent，后代关系不变）。
 
-        旧签名的 ``name``/``session_manifests`` 形参整体移除：新模型
         folder 无物理目录（无 rename 语义）、session 父关系由 catalog
         派生（无 manifest 改写）；显示名变更走 :meth:`update_node_name`。
         """
@@ -685,7 +644,7 @@ class SessionCatalogPathResolver:
                     f"移动会形成目录循环: node_id={folder_id}, "
                     f"parent={parent_node_id}"
                 )
-            # 父节点必须存在（缺失 KeyError，对齐旧 get_node 行为）。
+            # 父节点必须存在。
             self._store.get_node(parent_node_id)
         external_parent_session_id = self.nearest_session_ancestor(parent_node_id)
         nodes_by_id = {

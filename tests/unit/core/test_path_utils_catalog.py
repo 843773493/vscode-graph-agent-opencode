@@ -71,7 +71,7 @@ def test_existing_sqlite_returns_catalog_resolver(tmp_path):
     resolver = get_session_path_resolver(sessions_root)
 
     assert isinstance(resolver, SessionCatalogPathResolver)
-    assert resolver.index_path == database_path.resolve()
+    assert resolver.catalog_store.database_path == database_path.resolve()
 
 
 def test_sqlite_wins_over_stale_legacy_index(tmp_path):

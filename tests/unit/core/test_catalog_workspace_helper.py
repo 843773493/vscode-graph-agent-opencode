@@ -58,7 +58,7 @@ async def test_create_session_and_folder_builds_tree_with_derived_parents(
         # folder 是 SQLite-only 节点：无物理目录、无时间投影。
         folder_node = workspace.node(folder_id)
         assert folder_node.kind == "folder"
-        assert folder_node.path is None
+        assert not hasattr(folder_node, "path")
 
         # manifest 为剥离形态：不含 title/title_source/parent_session_id。
         manifest = workspace.manifest(child_id)

@@ -12,8 +12,8 @@ class _Resolver:
         assert session_id == "sess_goal"
         return self.path
 
-    def refresh(self):
-        return [SimpleNamespace(kind="session", path=self.path)]
+    def list_nodes(self):
+        return [SimpleNamespace(kind="session", node_id="sess_goal")]
 
 
 def test_goal_store_atomic_round_trip(tmp_path):

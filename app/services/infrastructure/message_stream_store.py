@@ -1965,7 +1965,10 @@ class MessageStreamStore:
         for node in self._path_resolver.list_nodes():
             if node.kind != "session":
                 continue
-            stream_dir = node.path / "message_streams"
+            stream_dir = (
+                self._path_resolver.resolve_session_node(node.node_id)
+                / "message_streams"
+            )
             if not stream_dir.is_dir():
                 continue
             for path in sorted(stream_dir.glob("*.jsonl")):

@@ -162,7 +162,11 @@ class FileTreeSettingsService:
         for node in self._path_resolver.list_nodes():
             if node.kind != "session":
                 continue
-            settings_path = node.path / "ui" / "file-tree-shortcuts.json"
+            settings_path = (
+                self._path_resolver.resolve_session_node(node.node_id)
+                / "ui"
+                / "file-tree-shortcuts.json"
+            )
             if settings_path.exists():
                 raw = self._read_settings_payload(settings_path)
                 if raw.get("version") == 2:

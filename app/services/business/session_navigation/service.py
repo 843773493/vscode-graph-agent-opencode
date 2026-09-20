@@ -9,8 +9,11 @@ from typing import TypeVar
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.session_catalog_resolver import SessionCatalogPathResolver
-from app.core.session_paths import SessionPhysicalNode
+from app.core.session_catalog_resolver import (
+    SessionCatalogNodeProjection,
+    SessionCatalogPathResolver,
+    SessionCatalogSessionProjection,
+)
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
@@ -44,14 +47,12 @@ class SessionCatalogService:
         self._cached_nodes: list[SessionCatalogNodeDTO] | None = None
         self._cached_revision: str | None = None
         self._cached_physical_revision: int | None = None
-        self._consistency_error: str | None = None
         self._session_service.register_change_listener(self._on_session_changed)
 
     def invalidate(self) -> None:
         self._cached_nodes = None
         self._cached_revision = None
         self._cached_physical_revision = None
-        self._consistency_error = None
 
     @property
     def path_resolver(self) -> SessionCatalogPathResolver:
@@ -61,7 +62,6 @@ class SessionCatalogService:
         self.invalidate()
 
     async def refresh(self) -> SessionCatalogPageDTO:
-        self._path_resolver.refresh()
         self.invalidate()
         nodes, revision = await self._snapshot(force=True)
         roots = self._sorted_children(nodes, None)
@@ -80,7 +80,7 @@ class SessionCatalogService:
         limit: int,
         cursor: str | None,
     ) -> SessionCatalogPageDTO:
-        nodes, revision = await self._snapshot(allow_inconsistent=True)
+        nodes, revision = await self._snapshot()
         if parent_node_id is not None and not any(
             node.node_id == parent_node_id for node in nodes
         ):
@@ -99,11 +99,10 @@ class SessionCatalogService:
                 else None
             ),
             total=len(children),
-            consistency_warning=self._consistency_error,
         )
 
     async def breadcrumb(self, node_id: str) -> SessionCatalogBreadcrumbDTO:
-        nodes, revision = await self._snapshot(allow_inconsistent=True)
+        nodes, revision = await self._snapshot()
         nodes_by_id = {node.node_id: node for node in nodes}
         node = nodes_by_id.get(node_id)
         if node is None:
@@ -123,7 +122,7 @@ class SessionCatalogService:
         normalized_query = query.strip().casefold()
         if not normalized_query:
             raise ValueError("会话目录搜索词不能为空")
-        nodes, revision = await self._snapshot(allow_inconsistent=True)
+        nodes, revision = await self._snapshot()
         offset = self._decode_cursor(cursor, revision)
         nodes_by_id = {node.node_id: node for node in nodes}
         matches: list[SessionCatalogNodeDTO] = []
@@ -198,7 +197,7 @@ class SessionCatalogService:
             else folder.parent_node_id
         )
         name = payload.name if payload.name is not None else folder.name
-        async def move_folder() -> SessionPhysicalNode:
+        async def move_folder() -> SessionCatalogNodeProjection:
             if parent_node_id != folder.parent_node_id:
                 return await self._session_service.relocate_folder_tree(
                     folder_id=folder_id,
@@ -216,7 +215,6 @@ class SessionCatalogService:
             return self._path_resolver.move_node(
                 node_id=folder_id,
                 parent_node_id=parent_node_id,
-                name=name,
             )
 
         moved = await self._run_sessions_idle(
@@ -314,7 +312,7 @@ class SessionCatalogService:
 
     async def _delete_folder_tree(self, folder_id: str) -> None:
         # 递归删除统一走 catalog 子树协议。folder 没有物理路径，不能再
-        # 通过 ``node.path`` 遍历或逐个调用旧的 session/folder 删除接口。
+        # 不通过节点投影遍历物理树或逐个调用旧的 session/folder 删除接口。
         # begin 的 mark CAS 是唯一拓扑快照和可见性关闭点；只有冻结完成后
         # 才能取得本次操作的 session 集合并做资源依赖校验。
         self._path_resolver.begin_subtree_delete(folder_id)
@@ -394,37 +392,17 @@ class SessionCatalogService:
         self,
         *,
         force: bool = False,
-        allow_inconsistent: bool = False,
     ) -> tuple[list[SessionCatalogNodeDTO], str]:
-        consistency_error: str | None = None
-        try:
-            physical_revision = self._path_resolver.revision
-            if (
-                not force
-                and self._cached_nodes is not None
-                and self._cached_revision is not None
-                and self._cached_physical_revision == physical_revision
-            ):
-                self._consistency_error = None
-                return self._cached_nodes, self._cached_revision
-            physical_nodes = self._path_resolver.list_nodes(refresh=force)
-            physical_revision = self._path_resolver.revision
-        except RuntimeError as error:
-            if not allow_inconsistent:
-                raise
-            # 业务读使用索引投影保留可见性；严格 refresh 仍拒绝不一致，
-            # 因此未登记的物理孤儿不会被静默吸收到目录树中。
-            consistency_error = str(error)
-            physical_nodes = self._path_resolver.list_authoritative_nodes()
-            physical_revision = self._path_resolver.authoritative_revision
+        physical_revision = self._path_resolver.revision
         if (
-            consistency_error is not None
+            not force
             and self._cached_nodes is not None
             and self._cached_revision is not None
-            and physical_revision == self._cached_physical_revision
+            and self._cached_physical_revision == physical_revision
         ):
-            self._consistency_error = consistency_error
             return self._cached_nodes, self._cached_revision
+        physical_nodes = self._path_resolver.list_nodes()
+        physical_revision = self._path_resolver.revision
         child_parent_ids = {
             node.parent_node_id
             for node in physical_nodes
@@ -441,12 +419,11 @@ class SessionCatalogService:
         self._cached_nodes = nodes
         self._cached_revision = revision
         self._cached_physical_revision = physical_revision
-        self._consistency_error = consistency_error
         return nodes, revision
 
     async def _load_session_metadata(
         self,
-        physical_nodes: list[SessionPhysicalNode],
+        physical_nodes: list[SessionCatalogNodeProjection],
     ) -> dict[str, SessionDTO]:
         session_nodes = [node for node in physical_nodes if node.kind == "session"]
         if not session_nodes:
@@ -476,13 +453,16 @@ class SessionCatalogService:
 
     def _to_catalog_node(
         self,
-        node: SessionPhysicalNode,
+        node: SessionCatalogNodeProjection,
         child_parent_ids: set[str],
         session_metadata: dict[str, SessionDTO],
     ) -> SessionCatalogNodeDTO:
         session = session_metadata.get(node.node_id)
         if node.kind == "session" and session is None:
             raise RuntimeError(f"会话目录节点缺少会话元数据: session_id={node.node_id}")
+        session_projection = (
+            node if isinstance(node, SessionCatalogSessionProjection) else None
+        )
         return SessionCatalogNodeDTO(
             node_id=node.node_id,
             kind=node.kind,
@@ -491,16 +471,17 @@ class SessionCatalogService:
             session_id=node.node_id if node.kind == "session" else None,
             folder_id=node.node_id if node.kind == "folder" else None,
             has_children=node.node_id in child_parent_ids,
-            # 新模型（8.2）folder 是 catalog-only 节点，物理投影 path=None，
-            # storage_relative_path 同为 None（DTO 可空，消费方以 or "" 兜底）；
-            # 旧 resolver 全部节点均有物理目录，行为不变。
             storage_relative_path=(
-                node.path.relative_to(self._path_resolver.sessions_root).as_posix()
-                if node.path is not None
+                session_projection.storage_relative_path
+                if session_projection is not None
                 else None
             ),
-            created_at=node.created_at,
-            updated_at=node.updated_at,
+            created_at=(
+                session_projection.created_at if session_projection is not None else None
+            ),
+            updated_at=(
+                session_projection.updated_at if session_projection is not None else None
+            ),
             session=session,
         )
 

@@ -157,9 +157,10 @@ class TestPathUtils:
         node = resolver.get_node(session_id)
         assert node.parent_node_id == folder.node_id
         assert node.name == session_title
-        assert folder.path is None
+        assert not hasattr(folder, "path")
         assert path.parent.parent.parent.parent == get_sessions_dir()
-        assert resolver.get_node(folder.node_id).updated_at is None
+        with pytest.raises(RuntimeError, match="folder 无物理目录"):
+            resolver.resolve_folder_dir(folder.node_id)
 
     def test_get_session_path_rejects_unknown_session(self, tmp_path, monkeypatch):
         workspace_root = tmp_path / "workspace"
