@@ -102,6 +102,7 @@ async def test_deterministic_model_stream_drives_node_debugging_from_user_prompt
     prompt = (
         f"请调试文件 {state.fixture_path}，工作目录是 {state.working_directory}。"
         "请先使用 skill_load(name=debugging) 加载当前工作区适用的调试能力，"
+        "不要用 read_file 读取 Skill 正文，"
         f"再对入口第 3 行和 {state.worker_path} 第 2 行设置断点，"
         "通过固定扩展信封启动并完成两处真实暂停、求值和继续。"
         "不要只解释，必须真实调用工具。"
@@ -140,9 +141,6 @@ async def test_deterministic_model_stream_drives_node_debugging_from_user_prompt
     names = [str(payload.get("tool_name")) for payload in start_payloads]
     expected_order = [
         "skill_load",
-        "glob",
-        "read_file",
-        "read_file",
         "list_debug_configurations",
         "list_breakpoints",
         "create_debug_configuration",
@@ -156,6 +154,8 @@ async def test_deterministic_model_stream_drives_node_debugging_from_user_prompt
         "list_breakpoints",
     ]
     assert names == expected_order, names
+    assert "read_file" not in names
+    assert "invoke_custom_tool" not in json.dumps(traces, ensure_ascii=False)
 
     debug_start_payloads = [
         payload
@@ -211,12 +211,7 @@ async def test_deterministic_model_stream_drives_node_debugging_from_user_prompt
     decoded_results = {
         name: _decode_debug_result(payloads[-1])
         for name, payloads in end_payloads_by_name.items()
-        if name
-        not in {
-            "skill_load",
-            "glob",
-            "read_file",
-        }
+        if name != "skill_load"
     }
     assert all(result.get("ok") is True for result in decoded_results.values()), (
         decoded_results

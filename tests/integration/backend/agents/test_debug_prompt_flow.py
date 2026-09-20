@@ -196,24 +196,6 @@ def scripted_model_server() -> Iterator[tuple[ScriptedModelState, str]]:
 
             assistant_text: str | None = None
             scripted_calls = (
-                (
-                    "glob",
-                    {
-                        "path": state.working_directory,
-                        "pattern": "**/*.mjs",
-                    },
-                    None,
-                ),
-                (
-                    "read_file",
-                    {"path": state.fixture_path},
-                    None,
-                ),
-                (
-                    "read_file",
-                    {"path": state.worker_path},
-                    None,
-                ),
                 ("list_debug_configurations", {}, None),
                 ("list_breakpoints", {}, None),
                 (
@@ -273,18 +255,11 @@ def scripted_model_server() -> Iterator[tuple[ScriptedModelState, str]]:
                 )
             elif tool_count - 1 < len(scripted_calls):
                 name, arguments, assistant_text = scripted_calls[tool_count - 1]
-                if name in {"glob", "read_file"}:
-                    call = _tool_call(
-                        call_index=tool_count,
-                        name=name,
-                        arguments=arguments,
-                    )
-                else:
-                    call = _tool_call(
-                        call_index=tool_count,
-                        name="invoke_extension_tool",
-                        arguments={"tool_name": name, "arguments": arguments},
-                    )
+                call = _tool_call(
+                    call_index=tool_count,
+                    name="invoke_extension_tool",
+                    arguments={"tool_name": name, "arguments": arguments},
+                )
             else:
                 call = None
                 assistant_text = "两个断点均已解释并完成 counter 加一，目标程序已正常退出。DEBUG_PROMPT_FLOW_OK"
@@ -420,6 +395,8 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     assert "先看状态再行动" in skill_text
     assert "invalid_breakpoints" in skill_text
     assert "不需要先交接控制权" in skill_text
+    assert "先用 `read_file` 读取 `.boxteam/bundled-skills/debugging/SKILL.md`" not in skill_text
+    assert "不要用 `read_file` 读取 Skill 正文" in skill_text
 
     create_response = await scripted_client.post(
         "/api/v1/sessions",
@@ -429,9 +406,9 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     session_id = create_response.json()["data"]["session_id"]
 
     prompt = (
-        "请在工作区里找到刚创建的计数程序入口和它依赖的相关 JavaScript 文件。"
+        f"请调试入口文件 {state.fixture_path} 及其依赖文件 {state.worker_path}，工作目录是 .。"
         "先使用 skill_load(name=debugging) 加载 debugging Skill 和可用调试方案；"
-        "如果没有匹配的具名方案就自己创建。"
+        "不要用 read_file 读取 Skill 正文；如果没有匹配的具名方案就自己创建。"
         "在入口累加和相关模块累加处设置断点并启动。每次真实停住后，先说明当前代码作用，"
         "再通过调试表达式把当前帧里的 state.counter 加一，然后继续到下一个断点，"
         "最后重新读取状态确认程序正常结束。不要修改源码来伪造计数变化。"
@@ -472,9 +449,6 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     ]
     expected_order = [
         "skill_load",
-        "glob",
-        "read_file",
-        "read_file",
         "list_debug_configurations",
         "list_breakpoints",
         "create_debug_configuration",
@@ -509,29 +483,8 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         == EXTENSION_TOOL_INVOKER_NAME
         for trace in debug_start_traces
     )
-
-    read_file_traces = [
-        trace
-        for trace in traces
-        if trace.get("type") == "tool_call_start"
-        and get_trace_payload(trace).get("tool_name") == "read_file"
-    ]
-    assert len(read_file_traces) == 2
-    assert [
-        get_trace_payload(trace).get("args", {}).get("path")
-        for trace in read_file_traces
-    ] == [state.fixture_path, state.worker_path]
-    read_file_ends = [
-        trace
-        for trace in traces
-        if trace.get("type") == "tool_call_end"
-        and get_trace_payload(trace).get("tool_name") == "read_file"
-    ]
-    assert len(read_file_ends) == 2
-    assert all(
-        get_trace_payload(trace).get("status") == "success"
-        for trace in read_file_ends
-    )
+    assert "read_file" not in tool_names
+    assert "invoke_custom_tool" not in json.dumps(traces, ensure_ascii=False)
 
     skill_load_starts = [
         trace

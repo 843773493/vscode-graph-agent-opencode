@@ -40,11 +40,14 @@ from app.schemas.internal_v2.node_debug import (
 )
 from app.services.infrastructure import node_debug_process_identity
 from app.services.infrastructure.node_debug_launch_claim import (
+    claim_marked,
     claim_running,
     claim_with_spawn_identity,
     new_launch_claim,
 )
 from app.services.infrastructure.node_debug_process_identity import (
+    IDENTITY_SOURCE_LINUX_PROC,
+    NodeDebugProcessIdentity,
     _probe_linux_proc_identity,
     probe_process_identity,
 )
@@ -425,6 +428,64 @@ async def test_restart_recovery_active_durable_claim_is_not_cold_eligible(
     assert snapshot.residency == "resident"
     assert await tracker.sweep() == ()
     assert fired == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("runtime_status", "claim_phase"),
+    [
+        ("launch_pending", "launch_pending"),
+        ("starting", "spawned"),
+        ("running", "running"),
+        ("paused", "running"),
+        ("stopping", "stopping"),
+    ],
+)
+async def test_all_active_debug_phases_remain_resident_past_thirty_minutes(
+    tmp_path: Path,
+    session_tree: SessionPathResolver,
+    runtime_status: str,
+    claim_phase: str,
+) -> None:
+    """每个产品活跃态都有 durable claim blocker，跨 30 分钟不得 cold。"""
+    claim = _launch_pending_claim()
+    if claim_phase != "launch_pending":
+        claim = claim_with_spawn_identity(
+            claim,
+            pid=12345,
+            identity=NodeDebugProcessIdentity(
+                pid=12345,
+                source=IDENTITY_SOURCE_LINUX_PROC,
+                start_marker="fake-start-marker",
+            ),
+        )
+    if claim_phase in {"running", "stopping"}:
+        claim = claim_running(claim, inspector_port=9229)
+    if claim_phase == "stopping":
+        claim = claim_marked(claim, phase="stopping")
+
+    store = NodeDebugSessionStore(session_tree)
+    store.write_launch_claim(claim)
+    clock = _FakeMonotonicClock()
+    tracker = _make_tracker(clock)
+    service = NodeDebugService(
+        workspace_root=tmp_path / "workspace",
+        session_store=store,
+        residency_tracker=tracker,
+    )
+    tracker.add_blocker_source(service)
+    tracker.register_generation(*_OWNER)
+    tracker.record_activity(*_OWNER)
+
+    clock.advance(7200)
+    snapshot = tracker.snapshot(*_OWNER)
+    assert snapshot.residency == "resident", runtime_status
+    assert snapshot.cold_eligible is False, runtime_status
+    assert snapshot.idle_seconds is None, runtime_status
+    assert [blocker.kind for blocker in snapshot.blockers] == [
+        "node_debug_process"
+    ]
+    assert await tracker.sweep() == ()
 
 
 @pytest.mark.asyncio
