@@ -15,6 +15,10 @@ import type {
   NodeDebugCapabilities,
   NodeDebugState,
 } from "../types/backend";
+import {
+  NodeDebugMutationGate,
+  type NodeDebugMutation,
+} from "./nodeDebugMutationGate";
 import { createNodeDebugSyncChannel } from "./nodeDebugSync";
 
 interface UseNodeDebugControllerOptions {
@@ -34,15 +38,6 @@ interface StartNodeDebugOptions {
   args?: string[];
 }
 
-type NodeDebugMutationMode = "action" | "loading";
-
-interface NodeDebugMutation {
-  ownerKey: string;
-  ownerGeneration: number;
-  mutationGeneration: number;
-  mode: NodeDebugMutationMode;
-}
-
 export function useNodeDebugController({
   apiPort,
   workspaceId,
@@ -56,31 +51,29 @@ export function useNodeDebugController({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
-  const mutationGenerationRef = useRef(0);
+  const ownerKey = `${apiPort}:${workspaceId ?? ""}:${sessionId ?? ""}:${threadId}`;
   const pollGenerationRef = useRef(0);
-  const ownerGenerationRef = useRef(0);
-  const mutationLocksRef = useRef<Map<string, NodeDebugMutation>>(new Map());
+  const mutationGateRef = useRef<NodeDebugMutationGate | null>(null);
+  if (mutationGateRef.current === null) {
+    mutationGateRef.current = new NodeDebugMutationGate(ownerKey);
+  }
+  const mutationGate = mutationGateRef.current;
   const syncChannelRef = useRef<ReturnType<typeof createNodeDebugSyncChannel> | null>(null);
   const stateRequestsRef = useRef<Map<string, Promise<NodeDebugState>>>(new Map());
-  const ownerKey = `${apiPort}:${workspaceId ?? ""}:${sessionId ?? ""}:${threadId}`;
-  const ownerKeyRef = useRef(ownerKey);
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
 
   const syncMutationFlags = () => {
-    const mutation = mutationLocksRef.current.get(ownerKeyRef.current);
-    const visible = enabledRef.current;
-    setActionBusy(visible && mutation?.mode === "action");
-    setLoading(visible && mutation?.mode === "loading");
+    const busyFlags = mutationGate.busyFlags(enabledRef.current);
+    setActionBusy(busyFlags.actionBusy);
+    setLoading(busyFlags.loading);
   };
 
   // owner 切换必须先使旧 mutation 失效，再允许新 owner 的轮询落地；否则旧
   // owner 的异步响应可能在切换后覆盖当前调试状态。旧 mutation 的锁仍保留
   // 到请求 settle，避免切回同一 owner 时重复发起后端 mutation。
   useLayoutEffect(() => {
-    if (ownerKeyRef.current !== ownerKey) {
-      ownerKeyRef.current = ownerKey;
-      ownerGenerationRef.current += 1;
+    if (mutationGate.switchOwner(ownerKey)) {
       setState(null);
       setCapabilities(null);
       setError(null);
@@ -88,16 +81,9 @@ export function useNodeDebugController({
     syncMutationFlags();
   }, [enabled, ownerKey]);
 
-  const beginMutation = (mode: NodeDebugMutationMode): NodeDebugMutation | null => {
-    if (mutationLocksRef.current.has(ownerKey)) return null;
-    const mutation = {
-      ownerKey,
-      ownerGeneration: ownerGenerationRef.current,
-      mutationGeneration: ++mutationGenerationRef.current,
-      mode,
-    } satisfies NodeDebugMutation;
-    mutationLocksRef.current.set(ownerKey, mutation);
-    syncMutationFlags();
+  const beginMutation = (mode: NodeDebugMutation["mode"]): NodeDebugMutation | null => {
+    const mutation = mutationGate.beginMutation(ownerKey, mode);
+    if (mutation) syncMutationFlags();
     return mutation;
   };
 
@@ -105,15 +91,11 @@ export function useNodeDebugController({
     mutationOwnerKey: string,
     mutationOwnerGeneration: number,
     mutationGeneration: number,
-  ): boolean => {
-    const current = mutationLocksRef.current.get(mutationOwnerKey);
-    return ownerKeyRef.current === mutationOwnerKey
-      && ownerGenerationRef.current === mutationOwnerGeneration
-      && mutationGenerationRef.current === mutationGeneration
-      && current?.ownerKey === mutationOwnerKey
-      && current.ownerGeneration === mutationOwnerGeneration
-      && current.mutationGeneration === mutationGeneration;
-  };
+  ): boolean => mutationGate.isCurrentMutation({
+    ownerKey: mutationOwnerKey,
+    ownerGeneration: mutationOwnerGeneration,
+    mutationGeneration,
+  });
 
   const loadState = useCallback((force = false): Promise<NodeDebugState> => {
     if (!sessionId) {
@@ -142,41 +124,28 @@ export function useNodeDebugController({
 
   const refresh = useCallback(async (force = false) => {
     const refreshOwnerKey = ownerKey;
-    const refreshOwnerGeneration = ownerGenerationRef.current;
-    const refreshMutationGeneration = mutationGenerationRef.current;
+    const refreshSnapshot = mutationGate.captureSnapshot(refreshOwnerKey);
     if (!enabledRef.current || !sessionId) {
-      if (
-        ownerKeyRef.current === refreshOwnerKey
-        && ownerGenerationRef.current === refreshOwnerGeneration
-      ) {
+      if (mutationGate.isCurrentOwner(refreshOwnerKey, refreshSnapshot.ownerGeneration)) {
         setState(null);
       }
       return;
     }
-    if (mutationLocksRef.current.has(refreshOwnerKey)) return;
+    if (mutationGate.hasMutation(refreshOwnerKey)) return;
     const nextState = await loadState(force);
     if (
-      ownerKeyRef.current === refreshOwnerKey
-      && ownerGenerationRef.current === refreshOwnerGeneration
-      && mutationGenerationRef.current === refreshMutationGeneration
-      && !mutationLocksRef.current.has(refreshOwnerKey)
+      mutationGate.isCurrentSnapshot(refreshSnapshot, true)
     ) {
       setState(nextState);
     }
   }, [loadState, ownerKey, sessionId]);
 
   const releaseMutation = (mutation: NodeDebugMutation) => {
-    if (mutationLocksRef.current.get(mutation.ownerKey) !== mutation) return;
-    const wasCurrentMutation = isCurrentMutation(
-      mutation.ownerKey,
-      mutation.ownerGeneration,
-      mutation.mutationGeneration,
-    );
-    mutationLocksRef.current.delete(mutation.ownerKey);
-    if (ownerKeyRef.current !== mutation.ownerKey) return;
+    const result = mutationGate.releaseMutation(mutation);
+    if (!result.released || !result.isCurrentOwner) return;
     syncMutationFlags();
     // 旧 owner 的响应被 generation 丢弃后，必须重新读取后端权威状态。
-    if (!wasCurrentMutation && enabledRef.current) void refresh(true);
+    if (!result.wasCurrent && enabledRef.current) void refresh(true);
   };
 
   useEffect(() => {
@@ -232,7 +201,7 @@ export function useNodeDebugController({
 
   useEffect(() => {
     const effectOwnerKey = ownerKey;
-    const effectOwnerGeneration = ownerGenerationRef.current;
+    const effectOwnerGeneration = mutationGate.ownerGeneration;
     const pollGeneration = ++pollGenerationRef.current;
     setError(null);
     setState(null);
@@ -245,7 +214,12 @@ export function useNodeDebugController({
     let disposed = false;
 
     const poll = async () => {
-      const pollMutationGeneration = mutationGenerationRef.current;
+      const pollMutationGeneration = mutationGate.mutationGeneration;
+      const pollSnapshot = {
+        ownerKey: effectOwnerKey,
+        ownerGeneration: effectOwnerGeneration,
+        mutationGeneration: pollMutationGeneration,
+      };
       try {
         const [nextState, nextCapabilities] = await Promise.all([
           sessionId
@@ -255,11 +229,8 @@ export function useNodeDebugController({
         ]);
         if (
           !disposed
-          && ownerKeyRef.current === effectOwnerKey
-          && ownerGenerationRef.current === effectOwnerGeneration
           && pollGenerationRef.current === pollGeneration
-          && mutationGenerationRef.current === pollMutationGeneration
-          && !mutationLocksRef.current.has(effectOwnerKey)
+          && mutationGate.isCurrentSnapshot(pollSnapshot, true)
         ) {
           setState(nextState);
           setCapabilities(nextCapabilities);
@@ -267,11 +238,8 @@ export function useNodeDebugController({
       } catch (cause: unknown) {
         if (
           !disposed
-          && ownerKeyRef.current === effectOwnerKey
-          && ownerGenerationRef.current === effectOwnerGeneration
           && pollGenerationRef.current === pollGeneration
-          && mutationGenerationRef.current === pollMutationGeneration
-          && !mutationLocksRef.current.has(effectOwnerKey)
+          && mutationGate.isCurrentSnapshot(pollSnapshot, true)
         ) {
           setError(cause instanceof Error ? cause.message : String(cause));
         }
@@ -281,16 +249,18 @@ export function useNodeDebugController({
     void poll();
     const intervalId = window.setInterval(() => {
       if (!sessionId) return;
-      const pollMutationGeneration = mutationGenerationRef.current;
+      const pollMutationGeneration = mutationGate.mutationGeneration;
+      const pollSnapshot = {
+        ownerKey: effectOwnerKey,
+        ownerGeneration: effectOwnerGeneration,
+        mutationGeneration: pollMutationGeneration,
+      };
       void loadState()
         .then((nextState) => {
           if (
             !disposed
-            && ownerKeyRef.current === effectOwnerKey
-            && ownerGenerationRef.current === effectOwnerGeneration
             && pollGenerationRef.current === pollGeneration
-            && mutationGenerationRef.current === pollMutationGeneration
-            && !mutationLocksRef.current.has(effectOwnerKey)
+            && mutationGate.isCurrentSnapshot(pollSnapshot, true)
           ) {
             setState(nextState);
           }
@@ -298,11 +268,8 @@ export function useNodeDebugController({
         .catch((cause: unknown) => {
           if (
             !disposed
-            && ownerKeyRef.current === effectOwnerKey
-            && ownerGenerationRef.current === effectOwnerGeneration
             && pollGenerationRef.current === pollGeneration
-            && mutationGenerationRef.current === pollMutationGeneration
-            && !mutationLocksRef.current.has(effectOwnerKey)
+            && mutationGate.isCurrentSnapshot(pollSnapshot, true)
           ) {
             setError(cause instanceof Error ? cause.message : String(cause));
           }
