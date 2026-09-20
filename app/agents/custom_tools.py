@@ -30,7 +30,7 @@ from app.agents.policy import parse_custom_tool_specs
 from app.agents.tool_invocation_context import ToolInvocationContext
 
 if TYPE_CHECKING:
-    from app.services.infrastructure.node_debug_service import NodeDebugService
+    from app.services.infrastructure.node_debug.service import NodeDebugService
 
 
 @dataclass(frozen=True, slots=True)

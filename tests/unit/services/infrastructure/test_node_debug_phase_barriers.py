@@ -26,16 +26,16 @@ from app.schemas.internal_v2.node_debug import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug_launch_claim import (
+from app.services.infrastructure.node_debug.launch_claim import (
     claim_with_spawn_identity,
     new_launch_claim,
 )
-from app.services.infrastructure.node_debug_process_identity import (
+from app.services.infrastructure.node_debug.process_identity import (
     IDENTITY_SOURCE_LINUX_PROC,
     NodeDebugProcessIdentity,
 )
-from app.services.infrastructure.node_debug_service import NodeDebugService
-from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )
@@ -217,7 +217,7 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
         raise _SpawnPidBarrier("backend 在 PID 登记前退出")
 
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug_service.probe_process_identity",
+        "app.services.infrastructure.node_debug.service.probe_process_identity",
         crash_after_spawn,
     )
 

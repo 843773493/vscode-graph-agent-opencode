@@ -38,24 +38,26 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugLaunchClaimDTO,
 )
-from app.services.infrastructure import node_debug_process_identity
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug_launch_claim import (
+from app.services.infrastructure.node_debug import (
+    process_identity as node_debug_process_identity,
+)
+from app.services.infrastructure.node_debug.launch_claim import (
     claim_marked,
     claim_running,
     claim_with_spawn_identity,
     new_launch_claim,
 )
-from app.services.infrastructure.node_debug_process_identity import (
+from app.services.infrastructure.node_debug.process_identity import (
     IDENTITY_SOURCE_LINUX_PROC,
     NodeDebugProcessIdentity,
     _probe_linux_proc_identity,
     probe_process_identity,
 )
-from app.services.infrastructure.node_debug_service import NodeDebugService
-from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
 from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.orchestration.thread_residency import (
     THREAD_IDLE_UNLOAD_SECONDS,

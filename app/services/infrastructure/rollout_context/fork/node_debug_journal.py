@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from app.services.infrastructure.node_debug_fork import (
+from app.services.infrastructure.node_debug.fork import (
     NodeDebugSourceCopySnapshot,
     NodeDebugTargetPrepublication,
 )

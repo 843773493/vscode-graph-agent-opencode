@@ -8,8 +8,8 @@ from pathlib import Path
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.path_utils import get_session_path_resolver
-from app.services.infrastructure.node_debug_fork import NodeDebugWorkspaceForkConfig
-from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.fork import NodeDebugWorkspaceForkConfig
+from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )

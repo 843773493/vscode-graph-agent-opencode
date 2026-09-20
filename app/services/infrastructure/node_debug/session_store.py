@@ -14,7 +14,7 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugLaunchClaimDTO,
     NodeDebugSessionManifestDTO,
 )
-from app.services.infrastructure.node_debug_thread_owner import (
+from app.services.infrastructure.node_debug.thread_owner import (
     SessionNodePathResolver,
     resolve_debug_thread_node,
     resolve_node_debug_owner,

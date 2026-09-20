@@ -41,12 +41,12 @@ from app.schemas.internal_v2.node_debug import (
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )
-from app.services.infrastructure.node_debug_breakpoint_expressions import (
+from app.services.infrastructure.node_debug.breakpoint_expressions import (
     inspector_breakpoint_condition,
     parse_logpoint_error,
     parse_logpoint_output,
 )
-from app.services.infrastructure.node_debug_breakpoints import (
+from app.services.infrastructure.node_debug.breakpoints import (
     anchor_breakpoint,
     persistable_breakpoint,
     portable_breakpoint,
@@ -54,10 +54,10 @@ from app.services.infrastructure.node_debug_breakpoints import (
     runtime_breakpoint,
     source_digest,
 )
-from app.services.infrastructure.node_debug_configuration_registry import (
+from app.services.infrastructure.node_debug.configuration_registry import (
     NodeDebugConfigurationRegistry,
 )
-from app.services.infrastructure.node_debug_launch_claim import (
+from app.services.infrastructure.node_debug.launch_claim import (
     ACTIVE_CLAIM_PHASES,
     NodeDebugClaimRecoveryDecision,
     claim_marked,
@@ -66,13 +66,13 @@ from app.services.infrastructure.node_debug_launch_claim import (
     decide_claim_recovery,
     new_launch_claim,
 )
-from app.services.infrastructure.node_debug_process_identity import (
+from app.services.infrastructure.node_debug.process_identity import (
     probe_process_identity,
 )
-from app.services.infrastructure.node_debug_session_admission import (
+from app.services.infrastructure.node_debug.session_admission import (
     NodeDebugSessionAdmission,
 )
-from app.services.infrastructure.node_debug_thread_owner import (
+from app.services.infrastructure.node_debug.thread_owner import (
     NodeDebugOwner,
     normalize_node_debug_owner,
     resolve_node_debug_owner,
@@ -87,10 +87,10 @@ if TYPE_CHECKING:
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug_session_store import (
+from app.services.infrastructure.node_debug.session_store import (
     NodeDebugSessionStore,
 )
-from app.services.infrastructure.node_debug_snapshot import (
+from app.services.infrastructure.node_debug.snapshot import (
     append_pending_debug_action,
     append_runtime_debug_action,
     build_node_debug_snapshot,

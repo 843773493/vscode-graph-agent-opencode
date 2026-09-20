@@ -23,8 +23,8 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug_service import NodeDebugService
-from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )

@@ -15,12 +15,12 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugSessionManifestDTO,
 )
-from app.services.infrastructure.node_debug_fork import (
+from app.services.infrastructure.node_debug.fork import (
     NodeDebugSourceCopySnapshot,
     NodeDebugWorkspaceForkConfig,
     validate_target_prepublication,
 )
-from app.services.infrastructure.node_debug_thread_owner import (
+from app.services.infrastructure.node_debug.thread_owner import (
     MAIN_THREAD_ID,
     resolve_node_debug_owner,
 )

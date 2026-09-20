@@ -38,7 +38,7 @@ from app.services.infrastructure.llm_request_log_service import LLMRequestLogSer
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.infrastructure.node_debug_service import NodeDebugService
+from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore

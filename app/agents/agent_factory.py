@@ -83,7 +83,7 @@ from app.services.infrastructure.events.channel_events import (
     ContextSourceEvent,
     ContextSourceEventPublisher,
 )
-from app.services.infrastructure.node_debug_service import NodeDebugService
+from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
     ReactorCreatedCallback,

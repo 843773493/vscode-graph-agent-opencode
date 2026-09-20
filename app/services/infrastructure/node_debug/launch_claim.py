@@ -25,7 +25,7 @@ from typing import Literal
 
 from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.node_debug import NodeDebugLaunchClaimDTO
-from app.services.infrastructure.node_debug_process_identity import (
+from app.services.infrastructure.node_debug.process_identity import (
     NodeDebugProcessIdentity,
     probe_process_identity,
 )

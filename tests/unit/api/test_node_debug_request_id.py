@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_node_debug_service
 from app.main import app
-from app.services.infrastructure.node_debug_service import NodeDebugService
+from app.services.infrastructure.node_debug.service import NodeDebugService
 
 
 def test_node_debug_http_error_contains_authoritative_request_id() -> None:

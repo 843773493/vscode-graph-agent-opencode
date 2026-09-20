@@ -22,7 +22,7 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugStartRequest,
     NodeDebugStateDTO,
 )
-from app.services.infrastructure.node_debug_service import NodeDebugService
+from app.services.infrastructure.node_debug.service import NodeDebugService
 
 
 @pytest.fixture

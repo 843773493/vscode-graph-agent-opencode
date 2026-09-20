@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.infrastructure.node_debug_breakpoint_expressions import (
+from app.services.infrastructure.node_debug.breakpoint_expressions import (
     inspector_breakpoint_condition,
     parse_logpoint_error,
     parse_logpoint_output,

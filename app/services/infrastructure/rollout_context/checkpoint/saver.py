@@ -41,9 +41,9 @@ from app.schemas.internal_v2.turn import (
     TurnHistoryPageDTO,
     TurnSummaryDTO,
 )
-from app.services.infrastructure.node_debug_fork import NodeDebugWorkspaceForkConfig
-from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
-from app.services.infrastructure.node_debug_thread_owner import MAIN_THREAD_ID
+from app.services.infrastructure.node_debug.fork import NodeDebugWorkspaceForkConfig
+from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.thread_owner import MAIN_THREAD_ID
 from app.services.infrastructure.rollout_context.checkpoint.async_api import (
     RolloutLangGraphAsyncMixin,
 )

@@ -15,12 +15,12 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugLaunchProfileDTO,
     NodeDebugSessionManifestDTO,
 )
-from app.services.infrastructure.node_debug_fork import (
+from app.services.infrastructure.node_debug.fork import (
     NodeDebugSourceDriftError,
     capture_source_copy_snapshot,
     validate_target_prepublication,
 )
-from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
 
 _SESSION_ID = "ses_fork_source"
 _CONFIGURATION_ID = "dbgcfg_11111111111111111111111111111111"

@@ -37,11 +37,11 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug_service import NodeDebugService
-from app.services.infrastructure.node_debug_session_admission import (
+from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.node_debug.session_admission import (
     NodeDebugSessionAdmission,
 )
-from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
 
 _SESSION_ID = "ses_api_debug"
 _CHILD_THREAD_ID = "ses_api_debug_child"

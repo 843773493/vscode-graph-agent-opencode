@@ -18,7 +18,7 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugStartRequest,
     NodeDebugStateDTO,
 )
-from app.services.infrastructure.node_debug_service import NodeDebugService
+from app.services.infrastructure.node_debug.service import NodeDebugService
 
 # Session 级产品入口要求显式 thread_id；main thread 使用值 "main"。
 # 所有 mutation 的 Session 生命周期准入（Session 存在且未删除）由

@@ -17,11 +17,11 @@ from langgraph.checkpoint.base import Checkpoint, CheckpointTuple
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_lifecycle_gate import SessionLifecycleGate
-from app.services.infrastructure.node_debug_fork import (
+from app.services.infrastructure.node_debug.fork import (
     NodeDebugSourceCopySnapshot,
     capture_source_copy_snapshot,
 )
-from app.services.infrastructure.node_debug_thread_owner import (
+from app.services.infrastructure.node_debug.thread_owner import (
     MAIN_THREAD_ID,
 )
 from app.services.infrastructure.rollout_context.fork.full_copy.preflight import (

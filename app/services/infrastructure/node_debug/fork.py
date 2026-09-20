@@ -20,10 +20,10 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugLaunchProfileDTO,
 )
-from app.services.infrastructure.node_debug_session_store import (
+from app.services.infrastructure.node_debug.session_store import (
     NodeDebugSessionStore,
 )
-from app.services.infrastructure.node_debug_thread_owner import (
+from app.services.infrastructure.node_debug.thread_owner import (
     MAIN_THREAD_ID,
     resolve_node_debug_owner,
 )

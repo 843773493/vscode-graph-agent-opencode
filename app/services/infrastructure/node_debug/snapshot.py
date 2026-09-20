@@ -14,7 +14,7 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugStateDTO,
     NodeDebugStatus,
 )
-from app.services.infrastructure.node_debug_configuration_registry import (
+from app.services.infrastructure.node_debug.configuration_registry import (
     NodeDebugConfigurationRegistry,
 )
 

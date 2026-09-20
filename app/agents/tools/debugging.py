@@ -28,8 +28,8 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugStateDTO,
 )
-from app.services.infrastructure.node_debug_service import NodeDebugService
-from app.services.infrastructure.node_debug_thread_owner import MAIN_THREAD_ID
+from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.node_debug.thread_owner import MAIN_THREAD_ID
 
 DebugScope = Literal["local", "global", "all"]
 VariableName = Annotated[str, Field(min_length=1)]
