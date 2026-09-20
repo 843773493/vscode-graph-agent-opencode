@@ -17,6 +17,36 @@ _SERVER_OWNED_FIELDS = {
     "conversation_id",
 }
 
+_RUNTIME_NOTICE_TEXT_TYPES = frozenset({"text", "input_text", "output_text"})
+
+
+def project_runtime_notice_content(content: Any) -> str | list[dict[str, str]]:
+    """把 runtime source 正文规范化为两种 Provider 共用的 user 文本。"""
+    if isinstance(content, str):
+        return content
+    values = content if isinstance(content, (list, tuple)) else [content]
+    blocks: list[dict[str, str]] = []
+    for value in values:
+        if isinstance(value, str):
+            blocks.append({"type": "text", "text": value})
+            continue
+        if not isinstance(value, Mapping):
+            raise TypeError(
+                "source-mismatch: runtime_notice 包含无法编码的 user text block"
+            )
+        block_type = value.get("type")
+        text = value.get("text")
+        if block_type is not None and block_type not in _RUNTIME_NOTICE_TEXT_TYPES:
+            raise ValueError(
+                "source-mismatch: runtime_notice 包含无法编码的 user text block"
+            )
+        if not isinstance(text, str):
+            raise TypeError(
+                "source-mismatch: runtime_notice 包含无法编码的 user text block"
+            )
+        blocks.append({"type": "text", "text": text})
+    return blocks
+
 
 def project_user_message_content(
     content: Any,

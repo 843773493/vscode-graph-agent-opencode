@@ -12,6 +12,7 @@ from app.domain.itemized.request_plan import ContextContribution, ContextRequest
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
+from app.services.mapping.itemized.carrier_dedup import superseded_stream_item_ids
 
 
 def _manifest_string(value: object, *, field: str) -> str:
@@ -180,9 +181,23 @@ class ContextPlanCompositionMixin:
             session_id,
             checkpoint_ns,
         ) as snapshot:
-            committed_refs = self._storage.committed_context_refs(
+            committed_items = self._storage.committed_context_items(
                 snapshot,
                 include_pending_notices=include_pending_notices,
+            )
+            # stream 与 checkpoint sink 都保留自己的 canonical carrier；计划
+            # 只能选择其中一个。这里在 Saver composition owner 内复用唯一的
+            # typed provenance 去重规则，保证晚到的 stream shadow 不会因物理
+            # append 顺序落到对应 tool result 之后。storage 仍只提供事实与
+            # view membership，不承担 Provider projection 规则。
+            superseded_item_ids = superseded_stream_item_ids(committed_items)
+            committed_refs = tuple(
+                ref
+                for ref in self._storage.committed_context_refs(
+                    snapshot,
+                    include_pending_notices=include_pending_notices,
+                )
+                if ref.ref_id not in superseded_item_ids
             )
             refs = list(committed_refs)
             seen_overlay_bindings: set[tuple[str, str]] = set()

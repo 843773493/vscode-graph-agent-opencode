@@ -13,7 +13,10 @@ from app.services.infrastructure.rollout_context.provider.toolset_request_bridge
     project_tool_set_ref,
 )
 from app.services.mapping.itemized.carrier_dedup import superseded_stream_item_ids
-from app.services.mapping.itemized.provider_request import project_user_message_content
+from app.services.mapping.itemized.provider_request import (
+    project_runtime_notice_content,
+    project_user_message_content,
+)
 from app.services.mapping.itemized.selection import (
     resolve_selected_item,
     resolve_selected_request_body,
@@ -171,6 +174,18 @@ def project_native_request(
                         else canonical_json_bytes(output).decode("utf-8"),
                     }
                 )
+            elif kind == "runtime_notice":
+                if item.wire_role != "user":
+                    raise ValueError(
+                        "source-mismatch: native runtime_notice 必须投影为 user: "
+                        f"{item.item_id}"
+                    )
+                content = _text_blocks(
+                    project_runtime_notice_content(item.payload),
+                    role="user",
+                )
+                if content:
+                    inputs.append({"role": "user", "content": content})
             else:
                 # Responses 对受保护 reasoning/扩展不承诺跨 provider 回放。
                 # 不复制密文或伪造空正文；明确记录未发送的来源与能力损失。

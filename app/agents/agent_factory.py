@@ -555,11 +555,7 @@ def create_my_deep_agent(
     context_source_manager = ContextSourceManager(
         owner=context_source_owner,
         control_state_port=context_source_control_port,
-        mutation_intent_port=(
-            checkpointer
-            if isinstance(checkpointer, RolloutCheckpointSaver)
-            else None
-        ),
+        mutation_intent_port=context_source_control_port,
         lifecycle_event_sink=context_source_event_sink,
     )
     # 事件驱动 reaction：reactor 订阅来源 owner 的轻量 change 通知，并把

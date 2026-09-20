@@ -141,7 +141,14 @@ def prepare_registered_context(
     )
     plan = snapshot.as_sealed_plan()
     messages, tools, losses = owner.project_context_plan_to_provider(
-        session_id, plan, target_format=target_format, checkpoint_ns=checkpoint_ns
+        session_id,
+        plan,
+        target_format=target_format,
+        checkpoint_ns=checkpoint_ns,
+        # pending/ambient runtime source 已经由同一 Saver owner 选入 sealed
+        # assembly；Provider dispatch 必须按其 wire_role 投影，history API
+        # 仍沿用默认值隐藏这类内部来源。
+        include_runtime_notices=True,
     )
     pending = {
         "assembly_id": snapshot.assembly_id,

@@ -6,6 +6,7 @@ import dataclasses
 
 import pytest
 
+from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.services.infrastructure.events.channel_events import ContextSourceEvent
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceControlState,
@@ -62,6 +63,16 @@ class _FakeControlStatePort:
         )
         self._states[key] = stored
         return stored
+
+
+class _RecordingMutationIntentPort:
+    """记录 CSM 提交的 source lifecycle intent。"""
+
+    def __init__(self) -> None:
+        self.intents: list[object] = []
+
+    def consume_mutation_intent(self, intent: object) -> None:
+        self.intents.append(intent)
 
 
 def _descriptor(source_id: str, name: str) -> ContextSourceDescriptor:
@@ -131,6 +142,28 @@ def test_commit_persists_before_memory_advance_and_events() -> None:
     assert [event.kind for event in events] == ["committed"]
     (stored,) = port.load_context_source_control_states(OWNER)
     assert stored.latest_visible_committed_revision == stored.latest_revision
+
+
+def test_activation_delta_maps_to_base_source_lifecycle_intent() -> None:
+    """首次 activation 保留内存 delta 合同，但 intent 使用合法 base 语义。"""
+    mutation_port = _RecordingMutationIntentPort()
+    manager = ContextSourceManager(
+        owner=OWNER,
+        control_state_port=_FakeControlStatePort(),
+        mutation_intent_port=mutation_port,
+    )
+    _activate(manager, "src_a", "a", "alpha")
+    batch = manager.prepare_pending()
+    assert batch is not None
+    assert batch.deltas[0].kind == "activation"
+
+    manager.commit_model_call_pending(batch)
+
+    assert len(mutation_port.intents) == 1
+    intent = mutation_port.intents[0]
+    assert isinstance(intent, ApplySourceLifecycleDecision)
+    assert intent.decision_kind == "base"
+    assert intent.from_revision is None
 
 
 def test_commit_rejects_pending_drift_fail_closed() -> None:

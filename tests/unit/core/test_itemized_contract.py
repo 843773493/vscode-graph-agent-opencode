@@ -793,6 +793,93 @@ def test_native_projection_restores_scoped_ids_and_drops_stream_shadow() -> None
     assert outputs == ["checkpoint result"]
 
 
+@pytest.mark.parametrize(
+    ("payload", "chat_content", "responses_content"),
+    [
+        (
+            {"text": "运行时提醒"},
+            [{"type": "text", "text": "运行时提醒"}],
+            [{"type": "input_text", "text": "运行时提醒"}],
+        ),
+        (
+            [{"type": "input_text", "text": "运行时提醒"}],
+            [{"type": "text", "text": "运行时提醒"}],
+            [{"type": "input_text", "text": "运行时提醒"}],
+        ),
+    ],
+)
+def test_runtime_notice_uses_same_user_text_contract_for_both_provider_formats(
+    payload: object,
+    chat_content: object,
+    responses_content: object,
+) -> None:
+    item = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="item-runtime-notice",
+        semantic_kind=SemanticKind.RUNTIME_NOTICE,
+        payload_kind=PayloadKind.STRUCTURED_CONTENT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={"producer_kind": "runtime", "producer_id": "source"},
+        payload=payload,
+        turn_scope="pending_next_turn",
+        wire_role="user",
+    )
+    plan = _native_tool_plan(
+        session_id="session-runtime-notice",
+        plan_id="plan-runtime-notice",
+        assembly_id="assembly-runtime-notice",
+        items=(item,),
+    )
+
+    messages = project_context_plan(
+        plan,
+        (item,),
+        include_runtime_notices=True,
+    )
+    native = project_native_request(plan, (item,), request_only_content={})
+
+    assert len(messages) == 1
+    assert isinstance(messages[0], HumanMessage)
+    assert messages[0].content == chat_content
+    assert native["request"]["input"] == [
+        {"role": "user", "content": responses_content}
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "image_url", "image_url": "https://example.invalid/image.png"},
+        {"encoding": "base64url", "value": "cHJvdGVjdGVk"},
+    ],
+)
+def test_runtime_notice_rejects_non_text_payload_for_both_provider_formats(
+    payload: object,
+) -> None:
+    item = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="item-runtime-notice-invalid",
+        semantic_kind=SemanticKind.RUNTIME_NOTICE,
+        payload_kind=PayloadKind.STRUCTURED_CONTENT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={"producer_kind": "runtime", "producer_id": "source"},
+        payload=payload,
+        turn_scope="pending_next_turn",
+        wire_role="user",
+    )
+    plan = _native_tool_plan(
+        session_id="session-runtime-notice-invalid",
+        plan_id="plan-runtime-notice-invalid",
+        assembly_id="assembly-runtime-notice-invalid",
+        items=(item,),
+    )
+
+    with pytest.raises((TypeError, ValueError), match="runtime_notice"):
+        project_context_plan(plan, (item,), include_runtime_notices=True)
+    with pytest.raises((TypeError, ValueError), match="runtime_notice"):
+        project_native_request(plan, (item,), request_only_content={})
+
+
 @pytest.fixture
 def cross_language_vectors() -> dict[str, object]:
     return json.loads(

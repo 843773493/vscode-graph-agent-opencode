@@ -903,7 +903,9 @@ class ContextSourceManager:
             decisions = []
             for delta in batch.deltas:
                 state = self._sources[delta.source_id]
-                decision_kind = delta.kind
+                # 内存 delta 保留 activation 作为首次注入的外部合同；
+                # mutation intent 的 source lifecycle 语义将首次激活表达为 base。
+                decision_kind = "base" if delta.kind == "activation" else delta.kind
                 observation = SourceObservation(
                     owner=self._owner,
                     source_id=delta.source_id,

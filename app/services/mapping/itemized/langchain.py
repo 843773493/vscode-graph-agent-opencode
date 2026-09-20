@@ -28,6 +28,9 @@ from app.services.mapping.itemized.carrier_dedup import (
 from app.services.mapping.itemized.carrier_dedup import (
     superseded_stream_item_ids as _superseded_stream_item_ids,
 )
+from app.services.mapping.itemized.provider_request import (
+    project_runtime_notice_content,
+)
 from app.services.mapping.itemized.selection import (
     resolve_selected_item,
     resolve_selected_request_body,
@@ -152,9 +155,17 @@ def project_canonical_items(
         if item.semantic_kind == SemanticKind.RUNTIME_NOTICE:
             if not include_runtime_notices:
                 continue
+            if item.wire_role != "user":
+                raise ValueError(
+                    "source-mismatch: runtime_notice 必须投影为 user: "
+                    f"{item.item_id}"
+                )
+            content = project_runtime_notice_content(item.payload)
+            if not content:
+                continue
             messages.append(
                 HumanMessage(
-                    content=_message_content(item.payload),
+                    content=content,
                     id=_message_id(item),
                     response_metadata={
                         "internal": True,

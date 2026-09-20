@@ -14,8 +14,18 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.detail_ref import DetailRef
-from app.domain.itemized.enums import PayloadKind
+from app.domain.itemized.enums import (
+    CanonicalItemStatus,
+    PayloadKind,
+    SemanticKind,
+    TurnScope,
+)
 from app.domain.itemized.hashing import contribution_content_hash
+from app.domain.itemized.mutation_intents import (
+    ApplySourceLifecycleDecision,
+    MutationIntentOwner,
+)
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_key,
@@ -61,6 +71,184 @@ def _prompt(identity: str) -> ContextContribution:
         body=body,
         content_hash=contribution_content_hash("prompt", body),
     )
+
+
+def test_dispatch_projects_pending_source_to_chat_and_responses(
+    dispatch_session: tuple[RolloutCheckpointSaver, str, str, Path],
+) -> None:
+    """sealed assembly 中的 source item 必须进入两种 Provider wire。"""
+    saver, session_id, turn_id, _sessions = dispatch_session
+    source_body = "# 源码调试工具\n\n通过固定信封调用调试目标。"
+    saver.consume_mutation_intent(
+        ApplySourceLifecycleDecision(
+            owner=MutationIntentOwner(session_id=session_id, thread_id="main"),
+            source_id="skill:debugging",
+            source_kind="skill",
+            name="debugging",
+            decision_kind="base",
+            revision="debugging-v1",
+            content=source_body,
+            item_id="item-context-source:skill:debugging:debugging-v1:base",
+        )
+    )
+
+    prepared = saver.prepare_context_for_provider(
+        session_id,
+        turn_id=turn_id,
+        provider_version="contract-provider-v2",
+        target_format="chat_completions",
+        plan_creation_idempotency_key="pending-source-chat:create",
+        seal_idempotency_key="pending-source-chat:seal",
+    )
+
+    assert any(message.type == "human" and message.text == source_body for message in prepared["messages"])
+    native = saver.project_context_plan_to_native(session_id, prepared["plan"])
+    assert {
+        "role": "user",
+        "content": [{"type": "input_text", "text": source_body}],
+    } in native["request"]["input"]
+
+
+def test_dispatch_excludes_late_stream_shadow_after_checkpoint_result(
+    dispatch_session: tuple[RolloutCheckpointSaver, str, str, Path],
+) -> None:
+    """晚到的 stream shadow 不得落在已配对 result 之后破坏 seal。"""
+    saver, session_id, turn_id, _sessions = dispatch_session
+    model_call_id = "model-call-late-shadow"
+    call_id = "call-late-shadow"
+    common = {
+        "turn_id": turn_id,
+        "turn_scope": TurnScope.TURN_MEMBER,
+        "status": CanonicalItemStatus.COMPLETED,
+    }
+    checkpoint_call = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id=f"item-lc_run--{model_call_id}",
+        semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind="tool_call",
+        producer_ref={"producer_kind": "provider", "producer_id": model_call_id},
+        payload={"tool_calls": [{"id": call_id, "name": "glob", "args": {}}]},
+        metadata={
+            "execution_confirmed": True,
+            "model_call_id": model_call_id,
+            "projection_message_id": f"lc_run--{model_call_id}",
+            "projection_group": {"ordinal": 0, "size": 1},
+        },
+        wire_role="assistant",
+        **common,
+    )
+    result = CanonicalItemRecord.create(
+        item_sequence=2,
+        item_id="item-result-late-shadow",
+        semantic_kind=SemanticKind.TOOL_RESULT,
+        payload_kind="tool_result",
+        producer_ref={"producer_kind": "tool", "producer_id": call_id},
+        payload={
+            "tool_call_id": call_id,
+            "result_id": "result-late-shadow",
+            "name": "glob",
+            "content": "[]",
+            "tool_outcome": "success",
+        },
+        metadata={
+            "execution_confirmed": True,
+            "model_call_id": model_call_id,
+            "projection_message_id": "result-late-shadow",
+        },
+        wire_role="tool",
+        **common,
+    )
+    late_stream_call = CanonicalItemRecord.create(
+        item_sequence=3,
+        item_id="item-stream-call-late-shadow",
+        semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind="tool_call",
+        producer_ref={"producer_kind": "provider", "producer_id": model_call_id},
+        payload={
+            "tool_call_id": f"{model_call_id}:tool-call:{call_id}",
+            "name": "glob",
+            "args": {},
+        },
+        metadata={
+            "model_call_id": model_call_id,
+            "block_id": f"{model_call_id}:tool-call:{call_id}",
+            "block_index": 0,
+        },
+        wire_role="assistant",
+        **common,
+    )
+    saver.append_items(session_id, (checkpoint_call, result))
+    saver.append_items(session_id, (late_stream_call,))
+
+    prepared = saver.prepare_context_for_provider(
+        session_id,
+        turn_id=turn_id,
+        provider_version="contract-provider-v2",
+        target_format="chat_completions",
+        plan_creation_idempotency_key="late-shadow:create",
+        seal_idempotency_key="late-shadow:seal",
+    )
+
+    selected_ids = {
+        entry.ref.ref_id for entry in prepared["plan"].selection if entry.included
+    }
+    assert checkpoint_call.item_id in selected_ids
+    assert result.item_id in selected_ids
+    assert late_stream_call.item_id not in selected_ids
+
+
+def test_composition_preserves_checkpoint_supersession_for_tool_call(
+    dispatch_session: tuple[RolloutCheckpointSaver, str, str, Path],
+) -> None:
+    """stream 去重不能绕过 Saver 原有的 checkpoint supersession 规则。"""
+    saver, session_id, turn_id, _sessions = dispatch_session
+    previous_message_id = "message-superseded-tool-call"
+    old_call = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="item-superseded-tool-call",
+        semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={"producer_kind": "provider", "producer_id": "model-call-old"},
+        payload={
+            "tool_calls": [{"id": "call-old", "name": "glob", "args": {}}]
+        },
+        metadata={
+            "execution_confirmed": True,
+            "projection_message_id": previous_message_id,
+            "projection_group": {"ordinal": 0, "size": 1},
+        },
+        turn_id=turn_id,
+        turn_scope=TurnScope.TURN_MEMBER,
+        wire_role="assistant",
+    )
+    final = CanonicalItemRecord.create(
+        item_sequence=2,
+        item_id="item-final-after-tool-call",
+        semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+        payload_kind=PayloadKind.TEXT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={"producer_kind": "provider", "producer_id": "model-call-final"},
+        payload="最终回答",
+        metadata={
+            "projection_message_id": "message-final-after-tool-call",
+            "supersedes_message_id": previous_message_id,
+        },
+        turn_id=turn_id,
+        turn_scope=TurnScope.TURN_MEMBER,
+        wire_role="assistant",
+    )
+    saver.append_items(session_id, (old_call, final))
+
+    plan = saver.compose_committed_context_plan(
+        session_id,
+        plan_id="checkpoint-supersession-plan",
+        include_pending_notices=False,
+    )
+
+    ref_ids = {ref.ref_id for ref in plan.refs}
+    assert old_call.item_id not in ref_ids
+    assert final.item_id in ref_ids
 
 
 @pytest.mark.parametrize(
