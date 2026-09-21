@@ -126,6 +126,16 @@ describe("useWorkbenchPanelRouting 面板路由契约", () => {
     expect(mounted.statuses).toEqual(["右侧侧边栏已切换为收起"]);
   });
 
+  test("handleToggleAuxiliaryPanel 在已收起时展开并写入展开文案", async () => {
+    const mounted = await mountHook({ auxiliaryVisible: false });
+
+    act(() => mounted.hook.handleToggleAuxiliaryPanel());
+
+    expect(mounted.auxiliaryVisible()).toBe(true);
+    expect(mounted.layoutWrites).toEqual([{ auxiliary_visible: true }]);
+    expect(mounted.statuses).toEqual(["右侧侧边栏已切换为展开"]);
+  });
+
   test("handleToggleChatPanel 取反显隐并持久化 chat_visible", async () => {
     const mounted = await mountHook({ chatVisible: false });
 
@@ -134,6 +144,16 @@ describe("useWorkbenchPanelRouting 面板路由契约", () => {
     expect(mounted.chatVisible()).toBe(true);
     expect(mounted.layoutWrites).toEqual([{ chat_visible: true }]);
     expect(mounted.statuses).toEqual(["会话区已展开"]);
+  });
+
+  test("handleToggleChatPanel 在已展示时收起并写入收起文案", async () => {
+    const mounted = await mountHook({ chatVisible: true });
+
+    act(() => mounted.hook.handleToggleChatPanel());
+
+    expect(mounted.chatVisible()).toBe(false);
+    expect(mounted.layoutWrites).toEqual([{ chat_visible: false }]);
+    expect(mounted.statuses).toEqual(["会话区已收起"]);
   });
 
   test("handleAuxiliaryTabChange 在非扩展窗口时写入 auxiliary_tab", async () => {
