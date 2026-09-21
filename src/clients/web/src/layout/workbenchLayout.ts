@@ -51,6 +51,7 @@ export function resizeAdjacentMainAreas({
   ratios,
   left,
   right,
+  grouped = [],
   leftWidth,
   rightWidth,
   deltaX,
@@ -58,6 +59,7 @@ export function resizeAdjacentMainAreas({
   ratios: WebUiMainAreaRatios;
   left: MainAreaKey;
   right: MainAreaKey;
+  grouped?: readonly MainAreaKey[];
   leftWidth: number;
   rightWidth: number;
   deltaX: number;
@@ -66,19 +68,23 @@ export function resizeAdjacentMainAreas({
   if (combinedWidth <= 0) {
     throw new Error(`无法调整没有宽度的主页区域: left=${left}, right=${right}`);
   }
-
   const nextLeftWidth = leftWidth + deltaX;
   const nextRightWidth = rightWidth - deltaX;
   if (nextLeftWidth <= 0 || nextRightWidth <= 0) {
     return ratios;
   }
 
-  const combinedRatio = ratios[left] + ratios[right];
-  return {
+  const groupedRatio = grouped.reduce((total, key) => total + ratios[key], ratios[right]);
+  const combinedRatio = ratios[left] + groupedRatio;
+  const rightScale = combinedRatio * (nextRightWidth / combinedWidth) / groupedRatio;
+  const nextRatios = {
     ...ratios,
     [left]: combinedRatio * (nextLeftWidth / combinedWidth),
-    [right]: combinedRatio * (nextRightWidth / combinedWidth),
   };
+  for (const key of [right, ...grouped]) {
+    nextRatios[key] = ratios[key] * rightScale;
+  }
+  return nextRatios;
 }
 
 export function defaultAuxiliaryVisible(): boolean {

@@ -47,6 +47,7 @@ import {
   useAppState,
 } from "./hooks";
 import { useWorkspacePreviewTabs } from "./hooks/useWorkspacePreviewTabs";
+import { useMainAreaResize } from "./hooks/useMainAreaResize";
 import { useNodeDebugWorkbench } from "./hooks/nodeDebug/useNodeDebugWorkbench";
 import { useChildThreadLoader } from "./hooks/useChildThreadLoader";
 import { useGatewayExtensionResources } from "./hooks/useGatewayExtensionResources";
@@ -55,16 +56,11 @@ import { buildSessionCatalogSyncKeys } from "./hooks/sessionResourceExplorer/res
 import { createSessionConnection } from "./gatewayApi";
 import {
   DEFAULT_GATEWAY_PANEL_HEIGHT,
-  DEFAULT_EXTENSION_DEBUG_AREA_RATIOS,
   DEFAULT_MAIN_AREA_RATIOS,
   GATEWAY_PANEL_RESIZING_CLASS,
-  LAYOUT_RESIZING_CLASS,
   clampGatewayPanelHeight,
   defaultAuxiliaryVisible,
-  resizeAdjacentMainAreas,
   resolveMainAreaRatios,
-  type MainAreaKey,
-  type LayoutResizeTarget,
 } from "./layout/workbenchLayout";
 import { sessionScopeKey } from "./state/session/sessionScope";
 import { shouldLoadDefaultViewChangesHint } from "./state/defaultViewChanges";
@@ -80,7 +76,6 @@ import type {
   AttachmentRef,
   SessionChangesSummary,
   SessionFileChange,
-  WebUiMainAreaRatios,
   WebUiSettings,
   WebUiSettingsUpdate,
 } from "./types/backend";
@@ -228,9 +223,6 @@ export default function AppShell() {
   const [mainAreaRatios, setMainAreaRatios] = useState(() =>
     resolveMainAreaRatios(state.uiSettings.layout.main_area_ratios),
   );
-  const [extensionDebugAreaRatios, setExtensionDebugAreaRatios] = useState(
-    () => ({ ...DEFAULT_EXTENSION_DEBUG_AREA_RATIOS }),
-  );
   const [defaultViewChangesHint, setDefaultViewChangesHint] = useState<{
     sessionId: string;
     summary: SessionChangesSummary;
@@ -241,7 +233,7 @@ export default function AppShell() {
     attachment: AttachmentRef;
   } | null>(null);
   const lastOpenedChangesPreviewKeyRef = useRef<string | null>(null);
-  const cleanupLayoutResizeRef = useRef<(() => void) | null>(null);
+  const cleanupPanelResizeRef = useRef<(() => void) | null>(null);
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
@@ -340,12 +332,6 @@ export default function AppShell() {
     }
     setMainAreaRatios(resolveMainAreaRatios(layout.main_area_ratios));
   }, [extensionWindowRequest?.kind, extensionWindowRequested, state.uiSettings]);
-
-  useEffect(() => {
-    return () => {
-      cleanupLayoutResizeRef.current?.();
-    };
-  }, []);
 
   const conversations = useMemo(
     () => activeSession
@@ -1001,164 +987,44 @@ export default function AppShell() {
     : extensionWindowFallback && activeRuntimePreviewResource
       ? activeRuntimePreview
       : null;
-  const handleOpenChangesView = () => {
-    setAuxiliaryVisible(true);
-    setAuxiliaryTab("changes");
-    persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: "changes" });
-  };
-  const startLayoutResize = (
-    target: LayoutResizeTarget,
-    event: ReactPointerEvent<HTMLButtonElement>,
-  ) => {
-    event.preventDefault();
-    cleanupLayoutResizeRef.current?.();
+  const {
+    extensionDebugAreaRatios,
+    resetExtensionDebugAreaRatios,
+    startLayoutResize,
+  } = useMainAreaResize({
+    mainAreaRatios,
+    setMainAreaRatios,
+    persistLayoutSettings,
+    extensionDebugSplitActive,
+  });
 
-    const startX = event.clientX;
-    const resizingExtensionDebugSplit = target === "auxiliary-left" &&
-      extensionDebugSplitActive;
-    const startRatios = resizingExtensionDebugSplit
-      ? {
-          ...mainAreaRatios,
-          workspace_preview: extensionDebugAreaRatios.workspace_preview,
-          auxiliary: extensionDebugAreaRatios.auxiliary,
-        }
-      : mainAreaRatios;
-    const effectiveStartRatios = startRatios;
-    const [left, leftSelector, right, rightSelector]: [
-      MainAreaKey,
-      string,
-      MainAreaKey,
-      string,
-    ] = target === "agent-sessions-right"
-      ? ["agent_sessions", ".agent-sessions-panel", "chat", ".workbench-main-column"]
-      : target === "workspace-editor-left"
-        ? ["chat", ".sessions-part-card", "workspace_preview", ".workspace-editor-shell"]
-        : ["workspace_preview", ".workspace-preview-panel", "auxiliary", ".auxiliary-panel"];
-    const leftArea = document.querySelector<HTMLElement>(leftSelector);
-    const rightArea = document.querySelector<HTMLElement>(rightSelector);
-    if (!leftArea || !rightArea) {
-      throw new Error(
-        `主页布局区域不存在: left=${leftSelector}, right=${rightSelector}`,
-      );
-    }
-    const leftWidth = leftArea.getBoundingClientRect().width;
-    const rightWidth = rightArea.getBoundingClientRect().width;
-    let latestRatios: WebUiMainAreaRatios = startRatios;
-    let moved = false;
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      const deltaX = moveEvent.clientX - startX;
-      if (deltaX === 0) {
-        return;
-      }
-      moved = true;
-      const resizedRatios = target === "agent-sessions-right"
-        ? (() => {
-            const combinedWidth = leftWidth + rightWidth;
-            if (combinedWidth <= 0) {
-              throw new Error("无法调整没有宽度的会话侧栏和主工作区");
-            }
-            const nextSidebarWidth = leftWidth + deltaX;
-            const nextMainWidth = rightWidth - deltaX;
-            if (nextSidebarWidth <= 0 || nextMainWidth <= 0) {
-              return effectiveStartRatios;
-            }
-            const mainRatio =
-              effectiveStartRatios.chat +
-              effectiveStartRatios.workspace_preview +
-              effectiveStartRatios.auxiliary;
-            const combinedRatio = effectiveStartRatios.agent_sessions + mainRatio;
-            const nextMainRatio = combinedRatio * (nextMainWidth / combinedWidth);
-            const mainScale = nextMainRatio / mainRatio;
-            return {
-              ...effectiveStartRatios,
-              agent_sessions: combinedRatio * (nextSidebarWidth / combinedWidth),
-              chat: effectiveStartRatios.chat * mainScale,
-              workspace_preview:
-                effectiveStartRatios.workspace_preview * mainScale,
-              auxiliary: effectiveStartRatios.auxiliary * mainScale,
-            };
-          })()
-        : target === "workspace-editor-left"
-          ? (() => {
-              const combinedWidth = leftWidth + rightWidth;
-              if (combinedWidth <= 0) {
-                throw new Error("无法调整没有宽度的会话区和编辑器工作区");
-              }
-              const nextChatWidth = leftWidth + deltaX;
-              const nextEditorWidth = rightWidth - deltaX;
-              if (nextChatWidth <= 0 || nextEditorWidth <= 0) {
-                return effectiveStartRatios;
-              }
-              const editorRatio =
-                effectiveStartRatios.workspace_preview +
-                effectiveStartRatios.auxiliary;
-              const combinedRatio = effectiveStartRatios.chat + editorRatio;
-              const nextChatRatio = combinedRatio * (nextChatWidth / combinedWidth);
-              const nextEditorRatio = combinedRatio * (nextEditorWidth / combinedWidth);
-              const editorScale = nextEditorRatio / editorRatio;
-              return {
-                ...effectiveStartRatios,
-                chat: nextChatRatio,
-                workspace_preview:
-                  effectiveStartRatios.workspace_preview * editorScale,
-                auxiliary: effectiveStartRatios.auxiliary * editorScale,
-              };
-            })()
-        : resizeAdjacentMainAreas({
-            ratios: effectiveStartRatios,
-            left,
-            right,
-            leftWidth,
-            rightWidth,
-            deltaX,
-          });
-      latestRatios = resizedRatios;
-      if (resizingExtensionDebugSplit) {
-        setExtensionDebugAreaRatios({
-          workspace_preview: latestRatios.workspace_preview,
-          auxiliary: latestRatios.auxiliary,
-        });
-      } else {
-        setMainAreaRatios(latestRatios);
-      }
-    };
-
-    const finishResize = () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", finishResize);
-      window.removeEventListener("pointercancel", finishResize);
-      document.body.classList.remove(LAYOUT_RESIZING_CLASS);
-      cleanupLayoutResizeRef.current = null;
-      if (moved && !resizingExtensionDebugSplit) {
-        persistLayoutSettings({ main_area_ratios: latestRatios });
-      }
-    };
-
-    document.body.classList.add(LAYOUT_RESIZING_CLASS);
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", finishResize);
-    window.addEventListener("pointercancel", finishResize);
-    cleanupLayoutResizeRef.current = finishResize;
-  };
   const resetMainAreaRatios = () => {
     if (extensionDebugSplitActive) {
-      setExtensionDebugAreaRatios({ ...DEFAULT_EXTENSION_DEBUG_AREA_RATIOS });
+      resetExtensionDebugAreaRatios();
       return;
     }
     const ratios = { ...DEFAULT_MAIN_AREA_RATIOS };
     setMainAreaRatios(ratios);
     persistLayoutSettings({ main_area_ratios: ratios });
   };
+
+  const handleOpenChangesView = () => {
+    setAuxiliaryVisible(true);
+    setAuxiliaryTab("changes");
+    persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: "changes" });
+  };
+  useEffect(() => () => {
+    cleanupPanelResizeRef.current?.();
+  }, []);
+
   const startGatewayPanelResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
-    cleanupLayoutResizeRef.current?.();
+    cleanupPanelResizeRef.current?.();
 
     const startY = event.clientY;
     const startHeight = bottomPanelState.height;
     let latestHeight = startHeight;
     let moved = false;
-
     const handlePointerMove = (moveEvent: PointerEvent) => {
       const deltaY = startY - moveEvent.clientY;
       if (deltaY === 0) {
@@ -1176,13 +1042,12 @@ export default function AppShell() {
         }));
       }
     };
-
     const finishResize = () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", finishResize);
       window.removeEventListener("pointercancel", finishResize);
       document.body.classList.remove(GATEWAY_PANEL_RESIZING_CLASS);
-      cleanupLayoutResizeRef.current = null;
+      cleanupPanelResizeRef.current = null;
       if (moved) {
         updateBottomPanelState({ height: latestHeight });
       }
@@ -1192,8 +1057,9 @@ export default function AppShell() {
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", finishResize);
     window.addEventListener("pointercancel", finishResize);
-    cleanupLayoutResizeRef.current = finishResize;
+    cleanupPanelResizeRef.current = finishResize;
   };
+
   const resetGatewayPanelHeight = () => {
     updateBottomPanelState({ height: DEFAULT_GATEWAY_PANEL_HEIGHT });
   };

@@ -24,6 +24,20 @@ if (resized.agent_sessions !== 1 || resized.auxiliary !== 1) {
   throw new Error("拖拽修改了非相邻区域比例");
 }
 
+const grouped = resizeAdjacentMainAreas({
+  ratios: defaults,
+  left: "agent_sessions",
+  right: "chat",
+  grouped: ["workspace_preview", "auxiliary"],
+  leftWidth: 400,
+  rightWidth: 400,
+  deltaX: 100,
+});
+if (grouped.agent_sessions !== 2.5 || grouped.chat !== 0.5
+  || grouped.workspace_preview !== 0.5 || grouped.auxiliary !== 0.5) {
+  throw new Error(`分组区域比例调整错误: ${JSON.stringify(grouped)}`);
+}
+
 const rejected = resizeAdjacentMainAreas({
   ratios: defaults,
   left: "chat",
