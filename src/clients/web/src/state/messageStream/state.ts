@@ -246,6 +246,16 @@ export function toolExecutionStatusValue(value: unknown): MessageStreamToolExecu
   return "running";
 }
 
+/** 未识别取值收敛为 undefined：outcome 是结果分类，宁缺勿造。 */
+export function toolExecutionOutcomeValue(value: unknown): MessageStreamToolExecution["outcome"] {
+  return value === "success"
+    || value === "provider_error"
+    || value === "execution_lost"
+    || value === "outcome_unknown"
+    ? value
+    : undefined;
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

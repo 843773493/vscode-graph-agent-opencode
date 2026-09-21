@@ -16,6 +16,7 @@ import {
   sortActivities,
   sortBlocks,
   sortToolExecutions,
+  toolExecutionOutcomeValue,
   toolExecutionStatusValue,
 } from "./state";
 import type {
@@ -153,7 +154,7 @@ function toolFromSnapshot(value: SnapshotToolExecution): MessageStreamToolExecut
     tool_attempt_id: value.tool_attempt_id,
     tool_name: value.tool_name,
     status: toolExecutionStatusValue(value.status),
-    outcome: value.outcome,
+    outcome: toolExecutionOutcomeValue(value.outcome),
     completion_reason: value.completion_reason,
     result: value.result
       ? boundedMessageStreamText(value.result, MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS)

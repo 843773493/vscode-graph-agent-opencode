@@ -7,6 +7,7 @@ import {
   isRecord,
   lifecycleFromValue,
   stringValue,
+  toolExecutionOutcomeValue,
 } from "./state";
 import type {
   MessageStreamEvent,
@@ -91,7 +92,7 @@ function toolFromPayload(
     tool_attempt_id: stringValue(payload.tool_attempt_id) ?? undefined,
     tool_name: stringValue(payload.tool_name) ?? "tool",
     status,
-    outcome: toolExecutionOutcome(payload.outcome),
+    outcome: toolExecutionOutcomeValue(payload.outcome),
     completion_reason: stringValue(payload.completion_reason) ?? undefined,
     result: typeof payload.result === "string"
       ? boundedMessageStreamText(payload.result, MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS)
@@ -121,13 +122,4 @@ export function mergeToolCall(
 function hasArguments(value: unknown): boolean {
   if (typeof value === "string") return value.length > 0;
   return isRecord(value) ? Object.keys(value).length > 0 : value != null;
-}
-
-function toolExecutionOutcome(value: unknown): MessageStreamToolExecution["outcome"] {
-  return value === "success"
-    || value === "provider_error"
-    || value === "execution_lost"
-    || value === "outcome_unknown"
-    ? value
-    : undefined;
 }

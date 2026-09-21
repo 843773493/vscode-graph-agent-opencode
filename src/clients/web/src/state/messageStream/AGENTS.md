@@ -17,7 +17,7 @@
 
 - `index.ts` 是模块唯一对外入口，跨模块复用的符号必须在此可导出。
 - 快照 hydration 与事件 reducer 保持互为递归的单一链路，不得复制状态归一逻辑。
-- 实体状态的值归一符号（`blockStatusValue`、`activityStatusValue`、`toolExecutionStatusValue`）统一集中在 `state.ts`，快照与事件两条链路复用同一实现，不得各自内联白名单。
+- 实体状态的值归一符号（`blockStatusValue`、`activityStatusValue`、`toolExecutionStatusValue`、`toolExecutionOutcomeValue`）统一集中在 `state.ts`，快照与事件两条链路复用同一实现，不得各自内联白名单。
 - 事件 reducer 只保留事件信封校验、事件分发与终态收口；工具实体 upsert 归入 `toolReducer.ts`，activity 与 model_call 的 upsert、终态收口及 activeState 归约归入 `activityReducer.ts`，block 链路（含 block 终态收口）仍留在 `eventReducer.ts`。
 - 代码注释使用中文，专业术语除外。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。

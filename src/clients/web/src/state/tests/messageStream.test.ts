@@ -1126,4 +1126,91 @@ describe("message stream reducer", () => {
       }
     }
   });
+
+  test("snapshot 路径的非法 tool outcome 与事件路径收敛一致，不原样透传", () => {
+    const snapshotState = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", {
+        snapshot_seq: 1,
+        stream_status: "open",
+        agent_loop_status: "tool_running",
+        current_attempt: 1,
+        tool_executions: [{
+          tool_execution_id: "exec_1",
+          tool_call_id: "call_1",
+          tool_name: "shell",
+          status: "completed",
+          outcome: "weird",
+        }],
+        resumable: true,
+      }),
+    );
+
+    let eventState = createMessageStreamState("ses_1", "turn_1");
+    eventState = applyMessageStreamEvent(eventState, event(1, "tool.started", {
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_name: "shell",
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(2, "tool.completed", {
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_name: "shell",
+      status: "completed",
+      outcome: "weird",
+    }));
+
+    expect(snapshotState.toolExecutions[0]?.outcome)
+      .toBe(eventState.toolExecutions[0]?.outcome);
+    expect(snapshotState.toolExecutions[0]?.outcome).toBeUndefined();
+    expect(snapshotState.toolExecutions[0]?.outcome).not.toBe("weird");
+  });
+
+  test("snapshot 路径与事件路径对 tool outcome 的归一结果逐字一致", () => {
+    const cases: Array<{ outcome: unknown; expected: MessageStreamToolExecution["outcome"] }> = [
+      { outcome: "success", expected: "success" },
+      { outcome: "provider_error", expected: "provider_error" },
+      { outcome: "execution_lost", expected: "execution_lost" },
+      { outcome: "outcome_unknown", expected: "outcome_unknown" },
+      { outcome: "validation_failed", expected: undefined },
+      { outcome: undefined, expected: undefined },
+    ];
+
+    for (const item of cases) {
+      const snapshotState = applyMessageStreamEvent(
+        createMessageStreamState("ses_1", "turn_1"),
+        event(1, "stream.snapshot", {
+          snapshot_seq: 1,
+          stream_status: "open",
+          agent_loop_status: "tool_running",
+          current_attempt: 1,
+          tool_executions: [{
+            tool_execution_id: "exec_1",
+            tool_call_id: "call_1",
+            tool_name: "shell",
+            status: "completed",
+            outcome: item.outcome,
+          }],
+          resumable: true,
+        }),
+      );
+      let eventState = createMessageStreamState("ses_1", "turn_1");
+      eventState = applyMessageStreamEvent(eventState, event(1, "tool.started", {
+        tool_execution_id: "exec_1",
+        tool_call_id: "call_1",
+        tool_name: "shell",
+      }));
+      eventState = applyMessageStreamEvent(eventState, event(2, "tool.completed", {
+        tool_execution_id: "exec_1",
+        tool_call_id: "call_1",
+        tool_name: "shell",
+        status: "completed",
+        outcome: item.outcome,
+      }));
+
+      expect(snapshotState.toolExecutions[0]?.outcome)
+        .toBe(eventState.toolExecutions[0]?.outcome);
+      expect(snapshotState.toolExecutions[0]?.outcome).toBe(item.expected);
+    }
+  });
 });
