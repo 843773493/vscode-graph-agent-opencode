@@ -21,6 +21,7 @@ from app.services.infrastructure.node_debug.configuration_registry import (
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.snapshot import MAX_NODE_DEBUG_ACTIONS
 from app.services.infrastructure.node_debug.thread_owner import (
     NodeDebugOwner,
     normalize_node_debug_owner,
@@ -29,9 +30,6 @@ from app.services.infrastructure.node_debug.thread_owner import (
 
 def _owner(session_id: str, thread_id: str) -> NodeDebugOwner:
     return normalize_node_debug_owner(session_id, thread_id)
-
-
-_MAX_ACTIONS = 100
 
 
 class NodeDebugSessionState:
@@ -155,7 +153,7 @@ class NodeDebugSessionState:
         actions: Iterable[NodeDebugActionRecordDTO],
     ) -> None:
         copied = [action.model_copy(deep=True) for action in actions]
-        self._pending_actions[owner] = copied[-_MAX_ACTIONS:]
+        self._pending_actions[owner] = copied[-MAX_NODE_DEBUG_ACTIONS:]
 
     def replace_pending_action(
         self,
@@ -196,7 +194,7 @@ class NodeDebugSessionState:
                 created_at=datetime.now(UTC),
             )
         )
-        del actions[:-_MAX_ACTIONS]
+        del actions[:-MAX_NODE_DEBUG_ACTIONS]
 
     def consume_pending_actions(
         self, owner: NodeDebugOwner

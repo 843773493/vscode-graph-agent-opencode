@@ -88,13 +88,14 @@ from app.services.infrastructure.node_debug.session_store import (
     NodeDebugSessionStore,
 )
 from app.services.infrastructure.node_debug.snapshot import (
+    MAX_NODE_DEBUG_ACTIONS,
     append_runtime_debug_action,
     build_node_debug_snapshot,
 )
 
 _INSPECTOR_URL_PATTERN = re.compile(r"Debugger listening on (ws://\S+)")
 
-_MAX_ACTIONS = 100
+_MAX_NODE_DEBUG_EVALUATIONS = 100
 _MAX_OUTPUT_LINES = 100
 _TOOL_ACTION_SOURCES: dict[str, frozenset[str]] = {
     "create_debug_configuration": frozenset({"create_configuration"}),
@@ -219,7 +220,7 @@ class NodeDebugService:
                 session_state=self._session_state,
                 set_selection=self._configuration_registry.set_selection,
                 runtimes_lock=self._runtimes_lock,
-                max_actions=_MAX_ACTIONS,
+                max_actions=MAX_NODE_DEBUG_ACTIONS,
                 load_session=self._session_state.ensure_loaded,
                 reconcile_sources=self._reconcile_session_sources,
                 select_configuration=self._configuration_registry.select_for_start,
@@ -1142,7 +1143,7 @@ class NodeDebugService:
             )
             self._session_state.set_pending_actions(
                 owner,
-                runtime.actions[-_MAX_ACTIONS:],
+                runtime.actions[-MAX_NODE_DEBUG_ACTIONS:],
             )
             return
         self._session_state.append_pending_action(
@@ -1389,7 +1390,7 @@ class NodeDebugService:
         async with runtime.state_lock:
             runtime.last_evaluation = evaluation
             runtime.evaluations.append(evaluation)
-            del runtime.evaluations[:-_MAX_ACTIONS]
+            del runtime.evaluations[:-_MAX_NODE_DEBUG_EVALUATIONS]
             runtime.error_message = None
             self._append_action(
                 runtime,
@@ -1523,7 +1524,7 @@ class NodeDebugService:
             tool_call_id=tool_call_id,
             extension_catalog_binding=extension_catalog_binding,
             result=result,
-            max_actions=_MAX_ACTIONS,
+            max_actions=MAX_NODE_DEBUG_ACTIONS,
         )
 
     def _snapshot(self, runtime: NodeDebugRuntime) -> NodeDebugStateDTO:
