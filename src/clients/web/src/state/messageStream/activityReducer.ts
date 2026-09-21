@@ -1,6 +1,7 @@
 // 活动与模型调用归约：维护 activity / model_call 两类"进行中投影"的 upsert 与终态收口。
 // 由 eventReducer 的事件 switch 调用；activeStateAfter 与 modelOutputPhase 同时被 block、tool 链路复用。
 import {
+  activityStatusValue,
   applyLifecycle,
   booleanValue,
   isRecord,
@@ -13,17 +14,6 @@ import type {
   MessageStreamEvent,
   MessageStreamState,
 } from "./types";
-
-function activityStatusValue(value: unknown): MessageStreamActivity["status"] {
-  return value === "running"
-    || value === "waiting"
-    || value === "stopping"
-    || value === "completed"
-    || value === "failed"
-    || value === "unknown"
-    ? value
-    : "unknown";
-}
 
 export function modelOutputPhase(carrierType: string): string {
   return [

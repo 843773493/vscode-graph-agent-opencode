@@ -227,6 +227,17 @@ export function blockStatusValue(value: unknown): MessageStreamBlock["status"] {
     : "running";
 }
 
+export function activityStatusValue(value: unknown): MessageStreamActivity["status"] {
+  return value === "running"
+    || value === "waiting"
+    || value === "stopping"
+    || value === "completed"
+    || value === "failed"
+    || value === "unknown"
+    ? value
+    : "unknown";
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

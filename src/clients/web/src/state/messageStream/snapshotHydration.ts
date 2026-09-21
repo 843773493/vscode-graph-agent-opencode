@@ -7,6 +7,7 @@ import { drainPendingEvents } from "./eventReducer";
 import {
   MESSAGE_STREAM_BLOCK_TEXT_MAX_CHARS,
   MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS,
+  activityStatusValue,
   blockStatusValue,
   boundedMessageStreamText,
   cloneMessageStreamState,
@@ -197,7 +198,7 @@ function activityFromSnapshot(value: SnapshotActivity): MessageStreamActivity {
     kind: value.kind,
     parent_activity_id: value.parent_activity_id,
     scope_ref: value.scope_ref ?? "turn",
-    status: value.status,
+    status: activityStatusValue(value.status),
     outcome: value.outcome,
     summary: value.summary,
     cancellable: value.cancellable ?? false,

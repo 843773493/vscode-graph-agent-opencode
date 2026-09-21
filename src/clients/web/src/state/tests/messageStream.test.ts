@@ -991,4 +991,53 @@ describe("message stream reducer", () => {
     expect(state.activities).toHaveLength(1);
     expect(state.activities[0]?.status).toBe("unknown");
   });
+
+  test("snapshot 路径的非法 activity status 同样收敛为 unknown，不原样透传", () => {
+    const state = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", {
+        snapshot_seq: 1,
+        stream_status: "open",
+        agent_loop_status: "running",
+        current_attempt: 1,
+        activities: [{
+          activity_id: "compaction_1",
+          kind: "context.compaction",
+          scope_ref: "turn",
+          status: "paused",
+          resource_refs: [],
+        }],
+        resumable: true,
+      }),
+    );
+
+    expect(state.activities).toHaveLength(1);
+    expect(state.activities[0]?.status).toBe("unknown");
+    expect(state.activities[0]?.status).not.toBe("paused");
+    expect(state.activities[0]?.status).not.toBe("completed");
+  });
+
+  test("snapshot 路径的合法 activity status 原样保留", () => {
+    const statuses = ["running", "waiting", "stopping", "completed", "failed", "unknown"] as const;
+    for (const status of statuses) {
+      const state = applyMessageStreamEvent(
+        createMessageStreamState("ses_1", "turn_1"),
+        event(1, "stream.snapshot", {
+          snapshot_seq: 1,
+          stream_status: "open",
+          agent_loop_status: "running",
+          current_attempt: 1,
+          activities: [{
+            activity_id: `compaction_${status}`,
+            kind: "context.compaction",
+            scope_ref: "turn",
+            status,
+            resource_refs: [],
+          }],
+          resumable: true,
+        }),
+      );
+      expect(state.activities[0]?.status).toBe(status);
+    }
+  });
 });
