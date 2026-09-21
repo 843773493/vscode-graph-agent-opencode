@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { GatewayExtensionResourceEntry } from "../hooks/useGatewayExtensionResources";
+import type { GatewayExtensionResourceEntry } from "../hooks/gatewayExtensions/useGatewayExtensionResources";
 import { buildGatewayAttachUrl } from "../utils/attachUrls";
 
 interface TerminalPanelProps {

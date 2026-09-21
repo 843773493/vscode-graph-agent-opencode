@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React, { type MutableRefObject } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import * as api from "../api";
-import { DEFAULT_BACKEND_PORT } from "../api";
-import * as gatewayApi from "../gatewayApi";
-import type { Agent } from "../types/backend";
-import type { AppState } from "../types/frontend";
-import type { FinishWorkspaceRefresh } from "./contentViewLoaderTypes";
+import * as api from "../../api";
+import { DEFAULT_BACKEND_PORT } from "../../api";
+import * as gatewayApi from "../../gatewayApi";
+import type { Agent } from "../../types/backend";
+import type { AppState } from "../../types/frontend";
+import type { FinishWorkspaceRefresh } from "../contentViewLoaderTypes";
 import { useGatewayWorkspaceActivation } from "./useGatewayWorkspaceActivation";
 
 const API_PORT = 49_621;

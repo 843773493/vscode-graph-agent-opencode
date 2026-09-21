@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { WorkspaceAuxiliaryTab } from "../components/workspace/WorkspaceAuxiliaryPanel";
-import type { WorkspaceRuntimePreviewTab } from "../components/workspace/WorkspaceRuntimePreviewArea";
+import type { WorkspaceAuxiliaryTab } from "../../components/workspace/WorkspaceAuxiliaryPanel";
+import type { WorkspaceRuntimePreviewTab } from "../../components/workspace/WorkspaceRuntimePreviewArea";
 import type { GatewayExtensionResourceEntry } from "./useGatewayExtensionResources";
-import type { SessionResource } from "../types/backend";
+import type { SessionResource } from "../../types/backend";
 
 // createSessionConnection 的真实实现会经由 http.ts 的认证屏障发起网络请求；
 // 这里替换为记录实参的桩，直接观察编排层原样转发的四个参数与返回的资源标识。
 const createSessionConnectionCalls: Array<[number, string, string, string]> = [];
 let createdConnectionResourceId = "created-browser-1";
-mock.module("../gatewayApi", () => ({
+mock.module("../../gatewayApi", () => ({
   createSessionConnection: async (
     port: number,
     workspaceId: string,

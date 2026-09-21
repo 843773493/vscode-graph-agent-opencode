@@ -3,7 +3,7 @@ import type { SessionResourceAction } from "../types/backend";
 import type {
   GatewayExtensionResourceEntry,
   GatewayExtensionResourceError,
-} from "../hooks/useGatewayExtensionResources";
+} from "../hooks/gatewayExtensions/useGatewayExtensionResources";
 import { kindLabel } from "../state/resourceDisplay";
 import ResourceTreeRow from "./ResourceTreeRow";
 import { useWarmConfirm } from "./WarmConfirmProvider";

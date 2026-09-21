@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import * as gatewayApi from "../gatewayApi";
-import { DEFAULT_BACKEND_PORT } from "../api";
+import * as gatewayApi from "../../gatewayApi";
+import { DEFAULT_BACKEND_PORT } from "../../api";
 import type {
   GatewayWorkspace,
   GatewayWorkspaceList,
   Session,
   WebUiSettings,
   WebUiSettingsUpdate,
-} from "../types/backend";
-import type { AppState } from "../types/frontend";
+} from "../../types/backend";
+import type { AppState } from "../../types/frontend";
 import { useGatewayWorkspaceMutations } from "./useGatewayWorkspaceMutations";
 
 const API_PORT = 49_611;

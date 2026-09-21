@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listGatewayResources } from "../gatewayApi";
+import { listGatewayResources } from "../../gatewayApi";
 import type {
   GatewayResourceItem,
   GatewayResourceScopeError,
   SessionResource,
   SessionResourceAction,
-} from "../types/backend";
-import { controlSessionResource } from "../api";
+} from "../../types/backend";
+import { controlSessionResource } from "../../api";
 
 export type GatewayExtensionRuntimeResource = Omit<SessionResource, "kind"> & {
   kind: "browser" | "terminal";

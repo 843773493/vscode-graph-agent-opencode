@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { DEFAULT_BACKEND_PORT } from "../api";
+import { DEFAULT_BACKEND_PORT } from "../../api";
 import {
   addManagedGatewayWorkspace as apiAddManagedGatewayWorkspace,
   addSshGatewayWorkspace as apiAddSshGatewayWorkspace,
@@ -7,15 +7,15 @@ import {
   removeGatewayWorkspace as apiRemoveGatewayWorkspace,
   renameGatewayWorkspace as apiRenameGatewayWorkspace,
   reorderGatewayWorkspaces as apiReorderGatewayWorkspaces,
-} from "../gatewayApi";
+} from "../../gatewayApi";
 import type {
   AddManagedGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
   WebUiSettings,
   WebUiSettingsUpdate,
-} from "../types/backend";
-import { applyGatewayWorkspaceListAfterRemoval } from "../state/gatewayWorkspaceState";
-import type { FinishWorkspaceRefresh, SetAppState } from "./contentViewLoaderTypes";
+} from "../../types/backend";
+import { applyGatewayWorkspaceListAfterRemoval } from "../../state/gatewayWorkspaceState";
+import type { FinishWorkspaceRefresh, SetAppState } from "../contentViewLoaderTypes";
 
 export function useGatewayWorkspaceMutations({
   apiPort,

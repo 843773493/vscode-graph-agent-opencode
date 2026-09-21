@@ -1,18 +1,18 @@
 import type { Dispatch, SetStateAction } from "react";
-import type { WorkspaceAuxiliaryTab } from "../components/workspace/WorkspaceAuxiliaryPanel";
-import type { WorkspaceRuntimePreviewTab } from "../components/workspace/WorkspaceRuntimePreviewArea";
-import { createSessionConnection } from "../gatewayApi";
+import type { WorkspaceAuxiliaryTab } from "../../components/workspace/WorkspaceAuxiliaryPanel";
+import type { WorkspaceRuntimePreviewTab } from "../../components/workspace/WorkspaceRuntimePreviewArea";
+import { createSessionConnection } from "../../gatewayApi";
 import type {
   GatewayExtensionResourceEntry,
   useGatewayExtensionResources,
 } from "./useGatewayExtensionResources";
-import type { SessionResource } from "../types/backend";
-import { buildGatewayAttachUrl } from "../utils/attachUrls";
+import type { SessionResource } from "../../types/backend";
+import { buildGatewayAttachUrl } from "../../utils/attachUrls";
 import {
   EXTENSION_WINDOW_NAME,
   buildExtensionWindowUrl,
   type ExtensionResourceKind,
-} from "../utils/extensionResourceWindow";
+} from "../../utils/extensionResourceWindow";
 
 interface UseGatewayExtensionWindowOptions {
   extensionWindowRequested: boolean;

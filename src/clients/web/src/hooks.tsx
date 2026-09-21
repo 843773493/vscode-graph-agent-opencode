@@ -50,10 +50,10 @@ import {
   type SessionViewStatePayload,
 } from "./hooks/useSessionViewState";
 import { useWorkspaceInformationClipboard } from "./hooks/useWorkspaceInformationClipboard";
-import { useGatewayWorkspaceHierarchy } from "./hooks/useGatewayWorkspaceHierarchy";
-import { useGatewayWorkspaceRuntimeLifecycle } from "./hooks/useGatewayWorkspaceRuntimeLifecycle";
-import { useGatewayWorkspaceMutations } from "./hooks/useGatewayWorkspaceMutations";
-import { useGatewayWorkspaceActivation } from "./hooks/useGatewayWorkspaceActivation";
+import { useGatewayWorkspaceHierarchy } from "./hooks/gatewayWorkspace/useGatewayWorkspaceHierarchy";
+import { useGatewayWorkspaceRuntimeLifecycle } from "./hooks/gatewayWorkspace/useGatewayWorkspaceRuntimeLifecycle";
+import { useGatewayWorkspaceMutations } from "./hooks/gatewayWorkspace/useGatewayWorkspaceMutations";
+import { useGatewayWorkspaceActivation } from "./hooks/gatewayWorkspace/useGatewayWorkspaceActivation";
 import { useWorkspaceSessionSelection } from "./hooks/useWorkspaceSessionSelection";
 import { useComposerStateProjection } from "./hooks/useComposerStateProjection";
 import { useUiSettingsController } from "./hooks/useUiSettingsController";

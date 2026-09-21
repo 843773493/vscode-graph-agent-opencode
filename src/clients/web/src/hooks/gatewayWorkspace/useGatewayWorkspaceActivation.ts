@@ -1,11 +1,11 @@
 import { useCallback, useRef, type MutableRefObject } from "react";
-import { DEFAULT_BACKEND_PORT, listAgents as apiListAgents } from "../api";
+import { DEFAULT_BACKEND_PORT, listAgents as apiListAgents } from "../../api";
 import {
   activateGatewayWorkspace as apiActivateGatewayWorkspace,
-} from "../gatewayApi";
-import type { AppState } from "../types/frontend";
-import type { FinishWorkspaceRefresh, SetAppState } from "./contentViewLoaderTypes";
-import { createLatestSerialTaskQueue } from "./serialTaskQueue";
+} from "../../gatewayApi";
+import type { AppState } from "../../types/frontend";
+import type { FinishWorkspaceRefresh, SetAppState } from "../contentViewLoaderTypes";
+import { createLatestSerialTaskQueue } from "../serialTaskQueue";
 
 type RefreshGatewayWorkspaceStatuses = (
   expectedWorkspaceId?: string | null,

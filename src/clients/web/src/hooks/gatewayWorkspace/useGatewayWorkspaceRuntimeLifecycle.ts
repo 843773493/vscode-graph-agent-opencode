@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { DEFAULT_BACKEND_PORT } from "../api";
+import { DEFAULT_BACKEND_PORT } from "../../api";
 import {
   forceRestartManagedGatewayWorkspaceBackend as apiForceRestartManagedGatewayWorkspaceBackend,
   probeExternalGatewayWorkspace as apiProbeExternalGatewayWorkspace,
@@ -7,11 +7,11 @@ import {
   safeRestartManagedGatewayWorkspaceBackend as apiSafeRestartManagedGatewayWorkspaceBackend,
   startManagedGatewayWorkspaceBackend as apiStartManagedGatewayWorkspaceBackend,
   stopManagedGatewayWorkspaceBackend as apiStopManagedGatewayWorkspaceBackend,
-} from "../gatewayApi";
+} from "../../gatewayApi";
 import type {
   GatewayRuntimeRestartResult,
-} from "../types/backend";
-import type { FinishWorkspaceRefresh, SetAppState } from "./contentViewLoaderTypes";
+} from "../../types/backend";
+import type { FinishWorkspaceRefresh, SetAppState } from "../contentViewLoaderTypes";
 
 type RefreshGatewayState = () => Promise<void>;
 
