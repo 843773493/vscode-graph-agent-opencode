@@ -8,11 +8,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from app.core.identifier import create_prefixed_id
 from app.core.path_utils import safe_join
 from app.schemas.internal_v2.node_debug import (
     ExtensionCatalogBindingAuditDTO,
-    NodeDebugActionRecordDTO,
     NodeDebugActionRequest,
     NodeDebugBreakpointDTO,
     NodeDebugBreakpointRequest,
@@ -26,9 +24,7 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugEvaluateParams,
     NodeDebugEvaluationDTO,
     NodeDebugLaunchProfileDTO,
-    NodeDebugSessionManifestDTO,
     NodeDebugSetBreakpointActionRequest,
-    NodeDebugSetBreakpointParams,
     NodeDebugStateDTO,
     NodeDebugUpdateBreakpointActionRequest,
     NodeDebugVariableDTO,
@@ -44,10 +40,7 @@ from app.services.infrastructure.node_debug.breakpoint_mutations import (
     NodeDebugBreakpointMutations,
 )
 from app.services.infrastructure.node_debug.breakpoints import (
-    persistable_breakpoint,
-    portable_breakpoint,
     reconcile_breakpoint,
-    runtime_breakpoint,
     source_digest,
 )
 from app.services.infrastructure.node_debug.claim_runtime import NodeDebugClaimRuntime
@@ -64,7 +57,6 @@ from app.services.infrastructure.node_debug.launch_orchestrator import (
     NodeDebugLaunchContext,
     NodeDebugLaunchOrchestrator,
     NodeDebugLaunchRequest,
-    NodeDebugLaunchSelection,
 )
 from app.services.infrastructure.node_debug.process_lifecycle import (
     NodeDebugProcessLifecycle,
@@ -76,6 +68,7 @@ from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntim
 from app.services.infrastructure.node_debug.session_admission import (
     NodeDebugSessionAdmission,
 )
+from app.services.infrastructure.node_debug.session_state import NodeDebugSessionState
 from app.services.infrastructure.node_debug.thread_owner import (
     NodeDebugOwner,
     normalize_node_debug_owner,
@@ -95,7 +88,6 @@ from app.services.infrastructure.node_debug.session_store import (
     NodeDebugSessionStore,
 )
 from app.services.infrastructure.node_debug.snapshot import (
-    append_pending_debug_action,
     append_runtime_debug_action,
     build_node_debug_snapshot,
 )
@@ -161,15 +153,15 @@ class NodeDebugService:
         #: 条目数与 ``_runtimes`` 同量级（每个被触达过的 owner 一把锁）；不做回收，
         #: 以免丢弃仍被并发任务持有的锁。
         self._owner_locks: dict[NodeDebugOwner, asyncio.Lock] = {}
-        self._pending_breakpoints: dict[NodeDebugOwner, list[NodeDebugBreakpointDTO]] = {}
-        self._pending_actions: dict[NodeDebugOwner, list[NodeDebugActionRecordDTO]] = {}
-        self._launch_selections: dict[NodeDebugOwner, NodeDebugLaunchSelection] = {}
         self._configuration_factory = NodeDebugConfigurationFactory(
             workspace_root=self._workspace_root
         )
         self._configuration_registry = NodeDebugConfigurationRegistry(
             store=session_store,
-            validate_configuration=self._configuration_factory.validate_configuration,
+            configuration_factory=self._configuration_factory,
+        )
+        self._session_state = NodeDebugSessionState(
+            configuration_registry=self._configuration_registry
         )
         self._session_admission = session_admission
         # 入口别名折叠需要目录索引；无持久化会话树场景（嵌入式/单测）没有可折叠的
@@ -187,10 +179,10 @@ class NodeDebugService:
         self._breakpoint_mutations = NodeDebugBreakpointMutations(
             workspace_root=self._workspace_root,
             configuration_factory=self._configuration_factory,
-            pending_breakpoints=self._pending_breakpoints,
+            session_state=self._session_state,
             command=self._inspector.command,
             append_action=self._append_action,
-            append_pending_action=self._append_pending_action,
+            append_pending_action=self._session_state.append_pending_action,
         )
         self._claim_runtime = NodeDebugClaimRuntime(
             session_store=self._session_store,
@@ -207,8 +199,8 @@ class NodeDebugService:
             settle_process_lease=self._claim_runtime.settle_process_lease,
             notify_release_failed=self._claim_runtime.notify_release_failed,
             append_action=self._append_action,
-            append_pending_action=self._append_pending_action,
-            write_session_manifest=self._write_session_manifest,
+            append_pending_action=self._session_state.append_pending_action,
+            write_session_manifest=self._session_state.write_session_manifest,
             clear_stop_snapshot=self._clear_stop_snapshot,
         )
 
@@ -223,18 +215,17 @@ class NodeDebugService:
                 inspector=self._inspector,
                 lifecycle=self._lifecycle,
                 runtimes=self._runtimes,
-                pending_breakpoints=self._pending_breakpoints,
-                pending_actions=self._pending_actions,
-                launch_selections=self._launch_selections,
+                session_state=self._session_state,
+                set_selection=self._configuration_registry.set_selection,
                 runtimes_lock=self._runtimes_lock,
                 max_actions=_MAX_ACTIONS,
-                load_session=self._ensure_session_loaded,
+                load_session=self._session_state.ensure_loaded,
                 reconcile_sources=self._reconcile_session_sources,
-                select_configuration=self._select_configuration_for_start,
-                read_configuration=self._configuration,
+                select_configuration=self._configuration_registry.select_for_start,
+                read_configuration=self._configuration_registry.get,
                 read_runtime_config=self._get_typed_debug_runtime_config,
                 read_source_digests=self._source_digests_for_runtime,
-                persist_state=self._persist_session_state,
+                persist_state=self._session_state.persist_runtime_state,
                 write_claim=self._claim_runtime.write_launch_claim,
                 mark_claim_running=self._claim_runtime.mark_claim_running,
                 append_action=self._append_action,
@@ -249,7 +240,7 @@ class NodeDebugService:
     ) -> NodeDebugStateDTO:
         owner = self._resolve_owner(session_id, thread_id)
         session_id, thread_id = owner
-        self._ensure_session_loaded(session_id, thread_id)
+        self._session_state.ensure_loaded(session_id, thread_id)
         self._configuration_registry.refresh_new_files(session_id, thread_id)
         runtime = self._runtimes.get(owner)
         if runtime is None:
@@ -257,10 +248,7 @@ class NodeDebugService:
             await self._lifecycle.reconcile_persisted_claim(owner)
         await self._reconcile_session_sources(session_id, thread_id, runtime)
         if runtime is None:
-            selection = self._launch_selections.get(
-                owner,
-                NodeDebugLaunchSelection(),
-            )
+            selection = self._configuration_registry.selection(session_id, thread_id)
             claim = self._claim_runtime.active_claim(session_id, thread_id)
             return NodeDebugStateDTO(
                 session_id=session_id,
@@ -290,11 +278,11 @@ class NodeDebugService:
                 args=list(selection.args),
                 breakpoints=[
                     breakpoint.model_copy(deep=True)
-                    for breakpoint in self._pending_breakpoints.get(owner, [])
+                    for breakpoint in self._session_state.pending_breakpoints(owner)
                 ],
                 actions=[
                     action.model_copy(deep=True)
-                    for action in self._pending_actions.get(owner, [])
+                    for action in self._session_state.pending_actions(owner)
                 ],
                 configuration_revision=(
                     self._configuration_registry.active_revision(session_id, thread_id)
@@ -347,7 +335,7 @@ class NodeDebugService:
         thread_id: str,
     ) -> list[NodeDebugConfigurationDTO]:
         session_id, thread_id = self._resolve_owner(session_id, thread_id)
-        self._ensure_session_loaded(session_id, thread_id)
+        self._session_state.ensure_loaded(session_id, thread_id)
         self._configuration_registry.refresh_new_files(session_id, thread_id)
         return self._configuration_registry.list(session_id, thread_id)
 
@@ -358,9 +346,9 @@ class NodeDebugService:
         thread_id: str,
     ) -> NodeDebugConfigurationDTO:
         session_id, thread_id = self._resolve_owner(session_id, thread_id)
-        self._ensure_session_loaded(session_id, thread_id)
+        self._session_state.ensure_loaded(session_id, thread_id)
         self._configuration_registry.refresh_new_files(session_id, thread_id)
-        return self._configuration(
+        return self._configuration_registry.get(
             session_id, thread_id, configuration_id
         ).model_copy(deep=True)
 
@@ -375,30 +363,17 @@ class NodeDebugService:
         session_id, thread_id = await self._admit_mutation(
             request.session_id, request.thread_id
         )
-        self._ensure_session_loaded(session_id, thread_id)
-        self._configuration_registry.assert_unique_name(
-            session_id,
-            request.name,
-            thread_id=thread_id,
-        )
+        self._session_state.ensure_loaded(session_id, thread_id)
         if request.activate:
             self._assert_no_running_target(session_id, thread_id)
-        configuration = self._configuration_factory.configuration_from_request(
-            configuration_id=create_prefixed_id("dbgcfg"),
-            name=request.name,
-            script_path=request.script_path,
-            working_directory=request.working_directory,
-            launch_profile_name=request.launch_profile_name,
-            args=request.args,
-            breakpoints=request.breakpoints,
+        configuration = self._configuration_registry.create(
+            request.model_copy(
+                update={"session_id": session_id, "thread_id": thread_id}
+            ),
         )
-        self._configuration_registry.put(session_id, configuration, thread_id)
         if request.activate:
-            self._activate_configuration_in_memory(
-                session_id,
-                thread_id,
-                configuration.configuration_id,
-            )
+            self._session_state.sync_active_configuration(session_id, thread_id)
+            self._drop_inactive_runtime((session_id, thread_id))
         self._record_session_action(
             session_id,
             "create_configuration",
@@ -408,7 +383,7 @@ class NodeDebugService:
             tool_call_id=tool_call_id,
             thread_id=thread_id,
         )
-        self._write_session_manifest(session_id, thread_id)
+        self._session_state.write_session_manifest(session_id, thread_id)
         return await self.get_state(session_id, thread_id)
 
     async def update_configuration(
@@ -423,33 +398,18 @@ class NodeDebugService:
         session_id, thread_id = await self._admit_mutation(
             request.session_id, request.thread_id
         )
-        self._ensure_session_loaded(session_id, thread_id)
-        current = self._configuration(session_id, thread_id, configuration_id)
+        self._session_state.ensure_loaded(session_id, thread_id)
+        self._configuration_registry.get(session_id, thread_id, configuration_id)
         self._assert_configuration_not_running(
             session_id, thread_id, configuration_id
         )
-        self._configuration_registry.assert_unique_name(
-            session_id,
-            request.name,
-            thread_id=thread_id,
-            exclude_configuration_id=configuration_id,
+        replacement = self._configuration_registry.update(
+            configuration_id,
+            request.model_copy(
+                update={"session_id": session_id, "thread_id": thread_id}
+            ),
         )
-        replacement = self._configuration_factory.configuration_from_request(
-            configuration_id=configuration_id,
-            name=request.name,
-            script_path=request.script_path,
-            working_directory=request.working_directory,
-            launch_profile_name=request.launch_profile_name,
-            args=request.args,
-            breakpoints=request.breakpoints,
-            revision=current.revision + 1,
-            created_at=current.created_at,
-        )
-        self._configuration_registry.put(session_id, replacement, thread_id)
-        if self._configuration_registry.active_id(session_id, thread_id) == configuration_id:
-            self._activate_configuration_in_memory(
-                session_id, thread_id, configuration_id
-            )
+        self._session_state.sync_active_configuration(session_id, thread_id)
         self._record_session_action(
             session_id,
             "update_configuration",
@@ -459,7 +419,7 @@ class NodeDebugService:
             tool_call_id=tool_call_id,
             thread_id=thread_id,
         )
-        self._write_session_manifest(session_id, thread_id)
+        self._session_state.write_session_manifest(session_id, thread_id)
         return await self.get_state(session_id, thread_id)
 
     async def activate_configuration(
@@ -473,12 +433,18 @@ class NodeDebugService:
         tool_call_id: str | None = None,
     ) -> NodeDebugStateDTO:
         session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        self._ensure_session_loaded(session_id, thread_id)
-        configuration = self._configuration(session_id, thread_id, configuration_id)
-        self._assert_no_running_target(session_id, thread_id)
-        self._activate_configuration_in_memory(
+        self._session_state.ensure_loaded(session_id, thread_id)
+        configuration = self._configuration_registry.get(
             session_id, thread_id, configuration_id
         )
+        self._assert_no_running_target(session_id, thread_id)
+        self._configuration_registry.activate(
+            session_id,
+            configuration_id,
+            thread_id=thread_id,
+        )
+        self._session_state.sync_active_configuration(session_id, thread_id)
+        self._drop_inactive_runtime((session_id, thread_id))
         self._record_session_action(
             session_id,
             "activate_configuration",
@@ -488,7 +454,7 @@ class NodeDebugService:
             tool_call_id=tool_call_id,
             thread_id=thread_id,
         )
-        self._write_session_manifest(session_id, thread_id)
+        self._session_state.write_session_manifest(session_id, thread_id)
         return await self.get_state(session_id, thread_id)
 
     async def delete_configuration(
@@ -502,18 +468,25 @@ class NodeDebugService:
         tool_call_id: str | None = None,
     ) -> NodeDebugStateDTO:
         session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        owner = self._owner_key(session_id, thread_id)
-        self._ensure_session_loaded(session_id, thread_id)
-        configuration = self._configuration(session_id, thread_id, configuration_id)
+        self._session_state.ensure_loaded(session_id, thread_id)
+        configuration = self._configuration_registry.get(
+            session_id, thread_id, configuration_id
+        )
         self._assert_configuration_not_running(
             session_id, thread_id, configuration_id
         )
-        self._configuration_registry.remove(session_id, configuration_id, thread_id)
-        if self._configuration_registry.active_id(session_id, thread_id) == configuration_id:
-            self._configuration_registry.clear_active(session_id, thread_id)
-            self._launch_selections.pop(owner, None)
-            self._pending_breakpoints.pop(owner, None)
-            self._runtimes.pop(owner, None)
+        was_active = (
+            self._configuration_registry.active_id(session_id, thread_id)
+            == configuration_id
+        )
+        self._configuration_registry.remove(
+            session_id,
+            configuration_id,
+            thread_id,
+        )
+        if was_active:
+            self._session_state.clear_pending_breakpoints((session_id, thread_id))
+            self._drop_inactive_runtime((session_id, thread_id))
         self._record_session_action(
             session_id,
             "delete_configuration",
@@ -523,7 +496,7 @@ class NodeDebugService:
             tool_call_id=tool_call_id,
             thread_id=thread_id,
         )
-        self._write_session_manifest(session_id, thread_id)
+        self._session_state.write_session_manifest(session_id, thread_id)
         return await self.get_state(session_id, thread_id)
 
     async def import_configuration(
@@ -536,31 +509,18 @@ class NodeDebugService:
         actor: Literal["human", "ai", "system"] = "human",
     ) -> NodeDebugStateDTO:
         session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        self._ensure_session_loaded(session_id, thread_id)
+        self._session_state.ensure_loaded(session_id, thread_id)
         if activate:
             self._assert_no_running_target(session_id, thread_id)
-        if self._configuration_registry.contains(
+        imported = self._configuration_registry.import_configuration(
             session_id,
-            configuration.configuration_id,
-            thread_id,
-        ):
-            raise ValueError(
-                f"目标会话已存在调试方案: {configuration.configuration_id}"
-            )
-        self._configuration_registry.assert_unique_name(
-            session_id,
-            configuration.name,
+            configuration,
             thread_id=thread_id,
+            activate=activate,
         )
-        imported = self._configuration_factory.validate_configuration(configuration)
-        self._configuration_registry.put(session_id, imported, thread_id)
         if activate:
-            self._assert_no_running_target(session_id, thread_id)
-            self._activate_configuration_in_memory(
-                session_id,
-                thread_id,
-                imported.configuration_id,
-            )
+            self._session_state.sync_active_configuration(session_id, thread_id)
+            self._drop_inactive_runtime((session_id, thread_id))
         self._record_session_action(
             session_id,
             "import_configuration",
@@ -568,7 +528,7 @@ class NodeDebugService:
             actor=actor,
             thread_id=thread_id,
         )
-        self._write_session_manifest(session_id, thread_id)
+        self._session_state.write_session_manifest(session_id, thread_id)
         return await self.get_state(session_id, thread_id)
 
     async def copy_configuration(
@@ -588,39 +548,26 @@ class NodeDebugService:
         target_session_id, target_thread_id = await self._admit_mutation(
             target_session_id, target_thread_id
         )
-        source = self.get_configuration(
+        self._session_state.ensure_loaded(target_session_id, target_thread_id)
+        self.get_configuration(
             source_session_id, configuration_id, source_thread_id
         )
-        self._ensure_session_loaded(target_session_id, target_thread_id)
         if activate:
             self._assert_no_running_target(target_session_id, target_thread_id)
-        target_name = (name or source.name).strip()
-        self._configuration_registry.assert_unique_name(
-            target_session_id,
-            target_name,
-            thread_id=target_thread_id,
+        copied = self._configuration_registry.copy_configuration(
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            configuration_id=configuration_id,
+            source_thread_id=source_thread_id,
+            target_thread_id=target_thread_id,
+            name=name,
+            activate=activate,
         )
-        now = datetime.now(UTC)
-        copied = self._configuration_factory.validate_configuration(
-            source.model_copy(
-                update={
-                    "configuration_id": create_prefixed_id("dbgcfg"),
-                    "name": target_name,
-                    "revision": 1,
-                    "created_at": now,
-                    "updated_at": now,
-                },
-                deep=True,
-            )
-        )
-        self._configuration_registry.put(target_session_id, copied, target_thread_id)
         if activate:
-            self._assert_no_running_target(target_session_id, target_thread_id)
-            self._activate_configuration_in_memory(
-                target_session_id,
-                target_thread_id,
-                copied.configuration_id,
+            self._session_state.sync_active_configuration(
+                target_session_id, target_thread_id
             )
+            self._drop_inactive_runtime((target_session_id, target_thread_id))
         self._record_session_action(
             target_session_id,
             "copy_configuration",
@@ -628,7 +575,9 @@ class NodeDebugService:
             actor="human",
             thread_id=target_thread_id,
         )
-        self._write_session_manifest(target_session_id, target_thread_id)
+        self._session_state.write_session_manifest(
+            target_session_id, target_thread_id
+        )
         return copied.model_copy(deep=True)
 
     async def start(
@@ -701,7 +650,7 @@ class NodeDebugService:
         session_id, thread_id = command.session_id, command.thread_id
         session_id, thread_id = await self._admit_mutation(session_id, thread_id)
         owner = self._owner_key(session_id, thread_id)
-        self._ensure_session_loaded(session_id, thread_id)
+        self._session_state.ensure_loaded(session_id, thread_id)
         runtime = self._runtimes.get(owner)
         await self._reconcile_session_sources(session_id, thread_id, runtime)
         if runtime is None and not isinstance(
@@ -720,10 +669,10 @@ class NodeDebugService:
                 f"Node 调试会话不存在: session_id={session_id}, thread_id={thread_id}"
             )
         if isinstance(command, NodeDebugSetBreakpointActionRequest):
-            self._ensure_configuration_for_breakpoint(
+            self._configuration_registry.ensure_configuration_for_breakpoint(
                 session_id,
                 thread_id,
-                command.params,
+                path=command.params.path,
             )
             await self._breakpoint_mutations.set_breakpoint(
                 owner,
@@ -768,7 +717,9 @@ class NodeDebugService:
                     tool_name=tool_name,
                     tool_call_id=tool_call_id,
                 )
-                self._persist_session_state(session_id, thread_id, runtime)
+                self._session_state.persist_runtime_state(
+                    session_id, thread_id, runtime
+                )
                 return await self.get_state(session_id, thread_id)
             # stop 与 start 共用 per-owner 临界区（R3b 复核残留项）：否则 stop 落在
             # "runtime 已登记、进程尚未 spawn"的窗口会以 process is None 判定
@@ -790,9 +741,13 @@ class NodeDebugService:
                         )
             if outcome == "reconcile_required":
                 # 无法核实终态：保持 reconcile_required，不报告 stopped。
-                self._persist_session_state(session_id, thread_id, runtime)
+                self._session_state.persist_runtime_state(
+                    session_id, thread_id, runtime
+                )
                 return await self.get_state(session_id, thread_id)
-        self._persist_session_state(session_id, thread_id, runtime)
+        self._session_state.persist_runtime_state(
+            session_id, thread_id, runtime
+        )
         return await self.get_state(session_id, thread_id)
 
     async def restart(
@@ -811,7 +766,7 @@ class NodeDebugService:
         # 直接调用启动编排器，绝不能再经 `start()` 重入同一把 asyncio.Lock
         # （不可重入，重入即自锁）。
         async with self._owner_lock(owner):
-            self._ensure_session_loaded(session_id, thread_id)
+            self._session_state.ensure_loaded(session_id, thread_id)
             runtime = self._runtimes.get(owner)
             if runtime is None:
                 self._assert_no_unsettled_claim(owner, operation="重启调试")
@@ -843,7 +798,9 @@ class NodeDebugService:
             outcome = await self._lifecycle.stop_runtime(runtime)
             if outcome == "reconcile_required":
                 # 旧实例无法核实终态：保持 reconcile_required，绝不为同一 owner 启动新实例。
-                self._persist_session_state(session_id, thread_id, runtime)
+                self._session_state.persist_runtime_state(
+                    session_id, thread_id, runtime
+                )
                 raise RuntimeError(
                     "旧调试实例无法核实终态，保持 reconcile_required；拒绝重启: "
                     f"session_id={session_id}, thread_id={thread_id}"
@@ -877,12 +834,11 @@ class NodeDebugService:
     ) -> NodeDebugStateDTO:
         session_id, thread_id = await self._admit_mutation(session_id, thread_id)
         owner = self._owner_key(session_id, thread_id)
-        self._ensure_session_loaded(session_id, thread_id)
+        self._session_state.ensure_loaded(session_id, thread_id)
         runtime = self._runtimes.get(owner)
         if runtime is None:
-            removed = len(self._pending_breakpoints.get(owner, []))
-            self._pending_breakpoints.pop(owner, None)
-            self._append_pending_action(
+            removed = self._session_state.clear_pending_breakpoints(owner)
+            self._session_state.append_pending_action(
                 session_id,
                 thread_id,
                 "clear_all_breakpoints",
@@ -891,7 +847,9 @@ class NodeDebugService:
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
             )
-            self._persist_session_state(session_id, thread_id, None)
+            self._session_state.persist_runtime_state(
+                session_id, thread_id, None
+            )
             return await self.get_state(session_id, thread_id)
         async with runtime.state_lock:
             breakpoint_ids = tuple(runtime.inspector_breakpoint_ids.values())
@@ -913,7 +871,9 @@ class NodeDebugService:
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
             )
-        self._persist_session_state(session_id, thread_id, runtime)
+        self._session_state.persist_runtime_state(
+            session_id, thread_id, runtime
+        )
         return await self.get_state(session_id, thread_id)
 
     async def record_tool_action(
@@ -929,10 +889,10 @@ class NodeDebugService:
     ) -> NodeDebugStateDTO:
         session_id, thread_id = await self._admit_mutation(session_id, thread_id)
         owner = self._owner_key(session_id, thread_id)
-        self._ensure_session_loaded(session_id, thread_id)
+        self._session_state.ensure_loaded(session_id, thread_id)
         runtime = self._runtimes.get(owner)
         if runtime is None:
-            pending = self._pending_actions.setdefault(owner, [])
+            pending = self._session_state.pending_actions(owner)
             existing_index = next(
                 (
                     index
@@ -943,16 +903,20 @@ class NodeDebugService:
                 None,
             )
             if existing_index is not None:
-                pending[existing_index] = pending[existing_index].model_copy(
-                    update={
-                        "message": message,
-                        "result": result,
-                        "actor": "ai",
-                        "extension_catalog_binding": extension_catalog_binding,
-                    }
+                self._session_state.replace_pending_action(
+                    owner,
+                    existing_index,
+                    pending[existing_index].model_copy(
+                        update={
+                            "message": message,
+                            "result": result,
+                            "actor": "ai",
+                            "extension_catalog_binding": extension_catalog_binding,
+                        }
+                    ),
                 )
             else:
-                self._append_pending_action(
+                self._session_state.append_pending_action(
                     session_id,
                     thread_id,
                     tool_name,
@@ -963,7 +927,9 @@ class NodeDebugService:
                     extension_catalog_binding=extension_catalog_binding,
                     result=result,
                 )
-            self._persist_session_state(session_id, thread_id, None)
+            self._session_state.persist_runtime_state(
+                session_id, thread_id, None
+            )
             return await self.get_state(session_id, thread_id)
         async with runtime.state_lock:
             existing_index = next(
@@ -1014,7 +980,9 @@ class NodeDebugService:
                         extension_catalog_binding=extension_catalog_binding,
                         result=result,
                     )
-        self._persist_session_state(session_id, thread_id, runtime)
+        self._session_state.persist_runtime_state(
+            session_id, thread_id, runtime
+        )
         return await self.get_state(session_id, thread_id)
 
     async def get_variables(
@@ -1086,7 +1054,9 @@ class NodeDebugService:
                     runtime.error_message = None
                 # 与 Web/API stop 入口保持同一 authoritative manifest 语义；
                 # 物理 rename 发生在本回调返回之后。
-                self._persist_session_state(owner[0], owner[1], runtime)
+                self._session_state.persist_runtime_state(
+                    owner[0], owner[1], runtime
+                )
 
             # runtime 缺失时按 durable claim 恢复合同定点核实旧实例；若
             # claim 仍不可核实，必须阻断删除，而不能把内存缺项当成 stopped。
@@ -1147,212 +1117,6 @@ class NodeDebugService:
         owner = self._owner_key(session_id, thread_id)
         return self._claim_runtime.residency_blockers(*owner)
 
-    def _ensure_session_loaded(self, session_id: str, thread_id: str) -> None:
-        owner = self._owner_key(session_id, thread_id)
-        manifest = self._configuration_registry.ensure_loaded(session_id, thread_id)
-        if manifest is None:
-            return
-        self._pending_actions[owner] = [
-            action.model_copy(deep=True) for action in manifest.actions[-_MAX_ACTIONS:]
-        ]
-        if manifest.active_configuration_id is not None:
-            self._load_active_configuration(session_id, thread_id)
-
-    def _persist_session_state(
-        self,
-        session_id: str,
-        thread_id: str,
-        runtime: NodeDebugRuntime | None,
-    ) -> None:
-        owner = self._owner_key(session_id, thread_id)
-        configuration_id = self._configuration_registry.active_id(session_id, thread_id)
-        selection = self._launch_selections.get(
-            owner,
-            NodeDebugLaunchSelection(),
-        )
-        if runtime is not None:
-            configuration_id = runtime.configuration_id
-            self._configuration_registry.set_active(
-                session_id, configuration_id, thread_id
-            )
-            selection = NodeDebugLaunchSelection(
-                script_path=runtime.relative_script_path,
-                working_directory=(
-                    runtime.working_directory.relative_to(
-                        runtime.workspace_root
-                    ).as_posix()
-                    if runtime.working_directory != runtime.workspace_root
-                    else ""
-                ),
-                launch_profile_name=runtime.launch_profile_name,
-                args=list(runtime.args),
-            )
-            self._launch_selections[owner] = selection
-            breakpoints = [
-                persistable_breakpoint(breakpoint)
-                for breakpoint in runtime.breakpoints.values()
-            ]
-            self._pending_actions[owner] = [
-                action.model_copy(deep=True)
-                for action in runtime.actions[-_MAX_ACTIONS:]
-            ]
-        else:
-            breakpoints = [
-                persistable_breakpoint(breakpoint)
-                for breakpoint in self._pending_breakpoints.get(owner, [])
-            ]
-            self._pending_actions.setdefault(owner, [])
-        if configuration_id is not None:
-            current = self._configuration(session_id, thread_id, configuration_id)
-            normalized_breakpoints = [
-                portable_breakpoint(breakpoint) for breakpoint in breakpoints
-            ]
-            configuration_changed = (
-                current.script_path != selection.script_path
-                or current.working_directory != (selection.working_directory or "")
-                or current.launch_profile_name != selection.launch_profile_name
-                or current.args != list(selection.args)
-                or current.breakpoints != normalized_breakpoints
-            )
-            if configuration_changed:
-                configuration = current.model_copy(
-                    update={
-                        "revision": current.revision + 1,
-                        "script_path": selection.script_path,
-                        "working_directory": selection.working_directory or "",
-                        "launch_profile_name": selection.launch_profile_name,
-                        "args": list(selection.args),
-                        "breakpoints": normalized_breakpoints,
-                        "updated_at": datetime.now(UTC),
-                    }
-                )
-                self._configuration_registry.put(
-                    session_id, configuration, thread_id
-                )
-        self._write_session_manifest(session_id, thread_id)
-
-    def _select_configuration_for_start(
-        self,
-        *,
-        session_id: str,
-        thread_id: str,
-        configuration_id: str | None,
-        path: str,
-        working_directory: str | None,
-        launch_profile_name: str | None,
-        args: list[str],
-    ) -> str:
-        selected_id = configuration_id or self._configuration_registry.active_id(
-            session_id, thread_id
-        )
-        if selected_id is None:
-            _, relative_path = self._configuration_factory.resolve_script_path(path)
-            configuration = self._configuration_factory.configuration_from_request(
-                configuration_id=create_prefixed_id("dbgcfg"),
-                name=f"调试 {Path(relative_path).name}",
-                script_path=relative_path,
-                working_directory=working_directory or "",
-                launch_profile_name=launch_profile_name,
-                args=args,
-                breakpoints=[],
-            )
-            self._configuration_registry.put(session_id, configuration, thread_id)
-            selected_id = configuration.configuration_id
-        self._configuration(session_id, thread_id, selected_id)
-        if self._configuration_registry.active_id(session_id, thread_id) != selected_id:
-            self._activate_configuration_in_memory(session_id, thread_id, selected_id)
-        return selected_id
-
-    def _ensure_configuration_for_breakpoint(
-        self,
-        session_id: str,
-        thread_id: str,
-        params: NodeDebugSetBreakpointParams,
-    ) -> None:
-        if self._configuration_registry.active_id(session_id, thread_id) is not None:
-            return
-        _, relative_path = self._configuration_factory.resolve_script_path(params.path)
-        configuration = self._configuration_factory.configuration_from_request(
-            configuration_id=create_prefixed_id("dbgcfg"),
-            name=f"调试 {Path(relative_path).name}",
-            script_path=relative_path,
-            working_directory="",
-            launch_profile_name="node-default",
-            args=[],
-            breakpoints=[],
-        )
-        self._configuration_registry.put(session_id, configuration, thread_id)
-        self._activate_configuration_in_memory(
-            session_id,
-            thread_id,
-            configuration.configuration_id,
-        )
-
-    def _activate_configuration_in_memory(
-        self,
-        session_id: str,
-        thread_id: str,
-        configuration_id: str,
-    ) -> None:
-        owner = self._owner_key(session_id, thread_id)
-        self._configuration(session_id, thread_id, configuration_id)
-        runtime = self._runtimes.get(owner)
-        if runtime is not None and runtime.status not in {
-            "starting",
-            "running",
-            "paused",
-        }:
-            self._runtimes.pop(owner, None)
-        self._configuration_registry.set_active(session_id, configuration_id, thread_id)
-        self._load_active_configuration(session_id, thread_id)
-
-    def _load_active_configuration(self, session_id: str, thread_id: str) -> None:
-        owner = self._owner_key(session_id, thread_id)
-        configuration_id = self._configuration_registry.active_id(session_id, thread_id)
-        if configuration_id is None:
-            raise RuntimeError(
-                f"会话没有活动调试方案: session_id={session_id}, thread_id={thread_id}"
-            )
-        configuration = self._configuration(session_id, thread_id, configuration_id)
-        self._launch_selections[owner] = NodeDebugLaunchSelection(
-            script_path=configuration.script_path,
-            working_directory=configuration.working_directory,
-            launch_profile_name=configuration.launch_profile_name,
-            args=list(configuration.args),
-        )
-        self._pending_breakpoints[owner] = [
-            persistable_breakpoint(runtime_breakpoint(breakpoint))
-            for breakpoint in configuration.breakpoints
-        ]
-
-    def _configuration(
-        self,
-        session_id: str,
-        thread_id: str,
-        configuration_id: str,
-    ) -> NodeDebugConfigurationDTO:
-        return self._configuration_registry.get(session_id, configuration_id, thread_id)
-
-    def _write_session_manifest(self, session_id: str, thread_id: str) -> None:
-        self._configuration_registry.write_manifest(
-            NodeDebugSessionManifestDTO(
-                session_id=session_id,
-                thread_id=thread_id,
-                active_configuration_id=self._configuration_registry.active_id(
-                    session_id, thread_id
-                ),
-                actions=[
-                    action.model_copy(deep=True)
-                    for action in self._pending_actions.get(
-                        self._owner_key(session_id, thread_id), []
-                    )[
-                        -_MAX_ACTIONS:
-                    ]
-                ],
-                updated_at=datetime.now(UTC),
-            )
-        )
-
     def _record_session_action(
         self,
         session_id: str,
@@ -1375,11 +1139,12 @@ class NodeDebugService:
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
             )
-            self._pending_actions[owner] = [
-                item.model_copy(deep=True) for item in runtime.actions[-_MAX_ACTIONS:]
-            ]
+            self._session_state.set_pending_actions(
+                owner,
+                runtime.actions[-_MAX_ACTIONS:],
+            )
             return
-        self._append_pending_action(
+        self._session_state.append_pending_action(
             session_id,
             thread_id,
             action,
@@ -1388,6 +1153,15 @@ class NodeDebugService:
             tool_name=tool_name,
             tool_call_id=tool_call_id,
         )
+
+    def _drop_inactive_runtime(self, owner: NodeDebugOwner) -> None:
+        runtime = self._runtimes.get(owner)
+        if runtime is not None and runtime.status not in {
+            "starting",
+            "running",
+            "paused",
+        }:
+            self._runtimes.pop(owner, None)
 
     def _assert_no_running_target(self, session_id: str, thread_id: str) -> None:
         owner = self._owner_key(session_id, thread_id)
@@ -1459,11 +1233,10 @@ class NodeDebugService:
         thread_id: str,
         runtime: NodeDebugRuntime | None,
     ) -> None:
-        owner = self._owner_key(session_id, thread_id)
         breakpoints = (
             list(runtime.breakpoints.values())
             if runtime is not None
-            else list(self._pending_breakpoints.get(owner, []))
+            else self._session_state.pending_breakpoints((session_id, thread_id))
         )
         reconciled: list[NodeDebugBreakpointDTO] = []
         changed = False
@@ -1548,24 +1321,22 @@ class NodeDebugService:
                             result="error",
                         )
         elif changed:
-            self._pending_breakpoints[owner] = reconciled
-            pending_actions = self._pending_actions.setdefault(owner, [])
+            self._session_state.set_pending_breakpoints(
+                (session_id, thread_id), reconciled
+            )
             for message in relocation_messages:
-                pending_actions.append(
-                    NodeDebugActionRecordDTO(
-                        action_id=create_prefixed_id("node-debug-action"),
-                        session_id=session_id,
-                        thread_id=thread_id,
-                        action="breakpoint_reconciled",
-                        message=message,
-                        actor="system",
-                        created_at=datetime.now(UTC),
-                    )
+                self._session_state.append_pending_action(
+                    session_id,
+                    thread_id,
+                    "breakpoint_reconciled",
+                    message,
+                    actor="system",
                 )
-            del pending_actions[:-_MAX_ACTIONS]
 
         if should_persist:
-            self._persist_session_state(session_id, thread_id, runtime)
+            self._session_state.persist_runtime_state(
+                session_id, thread_id, runtime
+            )
 
     def _get_typed_debug_runtime_config(self) -> NodeDebugRuntimeConfig:
         return NodeDebugRuntimeConfig.from_mapping(
@@ -1729,36 +1500,6 @@ class NodeDebugService:
             )
             for breakpoint_id, breakpoint in runtime.breakpoints.items()
         }
-
-    def _append_pending_action(
-        self,
-        session_id: str,
-        thread_id: str,
-        action: str,
-        message: str,
-        *,
-        actor: Literal["human", "ai", "system"],
-        tool_name: str | None = None,
-        tool_call_id: str | None = None,
-        extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
-        result: Literal["success", "error"] = "success",
-    ) -> None:
-        actions = self._pending_actions.setdefault(
-            self._owner_key(session_id, thread_id), []
-        )
-        append_pending_debug_action(
-            actions,
-            session_id=session_id,
-            thread_id=thread_id,
-            action=action,
-            message=message,
-            actor=actor,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            extension_catalog_binding=extension_catalog_binding,
-            result=result,
-            max_actions=_MAX_ACTIONS,
-        )
 
     @staticmethod
     def _append_action(

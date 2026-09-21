@@ -638,7 +638,11 @@ async def test_drain_session_stops_exact_main_runtime_before_delete(
         reconciled.append(candidate_owner)
 
     monkeypatch.setattr(service._lifecycle, "stop_runtime", stop_runtime)
-    monkeypatch.setattr(service, "_persist_session_state", lambda *args: None)
+    monkeypatch.setattr(
+        service._session_state,
+        "persist_runtime_state",
+        lambda *args: None,
+    )
     monkeypatch.setattr(service._lifecycle, "reconcile_persisted_claim", reconcile)
     monkeypatch.setattr(service._claim_runtime, "active_claim", lambda *_args: None)
 

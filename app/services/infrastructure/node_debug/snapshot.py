@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.node_debug import (
@@ -9,10 +9,14 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRecordDTO,
     NodeDebugStateDTO,
 )
-from app.services.infrastructure.node_debug.configuration_registry import (
-    NodeDebugConfigurationRegistry,
-)
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.node_debug.configuration_registry import (
+        NodeDebugConfigurationRegistry,
+    )
+
+MAX_NODE_DEBUG_ACTIONS = 100
 
 
 def append_pending_debug_action(
@@ -129,6 +133,7 @@ def build_node_debug_snapshot(
 
 
 __all__ = [
+    "MAX_NODE_DEBUG_ACTIONS",
     "append_pending_debug_action",
     "append_runtime_debug_action",
     "build_node_debug_snapshot",

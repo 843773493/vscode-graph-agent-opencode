@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import MutableMapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -18,6 +18,9 @@ from app.services.infrastructure.node_debug.breakpoint_mutations import (
 )
 from app.services.infrastructure.node_debug.configuration_factory import (
     NodeDebugConfigurationFactory,
+)
+from app.services.infrastructure.node_debug.configuration_registry import (
+    NodeDebugLaunchSelection,
 )
 from app.services.infrastructure.node_debug.inspector import NodeDebugInspector
 from app.services.infrastructure.node_debug.launch_claim import (
@@ -37,15 +40,8 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugActionAppender,
     NodeDebugRuntime,
 )
+from app.services.infrastructure.node_debug.session_state import NodeDebugSessionState
 from app.services.infrastructure.node_debug.thread_owner import NodeDebugOwner
-
-
-@dataclass(frozen=True, slots=True)
-class NodeDebugLaunchSelection:
-    script_path: str | None = None
-    working_directory: str | None = None
-    launch_profile_name: str | None = None
-    args: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +124,12 @@ class NodeDebugLaunchStatePersister(Protocol):
     def __call__(self, session_id: str, thread_id: str, runtime: NodeDebugRuntime) -> None: ...
 
 
+class NodeDebugLaunchSelectionWriter(Protocol):
+    def __call__(
+        self, owner: NodeDebugOwner, selection: NodeDebugLaunchSelection
+    ) -> None: ...
+
+
 class NodeDebugLaunchClaimWriter(Protocol):
     def __call__(self, claim: NodeDebugLaunchClaimDTO) -> None: ...
 
@@ -149,9 +151,8 @@ class NodeDebugLaunchContext:
     inspector: NodeDebugInspector
     lifecycle: NodeDebugProcessLifecycle
     runtimes: MutableMapping[NodeDebugOwner, NodeDebugRuntime]
-    pending_breakpoints: MutableMapping[NodeDebugOwner, list[NodeDebugBreakpointDTO]]
-    pending_actions: MutableMapping[NodeDebugOwner, list[NodeDebugActionRecordDTO]]
-    launch_selections: MutableMapping[NodeDebugOwner, NodeDebugLaunchSelection]
+    session_state: NodeDebugSessionState
+    set_selection: NodeDebugLaunchSelectionWriter
     runtimes_lock: asyncio.Lock
     max_actions: int
     load_session: NodeDebugLaunchSessionLoader
@@ -194,6 +195,7 @@ class NodeDebugLaunchOrchestrator:
             launch_profile_name=request.launch_profile_name,
             args=request.args,
         )
+        context.session_state.sync_active_configuration(session_id, thread_id)
         selected_configuration = context.read_configuration(
             session_id,
             thread_id,
@@ -233,8 +235,8 @@ class NodeDebugLaunchOrchestrator:
                 "BOXTEAM_NODE_BIN 指定"
             )
 
-        pending_breakpoints = list(context.pending_breakpoints.get(request.owner, []))
-        pending_actions = list(context.pending_actions.get(request.owner, []))
+        pending_breakpoints = context.session_state.pending_breakpoints(request.owner)
+        pending_actions = context.session_state.pending_actions(request.owner)
         async with context.runtimes_lock:
             previous = context.runtimes.get(request.owner)
             previous_breakpoints: list[NodeDebugBreakpointDTO] = []
@@ -315,9 +317,9 @@ class NodeDebugLaunchOrchestrator:
             runtime.actions.extend(action.model_copy(deep=True) for action in source_actions)
             del runtime.actions[:-context.max_actions]
             context.runtimes[request.owner] = runtime
-            context.pending_breakpoints.pop(request.owner, None)
-            context.pending_actions.pop(request.owner, None)
-            context.launch_selections[request.owner] = NodeDebugLaunchSelection(
+            context.session_state.consume_pending_breakpoints(request.owner)
+            context.session_state.consume_pending_actions(request.owner)
+            context.set_selection(request.owner, NodeDebugLaunchSelection(
                 script_path=relative_path,
                 working_directory=(
                     resolved_working_directory.relative_to(context.workspace_root).as_posix()
@@ -326,7 +328,7 @@ class NodeDebugLaunchOrchestrator:
                 ),
                 launch_profile_name=profile_name,
                 args=list(normalized_args),
-            )
+            ))
             runtime.loaded_source_digests = context.read_source_digests(runtime)
             context.persist_state(session_id, thread_id, runtime)
 

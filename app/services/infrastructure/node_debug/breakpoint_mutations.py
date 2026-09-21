@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, MutableMapping
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Literal
 
@@ -23,6 +23,7 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugPendingActionAppender,
     NodeDebugRuntime,
 )
+from app.services.infrastructure.node_debug.session_state import NodeDebugSessionState
 from app.services.infrastructure.node_debug.thread_owner import NodeDebugOwner
 
 
@@ -34,16 +35,14 @@ class NodeDebugBreakpointMutations:
         *,
         workspace_root: Path,
         configuration_factory: NodeDebugConfigurationFactory,
-        pending_breakpoints: MutableMapping[
-            NodeDebugOwner, list[NodeDebugBreakpointDTO]
-        ],
+        session_state: NodeDebugSessionState,
         command: NodeDebugCommandSender,
         append_action: NodeDebugActionAppender,
         append_pending_action: NodeDebugPendingActionAppender,
     ) -> None:
         self._workspace_root = workspace_root
         self._configuration_factory = configuration_factory
-        self._pending_breakpoints = pending_breakpoints
+        self._session_state = session_state
         self._command = command
         self._append_action = append_action
         self._append_pending_action = append_pending_action
@@ -75,10 +74,10 @@ class NodeDebugBreakpointMutations:
         script_path = safe_join(self._workspace_root, breakpoint.path)
         if runtime is None:
             session_id, thread_id = owner
-            pending = self._pending_breakpoints.setdefault(owner, [])
+            pending = self._session_state.pending_breakpoints(owner)
             if self._matching_breakpoint(pending, breakpoint) is not None:
                 raise ValueError(f"源码断点已存在: {breakpoint.path}:{line}:{column}")
-            pending.append(breakpoint)
+            self._session_state.append_pending_breakpoint(owner, breakpoint)
             self._append_pending_action(
                 session_id,
                 thread_id,
@@ -120,7 +119,7 @@ class NodeDebugBreakpointMutations:
         breakpoints: Iterable[NodeDebugBreakpointDTO] = (
             runtime.breakpoints.values()
             if runtime is not None
-            else self._pending_breakpoints.get(owner, [])
+            else self._session_state.pending_breakpoints(owner)
         )
         current = next(
             (
@@ -180,8 +179,9 @@ class NodeDebugBreakpointMutations:
             raise ValueError(f"源码断点位置已被占用: {updated.path}:{line}:{column}")
 
         if runtime is None:
-            pending = self._pending_breakpoints.get(owner, [])
-            pending[pending.index(current)] = updated
+            self._session_state.replace_pending_breakpoint(
+                owner, breakpoint_id, updated
+            )
             self._append_pending_action(
                 session_id,
                 thread_id,
@@ -233,23 +233,19 @@ class NodeDebugBreakpointMutations:
         breakpoint_id = params.breakpoint_id
         if runtime is None:
             session_id, thread_id = owner
-            pending = self._pending_breakpoints.get(owner, [])
-            for index, breakpoint in enumerate(pending):
-                if breakpoint.breakpoint_id == breakpoint_id:
-                    pending.pop(index)
-                    if not pending:
-                        self._pending_breakpoints.pop(owner, None)
-                    self._append_pending_action(
-                        session_id,
-                        thread_id,
-                        "clear_breakpoint",
-                        f"已清除源码断点 {breakpoint.path}:{breakpoint.line}",
-                        actor=actor,
-                        tool_name=tool_name,
-                        tool_call_id=tool_call_id,
-                    )
-                    return
-            raise ValueError(f"源码断点不存在: {breakpoint_id}")
+            breakpoint = self._session_state.remove_pending_breakpoint(
+                owner, breakpoint_id
+            )
+            self._append_pending_action(
+                session_id,
+                thread_id,
+                "clear_breakpoint",
+                f"已清除源码断点 {breakpoint.path}:{breakpoint.line}",
+                actor=actor,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+            )
+            return
         inspector_id = runtime.inspector_breakpoint_ids.get(breakpoint_id)
         if inspector_id and runtime.inspector.socket is not None:
             await self._command(
