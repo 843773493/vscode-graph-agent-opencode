@@ -12,6 +12,13 @@ import type {
   MessageStreamEventType,
 } from "../state/messageStream";
 import type { APIResponse } from "../types/backend";
+import {
+  isJsonObject,
+  validateMessageStreamSnapshot,
+  type MessageStreamSnapshotResponse,
+} from "./messageStreamSnapshot";
+
+export type { MessageStreamSnapshotResponse } from "./messageStreamSnapshot";
 
 export class MessageStreamCursorGoneError extends Error {
   readonly status = 410;
@@ -32,29 +39,6 @@ export class MessageStreamConnectionError extends Error {
     super(`无法连接 Turn 消息流: ${status} ${statusText}`);
     this.name = "MessageStreamConnectionError";
   }
-}
-
-export interface MessageStreamSnapshotResponse {
-  session_id: string;
-  turn_id: string;
-  turn_stream_id: string;
-  workspace_id?: string | null;
-  snapshot_seq: number;
-  stream_status: string;
-  agent_loop_status: string;
-  current_model_call_id?: string | null;
-  current_attempt: number;
-  blocks: Array<Record<string, unknown>>;
-  tool_calls: Array<Record<string, unknown>>;
-  tool_executions: Array<Record<string, unknown>>;
-  model_calls?: Array<Record<string, unknown>>;
-  activities?: Array<Record<string, unknown>>;
-  resource_refs?: Array<Record<string, unknown>>;
-  active_state?: Record<string, unknown> | null;
-  recovery?: Record<string, unknown> | null;
-  interrupt_state?: Record<string, unknown> | null;
-  failure?: Record<string, unknown> | null;
-  resumable: boolean;
 }
 
 export async function getSessionMessageStreamSnapshot(
@@ -78,7 +62,7 @@ export async function getSessionMessageStreamSnapshot(
         signal: options.signal,
       },
     );
-    return unwrapApiData(response);
+    return validateMessageStreamSnapshot(unwrapApiData(response));
   } catch (error) {
     if (error instanceof HttpRequestError && error.status === 410) {
       throw new MessageStreamCursorGoneError(0);
@@ -132,8 +116,7 @@ export async function streamSessionMessageEvents(
       "*": defineSseEvent(
         (data, frame) => {
           if (!frame.id) throw new Error("SSE 消息流缺少 event_seq id 行");
-          const value = decodeJsonSseData(data, frame);
-          return validateMessageStreamEvent(value);
+          return validateMessageStreamEvent(decodeJsonSseData(data, frame));
         },
         (event) => options.onEvent?.(event),
       ),
@@ -142,7 +125,7 @@ export async function streamSessionMessageEvents(
 }
 
 function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
-  if (!isRecord(value)) throw new Error("消息流事件必须是对象");
+  if (!isJsonObject(value)) throw new Error("消息流事件必须是对象");
   const eventId = stringValue(value.event_id);
   const sessionId = stringValue(value.session_id);
   const turnId = stringValue(value.turn_id);
@@ -155,7 +138,7 @@ function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
   if (typeof eventSeq !== "number" || !Number.isInteger(eventSeq) || eventSeq < 0) {
     throw new Error("消息流 event_seq 必须是非负整数");
   }
-  if (!isRecord(value.payload)) throw new Error("消息流 payload 必须是对象");
+  if (!isJsonObject(value.payload)) throw new Error("消息流 payload 必须是对象");
   for (const field of [
     "model_call_id",
     "block_id",
@@ -165,25 +148,17 @@ function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
     "tool_execution_id",
     "workspace_id",
   ] as const) {
-    const rawEnvelopeValue = value[field];
-    const rawPayloadValue = value.payload[field];
-    if (
-      rawEnvelopeValue !== undefined
-      && rawEnvelopeValue !== null
-      && !stringValue(rawEnvelopeValue)
-    ) {
+    const envelopeValue = value[field];
+    const payloadValue = value.payload[field];
+    if (envelopeValue !== undefined && envelopeValue !== null && !stringValue(envelopeValue)) {
       throw new Error(`消息流 ${field} 信封身份必须是非空字符串`);
     }
-    if (
-      rawPayloadValue !== undefined
-      && rawPayloadValue !== null
-      && !stringValue(rawPayloadValue)
-    ) {
+    if (payloadValue !== undefined && payloadValue !== null && !stringValue(payloadValue)) {
       throw new Error(`消息流 ${field} payload 身份必须是非空字符串`);
     }
-    const envelopeValue = stringValue(rawEnvelopeValue);
-    const payloadValue = stringValue(rawPayloadValue);
-    if (envelopeValue && payloadValue && envelopeValue !== payloadValue) {
+    const envelopeId = stringValue(envelopeValue);
+    const payloadId = stringValue(payloadValue);
+    if (envelopeId && payloadId && envelopeId !== payloadId) {
       throw new Error(`消息流 ${field} 信封与 payload 身份不一致`);
     }
   }
@@ -232,10 +207,6 @@ function isMessageStreamEventType(value: string): value is MessageStreamEventTyp
     "stream.failed",
     "stream.snapshot",
   ]).has(value as MessageStreamEventType);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function stringValue(value: unknown): string | null {

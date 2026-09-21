@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-import logging
+from collections.abc import Mapping
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from google.protobuf import json_format
+from pydantic import ValidationError
 
 from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
@@ -18,6 +19,7 @@ from app.protocol.codecs.message_stream import (
     message_stream_to_proto,
 )
 from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.message_stream import MessageStreamSnapshotDTO
 from app.services.infrastructure.message_stream_store import (
     MessageStreamCursorGoneError,
     MessageStreamError,
@@ -26,7 +28,7 @@ from app.services.infrastructure.message_stream_store import (
 )
 
 router = APIRouter(prefix="/sessions", tags=["message-stream"])
-logger = logging.getLogger(__name__)
+MessageStreamEventRecord = Mapping[str, object]
 
 
 def _parse_after_seq(after_seq: int | None, last_event_id: str | None) -> int:
@@ -44,7 +46,7 @@ def _parse_after_seq(after_seq: int | None, last_event_id: str | None) -> int:
     return max(parsed, 0)
 
 
-def _sse_frame(event: dict[str, object]) -> str:
+def _sse_frame(event: MessageStreamEventRecord) -> str:
     proto_event = message_stream_to_proto(event)
     value = message_stream_to_json(proto_event)
     return (
@@ -59,8 +61,8 @@ def _public_snapshot(
     session_id: CanonicalSessionId,
     turn_id: str,
     turn_stream_id: str,
-    snapshot: dict[str, object],
-) -> dict[str, object]:
+    snapshot: Mapping[str, object],
+) -> MessageStreamSnapshotDTO:
     """通过 v1 编解码边界返回快照，避免内部 checkpoint 字段泄漏。"""
     event = {
         "event_id": f"snapshot_{turn_stream_id}_{snapshot['snapshot_seq']}",
@@ -74,97 +76,27 @@ def _public_snapshot(
     try:
         value = message_stream_to_json(message_stream_to_proto(event))
     except (TypeError, ValueError, json_format.ParseError) as error:
-        if snapshot.get("stream_status") not in {
-            "completed",
-            "interrupted",
-            "failed",
-        }:
-            raise MessageStreamError("消息流快照编解码失败") from error
-        # 旧流已经有明确终态时，单个历史实体的未知内部字段不应把整个
-        # 历史页面变成 500。保留终态失败信息，并把投影失败原因放入公共
-        # recovery，便于前端展示和后续诊断；运行中的快照仍快速失败。
-        logger.warning(
-            "旧终态消息流快照存在未支持字段，返回最小终态快照: "
-            "session_id=%s turn_id=%s turn_stream_id=%s error=%s",
-            session_id,
-            turn_id,
-            turn_stream_id,
-            error,
-        )
-        value = {
-            "event_id": event["event_id"],
-            "session_id": session_id,
-            "turn_id": turn_id,
-            "turn_stream_id": turn_stream_id,
-            "event_seq": event["event_seq"],
-            "type": "stream.snapshot",
-            "payload": _minimal_terminal_snapshot(snapshot, error),
-        }
+        raise MessageStreamError("消息流快照编解码失败") from error
     payload = value["payload"]
-    if not isinstance(payload, dict):
+    if not isinstance(payload, Mapping):
         raise MessageStreamError("消息流快照编解码结果不是对象")
-    # HTTP 快照不是 SSE payload，仍需把资源定位键放回响应数据，供前端
-    # 在首次连接或重连时确认它拿到的是目标 Turn 的快照。
-    payload.update(
+    projected = dict(payload)
+    # 快照序号、尝试次数和可恢复性是存储状态的标量来源；protobuf JSON
+    # 为零值省略它们，HTTP DTO 仍需把同一真实值明确返回。
+    projected.update(
         {
             "session_id": session_id,
             "turn_id": turn_id,
             "turn_stream_id": turn_stream_id,
+            "snapshot_seq": snapshot["snapshot_seq"],
+            "current_attempt": snapshot["current_attempt"],
+            "resumable": snapshot["resumable"],
         }
     )
-    return payload
-
-
-def _minimal_terminal_snapshot(
-    snapshot: dict[str, object], error: Exception
-) -> dict[str, object]:
-    """将旧终态流降级为可回放的公共最小快照。"""
-    status = str(snapshot.get("stream_status"))
-    raw_failure = snapshot.get("failure")
-    failure = (
-        dict(raw_failure)
-        if isinstance(raw_failure, dict)
-        else {
-            "code": "snapshot_projection_failed",
-            "message": "历史消息流快照无法完整投影",
-            "after_interrupt_requested": False,
-            "resumable": False,
-        }
-    )
-    recovery = {
-        "status": "failed",
-        "code": "snapshot_projection_failed",
-        "message": f"历史消息流快照已进入终态，但公共投影不完整: {error}",
-        "resumable": False,
-    }
-    result: dict[str, object] = {
-        "snapshot_seq": int(snapshot.get("snapshot_seq") or 0),
-        "stream_status": status,
-        "agent_loop_status": str(snapshot.get("agent_loop_status") or status),
-        "current_model_call_id": None,
-        "current_attempt": int(snapshot.get("current_attempt") or 0),
-        "blocks": [],
-        "tool_executions": [],
-        "tool_calls": [],
-        "model_calls": [],
-        "activities": [],
-        "resource_refs": [],
-        "active_state": {
-            "kind": "terminal",
-            "phase": status,
-            "entity_id": str(snapshot.get("turn_stream_id") or ""),
-            "status": status,
-            "reason": failure.get("code") or status,
-        },
-        "interrupt_state": None,
-        "failure": failure,
-        "recovery": recovery,
-        "resumable": False,
-    }
-    workspace_id = snapshot.get("workspace_id")
-    if isinstance(workspace_id, str) and workspace_id:
-        result["workspace_id"] = workspace_id
-    return result
+    try:
+        return MessageStreamSnapshotDTO.model_validate(projected)
+    except ValidationError as error:
+        raise MessageStreamError("消息流快照不符合公共 DTO") from error
 
 
 @router.get(
@@ -236,7 +168,8 @@ async def stream_message_events(
 
 @router.get(
     "/{session_id}/turns/{turn_id}/message-stream/snapshot",
-    response_model=APIResponse[dict[str, object]],
+    response_model=APIResponse[MessageStreamSnapshotDTO],
+    response_model_exclude_none=True,
     summary="获取 Turn 消息流快照",
 )
 async def get_message_stream_snapshot(
@@ -269,7 +202,7 @@ async def get_message_stream_snapshot(
 
 @router.get(
     "/{session_id}/turns/{turn_id}/message-stream/events",
-    response_model=APIResponse[list[dict[str, object]]],
+    response_model=APIResponse[list[MessageStreamEventRecord]],
     summary="获取 Turn 消息流事件",
 )
 async def list_message_stream_events(
