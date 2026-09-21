@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.node_debug import (
-    NodeDebugActionRecordDTO,
     NodeDebugBreakpointDTO,
     NodeDebugConfigurationCreateRequest,
     NodeDebugConfigurationDTO,
@@ -17,17 +15,14 @@ from app.schemas.internal_v2.node_debug import (
 )
 from app.services.infrastructure.node_debug.breakpoints import (
     persistable_breakpoint,
-    portable_breakpoint,
     runtime_breakpoint,
 )
 from app.services.infrastructure.node_debug.configuration_factory import (
     NodeDebugConfigurationFactory,
 )
-from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.session_store import (
     NodeDebugSessionStore,
 )
-from app.services.infrastructure.node_debug.snapshot import MAX_NODE_DEBUG_ACTIONS
 from app.services.infrastructure.node_debug.thread_owner import (
     NodeDebugOwner,
     normalize_node_debug_owner,
@@ -49,10 +44,10 @@ def _owner(session_id: str, thread_id: str) -> NodeDebugOwner:
 
 
 class NodeDebugConfigurationRegistry:
-    """管理 Node Debug 配置、活动选择与配置持久化。
+    """管理 Node Debug 配置与活动选择。
 
-    配置文件、活动方案和启动选择只在这里保存一份；待安装断点和 manifest
-    动作历史属于 ``NodeDebugSessionState``，避免把运行投影混入配置 registry。
+    配置文件、活动方案和启动选择只在这里保存一份；运行态配置回写与 manifest
+    动作历史属于 ``NodeDebugSessionState``，避免把会话运行投影混入配置 registry。
     """
 
     def __init__(
@@ -397,89 +392,6 @@ class NodeDebugConfigurationRegistry:
         )
         self.put(session_id, configuration, thread_id)
         self.activate(session_id, configuration.configuration_id, thread_id=thread_id)
-
-    def persist_runtime_state(
-        self,
-        session_id: str,
-        thread_id: str,
-        runtime: NodeDebugRuntime | None,
-        *,
-        pending_breakpoints: Iterable[NodeDebugBreakpointDTO] = (),
-    ) -> None:
-        owner = _owner(session_id, thread_id)
-        configuration_id = self.active_id(session_id, thread_id)
-        selection = self.selection(session_id, thread_id)
-        if runtime is not None:
-            configuration_id = runtime.configuration_id
-            self._active_configuration_ids[owner] = configuration_id
-            working_directory = (
-                runtime.working_directory.relative_to(runtime.workspace_root).as_posix()
-                if runtime.working_directory is not None
-                and runtime.working_directory != runtime.workspace_root
-                else ""
-            )
-            selection = NodeDebugLaunchSelection(
-                script_path=runtime.relative_script_path,
-                working_directory=working_directory,
-                launch_profile_name=runtime.launch_profile_name,
-                args=list(runtime.args),
-            )
-            self.set_selection(owner, selection)
-            breakpoints = runtime.breakpoints.values()
-        else:
-            breakpoints = pending_breakpoints
-        if configuration_id is None:
-            return
-        current = self.get(session_id, thread_id, configuration_id)
-        normalized_breakpoints = [
-            portable_breakpoint(persistable_breakpoint(breakpoint))
-            for breakpoint in breakpoints
-        ]
-        if (
-            current.script_path == selection.script_path
-            and current.working_directory == (selection.working_directory or "")
-            and current.launch_profile_name == selection.launch_profile_name
-            and current.args == list(selection.args)
-            and current.breakpoints == normalized_breakpoints
-        ):
-            return
-        self.put(
-            session_id,
-            current.model_copy(
-                update={
-                    "revision": current.revision + 1,
-                    "script_path": selection.script_path,
-                    "working_directory": selection.working_directory or "",
-                    "launch_profile_name": selection.launch_profile_name,
-                    "args": list(selection.args),
-                    "breakpoints": normalized_breakpoints,
-                    "updated_at": datetime.now(UTC),
-                }
-            ),
-            thread_id,
-        )
-
-    def write_session_manifest(
-        self,
-        session_id: str,
-        thread_id: str,
-        *,
-        actions: Iterable[NodeDebugActionRecordDTO],
-    ) -> None:
-        if self._store is None:
-            return
-        self._store.write_manifest(
-            NodeDebugSessionManifestDTO(
-                session_id=session_id,
-                thread_id=thread_id,
-                active_configuration_id=self.active_id(session_id, thread_id),
-                actions=[
-                    action.model_copy(deep=True)
-                    for action in list(actions)[-MAX_NODE_DEBUG_ACTIONS:]
-                ],
-                updated_at=datetime.now(UTC),
-            )
-        )
 
     def summaries(
         self, session_id: str, thread_id: str

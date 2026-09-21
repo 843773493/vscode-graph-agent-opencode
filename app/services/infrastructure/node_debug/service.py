@@ -161,7 +161,8 @@ class NodeDebugService:
             configuration_factory=self._configuration_factory,
         )
         self._session_state = NodeDebugSessionState(
-            configuration_registry=self._configuration_registry
+            configuration_registry=self._configuration_registry,
+            store=session_store,
         )
         self._session_admission = session_admission
         # 入口别名折叠需要目录索引；无持久化会话树场景（嵌入式/单测）没有可折叠的

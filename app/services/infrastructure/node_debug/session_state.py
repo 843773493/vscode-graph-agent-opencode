@@ -11,10 +11,16 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugSessionManifestDTO,
 )
+from app.services.infrastructure.node_debug.breakpoints import (
+    persistable_breakpoint,
+    portable_breakpoint,
+)
 from app.services.infrastructure.node_debug.configuration_registry import (
     NodeDebugConfigurationRegistry,
+    NodeDebugLaunchSelection,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
 from app.services.infrastructure.node_debug.thread_owner import (
     NodeDebugOwner,
     normalize_node_debug_owner,
@@ -35,8 +41,14 @@ class NodeDebugSessionState:
     通过本类的行为方法进行，调用方不会拿到可变 mapping，也不会建立第二份缓存。
     """
 
-    def __init__(self, *, configuration_registry: NodeDebugConfigurationRegistry) -> None:
+    def __init__(
+        self,
+        *,
+        configuration_registry: NodeDebugConfigurationRegistry,
+        store: NodeDebugSessionStore | None = None,
+    ) -> None:
         self._configuration_registry = configuration_registry
+        self._store = store
         self._pending_breakpoints: dict[NodeDebugOwner, list[NodeDebugBreakpointDTO]] = {}
         self._pending_actions: dict[NodeDebugOwner, list[NodeDebugActionRecordDTO]] = {}
 
@@ -194,10 +206,18 @@ class NodeDebugSessionState:
         return actions
 
     def write_session_manifest(self, session_id: str, thread_id: str) -> None:
-        self._configuration_registry.write_session_manifest(
-            session_id,
-            thread_id,
-            actions=self.pending_actions(_owner(session_id, thread_id)),
+        if self._store is None:
+            return
+        self._store.write_manifest(
+            NodeDebugSessionManifestDTO(
+                session_id=session_id,
+                thread_id=thread_id,
+                active_configuration_id=self._configuration_registry.active_id(
+                    session_id, thread_id
+                ),
+                actions=self.pending_actions(_owner(session_id, thread_id)),
+                updated_at=datetime.now(UTC),
+            )
         )
 
     def persist_runtime_state(
@@ -206,14 +226,62 @@ class NodeDebugSessionState:
         thread_id: str,
         runtime: NodeDebugRuntime | None,
     ) -> None:
-        self._configuration_registry.persist_runtime_state(
-            session_id,
-            thread_id,
-            runtime,
-            pending_breakpoints=self.pending_breakpoints(
-                _owner(session_id, thread_id)
-            ),
+        owner = _owner(session_id, thread_id)
+        configuration_id = self._configuration_registry.active_id(session_id, thread_id)
+        selection = self._configuration_registry.selection(session_id, thread_id)
+        if runtime is not None:
+            configuration_id = runtime.configuration_id
+            self._configuration_registry.set_active(
+                session_id, configuration_id, thread_id
+            )
+            working_directory = (
+                runtime.working_directory.relative_to(runtime.workspace_root).as_posix()
+                if runtime.working_directory is not None
+                and runtime.working_directory != runtime.workspace_root
+                else ""
+            )
+            selection = NodeDebugLaunchSelection(
+                script_path=runtime.relative_script_path,
+                working_directory=working_directory,
+                launch_profile_name=runtime.launch_profile_name,
+                args=list(runtime.args),
+            )
+            self._configuration_registry.set_selection(owner, selection)
+            breakpoints = runtime.breakpoints.values()
+        else:
+            breakpoints = self.pending_breakpoints(owner)
+        if configuration_id is None:
+            self.write_session_manifest(session_id, thread_id)
+            return
+        current = self._configuration_registry.get(
+            session_id, thread_id, configuration_id
         )
+        normalized_breakpoints = [
+            portable_breakpoint(persistable_breakpoint(breakpoint))
+            for breakpoint in breakpoints
+        ]
+        if (
+            current.script_path != selection.script_path
+            or current.working_directory != (selection.working_directory or "")
+            or current.launch_profile_name != selection.launch_profile_name
+            or current.args != list(selection.args)
+            or current.breakpoints != normalized_breakpoints
+        ):
+            self._configuration_registry.put(
+                session_id,
+                current.model_copy(
+                    update={
+                        "revision": current.revision + 1,
+                        "script_path": selection.script_path,
+                        "working_directory": selection.working_directory or "",
+                        "launch_profile_name": selection.launch_profile_name,
+                        "args": list(selection.args),
+                        "breakpoints": normalized_breakpoints,
+                        "updated_at": datetime.now(UTC),
+                    }
+                ),
+                thread_id,
+            )
         self.write_session_manifest(session_id, thread_id)
 
 
