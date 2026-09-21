@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 from pathlib import Path
 
 import httpx
@@ -38,6 +37,7 @@ from tests.support.gateway_processes import (
     GatewayProcess,
     acquire_gateway_guest,
     close_gateway_process,
+    reset_gateway_persistent_state,
     reset_gateway_user_configuration,
     start_gateway_process,
     write_gateway_remote_gateway_config,
@@ -82,18 +82,11 @@ def isolated_gateway_state(
     已有的 `remote_gateway_connections`，因此在已经写入过元数据的 BOXTEAM_HOME
     上新增配置声明的远程 Gateway 时，连接不会再次落盘，只剩投影。下一次
     Gateway 启动就会因为“投影引用未知连接”而按 fail-closed 拒绝加载。这里在
-    每个测试函数开始前清空隔离 BOXTEAM_HOME 的 state/gateway，保证单个用例内
-    写入的是自洽的完整快照；用例内部的多次重启仍然共享同一份持久化状态。
+    每个测试函数开始前整体重建隔离 BOXTEAM_HOME，保证单个用例内写入的是自洽
+    的完整快照；用例内部的多次重启仍然共享同一份持久化状态。
     """
 
-    gateway_root = (
-        Path(e2e_workspace_root_path).resolve().parent
-        / "boxteam-home"
-        / "state"
-        / "gateway"
-    )
-    if gateway_root.exists():
-        shutil.rmtree(gateway_root)
+    reset_gateway_persistent_state(workspace_root=Path(e2e_workspace_root_path))
 
 
 @pytest.mark.asyncio

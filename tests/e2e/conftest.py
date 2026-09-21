@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.support.gateway_processes import reset_gateway_persistent_state
 from tests.support.model_stream_config import prepare_e2e_model_stream_config
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
@@ -50,6 +51,10 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
         test_layer="e2e",
         project_root=project_root,
     )
+    # Gateway 控制面状态位于工作区旁的 boxteam-home，与工作区一样跨运行持久；
+    # 重建工作区前一并清掉，避免上一次运行遗留的工作区注册项或用户配置残留被
+    # 本次 Gateway 重新加载。
+    reset_gateway_persistent_state(workspace_root=output_root / "workspace")
     workspace_root = prepare_default_test_workspace(
         workspace_root=output_root / "workspace",
         template_root=(
