@@ -261,6 +261,7 @@ def test_registry_persists_remote_gateway_without_federation_token(
         remote_gateway_port=8014,
         remote_gateway_id="gateway_remote",
         protocol_version=FEDERATION_PROTOCOL_VERSION,
+        source_owner="manual",
     )
     registry.upsert_remote_gateway(
         connection,
@@ -758,6 +759,7 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
             remote_gateway_port=9014,
             remote_gateway_id="gateway_remote",
             protocol_version=FEDERATION_PROTOCOL_VERSION,
+            source_owner="manual",
         ),
         runtime=WorkspaceRuntime(
             service_urls={"workspace_api": "http://127.0.0.1:41000"}
@@ -953,6 +955,40 @@ def test_legacy_ssh_registry_has_explicit_migration_error(tmp_path: Path) -> Non
         GatewayWorkspaceRegistry(storage_path=storage_path)
 
 
+def test_registry_rejects_legacy_source_owner(tmp_path: Path) -> None:
+    """旧数据缺少或使用 legacy owner 时必须显式失败，不得默认归一。"""
+
+    for payload_owner in (None, "legacy", "unknown"):
+        storage_path = tmp_path / f"workspaces-{payload_owner}.json"
+        connection: dict[str, object] = {
+            "connection_id": "rgw_legacy",
+            "name": "Legacy remote",
+            "host": "remote.example.com",
+            "port": 22,
+            "username": "developer",
+            "private_key_path": None,
+            "ssh_config_host": "remote",
+            "remote_gateway_port": 8014,
+            "remote_gateway_id": "gateway_remote",
+            "protocol_version": FEDERATION_PROTOCOL_VERSION,
+        }
+        if payload_owner is not None:
+            connection["source_owner"] = payload_owner
+        storage_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 10,
+                    "remote_gateway_connections": [connection],
+                    "targets": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="source_owner 非法"):
+            GatewayWorkspaceRegistry(storage_path=storage_path)
+
+
 @pytest.mark.asyncio
 async def test_remote_gateway_uses_one_ssh_forward(
     tmp_path: Path,
@@ -994,6 +1030,7 @@ async def test_remote_gateway_uses_one_ssh_forward(
         remote_gateway_port=8014,
         remote_gateway_id="gateway_remote",
         protocol_version=FEDERATION_PROTOCOL_VERSION,
+        source_owner="manual",
     )
 
     runtime = await start_remote_gateway_tunnel(
@@ -1034,6 +1071,7 @@ async def test_remote_restart_is_delegated_with_request_id(
             remote_gateway_port=8014,
             remote_gateway_id="gateway_remote",
             protocol_version=FEDERATION_PROTOCOL_VERSION,
+            source_owner="manual",
         ),
         runtime=WorkspaceRuntime(
             service_urls={"workspace_api": "http://127.0.0.1:41000"}

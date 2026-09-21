@@ -983,7 +983,6 @@ class GatewayWorkspaceRegistry:
         )
         if (
             existing_connection is not None
-            and existing_connection.source_owner != "legacy"
             and existing_connection.source_owner != connection.source_owner
         ):
             raise PermissionError(
@@ -1058,8 +1057,6 @@ class GatewayWorkspaceRegistry:
             connection.connection_id,
             connection.remote_config_event_cursor,
         )
-        if connection.source_owner not in {"config", "manual", "legacy"}:
-            raise PermissionError("远程 Gateway 连接 source owner 非法")
         previous_snapshot = self._capture_registry_state()
         previous_signatures = dict(self._route_signatures)
         previous_runtime = self._remote_gateway_runtimes.get(
@@ -1070,7 +1067,6 @@ class GatewayWorkspaceRegistry:
         )
         if (
             existing_connection is not None
-            and existing_connection.source_owner != "legacy"
             and existing_connection.source_owner != connection.source_owner
         ):
             raise PermissionError(
@@ -1243,7 +1239,7 @@ class GatewayWorkspaceRegistry:
         manual_connections = {
             connection_id: connection
             for connection_id, connection in previous_connections.items()
-            if connection.source_owner in {"manual", "legacy"}
+            if connection.source_owner == "manual"
             and connection_id not in configured_connection_by_id
         }
         if set(manual_connections) & set(configured_connection_by_id):
@@ -1270,14 +1266,7 @@ class GatewayWorkspaceRegistry:
             return (
                 target.owner == "remote_projection"
                 and connection is not None
-                and (
-                    connection.source_owner == "config"
-                    or (
-                        connection.source_owner == "legacy"
-                        and target.remote_gateway_connection_id
-                        in configured_connection_by_id
-                    )
-                )
+                and connection.source_owner == "config"
             )
 
         for target in staged_targets.values():
@@ -1388,10 +1377,7 @@ class GatewayWorkspaceRegistry:
             if connection_id in runtimes:
                 continue
             connection = previous_connections.get(connection_id)
-            if connection is not None and connection.source_owner in {
-                "manual",
-                "legacy",
-            }:
+            if connection is not None and connection.source_owner == "manual":
                 continue
             if defer_retiring_runtimes or self._has_route_references_for_connection(
                 connection_id
@@ -1918,6 +1904,14 @@ class GatewayWorkspaceRegistry:
         for item in raw_remote_connections:
             if not isinstance(item, dict):
                 raise ValueError("Gateway registry 远程 Gateway 连接必须是对象")
+            source_owner = item.get("source_owner")
+            if source_owner not in {"config", "manual"}:
+                raise ValueError(
+                    "Gateway registry 远程 Gateway 连接 source_owner 非法，"
+                    "只接受 config 或 manual: "
+                    f"connection_id={item.get('connection_id')}, "
+                    f"source_owner={source_owner!r}"
+                )
             connection = RemoteGatewayConnection(
                 connection_id=str(item["connection_id"]),
                 name=str(item["name"]),
@@ -1947,11 +1941,7 @@ class GatewayWorkspaceRegistry:
                     if item.get("remote_pair_command") is not None
                     else None
                 ),
-                source_owner=(
-                    item.get("source_owner")
-                    if item.get("source_owner") in {"config", "manual", "legacy"}
-                    else "legacy"
-                ),
+                source_owner=source_owner,
             )
             self._remote_gateway_connections[connection.connection_id] = connection
         targets = payload.get("targets", [])

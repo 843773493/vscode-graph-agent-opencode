@@ -41,6 +41,7 @@ def _registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
             remote_gateway_port=8014,
             remote_gateway_id="remote-gateway",
             protocol_version=1,
+            source_owner="manual",
         )
     )
     for workspace_id, root_path in (

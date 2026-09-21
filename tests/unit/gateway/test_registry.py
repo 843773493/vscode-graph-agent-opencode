@@ -238,6 +238,7 @@ def test_remote_gateway_runtime_retires_until_proxy_references_are_drained(
         remote_gateway_port=8014,
         remote_gateway_id="remote_gateway",
         protocol_version=1,
+        source_owner="manual",
     )
     old_runtime = WorkspaceRuntime(
         service_urls={"workspace_api": "http://127.0.0.1:41000"},

@@ -45,9 +45,9 @@ class RemoteGatewayConnection:
     remote_gateway_port: int
     remote_gateway_id: str
     protocol_version: int
+    source_owner: Literal["config", "manual"]
     connection_error: str | None = None
     remote_pair_command: str | None = None
-    source_owner: Literal["config", "manual", "legacy"] = "legacy"
     remote_config_event_cursor: int | None = None
     remote_config_state: str | None = None
     remote_restart_required: bool = False
