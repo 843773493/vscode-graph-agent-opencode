@@ -32,6 +32,9 @@ export function useGatewayWorkspaceActivation({
 }) {
   const workspaceActivationQueueRef = useRef(createLatestSerialTaskQueue());
   const backgroundWorkspaceActivationSequenceRef = useRef(0);
+  // 最近一次正式激活的激活意图序列号：正式激活用它判断自己的收敛职责是否已被
+  // 更新的正式激活接手。后台激活不更新这个 ref，因为它不负责收敛 workspaceSwitching。
+  const latestFormalActivationSequenceRef = useRef(0);
 
   const activateGatewayWorkspaceInBackground = useCallback((workspaceId: string) => {
     const requestSequence = ++backgroundWorkspaceActivationSequenceRef.current;
@@ -106,18 +109,24 @@ export function useGatewayWorkspaceActivation({
           isBootstrapping: false,
         }));
       };
-      // latest-only 队列对正式激活有两种吞掉结果的方式：尚未开始的旧任务被直接
-      // 跳过，已开始但被顶替的任务其 rejection 也会被队列守卫吞掉。因此结局不能
-      // 依赖队列链传播，任务体把状态写入闭包变量，由下面的收尾统一判定，保证
-      // 调用方要么拿到真实成功，要么拿到明确失败。
+      // 收敛 workspaceSwitching 的职责只属于最近一次正式激活：被更新的正式激活
+      // 顶替时它自己会 resetWorkspaceScopedState 并负责收敛，旧任务不得反向清掉。
+      // 被后台激活顶替时该序列号不变，仍由本任务复位，因为后台激活即使成功也
+      // 从不触碰 workspaceSwitching。
+      const formalSequence = ++latestFormalActivationSequenceRef.current;
+      // latest-only 队列会用两种方式吞掉正式激活的结果：尚未开始的旧任务被整条
+      // 跳过，已开始但被顶替的任务其 rejection 也会被守卫吞掉。真正的结局（是否
+      // 开始、是否失败、刷新是否生效）由任务体写进闭包变量，收尾统一判定，保证
+      // 调用方拿到 resolve 时激活一定已生效，否则一律拿到明确失败。
       let started = false;
+      let applied = false;
       let failure: unknown;
       let hasFailure = false;
       const operation = workspaceActivationQueueRef.current.enqueue(async () => {
         started = true;
         try {
           await apiActivateGatewayWorkspace(resolvedApiPort, workspaceId);
-          const applied = await finishWorkspaceRefresh(preferredSessionId, {
+          applied = await finishWorkspaceRefresh(preferredSessionId, {
             checkGatewayWorkspaceHealth: false,
             reuseCurrentUiSettings: true,
           });
@@ -131,17 +140,27 @@ export function useGatewayWorkspaceActivation({
         }
       });
       return operation.catch(() => undefined).then(() => {
-        // 无论是否被顶替都要复位 workspaceSwitching：该标志只由正式激活的
-        // resetWorkspaceScopedState 置真，后台激活即使成功也不会清理它。
+        const fail = (message: string, cause: unknown) => {
+          // 只有仍是最后一次正式激活意图时才写状态，避免污染新激活正在收敛的状态。
+          if (latestFormalActivationSequenceRef.current === formalSequence) {
+            applyActivationFailure(message);
+          }
+          throw cause;
+        };
         if (hasFailure) {
           const message = failure instanceof Error ? failure.message : String(failure);
-          applyActivationFailure(message);
-          throw failure;
+          return fail(message, failure);
         }
         if (!started) {
-          const message = `工作区激活已被更新的激活请求取代，${workspaceId} 未生效`;
-          applyActivationFailure(message);
-          throw new Error(message);
+          return fail(`工作区激活已被更新的激活请求取代，${workspaceId} 未生效`, new Error(
+            `工作区激活已被更新的激活请求取代，${workspaceId} 未生效`,
+          ));
+        }
+        if (!applied) {
+          return fail(
+            `工作区激活未生效：${workspaceId} 的工作区刷新已被更新的请求作废`,
+            new Error(`工作区激活未生效：${workspaceId} 的工作区刷新已被更新的请求作废`),
+          );
         }
       });
     },

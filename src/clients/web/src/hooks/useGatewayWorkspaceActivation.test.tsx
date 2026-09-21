@@ -61,6 +61,8 @@ interface MountOptions {
   refreshGatewayWorkspaceStatuses?: (
     expectedWorkspaceId?: string | null,
   ) => Promise<void>;
+  /** 需要真实还原切换态置位时启用，默认只计数，避免干扰既有的状态断言。 */
+  resetWorkspaceScopedState?: (previous: AppState) => AppState;
 }
 
 interface MountedHook {
@@ -114,6 +116,9 @@ async function mountHook(options: MountOptions = {}): Promise<MountedHook> {
       },
       resetWorkspaceScopedState: () => {
         calls.reset += 1;
+        if (options.resetWorkspaceScopedState) {
+          setLatest(options.resetWorkspaceScopedState(current));
+        }
       },
       finishWorkspaceRefresh: async (preferredSessionId, refreshOptions) => {
         calls.finish.push({ preferredSessionId, options: refreshOptions });
@@ -363,6 +368,58 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
     expect(next.isBootstrapping).toBe(false);
   });
 
+  test("正式激活被另一个正式激活顶替时不得清掉新激活正在收敛的切换态", async () => {
+    const pending: Array<{
+      resolve: (value: string) => void;
+      reject: (cause: unknown) => void;
+      workspaceId: string;
+    }> = [];
+    spyOnGatewayApi("activateGatewayWorkspace").mockImplementation(
+      (_port, workspaceId) =>
+        new Promise<string>((resolve, reject) => {
+          pending.push({ resolve, reject, workspaceId });
+        }),
+    );
+    spyOnApi("listAgents").mockResolvedValue([]);
+    const { hook, state } = await mountHook({
+      // 忠实还原 resetWorkspaceScopedState 的置位，才能观察旧任务是否反向清掉它。
+      resetWorkspaceScopedState: (previous) => ({
+        ...previous,
+        workspaceSwitching: true,
+        error: null,
+        status: "正在切换工作区",
+      }),
+    });
+
+    const formalActivationA = hook.activateGatewayWorkspace("ws-a");
+    await flush();
+    expect(pending.map((entry) => entry.workspaceId)).toEqual(["ws-a"]);
+
+    // 正式激活 B 入队顶替 A，B 的 resetWorkspaceScopedState 已把切换态置真。
+    const formalActivationB = hook.activateGatewayWorkspace("ws-b");
+    expect(state().workspaceSwitching).toBe(true);
+
+    // A 的请求失败：A 已被 B 顶替，只允许失败传播，不得写回任何状态。
+    pending[0].reject(new Error("A 激活接口失败"));
+    await act(async () => {
+      await expect(formalActivationA).rejects.toThrow("A 激活接口失败");
+    });
+    await flush();
+
+    // B 正在收敛的切换态与错误位必须保持原样，不能被旧任务 A 污染。
+    expect(state().workspaceSwitching).toBe(true);
+    expect(state().gatewayError).toBeNull();
+    expect(state().error).toBeNull();
+    expect(state().status).toBe("正在切换工作区");
+
+    // 清理：让 B 正常跑完，避免悬挂的任务体影响 unmount。
+    expect(pending.map((entry) => entry.workspaceId)).toEqual(["ws-a", "ws-b"]);
+    pending[1].resolve("ws-b");
+    await act(async () => {
+      await formalActivationB;
+    });
+  });
+
   test("正式激活已开始执行后被后台激活顶替且自身失败时仍显式失败", async () => {
     const failure = new Error("正式激活接口失败");
     const pending: Array<{
@@ -526,16 +583,28 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
     expect(calls.refreshStatuses).toEqual(["ws-formal"]);
   });
 
-  test("刷新未应用时不刷新 Gateway 状态", async () => {
+  test("刷新被作废未生效时显式失败、不刷新 Gateway 状态并复位切换态", async () => {
     spyOnGatewayApi("activateGatewayWorkspace").mockResolvedValue("ws-formal");
-    const { hook, calls } = await mountHook({
+    const { hook, state, calls } = await mountHook({
+      // 模拟 invalidateWorkspaceRefreshes 作废本次刷新：刷新没写回
+      // activeGatewayWorkspaceId，激活并未生效，绝不能给调用方假成功。
+      initialState: appState({ isBootstrapping: true, workspaceSwitching: true }),
       finishWorkspaceRefresh: async () => false,
     });
 
-    await hook.activateGatewayWorkspace("ws-formal");
+    await act(async () => {
+      await expect(hook.activateGatewayWorkspace("ws-formal"))
+        .rejects.toThrow("工作区激活未生效");
+    });
 
     expect(calls.finish).toHaveLength(1);
     expect(calls.refreshStatuses).toEqual([]);
+    const next = state();
+    expect(next.workspaceSwitching).toBe(false);
+    expect(next.gatewayError).toBe("工作区激活未生效：ws-formal 的工作区刷新已被更新的请求作废");
+    expect(next.error).toBe("工作区激活未生效：ws-formal 的工作区刷新已被更新的请求作废");
+    expect(next.status).toBe("工作区切换失败");
+    expect(next.isBootstrapping).toBe(false);
   });
 
   test("激活失败时写入五个失败字段并原样抛出", async () => {
