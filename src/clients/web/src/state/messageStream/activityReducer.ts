@@ -14,7 +14,7 @@ import type {
   MessageStreamState,
 } from "./types";
 
-export function activityStatusValue(value: unknown): MessageStreamActivity["status"] {
+function activityStatusValue(value: unknown): MessageStreamActivity["status"] {
   return value === "running"
     || value === "waiting"
     || value === "stopping"
@@ -67,7 +67,7 @@ export function activeStateAfter(
   };
 }
 
-export function activityFromPayload(payload: Record<string, unknown>): MessageStreamActivity | null {
+function activityFromPayload(payload: Record<string, unknown>): MessageStreamActivity | null {
   const activityId = stringValue(payload.activity_id);
   const kind = stringValue(payload.kind);
   if (!activityId || !kind) return null;

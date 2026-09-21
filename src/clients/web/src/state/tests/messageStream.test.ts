@@ -978,4 +978,17 @@ describe("message stream reducer", () => {
     expect(state.modelCalls.model_3?.started_seq).toBe(7);
     expect(state.connectionStatus).toBe("connected");
   });
+
+  test("非法 activity status 收敛为 unknown，不冒充分已完成", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "activity.started", {
+      activity_id: "compaction_1",
+      kind: "context.compaction",
+      scope_ref: "turn",
+      status: "paused",
+    }));
+
+    expect(state.activities).toHaveLength(1);
+    expect(state.activities[0]?.status).toBe("unknown");
+  });
 });
