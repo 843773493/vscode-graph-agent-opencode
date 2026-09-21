@@ -339,8 +339,8 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
       },
     );
     const { hook, state, calls: hookCalls } = await mountHook({
-      // 模拟真实 resetWorkspaceScopedState 已把切换态置真，验证失败分支会复位它。
-      initialState: appState({ workspaceSwitching: true }),
+      // 两个标志都置真，才能验证失败分支确实把它们压回 false，否则断言恒真。
+      initialState: appState({ isBootstrapping: true, workspaceSwitching: true }),
     });
 
     const formalActivation = hook.activateGatewayWorkspace("ws-formal");
@@ -359,6 +359,47 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
     expect(next.workspaceSwitching).toBe(false);
     expect(next.gatewayError).toBe("工作区激活已被更新的激活请求取代，ws-formal 未生效");
     expect(next.error).toBe("工作区激活已被更新的激活请求取代，ws-formal 未生效");
+    expect(next.status).toBe("工作区切换失败");
+    expect(next.isBootstrapping).toBe(false);
+  });
+
+  test("正式激活已开始执行后被后台激活顶替且自身失败时仍显式失败", async () => {
+    const failure = new Error("正式激活接口失败");
+    const pending: Array<{
+      resolve: (value: string) => void;
+      reject: (cause: unknown) => void;
+      workspaceId: string;
+    }> = [];
+    spyOnGatewayApi("activateGatewayWorkspace").mockImplementation(
+      (_port, workspaceId) =>
+        new Promise<string>((resolve, reject) => {
+          pending.push({ resolve, reject, workspaceId });
+        }),
+    );
+    spyOnApi("listAgents").mockResolvedValue([]);
+    const { hook, state } = await mountHook({
+      initialState: appState({ isBootstrapping: true, workspaceSwitching: true }),
+    });
+
+    const formalActivation = hook.activateGatewayWorkspace("ws-formal");
+    // 冲刷到正式激活的任务体已进入执行并停在激活请求上。
+    await flush();
+    expect(pending.map((entry) => entry.workspaceId)).toEqual(["ws-formal"]);
+
+    // 正式激活仍在途时后台激活入队顶替它，随后正式请求失败。
+    hook.activateGatewayWorkspaceInBackground("ws-background");
+    pending[0].reject(failure);
+    // 队列守卫会吞掉被顶替任务的 rejection，调用方绝不能因此拿到假成功。
+    await act(async () => {
+      await expect(formalActivation).rejects.toBe(failure);
+    });
+    await flush();
+
+    // 被顶替的失败正式激活必须把切换态收敛掉，不能永久卡真。
+    const next = state();
+    expect(next.workspaceSwitching).toBe(false);
+    expect(next.gatewayError).toBe("正式激活接口失败");
+    expect(next.error).toBe("正式激活接口失败");
     expect(next.status).toBe("工作区切换失败");
     expect(next.isBootstrapping).toBe(false);
   });

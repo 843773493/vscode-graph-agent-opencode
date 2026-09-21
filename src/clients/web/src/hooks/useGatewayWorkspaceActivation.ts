@@ -106,10 +106,13 @@ export function useGatewayWorkspaceActivation({
           isBootstrapping: false,
         }));
       };
-      // latest-only 队列会静默跳过尚未开始的旧任务，因此正式激活可能整条任务体
-      // 从未执行；此时 resetWorkspaceScopedState 已把 workspaceSwitching 置真，
-      // 必须显式失败并复位，否则调用方会拿到假成功且 UI 永久卡在切换态。
+      // latest-only 队列对正式激活有两种吞掉结果的方式：尚未开始的旧任务被直接
+      // 跳过，已开始但被顶替的任务其 rejection 也会被队列守卫吞掉。因此结局不能
+      // 依赖队列链传播，任务体把状态写入闭包变量，由下面的收尾统一判定，保证
+      // 调用方要么拿到真实成功，要么拿到明确失败。
       let started = false;
+      let failure: unknown;
+      let hasFailure = false;
       const operation = workspaceActivationQueueRef.current.enqueue(async () => {
         started = true;
         try {
@@ -122,18 +125,24 @@ export function useGatewayWorkspaceActivation({
             void refreshGatewayWorkspaceStatuses(workspaceId);
           }
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          applyActivationFailure(message);
+          failure = error;
+          hasFailure = true;
           throw error;
         }
       });
-      return operation.then(() => {
-        if (started) {
-          return;
+      return operation.catch(() => undefined).then(() => {
+        // 无论是否被顶替都要复位 workspaceSwitching：该标志只由正式激活的
+        // resetWorkspaceScopedState 置真，后台激活即使成功也不会清理它。
+        if (hasFailure) {
+          const message = failure instanceof Error ? failure.message : String(failure);
+          applyActivationFailure(message);
+          throw failure;
         }
-        const message = `工作区激活已被更新的激活请求取代，${workspaceId} 未生效`;
-        applyActivationFailure(message);
-        throw new Error(message);
+        if (!started) {
+          const message = `工作区激活已被更新的激活请求取代，${workspaceId} 未生效`;
+          applyActivationFailure(message);
+          throw new Error(message);
+        }
       });
     },
     [
