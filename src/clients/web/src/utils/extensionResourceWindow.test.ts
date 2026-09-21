@@ -6,10 +6,12 @@ import {
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 
-function stubWindow(pathname: string, search: string): void {
+function stubWindow(pathname: string, search: string, href?: string): void {
   Object.defineProperty(globalThis, "window", {
     configurable: true,
-    value: { location: { pathname, search, href: `http://127.0.0.1:8011${pathname}${search}` } },
+    value: {
+      location: { pathname, search, href: href ?? `http://127.0.0.1:8011${pathname}${search}` },
+    },
   });
 }
 
@@ -80,5 +82,40 @@ describe("扩展窗口 URL 组装", () => {
     const url = new URL(buildExtensionWindowUrl({ kind: "terminal" }));
     expect([...url.searchParams.keys()]).toEqual(["resourceType"]);
     expect(url.searchParams.get("resourceType")).toBe("terminal");
+  });
+
+  test("可选参数为空串时同样跳过对应查询项", () => {
+    stubWindow("/", "");
+    const url = new URL(
+      buildExtensionWindowUrl({ kind: "terminal", resourceId: "", workspaceId: "", sessionId: "" }),
+    );
+    expect([...url.searchParams.keys()]).toEqual(["resourceType"]);
+  });
+
+  test("查询项按 resourceType/resourceId/workspaceId/sessionId 次序写入", () => {
+    stubWindow("/", "");
+    const url = new URL(
+      buildExtensionWindowUrl({ kind: "browser", resourceId: "b1", workspaceId: "w1", sessionId: "s1" }),
+    );
+    expect([...url.searchParams.keys()]).toEqual([
+      "resourceType",
+      "resourceId",
+      "workspaceId",
+      "sessionId",
+    ]);
+  });
+
+  test("基址自带的查询串与 hash 被清理", () => {
+    stubWindow(
+      "/app",
+      "?window=extension&browserId=b9",
+      "http://127.0.0.1:8011/app?window=extension&browserId=b9#frag",
+    );
+    const url = new URL(buildExtensionWindowUrl({ kind: "terminal", resourceId: "t1" }));
+    expect(url.pathname).toBe("/extension");
+    expect(url.searchParams.has("window")).toBe(false);
+    expect(url.searchParams.has("browserId")).toBe(false);
+    expect(url.hash).toBe("");
+    expect([...url.searchParams.keys()]).toEqual(["resourceType", "resourceId"]);
   });
 });
