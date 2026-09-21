@@ -1,4 +1,4 @@
-"""一次性 legacy import 与正常 v2 runtime 的 format 边界。"""
+"""正常 rollout runtime 的格式版本闸门。"""
 
 from __future__ import annotations
 

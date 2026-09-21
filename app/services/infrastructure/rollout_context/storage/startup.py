@@ -10,11 +10,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from app.domain.itemized.errors import FormatDispatchError
-from app.services.infrastructure.rollout_context.migration.dispatch import (
-    require_v2_runtime,
-)
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
+)
+from app.services.infrastructure.rollout_context.storage.format_dispatch import (
+    require_v2_runtime,
 )
 from app.services.infrastructure.rollout_context.storage.recovery import (
     reconcile_jsonl_tail,

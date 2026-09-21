@@ -21,7 +21,7 @@ from app.services.infrastructure.rollout_context.migration import (
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     artifact_manifest,
 )
-from app.services.infrastructure.rollout_context.migration.dispatch import (
+from app.services.infrastructure.rollout_context.storage.format_dispatch import (
     require_v2_runtime,
 )
 from tests.harness.python.run_context import TestRunContext
