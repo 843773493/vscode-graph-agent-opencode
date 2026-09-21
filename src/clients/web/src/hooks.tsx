@@ -55,6 +55,7 @@ import { useGatewayWorkspaceRuntimeLifecycle } from "./hooks/useGatewayWorkspace
 import { useGatewayWorkspaceMutations } from "./hooks/useGatewayWorkspaceMutations";
 import { useGatewayWorkspaceActivation } from "./hooks/useGatewayWorkspaceActivation";
 import { useWorkspaceSessionSelection } from "./hooks/useWorkspaceSessionSelection";
+import { useComposerStateProjection } from "./hooks/useComposerStateProjection";
 import { useUiSettingsController } from "./hooks/useUiSettingsController";
 import {
   readCachedUiSettings,
@@ -65,11 +66,7 @@ import { sessionScopeKey } from "./state/session/sessionScope";
 import { cloneMaps } from "./state/appStateMaps";
 import { useSessionGoalController } from "./hooks/useSessionGoalController";
 import { useSessionTraceHistory } from "./hooks/sessionTraceHistory/useSessionTraceHistory";
-import {
-  reuseComposerStateSnapshot,
-  selectComposerState,
-  type ComposerStateSnapshot,
-} from "./state/composerState";
+import type { ComposerStateSnapshot } from "./state/composerState";
 import { refreshWorkspaceSessionList } from "./hooks/sessionEventStream/sessionRefresh";
 import {
   useSessionTurnTimeline,
@@ -520,34 +517,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => ({ ...prev, status: text }));
   }, []);
 
-  const getLatestAssistantContent = useCallback((): string | null => {
-    const latest = latestStateRef.current;
-    const latestSessionId = latest.currentSession?.session_id ?? null;
-    const latestWorkspaceId =
-      latest.currentSessionWorkspaceId ?? latest.activeGatewayWorkspaceId;
-    const scopeKey = latestSessionId && latestWorkspaceId
-      ? sessionScopeKey(latestWorkspaceId, latestSessionId)
-      : latestSessionId;
-    const timeline = scopeKey
-      ? latest.turnTimelinesBySession.get(scopeKey)
-      : null;
-    if (timeline) {
-      for (let index = timeline.orderedTurnIds.length - 1; index >= 0; index -= 1) {
-        const turn = timeline.turnsById[timeline.orderedTurnIds[index]];
-        if (!turn) {
-          continue;
-        }
-        const content = "final_response" in turn
-          ? turn.final_response ?? turn.response_preview ?? ""
-          : turn.response_preview ?? "";
-        if (content.trim()) {
-          return content;
-        }
-      }
-    }
-    return null;
-  }, []);
-
   const refreshGatewayWorkspaceSessions = useCallback(async (workspaceId: string) => {
     await refreshWorkspaceSessionList(
       state.apiPort ?? DEFAULT_BACKEND_PORT,
@@ -897,16 +866,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     ],
   );
 
-  const composerStateRef = useRef<ComposerStateSnapshot | null>(null);
-  const selectedComposerState = selectComposerState(state, currentSessionCacheKey);
-  const composerState = reuseComposerStateSnapshot(
-    composerStateRef.current,
-    selectedComposerState,
-  );
-  composerStateRef.current = composerState;
-  const composerValue = useMemo<ComposerContextType>(() => ({
-    state: composerState,
-    getLatestAssistantContent,
+  const { composerValue } = useComposerStateProjection({
+    state,
+    currentSessionCacheKey,
+    latestStateRef,
     setStatus,
     sendMessage,
     compactSession,
@@ -923,26 +886,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     createSession,
     renameSession,
     updateUiSettings,
-  }), [
-    clearGoal,
-    compactSession,
-    composerState,
-    createSession,
-    getLatestAssistantContent,
-    interruptSessionCallback,
-    refreshGoal,
-    renameSession,
-    sendMessage,
-    setStatus,
-    refreshAgents,
-    setWorkspaceDefaultAgent,
-    setWorkspaceDefaultProvider,
-    switchAgent,
-    switchContentView,
-    switchModel,
-    updateGoal,
-    updateUiSettings,
-  ]);
+  });
 
   return (
     <AppContext.Provider value={value}>
