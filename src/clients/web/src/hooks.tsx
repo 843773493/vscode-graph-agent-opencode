@@ -7,10 +7,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import {
-  DEFAULT_BACKEND_PORT,
-  getSession as apiGetSession,
-} from "./api";
+import { DEFAULT_BACKEND_PORT } from "./api";
 import type { TurnHistoryInclude } from "./api/sessionTurnHistory";
 import type {
   AddManagedGatewayWorkspaceRequest,
@@ -57,6 +54,7 @@ import { useGatewayWorkspaceHierarchy } from "./hooks/useGatewayWorkspaceHierarc
 import { useGatewayWorkspaceRuntimeLifecycle } from "./hooks/useGatewayWorkspaceRuntimeLifecycle";
 import { useGatewayWorkspaceMutations } from "./hooks/useGatewayWorkspaceMutations";
 import { useGatewayWorkspaceActivation } from "./hooks/useGatewayWorkspaceActivation";
+import { useWorkspaceSessionSelection } from "./hooks/useWorkspaceSessionSelection";
 import { useUiSettingsController } from "./hooks/useUiSettingsController";
 import {
   readCachedUiSettings,
@@ -72,9 +70,6 @@ import {
   selectComposerState,
   type ComposerStateSnapshot,
 } from "./state/composerState";
-import {
-  createLatestSerialTaskQueue,
-} from "./hooks/serialTaskQueue";
 import { refreshWorkspaceSessionList } from "./hooks/sessionEventStream/sessionRefresh";
 import {
   useSessionTurnTimeline,
@@ -365,8 +360,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const latestStateRef = useRef(state);
   latestStateRef.current = state;
-  const workspaceSessionSelectionQueueRef = useRef(createLatestSerialTaskQueue());
-  const workspaceSessionSelectionIntentRef = useRef(0);
   const currentSessionId = state.currentSession?.session_id ?? null;
   const defaultGatewayWorkspaceId =
     state.gatewayWorkspaces.find((workspace) => workspace.system_default)
@@ -646,24 +639,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     onStatusChange: setStatus,
   });
 
-  const selectSession = useCallback((sessionId: string) => {
-    selectSessionCallback(sessionId);
-    const latest = latestStateRef.current;
-    void loadSessionViewState(
-      latest.currentSessionWorkspaceId ?? latest.activeGatewayWorkspaceId,
-      sessionId,
-    );
-  }, [loadSessionViewState, selectSessionCallback]);
-
-  const selectWorkspaceSession = useCallback((
-    workspaceId: string,
-    sessionId: string,
-    sessionOverride?: Session,
-  ) => {
-    selectWorkspaceSessionCallback(workspaceId, sessionId, sessionOverride);
-    void loadSessionViewState(workspaceId, sessionId);
-  }, [loadSessionViewState, selectWorkspaceSessionCallback]);
-
   const toggleAgentSessionsPanel = useCallback(() => {
     let nextOpen: boolean | null = null;
     setState((prev) => {
@@ -746,38 +721,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     finishWorkspaceRefresh,
   });
 
-  const openWorkspaceSession = useCallback((workspaceId: string, sessionId: string) => {
-    const intent = ++workspaceSessionSelectionIntentRef.current;
-    return workspaceSessionSelectionQueueRef.current.enqueue(async () => {
-      if (intent !== workspaceSessionSelectionIntentRef.current) {
-        return;
-      }
-      const latestState = latestStateRef.current;
-      const cachedSession = latestState.sessionsByWorkspace
-        .get(workspaceId)
-        ?.find((session) => session.session_id === sessionId);
-      const shouldActivateWorkspace =
-        workspaceId !== latestState.activeGatewayWorkspaceId
-        || latestState.workspaceSwitching;
-      const selectedSession = cachedSession
-        ?? await apiGetSession(
-          state.apiPort ?? DEFAULT_BACKEND_PORT,
-          sessionId,
-          workspaceId,
-        );
-      if (intent !== workspaceSessionSelectionIntentRef.current) {
-        return;
-      }
-      selectWorkspaceSession(workspaceId, sessionId, selectedSession);
-      if (shouldActivateWorkspace) {
-        activateGatewayWorkspaceInBackground(workspaceId);
-      }
-    });
-  }, [
-    activateGatewayWorkspaceInBackground,
+  const {
+    selectSession,
     selectWorkspaceSession,
-    state.apiPort,
-  ]);
+    openWorkspaceSession,
+  } = useWorkspaceSessionSelection({
+    apiPort: state.apiPort,
+    latestStateRef,
+    selectSession: selectSessionCallback,
+    selectWorkspaceSession: selectWorkspaceSessionCallback,
+    loadSessionViewState,
+    activateGatewayWorkspaceInBackground,
+  });
 
   const {
     reconnectGatewayWorkspace,
