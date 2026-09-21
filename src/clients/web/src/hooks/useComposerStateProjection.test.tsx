@@ -152,6 +152,34 @@ describe("Composer 最新助手正文提取", () => {
       .toBe("最新摘要");
   });
 
+  test("同一 turn 同时含 final_response 与 response_preview 时取 final_response", () => {
+    const state = appState();
+    state.turnTimelinesBySession.set(SCOPE_KEY, timelineWith([
+      // response_preview 先声明：一旦二者优先级反转，返回的就会是预览而非正文。
+      ["turn_1", turn("turn_1", {
+        response_preview: "不应被选中的预览",
+        final_response: "最终正文",
+      })],
+    ]));
+
+    expect(mountHarness(state).projection().getLatestAssistantContent())
+      .toBe("最终正文");
+  });
+
+  test("orderedTurnIds 含 turnsById 缺失的 id 时跳过并继续回退到更早 turn", () => {
+    const state = appState();
+    const timeline = timelineWith([
+      ["turn_1", turn("turn_1", { final_response: "更早的有效正文" })],
+      ["turn_3", turn("turn_3", {})],
+    ]);
+    // turn_2 只出现在顺序里，没有对应记录，模拟详情淘汰后残留的悬空 id。
+    timeline.orderedTurnIds = ["turn_1", "turn_2", "turn_3"];
+    state.turnTimelinesBySession.set(SCOPE_KEY, timeline);
+
+    expect(mountHarness(state).projection().getLatestAssistantContent())
+      .toBe("更早的有效正文");
+  });
+
   test("全部为空或缺失时返回 null", () => {
     const state = appState();
     state.turnTimelinesBySession.set(SCOPE_KEY, timelineWith([
