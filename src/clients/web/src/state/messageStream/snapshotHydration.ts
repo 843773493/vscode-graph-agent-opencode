@@ -142,10 +142,26 @@ function blockFromSnapshot(value: SnapshotBlock): MessageStreamBlock {
     items: value.items.map((item) => ({ ...item })),
     redacted: value.redacted ?? false,
     projection: defaultedTextValue(value.projection, "streaming"),
-    completion_reason: defaultedTextValue(value.completion_reason, "upstream_completed"),
+    completion_reason: blockCompletionReason(value),
     partial: value.partial ?? false,
     ...lifecycleFromSnapshot(value),
   };
+}
+
+/**
+ * 快照 block 的 completion_reason 归一，必须与事件路径逐字一致：
+ * 运行中 block 事件路径用 optionalTextValue（undefined），仅 block.completed 分支
+ * 才兜底 "upstream_completed"；后端也只在 block.completed、stream.completed 自动收尾
+ * 和 interrupted/failed 强制收尾时写入该字段，运行中快照必然缺失。
+ * 终态兜底沿用 "upstream_completed"：interrupted/failed 收尾由后端无条件写入
+ * "user_interrupt"/"execution_lost"，不会走到这里。
+ */
+function blockCompletionReason(value: SnapshotBlock): string | undefined {
+  const reason = optionalTextValue(value.completion_reason);
+  if (reason !== undefined) return reason;
+  return blockStatusValue(value.status) === "running"
+    ? undefined
+    : "upstream_completed";
 }
 
 function toolFromSnapshot(value: SnapshotToolExecution): MessageStreamToolExecution {

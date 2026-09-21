@@ -1413,6 +1413,71 @@ describe("message stream reducer", () => {
     }
   });
 
+  test("运行中 block 的快照不发明 completion_reason，与 block.started 事件逐字段一致", () => {
+    const snapshotState = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", {
+        snapshot_seq: 1,
+        stream_status: "open",
+        agent_loop_status: "running",
+        current_attempt: 1,
+        blocks: [{
+          block_id: "b1",
+          block_index: 0,
+          items: [],
+          status: "running",
+          carrier_type: "text",
+          projection: "streaming",
+          text: "半截输出",
+        }],
+        resumable: true,
+      }),
+    );
+    let eventState = createMessageStreamState("ses_1", "turn_1");
+    eventState = applyMessageStreamEvent(eventState, event(1, "block.started", {
+      block_id: "b1",
+      block_index: 0,
+      carrier_type: "text",
+      projection: "streaming",
+    }));
+
+    const snapshotBlock = snapshotState.blocks[0];
+    const eventBlock = eventState.blocks[0];
+    expect(snapshotBlock?.status).toBe("running");
+    expect(snapshotBlock?.completion_reason).toBeUndefined();
+    expect(eventBlock?.completion_reason).toBeUndefined();
+    for (const field of ["status", "completion_reason", "partial", "carrier_type", "projection"] as const) {
+      expect(snapshotBlock?.[field]).toBe(eventBlock?.[field]);
+    }
+  });
+
+  test("终态快照显式给出 completion_reason 时原样保留，不被兜底覆盖", () => {
+    const block = snapshotBlockState("user_interrupt");
+    expect(block?.status).toBe("completed");
+    expect(block?.completion_reason).toBe("user_interrupt");
+  });
+
+  test("终态快照缺失 completion_reason 时兜底为 upstream_completed，与事件路径同一结果", () => {
+    const missing = snapshotBlockState(undefined);
+    expect(missing?.completion_reason).toBe("upstream_completed");
+    expect(missing?.completion_reason).toBe(eventBlockState(undefined)?.completion_reason);
+    for (const status of ["completed", "interrupted", "failed"] as const) {
+      const state = applyMessageStreamEvent(
+        createMessageStreamState("ses_1", "turn_1"),
+        event(1, "stream.snapshot", {
+          snapshot_seq: 1,
+          stream_status: "open",
+          agent_loop_status: "running",
+          current_attempt: 1,
+          blocks: [{ block_id: "b1", items: [], status }],
+          resumable: true,
+        }),
+      );
+      expect(state.blocks[0]?.status).toBe(status);
+      expect(state.blocks[0]?.completion_reason).toBe("upstream_completed");
+    }
+  });
+
   test("snapshot 与事件路径对 block carrier_type / projection 的文本归一逐字一致", () => {
     for (const item of ILLEGAL_TEXT_INPUTS) {
       const snapshotState = applyMessageStreamEvent(
