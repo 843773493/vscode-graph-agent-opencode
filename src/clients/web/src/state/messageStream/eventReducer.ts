@@ -481,6 +481,7 @@ function finishRunningActivities(
     applyLifecycle(activity, event, true);
   }
 }
+
 function failureFromPayload(payload: Record<string, unknown>): MessageStreamState["failure"] {
   return failureFromUnknown(payload);
 }

@@ -17,6 +17,6 @@
 
 - `index.ts` 是模块唯一对外入口，跨模块复用的符号必须在此可导出。
 - 快照 hydration 与事件 reducer 保持互为递归的单一链路，不得复制状态归一逻辑。
-- 事件 reducer 只保留事件信封校验、事件分发与终态收口；工具实体 upsert 等按实体归入对应子模块。
+- 事件 reducer 只保留事件信封校验、事件分发与终态收口；工具实体 upsert 归入 `toolReducer.ts`，block、activity 与 model_call 的 upsert 仍留在 `eventReducer.ts`。
 - 代码注释使用中文，专业术语除外。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。

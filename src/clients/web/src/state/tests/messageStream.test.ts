@@ -4,6 +4,7 @@ import {
   createMessageStreamState,
   messageStreamToResponseParts,
   type MessageStreamEvent,
+  type MessageStreamToolExecution,
   writeMessageStreamCache,
 } from "../messageStream/index";
 import { validateMessageStreamSnapshotPayload } from "../../api/messageStreamSnapshot";
@@ -435,6 +436,46 @@ describe("message stream reducer", () => {
     const toolPart = parts.find((part) => part.kind === "tool_call");
     expect(toolPart?.outcome_unknown).toBe(true);
     expect(toolPart?.arguments).toBe('{"command":"touch side-effect"}');
+  });
+
+  test("工具终态 outcome 逐值透传，未识别取值不写入", () => {
+    const cases: Array<{
+      outcome: unknown;
+      expected: MessageStreamToolExecution["outcome"];
+      expectedStatus: "completed" | "failed";
+    }> = [
+      { outcome: "success", expected: "success", expectedStatus: "completed" },
+      { outcome: "execution_lost", expected: "execution_lost", expectedStatus: "completed" },
+      { outcome: "provider_error", expected: "provider_error", expectedStatus: "failed" },
+      { outcome: "outcome_unknown", expected: "outcome_unknown", expectedStatus: "failed" },
+      // 未识别取值必须落到 undefined，不得伪造出 outcome
+      { outcome: "validation_failed", expected: undefined, expectedStatus: "completed" },
+      { outcome: undefined, expected: undefined, expectedStatus: "completed" },
+    ];
+    for (const item of cases) {
+      // tool.started 只带 running 状态，终态 outcome 必须由 tool.completed 透传进来
+      let state = createMessageStreamState("ses_1", "turn_1");
+      state = applyMessageStreamEvent(state, event(1, "tool.started", {
+        tool_execution_id: "exec_1",
+        tool_call_id: "call_1",
+        tool_name: "shell",
+      }));
+      state = applyMessageStreamEvent(state, event(2, "tool.completed", {
+        tool_execution_id: "exec_1",
+        tool_call_id: "call_1",
+        tool_name: "shell",
+        status: "completed",
+        outcome: item.outcome,
+      }));
+      expect(state.toolExecutions[0]?.status).toBe("completed");
+      expect(state.toolExecutions[0]?.outcome).toBe(item.expected);
+
+      const parts = messageStreamToResponseParts(state);
+      const toolPart = parts.find((part) => part.kind === "tool_call");
+      expect(toolPart?.status).toBe(item.expectedStatus);
+      expect(toolPart?.outcome_unknown).toBe(item.expected === "outcome_unknown");
+      expect(parts.find((part) => part.kind === "tool_result")?.status).toBe(item.expectedStatus);
+    }
   });
 
   test("工具信封身份可补入 payload 并在 active_state 中保留", () => {
