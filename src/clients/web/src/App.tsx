@@ -34,7 +34,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   DEFAULT_BACKEND_PORT,
@@ -48,6 +47,7 @@ import {
 } from "./hooks";
 import { useWorkspacePreviewTabs } from "./hooks/useWorkspacePreviewTabs";
 import { useMainAreaResize } from "./hooks/useMainAreaResize";
+import { useBottomPanelResize } from "./hooks/useBottomPanelResize";
 import { useNodeDebugWorkbench } from "./hooks/nodeDebug/useNodeDebugWorkbench";
 import { useChildThreadLoader } from "./hooks/useChildThreadLoader";
 import { useGatewayExtensionResources } from "./hooks/useGatewayExtensionResources";
@@ -57,7 +57,6 @@ import { createSessionConnection } from "./gatewayApi";
 import {
   DEFAULT_GATEWAY_PANEL_HEIGHT,
   DEFAULT_MAIN_AREA_RATIOS,
-  GATEWAY_PANEL_RESIZING_CLASS,
   clampGatewayPanelHeight,
   defaultAuxiliaryVisible,
   resolveMainAreaRatios,
@@ -233,7 +232,6 @@ export default function AppShell() {
     attachment: AttachmentRef;
   } | null>(null);
   const lastOpenedChangesPreviewKeyRef = useRef<string | null>(null);
-  const cleanupPanelResizeRef = useRef<(() => void) | null>(null);
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
@@ -1013,56 +1011,15 @@ export default function AppShell() {
     setAuxiliaryTab("changes");
     persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: "changes" });
   };
-  useEffect(() => () => {
-    cleanupPanelResizeRef.current?.();
-  }, []);
-
-  const startGatewayPanelResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    cleanupPanelResizeRef.current?.();
-
-    const startY = event.clientY;
-    const startHeight = bottomPanelState.height;
-    let latestHeight = startHeight;
-    let moved = false;
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      const deltaY = startY - moveEvent.clientY;
-      if (deltaY === 0) {
-        return;
-      }
-      moved = true;
-      latestHeight = clampGatewayPanelHeight(startHeight + deltaY);
-      if (bottomPanelWorkspaceId) {
-        setWorkspaceBottomPanelStates((previous) => ({
-          ...previous,
-          [bottomPanelWorkspaceId]: {
-            ...bottomPanelState,
-            height: latestHeight,
-          },
-        }));
-      }
-    };
-    const finishResize = () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", finishResize);
-      window.removeEventListener("pointercancel", finishResize);
-      document.body.classList.remove(GATEWAY_PANEL_RESIZING_CLASS);
-      cleanupPanelResizeRef.current = null;
-      if (moved) {
-        updateBottomPanelState({ height: latestHeight });
-      }
-    };
-
-    document.body.classList.add(GATEWAY_PANEL_RESIZING_CLASS);
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", finishResize);
-    window.addEventListener("pointercancel", finishResize);
-    cleanupPanelResizeRef.current = finishResize;
-  };
-
-  const resetGatewayPanelHeight = () => {
-    updateBottomPanelState({ height: DEFAULT_GATEWAY_PANEL_HEIGHT });
-  };
+  const {
+    resetBottomPanelHeight,
+    startBottomPanelResize,
+  } = useBottomPanelResize({
+    workspaceId: bottomPanelWorkspaceId,
+    panelState: bottomPanelState,
+    setWorkspaceBottomPanelStates,
+    updateBottomPanelState,
+  });
   const handleCreateSession = async (workspaceId?: string | null) => {
     setNameDialog(null);
     setNameDialogError(null);
@@ -1814,8 +1771,8 @@ export default function AppShell() {
             className="layout-sash layout-sash-gateway-panel"
             title="拖拽调整底部面板高度，双击还原"
             aria-label="调整底部面板高度"
-            onPointerDown={startGatewayPanelResize}
-            onDoubleClick={resetGatewayPanelHeight}
+            onPointerDown={startBottomPanelResize}
+            onDoubleClick={resetBottomPanelHeight}
           />
           {bottomPanelState.tab === "terminal" ? (
             <TerminalPanel

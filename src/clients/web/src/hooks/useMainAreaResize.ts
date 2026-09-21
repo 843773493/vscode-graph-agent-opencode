@@ -19,6 +19,7 @@ import type {
   WebUiMainAreaRatios,
   WebUiSettingsUpdate,
 } from "../types/backend";
+import { installPointerDrag } from "../utils/pointerDrag";
 
 type ExtensionDebugAreaRatios = Pick<
   WebUiMainAreaRatios,
@@ -39,25 +40,6 @@ const RESIZE_AREAS: Record<LayoutResizeTarget, readonly [MainAreaKey, string, Ma
   "workspace-editor-left": ["chat", ".sessions-part-card", "workspace_preview", ".workspace-editor-shell"],
   "auxiliary-left": ["workspace_preview", ".workspace-preview-panel", "auxiliary", ".auxiliary-panel"],
 };
-
-function installPointerDrag(
-  className: string,
-  onMove: (event: PointerEvent) => void,
-  onFinish: () => void,
-): () => void {
-  const finish = () => {
-    window.removeEventListener("pointermove", onMove);
-    window.removeEventListener("pointerup", finish);
-    window.removeEventListener("pointercancel", finish);
-    document.body.classList.remove(className);
-    onFinish();
-  };
-  document.body.classList.add(className);
-  window.addEventListener("pointermove", onMove);
-  window.addEventListener("pointerup", finish);
-  window.addEventListener("pointercancel", finish);
-  return finish;
-}
 
 export function useMainAreaResize({
   mainAreaRatios,
