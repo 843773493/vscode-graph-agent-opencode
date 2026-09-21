@@ -20,6 +20,9 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugLaunchProfileDTO,
 )
+from app.services.infrastructure.node_debug.runtime_config import (
+    parse_launch_profile_configs,
+)
 from app.services.infrastructure.node_debug.session_store import (
     NodeDebugSessionStore,
 )
@@ -71,28 +74,17 @@ def build_workspace_fork_config(
     raw_profiles = debug_config.get("launch_profiles")
     if not isinstance(raw_profiles, Mapping):
         raise TypeError("runtime.debug.launch_profiles 必须是 mapping")
+    parsed_profiles = parse_launch_profile_configs(raw_profiles, fill_defaults=True)
     profiles: dict[str, NodeDebugLaunchProfileDTO] = {}
-    for name, raw in raw_profiles.items():
-        if not isinstance(name, str) or not isinstance(raw, Mapping):
-            raise TypeError("runtime.debug.launch_profiles 结构非法")
-        adapter = raw.get("adapter")
-        runtime = raw.get("runtime")
-        args = raw.get("args", [])
-        if (
-            not isinstance(adapter, str)
-            or not isinstance(runtime, str)
-            or not isinstance(args, list)
-            or not all(isinstance(item, str) for item in args)
-        ):
-            raise TypeError(f"runtime.debug.launch_profiles.{name} 结构非法")
+    for name, profile in parsed_profiles.items():
         profiles[name] = NodeDebugLaunchProfileDTO(
             name=name,
-            adapter=adapter,
-            runtime=runtime,
-            supported=adapter == "node_inspector" and runtime == "node",
-            program=str(raw.get("program", "")),
-            working_directory=str(raw.get("working_directory", "")),
-            args=args,
+            adapter=profile.adapter,
+            runtime=profile.runtime,
+            supported=(profile.adapter == "node_inspector" and profile.runtime == "node"),
+            program=profile.program,
+            working_directory=profile.working_directory,
+            args=list(profile.args),
         )
     return NodeDebugWorkspaceForkConfig(
         workspace_root=workspace_root.resolve(),

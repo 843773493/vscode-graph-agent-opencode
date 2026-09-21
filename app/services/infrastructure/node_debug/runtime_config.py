@@ -45,13 +45,7 @@ class NodeDebugRuntimeConfig:
         raw_profiles = value.get("launch_profiles")
         if not isinstance(raw_profiles, Mapping):
             raise TypeError("runtime.debug.launch_profiles 配置无效")
-        profiles: dict[str, NodeDebugLaunchProfileConfig] = {}
-        for name, raw_profile in raw_profiles.items():
-            if not isinstance(name, str) or not name:
-                raise TypeError("runtime.debug.launch_profiles 名称无效")
-            if not isinstance(raw_profile, Mapping):
-                raise TypeError(f"runtime.debug.launch_profiles.{name} 配置无效")
-            profiles[name] = _profile_config(name, raw_profile)
+        profiles = parse_launch_profile_configs(raw_profiles)
         return cls(
             enabled=enabled,
             default_adapter=default_adapter,
@@ -88,15 +82,42 @@ def _node_config(value: object) -> NodeDebugNodeRuntimeConfig:
     )
 
 
+def parse_launch_profile_configs(
+    value: object,
+    *,
+    fill_defaults: bool = False,
+) -> dict[str, NodeDebugLaunchProfileConfig]:
+    if not isinstance(value, Mapping):
+        raise TypeError("runtime.debug.launch_profiles 配置无效")
+    profiles: dict[str, NodeDebugLaunchProfileConfig] = {}
+    for name, raw_profile in value.items():
+        if not isinstance(name, str) or not name:
+            raise TypeError("runtime.debug.launch_profiles 名称无效")
+        if not isinstance(raw_profile, Mapping):
+            raise TypeError(f"runtime.debug.launch_profiles.{name} 配置无效")
+        profiles[name] = _profile_config(
+            name,
+            raw_profile,
+            fill_defaults=fill_defaults,
+        )
+    return profiles
+
+
 def _profile_config(
     name: str,
     value: Mapping[object, object],
+    *,
+    fill_defaults: bool,
 ) -> NodeDebugLaunchProfileConfig:
     adapter = value.get("adapter")
     runtime = value.get("runtime")
     program = value.get("program")
     working_directory = value.get("working_directory")
     args = value.get("args")
+    if fill_defaults:
+        program = "" if program is None else program
+        working_directory = "" if working_directory is None else working_directory
+        args = [] if args is None else args
     if (
         not isinstance(adapter, str)
         or not isinstance(runtime, str)
@@ -120,4 +141,5 @@ __all__ = [
     "NodeDebugLaunchProfileConfig",
     "NodeDebugNodeRuntimeConfig",
     "NodeDebugRuntimeConfig",
+    "parse_launch_profile_configs",
 ]
