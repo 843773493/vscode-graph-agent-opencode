@@ -10,11 +10,7 @@ import React, {
 import {
   DEFAULT_BACKEND_PORT,
   getSession as apiGetSession,
-  listAgents as apiListAgents,
 } from "./api";
-import {
-  activateGatewayWorkspace as apiActivateGatewayWorkspace,
-} from "./gatewayApi";
 import type { TurnHistoryInclude } from "./api/sessionTurnHistory";
 import type {
   AddManagedGatewayWorkspaceRequest,
@@ -60,6 +56,7 @@ import { useWorkspaceInformationClipboard } from "./hooks/useWorkspaceInformatio
 import { useGatewayWorkspaceHierarchy } from "./hooks/useGatewayWorkspaceHierarchy";
 import { useGatewayWorkspaceRuntimeLifecycle } from "./hooks/useGatewayWorkspaceRuntimeLifecycle";
 import { useGatewayWorkspaceMutations } from "./hooks/useGatewayWorkspaceMutations";
+import { useGatewayWorkspaceActivation } from "./hooks/useGatewayWorkspaceActivation";
 import { useUiSettingsController } from "./hooks/useUiSettingsController";
 import {
   readCachedUiSettings,
@@ -365,10 +362,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const latestStateRef = useRef(state);
   latestStateRef.current = state;
-  const workspaceActivationQueueRef = useRef(createLatestSerialTaskQueue());
   const workspaceSessionSelectionQueueRef = useRef(createLatestSerialTaskQueue());
   const workspaceSessionSelectionIntentRef = useRef(0);
-  const backgroundWorkspaceActivationSequenceRef = useRef(0);
   const currentSessionId = state.currentSession?.session_id ?? null;
   const defaultGatewayWorkspaceId =
     state.gatewayWorkspaces.find((workspace) => workspace.system_default)
@@ -740,101 +735,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return true;
   }, [refreshSessions]);
 
-  const activateGatewayWorkspaceInBackground = useCallback((workspaceId: string) => {
-    const requestSequence = ++backgroundWorkspaceActivationSequenceRef.current;
-    const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
-    invalidateWorkspaceRefreshes();
-    const operation = workspaceActivationQueueRef.current.enqueue(async () => {
-      await apiActivateGatewayWorkspace(resolvedApiPort, workspaceId);
-    });
-    void operation.then(() => {
-      if (requestSequence !== backgroundWorkspaceActivationSequenceRef.current) {
-        return;
-      }
-      void apiListAgents(resolvedApiPort, workspaceId)
-        .then((agents) => {
-          if (
-            requestSequence !== backgroundWorkspaceActivationSequenceRef.current
-            || latestStateRef.current.currentSessionWorkspaceId !== workspaceId
-          ) {
-            return;
-          }
-          setState((previous) => ({ ...previous, agents }));
-        })
-        .catch((error: unknown) => {
-          if (
-            requestSequence !== backgroundWorkspaceActivationSequenceRef.current
-            || latestStateRef.current.currentSessionWorkspaceId !== workspaceId
-          ) {
-            return;
-          }
-          const message = error instanceof Error ? error.message : String(error);
-          setState((previous) => ({
-            ...previous,
-            gatewayError: "后台加载工作区 Agent 失败: " + message,
-            status: "后台加载工作区 Agent 失败: " + message,
-          }));
-        });
-      void refreshGatewayWorkspaceStatuses(workspaceId);
-    }).catch((error: unknown) => {
-      if (
-        requestSequence !== backgroundWorkspaceActivationSequenceRef.current
-        || latestStateRef.current.currentSessionWorkspaceId !== workspaceId
-      ) {
-        return;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      setState((previous) => ({
-        ...previous,
-        gatewayError: message,
-        status: "后台切换工作区失败: " + message,
-      }));
-    });
-  }, [
+  const {
+    activateGatewayWorkspace,
+    activateGatewayWorkspaceInBackground,
+    refreshGatewayState,
+  } = useGatewayWorkspaceActivation({
+    apiPort: state.apiPort,
+    currentSessionId,
+    latestStateRef,
+    setState,
     invalidateWorkspaceRefreshes,
     refreshGatewayWorkspaceStatuses,
-    setState,
-    state.apiPort,
-  ]);
-
-  const activateGatewayWorkspace = useCallback(
-    (workspaceId: string, preferredSessionId?: string | null) => {
-      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
-      backgroundWorkspaceActivationSequenceRef.current += 1;
-      invalidateWorkspaceRefreshes();
-      resetWorkspaceScopedState();
-      return workspaceActivationQueueRef.current.enqueue(async () => {
-        try {
-          await apiActivateGatewayWorkspace(resolvedApiPort, workspaceId);
-          const applied = await finishWorkspaceRefresh(preferredSessionId, {
-            checkGatewayWorkspaceHealth: false,
-            reuseCurrentUiSettings: true,
-          });
-          if (applied) {
-            void refreshGatewayWorkspaceStatuses(workspaceId);
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          setState((prev) => ({
-            ...prev,
-            workspaceSwitching: false,
-            gatewayError: message,
-            error: message,
-            status: "工作区切换失败",
-            isBootstrapping: false,
-          }));
-          throw error;
-        }
-      });
-    },
-    [
-      finishWorkspaceRefresh,
-      invalidateWorkspaceRefreshes,
-      refreshGatewayWorkspaceStatuses,
-      resetWorkspaceScopedState,
-      state.apiPort,
-    ],
-  );
+    resetWorkspaceScopedState,
+    finishWorkspaceRefresh,
+  });
 
   const openWorkspaceSession = useCallback((workspaceId: string, sessionId: string) => {
     const intent = ++workspaceSessionSelectionIntentRef.current;
@@ -868,28 +782,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     selectWorkspaceSession,
     state.apiPort,
   ]);
-
-  const refreshGatewayState = useCallback(async () => {
-    setState((prev) => ({
-      ...prev,
-      gatewayError: null,
-      error: null,
-      isBootstrapping: prev.isBootstrapping || Boolean(prev.error),
-      status: "正在刷新 Gateway 状态",
-    }));
-    try {
-      await finishWorkspaceRefresh(currentSessionId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setState((prev) => ({
-        ...prev,
-        gatewayError: message,
-        error: message,
-        status: `刷新 Gateway 状态失败: ${message}`,
-      }));
-      throw error;
-    }
-  }, [currentSessionId, finishWorkspaceRefresh]);
 
   const {
     reconnectGatewayWorkspace,
