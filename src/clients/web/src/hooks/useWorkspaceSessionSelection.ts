@@ -50,9 +50,7 @@ export function useWorkspaceSessionSelection({
   const openWorkspaceSession = useCallback((workspaceId: string, sessionId: string) => {
     const intent = ++selectionIntentRef.current;
     return selectionQueueRef.current.enqueue(async () => {
-      if (intent !== selectionIntentRef.current) {
-        return;
-      }
+      // 被顶替的任务由 latest-only 队列在回调入口直接短路，无需在回调内重复判定意图。
       const latestState = latestStateRef.current;
       const cachedSession = latestState.sessionsByWorkspace
         .get(workspaceId)
