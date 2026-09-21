@@ -2,7 +2,6 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React, { type MutableRefObject } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as api from "../api";
-import { DEFAULT_BACKEND_PORT } from "../api";
 import type { Session } from "../types/backend";
 import type { AppState } from "../types/frontend";
 import { useWorkspaceSessionSelection } from "./useWorkspaceSessionSelection";
@@ -164,5 +163,26 @@ describe("useWorkspaceSessionSelection latest-only 队列", () => {
     expect(getSession).not.toHaveBeenCalled();
     expect(calls).toContainEqual({ kind: "selectWorkspaceSession", args: ["ws-1", "session-c", cached] });
     expect(calls).toContainEqual({ kind: "activateGatewayWorkspaceInBackground", args: ["ws-1"] });
+  });
+
+  test("同一同步执行块内连续打开两个会话时，被顶替的任务完全不产生副作用", async () => {
+    const getSession = spyOn(api, "getSession").mockImplementation(
+      async (_port, sessionId) => session(sessionId),
+    );
+    restoreSpies.push(() => getSession.mockRestore());
+
+    const { hook, calls } = await mountHook(appState());
+    // 两次调用位于同一同步执行块：第一次的任务此刻只完成入队，其回调尚未开始执行。
+    hook.openWorkspaceSession("ws-1", "session-a");
+    hook.openWorkspaceSession("ws-1", "session-b");
+    await flush();
+
+    // session-a 的任务在进入回调前就被顶替，必须零副作用；只有最后一次打开生效。
+    expect(getSession.mock.calls.map((call) => call[1])).toEqual(["session-b"]);
+    expect(calls).toEqual([
+      { kind: "selectWorkspaceSession", args: ["ws-1", "session-b", session("session-b")] },
+      { kind: "loadSessionViewState", args: ["ws-1", "session-b"] },
+      { kind: "activateGatewayWorkspaceInBackground", args: ["ws-1"] },
+    ]);
   });
 });
