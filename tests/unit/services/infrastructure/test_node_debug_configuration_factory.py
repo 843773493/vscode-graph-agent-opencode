@@ -8,7 +8,7 @@ import pytest
 from app.core.exceptions import ForbiddenError
 from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.node_debug import NodeDebugBreakpointRequest
-from app.services.infrastructure.node_debug.configuration_factory import (
+from app.services.infrastructure.node_debug.configuration.configuration_factory import (
     NodeDebugConfigurationFactory,
 )
 

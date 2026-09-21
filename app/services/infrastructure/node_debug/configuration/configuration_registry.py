@@ -13,17 +13,17 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationUpdateRequest,
     NodeDebugSessionManifestDTO,
 )
-from app.services.infrastructure.node_debug.breakpoints import (
+from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     persistable_breakpoint,
     runtime_breakpoint,
 )
-from app.services.infrastructure.node_debug.configuration_factory import (
+from app.services.infrastructure.node_debug.configuration.configuration_factory import (
     NodeDebugConfigurationFactory,
 )
-from app.services.infrastructure.node_debug.session_store import (
+from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from app.services.infrastructure.node_debug.thread_owner import (
+from app.services.infrastructure.node_debug.session.thread_owner import (
     NodeDebugOwner,
     normalize_node_debug_owner,
 )

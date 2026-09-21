@@ -25,11 +25,11 @@ from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.node_debug.fork import (
+from app.services.infrastructure.node_debug.session.fork import (
     NodeDebugTargetValidationError,
     build_workspace_fork_config,
 )
-from app.services.infrastructure.node_debug.thread_owner import MAIN_THREAD_ID
+from app.services.infrastructure.node_debug.session.thread_owner import MAIN_THREAD_ID
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,

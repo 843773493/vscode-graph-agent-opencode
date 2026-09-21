@@ -19,13 +19,15 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug.breakpoints import (
+from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     anchor_breakpoint,
     reconcile_breakpoint,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.service import NodeDebugService
-from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )

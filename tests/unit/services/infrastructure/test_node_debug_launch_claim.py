@@ -36,15 +36,15 @@ from app.schemas.internal_v2.node_debug import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug import process_lifecycle
-from app.services.infrastructure.node_debug.launch_claim import (
+from app.services.infrastructure.node_debug.process import process_lifecycle
+from app.services.infrastructure.node_debug.process.launch_claim import (
     claim_marked,
     claim_running,
     claim_with_spawn_identity,
     decide_claim_recovery,
     new_launch_claim,
 )
-from app.services.infrastructure.node_debug.process_identity import (
+from app.services.infrastructure.node_debug.process.process_identity import (
     IDENTITY_SOURCE_LINUX_PROC,
     IDENTITY_SOURCE_PSUTIL,
     NodeDebugProcessIdentity,
@@ -52,7 +52,9 @@ from app.services.infrastructure.node_debug.process_identity import (
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.service import NodeDebugService
-from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
@@ -568,11 +570,11 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
     # 把终止/强杀超时放大：stopping 窗口必须由测试显式释放进程才结束，
     # 不能因为真实超时到点而把替身 kill 掉、让窗口在断言中途自己合上。
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
         60.0,
     )
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.process_lifecycle._KILL_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process.process_lifecycle._KILL_TIMEOUT_SECONDS",
         60.0,
     )
     resolver, _parent_dir, _child_dir = session_tree
@@ -1071,11 +1073,11 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
     resolver, _parent_dir, _child_dir = session_tree
     service, store, workspace_root = _make_service(tmp_path, resolver)
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
         0.05,
     )
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.process_lifecycle._KILL_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process.process_lifecycle._KILL_TIMEOUT_SECONDS",
         0.05,
     )
     created = await service.create_configuration(
@@ -1177,11 +1179,11 @@ async def test_cross_source_identity_cannot_report_termination(
     resolver, _parent_dir, _child_dir = session_tree
     service, store, workspace_root = _make_service(tmp_path, resolver)
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
         0.05,
     )
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.process_lifecycle._KILL_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process.process_lifecycle._KILL_TIMEOUT_SECONDS",
         0.05,
     )
     created = await service.create_configuration(
@@ -1254,7 +1256,7 @@ async def test_reconcile_terminate_rechecks_identity_before_sigkilling(
     resolver, _parent_dir, _child_dir = session_tree
     service, _store, _workspace_root = _make_service(tmp_path, resolver)
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.process_lifecycle._RECONCILE_TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process.process_lifecycle._RECONCILE_TERMINATE_TIMEOUT_SECONDS",
         0.05,
     )
     recorded_marker = "boot:100"

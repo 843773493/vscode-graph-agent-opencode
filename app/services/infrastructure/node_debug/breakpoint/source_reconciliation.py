@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.core.path_utils import safe_join
 from app.schemas.internal_v2.node_debug import NodeDebugBreakpointDTO
-from app.services.infrastructure.node_debug.breakpoints import (
+from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     reconcile_breakpoint,
     source_digest,
 )
@@ -13,7 +13,9 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugCommandSender,
     NodeDebugRuntime,
 )
-from app.services.infrastructure.node_debug.session_state import NodeDebugSessionState
+from app.services.infrastructure.node_debug.session.session_state import (
+    NodeDebugSessionState,
+)
 
 
 class NodeDebugSourceReconciliation:

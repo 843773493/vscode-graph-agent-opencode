@@ -20,13 +20,13 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugLaunchProfileDTO,
 )
-from app.services.infrastructure.node_debug.runtime_config import (
+from app.services.infrastructure.node_debug.configuration.runtime_config import (
     parse_launch_profile_configs,
 )
-from app.services.infrastructure.node_debug.session_store import (
+from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from app.services.infrastructure.node_debug.thread_owner import (
+from app.services.infrastructure.node_debug.session.thread_owner import (
     MAIN_THREAD_ID,
     resolve_node_debug_owner,
 )

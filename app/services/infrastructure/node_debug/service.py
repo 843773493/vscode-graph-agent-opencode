@@ -30,43 +30,47 @@ from app.schemas.internal_v2.node_debug import (
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )
-from app.services.infrastructure.node_debug.breakpoint_expressions import (
+from app.services.infrastructure.node_debug.breakpoint.breakpoint_expressions import (
     parse_logpoint_error,
     parse_logpoint_output,
 )
-from app.services.infrastructure.node_debug.breakpoint_mutations import (
+from app.services.infrastructure.node_debug.breakpoint.breakpoint_mutations import (
     NodeDebugBreakpointMutations,
 )
-from app.services.infrastructure.node_debug.claim_runtime import NodeDebugClaimRuntime
-from app.services.infrastructure.node_debug.configuration_factory import (
+from app.services.infrastructure.node_debug.breakpoint.source_reconciliation import (
+    NodeDebugSourceReconciliation,
+)
+from app.services.infrastructure.node_debug.configuration.configuration_factory import (
     NodeDebugConfigurationFactory,
 )
-from app.services.infrastructure.node_debug.configuration_registry import (
+from app.services.infrastructure.node_debug.configuration.configuration_registry import (
     NodeDebugConfigurationRegistry,
 )
-from app.services.infrastructure.node_debug.inspector import (
+from app.services.infrastructure.node_debug.configuration.runtime_config import (
+    NodeDebugRuntimeConfig,
+)
+from app.services.infrastructure.node_debug.process.claim_runtime import (
+    NodeDebugClaimRuntime,
+)
+from app.services.infrastructure.node_debug.process.inspector import (
     NodeDebugInspector,
 )
-from app.services.infrastructure.node_debug.launch_orchestrator import (
+from app.services.infrastructure.node_debug.process.launch_orchestrator import (
     NodeDebugLaunchContext,
     NodeDebugLaunchOrchestrator,
     NodeDebugLaunchRequest,
 )
-from app.services.infrastructure.node_debug.process_lifecycle import (
+from app.services.infrastructure.node_debug.process.process_lifecycle import (
     NodeDebugProcessLifecycle,
 )
-from app.services.infrastructure.node_debug.runtime_config import (
-    NodeDebugRuntimeConfig,
-)
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
-from app.services.infrastructure.node_debug.session_admission import (
+from app.services.infrastructure.node_debug.session.session_admission import (
     NodeDebugSessionAdmission,
 )
-from app.services.infrastructure.node_debug.session_state import NodeDebugSessionState
-from app.services.infrastructure.node_debug.source_reconciliation import (
-    NodeDebugSourceReconciliation,
+from app.services.infrastructure.node_debug.session.session_state import (
+    NodeDebugSessionState,
 )
-from app.services.infrastructure.node_debug.thread_owner import (
+from app.services.infrastructure.node_debug.session.thread_owner import (
     NodeDebugOwner,
     normalize_node_debug_owner,
     resolve_node_debug_owner,
@@ -81,10 +85,10 @@ if TYPE_CHECKING:
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug.session_store import (
+from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from app.services.infrastructure.node_debug.snapshot import (
+from app.services.infrastructure.node_debug.session.snapshot import (
     MAX_NODE_DEBUG_ACTIONS,
     append_runtime_debug_action,
     build_node_debug_snapshot,

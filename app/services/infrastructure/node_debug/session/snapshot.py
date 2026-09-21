@@ -12,7 +12,7 @@ from app.schemas.internal_v2.node_debug import (
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 
 if TYPE_CHECKING:
-    from app.services.infrastructure.node_debug.configuration_registry import (
+    from app.services.infrastructure.node_debug.configuration.configuration_registry import (
         NodeDebugConfigurationRegistry,
     )
 

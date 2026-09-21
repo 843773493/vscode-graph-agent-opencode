@@ -10,10 +10,10 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointRequest,
     NodeDebugConfigurationDTO,
 )
-from app.services.infrastructure.node_debug.breakpoint_expressions import (
+from app.services.infrastructure.node_debug.breakpoint.breakpoint_expressions import (
     inspector_breakpoint_condition,
 )
-from app.services.infrastructure.node_debug.breakpoints import (
+from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     anchor_breakpoint,
     persistable_breakpoint,
     portable_breakpoint,

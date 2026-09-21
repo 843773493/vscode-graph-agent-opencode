@@ -11,10 +11,10 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugSetBreakpointParams,
     NodeDebugUpdateBreakpointParams,
 )
-from app.services.infrastructure.node_debug.breakpoint_expressions import (
+from app.services.infrastructure.node_debug.breakpoint.breakpoint_expressions import (
     inspector_breakpoint_condition,
 )
-from app.services.infrastructure.node_debug.configuration_factory import (
+from app.services.infrastructure.node_debug.configuration.configuration_factory import (
     NodeDebugConfigurationFactory,
 )
 from app.services.infrastructure.node_debug.runtime_state import (
@@ -23,8 +23,10 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugPendingActionAppender,
     NodeDebugRuntime,
 )
-from app.services.infrastructure.node_debug.session_state import NodeDebugSessionState
-from app.services.infrastructure.node_debug.thread_owner import NodeDebugOwner
+from app.services.infrastructure.node_debug.session.session_state import (
+    NodeDebugSessionState,
+)
+from app.services.infrastructure.node_debug.session.thread_owner import NodeDebugOwner
 
 
 class NodeDebugBreakpointMutations:

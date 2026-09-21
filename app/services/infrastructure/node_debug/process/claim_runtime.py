@@ -15,14 +15,16 @@ from app.services.infrastructure.events.channel_events import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug.launch_claim import (
+from app.services.infrastructure.node_debug.process.launch_claim import (
     ACTIVE_CLAIM_PHASES,
     claim_marked,
     claim_running,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
-from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
-from app.services.infrastructure.node_debug.thread_owner import NodeDebugOwner
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
+from app.services.infrastructure.node_debug.session.thread_owner import NodeDebugOwner
 from app.services.orchestration.thread_residency import (
     ResidencyBlocker,
     ThreadResidencyTracker,

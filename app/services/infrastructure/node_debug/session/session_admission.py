@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from app.core.exceptions import NotFoundError
-from app.services.infrastructure.node_debug.thread_owner import (
+from app.services.infrastructure.node_debug.session.thread_owner import (
     NodeDebugThreadOwner,
     SessionLifecycleReader,
     SessionNodePathResolver,

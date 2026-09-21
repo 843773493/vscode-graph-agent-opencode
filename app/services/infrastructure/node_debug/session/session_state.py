@@ -11,18 +11,22 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugSessionManifestDTO,
 )
-from app.services.infrastructure.node_debug.breakpoints import (
+from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     persistable_breakpoint,
     portable_breakpoint,
 )
-from app.services.infrastructure.node_debug.configuration_registry import (
+from app.services.infrastructure.node_debug.configuration.configuration_registry import (
     NodeDebugConfigurationRegistry,
     NodeDebugLaunchSelection,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
-from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
-from app.services.infrastructure.node_debug.snapshot import MAX_NODE_DEBUG_ACTIONS
-from app.services.infrastructure.node_debug.thread_owner import (
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
+from app.services.infrastructure.node_debug.session.snapshot import (
+    MAX_NODE_DEBUG_ACTIONS,
+)
+from app.services.infrastructure.node_debug.session.thread_owner import (
     NodeDebugOwner,
     normalize_node_debug_owner,
 )

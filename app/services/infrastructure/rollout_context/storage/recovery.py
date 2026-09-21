@@ -8,7 +8,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.services.infrastructure.node_debug.thread_owner import MAIN_THREAD_ID
+from app.services.infrastructure.node_debug.session.thread_owner import MAIN_THREAD_ID
 from app.services.infrastructure.rollout_context.fork.node_debug_materialization import (
     publish_target_snapshot,
     remove_target_snapshot,

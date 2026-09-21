@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.services.infrastructure.node_debug.thread_owner import (
+from app.services.infrastructure.node_debug.session.thread_owner import (
     NodeDebugThreadOwner,
     normalize_node_debug_owner,
 )

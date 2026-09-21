@@ -41,21 +41,23 @@ from app.services.infrastructure.events.event_channel_service import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug.claim_runtime import (
+from app.services.infrastructure.node_debug.process.claim_runtime import (
     NodeDebugProcessLeaseIdentity,
 )
-from app.services.infrastructure.node_debug.launch_claim import (
+from app.services.infrastructure.node_debug.process.launch_claim import (
     claim_running,
     claim_with_spawn_identity,
     new_launch_claim,
 )
-from app.services.infrastructure.node_debug.process_identity import (
+from app.services.infrastructure.node_debug.process.process_identity import (
     IDENTITY_SOURCE_PSUTIL,
     probe_process_identity,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.service import NodeDebugService
-from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
@@ -236,11 +238,11 @@ async def test_release_failure_publishes_release_failed_state_event(
 ) -> None:
     """owner 停止失败进入 reconcile_required 时发布 release_failed 事件。"""
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
         0.05,
     )
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.process_lifecycle._KILL_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process.process_lifecycle._KILL_TIMEOUT_SECONDS",
         0.05,
     )
     manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
@@ -499,11 +501,11 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
 ) -> None:
     """无法核实终态时占用保持 active；再次核实终结后才结清同一 lease。"""
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process.process_lifecycle._TERMINATE_TIMEOUT_SECONDS",
         0.05,
     )
     monkeypatch.setattr(
-        "app.services.infrastructure.node_debug.process_lifecycle._KILL_TIMEOUT_SECONDS",
+        "app.services.infrastructure.node_debug.process.process_lifecycle._KILL_TIMEOUT_SECONDS",
         0.05,
     )
     manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")

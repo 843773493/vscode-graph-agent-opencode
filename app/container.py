@@ -103,12 +103,16 @@ from app.services.infrastructure.llm_request_log_service import LLMRequestLogSer
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.infrastructure.node_debug.fork import build_workspace_fork_config
 from app.services.infrastructure.node_debug.service import NodeDebugService
-from app.services.infrastructure.node_debug.session_admission import (
+from app.services.infrastructure.node_debug.session.fork import (
+    build_workspace_fork_config,
+)
+from app.services.infrastructure.node_debug.session.session_admission import (
     NodeDebugSessionAdmission,
 )
-from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
 from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.resource_platform.bootstrap import (
     ResourcePlatform,

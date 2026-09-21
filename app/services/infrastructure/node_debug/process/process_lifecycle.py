@@ -6,12 +6,12 @@ import signal
 from collections.abc import Mapping
 from typing import Literal
 
-from app.services.infrastructure.node_debug.launch_claim import (
+from app.services.infrastructure.node_debug.process.launch_claim import (
     NodeDebugClaimRecoveryDecision,
     claim_marked,
     decide_claim_recovery,
 )
-from app.services.infrastructure.node_debug.process_identity import (
+from app.services.infrastructure.node_debug.process.process_identity import (
     probe_process_identity,
 )
 from app.services.infrastructure.node_debug.runtime_state import (
@@ -26,7 +26,7 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugSessionManifestWriter,
     NodeDebugStopSnapshotClearer,
 )
-from app.services.infrastructure.node_debug.thread_owner import NodeDebugOwner
+from app.services.infrastructure.node_debug.session.thread_owner import NodeDebugOwner
 
 _TERMINATE_TIMEOUT_SECONDS = 3.0
 _KILL_TIMEOUT_SECONDS = 3.0

@@ -38,10 +38,12 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
-from app.services.infrastructure.node_debug.session_admission import (
+from app.services.infrastructure.node_debug.session.session_admission import (
     NodeDebugSessionAdmission,
 )
-from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 _SESSION_ID = "ses_00000000400040008000000000000001"

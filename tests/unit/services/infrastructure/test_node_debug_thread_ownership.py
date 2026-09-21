@@ -29,11 +29,13 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
-from app.services.infrastructure.node_debug.session_admission import (
+from app.services.infrastructure.node_debug.session.session_admission import (
     NodeDebugSessionAdmission,
 )
-from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
-from app.services.infrastructure.node_debug.thread_owner import (
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
+from app.services.infrastructure.node_debug.session.thread_owner import (
     MAIN_THREAD_ID,
     normalize_node_debug_owner,
     resolve_node_debug_owner,

@@ -13,35 +13,37 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugLaunchClaimDTO,
 )
-from app.services.infrastructure.node_debug.breakpoint_mutations import (
+from app.services.infrastructure.node_debug.breakpoint.breakpoint_mutations import (
     NodeDebugBreakpointMutations,
 )
-from app.services.infrastructure.node_debug.configuration_factory import (
+from app.services.infrastructure.node_debug.configuration.configuration_factory import (
     NodeDebugConfigurationFactory,
 )
-from app.services.infrastructure.node_debug.configuration_registry import (
+from app.services.infrastructure.node_debug.configuration.configuration_registry import (
     NodeDebugLaunchSelection,
 )
-from app.services.infrastructure.node_debug.inspector import NodeDebugInspector
-from app.services.infrastructure.node_debug.launch_claim import (
+from app.services.infrastructure.node_debug.configuration.runtime_config import (
+    NodeDebugRuntimeConfig,
+)
+from app.services.infrastructure.node_debug.process.inspector import NodeDebugInspector
+from app.services.infrastructure.node_debug.process.launch_claim import (
     claim_with_spawn_identity,
     new_launch_claim,
 )
-from app.services.infrastructure.node_debug.process_identity import (
+from app.services.infrastructure.node_debug.process.process_identity import (
     probe_process_identity,
 )
-from app.services.infrastructure.node_debug.process_lifecycle import (
+from app.services.infrastructure.node_debug.process.process_lifecycle import (
     NodeDebugProcessLifecycle,
-)
-from app.services.infrastructure.node_debug.runtime_config import (
-    NodeDebugRuntimeConfig,
 )
 from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugActionAppender,
     NodeDebugRuntime,
 )
-from app.services.infrastructure.node_debug.session_state import NodeDebugSessionState
-from app.services.infrastructure.node_debug.thread_owner import NodeDebugOwner
+from app.services.infrastructure.node_debug.session.session_state import (
+    NodeDebugSessionState,
+)
+from app.services.infrastructure.node_debug.session.thread_owner import NodeDebugOwner
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,12 +15,14 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugLaunchProfileDTO,
     NodeDebugSessionManifestDTO,
 )
-from app.services.infrastructure.node_debug.fork import (
+from app.services.infrastructure.node_debug.session.fork import (
     NodeDebugSourceDriftError,
     capture_source_copy_snapshot,
     validate_target_prepublication,
 )
-from app.services.infrastructure.node_debug.session_store import NodeDebugSessionStore
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 _SESSION_ID = "ses_00000000400040008000000000000001"
