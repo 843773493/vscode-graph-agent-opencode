@@ -66,7 +66,9 @@ type WireStreamSnapshot = Omit<Partial<StreamSnapshot>,
   resumable: boolean;
 };
 
-export type MessageStreamSnapshotResponse = WireStreamSnapshot & {
+export type MessageStreamSnapshot = WireStreamSnapshot;
+
+export type MessageStreamSnapshotResponse = MessageStreamSnapshot & {
   session_id: string;
   turn_id: string;
   turn_stream_id: string;
@@ -77,38 +79,61 @@ export function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const SNAPSHOT_FIELDS = new Set([
+  "workspace_id",
+  "snapshot_seq",
+  "stream_status",
+  "agent_loop_status",
+  "current_model_call_id",
+  "current_attempt",
+  "blocks",
+  "tool_executions",
+  "failure",
+  "resumable",
+  "tool_calls",
+  "model_calls",
+  "activities",
+  "resource_refs",
+  "active_state",
+  "interrupt_state",
+  "recovery",
+]);
+
 export function validateMessageStreamSnapshot(value: unknown): MessageStreamSnapshotResponse {
   if (!isJsonObject(value)) throw new Error("消息流快照必须是对象");
-  const allowedFields = new Set([
-    "session_id",
-    "turn_id",
-    "turn_stream_id",
-    "workspace_id",
-    "snapshot_seq",
-    "stream_status",
-    "agent_loop_status",
-    "current_model_call_id",
-    "current_attempt",
-    "blocks",
-    "tool_executions",
-    "failure",
-    "resumable",
-    "tool_calls",
-    "model_calls",
-    "activities",
-    "resource_refs",
-    "active_state",
-    "interrupt_state",
-    "recovery",
-  ]);
   for (const field of Object.keys(value)) {
-    if (!allowedFields.has(field)) throw new Error(`消息流快照包含未知字段: ${field}`);
+    if (!SNAPSHOT_FIELDS.has(field) && !["session_id", "turn_id", "turn_stream_id"].includes(field)) {
+      throw new Error(`消息流快照包含未知字段: ${field}`);
+    }
   }
-  const requiredStrings = ["session_id", "turn_id", "turn_stream_id", "agent_loop_status"] as const;
+  const requiredStrings = ["session_id", "turn_id", "turn_stream_id"] as const;
   for (const field of requiredStrings) {
     if (typeof value[field] !== "string" || value[field].length === 0) {
       throw new Error(`消息流快照 ${field} 必须是非空字符串`);
     }
+  }
+  const payload = { ...value };
+  delete payload.session_id;
+  delete payload.turn_id;
+  delete payload.turn_stream_id;
+  validateSnapshotPayload(payload, true);
+  return value as unknown as MessageStreamSnapshotResponse;
+}
+
+export function validateMessageStreamSnapshotPayload(value: unknown): MessageStreamSnapshot {
+  if (!isJsonObject(value)) throw new Error("消息流快照必须是对象");
+  validateSnapshotPayload(value, false);
+  return value as unknown as MessageStreamSnapshot;
+}
+
+function validateSnapshotPayload(value: JsonObject, allowIdentityFields: boolean): void {
+  for (const field of Object.keys(value)) {
+    if (!SNAPSHOT_FIELDS.has(field) && !(allowIdentityFields && ["session_id", "turn_id", "turn_stream_id"].includes(field))) {
+      throw new Error(`消息流快照包含未知字段: ${field}`);
+    }
+  }
+  if (typeof value.agent_loop_status !== "string" || value.agent_loop_status.length === 0) {
+    throw new Error("消息流快照 agent_loop_status 必须是非空字符串");
   }
   if (!isStreamStatus(value.stream_status)) {
     throw new Error("消息流快照 stream_status 非法");
@@ -130,7 +155,6 @@ export function validateMessageStreamSnapshot(value: unknown): MessageStreamSnap
   if (value.workspace_id !== undefined && typeof value.workspace_id !== "string") {
     throw new Error("消息流快照 workspace_id 必须是字符串");
   }
-  return value as unknown as MessageStreamSnapshotResponse;
 }
 
 function isNonNegativeInteger(value: unknown): value is number {

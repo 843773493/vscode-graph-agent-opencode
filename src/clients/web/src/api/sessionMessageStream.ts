@@ -15,6 +15,7 @@ import type { APIResponse } from "../types/backend";
 import {
   isJsonObject,
   validateMessageStreamSnapshot,
+  validateMessageStreamSnapshotPayload,
   type MessageStreamSnapshotResponse,
 } from "./messageStreamSnapshot";
 
@@ -162,14 +163,13 @@ function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
       throw new Error(`消息流 ${field} 信封与 payload 身份不一致`);
     }
   }
-  return {
+  const envelope = {
     event_id: eventId,
     session_id: sessionId,
     turn_id: turnId,
     turn_stream_id: streamId,
     event_seq: eventSeq,
     emitted_at: stringValue(value.emitted_at) ?? undefined,
-    type,
     workspace_id: stringValue(value.workspace_id) ?? undefined,
     model_call_id: stringValue(value.model_call_id) ?? undefined,
     block_id: stringValue(value.block_id) ?? undefined,
@@ -177,8 +177,15 @@ function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
     tool_call_id: stringValue(value.tool_call_id) ?? undefined,
     tool_invocation_id: stringValue(value.tool_invocation_id) ?? undefined,
     tool_attempt_id: stringValue(value.tool_attempt_id) ?? undefined,
-    payload: value.payload,
   };
+  if (type === "stream.snapshot") {
+    const snapshot = validateMessageStreamSnapshotPayload(value.payload);
+    if (snapshot.snapshot_seq !== eventSeq) {
+      throw new Error("消息流 snapshot_seq 必须与事件 event_seq 一致");
+    }
+    return { ...envelope, type, payload: snapshot };
+  }
+  return { ...envelope, type, payload: value.payload };
 }
 
 function isMessageStreamEventType(value: string): value is MessageStreamEventType {

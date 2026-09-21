@@ -1,3 +1,7 @@
+import type {
+  MessageStreamSnapshot,
+  MessageStreamSnapshotResponse,
+} from "../api/messageStreamSnapshot";
 import type { TurnResponsePart } from "../types/backend";
 
 export type MessageStreamEventType =
@@ -25,14 +29,13 @@ export type MessageStreamEventType =
   | "stream.failed"
   | "stream.snapshot";
 
-export interface MessageStreamEvent {
+interface MessageStreamEventEnvelope {
   event_id: string;
   session_id: string;
   turn_id: string;
   turn_stream_id: string;
   event_seq: number;
   emitted_at?: string;
-  type: MessageStreamEventType;
   workspace_id?: string;
   model_call_id?: string;
   block_id?: string;
@@ -41,8 +44,19 @@ export interface MessageStreamEvent {
   tool_invocation_id?: string;
   tool_attempt_id?: string;
   job_id?: string;
+}
+
+export interface MessageStreamDataEvent extends MessageStreamEventEnvelope {
+  type: Exclude<MessageStreamEventType, "stream.snapshot">;
   payload: Record<string, unknown>;
 }
+
+export interface MessageStreamSnapshotEvent extends MessageStreamEventEnvelope {
+  type: "stream.snapshot";
+  payload: MessageStreamSnapshot;
+}
+
+export type MessageStreamEvent = MessageStreamDataEvent | MessageStreamSnapshotEvent;
 
 export interface MessageStreamLifecycle {
   started_seq?: number;
@@ -260,12 +274,8 @@ export function applyMessageStreamEvent(
     };
   }
   if (event.type === "stream.snapshot") {
-    const snapshot = isRecord(event.payload.snapshot)
-      ? event.payload.snapshot
-      : event.payload;
-    const snapshotSeq = numberValue(snapshot.snapshot_seq) ?? event.event_seq;
-    if (snapshotSeq < state.lastEventSeq) return state;
-    return drainPendingEvents(applySnapshot(state, event));
+    if (event.payload.snapshot_seq < state.lastEventSeq) return state;
+    return drainPendingEvents(applySnapshotState(state, event.payload, event));
   }
   if (event.event_seq <= state.lastEventSeq) return state;
   if (event.event_seq !== state.lastEventSeq + 1) {
@@ -547,42 +557,71 @@ export function applyMessageStreamEvent(
   return drainPendingEvents(state);
 }
 
-function applySnapshot(
+export function applyMessageStreamSnapshot(
   current: MessageStreamState,
-  event: MessageStreamEvent,
+  snapshot: MessageStreamSnapshotResponse,
 ): MessageStreamState {
-  const payload = event.payload;
-  const snapshot = isRecord(payload.snapshot) ? payload.snapshot : payload;
-  const next = createMessageStreamState(current.sessionId, current.turnId, event.turn_stream_id);
-  next.workspaceId = stringValue(snapshot.workspace_id) ?? event.workspace_id ?? current.workspaceId;
-  next.lastEventSeq = numberValue(snapshot.snapshot_seq) ?? event.event_seq;
-  next.streamStatus = streamStatusValue(snapshot.stream_status);
-  next.agentLoopStatus = stringValue(snapshot.agent_loop_status) ?? "running";
-  next.currentModelCallId = stringValue(snapshot.current_model_call_id);
-  next.currentAttempt = numberValue(snapshot.current_attempt) ?? 0;
-  next.blocks = sortBlocks(arrayValue(snapshot.blocks).flatMap(blockFromSnapshot));
-  next.toolCalls = toolCallsFromSnapshot(snapshot.tool_calls);
-  next.toolExecutions = sortToolExecutions(
-    arrayValue(snapshot.tool_executions).flatMap(toolFromSnapshot),
-  );
-  next.activeState = activeStateFromSnapshot(snapshot.active_state);
-  next.activities = sortActivities(arrayValue(snapshot.activities).flatMap(activityFromSnapshot));
-  next.modelCalls = modelCallsFromSnapshot(snapshot.model_calls);
-  next.resourceRefs = resourceRefsFromSnapshot(snapshot.resource_refs);
-  next.recovery = isRecord(snapshot.recovery) ? { ...snapshot.recovery } : null;
-  const interruptState = isRecord(snapshot.interrupt_state)
-    ? snapshot.interrupt_state
-    : null;
-  if (interruptState) {
-    next.interruptState = {
-      requestId: stringValue(interruptState.request_id),
-      status: stringValue(interruptState.status) ?? "unknown",
-      reason: stringValue(interruptState.reason) ?? undefined,
-      factConfirmed: booleanValue(interruptState.fact_confirmed) ?? undefined,
+  const state = cloneMessageStreamState(current);
+  if (state.sessionId !== snapshot.session_id || state.turnId !== snapshot.turn_id) {
+    return {
+      ...state,
+      connectionStatus: "gap",
+      protocolError: "消息流快照关联键与当前 Turn 不一致",
     };
   }
-  next.failure = failureFromUnknown(snapshot.failure);
-  next.resumable = booleanValue(snapshot.resumable) ?? false;
+  if (state.workspaceId && snapshot.workspace_id && state.workspaceId !== snapshot.workspace_id) {
+    return {
+      ...state,
+      connectionStatus: "gap",
+      protocolError: "消息流快照 workspace_id 与当前工作区不一致",
+    };
+  }
+  if (state.turnStreamId && state.turnStreamId !== snapshot.turn_stream_id) {
+    return {
+      ...state,
+      connectionStatus: "gap",
+      protocolError: "消息流快照 turn_stream_id 在同一 Turn 内发生变化",
+    };
+  }
+  if (snapshot.snapshot_seq < state.lastEventSeq) return state;
+  return drainPendingEvents(applySnapshotState(state, snapshot, snapshot));
+}
+
+type MessageStreamSnapshotIdentity = Pick<
+  MessageStreamSnapshotResponse,
+  "session_id" | "turn_id" | "turn_stream_id" | "workspace_id"
+>;
+
+function applySnapshotState(
+  current: MessageStreamState,
+  snapshot: MessageStreamSnapshot,
+  identity: MessageStreamSnapshotIdentity,
+): MessageStreamState {
+  const next = createMessageStreamState(current.sessionId, current.turnId, identity.turn_stream_id);
+  next.workspaceId = snapshot.workspace_id ?? identity.workspace_id ?? current.workspaceId;
+  next.lastEventSeq = snapshot.snapshot_seq;
+  next.streamStatus = snapshot.stream_status;
+  next.agentLoopStatus = snapshot.agent_loop_status;
+  next.currentModelCallId = snapshot.current_model_call_id ?? null;
+  next.currentAttempt = snapshot.current_attempt;
+  next.blocks = sortBlocks(snapshot.blocks.map(blockFromSnapshot));
+  next.toolCalls = toolCallsFromSnapshot(snapshot.tool_calls);
+  next.toolExecutions = sortToolExecutions(snapshot.tool_executions.map(toolFromSnapshot));
+  next.activeState = activeStateFromSnapshot(snapshot.active_state);
+  next.activities = sortActivities(snapshot.activities.map(activityFromSnapshot));
+  next.modelCalls = modelCallsFromSnapshot(snapshot.model_calls);
+  next.resourceRefs = resourceRefsFromSnapshot(snapshot.resource_refs);
+  next.recovery = snapshot.recovery ? { ...snapshot.recovery } : null;
+  next.interruptState = snapshot.interrupt_state
+    ? {
+      requestId: snapshot.interrupt_state.request_id,
+      status: snapshot.interrupt_state.status,
+      reason: snapshot.interrupt_state.reason,
+      factConfirmed: snapshot.interrupt_state.fact_confirmed,
+    }
+    : null;
+  next.failure = failureFromSnapshot(snapshot.failure);
+  next.resumable = snapshot.resumable;
   next.pendingEvents = current.pendingEvents.filter(
     (pending) => pending.event_seq > next.lastEventSeq,
   );
@@ -914,10 +953,11 @@ function cloneMessageStreamState(state: MessageStreamState): MessageStreamState 
       Object.entries(state.resourceRefs).map(([id, value]) => [id, { ...value }]),
     ),
     recovery: state.recovery ? { ...state.recovery } : null,
-    pendingEvents: state.pendingEvents.map((pending) => ({
-      ...pending,
-      payload: { ...pending.payload },
-    })),
+    pendingEvents: state.pendingEvents.map((pending): MessageStreamEvent =>
+      pending.type === "stream.snapshot"
+        ? { ...pending, payload: { ...pending.payload } }
+        : { ...pending, payload: { ...pending.payload } },
+    ),
   };
 }
 
@@ -1133,38 +1173,64 @@ function toolFromPayload(
   };
 }
 
-function blockFromSnapshot(value: unknown): MessageStreamBlock[] {
-  if (!isRecord(value) || !stringValue(value.block_id)) return [];
-  return [{
-    block_id: stringValue(value.block_id)!,
-    model_call_id: stringValue(value.model_call_id),
-    block_index: numberValue(value.block_index) ?? 0,
-    carrier_type: stringValue(value.carrier_type) ?? "text",
+type SnapshotBlock = MessageStreamSnapshot["blocks"][number];
+type SnapshotToolExecution = MessageStreamSnapshot["tool_executions"][number];
+type SnapshotActivity = MessageStreamSnapshot["activities"][number];
+type SnapshotActiveState = NonNullable<MessageStreamSnapshot["active_state"]>;
+
+function lifecycleFromSnapshot(value: MessageStreamLifecycle): MessageStreamLifecycle {
+  return {
+    started_seq: value.started_seq,
+    last_event_seq: value.last_event_seq,
+    completed_seq: value.completed_seq,
+    started_at: value.started_at,
+    updated_at: value.updated_at,
+    completed_at: value.completed_at,
+  };
+}
+
+function blockFromSnapshot(value: SnapshotBlock): MessageStreamBlock {
+  return {
+    block_id: value.block_id,
+    model_call_id: null,
+    block_index: value.block_index ?? 0,
+    carrier_type: value.carrier_type ?? "text",
     status: blockStatusValue(value.status),
-    text: typeof value.text === "string"
+    text: value.text
       ? boundedMessageStreamText(value.text, MESSAGE_STREAM_BLOCK_TEXT_MAX_CHARS)
       : "",
-    items: arrayValue(value.items).filter(isRecord),
-    redacted: booleanValue(value.redacted) ?? false,
-    projection: stringValue(value.projection) ?? "streaming",
-    completion_reason: stringValue(value.completion_reason) ?? undefined,
-    partial: booleanValue(value.partial) ?? false,
-    ...lifecycleFromValue(value),
-  }];
+    items: value.items.map((item) => ({ ...item })),
+    redacted: value.redacted ?? false,
+    projection: value.projection ?? "streaming",
+    completion_reason: value.completion_reason,
+    partial: value.partial ?? false,
+    ...lifecycleFromSnapshot(value),
+  };
 }
 
-function toolFromSnapshot(value: unknown): MessageStreamToolExecution[] {
-  if (!isRecord(value) || !stringValue(value.tool_execution_id)) return [];
-  return [toolFromPayload(value, toolExecutionStatus(value.status))];
+function toolFromSnapshot(value: SnapshotToolExecution): MessageStreamToolExecution {
+  return {
+    tool_execution_id: value.tool_execution_id,
+    tool_call_id: value.tool_call_id,
+    tool_invocation_id: value.tool_invocation_id,
+    tool_attempt_id: value.tool_attempt_id,
+    tool_name: value.tool_name,
+    status: value.status,
+    outcome: value.outcome,
+    completion_reason: value.completion_reason,
+    result: value.result
+      ? boundedMessageStreamText(value.result, MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS)
+      : value.result,
+    error: value.error
+      ? boundedMessageStreamText(value.error, MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS)
+      : value.error,
+    ...lifecycleFromSnapshot(value),
+  };
 }
 
-function toolCallsFromSnapshot(value: unknown): Record<string, Record<string, unknown>> {
+function toolCallsFromSnapshot(value: MessageStreamSnapshot["tool_calls"]): Record<string, Record<string, unknown>> {
   const calls: Record<string, Record<string, unknown>> = {};
-  for (const item of arrayValue(value)) {
-    if (!isRecord(item)) continue;
-    const toolCallId = stringValue(item.tool_call_id);
-    if (toolCallId) calls[toolCallId] = { ...item };
-  }
+  for (const item of value) calls[item.tool_call_id] = { ...item };
   return calls;
 }
 
@@ -1204,18 +1270,24 @@ function failureFromUnknown(value: unknown): MessageStreamState["failure"] {
   };
 }
 
+function failureFromSnapshot(
+  value: MessageStreamSnapshot["failure"] | undefined,
+): MessageStreamState["failure"] {
+  if (!value) return null;
+  return {
+    code: value.code,
+    message: value.message,
+    afterInterruptRequested: value.after_interrupt_requested ?? false,
+    resumable: value.resumable ?? false,
+  };
+}
+
 function isTerminalEvent(type: MessageStreamEventType): boolean {
   return type === "stream.completed" || type === "stream.interrupted" || type === "stream.failed";
 }
 
 function isTerminalStatus(status: MessageStreamState["streamStatus"]): boolean {
   return status === "completed" || status === "interrupted" || status === "failed";
-}
-
-function streamStatusValue(value: unknown): MessageStreamState["streamStatus"] {
-  return value === "interrupting" || value === "completed" || value === "interrupted" || value === "failed"
-    ? value
-    : "open";
 }
 
 function blockStatusValue(value: unknown): MessageStreamBlock["status"] {
@@ -1293,57 +1365,74 @@ function activeStateAfter(
   };
 }
 
-function activeStateFromSnapshot(value: unknown): MessageStreamActiveState | null {
-  if (!isRecord(value)) return null;
-  const kind = stringValue(value.kind);
-  const phase = stringValue(value.phase);
-  if (!kind || !phase) return null;
+function activeStateFromSnapshot(value: SnapshotActiveState | undefined): MessageStreamActiveState | null {
+  if (!value) return null;
   return {
-    kind,
-    phase,
-    entity_id: stringValue(value.entity_id) ?? "",
-    carrier_type: stringValue(value.carrier_type) ?? undefined,
-    block_id: stringValue(value.block_id) ?? undefined,
-    tool_call_id: stringValue(value.tool_call_id) ?? undefined,
-    tool_execution_id: stringValue(value.tool_execution_id) ?? undefined,
-    tool_invocation_id: stringValue(value.tool_invocation_id) ?? undefined,
-    tool_attempt_id: stringValue(value.tool_attempt_id) ?? undefined,
-    activity_id: stringValue(value.activity_id) ?? undefined,
-    activity_kind: stringValue(value.activity_kind) ?? undefined,
-    status: stringValue(value.status) ?? "unknown",
-    last_kind: stringValue(value.last_kind) ?? undefined,
-    last_phase: stringValue(value.last_phase) ?? undefined,
-    reason: stringValue(value.reason) ?? undefined,
-    detail_ref: stringValue(value.detail_ref) ?? undefined,
+    kind: value.kind,
+    phase: value.phase,
+    entity_id: value.entity_id,
+    carrier_type: value.carrier_type,
+    block_id: value.block_id,
+    tool_call_id: value.tool_call_id,
+    tool_execution_id: value.tool_execution_id,
+    tool_invocation_id: value.tool_invocation_id,
+    tool_attempt_id: value.tool_attempt_id,
+    activity_id: value.activity_id,
+    activity_kind: value.activity_kind,
+    status: value.status,
+    last_kind: value.last_kind,
+    last_phase: value.last_phase,
+    reason: value.reason,
+    detail_ref: value.detail_ref,
   };
 }
 
-function activityFromSnapshot(value: unknown): MessageStreamActivity[] {
-  if (!isRecord(value)) return [];
-  const activityId = stringValue(value.activity_id);
-  const kind = stringValue(value.kind);
-  if (!activityId || !kind) return [];
-  return [{
+function activityFromSnapshot(value: SnapshotActivity): MessageStreamActivity {
+  return {
+    activity_id: value.activity_id,
+    kind: value.kind,
+    parent_activity_id: value.parent_activity_id,
+    scope_ref: value.scope_ref ?? "turn",
+    status: value.status,
+    outcome: value.outcome,
+    summary: value.summary,
+    cancellable: value.cancellable ?? false,
+    resumable: value.resumable ?? false,
+    side_effect_policy: value.side_effect_policy ?? "unknown",
+    resource_refs: [...value.resource_refs],
+    detail: value.detail ? { ...value.detail } : undefined,
+    detail_ref: value.detail_ref,
+    detail_available: value.detail_available ?? false,
+    detail_error: value.detail_error,
+    ...lifecycleFromSnapshot(value),
+  };
+}
+
+function activityFromPayload(payload: Record<string, unknown>): MessageStreamActivity | null {
+  const activityId = stringValue(payload.activity_id);
+  const kind = stringValue(payload.kind);
+  if (!activityId || !kind) return null;
+  return {
     activity_id: activityId,
     kind,
-    parent_activity_id: stringValue(value.parent_activity_id) ?? undefined,
-    scope_ref: stringValue(value.scope_ref) ?? "turn",
-    status: activityStatusValue(value.status),
-    outcome: stringValue(value.outcome) ?? undefined,
-    summary: stringValue(value.summary) ?? undefined,
-    cancellable: booleanValue(value.cancellable) ?? false,
-    resumable: booleanValue(value.resumable) ?? false,
-    side_effect_policy: stringValue(value.side_effect_policy) ?? "unknown",
-    resource_refs: arrayValue(value.resource_refs).filter(
-      (item): item is string => typeof item === "string",
-    ),
-    detail: isRecord(value.detail) ? { ...value.detail } : undefined,
-    detail_ref: stringValue(value.detail_ref) ?? undefined,
-    detail_available: booleanValue(value.detail_available) ?? false,
-    detail_error: stringValue(value.detail_error) ?? undefined,
-    completion_reason: stringValue(value.completion_reason) ?? undefined,
-    ...lifecycleFromValue(value),
-  }];
+    parent_activity_id: stringValue(payload.parent_activity_id) ?? undefined,
+    scope_ref: stringValue(payload.scope_ref) ?? "turn",
+    status: activityStatusValue(payload.status),
+    outcome: stringValue(payload.outcome) ?? undefined,
+    summary: stringValue(payload.summary) ?? undefined,
+    cancellable: booleanValue(payload.cancellable) ?? false,
+    resumable: booleanValue(payload.resumable) ?? false,
+    side_effect_policy: stringValue(payload.side_effect_policy) ?? "unknown",
+    resource_refs: Array.isArray(payload.resource_refs)
+      ? payload.resource_refs.filter((item): item is string => typeof item === "string")
+      : [],
+    detail: isRecord(payload.detail) ? { ...payload.detail } : undefined,
+    detail_ref: stringValue(payload.detail_ref) ?? undefined,
+    detail_available: booleanValue(payload.detail_available) ?? false,
+    detail_error: stringValue(payload.detail_error) ?? undefined,
+    completion_reason: stringValue(payload.completion_reason) ?? undefined,
+    ...lifecycleFromValue(payload),
+  };
 }
 
 function upsertActivity(
@@ -1351,7 +1440,7 @@ function upsertActivity(
   payload: Record<string, unknown>,
   event: MessageStreamEvent,
 ): void {
-  const activity = activityFromSnapshot(payload)[0];
+  const activity = activityFromPayload(payload);
   if (!activity) return;
   const existing = state.activities.find((item) => item.activity_id === activity.activity_id);
   if (existing) {
@@ -1383,13 +1472,9 @@ function activityStatusValue(value: unknown): MessageStreamActivity["status"] {
     : "unknown";
 }
 
-function modelCallsFromSnapshot(value: unknown): Record<string, Record<string, unknown>> {
+function modelCallsFromSnapshot(value: MessageStreamSnapshot["model_calls"]): Record<string, Record<string, unknown>> {
   const calls: Record<string, Record<string, unknown>> = {};
-  for (const item of arrayValue(value)) {
-    if (!isRecord(item)) continue;
-    const id = stringValue(item.model_call_id);
-    if (id) calls[id] = { ...item };
-  }
+  for (const item of value) calls[item.model_call_id] = { ...item };
   return calls;
 }
 
@@ -1413,13 +1498,9 @@ function upsertModelCall(
   );
 }
 
-function resourceRefsFromSnapshot(value: unknown): Record<string, Record<string, unknown>> {
+function resourceRefsFromSnapshot(value: MessageStreamSnapshot["resource_refs"]): Record<string, Record<string, unknown>> {
   const refs: Record<string, Record<string, unknown>> = {};
-  for (const item of arrayValue(value)) {
-    if (!isRecord(item)) continue;
-    const id = stringValue(item.resource_id);
-    if (id) refs[id] = { ...item };
-  }
+  for (const item of value) refs[item.resource_id] = { ...item };
   return refs;
 }
 
@@ -1442,10 +1523,6 @@ function drainPendingEvents(state: MessageStreamState): MessageStreamState {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function arrayValue(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
 }
 
 function stringValue(value: unknown): string | null {

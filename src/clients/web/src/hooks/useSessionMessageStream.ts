@@ -7,6 +7,7 @@ import {
 } from "../api/sessionMessageStream";
 import {
   applyMessageStreamEvent,
+  applyMessageStreamSnapshot,
   createMessageStreamState,
   writeMessageStreamCache,
   type MessageStreamEvent,
@@ -152,20 +153,23 @@ export function useSessionMessageStream({
       if (typeof snapshotTurnStreamId === "string" && snapshotTurnStreamId) {
         turnStreamId = snapshotTurnStreamId;
       }
-      const event: MessageStreamEvent = {
-        event_id: `snapshot:${targetTurnId}:${snapshot.snapshot_seq}`,
-        session_id: snapshot.session_id,
-        turn_id: snapshot.turn_id,
-        turn_stream_id: snapshotTurnStreamId,
-        event_seq: snapshot.snapshot_seq,
-        type: "stream.snapshot",
-        workspace_id: snapshot.workspace_id ?? undefined,
-        payload: snapshot as unknown as Record<string, unknown>,
-      };
+      updateState((current) => applyMessageStreamSnapshot(current, snapshot));
+      lastEventSeq = Math.max(lastEventSeq, snapshot.snapshot_seq);
       terminalSeen = snapshot.stream_status === "completed"
         || snapshot.stream_status === "interrupted"
         || snapshot.stream_status === "failed";
-      applyEvent(event);
+      if (terminalSeen) {
+        terminalStatus = snapshot.stream_status;
+        terminalFailure = snapshot.failure
+          ? {
+            code: snapshot.failure.code,
+            message: snapshot.failure.message,
+            afterInterruptRequested: snapshot.failure.after_interrupt_requested ?? false,
+            resumable: snapshot.failure.resumable ?? false,
+          }
+          : null;
+        notifyTerminal();
+      }
     };
 
     const connect = async () => {
@@ -273,10 +277,7 @@ function terminalStatusFromEvent(event: MessageStreamEvent): TerminalStreamStatu
     return event.type.slice("stream.".length) as TerminalStreamStatus;
   }
   if (event.type !== "stream.snapshot") return null;
-  const snapshot = isRecord(event.payload.snapshot)
-    ? event.payload.snapshot
-    : event.payload;
-  const streamStatus = snapshot.stream_status;
+  const streamStatus = event.payload.stream_status;
   return streamStatus === "completed"
     || streamStatus === "interrupted"
     || streamStatus === "failed"
@@ -285,22 +286,25 @@ function terminalStatusFromEvent(event: MessageStreamEvent): TerminalStreamStatu
 }
 
 function failureFromEvent(event: MessageStreamEvent): MessageStreamState["failure"] {
-  const payload = event.type === "stream.snapshot" && isRecord(event.payload.snapshot)
-    ? event.payload.snapshot
-    : event.payload;
-  const failure = isRecord(payload.failure) ? payload.failure : payload;
-  const message = stringValue(failure.message);
+  if (event.type === "stream.snapshot") {
+    const failure = event.payload.failure;
+    return failure
+      ? {
+        code: failure.code,
+        message: failure.message,
+        afterInterruptRequested: failure.after_interrupt_requested ?? false,
+        resumable: failure.resumable ?? false,
+      }
+      : null;
+  }
+  const message = stringValue(event.payload.message);
   if (!message) return null;
   return {
-    code: stringValue(failure.code) ?? "message_stream_failure",
+    code: stringValue(event.payload.code) ?? "message_stream_failure",
     message,
-    afterInterruptRequested: failure.after_interrupt_requested === true,
-    resumable: failure.resumable === true,
+    afterInterruptRequested: event.payload.after_interrupt_requested === true,
+    resumable: event.payload.resumable === true,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function stringValue(value: unknown): string | null {

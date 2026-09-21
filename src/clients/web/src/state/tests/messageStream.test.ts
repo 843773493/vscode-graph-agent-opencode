@@ -6,21 +6,36 @@ import {
   type MessageStreamEvent,
   writeMessageStreamCache,
 } from "../messageStream";
+import { validateMessageStreamSnapshotPayload } from "../../api/messageStreamSnapshot";
 
 function event(
   seq: number,
   type: MessageStreamEvent["type"],
   payload: Record<string, unknown>,
 ): MessageStreamEvent {
-  return {
+  const envelope = {
     event_id: `evt_${seq}`,
     session_id: "ses_1",
     turn_id: "turn_1",
     turn_stream_id: "strm_1",
     event_seq: seq,
-    type,
-    payload,
   };
+  if (type === "stream.snapshot") {
+    return {
+      ...envelope,
+      type,
+      payload: validateMessageStreamSnapshotPayload({
+        blocks: [],
+        tool_executions: [],
+        tool_calls: [],
+        model_calls: [],
+        activities: [],
+        resource_refs: [],
+        ...payload,
+      }),
+    };
+  }
+  return { ...envelope, type, payload };
 }
 
 describe("message stream reducer", () => {

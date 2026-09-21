@@ -1,13 +1,19 @@
 import { describe, expect, it } from "bun:test";
-import { applyMessageStreamEvent, createMessageStreamState, messageStreamToResponseParts } from "./messageStream";
+import {
+  applyMessageStreamEvent,
+  createMessageStreamState,
+  messageStreamToResponseParts,
+  type MessageStreamDataEvent,
+  type MessageStreamEvent,
+} from "./messageStream";
 import { responsePartsToTimelineItems } from "./responseParts";
 import { formatToolCardContent, toolCollapsedText } from "./toolDisplay";
 
 function streamEvent(
   eventSeq: number,
-  type: Parameters<typeof applyMessageStreamEvent>[1]["type"],
+  type: Exclude<MessageStreamEvent["type"], "stream.snapshot">,
   payload: Record<string, unknown>,
-): Parameters<typeof applyMessageStreamEvent>[1] {
+): MessageStreamDataEvent {
   return {
     event_id: `evt_${eventSeq}`,
     session_id: "ses_1",
