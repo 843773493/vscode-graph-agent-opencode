@@ -304,6 +304,59 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
     expect(state().agents).toEqual([formalAgent]);
     expect(state().status).toBe("正式激活完成");
   });
+
+  test("被取代的等待任务不发起激活请求：后台激活尚未开始就被正式激活顶替", async () => {
+    const calls: Array<[number, string]> = [];
+    spyOnGatewayApi("activateGatewayWorkspace").mockImplementation(
+      async (port, workspaceId) => {
+        calls.push([port, workspaceId]);
+        return workspaceId;
+      },
+    );
+    const { hook, calls: hookCalls, setLatest } = await mountHook();
+    setLatest(appState({ currentSessionWorkspaceId: "ws-background" }));
+
+    // 两次入队之间不冲刷微任务，后台激活的任务体保持未开始执行。
+    hook.activateGatewayWorkspaceInBackground("ws-background");
+    const formalActivation = hook.activateGatewayWorkspace("ws-formal");
+    await act(async () => {
+      await formalActivation;
+    });
+    await flush();
+
+    // latest-only 语义：被顶替的后台激活必须整条链路跳过，连激活请求都不发。
+    expect(calls).toEqual([[API_PORT, "ws-formal"]]);
+    // 后台激活被跳过且序列号已作废，收尾分支不得刷新 Gateway 状态。
+    expect(hookCalls.refreshStatuses).toEqual(["ws-formal"]);
+  });
+
+  test("正式激活被随后入队的后台激活取代时不发起请求且 promise 正常 resolve", async () => {
+    // 本用例锁定的是既有缺陷行为 A：正式激活入队后被后台激活抢先取代时被静默跳过，
+    // 调用方却拿到成功结果，且 resetWorkspaceScopedState() 已把 workspaceSwitching
+    // 置真而无人复位。修复 A 时必须同步更新此用例，不要把它当成期望的正确行为。
+    const calls: Array<[number, string]> = [];
+    spyOnGatewayApi("activateGatewayWorkspace").mockImplementation(
+      async (port, workspaceId) => {
+        calls.push([port, workspaceId]);
+        return workspaceId;
+      },
+    );
+    const { hook, calls: hookCalls } = await mountHook();
+
+    const formalActivation = hook.activateGatewayWorkspace("ws-formal");
+    hook.activateGatewayWorkspaceInBackground("ws-background");
+    // 被跳过的正式激活不抛错，调用方误以为切换成功。
+    await act(async () => {
+      await formalActivation;
+    });
+    await flush();
+
+    expect(calls).toEqual([[API_PORT, "ws-background"]]);
+    // 正式激活的收尾刷新不会发生，只剩后台激活的收尾分支在跑。
+    // 注：本用例只锁定到「正式激活被跳过且 promise 正常 resolve」这一可观测事实；
+    // workspaceSwitching 卡真由真实 resetWorkspaceScopedState 造成，测试桩无法复原。
+    expect(hookCalls.refreshStatuses).toEqual(["ws-background"]);
+  });
 });
 
 describe("useGatewayWorkspaceActivation 后台激活", () => {
@@ -442,7 +495,10 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
   test("激活失败时写入五个失败字段并原样抛出", async () => {
     const failure = new Error("激活接口不可用");
     spyOnGatewayApi("activateGatewayWorkspace").mockRejectedValue(failure);
-    const { hook, state } = await mountHook();
+    // 初始必须为真，失败分支把两者压回 false 才是可观测的收敛，否则断言恒真。
+    const { hook, state } = await mountHook({
+      initialState: appState({ isBootstrapping: true, workspaceSwitching: true }),
+    });
 
     await expect(hook.activateGatewayWorkspace("ws-formal")).rejects.toBe(failure);
 
@@ -457,7 +513,9 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
   test("工作区刷新失败时同样走失败路径并原样抛出", async () => {
     const failure = new Error("刷新失败");
     spyOnGatewayApi("activateGatewayWorkspace").mockResolvedValue("ws-formal");
+    // 同上：初始为真才能验证失败分支确实复位了这两个标志。
     const { hook, state, calls } = await mountHook({
+      initialState: appState({ isBootstrapping: true, workspaceSwitching: true }),
       finishWorkspaceRefresh: async () => {
         throw failure;
       },
