@@ -130,27 +130,6 @@ const DEFAULT_AUXILIARY_TAB_ORDER: WorkspaceAuxiliaryTab[] = [
   "resources",
 ];
 
-type StoredAuxiliaryTab = WorkspaceAuxiliaryTab | "automation";
-
-function resolveAuxiliaryTab(value: StoredAuxiliaryTab | null | undefined): WorkspaceAuxiliaryTab {
-  return value === "changes" || value === "resources" || value === "debug"
-    ? value
-    : "files";
-}
-
-function resolveAuxiliaryTabOrder(
-  value: ReadonlyArray<StoredAuxiliaryTab> | null | undefined,
-): WorkspaceAuxiliaryTab[] {
-  const result: WorkspaceAuxiliaryTab[] = [];
-  for (const tab of value ?? []) {
-    if (tab !== "automation" && !result.includes(tab)) result.push(tab);
-  }
-  for (const tab of DEFAULT_AUXILIARY_TAB_ORDER) {
-    if (!result.includes(tab)) result.push(tab);
-  }
-  return result;
-}
-
 export default function AppShell() {
   const confirm = useWarmConfirm();
   const extensionWindowRequest = useMemo(resolveExtensionWindowRequest, []);
@@ -222,10 +201,12 @@ export default function AppShell() {
   const [auxiliaryTab, setAuxiliaryTab] = useState<WorkspaceAuxiliaryTab>(
     () => extensionWindowRequested
       ? extensionWindowRequest?.kind === "debug" ? "debug" : "resources"
-      : resolveAuxiliaryTab(state.uiSettings.layout.auxiliary_tab),
+      : state.uiSettings.layout.auxiliary_tab ?? "files",
   );
   const [auxiliaryTabOrder, setAuxiliaryTabOrder] = useState<WorkspaceAuxiliaryTab[]>(
-    () => resolveAuxiliaryTabOrder(state.uiSettings.layout.auxiliary_tab_order),
+    () => state.uiSettings.layout.auxiliary_tab_order
+      ? [...state.uiSettings.layout.auxiliary_tab_order]
+      : [...DEFAULT_AUXILIARY_TAB_ORDER],
   );
   const [auxiliaryVisible, setAuxiliaryVisible] = useState(
     () => extensionWindowRequested
@@ -291,16 +272,13 @@ export default function AppShell() {
         height: clampGatewayPanelHeight(
           state.uiSettings.layout.panel_height ?? DEFAULT_GATEWAY_PANEL_HEIGHT,
         ),
-        tab: state.uiSettings.layout.auxiliary_tab === "automation"
-          ? "automation"
-          : "output",
+        tab: "output",
         terminalId: null,
       });
   }, [
     bottomPanelWorkspaceId,
     extensionWindowRequested,
     state.uiSettings.layout.bottom_panel_by_workspace,
-    state.uiSettings.layout.auxiliary_tab,
     state.uiSettings.layout.panel_height,
     state.uiSettings.layout.panel_visible,
     workspaceBottomPanelStates,
@@ -355,10 +333,10 @@ export default function AppShell() {
       setChatVisible(layout.chat_visible);
     }
     if (layout.auxiliary_tab) {
-      setAuxiliaryTab(resolveAuxiliaryTab(layout.auxiliary_tab));
+      setAuxiliaryTab(layout.auxiliary_tab);
     }
     if (layout.auxiliary_tab_order) {
-      setAuxiliaryTabOrder(resolveAuxiliaryTabOrder(layout.auxiliary_tab_order));
+      setAuxiliaryTabOrder([...layout.auxiliary_tab_order]);
     }
     setMainAreaRatios(resolveMainAreaRatios(layout.main_area_ratios));
   }, [extensionWindowRequest?.kind, extensionWindowRequested, state.uiSettings]);
@@ -466,30 +444,6 @@ export default function AppShell() {
     },
     [bottomPanelState, bottomPanelWorkspaceId, persistUiSettings],
   );
-  useEffect(() => {
-    if (
-      extensionWindowRequested ||
-      state.uiSettings.layout.auxiliary_tab !== "automation" ||
-      !bottomPanelWorkspaceId
-    ) {
-      return;
-    }
-    if (bottomPanelState.tab !== "automation") {
-      updateBottomPanelState({
-        visible: true,
-        tab: "automation",
-        terminalId: null,
-      });
-    }
-    persistLayoutSettings({ auxiliary_tab: "files" });
-  }, [
-    bottomPanelState.tab,
-    bottomPanelWorkspaceId,
-    extensionWindowRequested,
-    persistLayoutSettings,
-    state.uiSettings.layout.auxiliary_tab,
-    updateBottomPanelState,
-  ]);
   const agentSessionsVisible = state.agentSessionsPanelOpen;
   const handleWorkbenchViewChange = useCallback(
     (view: WorkbenchView) => {
@@ -883,10 +837,9 @@ export default function AppShell() {
   };
 
   const handleAuxiliaryTabReorder = (tabOrder: WorkspaceAuxiliaryTab[]) => {
-    const nextOrder = resolveAuxiliaryTabOrder(tabOrder);
-    setAuxiliaryTabOrder(nextOrder);
+    setAuxiliaryTabOrder(tabOrder);
     if (!extensionWindowRequested) {
-      persistLayoutSettings({ auxiliary_tab_order: nextOrder });
+      persistLayoutSettings({ auxiliary_tab_order: tabOrder });
     }
   };
   const openAuxiliaryTab = (tab: WorkspaceAuxiliaryTab) => {

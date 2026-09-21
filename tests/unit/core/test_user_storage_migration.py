@@ -9,6 +9,7 @@ def test_migrate_user_storage_layout_moves_global_data(tmp_path, monkeypatch):
     legacy_config = home / ".boxteam"
     legacy_config.mkdir(parents=True)
     (legacy_config / "boxteam.jsonc").write_text("{}", encoding="utf-8")
+    (legacy_config / "web_ui_settings.json").write_text("{}", encoding="utf-8")
     legacy_gateway = default_workspace / ".boxteam" / "gateway"
     legacy_gateway.mkdir(parents=True)
     (legacy_gateway / "workspaces.json").write_text("{}", encoding="utf-8")
@@ -21,4 +22,7 @@ def test_migrate_user_storage_layout_moves_global_data(tmp_path, monkeypatch):
 
     assert (boxteam_home / "config" / "boxteam.jsonc").is_file()
     assert (boxteam_home / "state" / "gateway" / "workspaces.json").is_file()
+    assert (
+        boxteam_home / "state" / "migrated" / "legacy_web_ui_settings.json"
+    ).is_file()
     assert not legacy_gateway.exists()

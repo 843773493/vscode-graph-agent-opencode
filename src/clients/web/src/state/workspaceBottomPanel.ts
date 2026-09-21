@@ -24,7 +24,7 @@ export function resolveWorkspaceBottomPanelState(
   return {
     visible: persisted?.visible ?? fallback.visible,
     height: persisted?.height ?? fallback.height,
-    tab: persisted?.tab === "gateway" ? "output" : persisted?.tab ?? fallback.tab,
+    tab: persisted?.tab ?? fallback.tab,
     terminalId: persisted?.terminal_id ?? fallback.terminalId,
   };
 }

@@ -39,14 +39,7 @@ def migrate_user_storage_layout(
         default_workspace_root / ".boxteam" / "gateway",
         boxteam_home / "state" / "gateway",
     )
-    legacy_ui_settings = legacy_config_root / "web_ui_settings.json"
-    if legacy_ui_settings.exists():
-        current_ui_settings = (
-            boxteam_home / "state" / "gateway" / "web_ui_settings.json"
-        )
-        ui_target = (
-            boxteam_home / "state" / "migrated" / "legacy_web_ui_settings.json"
-            if current_ui_settings.exists()
-            else current_ui_settings
-        )
-        _move_legacy_path(legacy_ui_settings, ui_target)
+    _move_legacy_path(
+        legacy_config_root / "web_ui_settings.json",
+        boxteam_home / "state" / "migrated" / "legacy_web_ui_settings.json",
+    )

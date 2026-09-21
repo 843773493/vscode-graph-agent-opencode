@@ -565,6 +565,8 @@ class DevelopmentRuntimeRestartDTO(BaseModel):
 
 
 class WebUIMainAreaRatiosDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     agent_sessions: float = Field(default=1, gt=0)
     chat: float = Field(default=1, gt=0)
     workspace_preview: float = Field(default=1, gt=0)
@@ -572,26 +574,30 @@ class WebUIMainAreaRatiosDTO(BaseModel):
 
 
 class WebUIWorkspaceBottomPanelSettingsDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     visible: bool | None = None
     height: int | None = Field(default=None, ge=190, le=520)
-    tab: Literal["terminal", "output", "gateway", "ports", "automation"] | None = None
+    tab: Literal["terminal", "output", "ports", "automation"] | None = None
     terminal_id: str | None = None
 
 
 class WebUILayoutSettingsDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     workbench_view: Literal["sessions", "gateway"] | None = None
     agent_sessions_panel_open: bool | None = None
     chat_visible: bool | None = None
     auxiliary_visible: bool | None = None
     panel_visible: bool | None = None
-    auxiliary_tab: Literal["changes", "files", "automation", "resources", "debug"] | None = None
-    auxiliary_tab_order: list[Literal["changes", "files", "automation", "resources", "debug"]] | None = Field(
-        default=None,
-        min_length=4,
-        max_length=5,
-    )
+    auxiliary_tab: Literal["changes", "files", "resources", "debug"] | None = None
+    auxiliary_tab_order: (
+        list[Literal["changes", "files", "resources", "debug"]] | None
+    ) = Field(default=None, min_length=4, max_length=4)
     main_area_ratios: WebUIMainAreaRatiosDTO | None = None
-    bottom_panel_by_workspace: dict[str, WebUIWorkspaceBottomPanelSettingsDTO] | None = Field(
+    bottom_panel_by_workspace: (
+        dict[str, WebUIWorkspaceBottomPanelSettingsDTO] | None
+    ) = Field(
         default=None,
         max_length=200,
     )
@@ -616,14 +622,34 @@ class WebUILayoutSettingsDTO(BaseModel):
         ]
         | None
     ) = None
-    delivery_policy_default: Literal[
-        "after_turn",
-        "after_tool_result",
-        "after_interrupt",
-    ] | None = None
+    delivery_policy_default: (
+        Literal[
+            "after_turn",
+            "after_tool_result",
+            "after_interrupt",
+        ]
+        | None
+    ) = None
+
+    @field_validator("auxiliary_tab_order")
+    @classmethod
+    def validate_auxiliary_tab_order(
+        cls,
+        value: list[str] | None,
+    ) -> list[str] | None:
+        if value is not None and set(value) != {
+            "changes",
+            "files",
+            "resources",
+            "debug",
+        }:
+            raise ValueError("右侧侧边栏标签顺序必须包含且仅包含全部四个标签")
+        return value
 
 
 class WebUISessionSidebarSettingsDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     filter_mode: Literal["all", "current", "attachments", "agent", "named"] = "all"
     sort_mode: Literal["created", "updated"] = "updated"
     grouping_mode: Literal["workspace", "time"] = "workspace"
@@ -647,6 +673,8 @@ class WebUISessionSidebarSettingsDTO(BaseModel):
 
 
 class WebUIWorkspaceFileTreeSettingsDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     expanded_paths_by_workspace: dict[str, list[str]] = Field(
         default_factory=dict,
         max_length=200,
@@ -669,6 +697,8 @@ class WebUIWorkspaceFileTreeSettingsDTO(BaseModel):
 
 
 class WebUIGatewayConsoleSettingsDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     view: Literal["routing", "managed"] = "routing"
 
 
@@ -739,17 +769,23 @@ class GatewayUIAssetListDTO(BaseModel):
 
 
 class WebUIThemeSettingsDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     theme_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
     background: GatewayThemeBackgroundDTO | None = None
     resolved_theme: ResolvedGatewayThemeDTO | None = None
 
 
 class WebUIThemeSettingsUpdateDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     theme_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
     background: GatewayThemeBackgroundDTO | None = None
 
 
 class WebUISettingsDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     layout: WebUILayoutSettingsDTO = Field(default_factory=WebUILayoutSettingsDTO)
     session_sidebar: WebUISessionSidebarSettingsDTO = Field(
         default_factory=WebUISessionSidebarSettingsDTO
@@ -765,6 +801,8 @@ class WebUISettingsDTO(BaseModel):
 
 
 class WebUISettingsUpdateDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     layout: WebUILayoutSettingsDTO | None = None
     session_sidebar: WebUISessionSidebarSettingsDTO | None = None
     workspace_file_tree: WebUIWorkspaceFileTreeSettingsDTO | None = None

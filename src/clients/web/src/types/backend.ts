@@ -545,8 +545,6 @@ export type WebUiMainAreaRatios = DeepRequired<WebUIMainAreaRatiosDTO>;
 
 export type WebUiBottomPanelTab = "terminal" | "output" | "ports" | "automation";
 
-/** 仅用于读取旧版本设置；新的底部面板状态统一使用 output。 */
-export type LegacyWebUiBottomPanelTab = WebUiBottomPanelTab | "gateway";
 
 export type WebUiWorkspaceBottomPanelSettings =
   WebUIWorkspaceBottomPanelSettingsDTO;
@@ -557,7 +555,7 @@ export type WebUiLayoutSettings = Omit<
 > & {
   main_area_ratios?: WebUiMainAreaRatios | null;
   auxiliary_tab_order?: Array<
-    "changes" | "files" | "automation" | "resources" | "debug"
+    "changes" | "files" | "resources" | "debug"
   > | null;
   workspace_preview_file_paths?: string[] | null;
 };

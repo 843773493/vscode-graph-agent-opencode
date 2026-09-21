@@ -7,13 +7,10 @@ import tempfile
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from app.gateway.control.user_access import USER_ID_PATTERN
 from app.gateway.config import ConfiguredTheme, GatewayConfig
+from app.gateway.control.user_access import USER_ID_PATTERN
+from app.gateway.ui_settings import merge_web_ui_settings_values
 from app.schemas.gateway import WebUISettingsDTO, WebUISettingsUpdateDTO
-from app.gateway.ui_settings import (
-    merge_web_ui_settings_values,
-    read_web_ui_settings,
-)
 
 _PROFILE_VERSION = 1
 _PROFILE_GITIGNORE = """# 由 BoxTeam 管理；个人主题和 profile.jsonc 可以提交到用户自己的 Git 仓库。
@@ -87,7 +84,6 @@ class UserProfileStore:
                 )
                 + "\n",
             )
-        self._migrate_legacy_ui_settings(user_id=user_id)
         return profile_root
 
     def theme_config(
@@ -193,21 +189,6 @@ class UserProfileStore:
             ),
         }
         self._write_profile(user_id=user_id, payload=profile)
-
-    def _migrate_legacy_ui_settings(self, *, user_id: str) -> None:
-        legacy_path = self._gateway_root / "web_ui_settings.json"
-        if not legacy_path.is_file():
-            return
-        backup_path = legacy_path.with_name("web_ui_settings.json.migrated.bak")
-        if backup_path.exists():
-            return
-        profile = self.read_profile(user_id=user_id)
-        if any(profile.get(key) for key in ("theme", "layout", "preferences")):
-            shutil.copy2(legacy_path, backup_path)
-            return
-        settings = read_web_ui_settings(self._gateway_root)
-        self.write_ui_settings(user_id=user_id, settings=settings)
-        shutil.copy2(legacy_path, backup_path)
 
     def _write_profile(self, *, user_id: str, payload: dict[str, object]) -> None:
         profile_path = self.user_path(user_id) / "profile.jsonc"
