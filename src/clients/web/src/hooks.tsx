@@ -76,7 +76,10 @@ import {
   createLatestSerialTaskQueue,
 } from "./hooks/serialTaskQueue";
 import { refreshWorkspaceSessionList } from "./hooks/sessionEventStream/sessionRefresh";
-import type { SessionTurnTimeline } from "./state/session/turnTimeline";
+import {
+  useSessionTurnTimeline,
+  useTerminalTurnLoader,
+} from "./hooks/useSessionTurnTimeline";
 
 export { getConversationsForSession } from "./state/conversations";
 export { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
@@ -375,11 +378,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     currentSessionId && currentSessionGatewayWorkspaceId
       ? sessionScopeKey(currentSessionGatewayWorkspaceId, currentSessionId)
       : currentSessionId;
-  const getCurrentTurnTimeline = useCallback((): SessionTurnTimeline | null => {
-    const latest = latestStateRef.current;
-    if (!currentSessionCacheKey) return null;
-    return latest.turnTimelinesBySession.get(currentSessionCacheKey) ?? null;
-  }, [currentSessionCacheKey]);
+  const {
+    getCurrentTurnTimeline,
+    currentTurnTimeline,
+  } = useSessionTurnTimeline({
+    latestStateRef,
+    currentSessionCacheKey,
+  });
   const currentActiveJobId = currentSessionCacheKey
     ? state.activeJobIdsBySession.get(currentSessionCacheKey) ?? null
     : null;
@@ -443,17 +448,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     reloadNonce: state.sessionHistoryReloadNonce,
     setState,
   });
-  const loadTerminalTurn = useCallback(
-    (turnId: string) => loadTurnDetails(
-      [turnId],
-      `terminal-turn:${turnId}`,
-      true,
-    ),
-    [loadTurnDetails],
-  );
-  const currentTurnTimeline = currentSessionCacheKey
-    ? state.turnTimelinesBySession.get(currentSessionCacheKey) ?? null
-    : null;
+  const loadTerminalTurn = useTerminalTurnLoader({ loadTurnDetails });
   const { abortCurrentStream } = useSessionEventStream({
     apiPort: state.apiPort,
     sessionId: currentSessionId,
