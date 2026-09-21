@@ -70,6 +70,12 @@ import {
 } from "./state/workspaceBottomPanel";
 import { resolveAgentSessionsPreferences } from "./state/uiSettings/preferences";
 import { buildGatewayAttachUrl } from "./utils/attachUrls";
+import {
+  EXTENSION_WINDOW_NAME,
+  buildExtensionWindowUrl,
+  resolveExtensionWindowRequest,
+  type ExtensionResourceKind,
+} from "./utils/extensionResourceWindow";
 import type { GatewayExtensionResourceEntry } from "./hooks/useGatewayExtensionResources";
 import type {
   AttachmentRef,
@@ -84,38 +90,6 @@ type SessionNameDialogState = {
   workspaceId: string;
   initialTitle: string;
 };
-
-type ExtensionResourceKind = "browser" | "terminal" | "debug";
-
-type ExtensionWindowRequest = {
-  kind: ExtensionResourceKind | null;
-  resourceId: string | null;
-  workspaceId: string | null;
-  sessionId: string | null;
-};
-
-const EXTENSION_WINDOW_NAME = "boxteam-extension";
-function resolveExtensionWindowRequest(): ExtensionWindowRequest | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const params = new URLSearchParams(window.location.search);
-  if (window.location.pathname !== "/extension" && params.get("window") !== "extension") {
-    return null;
-  }
-  const browserId = params.get("browserId");
-  const resourceId = params.get("resourceId") ?? browserId;
-  const resourceType = params.get("resourceType") ?? (browserId ? "browser" : null);
-  const kind = resourceType === "browser" || resourceType === "terminal" || resourceType === "debug"
-    ? resourceType
-    : null;
-  return {
-    kind,
-    resourceId,
-    workspaceId: params.get("workspaceId"),
-    sessionId: params.get("sessionId"),
-  };
-}
 
 const DEFAULT_AUXILIARY_TAB_ORDER: WorkspaceAuxiliaryTab[] = [
   "files",
@@ -872,19 +846,13 @@ export default function AppShell() {
       return;
     }
 
-    const url = new URL(window.location.href);
-    url.pathname = "/extension";
-    url.search = "";
-    url.hash = "";
-    url.searchParams.set("resourceType", kind);
-    if (resourceId) url.searchParams.set("resourceId", resourceId);
-    if (activeSessionWorkspaceId) {
-      url.searchParams.set("workspaceId", activeSessionWorkspaceId);
-    }
-    if (activeSession?.session_id) {
-      url.searchParams.set("sessionId", activeSession.session_id);
-    }
-    const extensionWindow = window.open(url.toString(), EXTENSION_WINDOW_NAME);
+    const url = buildExtensionWindowUrl({
+      kind,
+      resourceId,
+      workspaceId: activeSessionWorkspaceId,
+      sessionId: activeSession?.session_id,
+    });
+    const extensionWindow = window.open(url, EXTENSION_WINDOW_NAME);
     if (!extensionWindow) {
       setExtensionWindowFallback(true);
       openAuxiliaryTab(kind === "debug" ? "debug" : "resources");
