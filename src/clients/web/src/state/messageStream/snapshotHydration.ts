@@ -13,6 +13,7 @@ import {
   cloneMessageStreamState,
   createMessageStreamState,
   defaultedTextValue,
+  failureFromValue,
   isTerminalStatus,
   optionalTextValue,
   sortActivities,
@@ -238,13 +239,10 @@ function activityFromSnapshot(value: SnapshotActivity): MessageStreamActivity {
 function failureFromSnapshot(
   value: MessageStreamSnapshot["failure"] | undefined,
 ): MessageStreamState["failure"] {
-  if (!value) return null;
-  return {
-    code: value.code,
-    message: value.message,
-    afterInterruptRequested: value.after_interrupt_requested ?? false,
-    resumable: value.resumable ?? false,
-  };
+  // 必须与事件路径逐字段一致：message 是失败详情主体，缺失或空串都判定为无效
+  // failure（事件路径返回 null）。proto3 string 无 presence，空 message 会在
+  // SSE stream.snapshot 控制帧里被省略，透传会伪造 message=undefined 的假 failure。
+  return failureFromValue(value);
 }
 
 function modelCallsFromSnapshot(value: MessageStreamSnapshot["model_calls"]): Record<string, Record<string, unknown>> {

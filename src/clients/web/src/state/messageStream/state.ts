@@ -269,6 +269,23 @@ export function defaultedTextValue(value: unknown, fallback: string): string {
   return stringValue(value) ?? fallback;
 }
 
+/**
+ * failure 归一：快照与事件两条链路共用的唯一实现。message 是失败详情的主体，
+ * 非字符串或空串一律判定为无效 failure 并收敛为 null；后端 HTTP 快照 DTO 也以
+ * `message` 非空为契约，不伪造文案。
+ */
+export function failureFromValue(value: unknown): MessageStreamState["failure"] {
+  if (!isRecord(value)) return null;
+  const message = stringValue(value.message);
+  if (!message) return null;
+  return {
+    code: stringValue(value.code) ?? "message_stream_failure",
+    message,
+    afterInterruptRequested: booleanValue(value.after_interrupt_requested) ?? false,
+    resumable: booleanValue(value.resumable) ?? false,
+  };
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

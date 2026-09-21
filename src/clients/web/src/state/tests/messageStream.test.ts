@@ -1584,4 +1584,55 @@ describe("message stream reducer", () => {
       expect(snapshotState.interruptState?.reason).toBeUndefined();
     }
   });
+
+  test("snapshot 与事件路径对空 failure.message 的结果逐字段一致", () => {
+    // 后端 proto3 StreamFailure.message 无 presence：空串会在 SSE stream.snapshot
+    // 控制帧里被省略（已用真实后端 codec 复现）。快照侧若无条件构造会伪造
+    // message=undefined 的假 failure，而事件路径判定无效并返回 null。
+    // 注意 HTML 快照 DTO 以 message 非空为契约会直接 500，但 SSE 控制帧不经 DTO，
+    // 因此缺键形态是真实可达的。
+    const wireFailureInputs: Array<Record<string, unknown>> = [
+      { code: "execution_error" }, // SSE 控制帧：空 message 被 proto3 省略
+      { code: "execution_error", message: "" },
+      { code: "execution_error", message: null },
+      { code: "execution_error", message: 42 },
+      { code: "execution_error", message: { a: 1 } },
+      { code: "execution_error", message: "真实失败原因" },
+    ];
+    for (const failure of wireFailureInputs) {
+      const value = failure.message;
+      const snapshotState = applyMessageStreamEvent(
+        createMessageStreamState("ses_1", "turn_1"),
+        event(1, "stream.snapshot", {
+          snapshot_seq: 1,
+          stream_status: "failed",
+          agent_loop_status: "failed",
+          current_attempt: 1,
+          failure,
+          resumable: false,
+        }),
+      );
+      const eventState = applyMessageStreamEvent(
+        createMessageStreamState("ses_1", "turn_1"),
+        event(1, "stream.failed", {
+          code: "execution_error",
+          message: value,
+          after_interrupt_requested: false,
+          resumable: false,
+        }),
+      );
+      expect(snapshotState.failure).toEqual(eventState.failure);
+      if (typeof value === "string" && value.length > 0) {
+        expect(snapshotState.failure).toEqual({
+          code: "execution_error",
+          message: value,
+          afterInterruptRequested: false,
+          resumable: false,
+        });
+      } else {
+        // message 不是非空字符串时，两条路径都不得伪造 failure
+        expect(snapshotState.failure).toBeNull();
+      }
+    }
+  });
 });

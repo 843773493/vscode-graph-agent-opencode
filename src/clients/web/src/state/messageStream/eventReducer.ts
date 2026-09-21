@@ -19,6 +19,7 @@ import {
   cloneMessageStreamState,
   createMessageStreamState,
   defaultedTextValue,
+  failureFromValue,
   findBlock,
   isRecord,
   isTerminalStatus,
@@ -457,19 +458,8 @@ function finishRunningBlocks(
 }
 
 function failureFromPayload(payload: Record<string, unknown>): MessageStreamState["failure"] {
-  return failureFromUnknown(payload);
-}
-
-function failureFromUnknown(value: unknown): MessageStreamState["failure"] {
-  if (!isRecord(value)) return null;
-  const message = stringValue(value.message);
-  if (!message) return null;
-  return {
-    code: stringValue(value.code) ?? "message_stream_failure",
-    message,
-    afterInterruptRequested: booleanValue(value.after_interrupt_requested) ?? false,
-    resumable: booleanValue(value.resumable) ?? false,
-  };
+  // 与快照 hydration 共用唯一归一实现，从结构上杜绝两条链路再次分叉。
+  return failureFromValue(payload);
 }
 
 function isTerminalEvent(type: MessageStreamEventType): boolean {
