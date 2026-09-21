@@ -238,6 +238,14 @@ export function activityStatusValue(value: unknown): MessageStreamActivity["stat
     : "unknown";
 }
 
+export function toolExecutionStatusValue(value: unknown): MessageStreamToolExecution["status"] {
+  if (value === "failed") return "failed";
+  if (value === "completed" || value === "succeeded" || value === "outcome_unknown") {
+    return "completed";
+  }
+  return "running";
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

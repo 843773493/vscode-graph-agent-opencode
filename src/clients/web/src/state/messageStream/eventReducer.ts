@@ -24,12 +24,12 @@ import {
   lifecycleFromValue,
   numberValue,
   stringValue,
+  toolExecutionStatusValue,
 } from "./state";
 import {
   finishRunningToolCalls,
   markRunningToolsUnknown,
   mergeToolCall,
-  toolExecutionStatus,
   upsertTool,
   withToolIdentityFallback,
 } from "./toolReducer";
@@ -272,14 +272,14 @@ export function applyMessageStreamEvent(
       upsertTool(
         state,
         withToolIdentityFallback(payload, event),
-        toolExecutionStatus(payload.status),
+        toolExecutionStatusValue(payload.status),
         event,
       );
       state.activeState = activeStateAfter(
         state.activeState,
         "tool_execution",
         "completed",
-        toolExecutionStatus(payload.status),
+        toolExecutionStatusValue(payload.status),
         stringValue(payload.tool_execution_id) ?? event.tool_execution_id ?? undefined,
         withToolIdentityFallback(payload, event),
       );

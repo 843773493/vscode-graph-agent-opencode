@@ -123,14 +123,6 @@ function hasArguments(value: unknown): boolean {
   return isRecord(value) ? Object.keys(value).length > 0 : value != null;
 }
 
-export function toolExecutionStatus(value: unknown): MessageStreamToolExecution["status"] {
-  if (value === "failed") return "failed";
-  if (value === "completed" || value === "succeeded" || value === "outcome_unknown") {
-    return "completed";
-  }
-  return "running";
-}
-
 function toolExecutionOutcome(value: unknown): MessageStreamToolExecution["outcome"] {
   return value === "success"
     || value === "provider_error"

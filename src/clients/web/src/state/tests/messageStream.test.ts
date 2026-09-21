@@ -1040,4 +1040,90 @@ describe("message stream reducer", () => {
       expect(state.activities[0]?.status).toBe(status);
     }
   });
+
+  test("snapshot 路径的非法 tool status 与事件路径收敛一致，不原样透传", () => {
+    const snapshotState = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", {
+        snapshot_seq: 1,
+        stream_status: "open",
+        agent_loop_status: "tool_running",
+        current_attempt: 1,
+        tool_executions: [{
+          tool_execution_id: "exec_1",
+          tool_call_id: "call_1",
+          tool_name: "shell",
+          status: "paused",
+        }],
+        resumable: true,
+      }),
+    );
+
+    let eventState = createMessageStreamState("ses_1", "turn_1");
+    eventState = applyMessageStreamEvent(eventState, event(1, "tool.started", {
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_name: "shell",
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(2, "tool.completed", {
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_name: "shell",
+      status: "paused",
+    }));
+
+    expect(snapshotState.toolExecutions).toHaveLength(1);
+    expect(snapshotState.toolExecutions[0]?.status).toBe(eventState.toolExecutions[0]?.status);
+    expect(snapshotState.toolExecutions[0]?.status).toBe("running");
+    expect(snapshotState.toolExecutions[0]?.status).not.toBe("paused");
+    expect(snapshotState.toolExecutions[0]?.status).not.toBe("completed");
+  });
+
+  test("snapshot 路径与事件路径对 tool status 的收敛结果逐字一致", () => {
+    const cases = [
+      { status: "running", expected: "running", terminal: false },
+      { status: "completed", expected: "completed", terminal: true },
+      { status: "failed", expected: "failed", terminal: true },
+      { status: "succeeded", expected: "completed", terminal: true },
+      { status: "outcome_unknown", expected: "completed", terminal: true },
+    ] as const;
+
+    for (const [index, item] of cases.entries()) {
+      const snapshotState = applyMessageStreamEvent(
+        createMessageStreamState("ses_1", "turn_1"),
+        event(1, "stream.snapshot", {
+          snapshot_seq: 1,
+          stream_status: "open",
+          agent_loop_status: "tool_running",
+          current_attempt: 1,
+          tool_executions: [{
+            tool_execution_id: "exec_1",
+            tool_call_id: "call_1",
+            tool_name: "shell",
+            status: item.status,
+          }],
+          resumable: true,
+        }),
+      );
+      let eventState = createMessageStreamState("ses_1", "turn_1");
+      eventState = applyMessageStreamEvent(eventState, event(1, "tool.started", {
+        tool_execution_id: "exec_1",
+        tool_call_id: "call_1",
+        tool_name: "shell",
+      }));
+      eventState = applyMessageStreamEvent(eventState, event(2, "tool.completed", {
+        tool_execution_id: "exec_1",
+        tool_call_id: "call_1",
+        tool_name: "shell",
+        status: item.status,
+      }));
+
+      expect(snapshotState.toolExecutions[0]?.status)
+        .toBe(eventState.toolExecutions[0]?.status);
+      expect(snapshotState.toolExecutions[0]?.status).toBe(item.expected);
+      if (item.terminal) {
+        expect(eventState.toolExecutions[0]?.completed_seq).toBe(2);
+      }
+    }
+  });
 });

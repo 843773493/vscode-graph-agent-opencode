@@ -16,6 +16,7 @@ import {
   sortActivities,
   sortBlocks,
   sortToolExecutions,
+  toolExecutionStatusValue,
 } from "./state";
 import type {
   MessageStreamActiveState,
@@ -151,7 +152,7 @@ function toolFromSnapshot(value: SnapshotToolExecution): MessageStreamToolExecut
     tool_invocation_id: value.tool_invocation_id,
     tool_attempt_id: value.tool_attempt_id,
     tool_name: value.tool_name,
-    status: value.status,
+    status: toolExecutionStatusValue(value.status),
     outcome: value.outcome,
     completion_reason: value.completion_reason,
     result: value.result
