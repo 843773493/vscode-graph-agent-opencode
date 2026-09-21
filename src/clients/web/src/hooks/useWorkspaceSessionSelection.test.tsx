@@ -165,6 +165,10 @@ describe("useWorkspaceSessionSelection latest-only 队列", () => {
     expect(calls).toContainEqual({ kind: "activateGatewayWorkspaceInBackground", args: ["ws-1"] });
   });
 
+  // 本用例守护的是「latest-only 队列在回调入口短路 + await 之后的意图守卫」共同提供的
+  // 「被顶替任务零副作用」语义，而不是回调入口那处 intent 判定：后者已因不可达被删除——
+  // createLatestSerialTaskQueue 在 sequence !== latestSequence 时直接短路（见 serialTaskQueue.ts），
+  // 回调体不执行，故该判定永远不命中，删掉与否本用例都通过。
   test("同一同步执行块内连续打开两个会话时，被顶替的任务完全不产生副作用", async () => {
     const getSession = spyOn(api, "getSession").mockImplementation(
       async (_port, sessionId) => session(sessionId),
