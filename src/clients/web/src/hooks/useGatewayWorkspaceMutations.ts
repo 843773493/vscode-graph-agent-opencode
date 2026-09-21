@@ -15,9 +15,7 @@ import type {
   WebUiSettingsUpdate,
 } from "../types/backend";
 import { applyGatewayWorkspaceListAfterRemoval } from "../state/gatewayWorkspaceState";
-import type { SetAppState } from "./contentViewLoaderTypes";
-
-type FinishWorkspaceRefresh = (preferredSessionId?: string | null) => Promise<boolean>;
+import type { FinishWorkspaceRefresh, SetAppState } from "./contentViewLoaderTypes";
 
 export function useGatewayWorkspaceMutations({
   apiPort,

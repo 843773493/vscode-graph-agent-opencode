@@ -11,11 +11,7 @@ import {
 import type {
   GatewayRuntimeRestartResult,
 } from "../types/backend";
-import type { SetAppState } from "./contentViewLoaderTypes";
-
-type FinishWorkspaceRefresh = (
-  preferredSessionId?: string | null,
-) => Promise<boolean>;
+import type { FinishWorkspaceRefresh, SetAppState } from "./contentViewLoaderTypes";
 
 type RefreshGatewayState = () => Promise<void>;
 

@@ -4,21 +4,8 @@ import {
   activateGatewayWorkspace as apiActivateGatewayWorkspace,
 } from "../gatewayApi";
 import type { AppState } from "../types/frontend";
-import type { SetAppState } from "./contentViewLoaderTypes";
+import type { FinishWorkspaceRefresh, SetAppState } from "./contentViewLoaderTypes";
 import { createLatestSerialTaskQueue } from "./serialTaskQueue";
-
-// 激活链路需要把 checkGatewayWorkspaceHealth 与 reuseCurrentUiSettings 透传给
-// AppProvider 的 refreshSessions 包装，因此这里必须保留完整签名。
-// TODO: useGatewayWorkspaceMutations.ts 与 useGatewayWorkspaceRuntimeLifecycle.ts
-// 各自收窄了一份同名类型；待独立提交把准确的 FinishWorkspaceRefresh 收敛到共享
-// 模块后再删除此处副本。
-type FinishWorkspaceRefresh = (
-  preferredSessionId?: string | null,
-  options?: {
-    checkGatewayWorkspaceHealth?: boolean;
-    reuseCurrentUiSettings?: boolean;
-  },
-) => Promise<boolean>;
 
 type RefreshGatewayWorkspaceStatuses = (
   expectedWorkspaceId?: string | null,
