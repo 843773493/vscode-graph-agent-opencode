@@ -5,7 +5,7 @@ import {
   messageStreamToResponseParts,
   type MessageStreamDataEvent,
   type MessageStreamEvent,
-} from "./messageStream";
+} from "./messageStream/index";
 import { responsePartsToTimelineItems } from "./responseParts";
 import { formatToolCardContent, toolCollapsedText } from "./toolDisplay";
 

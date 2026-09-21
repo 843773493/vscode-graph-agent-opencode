@@ -10,7 +10,7 @@ import {
   responsePartsToTimelineItems,
 } from "../../../state/responseParts";
 import type { ConversationView } from "../../../types/frontend";
-import type { MessageStreamActivity } from "../../../state/messageStream";
+import type { MessageStreamActivity } from "../../../state/messageStream/index";
 import MarkdownContent from "../MarkdownContent";
 import ResponseActionToolbar from "../ResponseActionToolbar";
 import ToolRow from "../ToolRow";

@@ -5,7 +5,7 @@ import {
   messageStreamToResponseParts,
   type MessageStreamEvent,
   writeMessageStreamCache,
-} from "../messageStream";
+} from "../messageStream/index";
 import { validateMessageStreamSnapshotPayload } from "../../api/messageStreamSnapshot";
 
 function event(

@@ -19,7 +19,7 @@ import {
 import {
   createMessageStreamState,
   type MessageStreamState,
-} from "../messageStream";
+} from "../messageStream/index";
 import type { AppState, ConversationView } from "../../types/frontend";
 import type { TraceEvent } from "../../types/backend";
 

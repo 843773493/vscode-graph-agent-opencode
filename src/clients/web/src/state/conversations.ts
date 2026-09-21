@@ -9,7 +9,7 @@ import type { AppState, ConversationView } from "../types/frontend";
 import {
   messageStreamToResponseParts,
   type MessageStreamState,
-} from "./messageStream";
+} from "./messageStream/index";
 import { isTurnDetail, type TurnRecord } from "./session/turnTimeline";
 import {
   dedupeTraceEvents,

@@ -19,7 +19,7 @@ import type {
   JobStatus,
 } from "./backend";
 import type { SessionTurnTimeline } from "../state/session/turnTimeline";
-import type { MessageStreamState } from "../state/messageStream";
+import type { MessageStreamState } from "../state/messageStream/index";
 
 export type ConversationContentView =
   | "default"

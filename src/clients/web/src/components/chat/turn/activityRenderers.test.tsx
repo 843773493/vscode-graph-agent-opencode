@@ -4,7 +4,7 @@ import {
   ActivityRendererRegistry,
   activityRendererRegistry,
 } from "./activityRenderers";
-import type { MessageStreamActivity } from "../../../state/messageStream";
+import type { MessageStreamActivity } from "../../../state/messageStream/index";
 
 function activity(
   kind: string,

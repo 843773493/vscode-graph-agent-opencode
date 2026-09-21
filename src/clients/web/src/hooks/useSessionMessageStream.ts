@@ -12,7 +12,7 @@ import {
   writeMessageStreamCache,
   type MessageStreamEvent,
   type MessageStreamState,
-} from "../state/messageStream";
+} from "../state/messageStream/index";
 import { cloneMaps } from "../state/appStateMaps";
 import { completePendingForJob } from "../state/conversations";
 import type { SetAppState } from "./sessionEventStream/sessionRefresh";

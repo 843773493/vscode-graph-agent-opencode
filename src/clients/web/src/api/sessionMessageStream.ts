@@ -10,7 +10,7 @@ import {
 import type {
   MessageStreamEvent,
   MessageStreamEventType,
-} from "../state/messageStream";
+} from "../state/messageStream/index";
 import type { APIResponse } from "../types/backend";
 import {
   isJsonObject,

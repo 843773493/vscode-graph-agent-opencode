@@ -1,5 +1,5 @@
 import React from "react";
-import type { MessageStreamActivity } from "../../../state/messageStream";
+import type { MessageStreamActivity } from "../../../state/messageStream/index";
 
 export type ActivityRenderer = (
   activity: MessageStreamActivity,
