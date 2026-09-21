@@ -158,10 +158,10 @@ export function applyMessageStreamEvent(
           blockPayload.model_call_id = event.model_call_id;
         }
         const block = upsertBlock(
-        state,
-        blockPayload,
-        "running",
-        event,
+          state,
+          blockPayload,
+          "running",
+          event,
         );
         if (block) {
           state.activeState = {
