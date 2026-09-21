@@ -119,18 +119,20 @@ export function useGatewayWorkspaceActivation({
       // 开始、是否失败、刷新是否生效）由任务体写进闭包变量，收尾统一判定，保证
       // 调用方拿到 resolve 时激活一定已生效，否则一律拿到明确失败。
       let started = false;
-      let applied = false;
+      // 本轮刷新真正落到 state 的活动工作区 id：null 表示刷新被作废，
+      // 非 null 但不同于 workspaceId 表示自动健康回退把活动工作区切到了别处。
+      let appliedWorkspaceId: string | null = null;
       let failure: unknown;
       let hasFailure = false;
       const operation = workspaceActivationQueueRef.current.enqueue(async () => {
         started = true;
         try {
           await apiActivateGatewayWorkspace(resolvedApiPort, workspaceId);
-          applied = await finishWorkspaceRefresh(preferredSessionId, {
+          appliedWorkspaceId = await finishWorkspaceRefresh(preferredSessionId, {
             checkGatewayWorkspaceHealth: false,
             reuseCurrentUiSettings: true,
           });
-          if (applied) {
+          if (appliedWorkspaceId === workspaceId) {
             void refreshGatewayWorkspaceStatuses(workspaceId);
           }
         } catch (error) {
@@ -156,10 +158,21 @@ export function useGatewayWorkspaceActivation({
             `工作区激活已被更新的激活请求取代，${workspaceId} 未生效`,
           ));
         }
-        if (!applied) {
+        if (appliedWorkspaceId === null) {
           return fail(
             `工作区激活未生效：${workspaceId} 的工作区刷新已被更新的请求作废`,
             new Error(`工作区激活未生效：${workspaceId} 的工作区刷新已被更新的请求作废`),
+          );
+        }
+        // 刷新本身生效了，但生效的活动工作区不是请求的那个：自动健康回退
+        // （请求的工作区 offline）把活动工作区改到了别处，激活请求的工作区
+        // 从未成为活动工作区，绝不能给调用方假成功。
+        if (appliedWorkspaceId !== workspaceId) {
+          return fail(
+            `工作区激活未生效：${workspaceId} 未成为活动工作区（当前活动工作区为 ${appliedWorkspaceId}）`,
+            new Error(
+              `工作区激活未生效：${workspaceId} 未成为活动工作区（当前活动工作区为 ${appliedWorkspaceId}）`,
+            ),
           );
         }
       });

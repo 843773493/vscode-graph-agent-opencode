@@ -305,7 +305,7 @@ export function useWorkspaceBootstrap({
       checkGatewayWorkspaceHealth?: boolean;
       reuseCurrentUiSettings?: boolean;
     } = {},
-  ) => {
+  ): Promise<string | null> => {
     const refreshGeneration = ++refreshGenerationRef.current;
     refreshAbortRef.current?.abort();
     const controller = new AbortController();
@@ -360,7 +360,9 @@ export function useWorkspaceBootstrap({
         controller.signal.aborted
         || refreshGeneration !== refreshGenerationRef.current
       ) {
-        return false;
+        // 本次刷新已被更新的请求作废：没有任何工作区因它生效，用 null 与
+        // “生效了但活动工作区是另一个 id”严格区分。
+        return null;
       }
       setState((prev) => {
         const sessionsByWorkspace = new Map(prev.sessionsByWorkspace);
@@ -463,13 +465,15 @@ export function useWorkspaceBootstrap({
           isBootstrapping: false,
         };
       });
-      return true;
+      // activeWorkspaceId 是本轮 setState 唯一写进 activeGatewayWorkspaceId 的
+      // 权威值，直接回传它，避免调用方去读尚未重新 render 的 latestStateRef。
+      return activeWorkspaceId;
     } catch (error: unknown) {
       if (
         controller.signal.aborted
         || refreshGeneration !== refreshGenerationRef.current
       ) {
-        return false;
+        return null;
       }
       const message = error instanceof Error ? error.message : String(error);
       setState((prev) => ({

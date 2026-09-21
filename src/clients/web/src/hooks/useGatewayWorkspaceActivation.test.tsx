@@ -58,6 +58,8 @@ interface MountOptions {
   currentSessionId?: string | null;
   initialState?: AppState;
   finishWorkspaceRefresh?: FinishWorkspaceRefresh;
+  /** 刷新后落到 state 的活动工作区 id；null 表示刷新被作废。缺省为 null。 */
+  appliedWorkspaceId?: string | null;
   refreshGatewayWorkspaceStatuses?: (
     expectedWorkspaceId?: string | null,
   ) => Promise<void>;
@@ -122,9 +124,10 @@ async function mountHook(options: MountOptions = {}): Promise<MountedHook> {
       },
       finishWorkspaceRefresh: async (preferredSessionId, refreshOptions) => {
         calls.finish.push({ preferredSessionId, options: refreshOptions });
-        return options.finishWorkspaceRefresh
-          ? await options.finishWorkspaceRefresh(preferredSessionId, refreshOptions)
-          : true;
+        if (options.finishWorkspaceRefresh) {
+          return await options.finishWorkspaceRefresh(preferredSessionId, refreshOptions);
+        }
+        return options.appliedWorkspaceId ?? null;
       },
     });
     return null;
@@ -184,7 +187,7 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
       return activeWorkspaceId ?? workspaceId;
     });
     spyOnApi("listAgents").mockResolvedValue([]);
-    const { hook, setLatest } = await mountHook();
+    const { hook, setLatest } = await mountHook({ appliedWorkspaceId: "ws-formal" });
     // 让后台入口的收尾守卫提前退出，专注观察队列的串行行为。
     setLatest(appState({ currentSessionWorkspaceId: null }));
 
@@ -220,7 +223,7 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
     const { hook, state, setLatest, calls } = await mountHook({
       finishWorkspaceRefresh: async () => {
         // 代表正式激活链路写回的权威状态。
-        return true;
+        return "ws-formal";
       },
     });
     setLatest(appState({ currentSessionWorkspaceId: "ws-background" }));
@@ -258,7 +261,7 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
     );
     const backgroundAgents = deferred<Agent[]>();
     spyOnApi("listAgents").mockImplementation(async () => await backgroundAgents.promise);
-    const { hook, state, setLatest } = await mountHook();
+    const { hook, state, setLatest } = await mountHook({ appliedWorkspaceId: "ws-formal" });
     setLatest(appState({ currentSessionWorkspaceId: "ws-background" }));
 
     hook.activateGatewayWorkspaceInBackground("ws-background");
@@ -286,7 +289,7 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
     const backgroundAgents = deferred<Agent[]>();
     spyOnApi("listAgents").mockImplementation(async () => await backgroundAgents.promise);
     const formalAgent = agent("agent-formal");
-    const { hook, state, setLatest } = await mountHook();
+    const { hook, state, setLatest } = await mountHook({ appliedWorkspaceId: "ws-same" });
     // 前后台指向同一工作区，latestStateRef 的工作区判断无法区分，只剩序列号一道闸。
     setLatest(appState({ currentSessionWorkspaceId: "ws-same" }));
 
@@ -318,7 +321,9 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
         return workspaceId;
       },
     );
-    const { hook, calls: hookCalls, setLatest } = await mountHook();
+    const { hook, calls: hookCalls, setLatest } = await mountHook({
+      appliedWorkspaceId: "ws-formal",
+    });
     setLatest(appState({ currentSessionWorkspaceId: "ws-background" }));
 
     // 两次入队之间不冲刷微任务，后台激活的任务体保持未开始执行。
@@ -389,6 +394,7 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
         error: null,
         status: "正在切换工作区",
       }),
+      appliedWorkspaceId: "ws-b",
     });
 
     const formalActivationA = hook.activateGatewayWorkspace("ws-a");
@@ -566,7 +572,10 @@ describe("useGatewayWorkspaceActivation 后台激活", () => {
 describe("useGatewayWorkspaceActivation 正式激活", () => {
   test("成功时先重置工作区状态并复用同一端口调用激活接口", async () => {
     const activate = spyOnGatewayApi("activateGatewayWorkspace").mockResolvedValue("ws-formal");
-    const { hook, calls, setLatest } = await mountHook({ currentSessionId: PREFERRED_SESSION_ID });
+    const { hook, calls, setLatest } = await mountHook({
+      currentSessionId: PREFERRED_SESSION_ID,
+      appliedWorkspaceId: "ws-formal",
+    });
     setLatest(appState({ currentSessionWorkspaceId: "ws-formal" }));
 
     await hook.activateGatewayWorkspace("ws-formal", PREFERRED_SESSION_ID);
@@ -589,7 +598,7 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
       // 模拟 invalidateWorkspaceRefreshes 作废本次刷新：刷新没写回
       // activeGatewayWorkspaceId，激活并未生效，绝不能给调用方假成功。
       initialState: appState({ isBootstrapping: true, workspaceSwitching: true }),
-      finishWorkspaceRefresh: async () => false,
+      finishWorkspaceRefresh: async () => null,
     });
 
     await act(async () => {
@@ -603,6 +612,31 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
     expect(next.workspaceSwitching).toBe(false);
     expect(next.gatewayError).toBe("工作区激活未生效：ws-formal 的工作区刷新已被更新的请求作废");
     expect(next.error).toBe("工作区激活未生效：ws-formal 的工作区刷新已被更新的请求作废");
+    expect(next.status).toBe("工作区切换失败");
+    expect(next.isBootstrapping).toBe(false);
+  });
+
+  test("刷新生效但活动工作区被健康回退切到别处时显式失败并复位切换态", async () => {
+    spyOnGatewayApi("activateGatewayWorkspace").mockResolvedValue("ws-offline");
+    const { hook, state, calls } = await mountHook({
+      // 请求 offline 工作区：bootstrap 的自动健康回退会把活动工作区改到
+      // ws-healthy，请求的 ws-offline 从未成为活动工作区，绝不能假成功。
+      initialState: appState({ isBootstrapping: true, workspaceSwitching: true }),
+      appliedWorkspaceId: "ws-healthy",
+    });
+
+    const message = "工作区激活未生效：ws-offline 未成为活动工作区（当前活动工作区为 ws-healthy）";
+    await act(async () => {
+      await expect(hook.activateGatewayWorkspace("ws-offline")).rejects.toThrow(message);
+    });
+
+    expect(calls.finish).toHaveLength(1);
+    // 请求的工作区没有生效，不应刷新它的 Gateway 状态。
+    expect(calls.refreshStatuses).toEqual([]);
+    const next = state();
+    expect(next.workspaceSwitching).toBe(false);
+    expect(next.gatewayError).toBe(message);
+    expect(next.error).toBe(message);
     expect(next.status).toBe("工作区切换失败");
     expect(next.isBootstrapping).toBe(false);
   });

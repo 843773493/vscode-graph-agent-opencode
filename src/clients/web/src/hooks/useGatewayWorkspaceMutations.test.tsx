@@ -103,7 +103,7 @@ function appState(overrides: Partial<AppState> = {}): AppState {
 interface MountOptions {
   activeGatewayWorkspaceId?: string | null;
   recentLocalWorkspacePaths?: string[];
-  finishWorkspaceRefresh?: (preferredSessionId?: string | null) => Promise<boolean>;
+  finishWorkspaceRefresh?: (preferredSessionId?: string | null) => Promise<string | null>;
   resetWorkspaceScopedState?: () => void;
   abortCurrentStream?: () => void;
   updateUiSettings?: (
@@ -158,7 +158,7 @@ async function mountHook(
       },
       finishWorkspaceRefresh: async (preferredSessionId) => {
         calls.finish += 1;
-        if (!options.finishWorkspaceRefresh) return true;
+        if (!options.finishWorkspaceRefresh) return "ws-refreshed";
         return await options.finishWorkspaceRefresh(preferredSessionId);
       },
       resetWorkspaceScopedState: () => {
@@ -613,7 +613,7 @@ test("apiPort 为空时使用默认工作区后端端口", async () => {
       },
       abortCurrentStream: () => undefined,
       invalidateWorkspaceRefreshes: () => undefined,
-      finishWorkspaceRefresh: async () => true,
+      finishWorkspaceRefresh: async () => "ws-refreshed",
       resetWorkspaceScopedState: () => undefined,
       updateUiSettings: async () => undefined,
     });

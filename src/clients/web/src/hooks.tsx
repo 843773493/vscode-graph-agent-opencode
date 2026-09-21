@@ -716,10 +716,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       checkGatewayWorkspaceHealth?: boolean;
       reuseCurrentUiSettings?: boolean;
     } = {},
-  ): Promise<boolean> => {
-    const applied = await refreshSessions(preferredSessionId, options);
-    if (!applied) {
-      return false;
+  ): Promise<string | null> => {
+    // 返回本轮刷新真正生效的活动工作区 id：刷新被作废时 refreshSessions 返回
+    // null。调用方必须比对它是否等于自己请求的 workspaceId，不能只看真值——
+    // 自动健康回退可能把活动工作区切到别的 id，那不算请求的那个工作区生效。
+    const appliedWorkspaceId = await refreshSessions(preferredSessionId, options);
+    if (appliedWorkspaceId === null) {
+      return null;
     }
     setState((prev) => ({
       ...prev,
@@ -727,7 +730,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       error: null,
       status: "工作区已就绪",
     }));
-    return true;
+    return appliedWorkspaceId;
   }, [refreshSessions]);
 
   const {
