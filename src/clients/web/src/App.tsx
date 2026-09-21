@@ -51,6 +51,7 @@ import { useBottomPanelResize } from "./hooks/useBottomPanelResize";
 import { useNodeDebugWorkbench } from "./hooks/nodeDebug/useNodeDebugWorkbench";
 import { useChildThreadLoader } from "./hooks/useChildThreadLoader";
 import { useGatewayExtensionResources } from "./hooks/useGatewayExtensionResources";
+import { useWorkbenchPanelRouting } from "./hooks/useWorkbenchPanelRouting";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import { buildSessionCatalogSyncKeys } from "./hooks/sessionResourceExplorer/resourceTreeSync";
 import { createSessionConnection } from "./gatewayApi";
@@ -402,6 +403,29 @@ export default function AppShell() {
     },
     [bottomPanelState, bottomPanelWorkspaceId, persistUiSettings],
   );
+  const {
+    handleToggleAuxiliaryPanel,
+    handleToggleChatPanel,
+    handleTogglePanel,
+    handleAuxiliaryTabChange,
+    handleAuxiliaryTabReorder,
+    openAuxiliaryTab,
+    openTerminalPanel,
+  } = useWorkbenchPanelRouting({
+    auxiliaryVisible,
+    setAuxiliaryVisible,
+    chatVisible,
+    setChatVisible,
+    setAuxiliaryTab,
+    setAuxiliaryTabOrder,
+    bottomPanelState,
+    updateBottomPanelState,
+    bottomPanelWorkspaceId,
+    extensionWindowRequested,
+    setExtensionWindowFallback,
+    persistLayoutSettings,
+    setStatus,
+  });
   const agentSessionsVisible = state.agentSessionsPanelOpen;
   const handleWorkbenchViewChange = useCallback(
     (view: WorkbenchView) => {
@@ -770,46 +794,6 @@ export default function AppShell() {
     state.sessionChangesError,
     state.sessionChangesLoading,
   ]);
-  const handleToggleAuxiliaryPanel = () => {
-    const nextVisible = !auxiliaryVisible;
-    setAuxiliaryVisible(nextVisible);
-    persistLayoutSettings({ auxiliary_visible: nextVisible });
-    setStatus(nextVisible ? "右侧侧边栏已切换为展开" : "右侧侧边栏已切换为收起");
-  };
-  const handleToggleChatPanel = () => {
-    const nextVisible = !chatVisible;
-    setChatVisible(nextVisible);
-    persistLayoutSettings({ chat_visible: nextVisible });
-    setStatus(nextVisible ? "会话区已展开" : "会话区已收起");
-  };
-  const handleTogglePanel = () => {
-    const nextVisible = !bottomPanelState.visible;
-    updateBottomPanelState({ visible: nextVisible });
-    setStatus(nextVisible ? "底部面板已展开" : "底部面板已收起");
-  };
-  const handleAuxiliaryTabChange = (tab: WorkspaceAuxiliaryTab) => {
-    setAuxiliaryTab(tab);
-    if (!extensionWindowRequested) {
-      persistLayoutSettings({ auxiliary_tab: tab });
-    }
-  };
-
-  const handleAuxiliaryTabReorder = (tabOrder: WorkspaceAuxiliaryTab[]) => {
-    setAuxiliaryTabOrder(tabOrder);
-    if (!extensionWindowRequested) {
-      persistLayoutSettings({ auxiliary_tab_order: tabOrder });
-    }
-  };
-  const openAuxiliaryTab = (tab: WorkspaceAuxiliaryTab) => {
-    if (tab !== "resources") {
-      setExtensionWindowFallback(false);
-    }
-    setAuxiliaryVisible(true);
-    setAuxiliaryTab(tab);
-    if (!extensionWindowRequested) {
-      persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: tab });
-    }
-  };
   const handleOpenAttachment = useCallback(
     (sessionId: string, attachment: AttachmentRef) => {
       setSelectedAttachmentPreview({ sessionId, attachment });
@@ -817,18 +801,6 @@ export default function AppShell() {
     },
     [openAuxiliaryTab],
   );
-  const openTerminalPanel = (terminalId: string) => {
-    if (!bottomPanelWorkspaceId) {
-      setStatus("打开终端失败：当前没有活动工作区");
-      return;
-    }
-    updateBottomPanelState({
-      visible: true,
-      tab: "terminal",
-      terminalId,
-    });
-    setStatus(`已在主窗口底部面板打开终端：${terminalId}`);
-  };
   const openExtensionWindow = (kind: ExtensionResourceKind, resourceId?: string) => {
     if (extensionWindowRequested) {
       if (kind === "debug") {
