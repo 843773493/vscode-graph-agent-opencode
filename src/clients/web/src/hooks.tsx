@@ -378,13 +378,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     currentSessionId && currentSessionGatewayWorkspaceId
       ? sessionScopeKey(currentSessionGatewayWorkspaceId, currentSessionId)
       : currentSessionId;
-  const {
-    getCurrentTurnTimeline,
-    currentTurnTimeline,
-  } = useSessionTurnTimeline({
+  const { getCurrentTurnTimeline, currentTurnTimeline } = useSessionTurnTimeline(
+    state,
     latestStateRef,
     currentSessionCacheKey,
-  });
+  );
   const currentActiveJobId = currentSessionCacheKey
     ? state.activeJobIdsBySession.get(currentSessionCacheKey) ?? null
     : null;
@@ -448,7 +446,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     reloadNonce: state.sessionHistoryReloadNonce,
     setState,
   });
-  const loadTerminalTurn = useTerminalTurnLoader({ loadTurnDetails });
+  const loadTerminalTurn = useTerminalTurnLoader(loadTurnDetails);
   const { abortCurrentStream } = useSessionEventStream({
     apiPort: state.apiPort,
     sessionId: currentSessionId,
