@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 from pathlib import Path
 
 import httpx
@@ -12,6 +11,7 @@ from tests.integration.stubs.http_stubs import generation_target_stub
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
+    reset_gateway_persistent_state,
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
@@ -27,14 +27,7 @@ def isolated_gateway_state(
     产生的运行记录仍跨进程保留。
     """
 
-    gateway_root = (
-        Path(integration_workspace_root_path).resolve().parent
-        / "boxteam-home"
-        / "state"
-        / "gateway"
-    )
-    if gateway_root.exists():
-        shutil.rmtree(gateway_root)
+    reset_gateway_persistent_state(workspace_root=Path(integration_workspace_root_path))
 
 
 def _definition_payload(

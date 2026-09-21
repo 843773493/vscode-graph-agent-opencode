@@ -33,6 +33,7 @@ from tests.integration.stubs.http_stubs import openai_chat_stub
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
+    reset_gateway_persistent_state,
     start_gateway_process,
 )
 from tests.support.paths import output_root_for_test
@@ -327,6 +328,7 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         test_layer="integration",
         project_root=project_root,
     )
+    reset_gateway_persistent_state(workspace_root=output_root / "workspace")
     workspace_root = prepare_default_test_workspace(
         workspace_root=output_root / "workspace",
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",

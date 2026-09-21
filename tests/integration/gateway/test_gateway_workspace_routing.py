@@ -43,6 +43,7 @@ from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
+    reset_gateway_persistent_state,
     start_gateway_process,
     workspace_root_from_response,
 )
@@ -68,16 +69,6 @@ def _copy_workspace_config(source_workspace: Path, target_workspace: Path) -> No
     shutil.copy2(
         source_workspace / ".boxteam" / "workspace_schema.jsonc",
         target_config.parent / "workspace_schema.jsonc",
-    )
-
-
-def _isolated_gateway_state_roots(workspace_root: Path) -> tuple[Path, ...]:
-    """返回本测试文件会用到的全部隔离 BOXTEAM_HOME 的 Gateway 状态目录。"""
-
-    test_root = workspace_root.resolve().parent
-    return (
-        test_root / "boxteam-home" / "state" / "gateway",
-        test_root / "remote-gateway-host" / "boxteam-home" / "state" / "gateway",
     )
 
 
@@ -118,11 +109,14 @@ def isolated_gateway_state(
     用例启动失败或读到过期 pending。
     """
 
-    for gateway_root in _isolated_gateway_state_roots(
-        Path(integration_workspace_root_path)
+    workspace_root = Path(integration_workspace_root_path)
+    # 本测试文件同时使用主工作区与 remote-gateway-host 下的远程工作区，两者各自
+    # 带一份跨运行持久的 BOXTEAM_HOME，都要从干净状态开始。
+    for root in (
+        workspace_root,
+        workspace_root.parent / "remote-gateway-host" / "workspace",
     ):
-        if gateway_root.exists():
-            shutil.rmtree(gateway_root)
+        reset_gateway_persistent_state(workspace_root=root)
 
 
 async def _write_session_context_checkpoint(

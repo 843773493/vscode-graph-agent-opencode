@@ -29,6 +29,26 @@ def _test_boxteam_home(workspace_root: Path) -> Path:
     return workspace_root.resolve().parent / "boxteam-home"
 
 
+def reset_gateway_persistent_state(*, workspace_root: Path) -> None:
+    """删除隔离工作区旁的 BOXTEAM_HOME，清空 Gateway 跨运行持久状态。
+
+    工作区注册表（gateway.sqlite）、导航树、会话目录缓存和生成器定义都持久化在
+    ``<boxteam-home>/state/gateway``，与工作区一样跨测试运行存活。工作区后端端口
+    由测试文件在 ``tests/`` 下的排序位置决定，测试文件集合变化会让同一工作区路径
+    产生不同的 workspace_id 注册项；上一次运行遗留的注册项被本次 Gateway 加载后，
+    导航节点集合与跨工作区目录聚合结果会多算一份。重建工作区前必须清掉它。
+
+    这里整体删除 BOXTEAM_HOME 而不是只删 ``state/gateway``：``config/gateway.jsonc``
+    同样跨运行留存，测试会把它改成非默认值（poll_interval_seconds、远程 Gateway
+    声明等），只清 state 会让这些残留继续被下一次运行加载。``auth/`` 属附带删除，
+    integration 用例不配置 ChatGPT OAuth provider，凭据目录按需重新迁移。
+    """
+
+    boxteam_home = _test_boxteam_home(workspace_root)
+    if boxteam_home.exists():
+        shutil.rmtree(boxteam_home)
+
+
 def _install_current_user_configuration(
     *,
     config_root: Path,

@@ -205,13 +205,6 @@ async def test_gateway_user_view_sessions_two_browser_chain(
     _seed_rollout(Path(browser_backend[1]), unopened_session_id, count=2)
 
     port_block = integration_port_block_for_file(Path(request.node.fspath))
-    # Gateway 用户注册表与租约跨运行持久；沿用 gateway 测试的状态隔离模式，
-    # 每次运行从干净的用户/租约状态开始。
-    gateway_state_root = (
-        Path(browser_backend[1]).resolve().parent / "boxteam-home" / "state" / "gateway"
-    )
-    if gateway_state_root.exists():
-        shutil.rmtree(gateway_state_root)
     gateway = start_gateway_process(
         workspace_root=Path(browser_backend[1]),
         default_backend_url=browser_backend[0],

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from collections.abc import AsyncIterator, Generator, Sequence
 from hashlib import sha1
@@ -10,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.support.gateway_processes import reset_gateway_persistent_state
 from tests.support.paths import output_root_for_test
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
@@ -67,13 +67,10 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         test_layer="integration",
         project_root=project_root,
     )
-    # Gateway 控制面状态（工作区注册表、导航树、会话目录缓存）位于工作区旁的
-    # boxteam-home，与工作区一样跨运行持久；这里沿用 gateway 测试的状态隔离
-    # 模式，让每个测试文件都从干净的控制面开始，避免上一次运行遗留的工作区
-    # 注册项把导航节点集合或跨工作区目录聚合结果多算一份。
-    boxteam_home = output_root / "boxteam-home"
-    if boxteam_home.exists():
-        shutil.rmtree(boxteam_home)
+    # Gateway 控制面状态位于工作区旁的 boxteam-home，与工作区一样跨运行持久；
+    # 重建工作区前一并清掉，避免上一次运行遗留的工作区注册项把导航节点集合或
+    # 跨工作区目录聚合结果多算一份。
+    reset_gateway_persistent_state(workspace_root=output_root / "workspace")
     workspace_root = prepare_default_test_workspace(
         workspace_root=output_root / "workspace",
         template_root=(
