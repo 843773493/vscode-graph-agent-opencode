@@ -155,6 +155,8 @@ function blockFromSnapshot(value: SnapshotBlock): MessageStreamBlock {
  * 和 interrupted/failed 强制收尾时写入该字段，运行中快照必然缺失。
  * 终态兜底沿用 "upstream_completed"：interrupted/failed 收尾由后端无条件写入
  * "user_interrupt"/"execution_lost"，不会走到这里。
+ * 判定必须基于 status 而非 projection：model.retrying 会把运行中 block 的
+ * projection 置为 "intermediate"，据 projection 判定会伪造完成原因。
  */
 function blockCompletionReason(value: SnapshotBlock): string | undefined {
   const reason = optionalTextValue(value.completion_reason);

@@ -1451,6 +1451,55 @@ describe("message stream reducer", () => {
     }
   });
 
+  test("运行中 block 的 projection 非 streaming 时仍按 status 判定，不发明 completion_reason", () => {
+    // model.retrying 会把运行中 block 置为 projection="intermediate"，此时快照仍不得产出 completion_reason。
+    const snapshotState = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", {
+        snapshot_seq: 1,
+        stream_status: "open",
+        agent_loop_status: "retrying",
+        current_model_call_id: "mc_1",
+        current_attempt: 2,
+        blocks: [{
+          block_id: "b1",
+          block_index: 0,
+          items: [],
+          status: "running",
+          carrier_type: "text",
+          projection: "intermediate",
+          text: "重试中的半截输出",
+        }],
+        resumable: true,
+      }),
+    );
+    let eventState = createMessageStreamState("ses_1", "turn_1");
+    eventState = applyMessageStreamEvent(eventState, event(1, "model.started", {
+      model_call_id: "mc_1",
+      attempt: 1,
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(2, "block.started", {
+      block_id: "b1",
+      block_index: 0,
+      carrier_type: "text",
+      projection: "streaming",
+      model_call_id: "mc_1",
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(3, "model.retrying", {
+      model_call_id: "mc_1",
+    }));
+
+    const snapshotBlock = snapshotState.blocks[0];
+    const eventBlock = eventState.blocks[0];
+    expect(snapshotBlock?.projection).toBe("intermediate");
+    expect(eventBlock?.projection).toBe("intermediate");
+    expect(snapshotBlock?.completion_reason).toBeUndefined();
+    expect(eventBlock?.completion_reason).toBeUndefined();
+    for (const field of ["status", "completion_reason", "partial", "carrier_type", "projection"] as const) {
+      expect(snapshotBlock?.[field]).toBe(eventBlock?.[field]);
+    }
+  });
+
   test("终态快照显式给出 completion_reason 时原样保留，不被兜底覆盖", () => {
     const block = snapshotBlockState("user_interrupt");
     expect(block?.status).toBe("completed");
