@@ -96,7 +96,22 @@ export function useGatewayWorkspaceActivation({
       backgroundWorkspaceActivationSequenceRef.current += 1;
       invalidateWorkspaceRefreshes();
       resetWorkspaceScopedState();
-      return workspaceActivationQueueRef.current.enqueue(async () => {
+      const applyActivationFailure = (message: string) => {
+        setState((prev) => ({
+          ...prev,
+          workspaceSwitching: false,
+          gatewayError: message,
+          error: message,
+          status: "工作区切换失败",
+          isBootstrapping: false,
+        }));
+      };
+      // latest-only 队列会静默跳过尚未开始的旧任务，因此正式激活可能整条任务体
+      // 从未执行；此时 resetWorkspaceScopedState 已把 workspaceSwitching 置真，
+      // 必须显式失败并复位，否则调用方会拿到假成功且 UI 永久卡在切换态。
+      let started = false;
+      const operation = workspaceActivationQueueRef.current.enqueue(async () => {
+        started = true;
         try {
           await apiActivateGatewayWorkspace(resolvedApiPort, workspaceId);
           const applied = await finishWorkspaceRefresh(preferredSessionId, {
@@ -108,16 +123,17 @@ export function useGatewayWorkspaceActivation({
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          setState((prev) => ({
-            ...prev,
-            workspaceSwitching: false,
-            gatewayError: message,
-            error: message,
-            status: "工作区切换失败",
-            isBootstrapping: false,
-          }));
+          applyActivationFailure(message);
           throw error;
         }
+      });
+      return operation.then(() => {
+        if (started) {
+          return;
+        }
+        const message = `工作区激活已被更新的激活请求取代，${workspaceId} 未生效`;
+        applyActivationFailure(message);
+        throw new Error(message);
       });
     },
     [

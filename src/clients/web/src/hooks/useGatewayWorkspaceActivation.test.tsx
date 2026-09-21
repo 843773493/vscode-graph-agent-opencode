@@ -330,10 +330,7 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
     expect(hookCalls.refreshStatuses).toEqual(["ws-formal"]);
   });
 
-  test("正式激活被随后入队的后台激活取代时不发起请求且 promise 正常 resolve", async () => {
-    // 本用例锁定的是既有缺陷行为 A：正式激活入队后被后台激活抢先取代时被静默跳过，
-    // 调用方却拿到成功结果，且 resetWorkspaceScopedState() 已把 workspaceSwitching
-    // 置真而无人复位。修复 A 时必须同步更新此用例，不要把它当成期望的正确行为。
+  test("正式激活被随后入队的后台激活取代时显式失败并复位切换态", async () => {
     const calls: Array<[number, string]> = [];
     spyOnGatewayApi("activateGatewayWorkspace").mockImplementation(
       async (port, workspaceId) => {
@@ -341,21 +338,29 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
         return workspaceId;
       },
     );
-    const { hook, calls: hookCalls } = await mountHook();
+    const { hook, state, calls: hookCalls } = await mountHook({
+      // 模拟真实 resetWorkspaceScopedState 已把切换态置真，验证失败分支会复位它。
+      initialState: appState({ workspaceSwitching: true }),
+    });
 
     const formalActivation = hook.activateGatewayWorkspace("ws-formal");
     hook.activateGatewayWorkspaceInBackground("ws-background");
-    // 被跳过的正式激活不抛错，调用方误以为切换成功。
+    // 正式激活的任务体从未开始执行，必须让调用方拿到明确失败而不是假成功。
     await act(async () => {
-      await formalActivation;
+      await expect(formalActivation).rejects.toThrow("工作区激活已被更新的激活请求取代");
     });
     await flush();
 
     expect(calls).toEqual([[API_PORT, "ws-background"]]);
     // 正式激活的收尾刷新不会发生，只剩后台激活的收尾分支在跑。
-    // 注：本用例只锁定到「正式激活被跳过且 promise 正常 resolve」这一可观测事实；
-    // workspaceSwitching 卡真由真实 resetWorkspaceScopedState 造成，测试桩无法复原。
     expect(hookCalls.refreshStatuses).toEqual(["ws-background"]);
+    // 被取代的正式激活必须收敛为可见失败态，且不得把切换态永久卡真。
+    const next = state();
+    expect(next.workspaceSwitching).toBe(false);
+    expect(next.gatewayError).toBe("工作区激活已被更新的激活请求取代，ws-formal 未生效");
+    expect(next.error).toBe("工作区激活已被更新的激活请求取代，ws-formal 未生效");
+    expect(next.status).toBe("工作区切换失败");
+    expect(next.isBootstrapping).toBe(false);
   });
 });
 
