@@ -1,4 +1,3 @@
-import json
 import os
 import tempfile
 from pathlib import Path
@@ -22,10 +21,6 @@ from app.core.path_utils import (
     get_user_workspace_schema_path,
     initialize_directories,
     safe_join,
-)
-from app.core.storage_migration import (
-    migrate_legacy_trace_timestamps,
-    migrate_user_storage_layout,
 )
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
@@ -266,76 +261,3 @@ class TestPathUtils:
         )
         assert get_gateway_root() == boxteam_home.resolve() / "state" / "gateway"
         assert get_user_workspace_root() == boxteam_home.resolve() / "boxteam_workspace"
-
-    def test_migrate_legacy_trace_timestamps_keeps_backup(self, tmp_path):
-        boxteam_root = tmp_path / ".boxteam"
-        sessions_root = boxteam_root / "sessions"
-        trace_file = sessions_root / "session-1" / "logs" / "traces" / "events.jsonl"
-        trace_file.parent.mkdir(parents=True)
-        legacy_event = {
-            "event_id": "evt_legacy",
-            "job_id": "job_legacy",
-            "step_id": None,
-            "agent_id": "job_service",
-            "timestamp": "2026-06-29T02:07:35.569434",
-            "type": "job_created",
-            "payload": {
-                "session_id": "ses_legacy",
-                "message": "旧消息",
-                "agent_id": "default",
-            },
-        }
-        trace_file.write_text(
-            json.dumps(legacy_event, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-
-        migrate_legacy_trace_timestamps(
-            boxteam_root=boxteam_root,
-            sessions_root=sessions_root,
-        )
-
-        migrated_event = json.loads(trace_file.read_text(encoding="utf-8"))
-        assert migrated_event["timestamp"] == "2026-06-29T02:07:35.569434+00:00"
-        backup_file = (
-            boxteam_root
-            / "migrations"
-            / "trace-timestamps-v1-backup"
-            / "session-1"
-            / "logs"
-            / "traces"
-            / "events.jsonl"
-        )
-        assert json.loads(backup_file.read_text(encoding="utf-8"))["timestamp"] == (
-            "2026-06-29T02:07:35.569434"
-        )
-        assert (
-            json.loads(
-                (boxteam_root / "migrations" / "trace-timestamps-v1.json").read_text(
-                    encoding="utf-8"
-                )
-            )["normalized_timestamps"]
-            == 1
-        )
-
-    def test_migrate_user_storage_layout_moves_global_data(self, tmp_path, monkeypatch):
-        home = tmp_path / "home"
-        boxteam_home = home / ".boxteams"
-        default_workspace = boxteam_home / "boxteam_workspace"
-        monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
-        legacy_config = home / ".boxteam"
-        legacy_config.mkdir(parents=True)
-        (legacy_config / "boxteam.jsonc").write_text("{}", encoding="utf-8")
-        legacy_gateway = default_workspace / ".boxteam" / "gateway"
-        legacy_gateway.mkdir(parents=True)
-        (legacy_gateway / "workspaces.json").write_text("{}", encoding="utf-8")
-
-        migrate_user_storage_layout(
-            home=home,
-            boxteam_home=boxteam_home,
-            default_workspace_root=default_workspace,
-        )
-
-        assert (boxteam_home / "config" / "boxteam.jsonc").is_file()
-        assert (boxteam_home / "state" / "gateway" / "workspaces.json").is_file()
-        assert not legacy_gateway.exists()

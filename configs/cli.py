@@ -8,7 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from app.core.path_utils import resolve_boxteam_home
-from app.core.storage_migration import migrate_user_storage_layout
+from app.core.user_storage_migration import migrate_user_storage_layout
 from configs.diagnostics import diagnose_configuration
 from configs.gateway_development_assets import install_gateway_development_assets
 from configs.installer import (

@@ -9,10 +9,6 @@ from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_creation import SessionCreationService
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
-from app.core.storage_migration import (
-    migrate_legacy_trace_timestamps,
-    migrate_workspace_storage_layout,
-)
 from app.core.workspace_identity import load_or_create_workspace_id
 
 
@@ -236,20 +232,12 @@ def get_session_logs_dir(session_id: str) -> Path:
 
 
 def initialize_directories() -> None:
-    """初始化所有必需的目录，应该在应用启动时显式调用"""
+    """初始化当前工作区运行时所需的目录与 SQLite catalog。"""
     get_boxteam_root().mkdir(exist_ok=True, parents=True)
     get_sessions_dir().mkdir(exist_ok=True, parents=True)
     get_logs_dir().mkdir(exist_ok=True, parents=True)
     get_artifacts_dir().mkdir(exist_ok=True, parents=True)
     get_cache_dir().mkdir(exist_ok=True, parents=True)
-    migrate_workspace_storage_layout(
-        boxteam_root=get_boxteam_root(),
-        sessions_root=get_sessions_dir(),
-    )
-    migrate_legacy_trace_timestamps(
-        boxteam_root=get_boxteam_root(),
-        sessions_root=get_sessions_dir(),
-    )
     get_session_path_resolver().initialize()
 
 
