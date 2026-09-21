@@ -1,11 +1,28 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { WorkspaceAuxiliaryTab } from "../components/workspace/WorkspaceAuxiliaryPanel";
 import type { WorkspaceRuntimePreviewTab } from "../components/workspace/WorkspaceRuntimePreviewArea";
 import type { GatewayExtensionResourceEntry } from "./useGatewayExtensionResources";
-import { useGatewayExtensionWindow } from "./useGatewayExtensionWindow";
 import type { SessionResource } from "../types/backend";
+
+// createSessionConnection 的真实实现会经由 http.ts 的认证屏障发起网络请求；
+// 这里替换为记录实参的桩，直接观察编排层原样转发的四个参数与返回的资源标识。
+const createSessionConnectionCalls: Array<[number, string, string, string]> = [];
+let createdConnectionResourceId = "created-browser-1";
+mock.module("../gatewayApi", () => ({
+  createSessionConnection: async (
+    port: number,
+    workspaceId: string,
+    sessionId: string,
+    kind: string,
+  ) => {
+    createSessionConnectionCalls.push([port, workspaceId, sessionId, kind]);
+    return { kind, resourceId: createdConnectionResourceId };
+  },
+}));
+
+const { useGatewayExtensionWindow } = await import("./useGatewayExtensionWindow");
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -87,6 +104,7 @@ async function mountHook(options: MountOptions = {}) {
   const fallbackWrites: boolean[] = [];
   const browserPreviews: string[] = [];
   const terminalPreviews: string[] = [];
+  let refreshes = 0;
   let hook: Mounted | undefined;
 
   const extensionResources = {
@@ -99,7 +117,9 @@ async function mountHook(options: MountOptions = {}) {
     select: (key: string | null) => {
       selects.push(key);
     },
-    refresh: async () => {},
+    refresh: async () => {
+      refreshes += 1;
+    },
     control: async () => {},
   };
 
@@ -147,6 +167,9 @@ async function mountHook(options: MountOptions = {}) {
     fallbackWrites,
     browserPreviews,
     terminalPreviews,
+    get refreshes() {
+      return refreshes;
+    },
   };
 }
 
@@ -173,6 +196,8 @@ afterEach(() => {
   for (const renderer of renderers.splice(0)) {
     act(() => renderer.unmount());
   }
+  createSessionConnectionCalls.length = 0;
+  createdConnectionResourceId = "created-browser-1";
   if (originalWindow) {
     Object.defineProperty(globalThis, "window", originalWindow);
   } else {
@@ -333,6 +358,58 @@ describe("useGatewayExtensionWindow 预览标签选择", () => {
     expect(mounted.hook.runtimePreviewTab?.path).toBe("gateway-resource://w1:s1:browser:b9");
   });
 
+  test("browser 标签的 name、scopeLabel 与 attachUrl 取自扩展 entry 契约", async () => {
+    stubWindow();
+    const selected = entry("browser", "b9");
+    const mounted = await mountHook({
+      extensionWindowRequested: true,
+      selectedEntry: selected,
+    });
+
+    const tab = mounted.hook.runtimePreviewTab!;
+    expect(tab.name).toBe("browser-b9");
+    expect(tab.scopeLabel).toBe(
+      `${selected.gateway_name} · ${selected.workspace_name} · ${selected.session_title}`,
+    );
+    expect(tab.attachUrl).toBe(
+      "http://127.0.0.1:8011/api/gateway/attach/browser/?" +
+        `workspaceId=${selected.workspace_id}&browserId=${selected.resource.resource_id}&embedded=1`,
+    );
+  });
+
+  test("terminal 标签的 name、scopeLabel 与 attachUrl 取自扩展 entry 契约", async () => {
+    stubWindow();
+    const selected = entry("terminal", "t7");
+    const mounted = await mountHook({
+      extensionWindowRequested: true,
+      selectedEntry: selected,
+    });
+
+    const tab = mounted.hook.runtimePreviewTab!;
+    expect(tab.name).toBe("terminal-t7");
+    expect(tab.scopeLabel).toBe(
+      `${selected.gateway_name} · ${selected.workspace_name} · ${selected.session_title}`,
+    );
+    expect(tab.attachUrl).toBe(
+      "http://127.0.0.1:8011/api/gateway/attach/terminal/?" +
+        `workspaceId=${selected.workspace_id}&terminalId=${selected.resource.resource_id}&embedded=1`,
+    );
+  });
+
+  test("扩展窗口模式下 kind 不在 browser/terminal 白名单内的选择不产生预览标签", async () => {
+    stubWindow();
+    const debugEntry = {
+      ...entry("browser", "b9"),
+      resource: { ...entry("browser", "b9").resource, kind: "debug" },
+    } as unknown as GatewayExtensionResourceEntry;
+    const mounted = await mountHook({
+      extensionWindowRequested: true,
+      selectedEntry: debugEntry,
+    });
+
+    expect(mounted.hook.runtimePreviewTab).toBeNull();
+  });
+
   test("fallback 且活动运行资源命中时 runtimePreviewTab 取自活动预览", async () => {
     stubWindow();
     const active: WorkspaceRuntimePreviewTab = {
@@ -407,5 +484,70 @@ describe("useGatewayExtensionWindow 预览标签选择", () => {
       sharedPreviewVisible: false,
     });
     expect(splitOff.hook.extensionDebugSplitActive).toBe(false);
+  });
+
+  test("fallback 但资源 id 相同而 kind 不同时 runtimePreviewTab 为 null", async () => {
+    stubWindow();
+    const active: WorkspaceRuntimePreviewTab = {
+      previewType: "browser",
+      path: "browser://r1",
+      name: "浏览器 r1",
+      browserId: "r1",
+      attachUrl: "http://127.0.0.1:8011/api/gateway/attach/browser/?browserId=r1",
+    };
+    const mounted = await mountHook({
+      extensionWindowRequested: false,
+      extensionWindowFallback: true,
+      activeRuntimePreview: active,
+      sessionResources: [sessionResource("terminal", "r1", "running")],
+    });
+
+    expect(mounted.hook.runtimePreviewTab).toBeNull();
+  });
+});
+
+describe("useGatewayExtensionWindow 扩展资源动作", () => {
+  test("openExtensionResource 原样转发 entry.key 并输出完整范围文案", async () => {
+    stubWindow();
+    const target = entry("browser", "b9");
+    const mounted = await mountHook({ selectedEntry: target });
+
+    act(() => mounted.hook.openExtensionResource(target));
+
+    expect(mounted.selects).toEqual([target.key]);
+    expect(mounted.statuses).toEqual([
+      `已切换到 ${target.gateway_name} · ${target.workspace_name} · ${target.session_title}`,
+    ]);
+  });
+
+  test("createExtensionReplacement 以 browser kind 新建连接、刷新列表并报告资源标识", async () => {
+    stubWindow();
+    createdConnectionResourceId = "created-browser-42";
+    const target = entry("browser", "b9");
+    const mounted = await mountHook({ selectedEntry: target });
+
+    await act(async () => {
+      await mounted.hook.createExtensionReplacement(target);
+    });
+
+    expect(createSessionConnectionCalls).toEqual([
+      [49_507, target.workspace_id, target.session_id, "browser"],
+    ]);
+    expect(mounted.refreshes).toBe(1);
+    expect(mounted.statuses).toEqual(["已新建浏览器：created-browser-42"]);
+  });
+});
+
+describe("useGatewayExtensionWindow 扩展窗口目标匹配", () => {
+  test("kind 相同但 resource_id 不同、resource_id 相同但 kind 不同都不触发 select", async () => {
+    stubWindow();
+    const mounted = await mountHook({
+      extensionWindowRequested: true,
+      entries: [entry("browser", "b1"), entry("terminal", "b9")],
+    });
+
+    act(() => mounted.hook.openExtensionWindow("browser", "b9"));
+
+    expect(mounted.selects).toEqual([]);
   });
 });
