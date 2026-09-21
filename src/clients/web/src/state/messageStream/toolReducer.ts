@@ -4,8 +4,10 @@ import {
   MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS,
   applyLifecycle,
   boundedMessageStreamText,
+  defaultedTextValue,
   isRecord,
   lifecycleFromValue,
+  optionalTextValue,
   stringValue,
   toolExecutionOutcomeValue,
 } from "./state";
@@ -88,12 +90,12 @@ function toolFromPayload(
   return {
     tool_execution_id: stringValue(payload.tool_execution_id) ?? "unknown-tool-execution",
     tool_call_id: stringValue(payload.tool_call_id) ?? "unknown-tool-call",
-    tool_invocation_id: stringValue(payload.tool_invocation_id) ?? undefined,
-    tool_attempt_id: stringValue(payload.tool_attempt_id) ?? undefined,
-    tool_name: stringValue(payload.tool_name) ?? "tool",
+    tool_invocation_id: optionalTextValue(payload.tool_invocation_id),
+    tool_attempt_id: optionalTextValue(payload.tool_attempt_id),
+    tool_name: defaultedTextValue(payload.tool_name, "tool"),
     status,
     outcome: toolExecutionOutcomeValue(payload.outcome),
-    completion_reason: stringValue(payload.completion_reason) ?? undefined,
+    completion_reason: optionalTextValue(payload.completion_reason),
     result: typeof payload.result === "string"
       ? boundedMessageStreamText(payload.result, MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS)
       : undefined,

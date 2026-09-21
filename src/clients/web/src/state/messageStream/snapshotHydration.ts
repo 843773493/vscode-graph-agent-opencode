@@ -12,7 +12,9 @@ import {
   boundedMessageStreamText,
   cloneMessageStreamState,
   createMessageStreamState,
+  defaultedTextValue,
   isTerminalStatus,
+  optionalTextValue,
   sortActivities,
   sortBlocks,
   sortToolExecutions,
@@ -95,7 +97,7 @@ export function applySnapshotState(
     ? {
       requestId: snapshot.interrupt_state.request_id,
       status: snapshot.interrupt_state.status,
-      reason: snapshot.interrupt_state.reason,
+      reason: optionalTextValue(snapshot.interrupt_state.reason),
       factConfirmed: snapshot.interrupt_state.fact_confirmed,
     }
     : null;
@@ -132,15 +134,15 @@ function blockFromSnapshot(value: SnapshotBlock): MessageStreamBlock {
     block_id: value.block_id,
     model_call_id: null,
     block_index: value.block_index ?? 0,
-    carrier_type: value.carrier_type ?? "text",
+    carrier_type: defaultedTextValue(value.carrier_type, "text"),
     status: blockStatusValue(value.status),
     text: value.text
       ? boundedMessageStreamText(value.text, MESSAGE_STREAM_BLOCK_TEXT_MAX_CHARS)
       : "",
     items: value.items.map((item) => ({ ...item })),
     redacted: value.redacted ?? false,
-    projection: value.projection ?? "streaming",
-    completion_reason: value.completion_reason,
+    projection: defaultedTextValue(value.projection, "streaming"),
+    completion_reason: defaultedTextValue(value.completion_reason, "upstream_completed"),
     partial: value.partial ?? false,
     ...lifecycleFromSnapshot(value),
   };
@@ -150,12 +152,12 @@ function toolFromSnapshot(value: SnapshotToolExecution): MessageStreamToolExecut
   return {
     tool_execution_id: value.tool_execution_id,
     tool_call_id: value.tool_call_id,
-    tool_invocation_id: value.tool_invocation_id,
-    tool_attempt_id: value.tool_attempt_id,
-    tool_name: value.tool_name,
+    tool_invocation_id: optionalTextValue(value.tool_invocation_id),
+    tool_attempt_id: optionalTextValue(value.tool_attempt_id),
+    tool_name: defaultedTextValue(value.tool_name, "tool"),
     status: toolExecutionStatusValue(value.status),
     outcome: toolExecutionOutcomeValue(value.outcome),
-    completion_reason: value.completion_reason,
+    completion_reason: optionalTextValue(value.completion_reason),
     result: value.result
       ? boundedMessageStreamText(value.result, MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS)
       : value.result,
@@ -198,19 +200,19 @@ function activityFromSnapshot(value: SnapshotActivity): MessageStreamActivity {
   return {
     activity_id: value.activity_id,
     kind: value.kind,
-    parent_activity_id: value.parent_activity_id,
-    scope_ref: value.scope_ref ?? "turn",
+    parent_activity_id: optionalTextValue(value.parent_activity_id),
+    scope_ref: defaultedTextValue(value.scope_ref, "turn"),
     status: activityStatusValue(value.status),
-    outcome: value.outcome,
-    summary: value.summary,
+    outcome: optionalTextValue(value.outcome),
+    summary: optionalTextValue(value.summary),
     cancellable: value.cancellable ?? false,
     resumable: value.resumable ?? false,
-    side_effect_policy: value.side_effect_policy ?? "unknown",
+    side_effect_policy: defaultedTextValue(value.side_effect_policy, "unknown"),
     resource_refs: [...value.resource_refs],
     detail: value.detail ? { ...value.detail } : undefined,
-    detail_ref: value.detail_ref,
+    detail_ref: optionalTextValue(value.detail_ref),
     detail_available: value.detail_available ?? false,
-    detail_error: value.detail_error,
+    detail_error: optionalTextValue(value.detail_error),
     ...lifecycleFromSnapshot(value),
   };
 }

@@ -18,11 +18,13 @@ import {
   boundedMessageStreamText,
   cloneMessageStreamState,
   createMessageStreamState,
+  defaultedTextValue,
   findBlock,
   isRecord,
   isTerminalStatus,
   lifecycleFromValue,
   numberValue,
+  optionalTextValue,
   stringValue,
   toolExecutionStatusValue,
 } from "./state";
@@ -194,7 +196,7 @@ export function applyMessageStreamEvent(
       const block = findBlock(state, stringValue(payload.block_id) ?? event.block_id ?? null);
       if (block) {
         block.status = blockStatusValue(payload.status);
-        block.completion_reason = stringValue(payload.completion_reason) ?? "upstream_completed";
+        block.completion_reason = defaultedTextValue(payload.completion_reason, "upstream_completed");
         block.partial = booleanValue(payload.partial) ?? false;
         applyLifecycle(block, event, true);
         state.activeState = activeStateAfter(
@@ -297,12 +299,12 @@ export function applyMessageStreamEvent(
         phase: "requested",
         entity_id: stringValue(payload.interrupt_request_id) ?? "",
         status: "requested",
-        reason: stringValue(payload.reason) ?? undefined,
+        reason: optionalTextValue(payload.reason),
       };
       state.interruptState = {
         requestId: stringValue(payload.interrupt_request_id),
         status: "requested",
-        reason: stringValue(payload.reason) ?? undefined,
+        reason: optionalTextValue(payload.reason),
         factConfirmed: false,
       };
       break;
@@ -310,7 +312,7 @@ export function applyMessageStreamEvent(
       state.interruptState = {
         requestId: stringValue(payload.interrupt_request_id),
         status: "rejected",
-        reason: stringValue(payload.reason) ?? undefined,
+        reason: optionalTextValue(payload.reason),
         factConfirmed: false,
       };
       break;
@@ -387,13 +389,13 @@ function upsertBlock(
     block_id: blockId,
     model_call_id: stringValue(payload.model_call_id),
     block_index: numberValue(payload.block_index) ?? state.blocks.length,
-    carrier_type: stringValue(payload.carrier_type) ?? "text",
+    carrier_type: defaultedTextValue(payload.carrier_type, "text"),
     status,
     text: "",
     items: [],
     redacted: booleanValue(payload.redacted) ?? false,
-    projection: stringValue(payload.projection) ?? "streaming",
-    completion_reason: stringValue(payload.completion_reason) ?? undefined,
+    projection: defaultedTextValue(payload.projection, "streaming"),
+    completion_reason: optionalTextValue(payload.completion_reason),
     partial: booleanValue(payload.partial) ?? false,
     ...lifecycleFromValue(payload),
   };

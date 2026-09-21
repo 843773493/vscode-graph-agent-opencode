@@ -4,8 +4,10 @@ import {
   activityStatusValue,
   applyLifecycle,
   booleanValue,
+  defaultedTextValue,
   isRecord,
   lifecycleFromValue,
+  optionalTextValue,
   stringValue,
 } from "./state";
 import type {
@@ -64,22 +66,22 @@ function activityFromPayload(payload: Record<string, unknown>): MessageStreamAct
   return {
     activity_id: activityId,
     kind,
-    parent_activity_id: stringValue(payload.parent_activity_id) ?? undefined,
-    scope_ref: stringValue(payload.scope_ref) ?? "turn",
+    parent_activity_id: optionalTextValue(payload.parent_activity_id),
+    scope_ref: defaultedTextValue(payload.scope_ref, "turn"),
     status: activityStatusValue(payload.status),
-    outcome: stringValue(payload.outcome) ?? undefined,
-    summary: stringValue(payload.summary) ?? undefined,
+    outcome: optionalTextValue(payload.outcome),
+    summary: optionalTextValue(payload.summary),
     cancellable: booleanValue(payload.cancellable) ?? false,
     resumable: booleanValue(payload.resumable) ?? false,
-    side_effect_policy: stringValue(payload.side_effect_policy) ?? "unknown",
+    side_effect_policy: defaultedTextValue(payload.side_effect_policy, "unknown"),
     resource_refs: Array.isArray(payload.resource_refs)
       ? payload.resource_refs.filter((item): item is string => typeof item === "string")
       : [],
     detail: isRecord(payload.detail) ? { ...payload.detail } : undefined,
-    detail_ref: stringValue(payload.detail_ref) ?? undefined,
+    detail_ref: optionalTextValue(payload.detail_ref),
     detail_available: booleanValue(payload.detail_available) ?? false,
-    detail_error: stringValue(payload.detail_error) ?? undefined,
-    completion_reason: stringValue(payload.completion_reason) ?? undefined,
+    detail_error: optionalTextValue(payload.detail_error),
+    completion_reason: optionalTextValue(payload.completion_reason),
     ...lifecycleFromValue(payload),
   };
 }

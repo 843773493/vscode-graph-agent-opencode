@@ -256,6 +256,19 @@ export function toolExecutionOutcomeValue(value: unknown): MessageStreamToolExec
     : undefined;
 }
 
+/**
+ * 可选文本字段归一：非字符串或空串一律收敛为 undefined，与事件路径既有
+ * `stringValue(...) ?? undefined` 语义完全一致，不伪造文案。
+ */
+export function optionalTextValue(value: unknown): string | undefined {
+  return stringValue(value) ?? undefined;
+}
+
+/** 带兜底文案的文本字段归一：非字符串或空串收敛为 fallback。 */
+export function defaultedTextValue(value: unknown, fallback: string): string {
+  return stringValue(value) ?? fallback;
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

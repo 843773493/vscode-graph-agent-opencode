@@ -1213,4 +1213,261 @@ describe("message stream reducer", () => {
       expect(snapshotState.toolExecutions[0]?.outcome).toBe(item.expected);
     }
   });
+
+  const ILLEGAL_TEXT_INPUTS: Array<{ label: string; value: unknown }> = [
+    { label: "null", value: null },
+    { label: "number", value: 42 },
+    { label: "empty string", value: "" },
+    { label: "object", value: { a: 1 } },
+    { label: "boolean", value: true },
+    { label: "array", value: ["x"] },
+  ];
+
+  function snapshotToolState(toolName: unknown, completionReason: unknown) {
+    return applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", {
+        snapshot_seq: 1,
+        stream_status: "open",
+        agent_loop_status: "tool_running",
+        current_attempt: 1,
+        tool_executions: [{
+          tool_execution_id: "exec_1",
+          tool_call_id: "call_1",
+          tool_name: toolName,
+          status: "completed",
+          completion_reason: completionReason,
+        }],
+        resumable: true,
+      }),
+    );
+  }
+
+  function eventToolState(toolName: unknown, completionReason: unknown) {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "tool.started", {
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_name: toolName,
+    }));
+    return applyMessageStreamEvent(state, event(2, "tool.completed", {
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_name: toolName,
+      status: "completed",
+      completion_reason: completionReason,
+    }));
+  }
+
+  test("snapshot 路径的非法 tool_name 与 completion_reason 收敛到事件路径同一结果", () => {
+    for (const item of ILLEGAL_TEXT_INPUTS) {
+      const snapshotState = snapshotToolState(item.value, item.value);
+      const eventState = eventToolState(item.value, item.value);
+      const snapshotTool = snapshotState.toolExecutions[0];
+      const eventTool = eventState.toolExecutions[0];
+
+      expect(snapshotTool?.tool_name).toBe(eventTool?.tool_name);
+      expect(snapshotTool?.completion_reason).toBe(eventTool?.completion_reason);
+      // 非字符串输入不得原样透传
+      expect(snapshotTool?.tool_name).not.toEqual(item.value);
+      expect(snapshotTool?.completion_reason).not.toEqual(item.value);
+      // 既有语义：tool_name 兜底为 "tool"，completion_reason 收敛为 undefined
+      expect(snapshotTool?.tool_name).toBe("tool");
+      expect(snapshotTool?.completion_reason).toBeUndefined();
+    }
+  });
+
+  test("snapshot 路径与事件路径对 tool_name / completion_reason 的合法取值逐字一致", () => {
+    const names = ["shell", "read_file", "a".repeat(200)];
+    const reasons = ["tool_completed", "reconciled_tool_message", "execution_lost"];
+
+    for (const name of names) {
+      for (const reason of reasons) {
+        const snapshotTool = snapshotToolState(name, reason).toolExecutions[0];
+        const eventTool = eventToolState(name, reason).toolExecutions[0];
+        expect(snapshotTool?.tool_name).toBe(eventTool?.tool_name);
+        expect(snapshotTool?.tool_name).toBe(name);
+        expect(snapshotTool?.completion_reason).toBe(eventTool?.completion_reason);
+        expect(snapshotTool?.completion_reason).toBe(reason);
+      }
+    }
+  });
+
+  function snapshotActivityState(fields: Record<string, unknown>) {
+    return applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", {
+        snapshot_seq: 1,
+        stream_status: "open",
+        agent_loop_status: "running",
+        current_attempt: 1,
+        activities: [{
+          activity_id: "act_1",
+          kind: "browser.session",
+          status: "completed",
+          resource_refs: [],
+          ...fields,
+        }],
+        resumable: true,
+      }),
+    ).activities[0];
+  }
+
+  function eventActivityState(fields: Record<string, unknown>) {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "activity.started", {
+      activity_id: "act_1",
+      kind: "browser.session",
+      status: "running",
+    }));
+    state = applyMessageStreamEvent(state, event(2, "activity.completed", {
+      activity_id: "act_1",
+      kind: "browser.session",
+      status: "completed",
+      ...fields,
+    }));
+    return state.activities[0];
+  }
+
+  test("snapshot 路径的非法 activity 文本字段收敛到事件路径同一结果", () => {
+    const textFields = ["outcome", "summary", "detail_ref", "detail_error", "parent_activity_id"];
+    for (const item of ILLEGAL_TEXT_INPUTS) {
+      const fields = Object.fromEntries(textFields.map((field) => [field, item.value]));
+      const snapshotActivity = snapshotActivityState(fields);
+      const eventActivity = eventActivityState(fields);
+      for (const field of textFields) {
+        expect(snapshotActivity?.[field as "outcome"]).toBe(eventActivity?.[field as "outcome"]);
+        expect(snapshotActivity?.[field as "outcome"]).toBeUndefined();
+      }
+      // 带兜底文案的字段：非字符串输入收敛为默认值
+      expect(snapshotActivityState({ scope_ref: item.value })?.scope_ref).toBe("turn");
+      expect(eventActivityState({ scope_ref: item.value })?.scope_ref).toBe("turn");
+      expect(snapshotActivityState({ side_effect_policy: item.value })?.side_effect_policy).toBe("unknown");
+      expect(eventActivityState({ side_effect_policy: item.value })?.side_effect_policy).toBe("unknown");
+    }
+  });
+
+  test("snapshot 路径与事件路径对 activity 文本字段的合法取值逐字一致", () => {
+    const cases: Array<Record<string, unknown>> = [
+      { outcome: "success", summary: "抓取完成" },
+      { outcome: "user_interrupt", summary: "" },
+      { outcome: "provider_error", detail_ref: "detail_1", detail_error: "加载失败" },
+      { scope_ref: "session", side_effect_policy: "read_only", parent_activity_id: "act_parent" },
+    ];
+
+    for (const fields of cases) {
+      const snapshotActivity = snapshotActivityState(fields);
+      const eventActivity = eventActivityState(fields);
+      for (const field of Object.keys(fields)) {
+        expect(snapshotActivity?.[field as "outcome"]).toBe(eventActivity?.[field as "outcome"]);
+      }
+    }
+  });
+
+  function snapshotBlockState(completionReason: unknown) {
+    return applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", {
+        snapshot_seq: 1,
+        stream_status: "open",
+        agent_loop_status: "model_running",
+        current_attempt: 1,
+        blocks: [{
+          block_id: "b1",
+          items: [],
+          status: "completed",
+          completion_reason: completionReason,
+        }],
+        resumable: true,
+      }),
+    ).blocks[0];
+  }
+
+  function eventBlockState(completionReason: unknown) {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "block.started", { block_id: "b1" }));
+    state = applyMessageStreamEvent(state, event(2, "block.completed", {
+      block_id: "b1",
+      status: "completed",
+      completion_reason: completionReason,
+    }));
+    return state.blocks[0];
+  }
+
+  test("snapshot 路径的非法 block completion_reason 与事件路径收敛一致", () => {
+    for (const item of ILLEGAL_TEXT_INPUTS) {
+      const snapshotBlock = snapshotBlockState(item.value);
+      const eventBlock = eventBlockState(item.value);
+      expect(snapshotBlock?.completion_reason).toBe(eventBlock?.completion_reason);
+      expect(snapshotBlock?.completion_reason).not.toEqual(item.value);
+      expect(snapshotBlock?.completion_reason).toBe("upstream_completed");
+    }
+  });
+
+  test("snapshot 路径与事件路径对 block completion_reason 的合法取值逐字一致", () => {
+    for (const reason of ["upstream_completed", "user_interrupt", "carrier_switched"]) {
+      const snapshotBlock = snapshotBlockState(reason);
+      const eventBlock = eventBlockState(reason);
+      expect(snapshotBlock?.completion_reason).toBe(eventBlock?.completion_reason);
+      expect(snapshotBlock?.completion_reason).toBe(reason);
+    }
+  });
+
+  test("snapshot 与事件路径对 block carrier_type / projection 的文本归一逐字一致", () => {
+    for (const item of ILLEGAL_TEXT_INPUTS) {
+      const snapshotState = applyMessageStreamEvent(
+        createMessageStreamState("ses_1", "turn_1"),
+        event(1, "stream.snapshot", {
+          snapshot_seq: 1,
+          stream_status: "open",
+          agent_loop_status: "model_running",
+          current_attempt: 1,
+          blocks: [{
+            block_id: "b1",
+            items: [],
+            status: "running",
+            carrier_type: item.value,
+            projection: item.value,
+          }],
+          resumable: true,
+        }),
+      );
+      let eventState = createMessageStreamState("ses_1", "turn_1");
+      eventState = applyMessageStreamEvent(eventState, event(1, "block.started", {
+        block_id: "b1",
+        block_index: 0,
+        carrier_type: item.value,
+        projection: item.value,
+      }));
+      const snapshotBlock = snapshotState.blocks[0];
+      const eventBlock = eventState.blocks[0];
+      expect(snapshotBlock?.carrier_type).toBe(eventBlock?.carrier_type);
+      expect(snapshotBlock?.carrier_type).toBe("text");
+      expect(snapshotBlock?.projection).toBe(eventBlock?.projection);
+      expect(snapshotBlock?.projection).toBe("streaming");
+    }
+  });
+
+  test("snapshot 与事件路径对 interrupt reason 的非法文本归一逐字一致", () => {
+    for (const item of ILLEGAL_TEXT_INPUTS) {
+      const snapshotState = applyMessageStreamEvent(
+        createMessageStreamState("ses_1", "turn_1"),
+        event(1, "stream.snapshot", {
+          snapshot_seq: 1,
+          stream_status: "interrupting",
+          agent_loop_status: "running",
+          current_attempt: 1,
+          interrupt_state: { request_id: "intr_1", status: "requested", reason: item.value },
+          resumable: true,
+        }),
+      );
+      const eventState = applyMessageStreamEvent(
+        createMessageStreamState("ses_1", "turn_1"),
+        event(1, "interrupt.requested", { interrupt_request_id: "intr_1", reason: item.value }),
+      );
+      expect(snapshotState.interruptState?.reason)
+        .toBe(eventState.interruptState?.reason);
+      expect(snapshotState.interruptState?.reason).toBeUndefined();
+    }
+  });
 });
