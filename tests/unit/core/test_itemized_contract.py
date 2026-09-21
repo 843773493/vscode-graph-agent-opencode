@@ -793,6 +793,70 @@ def test_native_projection_restores_scoped_ids_and_drops_stream_shadow() -> None
     assert outputs == ["checkpoint result"]
 
 
+def test_parallel_checkpoint_tool_items_keep_unique_refs_and_one_provider_message() -> None:
+    """四个并行 invocation 拆成 item 后，native/chat 两条投影仍保持同一组。"""
+
+    codec = LangChainMessageCodec()
+    model_call_id = "parallel-native-model"
+    calls = [
+        {"id": f"parallel-call-{index}", "name": "read_file", "args": {"path": f"{index}.ts"}}
+        for index in range(4)
+    ]
+    checkpoint_group = codec.items_for_message(
+        AIMessage(
+            id=f"lc_run--{model_call_id}",
+            content=[{"type": "reasoning_content", "text": "并行读取"}],
+            tool_calls=calls,
+        ),
+        item_sequence=1,
+        message_id=f"lc_run--{model_call_id}",
+        turn_id="parallel-native-turn",
+        timestamp="2026-09-21T00:00:00+00:00",
+        model_call_id=model_call_id,
+    )
+    results: list[CanonicalItemRecord] = []
+    for index, call in enumerate(calls):
+        (result,) = codec.items_for_message(
+            ToolMessage(
+                id=f"parallel-result-{index}",
+                content=f"result-{index}",
+                tool_call_id=call["id"],
+                name=call["name"],
+                status="success",
+            ),
+            item_sequence=10 + index,
+            message_id=f"parallel-result-{index}",
+            turn_id="parallel-native-turn",
+            timestamp="2026-09-21T00:00:00+00:00",
+            model_call_id=model_call_id,
+        )
+        results.append(result)
+    items = (*checkpoint_group, *results)
+    call_items = tuple(
+        item for item in items if item.semantic_kind == SemanticKind.TOOL_CALL.value
+    )
+    assert len(call_items) == 4
+    assert len({item.item_id for item in call_items}) == 4
+    projected = codec.project_message(checkpoint_group)
+    assert [call["id"] for call in projected["data"]["tool_calls"]] == [
+        call["id"] for call in calls
+    ]
+    plan = _native_tool_plan(
+        session_id="session-parallel-native",
+        plan_id="plan-parallel-native",
+        assembly_id="assembly-parallel-native",
+        items=items,
+    )
+    native = project_native_request(plan, items, request_only_content={})
+    inputs = native["request"]["input"]
+    assert [item["call_id"] for item in inputs if item["type"] == "function_call"] == [
+        call["id"] for call in calls
+    ]
+    assert [
+        item["call_id"] for item in inputs if item["type"] == "function_call_output"
+    ] == [call["id"] for call in calls]
+
+
 @pytest.mark.parametrize(
     ("payload", "chat_content", "responses_content"),
     [

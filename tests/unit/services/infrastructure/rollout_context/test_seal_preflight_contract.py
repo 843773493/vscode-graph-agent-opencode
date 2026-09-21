@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import fields, replace
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.detail_ref import DetailRef
@@ -28,6 +29,9 @@ from app.services.infrastructure.rollout_context.assembly.seal_preflight import 
     ContextAssemblySealPreflightError,
     canonical_tool_pairings,
     validate_seal_dispatch_invariants,
+)
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
 )
 
 
@@ -418,6 +422,8 @@ def _canonical_record(
     semantic_kind: str,
     payload_kind: str,
     payload: object,
+    metadata: dict[str, object] | None = None,
+    turn_id: str = "turn-pairing",
 ) -> CanonicalItemRecord:
     return CanonicalItemRecord.create(
         item_sequence=1,
@@ -427,7 +433,8 @@ def _canonical_record(
         status=CanonicalItemStatus.COMPLETED.value,
         producer_ref={"producer_kind": "provider", "producer_id": item_id},
         payload=payload,
-        turn_id="turn-pairing",
+        metadata=metadata,
+        turn_id=turn_id,
         turn_scope="turn_member",
         message_group_id=f"message-{item_id}",
         wire_role="assistant",
@@ -563,4 +570,145 @@ def test_canonical_tool_pairings_cover_dual_carriers_with_one_result() -> None:
     assert canonical_tool_pairings((stream_call, checkpoint_call, result)) == (
         ("item-stream-call-1", "result-item-1"),
         ("item-checkpoint-call-1", "result-item-1"),
+    )
+
+
+def test_parallel_tool_group_canonicalizes_dual_completion_carriers() -> None:
+    """并行工具的 aggregate checkpoint carrier 必须拆成独立 invocation item。
+
+    stream 的 ``tool_completed`` result 与请求边界的
+    ``reconciled_tool_message`` result 同时落盘时，前者是 shadow，后者是
+    唯一的 checkpoint result。每个 call item 都必须有独立 ref，才能让 seal
+    preflight 覆盖四个并行调用而不把一个 aggregate ref 配到多个结果。
+    """
+
+    codec = LangChainMessageCodec()
+    model_call_id = "parallel-model-call"
+    turn_id = "parallel-turn"
+    calls = tuple(
+        {"id": f"call-{index}", "name": "read_file", "args": {"path": f"{index}.txt"}}
+        for index in range(4)
+    )
+    checkpoint_group = codec.items_for_message(
+        AIMessage(
+            id=f"lc_run--{model_call_id}",
+            content=[{"type": "reasoning_content", "text": "并行读取"}],
+            tool_calls=list(calls),
+        ),
+        item_sequence=20,
+        message_id=f"lc_run--{model_call_id}",
+        turn_id=turn_id,
+        timestamp="2026-09-21T00:00:00+00:00",
+        model_call_id=model_call_id,
+    )
+    checkpoint_calls = tuple(
+        item for item in checkpoint_group if item.semantic_kind == SemanticKind.TOOL_CALL.value
+    )
+    assert len(checkpoint_calls) == 4
+    assert len({item.item_id for item in checkpoint_calls}) == 4
+    assert checkpoint_calls[-1].metadata["projection_message_id"] == (
+        f"lc_run--{model_call_id}"
+    )
+
+    stream_calls: list[CanonicalItemRecord] = []
+    stream_results: list[CanonicalItemRecord] = []
+    checkpoint_results: list[CanonicalItemRecord] = []
+    for index, call in enumerate(calls):
+        call_id = str(call["id"])
+        stream_calls.append(
+            _canonical_record(
+                f"stream-call-{index}",
+                semantic_kind=SemanticKind.TOOL_CALL.value,
+                payload_kind=PayloadKind.TOOL_CALL.value,
+                payload={
+                    "tool_call_id": f"{model_call_id}:tool-call:{call_id}",
+                    "name": call["name"],
+                    "args": call["args"],
+                },
+                turn_id=turn_id,
+            )
+        )
+        stream_call = stream_calls[-1]
+        object.__setattr__(
+            stream_call,
+            "metadata",
+            {
+                "model_call_id": model_call_id,
+                "block_id": f"{model_call_id}:block:{call_id}",
+                "execution_confirmed": True,
+            },
+        )
+        stream_result = _canonical_record(
+            f"stream-result-{index}",
+            semantic_kind=SemanticKind.TOOL_RESULT.value,
+            payload_kind=PayloadKind.TOOL_RESULT.value,
+            payload={
+                "tool_call_id": f"{model_call_id}:tool-call:{call_id}",
+                "result_id": f"stream-result-{index}",
+                "name": call["name"],
+                "content": f"stream-{index}",
+                "tool_outcome": "success",
+                },
+                metadata={"execution_confirmed": True},
+                turn_id=turn_id,
+            )
+        object.__setattr__(
+            stream_result,
+            "metadata",
+            {
+                "model_call_id": model_call_id,
+                "execution_confirmed": True,
+                "completion_reason": "tool_completed",
+            },
+        )
+        stream_calls[-1] = stream_call
+        stream_results.append(stream_result)
+        (checkpoint_result,) = codec.items_for_message(
+            ToolMessage(
+                id=f"checkpoint-result-{index}",
+                content=f"checkpoint-{index}",
+                tool_call_id=call_id,
+                name=str(call["name"]),
+                status="success",
+            ),
+            item_sequence=30 + index,
+            message_id=f"checkpoint-result-{index}",
+            turn_id=turn_id,
+            timestamp="2026-09-21T00:00:00+00:00",
+            model_call_id=model_call_id,
+        )
+        checkpoint_results.append(
+            replace(
+                checkpoint_result,
+                metadata={
+                    **checkpoint_result.metadata,
+                    "completion_reason": "reconciled_tool_message",
+                },
+            )
+        )
+
+    items = tuple(stream_calls) + checkpoint_group + tuple(stream_results) + tuple(
+        checkpoint_results
+    )
+    pairings = canonical_tool_pairings(items)
+    assert len(pairings) == 8
+    assert len({call_ref for call_ref, _ in pairings}) == 8
+    assert {result_ref for _, result_ref in pairings} == {
+        item.item_id for item in checkpoint_results
+    }
+    refs = tuple(
+        _canonical_ref(
+            item.item_id,
+            item.semantic_kind,
+            item.payload_kind,
+        )
+        for item in (*stream_calls, *checkpoint_calls, *checkpoint_results)
+    )
+    selection = tuple(
+        _entry(index, ref, selection_kind=SelectionKind.CANONICAL_HISTORY.value)
+        for index, ref in enumerate(refs)
+    )
+    validate_seal_dispatch_invariants(
+        _snapshot(selection=selection, refs=refs),
+        tool_pairings=pairings,
     )

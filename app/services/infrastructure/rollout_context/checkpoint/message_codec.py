@@ -383,23 +383,33 @@ class LangChainMessageCodec:
                 status=tool_status,
             )
         elif item.semantic_kind == SemanticKind.TOOL_CALL:
-            payload = item.payload if isinstance(item.payload, Mapping) else {}
-            raw_calls = payload.get("tool_calls")
-            calls = raw_calls if isinstance(raw_calls, list) else [payload]
-            tool_calls = [
-                {
-                    "id": str(
-                        call.get("id") or call.get("tool_call_id") or item.item_id
-                    ),
-                    "name": str(call.get("name") or "tool"),
-                    "args": dict(call.get("args") or {})
-                    if isinstance(call.get("args"), Mapping)
-                    else {"raw": call.get("args", "")},
-                    "type": "tool_call",
-                }
-                for call in calls
-                if isinstance(call, Mapping)
-            ]
+            tool_calls: list[dict[str, object]] = []
+            for group_item in items:
+                if group_item.semantic_kind != SemanticKind.TOOL_CALL:
+                    continue
+                payload = (
+                    group_item.payload
+                    if isinstance(group_item.payload, Mapping)
+                    else {}
+                )
+                raw_calls = payload.get("tool_calls")
+                calls = raw_calls if isinstance(raw_calls, list) else [payload]
+                tool_calls.extend(
+                    {
+                        "id": str(
+                            call.get("id")
+                            or call.get("tool_call_id")
+                            or group_item.item_id
+                        ),
+                        "name": str(call.get("name") or "tool"),
+                        "args": dict(call.get("args") or {})
+                        if isinstance(call.get("args"), Mapping)
+                        else {"raw": call.get("args", "")},
+                        "type": "tool_call",
+                    }
+                    for call in calls
+                    if isinstance(call, Mapping)
+                )
             message = AIMessage(
                 content=group_content(items) if len(items) > 1 else "",
                 id=message_id, tool_calls=tool_calls,
