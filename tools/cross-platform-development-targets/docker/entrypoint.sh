@@ -58,4 +58,9 @@ Subsystem sftp internal-sftp
 EOF
 chmod 600 "$sshd_config"
 
+# 开发服务默认只绑定回环；容器内端口要经 compose 发布给宿主机，必须显式放开。
+if ! grep -q '^BOXTEAM_DEV_LISTEN_HOST=' /etc/environment 2>/dev/null; then
+  printf '%s\n' 'BOXTEAM_DEV_LISTEN_HOST=0.0.0.0' >> /etc/environment
+fi
+
 exec /usr/sbin/sshd -D -e -f "$sshd_config"

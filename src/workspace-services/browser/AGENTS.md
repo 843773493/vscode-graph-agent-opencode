@@ -20,5 +20,5 @@
 
 - 使用 ESM，通过 `import`/`export` 编写 Node.js 代码。
 - 浏览器错误必须显式返回或抛出，不要静默失败。
-- 独立后端默认监听 `127.0.0.1:8015`；`scripts/launch/dev.mjs` 为了让 Windows Codex app 访问，会显式传入 `BOXTEAM_BROWSER_LISTEN_HOST`（默认 `0.0.0.0`）同时启动后端与前端。
+- 独立后端默认监听 `127.0.0.1:8015`，attach 前端默认监听 `127.0.0.1:8016`；`scripts/launch/dev.mjs` 传入 `BOXTEAM_DEV_LISTEN_HOST`（默认 `127.0.0.1`）启动 attach 前端，只有需要跨机访问的隔离目标才显式放开。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。

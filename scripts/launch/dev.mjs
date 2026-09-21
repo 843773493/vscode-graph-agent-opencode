@@ -99,6 +99,8 @@ if (
 }
 const detachedReadyFile = process.env.BOXTEAM_DEV_READY_FILE ?? null;
 const host = "127.0.0.1";
+// 默认只绑定本机回环；隔离的容器或远程目标需要跨机访问时才显式放开。
+const listenHost = process.env.BOXTEAM_DEV_LISTEN_HOST?.trim() || host;
 function requirePath(targetPath, label) {
   if (!existsSync(targetPath)) {
     throw new Error(`${label}不存在: ${targetPath}`);
@@ -420,6 +422,7 @@ async function main() {
     BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT: defaultWorkspaceRoot,
     BOXTEAM_DEV_PORT_OFFSET: String(portOffset),
     BOXTEAM_DEV_FRONTEND_PORT: String(ports.frontend),
+    BOXTEAM_DEV_LISTEN_HOST: listenHost,
     BOXTEAM_GATEWAY_PORT: String(ports.gateway),
     BOXTEAM_DEFAULT_BACKEND_PORT: String(ports.backend),
     BOXTEAM_TERMINAL_FRONTEND_URL: `http://${host}:${ports.terminalFrontend}`,
@@ -467,7 +470,7 @@ async function main() {
           [
             "server.js",
             "--host",
-            "0.0.0.0",
+            listenHost,
             "--port",
             String(ports.terminalFrontend),
             "--backend-url",
@@ -487,7 +490,7 @@ async function main() {
           [
             "server.js",
             "--host",
-            "0.0.0.0",
+            listenHost,
             "--port",
             String(ports.browserFrontend),
             "--backend-url",

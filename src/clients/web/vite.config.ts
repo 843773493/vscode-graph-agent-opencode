@@ -14,6 +14,8 @@ function resolvePort(name: string, fallback: number): number {
 
 const frontendPort = resolvePort("BOXTEAM_DEV_FRONTEND_PORT", 8011);
 const gatewayPort = resolvePort("BOXTEAM_GATEWAY_PORT", 8014);
+// 默认只绑定本机回环；隔离的容器或远程目标需要跨机访问时才显式设置 BOXTEAM_DEV_LISTEN_HOST。
+const listenHost = process.env.BOXTEAM_DEV_LISTEN_HOST?.trim() || "127.0.0.1";
 
 export default defineConfig({
   cacheDir: process.env.BOXTEAM_VITE_CACHE_DIR ?? "node_modules/.vite",
@@ -36,7 +38,7 @@ export default defineConfig({
     },
   ],
   server: {
-    host: "0.0.0.0",
+    host: listenHost,
     port: frontendPort,
     strictPort: true,
     hmr: true,

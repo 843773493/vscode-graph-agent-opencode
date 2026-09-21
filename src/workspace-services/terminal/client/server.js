@@ -4,7 +4,7 @@ import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-const DEFAULT_HOST = "0.0.0.0";
+const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8013;
 const DEFAULT_BACKEND_PORT = 8012;
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8012";

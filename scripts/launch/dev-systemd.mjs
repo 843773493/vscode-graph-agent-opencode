@@ -13,6 +13,7 @@ const FORWARDED_ENVIRONMENT_NAMES = Object.freeze([
   "BOXTEAM_PYTHON_BIN",
   "NODE_BIN",
   "BOXTEAM_INSTALL_DEVELOPMENT_ASSETS",
+  "BOXTEAM_DEV_LISTEN_HOST",
 ]);
 
 function normalizeLocalOnly(environment) {

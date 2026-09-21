@@ -170,7 +170,7 @@
 ### 运行时说明
 
 1. 在 JS/TS 环境中使用 `bun`；使用 `bun install` 安装依赖，使用 `bun run dev` 启动本地开发环境。
-2. `bun run dev` 会通过 `scripts/launch/dev-systemd.mjs` 创建当前 worktree 专属的 transient user-systemd unit，再由 unit 执行 `scripts/launch/dev.mjs`。源码开发未显式设置 `BOXTEAM_HOME` 时默认使用当前 worktree 的 `out/development-runtime/boxteam-home/`。当前主服务监听关系为：工作区后端 `127.0.0.1:8010`、浏览器前端 `0.0.0.0:8011`、Workspace Gateway `127.0.0.1:8014`；Terminal 和 Browser 辅助服务分别使用 8012/8013 与 8015/8016，默认监听 `0.0.0.0`。
+2. `bun run dev` 会通过 `scripts/launch/dev-systemd.mjs` 创建当前 worktree 专属的 transient user-systemd unit，再由 unit 执行 `scripts/launch/dev.mjs`。源码开发未显式设置 `BOXTEAM_HOME` 时默认使用当前 worktree 的 `out/development-runtime/boxteam-home/`。当前主服务监听关系为：工作区后端 `127.0.0.1:8010`、浏览器前端 `127.0.0.1:8011`、Workspace Gateway `127.0.0.1:8014`；Terminal 和 Browser 辅助服务分别使用 8012/8013 与 8015/8016，默认监听 `127.0.0.1`。需要跨机访问时才通过 `BOXTEAM_DEV_LISTEN_HOST` 显式放开。
 3. `scripts/launch/dev.mjs` 启动前会清理 8010–8016 以及调试端口 8002 的旧监听进程，其中包括 Gateway。需要验证完整 Web 产品时必须通过该脚本统一重启，不要只手动重启 8010 后端而保留旧 Gateway 或旧前端。
 4. `bun run dev` 在 transient unit 和完整服务就绪后返回，`bun run dev:status` 查看状态，`bun run dev:stop` 停止并回收 unit。只有需要前台调试整组进程时才使用 `bun run dev:foreground`；任一关键进程退出时仍会停止其余进程。
 5. 验证 Web 可用性不能只检查 8010 健康接口或 8011 HTML。至少应通过 8011 实际请求 `/api/gateway/health`、`/api/gateway/workspaces` 和 `/api/v1/workspace`，确认页面初始化链路、激活工作区以及响应头/响应体 `request_id` 均正确；涉及交互时还应进行真实浏览器测试。
