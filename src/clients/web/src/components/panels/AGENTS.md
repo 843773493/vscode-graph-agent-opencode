@@ -1,13 +1,14 @@
 # 目录用途
 
-存放主窗口与扩展窗口的各类面板容器组件：请求日志面板、事件队列面板、会话资源面板、Agent 会话面板、Gateway 扩展资源面板和聊天面板，负责把对应数据渲染成可停靠的面板 UI。
+存放主窗口与扩展窗口的各类面板容器组件：请求日志、事件队列、会话资源、Agent 会话、Gateway 扩展资源、聊天、Agent 状态、自动化、端口转发、终端、Gateway 日志和子会话面板，负责把对应数据渲染成可停靠的面板 UI。
 
 本目录与相邻子包的分工边界：
 
 - `components/chat/`：聊天回合内部的渲染单元（ChatTurn、虚拟滚动等），本目录的 ChatPanel 只做列表容器与分页编排。
 - `components/agentSessions/`：Agent 会话树与筛选菜单内部实现，本目录的 AgentSessionsPanel 只做面板级组合。
-- `components/workspace/`：工作区文件与端口等面板，与本目录面板职责不同。
+- `components/workspace/`：工作区文件与端口等面板实现，本目录的 PortForwardPanel 只做工作区端口面板的接入层。
 - `components/eventQueue/`、`components/contextInspection/`、`components/nodeDebug/`、`components/gatewayExtensions/`：各自专属面板的进一步拆分子包。
+- `components/overlays/`（待建）：AnchoredOverlay / WarmActionDialog / SessionNameDialog / GatewayUserAccessMenu 等覆盖层与对话框，术语上不属于面板。
 
 # 可修改内容
 

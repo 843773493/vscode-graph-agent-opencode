@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ChildThreadSummary } from "../types/backend";
+import type { ChildThreadSummary } from "../../types/backend";
 import {
   childThreadStatusClass,
   childThreadStatusLabel,
-} from "../state/childThreadDisplay";
+} from "../../state/childThreadDisplay";
 import ChildThreadPanel from "./ChildThreadPanel";
 
 /** 递归提取 react-test-renderer 节点的全部文本。 */

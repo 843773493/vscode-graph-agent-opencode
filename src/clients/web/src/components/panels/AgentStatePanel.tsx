@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { formatDateTime } from "../utils/format";
-import AssemblyContextInspector from "./contextInspection/AssemblyContextInspector";
+import { formatDateTime } from "../../utils/format";
+import AssemblyContextInspector from "../contextInspection/AssemblyContextInspector";
 import {
   buildAgentStateSummary,
   formatAgentStateJsonlForDisplay,
   parseAgentStateRecords,
-} from "../state/display/agentStateDisplay";
+} from "../../state/display/agentStateDisplay";
 
 export default function AgentStatePanel({
   jsonl,

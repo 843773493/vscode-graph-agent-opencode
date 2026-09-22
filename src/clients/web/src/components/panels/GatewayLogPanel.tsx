@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getGatewayDiagnostics } from "../gatewayApi";
-import type { GatewayDiagnosticLog, GatewayDiagnostics } from "../types/backend";
-import { diagnosticLogUnavailableHint } from "./gatewayLogPresentation";
+import { getGatewayDiagnostics } from "../../gatewayApi";
+import type { GatewayDiagnosticLog, GatewayDiagnostics } from "../../types/backend";
+import { diagnosticLogUnavailableHint } from "../gatewayLogPresentation";
 
 interface GatewayLogPanelProps {
   apiPort: number;
