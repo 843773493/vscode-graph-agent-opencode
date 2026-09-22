@@ -1,6 +1,6 @@
 # 目录用途
 
-`src/clients/web/src/state/requestLogDisplay/` 放浏览器前端「请求日志展示族」的纯派生逻辑：把后端权威的 LLM 请求日志记录（`LLMRequestLogRecord`）投影成请求日志面板可直接渲染的展示模型、文案与归一结果，供 `components/panels/RequestLogPanel.tsx` 消费。本子包直接继承旧顶层文件 `src/clients/web/src/state/requestLogDisplay.ts`，其全部导出符号与外部契约保持不变（`index.ts` 是对外唯一入口）。
+`src/clients/web/src/state/requestLogDisplay/` 放浏览器前端「请求日志展示族」的纯派生逻辑：把后端权威的 LLM 请求日志记录（`LLMRequestLogRecord`）投影成请求日志面板可直接渲染的展示模型、文案与归一结果，供 `components/panels/inspectionPanels/RequestLogPanel.tsx` 消费。本子包直接继承旧顶层文件 `src/clients/web/src/state/requestLogDisplay.ts`，其全部导出符号与外部契约保持不变（`index.ts` 是对外唯一入口）。
 
 与相邻子包的边界：
 
