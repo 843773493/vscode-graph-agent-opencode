@@ -595,34 +595,47 @@ export default function WorkspaceFileTree({
     );
   };
 
+  // 文件树节点行的唯一渲染实现：树形递归路径与虚拟滚动扁平行共用，
+  // 避免两处逐字重复维护出偏移。
+  const renderNodeButton = (
+    node: WorkspaceFileNode,
+    depth: number,
+    expanded: boolean,
+  ) => {
+    const isDirectory = isExpandableFileTreeNode(node);
+    return (
+      <button
+        type="button"
+        className={`files-tree-item files-tree-row${isDirectory ? " directory" : ""}${activeFilePath === node.path ? " active" : ""}`}
+        title={displayPathForTreePath(node.path)}
+        style={{ paddingLeft: `${8 + depth * 14}px` }}
+        onClick={() => handleNodeClick(node)}
+        onContextMenu={(event) => openContextMenu(
+          event,
+          node.path,
+          node.name,
+          node.kind,
+        )}
+      >
+        <span
+          className={`codicon files-tree-chevron${isDirectory ? ` codicon-chevron-${expanded ? "down" : "right"}` : ""}`}
+          aria-hidden="true"
+        />
+        <span className={`file-icon ${node.kind}`}>{fileIcon(node)}</span>
+        <span className="file-label">{node.name}</span>
+        {node.kind === "file" ? (
+          <span className="files-tree-meta">{formatByteSize(node.size)}</span>
+        ) : null}
+      </button>
+    );
+  };
+
   const renderNode = (node: WorkspaceFileNode, depth: number) => {
     const isDirectory = isExpandableFileTreeNode(node);
     const expanded = expandedPaths.has(node.path);
     return (
       <div className="files-tree-node" key={node.path}>
-        <button
-          type="button"
-          className={`files-tree-item files-tree-row${isDirectory ? " directory" : ""}${activeFilePath === node.path ? " active" : ""}`}
-          title={displayPathForTreePath(node.path)}
-          style={{ paddingLeft: `${8 + depth * 14}px` }}
-          onClick={() => handleNodeClick(node)}
-          onContextMenu={(event) => openContextMenu(
-            event,
-            node.path,
-            node.name,
-            node.kind,
-          )}
-        >
-          <span
-            className={`codicon files-tree-chevron${isDirectory ? ` codicon-chevron-${expanded ? "down" : "right"}` : ""}`}
-            aria-hidden="true"
-          />
-          <span className={`file-icon ${node.kind}`}>{fileIcon(node)}</span>
-          <span className="file-label">{node.name}</span>
-          {node.kind === "file" ? (
-            <span className="files-tree-meta">{formatByteSize(node.size)}</span>
-          ) : null}
-        </button>
+        {renderNodeButton(node, depth, expanded)}
         {isDirectory && expanded ? renderDirectory(node.path, depth + 1) : null}
       </div>
     );
@@ -730,33 +743,7 @@ export default function WorkspaceFileTree({
       );
     }
     if (row.kind === "node") {
-      const { node } = row;
-      const isDirectory = isExpandableFileTreeNode(node);
-      return (
-        <button
-          type="button"
-          className={`files-tree-item files-tree-row${isDirectory ? " directory" : ""}${activeFilePath === node.path ? " active" : ""}`}
-          title={displayPathForTreePath(node.path)}
-          style={{ paddingLeft: `${8 + row.depth * 14}px` }}
-          onClick={() => handleNodeClick(node)}
-          onContextMenu={(event) => openContextMenu(
-            event,
-            node.path,
-            node.name,
-            node.kind,
-          )}
-        >
-          <span
-            className={`codicon files-tree-chevron${isDirectory ? ` codicon-chevron-${row.expanded ? "down" : "right"}` : ""}`}
-            aria-hidden="true"
-          />
-          <span className={`file-icon ${node.kind}`}>{fileIcon(node)}</span>
-          <span className="file-label">{node.name}</span>
-          {node.kind === "file" ? (
-            <span className="files-tree-meta">{formatByteSize(node.size)}</span>
-          ) : null}
-        </button>
-      );
+      return renderNodeButton(row.node, row.depth, row.expanded);
     }
     if (row.status === "error") {
       return (
