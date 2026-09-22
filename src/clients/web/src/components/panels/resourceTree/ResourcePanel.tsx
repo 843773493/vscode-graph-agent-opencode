@@ -18,6 +18,7 @@ import { CREATABLE_SESSION_CONNECTIONS } from "../../../state/sessionConnections
 import type { CreatableSessionConnectionKind } from "../../../types/frontend";
 import AnchoredOverlay from "../../overlays/AnchoredOverlay";
 import ResourceTreeRow from "./ResourceTreeRow";
+import { errorMessage } from "../../../utils/errorMessage";
 
 const DEFAULT_GROUP_OPEN: Record<ResourceAttentionGroup, boolean> = {
   active: true,
@@ -160,9 +161,7 @@ export default function ResourcePanel({
         setNotice(`已${actionLabelForKind(kind, action)}${kindLabel(kind)}：${resourceId}`);
       })
       .catch((controlError: unknown) => {
-        const technicalDetails = controlError instanceof Error
-          ? controlError.message
-          : String(controlError);
+        const technicalDetails = errorMessage(controlError);
         setNoticeTechnicalDetails(technicalDetails);
         setNotice(
           kind === "browser" && action === "resume"
@@ -212,7 +211,7 @@ export default function ResourcePanel({
     } catch (copyError) {
       setNotice(
         `复制失败: ${
-          copyError instanceof Error ? copyError.message : String(copyError)
+          errorMessage(copyError)
         }`,
       );
     }
@@ -257,7 +256,7 @@ export default function ResourcePanel({
       .catch((createError: unknown) => {
         setNotice("新建连接失败。请确认当前工作区仍在线后重试。");
         setNoticeTechnicalDetails(
-          createError instanceof Error ? createError.message : String(createError),
+          errorMessage(createError),
         );
       })
       .finally(() => setCreatingKind(null));

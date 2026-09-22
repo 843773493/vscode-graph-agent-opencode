@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getGatewayDiagnostics } from "../../../gatewayApi";
 import type { GatewayDiagnosticLog, GatewayDiagnostics } from "../../../types/backend";
 import { diagnosticLogUnavailableHint } from "../gatewayLogPresentation";
+import { errorMessage } from "../../../utils/errorMessage";
 
 interface GatewayLogPanelProps {
   apiPort: number;
@@ -118,7 +119,7 @@ export default function GatewayLogPanel({
               : nextWorkspaceLogs[0]?.log_id ?? null,
           );
         } catch (loadError) {
-          setError(loadError instanceof Error ? loadError.message : String(loadError));
+          setError(errorMessage(loadError));
           if (!silent) {
             setDiagnostics(null);
             setSelectedLogId(null);

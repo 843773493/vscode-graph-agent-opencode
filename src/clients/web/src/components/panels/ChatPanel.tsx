@@ -22,6 +22,7 @@ import ChatHistoryPageHeader from "../chat/ChatHistoryPageHeader";
 import ChatTurn from "../chat/ChatTurn";
 import ChatTurnErrorBoundary from "../chat/ChatTurnErrorBoundary";
 import { useTurnVirtualScroller } from "../chat/useTurnVirtualScroller";
+import { errorMessage } from "../../utils/errorMessage";
 
 interface ChatPanelRenderState {
   apiPort: number;
@@ -326,7 +327,7 @@ export default function ChatPanel({
     try {
       await action();
     } catch (error) {
-      setPendingActionError(error instanceof Error ? error.message : String(error));
+      setPendingActionError(errorMessage(error));
       throw error;
     } finally {
       setPendingActionRunning(false);

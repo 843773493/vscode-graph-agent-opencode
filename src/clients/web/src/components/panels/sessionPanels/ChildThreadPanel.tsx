@@ -6,6 +6,7 @@ import {
   childThreadStatusClass,
   childThreadStatusLabel,
 } from "../../../state/childThreadDisplay";
+import { errorMessage } from "../../../utils/errorMessage";
 
 /** child thread 在列表中的图标；用分支语义表达“从 owner 会话派生”。 */
 const CHILD_THREAD_ICON = "codicon-git-branch";
@@ -50,7 +51,7 @@ export default function ChildThreadPanel({
         setNoticeError(true);
         setNotice(
           `复制失败: ${
-            copyError instanceof Error ? copyError.message : String(copyError)
+            errorMessage(copyError)
           }`,
         );
       });

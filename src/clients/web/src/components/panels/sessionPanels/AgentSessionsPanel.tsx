@@ -33,6 +33,7 @@ import {
   type SessionGroupingMode,
   type SessionSortMode,
 } from '../../agentSessions/agentSessionsUtils';
+import { errorMessage } from "../../../utils/errorMessage";
 
 interface AgentSessionsPanelProps {
   apiPort: number;
@@ -197,7 +198,7 @@ export default function AgentSessionsPanel({
         await onRefreshWorkspaceSessions(workspaceId);
       } catch (error) {
         onStatusChange(
-          `工作区已启动，但刷新会话列表失败: ${error instanceof Error ? error.message : String(error)}`,
+          `工作区已启动，但刷新会话列表失败: ${errorMessage(error)}`,
         );
       }
       onInvalidateSessionCatalog(workspaceId);
@@ -339,7 +340,7 @@ export default function AgentSessionsPanel({
       return;
     }
     void onActivateWorkspace(workspace.workspace_id).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       onStatusChange(`工作区切换失败: ${message}`);
     });
   };
@@ -366,7 +367,7 @@ export default function AgentSessionsPanel({
               className="new-session-pill"
               onClick={() => {
                 void onCreateSession().catch((error: unknown) => {
-                  const message = error instanceof Error ? error.message : String(error);
+                  const message = errorMessage(error);
                   onStatusChange(`创建会话失败: ${message}`);
                 });
               }}
@@ -596,7 +597,7 @@ export default function AgentSessionsPanel({
           onUnbindSession={(sessionId, workspaceId) => {
             void onSetSessionParent(workspaceId, sessionId, null).catch(
               (error: unknown) => {
-                const message = error instanceof Error ? error.message : String(error);
+                const message = errorMessage(error);
                 onStatusChange(`解除会话绑定失败: ${message}`);
               },
             );
