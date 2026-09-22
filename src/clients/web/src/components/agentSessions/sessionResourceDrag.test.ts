@@ -203,3 +203,118 @@ describe("会话资源树拖放决策", () => {
     });
   });
 });
+
+/**
+ * decideSessionResourceDrop 的拒绝分支契约表：每条用例锁定一个拒绝理由，
+ * 防止任何一条拒绝分支被改坏后静默放行成非法移动。
+ */
+describe("会话资源拖放拒绝契约", () => {
+  const cases: Array<{
+    name: string;
+    source: Parameters<typeof decideSessionResourceDrop>[0];
+    target: Parameters<typeof decideSessionResourceDrop>[1];
+    zone?: Parameters<typeof decideSessionResourceDrop>[2];
+    reason: string;
+  }> = [
+    {
+      name: "工作区文件夹拖到工作区行中间时拒绝",
+      source: { kind: "workspace_folder", nodeId: "gwn_src", parentNodeId: null },
+      target: {
+        kind: "workspace",
+        nodeId: "gwn_ws",
+        workspaceId: "gw_1",
+        navigationParentNodeId: null,
+        parentWorkspaceId: null,
+      },
+      reason: "工作区文件夹不能放入工作区",
+    },
+    {
+      name: "工作区文件夹拖到会话节点时拒绝",
+      source: { kind: "workspace_folder", nodeId: "gwn_src", parentNodeId: null },
+      target: { kind: "session", nodeId: "cnode_1", sessionId: "ses_1", workspaceId: "gw_1" },
+      reason: "工作区文件夹只能放入或插入工作区文件夹层级",
+    },
+    {
+      name: "工作区文件夹拖到自身时拒绝",
+      source: { kind: "workspace_folder", nodeId: "gwn_same", parentNodeId: null },
+      target: { kind: "workspace_folder", nodeId: "gwn_same", parentNodeId: null },
+      reason: "工作区文件夹不能放入自身",
+    },
+    {
+      name: "工作区拖到自身时拒绝成为自己的子工作区",
+      source: {
+        kind: "workspace",
+        nodeId: "gwn_a",
+        workspaceId: "gw_a",
+        parentWorkspaceId: null,
+        parentNodeId: null,
+      },
+      target: {
+        kind: "workspace",
+        nodeId: "gwn_a",
+        workspaceId: "gw_a",
+        navigationParentNodeId: null,
+        parentWorkspaceId: null,
+      },
+      reason: "工作区不能成为自己的子工作区",
+    },
+    {
+      name: "工作区拖到会话节点时拒绝",
+      source: {
+        kind: "workspace",
+        nodeId: "gwn_a",
+        workspaceId: "gw_a",
+        parentWorkspaceId: null,
+        parentNodeId: null,
+      },
+      target: { kind: "session", nodeId: "cnode_1", sessionId: "ses_1", workspaceId: "gw_a" },
+      reason: "工作区只能放入父工作区或工作区文件夹",
+    },
+    {
+      name: "会话拖到导航根时拒绝",
+      source: {
+        kind: "session",
+        nodeId: "cnode_1",
+        sessionId: "ses_1",
+        workspaceId: "gw_a",
+        parentNodeId: null,
+      },
+      target: { kind: "navigation_root" },
+      reason: "会话资源只能在所属工作区的会话树内移动",
+    },
+    {
+      name: "会话拖到自身节点时拒绝",
+      source: {
+        kind: "session",
+        nodeId: "cnode_same",
+        sessionId: "ses_same",
+        workspaceId: "gw_a",
+        parentNodeId: null,
+      },
+      target: { kind: "session", nodeId: "cnode_same", sessionId: "ses_same", workspaceId: "gw_a" },
+      reason: "会话资源不能放入自身",
+    },
+    {
+      name: "会话已经位于目标文件夹下时拒绝",
+      source: {
+        kind: "session",
+        nodeId: "cnode_child",
+        sessionId: "ses_child",
+        workspaceId: "gw_a",
+        parentNodeId: "cnode_target",
+      },
+      target: { kind: "session_folder", nodeId: "cnode_target", workspaceId: "gw_a" },
+      reason: "会话资源已经位于该位置",
+    },
+  ];
+
+  for (const testCase of cases) {
+    test(testCase.name, () => {
+      expect(decideSessionResourceDrop(
+        testCase.source,
+        testCase.target,
+        testCase.zone,
+      )).toEqual({ allowed: false, reason: testCase.reason });
+    });
+  }
+});
