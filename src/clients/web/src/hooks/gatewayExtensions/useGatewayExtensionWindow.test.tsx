@@ -10,7 +10,7 @@ import type { SessionResource } from "../../types/backend";
 // 这里替换为记录实参的桩，直接观察编排层原样转发的四个参数与返回的资源标识。
 const createSessionConnectionCalls: Array<[number, string, string, string]> = [];
 let createdConnectionResourceId = "created-browser-1";
-mock.module("../../gatewayApi", () => ({
+mock.module("../../api/gateway/sessionConnections", () => ({
   createSessionConnection: async (
     port: number,
     workspaceId: string,

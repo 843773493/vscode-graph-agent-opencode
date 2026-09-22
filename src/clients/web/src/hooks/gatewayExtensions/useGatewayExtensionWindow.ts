@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { WorkspaceAuxiliaryTab } from "../../components/workspace/WorkspaceAuxiliaryPanel";
 import type { WorkspaceRuntimePreviewTab } from "../../components/workspace/WorkspaceRuntimePreviewArea";
-import { createSessionConnection } from "../../gatewayApi";
+import { createSessionConnection } from "../../api/gateway/sessionConnections";
 import type {
   GatewayExtensionResourceEntry,
   useGatewayExtensionResources,

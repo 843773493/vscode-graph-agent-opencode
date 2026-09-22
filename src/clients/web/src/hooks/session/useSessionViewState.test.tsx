@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import * as gatewayApi from "../../gatewayApi";
+import * as userViewStateApi from "../../api/gateway/userViewState";
 import type {
   GatewayUserAccess,
   GatewayUserViewState,
@@ -81,7 +81,7 @@ describe("useSessionViewState", () => {
   test("并发加载共享请求，并在成功后完整应用后端对象", async () => {
     let resolveRequest!: (value: GatewayUserViewState) => void;
     let requests = 0;
-    const reader = spyOn(gatewayApi, "getGatewayUserViewState").mockImplementation(
+    const reader = spyOn(userViewStateApi, "getGatewayUserViewState").mockImplementation(
       async () => {
         requests += 1;
         return await new Promise<GatewayUserViewState>((resolve) => {
@@ -123,7 +123,7 @@ describe("useSessionViewState", () => {
 
   test("保存响应在 lease generation 变化后不污染当前用户状态", async () => {
     let resolveRequest!: (value: GatewayUserViewState) => void;
-    const writer = spyOn(gatewayApi, "putGatewayUserViewState").mockImplementation(
+    const writer = spyOn(userViewStateApi, "putGatewayUserViewState").mockImplementation(
       async () => await new Promise<GatewayUserViewState>((resolve) => {
         resolveRequest = resolve;
       }),
@@ -160,7 +160,7 @@ describe("useSessionViewState", () => {
   });
 
   test("toggleExpandDetails 写入展开态并触发保存", async () => {
-    const writer = spyOn(gatewayApi, "putGatewayUserViewState").mockImplementation(
+    const writer = spyOn(userViewStateApi, "putGatewayUserViewState").mockImplementation(
       async () => viewState(),
     );
     restoreApi = () => writer.mockRestore();
@@ -183,7 +183,7 @@ describe("useSessionViewState", () => {
   });
 
   test("读取失败把原始错误文本写进 status", async () => {
-    const reader = spyOn(gatewayApi, "getGatewayUserViewState").mockImplementation(
+    const reader = spyOn(userViewStateApi, "getGatewayUserViewState").mockImplementation(
       async () => {
         throw new Error("网关视图位置不可读");
       },

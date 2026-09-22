@@ -7,11 +7,11 @@ import {
 import { HttpRequestError } from "../../api/http";
 import {
   activateGatewayWorkspace,
-  ensureGatewayUserAccess,
-  getLatestGatewayUserViewState,
   getGatewayUiSettings,
   listGatewayWorkspaces,
 } from "../../gatewayApi";
+import { ensureGatewayUserAccess } from "../../api/gateway/userAccess";
+import { getLatestGatewayUserViewState } from "../../api/gateway/userViewState";
 import { writeCachedUiSettings } from "../../state/storage";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import type { SetAppState } from "../contentViewLoaderTypes";

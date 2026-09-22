@@ -4,7 +4,7 @@ import { DEFAULT_BACKEND_PORT } from "../../api";
 import {
   getGatewayUserViewState,
   putGatewayUserViewState,
-} from "../../gatewayApi";
+} from "../../api/gateway/userViewState";
 import type {
   GatewayUserAccess,
   GatewayUserViewState,

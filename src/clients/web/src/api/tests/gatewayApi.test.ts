@@ -3,17 +3,135 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   addManagedGatewayWorkspace,
   browseGatewayLocalDirectories,
-  createSessionConnection,
-  ensureGatewayUserAccess,
-  heartbeatGatewayUserWithRetry,
   listGatewayWorkspaces,
 } from "../../gatewayApi";
+import { createSessionConnection } from "../gateway/sessionConnections";
+import {
+  acquireGatewayGuest,
+  createGatewayUser,
+  deleteGatewayUser,
+  ensureGatewayUserAccess,
+  heartbeatGatewayUserWithRetry,
+  listGatewayUsers,
+  selectGatewayUser,
+  takeoverGatewayUser,
+} from "../gateway/userAccess";
 import { requestJson } from "../../api";
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+interface CapturedUserRequest {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/**
+ * 安装一段记录用户访问控制请求的 fetch 桩：先应答屏障所需的本地凭据与
+ * current 探测，再记录目标请求；所有响应都带 request_id 以满足解包契约。
+ */
+function stubUserAccessFetch(
+  captured: CapturedUserRequest[],
+  respond: () => unknown,
+): void {
+  globalThis.fetch = Object.assign(
+    async (...args: Parameters<typeof fetch>) => {
+      const [input, init] = args;
+      const path = new URL(String(input), "http://127.0.0.1").pathname;
+      if (path === "/api/gateway/auth/local-credential") {
+        return Response.json({ data: { token: "user-access-token" } });
+      }
+      if (path === "/api/gateway/users/current") {
+        return Response.json({
+          data: { kind: "guest", user_id: null, lease_generation: 1 },
+          request_id: "req_user_access_current",
+        });
+      }
+      captured.push({
+        method: init?.method ?? "GET",
+        path,
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return Response.json(
+        { data: respond(), request_id: "req_user_access" },
+      );
+    },
+    { preconnect: originalFetch.preconnect },
+  );
+}
+
+describe("Gateway 用户访问控制请求", () => {
+  test("删除用户使用 DELETE 且路径做 URL 编码", async () => {
+    const captured: CapturedUserRequest[] = [];
+    stubUserAccessFetch(captured, () => ({ user_id: "u 1" }));
+
+    await deleteGatewayUser(49_910, "u 1");
+
+    expect(captured).toEqual([
+      { method: "DELETE", path: "/api/gateway/users/u%201", body: null },
+    ]);
+  });
+
+  test("列表与创建用户携带正确的方法与请求体", async () => {
+    const captured: CapturedUserRequest[] = [];
+    stubUserAccessFetch(captured, () => ({ items: [] }));
+
+    await listGatewayUsers(49_911);
+    await createGatewayUser(49_911, { display_name: "新用户" });
+
+    expect(captured).toEqual([
+      { method: "GET", path: "/api/gateway/users", body: null },
+      {
+        method: "POST",
+        path: "/api/gateway/users",
+        body: { display_name: "新用户" },
+      },
+    ]);
+  });
+
+  test("select/takeover 分别落到 access 与 takeover 且透传 client_label", async () => {
+    const captured: CapturedUserRequest[] = [];
+    stubUserAccessFetch(captured, () => ({
+      kind: "user",
+      user_id: "usr_1",
+      lease_generation: 1,
+    }));
+
+    await selectGatewayUser(49_912, "usr_1", "我的浏览器");
+    await takeoverGatewayUser(49_912, "usr_1");
+
+    expect(captured).toEqual([
+      {
+        method: "POST",
+        path: "/api/gateway/users/usr_1/access",
+        body: { client_label: "我的浏览器" },
+      },
+      {
+        method: "POST",
+        path: "/api/gateway/users/usr_1/takeover",
+        body: { client_label: null },
+      },
+    ]);
+  });
+
+  test("显式切换游客直接 POST guest 且不发送额外字段", async () => {
+    const captured: CapturedUserRequest[] = [];
+    stubUserAccessFetch(captured, () => ({
+      kind: "guest",
+      user_id: null,
+      lease_generation: 2,
+    }));
+
+    await acquireGatewayGuest(49_913);
+
+    expect(captured).toEqual([
+      { method: "POST", path: "/api/gateway/users/guest", body: {} },
+    ]);
+  });
 });
 
 describe("手动创建会话连接", () => {

@@ -4,7 +4,7 @@ import {
   getSessionResources,
 } from "../../api";
 import { HttpRequestError } from "../../api";
-import { ensureGatewayUserAccess } from "../../gatewayApi";
+import { ensureGatewayUserAccess } from "../../api/gateway/userAccess";
 import type {
   Session,
   SessionResourceAction,

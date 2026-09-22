@@ -7,7 +7,7 @@ import {
   listGatewayUsers,
   selectGatewayUser,
   takeoverGatewayUser,
-} from "../../gatewayApi";
+} from "../../api/gateway/userAccess";
 import { HttpRequestError } from "../../api";
 import { useAppState } from "../../hooks";
 import AnchoredOverlay from "./AnchoredOverlay";
