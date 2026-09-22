@@ -72,6 +72,9 @@ async function mountHook(initialState: AppState): Promise<MountedHook> {
       activateGatewayWorkspaceInBackground: (workspaceId) => {
         calls.push({ kind: "activateGatewayWorkspaceInBackground", args: [workspaceId] });
       },
+      setStatus: (message) => {
+        calls.push({ kind: "setStatus", args: [message] });
+      },
     });
     return null;
   }
@@ -163,6 +166,24 @@ describe("useWorkspaceSessionSelection latest-only 队列", () => {
     expect(getSession).not.toHaveBeenCalled();
     expect(calls).toContainEqual({ kind: "selectWorkspaceSession", args: ["ws-1", "session-c", cached] });
     expect(calls).toContainEqual({ kind: "activateGatewayWorkspaceInBackground", args: ["ws-1"] });
+  });
+
+  test("缓存未命中且后端读取失败时写入可见状态且不留下未处理拒绝", async () => {
+    const failure = new Error("后端不可达");
+    const getSession = spyOn(api, "getSession").mockRejectedValue(failure);
+    restoreSpies.push(() => getSession.mockRestore());
+
+    const { hook, calls } = await mountHook(appState());
+    const opened = hook.openWorkspaceSession("ws-1", "session-missing");
+
+    // 会话树的点击回调签名是 (sessionId) => void，没有调用方能接住 rejection，
+    // 因此失败必须写成可见状态并正常结束，绝不能留下未处理拒绝。
+    await act(async () => {
+      await expect(opened).resolves.toBeUndefined();
+    });
+
+    expect(calls).toContainEqual({ kind: "setStatus", args: ["打开会话失败: 后端不可达"] });
+    expect(calls.filter((call) => call.kind === "selectWorkspaceSession")).toEqual([]);
   });
 
   // 本用例守护的是「latest-only 队列在回调入口短路 + await 之后的意图守卫」共同提供的

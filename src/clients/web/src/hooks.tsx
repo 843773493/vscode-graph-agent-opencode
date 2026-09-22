@@ -623,6 +623,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     selectWorkspaceSession: selectWorkspaceSessionCallback,
     loadSessionViewState,
     activateGatewayWorkspaceInBackground,
+    setStatus,
   });
 
   const {

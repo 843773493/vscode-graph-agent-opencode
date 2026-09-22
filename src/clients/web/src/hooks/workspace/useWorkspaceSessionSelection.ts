@@ -2,6 +2,7 @@ import { useCallback, useRef, type MutableRefObject } from "react";
 import { DEFAULT_BACKEND_PORT, getSession as apiGetSession } from "../../api";
 import type { Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
+import { errorMessage } from "../../utils/errorMessage";
 import { createLatestSerialTaskQueue } from "../runtime/serialTaskQueue";
 import type { SessionViewStateController } from "../session/useSessionViewState";
 
@@ -14,6 +15,7 @@ export function useWorkspaceSessionSelection({
   selectWorkspaceSession,
   loadSessionViewState,
   activateGatewayWorkspaceInBackground,
+  setStatus,
 }: {
   apiPort: number | null;
   latestStateRef: MutableRefObject<AppState>;
@@ -25,6 +27,7 @@ export function useWorkspaceSessionSelection({
   ) => void;
   loadSessionViewState: SessionViewStateController["loadSessionViewState"];
   activateGatewayWorkspaceInBackground: (workspaceId: string) => void;
+  setStatus: (message: string) => void;
 }) {
   const selectionQueueRef = useRef(createLatestSerialTaskQueue());
   const selectionIntentRef = useRef(0);
@@ -59,8 +62,27 @@ export function useWorkspaceSessionSelection({
       const shouldActivateWorkspace =
         workspaceId !== latestState.activeGatewayWorkspaceId
         || latestState.workspaceSwitching;
-      const selectedSession = cachedSession
-        ?? await apiGetSession(apiPort ?? DEFAULT_BACKEND_PORT, sessionId, workspaceId);
+      let selectedSession: Session;
+      if (cachedSession) {
+        selectedSession = cachedSession;
+      } else {
+        try {
+          selectedSession = await apiGetSession(
+            apiPort ?? DEFAULT_BACKEND_PORT,
+            sessionId,
+            workspaceId,
+          );
+        } catch (error: unknown) {
+          // 缓存未命中且后端不可达时，以前的分支会让这次点击静默失败。会话树的
+          // 点击回调签名是 (sessionId) => void，没有任何调用方能接住这个 rejection，
+          // 继续抛出只会变成未处理拒绝。这里把失败写成用户可见状态后正常返回，
+          // 让「点击已被处理，只是失败了」这件事既可见又不残留未处理拒绝。
+          if (intent === selectionIntentRef.current) {
+            setStatus(`打开会话失败: ${errorMessage(error)}`);
+          }
+          return;
+        }
+      }
       if (intent !== selectionIntentRef.current) {
         return;
       }
@@ -69,7 +91,12 @@ export function useWorkspaceSessionSelection({
         activateGatewayWorkspaceInBackground(workspaceId);
       }
     });
-  }, [activateGatewayWorkspaceInBackground, selectWorkspaceSessionWithViewState, apiPort]);
+  }, [
+    activateGatewayWorkspaceInBackground,
+    selectWorkspaceSessionWithViewState,
+    apiPort,
+    setStatus,
+  ]);
 
   return {
     selectSession: selectSessionWithViewState,
