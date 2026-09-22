@@ -145,15 +145,20 @@ class NodeDebugRuntimeObserver:
         if return_code == 0:
             return None
         message = f"Node 调试进程退出，退出码: {return_code}"
-        tail = " / ".join(runtime.stderr_lines[-3:])
-        return f"{message}；stderr: {tail}" if tail else message
+        return NodeDebugRuntimeObserver._with_stderr_tail(runtime, message)
 
     @staticmethod
     def handshake_timeout_message(
         runtime: NodeDebugRuntime, timeout_seconds: float
     ) -> str:
         """握手超时必须带超时值与 stderr 尾行，绝不返回空消息。"""
-        message = f"等待 Node Inspector 就绪超时（{timeout_seconds:g} 秒）"
+        return NodeDebugRuntimeObserver._with_stderr_tail(
+            runtime, f"等待 Node Inspector 就绪超时（{timeout_seconds:g} 秒）"
+        )
+
+    @staticmethod
+    def _with_stderr_tail(runtime: NodeDebugRuntime, message: str) -> str:
+        """附加 stderr 尾行；没有诊断时原样返回消息。"""
         tail = " / ".join(runtime.stderr_lines[-3:])
         return f"{message}；stderr: {tail}" if tail else message
 
