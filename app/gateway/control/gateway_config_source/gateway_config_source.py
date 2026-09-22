@@ -541,12 +541,42 @@ class GatewayConfigSourceMixin:
             connection.close()
 
     def source_generation_high_water_mark(self, *, source_key: str) -> int:
+        """返回本 source 已提交的最大 journal generation；从未写入时为 0。
+
+        ``config_source_owner.next_generation`` 与 journal 在同一事务推进，合法写入
+        至少为 ``generation + 1``（首个事件后为 2，因此高水位至少为 1）。这里对两种
+        不可能由软件产生的形态响亮报错，绝不返回虚假默认值：
+
+        - owner 行缺失但 journal 已有 generation：有人绕过软件清空了水位行；
+        - owner 行存在但 ``next_generation < 1``：水位本身已损坏（会算出负值高水位，
+          让 CAS 永远失配）。
+        """
+
         connection = self._database.connection()
         try:
             row = connection.execute(
                 "SELECT next_generation FROM config_source_owner WHERE source_key = ?",
                 (source_key,),
             ).fetchone()
+            if row is None:
+                journal_row = connection.execute(
+                    "SELECT MAX(source_generation) FROM config_source_journal "
+                    "WHERE source_key = ?",
+                    (source_key,),
+                ).fetchone()
+                if journal_row is not None and journal_row[0] is not None:
+                    raise RuntimeError(
+                        "Gateway source owner 水位缺失但 journal 已有 generation；"
+                        "检测到绕过软件直接修改 Gateway 配置来源状态: "
+                        f"source_key={source_key}"
+                    )
+                return 0
+            next_generation = int(row[0])
+            if next_generation < 1:
+                raise RuntimeError(
+                    "Gateway source owner next_generation 非法: "
+                    f"source_key={source_key}, next_generation={next_generation}"
+                )
         finally:
             connection.close()
-        return int(row[0]) - 1 if row is not None else 0
+        return next_generation - 1

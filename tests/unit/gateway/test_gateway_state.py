@@ -131,6 +131,56 @@ def test_gateway_source_journal_owner_generation_guard_is_enforced(tmp_path):
         state.close()
 
 
+def test_gateway_source_high_water_mark_rejects_missing_owner_with_journal(tmp_path):
+    """水位行被外部清空但 journal 仍在时必须报错，不能返回虚假 0 让 CAS 静默失配。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        assert state.source_generation_high_water_mark(source_key="user") == 0
+        state.append_config_source_journal(
+            source_key="user",
+            source_event_id="event-1",
+            source_path=tmp_path / "workspace.jsonc",
+            presence="present",
+            layer_revision=1,
+            layer_digest="a",
+            previous_digest=None,
+            origin="file-watcher",
+            fanout_id="fanout-1",
+        )
+        assert state.source_generation_high_water_mark(source_key="user") == 1
+        connection = state.connection()
+        try:
+            connection.execute("DELETE FROM config_source_owner WHERE source_key = 'user'")
+            connection.commit()
+        finally:
+            connection.close()
+        with pytest.raises(RuntimeError, match="水位缺失但 journal 已有 generation"):
+            state.source_generation_high_water_mark(source_key="user")
+    finally:
+        state.close()
+
+
+def test_gateway_source_high_water_mark_rejects_corrupt_next_generation(tmp_path):
+    """next_generation 损坏为 0 时不得算出 -1 高水位，必须响亮失败。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        connection = state.connection()
+        try:
+            connection.execute(
+                "INSERT INTO config_source_owner(source_key, next_generation) "
+                "VALUES ('user', 0)"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with pytest.raises(RuntimeError, match="next_generation 非法"):
+            state.source_generation_high_water_mark(source_key="user")
+    finally:
+        state.close()
+
+
 def test_gateway_source_owner_guard_applies_inside_sync_transaction(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
