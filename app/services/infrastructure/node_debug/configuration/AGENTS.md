@@ -1,10 +1,11 @@
 # 目录用途
 
-`app/services/infrastructure/node_debug/configuration/` 承载 Node Debug 调试方案配置的基础设施实现：方案配置的构造/持久化工厂、方案注册表与激活选择，以及启动 profile 运行时配置解析。
+`app/services/infrastructure/node_debug/configuration/` 承载 Node Debug 调试方案配置的基础设施实现：方案配置的构造/持久化工厂、方案注册表与激活选择、启动 profile 运行时配置解析，以及供 `NodeDebugService` 继承的方案配置控制链路 Mixin。
 
 # 可修改内容
 
 - 可以维护方案配置 DTO 组装、方案注册表读写、激活/选择状态和启动 profile 解析。
+- 可以维护 `configuration_control.py` 中 `NodeDebugConfigurationControlMixin` 的方案控制方法族（能力投影、profile 名称解析、方案列表/读取/创建/更新/激活/删除/导入/复制，以及运行中阻断断言与动作记录收口）；它以 Mixin 形式由宿主 `NodeDebugService` 继承。
 - 可以维护本子包内模块之间的导入路径和实现细节。
 
 # 不可修改内容

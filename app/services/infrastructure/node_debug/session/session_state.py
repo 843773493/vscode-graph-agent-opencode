@@ -4,7 +4,6 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Literal
 
-from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.node_debug import (
     ExtensionCatalogBindingAuditDTO,
     NodeDebugActionRecordDTO,
@@ -25,15 +24,12 @@ from app.services.infrastructure.node_debug.session.session_store import (
 )
 from app.services.infrastructure.node_debug.session.snapshot import (
     MAX_NODE_DEBUG_ACTIONS,
+    append_pending_debug_action,
 )
 from app.services.infrastructure.node_debug.session.thread_owner import (
     NodeDebugOwner,
     normalize_node_debug_owner,
 )
-
-
-def _owner(session_id: str, thread_id: str) -> NodeDebugOwner:
-    return normalize_node_debug_owner(session_id, thread_id)
 
 
 class NodeDebugSessionState:
@@ -60,7 +56,7 @@ class NodeDebugSessionState:
         manifest = self._configuration_registry.ensure_loaded(session_id, thread_id)
         if manifest is not None:
             self.set_pending_actions(
-                _owner(session_id, thread_id),
+                normalize_node_debug_owner(session_id, thread_id),
                 manifest.actions,
             )
             self.sync_active_configuration(session_id, thread_id)
@@ -181,24 +177,20 @@ class NodeDebugSessionState:
         extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
         result: Literal["success", "error"] = "success",
     ) -> None:
-        owner = _owner(session_id, thread_id)
-        actions = self._pending_actions.setdefault(owner, [])
-        actions.append(
-            NodeDebugActionRecordDTO(
-                action_id=create_prefixed_id("node-debug-action"),
-                session_id=session_id,
-                thread_id=thread_id,
-                action=action,
-                message=message,
-                actor=actor,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                extension_catalog_binding=extension_catalog_binding,
-                result=result,
-                created_at=datetime.now(UTC),
-            )
+        owner = normalize_node_debug_owner(session_id, thread_id)
+        append_pending_debug_action(
+            self._pending_actions.setdefault(owner, []),
+            session_id=session_id,
+            thread_id=thread_id,
+            action=action,
+            message=message,
+            actor=actor,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            result=result,
+            max_actions=MAX_NODE_DEBUG_ACTIONS,
+            extension_catalog_binding=extension_catalog_binding,
         )
-        del actions[:-MAX_NODE_DEBUG_ACTIONS]
 
     def consume_pending_actions(
         self, owner: NodeDebugOwner
@@ -217,7 +209,9 @@ class NodeDebugSessionState:
                 active_configuration_id=self._configuration_registry.active_id(
                     session_id, thread_id
                 ),
-                actions=self.pending_actions(_owner(session_id, thread_id)),
+                actions=self.pending_actions(
+                    normalize_node_debug_owner(session_id, thread_id)
+                ),
                 updated_at=datetime.now(UTC),
             )
         )
@@ -228,7 +222,7 @@ class NodeDebugSessionState:
         thread_id: str,
         runtime: NodeDebugRuntime | None,
     ) -> None:
-        owner = _owner(session_id, thread_id)
+        owner = normalize_node_debug_owner(session_id, thread_id)
         configuration_id = self._configuration_registry.active_id(session_id, thread_id)
         selection = self._configuration_registry.selection(session_id, thread_id)
         if runtime is not None:

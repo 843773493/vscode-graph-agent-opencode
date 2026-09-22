@@ -39,10 +39,6 @@ class NodeDebugLaunchSelection:
     args: list[str] = field(default_factory=list)
 
 
-def _owner(session_id: str, thread_id: str) -> NodeDebugOwner:
-    return normalize_node_debug_owner(session_id, thread_id)
-
-
 class NodeDebugConfigurationRegistry:
     """管理 Node Debug 配置与活动选择。
 
@@ -68,7 +64,7 @@ class NodeDebugConfigurationRegistry:
     def ensure_loaded(
         self, session_id: str, thread_id: str
     ) -> NodeDebugSessionManifestDTO | None:
-        owner = _owner(session_id, thread_id)
+        owner = normalize_node_debug_owner(session_id, thread_id)
         if owner in self._loaded_sessions:
             return None
         configurations = (
@@ -110,7 +106,7 @@ class NodeDebugConfigurationRegistry:
     def refresh_new_files(self, session_id: str, thread_id: str) -> None:
         if self._store is None:
             return
-        owner = _owner(session_id, thread_id)
+        owner = normalize_node_debug_owner(session_id, thread_id)
         known = self._configurations.setdefault(owner, {})
         for configuration in self._store.list_configurations(session_id, thread_id):
             if configuration.configuration_id in known:
@@ -123,7 +119,7 @@ class NodeDebugConfigurationRegistry:
         return [
             configuration.model_copy(deep=True)
             for configuration in sorted(
-                self._configurations.get(_owner(session_id, thread_id), {}).values(),
+                self._configurations.get(normalize_node_debug_owner(session_id, thread_id), {}).values(),
                 key=lambda item: (item.name.casefold(), item.configuration_id),
             )
         ]
@@ -131,7 +127,7 @@ class NodeDebugConfigurationRegistry:
     def get(
         self, session_id: str, thread_id: str, configuration_id: str
     ) -> NodeDebugConfigurationDTO:
-        configuration = self._configurations.get(_owner(session_id, thread_id), {}).get(
+        configuration = self._configurations.get(normalize_node_debug_owner(session_id, thread_id), {}).get(
             configuration_id
         )
         if configuration is None:
@@ -144,7 +140,7 @@ class NodeDebugConfigurationRegistry:
 
     def contains(self, session_id: str, thread_id: str, configuration_id: str) -> bool:
         return configuration_id in self._configurations.get(
-            _owner(session_id, thread_id), {}
+            normalize_node_debug_owner(session_id, thread_id), {}
         )
 
     def put(
@@ -153,7 +149,7 @@ class NodeDebugConfigurationRegistry:
         configuration: NodeDebugConfigurationDTO,
         thread_id: str,
     ) -> None:
-        self._configurations.setdefault(_owner(session_id, thread_id), {})[
+        self._configurations.setdefault(normalize_node_debug_owner(session_id, thread_id), {})[
             configuration.configuration_id
         ] = configuration
         if self._store is not None:
@@ -226,7 +222,7 @@ class NodeDebugConfigurationRegistry:
         thread_id: str,
     ) -> NodeDebugConfigurationDTO:
         configuration = self.get(session_id, thread_id, configuration_id)
-        owner = _owner(session_id, thread_id)
+        owner = normalize_node_debug_owner(session_id, thread_id)
         del self._configurations[owner][configuration_id]
         if self._store is not None:
             self._store.delete_configuration(session_id, configuration_id, thread_id)
@@ -287,14 +283,14 @@ class NodeDebugConfigurationRegistry:
         return copied
 
     def active_id(self, session_id: str, thread_id: str) -> str | None:
-        return self._active_configuration_ids.get(_owner(session_id, thread_id))
+        return self._active_configuration_ids.get(normalize_node_debug_owner(session_id, thread_id))
 
     def set_active(self, session_id: str, configuration_id: str, thread_id: str) -> None:
         self.get(session_id, thread_id, configuration_id)
-        self._active_configuration_ids[_owner(session_id, thread_id)] = configuration_id
+        self._active_configuration_ids[normalize_node_debug_owner(session_id, thread_id)] = configuration_id
 
     def clear_active(self, session_id: str, thread_id: str) -> None:
-        self._active_configuration_ids.pop(_owner(session_id, thread_id), None)
+        self._active_configuration_ids.pop(normalize_node_debug_owner(session_id, thread_id), None)
 
     def active_name(self, session_id: str, thread_id: str) -> str | None:
         configuration_id = self.active_id(session_id, thread_id)
@@ -313,7 +309,7 @@ class NodeDebugConfigurationRegistry:
         )
 
     def selection(self, session_id: str, thread_id: str) -> NodeDebugLaunchSelection:
-        selection = self._launch_selections.get(_owner(session_id, thread_id))
+        selection = self._launch_selections.get(normalize_node_debug_owner(session_id, thread_id))
         if selection is None:
             return NodeDebugLaunchSelection()
         return NodeDebugLaunchSelection(
@@ -421,7 +417,7 @@ class NodeDebugConfigurationRegistry:
         if not normalized:
             raise ValueError("调试方案名称不能为空")
         for configuration in self._configurations.get(
-            _owner(session_id, thread_id), {}
+            normalize_node_debug_owner(session_id, thread_id), {}
         ).values():
             if configuration.configuration_id == exclude_configuration_id:
                 continue
@@ -429,7 +425,7 @@ class NodeDebugConfigurationRegistry:
                 raise ValueError(f"调试方案名称已存在: {name.strip()}")
 
     def _load_active_configuration(self, session_id: str, thread_id: str) -> None:
-        owner = _owner(session_id, thread_id)
+        owner = normalize_node_debug_owner(session_id, thread_id)
         configuration_id = self.active_id(session_id, thread_id)
         if configuration_id is None:
             raise RuntimeError(
