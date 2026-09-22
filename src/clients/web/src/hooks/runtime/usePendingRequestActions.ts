@@ -88,11 +88,24 @@ export function usePendingRequestActions({
     try {
       replaceSnapshot(target.sessionId, target.cacheKey, await request());
     } catch (error) {
-      await recoverSnapshot(
-        target.sessionId,
-        target.workspaceId,
-        target.cacheKey,
-      );
+      // 补偿重取失败不得覆盖原始错误：变更请求返回的 409/422 才是用户真正
+      // 需要看到的失败原因，对账用的待处理队列重取失败只是次生信息。
+      try {
+        await recoverSnapshot(
+          target.sessionId,
+          target.workspaceId,
+          target.cacheKey,
+        );
+      } catch (recoveryError) {
+        const recoveryMessage = recoveryError instanceof Error
+          ? recoveryError.message
+          : String(recoveryError);
+        // 必须是同一个错误对象：上层按 HttpRequestError 与 status 判断语义。
+        if (error instanceof Error) {
+          error.message =
+            `${error.message}；重新读取待处理队列也失败: ${recoveryMessage}`;
+        }
+      }
       throw error;
     }
   }, [recoverSnapshot, replaceSnapshot]);
