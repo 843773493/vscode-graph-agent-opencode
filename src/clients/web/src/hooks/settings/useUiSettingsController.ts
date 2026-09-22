@@ -14,21 +14,19 @@ async function applyUiSettings(setState: SetAppState, settings: WebUiSettings): 
   if (!settings.theme.resolved_theme) {
     throw new Error("Gateway UI Settings 缺少已解析主题");
   }
-  let themeLoadError: unknown = null;
-  try {
-    await loadAndApplyResolvedGatewayTheme(settings.theme.resolved_theme);
-  } catch (error) {
-    themeLoadError = error;
-  }
+  // 背景图是纯装饰画布：加载失败只写可见警告，核心主题已经应用，不阻断设置保存。
+  const { backgroundWarning } = await loadAndApplyResolvedGatewayTheme(
+    settings.theme.resolved_theme,
+  );
   setState((previous) => ({
     ...previous,
     uiSettings: settings,
     uiSettingsLoaded: true,
+    themeBackgroundWarning: backgroundWarning,
     agentSessionsPanelOpen:
       settings.layout.agent_sessions_panel_open
       ?? previous.agentSessionsPanelOpen,
   }));
-  if (themeLoadError) throw themeLoadError;
 }
 
 export function useUiSettingsController({

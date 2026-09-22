@@ -1,3 +1,5 @@
+import { errorMessage } from "../utils/errorMessage";
+
 export const BOXTEAM_THEME_EVENT = "boxteam:theme-change";
 export const DEFAULT_THEME_BACKGROUND_OVERLAY = "linear-gradient(180deg, rgb(17 19 24 / 0.08) 0%, rgb(17 19 24 / 0.16) 54%, rgb(17 19 24 / 0.44) 100%)";
 
@@ -74,13 +76,16 @@ export function applyBoxTeamTheme(
   }
 }
 
-export function applyResolvedGatewayTheme(theme: GatewayResolvedThemeConfig): void {
+export function applyResolvedGatewayTheme(
+  theme: GatewayResolvedThemeConfig,
+  root?: HTMLElement,
+): void {
   applyBoxTeamTheme({
     id: theme.id,
     colorScheme: theme.color_scheme,
     tokens: theme.tokens,
     backgroundImage: theme.background_image_url,
-  });
+  }, root);
 }
 
 export function preloadThemeBackground(
@@ -96,16 +101,33 @@ export function preloadThemeBackground(
   });
 }
 
+export interface ThemeApplicationResult {
+  /** 背景图加载失败时的可见警告文本；核心主题已经成功应用，调用方不得据此
+   * 判定主题失败，只需把这个非致命提示展示给用户。 */
+  backgroundWarning: string | null;
+}
+
+/**
+ * 应用 Gateway 已解析主题：核心 token 与配色模式是主题的必需部分，应用失败即抛出；
+ * 背景图是纯装饰画布，加载失败只降级为可见警告并回退为无背景图，绝不把一次背景图
+ * 404/断网升级成整个工作区初始化失败。
+ *
+ * root 与 createImage 是测试注入点，生产调用一律省略并使用浏览器默认值。
+ */
 export async function loadAndApplyResolvedGatewayTheme(
   theme: GatewayResolvedThemeConfig,
-): Promise<void> {
+  options: { root?: HTMLElement; createImage?: () => HTMLImageElement } = {},
+): Promise<ThemeApplicationResult> {
   try {
-    await preloadThemeBackground(theme.background_image_url);
+    await preloadThemeBackground(theme.background_image_url, options.createImage);
   } catch (error) {
-    applyResolvedGatewayTheme({ ...theme, background_image_url: null });
-    throw error;
+    applyResolvedGatewayTheme({ ...theme, background_image_url: null }, options.root);
+    return {
+      backgroundWarning: `主题背景图加载失败，已回退为无背景图：${errorMessage(error)}`,
+    };
   }
-  applyResolvedGatewayTheme(theme);
+  applyResolvedGatewayTheme(theme, options.root);
+  return { backgroundWarning: null };
 }
 
 export function installBoxTeamThemeRuntime(): () => void {

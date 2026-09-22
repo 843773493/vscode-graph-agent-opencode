@@ -1579,7 +1579,10 @@ export default function AppShell() {
         </div>
       </div>
       {!extensionWindowVisible ? (
-        <WorkbenchStatusBar status={state.status} />
+        <WorkbenchStatusBar
+          status={state.status}
+          themeBackgroundWarning={state.themeBackgroundWarning}
+        />
       ) : null}
       <SessionNameDialog
         open={nameDialog !== null}

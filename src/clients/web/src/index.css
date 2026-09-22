@@ -203,6 +203,21 @@ body > #root {
   text-overflow: ellipsis;
 }
 
+/* 主题背景图加载失败的非致命警告：与 status 分开渲染，visualWeight 更弱，
+   并靠右对齐，避免用户把装饰画布降级误读成工作区初始化失败。 */
+.workbench-status-warning {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  padding: 0 10px;
+  overflow: hidden;
+  color: var(--bt-status-warning);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .workbench-main-column {
   display: flex;
   flex: 1 1 0;

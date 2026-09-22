@@ -28,6 +28,9 @@ type WorkspaceBootstrapPayload = {
   userViewState: Awaited<ReturnType<typeof getLatestGatewayUserViewState>>;
   gatewayWorkspaces: Awaited<ReturnType<typeof listGatewayWorkspaces>>;
   uiSettings: Awaited<ReturnType<typeof getGatewayUiSettings>>;
+  /** 主题背景图加载失败的可见警告；核心主题已应用，非致命。undefined 表示本轮
+   * 复用了当前 UI 设置、没有重新加载主题，调用方必须保留原有警告而不是清空。 */
+  themeBackgroundWarning?: string | null;
   workspace: Awaited<ReturnType<typeof getWorkspace>>;
   workspaceSessionResults: PromiseSettledResult<WorkspaceSessionListSnapshot>[];
   agents: Awaited<ReturnType<typeof apiListAgents>>;
@@ -213,9 +216,11 @@ async function loadWorkspaceBootstrap(
   if (!uiSettings.theme.resolved_theme) {
     throw new Error("Gateway UI Settings 缺少已解析主题");
   }
-  if (!options.uiSettings) {
-    await loadAndApplyResolvedGatewayTheme(uiSettings.theme.resolved_theme);
-  }
+  // 主题应用分两段：核心 token/配色是必需的，失败即让整个引导失败；背景图
+  // 只是装饰画布，加载失败降级为可见警告，绝不能把工作区初始化一起拖垮。
+  const themeBackgroundWarning = options.uiSettings
+    ? undefined
+    : (await loadAndApplyResolvedGatewayTheme(uiSettings.theme.resolved_theme)).backgroundWarning;
   let gatewayWorkspaces = initialGatewayWorkspaces;
   const persistedWorkspaceId = userViewState?.workspace_id;
   if (
@@ -265,6 +270,7 @@ async function loadWorkspaceBootstrap(
     userViewState,
     gatewayWorkspaces,
     uiSettings,
+    themeBackgroundWarning,
     workspace,
     workspaceSessionResults,
     agents,
@@ -335,6 +341,7 @@ export function useWorkspaceBootstrap({
         userViewState,
         gatewayWorkspaces,
         uiSettings,
+        themeBackgroundWarning,
         workspace,
         workspaceSessionResults,
         agents,
@@ -461,6 +468,7 @@ export function useWorkspaceBootstrap({
           unreadSessionKeys,
           uiSettings,
           uiSettingsLoaded: true,
+          ...(themeBackgroundWarning === undefined ? {} : { themeBackgroundWarning }),
           expandDetails: selectBootstrapToolDetailsExpanded({
             persistedToolDetailsExpanded: userViewState?.tool_details_expanded,
             previousToolDetailsExpanded: prev.expandDetails,

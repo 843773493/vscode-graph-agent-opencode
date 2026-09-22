@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   applyBoxTeamTheme,
   DEFAULT_THEME_BACKGROUND_OVERLAY,
+  loadAndApplyResolvedGatewayTheme,
   preloadThemeBackground,
   type BoxTeamThemeConfig,
 } from "./theme";
@@ -129,5 +130,50 @@ describe("BoxTeam 运行时主题", () => {
     applyBoxTeamTheme({ id: "a2" }, first.root);
     expect(first.style.values.has("--bt-page-background")).toBe(false);
     expect(second.style.values.get("--bt-panel-background")).toBe("#b1b1b1");
+  });
+
+  test("背景图加载失败只降级为可见警告，核心主题仍成功应用", async () => {
+    const { root, style } = createRootStub();
+    const image = {} as HTMLImageElement;
+
+    const pending = loadAndApplyResolvedGatewayTheme(
+      {
+        id: "warm",
+        color_scheme: "light",
+        tokens: { "--bt-page-background": "#f2ecd9" },
+        background_image_url: "/api/gateway/ui-assets/missing",
+      },
+      { root, createImage: () => image },
+    );
+    image.onerror?.(new Event("error"));
+    const result = await pending;
+
+    // 关键断言：背景图失败不再 reject，调用方不会把它当成工作区初始化失败。
+    expect(result.backgroundWarning).toContain(
+      "背景图片加载失败: /api/gateway/ui-assets/missing",
+    );
+    expect(style.values.get("--bt-page-background")).toBe("#f2ecd9");
+    expect(style.values.get("--bt-background-image")).toBe("none");
+  });
+
+  test("背景图加载成功时不产生警告并应用背景图", async () => {
+    const { root, style } = createRootStub();
+    const image = {} as HTMLImageElement;
+
+    const pending = loadAndApplyResolvedGatewayTheme(
+      {
+        id: "warm",
+        color_scheme: "light",
+        tokens: { "--bt-page-background": "#f2ecd9" },
+        background_image_url: "https://example.com/bg.png",
+      },
+      { root, createImage: () => image },
+    );
+    image.onload?.(new Event("load"));
+
+    expect((await pending).backgroundWarning).toBeNull();
+    expect(style.values.get("--bt-background-image")).toBe(
+      'url("https://example.com/bg.png")',
+    );
   });
 });

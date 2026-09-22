@@ -89,6 +89,7 @@ const INITIAL_STATE: AppState = {
   gatewayUserViewStates: new Map(),
   uiSettings: CACHED_UI_SETTINGS,
   uiSettingsLoaded: false,
+  themeBackgroundWarning: null,
   workspaceRoot: null,
   workspaceName: null,
   agents: [],

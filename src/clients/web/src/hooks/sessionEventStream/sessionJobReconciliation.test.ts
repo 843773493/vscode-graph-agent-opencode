@@ -154,6 +154,7 @@ function appState(): AppState {
       recent_local_workspace_paths: [],
     },
     uiSettingsLoaded: true,
+    themeBackgroundWarning: null,
     workspaceRoot: "/tmp/reconciliation-workspace",
     workspaceName: "reconciliation-workspace",
     agents: [],
