@@ -22,8 +22,9 @@ interface SessionResourceTreeNavigationOptions {
 }
 
 /**
- * 会话资源树的导航与拖放行为：导航层级派生、拖拽/放置状态机、移动工作区导航节点
- * 与会话目录节点的提交与回滚，以及打开会话的进行中状态。渲染由 SessionResourceExplorer 负责。
+ * 会话资源浏览器的共享拖放机制：导航层级派生、拖拽/放置状态机，以及两条归属层级各自的
+ * 放置提交链——Gateway 工作区导航链（performWorkspaceDrop）与会话目录链（performSessionDrop）。
+ * 两条链的状态机共享，但提交动作与失败回滚各自独立，互不渗透。
  */
 export function useSessionResourceTreeNavigation({
   explorer,
@@ -163,8 +164,8 @@ export function useSessionResourceTreeNavigation({
     return rollbackPlacement;
   };
 
-  const performDrop = async (
-    source: SessionResourceDragItem,
+  const performWorkspaceDrop = async (
+    source: Extract<SessionResourceDragItem, { kind: "workspace" | "workspace_folder" }>,
     target: SessionResourceDropTarget,
     zone: SessionResourceDropZone,
   ) => {
@@ -214,8 +215,22 @@ export function useSessionResourceTreeNavigation({
       onStatusChange(zone === "inside" ? "已设置子工作区" : "已调整子工作区顺序");
       return;
     }
-    if (source.kind !== "session" && source.kind !== "session_folder") {
-      throw new Error("拖放来源不是会话资源");
+    throw new Error("拖放来源不是工作区或工作区文件夹");
+  };
+
+  const performSessionDrop = async (
+    source: Extract<SessionResourceDragItem, { kind: "session" | "session_folder" }>,
+    target: SessionResourceDropTarget,
+    zone: SessionResourceDropZone,
+  ) => {
+    const decision = decideSessionResourceDrop(source, target, zone);
+    if (!decision.allowed) {
+      throw new Error(decision.reason);
+    }
+    // 会话来源的决策只会产出 move_catalog_node；此处守卫同时满足 TS 判别联合收窄，
+    // 并在决策契约一旦被改坏时立刻抛出而不是静默什么都不做。
+    if (decision.action.kind !== "move_catalog_node") {
+      throw new Error("会话拖放决策没有产出目录移动动作");
     }
     await explorer.moveCatalogNode(
       source.workspaceId,
@@ -224,9 +239,18 @@ export function useSessionResourceTreeNavigation({
       source.parentNodeId,
     );
     await onRefreshWorkspaceSessions(source.workspaceId);
-    onStatusChange(
-      source.kind === "session" ? "已移动会话" : "已移动会话文件夹",
-    );
+    onStatusChange(source.kind === "session" ? "已移动会话" : "已移动会话文件夹");
+  };
+
+  const performDrop = async (
+    source: SessionResourceDragItem,
+    target: SessionResourceDropTarget,
+    zone: SessionResourceDropZone,
+  ) => {
+    if (source.kind === "session" || source.kind === "session_folder") {
+      return performSessionDrop(source, target, zone);
+    }
+    return performWorkspaceDrop(source, target, zone);
   };
 
   const handleDrop = (
@@ -250,6 +274,10 @@ export function useSessionResourceTreeNavigation({
     void performDrop(source, target, zone).catch((error) => handleError("拖放失败", error));
   };
 
+  /**
+   * 打开会话并维护进行中状态：同一会话只保留最后一次请求的 loading，
+   * 迟到的旧请求完成时不得清除当前请求的 loading。
+   */
   const openSessionNode = (
     workspaceId: string,
     sessionId: string,

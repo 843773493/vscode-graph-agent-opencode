@@ -2,7 +2,9 @@
 
 存放 Agent Sessions 面板的子组件，负责会话按钮、工作区会话分组、会话资源浏览器及其上下文菜单。
 
-`SessionResourceExplorer.tsx` 只负责会话资源树与搜索结果的渲染；导航层级派生、拖拽/放置状态机和拖放提交由 `useSessionResourceTreeNavigation.ts` 提供，右键菜单与对话框由 `SessionResourceOverlays.tsx` 提供，拖放决策纯函数位于 `sessionResourceDrag.ts`。
+`SessionResourceExplorer.tsx` 只负责会话资源树与搜索结果的渲染；导航层级派生、拖拽/放置状态机和两条归属层级各自的放置提交链由 `useSessionResourceTreeNavigation.ts` 提供（Gateway 工作区导航链 `performWorkspaceDrop` 与会话目录链 `performSessionDrop` 状态机共享、提交与回滚互不渗透），右键菜单与对话框由 `SessionResourceOverlays.tsx` 提供，拖放决策纯函数位于 `sessionResourceDrag.ts`。
+
+**待归位（下一阶段输入）**：本组件实际渲染的是左侧侧边栏的 Gateway 工作区导航树（工作区激活、父子关系、启停、Gateway 重连、连接管理入口），按 AGENTS.md 应属 Gateway 层级，与会话目录树的会话层级归属交叉；两条层级目前共处同一文件与同一渲染入口，尚未拆分。
 
 # 可修改内容
 

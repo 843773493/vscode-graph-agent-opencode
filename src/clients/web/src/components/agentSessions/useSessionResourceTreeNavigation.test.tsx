@@ -336,6 +336,42 @@ describe("useSessionResourceTreeNavigation 拖放提交", () => {
     expect(refreshed).toEqual(["gw_1"]);
     expect(statuses).toEqual(["已移动会话"]);
   });
+
+  test("会话已经位于目标文件夹下时拒绝且不提交目录移动", async () => {
+    const moveCalls: unknown[][] = [];
+    const errors: string[] = [];
+    const { handle } = createHarness({
+      navigationNodes: [],
+      explorer: {
+        moveCatalogNode: async (...args: unknown[]) => {
+          moveCalls.push(args);
+          return undefined as never;
+        },
+      },
+      handleError: (_prefix, error) => errors.push(
+        error instanceof Error ? error.message : String(error),
+      ),
+    });
+    act(() => {
+      handle.navigation.startDrag(dragEvent() as never, {
+        kind: "session",
+        nodeId: "cnode_child",
+        sessionId: "ses_child",
+        workspaceId: "gw_1",
+        parentNodeId: "cnode_target",
+      });
+    });
+    await act(async () => {
+      handle.navigation.handleDrop(dragEvent() as never, {
+        kind: "session_folder",
+        nodeId: "cnode_target",
+        workspaceId: "gw_1",
+      });
+      await flushDrop();
+    });
+    expect(errors).toEqual(["会话资源已经位于该位置"]);
+    expect(moveCalls).toEqual([]);
+  });
 });
 
 describe("useSessionResourceTreeNavigation 拖拽悬停判定", () => {
