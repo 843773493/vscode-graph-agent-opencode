@@ -1,4 +1,5 @@
 import React from "react";
+import { errorMessage } from "../../utils/errorMessage";
 
 import type { AttachmentRef, DeliveryPolicy } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
@@ -59,7 +60,7 @@ function PendingQueueItem({
     try {
       await action();
     } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : String(actionError));
+      setError(errorMessage(actionError));
     } finally {
       setActionRunning(false);
     }
@@ -238,7 +239,7 @@ export default function PendingQueueBar({
     try {
       await onClear();
     } catch (clearError) {
-      setError(clearError instanceof Error ? clearError.message : String(clearError));
+      setError(errorMessage(clearError));
     } finally {
       setClearing(false);
     }

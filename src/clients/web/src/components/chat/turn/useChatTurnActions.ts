@@ -5,6 +5,7 @@ import type {
   MessageReplayRequest,
 } from "../../../types/backend";
 import type { ConversationView } from "../../../types/frontend";
+import { errorMessage } from "../../../utils/errorMessage";
 
 export interface ChatTurnActionCallbacks {
   onReplayTurn: (
@@ -126,7 +127,7 @@ export function useChatTurnActions({
       setEditing(false);
       setConfirmAction(null);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      setActionError(errorMessage(error));
     } finally {
       setActionRunning(false);
     }
@@ -144,7 +145,7 @@ export function useChatTurnActions({
       );
       setEditing(false);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      setActionError(errorMessage(error));
     } finally {
       setActionRunning(false);
     }
@@ -166,7 +167,7 @@ export function useChatTurnActions({
     try {
       await action();
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      setActionError(errorMessage(error));
     } finally {
       setActionRunning(false);
     }
@@ -193,7 +194,7 @@ export function useChatTurnActions({
     executePendingEdit,
     executePendingAction,
     reportActionError: React.useCallback((error: unknown) => {
-      setActionError(error instanceof Error ? error.message : String(error));
+      setActionError(errorMessage(error));
     }, []),
   };
 }

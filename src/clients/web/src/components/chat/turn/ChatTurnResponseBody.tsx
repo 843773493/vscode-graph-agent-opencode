@@ -16,6 +16,7 @@ import ResponseActionToolbar from "../ResponseActionToolbar";
 import ToolRow from "../ToolRow";
 import { activityRendererRegistry } from "./activityRenderers";
 import type { ChatTurnActions } from "./useChatTurnActions";
+import { errorMessage } from "../../../utils/errorMessage";
 
 function ErrorPart({ item }: { item: Extract<TimelineItem, { kind: "trace" }> }) {
   const message = [item.payload.error, item.payload.message, item.payload.detail]
@@ -718,7 +719,7 @@ function TurnActivitySummary({
           ],
         );
       } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : String(loadError));
+        setError(errorMessage(loadError));
       } finally {
         setLoading(false);
       }

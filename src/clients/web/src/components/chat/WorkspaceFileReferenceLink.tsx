@@ -7,6 +7,7 @@ import {
   isLikelyWorkspaceFileReference,
   shouldResolveWorkspaceFileReference,
 } from "../../utils/workspaceFileReferences";
+import { errorMessage } from "../../utils/errorMessage";
 
 export default function WorkspaceFileReferenceLink({
   target,
@@ -47,7 +48,7 @@ export default function WorkspaceFileReferenceLink({
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setResolution({ status: "error", message });
       });
     return () => {

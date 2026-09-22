@@ -5,6 +5,7 @@ import {
 } from "../../state/display/toolDisplay";
 import type { TimelineItem } from "../../state/timeline/timelineTypes";
 import MarkdownContent from "./MarkdownContent";
+import { errorMessage } from "../../utils/errorMessage";
 
 type ToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
 
@@ -89,7 +90,7 @@ function ToolRow({
         await onLoadDetails(item.toolCallId);
         setOpen(true);
       } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : String(loadError));
+        setError(errorMessage(loadError));
       } finally {
         setLoading(false);
       }

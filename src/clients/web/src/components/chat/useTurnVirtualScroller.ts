@@ -6,6 +6,7 @@ import {
   type TurnVirtualIndexState,
 } from "../../state/session/turnVirtualization";
 import type { ConversationView } from "../../types/frontend";
+import { errorMessage } from "../../utils/errorMessage";
 
 const SCROLL_POSITION_CHANGE_TOLERANCE_PX = 0.5;
 const NATIVE_SCROLLBAR_HIT_WIDTH_PX = 24;
@@ -179,7 +180,7 @@ export function useTurnVirtualScroller({
       if (scroller.scrollTop <= 2) {
         void loadOlderMessagesRef.current().catch((error: unknown) => {
           onViewStateRestoreStatus?.(
-            `加载更早历史失败: ${error instanceof Error ? error.message : String(error)}`,
+            `加载更早历史失败: ${errorMessage(error)}`,
           );
         });
       }
@@ -271,7 +272,7 @@ export function useTurnVirtualScroller({
         restoration.attempts += 1;
         void onLoadAroundTurn(viewState.turn_anchor)
           .catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : String(error);
+            const message = errorMessage(error);
             onViewStateRestoreStatus?.(`恢复锚点历史失败: ${message}`);
           })
           .finally(() => {
@@ -290,7 +291,7 @@ export function useTurnVirtualScroller({
         restoration.attempts += 1;
         void onLoadOlderMessages()
           .catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : String(error);
+            const message = errorMessage(error);
             onViewStateRestoreStatus?.(`恢复历史位置失败: ${message}`);
           })
           .finally(() => {
@@ -472,7 +473,7 @@ export function useTurnVirtualScroller({
     if (!userRequestedOlderRef.current) return;
     void loadOlderMessages().catch((error: unknown) => {
       onViewStateRestoreStatus?.(
-        `加载更早历史失败: ${error instanceof Error ? error.message : String(error)}`,
+        `加载更早历史失败: ${errorMessage(error)}`,
       );
     });
   }, [loadOlderMessages, onViewStateRestoreStatus]);
@@ -480,7 +481,7 @@ export function useTurnVirtualScroller({
   const handleEndReached = React.useCallback(() => {
     void loadNewerMessages().catch((error: unknown) => {
       onViewStateRestoreStatus?.(
-        `加载更新历史失败: ${error instanceof Error ? error.message : String(error)}`,
+        `加载更新历史失败: ${errorMessage(error)}`,
       );
     });
   }, [loadNewerMessages, onViewStateRestoreStatus]);

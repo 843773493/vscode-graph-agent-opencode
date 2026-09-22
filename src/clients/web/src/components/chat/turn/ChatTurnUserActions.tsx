@@ -10,6 +10,7 @@ import type {
   ChatTurnActionCallbacks,
   ChatTurnActions,
 } from "./useChatTurnActions";
+import { errorMessage } from "../../../utils/errorMessage";
 
 export function ChatTurnUserSection({
   apiPort,
@@ -87,7 +88,7 @@ export function ChatTurnUserSection({
       );
       setRawMessageContent(content);
     } catch (error) {
-      setRawMessageError(error instanceof Error ? error.message : String(error));
+      setRawMessageError(errorMessage(error));
     } finally {
       setRawMessageLoading(false);
     }
