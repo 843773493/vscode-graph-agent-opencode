@@ -42,6 +42,30 @@ describe("文件树路径语义", () => {
     )).toBe(false);
   });
 
+  test("Windows 盘符路径的祖先判断与变更改写采用同一大小写语义", () => {
+    // changedPathToTreePath 已把 C:/Proj 与 c:/proj 当成同一棵树；祖先判断若仍按
+    // 字节比较，同一对路径会被判成互不包含，展开态失效与目录失效判定互相矛盾。
+    expect(changedPathToTreePath("C:/Proj/SRC/a.ts", "c:/proj")).not.toBeNull();
+    expect(isTreePathInside(
+      filesystemFileTreePath("C:/Proj/a.ts"),
+      filesystemFileTreePath("c:/proj"),
+    )).toBe(true);
+    expect(isTreePathInside(
+      filesystemFileTreePath("c:/proj/a.ts"),
+      filesystemFileTreePath("C:/Proj"),
+    )).toBe(true);
+    expect(isTreePathInside(filesystemFileTreePath("C:/Proj"),
+      filesystemFileTreePath("c:/proj"))).toBe(true);
+  });
+
+  test("POSIX 路径保持大小写敏感，不被盘符规则误折叠", () => {
+    expect(isTreePathInside(
+      filesystemFileTreePath("/home/Hyf/a"),
+      filesystemFileTreePath("/home/hyf"),
+    )).toBe(false);
+    expect(isTreePathInside("Src/a.ts", "src")).toBe(false);
+  });
+
   test("变更路径按工作区根改写为相对树路径", () => {
     expect(changedPathToTreePath("/workspace/proj/src/a.ts", "/workspace/proj"))
       .toBe("src/a.ts");

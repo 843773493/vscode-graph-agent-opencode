@@ -38,6 +38,9 @@ function isAbsolutePath(path: string): boolean {
   return path.startsWith("/") || /^[A-Za-z]:\//.test(path);
 }
 
+// Windows 盘符大小写不敏感，POSIX 路径大小写敏感。只对盘符形态的绝对路径折叠大小写，
+// 不能全局 toLowerCase：Linux 下 `/Home` 与 `/home` 是两个不同目录，macOS 的敏感度
+// 取决于文件系统格式，都不该由前端擅自归一。
 function caseInsensitiveIfWindowsDrive(path: string): string {
   return /^[A-Za-z]:\//.test(path) ? path.toLowerCase() : path;
 }
@@ -79,11 +82,15 @@ export function isTreePathInside(candidate: string, ancestor: string): boolean {
   if (candidateLocation.scope !== ancestorLocation.scope) {
     return false;
   }
-  if (!ancestorLocation.path) {
+  // 与 changedPathToTreePath 保持同一大小写语义：否则同一对 Windows 盘符路径在
+  // 「变更路径改写」里被认作同一棵树，在这里却被判成两棵，展开态与失效判定会互相矛盾。
+  const candidatePath = caseInsensitiveIfWindowsDrive(candidateLocation.path);
+  const ancestorPath = caseInsensitiveIfWindowsDrive(ancestorLocation.path);
+  if (!ancestorPath) {
     return true;
   }
-  return candidateLocation.path === ancestorLocation.path
-    || candidateLocation.path.startsWith(`${ancestorLocation.path}/`);
+  return candidatePath === ancestorPath
+    || candidatePath.startsWith(`${ancestorPath}/`);
 }
 
 export function shortWorkspaceLabel(
