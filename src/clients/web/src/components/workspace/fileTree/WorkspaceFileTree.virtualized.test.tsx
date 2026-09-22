@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { VirtuosoMockContext } from "react-virtuoso";
 
 
 const originalFetch = globalThis.fetch;
@@ -8,23 +9,33 @@ const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "wi
 
 const mountedRenderers: ReactTestRenderer[] = [];
 
-// 超过阈值时文件树走 react-virtuoso 扁平行路径。测试替换列表容器，
-// 直接对每一行调用 itemContent，从而观察扁平行与树形递归行是否同构。
-mock.module("react-virtuoso", () => ({
-  Virtuoso: (props: {
-    data: unknown[];
-    itemContent: (index: number, row: unknown) => React.ReactNode;
-    computeItemKey: (index: number, row: unknown) => React.Key;
-  }) => (
-    <>
-      {props.data.map((row, index) => (
-        <div key={props.computeItemKey(index, row)}>{props.itemContent(index, row)}</div>
-      ))}
-    </>
-  ),
-}));
+import WorkspaceFileTree from "./WorkspaceFileTree";
 
-const { default: WorkspaceFileTree } = await import("./WorkspaceFileTree");
+// 超过阈值时文件树走 react-virtuoso 扁平行路径。用真实 Virtuoso + 固定视口/行高的
+// VirtuosoMockContext 渲染，DOM 测量由 createNodeMock 提供宿主节点替身。
+// 不再 mock.module("react-virtuoso")：bun 的模块替身是进程级且不可撤销的，会让同一
+// 进程后续所有测试文件都看不到真实的 react-virtuoso。
+
+class VirtuosoHostNodeStub {
+  style = new Proxy({} as Record<string, string>, { get: () => "", set: () => true });
+  offsetHeight = 600;
+  offsetWidth = 800;
+  scrollHeight = 600;
+  scrollWidth = 800;
+  scrollTop = 0;
+  clientHeight = 600;
+  clientWidth = 800;
+  addEventListener() {}
+  removeEventListener() {}
+  appendChild() {}
+  removeChild() {}
+  setAttribute() {}
+  removeAttribute() {}
+  querySelector() { return null; }
+  getBoundingClientRect() {
+    return { x: 0, y: 0, top: 0, left: 0, right: 800, bottom: 600, width: 800, height: 600, toJSON: () => undefined };
+  }
+}
 
 function installWindow(port: number): void {
   Object.defineProperty(globalThis, "window", {
@@ -84,22 +95,25 @@ async function mount(port: number, activeFilePath: string | null, expanded: stri
   let renderer!: ReactTestRenderer;
   await act(async () => {
     renderer = create(
-      <WorkspaceFileTree
-        active
-        apiPort={port}
-        workspaceId="gw_virt"
-        workspaceName="project"
-        workspaceRoot="/w/project"
-        sessionId=""
-        activeFilePath={activeFilePath}
-        searchOpen={false}
-        collapseVersion={0}
-        expandedPaths={expanded}
-        onExpandedPathsChange={() => {}}
-        onCloseSearch={() => {}}
-        onOpenFile={() => {}}
-        onStatusChange={() => {}}
-      />,
+      <VirtuosoMockContext.Provider value={{ viewportHeight: 300, itemHeight: 30 }}>
+        <WorkspaceFileTree
+          active
+          apiPort={port}
+          workspaceId="gw_virt"
+          workspaceName="project"
+          workspaceRoot="/w/project"
+          sessionId=""
+          activeFilePath={activeFilePath}
+          searchOpen={false}
+          collapseVersion={0}
+          expandedPaths={expanded}
+          onExpandedPathsChange={() => {}}
+          onCloseSearch={() => {}}
+          onOpenFile={() => {}}
+          onStatusChange={() => {}}
+        />
+      </VirtuosoMockContext.Provider>,
+      { createNodeMock: () => new VirtuosoHostNodeStub() },
     );
   });
   mountedRenderers.push(renderer);
@@ -163,4 +177,3 @@ describe("工作区文件树虚拟滚动扁平行", () => {
     expect(dirRow[0].findAll((n) => classOf(n) === "files-tree-meta").length).toBe(0);
   });
 });
-
