@@ -7,6 +7,7 @@ import {
 import type { TraceEvent } from "../types/protocol_buf_generated/boxteam/workspace/v2/trace_pb";
 import { TraceEventSchema } from "../types/protocol_buf_generated/boxteam/workspace/v2/trace_pb";
 import type { WorkspaceFileChangeBatch } from "../types/protocol_buf_generated/boxteam/workspace/v2/file_events_pb";
+import { errorMessage } from "../utils/errorMessage";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -50,7 +51,7 @@ function parseProto<ProtoMessage>(
   try {
     return parse();
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = errorMessage(error);
     throw new Error(`${name} Protobuf 校验失败: ${detail}`);
   }
 }

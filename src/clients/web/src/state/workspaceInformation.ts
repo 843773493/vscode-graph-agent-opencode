@@ -1,5 +1,6 @@
 import type { GatewayWorkspace } from "../types/backend";
 import { isRecord, jsonCandidates } from "../utils/jsonDisplay";
+import { errorMessage } from "../utils/errorMessage";
 
 export const WORKSPACE_INFORMATION_KIND =
   "boxteam_workspace_information" as const;
@@ -83,7 +84,7 @@ export function extractWorkspaceIdFromClipboardText(text: string): string {
     try {
       parsed = JSON.parse(candidate);
     } catch (error) {
-      parseErrors.push(error instanceof Error ? error.message : String(error));
+      parseErrors.push(errorMessage(error));
       continue;
     }
     if (!isRecord(parsed) || parsed.kind !== WORKSPACE_INFORMATION_KIND) {

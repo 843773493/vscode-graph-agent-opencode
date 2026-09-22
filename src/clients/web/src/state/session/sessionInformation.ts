@@ -3,6 +3,7 @@ import type {
   SessionInformationSnapshot,
 } from "../../types/backend";
 import { isRecord, jsonCandidates } from "../../utils/jsonDisplay";
+import { errorMessage } from "../../utils/errorMessage";
 
 export const SESSION_INFORMATION_KIND = "session_diagnostic_snapshot" as const;
 
@@ -180,7 +181,7 @@ export function extractSessionIdFromClipboardText(text: string): string {
     try {
       parsed = JSON.parse(candidate);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       parseErrors.push(message);
       continue;
     }

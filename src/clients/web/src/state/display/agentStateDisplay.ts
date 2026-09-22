@@ -18,6 +18,7 @@ import {
   customToolTargetNameFromCall,
   isCustomInvokerValidationError,
 } from "../customTools/protocol";
+import { errorMessage } from "../../utils/errorMessage";
 
 export interface AgentStateSummary {
   skills: string[];
@@ -57,7 +58,7 @@ export function parseAgentStateJsonlLines(jsonl: string): AgentStateJsonlLine[] 
         raw: raw.length > AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT
           ? `${raw.slice(0, AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT)}...`
           : raw,
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       });
     }
   });

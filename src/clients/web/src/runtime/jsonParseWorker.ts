@@ -1,3 +1,4 @@
+import { errorMessage } from "../utils/errorMessage";
 interface JsonParseSuccess {
   ok: true;
   value: unknown;
@@ -24,7 +25,7 @@ workerScope.onmessage = (event) => {
   } catch (error) {
     workerScope.postMessage({
       ok: false,
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage(error),
     });
   }
 };

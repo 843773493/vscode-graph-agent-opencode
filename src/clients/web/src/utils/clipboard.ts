@@ -1,3 +1,4 @@
+import { errorMessage } from "./errorMessage";
 function fallbackCopyText(text: string): void {
   const textarea = document.createElement("textarea");
   textarea.value = text;
@@ -33,12 +34,8 @@ export async function copyTextToClipboard(text: string): Promise<void> {
     lastWrittenText = text;
   } catch (fallbackError) {
     if (clipboardError) {
-      const clipboardMessage = clipboardError instanceof Error
-        ? clipboardError.message
-        : String(clipboardError);
-      const fallbackMessage = fallbackError instanceof Error
-        ? fallbackError.message
-        : String(fallbackError);
+      const clipboardMessage = errorMessage(clipboardError);
+      const fallbackMessage = errorMessage(fallbackError);
       throw new Error(
         `Clipboard API 失败：${clipboardMessage}；兼容复制失败：${fallbackMessage}`,
       );
@@ -73,12 +70,8 @@ export async function copyTextToClipboardFromPromise(
         lastWrittenText = text;
         return;
       } catch (fallbackError) {
-        const clipboardMessage = clipboardError instanceof Error
-          ? clipboardError.message
-          : String(clipboardError);
-        const fallbackMessage = fallbackError instanceof Error
-          ? fallbackError.message
-          : String(fallbackError);
+        const clipboardMessage = errorMessage(clipboardError);
+        const fallbackMessage = errorMessage(fallbackError);
         throw new Error(
           `Clipboard API 失败：${clipboardMessage}；兼容复制失败：${fallbackMessage}`,
         );
@@ -106,9 +99,7 @@ export async function readTextFromClipboard(): Promise<string> {
     return lastWrittenText;
   }
   if (clipboardError) {
-    const message = clipboardError instanceof Error
-      ? clipboardError.message
-      : String(clipboardError);
+    const message = errorMessage(clipboardError);
     throw new Error(
       `浏览器拒绝读取剪贴板，且应用内没有最近复制的文本: ${message}`,
     );
@@ -145,12 +136,8 @@ export async function readFilePathTextFromClipboard(): Promise<string> {
     return await readTextFromClipboard();
   } catch (textError) {
     if (fileClipboardError) {
-      const fileMessage = fileClipboardError instanceof Error
-        ? fileClipboardError.message
-        : String(fileClipboardError);
-      const textMessage = textError instanceof Error
-        ? textError.message
-        : String(textError);
+      const fileMessage = errorMessage(fileClipboardError);
+      const textMessage = errorMessage(textError);
       throw new Error(
         `读取文件剪贴板失败：${fileMessage}；读取文本路径失败：${textMessage}`,
       );

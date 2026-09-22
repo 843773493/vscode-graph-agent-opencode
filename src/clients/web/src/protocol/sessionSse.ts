@@ -5,6 +5,7 @@ import {
 } from "@bufbuild/protobuf";
 import type { SessionExecutionSse } from "../types/protocol_buf_generated/boxteam/workspace/v2/session_stream_pb";
 import { SessionExecutionSseSchema } from "../types/protocol_buf_generated/boxteam/workspace/v2/session_stream_pb";
+import { errorMessage } from "../utils/errorMessage";
 
 const EVENT_PAYLOAD_FIELDS: Record<string, string> = {
   "message.updated": "messageUpdated",
@@ -252,7 +253,7 @@ export function parseSessionExecutionSse(value: unknown): SessionExecutionSse {
       ignoreUnknownFields: false,
     });
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = errorMessage(error);
     throw new Error(`SessionExecutionSseDTO Protobuf 校验失败: ${detail}`);
   }
 }
