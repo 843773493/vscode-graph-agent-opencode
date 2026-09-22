@@ -1,5 +1,5 @@
 import type { GatewayWorkspace } from "../../../types/backend";
-import WorkspacePortForwardPanel from "../../workspace/WorkspacePortForwardPanel";
+import WorkspacePortForwardPanel from "../../workspace/portForward/WorkspacePortForwardPanel";
 
 interface PortForwardPanelProps {
   apiPort: number;

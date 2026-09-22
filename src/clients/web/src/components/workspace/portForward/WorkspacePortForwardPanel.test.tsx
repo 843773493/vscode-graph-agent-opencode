@@ -5,8 +5,8 @@ import type {
   GatewayPortForward,
   GatewayPortForwardList,
   GatewayWorkspace,
-} from "../../types/backend";
-import WarmConfirmProvider from "../shell/WarmConfirmProvider";
+} from "../../../types/backend";
+import WarmConfirmProvider from "../../shell/WarmConfirmProvider";
 import WorkspacePortForwardPanel, {
   type WorkspacePortForwardApi,
 } from "./WorkspacePortForwardPanel";

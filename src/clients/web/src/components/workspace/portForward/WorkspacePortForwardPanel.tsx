@@ -6,7 +6,7 @@ import {
   deleteWorkspacePortForward,
   listWorkspacePortForwards,
   reconnectWorkspacePortForward,
-} from "../../gatewayApi";
+} from "../../../gatewayApi";
 import type {
   ChangeGatewayPortForwardLabelRequest,
   ChangeGatewayPortForwardLocalPortRequest,
@@ -15,9 +15,9 @@ import type {
   GatewayPortForwardList,
   GatewayPortForwardProtocol,
   GatewayWorkspace,
-} from "../../types/backend";
-import { useWarmConfirm } from "../shell/WarmConfirmProvider";
-import { errorMessage } from "../../utils/errorMessage";
+} from "../../../types/backend";
+import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
+import { errorMessage } from "../../../utils/errorMessage";
 
 export interface WorkspacePortForwardApi {
   list(port: number, workspaceId: string): Promise<GatewayPortForwardList>;
