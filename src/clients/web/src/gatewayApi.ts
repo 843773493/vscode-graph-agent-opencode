@@ -42,7 +42,12 @@ import type {
   WorkspaceNavigationNodeUpdateRequest,
   WorkspaceNavigationPlacementRequest,
 } from "./types/backend";
-import { HttpRequestError, requestJson, unwrapApiData } from "./api/http";
+import {
+  HttpRequestError,
+  normalizePageResult,
+  requestJson,
+  unwrapApiData,
+} from "./api/http";
 
 export async function getGatewayHealth(port: number): Promise<GatewayHealth> {
   return unwrapApiData(
@@ -657,13 +662,15 @@ export async function getGatewayThemes(port: number): Promise<GatewayThemeCatalo
 }
 
 export async function listGatewayUiAssets(port: number): Promise<GatewayUiAsset[]> {
-  const result = unwrapApiData(
-    await requestJson<APIResponse<GatewayUiAssetList>>(
-      port,
-      "/api/gateway/ui-assets",
+  return normalizePageResult<GatewayUiAsset>(
+    unwrapApiData(
+      await requestJson<APIResponse<GatewayUiAssetList>>(
+        port,
+        "/api/gateway/ui-assets",
+      ),
     ),
-  );
-  return result.items;
+    "Gateway UI 资源列表",
+  ).items;
 }
 
 export async function uploadGatewayUiAsset(
@@ -682,14 +689,16 @@ export async function uploadGatewayUiAsset(
 }
 
 export async function deleteGatewayUiAsset(port: number, assetId: string): Promise<GatewayUiAsset[]> {
-  const result = unwrapApiData(
-    await requestJson<APIResponse<GatewayUiAssetList>>(
-      port,
-      `/api/gateway/ui-assets/${encodeURIComponent(assetId)}`,
-      { method: "DELETE" },
+  return normalizePageResult<GatewayUiAsset>(
+    unwrapApiData(
+      await requestJson<APIResponse<GatewayUiAssetList>>(
+        port,
+        `/api/gateway/ui-assets/${encodeURIComponent(assetId)}`,
+        { method: "DELETE" },
+      ),
     ),
-  );
-  return result.items;
+    "Gateway UI 资源列表",
+  ).items;
 }
 
 export async function browseGatewayLocalDirectories(

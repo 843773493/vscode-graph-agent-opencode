@@ -3,6 +3,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   addManagedGatewayWorkspace,
   browseGatewayLocalDirectories,
+  deleteGatewayUiAsset,
+  listGatewayUiAssets,
   listGatewayWorkspaces,
 } from "../../gatewayApi";
 import { createSessionConnection } from "../gateway/sessionConnections";
@@ -464,5 +466,61 @@ describe("Gateway 认证初始化", () => {
     await heartbeatGatewayUserWithRetry(port);
 
     expect(heartbeatCalls).toBe(2);
+  });
+});
+
+describe("Gateway UI 资源列表载荷校验", () => {
+  /** 安装带凭据与护栏应答的 fetch 桩，正文由 items 入参决定。 */
+  function stubUiAssetsFetch(items: unknown): void {
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "ui-assets-token" } });
+        }
+        return Response.json({
+          data: items === undefined ? {} : { items },
+          request_id: "req_ui_assets",
+        });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+  }
+
+  test("合法资源数组正常返回", async () => {
+    stubUiAssetsFetch([
+      { asset_id: "asset_1", name: "主题", mime_type: "image/png" },
+    ]);
+
+    const assets = await listGatewayUiAssets(49_920);
+
+    expect(assets).toHaveLength(1);
+    expect(assets[0].asset_id).toBe("asset_1");
+  });
+
+  test("items 为 null / 对象 / 字符串时响亮失败，不伪造空列表", async () => {
+    for (const items of [null, {}, "x"]) {
+      stubUiAssetsFetch(items);
+      const expected = items === null ? "null" : items === "x" ? "string" : "object";
+      await expect(listGatewayUiAssets(49_921)).rejects.toThrow(
+        `Gateway UI 资源列表响应 items 必须是数组，实际为 ${expected}`,
+      );
+    }
+  });
+
+  test("缺失 items 字段同样响亮失败", async () => {
+    stubUiAssetsFetch(undefined);
+
+    await expect(listGatewayUiAssets(49_922)).rejects.toThrow(
+      "Gateway UI 资源列表响应 items 必须是数组，实际为 undefined",
+    );
+  });
+
+  test("删除资源同样按数组契约校验响应", async () => {
+    stubUiAssetsFetch(null);
+
+    await expect(deleteGatewayUiAsset(49_923, "asset_1")).rejects.toThrow(
+      "Gateway UI 资源列表响应 items 必须是数组，实际为 null",
+    );
   });
 });
