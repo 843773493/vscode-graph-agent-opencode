@@ -56,6 +56,7 @@ interface AgentSessionsPanelProps {
   gatewayWorkspaces: GatewayWorkspace[];
   gatewayWorkspacesStale: boolean;
   activeGatewayWorkspaceId: string | null;
+  removingGatewayWorkspaceIds: ReadonlySet<string>;
   workspaceSwitching: boolean;
   onActivateWorkspace: (workspaceId: string) => Promise<void>;
   onSetWorkspaceParent: (
@@ -122,6 +123,7 @@ export default function AgentSessionsPanel({
   gatewayWorkspaces,
   gatewayWorkspacesStale,
   activeGatewayWorkspaceId,
+  removingGatewayWorkspaceIds,
   workspaceSwitching,
   onActivateWorkspace,
   onSetWorkspaceParent,
@@ -477,6 +479,7 @@ export default function AgentSessionsPanel({
               searchQuery={searchQuery}
               workspaceSwitching={workspaceSwitching}
               startingWorkspaceIds={startingWorkspaceIds}
+              removingWorkspaceIds={removingGatewayWorkspaceIds}
               onActivateWorkspace={onActivateWorkspace}
               onSetWorkspaceParent={onSetWorkspaceParent}
               onRefreshWorkspaceSessions={onRefreshWorkspaceSessions}

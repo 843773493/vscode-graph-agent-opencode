@@ -87,6 +87,11 @@
   cursor: grab;
 }
 
+.session-resource-row.workspace.removing {
+  cursor: wait;
+  opacity: 0.58;
+}
+
 .session-resource-row.dragging {
   opacity: 0.45;
 }
@@ -282,6 +287,10 @@
   flex: 0 0 auto;
   border-radius: 50%;
   background: currentColor;
+}
+
+.session-resource-workspace-status.removing {
+  color: var(--bt-text-muted);
 }
 
 .session-resource-error-card {

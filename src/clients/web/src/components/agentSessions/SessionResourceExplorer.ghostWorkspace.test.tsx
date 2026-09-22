@@ -86,6 +86,7 @@ function renderExplorer(options: {
       searchQuery=""
       workspaceSwitching={false}
       startingWorkspaceIds={new Set()}
+      removingWorkspaceIds={new Set()}
       onActivateWorkspace={async () => undefined}
       onSetWorkspaceParent={async () => undefined}
       onRefreshWorkspaceSessions={async () => undefined}

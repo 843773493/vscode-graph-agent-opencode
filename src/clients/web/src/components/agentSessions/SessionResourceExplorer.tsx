@@ -37,6 +37,7 @@ interface SessionResourceExplorerProps {
   searchQuery: string;
   workspaceSwitching: boolean;
   startingWorkspaceIds: ReadonlySet<string>;
+  removingWorkspaceIds: ReadonlySet<string>;
   onActivateWorkspace: (workspaceId: string) => Promise<void>;
   onSetWorkspaceParent: (
     workspaceId: string,
@@ -84,6 +85,7 @@ export default function SessionResourceExplorer({
   searchQuery,
   workspaceSwitching,
   startingWorkspaceIds,
+  removingWorkspaceIds,
   onActivateWorkspace,
   onSetWorkspaceParent,
   onRefreshWorkspaceSessions,
@@ -520,6 +522,9 @@ export default function SessionResourceExplorer({
     const expanded = explorer.expandedIds.has(`workspace:${workspaceId}`);
     const active = workspaceId === activeWorkspaceId;
     const starting = startingWorkspaceIds.has(workspaceId);
+    // 删除中的工作区仍在 Gateway 列表里（删除请求在途），但这一行必须立刻失去交互能力：
+    // 否则用户可以继续激活、拖拽、右键一个正在消失的工作区。
+    const removing = removingWorkspaceIds.has(workspaceId);
     // 工作区已不在 Gateway 列表时 statusPresentation 会给出「已不可用」，
     // 同时必须禁用激活按钮，避免点到一个已不存在的 workspace_id。
     const statusPresentation = workspaceStatusPresentation(workspace);
@@ -536,11 +541,11 @@ export default function SessionResourceExplorer({
     return (
       <li key={node.node_id} role="treeitem" aria-expanded={expanded}>
         <div
-          className={`session-resource-row workspace${active ? " active-workspace" : ""}${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
+          className={`session-resource-row workspace${active ? " active-workspace" : ""}${removing ? " removing" : ""}${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
           aria-current={active ? "location" : undefined}
           title={hoverTitle}
           aria-grabbed={dragItem?.nodeId === node.node_id}
-          draggable={!workspaceSwitching && !starting && !unavailable}
+          draggable={!workspaceSwitching && !starting && !unavailable && !removing}
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
           data-testid={`workspace-node-${workspaceId}`}
           onDragStart={(event) => startDrag(event, {
@@ -556,6 +561,9 @@ export default function SessionResourceExplorer({
           onDragEnd={clearDrag}
           onContextMenu={(event) => {
             event.preventDefault();
+            if (removing) {
+              return;
+            }
             setWorkspaceFolderMenu(null);
             if (workspace) {
               onOpenWorkspaceMenu(workspace, event.clientX, event.clientY);
@@ -569,7 +577,7 @@ export default function SessionResourceExplorer({
             type="button"
             className="session-resource-chevron"
             aria-label={`${expanded ? "折叠" : "展开"}工作区 ${node.name}`}
-            disabled={starting}
+            disabled={starting || removing}
             onClick={() => explorer.toggleExpanded(`workspace:${workspaceId}`, workspaceId, null)}
           >
             <Chevron expanded={expanded} />
@@ -579,12 +587,22 @@ export default function SessionResourceExplorer({
             type="button"
             className="session-resource-label workspace-label"
             title={hoverTitle}
-            disabled={workspaceSwitching || starting || unavailable || workspace?.status === "offline"}
+            disabled={workspaceSwitching || starting || removing || unavailable || workspace?.status === "offline"}
             onClick={() => void onActivateWorkspace(workspaceId).catch((error) => handleError("切换工作区失败", error))}
           >
             {node.name}
           </button>
-          {starting ? (
+          {removing ? (
+            <span
+              className="session-resource-workspace-status removing"
+              role="status"
+              aria-label="工作区正在删除"
+              title="工作区正在删除"
+            >
+              <i aria-hidden="true" />
+              正在删除
+            </span>
+          ) : starting ? (
             <span
               className="codicon codicon-loading codicon-modifier-spin session-resource-starting-icon"
               role="img"

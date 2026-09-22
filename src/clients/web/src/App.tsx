@@ -1089,6 +1089,7 @@ export default function AppShell() {
           gatewayWorkspaces={state.gatewayWorkspaces}
           gatewayWorkspacesStale={state.gatewayWorkspacesStale}
           activeGatewayWorkspaceId={state.activeGatewayWorkspaceId}
+          removingGatewayWorkspaceIds={state.removingGatewayWorkspaceIds}
           workspaceSwitching={state.workspaceSwitching}
           onActivateWorkspace={activateGatewayWorkspace}
           onSetWorkspaceParent={setGatewayWorkspaceParent}
