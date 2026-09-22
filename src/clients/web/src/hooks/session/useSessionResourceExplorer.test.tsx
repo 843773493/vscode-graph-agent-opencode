@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { WorkspaceNavigationTree } from "../types/backend";
+import type { WorkspaceNavigationTree } from "../../types/backend";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
-import type { SessionGeneratorResourcesController } from "./sessionResourceExplorer/useSessionGeneratorResources";
-import { useSessionGeneratorResources } from "./sessionResourceExplorer/useSessionGeneratorResources";
+import type { SessionGeneratorResourcesController } from "../sessionResourceExplorer/useSessionGeneratorResources";
+import { useSessionGeneratorResources } from "../sessionResourceExplorer/useSessionGeneratorResources";
 
 const originalFetch = globalThis.fetch;
 

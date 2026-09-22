@@ -1,11 +1,11 @@
 import { useCallback } from "react";
-import { getSessionInformation } from "../api";
-import { listGatewayWorkspaces } from "../gatewayApi";
+import { getSessionInformation } from "../../api";
+import { listGatewayWorkspaces } from "../../gatewayApi";
 import {
   buildSessionInformationDump,
   formatSessionInformationDump,
-} from "../state/session/sessionInformation";
-import { copyTextToClipboardFromPromise } from "../utils/clipboard";
+} from "../../state/session/sessionInformation";
+import { copyTextToClipboardFromPromise } from "../../utils/clipboard";
 
 export function useSessionInformationClipboard(apiPort: number) {
   return useCallback(

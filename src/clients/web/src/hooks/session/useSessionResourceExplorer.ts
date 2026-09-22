@@ -9,7 +9,7 @@ import {
   moveSessionCatalogFolder,
   refreshSessionCatalog,
   renameSessionCatalogFolder,
-} from "../api";
+} from "../../api";
 import {
   createWorkspaceNavigationFolder,
   deleteWorkspaceNavigationFolder,
@@ -17,14 +17,14 @@ import {
   placeWorkspaceNavigationNode,
   renameWorkspaceNavigationFolder,
   searchGatewaySessionCatalog,
-} from "../gatewayApi";
+} from "../../gatewayApi";
 import type {
   GatewaySessionSearchResults,
   SessionCatalogPage,
   WorkspaceNavigationTree,
-} from "../types/backend";
-import type { SessionGeneratorResourcesController } from "./sessionResourceExplorer/useSessionGeneratorResources";
-import { changedCatalogWorkspaceIds } from "./sessionResourceExplorer/resourceTreeSync";
+} from "../../types/backend";
+import type { SessionGeneratorResourcesController } from "../sessionResourceExplorer/useSessionGeneratorResources";
+import { changedCatalogWorkspaceIds } from "../sessionResourceExplorer/resourceTreeSync";
 
 export interface CatalogBranchState extends SessionCatalogPage {
   loading: boolean;

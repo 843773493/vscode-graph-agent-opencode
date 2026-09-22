@@ -2,20 +2,20 @@ import { useCallback, useRef } from "react";
 import {
   controlSessionResource as apiControlSessionResource,
   getSessionResources,
-} from "../api";
-import { HttpRequestError } from "../api";
-import { ensureGatewayUserAccess } from "../gatewayApi";
+} from "../../api";
+import { HttpRequestError } from "../../api";
+import { ensureGatewayUserAccess } from "../../gatewayApi";
 import type {
   Session,
   SessionResourceAction,
   SessionResourceKind,
-} from "../types/backend";
+} from "../../types/backend";
 import {
   actionLabelForKind,
   resourceActionStatusLabel,
   statusLabel,
-} from "../state/resourceDisplay";
-import type { RefreshOptions, SetAppState } from "./contentViewLoaderTypes";
+} from "../../state/resourceDisplay";
+import type { RefreshOptions, SetAppState } from "../contentViewLoaderTypes";
 
 function isExpiredGatewayUserAccess(error: unknown): error is HttpRequestError {
   return (

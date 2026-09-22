@@ -42,7 +42,7 @@ import { useSessionEventStream } from "./hooks/sessionEventStream/useSessionEven
 import { useSessionMessageStream } from "./hooks/useSessionMessageStream";
 import { useBackgroundSessionActivity } from "./hooks/useBackgroundSessionActivity";
 import { useWorkspaceSessionActivity } from "./hooks/workspace/useWorkspaceSessionActivity";
-import { useSessionInformationClipboard } from "./hooks/useSessionInformationClipboard";
+import { useSessionInformationClipboard } from "./hooks/session/useSessionInformationClipboard";
 import { useSessionActions } from "./hooks/session/useSessionActions";
 import { useWorkspaceBootstrap } from "./hooks/workspace/useWorkspaceBootstrap";
 import {

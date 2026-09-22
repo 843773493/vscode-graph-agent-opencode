@@ -1,5 +1,5 @@
 import { useRef, useState, type DragEvent, type ReactNode } from "react";
-import { useSessionResourceExplorer } from "../../hooks/useSessionResourceExplorer";
+import { useSessionResourceExplorer } from "../../hooks/session/useSessionResourceExplorer";
 import type {
   GatewayWorkspace,
   Session,

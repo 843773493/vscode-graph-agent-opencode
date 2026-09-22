@@ -3,13 +3,13 @@ import {
   getSessionChangeset,
   getSessionChangesets,
   reviewSessionChangeFile as apiReviewSessionChangeFile,
-} from "../api";
+} from "../../api";
 import type {
   Session,
   SessionChangesetList,
   SessionFileChange,
-} from "../types/backend";
-import type { SetAppState } from "./contentViewLoaderTypes";
+} from "../../types/backend";
+import type { SetAppState } from "../contentViewLoaderTypes";
 
 export type SessionChangesRefreshOptions = {
   refreshList?: boolean;

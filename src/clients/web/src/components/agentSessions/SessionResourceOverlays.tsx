@@ -3,7 +3,7 @@ import { extractSessionIdFromClipboardText } from "../../state/session/sessionIn
 import { copyTextToClipboard, readTextFromClipboard } from "../../utils/clipboard";
 import AnchoredOverlay from "../AnchoredOverlay";
 import WarmActionDialog from "../WarmActionDialog";
-import type { SessionResourceExplorerController } from "../../hooks/useSessionResourceExplorer";
+import type { SessionResourceExplorerController } from "../../hooks/session/useSessionResourceExplorer";
 
 export interface SessionFolderContextMenu {
   workspaceId: string;

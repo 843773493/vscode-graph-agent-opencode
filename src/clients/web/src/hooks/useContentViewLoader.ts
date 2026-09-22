@@ -3,8 +3,8 @@ import type { Session } from "../types/backend";
 import type { ConversationContentView } from "../types/frontend";
 import { resetAgentStateFields, useAgentStateSnapshotLoader } from "./useAgentStateSnapshot";
 import { useRequestLogLoader } from "./useRequestLogLoader";
-import { useSessionChangesLoader } from "./useSessionChangesLoader";
-import { useSessionResourceLoader } from "./useSessionResourceLoader";
+import { useSessionChangesLoader } from "./session/useSessionChangesLoader";
+import { useSessionResourceLoader } from "./session/useSessionResourceLoader";
 import type { SetAppState } from "./contentViewLoaderTypes";
 
 export function useContentViewLoader({

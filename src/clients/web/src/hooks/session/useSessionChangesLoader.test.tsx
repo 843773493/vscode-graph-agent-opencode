@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { AppState } from "../types/frontend";
-import type { Session } from "../types/backend";
+import type { AppState } from "../../types/frontend";
+import type { Session } from "../../types/backend";
 import { useSessionChangesLoader } from "./useSessionChangesLoader";
 
 const originalFetch = globalThis.fetch;
