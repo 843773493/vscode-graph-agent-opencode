@@ -1,6 +1,6 @@
 # 目录用途
 
-`app/services/infrastructure/config/` 存放配置基础设施的聚焦组件，包括不可变快照、文件变化监听、状态模型、Workspace pending candidate 的待重启契约链路、配置事件消费者游标族、LLM provider/模型解析和 Workspace 会话默认值持久化。
+`app/services/infrastructure/config/` 存放配置基础设施的聚焦组件，包括不可变快照、文件变化监听、状态模型、Workspace pending candidate 的待重启契约链路、配置事件消费者游标族、LLM provider/模型解析、Workspace 会话默认值持久化和配置重载状态聚合。
 
 # 可修改内容
 
@@ -10,6 +10,7 @@
 - 配置事件的游标重放、消费者独立认领、投递确认与游标保留窗口校验。
 - 从生效配置解析 LLM provider（含 api_key 环境变量展开）与默认模型。
 - 读写 `${workspace_root}/.boxteam/settings/session_defaults.json` 的会话默认 Agent/provider。
+- 把状态库的 active/pending 记录叠加到快照重载状态之上。
 
 # 不可修改内容
 
@@ -27,3 +28,5 @@
 - LLM 解析协作者只接收无参、返回不可变值的叶子提供者（生效配置与默认 Agent id），不得注入整个 `ConfigService` 或快照存储。
 - 会话默认值协作者复用宿主传入的 `workspace_root`，不得另造 `.boxteam` 根路径拼接，也不得自行向上推导工作区根目录。
 - 会话默认值文件必须校验可解析、是对象且 schema 版本匹配；损坏或过期文件直接报错，不得静默回落默认值。
+- 重载状态协作者只接收快照状态的叶子提供者（无参、返回不可变 `ConfigReloadStatus`），不得注入 `ConfigSnapshotStore`，以免把候选快照构建反向拖入本目录。
+- 重载状态聚合不得抹掉快照基底的 `healthy`/`reason`/`last_error`，叠加 active/pending 只能补充字段。

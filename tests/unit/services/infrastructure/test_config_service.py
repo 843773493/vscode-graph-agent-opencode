@@ -1408,6 +1408,46 @@ async def test_reload_workspace_config_deletion_falls_back_to_user_config(
 
 
 @pytest.mark.asyncio
+async def test_reload_status_keeps_unhealthy_snapshot_base_with_active_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有 active 记录时，不健康的快照基底必须继续体现在 status 上。"""
+
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config_path = _write_workspace_config(tmp_path, _base_config())
+    workspace_root = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace_root)
+    try:
+        service = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace_root,
+            workspace_state_store=store,
+        )
+        service.validate_workspace_config()
+        healthy_status = service.get_reload_status()
+        assert healthy_status.healthy is True
+        assert healthy_status.reason is None
+        assert healthy_status.state == "active"
+
+        # 让快照基底失败，但状态库仍有 active 记录
+        config_path.write_text("{ invalid", encoding="utf-8")
+        with pytest.raises(ValueError):
+            await service.reload()
+        assert store.get_active_config_snapshot("workspace") is not None
+
+        status = service.get_reload_status()
+        # active 记录叠加后，基底的失败原因与 healthy=False 都不能被抹掉
+        assert status.healthy is False
+        assert status.last_error
+        assert status.state == "active"
+        assert status.active_revision == 1
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
 async def test_invalid_reload_retains_last_valid_snapshot_and_exposes_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

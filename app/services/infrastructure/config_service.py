@@ -9,7 +9,6 @@ import shutil
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +55,9 @@ from app.services.infrastructure.config.pending_restart import (
     PendingRestartCoordinator,
 )
 from app.services.infrastructure.config.policy import workspace_config_policy
+from app.services.infrastructure.config.reload_status import (
+    ReloadStatusCoordinator,
+)
 from app.services.infrastructure.config.session_defaults import SessionDefaults
 from app.services.infrastructure.config.shadow_adapter import (
     ConfigShadowLifecycleAdapter,
@@ -163,10 +165,15 @@ class ConfigService:
             os.environ.get("BOXTEAM_CONFIG_GENERATION", "").strip()
             or new_config_id("workspace_generation")
         )
+        self._reload_status = ReloadStatusCoordinator(
+            store=self._workspace_state_store,
+            config_domain=self._CONFIG_DOMAIN,
+            snapshot_status_provider=self._snapshot_store.status,
+        )
         self._pending_restart = PendingRestartCoordinator(
             store=self._workspace_state_store,
             config_domain=self._CONFIG_DOMAIN,
-            reload_status_provider=self.get_reload_status,
+            reload_status_provider=self._reload_status.get_reload_status,
         )
         self._event_cursor = ConfigEventCursor(
             store=self._workspace_state_store,
@@ -1086,48 +1093,8 @@ class ConfigService:
         return self._require_snapshot().revision
 
     def get_reload_status(self) -> ConfigReloadStatus:
-        status = self._snapshot_store.status()
-        if self._workspace_state_store is None:
-            return status
-        active = self._workspace_state_store.get_active_config_snapshot(
-            self._CONFIG_DOMAIN
-        )
-        pending = self._workspace_state_store.get_pending_config_candidate(
-            config_domain=self._CONFIG_DOMAIN
-        )
-        if active is None and pending is None:
-            return status
-        pending_state = pending.state if pending is not None else None
-        reason = status.reason
-        if pending_state == "discarded":
-            reason = None
-        elif pending_state in {"conflict", "rejected", "recovery_required"}:
-            reason = pending_state
-        elif pending_state == "pending_restart":
-            reason = "restart_required"
-        return replace(
-            status,
-            healthy=(
-                (status.healthy or pending_state == "discarded")
-                and pending_state
-                not in {"conflict", "rejected", "recovery_required"}
-            ),
-            restart_required=pending_state == "pending_restart",
-            reason=reason,
-            state=pending_state or ("active" if active is not None else None),
-            active_revision=active.active_revision if active is not None else None,
-            pending_revision=pending.pending_revision if pending is not None else None,
-            candidate_id=pending.candidate_id if pending is not None else None,
-            candidate_ref=pending.candidate_ref if pending is not None else None,
-            attempt_id=pending.last_attempt_id if pending is not None else None,
-            apply_id=pending.last_apply_id if pending is not None else None,
-            layer_digests=active.layer_digests if active is not None else None,
-            last_error=(
-                pending.last_error
-                if pending is not None and pending.last_error is not None
-                else status.last_error
-            ),
-        )
+        return self._reload_status.get_reload_status()
+
 
     def list_config_events(
         self,
