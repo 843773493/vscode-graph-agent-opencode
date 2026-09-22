@@ -105,6 +105,14 @@ class GatewayConfigSourceMixin:
         source_event_id: str | None = None,
         fanout_id: str | None = None,
     ) -> ConfigSourceLayerRecord:
+        """写入/去重一条 source layer，并可选在同一事务后回读。
+
+        ``backup_path`` 指向的备份文件由调用方在事务之前写好（见 config_service 的
+        ``*.migrated.bak`` / ``*.deleted.bak``）；本方法只把路径记进 layer 行。备份名
+        对每个配置路径是确定的、且写入端有 ``if not exists`` 守卫，因此崩溃最多留下
+        一个可被下次同步复用的孤儿备份，不会无界累积，无需额外回收机制。
+        """
+
         if presence not in {"present", "absent"}:
             raise ValueError(f"未知 Gateway source layer presence: {presence}")
         if presence == "present" and payload is None:

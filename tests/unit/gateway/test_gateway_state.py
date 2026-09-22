@@ -48,6 +48,32 @@ def test_gateway_state_keeps_config_in_control_database(tmp_path):
         store.close()
 
 
+def test_gateway_source_backup_path_records_caller_artifact(tmp_path):
+    """backup_path 是调用方在事务外写好的确定性文件，层行只记录其路径。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        source_path = tmp_path / "workspace.jsonc"
+        source_path.write_text("{}", encoding="utf-8")
+        backup_path = source_path.with_name(f"{source_path.name}.migrated.bak")
+        backup_path.write_text("OLD", encoding="utf-8")
+        record = state.sync_config_source(
+            config_key="workspace_mutable_override",
+            source_path=source_path,
+            config_version=1,
+            presence="present",
+            payload={"ui": {"a": 1}},
+            layer_digest="digest-1",
+            backup_path=backup_path,
+        )
+        assert record.backup_path == str(backup_path.resolve())
+        # 备份内容保持原样，回收由确定性命名 + 写入端 not exists 守卫承载
+        assert backup_path.read_text(encoding="utf-8") == "OLD"
+        assert [item.name for item in tmp_path.glob("*.bak")] == [backup_path.name]
+    finally:
+        state.close()
+
+
 def test_gateway_source_layer_cas_and_owner_generation_guard(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
