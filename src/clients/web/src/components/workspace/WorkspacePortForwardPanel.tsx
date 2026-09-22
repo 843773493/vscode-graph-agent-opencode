@@ -17,6 +17,7 @@ import type {
   GatewayWorkspace,
 } from "../../types/backend";
 import { useWarmConfirm } from "../shell/WarmConfirmProvider";
+import { errorMessage } from "../../utils/errorMessage";
 
 export interface WorkspacePortForwardApi {
   list(port: number, workspaceId: string): Promise<GatewayPortForwardList>;
@@ -64,10 +65,6 @@ const STATUS_LABELS: Record<GatewayPortForward["status"], string> = {
   error: "连接失败",
   stopped: "已停止",
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function parsePort(value: string, label: string): number {
   const port = Number(value);
