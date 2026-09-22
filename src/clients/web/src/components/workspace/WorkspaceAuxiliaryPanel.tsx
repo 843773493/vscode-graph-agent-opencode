@@ -6,7 +6,7 @@ import type {
   WorkspaceFileNode,
 } from "../../types/backend";
 import SessionChangesTree from "./SessionChangesTree";
-import WorkspaceFileTree from "./WorkspaceFileTree";
+import WorkspaceFileTree from "./fileTree/WorkspaceFileTree";
 
 export type WorkspaceAuxiliaryTab = "changes" | "files" | "resources" | "debug";
 

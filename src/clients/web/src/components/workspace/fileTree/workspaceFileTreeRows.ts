@@ -1,7 +1,7 @@
 import type {
   FileTreeShortcut,
   WorkspaceFileNode,
-} from "../../types/backend";
+} from "../../../types/backend";
 import type { DirectoryCacheEntry } from "./workspaceFileTreeCache";
 
 export const FILE_TREE_VIRTUALIZATION_THRESHOLD = 300;

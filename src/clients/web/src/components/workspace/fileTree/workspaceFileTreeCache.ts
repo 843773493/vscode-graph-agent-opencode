@@ -1,4 +1,4 @@
-import type { WorkspaceFileNode } from "../../types/backend";
+import type { WorkspaceFileNode } from "../../../types/backend";
 
 export const MAX_FILE_TREE_CACHED_DIRECTORIES = 256;
 export const MAX_FILE_TREE_CACHED_NODES = 20_000;

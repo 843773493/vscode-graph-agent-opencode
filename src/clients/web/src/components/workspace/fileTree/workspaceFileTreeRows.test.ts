@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { WorkspaceFileNode } from "../../types/backend";
+import type { WorkspaceFileNode } from "../../../types/backend";
 import type { DirectoryCacheEntry } from "./workspaceFileTreeCache";
 import { buildVisibleFileTreeRows } from "./workspaceFileTreeRows";
 

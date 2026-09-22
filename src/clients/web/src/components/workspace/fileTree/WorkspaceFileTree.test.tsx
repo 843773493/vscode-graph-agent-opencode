@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { SessionFileTreeSettings } from "../../types/backend";
-import { readFilePathTextFromClipboardData } from "../../utils/clipboard";
+import type { SessionFileTreeSettings } from "../../../types/backend";
+import { readFilePathTextFromClipboardData } from "../../../utils/clipboard";
 import WorkspaceFileTree, {
   parseClipboardFilePaths,
   runCurrentAndDefaultShortcutMutation,

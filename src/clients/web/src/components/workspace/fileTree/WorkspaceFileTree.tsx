@@ -22,29 +22,29 @@ import {
   removeSessionFileTreeShortcut,
   revealWorkspaceFileEntry,
   uploadWorkspaceFileEntries,
-} from "../../api";
+} from "../../../api";
 import type {
   FileTreeShortcut,
   SessionFileTreeSettings,
   WorkspaceFileList,
   WorkspaceFileNode,
-} from "../../types/backend";
-import type { WorkspaceFileLocation } from "../../api";
+} from "../../../types/backend";
+import type { WorkspaceFileLocation } from "../../../api";
 import {
   copyTextToClipboard,
   readFilePathTextFromClipboardData,
   readFilePathTextFromClipboard,
-} from "../../utils/clipboard";
+} from "../../../utils/clipboard";
 import {
   filesFromClipboardData,
   getFileTransferHost,
-} from "../../utils/fileTransferHost";
+} from "../../../utils/fileTransferHost";
 import {
   WORKSPACE_FILE_CHANGES_EVENT,
   type WorkspaceFileChangesEventDetail,
-} from "../../state/workspaceFileTreeEvents";
-import { useWorkspaceFileWatch } from "../../hooks/workspace/useWorkspaceFileWatch";
-import AnchoredOverlay from "../overlays/AnchoredOverlay";
+} from "../../../state/workspaceFileTreeEvents";
+import { useWorkspaceFileWatch } from "../../../hooks/workspace/useWorkspaceFileWatch";
+import AnchoredOverlay from "../../overlays/AnchoredOverlay";
 import {
   type DirectoryCacheEntry,
   pruneDirectoryCache,
