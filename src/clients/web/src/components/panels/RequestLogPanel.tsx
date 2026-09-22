@@ -13,7 +13,7 @@ import {
   type RequestReplayDisplay,
   type RequestToolDefinitionDisplay,
   type UpstreamAttemptDisplay,
-} from "../../state/requestLogDisplay";
+} from "../../state/requestLogDisplay/index";
 import type { LLMRequestLogRecord } from "../../types/backend";
 
 export const INITIAL_VISIBLE_REQUEST_LOG_COUNT = 10;

@@ -6,7 +6,7 @@ import {
   buildRequestLogKeyFlow,
   buildRequestReplayDisplay,
   normalizeRequestLogJsonForDisplay,
-} from "../requestLogDisplay";
+} from "../requestLogDisplay/index";
 
 function requestLog(
   overrides: Partial<LLMRequestLogRecord>,
@@ -261,6 +261,64 @@ const malformedDisplay = buildRequestLogDisplay(malformedArgumentLog);
 assert(
   malformedDisplay.calledToolNames.includes("invoke_extension_tool"),
   "请求日志遇到不完整 JSON 参数时不应崩溃，应退回显示固定入口",
+);
+
+// 条目概览的相位标签是请求日志面板的可见文案，三条分支都必须被覆盖。
+const toolCallPhase = buildRequestLogDisplay(
+  requestLog({
+    request: { model_name: "gpt-5.6-luna", messages: [{ type: "human", content: "hi" }] },
+    response: {
+      result: [
+        {
+          type: "ai",
+          tool_calls: [{ id: "call_phase", name: "read_file", args: {} }],
+        },
+      ],
+    },
+  }),
+);
+assert(
+  toolCallPhase.phaseLabel === "工具调用请求",
+  "响应含 tool_calls 时相位必须显示工具调用请求",
+);
+assert(
+  toolCallPhase.model === "gpt-5.6-luna",
+  "概览模型名应优先取 request.model_name",
+);
+assert(
+  toolCallPhase.messageCount === 1 && toolCallPhase.responseMessageCount === 1,
+  "概览应分别统计请求与响应消息数",
+);
+assert(
+  toolCallPhase.calledToolNames.join(",") === "read_file",
+  "概览应列出响应实际调用的工具名",
+);
+
+const naturalLanguagePhase = buildRequestLogDisplay(
+  requestLog({
+    request: { messages: [] },
+    response: { result: [{ type: "ai", content: "最终回复" }] },
+  }),
+);
+assert(
+  naturalLanguagePhase.phaseLabel === "自然语言回复",
+  "响应有自然语言正文时相位必须显示自然语言回复",
+);
+assert(
+  naturalLanguagePhase.responseText === "最终回复",
+  "概览应投影响应的自然语言正文",
+);
+
+const intermediatePhase = buildRequestLogDisplay(
+  requestLog({ request: { messages: [] }, response: { result: [] } }),
+);
+assert(
+  intermediatePhase.phaseLabel === "中间请求",
+  "既无工具调用也无正文时相位必须显示中间请求",
+);
+assert(
+  intermediatePhase.model === "unknown_model",
+  "缺少模型信息时概览应回退为 unknown_model",
 );
 
 const replayLog = requestLog({
