@@ -14,6 +14,7 @@ from app.schemas.internal_v2.config import ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
+    ConfigEventCursorGoneError,
 )
 from app.services.infrastructure.config.watcher import ConfigFileWatcher
 from app.services.infrastructure.config_service import ConfigService
@@ -61,6 +62,124 @@ def _base_config() -> dict:
             }
         },
     }
+
+
+def _append_test_event(store: WorkspaceStateStore, event_id: str) -> None:
+    store.append_config_event(
+        event_id=event_id,
+        config_domain="workspace",
+        candidate_id=None,
+        attempt_id=None,
+        apply_id=None,
+        idempotency_key=None,
+        commit_revision=None,
+        active_revision=None,
+        pending_revision=None,
+        source="test",
+        result="unchanged",
+    )
+
+
+def test_config_event_cursor_family_uses_store_state_gate_and_cursor(
+    tmp_path: Path,
+) -> None:
+    """游标族必须逐字转发 store 契约：after 语义、消费者隔离与投递幂等。"""
+
+    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+    try:
+        service = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=tmp_path / "workspace.jsonc",
+            workspace_root=tmp_path / "workspace",
+            workspace_state_store=store,
+        )
+        storeless = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=tmp_path / "workspace.jsonc",
+            workspace_root=tmp_path / "workspace",
+        )
+        for index in range(4):
+            _append_test_event(store, f"event-{index}")
+
+        assert [event.event_seq for event in service.list_config_events()] == [
+            1,
+            2,
+            3,
+            4,
+        ]
+        # after 必须逐字生效，不能被丢弃或改成 0
+        assert [
+            event.event_seq for event in service.list_config_events(after=2)
+        ] == [3, 4]
+        assert [
+            event.event_seq
+            for event in service.list_config_events(after=2, limit=1)
+        ] == [3]
+        assert list(service.list_config_events(after=99)) == []
+
+        # 两个消费者独立认领，互不影响
+        assert [
+            event.event_seq
+            for event in service.claim_config_events_for_consumer(
+                after=0, consumer_id="consumer-a"
+            )
+        ] == [1, 2, 3, 4]
+        assert [
+            event.event_seq
+            for event in service.claim_config_events_for_consumer(
+                after=0, consumer_id="consumer-b", limit=2
+            )
+        ] == [1, 2]
+        assert list(
+            service.claim_config_events_for_consumer(
+                after=0, consumer_id="consumer-a"
+            )
+        ) == []
+
+        # 投递确认必须幂等，重复确认不得改变游标
+        first = service.mark_config_event_delivered_for_consumer(
+            event_id="event-2", consumer_id="consumer-a"
+        )
+        repeated = service.mark_config_event_delivered_for_consumer(
+            event_id="event-2", consumer_id="consumer-a"
+        )
+        assert first.event_id == repeated.event_id == "event-2"
+
+        service.ensure_config_event_cursor(after=0)
+        service.ensure_config_event_cursor(after=1)
+        # 事件被裁剪后，越界游标必须由 store 报 CursorGone，且带 first_available
+        connection = store.connection()
+        try:
+            connection.execute(
+                "DELETE FROM config_events WHERE event_seq IN (1, 2)"
+            )
+        finally:
+            connection.close()
+        with pytest.raises(ConfigEventCursorGoneError) as gone:
+            service.ensure_config_event_cursor(after=1)
+        assert gone.value.first_available == 3
+        with pytest.raises(ConfigEventCursorGoneError):
+            service.list_config_events(after=1)
+        assert [
+            event.event_seq for event in service.list_config_events(after=2)
+        ] == [3, 4]
+
+        assert list(storeless.list_config_events()) == []
+        assert (
+            list(
+                storeless.claim_config_events_for_consumer(
+                    after=0, consumer_id="consumer-a"
+                )
+            )
+            == []
+        )
+        storeless.ensure_config_event_cursor(after=0)
+        with pytest.raises(RuntimeError, match="配置事件状态库"):
+            storeless.mark_config_event_delivered_for_consumer(
+                event_id="event-2", consumer_id="consumer-a"
+            )
+    finally:
+        store.close()
 
 
 def test_config_accepts_chatgpt_oauth_provider_without_api_key(tmp_path: Path):

@@ -50,6 +50,7 @@ from app.services.infrastructure.config import (
     WorkspaceSourceOwner,
     build_config_snapshot,
 )
+from app.services.infrastructure.config.event_cursor import ConfigEventCursor
 from app.services.infrastructure.config.pending_restart import (
     PendingRestartCoordinator,
 )
@@ -165,6 +166,10 @@ class ConfigService:
             store=self._workspace_state_store,
             config_domain=self._CONFIG_DOMAIN,
             reload_status_provider=self.get_reload_status,
+        )
+        self._event_cursor = ConfigEventCursor(
+            store=self._workspace_state_store,
+            config_domain=self._CONFIG_DOMAIN,
         )
 
     _CANDIDATE_REF_ENV = "BOXTEAM_CONFIG_CANDIDATE_REF"
@@ -1119,13 +1124,7 @@ class ConfigService:
         after: int = 0,
         limit: int = 100,
     ):
-        if self._workspace_state_store is None:
-            return ()
-        return self._workspace_state_store.list_config_events(
-            config_domain=self._CONFIG_DOMAIN,
-            after=after,
-            limit=limit,
-        )
+        return self._event_cursor.list_config_events(after=after, limit=limit)
 
     def claim_config_events_for_consumer(
         self,
@@ -1134,10 +1133,7 @@ class ConfigService:
         consumer_id: str,
         limit: int = 100,
     ):
-        if self._workspace_state_store is None:
-            return ()
-        return self._workspace_state_store.claim_config_events_for_consumer(
-            config_domain=self._CONFIG_DOMAIN,
+        return self._event_cursor.claim_config_events_for_consumer(
             after=after,
             consumer_id=consumer_id,
             limit=limit,
@@ -1149,20 +1145,13 @@ class ConfigService:
         event_id: str,
         consumer_id: str,
     ):
-        if self._workspace_state_store is None:
-            raise RuntimeError("当前 Workspace 没有配置事件状态库")
-        return self._workspace_state_store.mark_config_event_delivered_for_consumer(
+        return self._event_cursor.mark_config_event_delivered_for_consumer(
             event_id=event_id,
             consumer_id=consumer_id,
         )
 
     def ensure_config_event_cursor(self, *, after: int) -> None:
-        if self._workspace_state_store is None:
-            return
-        self._workspace_state_store.ensure_config_event_cursor(
-            config_domain=self._CONFIG_DOMAIN,
-            after=after,
-        )
+        self._event_cursor.ensure_config_event_cursor(after=after)
 
     def get_source_details(self) -> tuple[ConfigSource, ...]:
         return self._require_snapshot().source_details
