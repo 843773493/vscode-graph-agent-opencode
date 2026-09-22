@@ -573,26 +573,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       gatewayUserViewStates: state.gatewayUserViewStates,
       expandDetails: state.expandDetails,
     },
-    onApplyViewState: ({ workspaceId, sessionId, viewState, toolDetailsExpanded }) => {
-      setState((previous) => {
-        const next = cloneMaps(previous);
-        const cacheKey = sessionScopeKey(workspaceId, sessionId);
-        if (viewState) next.gatewayUserViewStates.set(cacheKey, viewState);
-        else next.gatewayUserViewStates.delete(cacheKey);
-        if (
-          toolDetailsExpanded !== undefined
-          && previous.currentSession?.session_id === sessionId
-          && previous.currentSessionWorkspaceId === workspaceId
-        ) {
-          next.expandDetails = toolDetailsExpanded;
-        }
-        return next;
-      });
-    },
-    onSetExpandDetails: (expand) => {
-      setState((previous) => ({ ...previous, expandDetails: expand }));
-    },
-    onStatusChange: setStatus,
+    setState,
+    setStatus,
   });
 
   const toggleAgentSessionsPanel = useCallback(() => {

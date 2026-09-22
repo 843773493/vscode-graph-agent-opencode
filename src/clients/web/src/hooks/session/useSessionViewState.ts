@@ -10,6 +10,8 @@ import type {
   GatewayUserViewState,
 } from "../../types/backend";
 import { sessionScopeKey } from "../../state/session/sessionScope";
+import { cloneMaps } from "../../state/appStateMaps";
+import type { SetAppState } from "../contentViewLoaderTypes";
 import { canAcceptUserViewStateMutation } from "../workspace/useWorkspaceBootstrap";
 
 const SESSION_VIEW_STATE_CACHE_LIMIT = 64;
@@ -30,18 +32,10 @@ export interface SessionViewStateHost {
   expandDetails: boolean;
 }
 
-export interface SessionViewStateMutation {
-  workspaceId: string;
-  sessionId: string;
-  viewState: GatewayUserViewState | null;
-  toolDetailsExpanded?: boolean;
-}
-
 interface UseSessionViewStateOptions {
   host: SessionViewStateHost;
-  onApplyViewState: (mutation: SessionViewStateMutation) => void;
-  onSetExpandDetails: (expand: boolean) => void;
-  onStatusChange: (message: string) => void;
+  setState: SetAppState;
+  setStatus: (message: string) => void;
 }
 
 export interface SessionViewStateController {
@@ -69,14 +63,37 @@ function writeSessionViewStateCache(
 
 export function useSessionViewState({
   host,
-  onApplyViewState,
-  onSetExpandDetails,
-  onStatusChange,
+  setState,
+  setStatus,
 }: UseSessionViewStateOptions): SessionViewStateController {
   const hostRef = useRef(host);
   hostRef.current = host;
   const cacheRef = useRef(new Map<string, GatewayUserViewState | null>());
   const requestsRef = useRef(new Map<string, Promise<GatewayUserViewState | null>>());
+
+  // 视图状态落库的唯一出口：按会话 scope 缓存后端权威对象，并只在当前会话
+  // 命中时同步工具详情展开态。
+  const applyViewState = useCallback((
+    workspaceId: string,
+    sessionId: string,
+    viewState: GatewayUserViewState | null,
+    toolDetailsExpanded?: boolean,
+  ) => {
+    setState((previous) => {
+      const next = cloneMaps(previous);
+      const cacheKey = sessionScopeKey(workspaceId, sessionId);
+      if (viewState) next.gatewayUserViewStates.set(cacheKey, viewState);
+      else next.gatewayUserViewStates.delete(cacheKey);
+      if (
+        toolDetailsExpanded !== undefined
+        && previous.currentSession?.session_id === sessionId
+        && previous.currentSessionWorkspaceId === workspaceId
+      ) {
+        next.expandDetails = toolDetailsExpanded;
+      }
+      return next;
+    });
+  }, [setState]);
 
   const applyLoadedViewState = useCallback((
     viewState: GatewayUserViewState | null,
@@ -97,13 +114,13 @@ export function useSessionViewState({
     ) {
       return;
     }
-    onApplyViewState({
+    applyViewState(
       workspaceId,
       sessionId,
       viewState,
-      toolDetailsExpanded: viewState?.tool_details_expanded ?? false,
-    });
-  }, [onApplyViewState]);
+      viewState?.tool_details_expanded ?? false,
+    );
+  }, [applyViewState]);
 
   const loadSessionViewState = useCallback(
     async (workspaceId: string | null, sessionId: string) => {
@@ -162,7 +179,7 @@ export function useSessionViewState({
         return viewState;
       }, (error: unknown) => {
         if (hostRef.current.gatewayUserAccess?.lease_generation === requestLeaseGeneration) {
-          onStatusChange(`读取用户视图位置失败: ${error instanceof Error ? error.message : String(error)}`);
+          setStatus(`读取用户视图位置失败: ${error instanceof Error ? error.message : String(error)}`);
         }
         return null;
       });
@@ -173,7 +190,7 @@ export function useSessionViewState({
         }
       });
       return await request;
-    }, [applyLoadedViewState, onStatusChange],
+    }, [applyLoadedViewState, setStatus],
   );
 
   const saveSessionViewState = useCallback((payload: SessionViewStatePayload) => {
@@ -217,16 +234,16 @@ export function useSessionViewState({
       })) {
         return;
       }
-      onApplyViewState({ workspaceId, sessionId, viewState: updated });
+      applyViewState(workspaceId, sessionId, updated);
     }).catch((error: unknown) => {
       if (hostRef.current.gatewayUserAccess?.lease_generation === requestLeaseGeneration) {
-        onStatusChange(`保存用户视图位置失败: ${error instanceof Error ? error.message : String(error)}`);
+        setStatus(`保存用户视图位置失败: ${error instanceof Error ? error.message : String(error)}`);
       }
     });
-  }, [onApplyViewState, onStatusChange]);
+  }, [applyViewState, setStatus]);
 
   const toggleExpandDetails = useCallback((expand: boolean) => {
-    onSetExpandDetails(expand);
+    setState((previous) => ({ ...previous, expandDetails: expand }));
     const current = hostRef.current;
     const existing = current.currentWorkspaceId && current.currentSessionId
       ? current.gatewayUserViewStates.get(
@@ -239,7 +256,7 @@ export function useSessionViewState({
       follow_latest: existing?.follow_latest ?? true,
       tool_details_expanded: expand,
     });
-  }, [onSetExpandDetails, saveSessionViewState]);
+  }, [saveSessionViewState, setState]);
 
   return {
     loadSessionViewState,
