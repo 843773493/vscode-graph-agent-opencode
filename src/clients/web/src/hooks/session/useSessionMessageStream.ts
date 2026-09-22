@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import {
   getSessionMessageStreamSnapshot,
   MessageStreamCursorGoneError,
-  MessageStreamConnectionError,
   streamSessionMessageEvents,
 } from "../../api/stream/sessionMessageStream";
 import {
@@ -55,7 +54,6 @@ export function useSessionMessageStream({
     let terminalStatus: MessageStreamState["streamStatus"] = "open";
     let terminalFailure: MessageStreamState["failure"] = null;
     let reconnectAttempt = 0;
-    let notReadyAttempts = 0;
 
     const updateState = (update: (current: MessageStreamState) => MessageStreamState) => {
       setState((previous) => {
@@ -183,7 +181,6 @@ export function useSessionMessageStream({
                 reconnectAttempt = 0;
               },
               onConnected: (resolvedStreamId) => {
-                notReadyAttempts = 0;
                 turnStreamId = resolvedStreamId ?? turnStreamId;
                 updateState((current) => ({
                   ...current,
@@ -218,21 +215,9 @@ export function useSessionMessageStream({
               }));
             }
           } else {
-            if (error instanceof MessageStreamConnectionError && error.status === 404) {
-              notReadyAttempts += 1;
-              if (notReadyAttempts > 5) {
-                updateState((current) => ({
-                  ...current,
-                  connectionStatus: "disconnected",
-                  protocolError: "Turn 消息流在有限重试后仍不可用: HTTP 404",
-                }));
-                return;
-              } else {
-                markConnection("connecting");
-              }
-            } else {
-              markConnection("disconnected");
-            }
+            // 连接失败统一走持续重连：runGatewayRequest 对非 2xx（含 404
+            // “流尚未就绪”）先抛 HttpRequestError，这里只需标记断开并退回重试。
+            markConnection("disconnected");
           }
         }
         if (terminalSeen || controller.signal.aborted) return;
