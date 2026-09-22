@@ -1,5 +1,5 @@
 import React from "react";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AppState } from "../../types/frontend";
 import type { Session } from "../../types/backend";
@@ -149,5 +149,240 @@ describe("会话已读状态", () => {
       currentState.sessionsByWorkspace.get(WORKSPACE_ID)?.[0],
     ).toEqual(targetSession);
     expect(currentState.sessionHistoryReloadNonce).toBe(0);
+  });
+});
+
+// —— 竞态与失败补偿：生命周期写动作的一致性守卫 ——
+
+const RACE_WORKSPACE = "gw_lifecycle_race";
+
+function raceSession(sessionId: string, agentId = "default"): Session {
+  return {
+    session_id: sessionId,
+    workspace_id: "ws_local",
+    title: sessionId,
+    title_source: "user",
+    current_agent_id: agentId,
+    parent_session_id: null,
+    created_at: "2026-07-24T00:00:00Z",
+    updated_at: "2026-07-24T00:00:00Z",
+  };
+}
+
+function raceState(current: Session | null, sessions: Session[]): AppState {
+  return {
+    gatewayWorkspaces: [
+      { workspace_id: RACE_WORKSPACE, root_path: "/tmp/ws", name: "ws" },
+    ],
+    sessions,
+    sessionsByWorkspace: new Map([[RACE_WORKSPACE, sessions]]),
+    sessionGatewayWorkspaceById: new Map(),
+    sessionAttachmentSummaries: new Map(),
+    eventQueuesBySession: new Map(),
+    pendingConversations: new Map(),
+    activeJobIdsBySession: new Map(),
+    unreadSessionKeys: new Set(),
+    activeGatewayWorkspaceId: RACE_WORKSPACE,
+    currentSession: current,
+    currentSessionWorkspaceId: RACE_WORKSPACE,
+    contentView: "default",
+    sessionHistoryReloadNonce: 0,
+    status: "",
+  } as unknown as AppState;
+}
+
+function apiResponse(data: unknown, status = 200): Response {
+  const message = (data as { message?: string }).message ?? "ok";
+  return Response.json(
+    { code: status === 200 ? 0 : status, message, request_id: "req_probe", data },
+    { status },
+  );
+}
+
+/** 挂载 hook 并把最新 state 镜像到调用方闭包；返回稳定的动作引用。 */
+function mountLifecycle({
+  currentSession,
+  readState,
+  writeState,
+  getActions,
+  abortCurrentStream = () => undefined,
+}: {
+  currentSession: Session | null;
+  readState: () => AppState;
+  writeState: (update: AppState | ((prev: AppState) => AppState)) => void;
+  getActions: (actions: ReturnType<typeof useSessionLifecycleActions>) => void;
+  abortCurrentStream?: () => void;
+}) {
+  function Harness() {
+    getActions(useSessionLifecycleActions({
+      apiPort: 8014,
+      currentSession,
+      activeGatewayWorkspaceId: RACE_WORKSPACE,
+      currentSessionGatewayWorkspaceId: RACE_WORKSPACE,
+      currentSessionCacheKey: sessionScopeKey(
+        RACE_WORKSPACE,
+        currentSession?.session_id ?? "",
+      ),
+      defaultGatewayWorkspaceId: RACE_WORKSPACE,
+      setState: (update) => {
+        const next = typeof update === "function"
+          ? (update as (prev: AppState) => AppState)(readState())
+          : update;
+        writeState(next);
+      },
+      abortCurrentStream,
+      invalidateAgentState: () => undefined,
+    }));
+    return null;
+  }
+  renderToStaticMarkup(<Harness />);
+}
+
+describe("会话生命周期写动作的竞态与失败补偿", () => {
+  const originalFetch = globalThis.fetch;
+  let currentState: AppState;
+  let actions: ReturnType<typeof useSessionLifecycleActions>;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function installFetch(
+    handler: (path: string, method: string) => Response | Promise<Response>,
+  ) {
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0])).pathname;
+        const method = String(
+          (args[1] as RequestInit | undefined)?.method ?? "GET",
+        );
+        if (path === "/api/gateway/auth/local-credential") {
+          return apiResponse({ token: "test-token" });
+        }
+        if (path === "/api/gateway/users/current") {
+          return apiResponse({ kind: "guest", user_id: null });
+        }
+        return handler(path, method);
+      },
+      { preconnect: originalFetch.preconnect },
+    ) as typeof fetch;
+  }
+
+  function mount(current: Session, sessions: Session[], abort?: () => void) {
+    currentState = raceState(current, sessions);
+    mountLifecycle({
+      currentSession: current,
+      readState: () => currentState,
+      writeState: (update) => {
+        currentState = typeof update === "function"
+          ? update(currentState)
+          : update;
+      },
+      getActions: (value) => {
+        actions = value;
+      },
+      abortCurrentStream: abort,
+    });
+  }
+
+  test("W4 切换 Agent 回包不覆盖用户请求在途期间切换到的会话", async () => {
+    const sesA = raceSession("ses_a");
+    const sesB = raceSession("ses_b");
+    let releasePatch: (() => void) | undefined;
+    let patchStarted = false;
+
+    installFetch((path, method) => {
+      if (path === `/api/v1/sessions/${sesA.session_id}` && method === "PATCH") {
+        patchStarted = true;
+        return new Promise<Response>((resolve) => {
+          releasePatch = () => resolve(
+            apiResponse({ ...sesA, current_agent_id: "agent_new" }),
+          );
+        });
+      }
+      throw new Error(`未预期请求: ${method} ${path}`);
+    });
+
+    mount(sesA, [sesA, sesB]);
+    const pending = actions.switchAgent("agent_new");
+    for (let i = 0; i < 100 && !patchStarted; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(patchStarted).toBe(true);
+
+    // 请求仍在途，用户切到会话 B。
+    actions.selectSession(sesB.session_id);
+    expect(currentState.currentSession?.session_id).toBe("ses_b");
+
+    releasePatch?.();
+    await pending;
+
+    // 迟到的 switchAgent 回包只能更新会话元数据，不得把用户拉回 A。
+    expect(currentState.currentSession?.session_id).toBe("ses_b");
+    expect(
+      currentState.sessions.find((item) => item.session_id === sesA.session_id)
+        ?.current_agent_id,
+    ).toBe("agent_new");
+  });
+
+  test("W5 fork 失败时补偿重取失败不覆盖原始错误", async () => {
+    const sesA = raceSession("ses_a");
+    installFetch((path) => {
+      if (path.endsWith("/fork-context")) {
+        return apiResponse({ message: "上下文快照损坏" }, 422);
+      }
+      if (path === "/api/v1/sessions") {
+        return apiResponse({ message: "列表不可用" }, 503);
+      }
+      throw new Error(`未预期请求: ${path}`);
+    });
+
+    mount(sesA, [sesA]);
+    await expect(
+      actions.forkSessionContext(RACE_WORKSPACE, sesA.session_id),
+    ).rejects.toThrow("上下文快照损坏");
+    // 二次失败必须保留在提示里，且不得成为调用方看到的主错误。
+    expect(currentState.status).toContain("上下文快照损坏");
+    expect(currentState.status).toContain("列表不可用");
+  });
+
+  test("W6 删除成功但列表刷新失败时不报删除失败且本地列表收敛", async () => {
+    const sesA = raceSession("ses_a");
+    const sesB = raceSession("ses_b");
+    installFetch((path, method) => {
+      if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
+        return apiResponse({ session_id: sesB.session_id });
+      }
+      if (path === "/api/v1/sessions") {
+        return apiResponse({ message: "列表不可用" }, 500);
+      }
+      throw new Error(`未预期请求: ${method} ${path}`);
+    });
+
+    mount(sesA, [sesA, sesB]);
+    await actions.deleteSession(sesB.session_id);
+
+    expect(currentState.status).not.toContain("删除会话失败");
+    expect(currentState.status).toContain("已删除会话");
+    expect(currentState.status).toContain("列表不可用");
+    expect(currentState.sessions.map((item) => item.session_id)).toEqual(["ses_a"]);
+  });
+
+  test("W7 选择不存在的会话时显式失败且不产生切换副作用", () => {
+    const sesA = raceSession("ses_a");
+    let aborts = 0;
+    installFetch((path) => {
+      throw new Error(`未预期请求: ${path}`);
+    });
+
+    mount(sesA, [sesA], () => {
+      aborts += 1;
+    });
+    actions.selectSession("ses_missing");
+
+    expect(currentState.status).toBe("切换会话失败: 不存在会话 ses_missing");
+    expect(currentState.currentSession?.session_id).toBe("ses_a");
+    expect(currentState.sessionHistoryReloadNonce).toBe(0);
+    expect(aborts).toBe(1);
   });
 });

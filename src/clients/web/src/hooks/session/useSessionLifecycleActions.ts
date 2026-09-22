@@ -77,18 +77,24 @@ export function useSessionLifecycleActions({
       abortCurrentStream();
       invalidateAgentState();
       setState((prev) => {
-        const next = cloneMaps(prev);
         const selected =
-          prev.sessions.find((session) => session.session_id === sessionId) ??
-          prev.currentSession;
+          prev.sessions.find((session) => session.session_id === sessionId);
+        if (!selected) {
+          // 未命中会话必须显式失败：旧实现用 `?? prev.currentSession` 静默回退，
+          // 会带着「切换成功」的全套副作用把用户留在原会话上。
+          return {
+            ...prev,
+            status: `切换会话失败: 不存在会话 ${sessionId}`,
+          };
+        }
+        const next = cloneMaps(prev);
         next.currentSession = selected;
-        const workspaceId = selected ? prev.activeGatewayWorkspaceId : null;
+        const workspaceId = prev.activeGatewayWorkspaceId;
         next.currentSessionWorkspaceId = workspaceId;
-        const cacheKey =
-          selected && workspaceId
-            ? sessionScopeKey(workspaceId, selected.session_id)
-            : sessionId;
-        if (selected && workspaceId) {
+        const cacheKey = workspaceId
+          ? sessionScopeKey(workspaceId, selected.session_id)
+          : selected.session_id;
+        if (workspaceId) {
           next.sessionGatewayWorkspaceById.set(
             cacheKey,
             workspaceId,
@@ -108,21 +114,19 @@ export function useSessionLifecycleActions({
         next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
         next.status = "正在加载会话历史";
         Object.assign(next, resetAgentStateFields(next));
-        if (selected) {
-          writeLastSessionId(selected.session_id);
-          appendFrontendEvent(
-            next.eventQueuesBySession,
-            selected.session_id,
-            "session_selected",
-            "切换会话",
-            {
-              session_id: selected.session_id,
-              title: selected.title,
-            },
-            selected.title,
-            cacheKey,
-          );
-        }
+        writeLastSessionId(selected.session_id);
+        appendFrontendEvent(
+          next.eventQueuesBySession,
+          selected.session_id,
+          "session_selected",
+          "切换会话",
+          {
+            session_id: selected.session_id,
+            title: selected.title,
+          },
+          selected.title,
+          cacheKey,
+        );
         return next;
       });
     },
@@ -394,17 +398,29 @@ export function useSessionLifecycleActions({
           return next;
         });
       } catch (error) {
-        const refreshed = await apiListSessions(apiPort, workspaceId);
-        setState((prev) => {
-          const next = cloneMaps(prev);
-          next.sessionsByWorkspace.set(workspaceId, refreshed.items);
-          if (prev.activeGatewayWorkspaceId === workspaceId) {
-            next.sessions = refreshed.items;
-          }
-          const message = error instanceof Error ? error.message : String(error);
-          next.status = `从上下文创建子会话失败: ${message}`;
-          return next;
-        });
+        const message = error instanceof Error ? error.message : String(error);
+        // 补偿重取失败不得覆盖原始错误：列表服务不可用时抛出的是 503，
+        // 而用户真正需要看到的是 fork 失败本身（如 422 上下文快照损坏）。
+        try {
+          const refreshed = await apiListSessions(apiPort, workspaceId);
+          setState((prev) => {
+            const next = cloneMaps(prev);
+            next.sessionsByWorkspace.set(workspaceId, refreshed.items);
+            if (prev.activeGatewayWorkspaceId === workspaceId) {
+              next.sessions = refreshed.items;
+            }
+            next.status = `从上下文创建子会话失败: ${message}`;
+            return next;
+          });
+        } catch (reconciliationError) {
+          const reconciliationMessage = reconciliationError instanceof Error
+            ? reconciliationError.message
+            : String(reconciliationError);
+          setState((prev) => ({
+            ...prev,
+            status: `从上下文创建子会话失败: ${message}；重新读取会话列表也失败: ${reconciliationMessage}`,
+          }));
+        }
         throw error;
       }
     },
@@ -488,21 +504,32 @@ export function useSessionLifecycleActions({
           return next;
         });
       } catch (error) {
-        const refreshed = await apiListSessions(apiPort, workspaceId);
-        setState((prev) => {
-          const next = cloneMaps(prev);
-          next.sessionsByWorkspace.set(workspaceId, refreshed.items);
-          if (prev.activeGatewayWorkspaceId === workspaceId) {
-            next.sessions = refreshed.items;
-            const currentId = prev.currentSession?.session_id;
-            next.currentSession = currentId
-              ? refreshed.items.find((item) => item.session_id === currentId) ?? null
-              : null;
-          }
-          const message = error instanceof Error ? error.message : String(error);
-          next.status = `更新会话树失败: ${message}`;
-          return next;
-        });
+        const message = error instanceof Error ? error.message : String(error);
+        // 同 forkSessionContext：补偿重取失败必须保留原始错误语义。
+        try {
+          const refreshed = await apiListSessions(apiPort, workspaceId);
+          setState((prev) => {
+            const next = cloneMaps(prev);
+            next.sessionsByWorkspace.set(workspaceId, refreshed.items);
+            if (prev.activeGatewayWorkspaceId === workspaceId) {
+              next.sessions = refreshed.items;
+              const currentId = prev.currentSession?.session_id;
+              next.currentSession = currentId
+                ? refreshed.items.find((item) => item.session_id === currentId) ?? null
+                : null;
+            }
+            next.status = `更新会话树失败: ${message}`;
+            return next;
+          });
+        } catch (reconciliationError) {
+          const reconciliationMessage = reconciliationError instanceof Error
+            ? reconciliationError.message
+            : String(reconciliationError);
+          setState((prev) => ({
+            ...prev,
+            status: `更新会话树失败: ${message}；重新读取会话列表也失败: ${reconciliationMessage}`,
+          }));
+        }
         throw error;
       }
     },
@@ -565,81 +592,98 @@ export function useSessionLifecycleActions({
 
       setState((prev) => ({ ...prev, status: "正在删除会话" }));
 
+      let result: Awaited<ReturnType<typeof apiDeleteSession>>;
       try {
-        const result = await apiDeleteSession(
+        result = await apiDeleteSession(
           apiPort,
           sessionId,
           workspaceIdForRequest,
           true,
         );
-        const refreshed = await apiListSessions(apiPort, workspaceIdForRequest);
-        setState((prev) => {
-          const next = cloneMaps(prev);
-          const workspaceId =
-            workspaceIdForRequest ??
-            prev.activeGatewayWorkspaceId ??
-            "workspace";
-          const remainingSessions = refreshed.items;
-          next.sessions = remainingSessions;
-          next.sessionsByWorkspace.set(
-            workspaceId,
-            refreshed.items,
-          );
-          const remainingIds = new Set(refreshed.items.map((session) => session.session_id));
-          const removedIds = (prev.sessionsByWorkspace.get(workspaceId) ?? prev.sessions)
-            .map((session) => session.session_id)
-            .filter((candidateId) => !remainingIds.has(candidateId));
-          for (const removedId of removedIds) {
-            const cacheKey = sessionScopeKey(workspaceId, removedId);
-            next.sessionAttachmentSummaries.delete(removedId);
-            next.eventQueuesBySession.delete(cacheKey);
-            next.pendingConversations.delete(cacheKey);
-            next.activeJobIdsBySession.delete(cacheKey);
-            next.unreadSessionKeys.delete(cacheKey);
-            next.sessionGatewayWorkspaceById.delete(cacheKey);
-          }
-
-          const currentWasDeleted = deletingCurrent
-            ? prev.currentSession === null || prev.currentSession.session_id === sessionId
-            : Boolean(
-              prev.currentSession
-              && !remainingIds.has(prev.currentSession.session_id),
-            );
-          if (currentWasDeleted) {
-            const nextSession = remainingSessions[0] ?? null;
-            next.currentSession = nextSession;
-            next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
-            if (!deletingCurrent) {
-              // 删除非当前会话时，级联删除可能移除了当前会话；这时才需要
-              // 为新选中的会话触发一次历史加载。
-              next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-            }
-            next.traceEvents = [];
-            next.llmRequestLogs = [];
-            next.llmRequestLogsLoadedAt = null;
-            next.llmRequestLogsLoading = false;
-            next.llmRequestLogsError = null;
-            next.sessionResources = [];
-            next.sessionResourcesLoadedAt = null;
-            next.sessionResourcesLoading = false;
-            next.sessionResourcesError = null;
-            next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
-            Object.assign(next, resetAgentStateFields(next));
-            if (nextSession) {
-              writeLastSessionId(nextSession.session_id);
-            } else {
-              clearLastSessionId();
-            }
-          }
-
-          next.status = `已删除会话: ${result.session_id}`;
-          return next;
-        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setState((prev) => ({ ...prev, status: `删除会话失败: ${message}` }));
         throw error;
       }
+
+      // 删除已成功，业务态到此确定。列表刷新只是收敛手段，它失败不得被
+      // 表述成「删除失败」——那会让用户对已经生效的删除重试。
+      let refreshed: Awaited<ReturnType<typeof apiListSessions>> | null = null;
+      let refreshFailure: string | null = null;
+      try {
+        refreshed = await apiListSessions(apiPort, workspaceIdForRequest);
+      } catch (error) {
+        refreshFailure = error instanceof Error ? error.message : String(error);
+      }
+
+      setState((prev) => {
+        const next = cloneMaps(prev);
+        const workspaceId =
+          workspaceIdForRequest ??
+          prev.activeGatewayWorkspaceId ??
+          "workspace";
+        const previousSessions =
+          prev.sessionsByWorkspace.get(workspaceId) ?? prev.sessions;
+        // 刷新失败时按已知事实本地收敛：被删会话必须立即从列表消失。
+        const remainingSessions = refreshed
+          ? refreshed.items
+          : previousSessions.filter(
+              (session) => session.session_id !== sessionId,
+            );
+        next.sessions = remainingSessions;
+        next.sessionsByWorkspace.set(workspaceId, remainingSessions);
+        const remainingIds = new Set(remainingSessions.map((session) => session.session_id));
+        const removedIds = previousSessions
+          .map((session) => session.session_id)
+          .filter((candidateId) => !remainingIds.has(candidateId));
+        for (const removedId of removedIds) {
+          const cacheKey = sessionScopeKey(workspaceId, removedId);
+          next.sessionAttachmentSummaries.delete(removedId);
+          next.eventQueuesBySession.delete(cacheKey);
+          next.pendingConversations.delete(cacheKey);
+          next.activeJobIdsBySession.delete(cacheKey);
+          next.unreadSessionKeys.delete(cacheKey);
+          next.sessionGatewayWorkspaceById.delete(cacheKey);
+        }
+
+        const currentWasDeleted = deletingCurrent
+          ? prev.currentSession === null || prev.currentSession.session_id === sessionId
+          : Boolean(
+            prev.currentSession
+            && !remainingIds.has(prev.currentSession.session_id),
+          );
+        if (currentWasDeleted) {
+          const nextSession = remainingSessions[0] ?? null;
+          next.currentSession = nextSession;
+          next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
+          if (!deletingCurrent) {
+            // 删除非当前会话时，级联删除可能移除了当前会话；这时才需要
+            // 为新选中的会话触发一次历史加载。
+            next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
+          }
+          next.traceEvents = [];
+          next.llmRequestLogs = [];
+          next.llmRequestLogsLoadedAt = null;
+          next.llmRequestLogsLoading = false;
+          next.llmRequestLogsError = null;
+          next.sessionResources = [];
+          next.sessionResourcesLoadedAt = null;
+          next.sessionResourcesLoading = false;
+          next.sessionResourcesError = null;
+          next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
+          Object.assign(next, resetAgentStateFields(next));
+          if (nextSession) {
+            writeLastSessionId(nextSession.session_id);
+          } else {
+            clearLastSessionId();
+          }
+        }
+
+        next.status = refreshFailure
+          ? `已删除会话: ${result.session_id}；会话列表刷新失败: ${refreshFailure}`
+          : `已删除会话: ${result.session_id}`;
+        return next;
+      });
     },
     [
       abortCurrentStream,
@@ -674,39 +718,16 @@ export function useSessionLifecycleActions({
           currentSessionGatewayWorkspaceId,
         );
         setState((prev) => {
-          const next = cloneMaps(prev);
-          next.currentSession = updatedSession;
-          next.currentSessionWorkspaceId =
-            currentSessionGatewayWorkspaceId ??
-            prev.currentSessionWorkspaceId ??
-            null;
-          next.sessions = prev.sessions.map((item) =>
-            item.session_id === updatedSession.session_id
-              ? updatedSession
-              : item,
-          );
+          // 只改会话元数据，且仅当用户仍停在被切换的会话上时才写
+          // currentSession（replaceSessionMetadata 的内部守卫）。直接赋值会把
+          // 请求在途期间用户已经切走的会话拉回来。
           const workspaceId =
             currentSessionGatewayWorkspaceId ??
             prev.activeGatewayWorkspaceId ??
             updatedSession.workspace_id;
-          const cacheKey = sessionScopeKey(workspaceId, updatedSession.session_id);
-          next.sessionGatewayWorkspaceById.set(cacheKey, workspaceId);
-          next.sessionsByWorkspace.set(
-            workspaceId,
-            (prev.sessionsByWorkspace.get(workspaceId) ?? []).map((item) =>
-              item.session_id === updatedSession.session_id
-                ? updatedSession
-                : item,
-            ),
-          );
-          if (
-            !next.sessions.some(
-              (item) => item.session_id === updatedSession.session_id,
-            )
-          ) {
-            next.sessions = [updatedSession, ...next.sessions];
-          }
+          const next = replaceSessionMetadata(prev, updatedSession, workspaceId);
           next.status = `已切换 Agent: ${updatedSession.current_agent_id}`;
+          const cacheKey = sessionScopeKey(workspaceId, updatedSession.session_id);
           appendFrontendEvent(
             next.eventQueuesBySession,
             updatedSession.session_id,
