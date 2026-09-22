@@ -19,6 +19,7 @@ import {
   withFreshGatewayWorkspaceList,
 } from "../../state/gatewayWorkspaceState";
 import type { FinishWorkspaceRefresh, SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 export function useGatewayWorkspaceMutations({
   apiPort,
@@ -49,7 +50,7 @@ export function useGatewayWorkspaceMutations({
       try {
         await apiAddManagedGatewayWorkspace(resolvedApiPort, payload);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => ({
           ...prev,
           workspaceSwitching: false,
@@ -76,7 +77,7 @@ export function useGatewayWorkspaceMutations({
           });
         } catch (error) {
           reconciliationErrors.push(
-            `保存最近路径失败: ${error instanceof Error ? error.message : String(error)}`,
+            `保存最近路径失败: ${errorMessage(error)}`,
           );
         }
       }
@@ -84,7 +85,7 @@ export function useGatewayWorkspaceMutations({
         await finishWorkspaceRefresh();
       } catch (error) {
         reconciliationErrors.push(
-          `刷新工作区列表失败: ${error instanceof Error ? error.message : String(error)}`,
+          `刷新工作区列表失败: ${errorMessage(error)}`,
         );
       }
       if (reconciliationErrors.length > 0) {
@@ -109,7 +110,7 @@ export function useGatewayWorkspaceMutations({
       try {
         await apiAddSshGatewayWorkspace(resolvedApiPort, payload);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => ({
           ...prev,
           workspaceSwitching: false,
@@ -122,7 +123,7 @@ export function useGatewayWorkspaceMutations({
       try {
         await finishWorkspaceRefresh();
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = errorMessage(error);
         const message = `远程 Gateway 已连接，但界面同步失败: ${detail}`;
         setState((prev) => ({
           ...prev,
@@ -221,11 +222,10 @@ export function useGatewayWorkspaceMutations({
           await finishWorkspaceRefresh();
         }
       } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
+        const workspaceFailureMessage = errorMessage(error);
         const operationMessage = workspaceRemoved
-          ? `工作区已删除，但新活动工作区加载失败: ${errorMessage}`
-          : errorMessage;
+          ? `工作区已删除，但新活动工作区加载失败: ${workspaceFailureMessage}`
+          : workspaceFailureMessage;
         let reconciliationMessage: string | null = null;
         try {
           const workspaceList = await apiListGatewayWorkspaces(resolvedApiPort);
@@ -242,9 +242,7 @@ export function useGatewayWorkspaceMutations({
           });
         } catch (reconciliationError) {
           reconciliationMessage =
-            reconciliationError instanceof Error
-              ? reconciliationError.message
-              : String(reconciliationError);
+            errorMessage(reconciliationError);
         }
         const message = reconciliationMessage
           ? `${operationMessage}；重新读取工作区列表也失败: ${reconciliationMessage}`
@@ -299,7 +297,7 @@ export function useGatewayWorkspaceMutations({
           };
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => ({
           ...prev,
           gatewayError: message,
@@ -344,7 +342,7 @@ export function useGatewayWorkspaceMutations({
         return renamedWorkspace.name;
       } catch (error) {
         const operationMessage =
-          error instanceof Error ? error.message : String(error);
+          errorMessage(error);
         let message = operationMessage;
         try {
           const workspaceList = await apiListGatewayWorkspaces(resolvedApiPort);
@@ -361,9 +359,7 @@ export function useGatewayWorkspaceMutations({
             };
           });
         } catch (reconciliationError) {
-          const reconciliationMessage = reconciliationError instanceof Error
-            ? reconciliationError.message
-            : String(reconciliationError);
+          const reconciliationMessage = errorMessage(reconciliationError);
           message = `${operationMessage}；重新读取工作区列表也失败: ${reconciliationMessage}`;
         }
         setState((prev) => ({

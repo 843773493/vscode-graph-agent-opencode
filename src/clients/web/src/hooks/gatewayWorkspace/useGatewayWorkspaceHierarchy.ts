@@ -5,6 +5,7 @@ import {
 } from "../../gatewayApi";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { withFreshGatewayWorkspaceList } from "../../state/gatewayWorkspaceState";
+import { errorMessage } from "../../utils/errorMessage";
 
 export function useGatewayWorkspaceHierarchy(
   apiPort: number,
@@ -46,7 +47,7 @@ export function useGatewayWorkspaceHierarchy(
         });
       } catch (error) {
         const operationMessage =
-          error instanceof Error ? error.message : String(error);
+          errorMessage(error);
         let message = operationMessage;
         try {
           const workspaceList = await listGatewayWorkspaces(apiPort);
@@ -55,9 +56,7 @@ export function useGatewayWorkspaceHierarchy(
             activeGatewayWorkspaceId: workspaceList.active_workspace_id,
           }));
         } catch (reconciliationError) {
-          const reconciliationMessage = reconciliationError instanceof Error
-            ? reconciliationError.message
-            : String(reconciliationError);
+          const reconciliationMessage = errorMessage(reconciliationError);
           message = `${operationMessage}；重新读取工作区列表也失败: ${reconciliationMessage}`;
         }
         setState((previous) => ({

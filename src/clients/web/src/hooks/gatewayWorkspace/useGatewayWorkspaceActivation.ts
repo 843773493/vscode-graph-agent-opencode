@@ -6,6 +6,7 @@ import {
 import type { AppState } from "../../types/frontend";
 import type { FinishWorkspaceRefresh, SetAppState } from "../contentViewLoaderTypes";
 import { createLatestSerialTaskQueue } from "../runtime/serialTaskQueue";
+import { errorMessage } from "../../utils/errorMessage";
 
 type RefreshGatewayWorkspaceStatuses = (
   expectedWorkspaceId?: string | null,
@@ -64,7 +65,7 @@ export function useGatewayWorkspaceActivation({
           ) {
             return;
           }
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessage(error);
           setState((previous) => ({
             ...previous,
             gatewayError: "后台加载工作区 Agent 失败: " + message,
@@ -79,7 +80,7 @@ export function useGatewayWorkspaceActivation({
       ) {
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((previous) => ({
         ...previous,
         gatewayError: message,
@@ -150,7 +151,7 @@ export function useGatewayWorkspaceActivation({
           throw cause;
         };
         if (hasFailure) {
-          const message = failure instanceof Error ? failure.message : String(failure);
+          const message = errorMessage(failure);
           return fail(message, failure);
         }
         if (!started) {
@@ -198,7 +199,7 @@ export function useGatewayWorkspaceActivation({
     try {
       await finishWorkspaceRefresh(currentSessionId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((prev) => ({
         ...prev,
         gatewayError: message,

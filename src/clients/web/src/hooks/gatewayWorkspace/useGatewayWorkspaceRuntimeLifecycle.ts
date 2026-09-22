@@ -13,6 +13,7 @@ import type {
 } from "../../types/backend";
 import type { FinishWorkspaceRefresh, SetAppState } from "../contentViewLoaderTypes";
 import { withFreshGatewayWorkspaceList } from "../../state/gatewayWorkspaceState";
+import { errorMessage } from "../../utils/errorMessage";
 
 type RefreshGatewayState = () => Promise<void>;
 
@@ -40,7 +41,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       await apiReconnectGatewayWorkspace(resolvedApiPort, workspaceId);
       await finishWorkspaceRefresh(currentSessionId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((prev) => ({
         ...prev,
         gatewayError: message,
@@ -66,7 +67,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         await finishWorkspaceRefresh(currentSessionId);
         return result;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => ({
           ...prev,
           gatewayError: message,
@@ -93,7 +94,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         } catch {
           // refreshGatewayState 已将二次读取失败完整写入界面状态。
         }
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => ({
           ...prev,
           gatewayError: message,
@@ -111,7 +112,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       try {
         await finishWorkspaceRefresh(currentSessionId);
       } catch (error) {
-        const message = `工作区已启动，但刷新 Gateway 状态失败: ${error instanceof Error ? error.message : String(error)}`;
+        const message = `工作区已启动，但刷新 Gateway 状态失败: ${errorMessage(error)}`;
         setState((prev) => ({
           ...prev,
           workspaceSwitching: false,
@@ -149,7 +150,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         } catch {
           // refreshGatewayState 已将二次读取失败完整写入界面状态。
         }
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => ({
           ...prev,
           gatewayError: message,
@@ -176,7 +177,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         await finishWorkspaceRefresh(currentSessionId);
         return result;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => ({
           ...prev,
           gatewayError: message,
@@ -199,7 +200,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         await apiProbeExternalGatewayWorkspace(resolvedApiPort, workspaceId);
         await finishWorkspaceRefresh(currentSessionId);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => ({
           ...prev,
           gatewayError: message,
