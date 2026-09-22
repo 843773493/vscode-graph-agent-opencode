@@ -315,6 +315,32 @@ class GatewayConfigSourceMixin:
         return record
 
     @staticmethod
+    def _advance_source_owner_generation(
+        connection: sqlite3.Connection,
+        *,
+        source_key: str,
+        generation: int,
+    ) -> None:
+        """同一事务内把 owner 水位推进到下一 generation；越级即 fail closed。"""
+
+        owner = connection.execute(
+            "SELECT next_generation FROM config_source_owner WHERE source_key = ?",
+            (source_key,),
+        ).fetchone()
+        if owner is not None and int(owner[0]) != generation:
+            raise ConfigConflictError("Gateway source owner generation CAS 冲突")
+        if owner is None:
+            connection.execute(
+                "INSERT INTO config_source_owner(source_key, next_generation) VALUES (?, ?)",
+                (source_key, generation + 1),
+            )
+        else:
+            connection.execute(
+                "UPDATE config_source_owner SET next_generation = ? WHERE source_key = ?",
+                (generation + 1, source_key),
+            )
+
+    @staticmethod
     def _append_config_source_journal_in_connection(
         connection: sqlite3.Connection,
         *,
@@ -376,22 +402,9 @@ class GatewayConfigSourceMixin:
         ):
             return current_generation
         generation = current_generation + 1
-        owner = connection.execute(
-            "SELECT next_generation FROM config_source_owner WHERE source_key = ?",
-            (source_key,),
-        ).fetchone()
-        if owner is not None and int(owner[0]) != generation:
-            raise ConfigConflictError("Gateway source owner generation CAS 冲突")
-        if owner is None:
-            connection.execute(
-                "INSERT INTO config_source_owner(source_key, next_generation) VALUES (?, ?)",
-                (source_key, generation + 1),
-            )
-        else:
-            connection.execute(
-                "UPDATE config_source_owner SET next_generation = ? WHERE source_key = ?",
-                (generation + 1, source_key),
-            )
+        GatewayConfigSourceMixin._advance_source_owner_generation(
+            connection, source_key=source_key, generation=generation
+        )
         connection.execute(
             """
             INSERT INTO config_source_journal(
@@ -471,22 +484,9 @@ class GatewayConfigSourceMixin:
                 connection.execute("COMMIT")
                 return self._source_journal_from_row(existing)
             generation = current_generation + 1
-            owner = connection.execute(
-                "SELECT next_generation FROM config_source_owner WHERE source_key = ?",
-                (source_key,),
-            ).fetchone()
-            if owner is not None and int(owner[0]) != generation:
-                raise ConfigConflictError("Gateway source owner generation CAS 冲突")
-            if owner is None:
-                connection.execute(
-                    "INSERT INTO config_source_owner(source_key, next_generation) VALUES (?, ?)",
-                    (source_key, generation + 1),
-                )
-            else:
-                connection.execute(
-                    "UPDATE config_source_owner SET next_generation = ? WHERE source_key = ?",
-                    (generation + 1, source_key),
-                )
+            self._advance_source_owner_generation(
+                connection, source_key=source_key, generation=generation
+            )
             now = utc_now_text()
             connection.execute(
                 """
