@@ -4,7 +4,6 @@ import asyncio
 import os
 import re
 import shutil
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -19,8 +18,6 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationUpdateRequest,
     NodeDebugControlActionRequest,
     NodeDebugEvaluateActionRequest,
-    NodeDebugEvaluateParams,
-    NodeDebugEvaluationDTO,
     NodeDebugLaunchProfileDTO,
     NodeDebugSetBreakpointActionRequest,
     NodeDebugStateDTO,
@@ -51,6 +48,9 @@ from app.services.infrastructure.node_debug.configuration.runtime_config import 
 )
 from app.services.infrastructure.node_debug.process.claim_runtime import (
     NodeDebugClaimRuntime,
+)
+from app.services.infrastructure.node_debug.process.evaluation import (
+    NodeDebugEvaluation,
 )
 from app.services.infrastructure.node_debug.process.inspector import (
     NodeDebugInspector,
@@ -96,7 +96,6 @@ from app.services.infrastructure.node_debug.session.snapshot import (
 
 _INSPECTOR_URL_PATTERN = re.compile(r"Debugger listening on (ws://\S+)")
 
-_MAX_NODE_DEBUG_EVALUATIONS = 100
 _MAX_OUTPUT_LINES = 100
 _TOOL_ACTION_SOURCES: dict[str, frozenset[str]] = {
     "create_debug_configuration": frozenset({"create_configuration"}),
@@ -191,6 +190,10 @@ class NodeDebugService:
             workspace_root=self._workspace_root,
             session_state=self._session_state,
             command=self._inspector.command,
+            append_action=self._append_action,
+        )
+        self._evaluation = NodeDebugEvaluation(
+            inspector=self._inspector,
             append_action=self._append_action,
         )
         self._claim_runtime = NodeDebugClaimRuntime(
@@ -710,7 +713,7 @@ class NodeDebugService:
                 tool_call_id=tool_call_id,
             )
         elif isinstance(command, NodeDebugEvaluateActionRequest):
-            await self._evaluate(
+            await self._evaluation.evaluate(
                 runtime,
                 command.params,
                 actor=actor,
@@ -1241,62 +1244,6 @@ class NodeDebugService:
         return NodeDebugRuntimeConfig.from_mapping(
             self._config_service.get_debug_runtime_config()
         )
-
-    async def _evaluate(
-        self,
-        runtime: NodeDebugRuntime,
-        params: NodeDebugEvaluateParams,
-        *,
-        actor: Literal["human", "ai", "system"],
-        tool_name: str | None,
-        tool_call_id: str | None,
-    ) -> None:
-        expression = params.expression
-        async with runtime.state_lock:
-            if runtime.status != "paused" or not runtime.call_stack:
-                raise RuntimeError("只有暂停在源码断点时才能求值")
-            call_frame_id = params.call_frame_id or runtime.call_stack[0].call_frame_id
-            if not any(
-                frame.call_frame_id == call_frame_id for frame in runtime.call_stack
-            ):
-                raise ValueError("求值 call_frame_id 不属于当前暂停调用栈")
-        result = await self._inspector.command(
-            runtime,
-            "Debugger.evaluateOnCallFrame",
-            {
-                "callFrameId": call_frame_id,
-                "expression": expression,
-                "returnByValue": True,
-                "generatePreview": False,
-            },
-        )
-        remote_result = result.get("result")
-        exception_details = result.get("exceptionDetails")
-        evaluation = NodeDebugEvaluationDTO(
-            expression=expression,
-            value=self._inspector.remote_value(remote_result),
-            type=self._inspector.remote_type(remote_result),
-            description=self._inspector.remote_description(remote_result),
-            error=(
-                self._inspector.exception_message(exception_details)
-                if isinstance(exception_details, dict)
-                else None
-            ),
-            evaluated_at=datetime.now(UTC),
-        )
-        async with runtime.state_lock:
-            runtime.last_evaluation = evaluation
-            runtime.evaluations.append(evaluation)
-            del runtime.evaluations[:-_MAX_NODE_DEBUG_EVALUATIONS]
-            runtime.error_message = None
-            self._append_action(
-                runtime,
-                "evaluate",
-                f"已求值: {expression}",
-                actor=actor,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-            )
 
     async def _read_stream(
         self,
