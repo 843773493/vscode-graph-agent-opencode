@@ -1,12 +1,13 @@
 # 目录用途
 
-存放请求装载与并发编排的运行期 hook 与基础原语：LLM 请求日志装载、待处理请求动作、以及把长任务串行化/只保留最新结果的 serialTaskQueue。
+存放请求装载与并发编排的运行期 hook 与基础原语：LLM 请求日志装载、待处理请求动作、Agent 状态消息快照装载，以及把长任务串行化/只保留最新结果的 serialTaskQueue。
 
 serialTaskQueue 是跨子包复用的基础原语，用于把异步任务串行化并支持 latest-only 短路；`hooks/session/`、`hooks/workspace/`、`hooks/gatewayWorkspace/` 等子包直接引用它，修改其对外语义会影响这些调用方。
 
 # 可修改内容
 
 - LLM 请求日志的装载与状态写入。
+- Agent 状态消息快照的装载与重置。
 - 待处理请求的接受、拒绝与清理动作。
 - 串行任务队列的入队、latest-only 短路与错误传播。
 - 与上述逻辑直接相关的纯函数测试。

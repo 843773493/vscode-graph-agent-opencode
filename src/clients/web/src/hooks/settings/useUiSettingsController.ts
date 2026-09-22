@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef } from "react";
-import { DEFAULT_BACKEND_PORT } from "../api";
+import { DEFAULT_BACKEND_PORT } from "../../api";
 import {
   getGatewayUiSettings,
   updateGatewayUiSettings,
-} from "../gatewayApi";
-import { writeCachedUiSettings } from "../state/storage";
-import { mergeGuestWebUiSettings } from "../state/uiSettings/preferences";
-import type { WebUiSettings, WebUiSettingsUpdate } from "../types/backend";
-import type { SetAppState } from "./contentViewLoaderTypes";
-import { loadAndApplyResolvedGatewayTheme } from "../theme";
+} from "../../gatewayApi";
+import { writeCachedUiSettings } from "../../state/storage";
+import { mergeGuestWebUiSettings } from "../../state/uiSettings/preferences";
+import type { WebUiSettings, WebUiSettingsUpdate } from "../../types/backend";
+import type { SetAppState } from "../contentViewLoaderTypes";
+import { loadAndApplyResolvedGatewayTheme } from "../../theme";
 
 async function applyUiSettings(setState: SetAppState, settings: WebUiSettings): Promise<void> {
   if (!settings.theme.resolved_theme) {

@@ -1,8 +1,8 @@
 import { useCallback, useRef } from "react";
-import { getAgentStateMessages } from "../api";
-import { findAgentStateMessageRawContent } from "../state/display/agentStateDisplay";
-import type { AppState } from "../types/frontend";
-import type { SetAppState } from "./contentViewLoaderTypes";
+import { getAgentStateMessages } from "../../api";
+import { findAgentStateMessageRawContent } from "../../state/display/agentStateDisplay";
+import type { AppState } from "../../types/frontend";
+import type { SetAppState } from "../contentViewLoaderTypes";
 
 export function resetAgentStateFields(
   state: AppState,

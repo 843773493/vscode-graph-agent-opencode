@@ -22,7 +22,7 @@ import {
 } from "../../state/storage";
 import { replaceSessionMetadata } from "../../state/session/sessions";
 import { appendFrontendEvent } from "../../state/traceEvents";
-import { resetAgentStateFields } from "../useAgentStateSnapshot";
+import { resetAgentStateFields } from "../runtime/useAgentStateSnapshot";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 

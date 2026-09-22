@@ -56,7 +56,7 @@ import { useGatewayWorkspaceMutations } from "./hooks/gatewayWorkspace/useGatewa
 import { useGatewayWorkspaceActivation } from "./hooks/gatewayWorkspace/useGatewayWorkspaceActivation";
 import { useWorkspaceSessionSelection } from "./hooks/workspace/useWorkspaceSessionSelection";
 import { useComposerStateProjection } from "./hooks/composer/useComposerStateProjection";
-import { useUiSettingsController } from "./hooks/useUiSettingsController";
+import { useUiSettingsController } from "./hooks/settings/useUiSettingsController";
 import {
   readCachedUiSettings,
   readUnreadSessionKeys,

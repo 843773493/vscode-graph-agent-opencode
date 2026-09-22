@@ -1,7 +1,7 @@
 import React from "react";
 import { createPortal } from "react-dom";
 import type { AttachmentRef } from "../../types/backend";
-import { useMessageMediaSources } from "../../hooks/useMessageMediaSources";
+import { useMessageMediaSources } from "../../hooks/media/useMessageMediaSources";
 import {
   buildMessageMediaItems,
   type MessageMediaItem,
