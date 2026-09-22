@@ -3152,3 +3152,41 @@ def test_write_transaction_nesting_error_does_not_corrupt_outer_transaction(
         assert store.get_fence() is not None
     finally:
         store.close()
+
+
+# ----------------------------------------------------------------------
+# 准入门禁边界：通信 ledger 不做 fence 门禁（由 SessionLifecycleGate 单点负责）
+# ----------------------------------------------------------------------
+
+
+def test_communication_ledger_does_not_gate_on_lifecycle_fence(
+    tmp_path: Path,
+) -> None:
+    """固化现状：store 层通信 ledger 不看 lifecycle fence。
+
+    准入红线由 `SessionLifecycleGate` 单点负责——唯一两个生产调用方
+    （`CommunicationLedgerService.admit_outgoing_send` /
+    `accept_incoming_send`）都在 `gate.exclusive(session_id)` 内；绕过
+    gate 直接调用 store 即视为绕过。本用例把这条分工固定下来，防止后人
+    误以为漏检而在 store 层重复加 fence 检查（那会制造第二套准入判断）。
+    """
+    store = SessionControlStore(tmp_path / "comm-fence.sqlite")
+    try:
+        main_thread_id = make_thread_id()
+        store.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
+        store.initialize_fence("active", 1)
+        assert store.cas_fence_transition(1, "deleting") is True
+        assert store.get_fence()[0] == "deleting"
+        # fence 已 deleting，store 层通信 ledger 仍照常写入（不设门禁）。
+        inbox, created = store.create_or_get_communication_inbox(
+            **inbox_kwargs(make_comm_id(), main_thread_id)
+        )
+        assert created is True
+        assert inbox.state == "target_accepted"
+        outbox, outbox_created = store.create_or_get_communication_outbox(
+            **outbox_kwargs(make_comm_id())
+        )
+        assert outbox_created is True
+        assert outbox.state == "accepted"
+    finally:
+        store.close()

@@ -15,6 +15,7 @@
 - 不得把 `SHA256_HEX_PATTERN`、`EXECUTION_BINDING_ID_PATTERN`、`EXECUTION_JOB_ID_PATTERN` 或 `validate_claim_fields` 在本目录复制一份；跨子包共用的形态口径只在 `session_control_primitives.py` 单点定义。
 - 不得放宽幂等守卫：同 `send_operation_id` 或同 `communication_id` 的身份字段漂移必须 fail closed，不得覆盖、重基或静默吸收。
 - 不得按墙钟时间自动让 inbox admission 过期；claim owner/generation 是无 TTL 的可恢复领取字段。
+- 本子包不做 owner 准入门禁（不读 lifecycle fence）：`fence=deleting` 的 session 仍可写入 outbox/inbox。这是有意设计——准入红线由 `SessionLifecycleGate` 单点负责（唯一两个生产调用方 `CommunicationLedgerService.admit_outgoing_send` / `accept_incoming_send` 都在 `gate.exclusive(session_id)` 内）；绕过 gate 直接调用 store 即视为绕过。不得为此在 store 层补 fence 检查，这会与「gate 单点负责」的既有分工重复。
 
 # 规范
 
