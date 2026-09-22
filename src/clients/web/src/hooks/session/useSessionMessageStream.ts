@@ -4,7 +4,7 @@ import {
   MessageStreamCursorGoneError,
   MessageStreamConnectionError,
   streamSessionMessageEvents,
-} from "../../api/sessionMessageStream";
+} from "../../api/stream/sessionMessageStream";
 import {
   applyMessageStreamEvent,
   applyMessageStreamSnapshot,

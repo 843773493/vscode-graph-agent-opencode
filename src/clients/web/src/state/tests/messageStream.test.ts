@@ -9,7 +9,7 @@ import {
   writeMessageStreamCache,
 } from "../messageStream/index";
 import { isTerminalStatus } from "../messageStream/state";
-import { validateMessageStreamSnapshotPayload } from "../../api/messageStreamSnapshot";
+import { validateMessageStreamSnapshotPayload } from "../../api/stream/messageStreamSnapshot";
 
 function event(
   seq: number,

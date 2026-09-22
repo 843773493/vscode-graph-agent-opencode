@@ -6,7 +6,7 @@ import {
   streamSessionEvents,
   TraceCursorGoneError,
 } from "./sessionTraceStream";
-import type { SessionStreamEvent } from "../types/backend";
+import type { SessionStreamEvent } from "../../types/backend";
 
 const originalFetch = globalThis.fetch;
 

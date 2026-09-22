@@ -7,7 +7,7 @@ import {
   SessionStreamIdleTimeoutError,
   streamSessionEvents,
   TraceCursorGoneError,
-} from "../../api/sessionTraceStream";
+} from "../../api/stream/sessionTraceStream";
 import { isTransientNetworkError } from "../../api/http";
 import { isJobTerminalTraceType } from "../../state/traceEvents";
 import type { SessionStreamEvent } from "../../types/backend";

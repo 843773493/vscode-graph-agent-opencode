@@ -3,16 +3,16 @@ import type {
   CursorPage,
   SessionStreamEvent,
   TraceEvent,
-} from "../types/backend";
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../sseClient";
-import { validateTraceEvent } from "../sseRuntimeSchemas";
+} from "../../types/backend";
+import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sseClient";
+import { validateTraceEvent } from "../../sseRuntimeSchemas";
 import {
   HttpRequestError,
   requestGatewayResponse,
   requestJson,
   unwrapApiData,
   workspaceHeader,
-} from "./http";
+} from "../http";
 
 const SESSION_TRACE_TIMEOUT_MS = 10_000;
 const DEFAULT_SESSION_STREAM_IDLE_TIMEOUT_MS = 45_000;

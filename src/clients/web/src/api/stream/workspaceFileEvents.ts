@@ -1,17 +1,17 @@
-import type { WorkspaceFileStreamBatch } from "../types/backend";
+import type { WorkspaceFileStreamBatch } from "../../types/backend";
 import {
   consumeSseResponse,
   decodeJsonSseData,
   defineSseEvent,
-} from "../sseClient";
+} from "../../sseClient";
 import {
   validateSseError,
   validateWorkspaceFileChangeBatch,
-} from "../sseRuntimeSchemas";
+} from "../../sseRuntimeSchemas";
 import {
   requestGatewayResponse,
   workspaceHeader,
-} from "./http";
+} from "../http";
 
 export async function streamWorkspaceFileEvents(
   port: number,

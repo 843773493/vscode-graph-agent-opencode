@@ -2,7 +2,7 @@
 import type {
   MessageStreamSnapshot,
   MessageStreamSnapshotResponse,
-} from "../../api/messageStreamSnapshot";
+} from "../../api/stream/messageStreamSnapshot";
 import { drainPendingEvents } from "./eventReducer";
 import {
   MESSAGE_STREAM_BLOCK_TEXT_MAX_CHARS,

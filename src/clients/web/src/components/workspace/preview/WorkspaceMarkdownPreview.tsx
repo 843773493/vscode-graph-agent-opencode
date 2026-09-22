@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import {
   resolveWorkspaceMarkdownTarget,
   type WorkspaceMarkdownTarget,
-} from "../../../utils/workspaceMarkdown";
+} from "../../../utils/markdown/workspaceMarkdown";
 import MermaidDiagram from "./MermaidDiagram";
 import WorkspaceMarkdownImage from "./WorkspaceMarkdownImage";
 

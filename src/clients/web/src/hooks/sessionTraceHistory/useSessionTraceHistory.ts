@@ -2,7 +2,7 @@ import React from "react";
 import {
   listSessionTraceHistory,
   TraceCursorGoneError,
-} from "../../api/sessionTraceStream";
+} from "../../api/stream/sessionTraceStream";
 import { dedupeTraceEvents } from "../../state/traceEvents";
 import type { Session } from "../../types/backend";
 import type { SessionTraceHistoryState } from "../../types/frontend";

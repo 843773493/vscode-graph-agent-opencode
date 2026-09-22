@@ -1,6 +1,6 @@
 import { normalizeDisplayText } from "../../utils/displayText";
 import { isRecord, redactLargeData } from "../../utils/jsonDisplay";
-import { allowedToolsFromSkillMarkdownText } from "../../utils/skillMarkdown";
+import { allowedToolsFromSkillMarkdownText } from "../../utils/markdown/skillMarkdown";
 import {
   compactKeyFlowText,
   createSkillKeyFlowState,

@@ -6,9 +6,9 @@ import {
 } from "./http";
 import { getSessionAttachmentBlob } from "./session/sessionMessages";
 import { streamSessionActivity } from "./session/sessionActivity";
-import { streamSessionMessageEvents } from "./sessionMessageStream";
-import { streamSessionEvents } from "./sessionTraceStream";
-import { streamWorkspaceFileEvents } from "./workspaceFileEvents";
+import { streamSessionMessageEvents } from "./stream/sessionMessageStream";
+import { streamSessionEvents } from "./stream/sessionTraceStream";
+import { streamWorkspaceFileEvents } from "./stream/workspaceFileEvents";
 import { getWorkspaceRawFileBlob } from "./workspaceFilesystem";
 
 const originalFetch = globalThis.fetch;

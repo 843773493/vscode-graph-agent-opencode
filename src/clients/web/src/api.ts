@@ -19,7 +19,7 @@ export {
   SessionStreamIdleTimeoutError,
   streamSessionEvents,
   TraceCursorGoneError,
-} from "./api/sessionTraceStream";
+} from "./api/stream/sessionTraceStream";
 export {
   getToolCatalog,
   getToolTestRun,
@@ -104,7 +104,7 @@ export {
   getSessionResources,
   reviewSessionChangeFile,
 } from "./api/session/sessionResources";
-export { streamWorkspaceFileEvents } from "./api/workspaceFileEvents";
+export { streamWorkspaceFileEvents } from "./api/stream/workspaceFileEvents";
 export { controlJob, getJob } from "./api/jobs";
 export {
   activateNodeDebugConfiguration,

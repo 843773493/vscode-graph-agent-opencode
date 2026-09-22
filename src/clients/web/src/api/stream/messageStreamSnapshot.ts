@@ -10,10 +10,10 @@ import type {
   StreamSnapshot,
   ToolCall,
   ToolExecutionSnapshot,
-} from "../types/protocol_generated/boxteam/workspace/message/v1/message_stream";
+} from "../../types/protocol_generated/boxteam/workspace/message/v1/message_stream";
 import type { JsonObject } from "@bufbuild/protobuf";
 // 复用全前端共享的对象判定权威实现，不在 api 层维护第三份同源 isJsonObject。
-import { isRecord } from "../utils/jsonDisplay";
+import { isRecord } from "../../utils/jsonDisplay";
 
 type WireToolExecutionStatus = "running" | "completed" | "failed";
 type WireToolExecutionOutcome = "success" | "provider_error" | "execution_lost" | "outcome_unknown";

@@ -1,19 +1,19 @@
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../sseClient";
+import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sseClient";
 import {
   HttpRequestError,
   requestGatewayResponse,
   requestJson,
   unwrapApiData,
   workspaceHeader,
-} from "./http";
+} from "../http";
 import type {
   MessageStreamEvent,
   MessageStreamEventType,
-} from "../state/messageStream/index";
+} from "../../state/messageStream/index";
 // 复用消息流原语中心的值归一实现，不再在 api 层维护第二份 stringValue。
-import { stringValue } from "../state/messageStream/state";
-import type { APIResponse } from "../types/backend";
-import { isRecord } from "../utils/jsonDisplay";
+import { stringValue } from "../../state/messageStream/state";
+import type { APIResponse } from "../../types/backend";
+import { isRecord } from "../../utils/jsonDisplay";
 import {
   validateMessageStreamSnapshot,
   validateMessageStreamSnapshotPayload,

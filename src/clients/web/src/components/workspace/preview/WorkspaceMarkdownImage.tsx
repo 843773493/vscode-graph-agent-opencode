@@ -3,7 +3,7 @@ import { getWorkspaceRawFileBlob } from "../../../api";
 import {
   resolveWorkspaceMarkdownTarget,
   type WorkspaceMarkdownTarget,
-} from "../../../utils/workspaceMarkdown";
+} from "../../../utils/markdown/workspaceMarkdown";
 
 interface WorkspaceMarkdownImageProps {
   apiPort: number;

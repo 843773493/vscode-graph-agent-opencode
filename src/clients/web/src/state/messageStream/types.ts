@@ -1,5 +1,5 @@
 // 消息流协议派生类型：事件信封、实体结构、状态结构与连接状态。
-import type { MessageStreamSnapshot } from "../../api/messageStreamSnapshot";
+import type { MessageStreamSnapshot } from "../../api/stream/messageStreamSnapshot";
 
 export type MessageStreamEventType =
   | "stream.opened"
