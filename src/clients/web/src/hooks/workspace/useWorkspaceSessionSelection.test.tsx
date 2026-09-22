@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React, { type MutableRefObject } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import * as api from "../api";
-import type { Session } from "../types/backend";
-import type { AppState } from "../types/frontend";
+import * as api from "../../api";
+import type { Session } from "../../types/backend";
+import type { AppState } from "../../types/frontend";
 import { useWorkspaceSessionSelection } from "./useWorkspaceSessionSelection";
 
 const API_PORT = 49_703;

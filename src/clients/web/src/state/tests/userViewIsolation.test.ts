@@ -11,7 +11,7 @@ import {
   writeTurnTimelineCache,
 } from "../session/turnTimeline";
 import { sessionScopeKey } from "../session/sessionScope";
-import { selectBootstrapSessionId } from "../../hooks/useWorkspaceBootstrap";
+import { selectBootstrapSessionId } from "../../hooks/workspace/useWorkspaceBootstrap";
 import type { AppState } from "../../types/frontend";
 
 const workspaceId = "workspace-a";

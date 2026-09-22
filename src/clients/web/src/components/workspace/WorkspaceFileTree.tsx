@@ -43,7 +43,7 @@ import {
   WORKSPACE_FILE_CHANGES_EVENT,
   type WorkspaceFileChangesEventDetail,
 } from "../../state/workspaceFileTreeEvents";
-import { useWorkspaceFileWatch } from "../../hooks/useWorkspaceFileWatch";
+import { useWorkspaceFileWatch } from "../../hooks/workspace/useWorkspaceFileWatch";
 import AnchoredOverlay from "../AnchoredOverlay";
 import {
   type DirectoryCacheEntry,

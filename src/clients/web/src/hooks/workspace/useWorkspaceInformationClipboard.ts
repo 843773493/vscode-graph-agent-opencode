@@ -2,9 +2,9 @@ import { useCallback } from "react";
 import {
   buildWorkspaceInformationDump,
   formatWorkspaceInformationDump,
-} from "../state/workspaceInformation";
-import type { GatewayWorkspace } from "../types/backend";
-import { copyTextToClipboard } from "../utils/clipboard";
+} from "../../state/workspaceInformation";
+import type { GatewayWorkspace } from "../../types/backend";
+import { copyTextToClipboard } from "../../utils/clipboard";
 
 export function useWorkspaceInformationClipboard(
   workspaces: GatewayWorkspace[],

@@ -7,7 +7,7 @@ import type { AppState } from "../../types/frontend";
 import {
   fetchWorkspaceSessionListSnapshot,
   isCurrentWorkspaceSessionListSnapshot,
-} from "../workspaceSessionListRefresh";
+} from "../workspace/workspaceSessionListRefresh";
 
 export type SetAppState = Dispatch<SetStateAction<AppState>>;
 

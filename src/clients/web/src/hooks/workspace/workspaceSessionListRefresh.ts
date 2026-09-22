@@ -1,6 +1,6 @@
-import { getSession, listSessions } from "../api";
-import { listSessionCatalogChildren } from "../api/sessionCatalog";
-import type { Session } from "../types/backend";
+import { getSession, listSessions } from "../../api";
+import { listSessionCatalogChildren } from "../../api/sessionCatalog";
+import type { Session } from "../../types/backend";
 
 const generations = new Map<string, number>();
 const inFlightRequests = new Map<string, Promise<WorkspaceSessionListSnapshot>>();

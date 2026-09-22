@@ -41,20 +41,20 @@ import { useSessionTurnHistory } from "./hooks/sessionTurnHistory/useSessionTurn
 import { useSessionEventStream } from "./hooks/useSessionEventStream";
 import { useSessionMessageStream } from "./hooks/useSessionMessageStream";
 import { useBackgroundSessionActivity } from "./hooks/useBackgroundSessionActivity";
-import { useWorkspaceSessionActivity } from "./hooks/useWorkspaceSessionActivity";
+import { useWorkspaceSessionActivity } from "./hooks/workspace/useWorkspaceSessionActivity";
 import { useSessionInformationClipboard } from "./hooks/useSessionInformationClipboard";
 import { useSessionActions } from "./hooks/useSessionActions";
-import { useWorkspaceBootstrap } from "./hooks/useWorkspaceBootstrap";
+import { useWorkspaceBootstrap } from "./hooks/workspace/useWorkspaceBootstrap";
 import {
   useSessionViewState,
   type SessionViewStatePayload,
 } from "./hooks/useSessionViewState";
-import { useWorkspaceInformationClipboard } from "./hooks/useWorkspaceInformationClipboard";
+import { useWorkspaceInformationClipboard } from "./hooks/workspace/useWorkspaceInformationClipboard";
 import { useGatewayWorkspaceHierarchy } from "./hooks/gatewayWorkspace/useGatewayWorkspaceHierarchy";
 import { useGatewayWorkspaceRuntimeLifecycle } from "./hooks/gatewayWorkspace/useGatewayWorkspaceRuntimeLifecycle";
 import { useGatewayWorkspaceMutations } from "./hooks/gatewayWorkspace/useGatewayWorkspaceMutations";
 import { useGatewayWorkspaceActivation } from "./hooks/gatewayWorkspace/useGatewayWorkspaceActivation";
-import { useWorkspaceSessionSelection } from "./hooks/useWorkspaceSessionSelection";
+import { useWorkspaceSessionSelection } from "./hooks/workspace/useWorkspaceSessionSelection";
 import { useComposerStateProjection } from "./hooks/useComposerStateProjection";
 import { useUiSettingsController } from "./hooks/useUiSettingsController";
 import {

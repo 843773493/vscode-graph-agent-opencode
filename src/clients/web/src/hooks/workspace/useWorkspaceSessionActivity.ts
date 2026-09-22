@@ -3,14 +3,14 @@ import {
   listSessionActivity,
   SessionActivityCursorGoneError,
   streamSessionActivity,
-} from "../api/sessionActivity";
-import { cloneMaps } from "../state/appStateMaps";
-import { sessionScopeKey } from "../state/session/sessionScope";
-import type { SessionActivity } from "../types/backend";
-import type { SetAppState } from "./contentViewLoaderTypes";
-import { refreshWorkspaceSessionList } from "./sessionEventStream/sessionRefresh";
-import { sessionStreamReconnectDelay } from "./sessionEventStreamPolicy";
-import { waitForReconnect } from "./waitForReconnect";
+} from "../../api/sessionActivity";
+import { cloneMaps } from "../../state/appStateMaps";
+import { sessionScopeKey } from "../../state/session/sessionScope";
+import type { SessionActivity } from "../../types/backend";
+import type { SetAppState } from "../contentViewLoaderTypes";
+import { refreshWorkspaceSessionList } from "../sessionEventStream/sessionRefresh";
+import { sessionStreamReconnectDelay } from "../sessionEventStreamPolicy";
+import { waitForReconnect } from "../waitForReconnect";
 
 function markActivity(
   event: SessionActivity,

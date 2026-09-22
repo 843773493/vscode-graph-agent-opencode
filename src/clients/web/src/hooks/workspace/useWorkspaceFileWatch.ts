@@ -2,9 +2,9 @@ import { useEffect } from "react";
 
 import {
   streamWorkspaceFileEvents,
-} from "../api";
-import type { WorkspaceFileStreamBatch } from "../types/backend";
-import { dispatchWorkspaceFileChanges } from "../state/workspaceFileTreeEvents";
+} from "../../api";
+import type { WorkspaceFileStreamBatch } from "../../types/backend";
+import { dispatchWorkspaceFileChanges } from "../../state/workspaceFileTreeEvents";
 
 interface UseWorkspaceFileWatchOptions {
   active: boolean;

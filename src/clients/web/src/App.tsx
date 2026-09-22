@@ -45,7 +45,7 @@ import {
   getConversationsForSession,
   useAppState,
 } from "./hooks";
-import { useWorkspacePreviewTabs } from "./hooks/useWorkspacePreviewTabs";
+import { useWorkspacePreviewTabs } from "./hooks/workspace/useWorkspacePreviewTabs";
 import { useMainAreaResize } from "./hooks/useMainAreaResize";
 import { useBottomPanelResize } from "./hooks/useBottomPanelResize";
 import { useNodeDebugWorkbench } from "./hooks/nodeDebug/useNodeDebugWorkbench";

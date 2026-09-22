@@ -3,19 +3,19 @@ import {
   DEFAULT_BACKEND_PORT,
   getWorkspace,
   listAgents as apiListAgents,
-} from "../api";
-import { HttpRequestError } from "../api/http";
+} from "../../api";
+import { HttpRequestError } from "../../api/http";
 import {
   activateGatewayWorkspace,
   ensureGatewayUserAccess,
   getLatestGatewayUserViewState,
   getGatewayUiSettings,
   listGatewayWorkspaces,
-} from "../gatewayApi";
-import { writeCachedUiSettings } from "../state/storage";
-import { sessionScopeKey } from "../state/session/sessionScope";
-import type { SetAppState } from "./contentViewLoaderTypes";
-import { loadAndApplyResolvedGatewayTheme } from "../theme";
+} from "../../gatewayApi";
+import { writeCachedUiSettings } from "../../state/storage";
+import { sessionScopeKey } from "../../state/session/sessionScope";
+import type { SetAppState } from "../contentViewLoaderTypes";
+import { loadAndApplyResolvedGatewayTheme } from "../../theme";
 import {
   fetchWorkspaceSessionListSnapshot,
   isCurrentWorkspaceSessionListSnapshot,

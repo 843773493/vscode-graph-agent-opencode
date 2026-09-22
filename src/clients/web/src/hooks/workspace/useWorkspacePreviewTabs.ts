@@ -3,22 +3,22 @@ import {
   DEFAULT_BACKEND_PORT,
   getWorkspaceFileContent,
   updateWorkspaceFileContent,
-} from "../api";
+} from "../../api";
 import type {
   SessionChangeset,
   SessionFileChange,
   WebUiLayoutSettings,
   WorkspaceFileContent,
   WorkspaceFileNode,
-} from "../types/backend";
-import type { WorkspacePreviewTab } from "../components/workspace/WorkspaceFilePreviewArea";
-import { buildGatewayAttachUrl } from "../utils/attachUrls";
+} from "../../types/backend";
+import type { WorkspacePreviewTab } from "../../components/workspace/WorkspaceFilePreviewArea";
+import { buildGatewayAttachUrl } from "../../utils/attachUrls";
 import type {
   WorkspaceFileReference,
   WorkspaceFileSelection,
-} from "../utils/workspaceFileReferences";
-import { isWorkspaceTextFilePath } from "../utils/workspaceFileReferences";
-import { useWarmConfirm } from "../components/WarmConfirmProvider";
+} from "../../utils/workspaceFileReferences";
+import { isWorkspaceTextFilePath } from "../../utils/workspaceFileReferences";
+import { useWarmConfirm } from "../../components/WarmConfirmProvider";
 
 interface UseWorkspacePreviewTabsOptions {
   apiPort: number;

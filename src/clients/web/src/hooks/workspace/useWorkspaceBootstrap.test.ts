@@ -8,8 +8,8 @@ import {
   isRetryableWorkspaceBootstrapError,
   selectHealthyGatewayWorkspace,
 } from "./useWorkspaceBootstrap";
-import { HttpRequestError } from "../api/http";
-import type { GatewayWorkspace } from "../types/backend";
+import { HttpRequestError } from "../../api/http";
+import type { GatewayWorkspace } from "../../types/backend";
 
 describe("selectBootstrapSessionId", () => {
   test("用户切换后不沿用上一个用户的当前会话", () => {

@@ -10,7 +10,7 @@ import type {
   GatewayUserViewState,
 } from "../types/backend";
 import { sessionScopeKey } from "../state/session/sessionScope";
-import { canAcceptUserViewStateMutation } from "./useWorkspaceBootstrap";
+import { canAcceptUserViewStateMutation } from "./workspace/useWorkspaceBootstrap";
 
 const SESSION_VIEW_STATE_CACHE_LIMIT = 64;
 
