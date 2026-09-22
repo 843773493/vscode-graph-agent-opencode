@@ -11,15 +11,16 @@ import {
 import { HttpRequestError } from "../../api";
 import { useAppState } from "../../hooks";
 import AnchoredOverlay from "./AnchoredOverlay";
+import { errorMessage } from "../../utils/errorMessage";
 
-function errorMessage(error: unknown): string {
+function gatewayUserErrorMessage(error: unknown): string {
   if (error instanceof HttpRequestError && error.detail && typeof error.detail === "object") {
     const detail = error.detail as { code?: unknown; client_label?: unknown };
     if (detail.code === "user_lease_occupied") {
       return `用户正在被占用${typeof detail.client_label === "string" ? `（${detail.client_label}）` : ""}`;
     }
   }
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 export default function GatewayUserAccessMenu() {
@@ -39,7 +40,7 @@ export default function GatewayUserAccessMenu() {
     try {
       setUsers((await listGatewayUsers(apiPort)).items);
     } catch (cause: unknown) {
-      setError(errorMessage(cause));
+      setError(gatewayUserErrorMessage(cause));
     } finally {
       setLoading(false);
     }
@@ -75,7 +76,7 @@ export default function GatewayUserAccessMenu() {
       setOpen(false);
       await refreshUsers();
     } catch (cause: unknown) {
-      setError(errorMessage(cause));
+      setError(gatewayUserErrorMessage(cause));
     } finally {
       setLoading(false);
     }
@@ -97,7 +98,7 @@ export default function GatewayUserAccessMenu() {
         `已切换到用户 ${user.display_name}`,
       );
     } catch (cause: unknown) {
-      setError(errorMessage(cause));
+      setError(gatewayUserErrorMessage(cause));
       setLoading(false);
     }
   };

@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
+import { errorMessage } from "../../utils/errorMessage";
 
 interface WarmActionDialogProps {
   open: boolean;
@@ -71,7 +72,7 @@ export default function WarmActionDialog({
       await onConfirm(normalizedValue);
       onClose();
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : String(submitError));
+      setError(errorMessage(submitError));
     } finally {
       setSubmitting(false);
     }
