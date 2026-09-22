@@ -70,3 +70,124 @@ describe("扁平文件树搜索", () => {
       .toBe(true);
   });
 });
+
+describe("符号链接与损坏目录结构的边界", () => {
+  test("符号链接即使位于展开集合内也不展开其子项", () => {
+    const link: WorkspaceFileNode = {
+      name: "link",
+      path: "dir/link",
+      kind: "symlink",
+      has_children: false,
+      size: 0,
+      modified_at: null,
+    };
+    const rows = buildVisibleFileTreeRows({
+      directories: {
+        dir: directory([link]),
+        // 即使调用方错误地提供了 symlink 的子目录缓存，也不应被展开。
+        "dir/link": directory([{
+          name: "escaped.ts",
+          path: "dir/link/escaped.ts",
+          kind: "file",
+          has_children: false,
+          size: 1,
+          modified_at: null,
+        }]),
+      },
+      expandedPaths: new Set(["dir", "dir/link"]),
+      shortcuts: [],
+      searchQuery: "",
+      workspaceLabel: "project",
+      workspaceTitle: "/workspace/project",
+      workspaceRootPath: "dir",
+      filesystemRootPath: "filesystem:/",
+      shortcutPath: (path) => "filesystem:" + path,
+    });
+
+    const linkRow = rows.find((row) => row.kind === "node" && row.node.path === "dir/link");
+    expect(linkRow).toMatchObject({ kind: "node", expanded: false });
+    expect(rows.some((row) => row.kind === "node" && row.node.path === "dir/link/escaped.ts"))
+      .toBe(false);
+  });
+
+  test("自引用目录不会造成无限递归", () => {
+    const rows = buildVisibleFileTreeRows({
+      directories: {
+        loop: directory([{
+          name: "loop",
+          path: "loop",
+          kind: "directory",
+          has_children: true,
+          size: null,
+          modified_at: null,
+        }]),
+      },
+      expandedPaths: new Set(["loop"]),
+      shortcuts: [],
+      searchQuery: "",
+      workspaceLabel: "project",
+      workspaceTitle: "/workspace/project",
+      workspaceRootPath: "loop",
+      filesystemRootPath: "filesystem:/",
+      shortcutPath: (path) => "filesystem:" + path,
+    });
+
+    expect(rows.filter((row) => row.kind === "node" && row.node.path === "loop"))
+      .toHaveLength(1);
+  });
+
+  test("搜索时自引用目录不会造成无限递归", () => {
+    const rows = buildVisibleFileTreeRows({
+      directories: {
+        loop: directory([{
+          name: "loop",
+          path: "loop",
+          kind: "directory",
+          has_children: true,
+          size: null,
+          modified_at: null,
+        }]),
+      },
+      expandedPaths: new Set(["loop"]),
+      shortcuts: [],
+      searchQuery: "needle",
+      workspaceLabel: "project",
+      workspaceTitle: "/workspace/project",
+      workspaceRootPath: "loop",
+      filesystemRootPath: "filesystem:/",
+      shortcutPath: (path) => "filesystem:" + path,
+    });
+
+    expect(rows.filter((row) => row.kind === "node" && row.node.path === "loop"))
+      .toHaveLength(1);
+  });
+
+  test("同一目录在互不嵌套的多条根下重复展开时仍各自渲染", () => {
+    const rows = buildVisibleFileTreeRows({
+      directories: {
+        "filesystem:shared": directory([{
+          name: "a.ts",
+          path: "shared/a.ts",
+          kind: "file",
+          has_children: false,
+          size: 1,
+          modified_at: null,
+        }]),
+      },
+      expandedPaths: new Set(["filesystem:shared"]),
+      shortcuts: [
+        { source: "workspace", label: "one", path: "shared" },
+        { source: "workspace", label: "two", path: "shared" },
+      ],
+      searchQuery: "",
+      workspaceLabel: "project",
+      workspaceTitle: "/workspace/project",
+      workspaceRootPath: "",
+      filesystemRootPath: "filesystem:/",
+      shortcutPath: (path) => "filesystem:" + path,
+    });
+
+    expect(rows.filter((row) => row.kind === "node" && row.node.path === "shared/a.ts"))
+      .toHaveLength(2);
+  });
+});

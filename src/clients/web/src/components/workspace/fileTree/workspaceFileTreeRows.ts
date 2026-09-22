@@ -6,6 +6,15 @@ import type { DirectoryCacheEntry } from "./workspaceFileTreeCache";
 
 export const FILE_TREE_VIRTUALIZATION_THRESHOLD = 300;
 
+// 只有 kind === "directory" 的节点可以展开。后端列举目录时使用
+// follow_symlinks=False（见 app/services/infrastructure/workspace_service.py），
+// 符号链接一律返回 kind: "symlink" 且 has_children=false，是刻意的 fail-closed
+// 设计：跟随符号链接既可能读到工作区外的内容，也可能因成环导致无限递归。
+// 因此这里只认 "directory"，不得为了「支持 symlink 展开」放开。
+export function isExpandableFileTreeNode(node: WorkspaceFileNode): boolean {
+  return node.kind === "directory";
+}
+
 export type WorkspaceFileTreeRow =
   | {
       key: string;
@@ -59,6 +68,13 @@ export function buildVisibleFileTreeRows({
   const rows: WorkspaceFileTreeRow[] = [];
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const searchMatchCache = new Map<string, boolean>();
+  // 展开是深度优先树遍历：后端构造子路径时始终是 `父路径/子项名`，子路径必然
+  // 严格长于父路径，因此合法数据不可能成环。但损坏载荷可能给出自引用目录，
+  // 使递归无限深入。这里只对**当前递归链**去重：合法数据中同一目录可在多个根下
+  // 重复出现（例如多条快捷路径指向同一目录），那种重复必须照常渲染，不能全局去重。
+  const activeDirectoryChain = new Set<string>();
+
+  const searchMatchChain = new Set<string>();
 
   const nodeMatchesSearch = (node: WorkspaceFileNode): boolean => {
     if (!normalizedQuery) {
@@ -69,16 +85,43 @@ export function buildVisibleFileTreeRows({
       return cached;
     }
     const matches = `${node.name}\n${node.path}`.toLowerCase().includes(normalizedQuery);
-    const result = matches || (
-      node.kind === "directory"
-      && (directories[node.path]?.items.some(nodeMatchesSearch) ?? true)
-    );
+    if (matches || !isExpandableFileTreeNode(node)) {
+      searchMatchCache.set(node.path, matches);
+      return matches;
+    }
+    // 与展开遍历同理：搜索递归也要对当前链去重，避免损坏载荷导致栈溢出。
+    if (searchMatchChain.has(node.path)) {
+      return true;
+    }
+    searchMatchChain.add(node.path);
+    let result: boolean;
+    try {
+      result = directories[node.path]?.items.some(nodeMatchesSearch) ?? true;
+    } finally {
+      searchMatchChain.delete(node.path);
+    }
     searchMatchCache.set(node.path, result);
     return result;
   };
 
   const appendDirectory = (directoryPath: string, depth: number) => {
+    if (activeDirectoryChain.has(directoryPath)) {
+      return;
+    }
+    activeDirectoryChain.add(directoryPath);
     const directory = directories[directoryPath];
+    try {
+      appendDirectoryContents(directoryPath, depth, directory);
+    } finally {
+      activeDirectoryChain.delete(directoryPath);
+    }
+  };
+
+  const appendDirectoryContents = (
+    directoryPath: string,
+    depth: number,
+    directory: DirectoryCacheEntry | undefined,
+  ) => {
     if (!directory || (directory.loading && directory.items.length === 0)) {
       rows.push({
         key: `status:loading:${directoryPath}`,
@@ -114,7 +157,7 @@ export function buildVisibleFileTreeRows({
       return;
     }
     for (const node of visibleItems) {
-      const expanded = node.kind === "directory" && expandedPaths.has(node.path);
+      const expanded = isExpandableFileTreeNode(node) && expandedPaths.has(node.path);
       rows.push({
         key: `node:${node.path}`,
         kind: "node",

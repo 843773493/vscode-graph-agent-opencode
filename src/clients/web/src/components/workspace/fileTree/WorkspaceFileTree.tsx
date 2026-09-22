@@ -39,6 +39,7 @@ import WorkspaceFileTreeContextMenu from "./WorkspaceFileTreeContextMenu";
 import {
   buildVisibleFileTreeRows,
   FILE_TREE_VIRTUALIZATION_THRESHOLD,
+  isExpandableFileTreeNode,
   type WorkspaceFileTreeRow,
 } from "./workspaceFileTreeRows";
 import {
@@ -109,6 +110,8 @@ export default function WorkspaceFileTree({
   const lastCollapseVersionRef = useRef(collapseVersion);
   const restoredExpandedPathsRef = useRef(restoredExpandedPaths);
   const shortcutTreePathsRef = useRef<Set<string>>(new Set());
+  // 搜索递归的当前递归链去重集合，避免损坏载荷造成无限递归。
+  const searchMatchChainRef = useRef<Set<string>>(new Set());
   const activeFilePathRef = useRef(activeFilePath);
   const activeRef = useRef(active);
   const previousActiveRef = useRef(active);
@@ -478,7 +481,7 @@ export default function WorkspaceFileTree({
   const openContextMenu = menu.openContextMenu;
 
   const handleNodeClick = (node: WorkspaceFileNode) => {
-    if (node.kind !== "directory") {
+    if (!isExpandableFileTreeNode(node)) {
       const size = formatByteSize(node.size);
       onOpenFile(node);
       const absolutePath = absolutePathForTreePath(node.path);
@@ -488,20 +491,30 @@ export default function WorkspaceFileTree({
     toggleDirectory(node.path, absolutePathForTreePath(node.path));
   };
 
+  // 与 buildVisibleFileTreeRows 的搜索判定保持同一语义：目录才向下递归，
+  // 并对当前递归链去重，避免损坏载荷造成栈溢出。
   const nodeMatchesSearch = (node: WorkspaceFileNode): boolean => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
     if (!normalizedQuery) {
       return true;
     }
     const nodeTextMatches = `${node.name}\n${node.path}`.toLowerCase().includes(normalizedQuery);
-    if (nodeTextMatches || node.kind !== "directory") {
+    if (nodeTextMatches || !isExpandableFileTreeNode(node)) {
       return nodeTextMatches;
+    }
+    if (searchMatchChainRef.current.has(node.path)) {
+      return true;
     }
     const loadedDirectory = directories[node.path];
     if (!loadedDirectory) {
       return true;
     }
-    return loadedDirectory.items.some(nodeMatchesSearch);
+    searchMatchChainRef.current.add(node.path);
+    try {
+      return loadedDirectory.items.some(nodeMatchesSearch);
+    } finally {
+      searchMatchChainRef.current.delete(node.path);
+    }
   };
 
   const renderDirectory = (path: string, depth: number) => {
@@ -571,7 +584,7 @@ export default function WorkspaceFileTree({
   };
 
   const renderNode = (node: WorkspaceFileNode, depth: number) => {
-    const isDirectory = node.kind === "directory";
+    const isDirectory = isExpandableFileTreeNode(node);
     const expanded = expandedPaths.has(node.path);
     return (
       <div className="files-tree-node" key={node.path}>
@@ -648,7 +661,7 @@ export default function WorkspaceFileTree({
           hasDirectMatch = true;
           break;
         }
-        if (node.kind === "directory" && !directories[node.path]) {
+        if (isExpandableFileTreeNode(node) && !directories[node.path]) {
           hasUnloadedDirectory = true;
         }
       }
@@ -706,7 +719,7 @@ export default function WorkspaceFileTree({
     }
     if (row.kind === "node") {
       const { node } = row;
-      const isDirectory = node.kind === "directory";
+      const isDirectory = isExpandableFileTreeNode(node);
       return (
         <button
           type="button"
