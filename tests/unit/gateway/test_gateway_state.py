@@ -977,6 +977,33 @@ def test_gateway_registry_apply_journal_recovery_is_explicit(tmp_path):
         state.close()
 
 
+def test_gateway_registry_rejects_non_list_targets_and_connections(tmp_path):
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        with pytest.raises(ValueError, match="payload 结构无效"):
+            state.replace_workspace_registry(
+                {
+                    "schema_version": 10,
+                    "targets": "not-a-list",
+                    "remote_gateway_connections": [],
+                },
+                expected_revision=0,
+                owner="manual_crud",
+            )
+        with pytest.raises(ValueError, match="payload 结构无效"):
+            state.replace_workspace_registry(
+                {
+                    "schema_version": 10,
+                    "targets": [],
+                    "remote_gateway_connections": "not-a-list",
+                },
+                expected_revision=0,
+                owner="manual_crud",
+            )
+    finally:
+        state.close()
+
+
 def test_gateway_registry_allows_multiple_remote_workspaces_per_connection(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
@@ -1005,6 +1032,38 @@ def test_gateway_registry_allows_multiple_remote_workspaces_per_connection(tmp_p
             expected_revision=0,
         )
         assert len(state.load_workspace_registry()["targets"]) == 2
+    finally:
+        state.close()
+
+
+def test_gateway_registry_start_journal_rejects_stale_expected_revision(tmp_path):
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        assert (
+            state.replace_workspace_registry(
+                {
+                    "schema_version": 10,
+                    "targets": [],
+                    "remote_gateway_connections": [],
+                },
+                expected_revision=0,
+                owner="manual_crud",
+            )
+            == 1
+        )
+        with pytest.raises(ConfigConflictError, match="revision CAS 冲突"):
+            state.replace_workspace_registry(
+                {
+                    "schema_version": 10,
+                    "targets": [],
+                    "remote_gateway_connections": [],
+                },
+                expected_revision=0,
+                owner="manual_crud",
+            )
+        assert state.get_registry_revision() == 1
+        journals = state.list_registry_apply_journal()
+        assert [journal["state"] for journal in journals] == ["committed"]
     finally:
         state.close()
 
