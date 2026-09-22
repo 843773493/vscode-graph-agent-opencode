@@ -70,6 +70,10 @@ export function useSessionViewState({
   hostRef.current = host;
   const cacheRef = useRef(new Map<string, GatewayUserViewState | null>());
   const requestsRef = useRef(new Map<string, Promise<GatewayUserViewState | null>>());
+  // 每条视图状态的 lease 代际登记表：gatewayUserViewStates 只按会话 scope 存值，
+  // 本身不带代际信息，无法判断某条残留是否来自上一代 lease。这里记录「这条本地
+  // 值是在哪一代 lease 下取得的」，让所有应用路径能共用同一条代际判据。
+  const scopeLeaseGenerationRef = useRef(new Map<string, number>());
 
   // 视图状态落库的唯一出口：按会话 scope 缓存后端权威对象，并只在当前会话
   // 命中时同步工具详情展开态。
@@ -77,13 +81,19 @@ export function useSessionViewState({
     workspaceId: string,
     sessionId: string,
     viewState: GatewayUserViewState | null,
+    leaseGeneration: number,
     toolDetailsExpanded?: boolean,
   ) => {
     setState((previous) => {
       const next = cloneMaps(previous);
       const cacheKey = sessionScopeKey(workspaceId, sessionId);
-      if (viewState) next.gatewayUserViewStates.set(cacheKey, viewState);
-      else next.gatewayUserViewStates.delete(cacheKey);
+      if (viewState) {
+        next.gatewayUserViewStates.set(cacheKey, viewState);
+        scopeLeaseGenerationRef.current.set(cacheKey, leaseGeneration);
+      } else {
+        next.gatewayUserViewStates.delete(cacheKey);
+        scopeLeaseGenerationRef.current.delete(cacheKey);
+      }
       if (
         toolDetailsExpanded !== undefined
         && previous.currentSession?.session_id === sessionId
@@ -118,6 +128,7 @@ export function useSessionViewState({
       workspaceId,
       sessionId,
       viewState,
+      expectedLeaseGeneration,
       viewState?.tool_details_expanded ?? false,
     );
   }, [applyViewState]);
@@ -137,7 +148,16 @@ export function useSessionViewState({
         cacheKey,
       ].join(":");
       const existingState = current.gatewayUserViewStates.get(cacheKey);
-      if (existingState) {
+      // 本地残留必须属于当前 lease 才能命中：接管后 user_id 不变而代际换代时，
+      // 上一代的残留既不能应用，也不能当作缓存短路掉后端读取。
+      const existingLeaseGeneration = scopeLeaseGenerationRef.current.get(cacheKey);
+      if (
+        existingState
+        && (
+          existingLeaseGeneration === undefined
+          || existingLeaseGeneration === leaseGeneration
+        )
+      ) {
         writeSessionViewStateCache(cacheRef.current, requestKey, existingState);
         applyLoadedViewState(
           existingState,
@@ -234,7 +254,7 @@ export function useSessionViewState({
       })) {
         return;
       }
-      applyViewState(workspaceId, sessionId, updated);
+      applyViewState(workspaceId, sessionId, updated, requestLeaseGeneration);
     }).catch((error: unknown) => {
       if (hostRef.current.gatewayUserAccess?.lease_generation === requestLeaseGeneration) {
         setStatus(`保存用户视图位置失败: ${error instanceof Error ? error.message : String(error)}`);

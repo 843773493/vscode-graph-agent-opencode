@@ -235,4 +235,51 @@ describe("useSessionViewState", () => {
     expect(latestState.gatewayUserViewStates.has(staleKey)).toBe(false);
     expect(latestState.gatewayUserViewStates.size).toBe(0);
   });
+  test("接管换代后上一代 lease 的本地残留不再被应用", async () => {
+    const scopeKey = "workspace-view-state::session-view-state";
+    // 第 7 代先正常读到一条视图状态，本地因此留有带代际登记的残留。
+    const reader = spyOn(userViewStateApi, "getGatewayUserViewState")
+      .mockResolvedValueOnce(viewState({ turn_anchor: "turn-stale" }))
+      .mockResolvedValueOnce(viewState({ turn_anchor: "turn-new" }));
+    restoreApi = () => reader.mockRestore();
+
+    let controller!: SessionViewStateController;
+    // host 与 AppState 共用同一份镜像（生产里由 AppProvider 从 state 装配）。
+    const sharedMirror = { gatewayUserViewStates: new Map<string, GatewayUserViewState>() };
+    let currentHost: SessionViewStateHost = {
+      ...host,
+      gatewayUserAccess: access(7),
+      gatewayUserViewStates: sharedMirror.gatewayUserViewStates,
+    };
+    let latestState = appState();
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      latestState = current;
+      sharedMirror.gatewayUserViewStates = current.gatewayUserViewStates;
+      currentHost = { ...currentHost, gatewayUserViewStates: current.gatewayUserViewStates };
+      controller = useSessionViewState({
+        host: currentHost,
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
+
+    await act(async () => { renderer = create(<Probe />); });
+    await act(async () => {
+      await controller.loadSessionViewState("workspace-view-state", "session-view-state");
+    });
+    expect(latestState.gatewayUserViewStates.get(scopeKey)?.turn_anchor).toBe("turn-stale");
+
+    // 用户被接管：user_id 不变，lease 升到第 8 代；后端此时权威地没有视图位置。
+    currentHost = { ...currentHost, gatewayUserAccess: access(8) };
+    await act(async () => { renderer!.update(<Probe />); });
+    await act(async () => {
+      await controller.loadSessionViewState("workspace-view-state", "session-view-state");
+    });
+
+    // 上一代的残留不得被应用，也不能短路掉读取：必须走后端并接受权威结果。
+    expect(reader).toHaveBeenCalledTimes(2);
+    expect(latestState.gatewayUserViewStates.get(scopeKey)?.turn_anchor).toBe("turn-new");
+  });
 });
