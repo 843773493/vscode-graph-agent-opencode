@@ -61,7 +61,14 @@ function toolExecutionRank(execution: MessageStreamToolExecution): number {
   return execution.status === "running" ? 1 : 0;
 }
 
-function responsePartToolStatus(
+/**
+ * 展示层的工具状态，语义与 state 层 `toolExecutionStatusValue` 有意不同：
+ * state 层把 outcome_unknown/provider_error 收敛为 `completed`，以便与后端
+ * tool.completed 的归一结果保持一致（那是权威状态事实，不得改）；而展示层
+ * 要告诉用户"结果未知/提供方出错，不能当作成功"，故降为 `failed`。
+ * 二者不是同一原语，禁止合并趋同。
+ */
+function toolExecutionDisplayStatus(
   execution: MessageStreamToolExecution,
 ): "running" | "completed" | "failed" {
   if (execution.status === "failed") return "failed";
@@ -149,7 +156,7 @@ export function messageStreamToResponseParts(
       const execution = entity.value;
       const toolCall = state.toolCalls[execution.tool_call_id];
       const argumentsValue = toolCall?.arguments;
-      const status = responsePartToolStatus(execution);
+      const status = toolExecutionDisplayStatus(execution);
       const outcomeUnknown = execution.outcome === "outcome_unknown";
       parts.push({
         part_id: execution.tool_execution_id,
