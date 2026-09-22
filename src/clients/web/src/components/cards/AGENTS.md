@@ -1,12 +1,11 @@
 # 目录用途
 
-存放卡片类展示组件：事件卡片、Goal 管理器卡片和技能摘要卡片，负责把单条事件、会话 Goal 状态或技能摘要渲染成独立可复用的卡片 UI。
+存放卡片类展示组件：Goal 管理器卡片，负责把会话 Goal 状态渲染成独立可复用的卡片 UI。
 
 本目录与相邻子包的分工边界：
 
 - `components/panels/`：停靠式面板容器；本目录是嵌入面板或对话流中的卡片，非面板。
 - `components/overlays/`：浮层与对话框；本目录的 GoalManagerCard 只消费浮层，不定义浮层。
-- `components/chat/`：聊天回合渲染单元；本目录的 EventCard 仅复用 MessageAttachments。
 
 # 可修改内容
 
