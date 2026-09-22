@@ -3,7 +3,7 @@ import {
   formatToolCardContent,
   toolCollapsedText,
 } from "../../state/toolDisplay";
-import type { TimelineItem } from "../../state/timelineTypes";
+import type { TimelineItem } from "../../state/timeline/timelineTypes";
 import MarkdownContent from "./MarkdownContent";
 
 type ToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;

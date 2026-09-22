@@ -1,7 +1,7 @@
 import type { TraceEvent } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
-import { buildTraceTimelineItems } from "../chatTimeline";
-import type { TimelineItem } from "../timelineTypes";
+import { buildTraceTimelineItems } from "../timeline/chatTimeline";
+import type { TimelineItem } from "../timeline/timelineTypes";
 import { isSkillInternalToolItem } from "../toolDisplay";
 
 function assert(condition: unknown, message: string): asserts condition {

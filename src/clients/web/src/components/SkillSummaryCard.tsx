@@ -1,6 +1,6 @@
 import React from "react";
 
-import type { TimelineItem } from "../state/chatTimeline";
+import type { TimelineItem } from "../state/timeline/chatTimeline";
 
 export type SkillSummaryRenderCard = (options: {
   title: string;

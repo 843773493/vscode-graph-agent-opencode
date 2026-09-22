@@ -1,6 +1,6 @@
-import type { TurnResponsePart } from "../types/backend";
+import type { TurnResponsePart } from "../../types/backend";
 import type { TimelineItem } from "./timelineTypes";
-import { isRecord } from "../utils/jsonDisplay";
+import { isRecord } from "../../utils/jsonDisplay";
 
 export interface ResponsePartsProjectionOptions {
   terminalFailure?: boolean;

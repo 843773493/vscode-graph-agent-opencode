@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import type { TimelineItem } from "../timelineTypes";
+import type { TimelineItem } from "../timeline/timelineTypes";
 import {
   formatToolCardContent,
   isRoutineInternalToolItem,

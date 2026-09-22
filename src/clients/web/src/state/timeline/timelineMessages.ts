@@ -1,4 +1,4 @@
-import type { AttachmentRef, Message } from "../types/backend";
+import type { AttachmentRef, Message } from "../../types/backend";
 import type { TimelineItem } from "./timelineTypes";
 
 function isAttachmentRef(value: unknown): value is AttachmentRef {

@@ -9,7 +9,7 @@ import {
   recordReadSkill,
   skillKeyFlowSnapshot,
 } from "../skillKeyFlow";
-import type { TimelineItem } from "../timelineTypes";
+import type { TimelineItem } from "../timeline/timelineTypes";
 import { extractEventInfo, getOptionalString } from "../tracePayload";
 import {
   buildActiveToolItem,

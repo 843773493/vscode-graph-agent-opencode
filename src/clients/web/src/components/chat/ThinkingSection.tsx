@@ -1,5 +1,5 @@
 import React from "react";
-import type { TimelineItem } from "../../state/timelineTypes";
+import type { TimelineItem } from "../../state/timeline/timelineTypes";
 import MarkdownContent from "./MarkdownContent";
 import ToolRow from "./ToolRow";
 

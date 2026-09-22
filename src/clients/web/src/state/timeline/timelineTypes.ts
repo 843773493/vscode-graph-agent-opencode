@@ -1,4 +1,4 @@
-import type { AttachmentRef, Message } from "../types/backend";
+import type { AttachmentRef, Message } from "../../types/backend";
 
 export type TimelineItem =
   | {

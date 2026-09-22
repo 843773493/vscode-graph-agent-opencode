@@ -5,10 +5,10 @@ import {
   conversationTokenUsage,
 } from "../../../state/tokenUsage";
 import { buildPendingStatusItem, isLiveConversationView } from "../../../state/trace/traceAggregation";
-import type { TimelineItem } from "../../../state/timelineTypes";
+import type { TimelineItem } from "../../../state/timeline/timelineTypes";
 import {
   responsePartsToTimelineItems,
-} from "../../../state/responseParts";
+} from "../../../state/timeline/responseParts";
 import type { ConversationView } from "../../../types/frontend";
 import type { MessageStreamActivity } from "../../../state/messageStream/index";
 import MarkdownContent from "../MarkdownContent";

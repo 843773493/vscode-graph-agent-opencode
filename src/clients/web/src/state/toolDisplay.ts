@@ -1,4 +1,4 @@
-import type { TimelineItem } from "./timelineTypes";
+import type { TimelineItem } from "./timeline/timelineTypes";
 import { isRecord } from "../utils/jsonDisplay";
 import { skillNameFromPath } from "../utils/skillPaths";
 

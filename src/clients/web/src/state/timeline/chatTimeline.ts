@@ -1,14 +1,14 @@
-import type { ConversationView } from "../types/frontend";
+import type { ConversationView } from "../../types/frontend";
 import {
   aggregateConversationEvents,
   buildPendingStatusItem,
   isLiveConversationView,
-} from "./trace/traceAggregation";
+} from "../trace/traceAggregation";
 import { normalizeTimelineMessage } from "./timelineMessages";
 import type { TimelineItem } from "./timelineTypes";
 
 export type { TimelineItem } from "./timelineTypes";
-export { normalizeTraceData } from "./tracePayload";
+export { normalizeTraceData } from "../tracePayload";
 
 export function buildTraceTimelineItems(
   conversations: ConversationView[],

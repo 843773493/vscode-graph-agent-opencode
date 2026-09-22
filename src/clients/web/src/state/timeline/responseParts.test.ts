@@ -5,9 +5,9 @@ import {
   messageStreamToResponseParts,
   type MessageStreamDataEvent,
   type MessageStreamEvent,
-} from "./messageStream/index";
+} from "../messageStream/index";
 import { responsePartsToTimelineItems } from "./responseParts";
-import { formatToolCardContent, toolCollapsedText } from "./toolDisplay";
+import { formatToolCardContent, toolCollapsedText } from "../toolDisplay";
 
 function streamEvent(
   eventSeq: number,
