@@ -19,6 +19,10 @@ import {
   selectGatewayUser,
   takeoverGatewayUser,
 } from "../gateway/userAccess";
+import {
+  getGatewayUserViewState,
+  getLatestGatewayUserViewState,
+} from "../gateway/userViewState";
 import { requestJson } from "../../api";
 
 const originalFetch = globalThis.fetch;
@@ -595,5 +599,52 @@ describe("Gateway UI 设置读取边界", () => {
     const settings = await getGatewayUiSettings(49_921);
     expect(settings.workspace_file_tree.expanded_paths_by_workspace)
       .toEqual({ "ws-a": ["", "src"] });
+  });
+});
+
+describe("用户视图状态的信封校验", () => {
+  /**
+   * 安装只应答凭据与用户视图状态的 fetch 桩；request_id 由 requestId 入参决定，
+   * 用 undefined 表示响应里省略该字段。
+   */
+  function stubViewStateFetch(requestId: unknown, includeData = true): void {
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "view-state-token" } });
+        }
+        const body: Record<string, unknown> = {
+          request_id: requestId,
+        };
+        if (includeData) body.data = null;
+        return Response.json(body);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+  }
+
+  test("request_id 为非空字符串时允许权威 data 为 null", async () => {
+    stubViewStateFetch("req_view_state");
+
+    expect(await getGatewayUserViewState(49_930, "ws-1", "ses-1")).toBeNull();
+    expect(await getLatestGatewayUserViewState(49_930)).toBeNull();
+  });
+
+  test("request_id 缺失或非字符串时响亮失败，不再被弱校验放过", async () => {
+    for (const requestId of [undefined, 123, true, {}]) {
+      stubViewStateFetch(requestId);
+      await expect(getGatewayUserViewState(49_931, "ws-1", "ses-1")).rejects.toThrow(
+        "后端响应缺少 request_id",
+      );
+    }
+  });
+
+  test("data 字段整个缺失时响亮失败，不把缺字段伪装成 null", async () => {
+    stubViewStateFetch("req_view_state_missing_data", false);
+
+    await expect(getGatewayUserViewState(49_932, "ws-1", "ses-1")).rejects.toThrow(
+      "后端响应缺少 data 字段",
+    );
   });
 });
