@@ -3,6 +3,7 @@ import { getAgentStateMessages } from "../../api";
 import { findAgentStateMessageRawContent } from "../../state/display/agentStateDisplay";
 import type { AppState } from "../../types/frontend";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 export function resetAgentStateFields(
   state: AppState,
@@ -115,7 +116,7 @@ export function useAgentStateSnapshotLoader({
           };
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => {
           if (
             requestId !== requestIdRef.current ||

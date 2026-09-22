@@ -1,6 +1,7 @@
 import React from "react";
 import { getSessionAttachmentBlob } from "../../api";
 import type { MessageMediaItem } from "../../utils/media/messageMedia";
+import { errorMessage } from "../../utils/errorMessage";
 
 const THUMBNAIL_CACHE_MAX_ENTRIES = 96;
 const thumbnailBlobCache = new Map<string, Promise<Blob>>();
@@ -77,7 +78,7 @@ export function useMessageMediaSources(
         objectUrls.push(objectUrl);
         nextSources.set(item.id, objectUrl);
       } catch (error) {
-        nextErrors.set(item.id, error instanceof Error ? error.message : String(error));
+        nextErrors.set(item.id, errorMessage(error));
       }
     })).then(() => {
       if (!active) {

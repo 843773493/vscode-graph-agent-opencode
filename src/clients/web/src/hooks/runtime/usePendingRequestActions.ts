@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { errorMessage } from "../../utils/errorMessage";
 
 import {
   clearPendingRequests as apiClearPendingRequests,
@@ -97,9 +98,7 @@ export function usePendingRequestActions({
           target.cacheKey,
         );
       } catch (recoveryError) {
-        const recoveryMessage = recoveryError instanceof Error
-          ? recoveryError.message
-          : String(recoveryError);
+        const recoveryMessage = errorMessage(recoveryError);
         // 必须是同一个错误对象：上层按 HttpRequestError 与 status 判断语义。
         if (error instanceof Error) {
           error.message =

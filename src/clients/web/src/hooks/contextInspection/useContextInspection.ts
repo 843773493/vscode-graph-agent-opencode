@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readSessionContext, sessionContextResource } from "../../api/session/sessionContext";
 import { appendInspectionPage, emptyInspectionPage } from "../../state/contextInspection/pagination";
+import { errorMessage } from "../../utils/errorMessage";
 
 export interface InspectionOwner {
   port: number;
@@ -41,7 +42,7 @@ export function useContextInspection({ port, workspaceId, sessionId, active }: I
       catalogRef.current = next;
       setCatalog(next);
     } catch (error) {
-      if (!controller.signal.aborted) setCatalogError(error instanceof Error ? error.message : String(error));
+      if (!controller.signal.aborted) setCatalogError(errorMessage(error));
     } finally {
       if (!controller.signal.aborted) setCatalogLoading(false);
     }
@@ -68,7 +69,7 @@ export function useContextInspection({ port, workspaceId, sessionId, active }: I
       projectionRef.current = next;
       setProjection(next);
     } catch (error) {
-      if (!controller.signal.aborted) setProjectionError(error instanceof Error ? error.message : String(error));
+      if (!controller.signal.aborted) setProjectionError(errorMessage(error));
     } finally {
       if (!controller.signal.aborted) setProjectionLoading(false);
     }

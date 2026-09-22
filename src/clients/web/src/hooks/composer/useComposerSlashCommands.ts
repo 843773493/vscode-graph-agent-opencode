@@ -9,6 +9,7 @@ import {
 import type { ConversationContentView } from "../../types/frontend";
 import type { Session, SessionCompactResult } from "../../types/backend";
 import type { SelectedAttachment } from "../../utils/media/mediaAttachments";
+import { errorMessage } from "../../utils/errorMessage";
 
 function copyTextWithSelection(text: string): boolean {
   // TODO: 兼容本地浏览器禁用 Clipboard API 权限的场景；后续统一权限策略后可收敛。
@@ -97,7 +98,7 @@ export function useComposerSlashCommands({
             // rejection 避免未处理拒绝。AppProvider 也会把同一条失败写进
             // AppState.status，状态栏同样会显示。
             setAttachmentError(
-              `创建会话失败：${error instanceof Error ? error.message : String(error)}`,
+              `创建会话失败：${errorMessage(error)}`,
             );
           });
           break;
@@ -135,7 +136,7 @@ export function useComposerSlashCommands({
             })
             .catch((error: unknown) => {
               setAttachmentError(
-                `复制失败：${error instanceof Error ? error.message : String(error)}`,
+                `复制失败：${errorMessage(error)}`,
               );
             });
           break;
@@ -187,7 +188,7 @@ export function useComposerSlashCommands({
               })
               .catch((error: unknown) => {
                 setAttachmentError(
-                  `上下文压缩失败：${error instanceof Error ? error.message : String(error)}`,
+                  `上下文压缩失败：${errorMessage(error)}`,
                 );
               });
           }

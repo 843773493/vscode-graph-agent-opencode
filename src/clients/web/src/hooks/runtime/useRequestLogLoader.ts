@@ -1,6 +1,7 @@
 import { useCallback, useRef } from "react";
 import { getLLMRequestLogs } from "../../api";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 export function useRequestLogLoader({
   apiPort,
@@ -50,7 +51,7 @@ export function useRequestLogLoader({
           };
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => {
           if (
             requestId !== requestIdRef.current ||
