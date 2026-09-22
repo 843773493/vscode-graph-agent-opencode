@@ -350,7 +350,6 @@ export function useTurnBootstrap({
                     ...timeline,
                     loadingBefore: false,
                     loadingAfter: false,
-                    loadingOlder: false,
                     error: null,
                   }
                 : failTurnTimeline(

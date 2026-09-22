@@ -2,6 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { createSessionTurnTimeline } from "../../state/session/turnTimeline";
+import {
+  applyTurnBootstrap,
+  applyTurnHistoryPage,
+  beginTurnBootstrap,
+} from "../../state/session/turnTimeline";
 import type { AppState } from "../../types/frontend";
 import { useInitialTurnLoader, useOlderTurnLoader } from "./page";
 
@@ -22,14 +27,16 @@ function installWindow(port: number): void {
   });
 }
 
-function state(): AppState {
+function state(timeline?: ReturnType<typeof createSessionTurnTimeline>): AppState {
   return {
     turnTimelinesBySession: new Map([[SCOPE_KEY, {
-      ...createSessionTurnTimeline(SCOPE_KEY, 1),
-      phase: "ready",
-      projectionEpoch: 2,
-      olderCursor: "cursor-epoch-2",
-      hasMore: true,
+      ...(timeline ?? {
+        ...createSessionTurnTimeline(SCOPE_KEY, 1),
+        phase: "ready",
+        projectionEpoch: 2,
+        beforeCursor: "cursor-epoch-2",
+        hasBefore: true,
+      }),
     }]]),
     sessionHistoryReloadNonce: 0,
     status: "",
@@ -50,14 +57,18 @@ async function runPageCase({
   response,
   abortResponse = false,
   reactState = false,
+  timeline,
+  historyRequests,
 }: {
   port: number;
   response: () => Response;
   abortResponse?: boolean;
   reactState?: boolean;
+  timeline?: ReturnType<typeof createSessionTurnTimeline>;
+  historyRequests?: { count: number };
 }): Promise<AppState> {
   installWindow(port);
-  let currentState = state();
+  let currentState = state(timeline);
   let loadOlder: (() => Promise<void>) | null = null;
   let abortRequest: (() => void) | null = null;
   globalThis.fetch = Object.assign(
@@ -71,6 +82,7 @@ async function runPageCase({
       }
       if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
         if (abortResponse) abortRequest?.();
+        if (historyRequests) historyRequests.count += 1;
         return response();
       }
       throw new Error(`测试收到未预期请求: ${path}`);
@@ -375,8 +387,8 @@ describe("Turn 历史分页 epoch 协调", () => {
 
     const timeline = result.turnTimelinesBySession.get(SCOPE_KEY);
     expect(timeline?.projectionEpoch).toBe(2);
-    expect(timeline?.hasMore).toBe(true);
-    expect(timeline?.loadingOlder).toBe(false);
+    expect(timeline?.hasBefore).toBe(true);
+    expect(timeline?.loadingBefore).toBe(false);
     expect(result.sessionHistoryReloadNonce).toBe(0);
   });
 
@@ -417,10 +429,10 @@ describe("Turn 历史分页 epoch 协调", () => {
 
     expect(result.sessionHistoryReloadNonce).toBe(1);
     expect(result.status).toBe("Turn 历史游标已失效，正在重新校准");
-    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.loadingOlder).toBe(false);
+    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.loadingBefore).toBe(false);
   });
 
-  test("请求被取消时也必须清除 loadingOlder", async () => {
+  test("请求被取消时也必须清除 loadingBefore", async () => {
     const result = await runPageCase({
       port: 9113,
       abortResponse: true,
@@ -437,7 +449,7 @@ describe("Turn 历史分页 epoch 协调", () => {
       }),
     });
 
-    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.loadingOlder).toBe(false);
+    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.loadingBefore).toBe(false);
   });
 
   test("React 异步批处理 setState 时仍使用当前游标发起请求", async () => {
@@ -457,7 +469,58 @@ describe("Turn 历史分页 epoch 协调", () => {
       }),
     });
 
-    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.hasMore).toBe(false);
-    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.loadingOlder).toBe(false);
+    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.hasBefore).toBe(false);
+    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.loadingBefore).toBe(false);
+  });
+
+  test("around 触顶后 before 方向不再发起陈旧游标请求", async () => {
+    // 用真实 reducer 构造 around 触顶后的状态：后端报 before_cursor=null、
+    // has_before=false，表示窗口已包含最旧 Turn。
+    let timeline = beginTurnBootstrap(createSessionTurnTimeline(SCOPE_KEY, 1), 1);
+    timeline = applyTurnBootstrap(timeline, 1, {
+      session: {
+        session_id: SESSION_ID,
+        workspace_id: WORKSPACE_ID,
+        title: "page 测试",
+        current_agent_id: "default",
+        created_at: "2026-07-28T00:00:00Z",
+        updated_at: "2026-07-28T00:00:00Z",
+      },
+      latest_turn: null,
+      active_jobs: [],
+      older_cursor: "cursor-stale",
+      event_cursor: "event-1",
+      projection_epoch: 1,
+    } as never);
+    timeline = applyTurnHistoryPage(timeline, {
+      items: [],
+      summaries: [],
+      next_cursor: null,
+      has_more: false,
+      before_cursor: null,
+      after_cursor: "newer-1",
+      has_before: false,
+      has_after: true,
+      projection_epoch: 1,
+    } as never, "around");
+
+    const historyRequests = { count: 0 };
+    const result = await runPageCase({
+      port: 9118,
+      timeline,
+      historyRequests,
+      response: () => Response.json({
+        code: 0,
+        message: "ok",
+        request_id: "request-page-around-floor",
+        data: { items: [], next_cursor: null, has_more: false, projection_epoch: 1 },
+      }),
+    });
+
+    // around 触顶后 hasBefore/beforeCursor 都为空，loadOlder 必须直接短路，
+    // 不得用陈旧值再发一次请求。
+    expect(historyRequests.count).toBe(0);
+    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.beforeCursor).toBeNull();
+    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.hasBefore).toBe(false);
   });
 });

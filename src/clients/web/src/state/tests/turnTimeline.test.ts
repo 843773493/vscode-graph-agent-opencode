@@ -293,7 +293,8 @@ describe("Turn timeline revision 合并", () => {
 
     expect(timeline.projectionState).toBe("partial");
     expect(timeline.orderedTurnIds).toEqual(["latest"]);
-    expect(timeline.hasMore).toBe(false);
+    expect(timeline.hasBefore).toBe(false);
+    expect(timeline.beforeCursor).toBeNull();
 
     timeline = applyTurnBootstrap(timeline, 1, {
       ...bootstrap(summary("latest", 3)),
@@ -301,8 +302,8 @@ describe("Turn timeline revision 合并", () => {
     });
 
     expect(timeline.projectionState).toBe("ready");
-    expect(timeline.hasMore).toBe(true);
-    expect(timeline.olderCursor).toBe("older-1");
+    expect(timeline.hasBefore).toBe(true);
+    expect(timeline.beforeCursor).toBe("older-1");
   });
 
   test("Turn detail epoch 纯决策区分同代、旧响应和未来响应", () => {
@@ -310,6 +311,49 @@ describe("Turn timeline revision 合并", () => {
     expect(decideTurnProjectionEpoch(3, 3)).toBe("apply");
     expect(decideTurnProjectionEpoch(3, 2)).toBe("discard_older");
     expect(decideTurnProjectionEpoch(3, 4)).toBe("refresh_bootstrap");
+  });
+
+  test("around 分页后 before 方向事实完全由后端 has_before/before_cursor 决定", () => {
+    let timeline = beginTurnBootstrap(createSessionTurnTimeline(SCOPE_KEY), 1);
+    timeline = applyTurnBootstrap(timeline, 1, bootstrap(summary("latest", 5)));
+    // 前置：bootstrap 建立了一个可继续向 before 翻页的游标。
+    expect(timeline.beforeCursor).toBe("older-1");
+    expect(timeline.hasBefore).toBe(true);
+
+    // around 命中窗口已经包含最旧 Turn：后端给出 before_cursor=null、has_before=false，
+    // 这是权威结论，必须清空 before 方向的游标与 has-before。
+    const around = applyTurnHistoryPage(timeline, {
+      items: [detail("job_3", 3)],
+      summaries: [],
+      next_cursor: null,
+      has_more: false,
+      before_cursor: null,
+      after_cursor: "newer-1",
+      has_before: false,
+      has_after: true,
+      projection_epoch: 1,
+    }, "around");
+
+    expect(around.beforeCursor).toBeNull();
+    expect(around.hasBefore).toBe(false);
+    expect(around.afterCursor).toBe("newer-1");
+    expect(around.hasAfter).toBe(true);
+
+    // 反向验证：around 命中窗口未触顶时，后端给出的 before 事实必须原样生效。
+    const partial = applyTurnHistoryPage(timeline, {
+      items: [detail("job_3", 3)],
+      summaries: [],
+      next_cursor: null,
+      has_more: false,
+      before_cursor: "older-around",
+      after_cursor: "newer-around",
+      has_before: true,
+      has_after: true,
+      projection_epoch: 1,
+    }, "around");
+
+    expect(partial.beforeCursor).toBe("older-around");
+    expect(partial.hasBefore).toBe(true);
   });
 
   test("历史分页和详情水合保留已加载 Turn", () => {

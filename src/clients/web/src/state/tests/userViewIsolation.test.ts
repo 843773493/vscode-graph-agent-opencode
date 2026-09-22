@@ -77,10 +77,10 @@ describe("用户视图隔离", () => {
     const timelines = writeTurnTimelineCache(
       new Map(),
       scope,
-      { ...createSessionTurnTimeline(scope), olderCursor: "cursor-user-a", hasMore: true },
+      { ...createSessionTurnTimeline(scope), beforeCursor: "cursor-user-a", hasBefore: true },
     );
     const userBTimelines = new Map<string, ReturnType<typeof createSessionTurnTimeline>>();
-    expect(timelines.get(scope)?.olderCursor).toBe("cursor-user-a");
+    expect(timelines.get(scope)?.beforeCursor).toBe("cursor-user-a");
     expect(userBTimelines.has(scope)).toBe(false);
   });
 

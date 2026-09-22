@@ -1,5 +1,6 @@
 import AgentStatePanel from "./components/panels/AgentStatePanel";
 import BootstrapState from "./components/shell/BootstrapState";
+import WorkbenchStatusBar from "./components/WorkbenchStatusBar";
 import ChatPanel from "./components/panels/ChatPanel";
 import PendingQueueBar from "./components/chat/PendingQueueBar";
 import Composer from "./components/composer/Composer";
@@ -1127,8 +1128,8 @@ export default function AppShell() {
             conversations={conversations}
             expandDetails={state.expandDetails}
             hasActiveSession={Boolean(activeSession)}
-            hasOlderMessages={activeTurnTimeline?.hasBefore ?? activeTurnTimeline?.hasMore ?? false}
-            loadingOlderMessages={activeTurnTimeline?.loadingBefore ?? activeTurnTimeline?.loadingOlder ?? false}
+            hasOlderMessages={activeTurnTimeline?.hasBefore ?? false}
+            loadingOlderMessages={activeTurnTimeline?.loadingBefore ?? false}
             hasNewerMessages={activeTurnTimeline?.hasAfter ?? false}
             loadingNewerMessages={activeTurnTimeline?.loadingAfter ?? false}
             historyLoading={Boolean(activeSession) && (
@@ -1673,7 +1674,7 @@ export default function AppShell() {
         </div>
       </div>
       {!extensionWindowVisible ? (
-        <footer className="workbench-status-bar" aria-label="状态栏" />
+        <WorkbenchStatusBar status={state.status} />
       ) : null}
       <SessionNameDialog
         open={nameDialog !== null}

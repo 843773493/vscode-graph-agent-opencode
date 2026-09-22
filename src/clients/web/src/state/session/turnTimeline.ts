@@ -31,13 +31,9 @@ export interface SessionTurnTimeline {
   hasAfter: boolean;
   loadingBefore: boolean;
   loadingAfter: boolean;
-  /** 旧字段暂时保留给尚未迁移的诊断状态读取方。 */
-  olderCursor: string | null;
-  hasMore: boolean;
   eventCursor: string | null;
   projectionEpoch: number | null;
   projectionState: TurnProjectionState;
-  loadingOlder: boolean;
   loadingDetailIds: string[];
   invalidatedTurnIds: string[];
   mergedTurnIds: string[];
@@ -67,12 +63,9 @@ export function createSessionTurnTimeline(
     hasAfter: false,
     loadingBefore: false,
     loadingAfter: false,
-    olderCursor: null,
-    hasMore: false,
     eventCursor: null,
     projectionEpoch: null,
     projectionState: "ready",
-    loadingOlder: false,
     loadingDetailIds: [],
     invalidatedTurnIds: [],
     mergedTurnIds: [],
@@ -530,7 +523,6 @@ export function beginTurnBootstrap(
     phase: "bootstrapping",
     loadingBefore: false,
     loadingAfter: false,
-    loadingOlder: false,
     loadingDetailIds: [],
     error: null,
   };
@@ -566,12 +558,6 @@ export function applyTurnBootstrap(
     hasAfter: preserveCachedWindow ? next.hasAfter : false,
     loadingBefore: false,
     loadingAfter: false,
-    olderCursor: preserveBeforeWindow
-      ? next.olderCursor
-      : bootstrap.older_cursor ?? null,
-    hasMore: preserveBeforeWindow
-      ? next.hasMore
-      : Boolean(bootstrap.older_cursor),
     eventCursor: bootstrap.event_cursor ?? null,
     projectionEpoch: bootstrap.projection_epoch,
     projectionState,
@@ -603,11 +589,8 @@ export function applyTurnPage(
   return {
     ...next,
     phase: "ready",
-    olderCursor: page.next_cursor ?? null,
-    hasMore: page.has_more ?? false,
     projectionEpoch: page.projection_epoch,
     projectionState: "ready",
-    loadingOlder: false,
     error: null,
   };
 }
@@ -691,13 +674,10 @@ export function applyTurnHistoryPage(
     afterCursor: isBefore ? timeline.afterCursor : cursor,
     hasBefore: isBefore ? hasMore : timeline.hasBefore,
     hasAfter: isBefore ? timeline.hasAfter : hasMore,
-    olderCursor: isBefore ? cursor : timeline.olderCursor,
-    hasMore: isBefore ? hasMore : timeline.hasMore,
     projectionEpoch: page.projection_epoch,
     projectionState: "ready",
     loadingBefore: isBefore ? false : timeline.loadingBefore,
     loadingAfter: isBefore ? timeline.loadingAfter : false,
-    loadingOlder: isBefore ? false : timeline.loadingOlder,
     error: null,
   };
 }
@@ -770,7 +750,6 @@ export function failTurnTimeline(
     phase: "error",
     loadingBefore: false,
     loadingAfter: false,
-    loadingOlder: false,
     loadingDetailIds: [],
     error,
   };

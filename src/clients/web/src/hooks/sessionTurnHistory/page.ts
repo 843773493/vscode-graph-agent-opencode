@@ -33,7 +33,7 @@ function pageCursor(
   direction: TurnPageDirection,
 ): string | null {
   return direction === "before"
-    ? timeline.beforeCursor ?? timeline.olderCursor
+    ? timeline.beforeCursor
     : timeline.afterCursor;
 }
 
@@ -41,7 +41,7 @@ function pageHasMore(
   timeline: SessionTurnTimeline,
   direction: TurnPageDirection,
 ): boolean {
-  return direction === "before" ? timeline.hasBefore || timeline.hasMore : timeline.hasAfter;
+  return direction === "before" ? timeline.hasBefore : timeline.hasAfter;
 }
 
 function loadingPatch(
@@ -49,7 +49,7 @@ function loadingPatch(
   loading: boolean,
 ): Partial<SessionTurnTimeline> {
   return direction === "before"
-    ? { loadingBefore: loading, loadingOlder: loading }
+    ? { loadingBefore: loading }
     : { loadingAfter: loading };
 }
 
@@ -94,13 +94,12 @@ function preserveTimelineAfterTransientNetworkFailure(
   targetGeneration: number,
 ): SessionTurnTimeline {
   const hasVisibleContent = timeline.orderedTurnIds.length > 0;
-  return {
-    ...timeline,
-    phase: hasVisibleContent ? timeline.phase : "error",
-    loadingBefore: false,
-    loadingAfter: false,
-    loadingOlder: false,
-    error: hasVisibleContent
+    return {
+      ...timeline,
+      phase: hasVisibleContent ? timeline.phase : "error",
+      loadingBefore: false,
+      loadingAfter: false,
+      error: hasVisibleContent
       ? null
       : "历史服务暂时断开，当前没有可显示的历史；请稍后重试",
     generation: targetGeneration,
@@ -140,7 +139,6 @@ export function useInitialTurnLoader({
           {
             ...timeline,
             loadingBefore: true,
-            loadingOlder: true,
             error: null,
           },
         ),
@@ -198,7 +196,7 @@ export function useInitialTurnLoader({
             turnTimelinesBySession: writeTurnTimelineCache(
               previous.turnTimelinesBySession,
               sessionCacheKey,
-              { ...timeline, loadingBefore: false, loadingOlder: false },
+              { ...timeline, loadingBefore: false },
             ),
           };
         }
@@ -209,7 +207,7 @@ export function useInitialTurnLoader({
             turnTimelinesBySession: writeTurnTimelineCache(
               previous.turnTimelinesBySession,
               sessionCacheKey,
-              { ...timeline, loadingBefore: false, loadingOlder: false },
+              { ...timeline, loadingBefore: false },
             ),
             status: "Turn 投影已更新，正在重新加载",
           };
@@ -236,7 +234,7 @@ export function useInitialTurnLoader({
             turnTimelinesBySession: writeTurnTimelineCache(
               previous.turnTimelinesBySession,
               sessionCacheKey,
-              { ...timeline, loadingBefore: false, loadingOlder: false },
+              { ...timeline, loadingBefore: false },
             ),
           };
         });
@@ -257,7 +255,6 @@ export function useInitialTurnLoader({
               {
                 ...timeline,
                 loadingBefore: false,
-                loadingOlder: false,
                 error: null,
               },
             ),
@@ -283,7 +280,6 @@ export function useInitialTurnLoader({
               {
                 ...timeline,
                 loadingBefore: false,
-                loadingOlder: false,
                 error: null,
               },
             ),
@@ -307,7 +303,6 @@ export function useInitialTurnLoader({
               {
                 ...timeline,
                 loadingBefore: false,
-                loadingOlder: false,
                 error: null,
               },
             ),
@@ -591,7 +586,6 @@ export function useAroundTurnLoader({
             ...timeline,
             loadingBefore: true,
             loadingAfter: true,
-            loadingOlder: true,
             error: null,
           },
         ),
@@ -627,7 +621,6 @@ export function useAroundTurnLoader({
                 ...timeline,
                 loadingBefore: false,
                 loadingAfter: false,
-                loadingOlder: false,
               },
             ),
           };
@@ -643,7 +636,6 @@ export function useAroundTurnLoader({
                 ...timeline,
                 loadingBefore: false,
                 loadingAfter: false,
-                loadingOlder: false,
               },
             ),
             status: "Turn 投影已更新，正在重新加载",
@@ -675,7 +667,6 @@ export function useAroundTurnLoader({
                 ...timeline,
                 loadingBefore: false,
                 loadingAfter: false,
-                loadingOlder: false,
               },
             ),
           };
@@ -699,7 +690,6 @@ export function useAroundTurnLoader({
                 ...timeline,
                 loadingBefore: false,
                 loadingAfter: false,
-                loadingOlder: false,
               },
             ),
             status: "Turn 历史游标已失效，正在重新校准",
@@ -723,7 +713,6 @@ export function useAroundTurnLoader({
                 ...timeline,
                 loadingBefore: false,
                 loadingAfter: false,
-                loadingOlder: false,
               },
             ),
             status: "保存的历史位置已失效，已准备从最新位置加载",
