@@ -1,6 +1,8 @@
 # 目录用途
 
-存放 Agent Sessions 面板的子组件，负责会话按钮、工作区会话分组和上下文菜单。
+存放 Agent Sessions 面板的子组件，负责会话按钮、工作区会话分组、会话资源浏览器及其上下文菜单。
+
+`SessionResourceExplorer.tsx` 只负责会话资源树与搜索结果的渲染；导航层级派生、拖拽/放置状态机和拖放提交由 `useSessionResourceTreeNavigation.ts` 提供，右键菜单与对话框由 `SessionResourceOverlays.tsx` 提供，拖放决策纯函数位于 `sessionResourceDrag.ts`。
 
 # 可修改内容
 
