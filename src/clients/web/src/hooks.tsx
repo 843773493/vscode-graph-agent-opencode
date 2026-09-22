@@ -55,6 +55,7 @@ import { useGatewayWorkspaceRuntimeLifecycle } from "./hooks/gatewayWorkspace/us
 import { useGatewayWorkspaceMutations } from "./hooks/gatewayWorkspace/useGatewayWorkspaceMutations";
 import { useGatewayWorkspaceActivation } from "./hooks/gatewayWorkspace/useGatewayWorkspaceActivation";
 import { useWorkspaceSessionSelection } from "./hooks/workspace/useWorkspaceSessionSelection";
+import { useWorkspaceRefreshOrchestration } from "./hooks/workspace/useWorkspaceRefreshOrchestration";
 import { useComposerStateProjection } from "./hooks/composer/useComposerStateProjection";
 import { useUiSettingsController } from "./hooks/settings/useUiSettingsController";
 import {
@@ -67,7 +68,6 @@ import { cloneMaps } from "./state/appStateMaps";
 import { useSessionGoalController } from "./hooks/session/useSessionGoalController";
 import { useSessionTraceHistory } from "./hooks/sessionTraceHistory/useSessionTraceHistory";
 import type { ComposerStateSnapshot } from "./state/composerState";
-import { refreshWorkspaceSessionList } from "./hooks/sessionEventStream/sessionRefresh";
 import {
   useSessionTurnTimeline,
   useTerminalTurnLoader,
@@ -517,15 +517,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => ({ ...prev, status: text }));
   }, []);
 
-  const refreshGatewayWorkspaceSessions = useCallback(async (workspaceId: string) => {
-    await refreshWorkspaceSessionList(
-      state.apiPort ?? DEFAULT_BACKEND_PORT,
-      workspaceId,
-      setState,
-      { force: true },
-    );
-  }, [setState, state.apiPort]);
-
   const updateUiSettings = useUiSettingsController({
     apiPort: state.apiPort,
     setState,
@@ -642,38 +633,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     refreshSessionChanges,
   });
 
-  const resetWorkspaceScopedState = useCallback(() => {
-    abortCurrentStream();
-    setState((prev) => ({
-      ...prev,
-      workspaceSwitching: true,
-      error: null,
-      status: "正在切换工作区",
-    }));
-  }, [abortCurrentStream]);
-
-  const finishWorkspaceRefresh = useCallback(async (
-    preferredSessionId?: string | null,
-    options: {
-      checkGatewayWorkspaceHealth?: boolean;
-      reuseCurrentUiSettings?: boolean;
-    } = {},
-  ): Promise<string | null> => {
-    // 返回本轮刷新真正生效的活动工作区 id：刷新被作废时 refreshSessions 返回
-    // null。调用方必须比对它是否等于自己请求的 workspaceId，不能只看真值——
-    // 自动健康回退可能把活动工作区切到别的 id，那不算请求的那个工作区生效。
-    const appliedWorkspaceId = await refreshSessions(preferredSessionId, options);
-    if (appliedWorkspaceId === null) {
-      return null;
-    }
-    setState((prev) => ({
-      ...prev,
-      workspaceSwitching: false,
-      error: null,
-      status: "工作区已就绪",
-    }));
-    return appliedWorkspaceId;
-  }, [refreshSessions]);
+  const {
+    finishWorkspaceRefresh,
+    refreshGatewayWorkspaceSessions,
+    resetWorkspaceScopedState,
+  } = useWorkspaceRefreshOrchestration({
+    apiPort: state.apiPort,
+    setState,
+    refreshSessions,
+    abortCurrentStream,
+  });
 
   const {
     activateGatewayWorkspace,

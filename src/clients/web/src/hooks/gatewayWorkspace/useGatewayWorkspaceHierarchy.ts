@@ -1,13 +1,13 @@
-import { useCallback, type Dispatch, type SetStateAction } from "react";
+import { useCallback } from "react";
 import {
   listGatewayWorkspaces,
   updateGatewayWorkspace,
 } from "../../gatewayApi";
-import type { AppState } from "../../types/frontend";
+import type { SetAppState } from "../contentViewLoaderTypes";
 
 export function useGatewayWorkspaceHierarchy(
   apiPort: number,
-  setState: Dispatch<SetStateAction<AppState>>,
+  setState: SetAppState,
 ) {
   return useCallback(
     async (

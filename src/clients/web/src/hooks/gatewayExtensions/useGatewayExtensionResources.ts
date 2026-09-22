@@ -7,6 +7,7 @@ import type {
   SessionResourceAction,
 } from "../../types/backend";
 import { controlSessionResource } from "../../api";
+import { errorMessage } from "../../utils/errorMessage";
 
 export type GatewayExtensionRuntimeResource = Omit<SessionResource, "kind"> & {
   kind: "browser" | "terminal";
@@ -22,10 +23,6 @@ export type GatewayExtensionResourceError = GatewayResourceScopeError;
 
 function resourceKey(item: GatewayResourceItem): string {
   return `${item.workspace_id}:${item.session_id}:${item.resource.kind}:${item.resource.resource_id}`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function selectDefaultResource(

@@ -137,4 +137,98 @@ describe("useSessionGoalController 请求合并", () => {
     });
     act(() => renderer!.unmount());
   });
+
+  test("读取 Goal 失败时把原始错误文本写入 goalError", async () => {
+    installBrowserGlobals();
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes("/api/gateway/auth/local-credential")) {
+        return apiResponse({ token: "local-test-token" });
+      }
+      if (url.includes("/api/gateway/users/current")) {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      if (url.includes("/api/v1/sessions/session-test/goal")) {
+        throw new TypeError("读取 Goal 的网络请求失败");
+      }
+      throw new Error(`测试收到未声明请求: ${url}`);
+    }, { preconnect: originalFetch.preconnect });
+
+    let latestController: ReturnType<typeof useSessionGoalController> | null = null;
+    let latestState: AppState = state();
+    function Harness(): React.ReactNode {
+      const [currentState, setState] = React.useState(state);
+      latestState = currentState;
+      latestController = useSessionGoalController({
+        apiPort: 49_406,
+        currentSessionId: currentState.currentSession?.session_id ?? null,
+        currentWorkspaceId: currentState.currentSessionWorkspaceId,
+        setState,
+      });
+      return null;
+    }
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+
+    let failure: unknown;
+    await act(async () => {
+      failure = await latestController!.refreshGoal().catch((error: unknown) => error);
+    });
+
+    // 错误文案必须来自原始抛出物，而不是任何被换掉的常量占位。
+    expect(latestState.goalError).toBe("读取 Goal 的网络请求失败");
+    expect(failure).toBeInstanceOf(TypeError);
+    act(() => renderer!.unmount());
+  });
+
+  test("重取校准再次失败时把二次错误的原始文本拼进抛出的错误", async () => {
+    installBrowserGlobals();
+    let goalRequests = 0;
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes("/api/gateway/auth/local-credential")) {
+        return apiResponse({ token: "local-test-token" });
+      }
+      if (url.includes("/api/gateway/users/current")) {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      if (url.includes("/api/v1/sessions/session-test/goal")) {
+        goalRequests += 1;
+        throw new TypeError(goalRequests === 1 ? "首次写 Goal 失败" : "二次重取失败");
+      }
+      throw new Error(`测试收到未声明请求: ${url}`);
+    }, { preconnect: originalFetch.preconnect });
+
+    let latestController: ReturnType<typeof useSessionGoalController> | null = null;
+    function Harness(): React.ReactNode {
+      const [currentState, setState] = React.useState(state);
+      latestController = useSessionGoalController({
+        apiPort: 49_406,
+        currentSessionId: currentState.currentSession?.session_id ?? null,
+        currentWorkspaceId: currentState.currentSessionWorkspaceId,
+        setState,
+      });
+      return null;
+    }
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+
+    let failure: Error | undefined;
+    await act(async () => {
+      failure = await latestController!.updateGoal({ objective: "验证错误拼接" })
+        .then(
+          () => undefined,
+          (error: Error) => error,
+        );
+    });
+
+    expect(failure?.message).toBe("首次写 Goal 失败；重新读取 Goal 也失败：二次重取失败");
+    act(() => renderer!.unmount());
+  });
 });

@@ -1,17 +1,12 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   clearSessionGoal as apiClearSessionGoal,
   getSessionGoal as apiGetSessionGoal,
   updateSessionGoal as apiUpdateSessionGoal,
 } from "../../api";
 import type { SessionGoal, SessionGoalUpdateRequest } from "../../types/backend";
-import type { AppState } from "../../types/frontend";
+import type { SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 interface GoalTarget {
   sessionId: string;
@@ -19,10 +14,6 @@ interface GoalTarget {
 }
 
 const SESSION_AUXILIARY_LOAD_DELAY_MS = 200;
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function useSessionGoalController({
   apiPort,
@@ -33,7 +24,7 @@ export function useSessionGoalController({
   apiPort: number;
   currentSessionId: string | null;
   currentWorkspaceId: string | null;
-  setState: Dispatch<SetStateAction<AppState>>;
+    setState: SetAppState;
 }) {
   const inFlightGoalRequestsRef = useRef<Map<string, Promise<SessionGoal | null>>>(
     new Map(),
