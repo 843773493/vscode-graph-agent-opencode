@@ -1528,3 +1528,38 @@ async def test_completed_stream_closes_running_blocks_with_public_events(
         ("block_late", "completed", "stream_completed"),
     ]
     await store.unsubscribe(subscription)
+
+
+@pytest.mark.asyncio
+async def test_completed_stream_rejects_deprecated_auto_closed_blocks(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    """手工提交已下线的 auto_closed_blocks 必须响亮失败，且不得改写内部状态。"""
+    store, _, session_id = message_stream_store
+    writer = await store.open(session_id=session_id, turn_id="job_autoclose_rejected")
+    await writer.commit(
+        "block.started",
+        {"block_id": "block_still_running", "block_index": 0, "carrier_type": "text"},
+        block_id="block_still_running",
+    )
+
+    with pytest.raises(MessageStreamError, match="auto_closed_blocks"):
+        await writer.commit(
+            "stream.completed",
+            {"status": "completed", "auto_closed_blocks": ["block_still_running"]},
+        )
+
+    # 响亮拒绝必须发生在终态收口之前：既不能留下终态事件，也不能闭合 block。
+    state = await store.get_state(writer.turn_stream_id)
+    assert state["stream_status"] == "open"
+    assert [
+        (block["block_id"], block["status"]) for block in state["blocks"]
+    ] == [("block_still_running", "running")]
+    events = await store.list_events(
+        session_id=session_id,
+        turn_stream_id=writer.turn_stream_id,
+    )
+    assert [event["type"] for event in events] == [
+        "stream.opened",
+        "block.started",
+    ]

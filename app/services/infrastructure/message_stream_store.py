@@ -376,6 +376,21 @@ class MessageStreamStore:
         }
 
     @staticmethod
+    def _validate_event_payload(event_type: str, payload: Mapping[str, Any]) -> None:
+        """拒绝已下线的内部字段，禁止绕过公共协议改写消息流状态。
+
+        auto_closed_blocks 曾在提交 stream.completed 时承载存储层的收口记账；
+        现在 running block 必须在同一把 Turn 锁内由规范 block.completed 公共事件
+        闭合（见 _close_running_blocks_locked）。手工提交该字段必须响亮失败，
+        而不是被静默吸收后又让公共投影报 ParseError。
+        """
+        if event_type == "stream.completed" and "auto_closed_blocks" in payload:
+            raise MessageStreamError(
+                "stream.completed 不再接受已下线的 auto_closed_blocks 字段: "
+                "running block 必须由规范 block.completed 事件闭合"
+            )
+
+    @staticmethod
     def _validate_event_identity_fields(
         event_type: str,
         payload: Mapping[str, Any],
@@ -994,6 +1009,7 @@ class MessageStreamStore:
         for field_name, field_value in tuple(identity_fields.items()):
             if field_value is None:
                 identity_fields[field_name] = payload.get(field_name)
+        self._validate_event_payload(event_type, payload)
         self._validate_event_identity_fields(event_type, payload, identity_fields)
         for field_name, field_value in identity_fields.items():
             if field_value is not None and (
@@ -1297,6 +1313,7 @@ class MessageStreamStore:
             raise MessageStreamError(
                 f"消息流事件 payload 必须是对象: type={event_type}"
             )
+        self._validate_event_payload(event_type, payload)
         if event_type == "stream.opened":
             next_state["stream_status"] = "open"
             next_state["active_state"] = None
@@ -1471,27 +1488,6 @@ class MessageStreamStore:
                     "reason": payload.get("reason"),
                 }
         elif event_type == "stream.completed":
-            auto_closed_blocks = payload.get("auto_closed_blocks", ())
-            if auto_closed_blocks in (None, ()):
-                auto_closed_blocks = []
-            if not isinstance(auto_closed_blocks, list):
-                raise MessageStreamError(
-                    "stream.completed.auto_closed_blocks 必须是 list"
-                )
-            auto_closed_ids = {
-                str(block_id)
-                for block_id in auto_closed_blocks
-                if isinstance(block_id, str) and block_id
-            }
-            for block in next_state.get("blocks", []):
-                if (
-                    isinstance(block, dict)
-                    and block.get("block_id") in auto_closed_ids
-                    and block.get("status") == "running"
-                ):
-                    block["status"] = "completed"
-                    block["completion_reason"] = "stream_completed"
-                    block["partial"] = False
             next_state["stream_status"] = "completed"
             next_state["agent_loop_status"] = "completed"
             next_state["resumable"] = False
