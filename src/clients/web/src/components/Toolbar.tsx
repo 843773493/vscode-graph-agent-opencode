@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { useAppState } from '../hooks';
-import AnchoredOverlay from './AnchoredOverlay';
-import GatewayUserAccessMenu from './GatewayUserAccessMenu';
+import AnchoredOverlay from './overlays/AnchoredOverlay';
+import GatewayUserAccessMenu from './overlays/GatewayUserAccessMenu';
 
 export type WorkbenchView = "sessions" | "gateway";
 

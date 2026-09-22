@@ -13,7 +13,7 @@ import RequestLogPanel from "./components/panels/RequestLogPanel";
 import ResourcePanel from "./components/panels/ResourcePanel";
 import ChildThreadPanel from "./components/panels/ChildThreadPanel";
 import GatewayExtensionResourcePanel from "./components/panels/GatewayExtensionResourcePanel";
-import SessionNameDialog from "./components/SessionNameDialog";
+import SessionNameDialog from "./components/overlays/SessionNameDialog";
 import { useWarmConfirm } from "./components/WarmConfirmProvider";
 import Toolbar, { type WorkbenchView } from "./components/Toolbar";
 import GatewayControlCenter from "./components/workspace/GatewayControlCenter";

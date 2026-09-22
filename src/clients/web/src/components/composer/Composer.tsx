@@ -25,8 +25,8 @@ import ComposerAttachmentTray from "./ComposerAttachmentTray";
 import ComposerSlashCommandMenu from "./ComposerSlashCommandMenu";
 import ComposerToolControl from "./ComposerToolControl";
 import ComposerViewControl from "./ComposerViewControl";
-import SessionNameDialog from "../SessionNameDialog";
-import WarmActionDialog from "../WarmActionDialog";
+import SessionNameDialog from "../overlays/SessionNameDialog";
+import WarmActionDialog from "../overlays/WarmActionDialog";
 import { useWarmConfirm } from "../WarmConfirmProvider";
 import {
   formatBrowserElementSelections,

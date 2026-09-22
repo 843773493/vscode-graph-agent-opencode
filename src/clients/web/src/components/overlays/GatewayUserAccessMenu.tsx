@@ -7,9 +7,9 @@ import {
   listGatewayUsers,
   selectGatewayUser,
   takeoverGatewayUser,
-} from "../gatewayApi";
-import { HttpRequestError } from "../api";
-import { useAppState } from "../hooks";
+} from "../../gatewayApi";
+import { HttpRequestError } from "../../api";
+import { useAppState } from "../../hooks";
 import AnchoredOverlay from "./AnchoredOverlay";
 
 function errorMessage(error: unknown): string {

@@ -1,6 +1,6 @@
 import React from "react";
 import type { Agent } from "../../types/backend";
-import AnchoredOverlay from "../AnchoredOverlay";
+import AnchoredOverlay from "../overlays/AnchoredOverlay";
 
 type AgentProvider = Agent["providers"][number];
 

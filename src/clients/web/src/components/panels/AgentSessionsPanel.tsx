@@ -18,8 +18,8 @@ import SessionResourceExplorer from '../agentSessions/SessionResourceExplorer';
 import { useAgentSessionsTreeState } from '../agentSessions/useAgentSessionsTreeState';
 import WorkspaceRenameDialog from '../workspace/WorkspaceRenameDialog';
 import WorkspaceAddDialog from '../workspace/WorkspaceAddDialog';
-import AnchoredOverlay from '../AnchoredOverlay';
-import WarmActionDialog from '../WarmActionDialog';
+import AnchoredOverlay from '../overlays/AnchoredOverlay';
+import WarmActionDialog from '../overlays/WarmActionDialog';
 import type { SessionGeneratorResourcesController } from '../../hooks/sessionResourceExplorer/useSessionGeneratorResources';
 import {
   WORKSPACE_SECTION_RECENT_LIMIT,

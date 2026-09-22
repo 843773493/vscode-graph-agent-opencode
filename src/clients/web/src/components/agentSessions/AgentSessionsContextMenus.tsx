@@ -3,7 +3,7 @@ import {
   copyTextToClipboard,
   readTextFromClipboard,
 } from "../../utils/clipboard";
-import AnchoredOverlay from "../AnchoredOverlay";
+import AnchoredOverlay from "../overlays/AnchoredOverlay";
 import { useWarmConfirm } from "../WarmConfirmProvider";
 
 export interface SessionContextMenu {

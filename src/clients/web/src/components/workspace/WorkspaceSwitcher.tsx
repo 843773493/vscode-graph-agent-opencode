@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import type { GatewayWorkspace } from "../../types/backend";
-import AnchoredOverlay from "../AnchoredOverlay";
+import AnchoredOverlay from "../overlays/AnchoredOverlay";
 
 interface WorkspaceSwitcherProps {
   workspaces: GatewayWorkspace[];

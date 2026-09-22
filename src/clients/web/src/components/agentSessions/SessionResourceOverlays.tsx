@@ -1,8 +1,8 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { extractSessionIdFromClipboardText } from "../../state/session/sessionInformation";
 import { copyTextToClipboard, readTextFromClipboard } from "../../utils/clipboard";
-import AnchoredOverlay from "../AnchoredOverlay";
-import WarmActionDialog from "../WarmActionDialog";
+import AnchoredOverlay from "../overlays/AnchoredOverlay";
+import WarmActionDialog from "../overlays/WarmActionDialog";
 import type { SessionResourceExplorerController } from "../../hooks/session/useSessionResourceExplorer";
 
 export interface SessionFolderContextMenu {

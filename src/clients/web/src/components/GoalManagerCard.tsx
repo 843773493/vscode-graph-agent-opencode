@@ -9,7 +9,7 @@ import {
   goalEditStatus,
   restartCompletedGoalPayload,
 } from "../state/sessionGoal";
-import WarmActionDialog from "./WarmActionDialog";
+import WarmActionDialog from "./overlays/WarmActionDialog";
 import { useWarmConfirm } from "./WarmConfirmProvider";
 
 function formatTokens(tokens: number): string {

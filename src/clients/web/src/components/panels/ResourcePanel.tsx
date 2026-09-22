@@ -15,7 +15,7 @@ import {
 } from "../../state/display/resourceDisplay";
 import { CREATABLE_SESSION_CONNECTIONS } from "../../state/sessionConnections";
 import type { CreatableSessionConnectionKind } from "../../types/frontend";
-import AnchoredOverlay from "../AnchoredOverlay";
+import AnchoredOverlay from "../overlays/AnchoredOverlay";
 import ResourceTreeRow from "../ResourceTreeRow";
 
 const DEFAULT_GROUP_OPEN: Record<ResourceAttentionGroup, boolean> = {

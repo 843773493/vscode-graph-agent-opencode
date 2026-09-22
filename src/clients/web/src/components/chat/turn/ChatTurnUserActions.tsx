@@ -2,7 +2,7 @@ import React from "react";
 import type { AttachmentRef, DeliveryPolicy } from "../../../types/backend";
 import type { ConversationView } from "../../../types/frontend";
 import { fileToSelectedAttachment } from "../../../utils/media/mediaAttachments";
-import AnchoredOverlay from "../../AnchoredOverlay";
+import AnchoredOverlay from "../../overlays/AnchoredOverlay";
 import MessageAttachments from "../MessageAttachments";
 import PendingRequestActions from "../PendingRequestActions";
 import ProgressiveUserMessage from "../ProgressiveUserMessage";

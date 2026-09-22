@@ -1,6 +1,6 @@
 import React from "react";
 import type { SlashCommandOption } from "../../state/slashCommands";
-import AnchoredOverlay from "../AnchoredOverlay";
+import AnchoredOverlay from "../overlays/AnchoredOverlay";
 
 export default function ComposerSlashCommandMenu({
   query,

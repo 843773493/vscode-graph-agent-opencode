@@ -4,7 +4,7 @@ import {
   type ViewOption,
 } from "../../state/contentViews";
 import type { ConversationContentView } from "../../types/frontend";
-import AnchoredOverlay from "../AnchoredOverlay";
+import AnchoredOverlay from "../overlays/AnchoredOverlay";
 
 export default function ComposerViewControl({
   controlRef,

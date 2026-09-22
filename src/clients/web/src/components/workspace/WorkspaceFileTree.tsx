@@ -44,7 +44,7 @@ import {
   type WorkspaceFileChangesEventDetail,
 } from "../../state/workspaceFileTreeEvents";
 import { useWorkspaceFileWatch } from "../../hooks/workspace/useWorkspaceFileWatch";
-import AnchoredOverlay from "../AnchoredOverlay";
+import AnchoredOverlay from "../overlays/AnchoredOverlay";
 import {
   type DirectoryCacheEntry,
   pruneDirectoryCache,

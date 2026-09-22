@@ -5,7 +5,7 @@ import type {
   GatewayWorkspace,
   GeneratorSessionStrategyMode,
 } from "../../types/backend";
-import WarmActionDialog from "../WarmActionDialog";
+import WarmActionDialog from "../overlays/WarmActionDialog";
 import {
   generatorStatusPresentation,
   generatorStrategyLabel,

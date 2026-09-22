@@ -19,7 +19,7 @@ import type {
   ToolTestRun,
 } from "../../types/toolTesting";
 import ComposerToolTree, { type ToolGroup } from "./ComposerToolTree";
-import AnchoredOverlay from "../AnchoredOverlay";
+import AnchoredOverlay from "../overlays/AnchoredOverlay";
 import {
   applyToolSelectionChanges,
   restoreToolSelectionAfterSaveFailure,
