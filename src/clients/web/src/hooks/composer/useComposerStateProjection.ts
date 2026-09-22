@@ -1,12 +1,12 @@
 import { useCallback, useMemo, useRef, type MutableRefObject } from "react";
-import type { AppState } from "../types/frontend";
-import { sessionScopeKey } from "../state/session/sessionScope";
+import type { AppState } from "../../types/frontend";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
   reuseComposerStateSnapshot,
   selectComposerState,
   type ComposerStateSnapshot,
-} from "../state/composerState";
-import type { ComposerContextType } from "../hooks";
+} from "../../state/composerState";
+import type { ComposerContextType } from "../../hooks";
 
 /** Composer 状态投影入参：AppState 切片，加上 ComposerContext 需要的外部回调。 */
 export interface ComposerStateProjectionInput

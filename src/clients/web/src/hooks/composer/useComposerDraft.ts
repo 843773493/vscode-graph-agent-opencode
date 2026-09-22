@@ -3,8 +3,8 @@ import {
   composerDraftScopeKey,
   readComposerDraft,
   writeComposerDraft,
-} from "../state/composerDrafts/storage";
-import { sessionScopeKey } from "../state/session/sessionScope";
+} from "../../state/composerDrafts/storage";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 
 const NEW_SESSION_DRAFT_ID = "__new_session_draft__";
 const ephemeralDraftsByScope = new Map<string, string>();

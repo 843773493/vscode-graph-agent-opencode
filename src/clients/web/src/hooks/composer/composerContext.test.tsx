@@ -5,19 +5,19 @@ import {
   ComposerContext,
   useComposerState,
   type ComposerContextType,
-} from "../hooks";
+} from "../../hooks";
 import { useComposerDraft } from "./useComposerDraft";
 import {
   reuseComposerStateSnapshot,
   selectComposerState,
   type ComposerStateSnapshot,
-} from "../state/composerState";
+} from "../../state/composerState";
 import {
   composerDraftScopeKey,
   writeComposerDraft,
-} from "../state/composerDrafts/storage";
-import type { AppState } from "../types/frontend";
-import { createSessionTurnTimeline } from "../state/session/turnTimeline";
+} from "../../state/composerDrafts/storage";
+import type { AppState } from "../../types/frontend";
+import { createSessionTurnTimeline } from "../../state/session/turnTimeline";
 
 const SESSION_CACHE_KEY = "workspace::session";
 

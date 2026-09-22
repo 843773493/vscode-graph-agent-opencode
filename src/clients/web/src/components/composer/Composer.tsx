@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
 import { useComposerState } from "../../hooks";
-import { useComposerSlashCommands } from "../../hooks/useComposerSlashCommands";
-import { useComposerDraft } from "../../hooks/useComposerDraft";
+import { useComposerSlashCommands } from "../../hooks/composer/useComposerSlashCommands";
+import { useComposerDraft } from "../../hooks/composer/useComposerDraft";
 import { VIEW_OPTIONS } from "../../state/contentViews";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import {

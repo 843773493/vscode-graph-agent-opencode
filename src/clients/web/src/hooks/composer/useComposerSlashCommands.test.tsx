@@ -1,8 +1,8 @@
 import React from "react";
 import { describe, expect, test } from "bun:test";
 import { act, create } from "react-test-renderer";
-import { COMPOSER_SLASH_COMMANDS, type SlashCommandOption } from "../state/slashCommands";
-import type { SessionCompactResult } from "../types/backend";
+import { COMPOSER_SLASH_COMMANDS, type SlashCommandOption } from "../../state/slashCommands";
+import type { SessionCompactResult } from "../../types/backend";
 import { useComposerSlashCommands } from "./useComposerSlashCommands";
 
 describe("Composer /new 命令", () => {

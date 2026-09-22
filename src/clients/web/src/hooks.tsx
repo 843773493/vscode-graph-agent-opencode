@@ -55,7 +55,7 @@ import { useGatewayWorkspaceRuntimeLifecycle } from "./hooks/gatewayWorkspace/us
 import { useGatewayWorkspaceMutations } from "./hooks/gatewayWorkspace/useGatewayWorkspaceMutations";
 import { useGatewayWorkspaceActivation } from "./hooks/gatewayWorkspace/useGatewayWorkspaceActivation";
 import { useWorkspaceSessionSelection } from "./hooks/workspace/useWorkspaceSessionSelection";
-import { useComposerStateProjection } from "./hooks/useComposerStateProjection";
+import { useComposerStateProjection } from "./hooks/composer/useComposerStateProjection";
 import { useUiSettingsController } from "./hooks/useUiSettingsController";
 import {
   readCachedUiSettings,

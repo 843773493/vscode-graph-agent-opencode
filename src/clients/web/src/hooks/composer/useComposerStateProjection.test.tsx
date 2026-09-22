@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import React, { Suspense, useRef, useState } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { AppState, ConversationContentView } from "../types/frontend";
-import { sessionScopeKey } from "../state/session/sessionScope";
+import type { AppState, ConversationContentView } from "../../types/frontend";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
   createSessionTurnTimeline,
   type TurnRecord,
-} from "../state/session/turnTimeline";
-import type { ComposerStateSnapshot } from "../state/composerState";
+} from "../../state/session/turnTimeline";
+import type { ComposerStateSnapshot } from "../../state/composerState";
 import {
   useComposerStateProjection,
   type ComposerStateProjection,
