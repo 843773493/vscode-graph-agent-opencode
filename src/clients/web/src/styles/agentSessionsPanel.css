@@ -7,6 +7,19 @@
   text-align: left;
 }
 
+.agent-sessions-stale-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--bt-status-warning);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bt-status-warning) 14%, transparent);
+  font-size: 11px;
+  line-height: 15px;
+}
+
 .agent-sessions-workspace-groups {
   display: flex;
   flex-direction: column;

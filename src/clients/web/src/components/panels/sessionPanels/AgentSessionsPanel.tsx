@@ -54,6 +54,7 @@ interface AgentSessionsPanelProps {
   isOpen: boolean;
   workspaceName: string;
   gatewayWorkspaces: GatewayWorkspace[];
+  gatewayWorkspacesStale: boolean;
   activeGatewayWorkspaceId: string | null;
   workspaceSwitching: boolean;
   onActivateWorkspace: (workspaceId: string) => Promise<void>;
@@ -119,6 +120,7 @@ export default function AgentSessionsPanel({
   isOpen,
   workspaceName,
   gatewayWorkspaces,
+  gatewayWorkspacesStale,
   activeGatewayWorkspaceId,
   workspaceSwitching,
   onActivateWorkspace,
@@ -455,6 +457,15 @@ export default function AgentSessionsPanel({
               <div className="agent-sessions-no-chats">No chats</div>
             ) : null}
           </section>
+
+          {gatewayWorkspacesStale && gatewayWorkspaces.length > 0 ? (
+            // 刷新失败时保留旧列表仅作过渡展示，必须显式告知「这份结构可能已过期」，
+            // 不能让用户把陈旧的工作区结构当成当前权威数据。
+            <div className="agent-sessions-stale-notice" role="alert">
+              <span className="codicon codicon-warning" aria-hidden="true" />
+              <span>工作区结构刷新失败，以下列表可能已过期</span>
+            </div>
+          ) : null}
 
           {gatewayWorkspaces.length > 0 ? (
             <SessionResourceExplorer

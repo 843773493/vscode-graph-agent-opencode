@@ -14,6 +14,7 @@ import { ensureGatewayUserAccess } from "../../api/gateway/userAccess";
 import { getLatestGatewayUserViewState } from "../../api/gateway/userViewState";
 import { writeCachedUiSettings } from "../../state/storage";
 import { sessionScopeKey } from "../../state/session/sessionScope";
+import { withFreshGatewayWorkspaceList } from "../../state/gatewayWorkspaceState";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { loadAndApplyResolvedGatewayTheme } from "../../theme/theme";
 import {
@@ -356,6 +357,9 @@ export function useWorkspaceBootstrap({
         failedWorkspaceNames.length > 0
           ? `部分工作区会话暂不可用，已保留现有会话状态：${failedWorkspaceNames.join("、")}`
           : null;
+      // 有工作区会话列表读取失败 / 网关结构未刷新成功时，保留旧值仅作为过渡展示，
+      // 但必须以「已失效」标记告知 UI，不能静默沿用旧值继续当作当前数据。
+      const gatewayWorkspacesStale = failedWorkspaceNames.length > 0;
       if (
         controller.signal.aborted
         || refreshGeneration !== refreshGenerationRef.current
@@ -427,6 +431,7 @@ export function useWorkspaceBootstrap({
           sessionsByWorkspace,
           sessionGatewayWorkspaceById,
           gatewayError: partialGatewayError,
+          gatewayWorkspacesStale,
           gatewayUserAccess: userAccess,
           gatewayUserViewStates,
           turnTimelinesBySession,
@@ -483,8 +488,14 @@ export function useWorkspaceBootstrap({
               gatewayWorkspaces: error.gatewayWorkspaces.items,
               activeGatewayWorkspaceId: error.gatewayWorkspaces.active_workspace_id,
               gatewayError: message,
+              // 这轮 Gateway 结构确实读到了，只是没有可用工作区，不算失效。
+              gatewayWorkspacesStale: false,
             }
-          : {}),
+          : {
+              // 其它错误下 gatewayWorkspaces 不写入、保留旧值：必须显式标记失效，
+              // 否则 UI 会把可能已过期的 Gateway 结构当成当前数据继续渲染。
+              gatewayWorkspacesStale: true,
+            }),
         error: message,
         status: "初始化失败",
         isBootstrapping: false,
@@ -519,8 +530,7 @@ export function useWorkspaceBootstrap({
           return previous;
         }
         return {
-          ...previous,
-          gatewayWorkspaces: workspaceList.items,
+          ...withFreshGatewayWorkspaceList(previous, workspaceList.items),
         };
       });
     } catch (error) {

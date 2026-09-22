@@ -1,4 +1,7 @@
-import { applyGatewayWorkspaceListAfterRemoval } from "../gatewayWorkspaceState";
+import {
+  applyGatewayWorkspaceListAfterRemoval,
+  withFreshGatewayWorkspaceList,
+} from "../gatewayWorkspaceState";
 import type { GatewayWorkspace, Session } from "../../types/backend";
 
 function workspace(workspaceId: string, active: boolean): GatewayWorkspace {
@@ -85,5 +88,23 @@ function session(sessionId: string): Session {
   }
   if (next.unrelatedValue !== "保持不变") {
     throw new Error("删除局部状态时修改了无关状态");
+  }
+}
+
+{
+  // 写入服务端确认的新列表时必须同时清除失效标记，否则过期提示会残留成假阳性。
+  const staleSlice: { gatewayWorkspacesStale: boolean; gatewayWorkspaces: GatewayWorkspace[] } = {
+    gatewayWorkspacesStale: true,
+    gatewayWorkspaces: [],
+  };
+  const next = withFreshGatewayWorkspaceList(
+    staleSlice,
+    [workspace("fresh", true)],
+  );
+  if (next.gatewayWorkspacesStale !== false) {
+    throw new Error("写入新工作区列表后未清除失效标记");
+  }
+  if (next.gatewayWorkspaces.map((item) => item.workspace_id).join(",") !== "fresh") {
+    throw new Error("写入新工作区列表后未采用新列表");
   }
 }

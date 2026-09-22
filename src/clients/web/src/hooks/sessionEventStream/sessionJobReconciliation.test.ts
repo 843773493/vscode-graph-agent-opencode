@@ -133,6 +133,7 @@ function appState(): AppState {
     sessionHistoryReloadNonce: 0,
     workspaceSwitching: false,
     gatewayError: null,
+    gatewayWorkspacesStale: false,
     gatewayUserAccess: null,
     gatewayUserViewStates: new Map(),
     uiSettings: {

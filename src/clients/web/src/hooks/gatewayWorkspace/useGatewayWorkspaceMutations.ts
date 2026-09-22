@@ -14,7 +14,10 @@ import type {
   WebUiSettings,
   WebUiSettingsUpdate,
 } from "../../types/backend";
-import { applyGatewayWorkspaceListAfterRemoval } from "../../state/gatewayWorkspaceState";
+import {
+  applyGatewayWorkspaceListAfterRemoval,
+  withFreshGatewayWorkspaceList,
+} from "../../state/gatewayWorkspaceState";
 import type { FinishWorkspaceRefresh, SetAppState } from "../contentViewLoaderTypes";
 
 export function useGatewayWorkspaceMutations({
@@ -236,8 +239,7 @@ export function useGatewayWorkspaceMutations({
             );
             removingGatewayWorkspaceIds.delete(workspaceId);
             return {
-              ...prev,
-              gatewayWorkspaces: workspaceList.items,
+              ...withFreshGatewayWorkspaceList(prev, workspaceList.items),
               activeGatewayWorkspaceId: workspaceList.active_workspace_id,
               removingGatewayWorkspaceIds,
             };
@@ -294,8 +296,7 @@ export function useGatewayWorkspaceMutations({
             (workspace) => workspace.workspace_id === activeWorkspaceId,
           );
           return {
-            ...prev,
-            gatewayWorkspaces: workspaceList.items,
+            ...withFreshGatewayWorkspaceList(prev, workspaceList.items),
             activeGatewayWorkspaceId: activeWorkspaceId,
             workspaceRoot: activeWorkspace?.root_path ?? prev.workspaceRoot,
             workspaceName: activeWorkspace?.name ?? prev.workspaceName,
@@ -337,8 +338,7 @@ export function useGatewayWorkspaceMutations({
               workspace.workspace_id === workspaceList.active_workspace_id,
           );
           return {
-            ...prev,
-            gatewayWorkspaces: workspaceList.items,
+            ...withFreshGatewayWorkspaceList(prev, workspaceList.items),
             activeGatewayWorkspaceId: workspaceList.active_workspace_id,
             workspaceRoot: activeWorkspace?.root_path ?? null,
             workspaceName: activeWorkspace?.name ?? null,
@@ -360,8 +360,7 @@ export function useGatewayWorkspaceMutations({
                 workspace.workspace_id === workspaceList.active_workspace_id,
             );
             return {
-              ...prev,
-              gatewayWorkspaces: workspaceList.items,
+              ...withFreshGatewayWorkspaceList(prev, workspaceList.items),
               activeGatewayWorkspaceId: workspaceList.active_workspace_id,
               workspaceRoot: activeWorkspace?.root_path ?? null,
               workspaceName: activeWorkspace?.name ?? null,

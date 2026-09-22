@@ -11,6 +11,19 @@ interface GatewayWorkspaceRemovalState {
   status: string;
 }
 
+interface GatewayWorkspaceListSlice {
+  gatewayWorkspaces: GatewayWorkspaceList["items"];
+  gatewayWorkspacesStale?: boolean;
+}
+
+/** 写入一份新的 Gateway 工作区权威列表：服务端已确认的列表一律清除失效标记，
+ * 保证 gatewayWorkspacesStale 只反映最近一次读取结果，不会残留成假阳性。 */
+export function withFreshGatewayWorkspaceList<
+  State extends GatewayWorkspaceListSlice,
+>(state: State, items: GatewayWorkspaceList["items"]): State {
+  return { ...state, gatewayWorkspaces: items, gatewayWorkspacesStale: false };
+}
+
 export function applyGatewayWorkspaceListAfterRemoval<
   State extends GatewayWorkspaceRemovalState,
 >(
@@ -32,8 +45,7 @@ export function applyGatewayWorkspaceListAfterRemoval<
   removingGatewayWorkspaceIds.delete(removedWorkspaceId);
 
   return {
-    ...state,
-    gatewayWorkspaces: workspaceList.items,
+    ...withFreshGatewayWorkspaceList(state, workspaceList.items),
     activeGatewayWorkspaceId: workspaceList.active_workspace_id,
     sessionsByWorkspace,
     sessionGatewayWorkspaceById,

@@ -84,6 +84,7 @@ const INITIAL_STATE: AppState = {
   sessionHistoryReloadNonce: 0,
   workspaceSwitching: false,
   gatewayError: null,
+  gatewayWorkspacesStale: false,
   gatewayUserAccess: null,
   gatewayUserViewStates: new Map(),
   uiSettings: CACHED_UI_SETTINGS,

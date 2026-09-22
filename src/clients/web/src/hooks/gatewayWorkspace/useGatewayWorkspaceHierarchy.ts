@@ -4,6 +4,7 @@ import {
   updateGatewayWorkspace,
 } from "../../gatewayApi";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import { withFreshGatewayWorkspaceList } from "../../state/gatewayWorkspaceState";
 
 export function useGatewayWorkspaceHierarchy(
   apiPort: number,
@@ -32,8 +33,7 @@ export function useGatewayWorkspaceHierarchy(
               workspace.workspace_id === workspaceList.active_workspace_id,
           );
           return {
-            ...previous,
-            gatewayWorkspaces: workspaceList.items,
+            ...withFreshGatewayWorkspaceList(previous, workspaceList.items),
             activeGatewayWorkspaceId: workspaceList.active_workspace_id,
             workspaceRoot: activeWorkspace?.root_path ?? null,
             workspaceName: activeWorkspace?.name ?? null,
@@ -51,8 +51,7 @@ export function useGatewayWorkspaceHierarchy(
         try {
           const workspaceList = await listGatewayWorkspaces(apiPort);
           setState((previous) => ({
-            ...previous,
-            gatewayWorkspaces: workspaceList.items,
+            ...withFreshGatewayWorkspaceList(previous, workspaceList.items),
             activeGatewayWorkspaceId: workspaceList.active_workspace_id,
           }));
         } catch (reconciliationError) {

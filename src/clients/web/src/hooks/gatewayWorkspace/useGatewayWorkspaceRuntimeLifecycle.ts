@@ -12,6 +12,7 @@ import type {
   GatewayRuntimeRestartResult,
 } from "../../types/backend";
 import type { FinishWorkspaceRefresh, SetAppState } from "../contentViewLoaderTypes";
+import { withFreshGatewayWorkspaceList } from "../../state/gatewayWorkspaceState";
 
 type RefreshGatewayState = () => Promise<void>;
 
@@ -103,8 +104,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         throw error;
       }
       setState((prev) => ({
-        ...prev,
-        gatewayWorkspaces: result.workspaces.items,
+        ...withFreshGatewayWorkspaceList(prev, result.workspaces.items),
         activeGatewayWorkspaceId: result.workspaces.active_workspace_id,
         gatewayError: null,
         error: null,
@@ -135,8 +135,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
           workspaceId,
         );
         setState((prev) => ({
-          ...prev,
-          gatewayWorkspaces: result.workspaces.items,
+          ...withFreshGatewayWorkspaceList(prev, result.workspaces.items),
           activeGatewayWorkspaceId: result.workspaces.active_workspace_id,
           status: result.status === "blocked" ? "工作区仍有活动任务，未关闭" : "工作区已关闭",
         }));

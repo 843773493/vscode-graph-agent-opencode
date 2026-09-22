@@ -163,6 +163,9 @@ export interface AppState {
   sessionHistoryReloadNonce: number;
   workspaceSwitching: boolean;
   gatewayError: string | null;
+  /** 当前的 gatewayWorkspaces 是否已不可信：Gateway 刷新整体失败或部分工作区
+   * 的会话列表读取失败时置真，UI 不得把这份数据当作当前权威结构展示。 */
+  gatewayWorkspacesStale: boolean;
   gatewayUserAccess: GatewayUserAccess | null;
   gatewayUserViewStates: Map<string, GatewayUserViewState>;
   uiSettings: WebUiSettings;
