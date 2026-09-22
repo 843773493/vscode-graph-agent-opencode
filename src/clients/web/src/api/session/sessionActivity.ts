@@ -2,8 +2,8 @@ import type {
   APIResponse,
   CursorPage,
   SessionActivity,
-} from "../types/backend";
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../sseClient";
+} from "../../types/backend";
+import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sseClient";
 import {
   getApiBaseUrl,
   getGatewayToken,
@@ -11,7 +11,7 @@ import {
   requestJson,
   unwrapApiData,
   workspaceHeader,
-} from "./http";
+} from "../http";
 
 const ACTIVITY_STREAM_IDLE_TIMEOUT_MS = 45_000;
 

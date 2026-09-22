@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import { getSession } from "../../api/sessions";
+import { getSession } from "../../api/session/sessions";
 import { cloneMaps } from "../../state/appStateMaps";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { replaceSessionMetadata } from "../../state/session/sessions";

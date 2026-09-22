@@ -9,8 +9,8 @@ import type {
   SessionResourceControlResult,
   SessionResourceKind,
   SessionResourceList,
-} from "../types/backend";
-import { requestJson, unwrapApiData, workspaceHeader } from "./http";
+} from "../../types/backend";
+import { requestJson, unwrapApiData, workspaceHeader } from "../http";
 
 function normalizeSessionChangesSummary(
   summary: Partial<SessionChangesSummary> | null | undefined,

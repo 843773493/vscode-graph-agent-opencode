@@ -10,7 +10,7 @@ import {
   StaleTurnCursorHttpError,
   StaleTurnReferenceHttpError,
   type TurnHistoryInclude,
-} from "../../api/sessionTurnHistory";
+} from "../../api/session/sessionTurnHistory";
 import {
   applyTurnDetails,
   createSessionTurnTimeline,

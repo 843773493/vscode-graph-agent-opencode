@@ -1,5 +1,5 @@
 import { getSession, listSessions } from "../../api";
-import { listSessionCatalogChildren } from "../../api/sessionCatalog";
+import { listSessionCatalogChildren } from "../../api/session/sessionCatalog";
 import type { Session } from "../../types/backend";
 
 const generations = new Map<string, number>();

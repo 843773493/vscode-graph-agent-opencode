@@ -8,14 +8,14 @@ import type {
   SessionCompactResult,
   SessionInformationSnapshot,
   SessionUpdateRequest,
-} from "../types/backend";
-import { parseChildThreadStatus } from "../types/protocol";
+} from "../../types/backend";
+import { parseChildThreadStatus } from "../../types/protocol";
 import {
   DEFAULT_API_REQUEST_TIMEOUT_MS,
   requestJson,
   unwrapApiData,
   workspaceHeader,
-} from "./http";
+} from "../http";
 
 export const DEFAULT_SESSION_TITLE = "新会话";
 

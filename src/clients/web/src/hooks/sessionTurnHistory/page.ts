@@ -4,7 +4,7 @@ import {
   loadSessionHistory,
   StaleTurnCursorHttpError,
   StaleTurnReferenceHttpError,
-} from "../../api/sessionTurnHistory";
+} from "../../api/session/sessionTurnHistory";
 import {
   applyTurnHistoryPage,
   createSessionTurnTimeline,

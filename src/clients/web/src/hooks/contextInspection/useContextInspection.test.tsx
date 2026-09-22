@@ -1,7 +1,7 @@
 import React from "react";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import * as client from "../../api/sessionContext";
+import * as client from "../../api/session/sessionContext";
 import type { SessionContextReadResultDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import { useContextInspection, type InspectionOwner } from "./useContextInspection";
 

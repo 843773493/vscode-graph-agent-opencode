@@ -8,7 +8,7 @@ import React, {
   useState,
 } from "react";
 import { DEFAULT_BACKEND_PORT } from "./api";
-import type { TurnHistoryInclude } from "./api/sessionTurnHistory";
+import type { TurnHistoryInclude } from "./api/session/sessionTurnHistory";
 import type {
   AddManagedGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,

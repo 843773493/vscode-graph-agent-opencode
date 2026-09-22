@@ -1,5 +1,5 @@
 import React from "react";
-import type { TurnHistoryInclude } from "../../api/sessionTurnHistory";
+import type { TurnHistoryInclude } from "../../api/session/sessionTurnHistory";
 import type { AttachmentRef } from "../../types/backend";
 import { isLiveConversationView } from "../../state/trace/traceAggregation";
 import type { ConversationView } from "../../types/frontend";

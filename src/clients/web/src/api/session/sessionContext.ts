@@ -1,6 +1,6 @@
-import type { APIResponse } from "../types/backend";
-import type { SessionContextReadResultDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
-import { requestJson, unwrapApiData, workspaceHeader } from "./http";
+import type { APIResponse } from "../../types/backend";
+import type { SessionContextReadResultDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import { requestJson, unwrapApiData, workspaceHeader } from "../http";
 
 export function sessionContextResource(sessionId: string, assemblyId?: string): string {
   if (!sessionId) throw new Error("上下文检查缺少 session owner");

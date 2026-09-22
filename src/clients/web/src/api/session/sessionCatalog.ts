@@ -3,8 +3,8 @@ import type {
   Session,
   SessionCatalogNode,
   SessionCatalogPage,
-} from "../types/backend";
-import { requestJson, unwrapApiData, workspaceHeader } from "./http";
+} from "../../types/backend";
+import { requestJson, unwrapApiData, workspaceHeader } from "../http";
 
 export async function listSessionCatalogChildren(
   port: number,

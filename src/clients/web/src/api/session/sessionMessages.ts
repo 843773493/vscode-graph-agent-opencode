@@ -11,14 +11,14 @@ import type {
   MessageRunAccepted,
   MessageRunRequest,
   DeliveryPolicy,
-} from "../types/backend";
+} from "../../types/backend";
 import {
   getApiBaseUrl,
   getGatewayToken,
   requestJson,
   unwrapApiData,
   workspaceHeader,
-} from "./http";
+} from "../http";
 
 export const DEFAULT_AGENT_ID = "default";
 

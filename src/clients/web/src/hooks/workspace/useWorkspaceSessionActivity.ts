@@ -3,7 +3,7 @@ import {
   listSessionActivity,
   SessionActivityCursorGoneError,
   streamSessionActivity,
-} from "../../api/sessionActivity";
+} from "../../api/session/sessionActivity";
 import { cloneMaps } from "../../state/appStateMaps";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import type { SessionActivity } from "../../types/backend";

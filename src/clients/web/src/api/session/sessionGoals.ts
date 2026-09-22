@@ -2,8 +2,8 @@ import type {
   APIResponse,
   SessionGoal,
   SessionGoalUpdateRequest,
-} from "../types/backend";
-import { requestJson, unwrapApiData, workspaceHeader } from "./http";
+} from "../../types/backend";
+import { requestJson, unwrapApiData, workspaceHeader } from "../http";
 
 export async function getSessionGoal(
   port: number,

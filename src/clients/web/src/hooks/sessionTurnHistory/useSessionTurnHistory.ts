@@ -6,7 +6,7 @@ import {
   useState,
 } from "react";
 import type { SetAppState } from "../contentViewLoaderTypes";
-import type { TurnHistoryInclude } from "../../api/sessionTurnHistory";
+import type { TurnHistoryInclude } from "../../api/session/sessionTurnHistory";
 import {
   dropTurn,
   writeTurnTimelineCache,

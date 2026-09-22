@@ -5,7 +5,7 @@ import type {
   ComputeItemKey,
   ItemContent,
 } from "react-virtuoso";
-import type { TurnHistoryInclude } from "../../api/sessionTurnHistory";
+import type { TurnHistoryInclude } from "../../api/session/sessionTurnHistory";
 import type {
   AttachmentRef,
   MessageReplayRequest,

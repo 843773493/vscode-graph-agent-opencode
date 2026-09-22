@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { listSessionCatalogChildren } from "./sessionCatalog";
+import { listSessionCatalogChildren } from "./session/sessionCatalog";
 import { getApiBaseUrl, requestJson } from "./http";
 
 const originalFetch = globalThis.fetch;

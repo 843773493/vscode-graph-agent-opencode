@@ -13,7 +13,7 @@ export {
   loadSessionHistory,
   StaleTurnCursorHttpError,
   StaleTurnReferenceHttpError,
-} from "./api/sessionTurnHistory";
+} from "./api/session/sessionTurnHistory";
 export {
   listSessionTraceHistory,
   SessionStreamIdleTimeoutError,
@@ -60,7 +60,7 @@ export {
   moveSessionParent,
   refreshSessionCatalog,
   renameSessionCatalogFolder,
-} from "./api/sessionCatalog";
+} from "./api/session/sessionCatalog";
 export {
   getWorkspace,
   listAgents,
@@ -80,12 +80,12 @@ export {
   updateSession,
   updateSessionAgent,
   updateSessionProvider,
-} from "./api/sessions";
+} from "./api/session/sessions";
 export {
   clearSessionGoal,
   getSessionGoal,
   updateSessionGoal,
-} from "./api/sessionGoals";
+} from "./api/session/sessionGoals";
 export {
   DEFAULT_AGENT_ID,
   getAgentStateMessages,
@@ -96,14 +96,14 @@ export {
   replayMessageTurn,
   sendMessage,
   sendUserMessage,
-} from "./api/sessionMessages";
+} from "./api/session/sessionMessages";
 export {
   controlSessionResource,
   getSessionChangeset,
   getSessionChangesets,
   getSessionResources,
   reviewSessionChangeFile,
-} from "./api/sessionResources";
+} from "./api/session/sessionResources";
 export { streamWorkspaceFileEvents } from "./api/workspaceFileEvents";
 export { controlJob, getJob } from "./api/jobs";
 export {

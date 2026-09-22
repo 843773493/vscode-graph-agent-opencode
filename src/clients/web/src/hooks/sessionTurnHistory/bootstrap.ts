@@ -1,6 +1,6 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 import { isTransientNetworkError } from "../../api/http";
-import { getSessionTurnBootstrap } from "../../api/sessionTurnHistory";
+import { getSessionTurnBootstrap } from "../../api/session/sessionTurnHistory";
 import { listPendingRequests } from "../../pendingRequestsApi";
 import { cloneMaps } from "../../state/appStateMaps";
 import { replaceSessionMetadata } from "../../state/session/sessions";

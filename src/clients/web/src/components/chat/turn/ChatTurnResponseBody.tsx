@@ -1,5 +1,5 @@
 import React from "react";
-import type { TurnHistoryInclude } from "../../../api/sessionTurnHistory";
+import type { TurnHistoryInclude } from "../../../api/session/sessionTurnHistory";
 import {
   conversationModelUsage,
   conversationTokenUsage,

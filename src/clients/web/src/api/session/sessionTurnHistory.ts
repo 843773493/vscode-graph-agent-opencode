@@ -5,13 +5,13 @@ import type {
   StaleTurnReferenceError,
   TurnHistoryLoadRequest,
   TurnHistoryPage,
-} from "../types/backend";
+} from "../../types/backend";
 import {
   HttpRequestError,
   requestJson,
   unwrapApiData,
   workspaceHeader,
-} from "./http";
+} from "../http";
 
 const SESSION_TURN_HISTORY_TIMEOUT_MS = 10_000;
 const TURN_DETAIL_WORKER_PARSE_THRESHOLD_BYTES = 256 * 1024;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { HttpRequestError } from "./http";
+import { HttpRequestError } from "../http";
 import { listChildThreads } from "./sessions";
 
 const originalFetch = globalThis.fetch;

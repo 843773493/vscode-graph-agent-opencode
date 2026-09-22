@@ -4,7 +4,7 @@ import {
   loadSessionHistory,
   StaleTurnCursorHttpError,
 } from "./sessionTurnHistory";
-import { HttpRequestError } from "./http";
+import { HttpRequestError } from "../http";
 
 const originalFetch = globalThis.fetch;
 

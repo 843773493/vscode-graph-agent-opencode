@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { readSessionContext, sessionContextResource } from "../../api/sessionContext";
+import { readSessionContext, sessionContextResource } from "../../api/session/sessionContext";
 import { appendInspectionPage, emptyInspectionPage } from "../../state/contextInspection/pagination";
 
 export interface InspectionOwner {
