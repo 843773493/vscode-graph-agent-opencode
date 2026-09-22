@@ -1,4 +1,5 @@
 import { useCallback, useRef } from "react";
+import { errorMessage } from "../../utils/errorMessage";
 
 import {
   activateNodeDebugConfiguration,
@@ -135,7 +136,7 @@ export function useNodeDebugController({
       onStatusChange(`源码调试：${command.action}`);
       return nextState;
     } catch (cause: unknown) {
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
         onStatusChange(`源码调试动作失败: ${message}`);
@@ -180,7 +181,7 @@ export function useNodeDebugController({
       onStatusChange(`已启动源码调试: ${path}`);
       return nextState;
     } catch (cause: unknown) {
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
         onStatusChange(`启动源码调试失败: ${message}`);
@@ -226,7 +227,7 @@ export function useNodeDebugController({
       onStatusChange(`已创建调试方案: ${input.name}`);
       return nextState;
     } catch (cause: unknown) {
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
         onStatusChange(`创建调试方案失败: ${message}`);
@@ -258,7 +259,7 @@ export function useNodeDebugController({
       onStatusChange(`已切换调试方案: ${nextState.active_configuration_name ?? configurationId}`);
       return nextState;
     } catch (cause: unknown) {
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
         onStatusChange(`切换调试方案失败: ${message}`);
@@ -314,7 +315,7 @@ export function useNodeDebugController({
       onStatusChange(`已保存调试方案: ${input.name}`);
       return nextState;
     } catch (cause: unknown) {
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
         onStatusChange(`保存调试方案失败: ${message}`);
@@ -347,7 +348,7 @@ export function useNodeDebugController({
       onStatusChange("已删除调试方案");
       return nextState;
     } catch (cause: unknown) {
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
         onStatusChange(`删除调试方案失败: ${message}`);

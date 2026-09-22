@@ -7,6 +7,7 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
+import { errorMessage } from "../../utils/errorMessage";
 
 import {
   getNodeDebugCapabilities,
@@ -151,9 +152,7 @@ export function useNodeDebugStateSync({
         setState(authoritativeState);
       }
     } catch (refreshCause: unknown) {
-      const refreshMessage = refreshCause instanceof Error
-        ? refreshCause.message
-        : String(refreshCause);
+      const refreshMessage = errorMessage(refreshCause);
       if (mutationGate.isCurrentMutation(mutation)) {
         setError(`${message}；重新获取调试状态失败: ${refreshMessage}`);
       }
@@ -195,7 +194,7 @@ export function useNodeDebugStateSync({
           && pollGenerationRef.current === pollGeneration
           && mutationGate.isCurrentSnapshot(pollSnapshot, true)
         ) {
-          setError(cause instanceof Error ? cause.message : String(cause));
+          setError(errorMessage(cause));
         }
       }
     };
@@ -220,7 +219,7 @@ export function useNodeDebugStateSync({
             && pollGenerationRef.current === pollGeneration
             && mutationGate.isCurrentSnapshot(pollSnapshot, true)
           ) {
-            setError(cause instanceof Error ? cause.message : String(cause));
+            setError(errorMessage(cause));
           }
         });
     }, 800);
