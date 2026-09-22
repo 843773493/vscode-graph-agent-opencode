@@ -43,6 +43,10 @@ export function useSessionResourceTreeNavigation({
     requestSequence: number;
     sessionKey: string;
   } | null>(null);
+  // 同一次拖放可能在同一 tick 内投递多次 drop（重复事件 / 快速双击）。
+  // 首次 drop 会同步 clearDrag，但该次渲染闭包里的 dragItem 仍非空，
+  // 因此必须用 ref 阻断重复提交，保证一次拖放只发一次移动请求。
+  const dropInFlightRef = useRef(false);
 
   const navigationChildren = new Map<string | null, WorkspaceNavigationNode[]>();
   for (const node of navigationNodes) {
@@ -238,8 +242,14 @@ export function useSessionResourceTreeNavigation({
       decision.action.parentNodeId,
       source.parentNodeId,
     );
-    await onRefreshWorkspaceSessions(source.workspaceId);
     onStatusChange(source.kind === "session" ? "已移动会话" : "已移动会话文件夹");
+    // 目录移动已经成功；此处只是跟随刷新工作区会话列表。
+    // 若刷新失败必须如实报告，不能让用户以为整次拖放失败而重复拖一次导致二次移动。
+    try {
+      await onRefreshWorkspaceSessions(source.workspaceId);
+    } catch (error) {
+      handleError("移动后刷新工作区会话列表失败", error);
+    }
   };
 
   const performDrop = async (
@@ -257,7 +267,7 @@ export function useSessionResourceTreeNavigation({
     event: DragEvent<HTMLElement>,
     target: SessionResourceDropTarget,
   ) => {
-    if (!dragItem) {
+    if (!dragItem || dropInFlightRef.current) {
       return;
     }
     event.stopPropagation();
@@ -271,7 +281,12 @@ export function useSessionResourceTreeNavigation({
     }
     event.preventDefault();
     clearDrag();
-    void performDrop(source, target, zone).catch((error) => handleError("拖放失败", error));
+    dropInFlightRef.current = true;
+    void performDrop(source, target, zone)
+      .catch((error) => handleError("拖放失败", error))
+      .finally(() => {
+        dropInFlightRef.current = false;
+      });
   };
 
   /**

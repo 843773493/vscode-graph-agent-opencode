@@ -372,6 +372,92 @@ describe("useSessionResourceTreeNavigation 拖放提交", () => {
     expect(errors).toEqual(["会话资源已经位于该位置"]);
     expect(moveCalls).toEqual([]);
   });
+
+  test("同一次拖放重复投递 drop 时只提交一次目录移动", async () => {
+    let moveCalls = 0;
+    const statuses: string[] = [];
+    const { handle } = createHarness({
+      navigationNodes: [],
+      explorer: {
+        moveCatalogNode: async () => {
+          moveCalls += 1;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return undefined as never;
+        },
+      },
+      handleError: () => undefined,
+      onStatusChange: (message) => statuses.push(message),
+    });
+    act(() => {
+      handle.navigation.startDrag(dragEvent() as never, {
+        kind: "session",
+        nodeId: "cnode_1",
+        sessionId: "ses_1",
+        workspaceId: "gw_1",
+        parentNodeId: null,
+      });
+    });
+    await act(async () => {
+      // 重复 drop 事件：同步连发两次，第二次不得再发一次移动请求
+      handle.navigation.handleDrop(dragEvent() as never, {
+        kind: "session",
+        nodeId: "cnode_2",
+        sessionId: "ses_2",
+        workspaceId: "gw_1",
+      });
+      handle.navigation.handleDrop(dragEvent() as never, {
+        kind: "session",
+        nodeId: "cnode_2",
+        sessionId: "ses_2",
+        workspaceId: "gw_1",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    expect(moveCalls).toBe(1);
+    expect(statuses).toEqual(["已移动会话"]);
+  });
+
+  test("目录移动成功但跟随刷新失败时报告刷新失败而不是整次拖放失败", async () => {
+    const errors: Array<{ prefix: string; message: string }> = [];
+    const statuses: string[] = [];
+    const { handle } = createHarness({
+      navigationNodes: [],
+      explorer: {
+        moveCatalogNode: async () => undefined as never,
+      },
+      handleError: (prefix, error) => errors.push({
+        prefix,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+      onStatusChange: (message) => statuses.push(message),
+      onRefreshWorkspaceSessions: async () => {
+        throw new Error("刷新会话列表失败");
+      },
+    });
+    act(() => {
+      handle.navigation.startDrag(dragEvent() as never, {
+        kind: "session",
+        nodeId: "cnode_1",
+        sessionId: "ses_1",
+        workspaceId: "gw_1",
+        parentNodeId: null,
+      });
+    });
+    await act(async () => {
+      handle.navigation.handleDrop(dragEvent() as never, {
+        kind: "session",
+        nodeId: "cnode_2",
+        sessionId: "ses_2",
+        workspaceId: "gw_1",
+      });
+      await flushDrop();
+    });
+    // 移动已成功：状态仍须报告已移动，失败只归因到跟随刷新这一步
+    expect(statuses).toEqual(["已移动会话"]);
+    expect(errors).toEqual([
+      { prefix: "移动后刷新工作区会话列表失败", message: "刷新会话列表失败" },
+    ]);
+  });
 });
 
 describe("useSessionResourceTreeNavigation 拖拽悬停判定", () => {
