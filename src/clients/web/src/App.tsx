@@ -207,7 +207,10 @@ export default function AppShell() {
   // 内容视图槽既承载有会话时的对话内容，也承载外壳级的工作区初始化失败出口；
   // 初始化失败恰恰发生在还没有会话的时候，所以错误出口不能和会话内容挤在同一个
   // activeSession 分支里 —— 否则它唯一的设计场景永远不可达，而别的动作失败会误用它。
-  const contentViewSlotsVisible = Boolean(activeSession) || Boolean(state.error);
+  // 首屏加载同理：还没有会话时骨架态也必须可达，否则用户只能看到空白，
+  // 既没有进度文案也没有超时后的重试入口。
+  const contentViewSlotsVisible =
+    Boolean(activeSession) || Boolean(state.error) || state.isBootstrapping;
   useEffect(() => {
     if (
       selectedAttachmentPreview

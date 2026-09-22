@@ -279,6 +279,23 @@ describe("AppState.error 只属于工作区初始化失败出口", () => {
     expect(html).not.toContain("session-view-content");
     expect(html).not.toContain('class="composer"');
   });
+
+  test("没有会话的首屏加载期间骨架态可达，不会只剩空白", () => {
+    // 首次加载还没有选中会话，此时既没有 error 也没有 activeSession。若可见性只认
+    // 这两者，ContentViewSlots 整块不渲染，BootstrapState（进度文案 + 10 秒后的
+    // 已等待时长与重试按钮）就永远不可达，用户只能看到空白。
+    const html = renderApp({
+      ...baseState(null),
+      isBootstrapping: true,
+    } as AppState);
+
+    expect(html).toContain("session-view-content");
+    expect(html).toContain("bootstrap-state");
+    expect(html).toContain("正在加载工作区与会话");
+    // 骨架态取代了错误大屏与聊天区外壳，二者都不应同时出现。
+    expect(html).not.toContain("前端初始化失败");
+    expect(html).not.toContain('class="composer"');
+  });
 });
 
 describe("App.tsx 的错误文案归一只有唯一实现", () => {
