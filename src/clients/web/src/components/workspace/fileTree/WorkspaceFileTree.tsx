@@ -39,6 +39,7 @@ import WorkspaceFileTreeContextMenu from "./WorkspaceFileTreeContextMenu";
 import {
   buildVisibleFileTreeRows,
   FILE_TREE_VIRTUALIZATION_THRESHOLD,
+  fileTreeNodeMatchesQuery,
   isExpandableFileTreeNode,
   type WorkspaceFileTreeRow,
 } from "./workspaceFileTreeRows";
@@ -509,7 +510,7 @@ export default function WorkspaceFileTree({
     if (!normalizedQuery) {
       return true;
     }
-    const nodeTextMatches = `${node.name}\n${node.path}`.toLowerCase().includes(normalizedQuery);
+    const nodeTextMatches = fileTreeNodeMatchesQuery(node, normalizedQuery);
     if (nodeTextMatches || !isExpandableFileTreeNode(node)) {
       return nodeTextMatches;
     }
@@ -668,7 +669,7 @@ export default function WorkspaceFileTree({
     let hasUnloadedDirectory = false;
     for (const directory of loadedDirectories) {
       for (const node of directory.items) {
-        if (`${node.name}\n${node.path}`.toLowerCase().includes(normalizedQuery)) {
+        if (fileTreeNodeMatchesQuery(node, normalizedQuery)) {
           hasDirectMatch = true;
           break;
         }
