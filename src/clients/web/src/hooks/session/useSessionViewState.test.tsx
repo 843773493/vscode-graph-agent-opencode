@@ -9,6 +9,7 @@ import type {
 import type { AppState } from "../../types/frontend";
 import {
   useSessionViewState,
+  type SessionViewStateLoadOutcome,
   type SessionViewStateController,
   type SessionViewStateHost,
 } from "./useSessionViewState";
@@ -282,4 +283,55 @@ describe("useSessionViewState", () => {
     expect(reader).toHaveBeenCalledTimes(2);
     expect(latestState.gatewayUserViewStates.get(scopeKey)?.turn_anchor).toBe("turn-new");
   });
+  test("权威空与读取失败对调用方可见地区分", async () => {
+    const scopeKey = "workspace-view-state::session-view-state";
+    const emptyMirror = new Map<string, GatewayUserViewState>();
+    let outcome: SessionViewStateLoadOutcome | undefined;
+
+    // 404：后端权威地没有保存视图位置，属于合法空，不是失败。
+    const absentReader = spyOn(userViewStateApi, "getGatewayUserViewState")
+      .mockResolvedValue(null);
+    restoreApi = () => absentReader.mockRestore();
+    let controller!: SessionViewStateController;
+    function AbsentProbe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      void current;
+      controller = useSessionViewState({
+        host: { ...host, gatewayUserViewStates: emptyMirror },
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
+    await act(async () => { renderer = create(<AbsentProbe />); });
+    await act(async () => {
+      outcome = await controller.loadSessionViewState("workspace-view-state", "session-view-state");
+    });
+    // 权威空：loaded 且 viewState 为 null，不能与失败混淆。
+    expect(outcome).toEqual({ kind: "loaded", viewState: null });
+    expect(emptyMirror.has(scopeKey)).toBe(false);
+    act(() => renderer?.unmount());
+
+    // 500：读取失败必须显式表现为 failed，并带上原始错误。
+    const failure = new Error("网关视图位置不可读");
+    const failingReader = spyOn(userViewStateApi, "getGatewayUserViewState")
+      .mockRejectedValue(failure);
+    restoreApi = () => failingReader.mockRestore();
+    function FailingProbe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      void current;
+      controller = useSessionViewState({
+        host: { ...host, gatewayUserViewStates: new Map<string, GatewayUserViewState>() },
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
+    await act(async () => { renderer = create(<FailingProbe />); });
+    await act(async () => {
+      outcome = await controller.loadSessionViewState("workspace-view-state", "session-view-state");
+    });
+    expect(outcome).toEqual({ kind: "failed", error: failure });
+  });
+
 });

@@ -11,6 +11,7 @@ import type {
 } from "../../types/backend";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { cloneMaps } from "../../state/appStateMaps";
+import { errorMessage } from "../../utils/errorMessage";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { canAcceptUserViewStateMutation } from "../workspace/useWorkspaceBootstrap";
 
@@ -42,10 +43,18 @@ export interface SessionViewStateController {
   loadSessionViewState: (
     workspaceId: string | null,
     sessionId: string,
-  ) => Promise<GatewayUserViewState | null | undefined>;
+  ) => Promise<SessionViewStateLoadOutcome>;
   saveSessionViewState: (payload: SessionViewStatePayload) => void;
   toggleExpandDetails: (expand: boolean) => void;
 }
+
+/** 视图状态读取结果：区分「后端权威地没有保存视图」（loaded + null）、「读取失败」
+ * （failed + 原始错误）和「当前没有可读取的目标」（skipped）。以前失败与权威空都
+ * 返回 null，调用方无法分辨。 */
+export type SessionViewStateLoadOutcome =
+  | { kind: "loaded"; viewState: GatewayUserViewState | null }
+  | { kind: "failed"; error: unknown }
+  | { kind: "skipped" };
 
 function writeSessionViewStateCache(
   cache: Map<string, GatewayUserViewState | null>,
@@ -69,7 +78,7 @@ export function useSessionViewState({
   const hostRef = useRef(host);
   hostRef.current = host;
   const cacheRef = useRef(new Map<string, GatewayUserViewState | null>());
-  const requestsRef = useRef(new Map<string, Promise<GatewayUserViewState | null>>());
+  const requestsRef = useRef(new Map<string, Promise<SessionViewStateLoadOutcome>>());
   // 每条视图状态的 lease 代际登记表：gatewayUserViewStates 只按会话 scope 存值，
   // 本身不带代际信息，无法判断某条残留是否来自上一代 lease。这里记录「这条本地
   // 值是在哪一代 lease 下取得的」，让所有应用路径能共用同一条代际判据。
@@ -110,35 +119,41 @@ export function useSessionViewState({
     workspaceId: string,
     sessionId: string,
     expectedUserId: string,
-    expectedLeaseGeneration: number,
+    requestLeaseGeneration: number,
+    // 是否用该对象同步工具详情展开态：只有读取路径需要；保存路径的展开态由用户
+    // 这次操作本身决定，不能被响应里的旧对象反推覆盖。
+    syncToolDetailsExpanded: boolean,
   ) => {
     const current = hostRef.current;
-    if (
-      !canAcceptUserViewStateMutation({
-        currentUserId: current.gatewayUserAccess?.user_id,
-        responseUserId: viewState?.user_id ?? expectedUserId,
-        currentLeaseGeneration: current.gatewayUserAccess?.lease_generation,
-        requestLeaseGeneration: expectedLeaseGeneration,
-      })
-      || current.gatewayUserAccess?.user_id !== expectedUserId
-    ) {
+    // 视图状态应用的唯一前置：当前访问必须是同一用户的同一 lease 代际。读取命中
+    // 本地缓存、读到后端响应、保存响应落库这三条路径都先过这里，不再各自判一遍。
+    if (current.gatewayUserAccess?.kind !== "user") return;
+    if (current.gatewayUserAccess.user_id !== expectedUserId) return;
+    if (!canAcceptUserViewStateMutation({
+      currentUserId: current.gatewayUserAccess.user_id,
+      responseUserId: viewState?.user_id ?? expectedUserId,
+      currentLeaseGeneration: current.gatewayUserAccess.lease_generation,
+      requestLeaseGeneration,
+    })) {
       return;
     }
     applyViewState(
       workspaceId,
       sessionId,
       viewState,
-      expectedLeaseGeneration,
-      viewState?.tool_details_expanded ?? false,
+      requestLeaseGeneration,
+      syncToolDetailsExpanded ? viewState?.tool_details_expanded ?? false : undefined,
     );
   }, [applyViewState]);
 
   const loadSessionViewState = useCallback(
-    async (workspaceId: string | null, sessionId: string) => {
+    async (workspaceId: string | null, sessionId: string): Promise<SessionViewStateLoadOutcome> => {
       const current = hostRef.current;
-      if (!workspaceId || current.gatewayUserAccess?.kind !== "user") return;
+      if (!workspaceId || current.gatewayUserAccess?.kind !== "user") {
+        return { kind: "skipped" };
+      }
       const userId = current.gatewayUserAccess.user_id;
-      if (!userId) return;
+      if (!userId) return { kind: "skipped" };
       const leaseGeneration = current.gatewayUserAccess.lease_generation;
       const cacheKey = sessionScopeKey(workspaceId, sessionId);
       const requestKey = [
@@ -147,17 +162,13 @@ export function useSessionViewState({
         leaseGeneration,
         cacheKey,
       ].join(":");
-      const existingState = current.gatewayUserViewStates.get(cacheKey);
       // 本地残留必须属于当前 lease 才能命中：接管后 user_id 不变而代际换代时，
       // 上一代的残留既不能应用，也不能当作缓存短路掉后端读取。
       const existingLeaseGeneration = scopeLeaseGenerationRef.current.get(cacheKey);
-      if (
-        existingState
-        && (
-          existingLeaseGeneration === undefined
-          || existingLeaseGeneration === leaseGeneration
-        )
-      ) {
+      const existingStateBelongsToCurrentLease = existingLeaseGeneration === undefined
+        || existingLeaseGeneration === leaseGeneration;
+      const existingState = current.gatewayUserViewStates.get(cacheKey);
+      if (existingState && existingStateBelongsToCurrentLease) {
         writeSessionViewStateCache(cacheRef.current, requestKey, existingState);
         applyLoadedViewState(
           existingState,
@@ -165,8 +176,9 @@ export function useSessionViewState({
           sessionId,
           userId,
           leaseGeneration,
+          true,
         );
-        return existingState;
+        return { kind: "loaded", viewState: existingState };
       }
       const cached = cacheRef.current.get(requestKey);
       if (cacheRef.current.has(requestKey)) {
@@ -176,14 +188,15 @@ export function useSessionViewState({
           sessionId,
           userId,
           leaseGeneration,
+          true,
         );
-        return cached ?? null;
+        return { kind: "loaded", viewState: cached ?? null };
       }
       const existingRequest = requestsRef.current.get(requestKey);
       if (existingRequest) return await existingRequest;
 
       const requestLeaseGeneration = current.gatewayUserAccess.lease_generation;
-      const request = getGatewayUserViewState(
+      const request: Promise<SessionViewStateLoadOutcome> = getGatewayUserViewState(
         current.apiPort ?? DEFAULT_BACKEND_PORT,
         workspaceId,
         sessionId,
@@ -195,13 +208,14 @@ export function useSessionViewState({
           sessionId,
           userId,
           leaseGeneration,
+          true,
         );
-        return viewState;
+        return { kind: "loaded", viewState } as const;
       }, (error: unknown) => {
         if (hostRef.current.gatewayUserAccess?.lease_generation === requestLeaseGeneration) {
-          setStatus(`读取用户视图位置失败: ${error instanceof Error ? error.message : String(error)}`);
+          setStatus(`读取用户视图位置失败: ${errorMessage(error)}`);
         }
-        return null;
+        return { kind: "failed", error } as const;
       });
       requestsRef.current.set(requestKey, request);
       void request.then(() => {
@@ -245,22 +259,21 @@ export function useSessionViewState({
         ].join(":"),
         updated,
       );
-      const latest = hostRef.current;
-      if (!canAcceptUserViewStateMutation({
-        currentUserId: latest.gatewayUserAccess?.user_id,
-        responseUserId: updated.user_id,
-        currentLeaseGeneration: latest.gatewayUserAccess?.lease_generation,
+      // 保存响应同样走唯一应用前置：代际/用户不匹配时丢弃，绝不写进当前用户状态。
+      applyLoadedViewState(
+        updated,
+        workspaceId,
+        sessionId,
+        updated.user_id,
         requestLeaseGeneration,
-      })) {
-        return;
-      }
-      applyViewState(workspaceId, sessionId, updated, requestLeaseGeneration);
+        false,
+      );
     }).catch((error: unknown) => {
       if (hostRef.current.gatewayUserAccess?.lease_generation === requestLeaseGeneration) {
-        setStatus(`保存用户视图位置失败: ${error instanceof Error ? error.message : String(error)}`);
+        setStatus(`保存用户视图位置失败: ${errorMessage(error)}`);
       }
     });
-  }, [applyViewState, setStatus]);
+  }, [applyLoadedViewState, setStatus]);
 
   const toggleExpandDetails = useCallback((expand: boolean) => {
     setState((previous) => ({ ...previous, expandDetails: expand }));

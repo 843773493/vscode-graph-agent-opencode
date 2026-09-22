@@ -67,7 +67,7 @@ async function mountHook(initialState: AppState): Promise<MountedHook> {
       },
       loadSessionViewState: async (workspaceId, sessionId) => {
         calls.push({ kind: "loadSessionViewState", args: [workspaceId, sessionId] });
-        return null;
+        return { kind: "loaded", viewState: null };
       },
       activateGatewayWorkspaceInBackground: (workspaceId) => {
         calls.push({ kind: "activateGatewayWorkspaceInBackground", args: [workspaceId] });
