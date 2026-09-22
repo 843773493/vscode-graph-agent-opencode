@@ -1037,12 +1037,7 @@ class GatewayStateStore(
             if actual_active != expected_active_revision:
                 raise ConfigConflictError("Gateway active revision CAS 冲突")
             if expected_registry_revision is not None:
-                registry_row = connection.execute(
-                    "SELECT revision FROM registry_meta WHERE registry_key = 'workspace'"
-                ).fetchone()
-                actual_registry_revision = (
-                    int(registry_row[0]) if registry_row is not None else 0
-                )
+                actual_registry_revision = self._read_registry_revision(connection)
                 if actual_registry_revision != expected_registry_revision:
                     raise ConfigConflictError(
                         "Gateway active promotion registry revision CAS 冲突: "
@@ -1778,12 +1773,7 @@ class GatewayStateStore(
                     f"current={current_active_revision}, expected={base_active_revision}"
                 )
             if registry_revision is not None:
-                registry_row = connection.execute(
-                    "SELECT revision FROM registry_meta WHERE registry_key = 'workspace'"
-                ).fetchone()
-                current_registry_revision = (
-                    int(registry_row[0]) if registry_row is not None else 0
-                )
+                current_registry_revision = self._read_registry_revision(connection)
                 if current_registry_revision != registry_revision:
                     raise ConfigConflictError(
                         "Gateway begin apply 的 registry revision 基线已变化: "
@@ -2808,12 +2798,7 @@ class GatewayStateStore(
                     FROM config_active_snapshot WHERE config_domain = 'gateway'
                     """
                 ).fetchone()
-                registry_row = connection.execute(
-                    "SELECT revision FROM registry_meta WHERE registry_key = 'workspace'"
-                ).fetchone()
-                registry_revision = (
-                    int(registry_row[0]) if registry_row is not None else 0
-                )
+                registry_revision = self._read_registry_revision(connection)
                 connection.execute(
                     """
                     INSERT INTO config_apply_journal(

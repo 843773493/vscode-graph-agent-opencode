@@ -1216,6 +1216,54 @@ def test_gateway_registry_allows_multiple_remote_workspaces_per_connection(tmp_p
         state.close()
 
 
+def test_gateway_registry_revision_rejects_out_of_band_meta_clear(tmp_path):
+    """registry_meta 被外部清空时必须响亮报错，不能静默退化为 revision 0。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        assert (
+            state.replace_workspace_registry(
+                {
+                    "schema_version": 10,
+                    "active_workspace_id": "workspace-a",
+                    "targets": [
+                        {
+                            "workspace_id": "workspace-a",
+                            "owner": "manual",
+                            "target_namespace": "gateway",
+                        }
+                    ],
+                    "remote_gateway_connections": [],
+                },
+                expected_revision=0,
+                owner="manual_crud",
+            )
+            == 1
+        )
+        connection = state.connection()
+        try:
+            connection.execute("DELETE FROM registry_meta")
+            connection.commit()
+        finally:
+            connection.close()
+        # 注册表仍有内容却读不到 revision：必须报错而不是返回 0
+        with pytest.raises(RuntimeError, match="检测到绕过软件直接修改"):
+            state.get_registry_revision()
+    finally:
+        state.close()
+
+
+def test_gateway_registry_revision_is_zero_for_untouched_registry(tmp_path):
+    """完全未初始化的注册表仍视为合法 revision 0，不误触发响亮失败。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        assert state.get_registry_revision() == 0
+        assert state.load_workspace_registry() is None
+    finally:
+        state.close()
+
+
 def test_gateway_registry_start_journal_rejects_stale_expected_revision(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:

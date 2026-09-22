@@ -37,13 +37,39 @@ __all__ = [
 
 
 class GatewayRegistryMixin:
+    @staticmethod
+    def _registry_meta_record_exists(connection: sqlite3.Connection) -> bool:
+        """判断是否已存在证明 revision 曾被写入的 ``workspace_registry_meta`` 记录。"""
+
+        return (
+            connection.execute(
+                "SELECT 1 FROM gateway_config WHERE config_key = 'workspace_registry_meta'"
+            ).fetchone()
+            is not None
+        )
+
     def _read_registry_revision(self, connection: sqlite3.Connection) -> int:
-        """读取调用方同一连接内 ``registry_meta`` 的 workspace revision。"""
+        """读取调用方同一连接内 ``registry_meta`` 的 workspace revision。
+
+        ``registry_meta`` 行由 :meth:`replace_workspace_registry` 与
+        ``workspace_registry_meta`` 在同一事务写入。真正的初始库（以及 ``registry_meta``
+        迁移之前的历史库）没有该记录，缺失即合法的 revision 0；但若 ``workspace_
+        registry_meta`` 已证明 revision 曾被写入，``registry_meta`` 却读不到，说明有人
+        绕过软件直接清空了索引，必须响亮报错，绝不能把外部清空误判成合法的
+        revision 0 而让过期 CAS 静默通过。
+        """
 
         row = connection.execute(
             "SELECT revision FROM registry_meta WHERE registry_key = 'workspace'"
         ).fetchone()
-        return int(row[0]) if row is not None else 0
+        if row is not None:
+            return int(row[0])
+        if self._registry_meta_record_exists(connection):
+            raise RuntimeError(
+                "Gateway registry_meta 缺少 workspace revision，但 workspace_registry_meta "
+                "已存在；检测到绕过软件直接修改 Gateway 注册状态"
+            )
+        return 0
 
     def _assert_registry_revision(
         self, *, current: int, expected: int
