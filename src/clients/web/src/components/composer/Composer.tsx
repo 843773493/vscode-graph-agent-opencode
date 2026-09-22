@@ -529,7 +529,10 @@ function Composer() {
       return;
     }
 
-    void interruptSession();
+    void interruptSession().catch(() => {
+      // 失败已由 AppProvider 写入 AppState.status，状态栏会显示；这里只需
+      // 接住 rejection，避免变成未处理拒绝。
+    });
   };
 
   const handleViewSelect = (view: ConversationContentView) => {
@@ -539,21 +542,32 @@ function Composer() {
 
   const handleAgentSelect = (agentId: string) => {
     setAgentMenuOpen(false);
-    void switchAgent(agentId).catch(() => {
-      // 错误状态由 AppProvider 写入，菜单这里不吞掉后端错误表现。
+    setAttachmentError("");
+    void switchAgent(agentId).catch((error: unknown) => {
+      // 切换失败必须让用户看得见：写进 Composer 本地错误区，同时 AppProvider
+      // 已把同一条失败写进 AppState.status，状态栏也会显示。
+      setAttachmentError(
+        `Agent 切换失败：${error instanceof Error ? error.message : String(error)}`,
+      );
     });
   };
 
   const handleWorkspaceDefaultAgent = (agentId: string) => {
-    void setWorkspaceDefaultAgent(agentId).catch(() => {
-      // 错误状态和后端状态校准由 AppProvider 统一处理。
+    setAttachmentError("");
+    void setWorkspaceDefaultAgent(agentId).catch((error: unknown) => {
+      setAttachmentError(
+        `设置工作区默认 Agent 失败：${error instanceof Error ? error.message : String(error)}`,
+      );
     });
   };
 
   const handleModelSelect = (providerId: string) => {
     setModelMenuOpen(false);
-    void switchModel(providerId).catch(() => {
-      // 错误状态和后端状态校准由 AppProvider 统一处理。
+    setAttachmentError("");
+    void switchModel(providerId).catch((error: unknown) => {
+      setAttachmentError(
+        `模型切换失败：${error instanceof Error ? error.message : String(error)}`,
+      );
     });
   };
 
@@ -569,8 +583,11 @@ function Composer() {
   };
 
   const handleWorkspaceDefaultProvider = (providerId: string) => {
-    void setWorkspaceDefaultProvider(currentAgent, providerId).catch(() => {
-      // 错误状态和后端状态校准由 AppProvider 统一处理。
+    setAttachmentError("");
+    void setWorkspaceDefaultProvider(currentAgent, providerId).catch((error: unknown) => {
+      setAttachmentError(
+        `设置工作区默认模型失败：${error instanceof Error ? error.message : String(error)}`,
+      );
     });
   };
 

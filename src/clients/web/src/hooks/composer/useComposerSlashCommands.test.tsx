@@ -54,6 +54,65 @@ describe("Composer /new 命令", () => {
 
     expect(createdTitles).toEqual([undefined]);
   });
+
+  test("创建失败时写入可见错误而不是变成未处理 rejection", async () => {
+    let runSlashCommand:
+      | ((command: SlashCommandOption, args?: string) => void)
+      | undefined;
+    let attachmentError = "";
+
+    function Harness() {
+      ({ runSlashCommand } = useComposerSlashCommands({
+        input: "/new",
+        currentSession: null,
+        compactLoading: false,
+        getLatestAssistantContent: () => null,
+        setInput: () => undefined,
+        setAttachments: () => undefined,
+        setAttachmentError: (update) => {
+          attachmentError = typeof update === "function"
+            ? update(attachmentError)
+            : update;
+        },
+        setComposerNotice: () => undefined,
+        setAgentMenuOpen: () => undefined,
+        setViewMenuOpen: () => undefined,
+        setStatus: () => undefined,
+        createSession: async () => {
+          throw new Error("请求失败 500 : 工作区不可用");
+        },
+        renameCurrentSession: () => undefined,
+        switchContentView: () => undefined,
+        compactSession: async () => {
+          throw new Error("/new 测试不会执行压缩");
+        },
+        runGoalCommand: () => undefined,
+      }));
+      return null;
+    }
+
+    let renderer: ReturnType<typeof create> | undefined;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    const newCommand = COMPOSER_SLASH_COMMANDS.find(
+      (command) => command.id === "new",
+    );
+    if (!newCommand || !runSlashCommand) {
+      throw new Error("测试未找到 /new 命令执行器");
+    }
+
+    // 未接住 rejection 会让 bun test 以 Unhandled error 终止本文件。
+    await act(async () => {
+      runSlashCommand?.(newCommand);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(attachmentError).toContain("创建会话失败");
+    expect(attachmentError).toContain("请求失败 500 : 工作区不可用");
+    renderer?.unmount();
+  });
 });
 
 describe("Composer /compact 命令", () => {

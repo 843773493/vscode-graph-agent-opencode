@@ -410,14 +410,42 @@ export function useSessionRunActions({
       );
       setState((prev) => ({ ...prev, status: `已中断: ${result.phase}` }));
     } catch (error) {
+      const sessionCacheKey = currentSessionGatewayWorkspaceId
+        ? sessionScopeKey(currentSessionGatewayWorkspaceId, currentSession.session_id)
+        : currentSession.session_id;
       if (!(error instanceof HttpRequestError) || error.status !== 404) {
+        // 中断失败说明后端任务很可能仍在运行，不能在这里乐观清掉前端运行态；
+        // 但要重新拉取待处理队列快照，让 activeJobIds 与后端真值保持一致。
+        const message = error instanceof Error ? error.message : String(error);
+        let notice = `中断生成失败: ${message}`;
+        try {
+          const snapshot = await apiListPendingRequests(
+            apiPort,
+            currentSession.session_id,
+            currentSessionGatewayWorkspaceId,
+          );
+          setState((prev) => {
+            const next = cloneMaps(prev);
+            writePendingSnapshot(
+              next.pendingConversations,
+              next.activeJobIdsBySession,
+              snapshot,
+              sessionCacheKey,
+            );
+            next.status = notice;
+            return next;
+          });
+        } catch (recoveryError) {
+          const recoveryMessage = recoveryError instanceof Error
+            ? recoveryError.message
+            : String(recoveryError);
+          notice = `${notice}；重新读取运行状态也失败: ${recoveryMessage}`;
+          setState((prev) => ({ ...prev, status: notice }));
+        }
         throw error;
       }
       // 后端已确认没有运行中的任务，清掉因重连/丢 SSE 残留的前端运行态，
       // 并触发一次历史 bootstrap 读取已提交的终态。
-      const sessionCacheKey = currentSessionGatewayWorkspaceId
-        ? sessionScopeKey(currentSessionGatewayWorkspaceId, currentSession.session_id)
-        : currentSession.session_id;
       setState((prev) => {
         const next = cloneMaps(prev);
         next.activeJobIdsBySession.delete(sessionCacheKey);

@@ -89,7 +89,7 @@ const composerActions: Omit<ComposerContextType, "state"> = {
     throw new Error("测试不调用 updateGoal");
   },
   clearGoal: async () => undefined,
-  interruptSession: () => undefined,
+  interruptSession: async () => undefined,
   switchAgent: async () => undefined,
   switchModel: async () => undefined,
   refreshAgents: async () => undefined,

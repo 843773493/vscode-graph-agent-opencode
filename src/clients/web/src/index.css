@@ -193,6 +193,16 @@ body > #root {
   color: var(--bt-status-bar-foreground);
 }
 
+.workbench-status-text {
+  min-width: 0;
+  padding: 0 10px;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .workbench-main-column {
   display: flex;
   flex: 1 1 0;

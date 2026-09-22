@@ -202,7 +202,7 @@ interface AppContextType {
     agentId: string,
     providerId: string,
   ) => Promise<void>;
-  interruptSession: () => void;
+  interruptSession: () => Promise<void>;
   selectSession: (sessionId: string) => void;
   selectWorkspaceSession: (
     workspaceId: string,

@@ -92,7 +92,14 @@ export function useComposerSlashCommands({
           break;
         case "new":
           setAttachments([]);
-          void createSession(args.trim() || undefined);
+          void createSession(args.trim() || undefined).catch((error: unknown) => {
+            // 与 /compact 分支同范式：失败写进 Composer 可见错误区，并接住
+            // rejection 避免未处理拒绝。AppProvider 也会把同一条失败写进
+            // AppState.status，状态栏同样会显示。
+            setAttachmentError(
+              `创建会话失败：${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
           break;
         case "rename":
           renameCurrentSession(args);

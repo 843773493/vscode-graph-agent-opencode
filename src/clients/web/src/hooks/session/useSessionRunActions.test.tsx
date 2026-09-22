@@ -303,6 +303,104 @@ describe("发送消息状态更新", () => {
     expect(currentState.status).toBe("运行任务已结束，正在同步会话历史");
   });
 
+  test("中断遇到非 404 失败会恢复后端运行态并写入可见失败", async () => {
+    const currentSession = session();
+    let currentState = state(currentSession);
+    const cacheKey = "gw_send_regression::ses_send_regression";
+    currentState.activeJobIdsBySession.set(cacheKey, "job_stale_running");
+    let interruptSession:
+      | ReturnType<typeof useSessionRunActions>["interruptSession"]
+      | undefined;
+
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = new URL(String(input)).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_interrupt_fail_credential",
+            data: { token: "test-interrupt-token" },
+          });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_interrupt_fail_current_user",
+            data: { kind: "guest", user_id: null },
+          });
+        }
+        if (path === `/api/v1/sessions/${currentSession.session_id}/interrupt`) {
+          return Response.json(
+            { detail: "中断执行器崩溃" },
+            { status: 500 },
+          );
+        }
+        // 后端真值：任务仍在运行。前端必须校准回这个 job，而不是乐观清空。
+        if (
+          path === `/api/v1/sessions/${currentSession.session_id}/pending-requests`
+        ) {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_interrupt_fail_pending",
+            data: {
+              session_id: currentSession.session_id,
+              active_job_id: "job_backend_running",
+              requests: [],
+            },
+          });
+        }
+        throw new Error(`测试收到未预期请求: ${path}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    function Harness(): React.ReactNode {
+      const actions = useSessionRunActions({
+        apiPort: 8014,
+        currentSession,
+        activeGatewayWorkspaceId: "gw_send_regression",
+        currentSessionGatewayWorkspaceId: "gw_send_regression",
+        currentSessionCacheKey: cacheKey,
+        defaultGatewayWorkspaceId: "gw_send_regression",
+        contentView: "default",
+        setState: (update) => {
+          currentState =
+            typeof update === "function" ? update(currentState) : update;
+        },
+        refreshAgentStateSnapshot: async () => undefined,
+      });
+      interruptSession = actions.interruptSession;
+      return null;
+    }
+
+    let thrown: unknown = null;
+    try {
+      renderToString(<Harness />);
+      await interruptSession!();
+    } catch (error) {
+      thrown = error;
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // 失败仍向上抛出，调用方必须接住；但状态与运行态已经收敛。
+    expect(thrown instanceof Error ? thrown.message : String(thrown)).toContain(
+      "中断执行器崩溃",
+    );
+    expect(currentState.status).toContain("中断生成失败");
+    expect(currentState.status).toContain("中断执行器崩溃");
+    // 后端仍在运行：activeJobId 必须回到后端真值，而不是被乐观清空。
+    expect(currentState.activeJobIdsBySession.get(cacheKey)).toBe(
+      "job_backend_running",
+    );
+    // 非 404 失败不得触发「任务已结束」的历史重载。
+    expect(currentState.sessionHistoryReloadNonce).toBe(0);
+  });
+
   test("重新生成成功后保留可见的乐观运行回合", async () => {
     const currentSession = session();
     let currentState = state(currentSession);
