@@ -51,6 +51,7 @@ from app.services.infrastructure.config import (
     build_config_snapshot,
 )
 from app.services.infrastructure.config.event_cursor import ConfigEventCursor
+from app.services.infrastructure.config.llm_resolution import LlmResolution
 from app.services.infrastructure.config.pending_restart import (
     PendingRestartCoordinator,
 )
@@ -170,6 +171,10 @@ class ConfigService:
         self._event_cursor = ConfigEventCursor(
             store=self._workspace_state_store,
             config_domain=self._CONFIG_DOMAIN,
+        )
+        self._llm_resolution = LlmResolution(
+            effective_config_provider=self._get_effective_config,
+            default_agent_id_provider=self.get_default_agent_id,
         )
 
     _CANDIDATE_REF_ENV = "BOXTEAM_CONFIG_CANDIDATE_REF"
@@ -2254,7 +2259,7 @@ class ConfigService:
 
         default_model = public_config.get("default_model")
         if default_model is None:
-            default_model = self._resolve_default_model(config)
+            default_model = self._llm_resolution.resolve_default_model(config)
 
         default_orchestration = public_config.get(
             "default_orchestration", "single_agent"
@@ -2324,87 +2329,12 @@ class ConfigService:
             raise ValueError("ui 配置必须是对象")
         return {**raw_public_config, **self._runtime_config_overrides}
 
-    def _resolve_default_model(self, config: dict[str, Any]) -> str:
-        default_agent_id = self.get_default_agent_id()
-        agents = config.get("agents", {})
-        if not isinstance(agents, dict):
-            raise ValueError("agents 配置必须是对象")
-
-        agent_config = agents.get(default_agent_id)
-        if not isinstance(agent_config, dict):
-            return self._resolve_first_provider_model(config)
-
-        model_config = agent_config.get("model", {})
-        if not isinstance(model_config, dict):
-            raise ValueError(f"agent {default_agent_id} 的 model 配置必须是对象")
-
-        primary_provider_id = model_config.get("primary_provider")
-        if not isinstance(primary_provider_id, str) or not primary_provider_id:
-            raise ValueError(
-                f"agent {default_agent_id} 缺少 model.primary_provider 配置"
-            )
-
-        return self._resolve_provider_model(config, primary_provider_id)
-
-    def _resolve_first_provider_model(self, config: dict[str, Any]) -> str:
-        providers = config.get("llm", {}).get("providers", [])
-        if not providers:
-            raise ValueError("未配置任何 LLM provider")
-        first_provider = providers[0]
-        if not isinstance(first_provider, dict):
-            raise ValueError("llm.providers 配置项必须是对象")
-        model = first_provider.get("model")
-        if not isinstance(model, str) or not model:
-            raise ValueError("llm.providers[0].model 必须是非空字符串")
-        return model
-
-    def _resolve_provider_model(self, config: dict[str, Any], provider_id: str) -> str:
-        providers = config.get("llm", {}).get("providers", [])
-        if not isinstance(providers, list):
-            raise ValueError("llm.providers 配置必须是数组")
-
-        for provider in providers:
-            if not isinstance(provider, dict):
-                raise ValueError("llm.providers 配置项必须是对象")
-            if provider.get("id") != provider_id:
-                continue
-            model = provider.get("model")
-            if not isinstance(model, str) or not model:
-                raise ValueError(f"provider {provider_id} 缺少有效 model 配置")
-            return model
-
-        raise ValueError(f"default agent 引用了不存在的 provider: {provider_id}")
-
     def get_llm_providers(self) -> list[dict]:
-        config = self._get_effective_config()
-        providers = config.get("llm", {}).get("providers", [])
-
-        return [self._expand_provider(provider) for provider in providers]
+        return self._llm_resolution.get_llm_providers()
 
     def get_llm_provider(self, provider_id: str) -> dict[str, Any]:
-        config = self._get_effective_config()
-        providers = config.get("llm", {}).get("providers", [])
-        for provider in providers:
-            if not isinstance(provider, dict):
-                raise TypeError("llm.providers 配置项必须是对象")
-            if provider.get("id") == provider_id:
-                return self._expand_provider(provider)
-        raise ValueError(f"不存在的 LLM provider: {provider_id}")
+        return self._llm_resolution.get_llm_provider(provider_id)
 
-    def _expand_provider(self, provider: object) -> dict[str, Any]:
-        if not isinstance(provider, dict):
-            raise TypeError("llm.providers 配置项必须是对象")
-        expanded = provider.copy()
-        api_key = provider.get("api_key", "")
-        if not isinstance(api_key, str):
-            raise TypeError("llm.providers[].api_key 必须是字符串")
-        if api_key.startswith("${") and api_key.endswith("}"):
-            var_name = api_key[2:-1]
-            env_value = os.environ.get(var_name)
-            if env_value is None:
-                raise ValueError(f"环境变量 {var_name} 未设置")
-            expanded["api_key"] = env_value
-        return expanded
 
     def get_default_agent_runtime_config(self) -> dict[str, Any]:
         return self.get_agent_runtime_config(self.get_default_agent_id())
