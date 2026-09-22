@@ -10,9 +10,9 @@ import {
   DEFAULT_GATEWAY_PANEL_HEIGHT,
   GATEWAY_PANEL_RESIZING_CLASS,
   clampGatewayPanelHeight,
-} from "../layout/workbenchLayout";
-import type { WorkspaceBottomPanelState } from "../state/workspaceBottomPanel";
-import { installPointerDrag } from "../utils/pointerDrag";
+} from "../../layout/workbenchLayout";
+import type { WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
+import { installPointerDrag } from "../../utils/pointerDrag";
 
 interface UseBottomPanelResizeOptions {
   workspaceId: string | null;

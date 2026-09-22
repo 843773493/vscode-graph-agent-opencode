@@ -46,13 +46,13 @@ import {
   useAppState,
 } from "./hooks";
 import { useWorkspacePreviewTabs } from "./hooks/workspace/useWorkspacePreviewTabs";
-import { useMainAreaResize } from "./hooks/useMainAreaResize";
-import { useBottomPanelResize } from "./hooks/useBottomPanelResize";
+import { useMainAreaResize } from "./hooks/panel/useMainAreaResize";
+import { useBottomPanelResize } from "./hooks/panel/useBottomPanelResize";
 import { useNodeDebugWorkbench } from "./hooks/nodeDebug/useNodeDebugWorkbench";
 import { useChildThreadLoader } from "./hooks/useChildThreadLoader";
 import { useGatewayExtensionResources } from "./hooks/gatewayExtensions/useGatewayExtensionResources";
 import { useGatewayExtensionWindow } from "./hooks/gatewayExtensions/useGatewayExtensionWindow";
-import { useWorkbenchPanelRouting } from "./hooks/useWorkbenchPanelRouting";
+import { useWorkbenchPanelRouting } from "./hooks/panel/useWorkbenchPanelRouting";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import { buildSessionCatalogSyncKeys } from "./hooks/sessionResourceExplorer/resourceTreeSync";
 import { createSessionConnection } from "./gatewayApi";

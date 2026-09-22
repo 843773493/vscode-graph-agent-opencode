@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { WorkspaceAuxiliaryTab } from "../components/workspace/WorkspaceAuxiliaryPanel";
-import type { WorkspaceBottomPanelState } from "../state/workspaceBottomPanel";
-import type { WebUiSettingsUpdate } from "../types/backend";
+import type { WorkspaceAuxiliaryTab } from "../../components/workspace/WorkspaceAuxiliaryPanel";
+import type { WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
+import type { WebUiSettingsUpdate } from "../../types/backend";
 import { useWorkbenchPanelRouting } from "./useWorkbenchPanelRouting";
 
 interface MountOptions {

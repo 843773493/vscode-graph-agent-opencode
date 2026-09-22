@@ -6,8 +6,8 @@ import {
   GATEWAY_PANEL_RESIZING_CLASS,
   MAX_GATEWAY_PANEL_HEIGHT,
   MIN_GATEWAY_PANEL_HEIGHT,
-} from "../layout/workbenchLayout";
-import type { WorkspaceBottomPanelState } from "../state/workspaceBottomPanel";
+} from "../../layout/workbenchLayout";
+import type { WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
 import { useBottomPanelResize } from "./useBottomPanelResize";
 
 type PointerListener = (event: PointerEvent) => void;

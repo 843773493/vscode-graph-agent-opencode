@@ -14,12 +14,12 @@ import {
   resizeAdjacentMainAreas,
   type LayoutResizeTarget,
   type MainAreaKey,
-} from "../layout/workbenchLayout";
+} from "../../layout/workbenchLayout";
 import type {
   WebUiMainAreaRatios,
   WebUiSettingsUpdate,
-} from "../types/backend";
-import { installPointerDrag } from "../utils/pointerDrag";
+} from "../../types/backend";
+import { installPointerDrag } from "../../utils/pointerDrag";
 
 type ExtensionDebugAreaRatios = Pick<
   WebUiMainAreaRatios,

@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
-import type { WorkspaceAuxiliaryTab } from "../components/workspace/WorkspaceAuxiliaryPanel";
-import type { WorkspaceBottomPanelState } from "../state/workspaceBottomPanel";
-import type { WebUiSettingsUpdate } from "../types/backend";
+import type { WorkspaceAuxiliaryTab } from "../../components/workspace/WorkspaceAuxiliaryPanel";
+import type { WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
+import type { WebUiSettingsUpdate } from "../../types/backend";
 
 interface UseWorkbenchPanelRoutingOptions {
   auxiliaryVisible: boolean;
