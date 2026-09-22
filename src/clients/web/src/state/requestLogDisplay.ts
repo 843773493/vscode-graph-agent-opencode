@@ -355,23 +355,10 @@ export function buildRequestReplayDisplay(
     } satisfies RequestPromptComponentDisplay];
   });
 
+  // 缺少 replay 元数据的日志只标记来源未记录，不再从 system_message 伪造
+  // 一份 Prompt 组成：真实落盘日志的 request.system_message 恒为 null，
+  // 该合成分支对任何可达输入都产不出内容。
   const legacy = promptComponents.length === 0;
-  if (legacy) {
-    const systemMessage = isRecord(log.request.system_message)
-      ? log.request.system_message
-      : null;
-    const contentBlocks = replayContentBlocks(systemMessage?.content);
-    if (contentBlocks.length > 0) {
-      promptComponents.push({
-        source: "legacy_log",
-        label: "最终 System Prompt（旧日志未记录来源）",
-        operation: "replace",
-        contentBlocks,
-        blockCount: contentBlocks.length,
-        charCount: contentCharCount(contentBlocks),
-      });
-    }
-  }
 
   const tools = requestToolDefinitions(log);
   const replayTools = replay && isRecord(replay.tools) ? replay.tools : null;

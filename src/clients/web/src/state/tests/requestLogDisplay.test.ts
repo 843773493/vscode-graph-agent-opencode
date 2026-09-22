@@ -322,6 +322,8 @@ assert(
   "折叠摘要应优先使用后端记录的统计值",
 );
 
+// 旧日志（无 replay 元数据）只允许标记来源未记录；即使日志里残留
+// system_message，也不得再从它合成第二套 Prompt 组成。
 const legacyReplay = buildRequestReplayDisplay({
   ...replayLog,
   request: {
@@ -330,9 +332,11 @@ const legacyReplay = buildRequestReplayDisplay({
     system_message: { content: "旧日志最终提示词" },
   },
 });
+assert(legacyReplay.legacy, "缺少 replay 元数据的日志必须标记来源未记录");
 assert(
-  legacyReplay.legacy && legacyReplay.promptComponents[0]?.source === "legacy_log",
-  "旧日志没有回放元数据时应明确标记，并仍允许查看最终 System Prompt",
+  legacyReplay.promptComponents.length === 0
+    && !legacyReplay.promptComponents.some((item) => item.source === "legacy_log"),
+  "旧日志不得从 system_message 合成 Prompt 组成",
 );
 
 const normalized = normalizeRequestLogJsonForDisplay({
