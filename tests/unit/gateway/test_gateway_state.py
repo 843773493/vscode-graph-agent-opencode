@@ -847,6 +847,35 @@ def test_gateway_config_event_bounds_distinguishes_lower_and_frontier(tmp_path):
         state.close()
 
 
+def test_gateway_prune_config_events_rowcount_semantics(tmp_path):
+    """prune 返回实际删除行数：0 行是合法结果（本域无事件或都在窗口内）。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        # 本域完全没有事件时清理 0 行，是合法结果而非「未执行」
+        assert state.prune_config_events(config_domain="gateway") == 0
+        _append_gateway_event(state, "gateway-fresh")
+        # 新事件都在保留窗口内，清理仍为 0 行
+        assert state.prune_config_events(config_domain="gateway", retention_days=30) == 0
+        # 跨域隔离：其它域事件不受本域清理影响，且不计入返回值
+        _append_gateway_event(state, "other-1", config_domain="other")
+        connection = state.connection()
+        try:
+            connection.execute(
+                "UPDATE config_events SET occurred_at = '2000-01-01T00:00:00+00:00'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        assert state.prune_config_events(config_domain="gateway", retention_days=30) == 1
+        assert state.prune_config_events(config_domain="gateway", retention_days=30) == 0
+        # 非法保留天数在入口直接抛错，绝不静默返回 0
+        with pytest.raises(ValueError, match="保留天数必须大于 0"):
+            state.prune_config_events(config_domain="gateway", retention_days=0)
+    finally:
+        state.close()
+
+
 def test_gateway_config_event_cursor_gone_only_inside_pruned_window(tmp_path):
     """游标只在本域仍有进度却已落在被裁剪区间时报 CursorGone。"""
 

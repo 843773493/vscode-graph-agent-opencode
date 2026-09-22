@@ -590,6 +590,13 @@ class GatewayConfigEventMixin:
     def prune_config_events(
         self, *, config_domain: str, retention_days: int = 30
     ) -> int:
+        """删除本域超过保留窗口的 outbox 事件，返回实际删除行数。
+
+        返回值就是被删除的事件条数；删除 0 行（本域没有事件、或都在保留窗口内）是
+        合法结果，调用方据此即可判定本次清理是否生效，不需要区分「未执行」，因为
+        保留天数非法会在入口直接抛 ``ValueError``，执行失败会向上抛出异常而非返回 0。
+        """
+
         if retention_days < 1:
             raise ValueError("Gateway 配置事件保留天数必须大于 0")
         cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
