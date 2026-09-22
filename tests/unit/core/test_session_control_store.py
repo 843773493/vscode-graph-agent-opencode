@@ -277,6 +277,40 @@ def test_multiple_main_rows_fail_closed(store: SessionControlStore) -> None:
         store.get_main_thread()
 
 
+def test_initialize_main_thread_rejects_multiple_main_rows(
+    store: SessionControlStore,
+) -> None:
+    """initialize_main_thread 遇多 main row 必须 fail closed，不得静默吸收。
+
+    库被外部改动（出现第二个 main row）时 create-or-get 绝不能返回
+    成功——否则 main thread 的唯一性被静默破坏。
+    """
+    existing = make_thread_id()
+    store.initialize_main_thread(existing, DEFAULT_CREATED_AT)
+    raw_execute(
+        store,
+        "INSERT INTO thread_catalog (thread_id, kind, created_at) "
+        "VALUES (?, 'main', ?)",
+        (make_thread_id(), DEFAULT_CREATED_AT.isoformat()),
+    )
+    # 即使传入与既有 first row 一致的 thread_id，多行库也必须拒绝。
+    with pytest.raises(RuntimeError, match="多个 main row"):
+        store.initialize_main_thread(existing, DEFAULT_CREATED_AT)
+
+
+def test_initialize_main_thread_conflict_does_not_absorb_second_row(
+    store: SessionControlStore,
+) -> None:
+    """冲突路径不得写入第二行：拒绝后 thread_catalog 仍只有 1 行。"""
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    with pytest.raises(RuntimeError, match="不一致"):
+        store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    rows = store.connection.execute(
+        "SELECT COUNT(*) FROM thread_catalog WHERE kind = 'main'"
+    ).fetchone()
+    assert int(rows[0]) == 1
+
+
 # ----------------------------------------------------------------------
 # lifecycle fence
 # ----------------------------------------------------------------------
@@ -1243,6 +1277,92 @@ def test_abort_record_rejects_published(store: SessionControlStore) -> None:
     with pytest.raises(RuntimeError, match="不可撤销"):
         store.abort_thread_creation_record("key-1", "迟到取消")
     assert store.get_thread_creation_record("key-1").state == "published"
+
+
+# ----------------------------------------------------------------------
+# get_published_child_thread_locator（已发布 child 的冻结 locator 解析）
+# ----------------------------------------------------------------------
+
+
+def _publish_child(store: SessionControlStore) -> ThreadCreationRecord:
+    """初始化 main/fence 后发布一条 child record，返回 published record。"""
+    prepare_record(store)
+    store.freeze_thread_creation_artifact_manifest(
+        "key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64
+    )
+    return store.publish_thread_creation_record("key-1")
+
+
+def test_get_published_child_locator_returns_frozen_locator(
+    store: SessionControlStore,
+) -> None:
+    """发布后按 thread_id 返回 record 冻结的 locator，叶名严格等于 thread_id。"""
+    record = _publish_child(store)
+    locator = store.get_published_child_thread_locator(record.child_thread_id)
+    assert locator == record.final_relative_locator
+    assert locator.endswith(f"/{record.child_thread_id}")
+
+
+def test_get_published_child_locator_missing_raises_key_error(
+    store: SessionControlStore,
+) -> None:
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    with pytest.raises(KeyError):
+        store.get_published_child_thread_locator(make_thread_id())
+
+
+def test_get_published_child_locator_rejects_main_row(
+    store: SessionControlStore,
+) -> None:
+    """main row 不是 child，解析必须 fail closed。"""
+    main_thread_id = make_thread_id()
+    store.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
+    with pytest.raises(RuntimeError, match="不是 child"):
+        store.get_published_child_thread_locator(main_thread_id)
+
+
+def test_get_published_child_locator_detects_created_at_drift(
+    store: SessionControlStore,
+) -> None:
+    """child row 与 creation record 的 created_at 漂移（库被外部改动）→ 报错。
+
+    物理定位必须同时受 thread_catalog 的可见性提交点与同一发布事务冻结
+    的 thread_creation_records 约束；二者创建时间不一致即 fail closed。
+    """
+    record = _publish_child(store)
+    raw_execute(
+        store,
+        "UPDATE thread_catalog SET created_at = ? WHERE thread_id = ?",
+        ("2099-01-01T00:00:00+00:00", record.child_thread_id),
+    )
+    with pytest.raises(RuntimeError, match="与 creation record 不一致"):
+        store.get_published_child_thread_locator(record.child_thread_id)
+
+
+def test_get_published_child_locator_detects_locator_leaf_drift(
+    store: SessionControlStore,
+) -> None:
+    """record 冻结 locator 的叶名与 child_thread_id 不一致 → 报错。"""
+    record = _publish_child(store)
+    drifted = record.final_relative_locator.rsplit("/", 1)[0] + "/" + make_thread_id()
+    raw_execute(
+        store,
+        "UPDATE thread_creation_records SET final_relative_locator = ? "
+        "WHERE thread_creation_idempotency_key = ?",
+        (drifted, "key-1"),
+    )
+    with pytest.raises(RuntimeError, match="与 creation record 不一致"):
+        store.get_published_child_thread_locator(record.child_thread_id)
+
+
+def test_get_published_child_locator_rejects_unpublished_record(
+    store: SessionControlStore,
+) -> None:
+    """preparing record 不出现在 thread_catalog，解析必须 KeyError。"""
+    record = prepare_record(store)
+    with pytest.raises(KeyError):
+        store.get_published_child_thread_locator(record.child_thread_id)
+    assert store.get_thread_creation_record("key-1").state == "preparing"
 
 
 def test_mark_published_idempotent_verifies_catalog_row(
