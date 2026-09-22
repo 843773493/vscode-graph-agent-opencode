@@ -2,9 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionFileTreeSettings } from "../../../types/backend";
 import { readFilePathTextFromClipboardData } from "../../../utils/clipboard";
-import WorkspaceFileTree, {
-  runCurrentAndDefaultShortcutMutation,
-} from "./WorkspaceFileTree";
+import WorkspaceFileTree from "./WorkspaceFileTree";
+import { runCurrentAndDefaultShortcutMutation } from "./useWorkspaceFileTreeContextMenu";
 import { parseClipboardFilePaths } from "./workspaceFileTreePaths";
 
 const emptySettings: SessionFileTreeSettings = {
