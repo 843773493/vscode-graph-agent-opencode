@@ -9,6 +9,7 @@ import type {
   GatewayInboundAccessList,
 } from "../../../types/backend";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
+import { errorMessage } from "../../../utils/errorMessage";
 
 interface GatewayInboundAccessPanelProps {
   apiPort: number;
@@ -45,7 +46,7 @@ export default function GatewayInboundAccessPanel({
     } catch (loadError) {
       setInbound(null);
       setDevices([]);
-      setError(loadError instanceof Error ? loadError.message : String(loadError));
+      setError(errorMessage(loadError));
     } finally {
       setLoading(false);
     }
@@ -75,7 +76,7 @@ export default function GatewayInboundAccessPanel({
       setDevices(result.items);
       await load();
     } catch (revokeError) {
-      setError(revokeError instanceof Error ? revokeError.message : String(revokeError));
+      setError(errorMessage(revokeError));
     } finally {
       setRevokingId(null);
     }

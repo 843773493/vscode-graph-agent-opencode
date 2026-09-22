@@ -14,6 +14,7 @@ import type {
 } from "../../../types/backend";
 import { DEFAULT_THEME_BACKGROUND_OVERLAY } from "../../../theme/theme";
 import { copyTextToClipboard } from "../../../utils/clipboard";
+import { errorMessage } from "../../../utils/errorMessage";
 
 interface GatewayThemeSettingsProps {
   apiPort: number;
@@ -75,7 +76,7 @@ export default function GatewayThemeSettings({
 
   useEffect(() => {
     void reload().catch((loadError) => {
-      setError(loadError instanceof Error ? loadError.message : String(loadError));
+      setError(errorMessage(loadError));
     });
   }, [reload]);
 
@@ -86,7 +87,7 @@ export default function GatewayThemeSettings({
       await reload();
       setNotice("已重新读取 Gateway 主题配置。 ");
     } catch (reloadError) {
-      setError(reloadError instanceof Error ? reloadError.message : String(reloadError));
+      setError(errorMessage(reloadError));
     } finally {
       setBusy(false);
     }
@@ -117,7 +118,7 @@ export default function GatewayThemeSettings({
         setError(`主题操作失败，且重新读取 Gateway 状态失败：${String(operationError)}；${String(reloadError)}`);
         return;
       }
-      setError(operationError instanceof Error ? operationError.message : String(operationError));
+      setError(errorMessage(operationError));
     } finally {
       setBusy(false);
     }
@@ -154,7 +155,7 @@ export default function GatewayThemeSettings({
       await reload();
       setNotice("背景图片已导入 Gateway；请选择图片后点击使用。 ");
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
+      setError(errorMessage(uploadError));
     } finally {
       setBusy(false);
     }
@@ -169,7 +170,7 @@ export default function GatewayThemeSettings({
     } catch (deleteError) {
       try {
         await reload();
-        setError(deleteError instanceof Error ? deleteError.message : String(deleteError));
+        setError(errorMessage(deleteError));
       } catch (reloadError) {
         setError(`删除背景资源失败，且重新读取 Gateway 状态失败：${String(deleteError)}；${String(reloadError)}`);
       }
@@ -184,7 +185,7 @@ export default function GatewayThemeSettings({
       await copyTextToClipboard(THEME_CONFIG_EXAMPLE);
       setNotice("主题配置示例已复制。 ");
     } catch (copyError) {
-      setError(copyError instanceof Error ? copyError.message : String(copyError));
+      setError(errorMessage(copyError));
     }
   };
 

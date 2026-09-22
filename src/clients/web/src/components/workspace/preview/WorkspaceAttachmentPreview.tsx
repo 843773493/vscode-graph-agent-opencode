@@ -1,6 +1,7 @@
 import React from "react";
 import { getSessionAttachmentBlob } from "../../../api";
 import type { AttachmentRef } from "../../../types/backend";
+import { errorMessage } from "../../../utils/errorMessage";
 
 const MAX_TEXT_PREVIEW_CHARS = 200_000;
 
@@ -64,7 +65,7 @@ export default function WorkspaceAttachmentPreview({
       if (!active || (reason instanceof DOMException && reason.name === "AbortError")) {
         return;
       }
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(errorMessage(reason));
     }).finally(() => {
       if (active) setLoading(false);
     });

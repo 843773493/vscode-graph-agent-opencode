@@ -20,6 +20,7 @@ import {
   workspaceParentPath,
   workspacePathSearchParts,
 } from "../../utils/selection/workspaceDirectorySelection";
+import { errorMessage } from "../../utils/errorMessage";
 
 interface WorkspaceAddDialogProps {
   open: boolean;
@@ -164,7 +165,7 @@ export default function WorkspaceAddDialog({
         if (directoryRequestRef.current !== requestNumber) return;
         setListing(null);
         setError(
-          loadError instanceof Error ? loadError.message : String(loadError),
+          errorMessage(loadError),
         );
       } finally {
         if (directoryRequestRef.current === requestNumber) setLoading(false);
@@ -287,7 +288,7 @@ export default function WorkspaceAddDialog({
       onClose();
     } catch (submitError) {
       setError(
-        submitError instanceof Error ? submitError.message : String(submitError),
+        errorMessage(submitError),
       );
     } finally {
       setSubmitting(false);

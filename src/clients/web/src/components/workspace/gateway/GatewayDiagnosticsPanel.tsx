@@ -10,6 +10,7 @@ import {
   diagnosticLogStatusLabel,
   diagnosticLogUnavailableHint,
 } from "../../panels/gatewayLogPresentation";
+import { errorMessage } from "../../../utils/errorMessage";
 
 interface GatewayDiagnosticsPanelProps {
   apiPort: number;
@@ -67,7 +68,7 @@ export default function GatewayDiagnosticsPanel({
       } catch (loadError) {
         setDiagnostics(null);
         setSelectedLogId(null);
-        setError(loadError instanceof Error ? loadError.message : String(loadError));
+        setError(errorMessage(loadError));
       } finally {
         setLoading(false);
       }
@@ -119,7 +120,7 @@ export default function GatewayDiagnosticsPanel({
       await navigator.clipboard.writeText(selectedLog.tail);
       setCopyNotice("当前日志尾部已复制。 ");
     } catch (copyError) {
-      setCopyNotice(copyError instanceof Error ? copyError.message : String(copyError));
+      setCopyNotice(errorMessage(copyError));
     }
   };
 

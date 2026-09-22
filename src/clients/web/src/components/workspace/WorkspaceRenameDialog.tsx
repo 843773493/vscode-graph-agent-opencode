@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { GatewayWorkspace } from "../../types/backend";
+import { errorMessage } from "../../utils/errorMessage";
 
 interface WorkspaceRenameDialogProps {
   workspace: GatewayWorkspace | null;
@@ -43,7 +44,7 @@ export default function WorkspaceRenameDialog({
       onClose();
     } catch (submitError) {
       setError(
-        submitError instanceof Error ? submitError.message : String(submitError),
+        errorMessage(submitError),
       );
     } finally {
       setSubmitting(false);

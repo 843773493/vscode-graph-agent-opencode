@@ -5,6 +5,7 @@ import {
 } from "../../api";
 import type { WorkspaceFileStreamBatch } from "../../types/backend";
 import { dispatchWorkspaceFileChanges } from "../../state/workspaceFileTreeEvents";
+import { errorMessage } from "../../utils/errorMessage";
 
 interface UseWorkspaceFileWatchOptions {
   active: boolean;
@@ -63,7 +64,7 @@ export function useWorkspaceFileWatch({
         if (controller.signal.aborted) {
           return;
         }
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         onStatusChange(`${message}；正在重连`);
         reconnectTimer = window.setTimeout(() => {
           reconnectTimer = null;

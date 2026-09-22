@@ -4,6 +4,7 @@ import {
   resolveWorkspaceMarkdownTarget,
   type WorkspaceMarkdownTarget,
 } from "../../../utils/markdown/workspaceMarkdown";
+import { errorMessage } from "../../../utils/errorMessage";
 
 interface WorkspaceMarkdownImageProps {
   apiPort: number;
@@ -31,7 +32,7 @@ export default function WorkspaceMarkdownImage({
       target = resolveWorkspaceMarkdownTarget(markdownPath, src);
     } catch (resolveError) {
       setResolvedSrc(null);
-      setError(resolveError instanceof Error ? resolveError.message : String(resolveError));
+      setError(errorMessage(resolveError));
       return;
     }
     if (target.kind === "external") {
@@ -61,7 +62,7 @@ export default function WorkspaceMarkdownImage({
       })
       .catch((loadError: unknown) => {
         if (!controller.signal.aborted) {
-          setError(loadError instanceof Error ? loadError.message : String(loadError));
+          setError(errorMessage(loadError));
         }
       });
     return () => {

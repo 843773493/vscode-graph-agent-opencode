@@ -12,6 +12,7 @@ import type {
   SshConnectionOption,
 } from "../../../types/backend";
 import { copyTextToClipboard } from "../../../utils/clipboard";
+import { errorMessage } from "../../../utils/errorMessage";
 
 type ConnectionPage = "ssh-select" | "ssh-manual" | "external-device" | "device-info";
 type ConnectionDialogMode = "ssh" | "external-device";
@@ -138,7 +139,7 @@ export default function GatewayConnectionDialog({
       setConnections([]);
       setSelectedConnectionId(null);
       setError(
-        `读取 ~/.ssh/config 失败：${loadError instanceof Error ? loadError.message : String(loadError)}`,
+        `读取 ~/.ssh/config 失败：${errorMessage(loadError)}`,
       );
     } finally {
       setLoading(false);
@@ -158,7 +159,7 @@ export default function GatewayConnectionDialog({
       );
     } catch (loadError) {
       setAccessAddresses([]);
-      setError(loadError instanceof Error ? loadError.message : String(loadError));
+      setError(errorMessage(loadError));
     } finally {
       setLoading(false);
     }
@@ -213,7 +214,7 @@ export default function GatewayConnectionDialog({
       await onAddSsh(buildSelectedSshConnectionRequest(selected));
       onClose();
     } catch (connectError) {
-      setError(connectError instanceof Error ? connectError.message : String(connectError));
+      setError(errorMessage(connectError));
     } finally {
       setSubmitting(false);
     }
@@ -224,7 +225,7 @@ export default function GatewayConnectionDialog({
     try {
       payload = buildManualSshConnectionRequest(manualForm);
     } catch (validationError) {
-      setError(validationError instanceof Error ? validationError.message : String(validationError));
+      setError(errorMessage(validationError));
       return;
     }
     setSubmitting(true);
@@ -233,7 +234,7 @@ export default function GatewayConnectionDialog({
       await onAddSsh(payload);
       onClose();
     } catch (connectError) {
-      setError(connectError instanceof Error ? connectError.message : String(connectError));
+      setError(errorMessage(connectError));
     } finally {
       setSubmitting(false);
     }
@@ -256,7 +257,7 @@ export default function GatewayConnectionDialog({
       setPage("device-info");
       onDeviceConnectionsChanged();
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : String(createError));
+      setError(errorMessage(createError));
     } finally {
       setSubmitting(false);
     }
@@ -268,7 +269,7 @@ export default function GatewayConnectionDialog({
       await copyTextToClipboard(connectionInfoText(createdDevice));
       setCopied(true);
     } catch (copyError) {
-      setError(copyError instanceof Error ? copyError.message : String(copyError));
+      setError(errorMessage(copyError));
     }
   };
 

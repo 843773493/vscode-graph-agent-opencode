@@ -16,6 +16,7 @@ import GatewayInboundAccessPanel from "./GatewayInboundAccessPanel";
 import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 import GatewayDiagnosticsPanel from "./GatewayDiagnosticsPanel";
 import GatewayThemeSettings from "./GatewayThemeSettings";
+import { errorMessage } from "../../../utils/errorMessage";
 
 export { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 
@@ -60,7 +61,7 @@ export default function GatewayControlCenter({
       setHealthError(null);
     } catch (error) {
       setHealth(null);
-      setHealthError(error instanceof Error ? error.message : String(error));
+      setHealthError(errorMessage(error));
     }
   }, [apiPort]);
 
@@ -82,7 +83,7 @@ export default function GatewayControlCenter({
       setDeviceRevision((value) => value + 1);
       setOperationNotice("连接状态已刷新。");
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : String(error));
+      setOperationError(errorMessage(error));
     } finally {
       setRefreshing(false);
     }
@@ -118,7 +119,7 @@ export default function GatewayControlCenter({
       await waitForRestartedGateway(result.previous_process_id);
       window.location.reload();
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : String(error));
+      setOperationError(errorMessage(error));
       setOperationNotice(null);
       setRestartingDevelopment(false);
     }
@@ -143,7 +144,7 @@ export default function GatewayControlCenter({
       await loadHealth();
       setOperationNotice(`远程 Gateway「${workspace.remote.ssh_config_host ?? workspace.remote.host}」已重新连接。`);
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : String(error));
+      setOperationError(errorMessage(error));
     } finally {
       setReconnectingId(null);
     }

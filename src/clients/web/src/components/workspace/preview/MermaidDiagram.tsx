@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { loadMermaid } from "../../../runtime/mermaid";
+import { errorMessage } from "../../../utils/errorMessage";
 
 export default function MermaidDiagram({ source }: { source: string }) {
   const reactId = useId();
@@ -20,7 +21,7 @@ export default function MermaidDiagram({ source }: { source: string }) {
       })
       .catch((renderError: unknown) => {
         if (!cancelled) {
-          setError(renderError instanceof Error ? renderError.message : String(renderError));
+          setError(errorMessage(renderError));
         }
       });
     return () => {

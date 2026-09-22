@@ -14,6 +14,7 @@ import {
   sessionStreamReconnectDelay,
 } from "../sessionEventStream/sessionEventStreamPolicy";
 import { waitForReconnect } from "../sessionEventStream/waitForReconnect";
+import { errorMessage } from "../../utils/errorMessage";
 
 function markActivity(
   event: SessionActivity,
@@ -71,7 +72,7 @@ export function useWorkspaceSessionActivity({
             // 卸载/中止后不得再写状态：定时器回调只在仍存活时才会走到这里，
             // 但刷新请求本身可能在卸载之后才失败。
             if (controller.signal.aborted) return;
-            const message = error instanceof Error ? error.message : String(error);
+            const message = errorMessage(error);
             setState((previous) => ({
               ...previous,
               status: `刷新会话摘要失败: ${message}`,
@@ -119,9 +120,7 @@ export function useWorkspaceSessionActivity({
           try {
             await refreshWorkspaceSessionList(apiPort, workspaceId, setState);
           } catch (refreshError: unknown) {
-            const message = refreshError instanceof Error
-              ? refreshError.message
-              : String(refreshError);
+            const message = errorMessage(refreshError);
             setState((previous) => ({
               ...previous,
               status: `活动游标失效且会话摘要刷新失败: ${message}`,
@@ -129,7 +128,7 @@ export function useWorkspaceSessionActivity({
           }
           reconnectAttempt = 0;
         } else {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessage(error);
           setState((previous) => ({
             ...previous,
             status: `会话活动流断开，正在重连: ${message}`,

@@ -7,6 +7,7 @@ import {
 } from "../../../utils/markdown/workspaceMarkdown";
 import MermaidDiagram from "./MermaidDiagram";
 import WorkspaceMarkdownImage from "./WorkspaceMarkdownImage";
+import { errorMessage } from "../../../utils/errorMessage";
 
 interface WorkspaceMarkdownPreviewProps {
   apiPort: number;
@@ -37,9 +38,7 @@ export default function WorkspaceMarkdownPreview({
             try {
               target = resolveWorkspaceMarkdownTarget(path, href);
             } catch (resolveError) {
-              const message = resolveError instanceof Error
-                ? resolveError.message
-                : String(resolveError);
+              const message = errorMessage(resolveError);
               return <span className="workspace-markdown-link-error" title={message}>{children}</span>;
             }
             if (target.kind === "workspace") {
