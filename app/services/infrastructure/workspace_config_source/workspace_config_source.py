@@ -49,6 +49,24 @@ SELECT source_key, source_generation, source_event_id, source_path,
 FROM config_source_journal
 """
 
+# 同一上行追加路径（事务内辅助与公开入口）共用的两条语句：读最新 generation
+# 做去重/CAS 判定，以及插入新 generation。
+_LATEST_JOURNAL_SELECT = """
+SELECT source_generation, presence, layer_digest
+FROM config_source_journal
+WHERE source_key = ?
+ORDER BY source_generation DESC
+LIMIT 1
+"""
+
+_JOURNAL_INSERT = """
+INSERT INTO config_source_journal(
+    source_key, source_generation, source_event_id, source_path,
+    presence, layer_revision, layer_digest, previous_digest,
+    origin, fanout_id, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
 class WorkspaceConfigSourceMixin:
     @staticmethod
     def _journal_from_row(
@@ -465,16 +483,7 @@ class WorkspaceConfigSourceMixin:
                     "source journal event_id 已绑定不同 source 记录"
                 )
             return int(existing[1])
-        latest = connection.execute(
-            """
-            SELECT source_generation, presence, layer_digest
-            FROM config_source_journal
-            WHERE source_key = ?
-            ORDER BY source_generation DESC
-            LIMIT 1
-            """,
-            (source_key,),
-        ).fetchone()
+        latest = connection.execute(_LATEST_JOURNAL_SELECT, (source_key,)).fetchone()
         current_generation = int(latest[0]) if latest is not None else 0
         if (
             expected_source_generation is not None
@@ -505,13 +514,7 @@ class WorkspaceConfigSourceMixin:
                 (generation + 1, source_key),
             )
         connection.execute(
-            """
-            INSERT INTO config_source_journal(
-                source_key, source_generation, source_event_id, source_path,
-                presence, layer_revision, layer_digest, previous_digest,
-                origin, fanout_id, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            _JOURNAL_INSERT,
             (
                 source_key,
                 generation,
@@ -560,14 +563,7 @@ class WorkspaceConfigSourceMixin:
                 connection.execute("COMMIT")
                 return self._journal_from_row(existing)
             latest = connection.execute(
-                """
-                SELECT source_generation, presence, layer_digest
-                FROM config_source_journal
-                WHERE source_key = ?
-                ORDER BY source_generation DESC
-                LIMIT 1
-                """,
-                (source_key,),
+                _LATEST_JOURNAL_SELECT, (source_key,)
             ).fetchone()
             current_generation = int(latest[0]) if latest is not None else 0
             if (
@@ -620,13 +616,7 @@ class WorkspaceConfigSourceMixin:
                 )
             now = utc_now_text()
             connection.execute(
-                """
-                INSERT INTO config_source_journal(
-                    source_key, source_generation, source_event_id, source_path,
-                    presence, layer_revision, layer_digest, previous_digest,
-                    origin, fanout_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                _JOURNAL_INSERT,
                 (
                     source_key,
                     generation,
@@ -681,15 +671,45 @@ class WorkspaceConfigSourceMixin:
         return tuple(self._journal_from_row(row) for row in rows)
 
     def source_generation_high_water_mark(self, *, source_key: str) -> int:
+        """返回本 source 已提交的最大 journal generation；从未写入时为 0。
+
+        ``config_source_owner.next_generation`` 与 journal 在同一事务推进，合法写入
+        至少为 ``generation + 1``（首个事件后为 2，因此高水位至少为 1）。这里对两种
+        不可能由软件产生的形态响亮报错，绝不返回虚假默认值：
+
+        - owner 行缺失但 journal 已有 generation：有人绕过软件清空了水位行；
+        - owner 行存在但 ``next_generation < 1``：水位本身已损坏（会算出负值高水位，
+          让 CAS 永远失配）。
+        """
+
         connection = self._database.connection()
         try:
             row = connection.execute(
                 "SELECT next_generation FROM config_source_owner WHERE source_key = ?",
                 (source_key,),
             ).fetchone()
+            if row is None:
+                journal_row = connection.execute(
+                    "SELECT MAX(source_generation) FROM config_source_journal "
+                    "WHERE source_key = ?",
+                    (source_key,),
+                ).fetchone()
+                if journal_row is not None and journal_row[0] is not None:
+                    raise RuntimeError(
+                        "Workspace source owner 水位缺失但 journal 已有 generation；"
+                        "检测到绕过软件直接修改 Workspace 配置来源状态: "
+                        f"source_key={source_key}"
+                    )
+                return 0
+            next_generation = int(row[0])
+            if next_generation < 1:
+                raise RuntimeError(
+                    "Workspace source owner next_generation 非法: "
+                    f"source_key={source_key}, next_generation={next_generation}"
+                )
         finally:
             connection.close()
-        return int(row[0]) - 1 if row is not None else 0
+        return next_generation - 1
 
     def record_config_source_fanout(
         self,
@@ -709,6 +729,7 @@ class WorkspaceConfigSourceMixin:
             raise ValueError("fan-out source_generation 必须为正数")
         connection = self._database.connection()
         try:
+            connection.execute("BEGIN IMMEDIATE")
             if connection.execute(
                 """
                 SELECT 1 FROM config_source_journal
@@ -743,6 +764,10 @@ class WorkspaceConfigSourceMixin:
                     utc_now_text(),
                 ),
             )
+            connection.execute("COMMIT")
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 
@@ -764,6 +789,7 @@ class WorkspaceConfigSourceMixin:
         )
         connection = self._database.connection()
         try:
+            connection.execute("BEGIN IMMEDIATE")
             now = utc_now_text()
             for record in records:
                 connection.execute(
@@ -782,6 +808,21 @@ class WorkspaceConfigSourceMixin:
                         now,
                     ),
                 )
+            # 返回必须反映库中真实状态：ON CONFLICT DO NOTHING 不会把既有
+            # applied/conflict 行改回 pending，此处按 workspace 回读权威状态。
+            statuses = dict(
+                connection.execute(
+                    """
+                    SELECT source_generation, status FROM config_source_fanout
+                    WHERE source_key = ? AND workspace_id = ?
+                    """,
+                    (source_key, workspace_id),
+                ).fetchall()
+            )
+            connection.execute("COMMIT")
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
         return tuple(
@@ -789,7 +830,7 @@ class WorkspaceConfigSourceMixin:
                 "source_generation": record.source_generation,
                 "source_event_id": record.source_event_id,
                 "fanout_id": record.fanout_id,
-                "status": "pending",
+                "status": str(statuses[record.source_generation]),
             }
             for record in records
         )

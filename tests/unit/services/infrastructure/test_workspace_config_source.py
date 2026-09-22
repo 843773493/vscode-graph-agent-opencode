@@ -467,3 +467,117 @@ def test_fanout_prepare_record_list_and_summary_states(tmp_path):
             store.prepare_config_source_fanout(source_key="user", workspace_id=" ")
     finally:
         store.close()
+
+
+def test_fanout_prepare_reports_persisted_status_not_hardcoded_pending(tmp_path):
+    """prepare 必须回读库中真实状态：既有 applied/conflict 行不得被谎报为 pending。"""
+
+    store = _store(tmp_path)
+    try:
+        for index in range(1, 4):
+            _journal(store, event_id=f"ev{index}", layer_revision=index,
+                     layer_digest=f"d{index}")
+        store.record_config_source_fanout(
+            source_key="user", source_generation=1, workspace_id="ws-a",
+            status="applied", layer_revision=1, layer_digest="d1", result="applied",
+        )
+        store.record_config_source_fanout(
+            source_key="user", source_generation=2, workspace_id="ws-a",
+            status="conflict", result="conflict", error="source changed",
+        )
+        returned = store.prepare_config_source_fanout(
+            source_key="user", workspace_id="ws-a", after_generation=0
+        )
+        assert [(item["source_generation"], item["status"]) for item in returned] == [
+            (1, "applied"),
+            (2, "conflict"),
+            (3, "pending"),
+        ]
+        # 另一 workspace 未导入过，全部为 pending
+        assert {
+            item["status"] for item in store.prepare_config_source_fanout(
+                source_key="user", workspace_id="ws-b", after_generation=0
+            )
+        } == {"pending"}
+    finally:
+        store.close()
+
+
+def test_fanout_prepare_rolls_back_all_generations_on_midloop_failure(tmp_path):
+    """批量 prepare 必须整批原子：中途失败不得残留前几条已写入的行。"""
+
+    store = _store(tmp_path)
+    try:
+        for index in range(1, 4):
+            _journal(store, event_id=f"ev{index}", layer_revision=index,
+                     layer_digest=f"d{index}")
+        connection = sqlite3.connect(store.path, isolation_level=None)
+        try:
+            connection.execute(
+                """
+                CREATE TRIGGER fanout_fail_on_generation_two
+                BEFORE INSERT ON config_source_fanout
+                WHEN NEW.source_generation = 2
+                BEGIN
+                    SELECT RAISE(ABORT, 'injected fanout failure');
+                END;
+                """
+            )
+        finally:
+            connection.close()
+
+        # 第 2 条 INSERT 被触发器中止：整个批次必须回滚，第 1 条也不得残留
+        with pytest.raises(sqlite3.IntegrityError, match="injected fanout failure"):
+            store.prepare_config_source_fanout(
+                source_key="user", workspace_id="ws-a", after_generation=0
+            )
+        assert store.list_config_source_fanout(
+            source_key="user", source_generation=1
+        ) == ()
+        assert store.list_config_source_fanout(
+            source_key="user", source_generation=3
+        ) == ()
+    finally:
+        store.close()
+
+
+def test_source_water_mark_rejects_missing_owner_with_existing_journal(tmp_path):
+    """水位行被外部清空但 journal 仍有 generation 时必须响亮报错，不返回虚假 0。"""
+
+    store = _store(tmp_path)
+    try:
+        _journal(store, event_id="ev1", layer_revision=1, layer_digest="d1")
+        assert store.source_generation_high_water_mark(source_key="user") == 1
+        connection = sqlite3.connect(store.path)
+        try:
+            connection.execute(
+                "DELETE FROM config_source_owner WHERE source_key = 'user'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with pytest.raises(RuntimeError, match="水位缺失但 journal 已有 generation"):
+            store.source_generation_high_water_mark(source_key="user")
+    finally:
+        store.close()
+
+
+def test_source_water_mark_rejects_corrupt_owner_generation(tmp_path):
+    """owner 水位被写成非法值（会算出负值高水位）时必须 fail-closed。"""
+
+    store = _store(tmp_path)
+    try:
+        _journal(store, event_id="ev1", layer_revision=1, layer_digest="d1")
+        connection = sqlite3.connect(store.path)
+        try:
+            connection.execute(
+                "UPDATE config_source_owner SET next_generation = 0 "
+                "WHERE source_key = 'user'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with pytest.raises(RuntimeError, match="next_generation 非法"):
+            store.source_generation_high_water_mark(source_key="user")
+    finally:
+        store.close()
