@@ -500,4 +500,192 @@ describe("发送消息状态更新", () => {
       .toBe("job_replay_new");
     expect(currentState.sessionHistoryReloadNonce).toBe(1);
   });
+
+  test("W10-发送成功分支整体投影后端 dispatch 的全部队列事实", async () => {
+    const currentSession = session();
+    const cacheKey = "gw_send_regression::ses_send_regression";
+    let currentState = state(currentSession);
+    let sendMessage:
+      | ReturnType<typeof useSessionRunActions>["sendMessage"]
+      | undefined;
+
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0])).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_w10_credential",
+            data: { token: "test-w10-token" },
+          });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_w10_current_user",
+            data: { kind: "guest", user_id: null },
+          });
+        }
+        if (
+          path === `/api/v1/sessions/${currentSession.session_id}/messages`
+        ) {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_w10_send",
+            data: {
+              message_id: "msg_w10_projection",
+              job_id: "job_w10_projection",
+              status: "queued",
+              dispatch: {
+                session_id: currentSession.session_id,
+                job_id: "job_w10_projection",
+                job_status: "queued",
+                active_job_id: "job_w10_active",
+                blocked_by_job_id: "job_w10_active",
+                queued_jobs_ahead: 2,
+                queued_job_count: 3,
+                pending_job_count: 4,
+                delivery_policy: "after_interrupt",
+                enqueue_sequence: 7,
+                queue_snapshot_version: 11,
+              },
+            },
+          });
+        }
+        throw new Error(`测试收到未预期请求: ${path}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    function Harness(): React.ReactNode {
+      const actions = useSessionRunActions({
+        apiPort: 8014,
+        currentSession,
+        activeGatewayWorkspaceId: "gw_send_regression",
+        currentSessionGatewayWorkspaceId: "gw_send_regression",
+        currentSessionCacheKey: cacheKey,
+        defaultGatewayWorkspaceId: "gw_send_regression",
+        contentView: "default",
+        setState: (update) => {
+          currentState =
+            typeof update === "function" ? update(currentState) : update;
+        },
+        refreshAgentStateSnapshot: async () => undefined,
+      });
+      sendMessage = actions.sendMessage;
+      return null;
+    }
+
+    try {
+      renderToString(<Harness />);
+      if (!sendMessage) throw new Error("测试未获取 sendMessage");
+      await sendMessage("投递投影");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const conversation = currentState.pendingConversations.get(cacheKey)?.[0];
+    expect(conversation?.deliveryPolicy).toBe("after_interrupt");
+    expect(conversation?.enqueueSequence).toBe(7);
+    expect(conversation?.pendingPosition).toBe(2);
+    expect(conversation?.queueSnapshotVersion).toBe(11);
+    // 此前被逐字段手挑丢掉的队列计数与阻塞来源必须进入前端状态。
+    expect(conversation?.queuedJobCount).toBe(3);
+    expect(conversation?.pendingJobCount).toBe(4);
+    expect(conversation?.blockedByJobId).toBe("job_w10_active");
+  });
+
+  test("W10-后端未提供 delivery_policy 时不伪造本地默认值", async () => {
+    const currentSession = session();
+    const cacheKey = "gw_send_regression::ses_send_regression";
+    let currentState = state(currentSession);
+    let sendMessage:
+      | ReturnType<typeof useSessionRunActions>["sendMessage"]
+      | undefined;
+
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0])).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_w10_null_credential",
+            data: { token: "test-w10-token" },
+          });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_w10_null_current_user",
+            data: { kind: "guest", user_id: null },
+          });
+        }
+        if (
+          path === `/api/v1/sessions/${currentSession.session_id}/messages`
+        ) {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_w10_null_send",
+            data: {
+              message_id: "msg_w10_null",
+              job_id: "job_w10_null",
+              status: "running",
+              dispatch: {
+                session_id: currentSession.session_id,
+                job_id: "job_w10_null",
+                job_status: "running",
+                active_job_id: "job_w10_null",
+                queued_jobs_ahead: 0,
+                queued_job_count: 0,
+                pending_job_count: 1,
+              },
+            },
+          });
+        }
+        throw new Error(`测试收到未预期请求: ${path}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    function Harness(): React.ReactNode {
+      const actions = useSessionRunActions({
+        apiPort: 8014,
+        currentSession,
+        activeGatewayWorkspaceId: "gw_send_regression",
+        currentSessionGatewayWorkspaceId: "gw_send_regression",
+        currentSessionCacheKey: cacheKey,
+        defaultGatewayWorkspaceId: "gw_send_regression",
+        contentView: "default",
+        setState: (update) => {
+          currentState =
+            typeof update === "function" ? update(currentState) : update;
+        },
+        refreshAgentStateSnapshot: async () => undefined,
+      });
+      sendMessage = actions.sendMessage;
+      return null;
+    }
+
+    try {
+      renderToString(<Harness />);
+      if (!sendMessage) throw new Error("测试未获取 sendMessage");
+      // 请求参数带 after_turn，但后端拒绝提供 delivery_policy。
+      await sendMessage("无投递策略", [], "after_turn");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const conversation = currentState.pendingConversations.get(cacheKey)?.[0];
+    expect(conversation?.deliveryPolicy).toBeUndefined();
+    expect(conversation?.enqueueSequence).toBeUndefined();
+    expect(conversation?.blockedByJobId).toBeUndefined();
+    expect(conversation?.queuedJobCount).toBe(0);
+    expect(conversation?.pendingJobCount).toBe(1);
+  });
 });

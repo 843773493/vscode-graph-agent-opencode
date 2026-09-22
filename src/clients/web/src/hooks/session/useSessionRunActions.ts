@@ -21,9 +21,15 @@ import type { ConversationContentView, ConversationView } from "../../types/fron
 import { cloneMaps } from "../../state/appStateMaps";
 import { listPendingRequests as apiListPendingRequests } from "../../pendingRequestsApi";
 import { updateSessionAttachmentSummary } from "../../state/attachments";
-import { writePendingList, writePendingSnapshot } from "../../state/conversations";
+import {
+  dispatchToConversationProjection,
+  writeDispatchActiveJob,
+  writePendingList,
+  writePendingSnapshot,
+} from "../../state/conversations";
 import { appendFrontendEvent } from "../../state/traceEvents";
 import { writeLastSessionId } from "../../state/storage";
+import { errorMessage } from "../../utils/errorMessage";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { usePendingRequestActions } from "../runtime/usePendingRequestActions";
@@ -73,7 +79,7 @@ export function useSessionRunActions({
             targetWorkspaceId,
           );
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessage(error);
           setState((prev) => ({ ...prev, status: `创建会话失败: ${message}` }));
           throw error;
         }
@@ -208,7 +214,7 @@ export function useSessionRunActions({
           deliveryPolicy,
         );
       } catch (error) {
-        let message = error instanceof Error ? error.message : String(error);
+        let message = errorMessage(error);
         // 发送失败不等于后端没收到：网关超时或响应丢失时，消息可能已经落库
         // 排进队列。先按权威快照校准本地队列，只有重取也失败时才退回本地
         // 回滚，避免把后端已经接受的回合从界面上抹掉。
@@ -221,9 +227,7 @@ export function useSessionRunActions({
             activeSessionGatewayWorkspaceId,
           );
         } catch (reconciliationError) {
-          reconciliationFailure = reconciliationError instanceof Error
-            ? reconciliationError.message
-            : String(reconciliationError);
+          reconciliationFailure = errorMessage(reconciliationError);
         }
         if (!snapshot && reconciliationFailure) {
           message = `${message}；重新读取待处理队列也失败: ${reconciliationFailure}`;
@@ -285,10 +289,7 @@ export function useSessionRunActions({
           activeJobOverlay: accepted.status !== "queued",
           pendingSubmissionId,
           source: "pending",
-          deliveryPolicy: accepted.dispatch.delivery_policy ?? deliveryPolicy,
-          enqueueSequence: accepted.dispatch.enqueue_sequence ?? undefined,
-          pendingPosition: accepted.dispatch.queued_jobs_ahead,
-          queueSnapshotVersion: accepted.dispatch.queue_snapshot_version,
+          ...dispatchToConversationProjection(accepted.dispatch),
         };
         const pendingList = next.pendingConversations.get(activeSessionCacheKey) ?? [];
         next.pendingConversations.set(activeSessionCacheKey, [
@@ -297,12 +298,11 @@ export function useSessionRunActions({
           ),
           conversation,
         ]);
-        if (accepted.dispatch.active_job_id) {
-          next.activeJobIdsBySession.set(
-            activeSessionCacheKey,
-            accepted.dispatch.active_job_id,
-          );
-        }
+        writeDispatchActiveJob(
+          next.activeJobIdsBySession,
+          accepted.dispatch,
+          activeSessionCacheKey,
+        );
         next.status =
           accepted.status === "queued" ? "已排队，等待当前任务结束" : "已发送，等待生成";
         // 普通发送只是向当前历史追加一个回合，不改变 context view。
@@ -379,7 +379,7 @@ export function useSessionRunActions({
       }
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((prev) => ({
         ...prev,
         compactLoading: false,
@@ -416,7 +416,7 @@ export function useSessionRunActions({
       if (!(error instanceof HttpRequestError) || error.status !== 404) {
         // 中断失败说明后端任务很可能仍在运行，不能在这里乐观清掉前端运行态；
         // 但要重新拉取待处理队列快照，让 activeJobIds 与后端真值保持一致。
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         let notice = `中断生成失败: ${message}`;
         try {
           const snapshot = await apiListPendingRequests(
@@ -436,9 +436,7 @@ export function useSessionRunActions({
             return next;
           });
         } catch (recoveryError) {
-          const recoveryMessage = recoveryError instanceof Error
-            ? recoveryError.message
-            : String(recoveryError);
+          const recoveryMessage = errorMessage(recoveryError);
           notice = `${notice}；重新读取运行状态也失败: ${recoveryMessage}`;
           setState((prev) => ({ ...prev, status: notice }));
         }
@@ -530,18 +528,17 @@ export function useSessionRunActions({
           ...pendingList,
           conversation,
         ]);
-        if (accepted.dispatch.active_job_id) {
-          next.activeJobIdsBySession.set(
-            sessionCacheKey,
-            accepted.dispatch.active_job_id,
-          );
-        }
+        writeDispatchActiveJob(
+          next.activeJobIdsBySession,
+          accepted.dispatch,
+          sessionCacheKey,
+        );
         next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
         next.status = `${accepted.notice} 正在生成新回复。`;
         return next;
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((prev) => ({
         ...prev,
         sessionHistoryReloadNonce: prev.sessionHistoryReloadNonce + 1,

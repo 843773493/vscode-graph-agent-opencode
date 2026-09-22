@@ -126,6 +126,11 @@ export interface ConversationView {
   waitingReason?: string | null;
   queueSnapshotVersion?: number;
   pendingPosition?: number;
+  /** 后端 dispatch 快照直投的队列事实：排队 Job 数与含活动 Job 的待处理总数。 */
+  queuedJobCount?: number;
+  pendingJobCount?: number;
+  /** 阻塞当前排队 Job 的活动 Job；由后端 dispatch 快照直投。 */
+  blockedByJobId?: string | null;
   source: "turn" | "pending";
 }
 

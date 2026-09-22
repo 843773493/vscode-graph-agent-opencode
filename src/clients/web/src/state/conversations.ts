@@ -1,4 +1,5 @@
 import type {
+  JobDispatchSnapshot,
   JobStatus,
   Message,
   PendingRequestList,
@@ -22,6 +23,47 @@ import {
 } from "./traceEvents";
 
 export const PENDING_CONVERSATION_EVENT_LIMIT = 512;
+
+/**
+ * 后端 JobDispatchSnapshot 直投到 ConversationView 的队列事实字段。
+ *
+ * 成功派发后前端必须以后端返回的完整对象替换本地状态，这里只做一次整体投影，
+ * 不再逐字段手挑；后端未提供的可选值一律保持 undefined，不回退到请求参数或
+ * 任何本地默认值，避免向前端伪造后端并不存在的队列事实。
+ */
+export function dispatchToConversationProjection(
+  dispatch: JobDispatchSnapshot,
+): Pick<
+  ConversationView,
+  | "deliveryPolicy"
+  | "enqueueSequence"
+  | "pendingPosition"
+  | "queueSnapshotVersion"
+  | "queuedJobCount"
+  | "pendingJobCount"
+  | "blockedByJobId"
+> {
+  return {
+    deliveryPolicy: dispatch.delivery_policy ?? undefined,
+    enqueueSequence: dispatch.enqueue_sequence ?? undefined,
+    pendingPosition: dispatch.queued_jobs_ahead,
+    queueSnapshotVersion: dispatch.queue_snapshot_version,
+    queuedJobCount: dispatch.queued_job_count,
+    pendingJobCount: dispatch.pending_job_count,
+    blockedByJobId: dispatch.blocked_by_job_id,
+  };
+}
+
+/** 把后端 dispatch 的活动 Job 写回会话级运行态镜像；dispatch 未给出活动 Job 时保持现状。 */
+export function writeDispatchActiveJob(
+  activeJobMap: Map<string, string>,
+  dispatch: JobDispatchSnapshot,
+  mapKey: string,
+): void {
+  if (dispatch.active_job_id) {
+    activeJobMap.set(mapKey, dispatch.active_job_id);
+  }
+}
 
 function compactPendingConversationEvents(
   events: TraceEvent[],

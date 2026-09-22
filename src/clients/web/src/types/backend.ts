@@ -15,6 +15,7 @@ export type {
   Job,
   JobControlRequest,
   JobControlResponse,
+  JobDispatchSnapshot,
   JobStatus,
   LLMRequestLogRecordDTO,
   Message,
