@@ -24,6 +24,7 @@ import {
   applyToolSelectionChanges,
   restoreToolSelectionAfterSaveFailure,
 } from "./toolSelectionState";
+import { errorMessage } from "../../utils/errorMessage";
 
 const TOOL_GROUP_KIND_ORDER: Record<ToolKind, number> = {
   default: 0,
@@ -75,7 +76,7 @@ export default function ComposerToolControl({
       setTools(catalog);
       setRuns(latestRunsByTool(history));
     } catch (loadError) {
-      const message = loadError instanceof Error ? loadError.message : String(loadError);
+      const message = errorMessage(loadError);
       setError(message);
       throw loadError;
     } finally {
@@ -114,7 +115,7 @@ export default function ComposerToolControl({
             }
           })
           .catch((pollError: unknown) => {
-            const message = pollError instanceof Error ? pollError.message : String(pollError);
+            const message = errorMessage(pollError);
             setError(`测试进度读取失败：${message}`);
           });
       }
@@ -171,16 +172,14 @@ export default function ComposerToolControl({
       ));
       onStatus(successMessage);
     } catch (saveError) {
-      const message = saveError instanceof Error ? saveError.message : String(saveError);
+      const message = errorMessage(saveError);
       setError(`工具设置保存失败：${message}`);
       try {
         const refreshedTools = await getToolCatalog(apiPort, agentId, workspaceId);
         setTools(restoreToolSelectionAfterSaveFailure(previousTools, refreshedTools));
       } catch (refreshError) {
         setTools(restoreToolSelectionAfterSaveFailure(previousTools, null));
-        const refreshMessage = refreshError instanceof Error
-          ? refreshError.message
-          : String(refreshError);
+        const refreshMessage = errorMessage(refreshError);
         setError(`工具设置保存失败，且状态刷新失败：${message}；${refreshMessage}`);
       }
       throw saveError;
@@ -264,7 +263,7 @@ export default function ComposerToolControl({
         onStatus(`已启动 ${tool.name} 模型工具测试`);
       })
       .catch((testError: unknown) => {
-        const message = testError instanceof Error ? testError.message : String(testError);
+        const message = errorMessage(testError);
         setError(`测试启动失败：${message}`);
         setTestingTools((current) => {
           const next = new Set(current);

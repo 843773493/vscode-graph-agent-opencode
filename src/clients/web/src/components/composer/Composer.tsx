@@ -40,6 +40,7 @@ import {
   goalNeedsReplacementConfirmation,
   parseGoalSlashAction,
 } from "../../state/sessionGoal";
+import { errorMessage } from "../../utils/errorMessage";
 
 function resizeTextarea(textarea: HTMLTextAreaElement | null) {
   if (!textarea) {
@@ -233,7 +234,7 @@ function Composer() {
       })
       .catch((error: unknown) => {
         setAttachmentError(
-          `命名失败：${error instanceof Error ? error.message : String(error)}`,
+          `命名失败：${errorMessage(error)}`,
         );
       });
   };
@@ -254,7 +255,7 @@ function Composer() {
       })
       .catch((error: unknown) => {
         setRenameDialogError(
-          error instanceof Error ? error.message : String(error),
+          errorMessage(error),
         );
       })
       .finally(() => {
@@ -280,7 +281,7 @@ function Composer() {
       setComposerNotice(successMessage);
       setStatus(successMessage);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setAttachmentError(`Goal 操作失败：${message}`);
       throw error;
     }
@@ -382,7 +383,7 @@ function Composer() {
     };
     void command().catch((error: unknown) => {
       setAttachmentError(
-        `Goal 操作失败：${error instanceof Error ? error.message : String(error)}`,
+        `Goal 操作失败：${errorMessage(error)}`,
       );
     });
   };
@@ -453,7 +454,7 @@ function Composer() {
       setAttachments(sentAttachments);
       setBrowserElements(sentBrowserElements);
       setAttachmentError(
-        `发送失败：${error instanceof Error ? error.message : String(error)}`,
+        `发送失败：${errorMessage(error)}`,
       );
     });
   };
@@ -477,7 +478,7 @@ function Composer() {
     );
     const errors = results.flatMap((result) =>
       result.status === "rejected"
-        ? [result.reason instanceof Error ? result.reason.message : String(result.reason)]
+        ? [errorMessage(result.reason)]
         : [],
     );
 
@@ -547,7 +548,7 @@ function Composer() {
       // 切换失败必须让用户看得见：写进 Composer 本地错误区，同时 AppProvider
       // 已把同一条失败写进 AppState.status，状态栏也会显示。
       setAttachmentError(
-        `Agent 切换失败：${error instanceof Error ? error.message : String(error)}`,
+        `Agent 切换失败：${errorMessage(error)}`,
       );
     });
   };
@@ -556,7 +557,7 @@ function Composer() {
     setAttachmentError("");
     void setWorkspaceDefaultAgent(agentId).catch((error: unknown) => {
       setAttachmentError(
-        `设置工作区默认 Agent 失败：${error instanceof Error ? error.message : String(error)}`,
+        `设置工作区默认 Agent 失败：${errorMessage(error)}`,
       );
     });
   };
@@ -566,7 +567,7 @@ function Composer() {
     setAttachmentError("");
     void switchModel(providerId).catch((error: unknown) => {
       setAttachmentError(
-        `模型切换失败：${error instanceof Error ? error.message : String(error)}`,
+        `模型切换失败：${errorMessage(error)}`,
       );
     });
   };
@@ -578,7 +579,7 @@ function Composer() {
       return;
     }
     void refreshAgents(currentWorkspaceId).catch((error: unknown) => {
-      setStatus(`刷新模型列表失败: ${error instanceof Error ? error.message : String(error)}`);
+      setStatus(`刷新模型列表失败: ${errorMessage(error)}`);
     });
   };
 
@@ -586,7 +587,7 @@ function Composer() {
     setAttachmentError("");
     void setWorkspaceDefaultProvider(currentAgent, providerId).catch((error: unknown) => {
       setAttachmentError(
-        `设置工作区默认模型失败：${error instanceof Error ? error.message : String(error)}`,
+        `设置工作区默认模型失败：${errorMessage(error)}`,
       );
     });
   };
@@ -807,7 +808,7 @@ function Composer() {
                         },
                       }).catch((error: unknown) => {
                         setStatus(
-                          `保存默认发送方式失败: ${error instanceof Error ? error.message : String(error)}`,
+                          `保存默认发送方式失败: ${errorMessage(error)}`,
                         );
                       });
                     }}
