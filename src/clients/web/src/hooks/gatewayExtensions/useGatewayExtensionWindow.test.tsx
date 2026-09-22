@@ -1,28 +1,46 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { WorkspaceAuxiliaryTab } from "../../components/workspace/WorkspaceAuxiliaryPanel";
 import type { WorkspaceRuntimePreviewTab } from "../../components/workspace/WorkspaceRuntimePreviewArea";
 import type { GatewayExtensionResourceEntry } from "./useGatewayExtensionResources";
 import type { SessionResource } from "../../types/backend";
+import { useGatewayExtensionWindow } from "./useGatewayExtensionWindow";
 
-// createSessionConnection 的真实实现会经由 http.ts 的认证屏障发起网络请求；
-// 这里替换为记录实参的桩，直接观察编排层原样转发的四个参数与返回的资源标识。
+const originalFetch = globalThis.fetch;
+
+// createSessionConnection 的真实实现会经 http.ts 的认证屏障发起网络请求；这里改用
+// fetch 桩记录实际转发的工作区、会话与资源类型。不要再用 mock.module：bun 的模块
+// 注册表是进程级的，mock.restore() 无法跨文件撤销，会污染随后加载同一模块的测试。
 const createSessionConnectionCalls: Array<[number, string, string, string]> = [];
 let createdConnectionResourceId = "created-browser-1";
-mock.module("../../api/gateway/sessionConnections", () => ({
-  createSessionConnection: async (
-    port: number,
-    workspaceId: string,
-    sessionId: string,
-    kind: string,
-  ) => {
-    createSessionConnectionCalls.push([port, workspaceId, sessionId, kind]);
-    return { kind, resourceId: createdConnectionResourceId };
-  },
-}));
 
-const { useGatewayExtensionWindow } = await import("./useGatewayExtensionWindow");
+function installCreateSessionConnectionStub(port: number): void {
+  globalThis.fetch = Object.assign(
+    async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/gateway/auth/local-credential")) {
+        return Response.json({ code: 0, message: "ok", request_id: "req_token", data: { token: "test-token" } });
+      }
+      const match = /\/api\/gateway\/workspaces\/([^/]+)\/([^/]+)\/api\/(browsers|terminals)/.exec(url);
+      if (match) {
+        const workspaceId = decodeURIComponent(match[1]);
+        const service = match[2];
+        const kind = service === "browser-manager" ? "browser" : "terminal";
+        const payload = JSON.parse(String(init?.body)) as { session_id: string };
+        createSessionConnectionCalls.push([port, workspaceId, payload.session_id, kind]);
+        return Response.json({
+          code: 0,
+          message: "ok",
+          request_id: "req_create",
+          data: kind === "browser" ? { browser_id: createdConnectionResourceId } : { terminal_id: createdConnectionResourceId },
+        });
+      }
+      throw new Error("未预期的请求: " + url);
+    },
+    { preconnect: originalFetch.preconnect },
+  );
+}
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -98,6 +116,7 @@ interface MountOptions {
 let renderers: ReactTestRenderer[] = [];
 
 async function mountHook(options: MountOptions = {}) {
+  installCreateSessionConnectionStub(49_507);
   const selects: (string | null)[] = [];
   const auxiliaryTabs: WorkspaceAuxiliaryTab[] = [];
   const statuses: string[] = [];
@@ -198,6 +217,7 @@ afterEach(() => {
   }
   createSessionConnectionCalls.length = 0;
   createdConnectionResourceId = "created-browser-1";
+  globalThis.fetch = originalFetch;
   if (originalWindow) {
     Object.defineProperty(globalThis, "window", originalWindow);
   } else {
