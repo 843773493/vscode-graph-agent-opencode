@@ -23,6 +23,7 @@ export function useEventQueuePagination({
   onLoadOlderHistory: () => Promise<number>;
 }) {
   const {
+    beginOlderLoad,
     appendVisibleCount,
     captureScrollAnchor,
     discardScrollAnchor,
@@ -50,15 +51,18 @@ export function useEventQueuePagination({
       || !historyHasMore
     ) return;
     serverLoadInFlightRef.current = true;
+    // 归属凭证在发起请求时确定：会话切换或窗口重置后返回的旧页必须被丢弃。
+    const ticket = beginOlderLoad();
     captureScrollAnchor();
     try {
       const added = await onLoadOlderHistory();
-      if (added > 0) appendVisibleCount(added);
-      else discardScrollAnchor();
+      if (added > 0) appendVisibleCount(added, ticket);
+      else discardScrollAnchor(ticket);
     } finally {
       serverLoadInFlightRef.current = false;
     }
   }, [
+    beginOlderLoad,
     appendVisibleCount,
     captureScrollAnchor,
     discardScrollAnchor,

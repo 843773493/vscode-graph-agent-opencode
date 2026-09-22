@@ -31,12 +31,28 @@ export interface ScrollWindow {
   listRef: React.RefObject<HTMLDivElement>;
   /** 客户端窗口向前展开一批，并恢复滚动锚点；返回是否真的展开了。 */
   revealOlderItems: () => boolean;
-  /** 服务端旧页返回后追加可见条目。 */
-  appendVisibleCount: (added: number) => void;
+  /** 记录一次服务端旧页请求的归属，供结果返回时校验。 */
+  beginOlderLoad: () => ScrollWindowLoadTicket;
+  /** 服务端旧页返回后追加可见条目；迟到结果按归属守卫丢弃。 */
+  appendVisibleCount: (added: number, ticket: ScrollWindowLoadTicket) => void;
   /** 记录当前滚动锚点，供异步加载后恢复。 */
   captureScrollAnchor: () => void;
-  /** 服务端旧页请求失败或没有新增时放弃锚点。 */
-  discardScrollAnchor: () => void;
+  /** 服务端旧页请求失败或没有新增时放弃锚点；迟到结果按归属守卫丢弃。 */
+  discardScrollAnchor: (ticket: ScrollWindowLoadTicket) => void;
+}
+
+/**
+ * 一次服务端旧页请求的归属凭证。
+ *
+ * 展示态累加只属于「发起请求时的那次窗口」：会话切换或窗口重置后，旧会话的
+ * 旧页条数绝不能算进新会话的可见窗口（上层 useSessionTraceHistory 虽有 epoch
+ * 丢弃，但那只管它自己写回的历史缓存，管不到这里的展示态）。
+ */
+export interface ScrollWindowLoadTicket {
+  /** 发起请求时的会话作用域。 */
+  scopeKey: string;
+  /** 发起请求时的窗口代次；会话切换或窗口重置都会使其失效。 */
+  generation: number;
 }
 
 /**
@@ -56,11 +72,17 @@ export function useScrollWindow({
   const restoreScrollRef = React.useRef<{ height: number; top: number } | null>(null);
   const shouldScrollToLatestRef = React.useRef(true);
   const stickToLatestRef = React.useRef(true);
+  const scopeKeyRef = React.useRef(sessionId);
+  const generationRef = React.useRef(0);
   const [visibleCount, setVisibleCount] = React.useState(initialVisibleCount);
   const firstVisibleIndex = Math.max(itemCount - visibleCount, 0);
 
   useClientLayoutEffect(() => {
     if (!active) return;
+    // 会话切换或窗口重置：旧窗口的滚动锚点与在途旧页结果全部作废。
+    scopeKeyRef.current = sessionId;
+    generationRef.current += 1;
+    restoreScrollRef.current = null;
     setVisibleCount(initialVisibleCount);
     shouldScrollToLatestRef.current = true;
     stickToLatestRef.current = true;
@@ -88,13 +110,28 @@ export function useScrollWindow({
     restoreScrollRef.current = { height: list.scrollHeight, top: list.scrollTop };
   }, []);
 
-  const discardScrollAnchor = React.useCallback(() => {
-    restoreScrollRef.current = null;
-  }, []);
+  const beginOlderLoad = React.useCallback((): ScrollWindowLoadTicket => ({
+    scopeKey: scopeKeyRef.current,
+    generation: generationRef.current,
+  }), []);
 
-  const appendVisibleCount = React.useCallback((added: number) => {
+  /** 迟到结果按归属守卫丢弃：不是当前窗口发起的请求，不得改动当前展示态。 */
+  const ownsTicket = React.useCallback(
+    (ticket: ScrollWindowLoadTicket): boolean =>
+      ticket.scopeKey === scopeKeyRef.current
+      && ticket.generation === generationRef.current,
+    [],
+  );
+
+  const discardScrollAnchor = React.useCallback((ticket: ScrollWindowLoadTicket) => {
+    if (!ownsTicket(ticket)) return;
+    restoreScrollRef.current = null;
+  }, [ownsTicket]);
+
+  const appendVisibleCount = React.useCallback((added: number, ticket: ScrollWindowLoadTicket) => {
+    if (!ownsTicket(ticket)) return;
     setVisibleCount((current) => current + added);
-  }, []);
+  }, [ownsTicket]);
 
   const revealOlderItems = React.useCallback((): boolean => {
     const list = listRef.current;
@@ -119,6 +156,7 @@ export function useScrollWindow({
     handleListScroll,
     listRef,
     revealOlderItems,
+    beginOlderLoad,
     appendVisibleCount,
     captureScrollAnchor,
     discardScrollAnchor,

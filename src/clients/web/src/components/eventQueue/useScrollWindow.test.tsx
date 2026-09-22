@@ -98,16 +98,18 @@ describe("共享滚动窗口", () => {
     windowed.attachList(list);
 
     // 记录锚点后内容变高：scrollTop 应保持「距底部偏移不变」。
+    const ticket = windowed.hook().beginOlderLoad();
     windowed.hook().captureScrollAnchor();
     list.scrollHeight = 400;
-    windowed.run(() => windowed.hook().appendVisibleCount(10));
+    windowed.run(() => windowed.hook().appendVisibleCount(10, ticket));
     expect(list.scrollTop).toBe(250);
 
     // 丢弃锚点后不再做高度差恢复，而是走贴底逻辑。
     windowed.hook().captureScrollAnchor();
-    windowed.hook().discardScrollAnchor();
+    windowed.hook().discardScrollAnchor(windowed.hook().beginOlderLoad());
     list.scrollHeight = 600;
-    windowed.run(() => windowed.hook().appendVisibleCount(10));
+    windowed.run(() =>
+      windowed.hook().appendVisibleCount(10, windowed.hook().beginOlderLoad()));
     expect(list.scrollTop).toBe(600);
 
     windowed.unmount();
@@ -135,6 +137,35 @@ describe("共享滚动窗口", () => {
     list.scrollTop = 90;
     windowed.hook().handleListScroll();
     expect(exhausted).toBe(1);
+
+    windowed.unmount();
+  });
+
+  test("会话切换后迟到的旧页结果不累加到新会话窗口", () => {
+    const windowed = mountWindow({
+      active: true,
+      sessionId: "ses_old",
+      itemCount: 100,
+      initialVisibleCount: 10,
+      olderBatchSize: 10,
+    });
+    windowed.attachList({ scrollHeight: 100, scrollTop: 50, clientHeight: 50 });
+
+    // 旧会话发起一次旧页请求并拿到凭证，请求在途时切到新会话。
+    const staleTicket = windowed.hook().beginOlderLoad();
+    windowed.update({ sessionId: "ses_new", itemCount: 20 });
+
+    // 新会话窗口按 initialVisibleCount 重置：20 - 10 = 10。
+    expect(windowed.hook().firstVisibleIndex).toBe(10);
+
+    // 旧会话的响应此时才到达：必须被归属守卫丢弃，不能把旧页条数算进来。
+    windowed.run(() => windowed.hook().appendVisibleCount(40, staleTicket));
+    expect(windowed.hook().firstVisibleIndex).toBe(10);
+
+    // 当前窗口自己的凭证仍然有效，累加照常生效。
+    windowed.run(() =>
+      windowed.hook().appendVisibleCount(10, windowed.hook().beginOlderLoad()));
+    expect(windowed.hook().firstVisibleIndex).toBe(0);
 
     windowed.unmount();
   });
