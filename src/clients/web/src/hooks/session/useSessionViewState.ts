@@ -269,9 +269,40 @@ export function useSessionViewState({
         false,
       );
     }).catch((error: unknown) => {
-      if (hostRef.current.gatewayUserAccess?.lease_generation === requestLeaseGeneration) {
-        setStatus(`保存用户视图位置失败: ${errorMessage(error)}`);
-      }
+      const latest = hostRef.current;
+      if (latest.gatewayUserAccess?.lease_generation !== requestLeaseGeneration) return;
+      let message = `保存用户视图位置失败: ${errorMessage(error)}`;
+      // 保存失败时本地镜像可能与后端真值不一致（toggleExpandDetails 更是乐观置位后
+      // 才发现保存失败）。按前端状态管理原则主动重取校准，让本地回到后端权威值，
+      // 而不是把错误留在本地继续误导后续投影。
+      void getGatewayUserViewState(
+        latest.apiPort ?? DEFAULT_BACKEND_PORT,
+        workspaceId,
+        sessionId,
+      ).then((viewState) => {
+        writeSessionViewStateCache(cacheRef.current, [
+          latest.apiPort ?? DEFAULT_BACKEND_PORT,
+          latest.gatewayUserAccess?.user_id ?? "",
+          requestLeaseGeneration,
+          cacheKey,
+        ].join(":"), viewState);
+        applyLoadedViewState(
+          viewState,
+          workspaceId,
+          sessionId,
+          latest.gatewayUserAccess?.user_id ?? "",
+          requestLeaseGeneration,
+          true,
+        );
+        if (hostRef.current.gatewayUserAccess?.lease_generation === requestLeaseGeneration) {
+          setStatus(message);
+        }
+      }, (recalibrationError: unknown) => {
+        message = `${message}；重新读取用户视图位置也失败: ${errorMessage(recalibrationError)}`;
+        if (hostRef.current.gatewayUserAccess?.lease_generation === requestLeaseGeneration) {
+          setStatus(message);
+        }
+      });
     });
   }, [applyLoadedViewState, setStatus]);
 

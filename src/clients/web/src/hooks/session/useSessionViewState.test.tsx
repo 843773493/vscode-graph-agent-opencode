@@ -334,4 +334,69 @@ describe("useSessionViewState", () => {
     expect(outcome).toEqual({ kind: "failed", error: failure });
   });
 
+  test("保存失败后重取校准，本地回到后端权威值并给出可见提示", async () => {
+    const scopeKey = "workspace-view-state::session-view-state";
+    const writer = spyOn(userViewStateApi, "putGatewayUserViewState")
+      .mockRejectedValue(new Error("保存接口不可用"));
+    // 后端权威值：工具详情未展开（与本地乐观值相反），滚动位置为 5。
+    const reader = spyOn(userViewStateApi, "getGatewayUserViewState")
+      .mockResolvedValue(viewState({ tool_details_expanded: false, scroll_offset: 5 }));
+    restoreApi = () => { reader.mockRestore(); writer.mockRestore(); };
+
+    let latestState = appState();
+    let controller!: SessionViewStateController;
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      latestState = current;
+      controller = useSessionViewState({
+        host: { ...host, gatewayUserViewStates: current.gatewayUserViewStates },
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
+
+    await act(async () => { renderer = create(<Probe />); });
+    // 乐观置位后保存失败：必须被重取校准纠正回后端真值。
+    act(() => controller.toggleExpandDetails(true));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(reader).toHaveBeenCalledTimes(1);
+    expect(latestState.expandDetails).toBe(false);
+    expect(latestState.gatewayUserViewStates.get(scopeKey)?.scroll_offset).toBe(5);
+    expect(latestState.status).toBe("保存用户视图位置失败: 保存接口不可用");
+  });
+
+  test("保存失败且重取也失败时，提示同时包含两段失败原因", async () => {
+    const writer = spyOn(userViewStateApi, "putGatewayUserViewState")
+      .mockRejectedValue(new Error("保存接口不可用"));
+    const reader = spyOn(userViewStateApi, "getGatewayUserViewState")
+      .mockRejectedValue(new Error("读取接口不可用"));
+    restoreApi = () => { writer.mockRestore(); reader.mockRestore(); };
+
+    let latestState = appState();
+    let controller!: SessionViewStateController;
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      latestState = current;
+      controller = useSessionViewState({
+        host: { ...host, gatewayUserViewStates: current.gatewayUserViewStates },
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
+
+    await act(async () => { renderer = create(<Probe />); });
+    act(() => controller.toggleExpandDetails(true));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(latestState.status).toBe(
+      "保存用户视图位置失败: 保存接口不可用；重新读取用户视图位置也失败: 读取接口不可用",
+    );
+  });
+
+
 });
