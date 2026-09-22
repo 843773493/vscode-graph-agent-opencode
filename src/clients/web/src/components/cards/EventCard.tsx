@@ -1,8 +1,8 @@
 import React from "react";
-import type { AttachmentRef } from "../types/backend";
-import { escapeHtml } from "../utils/format";
-import { renderMarkdown } from "../utils/markdown/markdown";
-import MessageAttachments from "./chat/MessageAttachments";
+import type { AttachmentRef } from "../../types/backend";
+import { escapeHtml } from "../../utils/format";
+import { renderMarkdown } from "../../utils/markdown/markdown";
+import MessageAttachments from "../chat/MessageAttachments";
 
 export interface EventCardProps {
   apiPort: number;

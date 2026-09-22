@@ -2,15 +2,15 @@ import { useEffect, useState } from "react";
 import type {
   SessionGoal,
   SessionGoalUpdateRequest,
-} from "../types/backend";
+} from "../../types/backend";
 import {
   GOAL_STATUS_LABELS,
   goalCanResume,
   goalEditStatus,
   restartCompletedGoalPayload,
-} from "../state/sessionGoal";
-import WarmActionDialog from "./overlays/WarmActionDialog";
-import { useWarmConfirm } from "./WarmConfirmProvider";
+} from "../../state/sessionGoal";
+import WarmActionDialog from "../overlays/WarmActionDialog";
+import { useWarmConfirm } from "../WarmConfirmProvider";
 
 function formatTokens(tokens: number): string {
   return new Intl.NumberFormat("zh-CN").format(tokens);
