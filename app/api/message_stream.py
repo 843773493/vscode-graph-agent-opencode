@@ -29,6 +29,8 @@ from app.services.infrastructure.message_stream_store import (
 
 router = APIRouter(prefix="/sessions", tags=["message-stream"])
 MessageStreamEventRecord = Mapping[str, object]
+# stream.snapshot 的定位字段只保留在事件信封中，payload 不重复承载。
+_SNAPSHOT_ENVELOPE_FIELDS = ("session_id", "turn_id", "turn_stream_id")
 
 
 def _parse_after_seq(after_seq: int | None, last_event_id: str | None) -> int:
@@ -47,13 +49,56 @@ def _parse_after_seq(after_seq: int | None, last_event_id: str | None) -> int:
 
 
 def _sse_frame(event: MessageStreamEventRecord) -> str:
-    proto_event = message_stream_to_proto(event)
-    value = message_stream_to_json(proto_event)
+    value = _public_event_json(event)
     return (
         f"id: {value['event_seq']}\n"
         f"event: {value['type']}\n"
         f"data: {json.dumps(value, ensure_ascii=False, separators=(',', ':'))}\n\n"
     )
+
+
+def _public_event_json(event: MessageStreamEventRecord) -> dict[str, object]:
+    """SSE 与 HTTP 共用的公共线格式投影。"""
+    value = message_stream_to_json(message_stream_to_proto(event))
+    if value["type"] != "stream.snapshot":
+        return value
+    snapshot = _snapshot_projection(event).model_dump(mode="json", exclude_none=True)
+    for field_name in _SNAPSHOT_ENVELOPE_FIELDS:
+        snapshot.pop(field_name, None)
+    return {**value, "payload": snapshot}
+
+
+def _snapshot_projection(event: MessageStreamEventRecord) -> MessageStreamSnapshotDTO:
+    """stream.snapshot 的唯一公共投影：SSE 控制帧与 HTTP 快照共用同一份实现。"""
+    try:
+        value = message_stream_to_json(message_stream_to_proto(event))
+    except (TypeError, ValueError, json_format.ParseError) as error:
+        raise MessageStreamError("消息流快照编解码失败") from error
+    payload = value["payload"]
+    if not isinstance(payload, Mapping):
+        raise MessageStreamError("消息流快照编解码结果不是对象")
+    source = event.get("payload")
+    if not isinstance(source, Mapping):
+        raise MessageStreamError("消息流快照源数据不是对象")
+    projected = dict(payload)
+    # 快照序号、尝试次数和可恢复性是存储状态的标量来源；protobuf JSON 为零值
+    # 省略它们，公共 DTO 仍需把同一真实值明确返回。
+    projected.update(
+        {
+            "session_id": event["session_id"],
+            "turn_id": event["turn_id"],
+            "turn_stream_id": event["turn_stream_id"],
+            "snapshot_seq": source["snapshot_seq"],
+            "current_attempt": source["current_attempt"],
+            "resumable": source["resumable"],
+            "stream_status": source["stream_status"],
+            "agent_loop_status": source["agent_loop_status"],
+        }
+    )
+    try:
+        return MessageStreamSnapshotDTO.model_validate(projected)
+    except ValidationError as error:
+        raise MessageStreamError("消息流快照不符合公共 DTO") from error
 
 
 def _public_snapshot(
@@ -73,30 +118,7 @@ def _public_snapshot(
         "type": "stream.snapshot",
         "payload": snapshot,
     }
-    try:
-        value = message_stream_to_json(message_stream_to_proto(event))
-    except (TypeError, ValueError, json_format.ParseError) as error:
-        raise MessageStreamError("消息流快照编解码失败") from error
-    payload = value["payload"]
-    if not isinstance(payload, Mapping):
-        raise MessageStreamError("消息流快照编解码结果不是对象")
-    projected = dict(payload)
-    # 快照序号、尝试次数和可恢复性是存储状态的标量来源；protobuf JSON
-    # 为零值省略它们，HTTP DTO 仍需把同一真实值明确返回。
-    projected.update(
-        {
-            "session_id": session_id,
-            "turn_id": turn_id,
-            "turn_stream_id": turn_stream_id,
-            "snapshot_seq": snapshot["snapshot_seq"],
-            "current_attempt": snapshot["current_attempt"],
-            "resumable": snapshot["resumable"],
-        }
-    )
-    try:
-        return MessageStreamSnapshotDTO.model_validate(projected)
-    except ValidationError as error:
-        raise MessageStreamError("消息流快照不符合公共 DTO") from error
+    return _snapshot_projection(event)
 
 
 @router.get(
@@ -240,9 +262,6 @@ async def list_message_stream_events(
     except (MessageStreamNotFoundError, MessageStreamError, FileNotFoundError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(
-        data=[
-            message_stream_to_json(message_stream_to_proto(event))
-            for event in events
-        ],
+        data=[_public_event_json(event) for event in events],
         request_id=request_id,
     )
