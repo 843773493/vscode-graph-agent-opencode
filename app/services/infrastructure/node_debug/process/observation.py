@@ -14,6 +14,7 @@ from app.services.infrastructure.node_debug.breakpoint.breakpoint_expressions im
     parse_logpoint_output,
 )
 from app.services.infrastructure.node_debug.runtime_state import (
+    MAX_NODE_DEBUG_LINE_BYTES,
     NodeDebugActionAppender,
     NodeDebugClaimPhaseMarker,
     NodeDebugRuntime,
@@ -44,12 +45,14 @@ class NodeDebugRuntimeObserver:
         append_action: NodeDebugActionAppender,
         max_output_lines: int = MAX_OUTPUT_LINES,
         max_stderr_lines: int = MAX_STDERR_LINES,
+        max_line_bytes: int = MAX_NODE_DEBUG_LINE_BYTES,
     ) -> None:
         self._mark_claim_phase = mark_claim_phase
         self._clear_stop_snapshot = clear_stop_snapshot
         self._append_action = append_action
         self._max_output_lines = max_output_lines
         self._max_stderr_lines = max_stderr_lines
+        self._max_line_bytes = max_line_bytes
 
     async def read_stream(
         self,
@@ -63,7 +66,17 @@ class NodeDebugRuntimeObserver:
         if stream is None:
             return
         while True:
-            line = await stream.readline()
+            try:
+                line = await stream.readline()
+            except ValueError as error:
+                # 单行超过 StreamReader 缓冲上限：asyncio 已清空内部缓冲，可以继续读。
+                # 必须显式暴露截断，绝不静默丢弃后续输出。
+                async with runtime.state_lock:
+                    runtime.output.append(
+                        f"[输出截断] {stream_name} 单行超过 {self._max_line_bytes} 字节: {error}"
+                    )
+                    del runtime.output[: -self._max_output_lines]
+                continue
             if not line:
                 return
             text = line.decode("utf-8", errors="replace").rstrip()

@@ -27,6 +27,9 @@ ACTIVE_NODE_DEBUG_RUNTIME_STATUSES: frozenset[NodeDebugStatus] = frozenset(
 LIVE_NODE_DEBUG_RUNTIME_STATUSES: frozenset[NodeDebugStatus] = frozenset(
     {"starting", "running", "paused"}
 )
+#: 单行输出的 StreamReader 缓冲上限（字节）。asyncio 默认仅 64 KiB，超限会抛
+#: ValueError 并终止读取；这里放宽到可容纳真实日志，避免正常单行被误伤。
+MAX_NODE_DEBUG_LINE_BYTES = 1_000_000
 
 
 @dataclass(slots=True)

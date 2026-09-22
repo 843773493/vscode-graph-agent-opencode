@@ -26,10 +26,15 @@ from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntim
 class _FakeStream:
     """按行返回预设字节，耗尽后返回空行结束读取。"""
 
-    def __init__(self, lines: list[str]) -> None:
+    def __init__(self, lines: list[str], *, limit_error: bool = False) -> None:
         self._lines = [line.encode("utf-8") + b"\n" for line in lines]
+        #: 模拟 asyncio StreamReader 在单行超过缓冲上限时抛出的 ValueError。
+        self._limit_error = limit_error
 
     async def readline(self) -> bytes:
+        if self._limit_error:
+            self._limit_error = False
+            raise ValueError("Separator is found, but chunk is longer than limit")
         return self._lines.pop(0) if self._lines else b""
 
 
@@ -246,6 +251,21 @@ def test_handshake_timeout_message_never_empty() -> None:
     assert observer.handshake_timeout_message(runtime, 3.0) == (
         "等待 Node Inspector 就绪超时（3 秒）；stderr: boom"
     )
+
+
+@pytest.mark.asyncio
+async def test_read_stream_survives_oversized_line_with_visible_notice() -> None:
+    """单行超限不得终止读取循环：必须显式标注截断并继续读取后续行。"""
+    recorder = _Recorder()
+    observer = _observer(recorder)
+    process = _FakeProcess(0, stdout=["after-oversize"])
+    process.stdout._limit_error = True
+    runtime = _runtime(process)
+    await observer.read_stream(runtime, "stdout")
+    assert runtime.output[0].startswith("[输出截断] ")
+    assert "stdout" in runtime.output[0]
+    # 超限之后的行仍必须被读到，绝不静默丢掉后续输出。
+    assert runtime.output[1] == "after-oversize"
 
 
 def _breakpoint(breakpoint_id: str, *, path: str = "entry.mjs", line: int = 1, condition=None, log_message=None) -> NodeDebugBreakpointDTO:

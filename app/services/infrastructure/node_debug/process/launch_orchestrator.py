@@ -38,6 +38,7 @@ from app.services.infrastructure.node_debug.process.process_lifecycle import (
 )
 from app.services.infrastructure.node_debug.runtime_state import (
     ACTIVE_NODE_DEBUG_RUNTIME_STATUSES,
+    MAX_NODE_DEBUG_LINE_BYTES,
     NodeDebugActionAppender,
     NodeDebugRuntime,
 )
@@ -420,6 +421,7 @@ class NodeDebugLaunchOrchestrator:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=MAX_NODE_DEBUG_LINE_BYTES,
             )
             runtime.stderr_task = asyncio.create_task(context.read_stream(runtime, "stderr"))
             runtime.stdout_task = asyncio.create_task(context.read_stream(runtime, "stdout"))
