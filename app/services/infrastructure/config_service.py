@@ -56,6 +56,7 @@ from app.services.infrastructure.config.pending_restart import (
     PendingRestartCoordinator,
 )
 from app.services.infrastructure.config.policy import workspace_config_policy
+from app.services.infrastructure.config.session_defaults import SessionDefaults
 from app.services.infrastructure.config.shadow_adapter import (
     ConfigShadowLifecycleAdapter,
 )
@@ -88,7 +89,6 @@ ConfigCandidateApplier = Callable[[ConfigSnapshot, ConfigSnapshot], Awaitable[No
 
 
 class ConfigService:
-    _WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION = 1
     _RUNTIME_OVERRIDE_CONFIG_KEY = "workspace_runtime_override"
     _CONFIG_DOMAIN = "workspace"
 
@@ -174,6 +174,12 @@ class ConfigService:
         )
         self._llm_resolution = LlmResolution(
             effective_config_provider=self._get_effective_config,
+            default_agent_id_provider=self.get_default_agent_id,
+        )
+        self._session_defaults = SessionDefaults(
+            workspace_root=self._workspace_root,
+            validate_agent_id=self.validate_agent_id,
+            resolve_agent_provider_id=self.resolve_agent_provider_id,
             default_agent_id_provider=self.get_default_agent_id,
         )
 
@@ -2350,103 +2356,27 @@ class ConfigService:
         return "default"
 
     def get_workspace_default_agent_id(self) -> str:
-        payload = self._read_workspace_session_defaults()
-        configured = payload.get("default_agent_id")
-        if configured is None:
-            return self.get_default_agent_id()
-        if not isinstance(configured, str) or not configured:
-            raise TypeError("工作区默认 Agent 必须是非空字符串")
-        return self.validate_agent_id(configured)
+        return self._session_defaults.get_workspace_default_agent_id()
 
     def get_workspace_default_provider_id(self, agent_id: str) -> str:
-        resolved_agent_id = self.validate_agent_id(agent_id)
-        payload = self._read_workspace_session_defaults()
-        raw_providers = payload.get("provider_by_agent", {})
-        if not isinstance(raw_providers, dict):
-            raise TypeError("工作区默认 provider 映射必须是对象")
-        configured = raw_providers.get(resolved_agent_id)
-        if configured is None:
-            return self.resolve_agent_provider_id(resolved_agent_id)
-        if not isinstance(configured, str) or not configured:
-            raise TypeError(
-                f"工作区默认 provider 必须是非空字符串: agent={resolved_agent_id}"
-            )
-        return self.resolve_agent_provider_id(resolved_agent_id, configured)
+        return self._session_defaults.get_workspace_default_provider_id(agent_id)
 
     def set_workspace_default_agent(self, agent_id: str) -> None:
-        resolved_agent_id = self.validate_agent_id(agent_id)
-        payload = self._read_workspace_session_defaults()
-        payload["default_agent_id"] = resolved_agent_id
-        self._write_workspace_session_defaults(payload)
+        self._session_defaults.set_workspace_default_agent(agent_id)
 
     def set_workspace_default_provider(
         self,
         agent_id: str,
         provider_id: str,
     ) -> None:
-        resolved_agent_id = self.validate_agent_id(agent_id)
-        resolved_provider_id = self.resolve_agent_provider_id(
-            resolved_agent_id,
-            provider_id,
-        )
-        payload = self._read_workspace_session_defaults()
-        raw_providers = payload.get("provider_by_agent", {})
-        if not isinstance(raw_providers, dict):
-            raise TypeError("工作区默认 provider 映射必须是对象")
-        payload["provider_by_agent"] = {
-            **raw_providers,
-            resolved_agent_id: resolved_provider_id,
-        }
-        self._write_workspace_session_defaults(payload)
+        self._session_defaults.set_workspace_default_provider(agent_id, provider_id)
 
     def resolve_new_session_agent_id(self, agent_id: str | None) -> str:
-        if agent_id is not None:
-            return self.validate_agent_id(agent_id)
-        return self.get_workspace_default_agent_id()
+        return self._session_defaults.resolve_new_session_agent_id(agent_id)
 
     def resolve_new_session_provider_id(self, agent_id: str) -> str:
-        return self.get_workspace_default_provider_id(agent_id)
+        return self._session_defaults.resolve_new_session_provider_id(agent_id)
 
-    def _workspace_session_defaults_path(self) -> Path:
-        if self._workspace_root is None:
-            raise RuntimeError("ConfigService 未绑定工作区，无法保存工作区会话默认值")
-        return self._workspace_root / ".boxteam" / "settings" / "session_defaults.json"
-
-    def _read_workspace_session_defaults(self) -> dict[str, Any]:
-        if self._workspace_root is None:
-            return {
-                "schema_version": self._WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION,
-                "provider_by_agent": {},
-            }
-        path = self._workspace_session_defaults_path()
-        if not path.exists():
-            return {
-                "schema_version": self._WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION,
-                "provider_by_agent": {},
-            }
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise TypeError(f"工作区会话默认值必须是对象: {path}")
-        if (
-            payload.get("schema_version")
-            != self._WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION
-        ):
-            raise ValueError(f"工作区会话默认值版本非法: {path}")
-        return payload
-
-    def _write_workspace_session_defaults(self, payload: dict[str, Any]) -> None:
-        path = self._workspace_session_defaults_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        persisted = {
-            **payload,
-            "schema_version": self._WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION,
-        }
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(persisted, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(path)
 
     def _normalize_agent_id(self, agent_id: str | None) -> str:
         if not agent_id:

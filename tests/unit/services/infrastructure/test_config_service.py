@@ -1133,6 +1133,70 @@ def test_agent_runtime_places_session_provider_first(
         )
 
 
+def test_workspace_session_defaults_file_guards_reject_corrupt_and_stale_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """会话默认值文件必须校验可解析、是对象且 schema 版本匹配。"""
+
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config_path = _write_workspace_config(tmp_path, _base_config())
+    workspace_root = tmp_path / "workspace"
+    settings_dir = workspace_root / ".boxteam" / "settings"
+    settings_dir.mkdir(parents=True)
+    defaults_path = settings_dir / "session_defaults.json"
+
+    def _service() -> ConfigService:
+        return ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace_root,
+        )
+
+    # 文件不存在时回落静态默认值，不报错
+    assert _service().get_workspace_default_agent_id() == "default"
+
+    # schema 版本不匹配必须报错，不得静默接受旧版本
+    defaults_path.write_text(
+        json.dumps({"schema_version": 999}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="版本非法"):
+        _service().get_workspace_default_agent_id()
+
+    # 顶层不是对象必须报错
+    defaults_path.write_text("[1, 2]", encoding="utf-8")
+    with pytest.raises(TypeError, match="必须是对象"):
+        _service().get_workspace_default_agent_id()
+
+    # 非法 JSON 必须原样抛出，不得被吞掉
+    defaults_path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        _service().get_workspace_default_agent_id()
+
+    # provider 映射不是对象必须报错
+    defaults_path.write_text(
+        json.dumps({"schema_version": 1, "provider_by_agent": "nope"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(TypeError, match="映射必须是对象"):
+        _service().get_workspace_default_provider_id("default")
+
+    # 写回必须带 schema_version，且未绑定工作区时明确报错
+    defaults_path.write_text(
+        json.dumps({"schema_version": 1}), encoding="utf-8"
+    )
+    _service().set_workspace_default_agent("default")
+    persisted = json.loads(defaults_path.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == 1
+    assert persisted["default_agent_id"] == "default"
+
+    unbound = ConfigService(
+        config_dir=Path.cwd() / "configs", config_path=config_path
+    )
+    with pytest.raises(RuntimeError, match="未绑定工作区"):
+        unbound.set_workspace_default_agent("default")
+
+
 def test_workspace_session_defaults_are_persisted_without_changing_static_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
