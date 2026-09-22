@@ -678,10 +678,30 @@ export async function listGatewayUiAssets(port: number): Promise<GatewayUiAsset[
   ).items;
 }
 
+/**
+ * Gateway 背景图资源的上限，与后端 app/gateway/theme/assets.py 的 MAX_UI_ASSET_BYTES 一致。
+ * 后端会先读完整个请求体再校验，数百 MB 的图片必然失败却要先传输一遍；空文件同样注定被拒。
+ * 因此在发请求前按同一上限拦住并给出可读中文错误，绝不把注定失败的载荷发出去。
+ */
+const MAX_GATEWAY_UI_ASSET_BYTES = 20 * 1024 * 1024;
+
+function assertUiAssetSize(file: File): void {
+  if (file.size === 0) {
+    throw new Error("背景图片内容为空");
+  }
+  if (file.size > MAX_GATEWAY_UI_ASSET_BYTES) {
+    const limitMiB = MAX_GATEWAY_UI_ASSET_BYTES / 1024 / 1024;
+    throw new Error(
+      `背景图片 ${(file.size / 1024 / 1024).toFixed(1)} MiB 超过 ${limitMiB} MiB 限制`,
+    );
+  }
+}
+
 export async function uploadGatewayUiAsset(
   port: number,
   file: File,
 ): Promise<GatewayUiAsset> {
+  assertUiAssetSize(file);
   const body = new FormData();
   body.append("file", file);
   return unwrapApiData(
@@ -728,7 +748,8 @@ export async function browseGatewayLocalDirectories(
     return await requestListing();
   } catch (error) {
     if (!(error instanceof HttpRequestError) || error.status !== 503) throw error;
-    // TODO: Vite 开发代理偶发在 Gateway 可用时返回一次 503；仅对幂等目录读取重试一次。
+    // Vite 开发代理偶发在 Gateway 可用时返回一次 503；只对幂等目录读取重试一次，
+    // 第二次仍失败则原样抛出 HttpRequestError，绝不再放大流量或吞成空结果。
     return await requestListing();
   }
 }

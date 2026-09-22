@@ -7,6 +7,7 @@ import {
   getGatewayUiSettings,
   listGatewayUiAssets,
   listGatewayWorkspaces,
+  uploadGatewayUiAsset,
 } from "../../gatewayApi";
 import { createSessionConnection } from "../gateway/sessionConnections";
 import {
@@ -24,6 +25,7 @@ import {
   getLatestGatewayUserViewState,
 } from "../gateway/userViewState";
 import { requestJson } from "../../api";
+import { HttpRequestError } from "../http";
 
 const originalFetch = globalThis.fetch;
 
@@ -233,6 +235,49 @@ describe("Gateway 本机目录浏览", () => {
     expect(listing.entries).toEqual([
       { name: "project", path: "/workspace/project" },
     ]);
+  });
+
+  test("连续 503 时只重试一次并原样抛出可诊断的 HttpRequestError", async () => {
+    let businessRequests = 0;
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "directory-retry-token" } });
+        }
+        businessRequests += 1;
+        return new Response(null, {
+          status: 503,
+          statusText: "Service Unavailable",
+        });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    const failure = browseGatewayLocalDirectories(49_960);
+
+    await expect(failure).rejects.toBeInstanceOf(HttpRequestError);
+    await expect(failure).rejects.toThrow("请求失败 503");
+    // 重试严格有界：首次 503 + 一次重试，不允许无限放大流量。
+    expect(businessRequests).toBe(2);
+  });
+
+  test("非 503 失败不重试，且不吞成空结果", async () => {
+    let businessRequests = 0;
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "directory-404-token" } });
+        }
+        businessRequests += 1;
+        return Response.json({ detail: "目录不存在" }, { status: 404 });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    await expect(browseGatewayLocalDirectories(49_961)).rejects.toThrow("目录不存在");
+    expect(businessRequests).toBe(1);
   });
 
   test("选择远程 Gateway 后把连接标识与目录一起发送", async () => {
@@ -740,5 +785,71 @@ describe("显式切换用户与在途初始化的时序", () => {
     await stale;
 
     expect(harness.writes[harness.writes.length - 1]).toBe("usr_A");
+  });
+});
+
+describe("Gateway 背景图上传的前置校验", () => {
+  /** 安装只记录请求次数的 fetch 桩：任何业务请求都算作「已经发出去」。 */
+  function stubCountingFetch(): { businessRequests: () => number } {
+    let business = 0;
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "ui-asset-token" } });
+        }
+        business += 1;
+        return Response.json({
+          data: {
+            asset_id: "asset_1",
+            original_filename: "bg.png",
+            content_type: "image/png",
+            size: 1,
+            sha256: "x",
+            imported_at: "2026-01-01T00:00:00Z",
+            url: "/api/gateway/ui-assets/asset_1",
+            referenced_theme_ids: [],
+          },
+          request_id: "req_ui_asset",
+        });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+    return { businessRequests: () => business };
+  }
+
+  test("空文件在发请求前以中文错误失败", async () => {
+    const fetchStub = stubCountingFetch();
+    const empty = new File([], "bg.png", { type: "image/png" });
+
+    await expect(uploadGatewayUiAsset(49_950, empty)).rejects.toThrow("背景图片内容为空");
+    expect(fetchStub.businessRequests()).toBe(0);
+  });
+
+  test("超过 20 MiB 的图片在发请求前失败并报出实际上限", async () => {
+    const fetchStub = stubCountingFetch();
+    const oversized = new File(
+      [new Uint8Array(21 * 1024 * 1024)],
+      "bg.png",
+      { type: "image/png" },
+    );
+
+    await expect(uploadGatewayUiAsset(49_951, oversized)).rejects.toThrow(
+      "背景图片 21.0 MiB 超过 20 MiB 限制",
+    );
+    expect(fetchStub.businessRequests()).toBe(0);
+  });
+
+  test("恰好 20 MiB 的图片仍然放行并发出请求", async () => {
+    const fetchStub = stubCountingFetch();
+    const exact = new File(
+      [new Uint8Array(20 * 1024 * 1024)],
+      "bg.png",
+      { type: "image/png" },
+    );
+
+    await expect(uploadGatewayUiAsset(49_952, exact)).resolves
+      .toMatchObject({ asset_id: "asset_1" });
+    expect(fetchStub.businessRequests()).toBe(1);
   });
 });
