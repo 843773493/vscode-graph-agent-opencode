@@ -13,6 +13,7 @@ import {
   type MessageStreamEvent,
   type MessageStreamState,
 } from "../state/messageStream/index";
+import { failureFromValue } from "../state/messageStream/state";
 import { cloneMaps } from "../state/appStateMaps";
 import { completePendingForJob } from "../state/conversations";
 import type { SetAppState } from "./sessionEventStream/sessionRefresh";
@@ -160,14 +161,7 @@ export function useSessionMessageStream({
         || snapshot.stream_status === "failed";
       if (terminalSeen) {
         terminalStatus = snapshot.stream_status;
-        terminalFailure = snapshot.failure
-          ? {
-            code: snapshot.failure.code,
-            message: snapshot.failure.message,
-            afterInterruptRequested: snapshot.failure.after_interrupt_requested ?? false,
-            resumable: snapshot.failure.resumable ?? false,
-          }
-          : null;
+        terminalFailure = failureFromValue(snapshot.failure);
         notifyTerminal();
       }
     };
@@ -285,28 +279,12 @@ function terminalStatusFromEvent(event: MessageStreamEvent): TerminalStreamStatu
     : null;
 }
 
+/**
+ * 终态事件到 failure 的唯一适配：快照事件读 payload.failure，其余事件读 payload
+ * 顶层，两者共用 state/messageStream 的唯一归一实现；不得在此另写一套构造。
+ */
 function failureFromEvent(event: MessageStreamEvent): MessageStreamState["failure"] {
-  if (event.type === "stream.snapshot") {
-    const failure = event.payload.failure;
-    return failure
-      ? {
-        code: failure.code,
-        message: failure.message,
-        afterInterruptRequested: failure.after_interrupt_requested ?? false,
-        resumable: failure.resumable ?? false,
-      }
-      : null;
-  }
-  const message = stringValue(event.payload.message);
-  if (!message) return null;
-  return {
-    code: stringValue(event.payload.code) ?? "message_stream_failure",
-    message,
-    afterInterruptRequested: event.payload.after_interrupt_requested === true,
-    resumable: event.payload.resumable === true,
-  };
-}
-
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
+  return failureFromValue(
+    event.type === "stream.snapshot" ? event.payload.failure : event.payload,
+  );
 }

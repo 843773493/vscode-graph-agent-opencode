@@ -327,3 +327,139 @@ describe("useSessionMessageStream 首次连接", () => {
     act(() => renderer!.unmount());
   });
 });
+
+describe("useSessionMessageStream 终态 failure 归一", () => {
+  function snapshotStreamResponse(failureJson: string): Response {
+    const payload = {
+      snapshot_seq: 1,
+      stream_status: "failed",
+      agent_loop_status: "failed",
+      current_attempt: 1,
+      blocks: [],
+      tool_executions: [],
+      tool_calls: [],
+      model_calls: [],
+      activities: [],
+      resource_refs: [],
+      resumable: false,
+      failure: JSON.parse(failureJson),
+    };
+    const data = JSON.stringify({
+      event_id: "evt_snapshot_failure",
+      session_id: "ses_failure_norm",
+      turn_id: "turn_failure_norm",
+      turn_stream_id: "strm_failure_norm",
+      event_seq: 1,
+      type: "stream.snapshot",
+      payload,
+    });
+    return new Response(
+      `id: 1\nevent: stream.snapshot\ndata: ${data}\n\n`,
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  }
+
+  function failedStreamResponse(payload: Record<string, unknown>): Response {
+    const data = JSON.stringify({
+      event_id: "evt_stream_failed",
+      session_id: "ses_failure_norm",
+      turn_id: "turn_failure_norm",
+      turn_stream_id: "strm_failure_norm",
+      event_seq: 1,
+      type: "stream.failed",
+      payload,
+    });
+    return new Response(
+      `id: 1\nevent: stream.failed\ndata: ${data}\n\n`,
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  }
+
+  // 真实线格式：proto3 string 无 presence，空 message 会在编码时整个键被省略，
+  // 因此「缺失 message」与「显式空串」都必须按同一语义处理。
+  const cases: Array<{ label: string; snapshotFailure: string; eventPayload: Record<string, unknown>; expectStatus: string }> = [
+    {
+      label: "空串 message",
+      snapshotFailure: JSON.stringify({ code: "execution_error", message: "" }),
+      eventPayload: { code: "execution_error", message: "" },
+      expectStatus: "任务失败前",
+    },
+    {
+      label: "缺失 message",
+      snapshotFailure: JSON.stringify({ code: "execution_error", after_interrupt_requested: false, resumable: false }),
+      eventPayload: { code: "execution_error", resumable: false },
+      expectStatus: "任务失败前",
+    },
+    {
+      // 非字符串 message：前端校验只要求 payload 是对象，不会拦下非法 failure；
+      // 唯一归一实现必须判定为无效 failure，不得伪造 "任务失败: 42" 这类假文案。
+      label: "非字符串 message",
+      snapshotFailure: JSON.stringify({ code: "execution_error", message: 42 }),
+      eventPayload: { code: "execution_error", message: 42 },
+      expectStatus: "任务失败前",
+    },
+    {
+      label: "合法 message",
+      snapshotFailure: JSON.stringify({ code: "execution_error", message: "真实失败原因" }),
+      eventPayload: { code: "execution_error", message: "真实失败原因" },
+      expectStatus: "任务失败: 真实失败原因",
+    },
+  ];
+
+  async function runFailureCase(
+    port: number,
+    response: Response,
+  ): Promise<{ status: string; failure: unknown }> {
+    installWindow(port);
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0]), "http://localhost").pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "failure-norm-token" } });
+        }
+        return response;
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+    let state = minimalState();
+    state.status = "任务失败前";
+    const setState: SetAppState = (update) => {
+      state = typeof update === "function" ? update(state) : update;
+    };
+    function Harness(): React.ReactNode {
+      useSessionMessageStream({
+        apiPort: port,
+        sessionId: "ses_failure_norm",
+        turnId: "turn_failure_norm",
+        workspaceId: "workspace_failure_norm",
+        sessionCacheKey: "workspace_failure_norm::ses_failure_norm",
+        setState,
+      });
+      return null;
+    }
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    act(() => renderer!.unmount());
+    const stream = [...(state.messageStreamsByTurnStream ?? new Map()).values()][0];
+    return { status: state.status, failure: stream?.failure };
+  }
+
+  let port = 49_510;
+  for (const testCase of cases) {
+    test(`${testCase.label}：stream.failed 与 stream.snapshot 归一一致`, async () => {
+      port += 1;
+      const eventResult = await runFailureCase(port, failedStreamResponse(testCase.eventPayload));
+      port += 1;
+      const snapshotResult = await runFailureCase(port, snapshotStreamResponse(testCase.snapshotFailure));
+
+      expect(snapshotResult.status).toBe(eventResult.status);
+      expect(snapshotResult.status).toBe(testCase.expectStatus);
+      expect(snapshotResult.failure).toEqual(eventResult.failure);
+    });
+  }
+});
