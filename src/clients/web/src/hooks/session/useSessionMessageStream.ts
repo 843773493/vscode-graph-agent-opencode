@@ -16,7 +16,7 @@ import {
 import { failureFromValue } from "../../state/messageStream/state";
 import { cloneMaps } from "../../state/appStateMaps";
 import { completePendingForJob } from "../../state/conversations";
-import type { SetAppState } from "../sessionEventStream/sessionRefresh";
+import type { SetAppState } from "../contentViewLoaderTypes";
 import { sessionStreamReconnectDelay } from "../sessionEventStream/sessionEventStreamPolicy";
 import { waitForReconnect } from "../sessionEventStream/waitForReconnect";
 

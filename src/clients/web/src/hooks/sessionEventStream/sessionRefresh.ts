@@ -1,15 +1,13 @@
-import type { Dispatch, SetStateAction } from "react";
 import { getSession } from "../../api/session/sessions";
 import { cloneMaps } from "../../state/appStateMaps";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { replaceSessionMetadata } from "../../state/session/sessions";
 import type { AppState } from "../../types/frontend";
+import type { SetAppState } from "../contentViewLoaderTypes";
 import {
   fetchWorkspaceSessionListSnapshot,
   isCurrentWorkspaceSessionListSnapshot,
 } from "../workspace/workspaceSessionListRefresh";
-
-export type SetAppState = Dispatch<SetStateAction<AppState>>;
 
 function sessionListsMatch(
   left: AppState["sessions"],

@@ -20,8 +20,8 @@ import {
 import type { SessionStreamEvent } from "../../types/backend";
 import {
   refreshSessionMetadata,
-  type SetAppState,
 } from "./sessionRefresh";
+import type { SetAppState } from "../contentViewLoaderTypes";
 
 export interface SessionStreamBatchContext {
   apiPort: number;

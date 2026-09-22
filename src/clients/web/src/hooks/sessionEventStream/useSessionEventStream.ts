@@ -26,8 +26,8 @@ import {
 } from "./batchUpdates";
 import {
   refreshWorkspaceSessionList,
-  type SetAppState,
 } from "./sessionRefresh";
+import type { SetAppState } from "../contentViewLoaderTypes";
 
 export function useSessionEventStream({
   apiPort,
