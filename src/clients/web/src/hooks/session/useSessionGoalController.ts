@@ -9,9 +9,9 @@ import {
   clearSessionGoal as apiClearSessionGoal,
   getSessionGoal as apiGetSessionGoal,
   updateSessionGoal as apiUpdateSessionGoal,
-} from "../api";
-import type { SessionGoal, SessionGoalUpdateRequest } from "../types/backend";
-import type { AppState } from "../types/frontend";
+} from "../../api";
+import type { SessionGoal, SessionGoalUpdateRequest } from "../../types/backend";
+import type { AppState } from "../../types/frontend";
 
 interface GoalTarget {
   sessionId: string;

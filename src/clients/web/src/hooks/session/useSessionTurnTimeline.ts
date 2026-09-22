@@ -1,6 +1,6 @@
 import { useCallback, type MutableRefObject } from "react";
-import type { AppState } from "../types/frontend";
-import type { useSessionTurnHistory } from "./sessionTurnHistory/useSessionTurnHistory";
+import type { AppState } from "../../types/frontend";
+import type { useSessionTurnHistory } from "../sessionTurnHistory/useSessionTurnHistory";
 
 /** getCurrentTurnTimeline 读 ref 取最新快照；currentTurnTimeline 读本次渲染的 state。 */
 export function useSessionTurnTimeline(

@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import * as gatewayApi from "../gatewayApi";
+import * as gatewayApi from "../../gatewayApi";
 import type {
   GatewayUserAccess,
   GatewayUserViewState,
-} from "../types/backend";
+} from "../../types/backend";
 import {
   useSessionViewState,
   type SessionViewStateController,

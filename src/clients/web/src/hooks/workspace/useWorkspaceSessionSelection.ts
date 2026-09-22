@@ -3,7 +3,7 @@ import { DEFAULT_BACKEND_PORT, getSession as apiGetSession } from "../../api";
 import type { Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import { createLatestSerialTaskQueue } from "../serialTaskQueue";
-import type { SessionViewStateController } from "../useSessionViewState";
+import type { SessionViewStateController } from "../session/useSessionViewState";
 
 /** 工作区会话选择链路：先切换会话再加载视图状态；openWorkspaceSession 用
  * latest-only 队列加 intent 守卫保证连续打开同一会话只有最后一次生效。 */

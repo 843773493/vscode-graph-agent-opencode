@@ -1,8 +1,8 @@
-import type { Session } from "../types/backend";
-import type { ConversationContentView } from "../types/frontend";
-import type { SetAppState } from "./contentViewLoaderTypes";
-import { useSessionLifecycleActions } from "./useSessionLifecycleActions";
-import { useSessionRunActions } from "./useSessionRunActions";
+import type { Session } from "../../types/backend";
+import type { ConversationContentView } from "../../types/frontend";
+import type { SetAppState } from "../contentViewLoaderTypes";
+import { useSessionLifecycleActions } from "../useSessionLifecycleActions";
+import { useSessionRunActions } from "../useSessionRunActions";
 
 export function useSessionActions({
   apiPort,

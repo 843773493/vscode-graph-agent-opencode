@@ -1,16 +1,16 @@
 import { useCallback, useRef } from "react";
 
-import { DEFAULT_BACKEND_PORT } from "../api";
+import { DEFAULT_BACKEND_PORT } from "../../api";
 import {
   getGatewayUserViewState,
   putGatewayUserViewState,
-} from "../gatewayApi";
+} from "../../gatewayApi";
 import type {
   GatewayUserAccess,
   GatewayUserViewState,
-} from "../types/backend";
-import { sessionScopeKey } from "../state/session/sessionScope";
-import { canAcceptUserViewStateMutation } from "./workspace/useWorkspaceBootstrap";
+} from "../../types/backend";
+import { sessionScopeKey } from "../../state/session/sessionScope";
+import { canAcceptUserViewStateMutation } from "../workspace/useWorkspaceBootstrap";
 
 const SESSION_VIEW_STATE_CACHE_LIMIT = 64;
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { AppState } from "../types/frontend";
+import type { AppState } from "../../types/frontend";
 import { useSessionGoalController } from "./useSessionGoalController";
 
 const originalFetch = globalThis.fetch;

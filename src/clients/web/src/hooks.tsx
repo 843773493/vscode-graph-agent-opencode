@@ -43,12 +43,12 @@ import { useSessionMessageStream } from "./hooks/useSessionMessageStream";
 import { useBackgroundSessionActivity } from "./hooks/useBackgroundSessionActivity";
 import { useWorkspaceSessionActivity } from "./hooks/workspace/useWorkspaceSessionActivity";
 import { useSessionInformationClipboard } from "./hooks/useSessionInformationClipboard";
-import { useSessionActions } from "./hooks/useSessionActions";
+import { useSessionActions } from "./hooks/session/useSessionActions";
 import { useWorkspaceBootstrap } from "./hooks/workspace/useWorkspaceBootstrap";
 import {
   useSessionViewState,
   type SessionViewStatePayload,
-} from "./hooks/useSessionViewState";
+} from "./hooks/session/useSessionViewState";
 import { useWorkspaceInformationClipboard } from "./hooks/workspace/useWorkspaceInformationClipboard";
 import { useGatewayWorkspaceHierarchy } from "./hooks/gatewayWorkspace/useGatewayWorkspaceHierarchy";
 import { useGatewayWorkspaceRuntimeLifecycle } from "./hooks/gatewayWorkspace/useGatewayWorkspaceRuntimeLifecycle";
@@ -64,14 +64,14 @@ import {
 } from "./state/storage";
 import { sessionScopeKey } from "./state/session/sessionScope";
 import { cloneMaps } from "./state/appStateMaps";
-import { useSessionGoalController } from "./hooks/useSessionGoalController";
+import { useSessionGoalController } from "./hooks/session/useSessionGoalController";
 import { useSessionTraceHistory } from "./hooks/sessionTraceHistory/useSessionTraceHistory";
 import type { ComposerStateSnapshot } from "./state/composerState";
 import { refreshWorkspaceSessionList } from "./hooks/sessionEventStream/sessionRefresh";
 import {
   useSessionTurnTimeline,
   useTerminalTurnLoader,
-} from "./hooks/useSessionTurnTimeline";
+} from "./hooks/session/useSessionTurnTimeline";
 
 export { getConversationsForSession } from "./state/conversations";
 export { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
