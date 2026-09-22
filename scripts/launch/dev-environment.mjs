@@ -68,3 +68,16 @@ export function developmentSystemdUnitName(layout) {
     .slice(0, 16);
   return `boxteam-dev-${digest}`;
 }
+
+/**
+ * 计算清理后仍未释放的开发端口。启动前必须据此响亮失败，禁止把端口占用
+ * 拖成服务就绪超时。listenerPids 返回给定端口的监听 PID 列表。
+ */
+export function remainingOccupiedPorts(targetPorts, listenerPids) {
+  const occupied = [];
+  for (const port of targetPorts) {
+    const pids = listenerPids(port);
+    if (pids.length > 0) occupied.push({ port, pids });
+  }
+  return occupied;
+}

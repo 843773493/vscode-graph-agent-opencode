@@ -20,7 +20,10 @@ import {
 } from "../../packages/launcher/src/service-log.mjs";
 import { requestGatewayHandoff } from "../../packages/launcher/src/gateway-supervisor.mjs";
 import { BOXTEAM_VERSION } from "../../packaging/runtime/versions.mjs";
-import { resolveDevelopmentLayout } from "./dev-environment.mjs";
+import {
+  remainingOccupiedPorts,
+  resolveDevelopmentLayout,
+} from "./dev-environment.mjs";
 
 const developmentLayout = resolveDevelopmentLayout();
 const {
@@ -315,27 +318,43 @@ function listenerPidsUnix(targetPort) {
     .filter((value) => /^\d+$/.test(value));
 }
 
+function listenerPidsWindows(targetPort) {
+  const netstat = Bun.spawnSync(["netstat", "-ano", "-p", "tcp"], {
+    cwd: projectRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (netstat.exitCode !== 0) {
+    throw new Error("无法检查 Windows 开发端口占用");
+  }
+  const targetPortName = String(targetPort);
+  const pids = [];
+  for (const line of new TextDecoder().decode(netstat.stdout).split(/\r?\n/)) {
+    const columns = line.trim().split(/\s+/);
+    if (!/LISTENING/i.test(line)) continue;
+    if (columns[1]?.split(":").at(-1) !== targetPortName) continue;
+    if (/^\d+$/.test(columns.at(-1))) pids.push(columns.at(-1));
+  }
+  return pids;
+}
+
+function assertDevelopmentPortsFree(targetPorts, listenerPids) {
+  const occupied = remainingOccupiedPorts(targetPorts, listenerPids);
+  if (occupied.length === 0) return;
+  const details = occupied
+    .map(({ port, pids }) => `${port}(pid=${pids.join(",")})`)
+    .join("、");
+  throw new Error(
+    "开发端口清理后仍被占用，拒绝启动（可能是其它用户或权限不足的进程）: " +
+      details +
+      "；请手动释放这些端口或改用 BOXTEAM_DEV_PORT_OFFSET",
+  );
+}
+
 async function cleanDevelopmentPorts() {
   const targetPorts = selectedPorts();
   if (process.platform === "win32") {
-    const netstat = Bun.spawnSync(["netstat", "-ano", "-p", "tcp"], {
-      cwd: projectRoot,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (netstat.exitCode !== 0) {
-      throw new Error("无法检查 Windows 开发端口占用");
-    }
-    const targetPortNames = new Set(targetPorts.map(String));
-    const pids = new Set();
-    for (const line of new TextDecoder()
-      .decode(netstat.stdout)
-      .split(/\r?\n/)) {
-      const columns = line.trim().split(/\s+/);
-      if (!/LISTENING/i.test(line)) continue;
-      if (!targetPortNames.has(columns[1]?.split(":").at(-1))) continue;
-      if (/^\d+$/.test(columns.at(-1))) pids.add(columns.at(-1));
-    }
+    const pids = new Set(targetPorts.flatMap((port) => listenerPidsWindows(port)));
     for (const pid of pids) {
       const result = Bun.spawnSync(["taskkill", "/T", "/F", "/PID", pid], {
         cwd: projectRoot,
@@ -346,6 +365,7 @@ async function cleanDevelopmentPorts() {
         throw new Error(`无法清理 Windows 开发进程: pid=${pid}`);
       }
     }
+    assertDevelopmentPortsFree(targetPorts, listenerPidsWindows);
     return;
   }
 
@@ -367,6 +387,7 @@ async function cleanDevelopmentPorts() {
       });
     }
   }
+  assertDevelopmentPortsFree(targetPorts, listenerPidsUnix);
 }
 
 function launcherLockPid() {
