@@ -7,7 +7,7 @@ import {
   groupSessionResources,
   resourceAttentionGroup,
   resourceTreeStatus,
-} from "../state/resourceDisplay";
+} from "../state/display/resourceDisplay";
 import ResourcePanel from "./ResourcePanel";
 import WarmConfirmProvider from "./WarmConfirmProvider";
 

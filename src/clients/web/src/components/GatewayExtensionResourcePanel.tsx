@@ -4,7 +4,7 @@ import type {
   GatewayExtensionResourceEntry,
   GatewayExtensionResourceError,
 } from "../hooks/gatewayExtensions/useGatewayExtensionResources";
-import { kindLabel } from "../state/resourceDisplay";
+import { kindLabel } from "../state/display/resourceDisplay";
 import ResourceTreeRow from "./ResourceTreeRow";
 import { useWarmConfirm } from "./WarmConfirmProvider";
 

@@ -12,7 +12,7 @@ import {
   kindLabel,
   type ResourceAttentionGroup,
   statusLabel,
-} from "../state/resourceDisplay";
+} from "../state/display/resourceDisplay";
 import { CREATABLE_SESSION_CONNECTIONS } from "../state/sessionConnections";
 import type { CreatableSessionConnectionKind } from "../types/frontend";
 import AnchoredOverlay from "./AnchoredOverlay";

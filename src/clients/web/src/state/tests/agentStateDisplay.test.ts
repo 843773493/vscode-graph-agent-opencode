@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { findAgentStateMessageRawContent } from "../agentStateDisplay";
+import { findAgentStateMessageRawContent } from "../display/agentStateDisplay";
 
 test("按 message_id 展开 Agent State 中默认隐藏的标记文本", () => {
   const jsonl = [

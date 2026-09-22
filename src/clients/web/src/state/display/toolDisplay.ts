@@ -1,6 +1,6 @@
-import type { TimelineItem } from "./timeline/timelineTypes";
-import { isRecord } from "../utils/jsonDisplay";
-import { skillNameFromPath } from "../utils/skillPaths";
+import type { TimelineItem } from "../timeline/timelineTypes";
+import { isRecord } from "../../utils/jsonDisplay";
+import { skillNameFromPath } from "../../utils/skillPaths";
 
 type AggregatedToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
 

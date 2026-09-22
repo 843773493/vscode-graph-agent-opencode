@@ -2,7 +2,7 @@ import React from "react";
 import {
   formatToolCardContent,
   toolCollapsedText,
-} from "../../state/toolDisplay";
+} from "../../state/display/toolDisplay";
 import type { TimelineItem } from "../../state/timeline/timelineTypes";
 import MarkdownContent from "./MarkdownContent";
 

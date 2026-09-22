@@ -2,7 +2,7 @@ import type { TraceEvent } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
 import { buildTraceTimelineItems } from "../timeline/chatTimeline";
 import type { TimelineItem } from "../timeline/timelineTypes";
-import { isSkillInternalToolItem } from "../toolDisplay";
+import { isSkillInternalToolItem } from "../display/toolDisplay";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {

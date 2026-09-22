@@ -2,8 +2,8 @@ import type {
   SessionResource,
   SessionResourceAction,
   SessionResourceKind,
-} from "../types/backend";
-import { formatDateTime } from "../utils/format";
+} from "../../types/backend";
+import { formatDateTime } from "../../utils/format";
 
 const ACTION_LABELS: Record<SessionResourceAction, string> = {
   pause: "暂停",

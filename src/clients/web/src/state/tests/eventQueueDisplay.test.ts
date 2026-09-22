@@ -1,7 +1,7 @@
 import type { TraceEvent } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
 import { buildTraceTimelineItems } from "../timeline/chatTimeline";
-import { buildKeyTraceSummary } from "../eventQueueDisplay";
+import { buildKeyTraceSummary } from "../display/eventQueueDisplay";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {

@@ -1,13 +1,13 @@
-import { normalizeDisplayText } from "../utils/displayText";
-import { isRecord, redactLargeData } from "../utils/jsonDisplay";
-import { allowedToolsFromSkillMarkdownText } from "../utils/skillMarkdown";
+import { normalizeDisplayText } from "../../utils/displayText";
+import { isRecord, redactLargeData } from "../../utils/jsonDisplay";
+import { allowedToolsFromSkillMarkdownText } from "../../utils/skillMarkdown";
 import {
   compactKeyFlowText,
   createSkillKeyFlowState,
   recordFinalText,
   recordReadSkill,
   skillKeyFlowSnapshot,
-} from "./skillKeyFlow";
+} from "../skillKeyFlow";
 import {
   EXTENSION_TOOL_INVOKER_NAME,
   INVALID_CUSTOM_TOOL_CALL_NAME,
@@ -16,7 +16,7 @@ import {
   customToolCallId,
   customToolCallName,
   customToolTargetNameFromCall,
-} from "./customTools/protocol";
+} from "../customTools/protocol";
 
 export interface AgentStateSummary {
   skills: string[];

@@ -7,7 +7,7 @@ import {
   type MessageStreamEvent,
 } from "../messageStream/index";
 import { responsePartsToTimelineItems } from "./responseParts";
-import { formatToolCardContent, toolCollapsedText } from "../toolDisplay";
+import { formatToolCardContent, toolCollapsedText } from "../display/toolDisplay";
 
 function streamEvent(
   eventSeq: number,

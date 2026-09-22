@@ -14,7 +14,7 @@ import {
   textDeltaKind,
   textDeltaText,
   toolEventSummary,
-} from "../state/eventQueueDisplay";
+} from "../state/display/eventQueueDisplay";
 import { useEventQueuePagination } from "./eventQueue/useEventQueuePagination";
 
 export const INITIAL_VISIBLE_EVENT_COUNT = 30;

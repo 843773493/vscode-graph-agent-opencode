@@ -11,7 +11,7 @@ import {
   resourceTreeDescription,
   resourceTreeStatus,
   resourceTreeTitle,
-} from "../state/resourceDisplay";
+} from "../state/display/resourceDisplay";
 
 const RESOURCE_ICONS: Record<SessionResourceKind, string> = {
   browser: "codicon-globe",

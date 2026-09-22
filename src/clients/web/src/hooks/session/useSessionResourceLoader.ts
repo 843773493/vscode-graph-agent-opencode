@@ -14,7 +14,7 @@ import {
   actionLabelForKind,
   resourceActionStatusLabel,
   statusLabel,
-} from "../../state/resourceDisplay";
+} from "../../state/display/resourceDisplay";
 import type { RefreshOptions, SetAppState } from "../contentViewLoaderTypes";
 
 function isExpiredGatewayUserAccess(error: unknown): error is HttpRequestError {

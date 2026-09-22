@@ -5,7 +5,7 @@ import {
   buildAgentStateSummary,
   formatAgentStateJsonlForDisplay,
   parseAgentStateRecords,
-} from "../state/agentStateDisplay";
+} from "../state/display/agentStateDisplay";
 
 export default function AgentStatePanel({
   jsonl,

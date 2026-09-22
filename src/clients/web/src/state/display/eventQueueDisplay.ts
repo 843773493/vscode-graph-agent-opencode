@@ -1,5 +1,5 @@
-import type { FrontendReceivedEvent } from "../types/frontend";
-import { isRecord } from "../utils/jsonDisplay";
+import type { FrontendReceivedEvent } from "../../types/frontend";
+import { isRecord } from "../../utils/jsonDisplay";
 import {
   compactKeyFlowText,
   createSkillKeyFlowState,
@@ -7,7 +7,7 @@ import {
   recordFinalText,
   recordReadSkill,
   skillKeyFlowSnapshot,
-} from "./skillKeyFlow";
+} from "../skillKeyFlow";
 
 export function eventPayload(item: FrontendReceivedEvent): Record<string, unknown> {
   if (item.kind === "frontend") {
