@@ -228,6 +228,153 @@ describe("Composer 切换类动作失败必须可见", () => {
     act(() => renderer.unmount());
   });
 
+  test("四类切换动作的失败文案都能落到可见错误区", async () => {
+    installComposerEnvironment();
+
+    const cases: Array<{
+      name: string;
+      expected: string;
+      actions: Partial<Actions>;
+      open: (renderer: ReactTestRenderer) => void;
+      select: (renderer: ReactTestRenderer) => void;
+    }> = [
+      {
+        name: "switchAgent",
+        expected: "Agent 切换失败：agent 挂了",
+        actions: {
+          switchAgent: async () => {
+            throw new Error("agent 挂了");
+          },
+        },
+        open: (renderer) => {
+          renderer.root.findByProps({ id: "agentSelectButton" }).props.onClick();
+        },
+        select: (renderer) => {
+          renderer.root
+            .findAllByProps({ role: "menuitemradio" })
+            .find((node) => node.props["aria-checked"] === false)
+            ?.props.onClick();
+        },
+      },
+      {
+        name: "setWorkspaceDefaultAgent",
+        expected: "设置工作区默认 Agent 失败：pin 挂了",
+        actions: {
+          setWorkspaceDefaultAgent: async () => {
+            throw new Error("pin 挂了");
+          },
+        },
+        open: (renderer) => {
+          renderer.root.findByProps({ id: "agentSelectButton" }).props.onClick();
+        },
+        select: (renderer) => {
+          renderer.root
+            .findAllByProps({ className: "composer-workspace-default-button" })[0]
+            ?.props.onClick();
+        },
+      },
+      {
+        name: "switchModel",
+        expected: "模型切换失败：model 挂了",
+        actions: {
+          switchModel: async () => {
+            throw new Error("model 挂了");
+          },
+        },
+        open: (renderer) => {
+          renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick();
+        },
+        select: (renderer) => {
+          renderer.root
+            .findAllByProps({ role: "menuitemradio" })
+            .find((node) => node.props["aria-checked"] === false)
+            ?.props.onClick();
+        },
+      },
+      {
+        name: "setWorkspaceDefaultProvider",
+        expected: "设置工作区默认模型失败：provider pin 挂了",
+        actions: {
+          setWorkspaceDefaultProvider: async () => {
+            throw new Error("provider pin 挂了");
+          },
+        },
+        open: (renderer) => {
+          renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick();
+        },
+        select: (renderer) => {
+          renderer.root
+            .findAllByProps({ className: "composer-workspace-default-button" })[0]
+            ?.props.onClick();
+        },
+      },
+    ];
+
+    for (const item of cases) {
+      const renderer = mountComposer(
+        appState([agent("default"), agent("reviewer")]),
+        baseActions(item.actions),
+      );
+      // 先渲染出菜单，再点击条目：两次 act 分别对应 React 的两次提交。
+      act(() => item.open(renderer));
+      await act(async () => {
+        item.select(renderer);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(`${item.name}: ${JSON.stringify(renderer.toJSON())}`).toContain(
+        item.expected,
+      );
+      act(() => renderer.unmount());
+    }
+  });
+
+  test("下一次成功的切换动作会清掉先前的可见错误", async () => {
+    installComposerEnvironment();
+    let shouldFail = true;
+    const renderer = mountComposer(
+      appState([agent("default"), agent("reviewer")]),
+      baseActions({
+        switchAgent: async () => {
+          if (shouldFail) {
+            throw new Error("请求失败 500 : 上游模型不可用");
+          }
+        },
+      }),
+    );
+
+    const openAgentMenu = () => {
+      renderer.root.findByProps({ id: "agentSelectButton" }).props.onClick();
+    };
+    const selectOtherAgent = () => {
+      renderer.root
+        .findAllByProps({ role: "menuitemradio" })
+        .find((node) => node.props["aria-checked"] === false)
+        ?.props.onClick();
+    };
+
+    act(() => openAgentMenu());
+    await act(async () => {
+      selectOtherAgent();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain(
+      "Agent 切换失败：请求失败 500 : 上游模型不可用",
+    );
+
+    // 后端恢复后再次切换：错误必须消失，不能残留成假失败。
+    shouldFail = false;
+    act(() => openAgentMenu());
+    await act(async () => {
+      selectOtherAgent();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("Agent 切换失败");
+    act(() => renderer.unmount());
+  });
+
   test("switchModel 失败后界面出现错误文本", async () => {
     installComposerEnvironment();
     const renderer = mountComposer(
