@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { errorMessage } from "../../utils/errorMessage";
 
 interface BootstrapStateProps {
   onRetry: () => Promise<void>;
@@ -33,7 +34,7 @@ export default function BootstrapState({ onRetry }: BootstrapStateProps): React.
     try {
       await onRetry();
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setRetryError(`重试失败：${message}`);
     } finally {
       setRetrying(false);

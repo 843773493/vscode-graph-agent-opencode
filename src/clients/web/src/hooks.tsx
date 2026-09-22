@@ -70,6 +70,7 @@ import {
   useSessionTurnTimeline,
   useTerminalTurnLoader,
 } from "./hooks/session/useSessionTurnTimeline";
+import { errorMessage } from "./utils/errorMessage";
 
 const CACHED_UI_SETTINGS = readCachedUiSettings();
 const CACHED_UNREAD_SESSION_KEYS = readUnreadSessionKeys();
@@ -566,7 +567,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (nextOpen !== null) {
       void updateUiSettings({ layout: { agent_sessions_panel_open: nextOpen } }).catch(
         (error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessage(error);
           setState((prev) => ({ ...prev, status: `保存页面设置失败: ${message}` }));
         },
       );
