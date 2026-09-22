@@ -48,6 +48,7 @@ interface HarnessHandle {
   loadDirectory: (path: string, force?: boolean, append?: boolean) => Promise<boolean>;
   directoriesRef: { current: Record<string, unknown> };
   refreshExpandedDirectories: () => void;
+  invalidateDirectoriesUnder: (treePath: string) => void;
   abortAllDirectoryRequests: () => string[];
   commitExpanded: (paths: string[]) => void;
 }
@@ -78,6 +79,7 @@ function mountHarness(port: number): {
     handle.loadDirectory = api.loadDirectory;
     handle.directoriesRef = api.directoriesRef;
     handle.refreshExpandedDirectories = api.refreshExpandedDirectories;
+    handle.invalidateDirectoriesUnder = api.invalidateDirectoriesUnder;
     handle.abortAllDirectoryRequests = api.abortAllDirectoryRequests;
     return null;
   }
@@ -351,4 +353,159 @@ describe("workspace 文件树目录缓存", () => {
     expect(statuses.some((text) =>
       text.startsWith("文件树加载失败: ") && text.includes("没有访问权限"))).toBe(true);
   });
+
+  test("子树失效后加载中被删除的目录不再回填迟到响应", async () => {
+    const port = 49_613;
+    installWindow(port);
+    const releaseList: { current: (() => void) | null } = { current: null };
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === "/api/gateway/auth/local-credential") {
+        return apiResponse({ token: "token" });
+      }
+      if (url.pathname === "/api/gateway/users/current") {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      await new Promise<void>((resolve) => { releaseList.current = resolve; });
+      const path = url.searchParams.get("path") ?? "";
+      return apiResponse({
+        root_path: path, path,
+        items: [fileNode(path + "/stale.ts")],
+        truncated: false, next_cursor: null,
+      });
+    }, { preconnect: originalFetch.preconnect });
+
+    const { handle } = mountHarness(port);
+    let pending!: Promise<boolean>;
+    await act(async () => {
+      pending = handle.loadDirectory("src/gone");
+      await Promise.resolve();
+    });
+    expect(handle.directoriesRef.current["src/gone"]).toMatchObject({ loading: true });
+    act(() => {
+      handle.invalidateDirectoriesUnder("src");
+    });
+    releaseList.current?.();
+    let resolved = true;
+    await act(async () => {
+      resolved = await pending;
+    });
+    expect(resolved).toBe(false);
+    expect(handle.directoriesRef.current["src/gone"]).toBeUndefined();
+  });
+
+  test("子树失效只丢弃该路径及其后代，兄弟与父级缓存保留", async () => {
+    const port = 49_614;
+    installWindow(port);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === "/api/gateway/auth/local-credential") {
+        return apiResponse({ token: "token" });
+      }
+      if (url.pathname === "/api/gateway/users/current") {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      const path = url.searchParams.get("path") ?? "";
+      return apiResponse({
+        root_path: path, path,
+        items: [fileNode(path + "/a.ts")],
+        truncated: false, next_cursor: null,
+      });
+    }, { preconnect: originalFetch.preconnect });
+
+    const { handle } = mountHarness(port);
+    await act(async () => {
+      await handle.loadDirectory("src");
+      await handle.loadDirectory("src/gone");
+      await handle.loadDirectory("src/kept");
+      await handle.loadDirectory("other");
+    });
+    act(() => {
+      handle.invalidateDirectoriesUnder("src/gone");
+    });
+    expect(handle.directoriesRef.current["src/gone"]).toBeUndefined();
+    expect(handle.directoriesRef.current["src"]).toBeDefined();
+    expect(handle.directoriesRef.current["src/kept"]).toBeDefined();
+    expect(handle.directoriesRef.current["other"]).toBeDefined();
+  });
+
+  test("失效后重新加载能拿到后端最新子项，不被旧缓存污染", async () => {
+    const port = 49_615;
+    installWindow(port);
+    let items = [fileNode("src/old.ts")];
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === "/api/gateway/auth/local-credential") {
+        return apiResponse({ token: "token" });
+      }
+      if (url.pathname === "/api/gateway/users/current") {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      const path = url.searchParams.get("path") ?? "";
+      return apiResponse({
+        root_path: path, path,
+        items,
+        truncated: false, next_cursor: null,
+      });
+    }, { preconnect: originalFetch.preconnect });
+
+    const { handle } = mountHarness(port);
+    await act(async () => {
+      await handle.loadDirectory("src");
+    });
+    items = [fileNode("src/new.ts")];
+    act(() => {
+      handle.invalidateDirectoriesUnder("src");
+    });
+    await act(async () => {
+      await handle.loadDirectory("src");
+    });
+    const entry = handle.directoriesRef.current["src"] as { items: Array<{ path: string }> };
+    expect(entry.items.map((item) => item.path)).toEqual(["src/new.ts"]);
+  });
+
+  test("失效会让叶子路径的在途请求结果一并作废", async () => {
+    const port = 49_616;
+    installWindow(port);
+    const releases: Array<() => void> = [];
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === "/api/gateway/auth/local-credential") {
+        return apiResponse({ token: "token" });
+      }
+      if (url.pathname === "/api/gateway/users/current") {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      await new Promise<void>((resolve) => { releases.push(resolve); });
+      const path = url.searchParams.get("path") ?? "";
+      return apiResponse({
+        root_path: path, path,
+        items: [fileNode(path + "/a.ts")],
+        truncated: false, next_cursor: null,
+      });
+    }, { preconnect: originalFetch.preconnect });
+
+    const { handle } = mountHarness(port);
+    let first!: Promise<boolean>;
+    await act(async () => {
+      first = handle.loadDirectory("src/gone");
+      await Promise.resolve();
+    });
+    act(() => {
+      handle.invalidateDirectoriesUnder("src/gone");
+    });
+    expect(handle.directoriesRef.current["src/gone"]).toBeUndefined();
+    let second!: Promise<boolean>;
+    await act(async () => {
+      second = handle.loadDirectory("src/gone");
+      await Promise.resolve();
+    });
+    expect(handle.directoriesRef.current["src/gone"]).toMatchObject({ loading: true });
+    releases.forEach((release) => release());
+    await act(async () => {
+      await Promise.all([first, second]);
+    });
+    expect(handle.directoriesRef.current["src/gone"]).toMatchObject({ loading: false });
+  });
+
 });

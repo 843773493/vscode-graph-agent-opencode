@@ -9,7 +9,12 @@ import {
   pruneDirectoryCache,
   type DirectoryCacheEntry,
 } from "./workspaceFileTreeCache";
-import { FILESYSTEM_ROOT_PATH, parentFileTreePath, ROOT_PATH } from "./workspaceFileTreePaths";
+import {
+  FILESYSTEM_ROOT_PATH,
+  isTreePathInside,
+  parentFileTreePath,
+  ROOT_PATH,
+} from "./workspaceFileTreePaths";
 
 interface DirectoryRequest {
   controller: AbortController;
@@ -35,6 +40,7 @@ interface WorkspaceFileTreeDirectories {
   ) => void;
   loadDirectory: (path: string, force?: boolean, append?: boolean) => Promise<boolean>;
   refreshExpandedDirectories: () => void;
+  invalidateDirectoriesUnder: (treePath: string) => void;
   abortAllDirectoryRequests: () => string[];
   resetDirectories: () => void;
 }
@@ -164,6 +170,26 @@ export function useWorkspaceFileTreeDirectories({
     }
   }, [expandedPathsRef, loadDirectory, updateDirectories]);
 
+  // 子树失效的唯一入口：丢弃该路径及其后代的缓存，并中止对应在途请求，
+  // 使迟到的响应因请求身份不匹配而被丢弃，不能回填已被失效的目录。
+  const invalidateDirectoriesUnder = useCallback((treePath: string) => {
+    for (const [path, request] of directoryRequestsRef.current) {
+      if (isTreePathInside(path, treePath)) {
+        request.controller.abort();
+        directoryRequestsRef.current.delete(path);
+      }
+    }
+    updateDirectories((current) => {
+      const next = { ...current };
+      for (const cachedPath of Object.keys(next)) {
+        if (isTreePathInside(cachedPath, treePath)) {
+          delete next[cachedPath];
+        }
+      }
+      return next;
+    });
+  }, [updateDirectories]);
+
   const abortAllDirectoryRequests = useCallback((): string[] => {
     const abortedPaths = [...directoryRequestsRef.current.keys()];
     for (const request of directoryRequestsRef.current.values()) {
@@ -184,6 +210,7 @@ export function useWorkspaceFileTreeDirectories({
     updateDirectories,
     loadDirectory,
     refreshExpandedDirectories,
+    invalidateDirectoriesUnder,
     abortAllDirectoryRequests,
     resetDirectories,
   };

@@ -132,6 +132,7 @@ export default function WorkspaceFileTree({
     updateDirectories,
     loadDirectory,
     refreshExpandedDirectories,
+    invalidateDirectoriesUnder,
     abortAllDirectoryRequests,
     resetDirectories,
   } = useWorkspaceFileTreeDirectories({
@@ -231,6 +232,29 @@ export default function WorkspaceFileTree({
       let nextExpanded = new Set(expandedPathsRef.current);
       let expandedChanged = false;
 
+      // 删除必须先让对应子树整体失效：丢弃缓存并中止在途请求，
+      // 否则迟到的响应会把已删除目录重新写回缓存。
+      const deletedTreePaths: string[] = [];
+      for (const change of changes) {
+        if (change.kind !== "delete") {
+          continue;
+        }
+        const treePath = changedPathToTreePath(change.path, workspaceRoot);
+        if (treePath === null) {
+          continue;
+        }
+        deletedTreePaths.push(treePath);
+        for (const expandedPath of nextExpanded) {
+          if (isTreePathInside(expandedPath, treePath)) {
+            nextExpanded.delete(expandedPath);
+            expandedChanged = true;
+          }
+        }
+      }
+      for (const treePath of deletedTreePaths) {
+        invalidateDirectoriesUnder(treePath);
+      }
+
       updateDirectories((current) => {
         const next = { ...current };
         for (const change of changes) {
@@ -240,20 +264,6 @@ export default function WorkspaceFileTree({
             continue;
           }
           changedParents.add(parentFileTreePath(treePath));
-          if (change.kind !== "delete") {
-            continue;
-          }
-          for (const cachedPath of Object.keys(next)) {
-            if (isTreePathInside(cachedPath, treePath)) {
-              delete next[cachedPath];
-            }
-          }
-          for (const expandedPath of nextExpanded) {
-            if (isTreePathInside(expandedPath, treePath)) {
-              nextExpanded.delete(expandedPath);
-              expandedChanged = true;
-            }
-          }
         }
         for (const parentPath of changedParents) {
           const entry = next[parentPath];
@@ -310,6 +320,7 @@ export default function WorkspaceFileTree({
     loadDirectory,
     onStatusChange,
     updateDirectories,
+    invalidateDirectoriesUnder,
     workspaceId,
     workspaceRoot,
   ]);
