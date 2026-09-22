@@ -2,8 +2,8 @@ import type {
   SessionChangeset,
   SessionChangesetListItem,
   SessionFileChange,
-} from "../../types/backend";
-import { formatDateTime } from "../../utils/format";
+} from "../../../types/backend";
+import { formatDateTime } from "../../../utils/format";
 
 function formatSummary(summary: { files: number; additions: number; deletions: number }) {
   return `${summary.files} 个文件 +${summary.additions} -${summary.deletions}`;
