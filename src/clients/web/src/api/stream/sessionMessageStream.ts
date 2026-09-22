@@ -1,4 +1,4 @@
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sseClient";
+import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
 import {
   HttpRequestError,
   requestGatewayResponse,

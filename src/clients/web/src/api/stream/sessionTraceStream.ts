@@ -4,8 +4,8 @@ import type {
   SessionStreamEvent,
   TraceEvent,
 } from "../../types/backend";
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sseClient";
-import { validateTraceEvent } from "../../sseRuntimeSchemas";
+import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
+import { validateTraceEvent } from "../../sse/sseRuntimeSchemas";
 import {
   HttpRequestError,
   requestGatewayResponse,

@@ -3,7 +3,7 @@ import type {
   CursorPage,
   SessionActivity,
 } from "../../types/backend";
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sseClient";
+import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
 import {
   HttpRequestError,
   requestGatewayResponse,

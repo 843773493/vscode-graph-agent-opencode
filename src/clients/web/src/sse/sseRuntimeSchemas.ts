@@ -2,14 +2,14 @@ import {
   parseSseError,
   parseTraceEvent,
   parseWorkspaceFileChangeBatch,
-} from "./protocol";
+} from "../protocol";
 import type {
   SessionExecutionSseDTO,
   SseErrorDTO,
   TraceEventDTO,
   WorkspaceFileChangeBatchDTO,
-} from "./protocol/jsonTypes";
-import { parseSessionExecutionSse } from "./protocol/sessionSse";
+} from "../protocol/jsonTypes";
+import { parseSessionExecutionSse } from "../protocol/sessionSse";
 
 export function validateTraceEvent(value: unknown): TraceEventDTO {
   parseTraceEvent(value);

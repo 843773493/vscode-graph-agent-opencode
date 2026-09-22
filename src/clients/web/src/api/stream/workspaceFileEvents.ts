@@ -3,11 +3,11 @@ import {
   consumeSseResponse,
   decodeJsonSseData,
   defineSseEvent,
-} from "../../sseClient";
+} from "../../sse/sseClient";
 import {
   validateSseError,
   validateWorkspaceFileChangeBatch,
-} from "../../sseRuntimeSchemas";
+} from "../../sse/sseRuntimeSchemas";
 import {
   requestGatewayResponse,
   workspaceHeader,
