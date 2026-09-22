@@ -10,6 +10,8 @@ import { useSessionGeneratorResources } from "../sessionResourceExplorer/useSess
 import { useSessionLifecycleActions } from "./useSessionLifecycleActions";
 import { useSessionMessageStream } from "./useSessionMessageStream";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
+import { useSessionRunActions } from "./useSessionRunActions";
+import { useSessionGoalController } from "./useSessionGoalController";
 
 /**
  * 会话级 hook 测试共享夹具。
@@ -23,6 +25,10 @@ const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
   "window",
+);
+const originalDocumentDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "document",
 );
 
 /** 统一的后端响应信封，request_id 必须是合法非空字符串。 */
@@ -84,7 +90,7 @@ export function installGatewayFetch(
   ) as typeof fetch;
 }
 
-/** 安装只有计时器的 window 桩；测试结束后用 restoreSessionHookGlobals 还原。 */
+/** 安装只有计时器与空监听器的 window 桩；用 restoreSessionHookGlobals 还原。 */
 export function installTestWindow(port: number): void {
   Object.defineProperty(globalThis, "window", {
     configurable: true,
@@ -92,17 +98,36 @@ export function installTestWindow(port: number): void {
       location: { port: String(port) },
       setTimeout: globalThis.setTimeout.bind(globalThis),
       clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
     },
   });
 }
 
-/** 将 fetch 与 window 一并还原到夹具加载时的形态，供 afterEach 调用。 */
+/** 安装只读可见性 document 桩；用 restoreSessionHookGlobals 还原。 */
+export function installTestDocument(): void {
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: {
+      visibilityState: "visible",
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    },
+  });
+}
+
+/** 将 fetch、window、document 还原到夹具加载时的形态，供 afterEach 调用。 */
 export function restoreSessionHookGlobals(): void {
   globalThis.fetch = originalFetch;
   if (originalWindowDescriptor) {
     Object.defineProperty(globalThis, "window", originalWindowDescriptor);
   } else {
     Reflect.deleteProperty(globalThis, "window");
+  }
+  if (originalDocumentDescriptor) {
+    Object.defineProperty(globalThis, "document", originalDocumentDescriptor);
+  } else {
+    Reflect.deleteProperty(globalThis, "document");
   }
 }
 
@@ -202,6 +227,78 @@ export function useSessionMessageStreamHarness(
     useSessionMessageStream({ ...props, setState });
     return null;
   };
+}
+
+/** useSessionRunActions 的入参：除 setState 外与生产签名逐字段一致。 */
+export type RunActionsProps = Omit<
+  Parameters<typeof useSessionRunActions>[0],
+  "setState"
+>;
+type RunActions = ReturnType<typeof useSessionRunActions>;
+export type SessionRunActionsHandle = RunActions;
+
+/**
+ * 挂载 useSessionRunActions 并把最新 state 镜像到闭包。所有用例共用同一组
+ * 网关工作区标识与固定 refreshAgentStateSnapshot，只覆盖自己关心的动作句柄。
+ */
+export function mountSessionRunActions(options: {
+  currentSession: Session;
+  state: AppState;
+  cacheKey: string;
+}): { state: () => AppState; actions: SessionRunActionsHandle } {
+  const { currentSession, cacheKey } = options;
+  const mirror = createStateMirror(options.state);
+  let actions: SessionRunActionsHandle | null = null;
+  function Harness(): React.ReactNode {
+    actions = useSessionRunActions({
+      apiPort: 8014,
+      currentSession,
+      activeGatewayWorkspaceId: "gw_send_regression",
+      currentSessionGatewayWorkspaceId: "gw_send_regression",
+      currentSessionCacheKey: cacheKey,
+      defaultGatewayWorkspaceId: "gw_send_regression",
+      contentView: "default",
+      setState: mirror.setState,
+      refreshAgentStateSnapshot: async () => undefined,
+    });
+    return null;
+  }
+  renderToStaticMarkup(React.createElement(Harness));
+  if (!actions) throw new Error("useSessionRunActions Harness 未完成渲染");
+  return { state: mirror.current, actions };
+}
+
+type GoalController = ReturnType<typeof useSessionGoalController>;
+export type SessionGoalControllerHandle = GoalController;
+
+/**
+ * 挂载 useSessionGoalController，用真实 React 状态机把最新 AppState 镜像到闭包。
+ * 该 hook 依赖 effect 重放，必须走 create/act，不能只做一次静态渲染。
+ */
+export async function mountSessionGoalController(options: {
+  initial: AppState;
+}): Promise<{
+  unmount: () => void;
+  controller: () => SessionGoalControllerHandle;
+  state: () => AppState;
+}> {
+  const { initial } = options;
+  let controller: SessionGoalControllerHandle | null = null;
+  let latestState = initial;
+  function Harness(): React.ReactNode {
+    const [currentState, setState] = React.useState(() => initial);
+    latestState = currentState;
+    controller = useSessionGoalController({
+      apiPort: 49_406,
+      currentSessionId: currentState.currentSession?.session_id ?? null,
+      currentWorkspaceId: currentState.currentSessionWorkspaceId,
+      setState,
+    });
+    return null;
+  }
+  const unmount = await mountHarness(Harness, 1);
+  if (!controller) throw new Error("useSessionGoalController Harness 未完成渲染");
+  return { unmount, controller: () => controller!, state: () => latestState };
 }
 
 export type ResourceExplorerProps = Omit<
