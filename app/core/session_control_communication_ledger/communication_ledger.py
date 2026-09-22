@@ -635,10 +635,19 @@ class CommunicationLedgerMixin:
                 )
             record = _communication_outbox_from_row(row)
             if record.state == new_state:
-                if record.latest_receipt != receipt_json:
+                # 幂等重入必须逐字复现本方法可写的两个载荷列（与 CAS 的
+                # SET 子句一一对应）；任一漂移 fail closed，不静默接受。
+                if (
+                    record.latest_receipt != receipt_json
+                    or record.abort_reason != abort_reason
+                ):
                     raise RuntimeError(
-                        "outbox 重复提交同状态但 receipt 漂移（fail "
-                        f"closed）: send_operation_id={send_operation_id!r}"
+                        "outbox 重复提交同状态但载荷漂移（fail closed）: "
+                        f"send_operation_id={send_operation_id!r}, "
+                        f"existing_receipt={record.latest_receipt!r}, "
+                        f"submitted_receipt={receipt_json!r}, "
+                        f"existing_abort_reason={record.abort_reason!r}, "
+                        f"submitted_abort_reason={abort_reason!r}"
                     )
                 return record
             allowed = _COMMUNICATION_OUTBOX_TRANSITIONS.get(record.state, ())

@@ -2605,7 +2605,7 @@ def test_outbox_advance_state_chain_and_guards(tmp_path: Path) -> None:
         assert store.advance_communication_outbox_state(
             operation_id, new_state="target_accepted", receipt_json="[]"
         ).state == "target_accepted"
-        with pytest.raises(RuntimeError, match="receipt 漂移"):
+        with pytest.raises(RuntimeError, match="载荷漂移"):
             store.advance_communication_outbox_state(
                 operation_id, new_state="target_accepted", receipt_json="[1]"
             )
@@ -2626,6 +2626,85 @@ def test_outbox_advance_state_chain_and_guards(tmp_path: Path) -> None:
         with pytest.raises(KeyError, match="无法推进状态"):
             store.advance_communication_outbox_state(
                 f"send-op-{uuid.uuid4().hex}", new_state="routing"
+            )
+    finally:
+        store.close()
+
+
+def test_outbox_idempotent_reentry_compares_both_payload_columns(
+    tmp_path: Path,
+) -> None:
+    """同状态重入逐字复现两个载荷列：receipt/abort_reason 任一漂移都抛错。
+
+    `advance_communication_outbox_state` 的 CAS SET 子句写 `latest_receipt`
+    与 `abort_reason` 两列，幂等分支必须对两列都比对；只比 receipt 会让
+    abort_reason 漂移被静默吞掉（真实缺口，本用例固化修复）。
+    """
+    store = SessionControlStore(tmp_path / "outbox-payload-drift.sqlite")
+    try:
+        record, _ = store.create_or_get_communication_outbox(
+            **outbox_kwargs(make_comm_id())
+        )
+        operation_id = record.send_operation_id
+        # 先落 failed（带原因），再以三种方式重入同一状态。
+        failed = store.advance_communication_outbox_state(
+            operation_id, new_state="failed", abort_reason="reason-A"
+        )
+        assert failed.state == "failed"
+        assert failed.abort_reason == "reason-A"
+        # 1) 完全一致 → 幂等返回原行。
+        assert store.advance_communication_outbox_state(
+            operation_id, new_state="failed", abort_reason="reason-A"
+        ).abort_reason == "reason-A"
+        # 2) abort_reason 漂移 → fail closed（修复前被静默接受）。
+        with pytest.raises(RuntimeError, match="载荷漂移"):
+            store.advance_communication_outbox_state(
+                operation_id, new_state="failed", abort_reason="reason-B"
+            )
+        # 3) abort_reason 缺失 → 同样 fail closed（不得当成 None 收下）。
+        with pytest.raises(ValueError, match="必须携带 abort_reason"):
+            store.advance_communication_outbox_state(
+                operation_id, new_state="failed"
+            )
+        # 漂移被拒后原行未被改动。
+        assert store.advance_communication_outbox_state(
+            operation_id, new_state="failed", abort_reason="reason-A"
+        ).abort_reason == "reason-A"
+    finally:
+        store.close()
+
+
+def test_outbox_idempotent_reentry_compares_receipt_column(
+    tmp_path: Path,
+) -> None:
+    """同状态重入的 receipt 漂移对照用例（终止态路径）。"""
+    store = SessionControlStore(tmp_path / "outbox-receipt-drift.sqlite")
+    try:
+        record, _ = store.create_or_get_communication_outbox(
+            **outbox_kwargs(make_comm_id())
+        )
+        operation_id = record.send_operation_id
+        store.advance_communication_outbox_state(
+            operation_id, new_state="routing"
+        )
+        store.advance_communication_outbox_state(
+            operation_id, new_state="target_accepted", receipt_json="[]"
+        )
+        # 完全一致 → 幂等；receipt 漂移 → fail closed。
+        assert store.advance_communication_outbox_state(
+            operation_id, new_state="target_accepted", receipt_json="[]"
+        ).state == "target_accepted"
+        with pytest.raises(RuntimeError, match="载荷漂移"):
+            store.advance_communication_outbox_state(
+                operation_id, new_state="target_accepted", receipt_json="[1]"
+            )
+        # 同状态但夹带 abort_reason 也是漂移（该列只允许 failed|cancelled）。
+        with pytest.raises(RuntimeError, match="载荷漂移"):
+            store.advance_communication_outbox_state(
+                operation_id,
+                new_state="target_accepted",
+                receipt_json="[]",
+                abort_reason="sneaky",
             )
     finally:
         store.close()
