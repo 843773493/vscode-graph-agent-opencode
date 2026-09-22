@@ -13,8 +13,8 @@ import type {
 // 复用消息流原语中心的值归一实现，不再在 api 层维护第二份 stringValue。
 import { stringValue } from "../state/messageStream/state";
 import type { APIResponse } from "../types/backend";
+import { isRecord } from "../utils/jsonDisplay";
 import {
-  isJsonObject,
   validateMessageStreamSnapshot,
   validateMessageStreamSnapshotPayload,
   type MessageStreamSnapshotResponse,
@@ -135,7 +135,7 @@ export async function streamSessionMessageEvents(
 }
 
 function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
-  if (!isJsonObject(value)) throw new Error("消息流事件必须是对象");
+  if (!isRecord(value)) throw new Error("消息流事件必须是对象");
   const eventId = stringValue(value.event_id);
   const sessionId = stringValue(value.session_id);
   const turnId = stringValue(value.turn_id);
@@ -148,7 +148,7 @@ function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
   if (typeof eventSeq !== "number" || !Number.isInteger(eventSeq) || eventSeq < 0) {
     throw new Error("消息流 event_seq 必须是非负整数");
   }
-  if (!isJsonObject(value.payload)) throw new Error("消息流 payload 必须是对象");
+  if (!isRecord(value.payload)) throw new Error("消息流 payload 必须是对象");
   for (const field of [
     "model_call_id",
     "block_id",

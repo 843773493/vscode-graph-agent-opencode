@@ -50,10 +50,15 @@ function encodeWorkspaceFileList(
   result: WorkspaceFileList,
   scope: "workspace" | "filesystem",
 ): WorkspaceFileList {
+  // 后端 WorkspaceFileListDTO.items 是 default_factory=list，序列化必为数组；
+  // 非数组即契约被破坏，不得静默收敛成空列表把损坏伪装成合法结果。
+  if (!Array.isArray(result.items)) {
+    throw new Error("工作区文件列表响应 items 必须是数组");
+  }
   return {
     ...result,
     path: encodeFileTreeResultPath(result.path, scope),
-    items: (result.items ?? []).map((node): WorkspaceFileNode => ({
+    items: result.items.map((node): WorkspaceFileNode => ({
       ...node,
       path: encodeFileTreeResultPath(node.path, scope),
     })),

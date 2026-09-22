@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { listSessionCatalogChildren } from "./session/sessionCatalog";
-import { getApiBaseUrl, requestJson } from "./http";
+import { getApiBaseUrl, normalizePageResult, requestJson } from "./http";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -286,5 +286,51 @@ describe("getApiBaseUrl", () => {
     installWindow(8011);
 
     expect(getApiBaseUrl(8027)).toBe("");
+  });
+});
+
+describe("normalizePageResult CursorPage 契约校验", () => {
+  test("合法空页正常返回", () => {
+    expect(normalizePageResult<number>({ items: [], has_more: false }, "会话列表")).toEqual({
+      items: [],
+      next_cursor: null,
+      has_more: false,
+    });
+  });
+
+  test("next_cursor 为 null 时保留合法 null 语义", () => {
+    expect(normalizePageResult<number>({ items: [1], next_cursor: null }, "会话列表")).toEqual({
+      items: [1],
+      next_cursor: null,
+      has_more: undefined,
+    });
+  });
+
+  test("items 非数组时响亮失败并带响应上下文", () => {
+    expect(() => normalizePageResult<number>({ items: "NOT-AN-ARRAY" }, "会话列表"))
+      .toThrow("会话列表响应 items 必须是数组，实际为 string");
+    expect(() => normalizePageResult<number>({ items: 5 }, "会话列表"))
+      .toThrow("会话列表响应 items 必须是数组，实际为 number");
+    expect(() => normalizePageResult<number>({}, "会话列表"))
+      .toThrow("会话列表响应 items 必须是数组，实际为 undefined");
+  });
+
+  test("载荷非对象时响亮失败", () => {
+    expect(() => normalizePageResult<number>("boom", "会话列表"))
+      .toThrow("会话列表响应必须是对象，实际为 string");
+    expect(() => normalizePageResult<number>(null, "会话列表"))
+      .toThrow("会话列表响应必须是对象，实际为 null");
+    expect(() => normalizePageResult<number>([], "会话列表"))
+      .toThrow("会话列表响应必须是对象，实际为 数组");
+  });
+
+  test("has_more 非布尔时响亮失败", () => {
+    expect(() => normalizePageResult<number>({ items: [], has_more: "yes" }, "会话列表"))
+      .toThrow("会话列表响应 has_more 必须是布尔值，实际为 string");
+  });
+
+  test("next_cursor 非字符串非 null 时响亮失败", () => {
+    expect(() => normalizePageResult<number>({ items: [], next_cursor: 7 }, "会话列表"))
+      .toThrow("会话列表响应 next_cursor 必须是字符串或 null，实际为 number");
   });
 });

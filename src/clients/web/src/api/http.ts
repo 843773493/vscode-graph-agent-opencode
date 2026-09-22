@@ -1,4 +1,4 @@
-import type { APIResponse } from "../types/backend";
+import type { APIResponse, CursorPage } from "../types/backend";
 import { parseJsonResponse } from "../runtime/jsonResponseParser";
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
@@ -468,4 +468,51 @@ export function unwrapApiData<T>(response: APIResponse<T>): T {
     throw new Error(`后端响应缺少 data 字段: ${response.message || "unknown message"}`);
   }
   return response.data;
+}
+
+/** 描述非法值的观测形态，供协议校验错误定位用（不打印原始内容，避免巨型载荷）。 */
+function describeUnknownValue(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "数组";
+  return typeof value;
+}
+
+/**
+ * 校验并归一后端 CursorPage 载荷。
+ *
+ * 信封层（request_id、data 非空）由 unwrapApiData 负责；本函数只守载荷形状。
+ * 后端 CursorPage.items 必填且保证为数组、has_more 保证为布尔
+ * （app/schemas/internal_v2/common.py 的 CursorPage），因此「字段存在但类型错误」
+ * 属于契约被破坏，必须响亮失败，不得伪造空页把协议损坏伪装成合法结果。
+ * next_cursor 是 Optional[str]，保留其缺失/为 null 的合法语义。
+ */
+export function normalizePageResult<T>(value: unknown, context: string): CursorPage<T> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${context}响应必须是对象，实际为 ${describeUnknownValue(value)}`);
+  }
+  const record = value as { items?: unknown; next_cursor?: unknown; has_more?: unknown };
+  if (!Array.isArray(record.items)) {
+    throw new Error(
+      `${context}响应 items 必须是数组，实际为 ${describeUnknownValue(record.items)}`,
+    );
+  }
+  if (record.has_more !== undefined && typeof record.has_more !== "boolean") {
+    throw new Error(
+      `${context}响应 has_more 必须是布尔值，实际为 ${describeUnknownValue(record.has_more)}`,
+    );
+  }
+  if (
+    record.next_cursor !== undefined
+    && record.next_cursor !== null
+    && typeof record.next_cursor !== "string"
+  ) {
+    throw new Error(
+      `${context}响应 next_cursor 必须是字符串或 null，实际为 ${describeUnknownValue(record.next_cursor)}`,
+    );
+  }
+  return {
+    items: record.items as T[],
+    next_cursor: (record.next_cursor as string | null | undefined) ?? null,
+    has_more: record.has_more as boolean | undefined,
+  };
 }

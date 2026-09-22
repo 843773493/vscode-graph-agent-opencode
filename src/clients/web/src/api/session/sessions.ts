@@ -12,6 +12,7 @@ import type {
 import { parseChildThreadStatus } from "../../types/protocol";
 import {
   DEFAULT_API_REQUEST_TIMEOUT_MS,
+  normalizePageResult,
   requestJson,
   unwrapApiData,
   workspaceHeader,
@@ -52,24 +53,6 @@ function parseChildThreadList(value: unknown): ChildThreadList {
   };
 }
 
-function normalizePageResult<T>(value: unknown): CursorPage<T> {
-  if (!value || typeof value !== "object") {
-    return { items: [] };
-  }
-
-  const record = value as {
-    items?: T[];
-    next_cursor?: string | null;
-    has_more?: boolean;
-  };
-  return {
-    items: Array.isArray(record.items) ? record.items : [],
-    next_cursor: record.next_cursor ?? null,
-    has_more:
-      typeof record.has_more === "boolean" ? record.has_more : undefined,
-  };
-}
-
 export async function listSessions(
   port: number,
   workspaceId?: string | null,
@@ -84,7 +67,7 @@ export async function listSessions(
         }
       : { timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
   );
-  return normalizePageResult<Session>(unwrapApiData(data));
+  return normalizePageResult<Session>(unwrapApiData(data), "会话列表");
 }
 
 export async function getSession(

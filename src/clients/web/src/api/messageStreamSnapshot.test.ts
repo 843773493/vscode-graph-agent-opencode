@@ -44,4 +44,10 @@ describe("消息流快照 DTO", () => {
       unknown: true,
     })).toThrow("包含未知字段");
   });
+
+  test("拒绝数组载荷：复用 utils.isRecord 的“非数组对象”语义", () => {
+    expect(() => validateMessageStreamSnapshot([])).toThrow("消息流快照必须是对象");
+    expect(() => validateMessageStreamSnapshot(null)).toThrow("消息流快照必须是对象");
+    expect(() => validateMessageStreamSnapshot("snapshot")).toThrow("消息流快照必须是对象");
+  });
 });

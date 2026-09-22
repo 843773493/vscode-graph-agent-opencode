@@ -13,6 +13,7 @@ import type {
   DeliveryPolicy,
 } from "../../types/backend";
 import {
+  normalizePageResult,
   requestGatewayResponse,
   requestJson,
   unwrapApiData,
@@ -23,24 +24,6 @@ export const DEFAULT_AGENT_ID = "default";
 
 const AGENT_STATE_TIMEOUT_MS = 10000;
 const SESSION_HISTORY_TIMEOUT_MS = 10000;
-
-function normalizePageResult<T>(value: unknown): CursorPage<T> {
-  if (!value || typeof value !== "object") {
-    return { items: [] };
-  }
-
-  const record = value as {
-    items?: T[];
-    next_cursor?: string | null;
-    has_more?: boolean;
-  };
-  return {
-    items: Array.isArray(record.items) ? record.items : [],
-    next_cursor: record.next_cursor ?? null,
-    has_more:
-      typeof record.has_more === "boolean" ? record.has_more : undefined,
-  };
-}
 
 export async function getSessionAttachmentBlob(
   port: number,
@@ -90,7 +73,7 @@ export async function listMessages(
       signal: options.signal,
     },
   );
-  return normalizePageResult<Message>(unwrapApiData(data));
+  return normalizePageResult<Message>(unwrapApiData(data), "会话消息列表");
 }
 
 export async function getAgentStateMessages(

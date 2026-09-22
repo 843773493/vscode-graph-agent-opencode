@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { HttpRequestError } from "../http";
-import { listChildThreads } from "./sessions";
+import { listChildThreads, listSessions } from "./sessions";
 
 const originalFetch = globalThis.fetch;
 
@@ -115,5 +115,41 @@ describe("child thread 列表 API", () => {
       expect(error).toBeInstanceOf(HttpRequestError);
       expect((error as HttpRequestError).status).toBe(409);
     }
+  });
+});
+
+describe("会话列表 API 的 CursorPage 契约", () => {
+  test("合法空页：items 为空数组正常返回，不伪造会话", async () => {
+    installFetchMock(() => Response.json({
+      data: { items: [], next_cursor: null, has_more: false },
+      request_id: "req-sessions-empty",
+    }));
+
+    await expect(listSessions(48_305, "workspace-1")).resolves.toEqual({
+      items: [],
+      next_cursor: null,
+      has_more: false,
+    });
+  });
+
+  test("items 非数组：响亮失败而不是静默收敛为空页", async () => {
+    installFetchMock(() => Response.json({
+      data: { items: "NOT-AN-ARRAY", next_cursor: null, has_more: "yes" },
+      request_id: "req-sessions-broken-items",
+    }));
+
+    await expect(listSessions(48_306, "workspace-1")).rejects
+      .toThrow("会话列表响应 items 必须是数组，实际为 string");
+  });
+
+  test("data 为 null：信封层响亮失败，与 items 损坏行为一致", async () => {
+    installFetchMock(() => Response.json({
+      data: null,
+      message: "boom",
+      request_id: "req-sessions-null-data",
+    }));
+
+    await expect(listSessions(48_307, "workspace-1")).rejects
+      .toThrow("后端响应缺少 data 字段: boom");
   });
 });

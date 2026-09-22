@@ -12,6 +12,8 @@ import type {
   ToolExecutionSnapshot,
 } from "../types/protocol_generated/boxteam/workspace/message/v1/message_stream";
 import type { JsonObject } from "@bufbuild/protobuf";
+// 复用全前端共享的对象判定权威实现，不在 api 层维护第三份同源 isJsonObject。
+import { isRecord } from "../utils/jsonDisplay";
 
 type WireToolExecutionStatus = "running" | "completed" | "failed";
 type WireToolExecutionOutcome = "success" | "provider_error" | "execution_lost" | "outcome_unknown";
@@ -75,10 +77,6 @@ export type MessageStreamSnapshotResponse = MessageStreamSnapshot & {
   workspace_id?: string;
 };
 
-export function isJsonObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 const SNAPSHOT_FIELDS = new Set([
   "workspace_id",
   "snapshot_seq",
@@ -100,7 +98,7 @@ const SNAPSHOT_FIELDS = new Set([
 ]);
 
 export function validateMessageStreamSnapshot(value: unknown): MessageStreamSnapshotResponse {
-  if (!isJsonObject(value)) throw new Error("消息流快照必须是对象");
+  if (!isRecord(value)) throw new Error("消息流快照必须是对象");
   for (const field of Object.keys(value)) {
     if (!SNAPSHOT_FIELDS.has(field) && !["session_id", "turn_id", "turn_stream_id"].includes(field)) {
       throw new Error(`消息流快照包含未知字段: ${field}`);
@@ -121,12 +119,12 @@ export function validateMessageStreamSnapshot(value: unknown): MessageStreamSnap
 }
 
 export function validateMessageStreamSnapshotPayload(value: unknown): MessageStreamSnapshot {
-  if (!isJsonObject(value)) throw new Error("消息流快照必须是对象");
+  if (!isRecord(value)) throw new Error("消息流快照必须是对象");
   validateSnapshotPayload(value, false);
   return value as unknown as MessageStreamSnapshot;
 }
 
-function validateSnapshotPayload(value: JsonObject, allowIdentityFields: boolean): void {
+function validateSnapshotPayload(value: Record<string, unknown>, allowIdentityFields: boolean): void {
   for (const field of Object.keys(value)) {
     if (!SNAPSHOT_FIELDS.has(field) && !(allowIdentityFields && ["session_id", "turn_id", "turn_stream_id"].includes(field))) {
       throw new Error(`消息流快照包含未知字段: ${field}`);
