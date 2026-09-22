@@ -89,6 +89,33 @@ def test_initialize_creates_tables_and_sets_user_version(tmp_path: Path) -> None
         created.close()
 
 
+def test_sha256_hex_pattern_has_single_neutral_definition() -> None:
+    """session-control 各族的 sha256 形态正则只有一处实现（中立原语模块）。
+
+    宿主、owner binding 子包与 operation lease 子包都必须从同一位置导入；
+    任何一处重新定义一份拷贝（哪怕是等价正则）都会让本断言失败。
+    """
+    import app.core.session_control_store as host
+    from app.core.session_control_operation_lease import operation_lease
+    from app.core.session_control_primitives import SHA256_HEX_PATTERN
+    from app.core.session_control_thread_owner_binding import (
+        thread_owner_binding,
+    )
+
+    for module in (host, thread_owner_binding, operation_lease):
+        assert module.SHA256_HEX_PATTERN is SHA256_HEX_PATTERN, module.__name__
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        # 只允许出现导入语句，不允许在别处再次 compile 出该形态。
+        assert source.count("re.compile(r\"^[0-9a-f]{64}$\")") == 0
+        assert (
+            "from app.core.session_control_primitives import "
+            "SHA256_HEX_PATTERN" in source
+        ), module.__name__
+    assert SHA256_HEX_PATTERN.pattern == r"^[0-9a-f]{64}$"
+    assert SHA256_HEX_PATTERN.fullmatch("0" * 64) is not None
+    assert SHA256_HEX_PATTERN.fullmatch("A" * 64) is None
+
+
 def test_initialize_is_idempotent_on_reopen(tmp_path: Path) -> None:
     target = tmp_path / "session-control.sqlite"
     first = SessionControlStore(target)
@@ -374,7 +401,7 @@ def test_fence_state_check_rejects_unknown_state_via_update(
 
 
 def test_get_fence_missing_raises_key_error(store: SessionControlStore) -> None:
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="缺少 lifecycle fence row"):
         store.get_fence()
 
 

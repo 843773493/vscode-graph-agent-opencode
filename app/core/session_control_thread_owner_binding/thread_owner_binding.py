@@ -28,23 +28,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.core.session_catalog_store import validate_thread_id
+from app.core.session_control_primitives import SHA256_HEX_PATTERN
 from app.core.session_control_thread_catalog.thread_catalog import (
     validate_thread_relative_locator,
 )
 
 __all__ = [
-    "SHA256_HEX_PATTERN",
     "THREAD_OWNER_BINDINGS_TABLE_DDL",
     "ThreadOwnerBinding",
     "ThreadOwnerBindingMixin",
 ]
-
-
-# sha256 小写 hex 形态（session-control 跨族共同口径：owner binding 的
-# stable_prefix_hash、lease 的 preimage_hash、thread creation 的
-# artifact_manifest_hash 与通信 payload_hash 共用本正则；在 session-control
-# 各族之间只允许这一份实现，宿主与后续子包一律从此处导入）。
-SHA256_HEX_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 # thread owner binding 字段槽（2.1，B1/B3）：单 thread 的 owner 侧事实

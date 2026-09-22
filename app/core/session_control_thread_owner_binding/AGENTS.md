@@ -18,7 +18,7 @@
 # 规范
 
 - `ThreadOwnerBindingMixin` 只依赖宿主类提供的 `database_path`、`_connection`、`_ensure_open()` 与 `_write_transaction()`；不得假设 `SessionControlStore` 的其它方法存在。
-- `SHA256_HEX_PATTERN` 是 session-control 各族的共同形态约束（owner binding stable prefix、lease preimage、artifact manifest、通信 payload），当前唯一实现暂放本模块；若后续拆出 operation lease 或通信账本，应把它提升到中立位置（例如 `app/core/session_control_primitives.py`），并把两处子包一起改到新位置，禁止复制正则。
+- `SHA256_HEX_PATTERN` 已提升到中立位置 `app/core/session_control_primitives.py`（session-control 各族的共同形态约束：owner binding stable prefix、lease preimage、artifact manifest、通信 payload），本模块只从该处导入使用，不再自行定义也不再列入本模块 `__all__`；禁止在任何子包内复制该正则。
 - 引用槽与列表槽必须走 2.1 负面合同：拒绝绝对路径、相对路径片段、NUL 与凭据形态键名。
 - 错误分类沿用 `session_control_store`：`KeyError` 目标行缺失、`RuntimeError` 库被外部改动或 CAS 冲突、`ValueError` 输入形态非法、`TypeError` 输入类型错误。
 - 修改本目录后运行 `uv run ruff check` 与 `uv run pytest tests/unit/core/test_session_control_store.py`。

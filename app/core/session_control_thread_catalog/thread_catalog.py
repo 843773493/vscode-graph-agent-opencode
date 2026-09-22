@@ -37,11 +37,37 @@ __all__ = [
     "THREAD_CATALOG_TABLE_DDL",
     "ChildThreadRow",
     "ThreadCatalogMixin",
+    "fetch_fence_row",
+    "read_fence_row",
     "validate_thread_relative_locator",
 ]
 
 
 FENCE_ROW_ID = 1
+
+
+def fetch_fence_row(connection: sqlite3.Connection) -> sqlite3.Row | None:
+    """读取固定行 (state, generation)；缺失返回 None。
+
+    session-control 各族的 fence 判态共用本查询，避免同一 SELECT 在
+    thread catalog、operation lease 准入与宿主发布 CAS 中多处复制。
+    """
+    return connection.execute(
+        "SELECT state, generation FROM lifecycle_fence WHERE id = ?",
+        (FENCE_ROW_ID,),
+    ).fetchone()
+
+
+def read_fence_row(
+    connection: sqlite3.Connection, *, database_path: object
+) -> sqlite3.Row:
+    """读取固定行；缺失抛 KeyError（fail closed，文案单点定义）。"""
+    row = fetch_fence_row(connection)
+    if row is None:
+        raise KeyError(
+            f"session control 缺少 lifecycle fence row: path={database_path}"
+        )
+    return row
 
 
 # thread_catalog（8.5-A 升级为 v2 形态）：kind CHECK 由 ``('main')`` 扩为
@@ -239,10 +265,7 @@ class ThreadCatalogMixin:
         self._ensure_open()
         self._connection.execute("BEGIN IMMEDIATE")
         try:
-            row = self._connection.execute(
-                "SELECT state, generation FROM lifecycle_fence WHERE id = ?",
-                (FENCE_ROW_ID,),
-            ).fetchone()
+            row = fetch_fence_row(self._connection)
             if row is None:
                 self._connection.execute(
                     "INSERT INTO lifecycle_fence (id, state, generation) "
@@ -295,15 +318,9 @@ class ThreadCatalogMixin:
         self._ensure_open()
         # 只读判态：连接为 isolation_level=None，裸 SELECT 不开启事务，
         # 失败路径因此天然无事务可泄漏（同实例可直接重试 CAS）。
-        row = self._connection.execute(
-            "SELECT state, generation FROM lifecycle_fence WHERE id = ?",
-            (FENCE_ROW_ID,),
-        ).fetchone()
-        if row is None:
-            raise KeyError(
-                f"session control 缺少 lifecycle fence row: "
-                f"path={self.database_path}"
-            )
+        row = read_fence_row(
+            self._connection, database_path=self.database_path
+        )
         state = str(row["state"])
         generation = int(row["generation"])
         # active→deleting 是唯一合法转移（deleting→active 不可复活）。
@@ -315,15 +332,9 @@ class ThreadCatalogMixin:
         # IMMEDIATE 之间 fence 被其他写者改变导致误推进。
         self._connection.execute("BEGIN IMMEDIATE")
         try:
-            row = self._connection.execute(
-                "SELECT state, generation FROM lifecycle_fence WHERE id = ?",
-                (FENCE_ROW_ID,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(
-                    f"session control 缺少 lifecycle fence row: "
-                    f"path={self.database_path}"
-                )
+            row = read_fence_row(
+                self._connection, database_path=self.database_path
+            )
             state = str(row["state"])
             generation = int(row["generation"])
             proceed = (
@@ -425,14 +436,9 @@ class ThreadCatalogMixin:
     def get_fence(self) -> tuple[str, int]:
         """返回 (state, generation)；缺失抛 KeyError。"""
         self._ensure_open()
-        row = self._connection.execute(
-            "SELECT state, generation FROM lifecycle_fence WHERE id = ?",
-            (FENCE_ROW_ID,),
-        ).fetchone()
-        if row is None:
-            raise KeyError(
-                f"session control 缺少 lifecycle fence row: path={self.database_path}"
-            )
+        row = read_fence_row(
+            self._connection, database_path=self.database_path
+        )
         return str(row["state"]), int(row["generation"])
 
     def verify_matches_catalog_main_thread(self, main_thread_id: str) -> None:

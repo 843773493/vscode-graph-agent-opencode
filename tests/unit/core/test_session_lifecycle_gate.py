@@ -303,7 +303,7 @@ def test_lease_rejected_when_fence_deleting(
 def test_lease_missing_fence_row_fails_closed(tmp_path: Path) -> None:
     store = SessionControlStore(tmp_path / "no-fence.sqlite")
     try:
-        with pytest.raises(KeyError):
+        with pytest.raises(KeyError, match="缺少 lifecycle fence row"):
             store.create_or_get_lease(
                 operation_kind="execution",
                 operation_identity="op-" + uuid.uuid4().hex,
@@ -433,6 +433,31 @@ def test_lease_takeover_rejected_on_terminal(
         )
 
 
+def test_lease_takeover_from_active_directly(
+    control: SessionControlStore,
+) -> None:
+    """active 而非 settling 的 lease 也允许接管（源状态闭集含两者）。
+
+    恢复 owner 可能面对尚未提交任何主体、仍停在 active 的旧 holder；
+    takeover 的源状态闭集必须是 active|settling，不能只剩 settling。
+    """
+    lease = control.create_or_get_lease(
+        operation_kind="runtime_owner",
+        operation_identity="op-" + uuid.uuid4().hex,
+        preimage_hash=make_preimage(),
+    )
+    assert lease.state == "active"
+    taken = control.takeover_lease(
+        lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token
+    )
+    assert taken.state == "active"
+    assert taken.fencing_token == lease.fencing_token + 1
+    assert taken.holder_generation == lease.holder_generation + 1
+    assert control.verify_lease_token(
+        lease_id=lease.lease_id, fencing_token=taken.fencing_token
+    )
+
+
 def test_lease_verify_token_missing_or_terminal(
     control: SessionControlStore,
 ) -> None:
@@ -458,6 +483,7 @@ def test_lease_verify_token_missing_or_terminal(
 
 
 def test_lease_has_no_wall_clock_expiry(control: SessionControlStore) -> None:
+    """lease 无墙钟自动到期：创建后不随时间失效，恢复按 token CAS。"""
     """lease 无墙钟自动到期：创建后不随时间失效，恢复按 token CAS。"""
     lease = control.create_or_get_lease(
         operation_kind="remote_observation",
@@ -512,6 +538,31 @@ def test_find_lease_by_operation_latest(
     assert isinstance(found, SessionOperationLease)
     assert found.lease_id == created.lease_id
     assert control.find_lease_by_operation("missing-op") is None
+
+
+def test_lease_missing_row_read_and_cas_diagnostics(
+    control: SessionControlStore,
+) -> None:
+    """缺失行的只读与 CAS 诊断路径都走同一取行实现并抛 KeyError。
+
+    覆盖 get_lease 的缺失分支，以及 settling/settle/takeover CAS 未命中
+    后按 lease_id 诊断取行时该行也不存在（行被外部删除）的分支。
+    """
+    missing = "lease_" + "0" * 32
+    with pytest.raises(KeyError, match="operation lease 不存在"):
+        control.get_lease(missing)
+    with pytest.raises(KeyError, match="operation lease 不存在"):
+        control.mark_lease_settling(
+            lease_id=missing, expected_fencing_token=1
+        )
+    with pytest.raises(KeyError, match="operation lease 不存在"):
+        control.settle_lease(
+            lease_id=missing,
+            expected_fencing_token=1,
+            outcome="completed",
+        )
+    with pytest.raises(KeyError, match="operation lease 不存在"):
+        control.takeover_lease(lease_id=missing, expected_fencing_token=1)
 
 
 def test_schema_v4_upgrades_to_current_schema_zero_loss(
