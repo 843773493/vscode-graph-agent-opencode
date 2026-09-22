@@ -1870,7 +1870,7 @@ async def test_workspace_pending_restart_resolves_with_matching_proof(
         pending = store.get_pending_config_candidate(config_domain="workspace")
         assert pending is not None
         assert pending.candidate_ref is not None
-        proof = service._pending_restart_health_proof(
+        proof = service._pending_restart.build_pending_restart_health_proof(
             candidate_ref=pending.candidate_ref,
             pending=pending,
         )
@@ -1934,7 +1934,7 @@ async def test_workspace_recovery_pending_requires_matching_proof_before_resolve
         assert failed is not None
         assert failed.state == "recovery_required"
 
-        proof = service._pending_restart_health_proof(
+        proof = service._pending_restart.build_pending_restart_health_proof(
             candidate_ref=pending.candidate_ref,
             pending=failed,
         )
