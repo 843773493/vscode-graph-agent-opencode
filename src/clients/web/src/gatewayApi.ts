@@ -42,6 +42,7 @@ import type {
   WorkspaceNavigationNodeUpdateRequest,
   WorkspaceNavigationPlacementRequest,
 } from "./types/backend";
+import { normalizeWebUiSettings } from "./state/uiSettings/preferences";
 import {
   HttpRequestError,
   normalizePageResult,
@@ -631,10 +632,12 @@ export async function reorderGatewayWorkspaces(
 }
 
 export async function getGatewayUiSettings(port: number): Promise<WebUiSettings> {
-  return unwrapApiData(
-    await requestJson<APIResponse<WebUiSettings>>(
-      port,
-      "/api/gateway/ui-settings",
+  return normalizeWebUiSettings(
+    unwrapApiData(
+      await requestJson<APIResponse<WebUiSettings>>(
+        port,
+        "/api/gateway/ui-settings",
+      ),
     ),
   );
 }
@@ -643,14 +646,16 @@ export async function updateGatewayUiSettings(
   port: number,
   payload: WebUiSettingsUpdate,
 ): Promise<WebUiSettings> {
-  return unwrapApiData(
-    await requestJson<APIResponse<WebUiSettings>>(
-      port,
-      "/api/gateway/ui-settings",
-      {
-        method: "PUT",
-        body: JSON.stringify(payload),
-      },
+  return normalizeWebUiSettings(
+    unwrapApiData(
+      await requestJson<APIResponse<WebUiSettings>>(
+        port,
+        "/api/gateway/ui-settings",
+        {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        },
+      ),
     ),
   );
 }

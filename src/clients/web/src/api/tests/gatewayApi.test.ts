@@ -4,6 +4,7 @@ import {
   addManagedGatewayWorkspace,
   browseGatewayLocalDirectories,
   deleteGatewayUiAsset,
+  getGatewayUiSettings,
   listGatewayUiAssets,
   listGatewayWorkspaces,
 } from "../../gatewayApi";
@@ -549,5 +550,50 @@ describe("heartbeat 遇取消立即放弃重试", () => {
     });
 
     expect(heartbeatCalls).toBe(1);
+  });
+});
+
+describe("Gateway UI 设置读取边界", () => {
+  function stubUiSettingsFetch(expandedPaths: unknown): void {
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "ui-settings-token" } });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            data: { kind: "guest", user_id: null, lease_generation: 1 },
+            request_id: "req_ui_settings_current",
+          });
+        }
+        return Response.json({
+          data: {
+            layout: {},
+            session_sidebar: {},
+            workspace_file_tree: { expanded_paths_by_workspace: expandedPaths },
+            gateway_console: {},
+            theme: { theme_id: "warm", background: null, resolved_theme: null },
+            recent_local_workspace_paths: [],
+          },
+          request_id: "req_ui_settings",
+        });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+  }
+
+  test("展开态载荷损坏时读取接口响亮失败，不产出虚假默认值", async () => {
+    stubUiSettingsFetch({ "ws-a": [123] });
+
+    await expect(getGatewayUiSettings(49_920)).rejects.toThrow("含非字符串元素");
+  });
+
+  test("合法的展开态读取后按工作区归一去重排序", async () => {
+    stubUiSettingsFetch({ "ws-a": ["src", "", "src"] });
+
+    const settings = await getGatewayUiSettings(49_921);
+    expect(settings.workspace_file_tree.expanded_paths_by_workspace)
+      .toEqual({ "ws-a": ["", "src"] });
   });
 });

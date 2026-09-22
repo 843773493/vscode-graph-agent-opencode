@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  normalizeExpandedPathsByWorkspace,
+  normalizeWebUiSettings,
   resolveAgentSessionsPreferences,
   stableUiSettingIds,
   toggleUiSettingId,
@@ -63,5 +65,63 @@ describe("持久化 id 集合切换", () => {
       "workspace-b",
       "workspace-c",
     ]);
+  });
+});
+
+
+describe("文件树展开态归一化", () => {
+  test("合法载荷去重、稳定排序并保持每个工作区独立", () => {
+    expect(normalizeExpandedPathsByWorkspace({
+      "workspace-b": ["src", "", "src"],
+      "workspace-a": ["lib"],
+    })).toEqual({
+      "workspace-a": ["lib"],
+      "workspace-b": ["", "src"],
+    });
+  });
+
+  test("缺失或 null 归一为空对象而不是抛错", () => {
+    expect(normalizeExpandedPathsByWorkspace(undefined)).toEqual({});
+    expect(normalizeExpandedPathsByWorkspace(null)).toEqual({});
+  });
+
+  test("顶层不是对象时响亮失败", () => {
+    expect(() => normalizeExpandedPathsByWorkspace("not-an-array"))
+      .toThrow("expanded_paths_by_workspace 必须是「工作区 ID → 路径数组」的对象，实际收到 string");
+    expect(() => normalizeExpandedPathsByWorkspace(["src"]))
+      .toThrow("实际收到 数组");
+    expect(() => normalizeExpandedPathsByWorkspace(42))
+      .toThrow("实际收到 number");
+  });
+
+  test("单个工作区的值不是数组时响亮失败并指出工作区", () => {
+    expect(() => normalizeExpandedPathsByWorkspace({ "ws-a": "src" }))
+      .toThrow('expanded_paths_by_workspace["ws-a"] 必须是字符串数组，实际收到 string');
+    expect(() => normalizeExpandedPathsByWorkspace({ "ws-a": { nested: ["src"] } }))
+      .toThrow('expanded_paths_by_workspace["ws-a"] 必须是字符串数组，实际收到 object');
+    expect(() => normalizeExpandedPathsByWorkspace({ "ws-a": null }))
+      .toThrow("实际收到 null");
+  });
+
+  test("数组内含非字符串时响亮失败并指出元素类型", () => {
+    expect(() => normalizeExpandedPathsByWorkspace({ "ws-a": [123] }))
+      .toThrow('expanded_paths_by_workspace["ws-a"] 含非字符串元素，实际收到 number');
+    expect(() => normalizeExpandedPathsByWorkspace({ "ws-a": [{}] }))
+      .toThrow("含非字符串元素，实际收到 object");
+    expect(() => normalizeExpandedPathsByWorkspace({ "ws-a": [null] }))
+      .toThrow("含非字符串元素，实际收到 null");
+    expect(() => normalizeExpandedPathsByWorkspace({ "ws-a": [["deep"]] }))
+      .toThrow("含非字符串元素，实际收到 数组");
+  });
+
+  test("整个设置归一化会对损坏的展开态响亮失败而非产出虚假默认值", () => {
+    expect(() => normalizeWebUiSettings({
+      workspace_file_tree: {
+        expanded_paths_by_workspace: { "ws-a": [1, 2] },
+      },
+    })).toThrow("含非字符串元素");
+    // 缺失展开态时仍给出空对象，保持既有默认行为。
+    expect(normalizeWebUiSettings({}).workspace_file_tree)
+      .toEqual({ expanded_paths_by_workspace: {} });
   });
 });

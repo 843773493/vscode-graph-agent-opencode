@@ -4,6 +4,48 @@ import type {
   WebUiSettingsUpdate,
 } from "../../types/backend";
 
+function describeSettingValue(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "数组";
+  return typeof value;
+}
+
+/**
+ * 归一 `workspace_file_tree.expanded_paths_by_workspace`：它来自 Gateway 用户
+ * profile，是文件树展开态的唯一权威来源。非法载荷一旦被当成合法设置传下去，
+ * 会让文件树在 `new Set(expandedPaths)` 处整块崩溃，因此这里按仓库既有约定
+ * （参见 `api/workspaceFilesystem.ts` 的 items 校验）响亮失败，不静默收敛成空对象。
+ */
+export function normalizeExpandedPathsByWorkspace(
+  value: unknown,
+): Record<string, string[]> {
+  if (value === null || value === undefined) {
+    return {};
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(
+      `UI 设置 expanded_paths_by_workspace 必须是「工作区 ID → 路径数组」的对象，实际收到 ${describeSettingValue(value)}`,
+    );
+  }
+  const normalized: Record<string, string[]> = {};
+  for (const [workspaceId, paths] of Object.entries(value)) {
+    if (!Array.isArray(paths)) {
+      throw new Error(
+        `UI 设置 expanded_paths_by_workspace["${workspaceId}"] 必须是字符串数组，实际收到 ${describeSettingValue(paths)}`,
+      );
+    }
+    for (const path of paths) {
+      if (typeof path !== "string") {
+        throw new Error(
+          `UI 设置 expanded_paths_by_workspace["${workspaceId}"] 含非字符串元素，实际收到 ${describeSettingValue(path)}`,
+        );
+      }
+    }
+    normalized[workspaceId] = [...new Set(paths)].sort();
+  }
+  return normalized;
+}
+
 export function createDefaultWebUiSettings(): WebUiSettings {
   return {
     layout: {},
@@ -35,8 +77,9 @@ export function normalizeWebUiSettings(
       ...value.session_sidebar,
     },
     workspace_file_tree: {
-      ...defaults.workspace_file_tree,
-      ...value.workspace_file_tree,
+      expanded_paths_by_workspace: normalizeExpandedPathsByWorkspace(
+        value.workspace_file_tree?.expanded_paths_by_workspace,
+      ),
     },
     gateway_console: {
       ...defaults.gateway_console,
