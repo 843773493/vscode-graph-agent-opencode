@@ -6,7 +6,7 @@ import {
   buildMessageMediaItems,
   type MessageMediaItem,
   type MessageMediaKind,
-} from "../../utils/messageMedia";
+} from "../../utils/media/messageMedia";
 
 function fallbackLabel(kind: MessageMediaKind): string {
   if (kind === "image") {

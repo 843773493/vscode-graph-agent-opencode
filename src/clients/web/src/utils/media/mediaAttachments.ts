@@ -1,4 +1,4 @@
-import type { AttachmentRef } from "../types/backend";
+import type { AttachmentRef } from "../../types/backend";
 
 export type AttachmentMediaKind = "image" | "video" | "file";
 

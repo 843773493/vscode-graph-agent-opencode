@@ -8,7 +8,7 @@ import {
 } from "../../state/slashCommands";
 import type { ConversationContentView } from "../../types/frontend";
 import type { Session, SessionCompactResult } from "../../types/backend";
-import type { SelectedAttachment } from "../../utils/mediaAttachments";
+import type { SelectedAttachment } from "../../utils/media/mediaAttachments";
 
 function copyTextWithSelection(text: string): boolean {
   // TODO: 兼容本地浏览器禁用 Clipboard API 权限的场景；后续统一权限策略后可收敛。

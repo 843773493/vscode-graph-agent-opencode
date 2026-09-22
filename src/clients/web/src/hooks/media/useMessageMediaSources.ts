@@ -1,6 +1,6 @@
 import React from "react";
 import { getSessionAttachmentBlob } from "../../api";
-import type { MessageMediaItem } from "../../utils/messageMedia";
+import type { MessageMediaItem } from "../../utils/media/messageMedia";
 
 const THUMBNAIL_CACHE_MAX_ENTRIES = 96;
 const thumbnailBlobCache = new Map<string, Promise<Blob>>();

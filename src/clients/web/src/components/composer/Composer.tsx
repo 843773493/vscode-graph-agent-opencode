@@ -17,7 +17,7 @@ import {
   MEDIA_ONLY_PROMPT,
   mediaFilesFromClipboard,
   type SelectedAttachment,
-} from "../../utils/mediaAttachments";
+} from "../../utils/media/mediaAttachments";
 import ComposerActionButtons from "./ComposerActionButtons";
 import ComposerAgentControl from "./ComposerAgentControl";
 import ComposerModelControl from "./ComposerModelControl";

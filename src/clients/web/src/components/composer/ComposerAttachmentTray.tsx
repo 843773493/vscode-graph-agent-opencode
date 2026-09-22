@@ -1,5 +1,5 @@
 import React from "react";
-import type { SelectedAttachment } from "../../utils/mediaAttachments";
+import type { SelectedAttachment } from "../../utils/media/mediaAttachments";
 
 export default function ComposerAttachmentTray({
   attachments,
