@@ -5,6 +5,7 @@ import type {
   WorkspaceFileContent,
 } from "../../types/backend";
 import type { WorkspaceFileSelection } from "../../utils/workspaceFileReferences";
+import { formatByteSize } from "../../utils/format";
 import NodeDebugBreakpointGutter, {
   type NodeDebugBreakpointDefinition,
 } from "../nodeDebug/NodeDebugBreakpointGutter";
@@ -104,16 +105,6 @@ function diffLineKind(line: string): "add" | "remove" | "meta" | "context" {
     return "meta";
   }
   return "context";
-}
-
-function formatFileSize(size: number): string {
-  if (size < 1024) {
-    return `${size} B`;
-  }
-  if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} KB`;
-  }
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export default function WorkspaceFilePreviewArea({
@@ -242,7 +233,7 @@ export default function WorkspaceFilePreviewArea({
             </div>
             <div className="workspace-preview-toolbar-actions" aria-label="文件预览操作">
               <span className="workspace-preview-meta">
-                {activeTab.language} · {formatFileSize(activeTab.size)}
+                {activeTab.language} · {formatByteSize(activeTab.size)}
               </span>
               {activeTab.language === "markdown" ? (
                 <div className="workspace-preview-mode-switch" role="group" aria-label="Markdown 查看方式">

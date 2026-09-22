@@ -5,6 +5,7 @@ import type {
   GatewayWorkspace,
 } from "../../../types/backend";
 import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
+import { formatByteSize } from "../../../utils/format";
 import {
   diagnosticLogStatusLabel,
   diagnosticLogUnavailableHint,
@@ -13,12 +14,6 @@ import {
 interface GatewayDiagnosticsPanelProps {
   apiPort: number;
   workspaces: GatewayWorkspace[];
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatTime(value: string | null): string {
@@ -233,7 +228,7 @@ export default function GatewayDiagnosticsPanel({
               {selectedLog ? (
                 <>
                   <header>
-                    <div><span>{selectedLog.source === "gateway" ? "Gateway 控制面" : selectedLog.workspace_name ?? "工作区"}</span><h2>{selectedLog.label}</h2><small>{selectedLog.size_bytes ? `${formatBytes(selectedLog.size_bytes)} · ` : ""}{formatTime(selectedLog.updated_at)}{selectedLog.truncated ? " · 仅显示最新尾部" : ""}</small></div>
+                    <div><span>{selectedLog.source === "gateway" ? "Gateway 控制面" : selectedLog.workspace_name ?? "工作区"}</span><h2>{selectedLog.label}</h2><small>{selectedLog.size_bytes ? `${formatByteSize(selectedLog.size_bytes)} · ` : ""}{formatTime(selectedLog.updated_at)}{selectedLog.truncated ? " · 仅显示最新尾部" : ""}</small></div>
                     <button type="button" className="gateway-compact-button" disabled={!selectedLog.tail} onClick={() => void copySelectedLog()}><span className="codicon codicon-copy" aria-hidden="true" />复制</button>
                   </header>
                   {selectedLog.status === "unavailable" ? (

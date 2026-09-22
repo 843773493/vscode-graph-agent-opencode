@@ -23,6 +23,7 @@ import {
 } from "../../../state/workspaceFileTreeEvents";
 import { useWorkspaceFileWatch } from "../../../hooks/workspace/useWorkspaceFileWatch";
 import { errorMessage } from "../../../utils/errorMessage";
+import { formatByteSize } from "../../../utils/format";
 import {
   loadedDirectoryEntry,
   markDirectoryStale,
@@ -77,19 +78,6 @@ function fileIcon(node: WorkspaceFileNode): string {
     return "↪";
   }
   return "◇";
-}
-
-function formatFileSize(size: number | null | undefined): string {
-  if (typeof size !== "number") {
-    return "";
-  }
-  if (size < 1024) {
-    return `${size} B`;
-  }
-  if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} KB`;
-  }
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export default function WorkspaceFileTree({
@@ -491,7 +479,7 @@ export default function WorkspaceFileTree({
 
   const handleNodeClick = (node: WorkspaceFileNode) => {
     if (node.kind !== "directory") {
-      const size = formatFileSize(node.size);
+      const size = formatByteSize(node.size);
       onOpenFile(node);
       const absolutePath = absolutePathForTreePath(node.path);
       onStatusChange(size ? `${absolutePath} · ${size}` : absolutePath);
@@ -607,7 +595,7 @@ export default function WorkspaceFileTree({
           <span className={`file-icon ${node.kind}`}>{fileIcon(node)}</span>
           <span className="file-label">{node.name}</span>
           {node.kind === "file" ? (
-            <span className="files-tree-meta">{formatFileSize(node.size)}</span>
+            <span className="files-tree-meta">{formatByteSize(node.size)}</span>
           ) : null}
         </button>
         {isDirectory && expanded ? renderDirectory(node.path, depth + 1) : null}
@@ -740,7 +728,7 @@ export default function WorkspaceFileTree({
           <span className={`file-icon ${node.kind}`}>{fileIcon(node)}</span>
           <span className="file-label">{node.name}</span>
           {node.kind === "file" ? (
-            <span className="files-tree-meta">{formatFileSize(node.size)}</span>
+            <span className="files-tree-meta">{formatByteSize(node.size)}</span>
           ) : null}
         </button>
       );
