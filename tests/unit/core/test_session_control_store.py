@@ -2283,3 +2283,122 @@ def test_owner_binding_negative_contract(tmp_path: Path) -> None:
             )
     finally:
         store.close()
+
+
+def test_owner_binding_missing_thread_raises_key_error(tmp_path: Path) -> None:
+    """get/update 对不存在的 thread_id 抛 KeyError（fail closed）。"""
+    store = SessionControlStore(tmp_path / "c.sqlite")
+    try:
+        missing = make_thread_id()
+        with pytest.raises(KeyError, match="不存在"):
+            store.get_thread_owner_binding(missing)
+        with pytest.raises(KeyError, match="不存在"):
+            store.update_thread_owner_binding(
+                missing, prefix_epoch=2, prefix_epoch_reason="compaction"
+            )
+    finally:
+        store.close()
+
+
+def test_owner_binding_ref_and_parameter_guards(tmp_path: Path) -> None:
+    """引用槽/参数下界：空串、NUL、空条目键、epoch/length 下界、空更新。"""
+    store = SessionControlStore(tmp_path / "c.sqlite")
+    try:
+        thread_id = make_thread_id()
+        store.ensure_thread_owner_binding(thread_id=thread_id)
+        with pytest.raises(ValueError, match="必须是非空字符串"):
+            store.update_thread_owner_binding(
+                thread_id, toolset_compatibility_key=""
+            )
+        with pytest.raises(ValueError, match="含 NUL"):
+            store.update_thread_owner_binding(
+                thread_id, assembly_parent_ref="assembly\x00parent"
+            )
+        with pytest.raises(ValueError, match="条目键必须是非空字符串"):
+            store.update_thread_owner_binding(
+                thread_id, append_attachment_ref={"": 1}
+            )
+        with pytest.raises(ValueError, match="prefix_epoch 必须是"):
+            store.update_thread_owner_binding(
+                thread_id, prefix_epoch=0, prefix_epoch_reason="initial"
+            )
+        with pytest.raises(ValueError, match="stable_prefix_length 必须是"):
+            store.update_thread_owner_binding(
+                thread_id,
+                stable_prefix_hash=_sha("prefix"),
+                stable_prefix_length=-1,
+            )
+        with pytest.raises(ValueError, match="desired_toolset_revision 必须是"):
+            store.update_thread_owner_binding(
+                thread_id, desired_toolset_revision=0
+            )
+        with pytest.raises(ValueError, match="需要至少一个字段"):
+            store.update_thread_owner_binding(thread_id)
+    finally:
+        store.close()
+
+
+def test_owner_binding_row_json_corruption_fail_closed(tmp_path: Path) -> None:
+    """库内 JSON 槽损坏（绕过 API 直改）在读取时 fail closed。"""
+    store = SessionControlStore(tmp_path / "c.sqlite")
+    try:
+        thread_id = make_thread_id()
+        store.ensure_thread_owner_binding(thread_id=thread_id)
+        # 列表槽不是 JSON 数组
+        raw_execute(
+            store,
+            "UPDATE thread_owner_bindings SET attachment_refs = ? "
+            "WHERE thread_id = ?",
+            ('{"a": 1}', thread_id),
+        )
+        with pytest.raises(RuntimeError, match="必须是 JSON 数组"):
+            store.get_thread_owner_binding(thread_id)
+        # 列表槽 JSON 损坏
+        raw_execute(
+            store,
+            "UPDATE thread_owner_bindings SET attachment_refs = ? "
+            "WHERE thread_id = ?",
+            ("not-json", thread_id),
+        )
+        with pytest.raises(RuntimeError, match="JSON 损坏"):
+            store.get_thread_owner_binding(thread_id)
+        # provenance JSON 损坏
+        raw_execute(
+            store,
+            "UPDATE thread_owner_bindings SET mutation_provenance = ? "
+            "WHERE thread_id = ?",
+            ("not-json", thread_id),
+        )
+        with pytest.raises(RuntimeError, match="mutation_provenance JSON 损坏"):
+            store.get_thread_owner_binding(thread_id)
+        # provenance 不是 JSON object
+        raw_execute(
+            store,
+            "UPDATE thread_owner_bindings SET mutation_provenance = ? "
+            "WHERE thread_id = ?",
+            ("[1]", thread_id),
+        )
+        with pytest.raises(RuntimeError, match="必须是 JSON object"):
+            store.get_thread_owner_binding(thread_id)
+    finally:
+        store.close()
+
+
+def test_owner_binding_append_requires_list_slot(tmp_path: Path) -> None:
+    """append 路径同样对非数组列表槽 fail closed。"""
+    store = SessionControlStore(tmp_path / "c.sqlite")
+    try:
+        thread_id = make_thread_id()
+        store.ensure_thread_owner_binding(thread_id=thread_id)
+        raw_execute(
+            store,
+            "UPDATE thread_owner_bindings SET variant_refs = ? "
+            "WHERE thread_id = ?",
+            ("{}", thread_id),
+        )
+        with pytest.raises(RuntimeError, match="必须是 JSON 数组"):
+            store.update_thread_owner_binding(
+                thread_id, append_variant_ref={"revision": 1}
+            )
+    finally:
+        store.close()
