@@ -206,4 +206,33 @@ describe("useSessionViewState", () => {
 
     expect(latestState.status).toBe("读取用户视图位置失败: 网关视图位置不可读");
   });
+
+  test("后端权威返回 null 时删除该会话的陈旧视图状态", async () => {
+    const reader = spyOn(userViewStateApi, "getGatewayUserViewState").mockImplementation(
+      async () => null,
+    );
+    restoreApi = () => reader.mockRestore();
+
+    const staleKey = "workspace-view-state::session-view-state";
+    let controller!: SessionViewStateController;
+    let latestState = appState();
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(() =>
+        appState({ gatewayUserViewStates: new Map([[staleKey, viewState()]]) }),
+      );
+      latestState = current;
+      controller = useSessionViewState({ host, setState, setStatus: statusWriter(setState) });
+      return null;
+    }
+
+    await act(async () => { renderer = create(<Probe />); });
+    await act(async () => {
+      await controller.loadSessionViewState("workspace-view-state", "session-view-state");
+    });
+
+    // 后端权威地表示「该会话没有保存的视图位置」：陈旧的本地缓存必须被删除，
+    // 而不是留成幽灵条目继续影响后续投影。
+    expect(latestState.gatewayUserViewStates.has(staleKey)).toBe(false);
+    expect(latestState.gatewayUserViewStates.size).toBe(0);
+  });
 });
