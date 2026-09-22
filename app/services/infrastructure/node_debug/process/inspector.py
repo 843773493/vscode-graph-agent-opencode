@@ -118,10 +118,18 @@ class NodeDebugInspector:
                 )
             )
             try:
-                response = await asyncio.wait_for(
-                    future,
-                    timeout=runtime.command_timeout_seconds,
-                )
+                try:
+                    response = await asyncio.wait_for(
+                        future,
+                        timeout=runtime.command_timeout_seconds,
+                    )
+                except TimeoutError as error:
+                    # asyncio 超时异常是空消息的 OSError，直接外泄只会让上层拿到无语义
+                    # 的 500。必须换成带方法名与超时值的可诊断错误。
+                    raise RuntimeError(
+                        f"Node Inspector 命令 {method} 超时（{runtime.command_timeout_seconds:g} 秒）"
+                        f"；会话 {runtime.session_id}/{runtime.thread_id} 期间未收到响应"
+                    ) from error
             finally:
                 runtime.inspector.pending_commands.pop(command_id, None)
         error = response.get("error")
@@ -342,10 +350,16 @@ class NodeDebugInspector:
         for _ in range(100):
             task = runtime.inspector.variable_hydration_task
             if task is not None:
-                await asyncio.wait_for(
-                    asyncio.shield(task),
-                    timeout=runtime.command_timeout_seconds,
-                )
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(task),
+                        timeout=runtime.command_timeout_seconds,
+                    )
+                except TimeoutError as error:
+                    # 同上：变量读取超时不得外泄无语义的空 OSError。
+                    raise RuntimeError(
+                        f"Node Inspector 读取局部变量超时（{runtime.command_timeout_seconds:g} 秒）"
+                    ) from error
                 return
             async with runtime.state_lock:
                 if runtime.status != "paused":
