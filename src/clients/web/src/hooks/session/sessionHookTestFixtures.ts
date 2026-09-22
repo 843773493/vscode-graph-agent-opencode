@@ -12,6 +12,7 @@ import { useSessionMessageStream } from "./useSessionMessageStream";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
 import { useSessionRunActions } from "./useSessionRunActions";
 import { useSessionGoalController } from "./useSessionGoalController";
+import { invalidateGatewayToken } from "../../api/http";
 
 /**
  * 会话级 hook 测试共享夹具。
@@ -92,6 +93,9 @@ export function installGatewayFetch(
 
 /** 安装只有计时器与空监听器的 window 桩；用 restoreSessionHookGlobals 还原。 */
 export function installTestWindow(port: number): void {
+  // 进程级 token 缓存按端口存活；同一端口在别的测试文件里可能已缓存过 token，
+  // 这里显式作废，保证本文件发出的凭据请求一定打到自己的 fetch 桩上。
+  invalidateGatewayToken(port);
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {

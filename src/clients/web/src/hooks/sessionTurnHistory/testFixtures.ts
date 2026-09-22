@@ -1,6 +1,7 @@
 import type { Session, SessionTurnBootstrap, TurnDetail } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import {
+  invalidateGatewayToken,
   invalidateGatewayUserSession,
   registerGatewayUserSessionInitializer,
 } from "../../api/http";
@@ -131,6 +132,8 @@ export function appState(): AppState {
 export function installWindow(apiPort: number): void {
   restoreGatewayUserSessionInitializer?.();
   invalidateGatewayUserSession(apiPort);
+  // 进程级 token 缓存跨测试文件存活，同一端口必须显式作废。
+  invalidateGatewayToken(apiPort);
   installedApiPort = apiPort;
   restoreGatewayUserSessionInitializer = registerGatewayUserSessionInitializer(
     async () => undefined,
@@ -150,6 +153,7 @@ export function restoreTurnHistoryTestGlobals(): void {
   restoreGatewayUserSessionInitializer = null;
   if (installedApiPort !== null) {
     invalidateGatewayUserSession(installedApiPort);
+    invalidateGatewayToken(installedApiPort);
     installedApiPort = null;
   }
   globalThis.fetch = originalFetch;

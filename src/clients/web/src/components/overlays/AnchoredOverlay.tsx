@@ -64,6 +64,10 @@ export default function AnchoredOverlay({
   onClose,
   children,
 }: AnchoredOverlayProps): React.ReactNode {
+  // 非浏览器环境（SSR、纯 Node 单测）没有 document：@floating-ui 的定位与
+  // dismiss 副作用会直接引用 document 而在挂载时抛错，因此必须在调用层整体关闭，
+  // 光靠下面 render 的 `typeof document` 分支根本到不了。
+  const positioningAvailable = typeof document !== "undefined";
   const virtualReference = useMemo(
     () => (point ? pointReference(point) : null),
     [point],
@@ -77,7 +81,7 @@ export default function AnchoredOverlay({
     },
     placement,
     strategy: "fixed",
-    whileElementsMounted: autoUpdate,
+    whileElementsMounted: positioningAvailable ? autoUpdate : undefined,
     middleware: [
       floatingOffset(offset),
       flip({ padding: viewportPadding }),
@@ -98,7 +102,7 @@ export default function AnchoredOverlay({
     ],
   });
   const dismiss = useDismiss(context, {
-    enabled: dismissible,
+    enabled: dismissible && positioningAvailable,
     escapeKey: true,
     outsidePress: true,
   });
@@ -122,7 +126,7 @@ export default function AnchoredOverlay({
   if (!open) {
     return null;
   }
-  if (typeof document === "undefined") {
+  if (!positioningAvailable) {
     return <>{children}</>;
   }
 

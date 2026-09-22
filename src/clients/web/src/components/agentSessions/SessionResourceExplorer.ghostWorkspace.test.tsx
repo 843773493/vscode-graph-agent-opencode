@@ -1,33 +1,35 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { GatewayWorkspace } from "../../types/backend";
+import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
+import {
+  apiResponse,
+  installGatewayFetch,
+  installTestWindow,
+  restoreSessionHookGlobals,
+} from "../../hooks/session/sessionHookTestFixtures";
 import SessionResourceExplorer from "./SessionResourceExplorer";
 
-// SessionResourceExplorer 的渲染依赖 explorer hook 与浮层；测试环境没有 DOM，
-// 用最小替身固定「工作区导航树如何渲染」这一契约。
-mock.module("../../hooks/session/useSessionResourceExplorer", () => ({
-  useSessionResourceExplorer: () => explorerStub,
-}));
-mock.module("./SessionResourceOverlays", () => ({
-  default: () => null,
-}));
+// 用真实 useSessionResourceExplorer + fetch 桩渲染导航树。不再替换 hook 与浮层模块：
+// bun 的 mock.module 是进程级且不可撤销的，会污染同一进程后续所有测试文件看到的
+// 这两个模块。
 
-const explorerStub = {
-  navigation: { nodes: [] as unknown[] } as { nodes: unknown[] } | null,
-  navigationError: null as string | null,
-  branches: new Map<string, unknown>(),
-  expandedIds: new Set<string>(),
-  searchResults: { items: [], workspaces: [] },
-  searching: false,
-  searchError: null,
-  refreshNavigation: async () => undefined,
-  refreshResourceTree: async () => undefined,
-  loadBranch: async () => undefined,
-  toggleExpanded: () => undefined,
-  placeWorkspaceNode: async () => undefined,
-  moveCatalogNode: async () => undefined,
-};
+afterEach(restoreSessionHookGlobals);
+
+const generatorResources = {
+  generators: null,
+  generationRuns: new Map(),
+  generatorError: null,
+} as unknown as SessionGeneratorResourcesController;
+
+/** 带可读 detail 的错误信封：HttpRequestError 从顶层 detail/message 取诊断文本。 */
+function errorResponse(detail: string): Response {
+  return Response.json(
+    { code: 500, message: "ok", request_id: "req_test", detail },
+    { status: 500 },
+  );
+}
 
 function navigationNode(workspaceId: string, name: string) {
   return {
@@ -62,67 +64,115 @@ function gatewayWorkspace(workspaceId: string, status: "ready" | "offline"): Gat
   };
 }
 
-function renderExplorer(options: {
+/** 导航树渲染：喂入指定节点与工作区，等 effect 收敛后返回渲染出的 HTML。 */
+async function renderExplorer(options: {
   nodes: unknown[];
   workspaces: GatewayWorkspace[];
-  navigation?: { nodes: unknown[] } | null;
-  navigationError?: string | null;
-  branches?: Map<string, unknown>;
-  expandedIds?: Set<string>;
-}): string {
-  explorerStub.navigation = options.navigation === undefined
-    ? { nodes: options.nodes }
-    : options.navigation;
-  explorerStub.navigationError = options.navigationError ?? null;
-  explorerStub.branches = options.branches ?? new Map<string, unknown>();
-  explorerStub.expandedIds = options.expandedIds ?? new Set<string>();
-  return renderToStaticMarkup(
-    <SessionResourceExplorer
-      apiPort={8014}
-      workspaces={options.workspaces}
-      activeWorkspaceId={null}
-      currentSessionId=""
-      searchOpen={false}
-      searchQuery=""
-      workspaceSwitching={false}
-      startingWorkspaceIds={new Set()}
-      removingWorkspaceIds={new Set()}
-      onActivateWorkspace={async () => undefined}
-      onSetWorkspaceParent={async () => undefined}
-      onRefreshWorkspaceSessions={async () => undefined}
-      onCreateSessionInFolder={async () => undefined}
-      onSessionFolderDeleted={async () => undefined}
-      catalogSyncKeys={new Map()}
-      catalogRefreshVersions={new Map()}
-      onSelectSession={() => undefined}
-      onStatusChange={() => undefined}
-      onOpenWorkspaceMenu={() => undefined}
-      onOpenSessionMenu={() => undefined}
-      activeJobIdsBySession={new Map()}
-      unreadSessionKeys={new Set()}
-      onRequestAddWorkspace={() => undefined}
-      onOpenConnectionManager={() => undefined}
-      onReconnectWorkspace={async () => undefined}
-      onStartWorkspace={async () => undefined}
-      generatorResources={{} as never}
-    />,
+  navigationMissing?: boolean;
+  /** 导航请求一直挂起：用于验证「尚未加载」的加载态。 */
+  navigationPending?: boolean;
+  navigationFails?: string | null;
+  branchItems?: unknown[];
+  branchError?: string | null;
+}): Promise<{ html: string; tree: ReactTestRenderer }> {
+  installTestWindow(8014);
+  installGatewayFetch((request) => {
+    if (request.path.includes("/api/gateway/workspace-navigation")) {
+      if (options.navigationFails) {
+        return errorResponse(options.navigationFails);
+      }
+      if (options.navigationPending) {
+        return new Promise<Response>(() => {});
+      }
+      if (options.navigationMissing) {
+        return undefined;
+      }
+      return apiResponse({ revision: "navigation", nodes: options.nodes });
+    }
+    if (request.path.includes("/api/v1/session-catalog/children")) {
+      if (options.branchError) {
+        return errorResponse(options.branchError);
+      }
+      return apiResponse({
+        revision: "catalog",
+        parent_node_id: null,
+        items: options.branchItems ?? [],
+        cursor: null,
+        total: 0,
+      });
+    }
+    if (request.path.includes("/api/gateway/session-generators")) {
+      return apiResponse({ revision: "generators", items: [] });
+    }
+    return undefined;
+  });
+
+  let tree!: ReactTestRenderer;
+  await act(async () => {
+    tree = create(
+      <SessionResourceExplorer
+        apiPort={8014}
+        workspaces={options.workspaces}
+        activeWorkspaceId={null}
+        currentSessionId=""
+        searchOpen={false}
+        searchQuery=""
+        workspaceSwitching={false}
+        startingWorkspaceIds={new Set()}
+        removingWorkspaceIds={new Set()}
+        onActivateWorkspace={async () => undefined}
+        onSetWorkspaceParent={async () => undefined}
+        onRefreshWorkspaceSessions={async () => undefined}
+        onCreateSessionInFolder={async () => undefined}
+        onSessionFolderDeleted={async () => undefined}
+        catalogSyncKeys={new Map()}
+        catalogRefreshVersions={new Map()}
+        onSelectSession={() => undefined}
+        onStatusChange={() => undefined}
+        onOpenWorkspaceMenu={() => undefined}
+        onOpenSessionMenu={() => undefined}
+        activeJobIdsBySession={new Map()}
+        unreadSessionKeys={new Set()}
+        onRequestAddWorkspace={() => undefined}
+        onOpenConnectionManager={() => undefined}
+        onReconnectWorkspace={async () => undefined}
+        onStartWorkspace={async () => undefined}
+        generatorResources={generatorResources}
+      />,
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  });
+  return { html: JSON.stringify(tree.toJSON()), tree };
+}
+
+/** 展开第一个工作区行，触发真实 loadBranch。 */
+async function expandFirstWorkspace(tree: ReactTestRenderer): Promise<void> {
+  const chevrons = tree.root.findAll(
+    (instance) =>
+      typeof instance.props.className === "string"
+      && instance.props.className.includes("session-resource-chevron"),
+    { deep: true },
   );
+  await act(async () => {
+    chevrons[0]?.props.onClick();
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  });
 }
 
 describe("工作区导航树对已消失工作区的渲染", () => {
-  test("导航索引残留但工作区已不在列表时明确标记不可用并禁用激活", () => {
-    const html = renderExplorer({
+  test("导航索引残留但工作区已不在列表时明确标记不可用并禁用激活", async () => {
+    const { html } = await renderExplorer({
       nodes: [navigationNode("gw_gone", "已删除的工作区")],
       workspaces: [],
     });
     expect(html).toContain("已不可用");
     expect(html).toContain("已删除的工作区");
     // 激活按钮必须被禁用，避免点到已不存在的 workspace_id
-    expect(html).toContain('disabled=""');
+    expect(html).toContain('"disabled":true');
   });
 
-  test("工作区仍在列表且就绪时不显示不可用提示", () => {
-    const html = renderExplorer({
+  test("工作区仍在列表且就绪时不显示不可用提示", async () => {
+    const { html } = await renderExplorer({
       nodes: [navigationNode("gw_ok", "正常的工作区")],
       workspaces: [gatewayWorkspace("gw_ok", "ready")],
     });
@@ -132,10 +182,9 @@ describe("工作区导航树对已消失工作区的渲染", () => {
 });
 
 describe("工作区导航树的空态与加载态", () => {
-  test("导航已加载但没有任何工作区时给出明确空态而不是空树", () => {
-    const html = renderExplorer({
+  test("导航已加载但没有任何工作区时给出明确空态而不是空树", async () => {
+    const { html } = await renderExplorer({
       nodes: [],
-      navigation: { nodes: [] },
       workspaces: [],
     });
     expect(html).toContain("还没有工作区");
@@ -143,34 +192,32 @@ describe("工作区导航树的空态与加载态", () => {
     expect(html).not.toContain("正在加载工作区目录");
   });
 
-  test("导航尚未加载时显示加载态而不是空态", () => {
-    const html = renderExplorer({
+  test("导航尚未加载时显示加载态而不是空态", async () => {
+    const { html } = await renderExplorer({
       nodes: [],
-      navigation: null,
       workspaces: [],
+      navigationPending: true,
     });
     expect(html).toContain("正在加载工作区目录");
     expect(html).not.toContain("还没有工作区");
   });
 
-  test("导航加载失败时显示错误卡而不是空态", () => {
-    const html = renderExplorer({
+  test("导航加载失败时显示错误卡而不是空态", async () => {
+    const { html } = await renderExplorer({
       nodes: [],
-      navigation: null,
-      navigationError: "HTTP 500 内部错误",
       workspaces: [],
+      navigationFails: "HTTP 500 内部错误",
     });
     expect(html).toContain("无法加载工作区列表");
     expect(html).toContain("HTTP 500 内部错误");
     expect(html).not.toContain("还没有工作区");
   });
 
-  test("刷新失败但保留了空的旧导航快照时只显示错误卡，不并列空态", () => {
-    const html = renderExplorer({
+  test("刷新失败但保留了空的旧导航快照时只显示错误卡，不并列空态", async () => {
+    const { html } = await renderExplorer({
       nodes: [],
-      navigation: { nodes: [] },
-      navigationError: "HTTP 500 内部错误",
       workspaces: [],
+      navigationFails: "HTTP 500 内部错误",
     });
     expect(html).toContain("无法加载工作区列表");
     // 旧快照为空 + 刷新失败：错误优先，空态必须让位
@@ -179,41 +226,26 @@ describe("工作区导航树的空态与加载态", () => {
 });
 
 describe("会话目录分支的加载失败与空态", () => {
-  function branch(overrides: Record<string, unknown>): Map<string, unknown> {
-    return new Map([["gw_1:root", {
-      revision: "",
-      parent_node_id: null,
-      items: [],
-      cursor: null,
-      total: 0,
-      consistency_warning: null,
-      loading: false,
-      error: null,
-      ...overrides,
-    }]]);
-  }
-
-  test("分支加载失败时显示错误卡并保留技术详情", () => {
-    const html = renderExplorer({
+  test("分支加载失败时显示错误卡并保留技术详情", async () => {
+    const { html, tree } = await renderExplorer({
       nodes: [navigationNode("gw_1", "gw_1")],
       workspaces: [gatewayWorkspace("gw_1", "ready")],
-      expandedIds: new Set(["workspace:gw_1"]),
-      branches: branch({ error: "HTTP 500 内部错误" }),
+      branchError: "HTTP 500 内部错误",
     });
-    expect(html).toContain("无法读取工作区目录");
-    expect(html).toContain("HTTP 500 内部错误");
+    await expandFirstWorkspace(tree);
+    expect(JSON.stringify(tree.toJSON())).toContain("无法读取工作区目录");
+    expect(JSON.stringify(tree.toJSON())).toContain("HTTP 500 内部错误");
     // 失败时不得同时宣称「暂无会话」，否则用户无法区分空目录和加载失败
-    expect(html).not.toContain("暂无会话或会话文件夹");
+    expect(JSON.stringify(tree.toJSON())).not.toContain("暂无会话或会话文件夹");
   });
 
-  test("分支为空且无错时才显示暂无会话", () => {
-    const html = renderExplorer({
+  test("分支为空且无错时才显示暂无会话", async () => {
+    const { tree } = await renderExplorer({
       nodes: [navigationNode("gw_1", "gw_1")],
       workspaces: [gatewayWorkspace("gw_1", "ready")],
-      expandedIds: new Set(["workspace:gw_1"]),
-      branches: branch({}),
     });
-    expect(html).toContain("暂无会话或会话文件夹");
-    expect(html).not.toContain("无法读取工作区目录");
+    await expandFirstWorkspace(tree);
+    expect(JSON.stringify(tree.toJSON())).toContain("暂无会话或会话文件夹");
+    expect(JSON.stringify(tree.toJSON())).not.toContain("无法读取工作区目录");
   });
 });

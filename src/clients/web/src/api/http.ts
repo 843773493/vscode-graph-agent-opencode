@@ -263,6 +263,15 @@ export function invalidateGatewayUserSession(port: number): void {
   gatewayUserSessionReadyByPort.delete(port);
 }
 
+/**
+ * 清除某个端口上缓存的本地凭据 Promise。Gateway 重启会轮换凭据，同一个 SPA
+ * 进程不能永久复用旧 token；进程内按端口缓存意味着测试或同一进程的多个调用方
+ * 切换后端时必须显式作废，否则会拿着上一个后端的 token 继续请求。
+ */
+export function invalidateGatewayToken(port: number): void {
+  gatewayTokenByPort.delete(port);
+}
+
 async function initializeGatewayUserSessionFallback(
   port: number,
   signal: AbortSignal | undefined,

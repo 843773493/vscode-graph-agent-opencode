@@ -1,40 +1,90 @@
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { Virtuoso, VirtuosoMockContext } from "react-virtuoso";
+import ChatPanel from "./ChatPanel";
 import type { ConversationView } from "../../types/frontend";
 
-interface MockVirtuosoProps {
-  context?: {
-    stateRef: React.MutableRefObject<unknown>;
-  };
-  components?: {
-    Header?: (props: { context: NonNullable<MockVirtuosoProps["context"]> }) => React.ReactNode;
-    Footer?: (props: { context: NonNullable<MockVirtuosoProps["context"]> }) => React.ReactNode;
-  };
-  itemContent?: (...args: unknown[]) => React.ReactNode;
-  computeItemKey?: (...args: unknown[]) => React.Key;
+/** 真实 react-virtuoso 只在需要浏览器尺寸测量时才拒绝无 DOM 环境；
+ * createNodeMock 提供宿主节点替身、VirtuosoMockContext 固定视口与条目高度，
+ * 就能让真实实现直接渲染。这样测试观察到的就是 ChatPanel 真正传给 Virtuoso 的
+ * props，不必再替换模块——bun 的 mock.module 是进程级且不可撤销的，会污染同一
+ * 进程后续所有测试文件看到的 react-virtuoso。 */
+
+interface VirtuosoHostNode {
+  style: Record<string, string>;
+  offsetHeight: number;
+  offsetWidth: number;
 }
 
-const renderedVirtuosoProps: MockVirtuosoProps[] = [];
-const MockVirtuoso = React.forwardRef<unknown, MockVirtuosoProps>((props, _ref) => {
-  if (props) {
-    renderedVirtuosoProps.push(props);
+function createVirtuosoHostNode(): unknown {
+  return {
+    style: new Proxy({} as Record<string, string>, { get: () => "", set: () => true }),
+    offsetHeight: 600,
+    offsetWidth: 800,
+    scrollHeight: 600,
+    scrollWidth: 800,
+    scrollTop: 0,
+    clientHeight: 600,
+    clientWidth: 800,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    appendChild: () => {},
+    removeChild: () => {},
+    setAttribute: () => {},
+    removeAttribute: () => {},
+    querySelector: () => null,
+    getBoundingClientRect: () => ({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      width: 800,
+      height: 600,
+      toJSON: () => undefined,
+    }),
+  };
+}
+
+function installVirtuosoEnvironment(): void {
+  originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      getComputedStyle: () => ({ getPropertyValue: () => "" }),
+      requestAnimationFrame: (handler: () => void) => globalThis.setTimeout(handler, 0),
+      cancelAnimationFrame: (id: number) => globalThis.clearTimeout(id),
+      setTimeout: globalThis.setTimeout.bind(globalThis),
+      clearTimeout: globalThis.clearTimeout.bind(globalThis),
+    },
+  });
+}
+
+let originalWindowDescriptor: PropertyDescriptor | undefined;
+
+afterEach(() => {
+  // 真实 react-virtuoso 需要 window 才能走通尺寸测量；用完必须还原，
+  // 否则这个桩会泄漏给同一进程后续所有测试文件（它们会误以为运行在浏览器里）。
+  if (originalWindowDescriptor) {
+    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
+  } else {
+    Reflect.deleteProperty(globalThis, "window");
   }
-  const Header = props.components?.Header;
-  const Footer = props.components?.Footer;
-  return (
-    <>
-      {Header && props.context ? <Header context={props.context} /> : null}
-      {Footer && props.context ? <Footer context={props.context} /> : null}
-    </>
-  );
+  originalWindowDescriptor = undefined;
 });
 
-// ChatPanel 通过 react-virtuoso 的 props 暴露渲染回调；测试替换列表容器，
-// 只观察连续流式更新时的引用和 context，不让 DOM 测量掩盖组件行为。
-mock.module("react-virtuoso", () => ({ Virtuoso: MockVirtuoso }));
+function withVirtuosoMock(children: React.ReactElement): React.ReactElement {
+  return (
+    <VirtuosoMockContext.Provider value={{ viewportHeight: 300, itemHeight: 30 }}>
+      {children}
+    </VirtuosoMockContext.Provider>
+  );
+}
 
-const { default: ChatPanel } = await import("./ChatPanel");
 type ChatPanelProps = Parameters<typeof ChatPanel>[0];
 
 function panelProps(
@@ -80,34 +130,37 @@ function conversation(text: string): ConversationView {
     jobId: "job-1",
     pending: false,
     source: "turn",
-  };
+  } as unknown as ConversationView;
 }
 
-function latestVirtuosoProps(): MockVirtuosoProps {
-  const props = renderedVirtuosoProps[renderedVirtuosoProps.length - 1];
-  if (!props) throw new Error("测试未捕获 Virtuoso props");
-  return props;
+/** 直接读出 ChatPanel 交给真实 Virtuoso 的 props。 */
+function virtuosoProps(renderer: ReactTestRenderer): Record<string, unknown> {
+  return renderer.root.findByType(Virtuoso).props as Record<string, unknown>;
 }
 
 describe("ChatPanel Virtuoso 渲染引用", () => {
   test("流式更新和取消后重试保持回调引用，同时读取最新历史状态", () => {
-    renderedVirtuosoProps.length = 0;
+    installVirtuosoEnvironment();
     const first = panelProps([conversation("第一段")]);
     let renderer: ReactTestRenderer;
     act(() => {
-      renderer = create(<ChatPanel {...first} />);
+      renderer = create(withVirtuosoMock(<ChatPanel {...first} />), {
+        createNodeMock: createVirtuosoHostNode,
+      }) as unknown as ReactTestRenderer;
     });
-    const initialProps = latestVirtuosoProps();
+    const initialProps = virtuosoProps(renderer!);
 
     act(() => {
       renderer!.update(
-        <ChatPanel
-          {...first}
-          conversations={[conversation("第一段继续流式增长") ]}
-        />,
+        withVirtuosoMock(
+          <ChatPanel
+            {...first}
+            conversations={[conversation("第一段继续流式增长")]}
+          />,
+        ),
       );
     });
-    const streamingProps = latestVirtuosoProps();
+    const streamingProps = virtuosoProps(renderer!);
     expect(streamingProps.components).toBe(initialProps.components);
     expect(streamingProps.itemContent).toBe(initialProps.itemContent);
     expect(streamingProps.computeItemKey).toBe(initialProps.computeItemKey);
@@ -119,17 +172,19 @@ describe("ChatPanel Virtuoso 渲染引用", () => {
     };
     act(() => {
       renderer!.update(
-        <ChatPanel
-          {...first}
-          conversations={[conversation("取消后重试的流式正文") ]}
-          hasOlderMessages
-          loadingOlderMessages
-          historyError="历史加载仍在进行"
-          onRetryHistory={retry}
-        />,
+        withVirtuosoMock(
+          <ChatPanel
+            {...first}
+            conversations={[conversation("取消后重试的流式正文")]}
+            hasOlderMessages
+            loadingOlderMessages
+            historyError="历史加载仍在进行"
+            onRetryHistory={retry}
+          />,
+        ),
       );
     });
-    const retryProps = latestVirtuosoProps();
+    const retryProps = virtuosoProps(renderer!);
 
     expect(retryProps.components).toBe(initialProps.components);
     expect(retryProps.itemContent).toBe(initialProps.itemContent);

@@ -20,6 +20,7 @@ import {
   createSessionTurnTimeline,
   upsertTurn,
 } from "../../state/session/turnTimeline";
+import { invalidateGatewayToken } from "../../api/http";
 
 const originalFetch = globalThis.fetch;
 const SESSION_ID = "ses_reconciliation";
@@ -253,6 +254,9 @@ function installMockBackend({
   turnProjectionEpoch?: number;
 }): string[] {
   const businessRequests: string[] = [];
+  // 进程级 token 缓存跨测试文件按端口存活；端口在不同文件间会复用，
+  // 必须显式作废，否则会跳过本文件的凭据桩直接复用旧 token。
+  invalidateGatewayToken(port);
   globalThis.fetch = Object.assign(
     async (...args: Parameters<typeof fetch>) => {
       const [input] = args;

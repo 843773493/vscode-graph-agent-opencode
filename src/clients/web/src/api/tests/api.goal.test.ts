@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 
 import { getSessionGoal } from "../../api";
+import { invalidateGatewayToken } from "../http";
 
 const originalFetch = globalThis.fetch;
 
@@ -9,6 +10,9 @@ afterEach(() => {
 });
 
 test("Goal GET 允许权威 data 为 null", async () => {
+  // 端口在不同测试文件间可能被复用，进程级 token 缓存必须显式作废，
+  // 否则会拿着上一个文件缓存的 token 直接跳过本文件的凭据桩。
+  invalidateGatewayToken(49_101);
   globalThis.fetch = Object.assign(
     async (input: string | URL | Request) => {
       const url = input instanceof Request ? input.url : String(input);
@@ -34,6 +38,7 @@ test("Goal GET 允许权威 data 为 null", async () => {
 });
 
 test("Goal GET 缺少 data 字段时快速失败", async () => {
+  invalidateGatewayToken(49_102);
   globalThis.fetch = Object.assign(
     async (input: string | URL | Request) => {
       const url = input instanceof Request ? input.url : String(input);
