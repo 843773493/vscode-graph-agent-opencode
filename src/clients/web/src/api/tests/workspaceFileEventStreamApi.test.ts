@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { streamWorkspaceFileEvents } from "./api";
+import { streamWorkspaceFileEvents } from "../../api";
 
 const originalFetch = globalThis.fetch;
 

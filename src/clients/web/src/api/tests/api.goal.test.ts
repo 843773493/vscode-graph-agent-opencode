@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { getSessionGoal } from "./api";
+import { getSessionGoal } from "../../api";
 
 const originalFetch = globalThis.fetch;
 

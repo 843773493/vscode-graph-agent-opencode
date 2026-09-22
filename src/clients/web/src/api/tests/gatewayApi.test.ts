@@ -7,8 +7,8 @@ import {
   ensureGatewayUserAccess,
   heartbeatGatewayUserWithRetry,
   listGatewayWorkspaces,
-} from "./gatewayApi";
-import { requestJson } from "./api";
+} from "../../gatewayApi";
+import { requestJson } from "../../api";
 
 const originalFetch = globalThis.fetch;
 
