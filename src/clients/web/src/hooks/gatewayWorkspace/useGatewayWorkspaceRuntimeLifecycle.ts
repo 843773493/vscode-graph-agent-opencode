@@ -44,7 +44,6 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       setState((prev) => ({
         ...prev,
         gatewayError: message,
-        error: message,
         status: `重新连接工作区失败: ${message}`,
       }));
       throw error;
@@ -71,7 +70,6 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         setState((prev) => ({
           ...prev,
           gatewayError: message,
-          error: message,
           status: `安全重启 Workspace 后端失败: ${message}`,
         }));
         throw error;
@@ -118,7 +116,6 @@ export function useGatewayWorkspaceRuntimeLifecycle({
           ...prev,
           workspaceSwitching: false,
           gatewayError: message,
-          error: message,
           status: message,
         }));
       }
@@ -156,7 +153,6 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         setState((prev) => ({
           ...prev,
           gatewayError: message,
-          error: message,
           status: `关闭工作区失败: ${message}`,
         }));
         throw error;
@@ -184,7 +180,6 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         setState((prev) => ({
           ...prev,
           gatewayError: message,
-          error: message,
           status: `强制重启 Workspace 后端失败: ${message}`,
         }));
         throw error;
@@ -208,7 +203,6 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         setState((prev) => ({
           ...prev,
           gatewayError: message,
-          error: message,
           status: `重新探测外部后端失败: ${message}`,
         }));
         throw error;

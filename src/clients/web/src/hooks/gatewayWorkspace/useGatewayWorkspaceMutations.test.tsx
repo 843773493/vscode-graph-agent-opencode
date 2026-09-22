@@ -227,7 +227,7 @@ describe("Gateway 工作区排序", () => {
     expect(next.status).toBe("工作区顺序已更新");
   });
 
-  test("排序失败写入三处错误字段并原样抛出，且不做回滚重取", async () => {
+  test("排序失败只写 gatewayError 与 status，不占用初始化失败通道，并原样抛出", async () => {
     const failure = new Error("排序后端不可用");
     const reorder = spyOnGatewayApi("reorderGatewayWorkspaces").mockRejectedValue(failure);
     const list = spyOnGatewayApi("listGatewayWorkspaces");
@@ -239,7 +239,7 @@ describe("Gateway 工作区排序", () => {
     expect(list).not.toHaveBeenCalled();
     const next = state();
     expect(next.gatewayError).toBe("排序后端不可用");
-    expect(next.error).toBe("排序后端不可用");
+    expect(next.error).toBeNull();
     expect(next.status).toBe("工作区排序失败: 排序后端不可用");
   });
 });
@@ -297,7 +297,7 @@ describe("Gateway 工作区重命名", () => {
 
     const next = state();
     expect(next.gatewayError).toBe("名称冲突；重新读取工作区列表也失败: 列表不可用");
-    expect(next.error).toBe("名称冲突；重新读取工作区列表也失败: 列表不可用");
+    expect(next.error).toBeNull();
     expect(next.status).toBe("重命名工作区失败: 名称冲突；重新读取工作区列表也失败: 列表不可用");
   });
 });
@@ -404,7 +404,7 @@ describe("Gateway 工作区删除", () => {
     const message = "工作区已删除，但新活动工作区加载失败: 刷新失败";
     const next = state();
     expect(next.gatewayError).toBe(message);
-    expect(next.error).toBe(message);
+    expect(next.error).toBeNull();
     expect(next.status).toBe(message);
     expect(next.status.startsWith("删除工作区失败")).toBe(false);
     expect(next.workspaceSwitching).toBe(false);
@@ -428,7 +428,7 @@ describe("Gateway 工作区删除", () => {
 
     const next = state();
     expect(next.gatewayError).toBe("删除被拒绝");
-    expect(next.error).toBe("删除被拒绝");
+    expect(next.error).toBeNull();
     expect(next.status).toBe("删除工作区失败: 删除被拒绝");
     expect(next.activeGatewayWorkspaceId).toBe("ws-active");
     expect(next.gatewayWorkspaces.map((item) => item.workspace_id)).toEqual(["ws-active", "ws-other"]);
@@ -449,7 +449,7 @@ describe("Gateway 工作区删除", () => {
     const message = "删除被拒绝；重新读取工作区列表也失败: 列表不可用";
     const next = state();
     expect(next.gatewayError).toBe(message);
-    expect(next.error).toBe(message);
+    expect(next.error).toBeNull();
     expect(next.status).toBe(`删除工作区失败: ${message}`);
     expect([...next.removingGatewayWorkspaceIds]).toEqual(["ws-active"]);
     expect(next.workspaceSwitching).toBe(false);
@@ -517,7 +517,7 @@ describe("Gateway 受管工作区新增", () => {
 
     const next = state();
     expect(next.gatewayError).toBe(message);
-    expect(next.error).toBe(message);
+    expect(next.error).toBeNull();
     expect(next.status).toBe(message);
     expect(next.workspaceSwitching).toBe(false);
     expect(next.isBootstrapping).toBe(false);
@@ -534,7 +534,7 @@ describe("Gateway 受管工作区新增", () => {
 
     const next = state();
     expect(next.gatewayError).toBe("后端拒绝");
-    expect(next.error).toBe("后端拒绝");
+    expect(next.error).toBeNull();
     expect(next.status).toBe("添加工作区失败: 后端拒绝");
     expect(next.workspaceSwitching).toBe(false);
     expect(next.isBootstrapping).toBe(false);
@@ -565,7 +565,7 @@ describe("Gateway 远程工作区新增", () => {
     expect(calls.finish).toBe(0);
     const next = state();
     expect(next.gatewayError).toBe("连接被拒绝");
-    expect(next.error).toBe("连接被拒绝");
+    expect(next.error).toBeNull();
     expect(next.status).toBe("连接远程 Gateway 失败: 连接被拒绝");
     expect(next.workspaceSwitching).toBe(false);
     expect(next.isBootstrapping).toBe(false);
@@ -589,7 +589,7 @@ describe("Gateway 远程工作区新增", () => {
     expect(calls.finish).toBe(1);
     const next = state();
     expect(next.gatewayError).toBe(message);
-    expect(next.error).toBe(message);
+    expect(next.error).toBeNull();
     expect(next.status).toBe(message);
     expect(next.workspaceSwitching).toBe(false);
     expect(next.isBootstrapping).toBe(false);

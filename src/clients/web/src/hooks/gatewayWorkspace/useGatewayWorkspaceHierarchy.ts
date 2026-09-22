@@ -63,7 +63,6 @@ export function useGatewayWorkspaceHierarchy(
         setState((previous) => ({
           ...previous,
           gatewayError: message,
-          error: message,
           status: `更新工作区父子关系失败: ${message}`,
         }));
         throw new Error(message);

@@ -54,7 +54,6 @@ export function useGatewayWorkspaceMutations({
           ...prev,
           workspaceSwitching: false,
           gatewayError: message,
-          error: message,
           status: `添加工作区失败: ${message}`,
           isBootstrapping: false,
         }));
@@ -94,7 +93,6 @@ export function useGatewayWorkspaceMutations({
           ...prev,
           workspaceSwitching: false,
           gatewayError: message,
-          error: message,
           status: message,
           isBootstrapping: false,
         }));
@@ -116,7 +114,6 @@ export function useGatewayWorkspaceMutations({
           ...prev,
           workspaceSwitching: false,
           gatewayError: message,
-          error: message,
           status: `连接远程 Gateway 失败: ${message}`,
           isBootstrapping: false,
         }));
@@ -131,7 +128,6 @@ export function useGatewayWorkspaceMutations({
           ...prev,
           workspaceSwitching: false,
           gatewayError: message,
-          error: message,
           status: message,
           isBootstrapping: false,
         }));
@@ -262,7 +258,6 @@ export function useGatewayWorkspaceMutations({
             ),
           ),
           gatewayError: message,
-          error: message,
           status: workspaceRemoved
             ? message
             : `删除工作区失败: ${message}`,
@@ -308,7 +303,6 @@ export function useGatewayWorkspaceMutations({
         setState((prev) => ({
           ...prev,
           gatewayError: message,
-          error: message,
           status: `工作区排序失败: ${message}`,
         }));
         throw error;
@@ -375,7 +369,6 @@ export function useGatewayWorkspaceMutations({
         setState((prev) => ({
           ...prev,
           gatewayError: message,
-          error: message,
           status: `重命名工作区失败: ${message}`,
         }));
         throw new Error(message);
