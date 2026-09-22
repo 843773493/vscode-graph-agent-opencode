@@ -38,7 +38,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
         catalogSyncKeys: new Map([["ws-test", "session-sync"]]),
       }),
     });
-    const { unmount } = await mountHarness(Harness);
+    const unmount = await mountHarness(Harness);
     expect(rootCatalogRequests).toBe(1);
 
     await act(async () => {
@@ -87,7 +87,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
     const Harness = useSessionResourceExplorerHarness({
       props: explorerProps({ apiPort: 49_407, currentSessionId: "session-a" }),
     });
-    const { unmount } = await mountHarness(Harness, 3);
+    const unmount = await mountHarness(Harness, 3);
 
     expect(catalogRequests.filter((parent) => parent === "root")).toHaveLength(1);
     expect(catalogRequests.filter((parent) => parent === "folder-a")).toHaveLength(1);
@@ -125,7 +125,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
         explorerHandle = explorer;
       },
     });
-    const { unmount } = await mountHarness(Harness, 3);
+    const unmount = await mountHarness(Harness, 3);
     expect(rootCatalogRequests).toBe(1);
 
     await act(async () => {
@@ -173,7 +173,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
         explorerHandle = explorer;
       },
     });
-    const { unmount } = await mountHarness(Harness);
+    const unmount = await mountHarness(Harness);
 
     await expect(
       explorerHandle!.moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old"),

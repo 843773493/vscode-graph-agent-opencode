@@ -229,17 +229,17 @@ export function explorerProps(
   };
 }
 
-/** 挂载一个 React 测试渲染器并跑指定轮数的 effect。 */
+/** 挂载一个 React 测试渲染器并跑指定轮数的 effect，返回卸载函数。 */
 export async function mountHarness(
   Harness: () => React.ReactNode,
   flushes = 2,
-): Promise<{ renderer: ReactTestRenderer; unmount: () => void }> {
+): Promise<() => void> {
   let renderer: ReactTestRenderer;
   await act(async () => {
     renderer = create(React.createElement(Harness));
     for (let i = 0; i < flushes; i += 1) await flushEffects();
   });
-  return { renderer: renderer!, unmount: () => act(() => renderer!.unmount()) };
+  return () => act(() => renderer!.unmount());
 }
 
 /**
