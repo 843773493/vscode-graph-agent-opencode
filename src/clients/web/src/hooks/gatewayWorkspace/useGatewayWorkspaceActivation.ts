@@ -5,7 +5,7 @@ import {
 } from "../../gatewayApi";
 import type { AppState } from "../../types/frontend";
 import type { FinishWorkspaceRefresh, SetAppState } from "../contentViewLoaderTypes";
-import { createLatestSerialTaskQueue } from "../serialTaskQueue";
+import { createLatestSerialTaskQueue } from "../runtime/serialTaskQueue";
 
 type RefreshGatewayWorkspaceStatuses = (
   expectedWorkspaceId?: string | null,

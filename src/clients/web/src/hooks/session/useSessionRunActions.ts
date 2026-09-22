@@ -24,7 +24,7 @@ import { appendFrontendEvent } from "../../state/traceEvents";
 import { writeLastSessionId } from "../../state/storage";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { sessionScopeKey } from "../../state/session/sessionScope";
-import { usePendingRequestActions } from "../usePendingRequestActions";
+import { usePendingRequestActions } from "../runtime/usePendingRequestActions";
 
 export function useSessionRunActions({
   apiPort,

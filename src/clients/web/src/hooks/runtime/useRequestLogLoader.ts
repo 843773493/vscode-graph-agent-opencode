@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
-import { getLLMRequestLogs } from "../api";
-import type { SetAppState } from "./contentViewLoaderTypes";
+import { getLLMRequestLogs } from "../../api";
+import type { SetAppState } from "../contentViewLoaderTypes";
 
 export function useRequestLogLoader({
   apiPort,

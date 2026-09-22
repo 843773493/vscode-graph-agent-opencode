@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import type { Session } from "../types/backend";
 import type { ConversationContentView } from "../types/frontend";
 import { resetAgentStateFields, useAgentStateSnapshotLoader } from "./useAgentStateSnapshot";
-import { useRequestLogLoader } from "./useRequestLogLoader";
+import { useRequestLogLoader } from "./runtime/useRequestLogLoader";
 import { useSessionChangesLoader } from "./session/useSessionChangesLoader";
 import { useSessionResourceLoader } from "./session/useSessionResourceLoader";
 import type { SetAppState } from "./contentViewLoaderTypes";

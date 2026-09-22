@@ -6,18 +6,18 @@ import {
   removePendingRequest as apiRemovePendingRequest,
   updatePendingRequestPolicy as apiUpdatePendingRequestPolicy,
   updatePendingRequest as apiUpdatePendingRequest,
-} from "../pendingRequestsApi";
-import { cloneMaps } from "../state/appStateMaps";
+} from "../../pendingRequestsApi";
+import { cloneMaps } from "../../state/appStateMaps";
 import {
   writePendingSnapshot,
-} from "../state/conversations";
+} from "../../state/conversations";
 import type {
   AttachmentRef,
   DeliveryPolicy,
   PendingRequestList,
   Session,
-} from "../types/backend";
-import type { SetAppState } from "./contentViewLoaderTypes";
+} from "../../types/backend";
+import type { SetAppState } from "../contentViewLoaderTypes";
 
 
 export function usePendingRequestActions({
