@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { FrontendReceivedEvent } from "../../types/frontend";
+import type { FrontendReceivedEvent } from "../../../types/frontend";
 import EventQueuePanel, { INITIAL_VISIBLE_EVENT_COUNT } from "./EventQueuePanel";
 
 const historyProps = {

@@ -1,16 +1,16 @@
-import AgentStatePanel from "./components/panels/AgentStatePanel";
+import AgentStatePanel from "./components/panels/inspectionPanels/AgentStatePanel";
 import BootstrapState from "./components/shell/BootstrapState";
 import WorkbenchStatusBar from "./components/WorkbenchStatusBar";
 import ChatPanel from "./components/panels/ChatPanel";
 import PendingQueueBar from "./components/chat/PendingQueueBar";
 import Composer from "./components/composer/Composer";
-import EventQueuePanel from "./components/panels/EventQueuePanel";
+import EventQueuePanel from "./components/panels/inspectionPanels/EventQueuePanel";
 import AgentSessionsPanel from "./components/panels/sessionPanels/AgentSessionsPanel";
 import GatewayLogPanel from "./components/panels/bottomPanel/GatewayLogPanel";
 import AutomationPanel from "./components/panels/bottomPanel/AutomationPanel";
 import PortForwardPanel from "./components/panels/bottomPanel/PortForwardPanel";
 import TerminalPanel from "./components/panels/bottomPanel/TerminalPanel";
-import RequestLogPanel from "./components/panels/RequestLogPanel";
+import RequestLogPanel from "./components/panels/inspectionPanels/RequestLogPanel";
 import ResourcePanel from "./components/panels/resourceTree/ResourcePanel";
 import ChildThreadPanel from "./components/panels/sessionPanels/ChildThreadPanel";
 import GatewayExtensionResourcePanel from "./components/panels/resourceTree/GatewayExtensionResourcePanel";
@@ -54,7 +54,7 @@ import { useGatewayExtensionWindow } from "./hooks/gatewayExtensions/useGatewayE
 import { useWorkbenchPanelRouting } from "./hooks/panel/useWorkbenchPanelRouting";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import { buildSessionCatalogSyncKeys } from "./hooks/sessionResourceExplorer/resourceTreeSync";
-import { createSessionConnection } from "./gatewayApi";
+import { createSessionConnection } from "./api/gateway/sessionConnections";
 import {
   DEFAULT_GATEWAY_PANEL_HEIGHT,
   DEFAULT_MAIN_AREA_RATIOS,

@@ -1,6 +1,6 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
-import { formatDateTime } from "../../utils/format";
-import { prettyJson } from "../../utils/jsonDisplay";
+import React, { useMemo, useState } from "react";
+import { formatDateTime } from "../../../utils/format";
+import { prettyJson } from "../../../utils/jsonDisplay";
 import {
   buildRequestLogDisplay,
   buildRequestLogKeyFlow,
@@ -13,15 +13,12 @@ import {
   type RequestReplayDisplay,
   type RequestToolDefinitionDisplay,
   type UpstreamAttemptDisplay,
-} from "../../state/requestLogDisplay/index";
-import type { LLMRequestLogRecord } from "../../types/backend";
+} from "../../../state/requestLogDisplay/index";
+import type { LLMRequestLogRecord } from "../../../types/backend";
+import { useScrollWindow } from "../../eventQueue/useScrollWindow";
 
 export const INITIAL_VISIBLE_REQUEST_LOG_COUNT = 10;
 export const OLDER_REQUEST_LOG_BATCH_SIZE = 10;
-const LOAD_OLDER_SCROLL_THRESHOLD = 32;
-const useClientLayoutEffect = typeof window === "undefined"
-  ? React.useEffect
-  : React.useLayoutEffect;
 
 function RequestLogKeyFlowSummary({
   readSkills,
@@ -431,75 +428,20 @@ export default function RequestLogPanel({
   sessionId: string;
   active: boolean;
 }) {
-  const listRef = useRef<HTMLDivElement | null>(null);
-  const restoreScrollRef = useRef<{ height: number; top: number } | null>(null);
-  const shouldScrollToLatestRef = useRef(true);
-  const stickToLatestRef = useRef(true);
-  const [visibleCount, setVisibleCount] = useState(
-    INITIAL_VISIBLE_REQUEST_LOG_COUNT,
-  );
   const displayLogs = [...logs].sort(
     (left, right) =>
       new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime(),
   );
-  const firstVisibleIndex = Math.max(displayLogs.length - visibleCount, 0);
+  const { firstVisibleIndex, handleListScroll, listRef } = useScrollWindow({
+    active,
+    sessionId,
+    itemCount: displayLogs.length,
+    initialVisibleCount: INITIAL_VISIBLE_REQUEST_LOG_COUNT,
+    olderBatchSize: OLDER_REQUEST_LOG_BATCH_SIZE,
+  });
   const renderedLogs = displayLogs.slice(firstVisibleIndex);
   const hasOlderLogs = firstVisibleIndex > 0;
   const keyFlow = buildRequestLogKeyFlow(logs);
-
-  useClientLayoutEffect(() => {
-    if (!active) {
-      return;
-    }
-    setVisibleCount(INITIAL_VISIBLE_REQUEST_LOG_COUNT);
-    shouldScrollToLatestRef.current = true;
-    stickToLatestRef.current = true;
-  }, [active, sessionId]);
-
-  useClientLayoutEffect(() => {
-    if (!active) {
-      return;
-    }
-    const list = listRef.current;
-    if (!list) {
-      return;
-    }
-    const restore = restoreScrollRef.current;
-    if (restore) {
-      list.scrollTop = list.scrollHeight - restore.height + restore.top;
-      restoreScrollRef.current = null;
-      return;
-    }
-    if (shouldScrollToLatestRef.current || stickToLatestRef.current) {
-      list.scrollTop = list.scrollHeight;
-      shouldScrollToLatestRef.current = false;
-    }
-  }, [active, displayLogs.length, sessionId, visibleCount]);
-
-  const handleListScroll = useCallback(() => {
-    const list = listRef.current;
-    if (!list) {
-      return;
-    }
-    stickToLatestRef.current =
-      list.scrollHeight - list.scrollTop - list.clientHeight <= LOAD_OLDER_SCROLL_THRESHOLD;
-    if (list.scrollTop > LOAD_OLDER_SCROLL_THRESHOLD) {
-      return;
-    }
-    setVisibleCount((current) => {
-      if (current >= displayLogs.length) {
-        return current;
-      }
-      restoreScrollRef.current = {
-        height: list.scrollHeight,
-        top: list.scrollTop,
-      };
-      return Math.min(
-        current + OLDER_REQUEST_LOG_BATCH_SIZE,
-        displayLogs.length,
-      );
-    });
-  }, [displayLogs.length]);
 
   // 请求视图是逐次审计模型输入、输出和请求组成来源的入口。
   // 大体积 Prompt、工具 schema 与 JSON 必须按层级懒展开；不要恢复成默认渲染全部内容，
