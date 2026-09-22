@@ -17,6 +17,7 @@ import {
   type SessionTurnTimeline,
 } from "../../state/session/turnTimeline";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 const PARTIAL_BOOTSTRAP_POLL_BASE_DELAY_MS = 250;
 const PARTIAL_BOOTSTRAP_POLL_MAX_DELAY_MS = 2_000;
@@ -282,7 +283,7 @@ export function useTurnBootstrap({
               if (controller.signal.aborted) return;
               const message = isTransientNetworkError(error)
                 ? "本地服务连接暂时变化，已保留当前队列并自动重试"
-                : error instanceof Error ? error.message : String(error);
+                : errorMessage(error);
               setState((previous) => ({
                 ...previous,
                 status: `加载待处理消息失败: ${message}`,
@@ -308,7 +309,7 @@ export function useTurnBootstrap({
               }
               const message = isTransientNetworkError(error)
                 ? "本地服务连接暂时变化，历史内容已保留并自动重试"
-                : error instanceof Error ? error.message : String(error);
+                : errorMessage(error);
               setState((previous) => ({
                 ...previous,
                 status: `加载 Turn 历史失败: ${message}`,
@@ -335,7 +336,7 @@ export function useTurnBootstrap({
           }));
           return;
         }
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((previous) => {
           const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
           if (timeline.generation !== targetGeneration) return previous;

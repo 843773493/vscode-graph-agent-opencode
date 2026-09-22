@@ -22,6 +22,7 @@ import {
   refreshSessionMetadata,
 } from "./sessionRefresh";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 export interface SessionStreamBatchContext {
   apiPort: number;
@@ -97,7 +98,7 @@ function setRefreshError(
 ): void {
   const message = isTransientNetworkError(error)
     ? "本地服务连接暂时变化，已保留当前状态并自动重试"
-    : error instanceof Error ? error.message : String(error);
+    : errorMessage(error);
   setState((latest) => ({
     ...latest,
     status: `${prefix}: ${message}`,

@@ -23,6 +23,7 @@ import {
 } from "../../state/session/turnTimeline";
 import type { TurnDetailBatchRequest } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 const TURN_DETAIL_COMMIT_RETRY_DELAYS_MS = [100, 250, 500, 1000] as const;
 
@@ -245,7 +246,7 @@ export function useTurnDetailLoader({
         });
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((previous) => {
         const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
         if (timeline.generation !== targetGeneration) return previous;

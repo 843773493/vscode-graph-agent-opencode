@@ -22,6 +22,7 @@ import {
   isCurrentWorkspaceSessionListSnapshot,
   type WorkspaceSessionListSnapshot,
 } from "./workspaceSessionListRefresh";
+import { errorMessage } from "../../utils/errorMessage";
 
 type WorkspaceBootstrapPayload = {
   userAccess: Awaited<ReturnType<typeof ensureGatewayUserAccess>>;
@@ -366,9 +367,7 @@ export function useWorkspaceBootstrap({
         const workspaceId = workspaceIds[index];
         if (!workspaceId) continue;
         const message =
-          result.reason instanceof Error
-            ? result.reason.message
-            : String(result.reason);
+          errorMessage(result.reason);
         workspaceSessionErrors.set(workspaceId, message);
       }
       // 会话目录异常只代表该分支暂时不可读，不能把健康的 Gateway 工作区
@@ -505,7 +504,7 @@ export function useWorkspaceBootstrap({
       ) {
         return null;
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((prev) => ({
         ...prev,
         ...(error instanceof WorkspaceBootstrapUnavailableError
@@ -562,7 +561,7 @@ export function useWorkspaceBootstrap({
       if (requestGeneration !== workspaceStatusRefreshGenerationRef.current) {
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((previous) => {
         if (
           expectedWorkspaceId

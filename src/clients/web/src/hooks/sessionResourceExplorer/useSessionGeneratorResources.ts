@@ -17,6 +17,7 @@ import type {
   SessionGeneratorDefinition,
   SessionGeneratorList,
 } from "../../types/backend";
+import { errorMessage } from "../../utils/errorMessage";
 
 export function useSessionGeneratorResources(apiPort: number, enabled = true) {
   const [generators, setGenerators] = useState<SessionGeneratorList | null>(null);
@@ -35,7 +36,7 @@ export function useSessionGeneratorResources(apiPort: number, enabled = true) {
       setGeneratorError(null);
       return next;
     } catch (error) {
-      setGeneratorError(error instanceof Error ? error.message : String(error));
+      setGeneratorError(errorMessage(error));
       throw error;
     }
   }, [apiPort]);
@@ -138,7 +139,7 @@ export function useSessionGeneratorResources(apiPort: number, enabled = true) {
       void Promise.all(activeGeneratorIds.map(refreshGenerationRuns)).catch(
         (error: unknown) => {
           setGeneratorError(
-            `刷新生成运行状态失败: ${error instanceof Error ? error.message : String(error)}`,
+            `刷新生成运行状态失败: ${errorMessage(error)}`,
           );
         },
       );

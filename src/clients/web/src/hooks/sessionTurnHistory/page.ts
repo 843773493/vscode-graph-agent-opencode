@@ -14,6 +14,7 @@ import {
   type SessionTurnTimeline,
 } from "../../state/session/turnTimeline";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 type TurnPageDirection = "before" | "after";
 
@@ -334,7 +335,7 @@ export function useInitialTurnLoader({
         onMissingTurn([latestTurnId]);
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((previous) => {
         const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
         if (timeline.generation !== targetGeneration) return previous;
@@ -522,7 +523,7 @@ export function useDirectionalTurnLoader({
         });
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((previous) => {
         const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
         if (timeline.generation !== targetGeneration) return previous;
@@ -739,7 +740,7 @@ export function useAroundTurnLoader({
         });
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((previous) => {
         const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
         if (timeline.generation !== targetGeneration) return previous;

@@ -7,6 +7,7 @@ import { dedupeTraceEvents } from "../../state/traceEvents";
 import type { Session } from "../../types/backend";
 import type { SessionTraceHistoryState } from "../../types/frontend";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 const SESSION_TRACE_HISTORY_CACHE_LIMIT = 8;
 
@@ -100,7 +101,7 @@ export function useSessionTraceHistory({
       });
     } catch (error) {
       if (controller.signal.aborted || generationRef.current !== generation) return;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState((previous) => {
         const current = previous.sessionTraceHistoryBySession.get(scopeKey);
         if (current?.generation !== generation) return previous;
@@ -188,7 +189,7 @@ export function useSessionTraceHistory({
       if (controller.signal.aborted || generationRef.current !== generation) return 0;
       const detail = error instanceof TraceCursorGoneError
         ? `Trace 历史游标已失效，请重新加载：${error.cursor}`
-        : error instanceof Error ? error.message : String(error);
+        : errorMessage(error);
       setState((previous) => {
         const current = previous.sessionTraceHistoryBySession.get(scopeKey);
         if (current?.generation !== generation) return previous;

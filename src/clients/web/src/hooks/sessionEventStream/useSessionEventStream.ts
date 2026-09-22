@@ -28,6 +28,7 @@ import {
   refreshWorkspaceSessionList,
 } from "./sessionRefresh";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 export function useSessionEventStream({
   apiPort,
@@ -93,7 +94,7 @@ export function useSessionEventStream({
         targetWorkspaceId,
         setState,
       ).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((latest) => ({
           ...latest,
           status: `刷新工作区会话失败: ${message}`,
@@ -148,7 +149,7 @@ export function useSessionEventStream({
         flushStreamEvents();
         void loadTerminalTurn(event.job_id).catch((error: unknown) => {
           if (controller.signal.aborted) return;
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessage(error);
           setState((latest) => ({
             ...latest,
             status: `加载已完成 Turn 失败: ${message}`,
@@ -206,7 +207,7 @@ export function useSessionEventStream({
           } else {
             const message = isTransientNetworkError(error)
               ? "本地服务连接暂时变化"
-              : error instanceof Error ? error.message : String(error);
+              : errorMessage(error);
             setState((prev) => ({
               ...prev,
               status: error instanceof SessionStreamIdleTimeoutError
@@ -303,7 +304,7 @@ export function useSessionEventStream({
           lastStaleProbeAtRef.current = 0;
         }
       }).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((latest) => ({
           ...latest,
           status: `对账运行中任务失败: ${message}`,
