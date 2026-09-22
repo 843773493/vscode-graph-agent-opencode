@@ -2435,6 +2435,89 @@ def test_owner_binding_append_requires_list_slot(tmp_path: Path) -> None:
     finally:
         store.close()
 
+def test_owner_binding_scalar_tamper_layers_are_frozen(
+    tmp_path: Path,
+) -> None:
+    """D7 取证固化：owner binding 外部篡改的三层防线边界。
+
+    结构层由 SQLite 约束兜底，语义层（JSON 槽）读时 fail closed，
+    未设读时校验的标量槽是有意为之（详见 thread_owner_binding.py 模块
+    docstring 的「外部篡改边界」）。本用例把三层现状固定下来，防止后人
+    误以为标量槽漏检而无条件加固。
+    """
+    store = SessionControlStore(tmp_path / "binding-tamper.sqlite")
+    try:
+        thread_id = make_thread_id()
+        store.ensure_thread_owner_binding(thread_id=thread_id)
+
+        # 结构层：非法直改在写入时即被 SQLite 约束拒绝。
+        with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
+            raw_execute(
+                store,
+                "UPDATE thread_owner_bindings SET prefix_epoch = NULL "
+                "WHERE thread_id = ?",
+                (thread_id,),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+            raw_execute(
+                store,
+                "UPDATE thread_owner_bindings SET prefix_epoch = -5 "
+                "WHERE thread_id = ?",
+                (thread_id,),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+            raw_execute(
+                store,
+                "UPDATE thread_owner_bindings SET prefix_epoch_reason = 'bogus' "
+                "WHERE thread_id = ?",
+                (thread_id,),
+            )
+
+        # 语义层：JSON 列表槽读时 fail closed。
+        raw_execute(
+            store,
+            "UPDATE thread_owner_bindings SET variant_refs = 'oops' "
+            "WHERE thread_id = ?",
+            (thread_id,),
+        )
+        with pytest.raises(RuntimeError, match="JSON 损坏"):
+            store.get_thread_owner_binding(thread_id)
+
+        # 标量层：非整数文本在投影 int() 时自然抛错（不是静默返回假值）。
+        raw_execute(
+            store,
+            "UPDATE thread_owner_bindings SET variant_refs = '[]' "
+            "WHERE thread_id = ?",
+            (thread_id,),
+        )
+        raw_execute(
+            store,
+            "UPDATE thread_owner_bindings SET prefix_epoch = 'abc' "
+            "WHERE thread_id = ?",
+            (thread_id,),
+        )
+        with pytest.raises(ValueError, match="invalid literal"):
+            store.get_thread_owner_binding(thread_id)
+
+        # 未设读时校验的标量槽：直改后读回不报错（有意为之，见模块 docstring）。
+        raw_execute(
+            store,
+            "UPDATE thread_owner_bindings SET prefix_epoch = 1, "
+            "stable_prefix_hash = 'not-a-hash', revision = 999 "
+            "WHERE thread_id = ?",
+            (thread_id,),
+        )
+        tampered = store.get_thread_owner_binding(thread_id)
+        assert tampered.stable_prefix_hash == "not-a-hash"
+        assert tampered.revision == 999
+        # update 路径仍按写入口径校验：hash/length 必须成对且合法。
+        with pytest.raises(ValueError, match="成对提供"):
+            store.update_thread_owner_binding(
+                thread_id, stable_prefix_hash="a" * 64
+            )
+    finally:
+        store.close()
+
 
 # ----------------------------------------------------------------------
 # D5 通信 ledger：outbox/inbox 幂等与 fail-closed 分支

@@ -15,8 +15,24 @@ ThreadOwnerBindingMixin 由 app.core.session_control_store.SessionControlStore
 session_control_store 约定：KeyError 目标行缺失、RuntimeError 库被外部改动或
 CAS 冲突、ValueError 输入形态非法、TypeError 输入类型错误。
 
-权威解释仍属对应 domain owner（ContextStore / ToolSet）：本表只是 owner 侧
-记录槽，不构成第二 writer，也不维护第二套会话层级。
+
+外部篡改边界（D7 取证结论，勿随手加固）：本表行的防线分三层——
+
+1. 结构层：``prefix_epoch``/``revision`` 的 NOT NULL 与 CHECK、
+   ``prefix_epoch_reason`` 的 CHECK 由 SQLite 约束兜底，非法直改在写入时即被
+   拒绝（IntegrityError）。
+2. 语义层：canonical JSON 列表槽（``*_refs``/``tracking_registrations``/
+   ``selection_provenance``）与 ``mutation_provenance`` 在读取时解析，损坏或
+   结构不符 fail closed（RuntimeError）。
+3. 未设读时校验的标量槽：``stable_prefix_hash`` 形态、
+   ``stable_prefix_length`` 与 hash 的成对性、``revision`` 单调性、
+   ``final_relative_locator`` 的 main/child 语义——这些只在写入路径校验，
+   直改后读回不报错。这是有意为之：它们只是 owner 侧记录槽，权威解释属对应
+   domain owner；当前唯一生产读者（rollout saver）只取
+   ``toolset_compatibility_key``，与期望值不等时自然触发一次新 intent 自愈，
+   不存在会被静默利用的路径。按「严禁过度防御」不在此处补读时校验；若将来
+   出现依赖这些标量做安全裁决的读者，应在那个读者侧按需校验，而不是在本表
+   无条件加固。
 """
 
 from __future__ import annotations
