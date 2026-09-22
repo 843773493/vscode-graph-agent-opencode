@@ -32,7 +32,6 @@ import type {
   ConversationContentView,
 } from "./types/frontend";
 import {
-  getConversationsForSession,
   messageStreamTurnIdForSession,
 } from "./state/conversations";
 import { useContentViewLoader } from "./hooks/content/useContentViewLoader";
@@ -72,9 +71,6 @@ import {
   useSessionTurnTimeline,
   useTerminalTurnLoader,
 } from "./hooks/session/useSessionTurnTimeline";
-
-export { getConversationsForSession } from "./state/conversations";
-export { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
 
 const CACHED_UI_SETTINGS = readCachedUiSettings();
 const CACHED_UNREAD_SESSION_KEYS = readUnreadSessionKeys();

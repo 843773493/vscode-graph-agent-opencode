@@ -42,8 +42,6 @@ import {
   createSessionCatalogFolder,
 } from "./api";
 import {
-  FRONTEND_EVENT_QUEUE_LIMIT,
-  getConversationsForSession,
   useAppState,
 } from "./hooks";
 import { useWorkspacePreviewTabs } from "./hooks/workspace/useWorkspacePreviewTabs";
@@ -66,6 +64,8 @@ import {
 } from "./layout/workbenchLayout";
 import { sessionScopeKey } from "./state/session/sessionScope";
 import { shouldLoadDefaultViewChangesHint } from "./state/defaultViewChanges";
+import { getConversationsForSession } from "./state/conversations";
+import { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
 import {
   resolveWorkspaceBottomPanelState,
   toWorkspaceBottomPanelSettings,
