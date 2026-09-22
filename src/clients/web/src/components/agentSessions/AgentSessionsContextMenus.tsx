@@ -5,6 +5,7 @@ import {
 } from "../../utils/clipboard";
 import AnchoredOverlay from "../overlays/AnchoredOverlay";
 import { useWarmConfirm } from "../shell/WarmConfirmProvider";
+import { errorMessage } from "../../utils/errorMessage";
 
 export interface SessionContextMenu {
   sessionId: string;
@@ -97,7 +98,7 @@ export default function AgentSessionsContextMenus({
         onStatusChange(`已复制会话 ID: ${target.sessionId}`);
       })
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         onStatusChange(`复制会话 ID 失败: ${message}`);
       });
   };
@@ -121,7 +122,7 @@ export default function AgentSessionsContextMenus({
         onStatusChange(`已将 ${childSessionId} 绑定到 ${target.sessionId}`);
       })
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         onStatusChange(`绑定剪贴板会话失败: ${message}`);
       });
   };
@@ -138,7 +139,7 @@ export default function AgentSessionsContextMenus({
         onStatusChange(`已复制会话信息: ${target.sessionId}`);
       })
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         onStatusChange(`复制会话信息失败: ${message}`);
       });
   };
@@ -151,7 +152,7 @@ export default function AgentSessionsContextMenus({
     onCloseSessionMenu();
     void onForkSessionContext(target.workspaceId, target.sessionId).catch(
       (error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         onStatusChange(`从上下文创建子会话失败: ${message}`);
       },
     );
@@ -169,7 +170,7 @@ export default function AgentSessionsContextMenus({
         onStatusChange(`已复制工作区信息: ${target.workspaceId}`);
       })
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         onStatusChange(`复制工作区信息失败: ${message}`);
       });
   };
@@ -191,7 +192,7 @@ export default function AgentSessionsContextMenus({
       }
     }).catch((error: unknown) => {
       onStatusChange(
-        `关闭工作区失败: ${error instanceof Error ? error.message : String(error)}`,
+        `关闭工作区失败: ${errorMessage(error)}`,
       );
     });
   };
@@ -329,7 +330,7 @@ export default function AgentSessionsContextMenus({
                 onCloseWorkspaceMenu();
                 void onStartWorkspace(target.workspaceId).catch((error: unknown) => {
                   onStatusChange(
-                    `启动工作区失败: ${error instanceof Error ? error.message : String(error)}`,
+                    `启动工作区失败: ${errorMessage(error)}`,
                   );
                 });
               }}
@@ -355,7 +356,7 @@ export default function AgentSessionsContextMenus({
               void onCreateWorkspaceSession(target.workspaceId, target.name).catch(
                 (error: unknown) => {
                   onStatusChange(
-                    `新建工作区会话失败: ${error instanceof Error ? error.message : String(error)}`,
+                    `新建工作区会话失败: ${errorMessage(error)}`,
                   );
                 },
               );

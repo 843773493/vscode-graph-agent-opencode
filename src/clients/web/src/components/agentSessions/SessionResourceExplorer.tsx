@@ -27,6 +27,7 @@ import SessionResourceOverlays, {
 } from "./SessionResourceOverlays";
 import { buildWorkspaceNavigationSyncKey } from "../../hooks/sessionResourceExplorer/resourceTreeSync";
 import { useSessionResourceTreeNavigation } from "./useSessionResourceTreeNavigation";
+import { errorMessage } from "../../utils/errorMessage";
 
 interface SessionResourceExplorerProps {
   apiPort: number;
@@ -139,10 +140,9 @@ export default function SessionResourceExplorer({
     && workspaceFolderEditor?.mode !== "create";
 
   const handleError = (prefix: string, error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    const errorMessage = `${prefix}: ${message}`;
-    setActionError(errorMessage);
-    onStatusChange(errorMessage);
+    const actionMessage = `${prefix}: ${errorMessage(error)}`;
+    setActionError(actionMessage);
+    onStatusChange(actionMessage);
   };
 
   const {
@@ -271,7 +271,7 @@ export default function SessionResourceExplorer({
         await explorer.loadBranch(workspaceId, parentNodeId);
       } catch (recoveryError) {
         onStatusChange(
-          `恢复工作区失败: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+          `恢复工作区失败: ${errorMessage(recoveryError)}`,
         );
       } finally {
         setRecoveringWorkspaceIds((previous) => {

@@ -10,6 +10,7 @@ import {
   type SessionResourceDropZone,
   type WorkspaceNavigationPlacement,
 } from "./sessionResourceDrag";
+import { errorMessage } from "../../utils/errorMessage";
 
 interface SessionResourceTreeNavigationOptions {
   explorer: SessionResourceExplorerController;
@@ -152,7 +153,7 @@ export function useSessionResourceTreeNavigation({
       await placeWorkspaceNavigation(source.nodeId, source.parentNodeId, rollbackPlacement);
     } catch (rollbackError) {
       throw new Error(
-        `${error instanceof Error ? error.message : String(error)}；恢复工作区导航位置也失败: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        `${errorMessage(error)}；恢复工作区导航位置也失败: ${errorMessage(rollbackError)}`,
       );
     }
     throw error;
