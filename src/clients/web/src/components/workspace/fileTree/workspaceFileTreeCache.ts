@@ -1,4 +1,4 @@
-import type { WorkspaceFileNode } from "../../../types/backend";
+import type { WorkspaceFileList, WorkspaceFileNode } from "../../../types/backend";
 
 export const MAX_FILE_TREE_CACHED_DIRECTORIES = 256;
 export const MAX_FILE_TREE_CACHED_NODES = 20_000;
@@ -12,6 +12,61 @@ export interface DirectoryCacheEntry {
   nextCursor: string | null;
   stale: boolean;
   lastAccessedAt: number;
+}
+
+/**
+ * 目录缓存条目的唯一构造入口。加载中、失败与后端快照三种结果只在少数字段上
+ * 不同，其余字段必须由这里统一补齐，避免每个调用点各写一份七字段字面量。
+ */
+export function loadedDirectoryEntry(
+  result: Pick<WorkspaceFileList, "items" | "truncated" | "next_cursor">,
+  lastAccessedAt: number,
+  items: WorkspaceFileNode[] = result.items ?? [],
+): DirectoryCacheEntry {
+  return {
+    items,
+    loading: false,
+    error: null,
+    truncated: result.truncated ?? false,
+    nextCursor: result.next_cursor ?? null,
+    stale: false,
+    lastAccessedAt,
+  };
+}
+
+export function loadingDirectoryEntry(
+  previous: DirectoryCacheEntry | undefined,
+  lastAccessedAt: number,
+): DirectoryCacheEntry {
+  return {
+    items: previous?.items ?? [],
+    loading: true,
+    error: null,
+    truncated: previous?.truncated ?? false,
+    nextCursor: previous?.nextCursor ?? null,
+    stale: previous?.stale ?? false,
+    lastAccessedAt,
+  };
+}
+
+export function failedDirectoryEntry(
+  previous: DirectoryCacheEntry | undefined,
+  error: string,
+  lastAccessedAt: number,
+): DirectoryCacheEntry {
+  return {
+    items: previous?.items ?? [],
+    loading: false,
+    error,
+    truncated: previous?.truncated ?? false,
+    nextCursor: previous?.nextCursor ?? null,
+    stale: previous?.stale ?? false,
+    lastAccessedAt,
+  };
+}
+
+export function markDirectoryStale(entry: DirectoryCacheEntry): DirectoryCacheEntry {
+  return { ...entry, stale: true };
 }
 
 export function pruneDirectoryCache(

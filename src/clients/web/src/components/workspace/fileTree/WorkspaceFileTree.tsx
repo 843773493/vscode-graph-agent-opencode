@@ -17,7 +17,6 @@ import {
   DEFAULT_BACKEND_PORT,
   filesystemFileTreePath,
   getSessionFileTreeSettings,
-  getWorkspaceFiles,
   pasteWorkspaceFileEntries,
   removeSessionFileTreeShortcut,
   revealWorkspaceFileEntry,
@@ -46,10 +45,11 @@ import {
 import { useWorkspaceFileWatch } from "../../../hooks/workspace/useWorkspaceFileWatch";
 import AnchoredOverlay from "../../overlays/AnchoredOverlay";
 import {
-  type DirectoryCacheEntry,
-  pruneDirectoryCache,
+  loadedDirectoryEntry,
+  markDirectoryStale,
   restoreDirectoriesInOrder,
 } from "./workspaceFileTreeCache";
+import { useWorkspaceFileTreeDirectories } from "./useWorkspaceFileTreeDirectories";
 import {
   buildVisibleFileTreeRows,
   FILE_TREE_VIRTUALIZATION_THRESHOLD,
@@ -100,11 +100,6 @@ interface WorkspaceClipboardEntry {
   absolutePath: string;
   label: string;
   workspaceId: string | null;
-}
-
-interface DirectoryRequest {
-  controller: AbortController;
-  promise: Promise<boolean>;
 }
 
 export async function runCurrentAndDefaultShortcutMutation(
@@ -175,7 +170,6 @@ export default function WorkspaceFileTree({
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(
     () => new Set(restoredExpandedPaths),
   );
-  const [directories, setDirectories] = useState<Record<string, DirectoryCacheEntry>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [settings, setSettings] = useState<SessionFileTreeSettings | null>(null);
   const [contextMenu, setContextMenu] = useState<FileTreeContextMenu | null>(null);
@@ -185,8 +179,6 @@ export default function WorkspaceFileTree({
   const uploadTargetRef = useRef<FileTreeContextMenu | null>(null);
   const lastCollapseVersionRef = useRef(collapseVersion);
   const restoredExpandedPathsRef = useRef(restoredExpandedPaths);
-  const directoryRequestsRef = useRef<Map<string, DirectoryRequest>>(new Map());
-  const directoriesRef = useRef<Record<string, DirectoryCacheEntry>>({});
   const shortcutTreePathsRef = useRef<Set<string>>(new Set());
   const activeFilePathRef = useRef(activeFilePath);
   const activeRef = useRef(active);
@@ -202,32 +194,22 @@ export default function WorkspaceFileTree({
   );
   const fileChangeFlushTimerRef = useRef<number | null>(null);
 
-  const updateDirectories = useCallback((
-    updater: (
-      current: Record<string, DirectoryCacheEntry>,
-    ) => Record<string, DirectoryCacheEntry>,
-  ) => {
-    setDirectories((current) => {
-      const candidate = updater(current);
-      const protectedPaths = new Set(expandedPathsRef.current);
-      protectedPaths.add(ROOT_PATH);
-      protectedPaths.add(FILESYSTEM_ROOT_PATH);
-      for (const shortcutPath of shortcutTreePathsRef.current) {
-        protectedPaths.add(shortcutPath);
-      }
-      let activePath = activeFilePathRef.current;
-      const visitedActivePaths = new Set<string>();
-      while (activePath && !visitedActivePaths.has(activePath)) {
-        visitedActivePaths.add(activePath);
-        const parentPath = parentFileTreePath(activePath);
-        protectedPaths.add(parentPath);
-        activePath = parentPath;
-      }
-      const next = pruneDirectoryCache(candidate, protectedPaths);
-      directoriesRef.current = next;
-      return next;
-    });
-  }, []);
+  const {
+    directories,
+    directoriesRef,
+    updateDirectories,
+    loadDirectory,
+    refreshExpandedDirectories,
+    abortAllDirectoryRequests,
+    resetDirectories,
+  } = useWorkspaceFileTreeDirectories({
+    port,
+    workspaceId,
+    expandedPathsRef,
+    shortcutTreePathsRef,
+    activeFilePathRef,
+    onStatusChange,
+  });
 
   const acceptFileTreeSettings = useCallback((result: SessionFileTreeSettings) => {
     shortcutTreePathsRef.current = new Set(
@@ -293,111 +275,6 @@ export default function WorkspaceFileTree({
     workspaceId,
   ]);
 
-  const loadDirectory = useCallback(
-    (path: string, force = false, append = false): Promise<boolean> => {
-      const existingRequest = directoryRequestsRef.current.get(path);
-      if (existingRequest && !force) {
-        return existingRequest.promise;
-      }
-      existingRequest?.controller.abort();
-      const currentEntry = directoriesRef.current[path];
-      const cursor = append ? currentEntry?.nextCursor : null;
-      if (append && !cursor) {
-        return Promise.resolve(true);
-      }
-      const controller = new AbortController();
-      updateDirectories((prev) => ({
-        ...prev,
-        [path]: {
-          items: prev[path]?.items ?? [],
-          loading: true,
-          error: null,
-          truncated: prev[path]?.truncated ?? false,
-          nextCursor: prev[path]?.nextCursor ?? null,
-          stale: prev[path]?.stale ?? false,
-          lastAccessedAt: Date.now(),
-        },
-      }));
-
-      const promise = (async (): Promise<boolean> => {
-        try {
-          const result = await getWorkspaceFiles(
-            port,
-            path,
-            workspaceId,
-            controller.signal,
-            cursor,
-          );
-          if (directoryRequestsRef.current.get(path)?.controller !== controller) {
-            return false;
-          }
-          updateDirectories((prev) => {
-            const previousItems = append ? prev[path]?.items ?? [] : [];
-            const itemsByPath = new Map(
-              previousItems.map((item) => [item.path, item]),
-            );
-            for (const item of result.items ?? []) {
-              itemsByPath.set(item.path, item);
-            }
-            return {
-              ...prev,
-              [path]: {
-                items: [...itemsByPath.values()],
-                loading: false,
-                error: null,
-                truncated: result.truncated ?? false,
-                nextCursor: result.next_cursor ?? null,
-                stale: false,
-                lastAccessedAt: Date.now(),
-              },
-            };
-          });
-          return true;
-        } catch (error) {
-          if (error instanceof Error && error.name === "AbortError") {
-            return false;
-          }
-          if (directoryRequestsRef.current.get(path)?.controller !== controller) {
-            return false;
-          }
-          const message = error instanceof Error ? error.message : String(error);
-          updateDirectories((prev) => ({
-            ...prev,
-            [path]: {
-              items: prev[path]?.items ?? [],
-              loading: false,
-              error: message,
-              truncated: prev[path]?.truncated ?? false,
-              nextCursor: prev[path]?.nextCursor ?? null,
-              stale: prev[path]?.stale ?? false,
-              lastAccessedAt: Date.now(),
-            },
-          }));
-          onStatusChange(`文件树加载失败: ${message}`);
-          return false;
-        } finally {
-          if (directoryRequestsRef.current.get(path)?.controller === controller) {
-            directoryRequestsRef.current.delete(path);
-          }
-        }
-      })();
-      directoryRequestsRef.current.set(path, { controller, promise });
-      return promise;
-    },
-    [onStatusChange, port, updateDirectories, workspaceId],
-  );
-
-  const refreshExpandedDirectories = useCallback(() => {
-    updateDirectories((current) => Object.fromEntries(
-      Object.entries(current).map(([path, entry]) => [path, { ...entry, stale: true }]),
-    ));
-    for (const path of expandedPathsRef.current) {
-      if (directoriesRef.current[path]) {
-        void loadDirectory(path, true);
-      }
-    }
-  }, [loadDirectory, updateDirectories]);
-
   const watchedShortcutPaths = useMemo(
     () => (settings?.effective_shortcuts ?? [])
       .map((shortcut) => shortcut.path)
@@ -452,7 +329,7 @@ export default function WorkspaceFileTree({
             entry
             && (!activeRef.current || !expandedPathsRef.current.has(parentPath))
           ) {
-            next[parentPath] = { ...entry, stale: true };
+            next[parentPath] = markDirectoryStale(entry);
           }
         }
         return next;
@@ -554,14 +431,10 @@ export default function WorkspaceFileTree({
   ]);
 
   useEffect(() => {
-    for (const request of directoryRequestsRef.current.values()) {
-      request.controller.abort();
-    }
-    directoryRequestsRef.current.clear();
+    abortAllDirectoryRequests();
     const restoredPaths = new Set(restoredExpandedPathsRef.current);
     commitExpandedPaths(restoredPaths);
-    directoriesRef.current = {};
-    setDirectories({});
+    resetDirectories();
     if (activeRef.current) {
       void restoreDirectoriesInOrder(
         [...restoredPaths],
@@ -570,23 +443,16 @@ export default function WorkspaceFileTree({
       );
     }
     return () => {
-      for (const request of directoryRequestsRef.current.values()) {
-        request.controller.abort();
-      }
-      directoryRequestsRef.current.clear();
+      abortAllDirectoryRequests();
     };
-  }, [loadDirectory, workspaceId, workspaceRoot]);
+  }, [abortAllDirectoryRequests, loadDirectory, resetDirectories, workspaceId, workspaceRoot]);
 
   useEffect(() => {
     const resumedAfterPause = !previousActiveRef.current && active;
     previousActiveRef.current = active;
     activeRef.current = active;
     if (!active) {
-      const abortedPaths = [...directoryRequestsRef.current.keys()];
-      for (const request of directoryRequestsRef.current.values()) {
-        request.controller.abort();
-      }
-      directoryRequestsRef.current.clear();
+      const abortedPaths = abortAllDirectoryRequests();
       updateDirectories((current) => {
         const next = { ...current };
         for (const path of abortedPaths) {
@@ -611,7 +477,7 @@ export default function WorkspaceFileTree({
       ),
       parentFileTreePath,
     );
-  }, [active, loadDirectory, updateDirectories]);
+  }, [abortAllDirectoryRequests, active, loadDirectory, updateDirectories]);
 
   useEffect(() => {
     if (lastCollapseVersionRef.current === collapseVersion) {
@@ -680,15 +546,7 @@ export default function WorkspaceFileTree({
   const replaceDirectory = (result: WorkspaceFileList) => {
     updateDirectories((prev) => ({
       ...prev,
-      [result.path]: {
-        items: result.items ?? [],
-        loading: false,
-        error: null,
-        truncated: result.truncated ?? false,
-        nextCursor: result.next_cursor ?? null,
-        stale: false,
-        lastAccessedAt: Date.now(),
-      },
+      [result.path]: loadedDirectoryEntry(result, Date.now()),
     }));
     if (!expandedPathsRef.current.has(result.path)) {
       const next = new Set(expandedPathsRef.current);

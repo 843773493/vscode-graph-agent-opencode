@@ -1,12 +1,13 @@
 # 目录用途
 
-`components/workspace/fileTree/` 存放工作区文件树族的实现：主组件 WorkspaceFileTree、路径语义纯逻辑 workspaceFileTreePaths、目录缓存纯逻辑 workspaceFileTreeCache、虚拟滚动行构建纯逻辑 workspaceFileTreeRows，以及对应测试。
+`components/workspace/fileTree/` 存放工作区文件树族的实现：主组件 WorkspaceFileTree、目录缓存与懒加载 hook useWorkspaceFileTreeDirectories、路径语义纯逻辑 workspaceFileTreePaths、目录缓存纯逻辑 workspaceFileTreeCache、虚拟滚动行构建纯逻辑 workspaceFileTreeRows，以及对应测试。
 
 文件分工：
 
-- `WorkspaceFileTree.tsx`：文件树组件外壳与交互编排（展开/选择状态、懒加载调用、右键菜单与对话框、快捷键）；只调用下面的纯逻辑模块，不内联路径算法。
+- `WorkspaceFileTree.tsx`：文件树组件外壳与交互编排（展开/选择状态、右键菜单与对话框、快捷键、恢复与文件变更消费）；只调用下面的 hook 与纯逻辑模块，不内联路径算法或目录缓存规则。
+- `useWorkspaceFileTreeDirectories.ts`：目录缓存与懒加载的唯一所有者（并发请求去重、分页合并、失败登记、LRU 保护集、展开目录刷新）。展开态与活动文件夹在外部，经 ref 传入以读取最新值。
 - `workspaceFileTreePaths.ts`：文件树路径的唯一语义权威（根路径常量、父子推导、作用域内判断、变更路径归一、绝对路径拼接、剪贴板路径解析）。任何路径归一都必须复用这里的实现。
-- `workspaceFileTreeCache.ts`：目录缓存条目结构、LRU 淘汰与按层恢复的并发控制。
+- `workspaceFileTreeCache.ts`：目录缓存条目结构与唯一构造入口（加载中/成功/失败/过期四种形态）、LRU 淘汰与按层恢复的并发控制。任何目录条目字面量都必须复用这里的工厂函数。
 - `workspaceFileTreeRows.ts`：把目录缓存与展开状态编译成可渲染的扁平行。
 
 本目录与相邻子包的边界：
