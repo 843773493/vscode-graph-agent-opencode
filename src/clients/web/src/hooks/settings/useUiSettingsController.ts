@@ -8,7 +8,7 @@ import { writeCachedUiSettings } from "../../state/storage";
 import { mergeGuestWebUiSettings } from "../../state/uiSettings/preferences";
 import type { WebUiSettings, WebUiSettingsUpdate } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
-import { loadAndApplyResolvedGatewayTheme } from "../../theme";
+import { loadAndApplyResolvedGatewayTheme } from "../../theme/theme";
 
 async function applyUiSettings(setState: SetAppState, settings: WebUiSettings): Promise<void> {
   if (!settings.theme.resolved_theme) {

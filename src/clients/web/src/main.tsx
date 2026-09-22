@@ -5,7 +5,7 @@ import AppErrorBoundary from './components/shell/AppErrorBoundary';
 import { AppProvider } from './hooks';
 import WarmConfirmProvider from './components/shell/WarmConfirmProvider';
 import '@vscode/codicons/dist/codicon.css';
-import { installBoxTeamThemeRuntime } from './theme';
+import { installBoxTeamThemeRuntime } from './theme/theme';
 import './styles/theme.css';
 import './index.css';
 import './styles/panelShared.css';

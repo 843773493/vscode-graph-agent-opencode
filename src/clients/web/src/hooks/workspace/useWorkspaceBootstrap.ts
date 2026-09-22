@@ -15,7 +15,7 @@ import {
 import { writeCachedUiSettings } from "../../state/storage";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import type { SetAppState } from "../contentViewLoaderTypes";
-import { loadAndApplyResolvedGatewayTheme } from "../../theme";
+import { loadAndApplyResolvedGatewayTheme } from "../../theme/theme";
 import {
   fetchWorkspaceSessionListSnapshot,
   isCurrentWorkspaceSessionListSnapshot,
