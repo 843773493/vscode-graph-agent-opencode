@@ -82,12 +82,29 @@ export function selectHealthyGatewayWorkspace(
   );
 }
 
-async function waitForBootstrapRetry(
+/** 初始化重试等待：必须可被外部 signal 立即打断。
+ *
+ * 以前这里只 sleep 完再 throwIfAborted，等待本身不可取消；调用方用缺省 signal
+ * 兜底时更是完全不可中断（最长 16.25 秒卡住工作区切换或卸载流程）。现在等待
+ * 期间监听 abort，一旦中止立刻结束等待并由 throwIfAborted 抛出。 */
+export async function waitForBootstrapRetry(
   delayMs: number,
   signal: AbortSignal,
 ): Promise<void> {
   await new Promise<void>((resolve) => {
-    globalThis.setTimeout(resolve, delayMs);
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      globalThis.clearTimeout(timerId);
+      resolve();
+    };
+    const timerId = globalThis.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
   signal.throwIfAborted();
 }
@@ -256,10 +273,13 @@ async function loadWorkspaceBootstrap(
 
 async function loadWorkspaceBootstrapWithRetry(
   apiPort: number,
-  options: Parameters<typeof loadWorkspaceBootstrap>[1],
+  // signal 必须是必填：重试等待只有在始终持有可取消 signal 时才谈得上可中断，
+  // 不允许再用「缺省 signal」兜底出一个不可取消的等待。
+  options: Parameters<typeof loadWorkspaceBootstrap>[1] & { signal: AbortSignal },
 ): Promise<WorkspaceBootstrapPayload> {
+  const { signal } = options;
   for (let attempt = 0; ; attempt += 1) {
-    options.signal?.throwIfAborted();
+    signal.throwIfAborted();
     try {
       return await loadWorkspaceBootstrap(apiPort, options);
     } catch (error: unknown) {
@@ -269,10 +289,7 @@ async function loadWorkspaceBootstrapWithRetry(
       ) {
         throw error;
       }
-      await waitForBootstrapRetry(
-        BOOTSTRAP_RETRY_DELAYS_MS[attempt],
-        options.signal ?? new AbortController().signal,
-      );
+      await waitForBootstrapRetry(BOOTSTRAP_RETRY_DELAYS_MS[attempt], signal);
     }
   }
 }
