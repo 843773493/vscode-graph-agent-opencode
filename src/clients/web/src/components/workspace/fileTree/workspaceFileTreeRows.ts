@@ -15,6 +15,22 @@ export function isExpandableFileTreeNode(node: WorkspaceFileNode): boolean {
   return node.kind === "directory";
 }
 
+/**
+ * 文件树按搜索词过滤的唯一命中判定。名称与路径分别匹配，绝不用分隔符把两者拼成
+ * 一个字符串再 includes：那样「名字尾 + 路径头」会跨边界拼出假命中（例如名字
+ * 含换行时 `` ${name}\n${path} `` 里两行会被当成一个连续串）。
+ */
+export function fileTreeNodeMatchesQuery(
+  node: WorkspaceFileNode,
+  normalizedQuery: string,
+): boolean {
+  if (!normalizedQuery) {
+    return true;
+  }
+  return node.name.toLowerCase().includes(normalizedQuery)
+    || node.path.toLowerCase().includes(normalizedQuery);
+}
+
 export type WorkspaceFileTreeRow =
   | {
       key: string;
@@ -84,7 +100,7 @@ export function buildVisibleFileTreeRows({
     if (cached !== undefined) {
       return cached;
     }
-    const matches = `${node.name}\n${node.path}`.toLowerCase().includes(normalizedQuery);
+    const matches = fileTreeNodeMatchesQuery(node, normalizedQuery);
     if (matches || !isExpandableFileTreeNode(node)) {
       searchMatchCache.set(node.path, matches);
       return matches;
