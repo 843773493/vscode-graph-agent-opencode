@@ -5,8 +5,11 @@ import {
   browseGatewayLocalDirectories,
   deleteGatewayUiAsset,
   getGatewayUiSettings,
+  getGatewayDiagnostics,
   listGatewayUiAssets,
   listGatewayWorkspaces,
+  runSessionGenerator,
+  searchGatewaySessionCatalog,
   uploadGatewayUiAsset,
 } from "../../gatewayApi";
 import { createSessionConnection } from "../gateway/sessionConnections";
@@ -25,12 +28,58 @@ import {
   getLatestGatewayUserViewState,
 } from "../gateway/userViewState";
 import { requestJson } from "../../api";
-import { HttpRequestError } from "../http";
+import { DEFAULT_API_REQUEST_TIMEOUT_MS, HttpRequestError } from "../http";
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+describe("Gateway API 超时常量收敛", () => {
+  /** 捕获 createRequestAbortState 注册的超时毫秒数，不改动真实计时。 */
+  async function captureTimeoutMs(run: () => Promise<unknown>): Promise<number> {
+    const originalSetTimeout = globalThis.setTimeout;
+    let captured = -1;
+    globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...rest: unknown[]) => {
+      if (captured < 0 && typeof timeout === "number" && timeout > 0) {
+        captured = timeout;
+      }
+      return (originalSetTimeout as (...a: unknown[]) => unknown)(handler, 0, ...rest);
+    }) as typeof globalThis.setTimeout;
+    try {
+      await run().catch(() => undefined);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+    return captured;
+  }
+
+  function stubFailingFetch(): void {
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "timeout-token" } });
+        }
+        return Response.json({ detail: "boom" }, { status: 500 });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+  }
+
+  test("三处读取接口的超时都等于 DEFAULT_API_REQUEST_TIMEOUT_MS", async () => {
+    const cases: Array<[string, () => Promise<unknown>]> = [
+      ["diagnostics", () => getGatewayDiagnostics(49_970)],
+      ["session-catalog search", () => searchGatewaySessionCatalog(49_971, "q")],
+      ["session generator run", () => runSessionGenerator(49_972, "gen_1")],
+    ];
+    for (const [label, run] of cases) {
+      stubFailingFetch();
+      const captured = await captureTimeoutMs(run);
+      process.stdout.write("PROBE_I3 " + label + " timeoutMs=" + captured + "\n");
+      expect(captured).toBe(DEFAULT_API_REQUEST_TIMEOUT_MS);
+    }
+  });
 });
 
 interface CapturedUserRequest {

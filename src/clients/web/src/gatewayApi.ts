@@ -44,6 +44,7 @@ import type {
 } from "./types/backend";
 import { normalizeWebUiSettings } from "./state/uiSettings/preferences";
 import {
+  DEFAULT_API_REQUEST_TIMEOUT_MS,
   HttpRequestError,
   normalizePageResult,
   requestJson,
@@ -80,7 +81,7 @@ export async function getGatewayDiagnostics(
     await requestJson<APIResponse<GatewayDiagnostics>>(
       port,
       `/api/gateway/diagnostics${query ? `?${query}` : ""}`,
-      { timeoutMs: 15000 },
+      { timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
     ),
   );
 }
@@ -296,7 +297,7 @@ export async function searchGatewaySessionCatalog(
     await requestJson<APIResponse<GatewaySessionSearchResults>>(
       port,
       `/api/gateway/session-catalog/search?${params.toString()}`,
-      { timeoutMs: 15000, signal },
+      { timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS, signal },
     ),
   );
 }
@@ -333,7 +334,7 @@ export async function runSessionGenerator(
     await requestJson<APIResponse<GenerationRun>>(
       port,
       `/api/gateway/session-generators/${encodeURIComponent(generatorId)}/run`,
-      { method: "POST", body: "{}", timeoutMs: 15000 },
+      { method: "POST", body: "{}", timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
     ),
   );
 }
