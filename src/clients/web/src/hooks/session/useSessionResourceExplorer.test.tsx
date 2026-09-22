@@ -1,86 +1,44 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { act, create } from "react-test-renderer";
 import type { WorkspaceNavigationTree } from "../../types/backend";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
-import type { SessionGeneratorResourcesController } from "../sessionResourceExplorer/useSessionGeneratorResources";
 import { useSessionGeneratorResources } from "../sessionResourceExplorer/useSessionGeneratorResources";
+import {
+  apiResponse,
+  explorerProps,
+  flushEffects,
+  installGatewayFetch,
+  mountHarness,
+  restoreSessionHookGlobals,
+  useSessionResourceExplorerHarness,
+  withCatalogDefaults,
+  type SessionResourceExplorerHandle,
+} from "./sessionHookTestFixtures";
 
-const originalFetch = globalThis.fetch;
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
-function apiResponse(data: unknown): Response {
-  return new Response(JSON.stringify({
-    code: 0,
-    message: "ok",
-    data,
-    request_id: "request-test",
-  }), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-async function flushEffects(): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
-}
+afterEach(restoreSessionHookGlobals);
 
 describe("useSessionResourceExplorer 自动同步", () => {
   test("初始目录同步与激活工作区加载根分支共享同一个请求", async () => {
     let releaseCatalog!: (response: Response) => void;
     let rootCatalogRequests = 0;
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = input instanceof Request ? input.url : String(input);
-      if (url.includes("/api/gateway/auth/local-credential")) {
-        return apiResponse({ token: "local-test-token" });
-      }
-      if (url.includes("/api/gateway/users/current")) {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
-      if (url.includes("/api/gateway/workspace-navigation")) {
-        return apiResponse({ revision: "navigation", nodes: [] });
-      }
-      if (url.includes("/api/gateway/session-generators")) {
-        return apiResponse({ revision: "generators", items: [] });
-      }
-      if (url.includes("/api/v1/session-catalog/children")) {
+    installGatewayFetch(withCatalogDefaults(({ path }) => {
+      if (path.includes("/api/v1/session-catalog/children")) {
         rootCatalogRequests += 1;
-        return await new Promise<Response>((resolve) => {
+        return new Promise<Response>((resolve) => {
           releaseCatalog = resolve;
         });
       }
-      throw new Error(`测试收到未声明请求: ${url}`);
-    }, { preconnect: originalFetch.preconnect });
+      return undefined;
+    }));
 
-    function Harness(): React.ReactNode {
-      const generatorResources = {
-        generators: null,
-        generationRuns: new Map(),
-        generatorError: null,
-      } as unknown as SessionGeneratorResourcesController;
-      useSessionResourceExplorer({
+    const Harness = useSessionResourceExplorerHarness({
+      props: explorerProps({
         apiPort: 49_405,
-        activeWorkspaceId: "ws-test",
-        searchOpen: false,
-        searchQuery: "",
-        currentSessionId: "",
-        workspaceNavigationSyncKey: "ws-test",
         catalogSyncKeys: new Map([["ws-test", "session-sync"]]),
-        catalogRefreshVersions: new Map(),
-        generatorResources,
-      });
-      return null;
-    }
-
-    let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<Harness />);
-      await flushEffects();
-      await flushEffects();
+      }),
     });
+    const { unmount } = await mountHarness(Harness);
     expect(rootCatalogRequests).toBe(1);
 
     await act(async () => {
@@ -96,24 +54,14 @@ describe("useSessionResourceExplorer 自动同步", () => {
       await Promise.resolve();
       await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 10));
     });
-    act(() => renderer!.unmount());
+    unmount();
   });
 
   test("当前会话定位复用已加载的根分支，不重复读取目录", async () => {
     const catalogRequests: string[] = [];
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = input instanceof Request ? input.url : String(input);
-      const parsed = new URL(url);
-      if (parsed.pathname.includes("/api/gateway/auth/local-credential")) {
-        return apiResponse({ token: "local-test-token" });
-      }
-      if (parsed.pathname.includes("/api/gateway/users/current")) {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
-      if (parsed.pathname.includes("/api/gateway/workspace-navigation")) {
-        return apiResponse({ revision: "navigation", nodes: [] });
-      }
-      if (parsed.pathname.includes("/api/v1/session-catalog/breadcrumb/")) {
+    installGatewayFetch(withCatalogDefaults(({ path, url }) => {
+      const parentNodeId = new URL(url).searchParams.get("parent_node_id");
+      if (path.includes("/api/v1/session-catalog/breadcrumb/")) {
         return apiResponse({
           items: [
             { node_id: "folder-a", kind: "folder", name: "Folder A" },
@@ -121,8 +69,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
           ],
         });
       }
-      if (parsed.pathname.includes("/api/v1/session-catalog/children")) {
-        const parentNodeId = parsed.searchParams.get("parent_node_id");
+      if (path.includes("/api/v1/session-catalog/children")) {
         catalogRequests.push(parentNodeId ?? "root");
         return apiResponse({
           revision: "catalog",
@@ -134,57 +81,23 @@ describe("useSessionResourceExplorer 自动同步", () => {
           total: 1,
         });
       }
-      throw new Error(`测试收到未声明请求: ${url}`);
-    }, { preconnect: originalFetch.preconnect });
+      return undefined;
+    }));
 
-    const generatorResources = {
-      generators: null,
-      generationRuns: new Map(),
-      generatorError: null,
-    } as unknown as SessionGeneratorResourcesController;
-    function Harness(): React.ReactNode {
-      useSessionResourceExplorer({
-        apiPort: 49_407,
-        activeWorkspaceId: "ws-test",
-        searchOpen: false,
-        searchQuery: "",
-        currentSessionId: "session-a",
-        workspaceNavigationSyncKey: "ws-test",
-        catalogSyncKeys: new Map(),
-        catalogRefreshVersions: new Map(),
-        generatorResources,
-      });
-      return null;
-    }
-
-    let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<Harness />);
-      await flushEffects();
-      await flushEffects();
-      await flushEffects();
+    const Harness = useSessionResourceExplorerHarness({
+      props: explorerProps({ apiPort: 49_407, currentSessionId: "session-a" }),
     });
+    const { unmount } = await mountHarness(Harness, 3);
 
     expect(catalogRequests.filter((parent) => parent === "root")).toHaveLength(1);
     expect(catalogRequests.filter((parent) => parent === "folder-a")).toHaveLength(1);
-    act(() => renderer!.unmount());
+    unmount();
   });
 
   test("当前会话不在已完成缓存分支时会自动重读，避免误报导航故障", async () => {
     let rootCatalogRequests = 0;
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = input instanceof Request ? input.url : String(input);
-      const parsed = new URL(url);
-      if (parsed.pathname.includes("/api/gateway/auth/local-credential")) {
-        return apiResponse({ token: "local-test-token" });
-      }
-      if (parsed.pathname.includes("/api/gateway/users/current")) {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
-      if (parsed.pathname.includes("/api/gateway/workspace-navigation")) {
-        return apiResponse({ revision: "navigation", nodes: [] });
-      }
-      if (parsed.pathname.includes("/api/v1/session-catalog/children")) {
+    installGatewayFetch(withCatalogDefaults(({ path }) => {
+      if (path.includes("/api/v1/session-catalog/children")) {
         rootCatalogRequests += 1;
         return apiResponse({
           revision: `catalog-${rootCatalogRequests}`,
@@ -202,87 +115,46 @@ describe("useSessionResourceExplorer 自动同步", () => {
           total: rootCatalogRequests === 1 ? 0 : 1,
         });
       }
-      throw new Error(`测试收到未声明请求: ${url}`);
-    }, { preconnect: originalFetch.preconnect });
+      return undefined;
+    }));
 
-    let latestExplorer: ReturnType<typeof useSessionResourceExplorer> | null = null;
-    const generatorResources = {
-      generators: null,
-      generationRuns: new Map(),
-      generatorError: null,
-    } as unknown as SessionGeneratorResourcesController;
-    function Harness(): React.ReactNode {
-      latestExplorer = useSessionResourceExplorer({
-        apiPort: 49_408,
-        activeWorkspaceId: "ws-test",
-        searchOpen: false,
-        searchQuery: "",
-        currentSessionId: "",
-        workspaceNavigationSyncKey: "ws-test",
-        catalogSyncKeys: new Map(),
-        catalogRefreshVersions: new Map(),
-        generatorResources,
-      });
-      return null;
-    }
-
-    let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<Harness />);
-      await flushEffects();
-      await flushEffects();
-      await flushEffects();
+    let explorerHandle: SessionResourceExplorerHandle | null = null;
+    const Harness = useSessionResourceExplorerHarness({
+      props: explorerProps({ apiPort: 49_408 }),
+      onExplorer: (explorer) => {
+        explorerHandle = explorer;
+      },
     });
+    const { unmount } = await mountHarness(Harness, 3);
     expect(rootCatalogRequests).toBe(1);
 
     await act(async () => {
-      await latestExplorer!.revealSearchResult(
-        "ws-test",
-        ["session-new"],
-        "session",
-      );
+      await explorerHandle!.revealSearchResult("ws-test", ["session-new"], "session");
       await flushEffects();
     });
 
     expect(rootCatalogRequests).toBe(2);
-    expect(latestExplorer!.branches.get("ws-test:root")?.items[0]?.session_id)
+    expect(explorerHandle!.branches.get("ws-test:root")?.items[0]?.session_id)
       .toBe("session-new");
-    expect(latestExplorer!.navigationError).toBeNull();
-    act(() => renderer!.unmount());
+    expect(explorerHandle!.navigationError).toBeNull();
+    unmount();
   });
 
   test("目录移动失败时只重读旧父/新父分支并保留树状态", async () => {
     const catalogRequests: string[] = [];
-    globalThis.fetch = Object.assign(async (
-      input: RequestInfo | URL,
-      init?: RequestInit,
-    ) => {
-      const url = input instanceof Request ? input.url : String(input);
-      const parsed = new URL(url);
-      if (parsed.pathname.includes("/api/gateway/auth/local-credential")) {
-        return apiResponse({ token: "local-test-token" });
-      }
-      if (parsed.pathname.includes("/api/gateway/users/current")) {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
-      if (parsed.pathname.includes("/api/gateway/workspace-navigation")) {
-        return apiResponse({ revision: "navigation", nodes: [] });
-      }
-      if (parsed.pathname.includes("/api/gateway/session-generators")) {
-        return apiResponse({ revision: "generators", items: [] });
-      }
-      if (parsed.pathname.includes("/api/v1/session-catalog/children")) {
-        catalogRequests.push(parsed.search);
+    installGatewayFetch(withCatalogDefaults(({ path, init, url }) => {
+      if (path.includes("/api/v1/session-catalog/children")) {
+        catalogRequests.push(new URL(url).search);
         return apiResponse({
           revision: "catalog",
-          parent_node_id: parsed.searchParams.get("parent_node_id"),
+          parent_node_id: new URL(url).searchParams.get("parent_node_id"),
           items: [],
           cursor: null,
           total: 0,
         });
       }
       if (
-        parsed.pathname === "/api/v1/session-catalog/nodes/ses_move/parent"
+        path === "/api/v1/session-catalog/nodes/ses_move/parent"
         && init?.method === "PATCH"
       ) {
         return new Response(JSON.stringify({ detail: "目录移动被拒绝" }), {
@@ -290,83 +162,56 @@ describe("useSessionResourceExplorer 自动同步", () => {
           headers: { "content-type": "application/json" },
         });
       }
-      throw new Error(`测试收到未声明请求: ${url}`);
-    }, { preconnect: originalFetch.preconnect });
+      return undefined;
+    }));
 
-    let latestExplorer: ReturnType<typeof useSessionResourceExplorer> | null = null;
-    function Harness(): React.ReactNode {
-      const generatorResources = useSessionGeneratorResources(49_404);
-      latestExplorer = useSessionResourceExplorer({
-        apiPort: 49_404,
-        activeWorkspaceId: "ws-test",
-        searchOpen: false,
-        searchQuery: "",
-        currentSessionId: "",
-        workspaceNavigationSyncKey: "ws-test",
-        catalogSyncKeys: new Map(),
-        catalogRefreshVersions: new Map(),
-        generatorResources,
-      });
-      return null;
-    }
-
-    let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<Harness />);
-      await flushEffects();
-      await flushEffects();
+    let explorerHandle: SessionResourceExplorerHandle | null = null;
+    const Harness = useSessionResourceExplorerHarness({
+      props: explorerProps({ apiPort: 49_404 }),
+      liveGeneratorResources: true,
+      onExplorer: (explorer) => {
+        explorerHandle = explorer;
+      },
     });
+    const { unmount } = await mountHarness(Harness);
 
     await expect(
-      latestExplorer!.moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old"),
+      explorerHandle!.moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old"),
     ).rejects.toThrow("目录移动被拒绝");
     expect(catalogRequests).toEqual(expect.arrayContaining([
       "?limit=100&parent_node_id=fld_old",
       "?limit=100&parent_node_id=fld_new",
     ]));
-    act(() => renderer!.unmount());
+    unmount();
   });
 
   test("工作区拓扑键变化会重读导航，迟到旧响应不会覆盖新树", async () => {
     const navigationResolvers: Array<(response: Response) => void> = [];
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = input instanceof Request ? input.url : String(input);
-      if (url.includes("/api/gateway/auth/local-credential")) {
-        return apiResponse({ token: "local-test-token" });
-      }
-      if (url.includes("/api/gateway/users/current")) {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
-      if (url.includes("/api/gateway/workspace-navigation")) {
-        return await new Promise<Response>((resolve) => {
+    installGatewayFetch(withCatalogDefaults(({ path }) => {
+      if (path.includes("/api/gateway/workspace-navigation")) {
+        return new Promise<Response>((resolve) => {
           navigationResolvers.push(resolve);
         });
       }
-      if (url.includes("/api/gateway/session-generators")) {
-        return apiResponse({ revision: "generators", items: [] });
-      }
-      throw new Error(`测试收到未声明请求: ${url}`);
-    }, { preconnect: originalFetch.preconnect });
+      return undefined;
+    }));
 
     let latestNavigation: WorkspaceNavigationTree | null = null;
     function Harness({ syncKey }: { syncKey: string }): React.ReactNode {
       const generatorResources = useSessionGeneratorResources(49_402);
       const explorer = useSessionResourceExplorer({
-        apiPort: 49_402,
-        activeWorkspaceId: null,
-        searchOpen: false,
-        searchQuery: "",
-        currentSessionId: "",
-        workspaceNavigationSyncKey: syncKey,
-        catalogSyncKeys: new Map(),
-        catalogRefreshVersions: new Map(),
+        ...explorerProps({
+          apiPort: 49_402,
+          activeWorkspaceId: null,
+          workspaceNavigationSyncKey: syncKey,
+        }),
         generatorResources,
       });
       latestNavigation = explorer.navigation;
       return null;
     }
 
-    let renderer: ReactTestRenderer;
+    let renderer: ReturnType<typeof create>;
     await act(async () => {
       renderer = create(<Harness syncKey="ws-1" />);
       await flushEffects();
@@ -374,7 +219,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
     expect(navigationResolvers).toHaveLength(1);
 
     await act(async () => {
-      renderer!.update(<Harness syncKey="ws-1\u0000ws-2" />);
+      renderer.update(<Harness syncKey="ws-1\u0000ws-2" />);
       await flushEffects();
     });
     expect(navigationResolvers).toHaveLength(2);
@@ -392,52 +237,37 @@ describe("useSessionResourceExplorer 自动同步", () => {
       await Promise.resolve();
     });
     expect((latestNavigation as WorkspaceNavigationTree | null)?.revision).toBe("new");
-    act(() => renderer!.unmount());
+    act(() => renderer.unmount());
   });
 
   test("切换工作区时失效的旧会话定位请求不会污染导航错误", async () => {
     let rejectBreadcrumb: ((reason: Error) => void) | null = null;
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = input instanceof Request ? input.url : String(input);
-      if (url.includes("/api/gateway/auth/local-credential")) {
-        return apiResponse({ token: "local-test-token" });
-      }
-      if (url.includes("/api/gateway/users/current")) {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
-      if (url.includes("/api/gateway/workspace-navigation")) {
-        return apiResponse({ revision: "navigation", nodes: [] });
-      }
-      if (url.includes("/api/v1/session-catalog/breadcrumb/")) {
-        return await new Promise<Response>((_resolve, reject) => {
+    installGatewayFetch(withCatalogDefaults(({ path }) => {
+      if (path.includes("/api/v1/session-catalog/breadcrumb/")) {
+        return new Promise<Response>((_resolve, reject) => {
           rejectBreadcrumb = reject;
         });
       }
-      if (url.includes("/api/gateway/session-generators")) {
-        return apiResponse({ revision: "generators", items: [] });
-      }
-      throw new Error(`测试收到未声明请求: ${url}`);
-    }, { preconnect: originalFetch.preconnect });
+      return undefined;
+    }));
 
     let latestNavigationError: string | null = null;
     function Harness({ currentSessionId }: { currentSessionId: string }): React.ReactNode {
       const generatorResources = useSessionGeneratorResources(49_403);
       const explorer = useSessionResourceExplorer({
-        apiPort: 49_403,
-        activeWorkspaceId: "ws-default",
-        searchOpen: false,
-        searchQuery: "",
-        currentSessionId,
-        workspaceNavigationSyncKey: "ws-default",
-        catalogSyncKeys: new Map(),
-        catalogRefreshVersions: new Map(),
+        ...explorerProps({
+          apiPort: 49_403,
+          activeWorkspaceId: "ws-default",
+          workspaceNavigationSyncKey: "ws-default",
+          currentSessionId,
+        }),
         generatorResources,
       });
       latestNavigationError = explorer.navigationError;
       return null;
     }
 
-    let renderer: ReactTestRenderer;
+    let renderer: ReturnType<typeof create>;
     await act(async () => {
       renderer = create(<Harness currentSessionId="session-from-closed-workspace" />);
       await flushEffects();
@@ -446,7 +276,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
     expect(rejectBreadcrumb).not.toBeNull();
 
     await act(async () => {
-      renderer!.update(<Harness currentSessionId="" />);
+      renderer.update(<Harness currentSessionId="" />);
       await flushEffects();
     });
     await act(async () => {
@@ -456,6 +286,6 @@ describe("useSessionResourceExplorer 自动同步", () => {
     });
 
     expect(latestNavigationError).toBeNull();
-    act(() => renderer!.unmount());
+    act(() => renderer.unmount());
   });
 });

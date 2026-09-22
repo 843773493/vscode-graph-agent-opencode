@@ -3,21 +3,14 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useSessionMessageStream } from "./useSessionMessageStream";
 import type { AppState } from "../../types/frontend";
-import type { SetAppState } from "../sessionEventStream/sessionRefresh";
-
-const originalFetch = globalThis.fetch;
-const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
-
-function installWindow(port: number): void {
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: {
-      location: { port: String(port) },
-      setTimeout: globalThis.setTimeout.bind(globalThis),
-      clearTimeout: globalThis.clearTimeout.bind(globalThis),
-    },
-  });
-}
+import {
+  apiResponse,
+  createStateMirror,
+  installGatewayFetch,
+  installTestWindow,
+  restoreSessionHookGlobals,
+  useSessionMessageStreamHarness,
+} from "./sessionHookTestFixtures";
 
 function streamResponse(
   sessionId = "ses_stream_retry",
@@ -110,50 +103,29 @@ function minimalState(): AppState {
   } as unknown as AppState;
 }
 
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
-});
+afterEach(restoreSessionHookGlobals);
 
 describe("useSessionMessageStream 首次连接", () => {
   test("首个 404 后有限退避重试，随后 200 继续消费终态", async () => {
     const port = 49_410;
-    installWindow(port);
+    installTestWindow(port);
     let streamRequests = 0;
-    globalThis.fetch = Object.assign(
-      async (...args: Parameters<typeof fetch>) => {
-        const path = new URL(String(args[0]), "http://localhost").pathname;
-        if (path === "/api/gateway/auth/local-credential") {
-          return Response.json({ data: { token: "stream-retry-token" } });
-        }
-        streamRequests += 1;
-        if (streamRequests === 1) {
-          return new Response("not ready", { status: 404, statusText: "Not Found" });
-        }
-        return streamResponse();
-      },
-      { preconnect: originalFetch.preconnect },
-    );
+    installGatewayFetch(() => {
+      streamRequests += 1;
+      if (streamRequests === 1) {
+        return new Response("not ready", { status: 404, statusText: "Not Found" });
+      }
+      return streamResponse();
+    }, { token: "stream-retry-token" });
 
-    let state = minimalState();
-    const setState: SetAppState = (update) => {
-      state = typeof update === "function" ? update(state) : update;
-    };
-    function Harness(): React.ReactNode {
-      useSessionMessageStream({
-        apiPort: port,
-        sessionId: "ses_stream_retry",
-        turnId: "turn_stream_retry",
-        workspaceId: "workspace_stream_retry",
-        sessionCacheKey: "workspace_stream_retry::ses_stream_retry",
-        setState,
-      });
-      return null;
-    }
+    const mirror = createStateMirror(minimalState());
+    const Harness = useSessionMessageStreamHarness({
+      apiPort: port,
+      sessionId: "ses_stream_retry",
+      turnId: "turn_stream_retry",
+      workspaceId: "workspace_stream_retry",
+      sessionCacheKey: "workspace_stream_retry::ses_stream_retry",
+    }, mirror.setState);
 
     let renderer: ReactTestRenderer;
     await act(async () => {
@@ -164,7 +136,7 @@ describe("useSessionMessageStream 首次连接", () => {
     });
 
     expect(streamRequests).toBe(2);
-    const stream = [...(state.messageStreamsByTurnStream ?? new Map()).values()][0];
+    const stream = [...(mirror.current().messageStreamsByTurnStream ?? new Map()).values()][0];
     expect(stream?.streamStatus).toBe("completed");
     expect(stream?.connectionStatus).toBe("terminal");
     expect(stream?.protocolError).toBeNull();
@@ -173,38 +145,24 @@ describe("useSessionMessageStream 首次连接", () => {
 
   test("组件更新不会重新建立已连接的消息流", async () => {
     const port = 49_411;
-    installWindow(port);
+    installTestWindow(port);
     let streamRequests = 0;
     let releaseStream: ((response: Response) => void) | undefined;
-    globalThis.fetch = Object.assign(
-      async (...args: Parameters<typeof fetch>) => {
-        const path = new URL(String(args[0]), "http://localhost").pathname;
-        if (path === "/api/gateway/auth/local-credential") {
-          return Response.json({ data: { token: "stable-stream-token" } });
-        }
-        streamRequests += 1;
-        return new Promise<Response>((resolve) => {
-          releaseStream = resolve;
-        });
-      },
-      { preconnect: originalFetch.preconnect },
-    );
-
-    let state = minimalState();
-    const setState: SetAppState = (update) => {
-      state = typeof update === "function" ? update(state) : update;
-    };
-    function Harness(): React.ReactNode {
-      useSessionMessageStream({
-        apiPort: port,
-        sessionId: "ses_stream_stable",
-        turnId: "turn_stream_stable",
-        workspaceId: "workspace_stream_stable",
-        sessionCacheKey: "workspace_stream_stable::ses_stream_stable",
-        setState,
+    installGatewayFetch(() => {
+      streamRequests += 1;
+      return new Promise<Response>((resolve) => {
+        releaseStream = resolve;
       });
-      return null;
-    }
+    }, { token: "stable-stream-token" });
+
+    const mirror = createStateMirror(minimalState());
+    const Harness = useSessionMessageStreamHarness({
+      apiPort: port,
+      sessionId: "ses_stream_stable",
+      turnId: "turn_stream_stable",
+      workspaceId: "workspace_stream_stable",
+      sessionCacheKey: "workspace_stream_stable::ses_stream_stable",
+    }, mirror.setState);
 
     let renderer: ReactTestRenderer;
     await act(async () => {
@@ -225,42 +183,30 @@ describe("useSessionMessageStream 首次连接", () => {
       releaseStream?.(streamResponse("ses_stream_stable", "turn_stream_stable"));
       await new Promise((resolve) => setTimeout(resolve, 80));
     });
-    expect([...(state.messageStreamsByTurnStream ?? new Map()).values()][0]?.streamStatus)
+    expect([...(mirror.current().messageStreamsByTurnStream ?? new Map()).values()][0]?.streamStatus)
       .toBe("completed");
     act(() => renderer!.unmount());
   });
 
   test("收到终态事件后不等待 SSE 关闭就清理前端运行态", async () => {
     const port = 49_412;
-    installWindow(port);
-    globalThis.fetch = Object.assign(
-      async (...args: Parameters<typeof fetch>) => {
-        const path = new URL(String(args[0]), "http://localhost").pathname;
-        if (path === "/api/gateway/auth/local-credential") {
-          return Response.json({ data: { token: "stream-terminal-token" } });
-        }
-        return openAfterTerminalStreamResponse();
-      },
-      { preconnect: originalFetch.preconnect },
+    installTestWindow(port);
+    installGatewayFetch(
+      () => openAfterTerminalStreamResponse(),
+      { token: "stream-terminal-token" },
     );
 
-    let state = minimalState();
     const sessionCacheKey = "workspace_stream_open::ses_stream_open";
-    state.activeJobIdsBySession.set(sessionCacheKey, "turn_stream_open");
-    const setState: SetAppState = (update) => {
-      state = typeof update === "function" ? update(state) : update;
-    };
-    function Harness(): React.ReactNode {
-      useSessionMessageStream({
-        apiPort: port,
-        sessionId: "ses_stream_open",
-        turnId: "turn_stream_open",
-        workspaceId: "workspace_stream_open",
-        sessionCacheKey,
-        setState,
-      });
-      return null;
-    }
+    const initialState = minimalState();
+    initialState.activeJobIdsBySession.set(sessionCacheKey, "turn_stream_open");
+    const mirror = createStateMirror(initialState);
+    const Harness = useSessionMessageStreamHarness({
+      apiPort: port,
+      sessionId: "ses_stream_open",
+      turnId: "turn_stream_open",
+      workspaceId: "workspace_stream_open",
+      sessionCacheKey,
+    }, mirror.setState);
 
     let renderer: ReactTestRenderer;
     await act(async () => {
@@ -270,33 +216,27 @@ describe("useSessionMessageStream 首次连接", () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
     });
 
-    expect(state.activeJobIdsBySession.has(sessionCacheKey)).toBe(false);
-    expect([...(state.messageStreamsByTurnStream ?? new Map()).values()][0]?.streamStatus)
+    expect(mirror.current().activeJobIdsBySession.has(sessionCacheKey)).toBe(false);
+    expect([...(mirror.current().messageStreamsByTurnStream ?? new Map()).values()][0]?.streamStatus)
       .toBe("completed");
     act(() => renderer!.unmount());
   });
 
   test("真实 React 异步状态更新不会丢失增量事件游标和正文", async () => {
     const port = 49_413;
-    installWindow(port);
+    installTestWindow(port);
     const messageStreamUrls: string[] = [];
     let streamRequests = 0;
-    globalThis.fetch = Object.assign(
-      async (...args: Parameters<typeof fetch>) => {
-        const url = String(args[0]);
-        const path = new URL(url, "http://localhost").pathname;
-        if (path === "/api/gateway/auth/local-credential") {
-          return Response.json({ data: { token: "stream-async-token" } });
-        }
-        messageStreamUrls.push(url);
-        streamRequests += 1;
-        return streamRequests === 1
-          ? partialStreamResponse()
-          : terminalStreamResponse();
-      },
-      { preconnect: originalFetch.preconnect },
-    );
+    installGatewayFetch(({ url }) => {
+      messageStreamUrls.push(url);
+      streamRequests += 1;
+      return streamRequests === 1
+        ? partialStreamResponse()
+        : terminalStreamResponse();
+    }, { token: "stream-async-token" });
 
+    // 本用例必须走真实 React 状态更新，才能复现异步 setState 下的游标丢失，
+    // 因此保留独立的 useState Harness，不复用闭包镜像夹具。
     let latestState = minimalState();
     function Harness(): React.ReactNode {
       const [state, setState] = React.useState(minimalState);
@@ -410,33 +350,18 @@ describe("useSessionMessageStream 终态 failure 归一", () => {
     port: number,
     response: Response,
   ): Promise<{ status: string; failure: unknown }> {
-    installWindow(port);
-    globalThis.fetch = Object.assign(
-      async (...args: Parameters<typeof fetch>) => {
-        const path = new URL(String(args[0]), "http://localhost").pathname;
-        if (path === "/api/gateway/auth/local-credential") {
-          return Response.json({ data: { token: "failure-norm-token" } });
-        }
-        return response;
-      },
-      { preconnect: originalFetch.preconnect },
-    );
-    let state = minimalState();
-    state.status = "任务失败前";
-    const setState: SetAppState = (update) => {
-      state = typeof update === "function" ? update(state) : update;
-    };
-    function Harness(): React.ReactNode {
-      useSessionMessageStream({
-        apiPort: port,
-        sessionId: "ses_failure_norm",
-        turnId: "turn_failure_norm",
-        workspaceId: "workspace_failure_norm",
-        sessionCacheKey: "workspace_failure_norm::ses_failure_norm",
-        setState,
-      });
-      return null;
-    }
+    installTestWindow(port);
+    installGatewayFetch(() => response, { token: "failure-norm-token" });
+    const initialState = minimalState();
+    initialState.status = "任务失败前";
+    const mirror = createStateMirror(initialState);
+    const Harness = useSessionMessageStreamHarness({
+      apiPort: port,
+      sessionId: "ses_failure_norm",
+      turnId: "turn_failure_norm",
+      workspaceId: "workspace_failure_norm",
+      sessionCacheKey: "workspace_failure_norm::ses_failure_norm",
+    }, mirror.setState);
     let renderer: ReactTestRenderer;
     await act(async () => {
       renderer = create(<Harness />);
@@ -445,8 +370,8 @@ describe("useSessionMessageStream 终态 failure 归一", () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
     });
     act(() => renderer!.unmount());
-    const stream = [...(state.messageStreamsByTurnStream ?? new Map()).values()][0];
-    return { status: state.status, failure: stream?.failure };
+    const stream = [...(mirror.current().messageStreamsByTurnStream ?? new Map()).values()][0];
+    return { status: mirror.current().status, failure: stream?.failure };
   }
 
   let port = 49_510;
