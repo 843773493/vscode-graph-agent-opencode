@@ -1,10 +1,11 @@
 # 目录用途
 
-`app/services/infrastructure/node_debug/process/` 承载 Node 调试进程的基础设施实现：OS 起始身份探测、launch claim 登记与恢复决策、进程生命周期控制、启动编排、Inspector 连接、暂停上下文求值以及进程租约运行时。
+`app/services/infrastructure/node_debug/process/` 承载 Node 调试进程的基础设施实现：OS 起始身份探测、launch claim 登记与恢复决策、进程生命周期控制、启动编排、Inspector 连接、暂停上下文求值、运行时输出/进程监控，以及进程租约运行时。
 
 # 可修改内容
 
 - 可以维护进程身份探测、launch claim 状态迁移、进程停止核实、启动编排、Inspector 协议交互与暂停上下文求值。
+- 可以维护 `observation.py` 中 `NodeDebugRuntimeObserver` 的运行时输出归集（stdout/stderr、Inspector 就绪地址、日志点输出与诊断）、进程终结终态判定（exited/failed）与暂停断点判定。
 - 可以维护本子包内模块之间的导入路径和实现细节。
 
 # 不可修改内容

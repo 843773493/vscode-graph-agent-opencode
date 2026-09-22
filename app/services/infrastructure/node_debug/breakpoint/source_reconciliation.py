@@ -9,6 +9,7 @@ from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     source_digest,
 )
 from app.services.infrastructure.node_debug.runtime_state import (
+    LIVE_NODE_DEBUG_RUNTIME_STATUSES,
     NodeDebugActionAppender,
     NodeDebugCommandSender,
     NodeDebugRuntime,
@@ -85,7 +86,7 @@ class NodeDebugSourceReconciliation:
                     )
 
         if runtime is not None:
-            active = runtime.status in {"starting", "running", "paused"}
+            active = runtime.status in LIVE_NODE_DEBUG_RUNTIME_STATUSES
             changed_paths = {
                 path
                 for path, loaded_digest in runtime.loaded_source_digests.items()

@@ -37,6 +37,7 @@ from app.services.infrastructure.node_debug.process.process_lifecycle import (
     NodeDebugProcessLifecycle,
 )
 from app.services.infrastructure.node_debug.runtime_state import (
+    ACTIVE_NODE_DEBUG_RUNTIME_STATUSES,
     NodeDebugActionAppender,
     NodeDebugRuntime,
 )
@@ -253,13 +254,10 @@ class NodeDebugLaunchOrchestrator:
                         action.model_copy(deep=True)
                         for action in previous.actions[-context.max_actions :]
                     ]
-            if previous is not None and previous.status in {
-                "starting",
-                "running",
-                "paused",
-                "stopping",
-                "reconcile_required",
-            }:
+            if (
+                previous is not None
+                and previous.status in ACTIVE_NODE_DEBUG_RUNTIME_STATUSES
+            ):
                 previous_outcome = await context.lifecycle.stop_runtime(previous)
                 if previous_outcome == "reconcile_required":
                     raise RuntimeError(

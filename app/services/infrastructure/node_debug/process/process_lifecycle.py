@@ -15,6 +15,7 @@ from app.services.infrastructure.node_debug.process.process_identity import (
     probe_process_identity,
 )
 from app.services.infrastructure.node_debug.runtime_state import (
+    LIVE_NODE_DEBUG_RUNTIME_STATUSES,
     NodeDebugActionAppender,
     NodeDebugClaimPhaseMarker,
     NodeDebugLaunchClaimReader,
@@ -254,7 +255,7 @@ class NodeDebugProcessLifecycle:
     ) -> Literal["stopped", "reconcile_required"]:
         """停止并核实进程终结；未核实终结时保持 reconcile_required 阻断。"""
         async with runtime.state_lock:
-            if runtime.status in {"starting", "running", "paused"}:
+            if runtime.status in LIVE_NODE_DEBUG_RUNTIME_STATUSES:
                 runtime.status = "stopping"
             runtime.closing = True
         self._mark_claim_phase(runtime, "stopping", "收到停止请求，等待进程终结")

@@ -20,6 +20,10 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugLaunchProfileDTO,
     NodeDebugStateDTO,
 )
+from app.services.infrastructure.node_debug.runtime_state import (
+    ACTIVE_NODE_DEBUG_RUNTIME_STATUSES,
+    LIVE_NODE_DEBUG_RUNTIME_STATUSES,
+)
 from app.services.infrastructure.node_debug.session.snapshot import (
     MAX_NODE_DEBUG_ACTIONS,
 )
@@ -359,23 +363,19 @@ class NodeDebugConfigurationControlMixin:
 
     def _drop_inactive_runtime(self, owner: NodeDebugOwner) -> None:
         runtime = self._runtimes.get(owner)
-        if runtime is not None and runtime.status not in {
-            "starting",
-            "running",
-            "paused",
-        }:
+        if (
+            runtime is not None
+            and runtime.status not in LIVE_NODE_DEBUG_RUNTIME_STATUSES
+        ):
             self._runtimes.pop(owner, None)
 
     def _assert_no_running_target(self, session_id: str, thread_id: str) -> None:
         owner = self._owner_key(session_id, thread_id)
         runtime = self._runtimes.get(owner)
-        if runtime is not None and runtime.status in {
-            "starting",
-            "running",
-            "paused",
-            "stopping",
-            "reconcile_required",
-        }:
+        if (
+            runtime is not None
+            and runtime.status in ACTIVE_NODE_DEBUG_RUNTIME_STATUSES
+        ):
             raise RuntimeError("目标程序运行中，停止后才能切换调试方案")
         self._assert_no_unsettled_claim(owner, operation="切换调试方案")
 
@@ -390,13 +390,7 @@ class NodeDebugConfigurationControlMixin:
         if (
             runtime is not None
             and runtime.configuration_id == configuration_id
-            and runtime.status in {
-                "starting",
-                "running",
-                "paused",
-                "stopping",
-                "reconcile_required",
-            }
+            and runtime.status in ACTIVE_NODE_DEBUG_RUNTIME_STATUSES
         ):
             raise RuntimeError("目标程序运行中，不能修改或删除当前调试方案")
         # 与 _assert_no_running_target 的阻面对齐（R3b 建议 3）：冷场景（backend

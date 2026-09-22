@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -21,10 +20,6 @@ from app.schemas.internal_v2.node_debug import (
 )
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
-)
-from app.services.infrastructure.node_debug.breakpoint.breakpoint_expressions import (
-    parse_logpoint_error,
-    parse_logpoint_output,
 )
 from app.services.infrastructure.node_debug.breakpoint.breakpoint_mutations import (
     NodeDebugBreakpointMutations,
@@ -57,6 +52,9 @@ from app.services.infrastructure.node_debug.process.launch_orchestrator import (
     NodeDebugLaunchContext,
     NodeDebugLaunchOrchestrator,
     NodeDebugLaunchRequest,
+)
+from app.services.infrastructure.node_debug.process.observation import (
+    NodeDebugRuntimeObserver,
 )
 from app.services.infrastructure.node_debug.process.process_lifecycle import (
     NodeDebugProcessLifecycle,
@@ -92,9 +90,6 @@ from app.services.infrastructure.node_debug.session.snapshot import (
     build_node_debug_snapshot,
 )
 
-_INSPECTOR_URL_PATTERN = re.compile(r"Debugger listening on (ws://\S+)")
-
-_MAX_OUTPUT_LINES = 100
 _TOOL_ACTION_SOURCES: dict[str, frozenset[str]] = {
     "create_debug_configuration": frozenset({"create_configuration"}),
     "activate_debug_configuration": frozenset({"activate_configuration"}),
@@ -213,6 +208,11 @@ class NodeDebugService(NodeDebugConfigurationControlMixin):
             write_session_manifest=self._session_state.write_session_manifest,
             clear_stop_snapshot=self._clear_stop_snapshot,
         )
+        self._observer = NodeDebugRuntimeObserver(
+            mark_claim_phase=self._claim_runtime.mark_claim_phase,
+            clear_stop_snapshot=self._clear_stop_snapshot,
+            append_action=self._append_action,
+        )
 
     def _create_launch_orchestrator(self) -> NodeDebugLaunchOrchestrator:
         """为本次启动读取最新 service 回调，避免缓存旧的 monkeypatch/运行态。"""
@@ -239,9 +239,9 @@ class NodeDebugService(NodeDebugConfigurationControlMixin):
                 write_claim=self._claim_runtime.write_launch_claim,
                 mark_claim_running=self._claim_runtime.mark_claim_running,
                 append_action=self._append_action,
-                is_paused_at_breakpoint=self._paused_at_breakpoint,
-                read_stream=self._read_stream,
-                monitor_process=self._monitor_process,
+                is_paused_at_breakpoint=self._observer.paused_at_breakpoint,
+                read_stream=self._observer.read_stream,
+                monitor_process=self._observer.monitor_process,
             )
         )
 
@@ -872,95 +872,8 @@ class NodeDebugService(NodeDebugConfigurationControlMixin):
             self._config_service.get_debug_runtime_config()
         )
 
-    async def _read_stream(
-        self,
-        runtime: NodeDebugRuntime,
-        stream_name: str,
-    ) -> None:
-        process = runtime.process
-        if process is None:
-            return
-        stream = getattr(process, stream_name)
-        if stream is None:
-            return
-        while True:
-            line = await stream.readline()
-            if not line:
-                return
-            text = line.decode("utf-8", errors="replace").rstrip()
-            match = _INSPECTOR_URL_PATTERN.search(text)
-            if match:
-                runtime.inspector.inspector_url = match.group(1)
-                runtime.inspector.inspector_ready.set()
-                continue
-            if stream_name == "stdout" and text:
-                logpoint_error = parse_logpoint_error(text)
-                if logpoint_error is not None:
-                    text = f"[日志点错误] {logpoint_error}"
-                    async with runtime.state_lock:
-                        runtime.logpoint_error_message = (
-                            f"日志点求值失败: {logpoint_error}"
-                        )
-                        runtime.error_message = runtime.logpoint_error_message
-                        self._append_action(
-                            runtime,
-                            "logpoint_error",
-                            runtime.logpoint_error_message,
-                            actor="system",
-                            result="error",
-                        )
-                else:
-                    logpoint_output = parse_logpoint_output(text)
-                    if logpoint_output is not None:
-                        text = f"[日志点] {logpoint_output}"
-                async with runtime.state_lock:
-                    runtime.output.append(text)
-                    del runtime.output[:-_MAX_OUTPUT_LINES]
-
-    async def _monitor_process(self, runtime: NodeDebugRuntime) -> None:
-        process = runtime.process
-        if process is None:
-            return
-        return_code = await process.wait()
-        # 进程句柄已报告终态：这是可核实的终结，结清本实例的 claim。
-        self._claim_runtime.mark_claim_phase(
-            runtime, "settled", f"进程已退出，退出码: {return_code}"
-        )
-        if runtime.closing:
-            return
-        async with runtime.state_lock:
-            runtime.status = "exited" if return_code == 0 else "failed"
-            self._clear_stop_snapshot(runtime)
-            runtime.error_message = (
-                runtime.logpoint_error_message
-                if runtime.logpoint_error_message is not None
-                else (
-                    None
-                    if return_code == 0
-                    else f"Node 调试进程退出，退出码: {return_code}"
-                )
-            )
-
-    @staticmethod
-    def _paused_at_breakpoint(runtime: NodeDebugRuntime) -> bool:
-        if runtime.paused_breakpoint_ids:
-            return bool(
-                runtime.paused_breakpoint_ids
-                & set(runtime.inspector_breakpoint_ids.values())
-            )
-        frame = runtime.call_stack[0] if runtime.call_stack else None
-        if frame is None or frame.path is None:
-            return False
-        return any(
-            breakpoint.log_message is None
-            and breakpoint.condition is None
-            and breakpoint.hit_condition is None
-            and breakpoint.path == frame.path
-            and frame.line in {breakpoint.line, breakpoint.actual_line}
-            for breakpoint in runtime.breakpoints.values()
-        )
-
     def _clear_stop_snapshot(self, runtime: NodeDebugRuntime) -> None:
+        """清空 Inspector 暂停快照并把断点回退为未安装态。"""
         self._inspector.clear_paused_snapshot(runtime)
         runtime.inspector_breakpoint_ids.clear()
         runtime.breakpoints = {

@@ -19,6 +19,15 @@ from app.schemas.internal_v2.node_debug import (
 
 _COMMAND_TIMEOUT_SECONDS = 10.0
 
+#: 仍在推进、尚未进入可核实终态的运行时状态。启动/停止/冲突断言共用同一定义。
+ACTIVE_NODE_DEBUG_RUNTIME_STATUSES: frozenset[NodeDebugStatus] = frozenset(
+    {"starting", "running", "paused", "stopping", "reconcile_required"}
+)
+#: 进程可控制的活体状态（不含停止中与待核实）。
+LIVE_NODE_DEBUG_RUNTIME_STATUSES: frozenset[NodeDebugStatus] = frozenset(
+    {"starting", "running", "paused"}
+)
+
 
 @dataclass(slots=True)
 class NodeDebugInspectorState:
@@ -172,6 +181,8 @@ class NodeDebugSessionManifestWriter(Protocol):
 
 
 __all__ = [
+    "ACTIVE_NODE_DEBUG_RUNTIME_STATUSES",
+    "LIVE_NODE_DEBUG_RUNTIME_STATUSES",
     "NodeDebugActionAppender",
     "NodeDebugClaimPhaseMarker",
     "NodeDebugCommandSender",

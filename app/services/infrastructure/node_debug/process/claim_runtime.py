@@ -20,7 +20,10 @@ from app.services.infrastructure.node_debug.process.launch_claim import (
     claim_marked,
     claim_running,
 )
-from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+from app.services.infrastructure.node_debug.runtime_state import (
+    ACTIVE_NODE_DEBUG_RUNTIME_STATUSES,
+    NodeDebugRuntime,
+)
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
@@ -39,9 +42,6 @@ _NODE_DEBUG_BLOCKER_REASON: dict[str, str] = {
     "stopping": "Node 调试进程停止中，等待核实终结",
     "reconcile_required": "Node 调试实例无法核实终态，需核实后才能解除占用",
 }
-_RESIDENCY_ACTIVE_RUNTIME_STATUSES = frozenset(
-    {"starting", "running", "paused", "stopping", "reconcile_required"}
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +147,7 @@ class NodeDebugClaimRuntime:
         owner = (session_id, thread_id)
         blockers: list[ResidencyBlocker] = []
         runtime = self._runtimes.get(owner)
-        if runtime is not None and runtime.status in _RESIDENCY_ACTIVE_RUNTIME_STATUSES:
+        if runtime is not None and runtime.status in ACTIVE_NODE_DEBUG_RUNTIME_STATUSES:
             blockers.append(
                 ResidencyBlocker(
                     kind="node_debug_process",
