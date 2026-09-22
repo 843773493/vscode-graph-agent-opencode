@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { ConversationContentView } from "../types/frontend";
+import type { ConversationContentView } from "../../types/frontend";
 
 export function useContentViewEffects({
   contentView,

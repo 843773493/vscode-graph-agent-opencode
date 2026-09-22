@@ -35,8 +35,8 @@ import {
   getConversationsForSession,
   messageStreamTurnIdForSession,
 } from "./state/conversations";
-import { useContentViewLoader } from "./hooks/useContentViewLoader";
-import { useContentViewEffects } from "./hooks/useContentViewEffects";
+import { useContentViewLoader } from "./hooks/content/useContentViewLoader";
+import { useContentViewEffects } from "./hooks/content/useContentViewEffects";
 import { useSessionTurnHistory } from "./hooks/sessionTurnHistory/useSessionTurnHistory";
 import { useSessionEventStream } from "./hooks/sessionEventStream/useSessionEventStream";
 import { useSessionMessageStream } from "./hooks/session/useSessionMessageStream";
