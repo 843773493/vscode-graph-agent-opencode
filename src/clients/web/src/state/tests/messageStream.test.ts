@@ -2403,8 +2403,8 @@ describe("block model_call_id 还原", () => {
         carrier_type: "text",
         projection: "streaming",
         text: "运行中正文",
-        started_seq: 6,
-        last_event_seq: 7,
+        started_seq: 7,
+        last_event_seq: 8,
       }],
       model_calls: [{
         model_call_id: "mc_1",
@@ -2736,5 +2736,201 @@ describe("终态白名单同域去重", () => {
     expect(source).toContain("isTerminalStatus(");
     // 不同语义域的常量必须保留，不得被本次去重误删。
     expect(source).toContain("TERMINAL_TURN_STATUSES");
+  });
+});
+
+describe("block model_call_id 归属真源", () => {
+  // 归属真源是 block_id 前缀：后端 _scoped_block_id 恒定构造
+  // `${model_call_id or "unbound-model-call"}:block:${provider_block_id}`，与
+  // block.started 事件信封写入的 model_call_id 恒等。事件序号区间无法表达后端
+  // _resolve_model_call_id 的真实语义：同一段空隙里，带新 call 显式身份的 delta
+  // 归其后第一个 call，带旧 call 身份或空身份的 delta 归 current_model_call_id，
+  // 两种情形 block 的 started_seq 形态完全相同（见下方两条空隙用例）。
+
+  function snapshotState(snapshot: Record<string, unknown>): MessageStreamState {
+    return applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", snapshot),
+    );
+  }
+
+  function blockBy(blockId: string, snapshot: Record<string, unknown>) {
+    return snapshotState(snapshot).blocks.find((block) => block.block_id === blockId);
+  }
+
+  test("unbound-model-call 前缀的 block 还原为 null", () => {
+    // provider delta 在任何 model.started 之前落盘：后端用 "unbound-model-call"
+    // 兜底 scoped id，事件路径的 model_call_id 也就是 null。即便 block 的
+    // started_seq 早于 mc_1 区间、且 current 已是 mc_1，也绝不能猜测成 mc_1。
+    const snapshot = {
+      snapshot_seq: 2,
+      stream_status: "open",
+      agent_loop_status: "model_running",
+      current_model_call_id: "mc_1",
+      current_attempt: 1,
+      blocks: [{
+        block_id: "unbound-model-call:block:text_early",
+        block_index: 0,
+        items: [],
+        status: "completed",
+        carrier_type: "text",
+        projection: "streaming",
+        text: "无归属前置段",
+        completion_reason: "upstream_completed",
+        partial: false,
+        started_seq: 2,
+        last_event_seq: 3,
+        completed_seq: 3,
+      }],
+      model_calls: [{
+        model_call_id: "mc_1",
+        attempt: 1,
+        status: "completed",
+        started_seq: 4,
+        last_event_seq: 5,
+        completed_seq: 5,
+      }],
+      resumable: true,
+    };
+
+    const block = blockBy("unbound-model-call:block:text_early", snapshot);
+    expect(block?.model_call_id).toBeNull();
+    expect(block?.projection).toBe("streaming");
+  });
+
+  test("空隙块复用旧 call 身份时归 current，而不是其后第一个 call", () => {
+    // 真实后端事实（s9）：mc_1 收口后、mc_2 start 前，复用 mc_1 身份的迟到新 block。
+    // 块 started_seq=7 落在 mc_1.completed=6 与 mc_2.started=9 之间的空隙；后端归
+    // mc_1（current）。旧序号规则会错归其后第一个 call mc_2，进而把 mc_1 正文标成
+    // intermediate 并从 projection 丢弃。
+    const snapshot = {
+      snapshot_seq: 15,
+      stream_status: "open",
+      agent_loop_status: "retrying",
+      current_model_call_id: "mc_2",
+      current_attempt: 2,
+      blocks: [
+        {
+          block_id: "mc_1:block:text_late",
+          block_index: 1,
+          items: [],
+          status: "completed",
+          carrier_type: "text",
+          projection: "streaming",
+          text: "mc1 收口后迟到新 block",
+          completion_reason: "upstream_completed",
+          partial: false,
+          started_seq: 7,
+          last_event_seq: 10,
+          completed_seq: 10,
+        },
+        {
+          block_id: "mc_2:block:text_2",
+          block_index: 2,
+          items: [],
+          status: "completed",
+          carrier_type: "text",
+          projection: "streaming",
+          text: "mc2 正文",
+          completion_reason: "upstream_completed",
+          partial: false,
+          started_seq: 11,
+          last_event_seq: 13,
+          completed_seq: 13,
+        },
+      ],
+      model_calls: [
+        { model_call_id: "mc_1", attempt: 1, status: "completed", started_seq: 2, last_event_seq: 6, completed_seq: 6 },
+        { model_call_id: "mc_2", attempt: 2, status: "completed", started_seq: 9, last_event_seq: 14, completed_seq: 14 },
+      ],
+      resumable: true,
+    };
+
+    expect(blockBy("mc_1:block:text_late", snapshot)?.model_call_id).toBe("mc_1");
+    expect(blockBy("mc_2:block:text_2", snapshot)?.model_call_id).toBe("mc_2");
+  });
+
+  test("乱序 model_calls 输入不影响归属", () => {
+    // model_calls 数组顺序不保证按 started_seq 升序；归属只取决于 block_id 前缀。
+    const snapshot = {
+      snapshot_seq: 15,
+      stream_status: "open",
+      agent_loop_status: "retrying",
+      current_model_call_id: "mc_2",
+      current_attempt: 2,
+      blocks: [
+        {
+          block_id: "mc_1:block:text_1",
+          block_index: 0,
+          items: [],
+          status: "completed",
+          carrier_type: "text",
+          projection: "streaming",
+          text: "mc1 正文",
+          completion_reason: "upstream_completed",
+          partial: false,
+          started_seq: 3,
+          last_event_seq: 5,
+          completed_seq: 5,
+        },
+        {
+          block_id: "mc_2:block:text_2",
+          block_index: 1,
+          items: [],
+          status: "running",
+          carrier_type: "text",
+          projection: "streaming",
+          text: "mc2 正文",
+          started_seq: 11,
+          last_event_seq: 13,
+        },
+      ],
+      // 故意逆序：mc_2 在前、mc_1 在后，且 mc_2 的 started_seq 更大。
+      model_calls: [
+        { model_call_id: "mc_2", attempt: 2, status: "completed", started_seq: 9, last_event_seq: 14, completed_seq: 14 },
+        { model_call_id: "mc_1", attempt: 1, status: "completed", started_seq: 2, last_event_seq: 6, completed_seq: 6 },
+      ],
+      resumable: true,
+    };
+
+    expect(blockBy("mc_1:block:text_1", snapshot)?.model_call_id).toBe("mc_1");
+    expect(blockBy("mc_2:block:text_2", snapshot)?.model_call_id).toBe("mc_2");
+  });
+
+  test("缺 ':block:' 分隔符的非法身份不猜测归属", () => {
+    // 后端 block_id 恒含 ':block:'；缺失说明身份非法，必须返回 null 而不是用
+    // started_seq 或 current 猜测。
+    const snapshot = {
+      snapshot_seq: 6,
+      stream_status: "open",
+      agent_loop_status: "validating",
+      current_model_call_id: "mc_1",
+      current_attempt: 1,
+      blocks: [{
+        block_id: "legacy-block-id",
+        block_index: 0,
+        items: [],
+        status: "completed",
+        carrier_type: "text",
+        projection: "streaming",
+        text: "旧格式身份",
+        completion_reason: "upstream_completed",
+        partial: false,
+        started_seq: 3,
+        last_event_seq: 5,
+        completed_seq: 5,
+      }],
+      model_calls: [{
+        model_call_id: "mc_1",
+        attempt: 1,
+        status: "completed",
+        started_seq: 2,
+        last_event_seq: 6,
+        completed_seq: 6,
+      }],
+      resumable: true,
+    };
+
+    expect(blockBy("legacy-block-id", snapshot)?.model_call_id).toBeNull();
   });
 });

@@ -87,7 +87,7 @@ export function applySnapshotState(
   next.currentModelCallId = snapshot.current_model_call_id ?? null;
   next.currentAttempt = snapshot.current_attempt;
   next.blocks = sortBlocks(
-    snapshot.blocks.map((block) => blockFromSnapshot(block, snapshot)),
+    snapshot.blocks.map(blockFromSnapshot),
   );
   next.toolCalls = toolCallsFromSnapshot(snapshot.tool_calls);
   next.toolExecutions = sortToolExecutions(snapshot.tool_executions.map(toolFromSnapshot));
@@ -132,13 +132,10 @@ function lifecycleFromSnapshot(value: MessageStreamLifecycle): MessageStreamLife
   };
 }
 
-function blockFromSnapshot(
-  value: SnapshotBlock,
-  snapshot: MessageStreamSnapshot,
-): MessageStreamBlock {
+function blockFromSnapshot(value: SnapshotBlock): MessageStreamBlock {
   return {
     block_id: value.block_id,
-    model_call_id: blockModelCallId(value, snapshot),
+    model_call_id: blockModelCallId(value),
     block_index: value.block_index ?? 0,
     carrier_type: defaultedTextValue(value.carrier_type, "text"),
     status: blockStatusValue(value.status),
@@ -165,33 +162,19 @@ function blockFromSnapshot(
  * 事件重放会得到不同的 projection，而 projection 决定 responseProjection 是否
  * 保留该 block 的文本（"intermediate" 会被丢弃），因此必须还原。
  *
- * 快照里唯一与归属相关的存活信号是事件序号：后端在 model.started 时登记
- * model_calls[].started_seq，收口时写 completed_seq，block 记录首个事件的
- * started_seq。归属即 block 首个事件落在哪个 model call 的
- * [started_seq, completed_seq] 区间内；provider 乱序前置段会让 block 早于所属
- * call 的 model.started 提交（started_seq 落在上一个 call 收口之后、本 call
- * started 之前的空隙），归入其后第一个 call。两者都取不到时（末次 call 之后
- * 迟到新建的 block）归入当前 call，与后端把迟到事件重映射到
- * current_model_call_id 的行为一致。
+ * 归属真源是 block_id 前缀：后端 StreamBlockAssemblyMixin._scoped_block_id 恒定
+ * 构造 `${model_call_id or "unbound-model-call"}:block:${provider_block_id}`，与
+ * block.started 事件信封写入的 model_call_id 同源恒等。事件序号无法承担该职责：
+ * 同一段 model_calls 区间空隙里，带新 call 显式身份的 delta 归其后第一个 call，
+ * 带旧 call 身份或空身份的 delta 归 current_model_call_id，两种情形 block 的
+ * started_seq 形态完全相同，纯序号规则不可能同时正确。
  */
-function blockModelCallId(
-  block: SnapshotBlock,
-  snapshot: MessageStreamSnapshot,
-): string | null {
-  const current = snapshot.current_model_call_id ?? null;
-  const sequence = block.started_seq;
-  if (typeof sequence !== "number") return current;
-  const calls = snapshot.model_calls
-    .filter((call) => typeof call.started_seq === "number")
-    .sort((left, right) => (left.started_seq ?? 0) - (right.started_seq ?? 0));
-  for (const call of calls) {
-    if ((call.started_seq ?? 0) > sequence) break;
-    if (call.completed_seq === undefined || sequence <= call.completed_seq) {
-      return call.model_call_id;
-    }
-  }
-  const next = calls.find((call) => (call.started_seq ?? 0) > sequence);
-  return next?.model_call_id ?? current;
+function blockModelCallId(value: SnapshotBlock): string | null {
+  const marker = value.block_id.indexOf(":block:");
+  // 后端 block_id 恒含 ':block:' 分隔符；缺失说明收到非法身份，不猜测归属。
+  if (marker < 0) return null;
+  const scoped = value.block_id.slice(0, marker);
+  return scoped === "unbound-model-call" ? null : scoped;
 }
 
 /**
