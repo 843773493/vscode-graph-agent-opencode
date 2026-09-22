@@ -85,8 +85,16 @@ export function workspaceFailurePresentation(
 }
 
 export function workspaceStatusPresentation(
-  workspace: GatewayWorkspace,
+  workspace: GatewayWorkspace | undefined,
 ): WorkspaceStatusPresentation | null {
+  // 工作区导航索引里仍存在该引用，但工作区已不在 Gateway 列表（被移除或尚未同步）。
+  // 不能回落成一行可点击的幽灵节点，必须显式说明它为何不可用。
+  if (!workspace) {
+    return {
+      label: '已不可用',
+      title: '该工作区已不在 Gateway 列表中，可能已被移除或尚未从 Gateway 同步。',
+    };
+  }
   if (workspace.status !== 'offline') return null;
   if (workspace.connection_kind === 'remote_gateway') {
     const summary = `远程 Gateway“${remoteGatewayName(workspace)}”当前未连接。`;

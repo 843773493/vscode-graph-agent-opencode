@@ -67,6 +67,17 @@ describe("工作区故障展示", () => {
       title: "工作区后端未运行，可通过右键菜单重新启动。",
     });
   });
+
+  test("就绪工作区不显示状态徽标", () => {
+    expect(workspaceStatusPresentation(workspace({ status: "ready" }))).toBeNull();
+  });
+
+  test("导航索引残留但工作区已不在 Gateway 列表时显式标记已不可用", () => {
+    expect(workspaceStatusPresentation(undefined)).toEqual({
+      label: "已不可用",
+      title: "该工作区已不在 Gateway 列表中，可能已被移除或尚未从 Gateway 同步。",
+    });
+  });
 });
 
 describe("会话目录时间展示", () => {

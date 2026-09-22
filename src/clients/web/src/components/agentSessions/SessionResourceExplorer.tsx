@@ -512,9 +512,10 @@ export default function SessionResourceExplorer({
     const expanded = explorer.expandedIds.has(`workspace:${workspaceId}`);
     const active = workspaceId === activeWorkspaceId;
     const starting = startingWorkspaceIds.has(workspaceId);
-    const statusPresentation = workspace
-      ? workspaceStatusPresentation(workspace)
-      : null;
+    // 工作区已不在 Gateway 列表时 statusPresentation 会给出「已不可用」，
+    // 同时必须禁用激活按钮，避免点到一个已不存在的 workspace_id。
+    const statusPresentation = workspaceStatusPresentation(workspace);
+    const unavailable = !workspace;
     const target: SessionResourceDropTarget = {
       kind: "workspace",
       nodeId: node.node_id,
@@ -531,7 +532,7 @@ export default function SessionResourceExplorer({
           aria-current={active ? "location" : undefined}
           title={hoverTitle}
           aria-grabbed={dragItem?.nodeId === node.node_id}
-          draggable={!workspaceSwitching && !starting}
+          draggable={!workspaceSwitching && !starting && !unavailable}
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
           data-testid={`workspace-node-${workspaceId}`}
           onDragStart={(event) => startDrag(event, {
@@ -570,7 +571,7 @@ export default function SessionResourceExplorer({
             type="button"
             className="session-resource-label workspace-label"
             title={hoverTitle}
-            disabled={workspaceSwitching || starting || workspace?.status === "offline"}
+            disabled={workspaceSwitching || starting || unavailable || workspace?.status === "offline"}
             onClick={() => void onActivateWorkspace(workspaceId).catch((error) => handleError("切换工作区失败", error))}
           >
             {node.name}
