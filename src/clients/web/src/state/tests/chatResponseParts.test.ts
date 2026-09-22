@@ -2,6 +2,7 @@ import type { TraceEvent } from "../../types/backend";
 import { compactWorkMarkdown } from "../../components/chat/ThinkingSection";
 import { aggregateConversationEvents } from "../trace/traceAggregation";
 import { buildTraceEvent } from "../traceEvents";
+import { errorMessage } from "../../utils/errorMessage";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -239,6 +240,6 @@ try {
     true,
   );
 } catch (error) {
-  kindMismatchError = error instanceof Error ? error.message : String(error);
+  kindMismatchError = errorMessage(error);
 }
 assert(kindMismatchError.includes("kind 从 markdown 变成了 reasoning"), "孤立事件恢复后仍必须校验 kind");

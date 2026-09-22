@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { WorkspaceNavigationNode } from "../../types/backend";
 import type { SessionResourceExplorerController } from "../../hooks/session/useSessionResourceExplorer";
 import { useSessionResourceTreeNavigation } from "./useSessionResourceTreeNavigation";
+import { errorMessage } from "../../utils/errorMessage";
 
 function navigationNode(
   nodeId: string,
@@ -199,7 +200,7 @@ describe("useSessionResourceTreeNavigation 拖放提交", () => {
       },
       handleError: (prefix, error) => errors.push({
         prefix,
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       }),
       onSetWorkspaceParent: async () => {
         throw new Error("父工作区更新失败");
@@ -240,7 +241,7 @@ describe("useSessionResourceTreeNavigation 拖放提交", () => {
         },
       },
       handleError: (_prefix, error) => errors.push(
-        error instanceof Error ? error.message : String(error),
+        errorMessage(error),
       ),
       onSetWorkspaceParent: async () => {
         throw new Error("父工作区更新失败");
@@ -349,7 +350,7 @@ describe("useSessionResourceTreeNavigation 拖放提交", () => {
         },
       },
       handleError: (_prefix, error) => errors.push(
-        error instanceof Error ? error.message : String(error),
+        errorMessage(error),
       ),
     });
     act(() => {
@@ -427,7 +428,7 @@ describe("useSessionResourceTreeNavigation 拖放提交", () => {
       },
       handleError: (prefix, error) => errors.push({
         prefix,
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       }),
       onStatusChange: (message) => statuses.push(message),
       onRefreshWorkspaceSessions: async () => {

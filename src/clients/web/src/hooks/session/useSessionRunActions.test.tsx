@@ -7,6 +7,7 @@ import {
   mountSessionRunActions,
   restoreSessionHookGlobals,
 } from "./sessionHookTestFixtures";
+import { errorMessage } from "../../utils/errorMessage";
 
 const CACHE_KEY = "gw_send_regression::ses_send_regression";
 
@@ -176,7 +177,7 @@ describe("发送消息状态更新", () => {
     }
 
     // 失败仍向上抛出，调用方必须接住；但状态与运行态已经收敛。
-    expect(thrown instanceof Error ? thrown.message : String(thrown)).toContain(
+    expect(errorMessage(thrown)).toContain(
       "中断执行器崩溃",
     );
     expect(mounted.state().status).toContain("中断生成失败");
