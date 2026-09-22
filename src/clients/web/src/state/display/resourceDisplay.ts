@@ -346,6 +346,13 @@ export function resourceTreeStatus(resource: SessionResource): string {
 
 export function statusLabel(status: string): string {
   const labels: Record<string, string> = {
+    // 终端 provider 会发 created/exited，浏览器 provider 会发 frozen/discarded，
+    // 记录缺失时两边都会回退 unknown；这些必须给出中文标签，不得把英文枚举漏给用户。
+    created: "已创建",
+    exited: "已退出",
+    frozen: "已冻结",
+    discarded: "已冷回收",
+    unknown: "状态未知",
     running: "运行中",
     terminated: "已终止",
     deleted: "已删除",

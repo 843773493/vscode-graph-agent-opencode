@@ -3,6 +3,7 @@ import type { SessionResource } from "../../types/backend";
 import {
   resourceKindIcon,
   resourceTreeTitle,
+  statusLabel,
   stripTerminalNamePrefix,
 } from "../display/resourceDisplay";
 
@@ -47,5 +48,15 @@ describe("资源展示投影", () => {
     expect(resourceKindIcon("browser")).toBe("codicon-globe");
     expect(resourceKindIcon("terminal")).toBe("codicon-terminal");
     expect(resourceKindIcon("background_task")).toBe("codicon-server-process");
+  });
+
+  test("后端实际会发出的资源状态都有中文标签，不把英文枚举漏给用户", () => {
+    // 终端 provider 会发 created/exited，浏览器 provider 会发 frozen/discarded，
+    // 两者在记录缺失时都会回退 unknown。
+    expect(statusLabel("created")).toBe("已创建");
+    expect(statusLabel("exited")).toBe("已退出");
+    expect(statusLabel("frozen")).toBe("已冻结");
+    expect(statusLabel("discarded")).toBe("已冷回收");
+    expect(statusLabel("unknown")).toBe("状态未知");
   });
 });
