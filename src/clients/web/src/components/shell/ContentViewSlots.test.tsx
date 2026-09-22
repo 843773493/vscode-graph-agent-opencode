@@ -38,6 +38,7 @@ function slot(overrides: SlotOverrides = {}) {
     requestLogsLoading: false,
     requestLogsError: null,
     requestLogsLoadedAt: null,
+    onRetryRequestLogs: () => {},
     conversations: [],
     activeTurnTimeline: null,
     changesHint: null,

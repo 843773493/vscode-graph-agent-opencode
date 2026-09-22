@@ -141,6 +141,7 @@ export default function AppShell() {
     refreshTurnHistory,
     loadOlderTraceHistory,
     refreshTraceHistory,
+    refreshLLMRequestLogs,
   } = useAppState();
   const loadToolDetails = useCallback(
     (turnId: string, toolCallId: string) => loadTurnDetails(
@@ -1203,6 +1204,10 @@ export default function AppShell() {
                       requestLogsLoading={state.llmRequestLogsLoading}
                       requestLogsError={state.llmRequestLogsError}
                       requestLogsLoadedAt={state.llmRequestLogsLoadedAt}
+                      onRetryRequestLogs={() => {
+                        const retrySessionId = activeSession?.session_id;
+                        if (retrySessionId) void refreshLLMRequestLogs(retrySessionId);
+                      }}
                       conversations={conversations}
                       activeTurnTimeline={activeTurnTimeline}
                       changesHint={defaultViewChangesHint}

@@ -342,9 +342,25 @@
   cursor: pointer;
 }
 
-.terminal-panel-viewer-empty button:hover {
+.terminal-panel-viewer-empty button:hover,
+.terminal-panel-frame-fallback button:hover {
   background: var(--bt-hover-background);
   color: var(--bt-text-primary);
+}
+
+.terminal-panel-frame-fallback button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 25px;
+  padding: 0 8px;
+  border: 1px solid var(--bt-input-border);
+  border-radius: var(--bt-radius-small);
+  background: transparent;
+  color: var(--bt-text-muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
 }
 
 .terminal-panel-content {
@@ -449,6 +465,35 @@
   min-height: 0;
   border: 0;
   background: var(--bt-terminal-background);
+}
+
+/* iframe 长时间不就绪时的兜底层：叠在终端区域之上，给出明确说明与重试入口。 */
+.terminal-panel-frame-host {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.terminal-panel-frame-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  padding: 24px;
+  background: var(--bt-bottom-panel-viewer-background);
+  color: var(--bt-text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.terminal-panel-frame-fallback strong {
+  color: var(--bt-status-danger);
+  font-size: 12px;
 }
 
 .terminal-panel-viewer-empty {

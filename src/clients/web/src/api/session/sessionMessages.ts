@@ -13,6 +13,7 @@ import type {
   DeliveryPolicy,
 } from "../../types/backend";
 import {
+  DEFAULT_API_REQUEST_TIMEOUT_MS,
   normalizePageResult,
   requestGatewayResponse,
   requestJson,
@@ -24,6 +25,9 @@ export const DEFAULT_AGENT_ID = "default";
 
 const AGENT_STATE_TIMEOUT_MS = 10000;
 const SESSION_HISTORY_TIMEOUT_MS = 10000;
+// 请求日志按会话整目录读取，文件多时比普通查询慢；沿用全局默认上限，
+// 避免后端卡死时前端 loading 永远不落地（面板无超时、无重试入口）。
+const LLM_REQUEST_LOG_TIMEOUT_MS = DEFAULT_API_REQUEST_TIMEOUT_MS;
 
 export async function getSessionAttachmentBlob(
   port: number,
@@ -100,7 +104,10 @@ export async function getLLMRequestLogs(
   const data = await requestJson<APIResponse<LLMRequestLogRecord[]>>(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/llm-request-logs`,
-    { headers: workspaceHeader(workspaceId) },
+    {
+      headers: workspaceHeader(workspaceId),
+      timeoutMs: LLM_REQUEST_LOG_TIMEOUT_MS,
+    },
   );
   return unwrapApiData(data);
 }

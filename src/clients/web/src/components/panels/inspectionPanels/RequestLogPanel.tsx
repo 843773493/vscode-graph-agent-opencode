@@ -420,6 +420,7 @@ export default function RequestLogPanel({
   loadedAt,
   sessionId,
   active,
+  onRetryRequestLogs,
 }: {
   logs: LLMRequestLogRecord[];
   loading: boolean;
@@ -427,6 +428,7 @@ export default function RequestLogPanel({
   loadedAt: string | null;
   sessionId: string;
   active: boolean;
+  onRetryRequestLogs: () => void;
 }) {
   const displayLogs = [...logs].sort(
     (left, right) =>
@@ -460,7 +462,19 @@ export default function RequestLogPanel({
       </div>
 
       {loading ? <div className="empty-state">正在读取 LLM 请求响应日志...</div> : null}
-      {error ? <div className="empty-state">LLM 请求响应日志加载失败：{error}</div> : null}
+      {error ? (
+        <div className="empty-state error-state" role="alert">
+          <div className="error-title">LLM 请求响应日志加载失败</div>
+          <div className="error-message">{error}</div>
+          <button
+            type="button"
+            className="error-retry-button"
+            onClick={onRetryRequestLogs}
+          >
+            重新读取请求日志
+          </button>
+        </div>
+      ) : null}
 
       {!error && displayLogs.length > 0 ? (
         <div

@@ -175,6 +175,8 @@ interface AppContextType {
   refreshTurnHistory: () => void;
   loadOlderTraceHistory: () => Promise<number>;
   refreshTraceHistory: () => Promise<void>;
+  /** 重新读取当前会话的 LLM 请求响应日志；请求视图加载失败的重试入口复用同一实现。 */
+  refreshLLMRequestLogs: (sessionId: string) => Promise<void>;
   replayTurn: (
     targetMessageId: string,
     action: MessageReplayRequest["action"],
@@ -679,6 +681,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       refreshTurnHistory,
       loadOlderTraceHistory,
       refreshTraceHistory,
+      refreshLLMRequestLogs,
       compactSession,
       refreshGoal,
       updateGoal,

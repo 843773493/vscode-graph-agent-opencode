@@ -1,7 +1,12 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { GatewayExtensionResourceEntry } from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
 import { buildGatewayAttachUrl } from "../../../utils/attachUrls";
 import { stripTerminalNamePrefix } from "../../../state/display/resourceDisplay";
+
+/** 终端 iframe 等待就绪的上限；超过即视为无响应，必须给用户明确的兜底说明与重试入口。 */
+export const TERMINAL_FRAME_READY_TIMEOUT_MS = 15_000;
+
+type TerminalFrameStatus = "loading" | "ready" | "stalled";
 
 interface TerminalPanelProps {
   entries: GatewayExtensionResourceEntry[];
@@ -33,6 +38,8 @@ export default function TerminalPanel({
   onClose,
 }: TerminalPanelProps) {
   const [terminalListWidth, setTerminalListWidth] = useState<number | null>(null);
+  const [frameStatus, setFrameStatus] = useState<TerminalFrameStatus>("loading");
+  const [frameReloadToken, setFrameReloadToken] = useState(0);
   const resizingRef = useRef(false);
   const selectedEntry = useMemo(
     () => entries.find(
@@ -40,6 +47,35 @@ export default function TerminalPanel({
     ) ?? entries[0] ?? null,
     [entries, selectedTerminalId],
   );
+  // 终端服务未就绪时 iframe 只会长时间空白，不会触发 onError；因此必须自行计时，
+  // 把「一直转圈」变成明确的「超时 + 重试」。URL 构造失败同样不得在 render 阶段抛出。
+  const attach = useMemo((): { url: string } | { error: string } | null => {
+    if (!selectedEntry) return null;
+    try {
+      return {
+        url: buildGatewayAttachUrl(
+          "terminal",
+          selectedEntry.workspace_id,
+          selectedEntry.resource.resource_id,
+          true,
+        ),
+      };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }, [selectedEntry]);
+
+  useEffect(() => {
+    if (!attach || "error" in attach) {
+      setFrameStatus("stalled");
+      return;
+    }
+    setFrameStatus("loading");
+    const timerId = window.setTimeout(() => {
+      setFrameStatus((current) => (current === "loading" ? "stalled" : current));
+    }, TERMINAL_FRAME_READY_TIMEOUT_MS);
+    return () => window.clearTimeout(timerId);
+  }, [attach, frameReloadToken]);
 
   const startListResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -178,16 +214,40 @@ export default function TerminalPanel({
 
         <article className="terminal-panel-viewer" aria-label="终端内容">
           {selectedEntry ? (
-            <iframe
-              src={buildGatewayAttachUrl(
-                "terminal",
-                selectedEntry.workspace_id,
-                selectedEntry.resource.resource_id,
-                true,
-              )}
-              className="terminal-panel-frame"
-              title={`${selectedEntry.resource.name} · ${selectedEntry.session_title}`}
-            />
+            <div className="terminal-panel-frame-host">
+              {attach && "url" in attach ? (
+                <iframe
+                  key={`${attach.url}#${frameReloadToken}`}
+                  src={attach.url}
+                  className="terminal-panel-frame"
+                  title={`${selectedEntry.resource.name} · ${selectedEntry.session_title}`}
+                  onLoad={() => setFrameStatus("ready")}
+                  onError={() => setFrameStatus("stalled")}
+                />
+              ) : null}
+              {frameStatus === "stalled" ? (
+                <div className="terminal-panel-frame-fallback" role="alert">
+                  <strong>
+                    {attach && "error" in attach
+                      ? "无法构造终端连接地址"
+                      : "终端连接超过 15 秒仍未就绪"}
+                  </strong>
+                  <span>
+                    {attach && "error" in attach
+                      ? attach.error
+                      : "终端辅助服务可能仍在启动，或该终端已不可连接。"}
+                  </span>
+                  {attach && "error" in attach ? null : (
+                    <button
+                      type="button"
+                      onClick={() => setFrameReloadToken((token) => token + 1)}
+                    >
+                      重试连接
+                    </button>
+                  )}
+                </div>
+              ) : null}
+            </div>
           ) : (
             <div className="terminal-panel-viewer-empty">
               <strong>当前工作区没有运行中的终端</strong>

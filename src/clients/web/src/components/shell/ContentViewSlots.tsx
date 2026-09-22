@@ -69,6 +69,7 @@ interface ContentViewSlotsProps extends Pick<
   requestLogsLoading: boolean;
   requestLogsError: string | null;
   requestLogsLoadedAt: string | null;
+  onRetryRequestLogs: () => void;
   conversations: ConversationView[];
   activeTurnTimeline: SessionTurnTimeline | null;
   changesHint: { sessionId: string; summary: SessionChangesSummary } | null;
@@ -118,6 +119,7 @@ export default function ContentViewSlots({
   requestLogsLoading,
   requestLogsError,
   requestLogsLoadedAt,
+  onRetryRequestLogs,
   conversations,
   activeTurnTimeline,
   changesHint,
@@ -209,6 +211,7 @@ export default function ContentViewSlots({
           loadedAt={requestLogsLoadedAt}
           sessionId={sessionId ?? ""}
           active={contentView === "requests"}
+          onRetryRequestLogs={onRetryRequestLogs}
         />
       </ContentViewSlot>
       <ContentViewSlot visible={conversationVisible}>
