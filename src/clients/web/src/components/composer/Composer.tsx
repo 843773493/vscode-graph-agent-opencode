@@ -685,6 +685,7 @@ function Composer() {
               <textarea
                 ref={textareaRef}
                 id="input"
+                data-testid="composer-input"
                 placeholder="你的路线图下一步是什么？"
                 value={input}
                 onChange={(e) => {

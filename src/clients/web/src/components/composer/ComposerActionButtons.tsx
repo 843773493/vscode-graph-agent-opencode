@@ -69,6 +69,7 @@ export default function ComposerActionButtons({
       )}
       <button
         id="sendButton"
+        data-testid="composer-send"
         type="button"
         className="send-button"
         disabled={!hasContent}

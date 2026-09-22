@@ -88,7 +88,9 @@ export default function AgentSessionsSessionTree({
 
   return (
     <>
-      <ul className="session-list session-tree">{visibleRoots.map(renderNode)}</ul>
+      <ul className="session-list session-tree" data-testid="session-tree">
+        {visibleRoots.map(renderNode)}
+      </ul>
       {tree.length > DEFAULT_VISIBLE_ROOT_COUNT ? (
         <button
           type="button"
