@@ -26,25 +26,72 @@ export interface AgentStateSummary {
   finalText: string;
 }
 
-export function formatAgentStateJsonlForDisplay(jsonl: string): string {
-  return jsonl
-    .trim()
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0)
-    .map((line) => {
-      const parsed: unknown = JSON.parse(line);
-      return JSON.stringify(redactLargeData(parsed));
-    })
+/** 非法行保留的原文片段上限：损坏行本身可能极长，不能让它淹没面板。 */
+const AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT = 400;
+
+/** 单行 Agent State 的解析结果：成功值，或带原文片段的解析失败。 */
+export type AgentStateJsonlLine =
+  | { ok: true; lineNumber: number; value: unknown }
+  | { ok: false; lineNumber: number; raw: string; message: string };
+
+/**
+ * Agent State JSONL 的唯一解析原语。
+ *
+ * 面板在 **render 阶段** 直接消费它，因此任何非法、截断或超长的行都不得把异常
+ * 抛出组件树（否则会被 AppErrorBoundary 顶上、整块白屏）；这与同族
+ * `state/display/toolDisplay.parseJsonRecord` 用 try/catch 挡住同一种失败的口径一致。
+ * 但与 toolDisplay 不同，这里 **不静默丢弃** 非法行：原始 JSONL 快照是排查
+ * checkpoint 与消息格式的唯一依据，失败行必须连同原文片段一起呈现给用户。
+ */
+export function parseAgentStateJsonlLines(jsonl: string): AgentStateJsonlLine[] {
+  const lines: AgentStateJsonlLine[] = [];
+  jsonl.split(/\r?\n/).forEach((raw, index) => {
+    if (raw.trim().length === 0) return;
+    const lineNumber = index + 1;
+    try {
+      lines.push({ ok: true, lineNumber, value: JSON.parse(raw) });
+    } catch (error) {
+      lines.push({
+        ok: false,
+        lineNumber,
+        raw: raw.length > AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT
+          ? `${raw.slice(0, AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT)}...`
+          : raw,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  return lines;
+}
+
+/** 解析失败行的可见标注：保留原文片段，便于直接定位损坏的那一行。 */
+export function agentStateInvalidLineNote(
+  line: Extract<AgentStateJsonlLine, { ok: false }>,
+): string {
+  return `[[第 ${line.lineNumber} 行解析失败：${line.message}；原文片段：${line.raw}]]`;
+}
+
+/** 供组件渲染的逐行文本：成功行脱敏后重新序列化，失败行标注原文片段。 */
+export function formatAgentStateLinesForDisplay(lines: AgentStateJsonlLine[]): string {
+  return lines
+    .map((line) => line.ok
+      ? JSON.stringify(redactLargeData(line.value))
+      : agentStateInvalidLineNote(line))
     .join("\n");
 }
 
-export function parseAgentStateRecords(jsonl: string): Record<string, unknown>[] {
-  return jsonl
-    .trim()
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as unknown)
+/** 从已解析行中取出可用的记录：非法行被排除，但调用方仍可据 lines 给出诊断。 */
+export function agentStateRecordsFromLines(
+  lines: AgentStateJsonlLine[],
+): Record<string, unknown>[] {
+  return lines
+    .filter((line): line is Extract<AgentStateJsonlLine, { ok: true }> => line.ok)
+    .map((line) => line.value)
     .filter(isRecord);
+}
+
+export function parseAgentStateRecords(jsonl: string): Record<string, unknown>[] {
+  return agentStateRecordsFromLines(parseAgentStateJsonlLines(jsonl));
 }
 
 function agentStateMessageId(record: Record<string, unknown>): string | null {

@@ -2,9 +2,12 @@ import { useState } from "react";
 import { formatDateTime } from "../../../utils/format";
 import AssemblyContextInspector from "../../contextInspection/AssemblyContextInspector";
 import {
+  agentStateInvalidLineNote,
+  type AgentStateJsonlLine,
+  agentStateRecordsFromLines,
   buildAgentStateSummary,
-  formatAgentStateJsonlForDisplay,
-  parseAgentStateRecords,
+  formatAgentStateLinesForDisplay,
+  parseAgentStateJsonlLines,
 } from "../../../state/display/agentStateDisplay";
 
 export default function AgentStatePanel({
@@ -31,10 +34,13 @@ export default function AgentStatePanel({
   const [frozen, setFrozen] = useState(false);
   const loadedAtText = loadedAt ? formatDateTime(loadedAt) : "";
   const trimmedJsonl = jsonl.trim();
-  const displayJsonl = trimmedJsonl
-    ? formatAgentStateJsonlForDisplay(trimmedJsonl)
-    : "";
-  const records = trimmedJsonl ? parseAgentStateRecords(trimmedJsonl) : [];
+  // 解析一次，展示文本与摘要记录共用同一结果；非法行不会抛异常，而是标注在面板上。
+  const parsedLines = trimmedJsonl ? parseAgentStateJsonlLines(trimmedJsonl) : [];
+  const displayJsonl = formatAgentStateLinesForDisplay(parsedLines);
+  const invalidLines = parsedLines.filter(
+    (line): line is Extract<AgentStateJsonlLine, { ok: false }> => !line.ok,
+  );
+  const records = agentStateRecordsFromLines(parsedLines);
   const summary = buildAgentStateSummary(records);
 
   return (
@@ -66,6 +72,19 @@ export default function AgentStatePanel({
             <span>扩展工具</span>
             <strong>{summary.customTools.join("、") || "未检测到扩展工具调用"}</strong>
           </div>
+        </div>
+      ) : null}
+      {invalidLines.length > 0 ? (
+        <div className="agent-state-invalid-lines" role="alert">
+          <strong>
+            {invalidLines.length} 行 Agent State JSONL 无法解析，已按原文片段标注在下文快照中。
+          </strong>
+          <details>
+            <summary>查看失败行与技术详情</summary>
+            {invalidLines.map((line) => (
+              <code key={line.lineNumber}>{agentStateInvalidLineNote(line)}</code>
+            ))}
+          </details>
         </div>
       ) : null}
       {loading ? (

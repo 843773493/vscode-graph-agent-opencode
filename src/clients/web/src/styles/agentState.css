@@ -58,6 +58,36 @@
   flex: 0 0 auto;
 }
 
+/* 非法 JSONL 行的可见诊断：原文快照是排查 checkpoint 的唯一依据，不能被静默丢弃。 */
+.agent-state-invalid-lines {
+  flex: 0 0 auto;
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--bt-status-danger) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bt-status-danger) 8%, transparent);
+  color: var(--bt-status-danger);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.agent-state-invalid-lines summary {
+  width: max-content;
+  margin-top: 4px;
+  cursor: pointer;
+  color: var(--bt-text-primary);
+}
+
+.agent-state-invalid-lines code {
+  display: block;
+  max-height: 90px;
+  margin-top: 4px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--bt-text-muted);
+}
+
 .agent-state-summary {
   margin: 0 12px 8px;
   display: grid;
