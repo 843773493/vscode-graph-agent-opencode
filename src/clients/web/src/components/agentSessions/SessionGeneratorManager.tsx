@@ -5,6 +5,7 @@ import type {
   GatewayWorkspace,
   GeneratorSessionStrategyMode,
 } from "../../types/backend";
+import { errorMessage } from "../../utils/errorMessage";
 import WarmActionDialog from "../overlays/WarmActionDialog";
 import {
   generatorStatusPresentation,
@@ -57,6 +58,8 @@ export default function SessionGeneratorManager({
     folder_id: string;
     name: string;
   }>>([]);
+  const [sessionFolderChoicesError, setSessionFolderChoicesError] =
+    useState<string | null>(null);
   const workspaceGenerators = generatorResources.generators?.items.filter(
     (generator) => generator.placement.workspace_id === activeWorkspaceId,
   ) ?? [];
@@ -118,9 +121,11 @@ export default function SessionGeneratorManager({
   useEffect(() => {
     if (!creating || !targetWorkspaceId) {
       setSessionFolderChoices([]);
+      setSessionFolderChoicesError(null);
       return;
     }
     let cancelled = false;
+    setSessionFolderChoicesError(null);
     void listSessionCatalogChildren(apiPort, targetWorkspaceId)
       .then((page) => {
         if (cancelled) return;
@@ -130,8 +135,12 @@ export default function SessionGeneratorManager({
             : []
         )));
       })
-      .catch(() => {
-        if (!cancelled) setSessionFolderChoices([]);
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        // 读取失败不等于「没有文件夹」：清空候选的同时必须显式呈现原因，
+        // 否则用户会把一次后端故障误判为当前工作区真的没有会话文件夹。
+        setSessionFolderChoices([]);
+        setSessionFolderChoicesError(errorMessage(error));
       });
     return () => {
       cancelled = true;
@@ -387,6 +396,11 @@ export default function SessionGeneratorManager({
                   <option key={folder.folder_id} value={folder.folder_id ?? ""}>{folder.name} [{folder.folder_id}]</option>
                 ))}
               </datalist>
+              {sessionFolderChoicesError ? (
+                <small className="session-resource-error" role="alert">
+                  会话文件夹列表加载失败，请手动输入文件夹 ID：{sessionFolderChoicesError}
+                </small>
+              ) : null}
             </label>
           ) : null}
           <label>会话名称模板<input required value={titleTemplate} onChange={(event) => setTitleTemplate(event.target.value)} /></label>
