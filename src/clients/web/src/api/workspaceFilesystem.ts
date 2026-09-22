@@ -22,6 +22,19 @@ import {
 
 const FILESYSTEM_PATH_PREFIX = "filesystem:";
 
+/**
+ * 后端 /files/upload 与 /files/paste 的批量上限（File/Form/Field 的 max_length=100）。
+ * 超出时 FastAPI 返回 422 且 detail 是英文 Pydantic 校验原文，用户无法据此判断
+ * 是文件数量问题，因此必须在发请求前拦住并给出可执行的中文提示。
+ */
+const FILE_BATCH_LIMIT = 100;
+
+function assertBatchWithinLimit(count: number, action: string): void {
+  if (count > FILE_BATCH_LIMIT) {
+    throw new Error(`${action}一次最多 ${FILE_BATCH_LIMIT} 项，当前 ${count} 项，请分批操作`);
+  }
+}
+
 export function filesystemFileTreePath(absolutePath: string): string {
   if (!absolutePath.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(absolutePath)) {
     throw new Error(`文件系统快捷路径必须是绝对路径: ${absolutePath}`);
@@ -116,6 +129,7 @@ export async function pasteWorkspaceFileEntries(
   payload: WorkspaceFilePasteRequest,
   workspaceId?: string | null,
 ): Promise<WorkspaceFileList> {
+  assertBatchWithinLimit(payload.source_paths.length, "粘贴");
   const location = decodeFileTreePath(directoryPath);
   const query = new URLSearchParams({ path: location.path, scope: location.scope });
   const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
@@ -170,6 +184,7 @@ export async function uploadWorkspaceFileEntries(
   if (files.length === 0) {
     throw new Error("没有需要上传的本地文件");
   }
+  assertBatchWithinLimit(files.length, "上传");
   const destination = decodeFileTreePath(directoryPath);
   const query = new URLSearchParams({
     path: destination.path,
