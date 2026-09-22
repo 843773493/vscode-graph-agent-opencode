@@ -17,8 +17,8 @@ import { failureFromValue } from "../state/messageStream/state";
 import { cloneMaps } from "../state/appStateMaps";
 import { completePendingForJob } from "../state/conversations";
 import type { SetAppState } from "./sessionEventStream/sessionRefresh";
-import { sessionStreamReconnectDelay } from "./sessionEventStreamPolicy";
-import { waitForReconnect } from "./waitForReconnect";
+import { sessionStreamReconnectDelay } from "./sessionEventStream/sessionEventStreamPolicy";
+import { waitForReconnect } from "./sessionEventStream/waitForReconnect";
 
 export function useSessionMessageStream({
   apiPort,

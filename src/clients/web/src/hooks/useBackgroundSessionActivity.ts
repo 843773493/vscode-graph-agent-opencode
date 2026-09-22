@@ -10,7 +10,7 @@ import {
 import type { AppState } from "../types/frontend";
 import type { JobStatus } from "../types/backend";
 import type { SetAppState } from "./contentViewLoaderTypes";
-import { ACTIVE_JOB_RECONCILE_INTERVAL_MS } from "./sessionEventStreamPolicy";
+import { ACTIVE_JOB_RECONCILE_INTERVAL_MS } from "./sessionEventStream/sessionEventStreamPolicy";
 
 const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
   "completed",

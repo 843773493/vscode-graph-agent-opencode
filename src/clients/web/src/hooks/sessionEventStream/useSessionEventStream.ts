@@ -7,10 +7,10 @@ import {
   SessionStreamIdleTimeoutError,
   streamSessionEvents,
   TraceCursorGoneError,
-} from "../api/sessionTraceStream";
-import { isTransientNetworkError } from "../api/http";
-import { isJobTerminalTraceType } from "../state/traceEvents";
-import type { SessionStreamEvent } from "../types/backend";
+} from "../../api/sessionTraceStream";
+import { isTransientNetworkError } from "../../api/http";
+import { isJobTerminalTraceType } from "../../state/traceEvents";
+import type { SessionStreamEvent } from "../../types/backend";
 import {
   ACTIVE_JOB_RECONCILE_INTERVAL_MS,
   ACTIVE_JOB_STALE_PROBE_INTERVAL_MS,
@@ -23,11 +23,11 @@ import { waitForReconnect } from "./waitForReconnect";
 import { reconcileActiveJob } from "./sessionJobReconciliation";
 import {
   flushSessionStreamEventBatch,
-} from "./sessionEventStream/batchUpdates";
+} from "./batchUpdates";
 import {
   refreshWorkspaceSessionList,
   type SetAppState,
-} from "./sessionEventStream/sessionRefresh";
+} from "./sessionRefresh";
 
 export function useSessionEventStream({
   apiPort,

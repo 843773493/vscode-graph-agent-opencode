@@ -4,14 +4,14 @@ import type { Dispatch, SetStateAction } from "react";
 import type {
   AppState,
   ConversationView,
-} from "../types/frontend";
+} from "../../types/frontend";
 import type {
   Job,
   Message,
   PendingRequestList,
   Session,
   TraceEvent,
-} from "../types/backend";
+} from "../../types/backend";
 import {
   reconcileActiveJob,
   refreshTerminalSession,
@@ -19,7 +19,7 @@ import {
 import {
   createSessionTurnTimeline,
   upsertTurn,
-} from "../state/session/turnTimeline";
+} from "../../state/session/turnTimeline";
 
 const originalFetch = globalThis.fetch;
 const SESSION_ID = "ses_reconciliation";

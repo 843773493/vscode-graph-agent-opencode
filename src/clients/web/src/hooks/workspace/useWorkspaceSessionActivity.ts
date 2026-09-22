@@ -9,8 +9,8 @@ import { sessionScopeKey } from "../../state/session/sessionScope";
 import type { SessionActivity } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { refreshWorkspaceSessionList } from "../sessionEventStream/sessionRefresh";
-import { sessionStreamReconnectDelay } from "../sessionEventStreamPolicy";
-import { waitForReconnect } from "../waitForReconnect";
+import { sessionStreamReconnectDelay } from "../sessionEventStream/sessionEventStreamPolicy";
+import { waitForReconnect } from "../sessionEventStream/waitForReconnect";
 
 function markActivity(
   event: SessionActivity,
