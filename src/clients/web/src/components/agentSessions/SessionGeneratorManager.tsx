@@ -69,7 +69,7 @@ export default function SessionGeneratorManager({
   }, [activeWorkspaceId]);
 
   const reportError = (prefix: string, error: unknown) => {
-    onStatusChange(`${prefix}: ${error instanceof Error ? error.message : String(error)}`);
+    onStatusChange(`${prefix}: ${errorMessage(error)}`);
   };
 
   const resetDraft = () => {
