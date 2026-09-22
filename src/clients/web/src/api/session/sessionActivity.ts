@@ -5,9 +5,8 @@ import type {
 } from "../../types/backend";
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sseClient";
 import {
-  getApiBaseUrl,
-  getGatewayToken,
   HttpRequestError,
+  requestGatewayResponse,
   requestJson,
   unwrapApiData,
   workspaceHeader,
@@ -59,23 +58,31 @@ export async function streamSessionActivity(
     onActivity?: () => void;
   } = {},
 ): Promise<void> {
-  const url = `${getApiBaseUrl(port)}/api/v1/session-catalog/events/stream`;
-  const localToken = await getGatewayToken(port);
-  const response = await fetch(url, {
-    signal: options.signal,
-    headers: {
-      accept: "text/event-stream",
-      "X-Local-Token": localToken,
-      ...workspaceHeader(workspaceId),
-      ...(options.after !== undefined
-        ? { "Last-Event-ID": String(options.after) }
-        : {}),
-    },
-  });
-  if (response.status === 410) {
-    throw new SessionActivityCursorGoneError(options.after ?? 0);
+  // SSE 长期连接只共享统一凭据与刷新重试；生命周期内的断线重连由调用方负责。
+  let response: Response;
+  try {
+    response = await requestGatewayResponse(
+      port,
+      "/api/v1/session-catalog/events/stream",
+      {
+        signal: options.signal,
+        skipGatewayUserSession: true,
+        headers: {
+          accept: "text/event-stream",
+          ...workspaceHeader(workspaceId),
+          ...(options.after !== undefined
+            ? { "Last-Event-ID": String(options.after) }
+            : {}),
+        },
+      },
+    );
+  } catch (error) {
+    if (error instanceof HttpRequestError && error.status === 410) {
+      throw new SessionActivityCursorGoneError(options.after ?? 0);
+    }
+    throw error;
   }
-  if (!response.ok || !response.body) {
+  if (!response.body) {
     throw new Error(`无法连接 Workspace 会话活动流: ${response.status} ${response.statusText}`);
   }
   await consumeSseResponse(response, {

@@ -1,8 +1,7 @@
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../sseClient";
 import {
-  getApiBaseUrl,
-  getGatewayToken,
   HttpRequestError,
+  requestGatewayResponse,
   requestJson,
   unwrapApiData,
   workspaceHeader,
@@ -91,23 +90,31 @@ export async function streamSessionMessageEvents(
   const params = new URLSearchParams();
   if (options.turnStreamId) params.set("turn_stream_id", options.turnStreamId);
   if (options.afterSeq !== undefined) params.set("after_seq", String(options.afterSeq));
-  const url = `${getApiBaseUrl(port)}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/message-stream?${params.toString()}`;
-  const localToken = await getGatewayToken(port);
-  const response = await fetch(url, {
-    signal: options.signal,
-    headers: {
-      accept: "text/event-stream",
-      "X-Local-Token": localToken,
-      ...workspaceHeader(options.workspaceId),
-      ...(options.afterSeq !== undefined
-        ? { "Last-Event-ID": String(options.afterSeq) }
-        : {}),
-    },
-  });
-  if (response.status === 410) {
-    throw new MessageStreamCursorGoneError(options.afterSeq ?? 0);
+  // SSE 长期连接只共享统一凭据与刷新重试；生命周期内的断线重连由调用方负责。
+  let response: Response;
+  try {
+    response = await requestGatewayResponse(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/message-stream?${params.toString()}`,
+      {
+        signal: options.signal,
+        skipGatewayUserSession: true,
+        headers: {
+          accept: "text/event-stream",
+          ...workspaceHeader(options.workspaceId),
+          ...(options.afterSeq !== undefined
+            ? { "Last-Event-ID": String(options.afterSeq) }
+            : {}),
+        },
+      },
+    );
+  } catch (error) {
+    if (error instanceof HttpRequestError && error.status === 410) {
+      throw new MessageStreamCursorGoneError(options.afterSeq ?? 0);
+    }
+    throw error;
   }
-  if (!response.ok || !response.body) {
+  if (!response.body) {
     throw new MessageStreamConnectionError(response.status, response.statusText);
   }
   options.onConnected?.(response.headers.get("X-Message-Stream-ID"));

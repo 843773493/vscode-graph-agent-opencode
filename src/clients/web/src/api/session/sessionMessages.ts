@@ -13,8 +13,7 @@ import type {
   DeliveryPolicy,
 } from "../../types/backend";
 import {
-  getApiBaseUrl,
-  getGatewayToken,
+  requestGatewayResponse,
   requestJson,
   unwrapApiData,
   workspaceHeader,
@@ -53,31 +52,22 @@ export async function getSessionAttachmentBlob(
     signal?: AbortSignal;
   } = {},
 ): Promise<Blob> {
-  const localToken = await getGatewayToken(port);
   const query = new URLSearchParams({ file_id: fileId });
   query.set("variant", options.variant ?? "original");
   if (options.variant === "thumbnail") {
     query.set("max_edge", "512");
   }
-  const response = await fetch(
-    `${getApiBaseUrl(port)}/api/v1/sessions/${encodeURIComponent(sessionId)}/attachments/content?${query}`,
+  // 二进制附件只共享统一凭据与刷新重试，不建立 Gateway 用户会话屏障。
+  const response = await requestGatewayResponse(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/attachments/content?${query}`,
     {
-      headers: {
-        "X-Local-Token": localToken,
-        ...workspaceHeader(workspaceId),
-      },
+      headers: workspaceHeader(workspaceId),
       signal: options.signal,
+      skipGatewayUserSession: true,
     },
   );
-  if (!response.ok) {
-    const payload = await response.clone().json().catch(() => null) as {
-      detail?: string;
-    } | null;
-    throw new Error(
-      `读取消息附件失败: ${payload?.detail ?? `HTTP ${response.status}`}`,
-    );
-  }
-  return response.blob();
+  return await response.blob();
 }
 
 export async function listMessages(

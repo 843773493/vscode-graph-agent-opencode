@@ -5,11 +5,18 @@ export const DEFAULT_BACKEND_HOST = "127.0.0.1";
 export const DEFAULT_BACKEND_PORT = 8014;
 export const DEFAULT_API_REQUEST_TIMEOUT_MS = 15_000;
 
-type RequestJsonInit = RequestInit & {
+interface GatewayResponseInit extends RequestInit {
+  /**
+   * 自行消费响应体的请求（SSE 实时流、二进制下载、multipart 上传）不建立 Gateway
+   * 用户会话屏障，只共享本地凭据与刷新重试；认证初始化内部请求也置为 true。
+   * 业务 JSON 请求不得绕过 Gateway 用户会话屏障。
+   */
+  skipGatewayUserSession?: boolean;
+}
+
+type RequestJsonInit = GatewayResponseInit & {
   timeoutMs?: number;
   parseInWorkerAboveBytes?: number;
-  /** 认证初始化内部请求使用；业务请求不应绕过 Gateway 用户会话屏障。 */
-  skipGatewayUserSession?: boolean;
 };
 
 export class HttpRequestError extends Error {
@@ -318,14 +325,19 @@ export function getGatewayToken(port: number): Promise<string> {
   return pending;
 }
 
-export async function requestJson<T>(
+/**
+ * 带凭据请求的唯一实现：收口 Gateway 用户会话屏障（可按需跳过）、本地凭据获取与
+ * 401 `invalid local token` 刷新重试、统一的 HttpRequestError。凭据与重试逻辑只
+ * 存在于这里，任何入口都必须经由它，不得另写一份。
+ */
+async function runGatewayRequest<T>(
   port: number,
   path: string,
-  init?: RequestJsonInit,
+  init: (GatewayResponseInit & { timeoutMs?: number }) | undefined,
+  consume: (response: Response) => T | Promise<T>,
 ): Promise<T> {
   const {
     timeoutMs,
-    parseInWorkerAboveBytes = null,
     skipGatewayUserSession = false,
     signal,
     headers,
@@ -345,9 +357,6 @@ export async function requestJson<T>(
     let userSessionRecovered = false;
     let tokenRefreshed = false;
     const requestHeaders = new Headers(normalizeHeaders(headers));
-    if (!(fetchInit.body instanceof FormData)) {
-      requestHeaders.set("Content-Type", "application/json");
-    }
     let response: Response | null = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const localToken = await awaitWithAbort(tokenPromise, abortState.signal);
@@ -397,18 +406,58 @@ export async function requestJson<T>(
         path,
       );
     }
-    if (response.status === 204) return undefined as T;
-    return await parseJsonResponse<T>(
-      response,
-      parseInWorkerAboveBytes,
-      abortState.signal,
-    );
+    return await consume(response);
   } catch (error) {
+    // 超时同时可能发生在响应体消费阶段，统一按既有超时文案收口。
     if (abortState.didTimeout()) throw new Error(timeoutErrorMessage);
     throw error;
   } finally {
     abortState.cleanup();
   }
+}
+
+/**
+ * 带凭据的原始 Response 唯一入口。调用方自行消费响应体，只用于 SSE 实时流、
+ * 二进制下载与 multipart 上传这类不能走 JSON 解包的场景；非 2xx 已弹出
+ * HttpRequestError。JSON 请求一律改用 requestJson。
+ */
+export async function requestGatewayResponse(
+  port: number,
+  path: string,
+  init?: GatewayResponseInit & { timeoutMs?: number },
+): Promise<Response> {
+  return await runGatewayRequest(port, path, init, (response) => response);
+}
+
+export async function requestJson<T>(
+  port: number,
+  path: string,
+  init?: RequestJsonInit,
+): Promise<T> {
+  const {
+    timeoutMs,
+    parseInWorkerAboveBytes = null,
+    headers,
+    ...fetchInit
+  } = init ?? {};
+  return await runGatewayRequest(
+    port,
+    path,
+    {
+      ...fetchInit,
+      timeoutMs,
+      headers: {
+        ...normalizeHeaders(headers),
+        ...(fetchInit.body instanceof FormData
+          ? {}
+          : { "Content-Type": "application/json" }),
+      },
+    },
+    async (response) =>
+      response.status === 204
+        ? undefined as T
+        : await parseJsonResponse<T>(response, parseInWorkerAboveBytes),
+  );
 }
 
 export function unwrapApiData<T>(response: APIResponse<T>): T {

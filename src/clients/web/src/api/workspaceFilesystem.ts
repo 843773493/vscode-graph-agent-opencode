@@ -14,6 +14,7 @@ import {
   DEFAULT_API_REQUEST_TIMEOUT_MS,
   getApiBaseUrl,
   getGatewayToken,
+  requestGatewayResponse,
   requestJson,
   unwrapApiData,
   workspaceHeader,
@@ -164,7 +165,6 @@ export async function uploadWorkspaceFileEntries(
   if (files.length === 0) {
     throw new Error("没有需要上传的本地文件");
   }
-  const localToken = await getGatewayToken(port);
   const destination = decodeFileTreePath(directoryPath);
   const query = new URLSearchParams({
     path: destination.path,
@@ -175,20 +175,17 @@ export async function uploadWorkspaceFileEntries(
     body.append("files", file, file.name);
     body.append("relative_paths", file.webkitRelativePath || file.name);
   }
-  const response = await fetch(
-    `${getApiBaseUrl(port)}/api/v1/workspace/files/upload?${query.toString()}`,
+  // multipart 上传自行携带 FormData，只共享统一凭据与刷新重试。
+  const response = await requestGatewayResponse(
+    port,
+    `/api/v1/workspace/files/upload?${query.toString()}`,
     {
       method: "POST",
-      headers: { "X-Local-Token": localToken, ...workspaceHeader(workspaceId) },
+      headers: workspaceHeader(workspaceId),
       body,
+      skipGatewayUserSession: true,
     },
   );
-  if (!response.ok) {
-    const payload = await response.clone().json().catch(() => null) as {
-      detail?: string;
-    } | null;
-    throw new Error(`上传本地文件失败: ${payload?.detail ?? `HTTP ${response.status}`}`);
-  }
   const result = unwrapApiData(await response.json() as APIResponse<WorkspaceFileList>);
   return encodeWorkspaceFileList(result, destination.scope);
 }
@@ -205,6 +202,11 @@ export async function createWorkspaceFileDownloadRequest(
   suggestedName: string,
   workspaceId?: string | null,
 ): Promise<WorkspaceFileDownloadRequest> {
+  // TODO: 下载由 FileTransferHost 以 anchor 触发浏览器原生导航，无法在本层包装成
+  // 带刷新重试的 fetch，只能沿用 getGatewayToken 取一次凭据并烘焙进 headers。降级
+  // 行为：若 Gateway 在本调用与 host 发起 fetch 之间轮换本地凭据，下载会以 host 的
+  // 普通 Error 失败且不会重试（非 HttpRequestError，调用方无法按状态码降级）；待把
+  // 下载改为经 requestGatewayResponse 由页面发起后即可与其余入口共享同一屏障。
   const localToken = await getGatewayToken(port);
   const location = decodeFileTreePath(path);
   const query = new URLSearchParams({ path: location.path, scope: location.scope });
@@ -250,23 +252,19 @@ export async function getWorkspaceRawFileBlob(
   workspaceId?: string | null,
   signal?: AbortSignal,
 ): Promise<Blob> {
-  const localToken = await getGatewayToken(port);
   const location = decodeFileTreePath(path);
   const query = new URLSearchParams({ path: location.path, scope: location.scope });
-  const response = await fetch(
-    `${getApiBaseUrl(port)}/api/v1/workspace/files/raw?${query.toString()}`,
+  // 二进制下载只共享统一凭据与刷新重试，不建立 Gateway 用户会话屏障。
+  const response = await requestGatewayResponse(
+    port,
+    `/api/v1/workspace/files/raw?${query.toString()}`,
     {
-      headers: { "X-Local-Token": localToken, ...workspaceHeader(workspaceId) },
+      headers: workspaceHeader(workspaceId),
       signal,
+      skipGatewayUserSession: true,
     },
   );
-  if (!response.ok) {
-    const payload = await response.clone().json().catch(() => null) as {
-      detail?: string;
-    } | null;
-    throw new Error(`读取工作区原始文件失败: ${payload?.detail ?? `HTTP ${response.status}`}`);
-  }
-  return response.blob();
+  return await response.blob();
 }
 
 export async function updateWorkspaceFileContent(

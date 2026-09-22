@@ -7,9 +7,8 @@ import type {
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../sseClient";
 import { validateTraceEvent } from "../sseRuntimeSchemas";
 import {
-  getApiBaseUrl,
-  getGatewayToken,
   HttpRequestError,
+  requestGatewayResponse,
   requestJson,
   unwrapApiData,
   workspaceHeader,
@@ -79,19 +78,29 @@ export async function streamSessionEvents(
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  const url = `${getApiBaseUrl(port)}/api/v1/sessions/${encodeURIComponent(sessionId)}/traces/stream`;
-  const localToken = await getGatewayToken(port);
-  const response = await fetch(url, {
-    signal: options?.signal,
-    headers: {
-      accept: "text/event-stream",
-      "X-Local-Token": localToken,
-      ...workspaceHeader(options?.workspaceId),
-      ...(options?.afterCursor ? { "Last-Event-ID": options.afterCursor } : {}),
-    },
-  });
-  if (response.status === 410) throw new TraceCursorGoneError(options?.afterCursor ?? "");
-  if (!response.ok || !response.body) {
+  // SSE 长期连接只共享统一凭据与刷新重试；生命周期内的断线重连由调用方负责。
+  let response: Response;
+  try {
+    response = await requestGatewayResponse(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/traces/stream`,
+      {
+        signal: options?.signal,
+        skipGatewayUserSession: true,
+        headers: {
+          accept: "text/event-stream",
+          ...workspaceHeader(options?.workspaceId),
+          ...(options?.afterCursor ? { "Last-Event-ID": options.afterCursor } : {}),
+        },
+      },
+    );
+  } catch (error) {
+    if (error instanceof HttpRequestError && error.status === 410) {
+      throw new TraceCursorGoneError(options?.afterCursor ?? "");
+    }
+    throw error;
+  }
+  if (!response.body) {
     throw new Error(`无法连接会话事件流: ${response.status} ${response.statusText}`);
   }
   options?.onConnected?.(response.headers.get("X-BoxTeam-Route-Revision"));

@@ -9,8 +9,7 @@ import {
   validateWorkspaceFileChangeBatch,
 } from "../sseRuntimeSchemas";
 import {
-  getApiBaseUrl,
-  getGatewayToken,
+  requestGatewayResponse,
   workspaceHeader,
 } from "./http";
 
@@ -24,26 +23,25 @@ export async function streamWorkspaceFileEvents(
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  const localToken = await getGatewayToken(port);
-  const response = await fetch(`${getApiBaseUrl(port)}/api/v1/workspace/files/events`, {
-    method: "POST",
-    signal: options?.signal,
-    headers: {
-      accept: "text/event-stream",
-      "Content-Type": "application/json",
-      "X-Local-Token": localToken,
-      ...workspaceHeader(options?.workspaceId),
+  // SSE 长期连接只共享统一凭据与刷新重试；生命周期内的断线重连由调用方负责。
+  const response = await requestGatewayResponse(
+    port,
+    "/api/v1/workspace/files/events",
+    {
+      method: "POST",
+      signal: options?.signal,
+      skipGatewayUserSession: true,
+      headers: {
+        accept: "text/event-stream",
+        "Content-Type": "application/json",
+        ...workspaceHeader(options?.workspaceId),
+      },
+      body: JSON.stringify({ paths }),
     },
-    body: JSON.stringify({ paths }),
-  });
-  if (!response.ok || !response.body) {
-    const detail = await response.clone().json().catch(() => null) as {
-      detail?: string;
-    } | null;
+  );
+  if (!response.body) {
     throw new Error(
-      detail?.detail
-        ? `无法连接文件监听流: ${detail.detail}`
-        : `无法连接文件监听流: ${response.status} ${response.statusText}`,
+      `无法连接文件监听流: ${response.status} ${response.statusText}`,
     );
   }
   options?.onConnected?.();
