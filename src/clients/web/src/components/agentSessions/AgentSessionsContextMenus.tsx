@@ -4,7 +4,7 @@ import {
   readTextFromClipboard,
 } from "../../utils/clipboard";
 import AnchoredOverlay from "../overlays/AnchoredOverlay";
-import { useWarmConfirm } from "../WarmConfirmProvider";
+import { useWarmConfirm } from "../shell/WarmConfirmProvider";
 
 export interface SessionContextMenu {
   sessionId: string;

@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import WarmActionDialog from "./overlays/WarmActionDialog";
+import WarmActionDialog from "../overlays/WarmActionDialog";
 
 interface WarmConfirmOptions {
   title?: string;

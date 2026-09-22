@@ -9,7 +9,7 @@ import {
   resourceTreeStatus,
 } from "../../state/display/resourceDisplay";
 import ResourcePanel from "./ResourcePanel";
-import WarmConfirmProvider from "../WarmConfirmProvider";
+import WarmConfirmProvider from "../shell/WarmConfirmProvider";
 
 function resource(
   index: number,

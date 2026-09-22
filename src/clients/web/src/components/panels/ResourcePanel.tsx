@@ -4,7 +4,7 @@ import type {
   SessionResourceAction,
   SessionResourceKind,
 } from "../../types/backend";
-import { useWarmConfirm } from "../WarmConfirmProvider";
+import { useWarmConfirm } from "../shell/WarmConfirmProvider";
 import {
   actionLabelForKind,
   groupSessionResources,

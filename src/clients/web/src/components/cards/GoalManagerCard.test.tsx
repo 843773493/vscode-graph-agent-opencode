@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { restartCompletedGoalPayload } from "../../state/sessionGoal";
 import GoalManagerCard from "./GoalManagerCard";
-import WarmConfirmProvider from "../WarmConfirmProvider";
+import WarmConfirmProvider from "../shell/WarmConfirmProvider";
 
 test("Goal 管理器在右侧区域提供完整操作且不重复展示斜杠命令", () => {
   const html = renderToStaticMarkup(

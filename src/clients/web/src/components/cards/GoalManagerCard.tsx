@@ -10,7 +10,7 @@ import {
   restartCompletedGoalPayload,
 } from "../../state/sessionGoal";
 import WarmActionDialog from "../overlays/WarmActionDialog";
-import { useWarmConfirm } from "../WarmConfirmProvider";
+import { useWarmConfirm } from "../shell/WarmConfirmProvider";
 
 function formatTokens(tokens: number): string {
   return new Intl.NumberFormat("zh-CN").format(tokens);

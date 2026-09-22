@@ -27,7 +27,7 @@ import ComposerToolControl from "./ComposerToolControl";
 import ComposerViewControl from "./ComposerViewControl";
 import SessionNameDialog from "../overlays/SessionNameDialog";
 import WarmActionDialog from "../overlays/WarmActionDialog";
-import { useWarmConfirm } from "../WarmConfirmProvider";
+import { useWarmConfirm } from "../shell/WarmConfirmProvider";
 import {
   formatBrowserElementSelections,
   parseBrowserElementSelectionBundle,

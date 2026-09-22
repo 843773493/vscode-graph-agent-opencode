@@ -1,9 +1,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import AppErrorBoundary from './components/AppErrorBoundary';
+import AppErrorBoundary from './components/shell/AppErrorBoundary';
 import { AppProvider } from './hooks';
-import WarmConfirmProvider from './components/WarmConfirmProvider';
+import WarmConfirmProvider from './components/shell/WarmConfirmProvider';
 import '@vscode/codicons/dist/codicon.css';
 import { installBoxTeamThemeRuntime } from './theme';
 import './styles/theme.css';

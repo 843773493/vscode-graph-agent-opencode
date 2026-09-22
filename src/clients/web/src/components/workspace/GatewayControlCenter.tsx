@@ -10,7 +10,7 @@ import type {
   WebUiSettings,
   WebUiSettingsUpdate,
 } from "../../types/backend";
-import { useWarmConfirm } from "../WarmConfirmProvider";
+import { useWarmConfirm } from "../shell/WarmConfirmProvider";
 import GatewayConnectionDialog from "./GatewayConnectionDialog";
 import GatewayInboundAccessPanel from "./GatewayInboundAccessPanel";
 import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";

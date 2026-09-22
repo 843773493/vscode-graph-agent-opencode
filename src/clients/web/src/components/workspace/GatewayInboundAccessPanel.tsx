@@ -8,7 +8,7 @@ import type {
   GatewayDeviceConnection,
   GatewayInboundAccessList,
 } from "../../types/backend";
-import { useWarmConfirm } from "../WarmConfirmProvider";
+import { useWarmConfirm } from "../shell/WarmConfirmProvider";
 
 interface GatewayInboundAccessPanelProps {
   apiPort: number;

@@ -16,7 +16,7 @@ import type {
   GatewayPortForwardProtocol,
   GatewayWorkspace,
 } from "../../types/backend";
-import { useWarmConfirm } from "../WarmConfirmProvider";
+import { useWarmConfirm } from "../shell/WarmConfirmProvider";
 
 export interface WorkspacePortForwardApi {
   list(port: number, workspaceId: string): Promise<GatewayPortForwardList>;

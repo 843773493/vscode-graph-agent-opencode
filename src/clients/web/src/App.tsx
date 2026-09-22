@@ -1,5 +1,5 @@
 import AgentStatePanel from "./components/panels/AgentStatePanel";
-import BootstrapState from "./components/BootstrapState";
+import BootstrapState from "./components/shell/BootstrapState";
 import ChatPanel from "./components/panels/ChatPanel";
 import PendingQueueBar from "./components/chat/PendingQueueBar";
 import Composer from "./components/composer/Composer";
@@ -14,8 +14,8 @@ import ResourcePanel from "./components/panels/ResourcePanel";
 import ChildThreadPanel from "./components/panels/ChildThreadPanel";
 import GatewayExtensionResourcePanel from "./components/panels/GatewayExtensionResourcePanel";
 import SessionNameDialog from "./components/overlays/SessionNameDialog";
-import { useWarmConfirm } from "./components/WarmConfirmProvider";
-import Toolbar, { type WorkbenchView } from "./components/Toolbar";
+import { useWarmConfirm } from "./components/shell/WarmConfirmProvider";
+import Toolbar, { type WorkbenchView } from "./components/shell/Toolbar";
 import GatewayControlCenter from "./components/workspace/GatewayControlCenter";
 import WorkspaceEditorHeader from "./components/workspace/WorkspaceEditorHeader";
 import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";

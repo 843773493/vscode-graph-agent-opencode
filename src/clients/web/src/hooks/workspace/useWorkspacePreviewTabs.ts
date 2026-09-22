@@ -18,7 +18,7 @@ import type {
   WorkspaceFileSelection,
 } from "../../utils/workspaceFileReferences";
 import { isWorkspaceTextFilePath } from "../../utils/workspaceFileReferences";
-import { useWarmConfirm } from "../../components/WarmConfirmProvider";
+import { useWarmConfirm } from "../../components/shell/WarmConfirmProvider";
 
 interface UseWorkspacePreviewTabsOptions {
   apiPort: number;

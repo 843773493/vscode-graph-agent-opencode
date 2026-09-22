@@ -1,6 +1,6 @@
 import { renderToString } from "react-dom/server";
 import type { GatewayWorkspace } from "../../types/backend";
-import WarmConfirmProvider from "../WarmConfirmProvider";
+import WarmConfirmProvider from "../shell/WarmConfirmProvider";
 import GatewayControlCenter from "./GatewayControlCenter";
 import { createDefaultWebUiSettings } from "../../state/uiSettings/preferences";
 
