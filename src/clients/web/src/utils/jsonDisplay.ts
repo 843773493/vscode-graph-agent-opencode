@@ -31,3 +31,19 @@ export function redactLargeData(value: unknown): unknown {
 export function prettyJson(value: unknown): string {
   return JSON.stringify(redactLargeData(value), null, 2) ?? "";
 }
+
+/**
+ * 从剪贴板文本里提取可解析的 JSON 候选：原文优先，其次逐个取出 ```json 围栏内容，
+ * 去重后按顺序返回。会话信息与工作区信息的粘贴导入共用这一实现。
+ */
+export function jsonCandidates(text: string): string[] {
+  const candidates = [text];
+  const fencePattern = /```(?:json)?\s*([\s\S]*?)```/gi;
+  for (const match of text.matchAll(fencePattern)) {
+    const fencedJson = match[1]?.trim();
+    if (fencedJson) {
+      candidates.push(fencedJson);
+    }
+  }
+  return [...new Set(candidates)];
+}

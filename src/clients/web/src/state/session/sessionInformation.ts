@@ -2,7 +2,7 @@ import type {
   GatewayWorkspace,
   SessionInformationSnapshot,
 } from "../../types/backend";
-import { isRecord } from "../../utils/jsonDisplay";
+import { isRecord, jsonCandidates } from "../../utils/jsonDisplay";
 
 export const SESSION_INFORMATION_KIND = "session_diagnostic_snapshot" as const;
 
@@ -163,18 +163,6 @@ function isSessionId(value: unknown): value is string {
   }
   const payload = value.slice(4);
   return payload[12] === "4" && "89ab".includes(payload[16] ?? "");
-}
-
-function jsonCandidates(text: string): string[] {
-  const candidates = [text];
-  const fencePattern = /```(?:json)?\s*([\s\S]*?)```/gi;
-  for (const match of text.matchAll(fencePattern)) {
-    const fencedJson = match[1]?.trim();
-    if (fencedJson) {
-      candidates.push(fencedJson);
-    }
-  }
-  return [...new Set(candidates)];
 }
 
 export function extractSessionIdFromClipboardText(text: string): string {

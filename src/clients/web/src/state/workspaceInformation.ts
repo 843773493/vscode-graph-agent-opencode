@@ -1,5 +1,5 @@
 import type { GatewayWorkspace } from "../types/backend";
-import { isRecord } from "../utils/jsonDisplay";
+import { isRecord, jsonCandidates } from "../utils/jsonDisplay";
 
 export const WORKSPACE_INFORMATION_KIND =
   "boxteam_workspace_information" as const;
@@ -28,18 +28,6 @@ export interface WorkspaceInformationDump {
 
 function isWorkspaceId(value: unknown): value is string {
   return typeof value === "string" && /^gw_[A-Za-z0-9_-]+$/.test(value);
-}
-
-function jsonCandidates(text: string): string[] {
-  const candidates = [text];
-  const fencePattern = /```(?:json)?\s*([\s\S]*?)```/gi;
-  for (const match of text.matchAll(fencePattern)) {
-    const fencedJson = match[1]?.trim();
-    if (fencedJson) {
-      candidates.push(fencedJson);
-    }
-  }
-  return [...new Set(candidates)];
 }
 
 export function buildWorkspaceInformationDump(
