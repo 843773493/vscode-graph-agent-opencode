@@ -92,24 +92,29 @@ def test_initialize_creates_tables_and_sets_user_version(tmp_path: Path) -> None
 def test_sha256_hex_pattern_has_single_neutral_definition() -> None:
     """session-control 各族的 sha256 形态正则只有一处实现（中立原语模块）。
 
-    宿主、owner binding 子包与 operation lease 子包都必须从同一位置导入；
-    任何一处重新定义一份拷贝（哪怕是等价正则）都会让本断言失败。
+    宿主与三个子包（owner binding / operation lease / communication ledger）
+    都必须从 `session_control_primitives` 导入同一对象；任何一处重新定义
+    一份拷贝（哪怕是等价正则）都会让本断言失败。
     """
     import app.core.session_control_store as host
+    from app.core.session_control_communication_ledger import (
+        communication_ledger,
+    )
     from app.core.session_control_operation_lease import operation_lease
     from app.core.session_control_primitives import SHA256_HEX_PATTERN
     from app.core.session_control_thread_owner_binding import (
         thread_owner_binding,
     )
 
-    for module in (host, thread_owner_binding, operation_lease):
+    modules = (host, thread_owner_binding, operation_lease, communication_ledger)
+    for module in modules:
         assert module.SHA256_HEX_PATTERN is SHA256_HEX_PATTERN, module.__name__
         source = Path(module.__file__).read_text(encoding="utf-8")
         # 只允许出现导入语句，不允许在别处再次 compile 出该形态。
         assert source.count("re.compile(r\"^[0-9a-f]{64}$\")") == 0
         assert (
-            "from app.core.session_control_primitives import "
-            "SHA256_HEX_PATTERN" in source
+            "session_control_primitives" in source
+            and "SHA256_HEX_PATTERN" in source
         ), module.__name__
     assert SHA256_HEX_PATTERN.pattern == r"^[0-9a-f]{64}$"
     assert SHA256_HEX_PATTERN.fullmatch("0" * 64) is not None
@@ -2427,5 +2432,549 @@ def test_owner_binding_append_requires_list_slot(tmp_path: Path) -> None:
             store.update_thread_owner_binding(
                 thread_id, append_variant_ref={"revision": 1}
             )
+    finally:
+        store.close()
+
+
+# ----------------------------------------------------------------------
+# D5 通信 ledger：outbox/inbox 幂等与 fail-closed 分支
+# ----------------------------------------------------------------------
+
+
+def make_comm_id() -> str:
+    return f"comm_{uuid.uuid4().hex}"
+
+
+def make_payload_hash(seed: str = "payload") -> str:
+    import hashlib
+
+    return hashlib.sha256(seed.encode()).hexdigest()
+
+
+def outbox_kwargs(communication_id: str, **over: object) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "session_id": make_session_id(),
+        "send_operation_id": f"send-op-{uuid.uuid4().hex}",
+        "communication_id": communication_id,
+        "source_gateway_id": "gw_a",
+        "source_workspace_id": "ws_a",
+        "source_thread_id": make_thread_id(),
+        "target_gateway_id": "gw_b",
+        "target_workspace_id": "ws_b",
+        "target_session_id": make_session_id(),
+        "target_thread_id": make_thread_id(),
+        "kind": "progress",
+        "reply_to_communication_id": None,
+        "payload_hash": make_payload_hash(),
+    }
+    kwargs.update(over)
+    return kwargs
+
+
+def test_outbox_create_or_get_is_idempotent(tmp_path: Path) -> None:
+    """同 operation 完全复现身份字段 → 返回既有行且不新增行。"""
+    store = SessionControlStore(tmp_path / "outbox.sqlite")
+    try:
+        kwargs = outbox_kwargs(make_comm_id())
+        first, created_first = store.create_or_get_communication_outbox(**kwargs)
+        second, created_second = store.create_or_get_communication_outbox(**kwargs)
+        assert created_first is True
+        assert created_second is False
+        assert first.send_operation_id == second.send_operation_id
+        assert first.state == second.state == "accepted"
+        assert first.payload_hash == second.payload_hash
+        rows = store.connection.execute(
+            "SELECT COUNT(*) FROM communication_outbox"
+        ).fetchone()[0]
+        assert rows == 1
+    finally:
+        store.close()
+
+
+def test_outbox_dedupes_by_communication_id_across_operations(
+    tmp_path: Path,
+) -> None:
+    """同 communication_id 绑定不同 operation 且 preimage 一致 → dedupe。"""
+    store = SessionControlStore(tmp_path / "outbox-dedupe.sqlite")
+    try:
+        base = outbox_kwargs(make_comm_id())
+        first, _ = store.create_or_get_communication_outbox(**base)
+        second, created = store.create_or_get_communication_outbox(
+            **dict(base, send_operation_id=f"send-op-{uuid.uuid4().hex}")
+        )
+        assert created is False
+        assert second.send_operation_id == first.send_operation_id
+        rows = store.connection.execute(
+            "SELECT COUNT(*) FROM communication_outbox"
+        ).fetchone()[0]
+        assert rows == 1
+    finally:
+        store.close()
+
+
+def test_outbox_operation_retry_with_different_communication_id_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """覆盖 operation 重试的 communication_id 漂移守卫。
+
+    覆盖 create_or_get_communication_outbox 中\n    ``mismatches or record.communication_id != communication_id`` 的
+    右侧分支：身份字段全一致、仅 communication_id 不同，也必须 fail
+    closed，而不仅是 preimage 漂移才报错。
+    """
+    store = SessionControlStore(tmp_path / "outbox-comm-drift.sqlite")
+    try:
+        base = outbox_kwargs(make_comm_id())
+        store.create_or_get_communication_outbox(**base)
+        with pytest.raises(RuntimeError, match="preimage 漂移"):
+            store.create_or_get_communication_outbox(
+                **dict(base, communication_id=make_comm_id())
+            )
+    finally:
+        store.close()
+
+
+def test_outbox_operation_retry_with_drifted_preimage_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """同 operation 但 preimage 字段漂移 → fail closed。"""
+    store = SessionControlStore(tmp_path / "outbox-preimage-drift.sqlite")
+    try:
+        base = outbox_kwargs(make_comm_id())
+        store.create_or_get_communication_outbox(**base)
+        with pytest.raises(RuntimeError, match="preimage 漂移"):
+            store.create_or_get_communication_outbox(
+                **dict(base, payload_hash=make_payload_hash("drift"))
+            )
+    finally:
+        store.close()
+
+
+def test_outbox_communication_rebind_with_other_preimage_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """同 communication_id 绑定不同 preimage → fail closed（不重基）。"""
+    store = SessionControlStore(tmp_path / "outbox-rebind.sqlite")
+    try:
+        base = outbox_kwargs(make_comm_id())
+        store.create_or_get_communication_outbox(**base)
+        with pytest.raises(RuntimeError, match="已绑定不同 preimage"):
+            store.create_or_get_communication_outbox(
+                **dict(
+                    base,
+                    send_operation_id=f"send-op-{uuid.uuid4().hex}",
+                    payload_hash=make_payload_hash("other"),
+                )
+            )
+    finally:
+        store.close()
+
+
+def test_outbox_advance_state_chain_and_guards(tmp_path: Path) -> None:
+    """前向 CAS 闭集：跳过中间态、终态回退、缺 receipt 均 fail closed。"""
+    store = SessionControlStore(tmp_path / "outbox-advance.sqlite")
+    try:
+        record, _ = store.create_or_get_communication_outbox(
+            **outbox_kwargs(make_comm_id())
+        )
+        operation_id = record.send_operation_id
+        with pytest.raises(ValueError, match="新状态非法"):
+            store.advance_communication_outbox_state(
+                operation_id, new_state="made_up"
+            )
+        with pytest.raises(ValueError, match="必须携带 receipt JSON"):
+            store.advance_communication_outbox_state(
+                operation_id, new_state="terminal"
+            )
+        with pytest.raises(ValueError, match="必须携带 abort_reason"):
+            store.advance_communication_outbox_state(
+                operation_id, new_state="failed"
+            )
+        with pytest.raises(RuntimeError, match="状态迁移非法"):
+            store.advance_communication_outbox_state(
+                operation_id, new_state="target_accepted", receipt_json="[]"
+            )
+        routed = store.advance_communication_outbox_state(
+            operation_id, new_state="routing"
+        )
+        assert routed.state == "routing"
+        accepted = store.advance_communication_outbox_state(
+            operation_id, new_state="target_accepted", receipt_json="[]"
+        )
+        assert accepted.state == "target_accepted"
+        # 重复相同 (state, receipt) 幂等；receipt 漂移 fail closed
+        assert store.advance_communication_outbox_state(
+            operation_id, new_state="target_accepted", receipt_json="[]"
+        ).state == "target_accepted"
+        with pytest.raises(RuntimeError, match="receipt 漂移"):
+            store.advance_communication_outbox_state(
+                operation_id, new_state="target_accepted", receipt_json="[1]"
+            )
+        with pytest.raises(RuntimeError, match="状态迁移非法"):
+            store.advance_communication_outbox_state(
+                operation_id, new_state="routing"
+            )
+        assert store.advance_communication_outbox_state(
+            operation_id, new_state="execution_bound", receipt_json="[]"
+        ).state == "execution_bound"
+        assert store.advance_communication_outbox_state(
+            operation_id, new_state="terminal", receipt_json="[]"
+        ).state == "terminal"
+        with pytest.raises(RuntimeError, match="状态迁移非法"):
+            store.advance_communication_outbox_state(
+                operation_id, new_state="routing"
+            )
+        with pytest.raises(KeyError, match="无法推进状态"):
+            store.advance_communication_outbox_state(
+                f"send-op-{uuid.uuid4().hex}", new_state="routing"
+            )
+    finally:
+        store.close()
+
+
+def inbox_kwargs(
+    communication_id: str, target_thread_id: str, **over: object
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "session_id": make_session_id(),
+        "communication_id": communication_id,
+        "source_gateway_id": "gw_a",
+        "source_workspace_id": "ws_a",
+        "source_session_id": make_session_id(),
+        "source_thread_id": make_thread_id(),
+        "target_thread_id": target_thread_id,
+        "kind": "progress",
+        "reply_to_communication_id": None,
+        "payload_hash": make_payload_hash(),
+    }
+    kwargs.update(over)
+    return kwargs
+
+
+def test_inbox_create_or_get_binds_main_and_dedupes(tmp_path: Path) -> None:
+    """target main binding fresh 校验通过并幂等；身份漂移 fail closed。"""
+    store = SessionControlStore(tmp_path / "inbox.sqlite")
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    try:
+        main_thread_id = str(store.get_main_thread()["thread_id"])
+        kwargs = inbox_kwargs(make_comm_id(), main_thread_id)
+        first, created_first = store.create_or_get_communication_inbox(**kwargs)
+        second, created_second = store.create_or_get_communication_inbox(**kwargs)
+        assert created_first is True
+        assert created_second is False
+        assert first.state == second.state == "target_accepted"
+        assert first.admission_id.startswith("cadm_")
+        assert first.wakeup_key.startswith("cwake_")
+        with pytest.raises(RuntimeError, match="main binding 漂移"):
+            store.create_or_get_communication_inbox(
+                **dict(kwargs, target_thread_id=make_thread_id())
+            )
+        with pytest.raises(RuntimeError, match="身份漂移"):
+            store.create_or_get_communication_inbox(
+                **dict(kwargs, payload_hash=make_payload_hash("drift"))
+            )
+    finally:
+        store.close()
+
+
+def test_inbox_requires_unique_main_row(tmp_path: Path) -> None:
+    """无 main row 时拒绝建立 inbox（fail closed，不伪装成功）。"""
+    store = SessionControlStore(tmp_path / "inbox-nomain.sqlite")
+    try:
+        with pytest.raises(RuntimeError, match="main row 缺失或不唯一"):
+            store.create_or_get_communication_inbox(
+                **inbox_kwargs(make_comm_id(), make_thread_id())
+            )
+    finally:
+        store.close()
+
+
+def test_inbox_claim_chain_guards(tmp_path: Path) -> None:
+    """admission 领取：未领取写入、同 claim 幂等、更高 generation 接管、
+    更低 generation 与不同 owner fail closed。"""
+    store = SessionControlStore(tmp_path / "inbox-claim.sqlite")
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    try:
+        main_thread_id = str(store.get_main_thread()["thread_id"])
+        record, _ = store.create_or_get_communication_inbox(
+            **inbox_kwargs(make_comm_id(), main_thread_id)
+        )
+        communication_id = record.communication_id
+        with pytest.raises(ValueError, match="claim_owner 不能为空"):
+            store.claim_communication_inbox_admission(
+                communication_id, claim_owner="", claim_generation=1
+            )
+        with pytest.raises(ValueError, match="claim_generation 必须是"):
+            store.claim_communication_inbox_admission(
+                communication_id, claim_owner="w1", claim_generation=0
+            )
+        claimed = store.claim_communication_inbox_admission(
+            communication_id, claim_owner="w1", claim_generation=1
+        )
+        assert claimed.admission_claim_owner == "w1"
+        assert claimed.admission_claim_generation == 1
+        assert store.claim_communication_inbox_admission(
+            communication_id, claim_owner="w1", claim_generation=1
+        ).admission_claim_generation == 1
+        bumped = store.claim_communication_inbox_admission(
+            communication_id, claim_owner="w1", claim_generation=2
+        )
+        assert bumped.admission_claim_generation == 2
+        with pytest.raises(RuntimeError, match="generation 过期"):
+            store.claim_communication_inbox_admission(
+                communication_id, claim_owner="w1", claim_generation=1
+            )
+        with pytest.raises(RuntimeError, match="已被其他 claim 持有"):
+            store.claim_communication_inbox_admission(
+                communication_id, claim_owner="w2", claim_generation=3
+            )
+        with pytest.raises(KeyError, match="无法领取 admission"):
+            store.claim_communication_inbox_admission(
+                make_comm_id(), claim_owner="w1", claim_generation=1
+            )
+    finally:
+        store.close()
+
+
+def test_inbox_mark_bound_and_record_failure(tmp_path: Path) -> None:
+    """execution_bound CAS、重复提交幂等、identity 漂移与失败记录。"""
+    store = SessionControlStore(tmp_path / "inbox-bound.sqlite")
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    try:
+        main_thread_id = str(store.get_main_thread()["thread_id"])
+        record, _ = store.create_or_get_communication_inbox(
+            **inbox_kwargs(make_comm_id(), main_thread_id)
+        )
+        communication_id = record.communication_id
+        job_id = f"job_{uuid.uuid4().hex}"
+        with pytest.raises(RuntimeError, match="未被领取"):
+            store.mark_communication_inbox_execution_bound(
+                communication_id, job_id=job_id, turn_id=None,
+                claim_owner="w1", claim_generation=1,
+            )
+        store.claim_communication_inbox_admission(
+            communication_id, claim_owner="w1", claim_generation=1
+        )
+        with pytest.raises(ValueError, match="job_id 形态非法"):
+            store.mark_communication_inbox_execution_bound(
+                communication_id, job_id="nope", turn_id=None,
+                claim_owner="w1", claim_generation=1,
+            )
+        with pytest.raises(RuntimeError, match="claim 与当前持有 claim 不一致"):
+            store.mark_communication_inbox_execution_bound(
+                communication_id, job_id=job_id, turn_id=None,
+                claim_owner="w9", claim_generation=1,
+            )
+        bound = store.mark_communication_inbox_execution_bound(
+            communication_id, job_id=job_id, turn_id="turn-1",
+            claim_owner="w1", claim_generation=1,
+        )
+        assert bound.state == "execution_bound"
+        assert bound.job_id == job_id
+        assert bound.turn_id == "turn-1"
+        repeated = store.mark_communication_inbox_execution_bound(
+            communication_id, job_id=job_id, turn_id="turn-1",
+            claim_owner="w1", claim_generation=1,
+        )
+        assert repeated.turn_id == "turn-1"
+        with pytest.raises(RuntimeError, match="identity 漂移"):
+            store.mark_communication_inbox_execution_bound(
+                communication_id, job_id=job_id, turn_id="turn-2",
+                claim_owner="w1", claim_generation=1,
+            )
+        # 失败记录：state 保持 target_accepted、untouched 的 claim 校验
+        fresh, _ = store.create_or_get_communication_inbox(
+            **inbox_kwargs(make_comm_id(), main_thread_id)
+        )
+        fresh_id = fresh.communication_id
+        with pytest.raises(ValueError, match="last_error 不能为空"):
+            store.record_communication_inbox_admission_failure(
+                fresh_id, claim_owner="w1", claim_generation=1, last_error=""
+            )
+        with pytest.raises(RuntimeError, match="claim 与当前持有 claim 不一致"):
+            store.record_communication_inbox_admission_failure(
+                fresh_id, claim_owner="w1", claim_generation=1,
+                last_error="boom",
+            )
+        store.claim_communication_inbox_admission(
+            fresh_id, claim_owner="w1", claim_generation=1
+        )
+        recorded = store.record_communication_inbox_admission_failure(
+            fresh_id, claim_owner="w1", claim_generation=1, last_error="boom"
+        )
+        assert recorded.state == "target_accepted"
+        assert recorded.last_error == "boom"
+        with pytest.raises(RuntimeError, match="无失败可记录"):
+            store.record_communication_inbox_admission_failure(
+                communication_id, claim_owner="w1", claim_generation=1,
+                last_error="boom",
+            )
+    finally:
+        store.close()
+
+
+def test_inbox_listing_and_get_fail_closed(tmp_path: Path) -> None:
+    """状态索引只列 target_accepted；缺失行读取抛 KeyError。"""
+    store = SessionControlStore(tmp_path / "inbox-listing.sqlite")
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    try:
+        main_thread_id = str(store.get_main_thread()["thread_id"])
+        records = [
+            store.create_or_get_communication_inbox(
+                **inbox_kwargs(make_comm_id(), main_thread_id)
+            )[0]
+            for _ in range(3)
+        ]
+        bound = records[1]
+        store.claim_communication_inbox_admission(
+            bound.communication_id, claim_owner="w1", claim_generation=1
+        )
+        store.mark_communication_inbox_execution_bound(
+            bound.communication_id, job_id=f"job_{uuid.uuid4().hex}",
+            turn_id=None, claim_owner="w1", claim_generation=1,
+        )
+        listed = store.list_target_accepted_communication_inboxes()
+        assert {item.communication_id for item in listed} == {
+            records[0].communication_id,
+            records[2].communication_id,
+        }
+        assert store.get_communication_inbox(
+            records[0].communication_id
+        ).communication_id == records[0].communication_id
+        with pytest.raises(KeyError, match="communication inbox 不存在"):
+            store.get_communication_inbox(make_comm_id())
+    finally:
+        store.close()
+
+
+def test_outbox_reply_causal_direction_is_enforced_by_endpoints(
+    tmp_path: Path,
+) -> None:
+    """source 侧 reply 因果证明：方向相反放行，方向相同 fail closed。"""
+    store = SessionControlStore(tmp_path / "outbox-reply.sqlite")
+    try:
+        session_id = make_session_id()
+        # 本 session 作为 target 收到过 forward：inbox 行把 main 记为 target。
+        main_thread_id = make_thread_id()
+        store.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
+        peer_thread_id = make_thread_id()
+        forward_id = make_comm_id()
+        store.create_or_get_communication_inbox(
+            session_id=session_id,
+            communication_id=forward_id,
+            source_gateway_id="gw_peer",
+            source_workspace_id="ws_peer",
+            source_session_id=make_session_id(),
+            source_thread_id=peer_thread_id,
+            target_thread_id=main_thread_id,
+            kind="progress",
+            reply_to_communication_id=None,
+            payload_hash=make_payload_hash("forward"),
+        )
+        reply_base = outbox_kwargs(make_comm_id())
+        reply_base.update(
+            session_id=session_id,
+            source_gateway_id="gw_peer",
+            source_workspace_id="ws_peer",
+            source_thread_id=main_thread_id,
+            target_gateway_id="gw_peer",
+            target_workspace_id="ws_peer",
+            target_thread_id=peer_thread_id,
+            kind="reply",
+            reply_to_communication_id=forward_id,
+        )
+        # 方向相反（source 端点回到 forward 的 source，target 端点落在 main）。
+        record, created = store.create_or_get_communication_outbox(**reply_base)
+        assert created is True
+        assert record.kind == "reply"
+        # 方向与 forward 的 inbox 行相同 → 必须 fail closed。
+        same_direction = dict(
+            reply_base,
+            communication_id=make_comm_id(),
+            send_operation_id=f"send-op-{uuid.uuid4().hex}",
+            source_gateway_id="gw_peer",
+            source_workspace_id="ws_peer",
+            source_thread_id=peer_thread_id,
+            target_gateway_id="gw_peer",
+            target_workspace_id="ws_peer",
+            target_thread_id=main_thread_id,
+        )
+        with pytest.raises(RuntimeError, match="方向与本次 send 相同"):
+            store.create_or_get_communication_outbox(**same_direction)
+        # 本库没有该 communication 的 inbox 行 → 也 fail closed。
+        unknown = dict(
+            reply_base,
+            communication_id=make_comm_id(),
+            send_operation_id=f"send-op-{uuid.uuid4().hex}",
+            reply_to_communication_id=make_comm_id(),
+        )
+        with pytest.raises(RuntimeError, match="无法在本 session inbox 中证明"):
+            store.create_or_get_communication_outbox(**unknown)
+    finally:
+        store.close()
+
+
+def test_inbox_reply_causal_direction_is_enforced_by_endpoints(
+    tmp_path: Path,
+) -> None:
+    """target 侧 reply 因果证明：方向相反放行，方向相同 fail closed。"""
+    store = SessionControlStore(tmp_path / "inbox-reply.sqlite")
+    try:
+        main_thread_id = make_thread_id()
+        store.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
+        peer_thread_id = make_thread_id()
+        session_id = make_session_id()
+        source_session_id = make_session_id()
+        forward_id = make_comm_id()
+        # 本 session 作为 source 发出过 forward：outbox 行 source=本库 main。
+        store.create_or_get_communication_outbox(
+            session_id=session_id,
+            send_operation_id=f"send-op-{uuid.uuid4().hex}",
+            communication_id=forward_id,
+            source_gateway_id="gw_a",
+            source_workspace_id="ws_a",
+            source_thread_id=main_thread_id,
+            target_gateway_id="gw_b",
+            target_workspace_id="ws_b",
+            target_session_id=source_session_id,
+            target_thread_id=peer_thread_id,
+            kind="progress",
+            reply_to_communication_id=None,
+            payload_hash=make_payload_hash("forward"),
+        )
+        reply_base = inbox_kwargs(make_comm_id(), main_thread_id)
+        reply_base.update(
+            session_id=session_id,
+            source_gateway_id="gw_b",
+            source_workspace_id="ws_b",
+            source_session_id=source_session_id,
+            source_thread_id=peer_thread_id,
+            target_thread_id=main_thread_id,
+            kind="reply",
+            reply_to_communication_id=forward_id,
+        )
+        # 方向相反（source 端点回到 forward 的 target，target 端点落在 main）。
+        record, created = store.create_or_get_communication_inbox(**reply_base)
+        assert created is True
+        assert record.kind == "reply"
+        # 方向与 forward 的 outbox 行相同 → 必须 fail closed。
+        same_direction = dict(
+            reply_base,
+            communication_id=make_comm_id(),
+            source_gateway_id="gw_a",
+            source_workspace_id="ws_a",
+            source_session_id=session_id,
+            source_thread_id=main_thread_id,
+            target_thread_id=main_thread_id,
+        )
+        with pytest.raises(RuntimeError, match="方向与本次方向不一致"):
+            store.create_or_get_communication_inbox(**same_direction)
+        # 本库没有该 communication 的 outbox 行 → 也 fail closed。
+        unknown = dict(
+            reply_base,
+            communication_id=make_comm_id(),
+            reply_to_communication_id=make_comm_id(),
+        )
+        with pytest.raises(RuntimeError, match="无法在本 session outbox 中证明"):
+            store.create_or_get_communication_inbox(**unknown)
     finally:
         store.close()

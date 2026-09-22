@@ -4,10 +4,11 @@
 
 ## 子包索引
 
-- `session_control_primitives.py`：per-session `session-control.sqlite` 各垂直链路共享的形态原语（当前为 `SHA256_HEX_PATTERN`）。只放跨子包共用的形态约束，不放任何表的 DDL、行投影或读写方法。
+- `session_control_primitives.py`：per-session `session-control.sqlite` 各垂直链路共享的形态原语（`SHA256_HEX_PATTERN`、`EXECUTION_BINDING_ID_PATTERN`、`EXECUTION_JOB_ID_PATTERN` 与 `validate_claim_fields`）。只放跨子包共用的形态约束与校验器，不放任何表的 DDL、行投影或读写方法。
 - `session_control_thread_catalog/`：thread catalog 与 lifecycle fence 一条垂直链路（main/child 权威指针、生命周期闸门 CAS、已发布 child 的冻结 locator 解析、`thread_catalog` v1→v2 加法升级）。只放这两张表的职责；creation record、execution intent、operation lease、owner binding 与通信账本不放这里。
 - `session_control_thread_owner_binding/`：thread owner binding 字段槽一条垂直链路（`thread_owner_bindings` 行投影、canonical JSON 列表槽解析、2.1 负面合同校验、ensure/get/update，以及该表行插入的唯一 SQL 实现）。只放 owner 侧记录槽；prefix epoch 与 ToolSet revision 的权威解释仍属对应 domain owner，不构成第二 writer。
 - `session_control_operation_lease/`：通用 operation lease 一条垂直链路（`session_operation_leases` DDL 与非终态索引、行投影、create-or-get 幂等准入、fencing token CAS 链与读取）。只放持久准入/操作 lease；`SessionOperationLease` 的 typed 字段集与状态闭集仍由 `session_lifecycle_gate.py` 单点定义。
+- `session_control_communication_ledger/`：跨 Session 通信 ledger 一条垂直链路（`communication_outbox`/`communication_inbox` DDL 与 target_accepted 索引、行投影、source 侧 create-or-get 与状态 CAS、target 侧 create-or-get/领取/绑定/失败记录与读取、kind=reply 双端因果证明）。只放这两张 telemetry 账表；typed 合同的 field 集与状态闭集仍由对应 facade 单点定义。
 
 # 可修改内容
 
