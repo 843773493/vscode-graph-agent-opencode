@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { errorMessage } from "../../utils/errorMessage";
 
 import { getWorkspaceFileContent } from "../../api";
 import type { NodeDebugBreakpoint } from "../../types/backend";
@@ -49,7 +50,7 @@ export default function NodeDebugSourcePreview({
         if (!disposed) setContent(file.content);
       })
       .catch((cause: unknown) => {
-        if (!disposed) setError(cause instanceof Error ? cause.message : String(cause));
+        if (!disposed) setError(errorMessage(cause));
       });
     return () => {
       disposed = true;

@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { MutableRefObject, Dispatch, SetStateAction } from "react";
+import { errorMessage } from "../../utils/errorMessage";
 
 import {
   copyNodeDebugConfiguration,
@@ -160,14 +161,14 @@ export default function NodeDebugConfigurationView({
     cause: unknown,
     mutationOwnerKey: string,
   ) => {
-    const message = `${operation}失败: ${cause instanceof Error ? cause.message : String(cause)}`;
+    const message = `${operation}失败: ${errorMessage(cause)}`;
     if (transferOwnerKeyRef.current !== mutationOwnerKey) return;
     setLocalNotice(message);
     onStatusChange(message);
     try {
       await refresh();
     } catch (refreshCause: unknown) {
-      const refreshMessage = `${message}；重新获取调试状态失败: ${refreshCause instanceof Error ? refreshCause.message : String(refreshCause)}`;
+      const refreshMessage = `${message}；重新获取调试状态失败: ${errorMessage(refreshCause)}`;
       if (transferOwnerKeyRef.current === mutationOwnerKey) {
         setLocalNotice(refreshMessage);
         onStatusChange(refreshMessage);
@@ -199,7 +200,7 @@ export default function NodeDebugConfigurationView({
         onStatusChange(`已导出调试方案: ${configuration.name}`);
       }
     } catch (cause: unknown) {
-      const message = `导出调试方案失败: ${cause instanceof Error ? cause.message : String(cause)}`;
+      const message = `导出调试方案失败: ${errorMessage(cause)}`;
       if (transferOwnerKeyRef.current === mutationOwnerKey) {
         setLocalNotice(message);
         onStatusChange(message);
@@ -228,7 +229,7 @@ export default function NodeDebugConfigurationView({
       try {
         await refresh();
       } catch (refreshCause: unknown) {
-        const refreshMessage = `已导入调试方案: ${configuration.name}；重新获取调试状态失败: ${refreshCause instanceof Error ? refreshCause.message : String(refreshCause)}`;
+        const refreshMessage = `已导入调试方案: ${configuration.name}；重新获取调试状态失败: ${errorMessage(refreshCause)}`;
         if (transferOwnerKeyRef.current === mutationOwnerKey) {
           setLocalNotice(refreshMessage);
           onStatusChange(refreshMessage);

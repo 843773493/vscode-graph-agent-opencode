@@ -11,6 +11,7 @@ import {
 } from "../../state/sessionGoal";
 import WarmActionDialog from "../overlays/WarmActionDialog";
 import { useWarmConfirm } from "../shell/WarmConfirmProvider";
+import { errorMessage } from "../../utils/errorMessage";
 
 function formatTokens(tokens: number): string {
   return new Intl.NumberFormat("zh-CN").format(tokens);
@@ -62,9 +63,7 @@ export default function GoalManagerCard({
     setOperationError(null);
     void operation().catch((operationFailure: unknown) => {
       setOperationError(
-        operationFailure instanceof Error
-          ? operationFailure.message
-          : String(operationFailure),
+        errorMessage(operationFailure),
       );
     });
   };
