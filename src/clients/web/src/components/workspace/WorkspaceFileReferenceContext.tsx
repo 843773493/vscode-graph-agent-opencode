@@ -198,10 +198,12 @@ export function WorkspaceFileReferenceProvider({
             }),
           )
           .catch((error: unknown): WorkspaceFileLookup => {
-            const message = error instanceof Error ? error.message : String(error);
-            if (message.includes("请求失败 404")) {
+            // 只按类型与状态码判定 404；错误文案属于展示层，可能被上游改写，
+            // 用文案判断会把「文件不存在」与「真实读取失败」混为一谈。
+            if (error instanceof HttpRequestError && error.status === 404) {
               return { status: "missing" };
             }
+            const message = error instanceof Error ? error.message : String(error);
             console.error(`文件引用验证失败: target=${target}`, error);
             return { status: "error", message };
           });
