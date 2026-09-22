@@ -1765,3 +1765,449 @@ describe("message stream reducer", () => {
     }
   });
 });
+
+describe("activity completion_reason 与 tool 展示状态", () => {
+  test("Activity 终态收口不写公共协议无法表达的 completion_reason", () => {
+    let interrupted = createMessageStreamState("ses_1", "turn_1");
+    interrupted = applyMessageStreamEvent(interrupted, event(1, "activity.started", {
+      activity_id: "act_1",
+      kind: "browser.session",
+      status: "running",
+      side_effect_policy: "read_only",
+    }));
+    interrupted = applyMessageStreamEvent(interrupted, event(2, "stream.interrupted", {
+      interrupt_request_id: "intr_1",
+      status: "interrupted",
+    }));
+    // 终态收敛本身必须保留：只读 Activity 被用户中断即视为已完成。
+    expect(interrupted.activities[0]?.status).toBe("completed");
+    expect(interrupted.activities[0]?.outcome).toBe("user_interrupt");
+    // completion_reason 未在公共 message.v1 的 Activity 中声明，codec 在
+    // activity.* 事件投影与 snapshot activities 投影两处一律摘除，事件侧
+    // 写入只会造出快照永远无法表达的不可恢复字段。
+    expect(interrupted.activities[0]?.completion_reason).toBeUndefined();
+    expect("completion_reason" in (interrupted.activities[0] ?? {})).toBe(false);
+
+    let lost = createMessageStreamState("ses_1", "turn_1");
+    lost = applyMessageStreamEvent(lost, event(1, "activity.started", {
+      activity_id: "act_2",
+      kind: "browser.session",
+      status: "running",
+      side_effect_policy: "read_only",
+    }));
+    lost = applyMessageStreamEvent(lost, event(2, "stream.failed", {
+      code: "execution_lost",
+      message: "后端重启",
+      after_interrupt_requested: false,
+      resumable: false,
+    }));
+    expect(lost.activities[0]?.status).toBe("failed");
+    expect(lost.activities[0]?.completion_reason).toBeUndefined();
+    expect("completion_reason" in (lost.activities[0] ?? {})).toBe(false);
+  });
+
+  test("事件侧不消费 payload 中被 codec 摘除的 activity completion_reason", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "activity.started", {
+      activity_id: "act_1",
+      kind: "browser.session",
+      status: "running",
+    }));
+    state = applyMessageStreamEvent(state, event(2, "activity.completed", {
+      activity_id: "act_1",
+      kind: "browser.session",
+      status: "completed",
+      // codec 永远不会把该字段交给前端；事件侧不得保留它。
+      completion_reason: "user_interrupt",
+    }));
+    expect(state.activities[0]?.status).toBe("completed");
+    expect(state.activities[0]?.completion_reason).toBeUndefined();
+    // snapshot 路径同样无法表达该字段，两条链路结果一致。
+    const snapshotState = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", {
+        snapshot_seq: 1,
+        stream_status: "open",
+        agent_loop_status: "activity_running",
+        current_attempt: 1,
+        activities: [{
+          activity_id: "act_1",
+          kind: "browser.session",
+          status: "completed",
+          resource_refs: [],
+        }],
+        resumable: true,
+      }),
+    );
+    expect(snapshotState.activities[0]?.completion_reason)
+      .toBe(state.activities[0]?.completion_reason);
+  });
+
+  test("工具展示状态有意与 state 层语义分叉，两者不得趋同", () => {
+    const cases = [
+      { outcome: "success", displayStatus: "completed" },
+      { outcome: "outcome_unknown", displayStatus: "failed" },
+      { outcome: "provider_error", displayStatus: "failed" },
+    ] as const;
+    for (const item of cases) {
+      let state = createMessageStreamState("ses_1", "turn_1");
+      state = applyMessageStreamEvent(state, event(1, "tool.started", {
+        tool_execution_id: "exec_1",
+        tool_call_id: "call_1",
+        tool_name: "shell",
+      }));
+      state = applyMessageStreamEvent(state, event(2, "tool.completed", {
+        tool_execution_id: "exec_1",
+        tool_call_id: "call_1",
+        tool_name: "shell",
+        status: "completed",
+        outcome: item.outcome,
+      }));
+      // state 层必须与后端 tool.completed 的归一结果一致：completed。
+      expect(state.toolExecutions[0]?.status).toBe("completed");
+      // 展示层才是"结果未知/提供方出错不能当作成功"的降级语义。
+      const toolPart = messageStreamToResponseParts(state)
+        .find((part) => part.kind === "tool_call");
+      expect(toolPart?.status).toBe(item.displayStatus);
+    }
+  });
+});
+
+// 对齐审计 P0-3：active_state 的 kind/phase 在前端事件路径与后端（及快照路径）取值不同。
+// 期望值全部来自后端 message_stream_store.py 的真实分支（已用 codec 差分复现，0 mismatch）。
+describe("active state kind 对齐", () => {
+  const FIELDS = [
+    "kind",
+    "phase",
+    "entity_id",
+    "status",
+    "last_kind",
+    "last_phase",
+    "reason",
+    "tool_call_id",
+    "tool_invocation_id",
+    "tool_attempt_id",
+    "tool_execution_id",
+  ] as const;
+
+  function activeStateOf(state: ReturnType<typeof createMessageStreamState>) {
+    return state.activeState;
+  }
+
+  function snapshotOf(seq: number, activeState: Record<string, unknown>) {
+    return applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(seq, "stream.snapshot", {
+        snapshot_seq: seq,
+        stream_status: "open",
+        agent_loop_status: "running",
+        current_attempt: 1,
+        active_state: activeState,
+        resumable: true,
+      }),
+    );
+  }
+
+  test("中断进行中：事件路径与快照路径都是 interrupting/stopping，并保留上一状态", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, event(2, "model.started", { model_call_id: "mc_1", attempt: 1 }));
+    state = applyMessageStreamEvent(state, event(3, "block.started", {
+      block_id: "b1",
+      block_index: 0,
+      carrier_type: "text",
+    }));
+    state = applyMessageStreamEvent(state, event(4, "interrupt.requested", {
+      interrupt_request_id: "i1",
+      reason: "user",
+    }));
+
+    const eventState = activeStateOf(state);
+    const snapshotState = activeStateOf(snapshotOf(4, {
+      kind: "interrupting",
+      phase: "stopping",
+      entity_id: "i1",
+      status: "stopping",
+      last_kind: "model_output",
+      last_phase: "text",
+      reason: "user",
+    }));
+
+    expect(eventState).toEqual({
+      kind: "interrupting",
+      phase: "stopping",
+      entity_id: "i1",
+      status: "stopping",
+      last_kind: "model_output",
+      last_phase: "text",
+      reason: "user",
+    });
+    for (const field of FIELDS) {
+      expect(eventState?.[field] ?? null).toBe(snapshotState?.[field] ?? null);
+    }
+  });
+
+  test("终态 completed：事件路径与快照路径都是 terminal/completed 并附 reason", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, event(2, "model.started", { model_call_id: "mc_1", attempt: 1 }));
+    state = applyMessageStreamEvent(state, event(3, "block.started", {
+      block_id: "b1",
+      block_index: 0,
+      carrier_type: "text",
+    }));
+    state = applyMessageStreamEvent(state, event(4, "stream.completed", { status: "completed" }));
+
+    const eventState = activeStateOf(state);
+    const snapshotState = activeStateOf(snapshotOf(4, {
+      kind: "terminal",
+      phase: "completed",
+      entity_id: "strm_1",
+      status: "completed",
+      last_kind: "model_output",
+      last_phase: "text",
+      reason: "completed",
+    }));
+
+    expect(eventState).toEqual({
+      kind: "terminal",
+      phase: "completed",
+      entity_id: "strm_1",
+      status: "completed",
+      last_kind: "model_output",
+      last_phase: "text",
+      reason: "completed",
+    });
+    for (const field of FIELDS) {
+      expect(eventState?.[field] ?? null).toBe(snapshotState?.[field] ?? null);
+    }
+  });
+
+  test("终态 interrupted：事件路径与快照路径都是 terminal/interrupted，last_kind=interrupting", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, event(2, "model.started", { model_call_id: "mc_1", attempt: 1 }));
+    state = applyMessageStreamEvent(state, event(3, "interrupt.requested", {
+      interrupt_request_id: "i1",
+    }));
+    state = applyMessageStreamEvent(state, event(4, "stream.interrupted", {
+      interrupt_request_id: "i1",
+      status: "interrupted",
+    }));
+
+    const eventState = activeStateOf(state);
+    const snapshotState = activeStateOf(snapshotOf(4, {
+      kind: "terminal",
+      phase: "interrupted",
+      entity_id: "strm_1",
+      status: "interrupted",
+      last_kind: "interrupting",
+      last_phase: "stopping",
+      reason: "interrupted",
+    }));
+
+    expect(eventState).toEqual({
+      kind: "terminal",
+      phase: "interrupted",
+      entity_id: "strm_1",
+      status: "interrupted",
+      last_kind: "interrupting",
+      last_phase: "stopping",
+      reason: "interrupted",
+    });
+    for (const field of FIELDS) {
+      expect(eventState?.[field] ?? null).toBe(snapshotState?.[field] ?? null);
+    }
+  });
+
+  test("终态 failed：事件路径与快照路径都是 terminal/failed，reason 取 code", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, event(2, "model.started", { model_call_id: "mc_1", attempt: 1 }));
+    state = applyMessageStreamEvent(state, event(3, "stream.failed", {
+      code: "execution_lost",
+      message: "boom",
+      resumable: false,
+    }));
+
+    const eventState = activeStateOf(state);
+    const snapshotState = activeStateOf(snapshotOf(3, {
+      kind: "terminal",
+      phase: "failed",
+      entity_id: "strm_1",
+      status: "failed",
+      last_kind: "model_output",
+      last_phase: "reasoning",
+      reason: "execution_lost",
+    }));
+
+    expect(eventState).toEqual({
+      kind: "terminal",
+      phase: "failed",
+      entity_id: "strm_1",
+      status: "failed",
+      last_kind: "model_output",
+      last_phase: "reasoning",
+      reason: "execution_lost",
+    });
+    for (const field of FIELDS) {
+      expect(eventState?.[field] ?? null).toBe(snapshotState?.[field] ?? null);
+    }
+  });
+
+  test("tool_call 链路：accumulating/stopping 与快照路径逐字段一致", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, {
+      ...event(2, "tool_call.delta", {
+        tool_call_id: "c1",
+        tool_name: "shell",
+        arguments: { a: 1 },
+        arguments_complete: true,
+      }),
+      tool_call_id: "c1",
+      tool_invocation_id: "inv1",
+    });
+
+    expect(activeStateOf(state)).toEqual({
+      kind: "tool_call",
+      phase: "accumulating",
+      entity_id: "c1",
+      tool_call_id: "c1",
+      status: "accumulating",
+    });
+
+    const accumulatingSnapshot = activeStateOf(snapshotOf(2, {
+      kind: "tool_call",
+      phase: "accumulating",
+      entity_id: "c1",
+      tool_call_id: "c1",
+      status: "accumulating",
+    }));
+    for (const field of FIELDS) {
+      expect(activeStateOf(state)?.[field] ?? null).toBe(accumulatingSnapshot?.[field] ?? null);
+    }
+
+    state = applyMessageStreamEvent(state, {
+      ...event(3, "tool_call.completed", {
+        tool_call_id: "c1",
+        tool_invocation_id: "inv1",
+        tool_name: "shell",
+        status: "completed",
+        completion_reason: "tool_started",
+        arguments_complete: true,
+      }),
+      tool_call_id: "c1",
+      tool_invocation_id: "inv1",
+    });
+
+    expect(activeStateOf(state)).toEqual({
+      kind: "tool_call",
+      phase: "stopping",
+      entity_id: "c1",
+      tool_call_id: "c1",
+      tool_invocation_id: "inv1",
+      status: "completed",
+    });
+
+    const stoppingSnapshot = activeStateOf(snapshotOf(3, {
+      kind: "tool_call",
+      phase: "stopping",
+      entity_id: "c1",
+      tool_call_id: "c1",
+      tool_invocation_id: "inv1",
+      status: "completed",
+    }));
+    for (const field of FIELDS) {
+      expect(activeStateOf(state)?.[field] ?? null).toBe(stoppingSnapshot?.[field] ?? null);
+    }
+  });
+
+  test("tool_execution 链路：running/stopping 与快照路径逐字段一致", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, {
+      ...event(2, "tool.started", { tool_name: "shell" }),
+      tool_execution_id: "x1",
+      tool_call_id: "c1",
+      tool_invocation_id: "inv1",
+    });
+
+    expect(activeStateOf(state)).toEqual({
+      kind: "tool_execution",
+      phase: "running",
+      entity_id: "x1",
+      tool_call_id: "c1",
+      tool_invocation_id: "inv1",
+      tool_execution_id: "x1",
+      status: "running",
+    });
+
+    state = applyMessageStreamEvent(state, {
+      ...event(3, "tool.completed", {
+        tool_name: "shell",
+        status: "completed",
+        outcome: "success",
+      }),
+      tool_execution_id: "x1",
+      tool_call_id: "c1",
+      tool_invocation_id: "inv1",
+    });
+
+    expect(activeStateOf(state)).toEqual({
+      kind: "tool_execution",
+      phase: "stopping",
+      entity_id: "x1",
+      tool_execution_id: "x1",
+      tool_call_id: "c1",
+      tool_invocation_id: "inv1",
+      status: "completed",
+    });
+
+    const snapshotState = activeStateOf(snapshotOf(3, {
+      kind: "tool_execution",
+      phase: "stopping",
+      entity_id: "x1",
+      tool_execution_id: "x1",
+      tool_call_id: "c1",
+      tool_invocation_id: "inv1",
+      status: "completed",
+    }));
+    for (const field of FIELDS) {
+      expect(activeStateOf(state)?.[field] ?? null).toBe(snapshotState?.[field] ?? null);
+    }
+  });
+
+  test("model.completed 与 block.completed 不回写 active_state，与快照保留上一状态一致", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, event(2, "model.started", { model_call_id: "mc_1", attempt: 1 }));
+    state = applyMessageStreamEvent(state, event(3, "model.completed", { model_call_id: "mc_1", attempt: 1 }));
+    // 后端 model.completed 分支不回写 active_state，事件侧必须保留 model.started 的取值。
+    expect(activeStateOf(state)).toEqual({
+      kind: "model_output",
+      phase: "reasoning",
+      entity_id: "mc_1",
+      status: "running",
+    });
+
+    state = applyMessageStreamEvent(state, event(4, "block.started", {
+      block_id: "b1",
+      block_index: 0,
+      carrier_type: "text",
+    }));
+    state = applyMessageStreamEvent(state, event(5, "block.completed", {
+      block_id: "b1",
+      status: "completed",
+    }));
+    // 后端 block.completed 分支同样不回写 active_state。
+    expect(activeStateOf(state)).toEqual({
+      kind: "model_output",
+      phase: "text",
+      entity_id: "b1",
+      block_id: "b1",
+      carrier_type: "text",
+      status: "running",
+    });
+  });
+});

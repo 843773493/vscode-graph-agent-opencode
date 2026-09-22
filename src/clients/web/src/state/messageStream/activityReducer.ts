@@ -1,5 +1,5 @@
 // 活动与模型调用归约：维护 activity / model_call 两类"进行中投影"的 upsert 与终态收口。
-// 由 eventReducer 的事件 switch 调用；activeStateAfter 与 modelOutputPhase 同时被 block、tool 链路复用。
+// 由 eventReducer 的事件 switch 调用；中断/终态 activeState 与 modelOutputPhase 同时被 block、tool 链路复用。
 import {
   activityStatusValue,
   applyLifecycle,
@@ -27,35 +27,45 @@ export function modelOutputPhase(carrierType: string): string {
   ].includes(carrierType) ? "reasoning" : "text";
 }
 
-export function activeStateAfter(
+/**
+ * 中断进行中的 active_state：逐字段对齐后端 interrupt.requested 分支
+ * （message_stream_store.py `_apply_event`）。取值必须是 interrupting/stopping，
+ * 并且只保留上一状态作为 last_kind/last_phase，不得携带 block/tool/activity 归属字段。
+ */
+export function interruptingActiveState(
   previous: MessageStreamActiveState | null,
-  kind: string,
-  phase: string,
-  status: string,
-  entityId?: string,
-  identityPayload?: Record<string, unknown>,
+  entityId: string,
+  reason: string | undefined,
 ): MessageStreamActiveState {
-  const toolCallId = stringValue(identityPayload?.tool_call_id);
-  const toolInvocationId = stringValue(identityPayload?.tool_invocation_id);
-  const toolAttemptId = stringValue(identityPayload?.tool_attempt_id);
-  const toolExecutionId = stringValue(identityPayload?.tool_execution_id);
   return {
-    kind,
-    phase,
-    entity_id: entityId ?? previous?.entity_id ?? "",
-    carrier_type: previous?.carrier_type,
-    block_id: previous?.block_id,
-    tool_call_id: toolCallId ?? previous?.tool_call_id,
-    tool_invocation_id: toolInvocationId ?? previous?.tool_invocation_id,
-    tool_attempt_id: toolAttemptId ?? previous?.tool_attempt_id,
-    tool_execution_id: toolExecutionId ?? previous?.tool_execution_id,
-    activity_id: previous?.activity_id,
-    activity_kind: previous?.activity_kind,
+    kind: "interrupting",
+    phase: "stopping",
+    entity_id: entityId,
+    status: "stopping",
+    last_kind: previous?.kind,
+    last_phase: previous?.phase,
+    reason,
+  };
+}
+
+/**
+ * 消息流终态的 active_state：逐字段对齐后端 `_set_terminal_active_state`。
+ * kind 固定为 terminal、phase 等于 status，并附上一状态作为 last_kind/last_phase。
+ */
+export function terminalActiveState(
+  previous: MessageStreamActiveState | null,
+  entityId: string,
+  status: string,
+  reason: string | undefined,
+): MessageStreamActiveState {
+  return {
+    kind: "terminal",
+    phase: status,
+    entity_id: entityId,
     status,
     last_kind: previous?.kind,
     last_phase: previous?.phase,
-    reason: previous?.reason,
-    detail_ref: previous?.detail_ref,
+    reason,
   };
 }
 
@@ -81,7 +91,10 @@ function activityFromPayload(payload: Record<string, unknown>): MessageStreamAct
     detail_ref: optionalTextValue(payload.detail_ref),
     detail_available: booleanValue(payload.detail_available) ?? false,
     detail_error: optionalTextValue(payload.detail_error),
-    completion_reason: optionalTextValue(payload.completion_reason),
+    // TODO: Activity 的 completion_reason 属于后端内部诊断字段，公共
+    // message.v1 未声明该字段，codec 会在事件投影与快照投影中一律摘除
+    // （app/protocol/codecs/message_stream.py 的 activity.* 与 snapshot
+    // activities 两处）。事件侧既无法收到该字段，也不得自行发明，故不再读写。
     ...lifecycleFromValue(payload),
   };
 }
@@ -160,7 +173,6 @@ export function finishRunningActivities(
     activity.outcome = reason === "execution_lost"
       ? "execution_lost"
       : uncertainInterrupt ? "outcome_unknown" : reason;
-    activity.completion_reason = reason;
     if (activity.status === "failed") activity.resumable = false;
     applyLifecycle(activity, event, true);
   }

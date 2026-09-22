@@ -1,10 +1,11 @@
 // SSE 数据事件 reducer：按 event_seq 推进消息流状态，维护实体 upsert 与终态收口。
 // 与 snapshotHydration 互为递归：乱序事件需要快照兜底，快照恢复后需要重放缓冲事件。
 import {
-  activeStateAfter,
   finishRunningActivities,
   finishRunningModelCalls,
+  interruptingActiveState,
   modelOutputPhase,
+  terminalActiveState,
   upsertActivity,
   upsertModelCall,
 } from "./activityReducer";
@@ -135,7 +136,8 @@ export function applyMessageStreamEvent(
         "completed",
         event,
       );
-      state.activeState = activeStateAfter(state.activeState, "model_output", "validating", "completed");
+      // 后端 model.completed 分支不回写 active_state（store.py:1317-1325），快照侧
+      // 因此保留 model.started 的取值；事件侧同样不得发明 validating 阶段。
       break;
     case "model.retrying":
       state.agentLoopStatus = "retrying";
@@ -200,13 +202,6 @@ export function applyMessageStreamEvent(
         block.completion_reason = defaultedTextValue(payload.completion_reason, "upstream_completed");
         block.partial = booleanValue(payload.partial) ?? false;
         applyLifecycle(block, event, true);
-        state.activeState = activeStateAfter(
-          state.activeState,
-          "model_output",
-          "completed",
-          block.status,
-          block.block_id,
-        );
       }
       break;
     }
@@ -220,14 +215,17 @@ export function applyMessageStreamEvent(
           toolCallPayload,
         );
         applyLifecycle(state.toolCalls[toolCallId], event);
+        // 逐字段对齐后端 tool_call / tool_call.delta 分支：phase 恒为 accumulating，
+        // status 取 payload（tool_call.delta 的公共线格式刻意剥离 status，缺失时
+        // 按 accumulating 归一），归属身份只取 payload，不额外补信封身份。
         state.activeState = {
           kind: "tool_call",
-          phase: "arguments",
+          phase: "accumulating",
           entity_id: toolCallId,
           tool_call_id: toolCallId,
-          tool_invocation_id: stringValue(toolCallPayload.tool_invocation_id) ?? undefined,
-          tool_attempt_id: stringValue(toolCallPayload.tool_attempt_id) ?? undefined,
-          status: "running",
+          tool_invocation_id: stringValue(payload.tool_invocation_id) ?? undefined,
+          tool_attempt_id: stringValue(payload.tool_attempt_id) ?? undefined,
+          status: stringValue(payload.status) ?? "accumulating",
         };
       }
       break;
@@ -241,14 +239,17 @@ export function applyMessageStreamEvent(
           toolCallPayload,
         );
         applyLifecycle(state.toolCalls[toolCallId], event, true);
-        state.activeState = activeStateAfter(
-          state.activeState,
-          "tool_call",
-          "completed",
-          stringValue(payload.status) ?? "completed",
-          toolCallId,
-          toolCallPayload,
-        );
+        // 后端 tool_call.completed 用 phase "stopping"，缺省 status "incomplete"；
+        // 归属身份同样只取 payload，不额外补信封身份。
+        state.activeState = {
+          kind: "tool_call",
+          phase: "stopping",
+          entity_id: toolCallId,
+          tool_call_id: toolCallId,
+          tool_invocation_id: stringValue(payload.tool_invocation_id) ?? undefined,
+          tool_attempt_id: stringValue(payload.tool_attempt_id) ?? undefined,
+          status: stringValue(payload.status) ?? "incomplete",
+        };
       }
       break;
     }
@@ -278,14 +279,17 @@ export function applyMessageStreamEvent(
         toolExecutionStatusValue(payload.status),
         event,
       );
-      state.activeState = activeStateAfter(
-        state.activeState,
-        "tool_execution",
-        "completed",
-        toolExecutionStatusValue(payload.status),
-        stringValue(payload.tool_execution_id) ?? event.tool_execution_id ?? undefined,
-        withToolIdentityFallback(payload, event),
-      );
+      // 后端 tool.completed 用 phase "stopping"，并带上执行的三个归属身份。
+      state.activeState = {
+        kind: "tool_execution",
+        phase: "stopping",
+        entity_id: stringValue(payload.tool_execution_id) ?? event.tool_execution_id ?? "",
+        tool_execution_id: stringValue(payload.tool_execution_id) ?? event.tool_execution_id ?? undefined,
+        tool_call_id: stringValue(payload.tool_call_id) ?? event.tool_call_id ?? undefined,
+        tool_invocation_id: stringValue(payload.tool_invocation_id) ?? event.tool_invocation_id ?? undefined,
+        tool_attempt_id: stringValue(payload.tool_attempt_id) ?? event.tool_attempt_id ?? undefined,
+        status: toolExecutionStatusValue(payload.status),
+      };
       break;
     case "activity.started":
     case "activity.updated":
@@ -295,13 +299,11 @@ export function applyMessageStreamEvent(
       break;
     case "interrupt.requested":
       state.streamStatus = "interrupting";
-      state.activeState = {
-        kind: "interrupt",
-        phase: "requested",
-        entity_id: stringValue(payload.interrupt_request_id) ?? "",
-        status: "requested",
-        reason: optionalTextValue(payload.reason),
-      };
+      state.activeState = interruptingActiveState(
+        state.activeState,
+        stringValue(payload.interrupt_request_id) ?? "",
+        optionalTextValue(payload.reason),
+      );
       state.interruptState = {
         requestId: stringValue(payload.interrupt_request_id),
         status: "requested",
@@ -321,7 +323,12 @@ export function applyMessageStreamEvent(
       state.streamStatus = "completed";
       state.agentLoopStatus = "completed";
       state.resumable = false;
-      state.activeState = activeStateAfter(state.activeState, "stream", "completed", "completed");
+      state.activeState = terminalActiveState(
+        state.activeState,
+        state.turnStreamId,
+        "completed",
+        terminalReason(payload, "completed"),
+      );
       break;
     case "stream.interrupted":
       state.streamStatus = "interrupted";
@@ -337,7 +344,12 @@ export function applyMessageStreamEvent(
         status: "confirmed",
         factConfirmed: true,
       };
-      state.activeState = activeStateAfter(state.activeState, "stream", "interrupted", "interrupted");
+      state.activeState = terminalActiveState(
+        state.activeState,
+        state.turnStreamId,
+        "interrupted",
+        terminalReason(payload, "interrupted"),
+      );
       break;
     case "stream.failed":
       state.streamStatus = "failed";
@@ -349,7 +361,12 @@ export function applyMessageStreamEvent(
       finishRunningToolCalls(state, event, "execution_lost");
       markRunningToolsUnknown(state, event);
       finishRunningActivities(state, event, "execution_lost");
-      state.activeState = activeStateAfter(state.activeState, "stream", "failed", "failed");
+      state.activeState = terminalActiveState(
+        state.activeState,
+        state.turnStreamId,
+        "failed",
+        terminalReason(payload, "failed"),
+      );
       break;
   }
   return drainPendingEvents(state);
@@ -460,6 +477,11 @@ function finishRunningBlocks(
 function failureFromPayload(payload: Record<string, unknown>): MessageStreamState["failure"] {
   // 与快照 hydration 共用唯一归一实现，从结构上杜绝两条链路再次分叉。
   return failureFromValue(payload);
+}
+
+// 与后端 _set_terminal_active_state 一致：reason 依次取 completion_reason、code，最后落到 status。
+function terminalReason(payload: Record<string, unknown>, status: string): string {
+  return stringValue(payload.completion_reason) ?? stringValue(payload.code) ?? status;
 }
 
 function isTerminalEvent(type: MessageStreamEventType): boolean {
