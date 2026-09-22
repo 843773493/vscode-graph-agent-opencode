@@ -1352,6 +1352,55 @@ def test_gateway_config_promotion_rejects_registry_revision_race(tmp_path):
         state.close()
 
 
+def test_gateway_runtime_handoff_requires_healthy_reserved_target(tmp_path):
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        state.record_gateway_runtime_generation(
+            generation_id="gateway-old",
+            process_id=100,
+            loaded_source="active",
+            candidate_id=None,
+            active_revision=1,
+            pending_revision=None,
+            candidate_digest=None,
+            effective_digest="active-digest",
+            secret_binding_digest=None,
+            fencing_token=None,
+            listener_state="serving",
+            state="active",
+        )
+        # fencing token 正确，但目标 generation 不是 healthy/reserved：
+        # 必须命中专门的 healthy/reserved 预检错误，而不是落到最终 CAS 失败。
+        for listener_state, target_state in (
+            ("reserved", "starting"),
+            ("serving", "active"),
+            ("closed", "failed"),
+        ):
+            generation_id = f"gateway-{target_state}"
+            state.record_gateway_runtime_generation(
+                generation_id=generation_id,
+                process_id=101,
+                loaded_source="pending",
+                candidate_id=None,
+                active_revision=1,
+                pending_revision=None,
+                candidate_digest=None,
+                effective_digest="pending-digest",
+                secret_binding_digest=None,
+                fencing_token="fence-ok",
+                listener_state=listener_state,
+                state=target_state,
+            )
+            with pytest.raises(ConfigConflictError, match="healthy/reserved"):
+                state.handoff_gateway_runtime_generation(
+                    generation_id=generation_id,
+                    expected_old_generation="gateway-old",
+                    fencing_token="fence-ok",
+                )
+    finally:
+        state.close()
+
+
 def test_gateway_runtime_generation_handoff_and_rollback_are_fenced(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
