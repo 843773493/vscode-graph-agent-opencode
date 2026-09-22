@@ -93,4 +93,41 @@ describe("BoxTeam 运行时主题", () => {
     );
     expect(style.values.get("--bt-page-background")).toBe("#f2ecd9");
   });
+
+  test("无 document 环境显式传入 root 时不访问 document，也不抛错", () => {
+    expect(typeof document).toBe("undefined");
+    const { root, style } = createRootStub();
+
+    applyBoxTeamTheme({
+      id: "ssr-theme",
+      tokens: { "--bt-page-background": "#101010" },
+    }, root);
+
+    expect(style.values.get("--bt-page-background")).toBe("#101010");
+  });
+
+  test("两个 root 交替应用主题时 token 集合互相独立", () => {
+    const first = createRootStub();
+    const second = createRootStub();
+
+    applyBoxTeamTheme(
+      { id: "a", tokens: { "--bt-page-background": "#a1a1a1", "--bt-text-primary": "#a2a2a2" } },
+      first.root,
+    );
+    applyBoxTeamTheme(
+      { id: "b", tokens: { "--bt-panel-background": "#b1b1b1" } },
+      second.root,
+    );
+
+    // 第二个 root 的应用不得清掉第一个 root 的 token。
+    expect(first.style.values.get("--bt-page-background")).toBe("#a1a1a1");
+    expect(first.style.values.get("--bt-text-primary")).toBe("#a2a2a2");
+    expect(second.style.values.get("--bt-panel-background")).toBe("#b1b1b1");
+    expect(second.style.values.has("--bt-page-background")).toBe(false);
+
+    // 各自重新应用时只清理自己那份。
+    applyBoxTeamTheme({ id: "a2" }, first.root);
+    expect(first.style.values.has("--bt-page-background")).toBe(false);
+    expect(second.style.values.get("--bt-panel-background")).toBe("#b1b1b1");
+  });
 });

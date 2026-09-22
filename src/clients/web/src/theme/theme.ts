@@ -23,7 +23,9 @@ declare global {
   }
 }
 
-const appliedTokens = new Set<BoxTeamThemeToken>();
+// 已应用 token 必须按 root 分片：主窗口与扩展窗口是不同的文档根节点，
+// 共用一个 Set 会让后一次应用把 token 从另一个 root 上误删。
+const appliedTokensByRoot = new WeakMap<HTMLElement, Set<BoxTeamThemeToken>>();
 
 function backgroundImageValue(url: string | null | undefined): string {
   if (!url) return "none";
@@ -45,10 +47,12 @@ export function applyBoxTeamTheme(
     return [token, rawValue.trim()] as const;
   });
 
-  for (const token of appliedTokens) {
+  const previousTokens = appliedTokensByRoot.get(root);
+  const appliedTokens = new Set<BoxTeamThemeToken>();
+  appliedTokensByRoot.set(root, appliedTokens);
+  for (const token of previousTokens ?? []) {
     root.style.removeProperty(token);
   }
-  appliedTokens.clear();
 
   root.dataset.boxteamTheme = config.id?.trim() || "warm";
   root.style.colorScheme = config.colorScheme ?? "light";
@@ -61,11 +65,13 @@ export function applyBoxTeamTheme(
     "--bt-background-image",
     backgroundImageValue(config.backgroundImage),
   );
-  const meta = typeof document === "undefined"
-    ? null
-    : document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
   const themeColor = config.tokens?.["--bt-page-background"];
-  if (meta && themeColor) meta.content = themeColor;
+  // 非浏览器环境没有 document（例如纯 Node 单测传 stub root）；
+  // 整段 meta 同步因此整体跳过，不能只在取值处做半截守卫。
+  if (typeof document !== "undefined" && themeColor) {
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (meta) meta.content = themeColor;
+  }
 }
 
 export function applyResolvedGatewayTheme(theme: GatewayResolvedThemeConfig): void {
