@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import ChatPanel, { transcriptConversationsForDisplay } from "./ChatPanel";
-import type { ConversationView } from "../types/frontend";
+import type { ConversationView } from "../../types/frontend";
 
 function emptyPanelProps(onRetryHistory: () => void) {
   return {

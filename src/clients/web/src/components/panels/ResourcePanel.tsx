@@ -3,8 +3,8 @@ import type {
   SessionResource,
   SessionResourceAction,
   SessionResourceKind,
-} from "../types/backend";
-import { useWarmConfirm } from "./WarmConfirmProvider";
+} from "../../types/backend";
+import { useWarmConfirm } from "../WarmConfirmProvider";
 import {
   actionLabelForKind,
   groupSessionResources,
@@ -12,11 +12,11 @@ import {
   kindLabel,
   type ResourceAttentionGroup,
   statusLabel,
-} from "../state/display/resourceDisplay";
-import { CREATABLE_SESSION_CONNECTIONS } from "../state/sessionConnections";
-import type { CreatableSessionConnectionKind } from "../types/frontend";
-import AnchoredOverlay from "./AnchoredOverlay";
-import ResourceTreeRow from "./ResourceTreeRow";
+} from "../../state/display/resourceDisplay";
+import { CREATABLE_SESSION_CONNECTIONS } from "../../state/sessionConnections";
+import type { CreatableSessionConnectionKind } from "../../types/frontend";
+import AnchoredOverlay from "../AnchoredOverlay";
+import ResourceTreeRow from "../ResourceTreeRow";
 
 const DEFAULT_GROUP_OPEN: Record<ResourceAttentionGroup, boolean> = {
   active: true,

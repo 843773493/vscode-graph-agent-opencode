@@ -1,7 +1,7 @@
 import React from "react";
-import { formatDateTime } from "../utils/format";
-import { prettyJson } from "../utils/jsonDisplay";
-import type { FrontendReceivedEvent } from "../types/frontend";
+import { formatDateTime } from "../../utils/format";
+import { prettyJson } from "../../utils/jsonDisplay";
+import type { FrontendReceivedEvent } from "../../types/frontend";
 import {
   attachmentNames,
   buildDisplayItems,
@@ -14,8 +14,8 @@ import {
   textDeltaKind,
   textDeltaText,
   toolEventSummary,
-} from "../state/display/eventQueueDisplay";
-import { useEventQueuePagination } from "./eventQueue/useEventQueuePagination";
+} from "../../state/display/eventQueueDisplay";
+import { useEventQueuePagination } from "../eventQueue/useEventQueuePagination";
 
 export const INITIAL_VISIBLE_EVENT_COUNT = 30;
 

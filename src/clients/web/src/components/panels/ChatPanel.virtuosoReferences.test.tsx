@@ -1,7 +1,7 @@
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, mock, test } from "bun:test";
-import type { ConversationView } from "../types/frontend";
+import type { ConversationView } from "../../types/frontend";
 
 interface MockVirtuosoProps {
   context?: {

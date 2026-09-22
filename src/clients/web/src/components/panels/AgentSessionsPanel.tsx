@@ -4,23 +4,23 @@ import type {
   GatewayWorkspace,
   Session,
   WebUiSessionSidebarSettings,
-} from '../types/backend';
-import type { SessionAttachmentSummary } from '../types/frontend';
-import type { AgentSessionsPreferences } from '../state/uiSettings/preferences';
-import { stableUiSettingIds } from '../state/uiSettings/preferences';
+} from '../../types/backend';
+import type { SessionAttachmentSummary } from '../../types/frontend';
+import type { AgentSessionsPreferences } from '../../state/uiSettings/preferences';
+import { stableUiSettingIds } from '../../state/uiSettings/preferences';
 import AgentSessionsContextMenus, {
   type SessionContextMenu,
   type WorkspaceContextMenu,
-} from './agentSessions/AgentSessionsContextMenus';
-import AgentSessionsFilterMenu from './agentSessions/AgentSessionsFilterMenu';
-import AgentSessionsSessionTree from './agentSessions/AgentSessionsSessionTree';
-import SessionResourceExplorer from './agentSessions/SessionResourceExplorer';
-import { useAgentSessionsTreeState } from './agentSessions/useAgentSessionsTreeState';
-import WorkspaceRenameDialog from './workspace/WorkspaceRenameDialog';
-import WorkspaceAddDialog from './workspace/WorkspaceAddDialog';
-import AnchoredOverlay from './AnchoredOverlay';
-import WarmActionDialog from './WarmActionDialog';
-import type { SessionGeneratorResourcesController } from '../hooks/sessionResourceExplorer/useSessionGeneratorResources';
+} from '../agentSessions/AgentSessionsContextMenus';
+import AgentSessionsFilterMenu from '../agentSessions/AgentSessionsFilterMenu';
+import AgentSessionsSessionTree from '../agentSessions/AgentSessionsSessionTree';
+import SessionResourceExplorer from '../agentSessions/SessionResourceExplorer';
+import { useAgentSessionsTreeState } from '../agentSessions/useAgentSessionsTreeState';
+import WorkspaceRenameDialog from '../workspace/WorkspaceRenameDialog';
+import WorkspaceAddDialog from '../workspace/WorkspaceAddDialog';
+import AnchoredOverlay from '../AnchoredOverlay';
+import WarmActionDialog from '../WarmActionDialog';
+import type { SessionGeneratorResourcesController } from '../../hooks/sessionResourceExplorer/useSessionGeneratorResources';
 import {
   WORKSPACE_SECTION_RECENT_LIMIT,
   buildTimeSections,
@@ -29,7 +29,7 @@ import {
   type SessionFilterMode,
   type SessionGroupingMode,
   type SessionSortMode,
-} from './agentSessions/agentSessionsUtils';
+} from '../agentSessions/agentSessionsUtils';
 
 function toggleSetValue(values: Set<string>, value: string): Set<string> {
   const next = new Set(values);

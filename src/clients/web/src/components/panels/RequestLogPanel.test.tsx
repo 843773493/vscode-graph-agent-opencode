@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { LLMRequestLogRecord } from "../types/backend";
+import type { LLMRequestLogRecord } from "../../types/backend";
 import RequestLogPanel, {
   INITIAL_VISIBLE_REQUEST_LOG_COUNT,
 } from "./RequestLogPanel";

@@ -1,15 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { SessionResource } from "../types/backend";
+import type { SessionResource } from "../../types/backend";
 import {
   actionLabelForKind,
   groupSessionResources,
   resourceAttentionGroup,
   resourceTreeStatus,
-} from "../state/display/resourceDisplay";
+} from "../../state/display/resourceDisplay";
 import ResourcePanel from "./ResourcePanel";
-import WarmConfirmProvider from "./WarmConfirmProvider";
+import WarmConfirmProvider from "../WarmConfirmProvider";
 
 function resource(
   index: number,

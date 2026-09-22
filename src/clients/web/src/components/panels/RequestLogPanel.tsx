@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { formatDateTime } from "../utils/format";
-import { prettyJson } from "../utils/jsonDisplay";
+import { formatDateTime } from "../../utils/format";
+import { prettyJson } from "../../utils/jsonDisplay";
 import {
   buildRequestLogDisplay,
   buildRequestLogKeyFlow,
@@ -13,8 +13,8 @@ import {
   type RequestReplayDisplay,
   type RequestToolDefinitionDisplay,
   type UpstreamAttemptDisplay,
-} from "../state/requestLogDisplay";
-import type { LLMRequestLogRecord } from "../types/backend";
+} from "../../state/requestLogDisplay";
+import type { LLMRequestLogRecord } from "../../types/backend";
 
 export const INITIAL_VISIBLE_REQUEST_LOG_COUNT = 10;
 export const OLDER_REQUEST_LOG_BATCH_SIZE = 10;

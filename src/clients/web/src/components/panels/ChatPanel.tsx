@@ -5,23 +5,23 @@ import type {
   ComputeItemKey,
   ItemContent,
 } from "react-virtuoso";
-import type { TurnHistoryInclude } from "../api/sessionTurnHistory";
+import type { TurnHistoryInclude } from "../../api/sessionTurnHistory";
 import type {
   AttachmentRef,
   MessageReplayRequest,
   DeliveryPolicy,
   SessionChangesSummary,
   GatewayUserViewState,
-} from "../types/backend";
-import type { ConversationView } from "../types/frontend";
-import { conversationTurnKey } from "../state/session/turnIdentity";
-import type { TurnProjectionState } from "../state/session/turnTimeline";
-import { isLiveConversationView } from "../state/trace/traceAggregation";
-import ChatHistoryEmptyState from "./chat/ChatHistoryEmptyState";
-import ChatHistoryPageHeader from "./chat/ChatHistoryPageHeader";
-import ChatTurn from "./chat/ChatTurn";
-import ChatTurnErrorBoundary from "./chat/ChatTurnErrorBoundary";
-import { useTurnVirtualScroller } from "./chat/useTurnVirtualScroller";
+} from "../../types/backend";
+import type { ConversationView } from "../../types/frontend";
+import { conversationTurnKey } from "../../state/session/turnIdentity";
+import type { TurnProjectionState } from "../../state/session/turnTimeline";
+import { isLiveConversationView } from "../../state/trace/traceAggregation";
+import ChatHistoryEmptyState from "../chat/ChatHistoryEmptyState";
+import ChatHistoryPageHeader from "../chat/ChatHistoryPageHeader";
+import ChatTurn from "../chat/ChatTurn";
+import ChatTurnErrorBoundary from "../chat/ChatTurnErrorBoundary";
+import { useTurnVirtualScroller } from "../chat/useTurnVirtualScroller";
 
 interface ChatPanelRenderState {
   apiPort: number;
