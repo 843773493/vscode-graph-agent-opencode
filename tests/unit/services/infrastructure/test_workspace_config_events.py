@@ -259,6 +259,35 @@ def test_workspace_config_events_reject_cursor_outside_retained_window(tmp_path)
         store.close()
 
 
+def test_workspace_config_events_reject_cursor_after_full_domain_prune(tmp_path):
+    """整域事件被裁空后，越界游标必须报 CursorGone，不得静默返回空页。
+
+    此时 first 为 None、sqlite_sequence 高水位仍在；若只看 first 会漏判，
+    让调用方把「游标已失效」误当成「没有新事件」。
+    """
+
+    store = _store(tmp_path)
+    try:
+        for index in range(1, 6):
+            _append(store, f"cfg-{index}")
+        connection = sqlite3.connect(store.path)
+        try:
+            connection.execute("DELETE FROM config_events")
+            connection.commit()
+        finally:
+            connection.close()
+        assert store.config_event_bounds(config_domain="workspace") == (None, 5)
+        # after=0 是全新订阅起点，允许正常返回空页
+        assert store.list_config_events(config_domain="workspace", after=0) == ()
+        with pytest.raises(ConfigEventCursorGoneError) as gone:
+            store.list_config_events(config_domain="workspace", after=1)
+        assert gone.value.first_available == 5
+        with pytest.raises(ConfigEventCursorGoneError):
+            store.ensure_config_event_cursor(config_domain="workspace", after=1)
+    finally:
+        store.close()
+
+
 def test_workspace_config_event_consumer_ledger_is_independent(tmp_path):
     store = _store(tmp_path)
     try:
@@ -422,5 +451,121 @@ def test_workspace_config_event_relay_retry_backoff_reclaims_expired_claim(tmp_p
         assert reclaimed is not None
         assert reclaimed.relay_claimed_by == "other"
         assert reclaimed.relay_attempts == 2
+    finally:
+        store.close()
+
+
+def test_workspace_relay_claimed_with_null_lease_is_reclaimable(tmp_path):
+    """claim 租约列为 NULL 时不能被永丢弃，必须可被恢复者接管。"""
+
+    store = _store(tmp_path)
+    try:
+        event = _append(store, "cfg-null-lease")
+        connection = sqlite3.connect(store.path)
+        try:
+            # 模拟异常中断：状态是 claimed 但没有租约时间（列可空）
+            connection.execute(
+                "UPDATE config_events SET relay_state = 'claimed', "
+                "relay_claimed_until = NULL, relay_claimed_by = 'dead-relay'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        # outbox relay 读取必须把该行当作可投递，不能静默丢弃
+        assert [
+            item.event_id
+            for item in store.list_config_events_for_relay(config_domain="workspace")
+        ] == [event.event_id]
+        # 单事件 claim 也必须能接管
+        reclaimed = store.claim_config_event_relay(
+            event_id=event.event_id, consumer_id="recovery-relay"
+        )
+        assert reclaimed is not None
+        assert reclaimed.relay_claimed_by == "recovery-relay"
+    finally:
+        store.close()
+
+
+def test_workspace_consumer_ledger_claimed_with_null_lease_is_reclaimable(tmp_path):
+    """consumer 账本 claim 租约为 NULL 时也必须可被同一 consumer 重新认领。"""
+
+    store = _store(tmp_path)
+    try:
+        event = _append(store, "cfg-ledger-null-lease")
+        store.claim_config_events_for_consumer(
+            config_domain="workspace", after=0, consumer_id="consumer-a"
+        )
+        connection = sqlite3.connect(store.path)
+        try:
+            connection.execute(
+                "UPDATE config_event_relay_delivery SET state = 'claimed', "
+                "claimed_until = NULL WHERE consumer_id = 'consumer-a'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        reclaimed = store.claim_config_events_for_consumer(
+            config_domain="workspace", after=0, consumer_id="consumer-a"
+        )
+        assert [record.event_id for record in reclaimed] == [event.event_id]
+    finally:
+        store.close()
+
+
+def test_workspace_expired_consumer_claims_are_swept_on_reconnect(tmp_path):
+    """SSE 重连遗留的过期 consumer claim 账本行必须被回收，delivered 必须保留。"""
+
+    store = _store(tmp_path)
+    try:
+        event = _append(store, "cfg-sweep")
+        store.claim_config_events_for_consumer(
+            config_domain="workspace",
+            after=0,
+            consumer_id="consumer-old",
+            lease_seconds=0.001,
+        )
+        # 让 consumer-done 有一行 delivered 终态：先 claim 再确认
+        store.claim_config_events_for_consumer(
+            config_domain="workspace", after=0, consumer_id="consumer-done"
+        )
+        store.mark_config_event_delivered_for_consumer(
+            event_id=event.event_id, consumer_id="consumer-done"
+        )
+        # 新 consumer 认领时顺带回收过期 claim，但 delivered 终态保留
+        store.claim_config_events_for_consumer(
+            config_domain="workspace", after=0, consumer_id="consumer-new"
+        )
+        rows = dict(
+            store.connection()
+            .execute(
+                "SELECT consumer_id, state FROM config_event_relay_delivery"
+            )
+            .fetchall()
+        )
+        assert "consumer-old" not in rows
+        assert rows["consumer-done"] == "delivered"
+        assert rows["consumer-new"] == "claimed"
+    finally:
+        store.close()
+
+
+def test_workspace_config_event_bad_path_row_error_carries_locator(tmp_path):
+    """坏路径行的报错必须携带 event_seq/event_id，避免整页读取无从诊断。"""
+
+    store = _store(tmp_path)
+    try:
+        _append(store, "cfg-good")
+        _append(store, "cfg-bad")
+        connection = sqlite3.connect(store.path)
+        try:
+            connection.execute(
+                "UPDATE config_events SET changed_paths_json = 'not-json' "
+                "WHERE event_id = 'cfg-bad'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with pytest.raises(ValueError, match="event_seq=2, event_id=cfg-bad"):
+            store.list_config_events(config_domain="workspace")
     finally:
         store.close()

@@ -73,20 +73,35 @@ class WorkspaceConfigEventMixin:
 
     @staticmethod
     def _event_from_row(row: sqlite3.Row | tuple[object, ...]) -> ConfigEventRecord:
+        # 行投影的唯一实现。路径列是本系统写入的 JSON 数组；若反序列化失败只可能是
+        # 外部绕过软件篡改了库内容，因此保持响亮失败，并把定位信息（event_seq /
+        # event_id）写进错误，避免一条坏行毒化整页读取时无从诊断。
+        event_seq = int(row[0])
+        event_id = str(row[1])
+
         def string_tuple(value: object) -> tuple[str, ...]:
-            parsed = json.loads(str(value))
+            try:
+                parsed = json.loads(str(value))
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    "配置事件路径 JSON 无效: "
+                    f"event_seq={event_seq}, event_id={event_id}: {error}"
+                ) from error
             if not isinstance(parsed, list) or not all(
                 isinstance(item, str) for item in parsed
             ):
-                raise ValueError("配置事件路径必须是字符串数组")
+                raise ValueError(
+                    "配置事件路径必须是字符串数组: "
+                    f"event_seq={event_seq}, event_id={event_id}"
+                )
             return tuple(parsed)
 
         def optional_datetime(value: object) -> datetime | None:
             return datetime.fromisoformat(str(value)) if value is not None else None
 
         return ConfigEventRecord(
-            event_seq=int(row[0]),
-            event_id=str(row[1]),
+            event_seq=event_seq,
+            event_id=event_id,
             config_domain=str(row[2]),
             candidate_id=str(row[3]) if row[3] is not None else None,
             attempt_id=str(row[4]) if row[4] is not None else None,
@@ -253,7 +268,8 @@ class WorkspaceConfigEventMixin:
                 WHERE config_domain = ? AND (
                     relay_state = 'pending'
                     OR (relay_state = 'failed' AND relay_next_attempt_at <= ?)
-                    OR (relay_state = 'claimed' AND relay_claimed_until <= ?)
+                    OR (relay_state = 'claimed'
+                        AND (relay_claimed_until IS NULL OR relay_claimed_until <= ?))
                 )
                 ORDER BY event_seq ASC
                 LIMIT ?
@@ -286,6 +302,7 @@ class WorkspaceConfigEventMixin:
         connection = self._database.connection()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            self._sweep_expired_consumer_claims(connection, now_text)
             rows = connection.execute(
                 _CONFIG_EVENT_SELECT_ALIASED + """
                 LEFT JOIN config_event_relay_delivery AS d
@@ -293,7 +310,8 @@ class WorkspaceConfigEventMixin:
                 WHERE e.config_domain = ? AND e.event_seq > ? AND (
                     d.event_id IS NULL
                     OR (d.state = 'failed' AND d.next_attempt_at <= ?)
-                    OR (d.state = 'claimed' AND d.claimed_until <= ?)
+                    OR (d.state = 'claimed'
+                        AND (d.claimed_until IS NULL OR d.claimed_until <= ?))
                 )
                 ORDER BY e.event_seq ASC
                 LIMIT ?
@@ -322,6 +340,27 @@ class WorkspaceConfigEventMixin:
             raise
         finally:
             connection.close()
+
+    @staticmethod
+    def _sweep_expired_consumer_claims(
+        connection: sqlite3.Connection, now_text: str
+    ) -> int:
+        """回收租约已过期的 consumer claim 账本行。
+
+        SSE 消费者每次重连都生成新的 ``consumer_id``，旧进程消失后其 ``claimed``
+        账本行不会再有调用方回来改写，若不回收会永久累积。这里只清理租约已过期
+        （或租约缺失）的 ``claimed`` 行：``delivered`` 是去重终态，必须保留；仍持有
+        有效租约的 ``claimed`` 行属于活跃消费者，不得删除。
+        """
+
+        cursor = connection.execute(
+            """
+            DELETE FROM config_event_relay_delivery
+            WHERE state = 'claimed' AND (claimed_until IS NULL OR claimed_until <= ?)
+            """,
+            (now_text,),
+        )
+        return int(cursor.rowcount)
 
     def mark_config_event_delivered_for_consumer(
         self,
@@ -426,7 +465,8 @@ class WorkspaceConfigEventMixin:
                 WHERE event_id = ? AND (
                     relay_state = 'pending'
                     OR (relay_state = 'failed' AND relay_next_attempt_at <= ?)
-                    OR (relay_state = 'claimed' AND relay_claimed_until <= ?)
+                    OR (relay_state = 'claimed'
+                        AND (relay_claimed_until IS NULL OR relay_claimed_until <= ?))
                 )
                 """,
                 (consumer_id, claimed_until, event_id, now_text, now_text),
@@ -590,12 +630,15 @@ class WorkspaceConfigEventMixin:
     def ensure_config_event_cursor(self, *, config_domain: str, after: int) -> None:
         if after < 0:
             raise ValueError("配置事件游标不能为负数")
-        first, _ = self.config_event_bounds(config_domain=config_domain)
-        if after > 0 and first is not None and after < first - 1:
+        first, latest = self.config_event_bounds(config_domain=config_domain)
+        # 保留窗口内已无任何本域事件（first is None）但全局游标已越过 after 时，
+        # 说明该游标落在已被裁剪的区间，必须响亮报 CursorGone，不能静默返回空页
+        # 让调用方误以为「没有新事件」；用本域可续读的起点 latest 作为 first_available。
+        if after > 0 and latest > after and (first is None or first > after + 1):
             raise ConfigEventCursorGoneError(
                 config_domain=config_domain,
                 after=after,
-                first=first,
+                first=first if first is not None else latest,
             )
 
     def prune_config_events(self, *, config_domain: str, retention_days: int = 30) -> int:
