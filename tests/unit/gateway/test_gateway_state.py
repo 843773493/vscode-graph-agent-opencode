@@ -666,6 +666,60 @@ def test_gateway_config_event_outbox_claim_retry_and_dedup(tmp_path):
         state.close()
 
 
+def test_gateway_outbox_relay_rejects_hijack_and_stale_finalize(tmp_path):
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        event = state.append_config_event(
+            ConfigEventInput(
+                event_id="gateway-outbox-hijack",
+                config_domain="gateway",
+                candidate_id=None,
+                attempt_id=None,
+                apply_id=None,
+                idempotency_key=None,
+                commit_revision=None,
+                active_revision=1,
+                pending_revision=None,
+                source="watcher",
+                result="applied",
+            )
+        )
+        claimed = state.claim_config_event_relay(
+            event_id=event.event_id,
+            consumer_id="relay-a",
+        )
+        assert claimed is not None
+        # 已由 relay-a claim 的事件不能被 relay-b 确认或标记失败
+        with pytest.raises(ConfigConflictError, match="不属于当前 consumer"):
+            state.mark_config_event_relay_delivered(
+                event_id=event.event_id,
+                consumer_id="relay-b",
+            )
+        with pytest.raises(ConfigConflictError, match="不属于当前 consumer"):
+            state.fail_config_event_relay(
+                event_id=event.event_id,
+                consumer_id="relay-b",
+                error="hijack",
+            )
+        # relay-a 的确认是幂等的，重复确认不改变归属
+        delivered = state.mark_config_event_relay_delivered(
+            event_id=event.event_id,
+            consumer_id="relay-a",
+        )
+        assert delivered.relay_state == "delivered"
+        assert state.mark_config_event_relay_delivered(
+            event_id=event.event_id,
+            consumer_id="relay-a",
+        ).relay_state == "delivered"
+        # 已 delivered 是全局幂等终态：第三方确认同样返回 delivered 而不报错
+        assert state.mark_config_event_relay_delivered(
+            event_id=event.event_id,
+            consumer_id="relay-b",
+        ).relay_state == "delivered"
+    finally:
+        state.close()
+
+
 def test_gateway_config_event_relay_is_independent_per_consumer(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
