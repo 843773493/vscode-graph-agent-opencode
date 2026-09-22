@@ -946,6 +946,37 @@ class MessageStreamStore:
         job_id: str | None = None,
         event_id: str | None = None,
     ) -> dict[str, Any]:
+        async with self._lock_for(turn_stream_id):
+            return await self._commit_locked(
+                turn_stream_id,
+                event_type,
+                payload,
+                model_call_id=model_call_id,
+                block_id=block_id,
+                tool_execution_id=tool_execution_id,
+                tool_call_id=tool_call_id,
+                tool_invocation_id=tool_invocation_id,
+                tool_attempt_id=tool_attempt_id,
+                job_id=job_id,
+                event_id=event_id,
+            )
+
+    async def _commit_locked(
+        self,
+        turn_stream_id: str,
+        event_type: str,
+        payload: Mapping[str, Any],
+        *,
+        model_call_id: str | None = None,
+        block_id: str | None = None,
+        tool_execution_id: str | None = None,
+        tool_call_id: str | None = None,
+        tool_invocation_id: str | None = None,
+        tool_attempt_id: str | None = None,
+        job_id: str | None = None,
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """在已持有 Turn 锁的前提下提交单个业务事件。"""
         if event_type == "stream.snapshot":
             raise MessageStreamError(
                 "stream.snapshot 是控制帧，不得作为业务事件提交或消耗 event_seq"
@@ -969,198 +1000,226 @@ class MessageStreamStore:
                 field_name != "workspace_id" or event_type == "stream.snapshot"
             ):
                 payload.setdefault(field_name, field_value)
-        async with self._lock_for(turn_stream_id):
-            # 必须在 Turn 锁内读取缓存；模型生命周期事件和 provider delta
-            # 可能并发提交，锁外捕获的旧 state 会让两个提交复用同一个 event_seq。
-            cached = self._states.get(turn_stream_id)
-            if cached is None:
-                raise MessageStreamNotFoundError(
-                    f"消息流不存在: turn_stream_id={turn_stream_id}"
+        # 必须在 Turn 锁内读取缓存；模型生命周期事件和 provider delta
+        # 可能并发提交，锁外捕获的旧 state 会让两个提交复用同一个 event_seq。
+        cached = self._states.get(turn_stream_id)
+        if cached is None:
+            raise MessageStreamNotFoundError(
+                f"消息流不存在: turn_stream_id={turn_stream_id}"
+            )
+        state = copy.deepcopy(cached)
+        incoming_workspace_id = identity_fields["workspace_id"]
+        stored_workspace_id = state.get("workspace_id")
+        if (
+            incoming_workspace_id is not None
+            and stored_workspace_id is not None
+            and incoming_workspace_id != stored_workspace_id
+        ):
+            raise MessageStreamError(
+                "消息流事件 workspace_id 与当前流不匹配: "
+                f"turn_stream_id={turn_stream_id} "
+                f"expected={stored_workspace_id} actual={incoming_workspace_id}"
+            )
+        if stored_workspace_id is None and incoming_workspace_id is not None:
+            state["workspace_id"] = incoming_workspace_id
+        if event_id is not None:
+            self._load_event_ids_from_disk(
+                str(state["session_id"]),
+                turn_stream_id,
+            )
+            previous = self._event_ids.get(turn_stream_id, {}).get(event_id)
+            previous_payload = previous.get("payload") if previous is not None else None
+            allowed_interrupt_duplicate = (
+                event_type == "interrupt.requested"
+                and previous is not None
+                and previous.get("type") == "interrupt.rejected"
+                and isinstance(previous_payload, dict)
+                and previous_payload.get("interrupt_request_id")
+                == payload.get("interrupt_request_id")
+                and previous_payload.get("reason")
+                in {"already_interrupting", "already_terminal"}
+            )
+            identity_conflict = (
+                previous is not None
+                and (
+                    previous.get("type") != event_type
+                    or previous.get("payload") != payload
+                    or any(
+                        field_value is not None
+                        and (
+                            previous.get(field_name)
+                            or (
+                                previous_payload.get(field_name)
+                                if isinstance(previous_payload, Mapping)
+                                else None
+                            )
+                        ) != field_value
+                        for field_name, field_value in identity_fields.items()
+                    )
                 )
-            state = copy.deepcopy(cached)
-            incoming_workspace_id = identity_fields["workspace_id"]
-            stored_workspace_id = state.get("workspace_id")
-            if (
-                incoming_workspace_id is not None
-                and stored_workspace_id is not None
-                and incoming_workspace_id != stored_workspace_id
-            ):
+            )
+            if identity_conflict and not allowed_interrupt_duplicate:
                 raise MessageStreamError(
-                    "消息流事件 workspace_id 与当前流不匹配: "
-                    f"turn_stream_id={turn_stream_id} "
-                    f"expected={stored_workspace_id} actual={incoming_workspace_id}"
+                    "重复 event_id 的消息流事件内容不一致: "
+                    f"turn_stream_id={turn_stream_id} event_id={event_id}"
                 )
-            if stored_workspace_id is None and incoming_workspace_id is not None:
-                state["workspace_id"] = incoming_workspace_id
-            if event_id is not None:
-                self._load_event_ids_from_disk(
-                    str(state["session_id"]),
-                    turn_stream_id,
+            if previous is not None:
+                return copy.deepcopy(previous)
+        current_status = state["stream_status"]
+        if current_status == "interrupting":
+            if event_type == "interrupt.requested":
+                event_type = "interrupt.rejected"
+                payload = {
+                    **dict(payload),
+                    "reason": "already_interrupting",
+                }
+            elif event_type not in INTERRUPTING_ALLOWED_EVENT_TYPES:
+                raise MessageStreamTerminalError(
+                    "中断闸门拒绝新的消息流事件: "
+                    "turn_stream_id="
+                    f"{turn_stream_id} type={event_type}"
                 )
-                previous = self._event_ids.get(turn_stream_id, {}).get(event_id)
-                previous_payload = previous.get("payload") if previous is not None else None
-                allowed_interrupt_duplicate = (
-                    event_type == "interrupt.requested"
-                    and previous is not None
-                    and previous.get("type") == "interrupt.rejected"
-                    and isinstance(previous_payload, dict)
-                    and previous_payload.get("interrupt_request_id")
-                    == payload.get("interrupt_request_id")
-                    and previous_payload.get("reason")
-                    in {"already_interrupting", "already_terminal"}
+        if current_status in TERMINAL_STREAM_STATUSES and event_type not in {
+            "interrupt.rejected",
+            "stream.snapshot",
+        }:
+            if event_type == "interrupt.requested":
+                event_type = "interrupt.rejected"
+                payload = {
+                    **dict(payload),
+                    "reason": "already_terminal",
+                }
+            else:
+                raise MessageStreamTerminalError(
+                    "终态消息流拒绝新事件: "
+                    "turn_stream_id="
+                    f"{turn_stream_id} status={current_status} type={event_type}"
                 )
-                identity_conflict = (
-                    previous is not None
-                    and (
-                        previous.get("type") != event_type
-                        or previous.get("payload") != payload
-                        or any(
-                            field_value is not None
-                            and (
-                                previous.get(field_name)
-                                or (
-                                    previous_payload.get(field_name)
-                                    if isinstance(previous_payload, Mapping)
-                                    else None
-                                )
-                            ) != field_value
-                            for field_name, field_value in identity_fields.items()
-                        )
-                    )
-                )
-                if identity_conflict and not allowed_interrupt_duplicate:
-                    raise MessageStreamError(
-                        "重复 event_id 的消息流事件内容不一致: "
-                        f"turn_stream_id={turn_stream_id} event_id={event_id}"
-                    )
-                if previous is not None:
-                    return copy.deepcopy(previous)
-            current_status = state["stream_status"]
-            if current_status == "interrupting":
-                if event_type == "interrupt.requested":
-                    event_type = "interrupt.rejected"
-                    payload = {
-                        **dict(payload),
-                        "reason": "already_interrupting",
-                    }
-                elif event_type not in INTERRUPTING_ALLOWED_EVENT_TYPES:
-                    raise MessageStreamTerminalError(
-                        "中断闸门拒绝新的消息流事件: "
-                        "turn_stream_id="
-                        f"{turn_stream_id} type={event_type}"
-                    )
-            if current_status in TERMINAL_STREAM_STATUSES and event_type not in {
-                "interrupt.rejected",
-                "stream.snapshot",
-            }:
-                if event_type == "interrupt.requested":
-                    event_type = "interrupt.rejected"
-                    payload = {
-                        **dict(payload),
-                        "reason": "already_terminal",
-                    }
-                else:
-                    raise MessageStreamTerminalError(
-                        "终态消息流拒绝新事件: "
-                        "turn_stream_id="
-                        f"{turn_stream_id} status={current_status} type={event_type}"
-                    )
-            if event_type == "stream.completed":
-                running_block_ids = [
-                    str(item.get("block_id"))
-                    for item in state.get("blocks", [])
-                    if isinstance(item, Mapping)
-                    and item.get("status") == "running"
-                    and isinstance(item.get("block_id"), str)
-                ]
-                if running_block_ids:
-                    # provider delta hook 与 LangChain callback event 可能在
-                    # model.completed 后仍有一个调度窗口。stream.completed
-                    # 是整条消息流的原子终态边界，允许并记录只针对 block 的
-                    # 最终闭合；model/tool/activity 仍由统一校验严格拒绝。
-                    payload = {
-                        **dict(payload),
-                        "auto_closed_blocks": running_block_ids,
-                    }
-            next_seq = int(state["snapshot_seq"]) + 1
-            event: dict[str, Any] = {
-                "event_id": event_id or create_prefixed_id("evt"),
-                "session_id": state["session_id"],
-                "turn_id": state["turn_id"],
-                "turn_stream_id": turn_stream_id,
-                "event_seq": next_seq,
-                "emitted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                "type": event_type,
-                "payload": copy.deepcopy(dict(payload)),
-            }
-            for field_name, field_value in identity_fields.items():
-                if field_value is not None:
-                    event[field_name] = field_value
-            if state.get("workspace_id") is not None:
-                event["workspace_id"] = state["workspace_id"]
-            resolved_job_id = job_id or state.get("job_id")
-            if resolved_job_id is not None:
-                event["job_id"] = resolved_job_id
-            next_state = self._apply_event(state, event)
-            if event_type == "stream.completed":
-                self._validate_completed_state(next_state)
-            if resolved_job_id is not None:
-                next_state["job_id"] = resolved_job_id
-            next_state["snapshot_seq"] = next_seq
-            # checkpoint 只供进程内订阅者使用；磁盘只追加 event，并把最新状态
-            # 原子写入单独快照，避免每个事件重复复制整个 blocks/tool_executions。
-            record = MessageStreamRecord(event=event, checkpoint=next_state)
-            session_id = str(state["session_id"])
-            path = self._stream_path(session_id, turn_stream_id)
-            encoded = self._encode_event(event)
+        if event_type == "stream.completed":
+            # stream.completed 是整条消息流的原子终态边界。provider delta
+            # hook 与 LangChain callback event 可能在 model.completed 后仍
+            # 有一个调度窗口，此时 state 中仍残留 running block。它们必须在
+            # 同一把 Turn 锁内以真实的 block.completed 公共事件闭合，事件路径
+            # 与快照路径才会看到同一份终态事实；不得依赖内部标记绕过协议。
+            await self._close_running_blocks_locked(
+                turn_stream_id,
+                job_id=job_id,
+            )
+            state = copy.deepcopy(self._states[turn_stream_id])
+        next_seq = int(state["snapshot_seq"]) + 1
+        event: dict[str, Any] = {
+            "event_id": event_id or create_prefixed_id("evt"),
+            "session_id": state["session_id"],
+            "turn_id": state["turn_id"],
+            "turn_stream_id": turn_stream_id,
+            "event_seq": next_seq,
+            "emitted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "type": event_type,
+            "payload": copy.deepcopy(dict(payload)),
+        }
+        for field_name, field_value in identity_fields.items():
+            if field_value is not None:
+                event[field_name] = field_value
+        if state.get("workspace_id") is not None:
+            event["workspace_id"] = state["workspace_id"]
+        resolved_job_id = job_id or state.get("job_id")
+        if resolved_job_id is not None:
+            event["job_id"] = resolved_job_id
+        next_state = self._apply_event(state, event)
+        if event_type == "stream.completed":
+            self._validate_completed_state(next_state)
+        if resolved_job_id is not None:
+            next_state["job_id"] = resolved_job_id
+        next_state["snapshot_seq"] = next_seq
+        # checkpoint 只供进程内订阅者使用；磁盘只追加 event，并把最新状态
+        # 原子写入单独快照，避免每个事件重复复制整个 blocks/tool_executions。
+        record = MessageStreamRecord(event=event, checkpoint=next_state)
+        session_id = str(state["session_id"])
+        path = self._stream_path(session_id, turn_stream_id)
+        encoded = self._encode_event(event)
+        try:
+            await asyncio.to_thread(
+                self._append_durable_event,
+                session_id,
+                path,
+                encoded,
+                turn_stream_id,
+                next_state,
+            )
+        except Exception:
+            # append/fsync 失败后，磁盘可能已经包含完整记录，也可能只包含
+            # 半条记录。重新扫描并截断未完成尾部，避免进程内继续沿用旧
+            # checkpoint，下一次提交复用已经写过的 event_seq。
+            self._states.pop(turn_stream_id, None)
+            self._event_ids.pop(turn_stream_id, None)
+            self._event_ids_loaded.discard(turn_stream_id)
+            self._load_state_from_disk(session_id, turn_stream_id)
+            raise
+        self._touch_cached_state(turn_stream_id, next_state)
+        self._event_ids.setdefault(turn_stream_id, {})[event["event_id"]] = event
+        self._event_ids_loaded.add(turn_stream_id)
+        subscribers = self._subscriptions.get(turn_stream_id, set())
+        overflowed: list[MessageStreamSubscription] = []
+        for subscription in tuple(subscribers):
             try:
-                await asyncio.to_thread(
-                    self._append_durable_event,
-                    session_id,
-                    path,
-                    encoded,
-                    turn_stream_id,
-                    next_state,
-                )
+                offered = subscription.offer(record)
             except Exception:
-                # append/fsync 失败后，磁盘可能已经包含完整记录，也可能只包含
-                # 半条记录。重新扫描并截断未完成尾部，避免进程内继续沿用旧
-                # checkpoint，下一次提交复用已经写过的 event_seq。
-                self._states.pop(turn_stream_id, None)
-                self._event_ids.pop(turn_stream_id, None)
-                self._event_ids_loaded.discard(turn_stream_id)
-                self._load_state_from_disk(session_id, turn_stream_id)
-                raise
-            self._touch_cached_state(turn_stream_id, next_state)
-            self._event_ids.setdefault(turn_stream_id, {})[event["event_id"]] = event
-            self._event_ids_loaded.add(turn_stream_id)
-            subscribers = self._subscriptions.get(turn_stream_id, set())
-            overflowed: list[MessageStreamSubscription] = []
-            for subscription in tuple(subscribers):
-                try:
-                    offered = subscription.offer(record)
-                except Exception:
-                    subscription.closed = True
-                    logger.exception(
-                        "消息流订阅 fanout 失败并关闭: turn_stream_id=%s",
-                        turn_stream_id,
-                    )
-                    offered = False
-                if not offered:
-                    overflowed.append(subscription)
-            for subscription in overflowed:
-                subscribers.discard(subscription)
-                logger.error(
-                    "消息流订阅队列溢出并关闭: turn_stream_id=%s",
+                subscription.closed = True
+                logger.exception(
+                    "消息流订阅 fanout 失败并关闭: turn_stream_id=%s",
                     turn_stream_id,
                 )
-            if self._should_write_state_snapshot(event_type, next_seq):
-                self._schedule_state_snapshot(
-                    session_id,
-                    turn_stream_id,
-                    next_state,
-                )
-            return copy.deepcopy(event)
+                offered = False
+            if not offered:
+                overflowed.append(subscription)
+        for subscription in overflowed:
+            subscribers.discard(subscription)
+            logger.error(
+                "消息流订阅队列溢出并关闭: turn_stream_id=%s",
+                turn_stream_id,
+            )
+        if self._should_write_state_snapshot(event_type, next_seq):
+            self._schedule_state_snapshot(
+                session_id,
+                turn_stream_id,
+                next_state,
+            )
+        return copy.deepcopy(event)
+
+    async def _close_running_blocks_locked(
+        self,
+        turn_stream_id: str,
+        *,
+        job_id: str | None,
+    ) -> None:
+        """用规范的 block.completed 事件闭合终态边界上仍在 running 的 block。"""
+        pending = [
+            item
+            for item in self._states[turn_stream_id].get("blocks", [])
+            if isinstance(item, Mapping)
+            and item.get("status") == "running"
+            and isinstance(item.get("block_id"), str)
+        ]
+        for item in pending:
+            await self._commit_locked(
+                turn_stream_id,
+                "block.completed",
+                {
+                    "block_id": str(item["block_id"]),
+                    "block_index": int(item.get("block_index") or 0),
+                    "carrier_type": str(item.get("carrier_type") or "text"),
+                    "status": "completed",
+                    "completion_reason": "stream_completed",
+                    "partial": False,
+                },
+                model_call_id=(
+                    str(item["model_call_id"])
+                    if isinstance(item.get("model_call_id"), str)
+                    else None
+                ),
+                block_id=str(item["block_id"]),
+                job_id=job_id,
+            )
 
     async def snapshot_event(self, turn_stream_id: str) -> dict[str, Any]:
         """构造与 checkpoint 高水位一致的控制帧，不追加事件日志。"""

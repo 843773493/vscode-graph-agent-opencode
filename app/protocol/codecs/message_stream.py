@@ -241,11 +241,6 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
         normalized["status"] = enum_maps["status"].get(
             normalized["status"], normalized["status"]
         )
-    if event_type == "stream.completed":
-        # auto_closed_blocks 是存储层在终态原子收口时使用的内部标记，
-        # 公共 message.v1 的 StreamCompleted 只表达终态 status。
-        # 不得把内部控制字段泄漏给严格 protobuf schema。
-        normalized.pop("auto_closed_blocks", None)
     if (
         event_type in {"model.completed", "model.failed"}
         and isinstance(normalized.get("outcome"), str)

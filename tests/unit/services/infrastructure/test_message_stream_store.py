@@ -1426,3 +1426,105 @@ async def test_repeated_compaction_keeps_ordered_lifecycles_across_snapshot_and_
     assert replayed_activities[0]["started_seq"] < replayed_activities[1]["started_seq"]
     assert replayed_activities[0]["updated_at"]
     assert replayed_activities[1]["completed_at"]
+
+
+@pytest.mark.asyncio
+async def test_completed_stream_closes_running_blocks_with_public_events(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    """终态原子收口必须以规范 block.completed 事件表达，而不是内部标记。"""
+    store, resolver, session_id = message_stream_store
+    writer = await store.open(session_id=session_id, turn_id="job_autoclose_public")
+    subscription = await store.subscribe(writer.turn_stream_id)
+    await writer.commit(
+        "model.started",
+        {"model_call_id": "model_1", "attempt": 1, "model": "probe"},
+        model_call_id="model_1",
+    )
+    await writer.commit(
+        "block.started",
+        {"block_id": "block_1", "block_index": 0, "carrier_type": "text"},
+        model_call_id="model_1",
+        block_id="block_1",
+    )
+    await writer.commit(
+        "model.completed",
+        {"model_call_id": "model_1", "attempt": 1, "outcome": "accepted"},
+        model_call_id="model_1",
+    )
+    # provider delta hook 晚于 model.completed 到达，形成新的 running block。
+    await writer.commit(
+        "block.started",
+        {"block_id": "block_late", "block_index": 1, "carrier_type": "text"},
+        model_call_id="model_1",
+        block_id="block_late",
+    )
+
+    completed = await writer.close_completed()
+    # 内部事件不得再携带任何绕过公共协议的收口标记。
+    assert "auto_closed_blocks" not in completed["payload"]
+    assert completed["payload"] == {"status": "completed"}
+
+    closed: list[dict[str, object]] = []
+    while not subscription.queue.empty():
+        record = await subscription.get()
+        if record.event["type"] == "block.completed":
+            closed.append(record.event)
+    assert [event["block_id"] for event in closed] == ["block_1", "block_late"]
+    for event in closed:
+        assert event["block_id"] == event["payload"]["block_id"]
+        assert event["payload"]["status"] == "completed"
+        assert event["payload"]["completion_reason"] == "stream_completed"
+        assert event["payload"]["partial"] is False
+
+    state = await store.get_state(writer.turn_stream_id)
+    assert state["stream_status"] == "completed"
+    for block in state["blocks"]:
+        assert block["status"] == "completed"
+        assert block["completion_reason"] == "stream_completed"
+        assert block["partial"] is False
+        assert block["completed_seq"] is not None
+    assert state["blocks"][0]["completed_seq"] < state["blocks"][1]["completed_seq"]
+    assert state["blocks"][0]["completed_seq"] < state["snapshot_seq"]
+
+    # 快照路径必须与事件路径表达同一份终态事实。
+    snapshot = await writer.snapshot()
+    assert snapshot["payload"]["stream_status"] == "completed"
+    assert [
+        (block["block_id"], block["status"], block["completion_reason"])
+        for block in snapshot["payload"]["blocks"]
+    ] == [
+        ("block_1", "completed", "stream_completed"),
+        ("block_late", "completed", "stream_completed"),
+    ]
+
+    # 进程重启后从事件日志重放，公共序列与内存态一致。
+    restarted = MessageStreamStore(path_resolver=resolver)
+    restarted_writer = await restarted.open_existing(
+        session_id=session_id,
+        turn_id="job_autoclose_public",
+        turn_stream_id=writer.turn_stream_id,
+    )
+    events = await restarted.list_events(
+        session_id=session_id,
+        turn_stream_id=restarted_writer.turn_stream_id,
+    )
+    assert [event["type"] for event in events] == [
+        "stream.opened",
+        "model.started",
+        "block.started",
+        "model.completed",
+        "block.started",
+        "block.completed",
+        "block.completed",
+        "stream.completed",
+    ]
+    replayed_state = await restarted.get_state(restarted_writer.turn_stream_id)
+    assert [
+        (block["block_id"], block["status"], block["completion_reason"])
+        for block in replayed_state["blocks"]
+    ] == [
+        ("block_1", "completed", "stream_completed"),
+        ("block_late", "completed", "stream_completed"),
+    ]
+    await store.unsubscribe(subscription)

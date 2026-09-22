@@ -1527,6 +1527,135 @@ describe("message stream reducer", () => {
     }
   });
 
+  test("stream.completed 自动收口的 block 在事件路径与快照路径逐字段一致", () => {
+    // 后端在 provider delta 晚于 model.completed 到达时，会在 stream.completed
+    // 之前补发规范 block.completed(completion_reason=stream_completed, partial=false)。
+    // 事件路径必须消费这些事件并落到与权威快照完全一致的 block 终态，
+    // 否则 completion_reason/partial/final 会在两条链路间分叉。
+    const blockA = {
+      block_id: "b_auto_1",
+      block_index: 0,
+      items: [],
+      status: "completed",
+      carrier_type: "text",
+      projection: "streaming",
+      text: "已收口文本",
+      completion_reason: "stream_completed",
+      partial: false,
+    };
+    const blockB = {
+      block_id: "b_auto_2",
+      block_index: 1,
+      items: [],
+      status: "completed",
+      carrier_type: "text",
+      projection: "streaming",
+      text: "迟到的最终文本",
+      completion_reason: "stream_completed",
+      partial: false,
+    };
+    const snapshotState = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", {
+        snapshot_seq: 8,
+        stream_status: "completed",
+        agent_loop_status: "completed",
+        current_attempt: 1,
+        blocks: [blockA, blockB],
+        resumable: false,
+      }),
+    );
+
+    let eventState = createMessageStreamState("ses_1", "turn_1");
+    eventState = applyMessageStreamEvent(eventState, event(1, "stream.opened", { status: "open" }));
+    eventState = applyMessageStreamEvent(eventState, event(2, "model.started", {
+      model_call_id: "mc_1",
+      attempt: 1,
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(3, "block.started", {
+      block_id: "b_auto_1",
+      block_index: 0,
+      carrier_type: "text",
+      projection: "streaming",
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(4, "block.delta", {
+      block_id: "b_auto_1",
+      operation: "append",
+      text: "已收口文本",
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(5, "model.completed", {
+      model_call_id: "mc_1",
+      attempt: 1,
+      outcome: "accepted",
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(6, "block.started", {
+      block_id: "b_auto_2",
+      block_index: 1,
+      carrier_type: "text",
+      projection: "streaming",
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(7, "block.delta", {
+      block_id: "b_auto_2",
+      operation: "append",
+      text: "迟到的最终文本",
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(8, "block.completed", {
+      block_id: "b_auto_1",
+      block_index: 0,
+      carrier_type: "text",
+      status: "completed",
+      completion_reason: "stream_completed",
+      partial: false,
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(9, "block.completed", {
+      block_id: "b_auto_2",
+      block_index: 1,
+      carrier_type: "text",
+      status: "completed",
+      completion_reason: "stream_completed",
+      partial: false,
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(10, "stream.completed", {
+      status: "completed",
+    }));
+
+    const fields = ["status", "completion_reason", "partial", "carrier_type", "projection", "text"] as const;
+    for (const eventBlock of eventState.blocks) {
+      const snapshotBlock = snapshotState.blocks.find(
+        (candidate) => candidate.block_id === eventBlock.block_id,
+      );
+      expect(snapshotBlock).toBeDefined();
+      for (const field of fields) {
+        expect(eventBlock[field]).toBe(snapshotBlock?.[field]);
+      }
+      expect(eventBlock.status).toBe("completed");
+      expect(eventBlock.completion_reason).toBe("stream_completed");
+      expect(eventBlock.partial).toBe(false);
+    }
+    expect(messageStreamToResponseParts(eventState)).toEqual(
+      messageStreamToResponseParts(snapshotState),
+    );
+  });
+
+  test("裸 stream.completed 不闭合仍 running 的 block，收口事实只能来自后端事件", () => {
+    // 公共事件流在终态前会补发规范 block.completed；前端不得在 stream.completed
+    // 分支无条件闭合 running block，否则会在 provider 仍可能补 delta 的真实场景
+    // 下伪造错误终态（completion_reason 由后端权威决定，不能由前端发明）。
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, event(2, "block.started", {
+      block_id: "b_open",
+      block_index: 0,
+      carrier_type: "text",
+      projection: "streaming",
+    }));
+    state = applyMessageStreamEvent(state, event(3, "stream.completed", { status: "completed" }));
+
+    expect(state.streamStatus).toBe("completed");
+    expect(state.blocks[0]?.status).toBe("running");
+    expect(state.blocks[0]?.completion_reason).toBeUndefined();
+  });
+
   test("snapshot 与事件路径对 block carrier_type / projection 的文本归一逐字一致", () => {
     for (const item of ILLEGAL_TEXT_INPUTS) {
       const snapshotState = applyMessageStreamEvent(
