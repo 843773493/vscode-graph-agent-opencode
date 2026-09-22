@@ -77,6 +77,13 @@ export function resourceKindIcon(kind: SessionResourceKind): string {
   return RESOURCE_KIND_ICONS[kind];
 }
 
+/** 「终端 / xxx」前缀的唯一归一实现；调用方各自决定是否再 trim。 */
+const TERMINAL_NAME_PREFIX = /^终端\s*\/\s*/u;
+
+export function stripTerminalNamePrefix(name: string): string {
+  return name.replace(TERMINAL_NAME_PREFIX, "");
+}
+
 export function resourceName(resource: SessionResource): string {
   if (resource.kind !== "background_task") {
     return resource.name;
@@ -290,7 +297,7 @@ export function resourceTreeTitle(resource: SessionResource): string {
     return title && title !== "无标题" ? title : resourceUrlSummary(resource);
   }
   if (resource.kind === "terminal") {
-    const normalizedName = resource.name.replace(/^终端\s*\/\s*/u, "").trim();
+    const normalizedName = stripTerminalNamePrefix(resource.name).trim();
     if (normalizedName && normalizedName !== resource.resource_id) {
       return normalizedName;
     }

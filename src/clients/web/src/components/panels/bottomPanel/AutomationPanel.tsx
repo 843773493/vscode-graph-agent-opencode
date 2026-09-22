@@ -1,6 +1,6 @@
-import type { GatewayWorkspace } from "../../types/backend";
-import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
-import SessionGeneratorManager from "../agentSessions/SessionGeneratorManager";
+import type { GatewayWorkspace } from "../../../types/backend";
+import type { SessionGeneratorResourcesController } from "../../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
+import SessionGeneratorManager from "../../agentSessions/SessionGeneratorManager";
 
 interface AutomationPanelProps {
   apiPort: number;

@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
-import type { GatewayExtensionResourceEntry } from "../../hooks/gatewayExtensions/useGatewayExtensionResources";
-import { buildGatewayAttachUrl } from "../../utils/attachUrls";
+import type { GatewayExtensionResourceEntry } from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
+import { buildGatewayAttachUrl } from "../../../utils/attachUrls";
+import { stripTerminalNamePrefix } from "../../../state/display/resourceDisplay";
 
 interface TerminalPanelProps {
   entries: GatewayExtensionResourceEntry[];
@@ -150,7 +151,7 @@ export default function TerminalPanel({
                 <span className="codicon codicon-terminal" aria-hidden="true" />
                 <span className="terminal-panel-list-copy">
                   <span className="terminal-panel-list-name">
-                    {entry.resource.name.replace(/^终端\s*\/\s*/u, "")}
+                    {stripTerminalNamePrefix(entry.resource.name)}
                   </span>
                 </span>
               </button>

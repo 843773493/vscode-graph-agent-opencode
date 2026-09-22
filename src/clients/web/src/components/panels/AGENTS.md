@@ -1,6 +1,6 @@
 # 目录用途
 
-存放主窗口与扩展窗口的各类面板容器组件：请求日志、事件队列、Agent 会话、聊天、Agent 状态、自动化、端口转发、终端、Gateway 日志和子会话面板，以及面板共用的 Gateway 日志展示纯逻辑（gatewayLogPresentation），负责把对应数据渲染成可停靠的面板 UI。可重连资源树族已下沉到 `components/panels/resourceTree/`。
+存放主窗口与扩展窗口的各类面板容器组件：请求日志、事件队列、Agent 会话、聊天、Agent 状态和子会话面板，以及面板共用的 Gateway 日志展示纯逻辑（gatewayLogPresentation），负责把对应数据渲染成可停靠的面板 UI。可重连资源树族已下沉到 `components/panels/resourceTree/`，底部面板族已下沉到 `components/panels/bottomPanel/`。
 
 本目录与相邻子包的分工边界：
 
@@ -9,6 +9,7 @@
 - `components/workspace/`：工作区文件与端口等面板实现，本目录的 PortForwardPanel 只做工作区端口面板的接入层。
 - `components/eventQueue/`、`components/contextInspection/`、`components/nodeDebug/`、`components/gatewayExtensions/`：各自专属面板的进一步拆分子包。
 - `components/panels/resourceTree/`：会话与 Gateway 可重连资源树的面板、行组件及其测试。
+- `components/panels/bottomPanel/`：主窗口底部面板族的终端、输出、端口与自动化标签页容器。
 - `components/overlays/`（待建）：AnchoredOverlay / WarmActionDialog / SessionNameDialog / GatewayUserAccessMenu 等覆盖层与对话框，术语上不属于面板。
 
 # 可修改内容
