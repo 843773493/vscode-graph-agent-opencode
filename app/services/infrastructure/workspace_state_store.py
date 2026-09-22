@@ -38,6 +38,7 @@ from app.services.infrastructure.workspace_config_events.workspace_config_events
     WorkspaceConfigEventMixin,
 )
 from app.services.infrastructure.workspace_config_source.workspace_config_source import (
+    WORKSPACE_CONFIG_UPSERT,
     WorkspaceConfigSourceMixin,
 )
 
@@ -354,14 +355,7 @@ class WorkspaceStateStore(
         connection = self._database.connection()
         try:
             connection.execute(
-                """
-                INSERT INTO workspace_config(config_key, config_version, payload_json, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(config_key) DO UPDATE SET
-                    config_version=excluded.config_version,
-                    payload_json=excluded.payload_json,
-                    updated_at=excluded.updated_at
-                """,
+                WORKSPACE_CONFIG_UPSERT,
                 (
                     config_key,
                     config_version,
