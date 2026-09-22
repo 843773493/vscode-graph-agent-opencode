@@ -5,7 +5,7 @@ import type {
   ToolTestRun,
   ToolTestRunList,
 } from "../types/toolTesting";
-import { requestJson, unwrapApiData, workspaceHeader } from "./http";
+import { normalizePageResult, requestJson, unwrapApiData, workspaceHeader } from "./http";
 
 export async function getToolCatalog(
   port: number,
@@ -70,9 +70,12 @@ export async function listToolTestRuns(
   port: number,
   workspaceId?: string | null,
 ): Promise<ToolTestRun[]> {
-  return unwrapApiData(await requestJson<APIResponse<ToolTestRunList>>(
-    port,
-    "/api/v1/tools/tests?limit=50",
-    { headers: workspaceHeader(workspaceId) },
-  )).items;
+  return normalizePageResult<ToolTestRun>(
+    unwrapApiData(await requestJson<APIResponse<ToolTestRunList>>(
+      port,
+      "/api/v1/tools/tests?limit=50",
+      { headers: workspaceHeader(workspaceId) },
+    )),
+    "工具测试记录列表",
+  ).items;
 }
