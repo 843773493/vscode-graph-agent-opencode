@@ -86,7 +86,9 @@ export function applySnapshotState(
   next.agentLoopStatus = snapshot.agent_loop_status;
   next.currentModelCallId = snapshot.current_model_call_id ?? null;
   next.currentAttempt = snapshot.current_attempt;
-  next.blocks = sortBlocks(snapshot.blocks.map(blockFromSnapshot));
+  next.blocks = sortBlocks(
+    snapshot.blocks.map((block) => blockFromSnapshot(block, snapshot)),
+  );
   next.toolCalls = toolCallsFromSnapshot(snapshot.tool_calls);
   next.toolExecutions = sortToolExecutions(snapshot.tool_executions.map(toolFromSnapshot));
   next.activeState = activeStateFromSnapshot(snapshot.active_state);
@@ -130,10 +132,13 @@ function lifecycleFromSnapshot(value: MessageStreamLifecycle): MessageStreamLife
   };
 }
 
-function blockFromSnapshot(value: SnapshotBlock): MessageStreamBlock {
+function blockFromSnapshot(
+  value: SnapshotBlock,
+  snapshot: MessageStreamSnapshot,
+): MessageStreamBlock {
   return {
     block_id: value.block_id,
-    model_call_id: null,
+    model_call_id: blockModelCallId(value, snapshot),
     block_index: value.block_index ?? 0,
     carrier_type: defaultedTextValue(value.carrier_type, "text"),
     status: blockStatusValue(value.status),
@@ -147,6 +152,46 @@ function blockFromSnapshot(value: SnapshotBlock): MessageStreamBlock {
     partial: value.partial ?? false,
     ...lifecycleFromSnapshot(value),
   };
+}
+
+/**
+ * 快照 block 的 model_call_id 还原。
+ *
+ * 公共 MessageBlockSnapshot 不带该字段：codec 在快照归一化里把它作为内部对账
+ * 字段摘除（app/protocol/codecs/message_stream.py 的 `block.pop("model_call_id")`），
+ * 但事件路径的 upsertBlock 会从事件信封写入它，且 model.retrying 以
+ * `block.model_call_id === state.currentModelCallId` 决定把哪些 block 的 projection
+ * 置为 "intermediate"。快照恢复后该字段若恒为 null，同一 Turn 经快照恢复与经
+ * 事件重放会得到不同的 projection，而 projection 决定 responseProjection 是否
+ * 保留该 block 的文本（"intermediate" 会被丢弃），因此必须还原。
+ *
+ * 快照里唯一与归属相关的存活信号是事件序号：后端在 model.started 时登记
+ * model_calls[].started_seq，收口时写 completed_seq，block 记录首个事件的
+ * started_seq。归属即 block 首个事件落在哪个 model call 的
+ * [started_seq, completed_seq] 区间内；provider 乱序前置段会让 block 早于所属
+ * call 的 model.started 提交（started_seq 落在上一个 call 收口之后、本 call
+ * started 之前的空隙），归入其后第一个 call。两者都取不到时（末次 call 之后
+ * 迟到新建的 block）归入当前 call，与后端把迟到事件重映射到
+ * current_model_call_id 的行为一致。
+ */
+function blockModelCallId(
+  block: SnapshotBlock,
+  snapshot: MessageStreamSnapshot,
+): string | null {
+  const current = snapshot.current_model_call_id ?? null;
+  const sequence = block.started_seq;
+  if (typeof sequence !== "number") return current;
+  const calls = snapshot.model_calls
+    .filter((call) => typeof call.started_seq === "number")
+    .sort((left, right) => (left.started_seq ?? 0) - (right.started_seq ?? 0));
+  for (const call of calls) {
+    if ((call.started_seq ?? 0) > sequence) break;
+    if (call.completed_seq === undefined || sequence <= call.completed_seq) {
+      return call.model_call_id;
+    }
+  }
+  const next = calls.find((call) => (call.started_seq ?? 0) > sequence);
+  return next?.model_call_id ?? current;
 }
 
 /**

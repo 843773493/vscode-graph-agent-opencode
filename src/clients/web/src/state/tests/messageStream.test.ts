@@ -4,6 +4,7 @@ import {
   createMessageStreamState,
   messageStreamToResponseParts,
   type MessageStreamEvent,
+  type MessageStreamState,
   type MessageStreamToolExecution,
   writeMessageStreamCache,
 } from "../messageStream/index";
@@ -2209,5 +2210,294 @@ describe("active state kind 对齐", () => {
       carrier_type: "text",
       status: "running",
     });
+  });
+});
+
+describe("block model_call_id 还原", () => {
+  // 公共 MessageBlockSnapshot 不带 model_call_id：codec 在快照归一化里把它作为
+  // 内部对账字段摘除，而事件路径 upsertBlock 会从事件信封写入它，model.retrying
+  // 又据该字段决定把哪些 block 的 projection 置为 "intermediate"。若快照恢复后
+  // 该字段恒为 null，同一 Turn 经快照恢复与经事件重放会得到不同 projection，
+  // 而 "intermediate" 会让 responseProjection 丢掉该 block 的文本并参与
+  // ChatTurn.tsx responsePartsEqual 的 memo 比较。
+  const blockFields = [
+    "model_call_id",
+    "projection",
+    "status",
+    "completion_reason",
+    "partial",
+    "carrier_type",
+    "text",
+  ] as const;
+
+  function snapshotThenRetrying(
+    snapshot: Record<string, unknown>,
+    seq: number,
+  ): MessageStreamState {
+    let state = applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(1, "stream.snapshot", snapshot),
+    );
+    state = applyMessageStreamEvent(state, event(seq, "model.retrying", {
+      model_call_id: snapshot.current_model_call_id,
+      attempt: snapshot.current_attempt,
+    }));
+    return state;
+  }
+
+  test("快照恢复后 model.retrying 把当前 call 的 block projection 置为 intermediate", () => {
+    // 真实后端线格式：单个 model call 收口后（block 已 completed、projection 仍
+    // streaming），随后 model.retrying。快照不带 blocks[].model_call_id，只能由
+    // block.started_seq 落在 model_calls[].started_seq 之后还原归属。
+    const state = snapshotThenRetrying({
+      snapshot_seq: 6,
+      stream_status: "open",
+      agent_loop_status: "validating",
+      current_model_call_id: "mc_1",
+      current_attempt: 1,
+      blocks: [{
+        block_id: "mc_1:block:text_1",
+        block_index: 0,
+        items: [],
+        status: "completed",
+        carrier_type: "text",
+        projection: "streaming",
+        text: "第一轮正文",
+        completion_reason: "upstream_completed",
+        partial: false,
+        started_seq: 3,
+        last_event_seq: 5,
+        completed_seq: 5,
+      }],
+      model_calls: [{
+        model_call_id: "mc_1",
+        attempt: 1,
+        status: "completed",
+        started_seq: 2,
+        last_event_seq: 6,
+        completed_seq: 6,
+      }],
+      resumable: true,
+    }, 7);
+
+    expect(state.blocks[0]?.model_call_id).toBe("mc_1");
+    expect(state.blocks[0]?.projection).toBe("intermediate");
+  });
+
+  test("快照恢复后 model.retrying 不命中属于上一个 call 的 block", () => {
+    // 工具循环：mc_1 的 block 已收口，mc_2 的 block 运行中且是 current。retrying
+    // 只应标记 mc_2 的 block；mc_1 的旧文本必须继续作为最终答复保留。
+    const state = snapshotThenRetrying({
+      snapshot_seq: 12,
+      stream_status: "open",
+      agent_loop_status: "validating",
+      current_model_call_id: "mc_2",
+      current_attempt: 2,
+      blocks: [
+        {
+          block_id: "mc_1:block:text_1",
+          block_index: 0,
+          items: [],
+          status: "completed",
+          carrier_type: "text",
+          projection: "streaming",
+          text: "第一轮最终文本",
+          completion_reason: "upstream_completed",
+          partial: false,
+          started_seq: 3,
+          last_event_seq: 5,
+          completed_seq: 5,
+        },
+        {
+          block_id: "mc_2:block:text_1",
+          block_index: 1,
+          items: [],
+          status: "running",
+          carrier_type: "text",
+          projection: "streaming",
+          text: "第二轮正文",
+          started_seq: 9,
+          last_event_seq: 11,
+        },
+      ],
+      model_calls: [
+        { model_call_id: "mc_1", attempt: 1, status: "completed", started_seq: 2, last_event_seq: 7, completed_seq: 7 },
+        { model_call_id: "mc_2", attempt: 2, status: "completed", started_seq: 8, last_event_seq: 12, completed_seq: 12 },
+      ],
+      resumable: true,
+    }, 13);
+
+    expect(state.blocks[0]?.model_call_id).toBe("mc_1");
+    expect(state.blocks[0]?.projection).toBe("streaming");
+    expect(state.blocks[1]?.model_call_id).toBe("mc_2");
+    expect(state.blocks[1]?.projection).toBe("intermediate");
+  });
+
+  test("乱序前置段的 block 归入其后第一个 model call", () => {
+    // provider delta 可能先于所属 call 的 model.started 提交：block 的 started_seq
+    // 落在上一个 call 收口之后、本 call started 之前的空隙，后端仍把它记为
+    // 本 call 归属，因此必须归入其后第一个 call 而不是上一个。
+    const state = snapshotThenRetrying({
+      snapshot_seq: 11,
+      stream_status: "open",
+      agent_loop_status: "validating",
+      current_model_call_id: "mc_2",
+      current_attempt: 2,
+      blocks: [
+        {
+          block_id: "mc_1:block:text_1",
+          block_index: 0,
+          items: [],
+          status: "completed",
+          carrier_type: "text",
+          projection: "streaming",
+          text: "mc1 正文",
+          completion_reason: "upstream_completed",
+          partial: false,
+          started_seq: 3,
+          last_event_seq: 5,
+          completed_seq: 5,
+        },
+        {
+          block_id: "mc_2:block:text_1",
+          block_index: 1,
+          items: [],
+          status: "completed",
+          carrier_type: "text",
+          projection: "streaming",
+          text: "mc2 前置段",
+          completion_reason: "upstream_completed",
+          partial: false,
+          started_seq: 7,
+          last_event_seq: 10,
+          completed_seq: 10,
+        },
+      ],
+      model_calls: [
+        { model_call_id: "mc_1", attempt: 1, status: "completed", started_seq: 2, last_event_seq: 6, completed_seq: 6 },
+        { model_call_id: "mc_2", attempt: 2, status: "completed", started_seq: 9, last_event_seq: 11, completed_seq: 11 },
+      ],
+      resumable: true,
+    }, 12);
+
+    expect(state.blocks[0]?.model_call_id).toBe("mc_1");
+    expect(state.blocks[0]?.projection).toBe("streaming");
+    expect(state.blocks[1]?.model_call_id).toBe("mc_2");
+    expect(state.blocks[1]?.projection).toBe("intermediate");
+  });
+
+  test("末次 model call 之后仍 running 的 block 归入当前 call", () => {
+    // 后端把末次 call 之后的迟到事件重映射到 current_model_call_id，快照侧同样兜底。
+    const state = snapshotThenRetrying({
+      snapshot_seq: 7,
+      stream_status: "open",
+      agent_loop_status: "retrying",
+      current_model_call_id: "mc_1",
+      current_attempt: 1,
+      blocks: [{
+        block_id: "mc_1:block:text_1",
+        block_index: 1,
+        items: [],
+        status: "running",
+        carrier_type: "text",
+        projection: "streaming",
+        text: "运行中正文",
+        started_seq: 6,
+        last_event_seq: 7,
+      }],
+      model_calls: [{
+        model_call_id: "mc_1",
+        attempt: 1,
+        status: "completed",
+        started_seq: 2,
+        last_event_seq: 6,
+        completed_seq: 6,
+      }],
+      resumable: true,
+    }, 8);
+
+    expect(state.blocks[0]?.model_call_id).toBe("mc_1");
+    expect(state.blocks[0]?.projection).toBe("intermediate");
+  });
+
+  test("快照路径与事件路径对 retrying 后 block 的投影逐字段一致", () => {
+    // 单 call：快照在 model.completed(validation_failed) 之后、model.retrying 之前取得；
+    // 事件路径从 stream.opened 全量重放。两条链路必须给出同一份 block 事实与部件。
+    const snapshotState = snapshotThenRetrying({
+      snapshot_seq: 6,
+      stream_status: "open",
+      agent_loop_status: "validating",
+      current_model_call_id: "mc_1",
+      current_attempt: 1,
+      blocks: [{
+        block_id: "mc_1:block:text_1",
+        block_index: 0,
+        items: [],
+        status: "completed",
+        carrier_type: "text",
+        projection: "streaming",
+        text: "被校验拒绝的正文",
+        completion_reason: "upstream_completed",
+        partial: false,
+        started_seq: 3,
+        last_event_seq: 5,
+        completed_seq: 5,
+      }],
+      model_calls: [{
+        model_call_id: "mc_1",
+        attempt: 1,
+        status: "completed",
+        started_seq: 2,
+        last_event_seq: 6,
+        completed_seq: 6,
+      }],
+      resumable: true,
+    }, 7);
+
+    let eventState = createMessageStreamState("ses_1", "turn_1");
+    eventState = applyMessageStreamEvent(eventState, event(1, "stream.opened", { status: "open" }));
+    eventState = applyMessageStreamEvent(eventState, event(2, "model.started", {
+      model_call_id: "mc_1",
+      attempt: 1,
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(3, "block.started", {
+      block_id: "mc_1:block:text_1",
+      block_index: 0,
+      carrier_type: "text",
+      projection: "streaming",
+      model_call_id: "mc_1",
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(4, "block.delta", {
+      block_id: "mc_1:block:text_1",
+      operation: "append",
+      text: "被校验拒绝的正文",
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(5, "block.completed", {
+      block_id: "mc_1:block:text_1",
+      status: "completed",
+      completion_reason: "upstream_completed",
+      partial: false,
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(6, "model.completed", {
+      model_call_id: "mc_1",
+      attempt: 1,
+      outcome: "validation_failed",
+    }));
+    eventState = applyMessageStreamEvent(eventState, event(7, "model.retrying", {
+      model_call_id: "mc_1",
+      attempt: 1,
+      reason: "校验未通过",
+    }));
+
+    const snapshotBlock = snapshotState.blocks[0];
+    const eventBlock = eventState.blocks[0];
+    expect(snapshotBlock?.projection).toBe("intermediate");
+    expect(eventBlock?.projection).toBe("intermediate");
+    for (const field of blockFields) {
+      expect(snapshotBlock?.[field]).toBe(eventBlock?.[field]);
+    }
+    expect(messageStreamToResponseParts(snapshotState)).toEqual(
+      messageStreamToResponseParts(eventState),
+    );
   });
 });
