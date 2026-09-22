@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listChildThreads } from "../../api";
 import type { ChildThreadSummary } from "../../types/backend";
+import { errorMessage } from "../../utils/errorMessage";
 
 export interface ChildThreadSnapshot {
   threads: ChildThreadSummary[];
@@ -77,7 +78,7 @@ export function useChildThreadLoader({
         setSnapshot((prev) => ({
           ...prev,
           loading: false,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage(error),
         }));
       }
     },

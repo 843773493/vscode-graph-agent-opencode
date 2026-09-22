@@ -9,6 +9,7 @@ import type { AppState } from "../../types/frontend";
 import type { JobStatus } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { ACTIVE_JOB_RECONCILE_INTERVAL_MS } from "../sessionEventStream/sessionEventStreamPolicy";
+import { errorMessage } from "../../utils/errorMessage";
 
 const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
   "completed",
@@ -101,9 +102,7 @@ export function useBackgroundSessionActivity({
         (result): result is PromiseRejectedResult => result.status === "rejected",
       );
       if (failure && !cancelled) {
-        const message = failure.reason instanceof Error
-          ? failure.reason.message
-          : String(failure.reason);
+        const message = errorMessage(failure.reason);
         setState((previous) => ({
           ...previous,
           status: `后台会话活动状态对账失败: ${message}`,

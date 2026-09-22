@@ -16,6 +16,7 @@ import {
   statusLabel,
 } from "../../state/display/resourceDisplay";
 import type { RefreshOptions, SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 function isExpiredGatewayUserAccess(error: unknown): error is HttpRequestError {
   return (
@@ -113,7 +114,7 @@ export function useSessionResourceLoader({
             };
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessage(error);
           setState((prev) => {
             if (
               requestId !== requestIdRef.current ||

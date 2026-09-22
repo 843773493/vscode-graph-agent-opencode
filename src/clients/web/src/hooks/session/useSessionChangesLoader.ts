@@ -10,6 +10,7 @@ import type {
   SessionFileChange,
 } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import { errorMessage } from "../../utils/errorMessage";
 
 export type SessionChangesRefreshOptions = {
   refreshList?: boolean;
@@ -139,7 +140,7 @@ export function useSessionChangesLoader({
           };
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => {
           if (
             requestId !== requestIdRef.current ||

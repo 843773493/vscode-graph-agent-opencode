@@ -212,9 +212,7 @@ export function useSessionMessageStream({
               updateState((current) => ({
                 ...current,
                 connectionStatus: "disconnected",
-                protocolError: snapshotError instanceof Error
-                  ? snapshotError.message
-                  : String(snapshotError),
+                protocolError: errorMessage(snapshotError),
               }));
             }
           } else if (

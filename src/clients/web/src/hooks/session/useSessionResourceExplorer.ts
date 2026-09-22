@@ -25,6 +25,7 @@ import type {
 } from "../../types/backend";
 import type { SessionGeneratorResourcesController } from "../sessionResourceExplorer/useSessionGeneratorResources";
 import { changedCatalogWorkspaceIds } from "../sessionResourceExplorer/resourceTreeSync";
+import { errorMessage } from "../../utils/errorMessage";
 
 export interface CatalogBranchState extends SessionCatalogPage {
   loading: boolean;
@@ -40,7 +41,7 @@ const emptySearch: GatewaySessionSearchResults = {
 const CATALOG_RETRY_LIMIT = 3;
 
 function isRetryableCatalogError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   return /(?:HTTP\s*(?:502|503|504)|Failed to fetch|NetworkError|ERR_NETWORK_CHANGED|连接被拒绝|暂时不可用)/i.test(
     message,
   );
@@ -144,7 +145,7 @@ export function useSessionResourceExplorer({
       }
       return next;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       if (navigationRequestRef.current === requestId) {
         setNavigationError(message);
       }
@@ -225,7 +226,7 @@ export function useSessionResourceExplorer({
         if (branchRequestRefs.current.get(key) !== requestId) {
           return undefined;
         }
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setBranches((previous) => {
           const next = new Map(previous);
           const previousBranch = next.get(key);
@@ -410,7 +411,7 @@ export function useSessionResourceExplorer({
         cursor = page.cursor;
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setBranches((previous) => {
         const next = new Map(previous);
         const branch = next.get(key);
@@ -555,7 +556,7 @@ export function useSessionResourceExplorer({
         await refreshNavigation();
       } catch (reconciliationError) {
         throw new Error(
-          `${operationError instanceof Error ? operationError.message : String(operationError)}；重新读取工作区导航也失败: ${reconciliationError instanceof Error ? reconciliationError.message : String(reconciliationError)}`,
+          `${errorMessage(operationError)}；重新读取工作区导航也失败: ${errorMessage(reconciliationError)}`,
         );
       }
       throw operationError;
@@ -628,7 +629,7 @@ export function useSessionResourceExplorer({
         await loadBranch(workspaceId, parentNodeId);
         return null;
       } catch (error) {
-        return `${parentNodeId ?? "root"}: ${error instanceof Error ? error.message : String(error)}`;
+        return `${parentNodeId ?? "root"}: ${errorMessage(error)}`;
       }
     }))).filter((error): error is string => error !== null);
     if (errors.length > 0) {
@@ -652,7 +653,7 @@ export function useSessionResourceExplorer({
         );
       } catch (reconciliationError) {
         throw new Error(
-          `${operationError instanceof Error ? operationError.message : String(operationError)}；${reconciliationError instanceof Error ? reconciliationError.message : String(reconciliationError)}`,
+          `${errorMessage(operationError)}；${errorMessage(reconciliationError)}`,
         );
       }
       throw operationError;
@@ -777,7 +778,7 @@ export function useSessionResourceExplorer({
         })
         .catch((error: unknown) => {
           if (!controller.signal.aborted) {
-            setSearchError(error instanceof Error ? error.message : String(error));
+            setSearchError(errorMessage(error));
           }
         })
         .finally(() => {
@@ -828,7 +829,7 @@ export function useSessionResourceExplorer({
         if (currentSessionRevealRequestRef.current === requestId) {
           currentSessionRevealKeyRef.current = null;
           setNavigationError(
-            `定位当前会话失败: ${error instanceof Error ? error.message : String(error)}`,
+            `定位当前会话失败: ${errorMessage(error)}`,
           );
         }
       });

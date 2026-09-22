@@ -26,6 +26,7 @@ import { appendFrontendEvent } from "../../state/traceEvents";
 import { resetAgentStateFields } from "../runtime/useAgentStateSnapshot";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { sessionScopeKey } from "../../state/session/sessionScope";
+import { errorMessage } from "../../utils/errorMessage";
 
 function normalizeSessionTitle(title: string): string {
   const trimmed = title.trim();
@@ -358,7 +359,7 @@ export function useSessionLifecycleActions({
         });
         return session;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         setState((prev) => ({ ...prev, status: `创建会话失败: ${message}` }));
         throw error;
       }
@@ -441,7 +442,7 @@ export function useSessionLifecycleActions({
           return next;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         // 补偿重取失败不得覆盖原始错误：列表服务不可用时抛出的是 503，
         // 而用户真正需要看到的是 fork 失败本身（如 422 上下文快照损坏）。
         try {
@@ -456,9 +457,7 @@ export function useSessionLifecycleActions({
             return next;
           });
         } catch (reconciliationError) {
-          const reconciliationMessage = reconciliationError instanceof Error
-            ? reconciliationError.message
-            : String(reconciliationError);
+          const reconciliationMessage = errorMessage(reconciliationError);
           setState((prev) => ({
             ...prev,
             status: `从上下文创建子会话失败: ${message}；重新读取会话列表也失败: ${reconciliationMessage}`,
@@ -514,7 +513,7 @@ export function useSessionLifecycleActions({
           return next;
         });
       } catch (error) {
-        let message = error instanceof Error ? error.message : String(error);
+        let message = errorMessage(error);
         // 失败后重取会话校准：重命名可能已生效（如响应超时），本地镜像必须
         // 以后端返回的权威标题为准，而不是停在乐观假设上。
         try {
@@ -531,9 +530,7 @@ export function useSessionLifecycleActions({
             return next;
           });
         } catch (reconciliationError) {
-          const reconciliationMessage = reconciliationError instanceof Error
-            ? reconciliationError.message
-            : String(reconciliationError);
+          const reconciliationMessage = errorMessage(reconciliationError);
           message = `${message}；重新读取会话也失败: ${reconciliationMessage}`;
           setState((prev) => ({ ...prev, status: `会话命名失败: ${message}` }));
         }
@@ -569,7 +566,7 @@ export function useSessionLifecycleActions({
           return next;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         // 同 forkSessionContext：补偿重取失败必须保留原始错误语义。
         try {
           const refreshed = await apiListSessions(apiPort, workspaceId);
@@ -587,9 +584,7 @@ export function useSessionLifecycleActions({
             return next;
           });
         } catch (reconciliationError) {
-          const reconciliationMessage = reconciliationError instanceof Error
-            ? reconciliationError.message
-            : String(reconciliationError);
+          const reconciliationMessage = errorMessage(reconciliationError);
           setState((prev) => ({
             ...prev,
             status: `更新会话树失败: ${message}；重新读取会话列表也失败: ${reconciliationMessage}`,
@@ -666,7 +661,7 @@ export function useSessionLifecycleActions({
           true,
         );
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         // 失败后主动从后端重取列表校准本地镜像（AGENTS.md 前端状态管理第 4 条）：
         // 删除可能实际已在后端生效（如响应超时），本地必须以后端为准。
         let reconciled: Session[] | null = null;
@@ -676,9 +671,7 @@ export function useSessionLifecycleActions({
             await apiListSessions(apiPort, workspaceIdForRequest)
           ).items;
         } catch (reconciliationError) {
-          reconciliationFailure = reconciliationError instanceof Error
-            ? reconciliationError.message
-            : String(reconciliationError);
+          reconciliationFailure = errorMessage(reconciliationError);
         }
         setState((prev) => {
           const resolvedWorkspaceId =
@@ -705,7 +698,7 @@ export function useSessionLifecycleActions({
       try {
         refreshed = await apiListSessions(apiPort, workspaceIdForRequest);
       } catch (error) {
-        refreshFailure = error instanceof Error ? error.message : String(error);
+        refreshFailure = errorMessage(error);
       }
 
       setState((prev) => {
@@ -825,7 +818,7 @@ export function useSessionLifecycleActions({
           return next;
         });
       } catch (error) {
-        let message = error instanceof Error ? error.message : String(error);
+        let message = errorMessage(error);
         // 失败后重取会话校准：切换可能已生效（如响应超时），也可能是别的
         // 来源改了 current_agent_id，本地镜像必须以后端真值为准。
         try {
@@ -844,9 +837,7 @@ export function useSessionLifecycleActions({
             return next;
           });
         } catch (reconciliationError) {
-          const reconciliationMessage = reconciliationError instanceof Error
-            ? reconciliationError.message
-            : String(reconciliationError);
+          const reconciliationMessage = errorMessage(reconciliationError);
           message = `${message}；重新读取会话也失败: ${reconciliationMessage}`;
           setState((prev) => ({ ...prev, status: `Agent 切换失败: ${message}` }));
         }
@@ -911,7 +902,7 @@ export function useSessionLifecycleActions({
           return next;
         });
       } catch (error) {
-        let message = error instanceof Error ? error.message : String(error);
+        let message = errorMessage(error);
         try {
           const refreshed = await apiGetSession(
             apiPort,
@@ -932,9 +923,7 @@ export function useSessionLifecycleActions({
             return next;
           });
         } catch (reconciliationError) {
-          const reconciliationMessage = reconciliationError instanceof Error
-            ? reconciliationError.message
-            : String(reconciliationError);
+          const reconciliationMessage = errorMessage(reconciliationError);
           message = `${message}；重新读取会话也失败: ${reconciliationMessage}`;
           setState((prev) => ({ ...prev, status: `模型切换失败: ${message}` }));
         }
@@ -977,7 +966,7 @@ export function useSessionLifecycleActions({
           status: `已将 ${agentId} 设为工作区默认 Agent，仅影响新会话`,
         }));
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         try {
           const agents = await apiListAgents(apiPort, workspaceId);
           setState((prev) => ({
@@ -986,9 +975,7 @@ export function useSessionLifecycleActions({
             status: `设置工作区默认 Agent 失败: ${message}`,
           }));
         } catch (reconciliationError) {
-          const reconciliationMessage = reconciliationError instanceof Error
-            ? reconciliationError.message
-            : String(reconciliationError);
+          const reconciliationMessage = errorMessage(reconciliationError);
           setState((prev) => ({
             ...prev,
             status: `设置工作区默认 Agent 失败: ${message}；重新读取 Agent 也失败: ${reconciliationMessage}`,
@@ -1032,7 +1019,7 @@ export function useSessionLifecycleActions({
           status: `已将 ${providerId} 设为 ${agentId} 的工作区默认模型，仅影响新会话`,
         }));
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         try {
           const agents = await apiListAgents(apiPort, workspaceId);
           setState((prev) => ({
@@ -1041,9 +1028,7 @@ export function useSessionLifecycleActions({
             status: `设置工作区默认模型失败: ${message}`,
           }));
         } catch (reconciliationError) {
-          const reconciliationMessage = reconciliationError instanceof Error
-            ? reconciliationError.message
-            : String(reconciliationError);
+          const reconciliationMessage = errorMessage(reconciliationError);
           setState((prev) => ({
             ...prev,
             status: `设置工作区默认模型失败: ${message}；重新读取 Agent 也失败: ${reconciliationMessage}`,
