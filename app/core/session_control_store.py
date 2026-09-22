@@ -365,6 +365,24 @@ def _validate_execution_identity(
         raise ValueError(f"job_id 形态非法: {job_id!r}")
 
 
+def _fetch_execution_intent_row(
+    connection: sqlite3.Connection,
+    admission_idempotency_key: str,
+) -> sqlite3.Row | None:
+    """按 admission 幂等键取 intent 行投影；缺失返回 None。
+
+    intent 的判态/回读（create-or-get、claim、mark bound、record
+    failure 与单条读取）共用本查询，避免同一 SELECT 在多处复制；各调用
+    点仍各自决定缺失时的错误文案与分支。
+    """
+    return connection.execute(
+        f"SELECT {_THREAD_EXECUTION_INTENT_COLUMNS} "
+        "FROM thread_execution_intents "
+        "WHERE admission_idempotency_key = ?",
+        (admission_idempotency_key,),
+    ).fetchone()
+
+
 @dataclass(frozen=True, slots=True)
 class ThreadCreationRecord:
     """thread_creation_records 表行的不可变投影（8.5-A 创建 lease record）。
@@ -1828,12 +1846,7 @@ class SessionControlStore(
                     f"thread_id={thread_id!r}"
                 )
             now_text = datetime.now(UTC).isoformat()
-            existing = connection.execute(
-                f"SELECT {_THREAD_EXECUTION_INTENT_COLUMNS} "
-                "FROM thread_execution_intents "
-                "WHERE admission_idempotency_key = ?",
-                (admission_idempotency_key,),
-            ).fetchone()
+            existing = _fetch_execution_intent_row(connection, admission_idempotency_key)
             if existing is not None:
                 if (
                     str(existing["thread_id"]) != thread_id
@@ -1886,12 +1899,7 @@ class SessionControlStore(
                     now_text,
                 ),
             )
-            inserted = connection.execute(
-                f"SELECT {_THREAD_EXECUTION_INTENT_COLUMNS} "
-                "FROM thread_execution_intents "
-                "WHERE admission_idempotency_key = ?",
-                (admission_idempotency_key,),
-            ).fetchone()
+            inserted = _fetch_execution_intent_row(connection, admission_idempotency_key)
             if inserted is None:
                 # 防御性兜底：同事务内刚插入必然可见。
                 raise RuntimeError(
@@ -1907,12 +1915,7 @@ class SessionControlStore(
         """按 admission 幂等键返回 intent 投影；不存在抛 KeyError。"""
         self._validate_thread_creation_key(admission_idempotency_key)
         self._ensure_open()
-        row = self._connection.execute(
-            f"SELECT {_THREAD_EXECUTION_INTENT_COLUMNS} "
-            "FROM thread_execution_intents "
-            "WHERE admission_idempotency_key = ?",
-            (admission_idempotency_key,),
-        ).fetchone()
+        row = _fetch_execution_intent_row(self._connection, admission_idempotency_key)
         if row is None:
             raise KeyError(
                 "initial execution intent 不存在: "
@@ -1981,12 +1984,7 @@ class SessionControlStore(
         self._validate_thread_creation_key(admission_idempotency_key)
         validate_claim_fields(claim_owner, claim_generation)
         with self._write_transaction() as connection:
-            row = connection.execute(
-                f"SELECT {_THREAD_EXECUTION_INTENT_COLUMNS} "
-                "FROM thread_execution_intents "
-                "WHERE admission_idempotency_key = ?",
-                (admission_idempotency_key,),
-            ).fetchone()
+            row = _fetch_execution_intent_row(connection, admission_idempotency_key)
             if row is None:
                 raise KeyError(
                     "initial execution intent 不存在，无法领取: "
@@ -2055,12 +2053,7 @@ class SessionControlStore(
                     f"held_owner={existing_owner!r}, "
                     f"requested_owner={claim_owner!r}"
                 )
-            updated = connection.execute(
-                f"SELECT {_THREAD_EXECUTION_INTENT_COLUMNS} "
-                "FROM thread_execution_intents "
-                "WHERE admission_idempotency_key = ?",
-                (admission_idempotency_key,),
-            ).fetchone()
+            updated = _fetch_execution_intent_row(connection, admission_idempotency_key)
             if updated is None:
                 # 防御性兜底：同事务内已确认存在。
                 raise RuntimeError(
@@ -2094,12 +2087,7 @@ class SessionControlStore(
         _validate_execution_identity(execution_binding_id, job_id)
         validate_claim_fields(claim_owner, claim_generation)
         with self._write_transaction() as connection:
-            row = connection.execute(
-                f"SELECT {_THREAD_EXECUTION_INTENT_COLUMNS} "
-                "FROM thread_execution_intents "
-                "WHERE admission_idempotency_key = ?",
-                (admission_idempotency_key,),
-            ).fetchone()
+            row = _fetch_execution_intent_row(connection, admission_idempotency_key)
             if row is None:
                 raise KeyError(
                     "initial execution intent 不存在，无法标记 bound: "
@@ -2184,12 +2172,7 @@ class SessionControlStore(
                     "mark bound CAS 失败（intent 已被并发推进，fail "
                     f"closed）: admission_key={admission_idempotency_key!r}"
                 )
-            updated = connection.execute(
-                f"SELECT {_THREAD_EXECUTION_INTENT_COLUMNS} "
-                "FROM thread_execution_intents "
-                "WHERE admission_idempotency_key = ?",
-                (admission_idempotency_key,),
-            ).fetchone()
+            updated = _fetch_execution_intent_row(connection, admission_idempotency_key)
             if updated is None:
                 # 防御性兜底：同事务内已确认存在。
                 raise RuntimeError(
@@ -2219,12 +2202,7 @@ class SessionControlStore(
         if not isinstance(last_error, str) or not last_error:
             raise ValueError(f"last_error 不能为空: {last_error!r}")
         with self._write_transaction() as connection:
-            row = connection.execute(
-                f"SELECT {_THREAD_EXECUTION_INTENT_COLUMNS} "
-                "FROM thread_execution_intents "
-                "WHERE admission_idempotency_key = ?",
-                (admission_idempotency_key,),
-            ).fetchone()
+            row = _fetch_execution_intent_row(connection, admission_idempotency_key)
             if row is None:
                 raise KeyError(
                     "initial execution intent 不存在，无法记录失败: "
@@ -2265,12 +2243,7 @@ class SessionControlStore(
                     "record failure CAS 失败（intent 已被并发推进，fail "
                     f"closed）: admission_key={admission_idempotency_key!r}"
                 )
-            updated = connection.execute(
-                f"SELECT {_THREAD_EXECUTION_INTENT_COLUMNS} "
-                "FROM thread_execution_intents "
-                "WHERE admission_idempotency_key = ?",
-                (admission_idempotency_key,),
-            ).fetchone()
+            updated = _fetch_execution_intent_row(connection, admission_idempotency_key)
             if updated is None:
                 # 防御性兜底：同事务内已确认存在。
                 raise RuntimeError(
