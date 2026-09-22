@@ -3,19 +3,20 @@ import type {
   SessionResource,
   SessionResourceAction,
   SessionResourceKind,
-} from "../../types/backend";
-import { useWarmConfirm } from "../shell/WarmConfirmProvider";
+} from "../../../types/backend";
+import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import {
   actionLabelForKind,
   groupSessionResources,
   isPreviewedResource,
   kindLabel,
+  resourceKindIcon,
   type ResourceAttentionGroup,
   statusLabel,
-} from "../../state/display/resourceDisplay";
-import { CREATABLE_SESSION_CONNECTIONS } from "../../state/sessionConnections";
-import type { CreatableSessionConnectionKind } from "../../types/frontend";
-import AnchoredOverlay from "../overlays/AnchoredOverlay";
+} from "../../../state/display/resourceDisplay";
+import { CREATABLE_SESSION_CONNECTIONS } from "../../../state/sessionConnections";
+import type { CreatableSessionConnectionKind } from "../../../types/frontend";
+import AnchoredOverlay from "../../overlays/AnchoredOverlay";
 import ResourceTreeRow from "./ResourceTreeRow";
 
 const DEFAULT_GROUP_OPEN: Record<ResourceAttentionGroup, boolean> = {
@@ -392,7 +393,7 @@ export default function ResourcePanel({
                       <div key={kindGroup.kind} className="resource-tree-kind-group">
                         {showKindGroups ? (
                           <div className="resource-tree-kind-heading">
-                            <span className={`codicon ${kindGroup.kind === "browser" ? "codicon-globe" : kindGroup.kind === "terminal" ? "codicon-terminal" : "codicon-server-process"}`} aria-hidden="true" />
+                            <span className={`codicon ${resourceKindIcon(kindGroup.kind)}`} aria-hidden="true" />
                             <span>{kindLabel(kindGroup.kind)}</span>
                             <span>{kindGroup.resources.length}</span>
                           </div>

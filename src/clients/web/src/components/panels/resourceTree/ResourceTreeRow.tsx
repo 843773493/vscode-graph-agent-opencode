@@ -3,21 +3,16 @@ import type {
   SessionResource,
   SessionResourceAction,
   SessionResourceKind,
-} from "../../types/backend";
-import { formatDateTime } from "../../utils/format";
+} from "../../../types/backend";
+import { formatDateTime } from "../../../utils/format";
 import {
   actionLabel,
   metadataRows,
   resourceTreeDescription,
+  resourceKindIcon,
   resourceTreeStatus,
   resourceTreeTitle,
-} from "../../state/display/resourceDisplay";
-
-const RESOURCE_ICONS: Record<SessionResourceKind, string> = {
-  browser: "codicon-globe",
-  terminal: "codicon-terminal",
-  background_task: "codicon-server-process",
-};
+} from "../../../state/display/resourceDisplay";
 
 function resourceActionIcon(action: SessionResourceAction): string {
   if (action === "delete") return "codicon-trash";
@@ -105,7 +100,7 @@ export default function ResourceTreeRow({
           title={`${title} · ${description}`}
         >
           <span
-            className={`resource-tree-kind codicon ${RESOURCE_ICONS[resource.kind]}`}
+            className={`resource-tree-kind codicon ${resourceKindIcon(resource.kind)}`}
             aria-hidden="true"
           />
           <span className="resource-tree-copy">

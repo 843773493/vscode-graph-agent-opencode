@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
-import type { SessionResourceAction } from "../../types/backend";
+import type { SessionResourceAction } from "../../../types/backend";
 import type {
   GatewayExtensionResourceEntry,
   GatewayExtensionResourceError,
-} from "../../hooks/gatewayExtensions/useGatewayExtensionResources";
-import { kindLabel } from "../../state/display/resourceDisplay";
+} from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
+import { kindLabel } from "../../../state/display/resourceDisplay";
 import ResourceTreeRow from "./ResourceTreeRow";
-import { useWarmConfirm } from "../shell/WarmConfirmProvider";
+import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 
 interface GatewayExtensionResourcePanelProps {
   entries: GatewayExtensionResourceEntry[];

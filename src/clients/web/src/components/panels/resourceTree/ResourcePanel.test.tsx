@@ -1,15 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { SessionResource } from "../../types/backend";
+import type { SessionResource } from "../../../types/backend";
 import {
   actionLabelForKind,
   groupSessionResources,
   resourceAttentionGroup,
+  resourceKindIcon,
   resourceTreeStatus,
-} from "../../state/display/resourceDisplay";
+} from "../../../state/display/resourceDisplay";
 import ResourcePanel from "./ResourcePanel";
-import WarmConfirmProvider from "../shell/WarmConfirmProvider";
+import WarmConfirmProvider from "../../shell/WarmConfirmProvider";
 
 function resource(
   index: number,
@@ -37,6 +38,48 @@ function resource(
 }
 
 describe("后台连接目录", () => {
+  test("资源种类图标来自 resourceDisplay 唯一映射，面板分组标题与树行一致", () => {
+    expect(resourceKindIcon("browser")).toBe("codicon-globe");
+    expect(resourceKindIcon("terminal")).toBe("codicon-terminal");
+    expect(resourceKindIcon("background_task")).toBe("codicon-server-process");
+
+    const html = renderToStaticMarkup(
+      <WarmConfirmProvider>
+        <ResourcePanel
+          resources={[
+            resource(1),
+            resource(2, {
+              kind: "terminal",
+              name: "终端 / 主终端",
+              metadata: { cwd: "/workspace" },
+            }),
+          ]}
+          loading={false}
+          error={null}
+          loadedAt={null}
+          sessionId="ses_resource_tree"
+          workspaceId="workspace_test"
+          activePreviewPath={null}
+          onRefresh={() => {}}
+          onControl={async () => {}}
+          onOpenTerminalPreview={() => {}}
+          onOpenBrowserPreview={() => {}}
+          onCloseResourcePreview={async () => {}}
+          onCreateConnection={async () => {}}
+        />
+      </WarmConfirmProvider>,
+    );
+
+    // 分组标题按种类渲染图标，必须与 resourceKindIcon 完全一致。
+    // ResourcePanel 只渲染可重连的 browser/terminal，background_task 由 resourceKindIcon 单测覆盖。
+    expect(html).toContain(
+      'resource-tree-kind-heading"><span class="codicon codicon-globe" aria-hidden="true"></span><span>浏览器</span>',
+    );
+    expect(html).toContain(
+      'resource-tree-kind-heading"><span class="codicon codicon-terminal" aria-hidden="true"></span><span>终端</span>',
+    );
+  });
+
   test("按用户注意力分组，并将当前预览资源置顶", () => {
     const resources = [
       resource(1),

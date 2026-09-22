@@ -67,6 +67,16 @@ export function kindLabel(kind: SessionResourceKind): string {
   return "后台任务";
 }
 
+const RESOURCE_KIND_ICONS: Record<SessionResourceKind, string> = {
+  browser: "codicon-globe",
+  terminal: "codicon-terminal",
+  background_task: "codicon-server-process",
+};
+
+export function resourceKindIcon(kind: SessionResourceKind): string {
+  return RESOURCE_KIND_ICONS[kind];
+}
+
 export function resourceName(resource: SessionResource): string {
   if (resource.kind !== "background_task") {
     return resource.name;
