@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 
 import pytest
@@ -13,6 +14,43 @@ from app.services.infrastructure.config.state import (
     build_secret_binding_summary,
 )
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+
+
+def test_workspace_config_read_reports_corrupt_payload_with_context(tmp_path):
+    """workspace_config 被外部写成非法 JSON / 非对象时，读取必须带上下文响亮失败。"""
+
+    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+    try:
+        store.set_config(config_key="user", config_version=1, payload={"a": 1})
+        assert store.get_config("user").payload == {"a": 1}
+        # 缺失是「从未保存」，返回 None；损坏是错误，必须抛出且带位置
+        assert store.get_config("never-saved") is None
+
+        connection = sqlite3.connect(store.path)
+        try:
+            connection.execute(
+                "UPDATE workspace_config SET payload_json = 'not-json' "
+                "WHERE config_key = 'user'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with pytest.raises(ValueError, match="workspace_config payload"):
+            store.get_config("user")
+
+        connection = sqlite3.connect(store.path)
+        try:
+            connection.execute(
+                "UPDATE workspace_config SET payload_json = '[1, 2]' "
+                "WHERE config_key = 'user'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with pytest.raises(TypeError, match="workspace_config payload"):
+            store.get_config("user")
+    finally:
+        store.close()
 
 
 def test_workspace_state_uses_workspace_boundary_and_activity_cursor(tmp_path):

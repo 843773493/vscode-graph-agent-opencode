@@ -273,6 +273,49 @@ _WORKSPACE_MIGRATIONS = (
 )
 
 
+# 以下常量收敛同一语义 SQL 的逐字重复：begin/acquire 两条 apply 入口共用候选
+# 快照读取，start/begin 两处共用 apply journal 首插，prepare/acquire 两处共用
+# apply claim upsert，begin/discard 两处共用 source layer 完整基线读取。
+_PENDING_CANDIDATE_SNAPSHOT_SELECT = """
+SELECT pending_revision, state, base_active_revision
+FROM config_pending_candidate
+WHERE config_domain = ? AND candidate_id = ?
+"""
+
+_SOURCE_LAYER_BASELINE_SELECT = """
+SELECT config_key, source_path, presence, layer_revision,
+       layer_digest, source_generation
+FROM config_source_layers
+"""
+
+_CONFIG_APPLY_JOURNAL_INSERT = """
+INSERT INTO config_apply_journal(
+    config_domain, apply_id, candidate_id, attempt_id, owner,
+    base_active_revision, pending_revision, source_baseline_json,
+    active_baseline_json, registry_revision, side_effects_json,
+    state, last_error, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'applying', NULL, ?, ?)
+"""
+
+_CONFIG_APPLY_CLAIM_UPSERT = """
+INSERT INTO config_apply_claim(
+    config_domain, candidate_id, attempt_id, apply_id, owner,
+    base_active_revision, target_generation, lease_expires_at,
+    fencing_token, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(config_domain) DO UPDATE SET
+    candidate_id=excluded.candidate_id,
+    attempt_id=excluded.attempt_id,
+    apply_id=excluded.apply_id,
+    owner=excluded.owner,
+    base_active_revision=excluded.base_active_revision,
+    target_generation=excluded.target_generation,
+    lease_expires_at=excluded.lease_expires_at,
+    fencing_token=excluded.fencing_token,
+    updated_at=excluded.updated_at
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class WorkspaceConfigRecord:
     config_key: str
@@ -702,11 +745,7 @@ class WorkspaceStateStore(
                     and detail.get("layer_revision") is not None
                 }
                 current_rows = connection.execute(
-                    """
-                    SELECT config_key, source_path, presence, layer_revision,
-                           layer_digest, source_generation
-                    FROM config_source_layers
-                    """
+                    _SOURCE_LAYER_BASELINE_SELECT
                 ).fetchall()
                 current_keys = {str(row[0]) for row in current_rows}
                 if current_keys != set(expected_sources):
@@ -1395,14 +1434,7 @@ class WorkspaceStateStore(
             if existing is None:
                 now = utc_now_text()
                 connection.execute(
-                    """
-                    INSERT INTO config_apply_journal(
-                        config_domain, apply_id, candidate_id, attempt_id, owner,
-                        base_active_revision, pending_revision, source_baseline_json,
-                        active_baseline_json, registry_revision, side_effects_json,
-                        state, last_error, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'applying', NULL, ?, ?)
-                    """,
+                    _CONFIG_APPLY_JOURNAL_INSERT,
                     (
                         config_domain,
                         apply_id,
@@ -1650,11 +1682,7 @@ class WorkspaceStateStore(
         try:
             connection.execute("BEGIN IMMEDIATE")
             pending = connection.execute(
-                """
-                SELECT pending_revision, state, base_active_revision
-                FROM config_pending_candidate
-                WHERE config_domain = ? AND candidate_id = ?
-                """,
+                _PENDING_CANDIDATE_SNAPSHOT_SELECT,
                 (config_domain, candidate_id),
             ).fetchone()
             if (
@@ -1697,23 +1725,7 @@ class WorkspaceStateStore(
                 else new_config_id("fence")
             )
             connection.execute(
-                """
-                INSERT INTO config_apply_claim(
-                    config_domain, candidate_id, attempt_id, apply_id, owner,
-                    base_active_revision, target_generation, lease_expires_at,
-                    fencing_token, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(config_domain) DO UPDATE SET
-                    candidate_id=excluded.candidate_id,
-                    attempt_id=excluded.attempt_id,
-                    apply_id=excluded.apply_id,
-                    owner=excluded.owner,
-                    base_active_revision=excluded.base_active_revision,
-                    target_generation=excluded.target_generation,
-                    lease_expires_at=excluded.lease_expires_at,
-                    fencing_token=excluded.fencing_token,
-                    updated_at=excluded.updated_at
-                """,
+                _CONFIG_APPLY_CLAIM_UPSERT,
                 (
                     config_domain,
                     candidate_id,
@@ -1753,14 +1765,7 @@ class WorkspaceStateStore(
             if journal is None:
                 now_text = now.isoformat()
                 connection.execute(
-                    """
-                    INSERT INTO config_apply_journal(
-                        config_domain, apply_id, candidate_id, attempt_id, owner,
-                        base_active_revision, pending_revision, source_baseline_json,
-                        active_baseline_json, registry_revision, side_effects_json,
-                        state, last_error, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'applying', NULL, ?, ?)
-                    """,
+                    _CONFIG_APPLY_JOURNAL_INSERT,
                     (
                         config_domain,
                         apply_id,
@@ -1827,11 +1832,7 @@ class WorkspaceStateStore(
                 (config_domain,),
             ).fetchone()
             pending = connection.execute(
-                """
-                SELECT pending_revision, state, base_active_revision
-                FROM config_pending_candidate
-                WHERE config_domain = ? AND candidate_id = ?
-                """,
+                _PENDING_CANDIDATE_SNAPSHOT_SELECT,
                 (config_domain, candidate_id),
             ).fetchone()
             if pending is None or str(pending[1]) not in {
@@ -1869,23 +1870,7 @@ class WorkspaceStateStore(
             )
             lease_expires_at = now + timedelta(seconds=lease_seconds)
             connection.execute(
-                """
-                INSERT INTO config_apply_claim(
-                    config_domain, candidate_id, attempt_id, apply_id, owner,
-                    base_active_revision, target_generation, lease_expires_at,
-                    fencing_token, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(config_domain) DO UPDATE SET
-                    candidate_id=excluded.candidate_id,
-                    attempt_id=excluded.attempt_id,
-                    apply_id=excluded.apply_id,
-                    owner=excluded.owner,
-                    base_active_revision=excluded.base_active_revision,
-                    target_generation=excluded.target_generation,
-                    lease_expires_at=excluded.lease_expires_at,
-                    fencing_token=excluded.fencing_token,
-                    updated_at=excluded.updated_at
-                """,
+                _CONFIG_APPLY_CLAIM_UPSERT,
                 (
                     config_domain,
                     candidate_id,
@@ -2231,11 +2216,7 @@ class WorkspaceStateStore(
                     "Workspace pending discard 的 source baseline 与候选不一致"
                 )
             current_rows = connection.execute(
-                """
-                SELECT config_key, source_path, presence, layer_revision,
-                       layer_digest, source_generation
-                FROM config_source_layers
-                """
+                _SOURCE_LAYER_BASELINE_SELECT
             ).fetchall()
             if {str(row[0]) for row in current_rows} != set(expected_sources):
                 raise ConfigConflictError(
@@ -2352,13 +2333,12 @@ class WorkspaceStateStore(
             ).fetchone()
             if row is None:
                 return None
-            payload = json.loads(str(row[2]))
-            if not isinstance(payload, dict):
-                raise ValueError(f"Workspace SQLite 配置不是对象: key={config_key}")
             return WorkspaceConfigRecord(
                 config_key=str(row[0]),
                 config_version=int(row[1]),
-                payload=payload,
+                payload=load_json_object(
+                    str(row[2]), field=f"workspace_config payload (key={config_key})"
+                ),
             )
         finally:
             connection.close()
