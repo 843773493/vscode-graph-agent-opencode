@@ -1084,6 +1084,7 @@ export default function AppShell() {
           isOpen={agentSessionsVisible && workbenchView === "sessions"}
           workspaceName={state.workspaceName ?? ""}
           gatewayWorkspaces={state.gatewayWorkspaces}
+          gatewayWorkspacesStale={state.gatewayWorkspacesStale}
           activeGatewayWorkspaceId={state.activeGatewayWorkspaceId}
           workspaceSwitching={state.workspaceSwitching}
           onActivateWorkspace={activateGatewayWorkspace}
