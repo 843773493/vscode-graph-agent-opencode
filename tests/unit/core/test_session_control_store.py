@@ -3094,3 +3094,61 @@ def test_inbox_reply_causal_direction_is_enforced_by_endpoints(
             store.create_or_get_communication_inbox(**unknown)
     finally:
         store.close()
+
+
+# ----------------------------------------------------------------------
+# 写事务不变量：_write_transaction 不可重入
+# ----------------------------------------------------------------------
+
+
+def test_write_transaction_rejects_nesting_with_domain_error(
+    tmp_path: Path,
+) -> None:
+    """嵌套写事务必须抛本库领域错误（含「嵌套」），而不是 sqlite3 原始异常。
+
+    固化 `_write_transaction` 的不可重入不变量：内层 BEGIN IMMEDIATE 若
+    在外层事务内执行，sqlite3 会报 "cannot start a transaction within a
+    transaction"，该文案不含本库上下文；本库改在进入前 fail loud。
+    """
+    store = SessionControlStore(tmp_path / "nested-tx.sqlite")
+
+    def enter_nested_transaction() -> None:
+        with store._write_transaction():
+            pass
+
+    try:
+        with store._write_transaction(), pytest.raises(RuntimeError, match="嵌套"):
+            enter_nested_transaction()
+        # 外层事务已正常提交；再次单独开事务不受影响（不变量只拒嵌套）。
+        with store._write_transaction() as connection:
+            assert connection.execute("SELECT 1").fetchone()[0] == 1
+        assert store.connection.in_transaction is False
+    finally:
+        store.close()
+
+
+def test_write_transaction_nesting_error_does_not_corrupt_outer_transaction(
+    tmp_path: Path,
+) -> None:
+    """嵌套被拒后外层事务仍可正常提交，且异常不被静默吞掉。"""
+    store = SessionControlStore(tmp_path / "nested-tx-outer.sqlite")
+    try:
+        store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+        with store._write_transaction() as connection:
+            connection.execute(
+                "INSERT INTO lifecycle_fence (id, state, generation) "
+                "VALUES (1, 'active', 1) "
+                "ON CONFLICT(id) DO NOTHING"
+            )
+            nested_error: RuntimeError | None = None
+            try:
+                with store._write_transaction():
+                    pass
+            except RuntimeError as error:
+                nested_error = error
+            assert nested_error is not None
+            assert "嵌套" in str(nested_error)
+        # 外层事务提交成功，插入可见。
+        assert store.get_fence() is not None
+    finally:
+        store.close()

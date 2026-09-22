@@ -533,6 +533,16 @@ class SessionControlStore(
         手写模式保持不变；8.5-A 新增方法统一走本 CM）。
         """
         self._ensure_open()
+        # 不变量：_write_transaction 不可重入。嵌套调用会让内层 BEGIN
+        # IMMEDIATE 在外层事务内触发 sqlite3 的 "cannot start a
+        # transaction within a transaction"，错误信息不含本库上下文，
+        # 难以定位。此处响亮失败并给出可诊断信息（拒绝静默嵌套）。
+        if self._connection.in_transaction:
+            raise RuntimeError(
+                "session control 写事务嵌套：_write_transaction 不可重入"
+                "（外层事务未结束，内层 BEGIN IMMEDIATE 会破坏事务边界）: "
+                f"path={self.database_path}"
+            )
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             yield self._connection
