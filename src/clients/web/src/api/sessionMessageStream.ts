@@ -190,8 +190,7 @@ function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
   return { ...envelope, type, payload: value.payload };
 }
 
-// 事件类型白名单的唯一运行时清单。逐字对齐 types.ts 的 MessageStreamEventType 联合；
-// 下方类型级校验保证联合类型新增成员时此处必须同步，杜绝静默漂移的第二份真相。
+// 事件类型白名单的唯一运行时清单。逐字对齐 types.ts 的 MessageStreamEventType 联合。
 const MESSAGE_STREAM_EVENT_TYPES = [
     "stream.opened",
     "model.started",
@@ -218,11 +217,17 @@ const MESSAGE_STREAM_EVENT_TYPES = [
     "stream.snapshot",
 ] as const satisfies readonly MessageStreamEventType[];
 
-// 若 MessageStreamEventType 出现本清单未覆盖的成员，下面一行将产生类型错误。
+// 双向编译期穷尽守卫：类型别名必须被真正消费，tsc 才会例化它，否则守卫形同虚设。
+// 下面一行把它从 "未消费的别名" 变成 "被赋值的常量"，从而在以下任一情况下报错：
+// - 联合类型新增成员而白名单未跟上（Exclude 结果非 never，别名为 never，赋值 true 报错）；
+// - 白名单漏掉任一联合成员（同理报错）。
+// 白名单多出联合之外的成员由上面的 satisfies 拦截。
 type MessageStreamEventTypesExhaustive = Exclude<
   MessageStreamEventType,
   (typeof MESSAGE_STREAM_EVENT_TYPES)[number]
 > extends never ? true : never;
+
+const MESSAGE_STREAM_EVENT_TYPES_EXHAUSTIVE: MessageStreamEventTypesExhaustive = true;
 
 const MESSAGE_STREAM_EVENT_TYPE_SET: ReadonlySet<string> = new Set(MESSAGE_STREAM_EVENT_TYPES);
 

@@ -7,6 +7,7 @@ import type {
   MessageStreamState,
   MessageStreamToolExecution,
 } from "./types";
+import { isRecord } from "../../utils/jsonDisplay";
 
 export const MESSAGE_STREAM_PENDING_EVENT_LIMIT = 256;
 const TERMINAL_MESSAGE_STREAM_CACHE_LIMIT = 8;
@@ -286,9 +287,8 @@ export function failureFromValue(value: unknown): MessageStreamState["failure"] 
   };
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+// isRecord 统一由 utils/jsonDisplay 提供权威共享实现；此处仅转发，避免第二份同源实现并存。
+export { isRecord };
 
 export function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;

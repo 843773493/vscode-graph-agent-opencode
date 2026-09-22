@@ -1,4 +1,4 @@
-/** 通用对象判定：非数组的 object。全前端唯一的 isRecord 权威实现。 */
+/** 通用对象判定：非数组的 object。全前端共享的 isRecord 权威实现。 */
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
