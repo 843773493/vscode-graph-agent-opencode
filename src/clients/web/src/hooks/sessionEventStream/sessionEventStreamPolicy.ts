@@ -4,6 +4,10 @@ export const ACTIVE_JOB_TRACE_STALE_MS = 8_000;
 export const ACTIVE_JOB_STALE_PROBE_INTERVAL_MS = 10_000;
 export const WORKSPACE_SESSION_FALLBACK_REFRESH_MS = 60_000;
 
+/** 连续重连次数上限：连接成功（有活动）会把计数归零，因此这里限制的是
+ * 「连续若干次都没能建立连接」的退避上限，耗尽后调用方必须给出可见终态。 */
+export const SESSION_STREAM_MAX_RECONNECT_ATTEMPTS = 6;
+
 const SESSION_STREAM_RECONNECT_INITIAL_MS = 1_000;
 const SESSION_STREAM_RECONNECT_MAX_MS = 30_000;
 const SESSION_STREAM_RECONNECT_JITTER_RATIO = 0.2;

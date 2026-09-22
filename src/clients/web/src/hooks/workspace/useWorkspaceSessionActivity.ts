@@ -9,7 +9,10 @@ import { sessionScopeKey } from "../../state/session/sessionScope";
 import type { SessionActivity } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { refreshWorkspaceSessionList } from "../sessionEventStream/sessionRefresh";
-import { sessionStreamReconnectDelay } from "../sessionEventStream/sessionEventStreamPolicy";
+import {
+  SESSION_STREAM_MAX_RECONNECT_ATTEMPTS,
+  sessionStreamReconnectDelay,
+} from "../sessionEventStream/sessionEventStreamPolicy";
 import { waitForReconnect } from "../sessionEventStream/waitForReconnect";
 
 function markActivity(
@@ -65,6 +68,9 @@ export function useWorkspaceSessionActivity({
         refreshPending = false;
         void refreshWorkspaceSessionList(apiPort, workspaceId, setState).catch(
           (error: unknown) => {
+            // 卸载/中止后不得再写状态：定时器回调只在仍存活时才会走到这里，
+            // 但刷新请求本身可能在卸载之后才失败。
+            if (controller.signal.aborted) return;
             const message = error instanceof Error ? error.message : String(error);
             setState((previous) => ({
               ...previous,
@@ -129,14 +135,22 @@ export function useWorkspaceSessionActivity({
             status: `会话活动流断开，正在重连: ${message}`,
           }));
         }
-        if (!controller.signal.aborted) {
-          await waitForReconnect(
-            controller.signal,
-            sessionStreamReconnectDelay(reconnectAttempt),
-          );
-          reconnectAttempt += 1;
-          void connect();
+        if (controller.signal.aborted) return;
+        // 有界重连：连续到达上限后停止重连并给出可见终态说明，不再无限刷屏。
+        // onActivity 会在连接真正建立时把计数归零，因此只统计连续失败。
+        if (reconnectAttempt >= SESSION_STREAM_MAX_RECONNECT_ATTEMPTS) {
+          setState((previous) => ({
+            ...previous,
+            status: `会话活动流连续 ${SESSION_STREAM_MAX_RECONNECT_ATTEMPTS} 次重连失败，已停止自动重连；请手动刷新或切换工作区后重试`,
+          }));
+          return;
         }
+        await waitForReconnect(
+          controller.signal,
+          sessionStreamReconnectDelay(reconnectAttempt),
+        );
+        reconnectAttempt += 1;
+        void connect();
       }
     };
 
