@@ -19,7 +19,7 @@ import {
   workspaceDirectoryMatchesQuery,
   workspaceParentPath,
   workspacePathSearchParts,
-} from "../../utils/workspaceDirectorySelection";
+} from "../../utils/selection/workspaceDirectorySelection";
 
 interface WorkspaceAddDialogProps {
   open: boolean;

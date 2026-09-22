@@ -32,7 +32,7 @@ import {
   formatBrowserElementSelections,
   parseBrowserElementSelectionBundle,
   type BrowserElementSelection,
-} from "../../utils/browserElementSelection";
+} from "../../utils/selection/browserElementSelection";
 import {
   GOAL_STATUS_LABELS,
   goalCanResume,
