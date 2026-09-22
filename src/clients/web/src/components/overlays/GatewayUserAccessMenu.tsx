@@ -56,11 +56,11 @@ export default function GatewayUserAccessMenu() {
               setStatus("当前用户已被另一台电脑接管，已切换到游客视图");
             })
             .catch((refreshError: unknown) => {
-              setError(`当前访问已失效，且游客视图切换失败：${errorMessage(refreshError)}`);
+              setError(`当前访问已失效，且游客视图切换失败：${gatewayUserErrorMessage(refreshError)}`);
             });
           return;
         }
-        setError(`当前访问已失效：${errorMessage(cause)}`);
+        setError(`当前访问已失效：${gatewayUserErrorMessage(cause)}`);
       });
     }, 20_000);
     return () => window.clearInterval(timer);
