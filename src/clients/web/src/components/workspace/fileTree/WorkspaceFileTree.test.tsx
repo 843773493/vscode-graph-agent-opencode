@@ -84,6 +84,27 @@ describe("工作区文件树根节点", () => {
     expect(() => parseClipboardFilePaths("not-a-path")).toThrow("绝对文件路径");
   });
 
+  test("file 地址无法被 URL 解析时给出中文错误而不是原生 TypeError", () => {
+    expect(() => parseClipboardFilePaths("file://%zz")).toThrow(
+      "剪贴板中的 file 地址无法解析: file://%zz",
+    );
+  });
+
+  test("file 地址含非法百分号转义时给出中文错误而不是原生 URIError", () => {
+    expect(() => parseClipboardFilePaths("file:///a%")).toThrow(
+      "剪贴板中的 file 地址包含非法百分号转义: file:///a%",
+    );
+    expect(() => parseClipboardFilePaths("file:///a%2")).toThrow("非法百分号转义");
+  });
+
+  test("file 地址解码后含空字符时在入口拒绝", () => {
+    // %00 会被 decodeURIComponent 还原成 NUL，后端 Path.resolve 只会抛英文
+    // "embedded null byte"，必须在剪贴板入口拦下并说明原始输入。
+    expect(() => parseClipboardFilePaths("file:///tmp/x%00y")).toThrow(
+      "剪贴板中的文件路径包含空字符: file:///tmp/x%00y",
+    );
+  });
+
   test("从浏览器原生 paste 事件读取文件路径", () => {
     const values: Record<string, string> = {
       "text/uri-list": "file:///home/hyf/project%20one\nfile:///home/hyf/project-two",

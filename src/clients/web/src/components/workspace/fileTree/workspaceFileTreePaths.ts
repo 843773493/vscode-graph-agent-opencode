@@ -112,6 +112,30 @@ export function absolutePathForTreePath(
 }
 
 export function parseClipboardFilePaths(text: string): [string, ...string[]] {
+  const parseFileUri = (raw: string): string => {
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch (error) {
+      throw new Error(`剪贴板中的 file 地址无法解析: ${raw}`, { cause: error });
+    }
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(url.pathname);
+    } catch (error) {
+      throw new Error(`剪贴板中的 file 地址包含非法百分号转义: ${raw}`, { cause: error });
+    }
+    // 空字符会让下游后端路径解析与文件系统调用只看到截断后的前缀，必须在入口拒绝。
+    if (decodedPath.includes("\0")) {
+      throw new Error(`剪贴板中的文件路径包含空字符: ${raw}`);
+    }
+    if (url.hostname) {
+      return `//${url.hostname}${decodedPath}`;
+    }
+    return /^\/[A-Za-z]:\//.test(decodedPath)
+      ? decodedPath.slice(1)
+      : decodedPath;
+  };
   const paths = text
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -126,14 +150,7 @@ export function parseClipboardFilePaths(text: string): [string, ...string[]] {
         ? line.slice(1, -1)
         : line;
       if (unquoted.startsWith("file://")) {
-        const url = new URL(unquoted);
-        const decodedPath = decodeURIComponent(url.pathname);
-        if (url.hostname) {
-          return `//${url.hostname}${decodedPath}`;
-        }
-        return /^\/[A-Za-z]:\//.test(decodedPath)
-          ? decodedPath.slice(1)
-          : decodedPath;
+        return parseFileUri(unquoted);
       }
       if (unquoted.startsWith("/") || /^[A-Za-z]:[\\/]/.test(unquoted)) {
         return unquoted;
