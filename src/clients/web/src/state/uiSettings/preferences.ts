@@ -146,3 +146,17 @@ export function resolveAgentSessionsPreferences(
 export function stableUiSettingIds(values: Iterable<string>): string[] {
   return stableUniqueStrings([...values]);
 }
+
+/** 持久化 id 集合的唯一切换实现：存在则移除，不存在则加入。 */
+export function toggleUiSettingId(
+  values: Iterable<string>,
+  value: string,
+): Set<string> {
+  const next = new Set(values);
+  if (next.has(value)) {
+    next.delete(value);
+  } else {
+    next.add(value);
+  }
+  return next;
+}

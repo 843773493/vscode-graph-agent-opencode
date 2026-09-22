@@ -1,11 +1,11 @@
 import { useState } from "react";
-import type { ChildThreadSummary } from "../../types/backend";
-import { copyTextToClipboard } from "../../utils/clipboard";
-import { formatDateTime } from "../../utils/format";
+import type { ChildThreadSummary } from "../../../types/backend";
+import { copyTextToClipboard } from "../../../utils/clipboard";
+import { formatDateTime } from "../../../utils/format";
 import {
   childThreadStatusClass,
   childThreadStatusLabel,
-} from "../../state/childThreadDisplay";
+} from "../../../state/childThreadDisplay";
 
 /** child thread 在列表中的图标；用分支语义表达“从 owner 会话派生”。 */
 const CHILD_THREAD_ICON = "codicon-git-branch";
