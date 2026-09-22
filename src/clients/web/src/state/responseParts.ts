@@ -1,5 +1,6 @@
 import type { TurnResponsePart } from "../types/backend";
 import type { TimelineItem } from "./timelineTypes";
+import { isRecord } from "../utils/jsonDisplay";
 
 export interface ResponsePartsProjectionOptions {
   terminalFailure?: boolean;
@@ -26,10 +27,6 @@ function recordField(
 ): Record<string, unknown> {
   const value = (part as unknown as Record<string, unknown>)[field];
   return isRecord(value) ? value : {};
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** 将权威 Turn response parts 转为聊天时间线部件。 */

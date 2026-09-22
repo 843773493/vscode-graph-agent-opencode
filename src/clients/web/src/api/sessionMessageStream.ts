@@ -11,6 +11,8 @@ import type {
   MessageStreamEvent,
   MessageStreamEventType,
 } from "../state/messageStream/index";
+// 复用消息流原语中心的值归一实现，不再在 api 层维护第二份 stringValue。
+import { stringValue } from "../state/messageStream/state";
 import type { APIResponse } from "../types/backend";
 import {
   isJsonObject,
@@ -188,8 +190,9 @@ function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
   return { ...envelope, type, payload: value.payload };
 }
 
-function isMessageStreamEventType(value: string): value is MessageStreamEventType {
-  return new Set<MessageStreamEventType>([
+// 事件类型白名单的唯一运行时清单。逐字对齐 types.ts 的 MessageStreamEventType 联合；
+// 下方类型级校验保证联合类型新增成员时此处必须同步，杜绝静默漂移的第二份真相。
+const MESSAGE_STREAM_EVENT_TYPES = [
     "stream.opened",
     "model.started",
     "model.completed",
@@ -213,9 +216,16 @@ function isMessageStreamEventType(value: string): value is MessageStreamEventTyp
     "stream.interrupted",
     "stream.failed",
     "stream.snapshot",
-  ]).has(value as MessageStreamEventType);
-}
+] as const satisfies readonly MessageStreamEventType[];
 
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
+// 若 MessageStreamEventType 出现本清单未覆盖的成员，下面一行将产生类型错误。
+type MessageStreamEventTypesExhaustive = Exclude<
+  MessageStreamEventType,
+  (typeof MESSAGE_STREAM_EVENT_TYPES)[number]
+> extends never ? true : never;
+
+const MESSAGE_STREAM_EVENT_TYPE_SET: ReadonlySet<string> = new Set(MESSAGE_STREAM_EVENT_TYPES);
+
+function isMessageStreamEventType(value: string): value is MessageStreamEventType {
+  return MESSAGE_STREAM_EVENT_TYPE_SET.has(value);
 }

@@ -2,6 +2,7 @@ import type {
   GatewayWorkspace,
   SessionInformationSnapshot,
 } from "../../types/backend";
+import { isRecord } from "../../utils/jsonDisplay";
 
 export const SESSION_INFORMATION_KIND = "session_diagnostic_snapshot" as const;
 
@@ -150,10 +151,6 @@ export function formatSessionInformationDump(
   information: SessionInformationDump,
 ): string {
   return JSON.stringify(information, null, 2);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 // 与后端唯一 canonical 验证器同口径（OpenSpec 2.1：ses_ + 32 位小写

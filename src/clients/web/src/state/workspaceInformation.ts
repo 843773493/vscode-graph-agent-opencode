@@ -1,4 +1,5 @@
 import type { GatewayWorkspace } from "../types/backend";
+import { isRecord } from "../utils/jsonDisplay";
 
 export const WORKSPACE_INFORMATION_KIND =
   "boxteam_workspace_information" as const;
@@ -23,10 +24,6 @@ export interface WorkspaceInformationDump {
     remote: GatewayWorkspace["remote"];
     connection_error: string | null;
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isWorkspaceId(value: unknown): value is string {
