@@ -60,11 +60,10 @@ import { useUiSettingsController } from "./hooks/settings/useUiSettingsControlle
 import {
   readCachedUiSettings,
   readUnreadSessionKeys,
-  writeUnreadSessionKeys,
 } from "./state/storage";
 import { sessionScopeKey } from "./state/session/sessionScope";
-import { cloneMaps } from "./state/appStateMaps";
 import { useSessionGoalController } from "./hooks/session/useSessionGoalController";
+import { useUnreadSessionTracking } from "./hooks/session/useUnreadSessionTracking";
 import { useSessionTraceHistory } from "./hooks/sessionTraceHistory/useSessionTraceHistory";
 import type { ComposerStateSnapshot } from "./state/composerState";
 import {
@@ -468,36 +467,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState,
   });
 
-  useEffect(() => {
-    writeUnreadSessionKeys(state.unreadSessionKeys);
-  }, [state.unreadSessionKeys]);
+  useUnreadSessionTracking({
+    unreadSessionKeys: state.unreadSessionKeys,
+    currentSessionCacheKey,
+    setState,
+  });
 
-  useEffect(() => {
-    const markCurrentSessionRead = () => {
-      if (
-        !currentSessionCacheKey
-        || document.visibilityState !== "visible"
-        || !document.hasFocus()
-      ) {
-        return;
-      }
-      setState((previous) => {
-        if (!previous.unreadSessionKeys.has(currentSessionCacheKey)) {
-          return previous;
-        }
-        const next = cloneMaps(previous);
-        next.unreadSessionKeys.delete(currentSessionCacheKey);
-        return next;
-      });
-    };
-    markCurrentSessionRead();
-    document.addEventListener("visibilitychange", markCurrentSessionRead);
-    window.addEventListener("focus", markCurrentSessionRead);
-    return () => {
-      document.removeEventListener("visibilitychange", markCurrentSessionRead);
-      window.removeEventListener("focus", markCurrentSessionRead);
-    };
-  }, [currentSessionCacheKey]);
   const copySessionInformation = useSessionInformationClipboard(
     state.apiPort ?? DEFAULT_BACKEND_PORT,
   );
