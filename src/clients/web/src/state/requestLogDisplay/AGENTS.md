@@ -1,13 +1,13 @@
 # 目录用途
 
-`src/clients/web/src/state/requestLogDisplay/` 放浏览器前端「请求日志展示族」的纯派生逻辑：把后端权威的 LLM 请求日志记录（`LLMRequestLogRecord`）投影成请求日志面板可直接渲染的展示模型、文案与归一结果，供 `components/panels/inspectionPanels/RequestLogPanel.tsx` 消费。本子包直接继承旧顶层文件 `src/clients/web/src/state/requestLogDisplay.ts`，其全部导出符号与外部契约保持不变（`index.ts` 是对外唯一入口）。
+`src/clients/web/src/state/requestLogDisplay/` 放浏览器前端「请求日志展示族」的纯派生逻辑：把后端权威的 LLM 请求日志记录（`LLMRequestLogRecord`）投影成请求日志面板可直接渲染的展示模型、文案与归一结果，供 `components/panels/inspectionPanels/RequestLogPanel.tsx` 消费。本子包的对外契约由 `index.ts` 统一收口，是该族唯一的导入入口。
 
 与相邻子包的边界：
 
 - `state/display/`：放大盘权威数据（Agent State、工具事件、资源、事件队列）的展示投影。本包同样是「权威数据 → 展示模型」的单向投影，但输入源专指请求日志记录，二者互不内联复制归一逻辑。
 - `state/trace/`：Trace 事件的配对、失败补全与聚合。请求日志里的 `tool_calls` 配对只服务于「本条日志/本组日志」的条目展示与关键流转聚合，不参与 Trace 事件时间线的配对，也不产出 Trace 聚合结果。
 - `state/messageStream/`：Turn SSE 实时实体状态与快照 hydration。本包只读已落盘的历史日志，不读写任何流状态。
-- `state/skillKeyFlow/`、`state/customTools/`：分别提供 skill 关键流转状态机器与 `invoke_extension_tool` 协议解析。本包单向消费它们，不复制其常量与解析规则。
+- `state/skillKeyFlow.ts`、`state/customTools/`：分别提供 skill 关键流转状态机器与 `invoke_extension_tool` 协议解析。本包单向消费它们，不复制其常量与解析规则。
 
 ## 可修改内容
 
