@@ -45,6 +45,132 @@ def test_gateway_state_keeps_config_in_control_database(tmp_path):
         store.close()
 
 
+def test_gateway_source_layer_cas_and_owner_generation_guard(tmp_path):
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        source_path = tmp_path / "workspace.jsonc"
+        state.sync_config_source(
+            config_key="workspace_mutable_override",
+            source_path=source_path,
+            config_version=1,
+            presence="present",
+            payload={"ui": {"a": 1}},
+            layer_digest="digest-1",
+        )
+        # layer revision / digest 显式 CAS 必须拒绝过期输入
+        for key, kwargs in (
+            ("revision", {"expected_layer_revision": 99}),
+            ("digest", {"expected_layer_revision": 1, "expected_layer_digest": "stale"}),
+        ):
+            with pytest.raises(ConfigConflictError, match="source layer CAS"):
+                state.sync_config_source(
+                    config_key="workspace_mutable_override",
+                    source_path=source_path,
+                    config_version=2,
+                    presence="present",
+                    payload={"ui": {"a": 2}},
+                    layer_digest="digest-2",
+                    **kwargs,
+                )
+        # 首次写入带期望 revision 时必须报初始 CAS 冲突
+        with pytest.raises(ConfigConflictError, match="初始 CAS"):
+            state.sync_config_source(
+                config_key="brand_new_key",
+                source_path=source_path,
+                config_version=1,
+                presence="present",
+                payload={"ui": {}},
+                layer_digest="digest-new",
+                expected_layer_revision=1,
+            )
+    finally:
+        state.close()
+
+
+def test_gateway_source_journal_owner_generation_guard_is_enforced(tmp_path):
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        source_path = tmp_path / "workspace.jsonc"
+        state.append_config_source_journal(
+            source_key="user",
+            source_event_id="event-1",
+            source_path=source_path,
+            presence="present",
+            layer_revision=1,
+            layer_digest="a",
+            previous_digest=None,
+            origin="file-watcher",
+            fanout_id="fanout-1",
+        )
+        # 人为把 owner 水位推到与 journal 水位不一致：下一次 append 必须 fail closed
+        connection = state.connection()
+        try:
+            connection.execute(
+                "UPDATE config_source_owner SET next_generation = ? WHERE source_key = 'user'",
+                (99,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with pytest.raises(ConfigConflictError, match="source owner generation CAS"):
+            state.append_config_source_journal(
+                source_key="user",
+                source_event_id="event-2",
+                source_path=source_path,
+                presence="absent",
+                layer_revision=2,
+                layer_digest="b",
+                previous_digest="a",
+                origin="file-watcher",
+                fanout_id="fanout-2",
+            )
+    finally:
+        state.close()
+
+
+def test_gateway_source_owner_guard_applies_inside_sync_transaction(tmp_path):
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        source_path = tmp_path / "workspace.jsonc"
+        # sync_config_source 在同一事务内经 _append_config_source_journal_in_connection
+        # 追加 journal，owner 水位不一致时必须在事务内 fail closed 并回滚整个 sync。
+        state.sync_config_source(
+            config_key="workspace_mutable_override",
+            source_path=source_path,
+            config_version=1,
+            presence="present",
+            payload={"ui": {"a": 1}},
+            layer_digest="d1",
+            journal_origin="file-watcher",
+            source_event_id="sync-event-1",
+            fanout_id="sync-fanout-1",
+        )
+        connection = state.connection()
+        try:
+            connection.execute(
+                "UPDATE config_source_owner SET next_generation = 99"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with pytest.raises(ConfigConflictError, match="source owner generation CAS"):
+            state.sync_config_source(
+                config_key="workspace_mutable_override",
+                source_path=tmp_path / "next.jsonc",
+                config_version=2,
+                presence="present",
+                payload={"ui": {"a": 2}},
+                layer_digest="d2",
+                journal_origin="file-watcher",
+                source_event_id="sync-event-2",
+                fanout_id="sync-fanout-2",
+            )
+        # 事务整体回滚：layer 仍停留在上一次成功提交的 revision
+        assert state.get_source_layer("workspace_mutable_override").layer_revision == 1
+    finally:
+        state.close()
+
+
 def test_gateway_registry_uses_sqlite_without_mixing_session_indexes(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
