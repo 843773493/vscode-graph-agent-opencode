@@ -38,6 +38,104 @@ function state(currentSession: Session): AppState {
 }
 
 describe("发送消息状态更新", () => {
+  test("W9-d 发送失败后按后端队列快照校准而不是抹掉已接受的回合", async () => {
+    const currentSession = session();
+    const cacheKey = "gw_send_regression::ses_send_regression";
+    let currentState = state(currentSession);
+    let pendingCalls = 0;
+    let sendMessage:
+      | ReturnType<typeof useSessionRunActions>["sendMessage"]
+      | undefined;
+
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0])).pathname;
+        const method = String(
+          (args[1] as RequestInit | undefined)?.method ?? "GET",
+        );
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_pending_credential",
+            data: { token: "test-pending-token" },
+          });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_pending_user",
+            data: { kind: "guest", user_id: null },
+          });
+        }
+        if (
+          path === `/api/v1/sessions/${currentSession.session_id}/messages`
+          && method === "POST"
+        ) {
+          // 网关拒绝：但后端其实已经收下并排进队列。
+          return Response.json(
+            { detail: "模型网关拒绝" },
+            { status: 502 },
+          );
+        }
+        if (
+          path === `/api/v1/sessions/${currentSession.session_id}/pending-requests`
+        ) {
+          pendingCalls += 1;
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_pending_snapshot",
+            data: {
+              session_id: currentSession.session_id,
+              snapshot_version: 9,
+              active_job_id: "job_server_accepted",
+              queue: [],
+              requests: [],
+            },
+          });
+        }
+        throw new Error(`测试收到未预期请求: ${method} ${path}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    function Harness(): React.ReactNode {
+      const actions = useSessionRunActions({
+        apiPort: 8014,
+        currentSession,
+        activeGatewayWorkspaceId: "gw_send_regression",
+        currentSessionGatewayWorkspaceId: "gw_send_regression",
+        currentSessionCacheKey: cacheKey,
+        defaultGatewayWorkspaceId: "gw_send_regression",
+        contentView: "default",
+        setState: (update) => {
+          currentState =
+            typeof update === "function" ? update(currentState) : update;
+        },
+        refreshAgentStateSnapshot: async () => undefined,
+      });
+      sendMessage = actions.sendMessage;
+      return null;
+    }
+
+    try {
+      renderToString(<Harness />);
+      if (!sendMessage) throw new Error("测试未获取 sendMessage");
+      await expect(sendMessage("你好")).rejects.toThrow("模型网关拒绝");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(pendingCalls).toBe(1);
+    // 乐观回合被后端权威快照替换：后端已接受的 job 必须留在本地队列里。
+    expect(currentState.activeJobIdsBySession.get(cacheKey))
+      .toBe("job_server_accepted");
+    expect(currentState.status).toContain("发送失败");
+    expect(currentState.status).toContain("模型网关拒绝");
+  });
+
   test("API 接受请求前的乐观更新不读取尚未返回的 accepted", async () => {
     const currentSession = session();
     let currentState = state(currentSession);

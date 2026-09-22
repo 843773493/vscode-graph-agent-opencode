@@ -386,3 +386,209 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     expect(aborts).toBe(1);
   });
 });
+
+describe("会话生命周期失败后的后端重取校准", () => {
+  const originalFetch = globalThis.fetch;
+  let currentState: AppState;
+  let actions: ReturnType<typeof useSessionLifecycleActions>;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function installFetch(
+    handler: (path: string, method: string) => Response | Promise<Response>,
+  ) {
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0])).pathname;
+        const method = String(
+          (args[1] as RequestInit | undefined)?.method ?? "GET",
+        );
+        if (path === "/api/gateway/auth/local-credential") {
+          return apiResponse({ token: "test-token" });
+        }
+        if (path === "/api/gateway/users/current") {
+          return apiResponse({ kind: "guest", user_id: null });
+        }
+        return handler(path, method);
+      },
+      { preconnect: originalFetch.preconnect },
+    ) as typeof fetch;
+  }
+
+  function mount(current: Session, sessions: Session[]) {
+    currentState = raceState(current, sessions);
+    mountLifecycle({
+      currentSession: current,
+      readState: () => currentState,
+      writeState: (update) => {
+        currentState = typeof update === "function"
+          ? update(currentState)
+          : update;
+      },
+      getActions: (value) => {
+        actions = value;
+      },
+    });
+  }
+
+  test("W9-a Agent 切换失败后用后端真值校准 current_agent_id", async () => {
+    const before = raceSession(RACE_WORKSPACE, "agent_old");
+    let getCalls = 0;
+    installFetch((path, method) => {
+      if (path === `/api/v1/sessions/${before.session_id}` && method === "PATCH") {
+        return apiResponse({ message: "上游模型不可用" }, 500);
+      }
+      if (path === `/api/v1/sessions/${before.session_id}` && method === "GET") {
+        getCalls += 1;
+        return apiResponse({ ...before, current_agent_id: "agent_server_truth" });
+      }
+      throw new Error(`未预期请求: ${method} ${path}`);
+    });
+
+    mount(before, [before]);
+    await expect(actions.switchAgent("agent_new")).rejects.toThrow("上游模型不可用");
+
+    expect(getCalls).toBe(1);
+    expect(currentState.currentSession?.current_agent_id).toBe("agent_server_truth");
+    expect(
+      currentState.sessions.find((item) => item.session_id === before.session_id)
+        ?.current_agent_id,
+    ).toBe("agent_server_truth");
+  });
+
+  test("W9-b 会话命名失败后用后端真值校准标题", async () => {
+    const before = raceSession(RACE_WORKSPACE, "default");
+    before.title = "旧标题";
+    let getCalls = 0;
+    installFetch((path, method) => {
+      if (path === `/api/v1/sessions/${before.session_id}` && method === "PATCH") {
+        return apiResponse({ message: "标题已存在" }, 409);
+      }
+      if (path === `/api/v1/sessions/${before.session_id}` && method === "GET") {
+        getCalls += 1;
+        return apiResponse({ ...before, title: "服务端标题" });
+      }
+      throw new Error(`未预期请求: ${method} ${path}`);
+    });
+
+    mount(before, [before]);
+    await expect(actions.renameSession(before.session_id, "新标题"))
+      .rejects.toThrow("标题已存在");
+
+    expect(getCalls).toBe(1);
+    expect(currentState.currentSession?.title).toBe("服务端标题");
+    expect(currentState.status).toContain("会话命名失败");
+  });
+
+  test("W9-b2 会话命名空标题也走统一失败上报", async () => {
+    const before = raceSession(RACE_WORKSPACE, "default");
+    installFetch((path) => {
+      throw new Error(`未预期请求: ${path}`);
+    });
+
+    mount(before, [before]);
+    await expect(actions.renameSession(before.session_id, "   "))
+      .rejects.toThrow("会话名称不能为空");
+
+    expect(currentState.status).toContain("会话命名失败");
+  });
+
+  test("W9-c 删除失败后用后端列表校准本地镜像", async () => {
+    const sesA = raceSession("ses_a");
+    const sesB = raceSession("ses_b");
+    let listCalls = 0;
+    installFetch((path, method) => {
+      if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
+        return apiResponse({ message: "会话正在运行" }, 409);
+      }
+      if (path === "/api/v1/sessions") {
+        listCalls += 1;
+        return apiResponse({
+          items: [sesA, raceSession("ses_server")],
+          has_more: false,
+          next_cursor: null,
+        });
+      }
+      throw new Error(`未预期请求: ${method} ${path}`);
+    });
+
+    mount(sesA, [sesA, sesB]);
+    await expect(actions.deleteSession(sesB.session_id)).rejects.toThrow("会话正在运行");
+
+    expect(listCalls).toBe(1);
+    // 失败后本地镜像以后端为准：既有会话保留，后端新出现的会话也要补上。
+    expect(currentState.sessions.map((item) => item.session_id))
+      .toEqual(["ses_a", "ses_server"]);
+    expect(currentState.status).toContain("删除会话失败");
+  });
+
+  test("W9-c2 删除失败且重取也失败时保留原始错误", async () => {
+    const sesA = raceSession("ses_a");
+    const sesB = raceSession("ses_b");
+    installFetch((path, method) => {
+      if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
+        return apiResponse({ message: "会话正在运行" }, 409);
+      }
+      if (path === "/api/v1/sessions") {
+        return apiResponse({ message: "列表服务不可用" }, 503);
+      }
+      throw new Error(`未预期请求: ${method} ${path}`);
+    });
+
+    mount(sesA, [sesA, sesB]);
+    await expect(actions.deleteSession(sesB.session_id)).rejects.toThrow("会话正在运行");
+
+    expect(currentState.status).toContain("会话正在运行");
+    expect(currentState.status).toContain("列表服务不可用");
+    // 重取失败时不得凭空删掉本地条目。
+    expect(currentState.sessions.map((item) => item.session_id))
+      .toEqual(["ses_a", "ses_b"]);
+  });
+
+  test("W12-a 创建会话空标题走统一失败上报", async () => {
+    const before = raceSession(RACE_WORKSPACE, "default");
+    installFetch((path) => {
+      throw new Error(`未预期请求: ${path}`);
+    });
+
+    mount(before, [before]);
+    await expect(actions.createSession("   ")).rejects.toThrow("会话名称不能为空");
+
+    expect(currentState.status).toContain("创建会话失败");
+  });
+
+  test("W12-b 打开未知工作区的会话时显式失败而不是沿用旧工作区元数据", () => {
+    const current = raceSession(RACE_WORKSPACE, "default");
+    const target = raceSession("ses_other", "default");
+    installFetch((path) => {
+      throw new Error(`未预期请求: ${path}`);
+    });
+
+    currentState = raceState(current, [current]);
+    currentState.gatewayWorkspaces = [];
+    currentState.workspaceRoot = "/prev/root";
+    currentState.workspaceName = "prev-ws";
+    currentState.sessionsByWorkspace = new Map([["gw_unknown", [target]]]);
+    mountLifecycle({
+      currentSession: current,
+      readState: () => currentState,
+      writeState: (update) => {
+        currentState = typeof update === "function"
+          ? update(currentState)
+          : update;
+      },
+      getActions: (value) => {
+        actions = value;
+      },
+    });
+
+    actions.selectWorkspaceSession("gw_unknown", target.session_id);
+
+    expect(currentState.status).toBe("切换会话失败: 未知工作区 gw_unknown");
+    expect(currentState.currentSession?.session_id).toBe(current.session_id);
+    // 旧工作区的根目录/名称不得被当成新工作区身份继续用下去。
+    expect(currentState.workspaceRoot).toBe("/prev/root");
+  });
+});

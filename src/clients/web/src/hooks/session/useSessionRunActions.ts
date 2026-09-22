@@ -13,13 +13,15 @@ import type {
   MessageReplayRequest,
   MessageRunAccepted,
   DeliveryPolicy,
+  PendingRequestList,
   Session,
   SessionCompactResult,
 } from "../../types/backend";
 import type { ConversationContentView, ConversationView } from "../../types/frontend";
 import { cloneMaps } from "../../state/appStateMaps";
+import { listPendingRequests as apiListPendingRequests } from "../../pendingRequestsApi";
 import { updateSessionAttachmentSummary } from "../../state/attachments";
-import { writePendingList } from "../../state/conversations";
+import { writePendingList, writePendingSnapshot } from "../../state/conversations";
 import { appendFrontendEvent } from "../../state/traceEvents";
 import { writeLastSessionId } from "../../state/storage";
 import type { SetAppState } from "../contentViewLoaderTypes";
@@ -206,19 +208,47 @@ export function useSessionRunActions({
           deliveryPolicy,
         );
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        let message = error instanceof Error ? error.message : String(error);
+        // 发送失败不等于后端没收到：网关超时或响应丢失时，消息可能已经落库
+        // 排进队列。先按权威快照校准本地队列，只有重取也失败时才退回本地
+        // 回滚，避免把后端已经接受的回合从界面上抹掉。
+        let snapshot: PendingRequestList | null = null;
+        let reconciliationFailure: string | null = null;
+        try {
+          snapshot = await apiListPendingRequests(
+            apiPort,
+            activeSession.session_id,
+            activeSessionGatewayWorkspaceId,
+          );
+        } catch (reconciliationError) {
+          reconciliationFailure = reconciliationError instanceof Error
+            ? reconciliationError.message
+            : String(reconciliationError);
+        }
+        if (!snapshot && reconciliationFailure) {
+          message = `${message}；重新读取待处理队列也失败: ${reconciliationFailure}`;
+        }
         setState((prev) => {
           const next = cloneMaps(prev);
-          const pendingList =
-            next.pendingConversations.get(activeSessionCacheKey) ?? [];
-          writePendingList(
-            next.pendingConversations,
-            activeSessionCacheKey,
-            pendingList.filter(
-              (conversation) =>
-                conversation.pendingSubmissionId !== pendingSubmissionId,
-            ),
-          );
+          if (snapshot) {
+            writePendingSnapshot(
+              next.pendingConversations,
+              next.activeJobIdsBySession,
+              snapshot,
+              activeSessionCacheKey,
+            );
+          } else {
+            const pendingList =
+              next.pendingConversations.get(activeSessionCacheKey) ?? [];
+            writePendingList(
+              next.pendingConversations,
+              activeSessionCacheKey,
+              pendingList.filter(
+                (conversation) =>
+                  conversation.pendingSubmissionId !== pendingSubmissionId,
+              ),
+            );
+          }
           next.status = `发送失败: ${message}`;
           return next;
         });
