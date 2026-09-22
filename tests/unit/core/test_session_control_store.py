@@ -2924,6 +2924,43 @@ def test_inbox_listing_and_get_fail_closed(tmp_path: Path) -> None:
     finally:
         store.close()
 
+def test_inbox_last_error_has_no_write_time_length_cap(tmp_path: Path) -> None:
+    """固化 D2 判定：last_error 是诊断真值，store 层写入不截断。
+
+    全库既有口径是在展示/传输边界截断（session_information_service.
+    _truncate_text 对 last_error 走 _DIAGNOSTIC_TEXT_LIMIT=2048 并带
+    _truncated 标志；bounded_json 在边界加截断标记）。store 层若截断会
+    丢失可诊断信息，故只校验非空。本用例固定该边界，防止后人误加限长。
+    """
+    store = SessionControlStore(tmp_path / "inbox-long-error.sqlite")
+    try:
+        main_thread_id = make_thread_id()
+        store.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
+        record, _ = store.create_or_get_communication_inbox(
+            **inbox_kwargs(make_comm_id(), main_thread_id)
+        )
+        store.claim_communication_inbox_admission(
+            record.communication_id, claim_owner="w1", claim_generation=1
+        )
+        long_error = "x" * 200_000
+        updated = store.record_communication_inbox_admission_failure(
+            record.communication_id,
+            claim_owner="w1",
+            claim_generation=1,
+            last_error=long_error,
+        )
+        assert updated.last_error == long_error
+        # 空串仍然 fail closed（唯一保留的写入校验）。
+        with pytest.raises(ValueError, match="不能为空"):
+            store.record_communication_inbox_admission_failure(
+                record.communication_id,
+                claim_owner="w1",
+                claim_generation=1,
+                last_error="",
+            )
+    finally:
+        store.close()
+
 
 def test_outbox_reply_causal_direction_is_enforced_by_endpoints(
     tmp_path: Path,
