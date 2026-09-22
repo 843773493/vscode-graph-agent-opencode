@@ -58,7 +58,8 @@ export function workspaceHoverTitle(workspace: GatewayWorkspace): string {
   return lines.join('\n');
 }
 
-function remoteGatewayName(workspace: GatewayWorkspace): string {
+/** 远程 Gateway 展示名的唯一实现：优先 SSH 配置主机名。 */
+export function remoteGatewayName(workspace: GatewayWorkspace): string {
   return workspace.remote?.ssh_config_host
     ?? workspace.remote?.name
     ?? workspace.remote?.host

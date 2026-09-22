@@ -3,6 +3,7 @@ import type {
   GeneratorSessionStrategyMode,
   SessionGeneratorDefinition,
 } from "../../types/backend";
+import { remoteGatewayName } from "./agentSessionsUtils";
 
 export interface GeneratorStatusPresentation {
   label: string;
@@ -34,13 +35,6 @@ export function generatorTriggerLabel(
   if (seconds > 0 && seconds % 3600 === 0) return `每 ${seconds / 3600} 小时`;
   if (seconds > 0 && seconds % 60 === 0) return `每 ${seconds / 60} 分钟`;
   return `每 ${seconds} 秒`;
-}
-
-function remoteGatewayName(workspace: GatewayWorkspace): string {
-  return workspace.remote?.ssh_config_host
-    ?? workspace.remote?.name
-    ?? workspace.remote?.host
-    ?? "远程 Gateway";
 }
 
 export function generatorStatusPresentation(
