@@ -43,6 +43,11 @@ class NodeDebugInspectorState:
     )
     command_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     inspector_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    #: stderr 上解析到的 Inspector 启动失败原因（如端口被占用）。就绪事件之外的
+    #: 失败信号：node 会在这种失败后继续运行但永不打印就绪地址。
+    inspector_failure_reason: str | None = None
+    #: Inspector 启动失败信号；唤醒握手的失败分支，避免白等到超时。
+    inspector_failed: asyncio.Event = field(default_factory=asyncio.Event)
     receiver_task: asyncio.Task[None] | None = None
     variable_hydration_task: asyncio.Task[None] | None = None
 
@@ -79,6 +84,8 @@ class NodeDebugRuntime:
     breakpoints: dict[str, NodeDebugBreakpointDTO] = field(default_factory=dict)
     inspector_breakpoint_ids: dict[str, str] = field(default_factory=dict)
     output: list[str] = field(default_factory=list)
+    #: stderr 诊断行（有界）。失败终态的消息从这里补原因，不混入程序 stdout 输出。
+    stderr_lines: list[str] = field(default_factory=list)
     logpoint_error_message: str | None = None
     last_evaluation: NodeDebugEvaluationDTO | None = None
     evaluations: list[NodeDebugEvaluationDTO] = field(default_factory=list)

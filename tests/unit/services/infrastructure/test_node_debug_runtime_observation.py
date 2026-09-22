@@ -60,12 +60,18 @@ class _Recorder:
         self.cleared += 1
 
 
-def _observer(recorder: _Recorder, *, max_output_lines: int = 100) -> NodeDebugRuntimeObserver:
+def _observer(
+    recorder: _Recorder,
+    *,
+    max_output_lines: int = 100,
+    max_stderr_lines: int = 50,
+) -> NodeDebugRuntimeObserver:
     return NodeDebugRuntimeObserver(
         mark_claim_phase=recorder.mark_claim_phase,
         clear_stop_snapshot=recorder.clear_stop_snapshot,
         append_action=recorder.append_action,
         max_output_lines=max_output_lines,
+        max_stderr_lines=max_stderr_lines,
     )
 
 
@@ -180,6 +186,68 @@ async def test_read_stream_returns_without_process() -> None:
     assert runtime.output == []
 
 
+@pytest.mark.asyncio
+async def test_read_stream_buffers_stderr_and_flags_inspector_failure() -> None:
+    """stderr 诊断行不得丢弃：端口占用必须被识别并唤醒握手失败分支。"""
+    recorder = _Recorder()
+    observer = _observer(recorder)
+    runtime = _runtime(
+        _FakeProcess(
+            1,
+            stderr=[
+                "Starting inspector on 127.0.0.1:9229 failed: address already in use",
+                "Debugger attached.",
+            ],
+        )
+    )
+    await observer.read_stream(runtime, "stderr")
+    assert runtime.inspector.inspector_failed.is_set()
+    assert runtime.inspector.inspector_failure_reason == "address already in use"
+    assert runtime.stderr_lines == [
+        "Starting inspector on 127.0.0.1:9229 failed: address already in use",
+        "Debugger attached.",
+    ]
+    # stderr 只进诊断缓冲，不得混入程序 stdout 输出。
+    assert runtime.output == []
+
+
+@pytest.mark.asyncio
+async def test_read_stream_caps_stderr_lines() -> None:
+    observer = _observer(_Recorder(), max_stderr_lines=2)
+    runtime = _runtime(_FakeProcess(0, stderr=["a", "b", "c"]))
+    await observer.read_stream(runtime, "stderr")
+    assert runtime.stderr_lines == ["b", "c"]
+
+
+def test_terminal_error_message_never_empty_on_failure() -> None:
+    """非零退出必须给出退出码与 stderr 尾行；零退出才是 None。"""
+    observer = _observer(_Recorder())
+    runtime = _runtime()
+    runtime.stderr_lines = ["line-1", "line-2", "line-3", "line-4"]
+    assert observer.terminal_error_message(runtime, 0) is None
+    failed = observer.terminal_error_message(runtime, 3)
+    assert failed == "Node 调试进程退出，退出码: 3；stderr: line-2 / line-3 / line-4"
+
+    bare = _runtime()
+    assert observer.terminal_error_message(bare, 3) == "Node 调试进程退出，退出码: 3"
+
+    logpoint = _runtime()
+    logpoint.logpoint_error_message = "日志点求值失败: boom"
+    assert observer.terminal_error_message(logpoint, 1) == "日志点求值失败: boom"
+
+
+def test_handshake_timeout_message_never_empty() -> None:
+    observer = _observer(_Recorder())
+    runtime = _runtime()
+    assert observer.handshake_timeout_message(runtime, 3.0) == (
+        "等待 Node Inspector 就绪超时（3 秒）"
+    )
+    runtime.stderr_lines = ["boom"]
+    assert observer.handshake_timeout_message(runtime, 3.0) == (
+        "等待 Node Inspector 就绪超时（3 秒）；stderr: boom"
+    )
+
+
 def _breakpoint(breakpoint_id: str, *, path: str = "entry.mjs", line: int = 1, condition=None, log_message=None) -> NodeDebugBreakpointDTO:
     return NodeDebugBreakpointDTO(
         breakpoint_id=breakpoint_id,
@@ -223,4 +291,3 @@ def test_paused_at_breakpoint_matrix() -> None:
         _rt([_breakpoint("node-bp-4", path="other.mjs")], call_stack=[frame])
     ) is False
     assert observer.paused_at_breakpoint(_rt([plain])) is False
-

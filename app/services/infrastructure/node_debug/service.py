@@ -242,6 +242,8 @@ class NodeDebugService(NodeDebugConfigurationControlMixin):
                 is_paused_at_breakpoint=self._observer.paused_at_breakpoint,
                 read_stream=self._observer.read_stream,
                 monitor_process=self._observer.monitor_process,
+                terminal_error_message=self._observer.terminal_error_message,
+                handshake_timeout_message=self._observer.handshake_timeout_message,
             )
         )
 

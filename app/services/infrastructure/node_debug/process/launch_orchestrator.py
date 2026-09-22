@@ -106,6 +106,18 @@ class NodeDebugLaunchProcessMonitor(Protocol):
     async def __call__(self, runtime: NodeDebugRuntime) -> None: ...
 
 
+class NodeDebugLaunchTerminalErrorMessage(Protocol):
+    def __call__(
+        self, runtime: NodeDebugRuntime, return_code: int
+    ) -> str | None: ...
+
+
+class NodeDebugLaunchHandshakeTimeoutMessage(Protocol):
+    def __call__(
+        self, runtime: NodeDebugRuntime, timeout_seconds: float
+    ) -> str: ...
+
+
 class NodeDebugLaunchSessionLoader(Protocol):
     def __call__(self, session_id: str, thread_id: str) -> None: ...
 
@@ -171,6 +183,8 @@ class NodeDebugLaunchContext:
     is_paused_at_breakpoint: NodeDebugPausedBreakpointChecker
     read_stream: NodeDebugLaunchStreamReader
     monitor_process: NodeDebugLaunchProcessMonitor
+    terminal_error_message: NodeDebugLaunchTerminalErrorMessage
+    handshake_timeout_message: NodeDebugLaunchHandshakeTimeoutMessage
 
 
 class NodeDebugLaunchOrchestrator:
@@ -178,6 +192,55 @@ class NodeDebugLaunchOrchestrator:
 
     def __init__(self, context: NodeDebugLaunchContext) -> None:
         self._context = context
+
+    async def _await_inspector_ready(self, runtime: NodeDebugRuntime) -> None:
+        """等待 Inspector 就绪，并让进程终结与 Inspector 启动失败同样立即失败。
+
+        只等就绪事件会让"进程已崩溃退出"或"端口被占用"白等满超时；两者都必须在
+        发生时立刻带诊断信息抛出，绝不静默超时。
+        """
+        context = self._context
+        ready = asyncio.ensure_future(runtime.inspector.inspector_ready.wait())
+        failed = asyncio.ensure_future(runtime.inspector.inspector_failed.wait())
+        exited = asyncio.ensure_future(runtime.process_task) if runtime.process_task else None
+        waiters: list[asyncio.Future[object]] = [ready, failed]
+        if exited is not None:
+            waiters.append(exited)
+        try:
+            await asyncio.wait(
+                waiters,
+                timeout=runtime.command_timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for waiter in (ready, failed):
+                waiter.cancel()
+            await asyncio.gather(ready, failed, return_exceptions=True)
+        if runtime.inspector.inspector_ready.is_set():
+            return
+        process = runtime.process
+        return_code = process.returncode if process is not None else None
+        if return_code is not None:
+            await self._drain_stream_tasks(runtime)
+            raise RuntimeError(
+                context.terminal_error_message(runtime, return_code)
+                or f"Node 调试进程在握手期间退出，退出码: {return_code}"
+            )
+        if runtime.inspector.inspector_failure_reason is not None:
+            raise RuntimeError(
+                "Node Inspector 启动失败: "
+                f"{runtime.inspector.inspector_failure_reason}"
+            )
+        raise RuntimeError(
+            context.handshake_timeout_message(runtime, runtime.command_timeout_seconds)
+        )
+
+    async def _drain_stream_tasks(self, runtime: NodeDebugRuntime) -> None:
+        """让仍在读取 stdout/stderr 的任务把已缓冲的诊断行落进 runtime。"""
+        tasks = (runtime.stdout_task, runtime.stderr_task)
+        pending = [task for task in tasks if task is not None]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def launch(self, request: NodeDebugLaunchRequest) -> NodeDebugLaunchResult:
         context = self._context
@@ -376,10 +439,7 @@ class NodeDebugLaunchOrchestrator:
                     identity=spawn_identity,
                 )
             )
-            await asyncio.wait_for(
-                runtime.inspector.inspector_ready.wait(),
-                timeout=runtime.command_timeout_seconds,
-            )
+            await self._await_inspector_ready(runtime)
             await context.inspector.connect(runtime)
             await context.inspector.command(runtime, "Runtime.enable")
             await context.inspector.command(runtime, "Debugger.enable")
@@ -407,10 +467,21 @@ class NodeDebugLaunchOrchestrator:
                 await context.inspector.command(runtime, "Debugger.resume")
                 await context.inspector.wait_for_execution_state(runtime)
             await context.inspector.wait_for_frame_variables(runtime)
+            process = runtime.process
+            return_code = process.returncode if process is not None else None
+            if return_code is not None and return_code != 0:
+                # 握手期间进程已失败退出：响亮失败并带上 stderr 诊断，绝不谎报 start 成功。
+                await self._drain_stream_tasks(runtime)
+                raise RuntimeError(
+                    context.terminal_error_message(runtime, return_code)
+                    or f"Node 调试进程在握手期间退出，退出码: {return_code}"
+                )
             async with runtime.state_lock:
-                if runtime.status not in {"exited", "failed", "paused"} and (
-                    runtime.process is None or runtime.process.returncode is None
-                ):
+                if return_code is None and runtime.status not in {
+                    "exited",
+                    "failed",
+                    "paused",
+                }:
                     runtime.status = "running"
                 runtime.error_message = runtime.logpoint_error_message
                 context.append_action(

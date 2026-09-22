@@ -18,6 +18,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -456,14 +457,17 @@ class _FakeNodeProcess:
 class _DebugConfigStub:
     """只提供 ``get_debug_runtime_config``，把 Inspector 端口固定成可断言值。"""
 
-    def __init__(self, inspector_port: int) -> None:
+    def __init__(
+        self, inspector_port: int, *, command_timeout_seconds: float = 5.0
+    ) -> None:
         self._inspector_port = inspector_port
+        self._command_timeout_seconds = command_timeout_seconds
 
     def get_debug_runtime_config(self) -> dict[str, object]:
         return {
             "enabled": True,
             "default_adapter": "node_inspector",
-            "command_timeout_seconds": 5.0,
+            "command_timeout_seconds": self._command_timeout_seconds,
             "node": {
                 "inspector_host": "127.0.0.1",
                 "inspector_port": self._inspector_port,
@@ -512,6 +516,7 @@ def _make_service(
     resolver: object,
     *,
     inspector_port: int | None = None,
+    command_timeout_seconds: float = 5.0,
 ) -> tuple[NodeDebugService, NodeDebugSessionStore, Path]:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(exist_ok=True)
@@ -524,7 +529,10 @@ def _make_service(
         workspace_root=workspace_root,
         session_store=store,
         config_service=(
-            _DebugConfigStub(inspector_port or 0)
+            _DebugConfigStub(
+                inspector_port or 0,
+                command_timeout_seconds=command_timeout_seconds,
+            )
         ),
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -535,6 +543,48 @@ def _make_service(
 def _sleeper_child() -> subprocess.Popen[bytes]:
     """真实可定点停止的子进程，充当崩溃后遗留的旧调试实例。"""
     return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+
+
+class _HandshakeFailingProcess:
+    """永不报告就绪、只在 stderr 上给出诊断的进程替身。
+
+    真实 pid 让启动前的身份核对走生产代码；exit_code 为 None 时模拟「进程仍在但
+    Inspector 起不来」，否则模拟「握手期间进程已失败退出」。
+    """
+
+    def __init__(
+        self,
+        child: subprocess.Popen[bytes],
+        *,
+        stderr_lines: list[str],
+        exit_code: int | None,
+    ) -> None:
+        self._child = child
+        self.returncode: int | None = None
+        self._exit_code = exit_code
+        self.stderr = asyncio.StreamReader()
+        self.stdout = asyncio.StreamReader()
+        for line in stderr_lines:
+            self.stderr.feed_data((line + "\n").encode())
+        self.stderr.feed_eof()
+        self.stdout.feed_eof()
+
+    @property
+    def pid(self) -> int:
+        return self._child.pid
+
+    def terminate(self) -> None:
+        self._child.terminate()
+
+    def kill(self) -> None:
+        self._child.kill()
+
+    async def wait(self) -> int:
+        if self._exit_code is None:
+            await asyncio.Event().wait()
+            raise AssertionError('不可达：常驻替身的 wait() 必须被取消')
+        self.returncode = self._exit_code
+        return self.returncode
 
 
 def _runtime_for(
@@ -1433,4 +1483,130 @@ async def test_concurrent_starts_are_serialized_per_owner(
         for child in children:
             if child.poll() is None:
                 child.kill()
+            child.wait()
+
+
+@pytest.mark.asyncio
+async def test_handshake_fails_fast_with_inspector_diagnostics_on_port_conflict(
+    tmp_path: Path,
+    session_tree: tuple[object, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """端口被占用：不得白等满超时，必须立刻抛出并带上 stderr 原因。"""
+    resolver, _parent_dir, _child_dir = session_tree
+    service, _store, _workspace_root = _make_service(
+        tmp_path,
+        resolver,
+        inspector_port=0,
+        command_timeout_seconds=30.0,
+    )
+    child = _sleeper_child()
+    diagnostics = (
+        "Starting inspector on 127.0.0.1:9229 failed: address already in use"
+    )
+
+    async def fake_exec(*args: object, **kwargs: object) -> _HandshakeFailingProcess:
+        return _HandshakeFailingProcess(
+            child, stderr_lines=[diagnostics], exit_code=None
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    try:
+        started = time.monotonic()
+        with pytest.raises(RuntimeError, match='address already in use'):
+            await service.start(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                path="entry.mjs",
+                args=[],
+                breakpoints=[],
+            )
+        # 诊断行一到就必须失败，绝不空等 30 秒超时。
+        assert time.monotonic() - started < 10.0
+        failed = await service.get_state(_PARENT_SESSION_ID, 'main')
+        assert failed.status == "failed"
+        assert failed.actions[-1].action == "start_failed"
+        assert "address already in use" in (failed.error_message or "")
+    finally:
+        await service.close()
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+
+
+@pytest.mark.asyncio
+async def test_handshake_reports_exit_code_and_stderr_when_process_dies(
+    tmp_path: Path,
+    session_tree: tuple[object, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """启动脚本立即/异常退出：必须响亮失败并记录退出码与 stderr 尾行。"""
+    resolver, _parent_dir, _child_dir = session_tree
+    service, store, _workspace_root = _make_service(tmp_path, resolver)
+    child = _sleeper_child()
+
+    async def fake_exec(*args: object, **kwargs: object) -> _HandshakeFailingProcess:
+        return _HandshakeFailingProcess(
+            child,
+            stderr_lines=['Error: boom', '    at entry.mjs:1:1'],
+            exit_code=7,
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    try:
+        with pytest.raises(RuntimeError, match='退出码: 7'):
+            await service.start(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                path="entry.mjs",
+                args=[],
+                breakpoints=[],
+            )
+        failed = await service.get_state(_PARENT_SESSION_ID, 'main')
+        assert failed.status == "failed"
+        assert failed.actions[-1].action == "start_failed"
+        assert failed.error_message is not None
+        assert "退出码: 7" in failed.error_message
+        assert "Error: boom" in failed.error_message
+        # 失败终态的登记必须当场结清，不得为下次启动留下永久阻断。
+        persisted = store.read_launch_claim(_PARENT_SESSION_ID, 'main')
+        assert persisted is not None
+        assert persisted.phase == "settled"
+    finally:
+        await service.close()
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+
+
+@pytest.mark.asyncio
+async def test_handshake_timeout_message_is_never_empty(
+    tmp_path: Path,
+    session_tree: tuple[object, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """无诊断的超时必须给出超时值，绝不返回空消息。"""
+    resolver, _parent_dir, _child_dir = session_tree
+    service, _store, _workspace_root = _make_service(
+        tmp_path, resolver, command_timeout_seconds=0.3
+    )
+    child = _sleeper_child()
+
+    async def fake_exec(*args: object, **kwargs: object) -> _HandshakeFailingProcess:
+        return _HandshakeFailingProcess(child, stderr_lines=[], exit_code=None)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    try:
+        with pytest.raises(RuntimeError, match='等待 Node Inspector 就绪超时'):
+            await service.start(
+                session_id=_PARENT_SESSION_ID,
+                thread_id="main",
+                path="entry.mjs",
+                args=[],
+                breakpoints=[],
+            )
+    finally:
+        await service.close()
+        if child.poll() is None:
+            child.kill()
             child.wait()
