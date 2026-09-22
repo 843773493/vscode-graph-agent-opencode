@@ -230,6 +230,7 @@ class GatewayConfigEventMixin:
         connection = self._database.connection()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            self._sweep_expired_consumer_claims(connection, now_text)
             rows = connection.execute(
                 """
                 SELECT e.event_seq, e.event_id, e.config_domain, e.candidate_id,
@@ -277,6 +278,27 @@ class GatewayConfigEventMixin:
             raise
         finally:
             connection.close()
+
+    @staticmethod
+    def _sweep_expired_consumer_claims(
+        connection: sqlite3.Connection, now_text: str
+    ) -> int:
+        """回收租约已过期的 consumer claim 账本行。
+
+        SSE 消费者每次重连都生成新的 ``consumer_id``，旧进程消失后其 ``claimed``
+        账本行不会再有调用方回来改写，若不回收会永久累积。这里只清理租约已过期
+        （或租约缺失）的 ``claimed`` 行：``delivered`` 是去重终态，必须保留；仍持有
+        有效租约的 ``claimed`` 行属于活跃消费者，不得删除。
+        """
+
+        cursor = connection.execute(
+            """
+            DELETE FROM config_event_relay_delivery
+            WHERE state = 'claimed' AND (claimed_until IS NULL OR claimed_until <= ?)
+            """,
+            (now_text,),
+        )
+        return int(cursor.rowcount)
 
     def mark_config_event_delivered_for_consumer(
         self,

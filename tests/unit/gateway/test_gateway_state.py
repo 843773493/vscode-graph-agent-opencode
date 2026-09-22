@@ -957,6 +957,114 @@ def test_gateway_relay_next_attempt_at_is_not_null(tmp_path):
         state.close()
 
 
+def test_gateway_expired_consumer_claims_are_swept(tmp_path):
+    """新 consumer 认领时回收已过期 claim 行，但保留有效租约与 delivered 终态。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        event = state.append_config_event(
+            ConfigEventInput(
+                event_id="gateway-sweep",
+                config_domain="gateway",
+                candidate_id=None,
+                attempt_id=None,
+                apply_id=None,
+                idempotency_key=None,
+                commit_revision=None,
+                active_revision=1,
+                pending_revision=None,
+                source="watcher",
+                result="applied",
+            )
+        )
+        # 过期 claim（租约已过）
+        state.claim_config_events_for_consumer(
+            config_domain="gateway", after=0, consumer_id="dead", lease_seconds=0.01
+        )
+        time.sleep(0.05)
+        # 活跃 claim（长租约）
+        state.claim_config_events_for_consumer(
+            config_domain="gateway",
+            after=0,
+            consumer_id="alive",
+            lease_seconds=3600,
+        )
+        # delivered 终态：先 claim 再确认
+        state.claim_config_events_for_consumer(
+            config_domain="gateway",
+            after=0,
+            consumer_id="done",
+            lease_seconds=3600,
+        )
+        state.mark_config_event_delivered_for_consumer(
+            event_id=event.event_id, consumer_id="done"
+        )
+        # 新 consumer 认领时触发回收
+        state.claim_config_events_for_consumer(
+            config_domain="gateway", after=0, consumer_id="fresh"
+        )
+        ledger = {
+            str(row[0]): str(row[1])
+            for row in state.connection().execute(
+                "SELECT consumer_id, state FROM config_event_relay_delivery"
+            )
+        }
+        assert "dead" not in ledger  # 过期 claim 已回收
+        assert ledger["alive"] == "claimed"  # 有效租约保留
+        assert ledger["fresh"] == "claimed"
+    finally:
+        state.close()
+
+
+def test_gateway_delivered_consumer_ledger_survives_sweep(tmp_path):
+    """delivered 是去重终态，不能被过期清理删除。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        event = state.append_config_event(
+            ConfigEventInput(
+                event_id="gateway-delivered-sweep",
+                config_domain="gateway",
+                candidate_id=None,
+                attempt_id=None,
+                apply_id=None,
+                idempotency_key=None,
+                commit_revision=None,
+                active_revision=1,
+                pending_revision=None,
+                source="watcher",
+                result="applied",
+            )
+        )
+        state.claim_config_events_for_consumer(
+            config_domain="gateway", after=0, consumer_id="done"
+        )
+        state.mark_config_event_delivered_for_consumer(
+            event_id=event.event_id, consumer_id="done"
+        )
+        state.claim_config_events_for_consumer(
+            config_domain="gateway", after=0, consumer_id="other"
+        )
+        assert (
+            state.connection()
+            .execute(
+                "SELECT state FROM config_event_relay_delivery "
+                "WHERE consumer_id = 'done'"
+            )
+            .fetchone()[0]
+            == "delivered"
+        )
+        # delivered 仍然抑制同一 consumer 的重复投递
+        assert (
+            state.claim_config_events_for_consumer(
+                config_domain="gateway", after=0, consumer_id="done"
+            )
+            == ()
+        )
+    finally:
+        state.close()
+
+
 def test_gateway_config_event_outbox_claim_retry_and_dedup(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
