@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type {
   NodeDebugBreakpoint,
   SessionFileChange,
@@ -80,6 +80,10 @@ interface WorkspaceFilePreviewAreaProps {
   ) => void;
 }
 
+// 会话 diff 可能包含数万行；一次渲染全部行会让主线程长时间阻塞。超过阈值时
+// 只渲染前 N 行，并显式提示剩余行数与展开入口，绝不静默截断。
+const MAX_RENDERED_DIFF_LINES = 2000;
+
 function lineRows(content: string): string[] {
   const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   return normalized.split("\n");
@@ -146,10 +150,23 @@ export default function WorkspaceFilePreviewArea({
   const editorLineNumbersRef = useRef<HTMLDivElement | null>(null);
   const debugExecutionLineRef = useRef<HTMLDivElement | null>(null);
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? tabs[0] ?? null;
+  // 展开状态按标签路径记忆：切换标签或重开同一 diff 时重置为折叠，避免上次
+  // 的展开状态在另一个大 diff 上意外生效。
+  const [diffFullyExpanded, setDiffFullyExpanded] = useState(false);
+  useEffect(() => {
+    setDiffFullyExpanded(false);
+  }, [activeTab?.path]);
   const activeDiffLines =
     activeTab?.previewType === "session-diff"
       ? lineRows(activeTab.change.diff_text)
       : [];
+  const diffTruncated = activeDiffLines.length > MAX_RENDERED_DIFF_LINES;
+  const visibleDiffLines = useMemo(
+    () => diffTruncated && !diffFullyExpanded
+      ? activeDiffLines.slice(0, MAX_RENDERED_DIFF_LINES)
+      : activeDiffLines,
+    [activeDiffLines, diffTruncated, diffFullyExpanded],
+  );
   const diffLineNumberWidth = Math.max(2, String(activeDiffLines.length).length);
   const showLoadingEmpty = loadingPath &&
     (!activeTab || activeTab.previewType === "file-placeholder");
@@ -403,11 +420,26 @@ export default function WorkspaceFilePreviewArea({
           />
         ) : activeTab?.previewType === "session-diff" ? (
           <div className="workspace-preview-diff-scroll">
+              {diffTruncated ? (
+                <div className="workspace-preview-truncation-notice" role="status">
+                  <span>
+                    变更共 {activeDiffLines.length} 行，已只渲染前 {MAX_RENDERED_DIFF_LINES} 行以避免界面卡顿。
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setDiffFullyExpanded((value) => !value)}
+                  >
+                    {diffFullyExpanded
+                      ? `仅显示前 ${MAX_RENDERED_DIFF_LINES} 行`
+                      : `渲染全部 ${activeDiffLines.length} 行`}
+                  </button>
+                </div>
+              ) : null}
               <div
                 className="workspace-preview-code-table workspace-preview-diff-table"
                 style={{ "--preview-line-number-width": `${diffLineNumberWidth}ch` } as CSSProperties}
               >
-                {activeDiffLines.map((line, index) => (
+                {visibleDiffLines.map((line, index) => (
                   <div
                     className={`workspace-preview-line workspace-preview-diff-line diff-${diffLineKind(line)}`}
                     key={`${index}-${line.length}`}
