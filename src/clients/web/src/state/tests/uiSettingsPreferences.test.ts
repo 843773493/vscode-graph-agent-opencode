@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  normalizeContentView,
   normalizeExpandedPathsByWorkspace,
   normalizeWebUiSettings,
   resolveAgentSessionsPreferences,
@@ -123,5 +124,41 @@ describe("文件树展开态归一化", () => {
     // 缺失展开态时仍给出空对象，保持既有默认行为。
     expect(normalizeWebUiSettings({}).workspace_file_tree)
       .toEqual({ expanded_paths_by_workspace: {} });
+  });
+});
+
+describe("会话内容视图归一化", () => {
+  test("合法取值一律通过校验", () => {
+    const views = ["default", "events", "requests", "changes", "resources", "agent"] as const;
+    for (const view of views) {
+      expect(() => normalizeContentView(view)).not.toThrow();
+    }
+  });
+
+  test("缺失或 null 视为未设置，交由调用方沿用当前视图", () => {
+    expect(() => normalizeContentView(undefined)).not.toThrow();
+    expect(() => normalizeContentView(null)).not.toThrow();
+  });
+
+  test("未知取值响亮失败并列出合法取值", () => {
+    // 未知视图若不报错，会被 ContentViewSlots 静默当成「默认视图」渲染。
+    expect(() => normalizeContentView("timeline")).toThrow(
+      'UI 设置 content_view 必须是以下之一：default、events、requests、changes、resources、agent，实际收到 "timeline"',
+    );
+    expect(() => normalizeContentView("")).toThrow("实际收到 \"\"");
+    expect(() => normalizeContentView(42)).toThrow("实际收到 number");
+    expect(() => normalizeContentView(["default"])).toThrow("实际收到 数组");
+    expect(() => normalizeContentView({ view: "default" })).toThrow("实际收到 object");
+  });
+
+  test("整个设置归一化会校验 content_view，未知取值不再静默落成默认视图", () => {
+    expect(normalizeWebUiSettings({
+      layout: { content_view: "events" },
+    }).layout.content_view).toBe("events");
+    expect(() => normalizeWebUiSettings({
+      layout: { content_view: "timeline" as never },
+    })).toThrow("content_view 必须是以下之一");
+    // 缺失 content_view 时沿用空 layout，保持既有默认行为。
+    expect(normalizeWebUiSettings({}).layout.content_view).toBeUndefined();
   });
 });

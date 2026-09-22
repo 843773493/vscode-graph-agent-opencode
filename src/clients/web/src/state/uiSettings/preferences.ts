@@ -3,11 +3,48 @@ import type {
   WebUiSettings,
   WebUiSettingsUpdate,
 } from "../../types/backend";
+import type { ConversationContentView } from "../../types/frontend";
 
 function describeSettingValue(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "数组";
   return typeof value;
+}
+
+/**
+ * 会话内容视图的完整取值集合，与 `types/frontend.ts` 的
+ * `ConversationContentView` 一一对应。`ContentViewSlots` 只把 agent/events/requests
+ * 当作检视槽，其余值一律落到会话记录槽；因此未知值会被静默当成「默认视图」，
+ * 用户看到的视图与设置里的值不一致，却没有任何提示。
+ */
+export const CONVERSATION_CONTENT_VIEWS = [
+  "default",
+  "events",
+  "requests",
+  "changes",
+  "resources",
+  "agent",
+] as const satisfies readonly ConversationContentView[];
+
+/**
+ * 归一 `layout.content_view`：它来自 Gateway 用户 profile，是当前会话内容视图的
+ * 唯一权威来源。未知取值会被前端静默展示成「默认视图」，因此这里按仓库既有约定
+ * （参见同文件的 `normalizeExpandedPathsByWorkspace`）响亮失败，不静默收敛。
+ */
+export function normalizeContentView(value: unknown): void {
+  if (value === null || value === undefined) {
+    return;
+  }
+  if (
+    typeof value !== "string"
+    || !(CONVERSATION_CONTENT_VIEWS as readonly string[]).includes(value)
+  ) {
+    const received =
+      typeof value === "string" ? JSON.stringify(value) : describeSettingValue(value);
+    throw new Error(
+      `UI 设置 content_view 必须是以下之一：${CONVERSATION_CONTENT_VIEWS.join("、")}，实际收到 ${received}`,
+    );
+  }
 }
 
 /**
@@ -70,8 +107,10 @@ export function normalizeWebUiSettings(
   value: WebUiSettingsUpdate,
 ): WebUiSettings {
   const defaults = createDefaultWebUiSettings();
+  const layout = value.layout ?? defaults.layout;
+  normalizeContentView(layout.content_view);
   return {
-    layout: value.layout ?? defaults.layout,
+    layout,
     session_sidebar: {
       ...defaults.session_sidebar,
       ...value.session_sidebar,
