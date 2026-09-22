@@ -16,6 +16,7 @@ import {
   customToolCallId,
   customToolCallName,
   customToolTargetNameFromArgs,
+  isCustomInvokerValidationError,
 } from "../customTools/protocol";
 import { compactPreview, responsePreview, stringifyContent } from "./messages";
 import { collectToolCallsFromLog, requestToolNames } from "./tools";
@@ -57,13 +58,6 @@ function collectToolResultMessages(
     }
   }
   return results;
-}
-
-function isCustomInvokerValidationError(resultText: string): boolean {
-  return (
-    resultText.includes("Error invoking tool 'invoke_extension_tool'") &&
-    resultText.includes("tool_name: Field required")
-  );
 }
 
 export function buildRequestLogKeyFlow(logs: LLMRequestLogRecord[]): RequestLogKeyFlow {

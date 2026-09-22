@@ -95,3 +95,14 @@ export function customToolInvocationLabel(targetToolName: string): string {
     ? `${EXTENSION_TOOL_INVOKER_NAME} -> ${targetToolName}`
     : EXTENSION_TOOL_INVOKER_NAME;
 }
+
+/**
+ * 固定入口 `invoke_extension_tool` 因缺少 tool_name 参数而失败的唯一判定：
+ * 依据模型返回的原始错误文本判定，请求日志与 Agent State 必须共用这一实现。
+ */
+export function isCustomInvokerValidationError(resultText: string): boolean {
+  return (
+    resultText.includes("Error invoking tool 'invoke_extension_tool'") &&
+    resultText.includes("tool_name: Field required")
+  );
+}

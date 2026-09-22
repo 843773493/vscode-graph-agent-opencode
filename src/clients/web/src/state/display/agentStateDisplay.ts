@@ -16,6 +16,7 @@ import {
   customToolCallId,
   customToolCallName,
   customToolTargetNameFromCall,
+  isCustomInvokerValidationError,
 } from "../customTools/protocol";
 
 export interface AgentStateSummary {
@@ -109,13 +110,6 @@ function toolCalls(record: Record<string, unknown>): Record<string, unknown>[] {
     return [];
   }
   return calls.filter(isRecord);
-}
-
-function isCustomInvokerValidationError(resultText: string): boolean {
-  return (
-    resultText.includes("Error invoking tool 'invoke_extension_tool'") &&
-    resultText.includes("tool_name: Field required")
-  );
 }
 
 export function buildAgentStateSummary(
