@@ -70,6 +70,7 @@ import { resolveAgentSessionsPreferences } from "./state/uiSettings/preferences"
 import {
   resolveExtensionWindowRequest,
 } from "./utils/extensionResourceWindow";
+import { errorMessage } from "./utils/errorMessage";
 import type {
   AttachmentRef,
   SessionChangesSummary,
@@ -202,6 +203,10 @@ export default function AppShell() {
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
+  // 内容视图槽既承载有会话时的对话内容，也承载外壳级的工作区初始化失败出口；
+  // 初始化失败恰恰发生在还没有会话的时候，所以错误出口不能和会话内容挤在同一个
+  // activeSession 分支里 —— 否则它唯一的设计场景永远不可达，而别的动作失败会误用它。
+  const contentViewSlotsVisible = Boolean(activeSession) || Boolean(state.error);
   useEffect(() => {
     if (
       selectedAttachmentPreview
@@ -359,8 +364,7 @@ export default function AppShell() {
         | ((current: WebUiSettings) => WebUiSettingsUpdate),
     ) => {
       void updateUiSettings(input).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        setStatus(`保存页面设置失败: ${message}`);
+        setStatus(`保存页面设置失败: ${errorMessage(error)}`);
       });
     },
     [setStatus, updateUiSettings],
@@ -686,9 +690,8 @@ export default function AppShell() {
           if (cancelled) {
             return;
           }
-          const message = error instanceof Error ? error.message : String(error);
           setDefaultViewChangesHint(null);
-          setStatus(`会话文件变更提示加载失败: ${message}`);
+          setStatus(`会话文件变更提示加载失败: ${errorMessage(error)}`);
         })
         .finally(() => {
           if (!cancelled) {
@@ -875,8 +878,7 @@ export default function AppShell() {
       await createSession(DEFAULT_SESSION_TITLE, targetWorkspaceId);
       invalidateSessionCatalog(targetWorkspaceId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setStatus(`创建会话失败: ${message}`);
+      setStatus(`创建会话失败: ${errorMessage(error)}`);
       throw error;
     }
   };
@@ -933,7 +935,7 @@ export default function AppShell() {
         await removeGatewayWorkspace(workspaceId);
       }
     }).catch((error: unknown) => {
-      setStatus(`删除工作区失败: ${error instanceof Error ? error.message : String(error)}`);
+      setStatus(`删除工作区失败: ${errorMessage(error)}`);
     });
   };
   const handleUseGatewayWorkspace = async (workspaceId: string) => {
@@ -972,7 +974,7 @@ export default function AppShell() {
       await deleteSession(sessionId, workspaceId);
       invalidateSessionCatalog(workspaceId);
     }).catch((error: unknown) => {
-      setStatus(`删除会话失败: ${error instanceof Error ? error.message : String(error)}`);
+      setStatus(`删除会话失败: ${errorMessage(error)}`);
     });
   };
   const handleSetSessionParent = async (
@@ -1016,7 +1018,7 @@ export default function AppShell() {
         setNameDialog(null);
       })
       .catch((error: unknown) => {
-        setNameDialogError(error instanceof Error ? error.message : String(error));
+        setNameDialogError(errorMessage(error));
       })
       .finally(() => {
         setNameDialogSubmitting(false);
@@ -1175,56 +1177,58 @@ export default function AppShell() {
               style={{ flexBasis: 0, flexGrow: mainAreaRatios.chat }}
             >
               <div className="session-view-surface">
+                {contentViewSlotsVisible ? (
+                  <div className="session-view-content">
+                    <ContentViewSlots
+                      error={state.error}
+                      isBootstrapping={state.isBootstrapping}
+                      onRetryGatewayState={refreshGatewayState}
+                      contentView={state.contentView}
+                      apiPort={resolvedApiPort}
+                      workspaceId={activeSessionWorkspaceId}
+                      sessionId={activeSession?.session_id ?? null}
+                      hasActiveSession={Boolean(activeSession)}
+                      activeSessionCacheKey={activeSessionCacheKey}
+                      expandedDetails={state.expandDetails}
+                      agentStateJsonl={state.agentStateJsonl}
+                      agentStateMessageCount={state.agentStateMessageCount}
+                      agentStateLoadedAt={state.agentStateLoadedAt}
+                      agentStateLoading={state.agentStateLoading}
+                      agentStateError={state.agentStateError}
+                      receivedEvents={receivedEvents}
+                      activeTraceHistory={activeTraceHistory}
+                      onLoadOlderTraceHistory={loadOlderTraceHistory}
+                      onRetryTraceHistory={refreshTraceHistory}
+                      requestLogs={state.llmRequestLogs}
+                      requestLogsLoading={state.llmRequestLogsLoading}
+                      requestLogsError={state.llmRequestLogsError}
+                      requestLogsLoadedAt={state.llmRequestLogsLoadedAt}
+                      conversations={conversations}
+                      activeTurnTimeline={activeTurnTimeline}
+                      changesHint={defaultViewChangesHint}
+                      changesHintLoading={defaultViewChangesLoading}
+                      activeChangeset={state.activeChangeset}
+                      gatewayUserViewStates={state.gatewayUserViewStates}
+                      onLoadOlderMessages={loadOlderMessages}
+                      onLoadNewerMessages={loadNewerMessages}
+                      onLoadAroundTurn={loadAroundTurn}
+                      onLoadTurnDetails={loadTurnDetails}
+                      onLoadToolDetails={loadToolDetails}
+                      onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
+                      onRetryHistory={refreshTurnHistory}
+                      onOpenChanges={handleOpenChangesView}
+                      onReplayTurn={replayTurn}
+                      onUpdatePending={updatePendingRequest}
+                      onRemovePending={removePendingRequest}
+                      onChangePendingPolicy={updatePendingRequestPolicy}
+                      onOpenAttachment={handleOpenAttachment}
+                      onViewStateChange={saveSessionViewState}
+                      onViewStateRestoreStatus={setStatus}
+                    />
+                  </div>
+                ) : null}
                 {activeSession ? (
                   <>
-                    <div className="session-view-content">
-                      <ContentViewSlots
-                        error={state.error}
-                        isBootstrapping={state.isBootstrapping}
-                        onRetryGatewayState={refreshGatewayState}
-                        contentView={state.contentView}
-                        apiPort={resolvedApiPort}
-                        workspaceId={activeSessionWorkspaceId}
-                        sessionId={activeSession?.session_id ?? null}
-                        hasActiveSession={Boolean(activeSession)}
-                        activeSessionCacheKey={activeSessionCacheKey}
-                        expandedDetails={state.expandDetails}
-                        agentStateJsonl={state.agentStateJsonl}
-                        agentStateMessageCount={state.agentStateMessageCount}
-                        agentStateLoadedAt={state.agentStateLoadedAt}
-                        agentStateLoading={state.agentStateLoading}
-                        agentStateError={state.agentStateError}
-                        receivedEvents={receivedEvents}
-                        activeTraceHistory={activeTraceHistory}
-                        onLoadOlderTraceHistory={loadOlderTraceHistory}
-                        onRetryTraceHistory={refreshTraceHistory}
-                        requestLogs={state.llmRequestLogs}
-                        requestLogsLoading={state.llmRequestLogsLoading}
-                        requestLogsError={state.llmRequestLogsError}
-                        requestLogsLoadedAt={state.llmRequestLogsLoadedAt}
-                        conversations={conversations}
-                        activeTurnTimeline={activeTurnTimeline}
-                        changesHint={defaultViewChangesHint}
-                        changesHintLoading={defaultViewChangesLoading}
-                        activeChangeset={state.activeChangeset}
-                        gatewayUserViewStates={state.gatewayUserViewStates}
-                        onLoadOlderMessages={loadOlderMessages}
-                        onLoadNewerMessages={loadNewerMessages}
-                        onLoadAroundTurn={loadAroundTurn}
-                        onLoadTurnDetails={loadTurnDetails}
-                        onLoadToolDetails={loadToolDetails}
-                        onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
-                        onRetryHistory={refreshTurnHistory}
-                        onOpenChanges={handleOpenChangesView}
-                        onReplayTurn={replayTurn}
-                        onUpdatePending={updatePendingRequest}
-                        onRemovePending={removePendingRequest}
-                        onChangePendingPolicy={updatePendingRequestPolicy}
-                        onOpenAttachment={handleOpenAttachment}
-                        onViewStateChange={saveSessionViewState}
-                        onViewStateRestoreStatus={setStatus}
-                      />
-                    </div>
                     <PendingQueueBar
                       conversations={conversations}
                       onClear={clearPendingRequests}

@@ -539,11 +539,12 @@ export function useSessionRunActions({
       });
     } catch (error) {
       const message = errorMessage(error);
+      // 轮次回放失败只是当前会话的一次动作失败，不属于「工作区初始化失败」；
+      // 只写 status，绝不能写 error —— 那是初始化失败出口的专属状态。
       setState((prev) => ({
         ...prev,
         sessionHistoryReloadNonce: prev.sessionHistoryReloadNonce + 1,
         status: `轮次操作失败: ${message}`,
-        error: message,
       }));
       throw error;
     }
