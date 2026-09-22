@@ -361,9 +361,11 @@ export default function EventQueuePanel({
           </div>
         </>
       ) : (
-        <div className="empty-state">
-          {historyLoading ? "正在读取事件历史…" : "当前会话还没有事件"}
-        </div>
+        historyError ? null : (
+          <div className="empty-state">
+            {historyLoading ? "正在读取事件历史…" : "当前会话还没有事件"}
+          </div>
+        )
       )}
     </section>
   );

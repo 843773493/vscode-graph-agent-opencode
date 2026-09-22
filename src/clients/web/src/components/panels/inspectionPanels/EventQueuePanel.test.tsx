@@ -140,3 +140,21 @@ describe("EventQueuePanel 超大 payload 兜底", () => {
     expect(html.length).toBeLessThan(200_000);
   });
 });
+
+describe("EventQueuePanel 空态与失败态口径", () => {
+  test("历史读取失败时不得同时显示「当前会话还没有事件」", () => {
+    const html = renderToStaticMarkup(
+      <EventQueuePanel
+        {...historyProps}
+        items={[]}
+        limit={200}
+        sessionId="ses_events"
+        active
+        historyError="Trace 历史读取失败：连接被拒绝"
+      />,
+    );
+
+    expect(html).toContain("Trace 历史读取失败：连接被拒绝");
+    expect(html).not.toContain("当前会话还没有事件");
+  });
+});
