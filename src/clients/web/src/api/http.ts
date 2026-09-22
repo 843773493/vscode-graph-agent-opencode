@@ -64,6 +64,35 @@ function httpErrorDetailMessage(detail: unknown, fallback: string): string {
   return fallback;
 }
 
+/** 非 JSON 错误响应保留的原始文本片段上限：HTML 错误页可能极长，不能整段带进错误文案。 */
+const ERROR_BODY_SNIPPET_LIMIT = 200;
+
+/**
+ * 错误响应体的唯一解析实现：优先取后端信封的 detail/message；响应体为空或不是
+ * JSON 时，把这件事本身作为可诊断信息返回，而不是吞成无 detail。断流与截断响应
+ * 下用户才能看到真实原因。
+ */
+async function readHttpErrorDetail(response: Response): Promise<unknown> {
+  const raw = await response.clone().text().catch(() => null);
+  if (raw === null) return "响应体不可读取";
+  const trimmed = raw.trim();
+  if (!trimmed) return "响应体为空";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    const snippet = trimmed.length > ERROR_BODY_SNIPPET_LIMIT
+      ? `${trimmed.slice(0, ERROR_BODY_SNIPPET_LIMIT)}…`
+      : trimmed;
+    return `响应体不是 JSON: ${snippet}`;
+  }
+  if (parsed && typeof parsed === "object") {
+    const envelope = parsed as { detail?: unknown; message?: unknown };
+    return envelope.detail ?? envelope.message;
+  }
+  return `响应体不是 JSON 对象: ${trimmed.length > ERROR_BODY_SNIPPET_LIMIT ? `${trimmed.slice(0, ERROR_BODY_SNIPPET_LIMIT)}…` : trimmed}`;
+}
+
 function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
   if (!headers) return {};
   if (headers instanceof Headers) return Object.fromEntries(headers.entries());
@@ -395,14 +424,10 @@ async function runGatewayRequest<T>(
       throw new Error(`请求未获得响应: ${path}`);
     }
     if (!response.ok) {
-      const errorBody = await response.clone().json().catch(() => null) as {
-        detail?: unknown;
-        message?: string;
-      } | null;
       throw new HttpRequestError(
         response.status,
         response.statusText,
-        errorBody?.detail ?? errorBody?.message,
+        await readHttpErrorDetail(response),
         path,
       );
     }
@@ -461,10 +486,28 @@ export async function requestJson<T>(
 }
 
 export function unwrapApiData<T>(response: APIResponse<T>): T {
+  validateApiEnvelope(response);
+  if (response.data == null) {
+    throw new Error(`后端响应缺少 data 字段: ${response.message || "unknown message"}`);
+  }
+  return response.data;
+}
+
+/** 响应信封的唯一校验实现：request_id 必须是非空字符串。 */
+function validateApiEnvelope(response: APIResponse<unknown>): void {
   if (typeof response.request_id !== "string" || !response.request_id) {
     throw new Error("后端响应缺少 request_id");
   }
-  if (response.data == null) {
+}
+
+/**
+ * 与 unwrapApiData 共用同一信封校验，但允许 data 显式为 null。
+ * 适用于「空结果本身是合法业务语义」的读取接口（如用户视图状态、会话目标）；
+ * data 字段缺失仍属契约被破坏，必须响亮失败。
+ */
+export function unwrapApiDataOrNull<T>(response: APIResponse<T | null>): T | null {
+  validateApiEnvelope(response);
+  if (!Object.prototype.hasOwnProperty.call(response, "data")) {
     throw new Error(`后端响应缺少 data 字段: ${response.message || "unknown message"}`);
   }
   return response.data;

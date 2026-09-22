@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { listSessionCatalogChildren } from "./session/sessionCatalog";
-import { getApiBaseUrl, normalizePageResult, requestJson } from "./http";
+import { getApiBaseUrl, HttpRequestError, normalizePageResult, requestJson } from "./http";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -272,6 +272,90 @@ describe("requestJson 请求取消", () => {
     expect(externalController.signal.aborted).toBe(true);
     expect(requestSignal).not.toBe(externalController.signal);
     expect((requestSignal as AbortSignal | null)?.aborted).toBe(true);
+  });
+});
+
+describe("HttpRequestError 错误体诊断", () => {
+  function installErrorResponse(port: number, body: BodyInit | null, contentType?: string): void {
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = resolveTestUrl(input, port).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_error_token",
+            data: { token: "error-test-token" },
+          });
+        }
+        return new Response(body, {
+          status: 500,
+          statusText: "Internal Server Error",
+          headers: contentType ? { "content-type": contentType } : undefined,
+        });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+  }
+
+  test("截断 JSON 响应体保留原始文本片段而不是吞成无 detail", async () => {
+    const port = 49_341;
+    installWindow(port);
+    installErrorResponse(port, '{"detail": "上游中断', "application/json");
+
+    const error = await requestJson(port, "/api/v1/broken", {
+      skipGatewayUserSession: true,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HttpRequestError);
+    expect((error as Error).message).toContain("响应体不是 JSON");
+    expect((error as Error).message).toContain("上游中断");
+  });
+
+  test("HTML 错误页保留可诊断片段且截断超长正文", async () => {
+    const port = 49_342;
+    installWindow(port);
+    const html = `<html><body>502 Bad Gateway${"x".repeat(500)}`;
+    installErrorResponse(port, html, "text/html");
+
+    const error = await requestJson(port, "/api/v1/html-error", {
+      skipGatewayUserSession: true,
+    }).catch((caught: unknown) => caught);
+
+    expect((error as Error).message).toContain("响应体不是 JSON");
+    expect((error as Error).message).toContain("502 Bad Gateway");
+    expect((error as Error).message.length).toBeLessThan(html.length);
+  });
+
+  test("空响应体显式报告为空，而不是退化成路径 fallback", async () => {
+    const port = 49_343;
+    installWindow(port);
+    installErrorResponse(port, "");
+
+    const error = await requestJson(port, "/api/v1/empty-error", {
+      skipGatewayUserSession: true,
+    }).catch((caught: unknown) => caught);
+
+    expect((error as Error).message).toContain("响应体为空");
+  });
+
+  test("合法 JSON 信封仍优先取 detail", async () => {
+    const port = 49_344;
+    installWindow(port);
+    installErrorResponse(
+      port,
+      JSON.stringify({ detail: "目录读取失败" }),
+      "application/json",
+    );
+
+    const error = await requestJson(port, "/api/v1/envelope-error", {
+      skipGatewayUserSession: true,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HttpRequestError);
+    expect((error as HttpRequestError).detail).toBe("目录读取失败");
+    expect((error as Error).message).toContain("目录读取失败");
   });
 });
 
