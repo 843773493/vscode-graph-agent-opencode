@@ -3273,3 +3273,57 @@ def test_communication_ledger_does_not_gate_on_lifecycle_fence(
         assert outbox.state == "accepted"
     finally:
         store.close()
+
+
+# ----------------------------------------------------------------------
+# 写锁冲突：跨连接竞争超时转领域错误（不是裸 sqlite3.OperationalError）
+# ----------------------------------------------------------------------
+
+
+def test_begin_immediate_lock_contention_raises_domain_error(
+    tmp_path: Path,
+) -> None:
+    """另一连接持写锁时，本库抛含阶段与路径的领域错误。
+
+    同一 session 库可能被多个进程同时打开；跨进程写竞争超过
+    ``SQLITE_BUSY_TIMEOUT_MS`` 时不得让裸 ``OperationalError: database
+    is locked`` 冒泡（无库路径、无等待时长，无法定位）。
+    """
+    from app.core.sqlite_state import SQLITE_BUSY_TIMEOUT_MS
+
+    database = tmp_path / "lock-contention.sqlite"
+    store = SessionControlStore(database)
+    holder = sqlite3.connect(
+        store.database_path,
+        timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+        isolation_level=None,
+    )
+    try:
+        # 另一连接先占写锁；holder 连接写完后 store 侧事务会超时。
+        holder.execute("PRAGMA busy_timeout = 50")
+        holder.execute("BEGIN IMMEDIATE")
+        holder.execute("INSERT INTO lifecycle_fence (id, state, generation) "
+                       "VALUES (1, 'active', 1) ON CONFLICT(id) DO NOTHING")
+        # 缩短本 store 连接的等待，避免用例耗时 5s。
+        store.connection.execute("PRAGMA busy_timeout = 50")
+        with (
+            pytest.raises(RuntimeError, match="获取写事务失败") as excinfo,
+            store._write_transaction(),
+        ):
+            pass
+        message = str(excinfo.value)
+        assert "stage=BEGIN IMMEDIATE" in message
+        assert str(store.database_path) in message
+        # 错误里报告的是实际生效的 busy_timeout（此处被本用例缩短为 50ms）。
+        assert "等待 50ms 后仍被占用" in message
+        # 底层 sqlite3 异常保留为 cause，便于诊断。
+        assert isinstance(excinfo.value.__cause__, sqlite3.OperationalError)
+        # 失败后连接未卡在事务里，仍可正常工作。
+        holder.execute("ROLLBACK")
+        store.connection.execute("PRAGMA busy_timeout = 5000")
+        with store._write_transaction():
+            pass
+        assert store.connection.in_transaction is False
+    finally:
+        holder.close()
+        store.close()

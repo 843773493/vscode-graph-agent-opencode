@@ -522,6 +522,39 @@ class SessionControlStore(
                 f"session control store 已关闭: {self.database_path}"
             )
 
+    def _begin_immediate(self) -> None:
+        """开启写事务（BEGIN IMMEDIATE），锁冲突转明确领域错误。
+
+        本库只持一条共享连接，但同一 session 库可能被多个进程同时打开
+        （resolver / worker / 删除流各持一份）；跨进程写竞争超过
+        ``SQLITE_BUSY_TIMEOUT_MS`` 时 sqlite3 抛裸 ``OperationalError:
+        database is locked``，该文案不含库路径与等待时长，无法定位。
+        此处统一转成含操作阶段、库路径与等待时长的领域错误。
+
+        不变量：不可重入。嵌套调用会在外层事务内再 BEGIN，本方法在
+        进入前响亮失败，避免 sqlite3 的 "cannot start a transaction
+        within a transaction"（详见 ``_write_transaction``）。
+        """
+        self._ensure_open()
+        if self._connection.in_transaction:
+            raise RuntimeError(
+                "session control 写事务嵌套：_begin_immediate 不可重入"
+                "（外层事务未结束，内层 BEGIN IMMEDIATE 会破坏事务边界）: "
+                f"path={self.database_path}"
+            )
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as error:
+            waited_ms = int(
+                self._connection.execute("PRAGMA busy_timeout").fetchone()[0]
+            )
+            raise RuntimeError(
+                "session control 获取写事务失败：另一个进程持有写锁，"
+                f"等待 {waited_ms}ms 后仍被占用（fail loud）: "
+                f"stage=BEGIN IMMEDIATE, path={self.database_path}, "
+                f"error={error}"
+            ) from error
+
     @contextmanager
     def _write_transaction(self) -> Iterator[sqlite3.Connection]:
         """单个写事务：BEGIN IMMEDIATE 内先验证后写入。
@@ -532,18 +565,8 @@ class SessionControlStore(
         泄漏（本类既有方法以「先判态后写入 + 成功路径末尾 COMMIT」的
         手写模式保持不变；8.5-A 新增方法统一走本 CM）。
         """
-        self._ensure_open()
-        # 不变量：_write_transaction 不可重入。嵌套调用会让内层 BEGIN
-        # IMMEDIATE 在外层事务内触发 sqlite3 的 "cannot start a
-        # transaction within a transaction"，错误信息不含本库上下文，
-        # 难以定位。此处响亮失败并给出可诊断信息（拒绝静默嵌套）。
-        if self._connection.in_transaction:
-            raise RuntimeError(
-                "session control 写事务嵌套：_write_transaction 不可重入"
-                "（外层事务未结束，内层 BEGIN IMMEDIATE 会破坏事务边界）: "
-                f"path={self.database_path}"
-            )
-        self._connection.execute("BEGIN IMMEDIATE")
+        # 不变量与锁冲突翻译统一在 _begin_immediate 内（单点实现）。
+        self._begin_immediate()
         try:
             yield self._connection
         except BaseException:
@@ -593,7 +616,7 @@ class SessionControlStore(
                 f"path={self.database_path}, user_version={current}, "
                 f"supported={self.SCHEMA_VERSION}"
             )
-        self._connection.execute("BEGIN IMMEDIATE")
+        self._begin_immediate()
         try:
             if current == 1:
                 self._upgrade_thread_catalog_kind_v1_to_v2()
@@ -1072,8 +1095,7 @@ class SessionControlStore(
                 "collaboration_precondition_revision 必须是整数或 None: "
                 f"{collaboration_precondition_revision!r}"
             )
-        self._ensure_open()
-        self._connection.execute("BEGIN IMMEDIATE")
+        self._begin_immediate()
         try:
             existing = self._fetch_thread_creation_record(
                 self._connection, idempotency_key
