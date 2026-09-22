@@ -86,7 +86,7 @@ describe("useWorkspaceRefreshOrchestration", () => {
     expect(mounted.current().status).toBe("正在切换工作区");
   });
 
-  test("刷新被作废时返回 null 且不把 workspaceSwitching 收敛掉", async () => {
+  test("刷新被作废时返回 null 并退出切换态、给可见终态", async () => {
     const mounted = await mountHook({
       initialState: appState({ workspaceSwitching: true, error: "旧错误", status: "正在切换工作区" }),
       refreshSessions: async () => null,
@@ -100,11 +100,62 @@ describe("useWorkspaceRefreshOrchestration", () => {
     });
 
     expect(applied).toBeNull();
-    // 作废的刷新没有任何工作区生效：切换态与旧错误必须原样保留，
-    // 不能给出「工作区已就绪」的假成功。
-    expect(mounted.current().workspaceSwitching).toBe(true);
-    expect(mounted.current().error).toBe("旧错误");
-    expect(mounted.current().status).toBe("正在切换工作区");
+    // 作废的刷新没有任何工作区生效，必须给可见终态而不是卡在「正在切换工作区」；
+    // 同时绝不能给出「工作区已就绪」的假成功。
+    expect(mounted.current().workspaceSwitching).toBe(false);
+    expect(mounted.current().error).toBe("工作区切换未生效：本轮刷新已被更新的请求作废");
+    expect(mounted.current().status).toBe("工作区切换未生效：本轮刷新已被更新的请求作废");
+  });
+
+  test("刷新抛错时复位切换态并给出可见错误", async () => {
+    const mounted = await mountHook({
+      initialState: appState({ workspaceSwitching: true, error: null, status: "正在切换工作区" }),
+      refreshSessions: async () => {
+        throw new Error("激活接口不可用");
+      },
+    });
+
+    await act(async () => {
+      await expect(mounted.hook.finishWorkspaceRefresh("workspace-a"))
+        .rejects.toThrow("激活接口不可用");
+    });
+
+    const next = mounted.current();
+    expect(next.workspaceSwitching).toBe(false);
+    expect(next.error).toBe("激活接口不可用");
+    expect(next.status).toBe("激活接口不可用");
+  });
+
+  test("被更新的切换步骤顶替时本次不写回状态，不污染新链路收敛", async () => {
+    let rejectEarlier!: (cause: unknown) => void;
+    const first = new Promise<string | null>((_resolve, reject) => {
+      rejectEarlier = reject;
+    });
+    const mounted = await mountHook({
+      initialState: appState({ workspaceSwitching: false, error: null, status: "" }),
+      refreshSessions: async (preferredSessionId) => (
+        preferredSessionId === "workspace-a" ? await first : "workspace-b"
+      ),
+    });
+
+    const earlier = mounted.hook.finishWorkspaceRefresh("workspace-a");
+    await flush();
+    // 新链路重新进入切换态并完成刷新。
+    act(() => mounted.hook.resetWorkspaceScopedState());
+    const later = await mounted.hook.finishWorkspaceRefresh("workspace-b");
+    expect(later).toBe("workspace-b");
+    expect(mounted.current().status).toBe("工作区已就绪");
+
+    // 旧链路此时才失败：它已被顶替，绝不能把失败态反向写回，覆盖新链路收敛后的状态。
+    rejectEarlier(new Error("旧链路失败"));
+    await act(async () => {
+      await expect(earlier).rejects.toThrow("旧链路失败");
+    });
+
+    const next = mounted.current();
+    expect(next.workspaceSwitching).toBe(false);
+    expect(next.status).toBe("工作区已就绪");
+    expect(next.error).toBeNull();
   });
 
   test("刷新生效时回传活动工作区 id 并收敛切换态", async () => {
