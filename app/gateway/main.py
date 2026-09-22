@@ -202,7 +202,10 @@ def _gateway_root() -> Path:
     return get_gateway_root()
 
 
-async def _cleanup_user_access_periodically(service: UserAccessService) -> None:
+async def _cleanup_user_access_periodically(
+    service: UserAccessService,
+    view_state_store: UserViewStateStore,
+) -> None:
     while True:
         await asyncio.sleep(3600)
         expired_leases, expired_guests = service.cleanup_expired()
@@ -211,6 +214,11 @@ async def _cleanup_user_access_periodically(service: UserAccessService) -> None:
                 "Gateway 清理过期用户访问: leases=%s guests=%s",
                 expired_leases,
                 expired_guests,
+            )
+        expired_view_states = view_state_store.cleanup_expired()
+        if expired_view_states:
+            logger.info(
+                "Gateway 清理过期视图状态: rows=%s", expired_view_states
             )
 
 
@@ -935,6 +943,7 @@ async def lifespan(app: FastAPI):
     app.state.user_profile_store = UserProfileStore(gateway_root=_gateway_root())
     app.state.user_view_state_store = UserViewStateStore(state=gateway_state)
     app.state.user_access_service.cleanup_expired()
+    app.state.user_view_state_store.cleanup_expired()
     startup_generation = (
         os.environ.get("BOXTEAM_CONFIG_GENERATION") or f"gateway_runtime_{os.getpid()}"
     )
@@ -1058,7 +1067,10 @@ async def lifespan(app: FastAPI):
     catalog_search_started = False
     scheduler_started = False
     user_access_cleanup_task = asyncio.create_task(
-        _cleanup_user_access_periodically(app.state.user_access_service)
+        _cleanup_user_access_periodically(
+            app.state.user_access_service,
+            app.state.user_view_state_store,
+        )
     )
     default_workspace_id = next(
         (target.workspace_id for target in registry.targets() if target.system_default),

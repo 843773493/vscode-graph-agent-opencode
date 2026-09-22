@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from app.core.sqlite_state import utc_now_text
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -22,8 +23,16 @@ class UserViewStateRecord:
 
 
 class UserViewStateStore:
-    def __init__(self, *, state: GatewayStateStore) -> None:
+    def __init__(
+        self,
+        *,
+        state: GatewayStateStore,
+        retention_days: int = 30,
+    ) -> None:
+        if retention_days < 1:
+            raise ValueError("视图状态保留天数必须大于 0 天")
         self._state = state
+        self._retention = timedelta(days=retention_days)
 
     @staticmethod
     def _require_user(context: UserAccessContext) -> str:
@@ -180,5 +189,24 @@ class UserViewStateStore:
         except Exception:
             connection.rollback()
             raise
+        finally:
+            connection.close()
+
+    def cleanup_expired(self) -> int:
+        """删除超过保留窗口的视图状态行，返回删除条数。
+
+        与 :meth:`UserAccessService.cleanup_expired` 保持同一范式：按 ``updated_at``
+        判定过期，由启动与周期任务触发，删除 0 行是合法结果。视图状态按
+        (user, workspace, session) 累积，多工作区多会话长期切换会无界增长。
+        """
+
+        cutoff = (datetime.now(UTC) - self._retention).isoformat()
+        connection = self._state.connection()
+        try:
+            cursor = connection.execute(
+                "DELETE FROM user_view_state WHERE updated_at < ?",
+                (cutoff,),
+            )
+            return int(cursor.rowcount)
         finally:
             connection.close()
