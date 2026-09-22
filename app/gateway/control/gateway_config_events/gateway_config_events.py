@@ -56,20 +56,37 @@ FROM config_events
 class GatewayConfigEventMixin:
     @staticmethod
     def _event_from_row(row: sqlite3.Row) -> ConfigEventRecord:
+        # 行投影的唯一实现。路径列是本系统写入的 JSON 数组；若反序列化失败只可能是
+        # 外部绕过软件篡改了库内容，因此这里保持响亮失败，并把定位信息（event_seq /
+        # event_id）写进错误，避免一条坏行毒化整页读取时无从诊断。
+        # TODO: 同仓其它列表字段并无统一上限口径，暂不为路径列表新增任意上限；若未来
+        # 约定聚合成比，需与此处对齐后再补。
+        event_seq = int(row[0])
+        event_id = str(row[1])
+
         def paths(value: object) -> tuple[str, ...]:
-            parsed = json.loads(str(value))
+            try:
+                parsed = json.loads(str(value))
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    "Gateway 配置事件路径 JSON 无效: "
+                    f"event_seq={event_seq}, event_id={event_id}: {error}"
+                ) from error
             if not isinstance(parsed, list) or not all(
                 isinstance(item, str) for item in parsed
             ):
-                raise ValueError("Gateway 配置事件路径无效")
+                raise ValueError(
+                    "Gateway 配置事件路径无效: "
+                    f"event_seq={event_seq}, event_id={event_id}"
+                )
             return tuple(parsed)
 
         def optional_datetime(value: object) -> datetime | None:
             return datetime.fromisoformat(str(value)) if value is not None else None
 
         return ConfigEventRecord(
-            event_seq=int(row[0]),
-            event_id=str(row[1]),
+            event_seq=event_seq,
+            event_id=event_id,
             config_domain=str(row[2]),
             candidate_id=str(row[3]) if row[3] is not None else None,
             attempt_id=str(row[4]) if row[4] is not None else None,

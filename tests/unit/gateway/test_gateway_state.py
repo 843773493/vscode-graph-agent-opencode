@@ -847,6 +847,39 @@ def test_gateway_config_event_bounds_distinguishes_lower_and_frontier(tmp_path):
         state.close()
 
 
+def test_gateway_config_event_bad_path_row_reports_locator(tmp_path):
+    """外部篡改导致的坏行必须响亮失败，并在错误信息里指出是哪一条事件。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        _append_gateway_event(state, "gateway-poison")
+        connection = state.connection()
+        try:
+            connection.execute(
+                "UPDATE config_events SET changed_paths_json = '[1, 2]' "
+                "WHERE event_id = 'gateway-poison'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with pytest.raises(ValueError, match="event_id=gateway-poison"):
+            state.list_config_events(config_domain="gateway")
+        # 非法 JSON 时同样指出是哪一条事件
+        connection = state.connection()
+        try:
+            connection.execute(
+                "UPDATE config_events SET changed_paths_json = 'not-json' "
+                "WHERE event_id = 'gateway-poison'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with pytest.raises(ValueError, match="event_id=gateway-poison"):
+            state.list_config_events(config_domain="gateway")
+    finally:
+        state.close()
+
+
 def test_gateway_prune_config_events_rowcount_semantics(tmp_path):
     """prune 返回实际删除行数：0 行是合法结果（本域无事件或都在窗口内）。"""
 
