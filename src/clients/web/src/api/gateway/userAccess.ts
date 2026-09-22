@@ -27,6 +27,11 @@ const pendingGatewayUserAccessByPort = new Map<
 >();
 const HEARTBEAT_RETRY_DELAYS_MS = [250, 1_000] as const;
 
+/** 取消（页面卸载、会话切换）必须立即放弃，绝不当成网络抖动重试。 */
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 // Guest 重建请求的唯一构造点：认证初始化的 401 兜底与显式切换游客都走这里，
 // 并发编排（写串行锁、pending 失效）由各自调用方负责。
 async function requestGatewayGuest(port: number): Promise<GatewayUserAccess> {
@@ -188,9 +193,13 @@ export async function heartbeatGatewayUserWithRetry(
     try {
       return await heartbeatGatewayUser(port);
     } catch (error) {
-      // 409/401 是业务鉴权结果，必须立即交给访问状态处理；这里只恢复
-      // 重启或网络切换造成的 fetch 传输失败，并且重试次数严格有界。
-      if (error instanceof HttpRequestError || attempt === HEARTBEAT_RETRY_DELAYS_MS.length) {
+      // 409/401 是业务鉴权结果、AbortError 是调用方主动取消，都必须立即交给
+      // 上层处理；这里只恢复重启或网络切换造成的 fetch 传输失败，重试严格有界。
+      if (
+        error instanceof HttpRequestError
+        || isAbortError(error)
+        || attempt === HEARTBEAT_RETRY_DELAYS_MS.length
+      ) {
         throw error;
       }
       await new Promise<void>((resolve) => {

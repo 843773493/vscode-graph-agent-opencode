@@ -524,3 +524,30 @@ describe("Gateway UI 资源列表载荷校验", () => {
     );
   });
 });
+
+describe("heartbeat 遇取消立即放弃重试", () => {
+  test("AbortError 不触发重试，且不再发第二个请求", async () => {
+    const port = 49_924;
+    let heartbeatCalls = 0;
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0]), `http://127.0.0.1:${port}`).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "heartbeat-abort-token" } });
+        }
+        if (path === "/api/gateway/users/current/heartbeat") {
+          heartbeatCalls += 1;
+          throw new DOMException("页面已卸载", "AbortError");
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    await expect(heartbeatGatewayUserWithRetry(port)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+
+    expect(heartbeatCalls).toBe(1);
+  });
+});
