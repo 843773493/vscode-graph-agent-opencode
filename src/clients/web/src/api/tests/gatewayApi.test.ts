@@ -40,13 +40,13 @@ describe("手动创建会话连接", () => {
     );
 
     const terminal = await createSessionConnection(
-      49_101,
+      49_901,
       "gw_manual",
       "ses_manual",
       "terminal",
     );
     const browser = await createSessionConnection(
-      49_101,
+      49_901,
       "gw_manual",
       "ses_manual",
       "browser",
@@ -102,7 +102,7 @@ describe("Gateway 本机目录浏览", () => {
       { preconnect: originalFetch.preconnect },
     );
 
-    const listing = await browseGatewayLocalDirectories(49_102, "/workspace");
+    const listing = await browseGatewayLocalDirectories(49_902, "/workspace");
 
     expect(requestCount).toBe(3);
     expect(listing.entries).toEqual([
@@ -135,7 +135,7 @@ describe("Gateway 本机目录浏览", () => {
     );
 
     await browseGatewayLocalDirectories(
-      49_103,
+      49_903,
       "/srv/projects",
       "rgw_remote",
     );
@@ -170,7 +170,7 @@ describe("Gateway 工作区注册", () => {
       { preconnect: originalFetch.preconnect },
     );
 
-    await addManagedGatewayWorkspace(49_104, {
+    await addManagedGatewayWorkspace(49_904, {
       gateway_connection_id: "rgw_remote",
       root_path: "/srv/projects/alpha",
     });
@@ -201,7 +201,7 @@ describe("Gateway 工作区列表", () => {
       { preconnect: originalFetch.preconnect },
     );
 
-    await listGatewayWorkspaces(49_105, { checkHealth: false });
+    await listGatewayWorkspaces(49_905, { checkHealth: false });
 
     expect(requestedUrls[1]).toContain(
       "/api/gateway/workspaces?check_health=false",
@@ -211,7 +211,7 @@ describe("Gateway 工作区列表", () => {
 
 describe("Gateway 认证初始化", () => {
   test("业务请求必须等待 current 用户会话成功后再发送", async () => {
-    const port = 49_108;
+    const port = 49_908;
     const requestedPaths: string[] = [];
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
@@ -259,7 +259,7 @@ describe("Gateway 认证初始化", () => {
   });
 
   test("React StrictMode 并发初始化只探测一次并只创建一个 guest", async () => {
-    const port = 49_106;
+    const port = 49_906;
     let credentialCalls = 0;
     let currentCalls = 0;
     let guestCalls = 0;
@@ -311,7 +311,7 @@ describe("Gateway 认证初始化", () => {
   });
 
   test("heartbeat 只对网络传输失败做有界重试", async () => {
-    const port = 49_107;
+    const port = 49_907;
     let heartbeatCalls = 0;
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
