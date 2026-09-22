@@ -10,6 +10,7 @@ from app.gateway.federation import FEDERATION_PROTOCOL_VERSION
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
+    ConfigEventCursorGoneError,
     ConfigEventInput,
 )
 
@@ -742,6 +743,116 @@ def test_legacy_gateway_secret_migration_blocks_irreversible_digest(tmp_path):
         digest_record = state.get_config("legacy-digest")
         assert digest_record is not None
         assert digest_record.payload["api_key"] == "literal-sha256:deadbeef"
+    finally:
+        state.close()
+
+
+def _append_gateway_event(
+    state: GatewayStateStore, event_id: str, *, config_domain: str = "gateway"
+) -> None:
+    state.append_config_event(
+        ConfigEventInput(
+            event_id=event_id,
+            config_domain=config_domain,
+            candidate_id=None,
+            attempt_id=None,
+            apply_id=None,
+            idempotency_key=None,
+            commit_revision=None,
+            active_revision=1,
+            pending_revision=None,
+            source="watcher",
+            result="applied",
+        )
+    )
+
+
+def test_gateway_config_event_bounds_distinguishes_lower_and_frontier(tmp_path):
+    """下界按域受裁剪影响，前沿全局单调且裁剪后不回退。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        assert state.config_event_bounds(config_domain="gateway") == (None, 0)
+        _append_gateway_event(state, "gateway-1")
+        _append_gateway_event(state, "other-1", config_domain="other")
+        # 本域下界只看本域；前沿是全局最大已分配 seq
+        assert state.config_event_bounds(config_domain="gateway") == (1, 2)
+        assert state.config_event_bounds(config_domain="unknown") == (None, 2)
+
+        connection = state.connection()
+        try:
+            connection.execute(
+                "UPDATE config_events SET occurred_at = '2000-01-01T00:00:00+00:00' "
+                "WHERE event_id = 'gateway-1'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        assert state.prune_config_events(config_domain="gateway") == 1
+        # 裁剪后本域下界消失，但前台前沿保持 2 不回退
+        assert state.config_event_bounds(config_domain="gateway") == (None, 2)
+    finally:
+        state.close()
+
+
+def test_gateway_config_event_cursor_gone_only_inside_pruned_window(tmp_path):
+    """游标只在本域仍有进度却已落在被裁剪区间时报 CursorGone。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        for index in range(1, 5):
+            _append_gateway_event(state, f"gateway-{index}")
+        connection = state.connection()
+        try:
+            connection.execute("DELETE FROM config_events WHERE event_seq IN (1, 2)")
+            connection.commit()
+        finally:
+            connection.close()
+        assert state.config_event_bounds(config_domain="gateway") == (3, 4)
+        # 连续窗口边界：after 恰好等于 first-1 时仍可续读
+        state.ensure_config_event_cursor(config_domain="gateway", after=2)
+        with pytest.raises(ConfigEventCursorGoneError):
+            state.ensure_config_event_cursor(config_domain="gateway", after=1)
+    finally:
+        state.close()
+
+
+def test_gateway_config_event_cursor_gone_after_full_prune(tmp_path):
+    """本域被完全裁剪且前沿已前进时，落后游标必须报 CursorGone 而不是静默空页。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        _append_gateway_event(state, "gateway-1")
+        state.append_config_event(
+            ConfigEventInput(
+                event_id="other-1",
+                config_domain="other",
+                candidate_id=None,
+                attempt_id=None,
+                apply_id=None,
+                idempotency_key=None,
+                commit_revision=None,
+                active_revision=1,
+                pending_revision=None,
+                source="watcher",
+                result="applied",
+            )
+        )
+        connection = state.connection()
+        try:
+            connection.execute(
+                "DELETE FROM config_events WHERE config_domain = 'gateway'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        # 本域已无保留事件，但全局前沿已推进到 2：落后游标不能再当空页
+        assert state.config_event_bounds(config_domain="gateway") == (None, 2)
+        state.ensure_config_event_cursor(config_domain="gateway", after=0)
+        with pytest.raises(ConfigEventCursorGoneError):
+            state.ensure_config_event_cursor(config_domain="gateway", after=1)
+        # after 已追平前沿：没有新事件是合法结果
+        state.ensure_config_event_cursor(config_domain="gateway", after=2)
     finally:
         state.close()
 

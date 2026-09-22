@@ -510,6 +510,22 @@ class GatewayConfigEventMixin:
         return tuple(self._event_from_row(row) for row in rows)
 
     def config_event_bounds(self, *, config_domain: str) -> tuple[int | None, int]:
+        """返回本域的保留窗口下界与单调前沿上界。
+
+        返回 ``(first_retained_seq, global_frontier_seq)``：
+
+        - ``first_retained_seq`` 是 ``config_events`` 中**本域**仍保留的最小
+          ``event_seq``；本域已被完全裁剪时为 ``None``。它是保留窗口下界，只描述
+          本域。
+        - ``global_frontier_seq`` 是**全局**已分配的最大 ``event_seq``（取自
+          ``sqlite_sequence``），即使裁剪也不回退，因此可作为对外单调游标
+          （federation manifest ``config_event_cursor``）使用。
+
+        两者刻意不是同一取值域：下界受裁剪影响、按域统计；上界全局单调、永不回退。
+        调用方若需要「游标是否已落在被裁剪区间」请用 :meth:`ensure_config_event_cursor`，
+        不要直接相减去推断。
+        """
+
         connection = self._database.connection()
         try:
             row = connection.execute(
@@ -530,14 +546,20 @@ class GatewayConfigEventMixin:
             connection.close()
 
     def ensure_config_event_cursor(self, *, config_domain: str, after: int) -> None:
+        """校验游标仍能从本域续读，落在被裁剪区间时抛出 CursorGone。"""
+
         if after < 0:
             raise ValueError("Gateway 配置事件游标不能为负数")
-        first, _ = self.config_event_bounds(config_domain=config_domain)
-        if after > 0 and first is not None and after < first - 1:
+        first, frontier = self.config_event_bounds(config_domain=config_domain)
+        # 前沿已越过 after，说明本域存在晚于 after 的全局进度；此时若本域已无保留事件
+        # （first is None，整个域被裁剪）或最早保留事件跳过了 after+1（first > after+1，
+        # 中间被裁剪），该游标已落在被裁剪区间，必须响亮报 CursorGone，不能让调用方
+        # 把「空页」误当成「没有新事件」。first 为 None 时用前沿作为 first_available。
+        if after > 0 and frontier > after and (first is None or first > after + 1):
             raise ConfigEventCursorGoneError(
                 config_domain=config_domain,
                 after=after,
-                first=first,
+                first=first if first is not None else frontier,
             )
 
     def prune_config_events(
