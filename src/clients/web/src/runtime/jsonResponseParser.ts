@@ -10,6 +10,31 @@ interface JsonParseFailure {
 
 type JsonParseResult = JsonParseSuccess | JsonParseFailure;
 
+/**
+ * JSON 解析失败时携带已读取的正文前缀。引擎自带的 SyntaxError 只说明语法错误，
+ * 不含路径与响应体形态，调用方无法据此判断「Gateway 未启动返回了 HTML」还是
+ * 「响应体为空」；上层（api/http.ts）用它组合可诊断的中文错误。
+ */
+export class JsonResponseBodyError extends Error {
+  constructor(readonly bodyPrefix: string) {
+    super("响应体不是 JSON");
+    this.name = "JsonResponseBodyError";
+  }
+}
+
+/** 诊断只需正文开头：巨型载荷不得整段进入错误文案。 */
+const DIAGNOSTIC_BODY_PREFIX_LIMIT = 512;
+
+function textPrefix(text: string): string {
+  return text.length > DIAGNOSTIC_BODY_PREFIX_LIMIT
+    ? text.slice(0, DIAGNOSTIC_BODY_PREFIX_LIMIT)
+    : text;
+}
+
+function bufferPrefix(buffer: ArrayBuffer): string {
+  return new TextDecoder().decode(buffer.slice(0, DIAGNOSTIC_BODY_PREFIX_LIMIT));
+}
+
 function parseJsonBuffer<T>(buffer: ArrayBuffer): T {
   return JSON.parse(new TextDecoder().decode(buffer)) as T;
 }
@@ -58,7 +83,12 @@ export async function parseJsonResponse<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   if (workerThresholdBytes === null) {
-    return await awaitWithAbort(response.json() as Promise<T>, signal);
+    const text = await awaitWithAbort(response.text(), signal);
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new JsonResponseBodyError(textPrefix(text));
+    }
   }
   if (!Number.isSafeInteger(workerThresholdBytes) || workerThresholdBytes < 1) {
     throw new Error(
@@ -68,11 +98,17 @@ export async function parseJsonResponse<T>(
   const buffer = await awaitWithAbort(response.arrayBuffer(), signal);
   if (buffer.byteLength < workerThresholdBytes) {
     if (signal?.aborted) throw abortReason(signal);
-    return parseJsonBuffer<T>(buffer);
+    try {
+      return parseJsonBuffer<T>(buffer);
+    } catch {
+      throw new JsonResponseBodyError(bufferPrefix(buffer));
+    }
   }
 
   if (signal?.aborted) throw abortReason(signal);
 
+  // buffer 会以 transfer 交给 Worker 而失效，诊断前缀必须在移交前取出。
+  const prefix = bufferPrefix(buffer);
   const worker = new Worker(
     new URL("./jsonParseWorker.ts", import.meta.url),
     { type: "module", name: "boxteam-json-parser" },
@@ -96,7 +132,7 @@ export async function parseJsonResponse<T>(
         resolve(event.data.value as T);
         return;
       }
-      reject(new Error(`JSON Worker 解析失败: ${event.data.message}`));
+      reject(new JsonResponseBodyError(prefix));
     };
     worker.onerror = (event) => {
       if (!finish()) return;

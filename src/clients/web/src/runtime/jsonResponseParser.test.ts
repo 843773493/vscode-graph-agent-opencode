@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { parseJsonResponse } from "./jsonResponseParser";
+import { JsonResponseBodyError, parseJsonResponse } from "./jsonResponseParser";
 
 const originalWorkerDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Worker");
 
@@ -31,12 +31,17 @@ describe("JSON response 渐进解析", () => {
     expect(parsed.data.value).toBe(value);
   });
 
-  test("损坏 JSON 透明返回 Worker 解析错误", async () => {
+  test("损坏 JSON 抛出带正文前缀的 JsonResponseBodyError，不再暴露 Worker 引擎文案", async () => {
     const response = new Response(`{"value":"${"x".repeat(300_000)}`);
 
-    expect(parseJsonResponse(response, 256 * 1024)).rejects.toThrow(
-      "JSON Worker 解析失败",
+    const error = await parseJsonResponse(response, 256 * 1024).catch(
+      (caught: unknown) => caught,
     );
+
+    expect(error).toBeInstanceOf(JsonResponseBodyError);
+    // 诊断前缀在移交 Worker 之前取出，因此即使 Worker 挂掉也能带出响应体形态。
+    expect((error as JsonResponseBodyError).bodyPrefix).toContain('{"value":"');
+    expect((error as Error).message).not.toContain("Worker");
   });
 
   test("arrayBuffer 下载阶段取消后立即拒绝且不启动 Worker", async () => {

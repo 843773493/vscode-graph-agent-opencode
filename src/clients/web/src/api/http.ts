@@ -1,5 +1,5 @@
 import type { APIResponse, CursorPage } from "../types/backend";
-import { parseJsonResponse } from "../runtime/jsonResponseParser";
+import { JsonResponseBodyError, parseJsonResponse } from "../runtime/jsonResponseParser";
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
 export const DEFAULT_BACKEND_PORT = 8014;
@@ -263,15 +263,6 @@ export function invalidateGatewayUserSession(port: number): void {
   gatewayUserSessionReadyByPort.delete(port);
 }
 
-/**
- * 清除某个端口上缓存的本地凭据 Promise。Gateway 重启会轮换凭据，同一个 SPA
- * 进程不能永久复用旧 token；进程内按端口缓存意味着测试或同一进程的多个调用方
- * 切换后端时必须显式作废，否则会拿着上一个后端的 token 继续请求。
- */
-export function invalidateGatewayToken(port: number): void {
-  gatewayTokenByPort.delete(port);
-}
-
 async function initializeGatewayUserSessionFallback(
   port: number,
   signal: AbortSignal | undefined,
@@ -490,8 +481,33 @@ export async function requestJson<T>(
     async (response) =>
       response.status === 204
         ? undefined as T
-        : await parseJsonResponse<T>(response, parseInWorkerAboveBytes),
+        : await parseJsonResponseOrThrowDiagnostic<T>(
+          response,
+          path,
+          parseInWorkerAboveBytes,
+        ),
   );
+}
+
+/**
+ * JSON 解包的唯一收口：解析失败时把正文形态与路径拼进可诊断中文错误，
+ * 绝不把引擎 SyntaxError 原样透给用户。
+ */
+async function parseJsonResponseOrThrowDiagnostic<T>(
+  response: Response,
+  path: string,
+  parseInWorkerAboveBytes: number | null,
+): Promise<T> {
+  try {
+    return await parseJsonResponse<T>(response, parseInWorkerAboveBytes);
+  } catch (error) {
+    if (error instanceof JsonResponseBodyError) {
+      throw new Error(
+        jsonBodyDiagnosticMessage(response, path, error.bodyPrefix),
+      );
+    }
+    throw error;
+  }
 }
 
 export function unwrapApiData<T>(response: APIResponse<T>): T {
@@ -520,6 +536,28 @@ export function unwrapApiDataOrNull<T>(response: APIResponse<T | null>): T | nul
     throw new Error(`后端响应缺少 data 字段: ${response.message || "unknown message"}`);
   }
   return response.data;
+}
+
+/**
+ * 2xx 成功路径收到非 JSON 响应体时的唯一诊断实现：把「代理返回了 HTML 错误页」
+ * 「响应体为空」这类真实原因写进错误文案，而不是把引擎的 SyntaxError 直接暴露给用户。
+ * 正文只带前缀片段，绝不把巨型载荷整段带进错误。
+ */
+function jsonBodyDiagnosticMessage(
+  response: Response,
+  path: string,
+  bodyPrefix: string,
+): string {
+  const trimmed = bodyPrefix.trim();
+  const snippet = trimmed.length > ERROR_BODY_SNIPPET_LIMIT
+    ? `${trimmed.slice(0, ERROR_BODY_SNIPPET_LIMIT)}…`
+    : trimmed;
+  const shape = !trimmed
+    ? "响应体为空"
+    : trimmed.startsWith("<")
+      ? "响应体看起来是 HTML"
+      : "响应体不是 JSON";
+  return `${path} 返回 ${response.status} ${response.statusText}，但${shape}: ${snippet}`;
 }
 
 /** 描述非法值的观测形态，供协议校验错误定位用（不打印原始内容，避免巨型载荷）。 */

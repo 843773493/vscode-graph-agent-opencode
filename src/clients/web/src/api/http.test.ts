@@ -359,6 +359,120 @@ describe("HttpRequestError 错误体诊断", () => {
   });
 });
 
+describe("2xx 非 JSON 响应体的可诊断错误", () => {
+  function installSuccessResponse(
+    port: number,
+    body: BodyInit | null,
+    status = 200,
+    statusText = "OK",
+    contentType?: string,
+  ): void {
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = resolveTestUrl(input, port).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_success_token",
+            data: { token: "success-test-token" },
+          });
+        }
+        return new Response(body, {
+          status,
+          statusText,
+          headers: contentType ? { "content-type": contentType } : undefined,
+        });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+  }
+
+  test("2xx 返回 HTML 时给出中文错误并指明响应体看起来是 HTML", async () => {
+    const port = 49_350;
+    installWindow(port);
+    installSuccessResponse(
+      port,
+      "<!doctype html><html><body>Gateway 未启动</body></html>",
+      200,
+      "OK",
+      "text/html",
+    );
+
+    const error = await requestJson(port, "/api/v1/workspace", {
+      skipGatewayUserSession: true,
+    }).catch((caught: unknown) => caught);
+
+    const message = (error as Error).message;
+    expect(message).toContain("/api/v1/workspace");
+    expect(message).toContain("200");
+    expect(message).toContain("响应体看起来是 HTML");
+    expect(message).toContain("<!doctype html");
+    expect(message).not.toContain("is not valid JSON");
+  });
+
+  test("2xx 空响应体时显式报告为空而不是 EOF 解析错误", async () => {
+    const port = 49_351;
+    installWindow(port);
+    installSuccessResponse(port, "");
+
+    const error = await requestJson(port, "/api/v1/workspace", {
+      skipGatewayUserSession: true,
+    }).catch((caught: unknown) => caught);
+
+    const message = (error as Error).message;
+    expect(message).toContain("/api/v1/workspace");
+    expect(message).toContain("响应体为空");
+    expect(message).not.toContain("Unexpected end of JSON input");
+  });
+
+  test("2xx 纯文本时说明不是 JSON 并带出片段", async () => {
+    const port = 49_352;
+    installWindow(port);
+    installSuccessResponse(port, "gateway is down", 200, "OK", "text/plain");
+
+    const error = await requestJson(port, "/api/v1/workspace", {
+      skipGatewayUserSession: true,
+    }).catch((caught: unknown) => caught);
+
+    const message = (error as Error).message;
+    expect(message).toContain("响应体不是 JSON");
+    expect(message).toContain("gateway is down");
+  });
+
+  test("2xx 合法 JSON 仍正常解包，204 仍返回 undefined", async () => {
+    const port = 49_353;
+    installWindow(port);
+    installSuccessResponse(port, JSON.stringify({ data: { ok: 1 }, request_id: "r" }));
+    await expect(
+      requestJson(port, "/api/v1/workspace", { skipGatewayUserSession: true }),
+    ).resolves.toEqual({ data: { ok: 1 }, request_id: "r" });
+
+    const port204 = 49_354;
+    installWindow(port204);
+    installSuccessResponse(port204, null, 204, "No Content");
+    await expect(
+      requestJson(port204, "/api/v1/workspace", { skipGatewayUserSession: true }),
+    ).resolves.toBeUndefined();
+  });
+
+  test("超大伪造 JSON 只带出前缀片段，不把整个载荷写进错误", async () => {
+    const port = 49_355;
+    installWindow(port);
+    const huge = "<!doctype html>" + "x".repeat(20_000);
+    installSuccessResponse(port, huge, 200, "OK", "text/html");
+
+    const error = await requestJson(port, "/api/v1/workspace", {
+      skipGatewayUserSession: true,
+    }).catch((caught: unknown) => caught);
+
+    const message = (error as Error).message;
+    expect(message).toContain("响应体看起来是 HTML");
+    expect(message.length).toBeLessThan(huge.length);
+  });
+});
+
 describe("getApiBaseUrl", () => {
   test("浏览器始终使用同源相对路径，避免 localhost 与 127.0.0.1 互相跨站", () => {
     installWindow(8014, "http://localhost:8014");
