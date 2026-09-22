@@ -648,3 +648,97 @@ describe("用户视图状态的信封校验", () => {
     );
   });
 });
+
+describe("显式切换用户与在途初始化的时序", () => {
+  /**
+   * 构造「初始化在途 → 显式切换用户 → 旧初始化响应延迟到达」的时序：
+   * 初始化的 current 探测被闸门卡住，切换先落地，再放行旧探测。
+   */
+  function stubSupersededInitialization(port: number): {
+    writes: string[];
+    releaseInitialization: () => void;
+    settle: () => Promise<void>;
+  } {
+    const writes: string[] = [];
+    let switched = false;
+    let releaseInitialization!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseInitialization = resolve;
+    });
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(String(args[0]), `http://127.0.0.1:${port}`).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "switch-token" } });
+        }
+        if (path === "/api/gateway/users/current") {
+          if (!switched) {
+            await gate;
+            return Response.json({ detail: "user_session_required" }, { status: 401 });
+          }
+          return Response.json({
+            data: { kind: "user", user_id: "usr_A", lease_generation: 2 },
+            request_id: "req_current_after_switch",
+          });
+        }
+        if (path === "/api/gateway/users/guest") {
+          writes.push("guest");
+          return Response.json({
+            data: { kind: "guest", user_id: null, lease_generation: 1 },
+            request_id: "req_guest",
+          });
+        }
+        if (path === "/api/gateway/users/usr_A/access") {
+          writes.push("usr_A");
+          switched = true;
+          return Response.json({
+            data: { kind: "user", user_id: "usr_A", lease_generation: 2 },
+            request_id: "req_access",
+          });
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+    return {
+      writes,
+      releaseInitialization,
+      settle: async () => {
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+      },
+    };
+  }
+
+  test("旧初始化不返回切换前的游客身份，也不重建游客", async () => {
+    const port = 49_940;
+    const harness = stubSupersededInitialization(port);
+
+    const stale = ensureGatewayUserAccess(port);
+    await harness.settle();
+    const switching = selectGatewayUser(port, "usr_A");
+    harness.releaseInitialization();
+
+    const staleAccess = await stale;
+    const switchedAccess = await switching;
+
+    // 两条调用链都必须看到切换后的用户，绝不能有任一环回传旧游客身份。
+    expect(staleAccess).toMatchObject({ kind: "user", user_id: "usr_A" });
+    expect(switchedAccess).toMatchObject({ kind: "user", user_id: "usr_A" });
+    // 切换后不得再发游客重建请求。
+    expect(harness.writes).toEqual(["usr_A"]);
+  });
+
+  test("切换始终是最后写入 cookie 的一方", async () => {
+    const port = 49_941;
+    const harness = stubSupersededInitialization(port);
+
+    const stale = ensureGatewayUserAccess(port);
+    await harness.settle();
+    const switching = selectGatewayUser(port, "usr_A");
+    harness.releaseInitialization();
+    await switching;
+    await stale;
+
+    expect(harness.writes[harness.writes.length - 1]).toBe("usr_A");
+  });
+});

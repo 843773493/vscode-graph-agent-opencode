@@ -25,7 +25,23 @@ const pendingGatewayUserAccessByPort = new Map<
   number,
   Promise<GatewayUserAccess>
 >();
+// 显式切换用户（游客/select/takeover）的代际令牌。在途初始化只有在代际未变时
+// 才允许写入 cookie 或返回自己的结论；一旦被切换取代，它必须作废退出，由调用方
+// 在切换落地后重新判定，绝不能把切换前的旧身份回传出去（用户身份串台）。
+const gatewayUserAccessGenerationByPort = new Map<number, number>();
 const HEARTBEAT_RETRY_DELAYS_MS = [250, 1_000] as const;
+
+/** 被显式切换取代的在途初始化以此信号作废，不写 cookie、不返回旧身份。 */
+class SupersededUserAccessError extends Error {
+  constructor() {
+    super("用户访问初始化已被显式切换取代");
+    this.name = "SupersededUserAccessError";
+  }
+}
+
+function userAccessGeneration(port: number): number {
+  return gatewayUserAccessGenerationByPort.get(port) ?? 0;
+}
 
 /** 取消（页面卸载、会话切换）必须立即放弃，绝不当成网络抖动重试。 */
 function isAbortError(error: unknown): boolean {
@@ -69,42 +85,83 @@ export async function ensureGatewayUserAccess(
 ): Promise<GatewayUserAccess> {
   const pending = pendingGatewayUserAccessByPort.get(port);
   if (pending) return pending;
+  const generation = userAccessGeneration(port);
 
-  const initialization = (async () => {
-    // current 判定与游客重建必须整体进入会话写串行锁，避免锁外的 401
-    // 结论与并发 acquire 互相覆盖 cookie。
-    return await withGatewayUserSessionWrite(port, async () => {
-      try {
-        return await getCurrentGatewayUser(port);
-      } catch (error: unknown) {
-        if (!(error instanceof HttpRequestError) || error.status !== 401) throw error;
-        return await requestGatewayGuest(port);
-      }
-    });
-  })();
-  pendingGatewayUserAccessByPort.set(port, initialization);
-  void initialization.then(() => {
-    if (pendingGatewayUserAccessByPort.get(port) === initialization) {
-      pendingGatewayUserAccessByPort.delete(port);
-    }
-  }, () => {
-    if (pendingGatewayUserAccessByPort.get(port) === initialization) {
-      pendingGatewayUserAccessByPort.delete(port);
+  // current 判定与游客重建必须整体进入会话写串行锁，避免锁外的 401
+  // 结论与并发 acquire 互相覆盖 cookie。
+  const initialization = withGatewayUserSessionWrite(port, async () => {
+    try {
+      return await getCurrentGatewayUser(port);
+    } catch (error: unknown) {
+      if (!(error instanceof HttpRequestError) || error.status !== 401) throw error;
+      // 锁外发生的显式切换已经作废本次结论：不得重建游客把身份拉回，
+      // 也不得把切换前的判定交给调用方。
+      if (userAccessGeneration(port) !== generation) throw new SupersededUserAccessError();
+      return await requestGatewayGuest(port);
     }
   });
-  return initialization;
+  registerPendingGatewayUserAccess(port, initialization);
+  return await inheritSupersedingUserAccess(port, initialization);
 }
 
-function invalidatePendingGatewayUserAccess(port: number): void {
-  pendingGatewayUserAccessByPort.delete(port);
+/** 登记在途初始化/切换结果，并在它仍是当前条目时自动清理。 */
+function registerPendingGatewayUserAccess(
+  port: number,
+  pending: Promise<GatewayUserAccess>,
+): void {
+  pendingGatewayUserAccessByPort.set(port, pending);
+  const clearIfCurrent = () => {
+    if (pendingGatewayUserAccessByPort.get(port) === pending) {
+      pendingGatewayUserAccessByPort.delete(port);
+    }
+  };
+  void pending.then(clearIfCurrent, clearIfCurrent);
+}
+
+/**
+ * 被显式切换取代的初始化不得把切换前的身份交给调用方：把调用方转交给取代者
+ * （切换请求），由它返回切换后的唯一权威身份。
+ */
+async function inheritSupersedingUserAccess(
+  port: number,
+  initialization: Promise<GatewayUserAccess>,
+): Promise<GatewayUserAccess> {
+  try {
+    return await initialization;
+  } catch (error: unknown) {
+    if (!(error instanceof SupersededUserAccessError)) throw error;
+    const superseding = pendingGatewayUserAccessByPort.get(port);
+    if (superseding && superseding !== initialization) return await superseding;
+    throw error;
+  }
+}
+
+/**
+ * 显式切换用户（游客/select/takeover）的唯一入口。
+ *
+ * 先把切换本身登记为新的 pending，再等在途初始化退出写锁，最后执行切换写入。
+ * 这样既保证切换是最后写入 cookie 的一方，也让被取代的初始化能直接继承切换结果，
+ * 而不是回传切换前的旧身份。
+ */
+async function switchGatewayUserAccess(
+  port: number,
+  performSwitch: () => Promise<GatewayUserAccess>,
+): Promise<GatewayUserAccess> {
+  const superseded = pendingGatewayUserAccessByPort.get(port);
+  gatewayUserAccessGenerationByPort.set(port, userAccessGeneration(port) + 1);
+  invalidateGatewayUserSession(port);
+  const switching = (async () => {
+    if (superseded) await superseded.catch(() => undefined);
+    return await withGatewayUserSessionWrite(port, performSwitch);
+  })();
+  registerPendingGatewayUserAccess(port, switching);
+  return await switching;
 }
 
 export async function acquireGatewayGuest(
   port: number,
 ): Promise<GatewayUserAccess> {
-  invalidatePendingGatewayUserAccess(port);
-  invalidateGatewayUserSession(port);
-  return await withGatewayUserSessionWrite(port, () => requestGatewayGuest(port));
+  return await switchGatewayUserAccess(port, () => requestGatewayGuest(port));
 }
 
 export async function listGatewayUsers(port: number): Promise<GatewayUserList> {
@@ -139,9 +196,7 @@ async function acquireGatewayUser(
   path: "access" | "takeover",
   clientLabel?: string,
 ): Promise<GatewayUserAccess> {
-  invalidatePendingGatewayUserAccess(port);
-  invalidateGatewayUserSession(port);
-  return await withGatewayUserSessionWrite(port, async () =>
+  return await switchGatewayUserAccess(port, async () =>
     unwrapApiData(
       await requestJson<APIResponse<GatewayUserAccess>>(
         port,
