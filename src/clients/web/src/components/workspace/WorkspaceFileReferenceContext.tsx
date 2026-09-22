@@ -18,6 +18,7 @@ import {
   parseWorkspaceFileReference,
   type WorkspaceFileReference,
 } from "../../utils/workspaceFileReferences";
+import { errorDisplayMessage } from "../../utils/errorMessage";
 
 export type WorkspaceFileReferenceResolution =
   | {
@@ -203,7 +204,7 @@ export function WorkspaceFileReferenceProvider({
             if (error instanceof HttpRequestError && error.status === 404) {
               return { status: "missing" };
             }
-            const message = error instanceof Error ? error.message : String(error);
+            const message = errorDisplayMessage(error);
             console.error(`文件引用验证失败: target=${target}`, error);
             return { status: "error", message };
           });

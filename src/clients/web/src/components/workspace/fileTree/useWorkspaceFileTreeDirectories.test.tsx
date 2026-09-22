@@ -321,4 +321,34 @@ describe("workspace 文件树目录缓存", () => {
       nextCursor: null,
     });
   });
+
+  test("403 权限失败时目录错误与状态栏都带可执行提示且保留原始文本", async () => {
+    const port = 49_612;
+    installWindow(port);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === "/api/gateway/auth/local-credential") {
+        return apiResponse({ token: "token" });
+      }
+      if (url.pathname === "/api/gateway/users/current") {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      return new Response(JSON.stringify({ detail: "文件树路径无访问权限: root" }), {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "Content-Type": "application/json" },
+      });
+    }, { preconnect: originalFetch.preconnect });
+
+    const { handle, statuses } = mountHarness(port);
+    await act(async () => {
+      await handle.loadDirectory("root");
+    });
+    const entry = handle.directoriesRef.current["root"] as { error?: string };
+    expect(entry.error).toContain("没有访问权限");
+    expect(entry.error).toContain("请求失败 403 Forbidden");
+    expect(entry.error).toContain("文件树路径无访问权限: root");
+    expect(statuses.some((text) =>
+      text.startsWith("文件树加载失败: ") && text.includes("没有访问权限"))).toBe(true);
+  });
 });

@@ -18,6 +18,7 @@ import type {
   WorkspaceFileSelection,
 } from "../../utils/workspaceFileReferences";
 import { isWorkspaceTextFilePath } from "../../utils/workspaceFileReferences";
+import { errorDisplayMessage } from "../../utils/errorMessage";
 import { useWarmConfirm } from "../../components/shell/WarmConfirmProvider";
 
 interface UseWorkspacePreviewTabsOptions {
@@ -172,9 +173,7 @@ export function useWorkspacePreviewTabs({
         if (cancelled) {
           return;
         }
-        const message = restoreError instanceof Error
-          ? restoreError.message
-          : String(restoreError);
+        const message = errorDisplayMessage(restoreError);
         setError(message);
         onStatusChange(`恢复文件选择失败: ${message}`);
       })
@@ -286,7 +285,7 @@ export function useWorkspacePreviewTabs({
     void loadWorkspaceFileContent(path)
       .then((content) => openWorkspaceFileContent(content, null))
       .catch((openError: unknown) => {
-        const message = openError instanceof Error ? openError.message : String(openError);
+        const message = errorDisplayMessage(openError);
         setError(message);
         onStatusChange(`文件读取失败: ${message}`);
       })
@@ -330,7 +329,7 @@ export function useWorkspacePreviewTabs({
       const content = await loadWorkspaceFileContent(path);
       openWorkspaceFileContent(content, null);
     } catch (openError) {
-      const message = openError instanceof Error ? openError.message : String(openError);
+      const message = errorDisplayMessage(openError);
       setError(message);
       onStatusChange(`文件读取失败: ${message}`);
     } finally {
@@ -497,9 +496,7 @@ export function useWorkspacePreviewTabs({
       setDraftContent(saved.content);
       onStatusChange(`已保存文件: ${saved.path}`);
     } catch (saveError) {
-      const message = saveError instanceof Error
-        ? saveError.message
-        : String(saveError);
+      const message = errorDisplayMessage(saveError);
       setError(message);
       onStatusChange(`保存文件失败: ${message}`);
     } finally {

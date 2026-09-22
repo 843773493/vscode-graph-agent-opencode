@@ -22,7 +22,7 @@ import {
   type WorkspaceFileChangesEventDetail,
 } from "../../../state/workspaceFileTreeEvents";
 import { useWorkspaceFileWatch } from "../../../hooks/workspace/useWorkspaceFileWatch";
-import { errorMessage } from "../../../utils/errorMessage";
+import { errorDisplayMessage } from "../../../utils/errorMessage";
 import { formatByteSize } from "../../../utils/format";
 import {
   loadedDirectoryEntry,
@@ -341,7 +341,7 @@ export default function WorkspaceFileTree({
         })
         .catch((error: unknown) => {
           if (!cancelled) {
-            onStatusChange(`快捷路径加载失败: ${errorMessage(error)}`);
+            onStatusChange(`快捷路径加载失败: ${errorDisplayMessage(error)}`);
           }
         });
     }, SESSION_AUXILIARY_LOAD_DELAY_MS);

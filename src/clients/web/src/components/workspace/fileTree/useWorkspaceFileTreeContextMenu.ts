@@ -19,7 +19,7 @@ import type {
   WorkspaceFileList,
   WorkspaceFileNode,
 } from "../../../types/backend";
-import { errorMessage } from "../../../utils/errorMessage";
+import { errorDisplayMessage } from "../../../utils/errorMessage";
 import {
   copyTextToClipboard,
   readFilePathTextFromClipboard,
@@ -360,7 +360,7 @@ export function useWorkspaceFileTreeContextMenu({
       return;
     }
     void uploadEntries(target, files).catch((error: unknown) => {
-      onStatusChange(`上传本地文件失败: ${errorMessage(error)}`);
+      onStatusChange(`上传本地文件失败: ${errorDisplayMessage(error)}`);
     });
   };
 
@@ -375,7 +375,7 @@ export function useWorkspaceFileTreeContextMenu({
       const files = filesFromClipboardData(event.clipboardData);
       if (files.length > 0) {
         void uploadEntries(target, files).catch((error: unknown) => {
-          onStatusChange(`上传本地文件失败: ${errorMessage(error)}`);
+          onStatusChange(`上传本地文件失败: ${errorDisplayMessage(error)}`);
         });
         return;
       }
@@ -383,11 +383,11 @@ export function useWorkspaceFileTreeContextMenu({
       try {
         clipboardText = readFilePathTextFromClipboardData(event.clipboardData);
       } catch (error) {
-        onStatusChange(`粘贴失败: ${errorMessage(error)}`);
+        onStatusChange(`粘贴失败: ${errorDisplayMessage(error)}`);
         return;
       }
       void pasteEntries(target, clipboardText).catch((error: unknown) => {
-        onStatusChange(`粘贴失败: ${errorMessage(error)}`);
+        onStatusChange(`粘贴失败: ${errorDisplayMessage(error)}`);
       });
     };
     const handleCopyShortcut = (event: KeyboardEvent) => {
@@ -403,7 +403,7 @@ export function useWorkspaceFileTreeContextMenu({
       const target = contextMenu;
       setContextMenu(null);
       void copyEntryToClipboard(target).catch((error: unknown) => {
-        onStatusChange(`复制文件失败: ${errorMessage(error)}`);
+        onStatusChange(`复制文件失败: ${errorDisplayMessage(error)}`);
       });
     };
     window.addEventListener("paste", handlePaste);
@@ -418,7 +418,7 @@ export function useWorkspaceFileTreeContextMenu({
     setContextMenu(null);
     setActionError(null);
     void action().catch((error: unknown) => {
-      const failureMessage = `${failurePrefix}: ${errorMessage(error)}`;
+      const failureMessage = `${failurePrefix}: ${errorDisplayMessage(error)}`;
       setActionError(failureMessage);
       onStatusChange(failureMessage);
     });
@@ -426,7 +426,7 @@ export function useWorkspaceFileTreeContextMenu({
 
   const runStatusAction = useCallback((failurePrefix: string, action: () => Promise<unknown>) => {
     void action().catch((error: unknown) => {
-      onStatusChange(`${failurePrefix}: ${errorMessage(error)}`);
+      onStatusChange(`${failurePrefix}: ${errorDisplayMessage(error)}`);
     });
   }, [onStatusChange]);
 

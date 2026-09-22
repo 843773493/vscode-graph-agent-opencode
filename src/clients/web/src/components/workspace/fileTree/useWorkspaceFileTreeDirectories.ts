@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState, type MutableRefObject } from "react";
 import { getWorkspaceFiles } from "../../../api";
-import { errorMessage } from "../../../utils/errorMessage";
+import { errorDisplayMessage } from "../../../utils/errorMessage";
 import {
   failedDirectoryEntry,
   loadedDirectoryEntry,
@@ -134,7 +134,7 @@ export function useWorkspaceFileTreeDirectories({
           if (directoryRequestsRef.current.get(path)?.controller !== controller) {
             return false;
           }
-          const message = errorMessage(error);
+          const message = errorDisplayMessage(error);
           updateDirectories((prev) => ({
             ...prev,
             [path]: failedDirectoryEntry(prev[path], message, Date.now()),
