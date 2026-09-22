@@ -17,7 +17,7 @@ import GatewayExtensionResourcePanel from "./components/panels/GatewayExtensionR
 import SessionNameDialog from "./components/overlays/SessionNameDialog";
 import { useWarmConfirm } from "./components/shell/WarmConfirmProvider";
 import Toolbar, { type WorkbenchView } from "./components/shell/Toolbar";
-import GatewayControlCenter from "./components/workspace/GatewayControlCenter";
+import GatewayControlCenter from "./components/workspace/gateway/GatewayControlCenter";
 import WorkspaceEditorHeader from "./components/workspace/WorkspaceEditorHeader";
 import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";
 import NodeDebugWorkbench from "./components/nodeDebug/NodeDebugWorkbench";
