@@ -3,9 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionFileTreeSettings } from "../../../types/backend";
 import { readFilePathTextFromClipboardData } from "../../../utils/clipboard";
 import WorkspaceFileTree, {
-  parseClipboardFilePaths,
   runCurrentAndDefaultShortcutMutation,
 } from "./WorkspaceFileTree";
+import { parseClipboardFilePaths } from "./workspaceFileTreePaths";
 
 const emptySettings: SessionFileTreeSettings = {
   session_id: "ses_file_tree",

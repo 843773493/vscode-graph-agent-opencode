@@ -55,6 +55,16 @@ import {
   FILE_TREE_VIRTUALIZATION_THRESHOLD,
   type WorkspaceFileTreeRow,
 } from "./workspaceFileTreeRows";
+import {
+  absolutePathForTreePath as resolveTreeAbsolutePath,
+  changedPathToTreePath,
+  FILESYSTEM_ROOT_PATH,
+  isTreePathInside,
+  parentFileTreePath,
+  parseClipboardFilePaths,
+  ROOT_PATH,
+  shortWorkspaceLabel,
+} from "./workspaceFileTreePaths";
 
 interface WorkspaceFileTreeProps {
   active: boolean;
@@ -73,8 +83,6 @@ interface WorkspaceFileTreeProps {
   onStatusChange: (text: string) => void;
 }
 
-const ROOT_PATH = "";
-const FILESYSTEM_ROOT_PATH = filesystemFileTreePath("/");
 const SESSION_AUXILIARY_LOAD_DELAY_MS = 200;
 
 interface FileTreeContextMenu {
@@ -141,109 +149,6 @@ function formatFileSize(size: number | null | undefined): string {
     return `${(size / 1024).toFixed(1)} KB`;
   }
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function shortWorkspaceLabel(workspaceRoot: string | null, workspaceName: string | null): string {
-  return workspaceName || workspaceRoot?.split(/[\\/]/).filter(Boolean).pop() || "workspace";
-}
-
-function parentFileTreePath(treePath: string): string {
-  const location = decodeFileTreePath(treePath);
-  const normalized = location.path.replace(/\\/g, "/").replace(/\/$/, "");
-  const separatorIndex = normalized.lastIndexOf("/");
-  if (location.scope === "workspace") {
-    return separatorIndex < 0 ? ROOT_PATH : normalized.slice(0, separatorIndex);
-  }
-  let parent = separatorIndex <= 0 ? "/" : normalized.slice(0, separatorIndex);
-  if (/^[A-Za-z]:$/.test(parent)) {
-    parent += "/";
-  }
-  return filesystemFileTreePath(parent);
-}
-
-function changedPathToTreePath(
-  path: string,
-  workspaceRoot: string | null,
-): string | null {
-  const normalized = path.trim().replace(/\\/g, "/");
-  if (!normalized) {
-    return null;
-  }
-  const isAbsolute = normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized);
-  if (!isAbsolute) {
-    const relative = normalized.replace(/^\.\//, "");
-    if (relative.split("/").includes("..")) {
-      return null;
-    }
-    return relative;
-  }
-  const rawRoot = workspaceRoot?.replace(/\\/g, "/") ?? "";
-  const normalizedRoot = rawRoot === "/" ? "/" : rawRoot.replace(/\/$/, "");
-  const comparePath = /^[A-Za-z]:\//.test(normalized)
-    ? normalized.toLowerCase()
-    : normalized;
-  const compareRoot = /^[A-Za-z]:\//.test(normalizedRoot)
-    ? normalizedRoot.toLowerCase()
-    : normalizedRoot;
-  if (compareRoot && comparePath === compareRoot) {
-    return ROOT_PATH;
-  }
-  if (compareRoot === "/" && comparePath.startsWith("/")) {
-    return normalized.slice(1);
-  }
-  if (compareRoot && comparePath.startsWith(`${compareRoot}/`)) {
-    return normalized.slice(normalizedRoot.length + 1);
-  }
-  return filesystemFileTreePath(normalized);
-}
-
-function isTreePathInside(candidate: string, ancestor: string): boolean {
-  const candidateLocation = decodeFileTreePath(candidate);
-  const ancestorLocation = decodeFileTreePath(ancestor);
-  if (candidateLocation.scope !== ancestorLocation.scope) {
-    return false;
-  }
-  const candidatePath = candidateLocation.path.replace(/\\/g, "/").replace(/\/$/, "");
-  const ancestorPath = ancestorLocation.path.replace(/\\/g, "/").replace(/\/$/, "");
-  if (!ancestorPath) {
-    return true;
-  }
-  return candidatePath === ancestorPath || candidatePath.startsWith(`${ancestorPath}/`);
-}
-
-export function parseClipboardFilePaths(text: string): [string, ...string[]] {
-  const paths = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => (
-      line
-      && line !== "copy"
-      && line !== "cut"
-      && !line.startsWith("#")
-    ))
-    .map((line) => {
-      const unquoted = line.length >= 2 && line.startsWith('"') && line.endsWith('"')
-        ? line.slice(1, -1)
-        : line;
-      if (unquoted.startsWith("file://")) {
-        const url = new URL(unquoted);
-        const decodedPath = decodeURIComponent(url.pathname);
-        if (url.hostname) {
-          return `//${url.hostname}${decodedPath}`;
-        }
-        return /^\/[A-Za-z]:\//.test(decodedPath)
-          ? decodedPath.slice(1)
-          : decodedPath;
-      }
-      if (unquoted.startsWith("/") || /^[A-Za-z]:[\\/]/.test(unquoted)) {
-        return unquoted;
-      }
-      throw new Error(`剪贴板内容不是绝对文件路径: ${unquoted}`);
-    });
-  if (paths.length === 0) {
-    throw new Error("剪贴板中没有可粘贴的文件路径");
-  }
-  return [...new Set(paths)] as [string, ...string[]];
 }
 
 export default function WorkspaceFileTree({
@@ -600,20 +505,10 @@ export default function WorkspaceFileTree({
     workspaceRoot,
   ]);
 
-  const absolutePathForTreePath = useCallback((treePath: string): string => {
-    const location = decodeFileTreePath(treePath);
-    if (location.scope === "filesystem") {
-      return location.path;
-    }
-    if (!workspaceRoot) {
-      throw new Error("当前工作区缺少根目录，无法添加快捷路径");
-    }
-    if (!location.path) {
-      return workspaceRoot;
-    }
-    const separator = workspaceRoot.includes("\\") ? "\\" : "/";
-    return `${workspaceRoot.replace(/[\\/]$/, "")}${separator}${location.path.split("/").join(separator)}`;
-  }, [workspaceRoot]);
+  const absolutePathForTreePath = useCallback(
+    (treePath: string): string => resolveTreeAbsolutePath(treePath, workspaceRoot),
+    [workspaceRoot],
+  );
 
   const displayPathForTreePath = useCallback((treePath: string): string => {
     const location = decodeFileTreePath(treePath);
