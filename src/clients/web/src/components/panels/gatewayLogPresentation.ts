@@ -1,4 +1,4 @@
-import type { GatewayDiagnosticLog } from "../types/backend";
+import type { GatewayDiagnosticLog } from "../../types/backend";
 
 export function diagnosticLogStatusLabel(log: GatewayDiagnosticLog): string {
   if (log.status === "available") return "可读";

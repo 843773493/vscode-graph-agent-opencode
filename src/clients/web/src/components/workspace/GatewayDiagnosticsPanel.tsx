@@ -8,7 +8,7 @@ import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 import {
   diagnosticLogStatusLabel,
   diagnosticLogUnavailableHint,
-} from "../gatewayLogPresentation";
+} from "../panels/gatewayLogPresentation";
 
 interface GatewayDiagnosticsPanelProps {
   apiPort: number;

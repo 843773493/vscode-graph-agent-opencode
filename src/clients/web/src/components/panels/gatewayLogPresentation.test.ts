@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { GatewayDiagnosticLog } from "../types/backend";
+import type { GatewayDiagnosticLog } from "../../types/backend";
 import {
   diagnosticLogStatusLabel,
   diagnosticLogUnavailableHint,

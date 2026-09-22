@@ -3,15 +3,15 @@ import type {
   SessionResource,
   SessionResourceAction,
   SessionResourceKind,
-} from "../types/backend";
-import { formatDateTime } from "../utils/format";
+} from "../../types/backend";
+import { formatDateTime } from "../../utils/format";
 import {
   actionLabel,
   metadataRows,
   resourceTreeDescription,
   resourceTreeStatus,
   resourceTreeTitle,
-} from "../state/display/resourceDisplay";
+} from "../../state/display/resourceDisplay";
 
 const RESOURCE_ICONS: Record<SessionResourceKind, string> = {
   browser: "codicon-globe",

@@ -5,7 +5,7 @@ import type {
   GatewayExtensionResourceError,
 } from "../../hooks/gatewayExtensions/useGatewayExtensionResources";
 import { kindLabel } from "../../state/display/resourceDisplay";
-import ResourceTreeRow from "../ResourceTreeRow";
+import ResourceTreeRow from "./ResourceTreeRow";
 import { useWarmConfirm } from "../shell/WarmConfirmProvider";
 
 interface GatewayExtensionResourcePanelProps {
