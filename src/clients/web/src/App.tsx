@@ -1,22 +1,18 @@
-import AgentStatePanel from "./components/panels/inspectionPanels/AgentStatePanel";
-import BootstrapState from "./components/shell/BootstrapState";
 import WorkbenchStatusBar from "./components/WorkbenchStatusBar";
-import ChatPanel from "./components/panels/ChatPanel";
 import PendingQueueBar from "./components/chat/PendingQueueBar";
 import Composer from "./components/composer/Composer";
-import EventQueuePanel from "./components/panels/inspectionPanels/EventQueuePanel";
 import AgentSessionsPanel from "./components/panels/sessionPanels/AgentSessionsPanel";
 import GatewayLogPanel from "./components/panels/bottomPanel/GatewayLogPanel";
 import AutomationPanel from "./components/panels/bottomPanel/AutomationPanel";
 import PortForwardPanel from "./components/panels/bottomPanel/PortForwardPanel";
 import TerminalPanel from "./components/panels/bottomPanel/TerminalPanel";
-import RequestLogPanel from "./components/panels/inspectionPanels/RequestLogPanel";
 import ResourcePanel from "./components/panels/resourceTree/ResourcePanel";
 import ChildThreadPanel from "./components/panels/sessionPanels/ChildThreadPanel";
 import GatewayExtensionResourcePanel from "./components/panels/resourceTree/GatewayExtensionResourcePanel";
 import SessionNameDialog from "./components/overlays/SessionNameDialog";
 import { useWarmConfirm } from "./components/shell/WarmConfirmProvider";
 import Toolbar, { type WorkbenchView } from "./components/shell/Toolbar";
+import ContentViewSlots from "./components/shell/ContentViewSlots";
 import GatewayControlCenter from "./components/workspace/gateway/GatewayControlCenter";
 import WorkspaceEditorHeader from "./components/workspace/WorkspaceEditorHeader";
 import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";
@@ -65,7 +61,6 @@ import {
 import { sessionScopeKey } from "./state/session/sessionScope";
 import { shouldLoadDefaultViewChangesHint } from "./state/defaultViewChanges";
 import { getConversationsForSession } from "./state/conversations";
-import { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
 import {
   resolveWorkspaceBottomPanelState,
   toWorkspaceBottomPanelSettings,
@@ -1027,144 +1022,6 @@ export default function AppShell() {
         setNameDialogSubmitting(false);
       });
   };
-  const renderContentView = () => {
-    if (state.error) {
-      return (
-        <div className="empty-state error-state">
-          <div className="error-title">前端初始化失败</div>
-          <div className="error-message">{state.error}</div>
-          <button
-            type="button"
-            className="error-retry-button"
-            onClick={() => void refreshGatewayState().catch(() => undefined)}
-          >
-            重新加载工作区
-          </button>
-        </div>
-      );
-    }
-
-    if (state.isBootstrapping) {
-      return <BootstrapState onRetry={refreshGatewayState} />;
-    }
-
-    const contentView = state.contentView;
-    const conversationVisible = ![
-      "agent",
-      "events",
-      "requests",
-    ].includes(contentView);
-    const activeSessionChangeHint =
-      defaultViewChangesHint &&
-      defaultViewChangesHint.sessionId === activeSession?.session_id
-        ? defaultViewChangesHint.summary
-        : contentView === "changes" && state.activeChangeset
-          ? state.activeChangeset.summary
-          : null;
-
-    return (
-      <>
-        <div
-          className={`content-view-slot${
-            contentView === "agent" ? "" : " preserve-mounted-hidden"
-          }`}
-          hidden={contentView !== "agent"}
-        >
-        <AgentStatePanel
-          port={resolvedApiPort}
-          workspaceId={activeSessionWorkspaceId ?? ""}
-          sessionId={activeSession?.session_id ?? ""}
-          active={contentView === "agent"}
-          jsonl={state.agentStateJsonl}
-          messageCount={state.agentStateMessageCount}
-          loadedAt={state.agentStateLoadedAt}
-          loading={state.agentStateLoading}
-          error={state.agentStateError}
-        />
-        </div>
-        <div
-          className={`content-view-slot${
-            contentView === "events" ? "" : " preserve-mounted-hidden"
-          }`}
-          hidden={contentView !== "events"}
-        >
-        <EventQueuePanel
-          items={receivedEvents}
-          limit={FRONTEND_EVENT_QUEUE_LIMIT}
-          sessionId={activeSession?.session_id ?? ""}
-          active={contentView === "events"}
-          historyLoading={activeTraceHistory?.loading ?? false}
-          historyLoadingOlder={activeTraceHistory?.loadingOlder ?? false}
-          historyHasMore={activeTraceHistory?.hasMore ?? false}
-          historyError={activeTraceHistory?.error ?? null}
-          onLoadOlderHistory={loadOlderTraceHistory}
-          onRetryHistory={() => void refreshTraceHistory()}
-        />
-        </div>
-        <div
-          className={`content-view-slot${
-            contentView === "requests" ? "" : " preserve-mounted-hidden"
-          }`}
-          hidden={contentView !== "requests"}
-        >
-        <RequestLogPanel
-          logs={state.llmRequestLogs}
-          loading={state.llmRequestLogsLoading}
-          error={state.llmRequestLogsError}
-          loadedAt={state.llmRequestLogsLoadedAt}
-          sessionId={activeSession?.session_id ?? ""}
-          active={contentView === "requests"}
-        />
-        </div>
-        <div
-          className={`content-view-slot${
-            conversationVisible ? "" : " preserve-mounted-hidden"
-          }`}
-          hidden={!conversationVisible}
-        >
-          <ChatPanel
-            apiPort={resolvedApiPort}
-            workspaceId={activeSessionWorkspaceId}
-            conversations={conversations}
-            expandDetails={state.expandDetails}
-            hasActiveSession={Boolean(activeSession)}
-            hasOlderMessages={activeTurnTimeline?.hasBefore ?? false}
-            loadingOlderMessages={activeTurnTimeline?.loadingBefore ?? false}
-            hasNewerMessages={activeTurnTimeline?.hasAfter ?? false}
-            loadingNewerMessages={activeTurnTimeline?.loadingAfter ?? false}
-            historyLoading={Boolean(activeSession) && (
-              !activeTurnTimeline || activeTurnTimeline.phase === "bootstrapping"
-            )}
-            projectionState={activeTurnTimeline?.projectionState ?? "ready"}
-            historyError={activeTurnTimeline?.error ?? null}
-            onLoadOlderMessages={loadOlderMessages}
-            onLoadNewerMessages={loadNewerMessages}
-            onLoadAroundTurn={loadAroundTurn}
-            onLoadTurnDetails={loadTurnDetails}
-            onLoadToolDetails={loadToolDetails}
-            onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
-            onRetryHistory={refreshTurnHistory}
-            sessionChangeSummary={activeSessionChangeHint}
-            sessionChangesLoading={defaultViewChangesLoading}
-            onOpenChanges={handleOpenChangesView}
-            onReplayTurn={replayTurn}
-            onUpdatePending={updatePendingRequest}
-            onRemovePending={removePendingRequest}
-            onChangePendingPolicy={updatePendingRequestPolicy}
-            onOpenAttachment={handleOpenAttachment}
-            viewState={
-              activeSessionCacheKey
-                ? state.gatewayUserViewStates.get(activeSessionCacheKey) ?? null
-                : null
-            }
-            onViewStateChange={saveSessionViewState}
-            onViewStateRestoreStatus={setStatus}
-          />
-        </div>
-      </>
-    );
-  };
-
   return (
     <WorkspaceFileReferenceProvider
       apiPort={resolvedApiPort}
@@ -1319,7 +1176,54 @@ export default function AppShell() {
               <div className="session-view-surface">
                 {activeSession ? (
                   <>
-                    <div className="session-view-content">{renderContentView()}</div>
+                    <div className="session-view-content">
+                      <ContentViewSlots
+                        error={state.error}
+                        isBootstrapping={state.isBootstrapping}
+                        onRetryGatewayState={refreshGatewayState}
+                        contentView={state.contentView}
+                        apiPort={resolvedApiPort}
+                        workspaceId={activeSessionWorkspaceId}
+                        sessionId={activeSession?.session_id ?? null}
+                        hasActiveSession={Boolean(activeSession)}
+                        activeSessionCacheKey={activeSessionCacheKey}
+                        expandedDetails={state.expandDetails}
+                        agentStateJsonl={state.agentStateJsonl}
+                        agentStateMessageCount={state.agentStateMessageCount}
+                        agentStateLoadedAt={state.agentStateLoadedAt}
+                        agentStateLoading={state.agentStateLoading}
+                        agentStateError={state.agentStateError}
+                        receivedEvents={receivedEvents}
+                        activeTraceHistory={activeTraceHistory}
+                        onLoadOlderTraceHistory={loadOlderTraceHistory}
+                        onRetryTraceHistory={refreshTraceHistory}
+                        requestLogs={state.llmRequestLogs}
+                        requestLogsLoading={state.llmRequestLogsLoading}
+                        requestLogsError={state.llmRequestLogsError}
+                        requestLogsLoadedAt={state.llmRequestLogsLoadedAt}
+                        conversations={conversations}
+                        activeTurnTimeline={activeTurnTimeline}
+                        changesHint={defaultViewChangesHint}
+                        changesHintLoading={defaultViewChangesLoading}
+                        activeChangeset={state.activeChangeset}
+                        gatewayUserViewStates={state.gatewayUserViewStates}
+                        onLoadOlderMessages={loadOlderMessages}
+                        onLoadNewerMessages={loadNewerMessages}
+                        onLoadAroundTurn={loadAroundTurn}
+                        onLoadTurnDetails={loadTurnDetails}
+                        onLoadToolDetails={loadToolDetails}
+                        onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
+                        onRetryHistory={refreshTurnHistory}
+                        onOpenChanges={handleOpenChangesView}
+                        onReplayTurn={replayTurn}
+                        onUpdatePending={updatePendingRequest}
+                        onRemovePending={removePendingRequest}
+                        onChangePendingPolicy={updatePendingRequestPolicy}
+                        onOpenAttachment={handleOpenAttachment}
+                        onViewStateChange={saveSessionViewState}
+                        onViewStateRestoreStatus={setStatus}
+                      />
+                    </div>
                     <PendingQueueBar
                       conversations={conversations}
                       onClear={clearPendingRequests}

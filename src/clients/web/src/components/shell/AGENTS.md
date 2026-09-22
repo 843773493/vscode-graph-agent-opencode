@@ -1,6 +1,6 @@
 # 目录用途
 
-存放应用外壳层组件：顶层 Provider（WarmConfirmProvider）、错误边界（AppErrorBoundary）、启动骨架（BootstrapState）与主工具栏（Toolbar），负责应用启动、错误兜底和全局工具栏交互。
+存放应用外壳层组件：顶层 Provider（WarmConfirmProvider）、错误边界（AppErrorBoundary）、启动骨架（BootstrapState）、主工具栏（Toolbar）与会话区内容视图槽编排（ContentViewSlots），负责应用启动、错误兜底、全局工具栏交互和内容视图槽位显隐。
 
 本目录与相邻子包的分工边界：
 
@@ -14,6 +14,7 @@
 - 错误边界的兜底渲染与恢复入口。
 - 启动骨架与加载态展示。
 - 主工具栏的视图切换与全局动作入口。
+- 会话区内容视图槽的显隐编排，以及启动失败/骨架分支到具体面板的装配。
 - 与上述逻辑直接相关的组件测试。
 
 # 不可修改内容
