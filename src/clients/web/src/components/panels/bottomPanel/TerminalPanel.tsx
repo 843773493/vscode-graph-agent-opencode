@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GatewayExtensionResourceEntry } from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
 import { buildGatewayAttachUrl } from "../../../utils/attachUrls";
+import { errorMessage } from "../../../utils/errorMessage";
 import { stripTerminalNamePrefix } from "../../../state/display/resourceDisplay";
 
 /** 终端 iframe 等待就绪的上限；超过即视为无响应，必须给用户明确的兜底说明与重试入口。 */
@@ -61,7 +62,7 @@ export default function TerminalPanel({
         ),
       };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
+      return { error: errorMessage(error) };
     }
   }, [selectedEntry]);
 

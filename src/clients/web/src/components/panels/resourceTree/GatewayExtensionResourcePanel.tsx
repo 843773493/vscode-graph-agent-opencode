@@ -6,6 +6,7 @@ import type {
 } from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
 import { kindLabel } from "../../../state/display/resourceDisplay";
 import { copyTextToClipboard } from "../../../utils/clipboard";
+import { errorMessage } from "../../../utils/errorMessage";
 import ResourceTreeRow from "./ResourceTreeRow";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 
@@ -105,9 +106,8 @@ export default function GatewayExtensionResourcePanel({
       await onControl(entry, action);
       setNotice(`已更新 ${entry.resource.name} 的状态`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       setNoticeIsError(true);
-      setNotice(`操作失败：${message}`);
+      setNotice(`操作失败：${errorMessage(error)}`);
     } finally {
       setBusyKey(null);
     }
@@ -123,9 +123,7 @@ export default function GatewayExtensionResourcePanel({
       })
       .catch((copyError: unknown) => {
         setNoticeIsError(true);
-        setNotice(
-          `复制失败: ${copyError instanceof Error ? copyError.message : String(copyError)}`,
-        );
+        setNotice(`复制失败: ${errorMessage(copyError)}`);
       });
   };
 
