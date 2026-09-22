@@ -288,4 +288,47 @@ describe("useSessionResourceExplorer 自动同步", () => {
     expect(latestNavigationError).toBeNull();
     act(() => renderer.unmount());
   });
+
+  test("目录移动失败且补偿重读也失败时抛出错误必须同时含两条文案", async () => {
+    installGatewayFetch(withCatalogDefaults(({ path, init }) => {
+      if (
+        path === "/api/v1/session-catalog/nodes/ses_move/parent"
+        && init?.method === "PATCH"
+      ) {
+        return new Response(JSON.stringify({ detail: "目录移动被拒绝" }), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (path.includes("/api/v1/session-catalog/children")) {
+        return new Response(JSON.stringify({ detail: "目录重读崩了" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return undefined;
+    }));
+
+    let explorerHandle: SessionResourceExplorerHandle | null = null;
+    const Harness = useSessionResourceExplorerHarness({
+      props: explorerProps({ apiPort: 49_407 }),
+      onExplorer: (explorer) => {
+        explorerHandle = explorer;
+      },
+    });
+    const unmount = await mountHarness(Harness, 3);
+
+    let failure: Error | undefined;
+    await act(async () => {
+      failure = await explorerHandle!.moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old")
+        .then(() => undefined, (error: Error) => error);
+      await flushEffects();
+    });
+
+    // 移动失败与补偿重读失败是两条独立事实，用户必须同时看到，不能只报其中一条。
+    expect(failure?.message).toContain("目录移动被拒绝");
+    expect(failure?.message).toContain("重新读取会话目录失败");
+    expect(failure?.message).toContain("目录重读崩了");
+    unmount();
+  });
 });

@@ -145,6 +145,21 @@ export async function flushEffects(): Promise<void> {
 }
 
 /**
+ * 挂起一个请求直到显式释放，用于验收「请求在途期间卸载或切换会话」的并发
+ * 场景（例如 SSE 长连接、后端无响应）。不释放就永不落地。
+ */
+export function hangUntilReleased<T>(): {
+  promise: Promise<T>;
+  release: (value: T) => void;
+} {
+  let release!: (value: T) => void;
+  const promise = new Promise<T>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+/**
  * 先让用例自己的 handler 认领请求，未认领的导航/生成器探测回落到默认空响应。
  * 只覆盖这两条每个用例都会被动触发、但极少真正关心的路由。
  */

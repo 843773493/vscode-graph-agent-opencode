@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import React from "react";
 import { act } from "react-test-renderer";
 import type { AppState } from "../../types/frontend";
+import type { Session } from "../../types/backend";
+import { useSessionGoalController } from "./useSessionGoalController";
 import {
   apiResponse,
   installGatewayFetch,
   installTestDocument,
   installTestWindow,
+  mountHarness,
   mountSessionGoalController,
   restoreSessionHookGlobals,
 } from "./sessionHookTestFixtures";
@@ -128,6 +132,98 @@ describe("useSessionGoalController 请求合并", () => {
     });
 
     expect(failure?.message).toBe("首次写 Goal 失败；重新读取 Goal 也失败：二次重取失败");
+    unmount();
+  });
+});
+
+describe("useSessionGoalController 跨会话守卫", () => {
+  const sessionA = {
+    session_id: "ses_a",
+    workspace_id: "workspace-test",
+    title: "会话 A",
+    current_agent_id: "default",
+    created_at: "2026-09-02T00:00:00Z",
+    updated_at: "2026-09-02T00:00:00Z",
+  } as unknown as Session;
+  const sessionB = { ...sessionA, session_id: "ses_b", title: "会话 B" };
+
+  test("在途读取回包前切走会话时不得把旧 Goal 写进新会话", async () => {
+    installTestWindow(49_406);
+    installTestDocument();
+    let releaseGoal!: (response: Response) => void;
+    installGatewayFetch(({ path }) => {
+      if (path.includes("/api/v1/sessions/ses_a/goal")) {
+        return new Promise<Response>((resolve) => {
+          releaseGoal = resolve;
+        });
+      }
+      return undefined;
+    }, { token: "gc-race-token" });
+
+    // 本用例必须在请求在途期间切换 currentSession，因此保留自持状态机的
+    // Harness，不复用闭包镜像装配器。
+    let latestState = {
+      currentSession: sessionA,
+      currentSessionWorkspaceId: "workspace-test",
+      currentGoal: null,
+      currentGoalSessionId: "ses_a",
+      goalLoading: false,
+      goalError: null,
+    } as unknown as AppState;
+    let controller: ReturnType<typeof useSessionGoalController> | null = null;
+    let switchToB: (() => void) | null = null;
+    function Harness(): React.ReactNode {
+      const [state, setState] = React.useState<AppState>(() => latestState);
+      latestState = state;
+      controller = useSessionGoalController({
+        apiPort: 49_406,
+        currentSessionId: state.currentSession?.session_id ?? null,
+        currentWorkspaceId: state.currentSessionWorkspaceId,
+        setState,
+      });
+      switchToB = () => setState((prev) => ({
+        ...prev,
+        currentSession: sessionB,
+        currentGoal: null,
+        currentGoalSessionId: "ses_b",
+      }));
+      return null;
+    }
+    const unmount = await mountHarness(Harness, 2);
+
+    let pending: Promise<unknown>;
+    await act(async () => {
+      pending = controller!.refreshGoal({
+        sessionId: "ses_a",
+        workspaceId: "workspace-test",
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      switchToB!();
+      await Promise.resolve();
+    });
+    expect(latestState.currentSession?.session_id).toBe("ses_b");
+
+    releaseGoal(apiResponse({
+      goal_id: "goal_a",
+      session_id: "ses_a",
+      objective: "A 的目标",
+      status: "active",
+      token_budget: null,
+      tokens_used: 0,
+      time_used_seconds: 0,
+      created_at: "2026-09-02T00:00:00Z",
+      updated_at: "2026-09-02T00:00:00Z",
+    }));
+    await act(async () => {
+      await pending!.catch(() => undefined);
+    });
+
+    // 迟到的 A 会话响应属于旧会话事实，绝不能污染已经切到的 B 会话。
+    expect(latestState.currentSession?.session_id).toBe("ses_b");
+    expect(latestState.currentGoal).toBeNull();
+    expect(latestState.currentGoalSessionId).toBe("ses_b");
     unmount();
   });
 });
