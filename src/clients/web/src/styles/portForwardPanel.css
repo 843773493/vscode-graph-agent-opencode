@@ -80,6 +80,12 @@
   border-color: var(--bt-focus-border);
 }
 
+.port-forward-port-hint {
+  margin: 6px 0 0;
+  color: var(--bt-status-danger);
+  font-size: 10px;
+}
+
 .port-forward-create,
 .port-forward-create-cancel {
   min-height: 26px;

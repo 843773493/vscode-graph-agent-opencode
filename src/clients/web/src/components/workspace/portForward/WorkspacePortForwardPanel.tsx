@@ -66,17 +66,28 @@ const STATUS_LABELS: Record<GatewayPortForward["status"], string> = {
   stopped: "已停止",
 };
 
+// 端口只接受十进制整数字面量：`Number()` 会把 "1e3"、"12.0"、" 80 "、"0x50"
+// 静默收敛成数字，导致非法输入被当成合法端口提交。解析与合法性判定共用同一
+// 份实现，避免「按钮判定」与「提交解析」两套口径漂移。
+const DECIMAL_PORT_PATTERN = /^\d{1,5}$/;
+
+function portRangeError(label: string): string {
+  return `${label}必须是 1–65535 之间的整数`;
+}
+
 function parsePort(value: string, label: string): number {
+  if (!DECIMAL_PORT_PATTERN.test(value)) {
+    throw new Error(portRangeError(label));
+  }
   const port = Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`${label}必须是 1–65535 之间的整数`);
+  if (port < 1 || port > 65535) {
+    throw new Error(portRangeError(label));
   }
   return port;
 }
 
 function isValidPortInput(value: string): boolean {
-  const port = Number(value);
-  return Number.isInteger(port) && port >= 1 && port <= 65535;
+  return DECIMAL_PORT_PATTERN.test(value) && Number(value) >= 1 && Number(value) <= 65535;
 }
 
 function portLabel(forward: GatewayPortForward): string {
@@ -407,6 +418,9 @@ export default function WorkspacePortForwardPanel({
     forward.status,
   ].some((value) => String(value ?? "").toLocaleLowerCase().includes(normalizedFilter))) ?? [];
   const createDisabled = submitting || !isValidPortInput(remotePort) || (localPort !== "" && !isValidPortInput(localPort));
+  // 输入不合法时按钮会被禁用；必须同时给出原因，避免「点了没反应」的静默失败。
+  const remotePortInvalid = remotePort !== "" && !isValidPortInput(remotePort);
+  const localPortInvalid = localPort !== "" && !isValidPortInput(localPort);
 
   return (
     <section className="port-forward-panel" aria-label="工作区 SSH 端口转发">
@@ -673,11 +687,11 @@ export default function WorkspacePortForwardPanel({
           <form id="workspace-port-forward-form" className="port-forward-form" onSubmit={(event) => void handleCreate(event)}>
             <label className="port-forward-field port-forward-field-primary">
               <span>远端端口</span>
-              <input type="number" min="1" max="65535" required inputMode="numeric" placeholder="例如 5173" value={remotePort} onChange={(event) => setRemotePort(event.target.value)} disabled={submitting} />
+              <input type="number" min="1" max="65535" required inputMode="numeric" placeholder="例如 5173" value={remotePort} onChange={(event) => setRemotePort(event.target.value)} disabled={submitting} aria-invalid={remotePortInvalid} />
             </label>
             <label className="port-forward-field">
               <span>本地端口（可选）</span>
-              <input type="number" min="1" max="65535" inputMode="numeric" placeholder="自动分配" value={localPort} onChange={(event) => setLocalPort(event.target.value)} disabled={submitting} />
+              <input type="number" min="1" max="65535" inputMode="numeric" placeholder="自动分配" value={localPort} onChange={(event) => setLocalPort(event.target.value)} disabled={submitting} aria-invalid={localPortInvalid} />
             </label>
             <label className="port-forward-field">
               <span>协议</span>
@@ -694,6 +708,11 @@ export default function WorkspacePortForwardPanel({
             <button className="port-forward-create" type="submit" disabled={createDisabled}>{submitting ? "正在创建…" : "创建转发"}</button>
             <button className="port-forward-create-cancel" type="button" onClick={() => setIsCreateOpen(false)} disabled={submitting}>取消</button>
           </form>
+          {remotePortInvalid || localPortInvalid ? (
+            <p className="port-forward-port-hint" role="alert">
+              端口必须是 1–65535 之间的十进制整数，不接受科学计数法、小数、十六进制或空白字符。
+            </p>
+          ) : null}
         </div>
       ) : null}
     </section>
