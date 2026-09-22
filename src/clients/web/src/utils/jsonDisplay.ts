@@ -3,6 +3,24 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * 单个字符串进入展示层前的保留上限。与 ProgressiveUserMessage 的
+ * LARGE_USER_MESSAGE_RENDER_LIMIT 取同一量级：超大工具结果、超长 text_delta
+ * 或整段 Prompt 一旦原样进 DOM，会同步撑爆主线程与内存。
+ */
+export const LARGE_STRING_DISPLAY_LIMIT = 20_000;
+
+/**
+ * 展示用字符串兜底：超过上限只保留头部，并显式标注原文长度。
+ * 截断必须可见，绝不静默丢弃内容。
+ */
+export function boundedDisplayString(value: string): string {
+  if (value.length <= LARGE_STRING_DISPLAY_LIMIT) {
+    return value;
+  }
+  return `${value.slice(0, LARGE_STRING_DISPLAY_LIMIT)}…（已截断展示，原文 ${value.length} 字符）`;
+}
+
 export function redactLargeData(value: unknown): unknown {
   if (typeof value === "string") {
     if (
@@ -15,7 +33,7 @@ export function redactLargeData(value: unknown): unknown {
       const payloadLength = commaIndex >= 0 ? value.length - commaIndex - 1 : value.length;
       return `${header},<base64 ${payloadLength} chars redacted>`;
     }
-    return value;
+    return boundedDisplayString(value);
   }
   if (Array.isArray(value)) {
     return value.map(redactLargeData);

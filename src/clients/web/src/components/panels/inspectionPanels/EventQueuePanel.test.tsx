@@ -119,3 +119,24 @@ describe("EventQueuePanel", () => {
     expect(html).toContain("重新加载事件历史");
   });
 });
+
+describe("EventQueuePanel 超大 payload 兜底", () => {
+  test("折叠状态下也不会把完整 payload 原样渲染进 DOM", () => {
+    const huge = "X".repeat(500_000);
+    const base = traceItem(1);
+    if (base.kind !== "trace") throw new Error("traceItem 必须返回 trace 事件");
+    const html = renderToStaticMarkup(
+      <EventQueuePanel
+        {...historyProps}
+        items={[{ ...base, event: { ...base.event, payload: { result: huge } } }]}
+        limit={200}
+        sessionId="ses_events"
+        active
+      />,
+    );
+
+    expect(html).not.toContain(huge);
+    expect(html).toContain("已截断展示");
+    expect(html.length).toBeLessThan(200_000);
+  });
+});

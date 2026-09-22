@@ -1,6 +1,6 @@
 import React from "react";
 import { formatDateTime } from "../../../utils/format";
-import { prettyJson } from "../../../utils/jsonDisplay";
+import { boundedDisplayString, prettyJson } from "../../../utils/jsonDisplay";
 import type { FrontendReceivedEvent } from "../../../types/frontend";
 import {
   attachmentNames,
@@ -164,7 +164,9 @@ function TextDeltaGroupCard({
           <span className="panel-pill event-queue-source">{sourceLabel(first.source)}</span>
         </div>
         {mergedText ? (
-          <span className="event-queue-compact-content">{mergedText}</span>
+          <span className="event-queue-compact-content">
+            {boundedDisplayString(mergedText)}
+          </span>
         ) : null}
         <div className="panel-time">
           {eventTime ? <span>首条 {eventTime}</span> : null}
