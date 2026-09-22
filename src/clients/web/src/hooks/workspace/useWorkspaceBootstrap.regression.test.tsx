@@ -11,6 +11,8 @@ import { useWorkspaceBootstrap } from "./useWorkspaceBootstrap";
 
 const API_PORT = 49_713;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+const originalDocumentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
+const originalImageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Image");
 
 /** setIsBootstrapping 之外的延时都要压成 0，避免真实退避把测试拖慢。 */
 function installWindow(): void {
@@ -116,7 +118,41 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(globalThis, "window");
   }
+  for (const [name, descriptor] of [
+    ["document", originalDocumentDescriptor],
+    ["Image", originalImageDescriptor],
+  ] as const) {
+    if (descriptor) {
+      Object.defineProperty(globalThis, name, descriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, name);
+    }
+  }
 });
+
+/** 主题应用需要 document.documentElement；bun test 默认没有 DOM，这里补最小桩。 */
+function installDocumentStub(): void {
+  const style = { setProperty: () => {}, removeProperty: () => {} };
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: { documentElement: { style, dataset: {} }, querySelector: () => null },
+  });
+}
+
+/** 背景图预加载用到的 Image 桩：src 一赋值立刻触发 error，模拟 404/断网。 */
+function installFailingImageStub(): void {
+  class FailingImage {
+    onload: ((event: Event) => void) | null = null;
+    onerror: ((event: Event) => void) | null = null;
+    set src(_value: string) {
+      this.onerror?.(new Event("error"));
+    }
+  }
+  Object.defineProperty(globalThis, "Image", {
+    configurable: true,
+    value: FailingImage,
+  });
+}
 
 function stubCommonBootstrap(): void {
   const userAccess = spyOn(userAccessApi, "ensureGatewayUserAccess")
@@ -186,5 +222,51 @@ describe("useWorkspaceBootstrap 失效标记", () => {
       await failedRun.refreshSessions(undefined, { reuseCurrentUiSettings: true });
     });
     expect(failedRun.state().gatewayWorkspacesStale).toBe(false);
+  });
+
+  test("背景图 404 时工作区初始化仍成功，只留下可见的背景图警告", async () => {
+    installWindow();
+    installDocumentStub();
+    installFailingImageStub();
+    stubCommonBootstrap();
+    spy("getGatewayUiSettings").mockResolvedValue({
+      theme: {
+        resolved_theme: {
+          id: "warm",
+          color_scheme: "light",
+          tokens: { "--bt-page-background": "#f2ecd9" },
+          background_image_url: "/api/gateway/ui-assets/background-404",
+        },
+      },
+      layout: {},
+    } as never);
+    spy("listGatewayWorkspaces").mockResolvedValue(
+      gatewayWorkspaceList([{ workspace_id: "ws-1", name: "工作区一", status: "ready" }]),
+    );
+    const snapshot = spyOn(workspaceSessionListRefresh, "fetchWorkspaceSessionListSnapshot")
+      .mockResolvedValue({
+        apiPort: API_PORT,
+        workspaceId: "ws-1",
+        generation: 0,
+        sessions: [],
+      } as never);
+    restoreSpies.push(() => snapshot.mockRestore());
+
+    // 关键验收：不传 reuseCurrentUiSettings，真正走一遍主题加载链路。
+    const mounted = await mountBootstrap(appState());
+    await act(async () => {
+      await mounted.refreshSessions();
+    });
+
+    const next = mounted.state();
+    // 工作区初始化必须成功：没有把背景图失败升级成初始化失败。
+    expect(next.error).toBeNull();
+    expect(next.isBootstrapping).toBe(false);
+    expect(next.status).not.toBe("初始化失败");
+    expect(next.workspaceName).toBe("工作区");
+    // 且失败必须可见，不得静默。
+    expect(next.themeBackgroundWarning).toContain(
+      "背景图片加载失败: /api/gateway/ui-assets/background-404",
+    );
   });
 });
