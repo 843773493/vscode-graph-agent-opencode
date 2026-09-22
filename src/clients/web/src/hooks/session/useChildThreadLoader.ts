@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listChildThreads } from "../api";
-import type { ChildThreadSummary } from "../types/backend";
+import { listChildThreads } from "../../api";
+import type { ChildThreadSummary } from "../../types/backend";
 
 export interface ChildThreadSnapshot {
   threads: ChildThreadSummary[];

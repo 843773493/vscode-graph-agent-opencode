@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useSessionMessageStream } from "./useSessionMessageStream";
-import type { AppState } from "../types/frontend";
-import type { SetAppState } from "./sessionEventStream/sessionRefresh";
+import type { AppState } from "../../types/frontend";
+import type { SetAppState } from "../sessionEventStream/sessionRefresh";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");

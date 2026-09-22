@@ -1,16 +1,16 @@
 import { useEffect, useMemo } from "react";
-import { getJob } from "../api";
-import { listPendingRequests } from "../pendingRequestsApi";
-import { cloneMaps } from "../state/appStateMaps";
-import { writePendingSnapshot } from "../state/conversations";
+import { getJob } from "../../api";
+import { listPendingRequests } from "../../pendingRequestsApi";
+import { cloneMaps } from "../../state/appStateMaps";
+import { writePendingSnapshot } from "../../state/conversations";
 import {
   parseSessionScopeKey,
   sessionScopeKey,
-} from "../state/session/sessionScope";
-import type { AppState } from "../types/frontend";
-import type { JobStatus } from "../types/backend";
-import type { SetAppState } from "./contentViewLoaderTypes";
-import { ACTIVE_JOB_RECONCILE_INTERVAL_MS } from "./sessionEventStream/sessionEventStreamPolicy";
+} from "../../state/session/sessionScope";
+import type { AppState } from "../../types/frontend";
+import type { JobStatus } from "../../types/backend";
+import type { SetAppState } from "../contentViewLoaderTypes";
+import { ACTIVE_JOB_RECONCILE_INTERVAL_MS } from "../sessionEventStream/sessionEventStreamPolicy";
 
 const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
   "completed",

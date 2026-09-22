@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { HttpRequestError } from "../api/http";
+import { HttpRequestError } from "../../api/http";
 import {
   compactSessionContext as apiCompactSessionContext,
   createSession as apiCreateSession,
@@ -7,7 +7,7 @@ import {
   interruptSession as apiInterruptSession,
   replayMessageTurn as apiReplayMessageTurn,
   sendUserMessage as apiSendMessage,
-} from "../api";
+} from "../../api";
 import type {
   AttachmentRef,
   MessageReplayRequest,
@@ -15,16 +15,16 @@ import type {
   DeliveryPolicy,
   Session,
   SessionCompactResult,
-} from "../types/backend";
-import type { ConversationContentView, ConversationView } from "../types/frontend";
-import { cloneMaps } from "../state/appStateMaps";
-import { updateSessionAttachmentSummary } from "../state/attachments";
-import { writePendingList } from "../state/conversations";
-import { appendFrontendEvent } from "../state/traceEvents";
-import { writeLastSessionId } from "../state/storage";
-import type { SetAppState } from "./contentViewLoaderTypes";
-import { sessionScopeKey } from "../state/session/sessionScope";
-import { usePendingRequestActions } from "./usePendingRequestActions";
+} from "../../types/backend";
+import type { ConversationContentView, ConversationView } from "../../types/frontend";
+import { cloneMaps } from "../../state/appStateMaps";
+import { updateSessionAttachmentSummary } from "../../state/attachments";
+import { writePendingList } from "../../state/conversations";
+import { appendFrontendEvent } from "../../state/traceEvents";
+import { writeLastSessionId } from "../../state/storage";
+import type { SetAppState } from "../contentViewLoaderTypes";
+import { sessionScopeKey } from "../../state/session/sessionScope";
+import { usePendingRequestActions } from "../usePendingRequestActions";
 
 export function useSessionRunActions({
   apiPort,

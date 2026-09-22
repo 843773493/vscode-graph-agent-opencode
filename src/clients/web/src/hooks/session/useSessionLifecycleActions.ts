@@ -13,18 +13,18 @@ import {
   updateSession as apiUpdateSession,
   updateSessionAgent as apiUpdateSessionAgent,
   updateSessionProvider as apiUpdateSessionProvider,
-} from "../api";
-import type { Session } from "../types/backend";
-import { cloneMaps } from "../state/appStateMaps";
+} from "../../api";
+import type { Session } from "../../types/backend";
+import { cloneMaps } from "../../state/appStateMaps";
 import {
   clearLastSessionId,
   writeLastSessionId,
-} from "../state/storage";
-import { replaceSessionMetadata } from "../state/session/sessions";
-import { appendFrontendEvent } from "../state/traceEvents";
-import { resetAgentStateFields } from "./useAgentStateSnapshot";
-import type { SetAppState } from "./contentViewLoaderTypes";
-import { sessionScopeKey } from "../state/session/sessionScope";
+} from "../../state/storage";
+import { replaceSessionMetadata } from "../../state/session/sessions";
+import { appendFrontendEvent } from "../../state/traceEvents";
+import { resetAgentStateFields } from "../useAgentStateSnapshot";
+import type { SetAppState } from "../contentViewLoaderTypes";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 
 function normalizeSessionTitle(title: string): string {
   const trimmed = title.trim();

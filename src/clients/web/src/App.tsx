@@ -49,7 +49,7 @@ import { useWorkspacePreviewTabs } from "./hooks/workspace/useWorkspacePreviewTa
 import { useMainAreaResize } from "./hooks/panel/useMainAreaResize";
 import { useBottomPanelResize } from "./hooks/panel/useBottomPanelResize";
 import { useNodeDebugWorkbench } from "./hooks/nodeDebug/useNodeDebugWorkbench";
-import { useChildThreadLoader } from "./hooks/useChildThreadLoader";
+import { useChildThreadLoader } from "./hooks/session/useChildThreadLoader";
 import { useGatewayExtensionResources } from "./hooks/gatewayExtensions/useGatewayExtensionResources";
 import { useGatewayExtensionWindow } from "./hooks/gatewayExtensions/useGatewayExtensionWindow";
 import { useWorkbenchPanelRouting } from "./hooks/panel/useWorkbenchPanelRouting";

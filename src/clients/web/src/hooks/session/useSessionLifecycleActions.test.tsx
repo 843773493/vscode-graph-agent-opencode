@@ -1,9 +1,9 @@
 import React from "react";
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AppState } from "../types/frontend";
-import type { Session } from "../types/backend";
-import { sessionScopeKey } from "../state/session/sessionScope";
+import type { AppState } from "../../types/frontend";
+import type { Session } from "../../types/backend";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 import { useSessionLifecycleActions } from "./useSessionLifecycleActions";
 
 const WORKSPACE_ID = "gw_read_state";

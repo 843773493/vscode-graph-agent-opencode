@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToString } from "react-dom/server";
 
-import type { Session } from "../types/backend";
-import type { AppState } from "../types/frontend";
+import type { Session } from "../../types/backend";
+import type { AppState } from "../../types/frontend";
 import { useSessionRunActions } from "./useSessionRunActions";
 
 const originalFetch = globalThis.fetch;

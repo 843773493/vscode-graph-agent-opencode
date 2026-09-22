@@ -4,7 +4,7 @@ import {
   MessageStreamCursorGoneError,
   MessageStreamConnectionError,
   streamSessionMessageEvents,
-} from "../api/sessionMessageStream";
+} from "../../api/sessionMessageStream";
 import {
   applyMessageStreamEvent,
   applyMessageStreamSnapshot,
@@ -12,13 +12,13 @@ import {
   writeMessageStreamCache,
   type MessageStreamEvent,
   type MessageStreamState,
-} from "../state/messageStream/index";
-import { failureFromValue } from "../state/messageStream/state";
-import { cloneMaps } from "../state/appStateMaps";
-import { completePendingForJob } from "../state/conversations";
-import type { SetAppState } from "./sessionEventStream/sessionRefresh";
-import { sessionStreamReconnectDelay } from "./sessionEventStream/sessionEventStreamPolicy";
-import { waitForReconnect } from "./sessionEventStream/waitForReconnect";
+} from "../../state/messageStream/index";
+import { failureFromValue } from "../../state/messageStream/state";
+import { cloneMaps } from "../../state/appStateMaps";
+import { completePendingForJob } from "../../state/conversations";
+import type { SetAppState } from "../sessionEventStream/sessionRefresh";
+import { sessionStreamReconnectDelay } from "../sessionEventStream/sessionEventStreamPolicy";
+import { waitForReconnect } from "../sessionEventStream/waitForReconnect";
 
 export function useSessionMessageStream({
   apiPort,
