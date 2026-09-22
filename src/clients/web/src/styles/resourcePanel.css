@@ -271,6 +271,10 @@
   display: block;
 }
 
+.resource-notice.is-error {
+  color: var(--bt-status-danger);
+}
+
 .resource-notice details {
   margin-top: 4px;
 }

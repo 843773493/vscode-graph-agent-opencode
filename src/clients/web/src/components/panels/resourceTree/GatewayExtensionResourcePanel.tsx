@@ -5,6 +5,7 @@ import type {
   GatewayExtensionResourceError,
 } from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
 import { kindLabel } from "../../../state/display/resourceDisplay";
+import { copyTextToClipboard } from "../../../utils/clipboard";
 import ResourceTreeRow from "./ResourceTreeRow";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 
@@ -71,6 +72,7 @@ export default function GatewayExtensionResourcePanel({
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [openScopes, setOpenScopes] = useState<Record<string, boolean>>({});
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeIsError, setNoticeIsError] = useState(false);
   const groups = useMemo(() => groupResources(entries), [entries]);
   const groupedErrors = useMemo(() => {
     const grouped = new Map<string, { message: string; labels: string[] }>();
@@ -98,15 +100,33 @@ export default function GatewayExtensionResourcePanel({
     }
     setBusyKey(entry.key);
     setNotice(null);
+    setNoticeIsError(false);
     try {
       await onControl(entry, action);
       setNotice(`已更新 ${entry.resource.name} 的状态`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      setNoticeIsError(true);
       setNotice(`操作失败：${message}`);
     } finally {
       setBusyKey(null);
     }
+  };
+
+  // 复制统一走 utils/clipboard 的唯一实现：非安全上下文与权限拒绝都要给用户可见反馈，
+  // 不能用 `void navigator.clipboard?.writeText(...)` 静默吞掉失败。
+  const handleCopyResourceId = (resourceId: string) => {
+    void copyTextToClipboard(resourceId)
+      .then(() => {
+        setNoticeIsError(false);
+        setNotice(`已复制 UUID: ${resourceId}`);
+      })
+      .catch((copyError: unknown) => {
+        setNoticeIsError(true);
+        setNotice(
+          `复制失败: ${copyError instanceof Error ? copyError.message : String(copyError)}`,
+        );
+      });
   };
 
   return (
@@ -142,7 +162,14 @@ export default function GatewayExtensionResourcePanel({
       <div className="gateway-extension-scope-hint">
         所有 Gateway、工作区和会话申请的浏览器/终端；不跟随标准窗口当前会话。
       </div>
-      {notice ? <div className="resource-notice" role="status">{notice}</div> : null}
+      {notice ? (
+        <div
+          className={`resource-notice${noticeIsError ? " is-error" : ""}`}
+          role={noticeIsError ? "alert" : "status"}
+        >
+          {notice}
+        </div>
+      ) : null}
       {groupedErrors.map((error) => (
         <div className="resource-notice gateway-extension-error" key={error.message}>
           <strong>{error.labels.length} 个资源范围暂不可用</strong>
@@ -206,7 +233,7 @@ export default function GatewayExtensionResourcePanel({
                           void handleControl(entry, action);
                         }}
                         onCopy={(resourceId) => {
-                          void navigator.clipboard?.writeText(resourceId);
+                          handleCopyResourceId(resourceId);
                         }}
                         onOpenTerminal={() => {
                           onSelect(entry.key);
