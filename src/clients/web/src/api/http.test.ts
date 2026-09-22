@@ -532,3 +532,201 @@ describe("normalizePageResult CursorPage 契约校验", () => {
       .toThrow("会话列表响应 next_cursor 必须是字符串或 null，实际为 number");
   });
 });
+
+describe("Gateway 用户会话恢复循环边界", () => {
+  test("连续 401 时恢复动作只执行一次，最终以 HttpRequestError 401 有界收口", async () => {
+    const port = 49_360;
+    installWindow(port);
+    let targetCalls = 0;
+    let currentCalls = 0;
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = resolveTestUrl(input, port).pathname;
+        if (path === "/api/gateway/auth/local-credential") return tokenResponse();
+        if (path === "/api/gateway/users/current") {
+          currentCalls += 1;
+          return Response.json({
+            data: { kind: "guest", user_id: null },
+            request_id: "request-current-bounded",
+          });
+        }
+        if (path === "/api/gateway/users/guest") {
+          return Response.json({
+            data: { kind: "guest", user_id: null },
+            request_id: "request-guest-bounded",
+          });
+        }
+        if (path === "/api/v1/always-401") {
+          targetCalls += 1;
+          return Response.json({ detail: "user_session_required" }, { status: 401 });
+        }
+        throw new Error("Unexpected request: " + path);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    const error = await requestJson(port, "/api/v1/always-401")
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HttpRequestError);
+    expect((error as HttpRequestError).status).toBe(401);
+    // 恢复上限为一次：目标请求最多再试一次，绝不无限重试。
+    expect(targetCalls).toBe(2);
+    // 初始屏障 + 401 恢复各拉取一次用户会话，证明恢复动作确实执行了一次。
+    expect(currentCalls).toBe(2);
+    expect((error as Error).message).not.toContain("请求未获得响应");
+  });
+
+  test("401 同时含 user_session_required 与失效 token 时两种恢复各一次后停止", async () => {
+    const port = 49_361;
+    installWindow(port);
+    let targetCalls = 0;
+    let credentialCalls = 0;
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = resolveTestUrl(input, port).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          credentialCalls += 1;
+          return tokenResponse();
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            data: { kind: "guest", user_id: null },
+            request_id: "request-current-mixed",
+          });
+        }
+        if (path === "/api/gateway/users/guest") {
+          return Response.json({
+            data: { kind: "guest", user_id: null },
+            request_id: "request-guest-mixed",
+          });
+        }
+        if (path === "/api/v1/mixed-401") {
+          targetCalls += 1;
+          return Response.json(
+            { detail: "user_session_required; invalid local token" },
+            { status: 401 },
+          );
+        }
+        throw new Error("Unexpected request: " + path);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    const error = await requestJson(port, "/api/v1/mixed-401")
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HttpRequestError);
+    expect((error as HttpRequestError).status).toBe(401);
+    // 目标请求：初始 + 会话恢复重试 + token 刷新重试，共 3 次后停止。
+    expect(targetCalls).toBe(3);
+    expect(credentialCalls).toBe(2);
+  });
+
+  test("恢复动作自身 500 时抛出 500 根因，绝不伪装成 401", async () => {
+    const port = 49_362;
+    installWindow(port);
+    let currentCalls = 0;
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = resolveTestUrl(input, port).pathname;
+        if (path === "/api/gateway/auth/local-credential") return tokenResponse();
+        if (path === "/api/gateway/users/current") {
+          currentCalls += 1;
+          if (currentCalls === 1) {
+            return Response.json({
+              data: { kind: "guest", user_id: null },
+              request_id: "request-current-ok",
+            });
+          }
+          return Response.json({ detail: "用户会话服务炸了" }, { status: 500 });
+        }
+        if (path === "/api/v1/needs-recovery") {
+          return Response.json({ detail: "user_session_required" }, { status: 401 });
+        }
+        throw new Error("Unexpected request: " + path);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    const error = await requestJson(port, "/api/v1/needs-recovery")
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HttpRequestError);
+    expect((error as HttpRequestError).status).toBe(500);
+    expect((error as Error).message).toContain("用户会话服务炸了");
+  });
+
+  test("恢复期间凭据端点失败时透出可诊断根因", async () => {
+    const port = 49_364;
+    installWindow(port);
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = resolveTestUrl(input, port).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return new Response("boom", { status: 500, statusText: "Internal Server Error" });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            data: { kind: "guest", user_id: null },
+            request_id: "request-current-cred",
+          });
+        }
+        throw new Error("Unexpected request: " + path);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    const error = await requestJson(port, "/api/v1/needs-credential")
+      .catch((caught: unknown) => caught);
+
+    expect((error as Error).message).toContain("获取 Gateway 本地凭据失败: HTTP 500");
+  });
+
+  test("恢复期间外部 abort 立即终止，不再发出后续目标请求", async () => {
+    const port = 49_363;
+    installWindow(port);
+    const externalController = new AbortController();
+    let targetCalls = 0;
+    let currentCalls = 0;
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = resolveTestUrl(input, port).pathname;
+        if (path === "/api/gateway/auth/local-credential") return tokenResponse();
+        if (path === "/api/gateway/users/current") {
+          currentCalls += 1;
+          if (currentCalls === 2) externalController.abort();
+          return Response.json({
+            data: { kind: "guest", user_id: null },
+            request_id: "request-current-abort",
+          });
+        }
+        if (path === "/api/gateway/users/guest") {
+          return Response.json({
+            data: { kind: "guest", user_id: null },
+            request_id: "request-guest-abort",
+          });
+        }
+        if (path === "/api/v1/abort-during-recovery") {
+          targetCalls += 1;
+          return Response.json({ detail: "user_session_required" }, { status: 401 });
+        }
+        throw new Error("Unexpected request: " + path);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    const error = await requestJson(port, "/api/v1/abort-during-recovery", {
+      signal: externalController.signal,
+    }).catch((caught: unknown) => caught);
+
+    expect((error as Error).name).toBe("AbortError");
+    // abort 后恢复循环不再发出第二次目标请求。
+    expect(targetCalls).toBe(1);
+  });
+});
