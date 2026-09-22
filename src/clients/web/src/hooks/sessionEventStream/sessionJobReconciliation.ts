@@ -18,7 +18,7 @@ import type {
 } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import type { SetAppState } from "../contentViewLoaderTypes";
-import { sessionScopeKey } from "../../state/session/sessionScope";
+import { isSessionActivelyViewed } from "../../state/session/viewedSession";
 
 const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
   "completed",
@@ -43,22 +43,6 @@ export interface ActiveJobReconciliationResult {
   jobStatus: JobStatus;
   lastEventCursor: string | null;
   recoveredEventCount: number;
-}
-
-function sessionIsActivelyViewed(
-  state: AppState,
-  sessionCacheKey: string,
-): boolean {
-  const currentSessionId = state.currentSession?.session_id;
-  const currentWorkspaceId = state.currentSessionWorkspaceId;
-  if (!currentSessionId || !currentWorkspaceId) {
-    return false;
-  }
-  if (sessionScopeKey(currentWorkspaceId, currentSessionId) !== sessionCacheKey) {
-    return false;
-  }
-  return typeof document === "undefined"
-    || (document.visibilityState === "visible" && document.hasFocus());
 }
 
 function terminalStatusTextForJob(job: Job | undefined): string {
@@ -268,7 +252,7 @@ async function refreshTerminalSessionInternal(
       !pendingSnapshot.active_job_id
       && (pendingSnapshot.requests?.length ?? 0) === 0
     ) {
-      if (sessionIsActivelyViewed(latest, sessionCacheKey)) {
+      if (isSessionActivelyViewed(latest, sessionCacheKey)) {
         latestNext.unreadSessionKeys.delete(sessionCacheKey);
       } else {
         latestNext.unreadSessionKeys.add(sessionCacheKey);

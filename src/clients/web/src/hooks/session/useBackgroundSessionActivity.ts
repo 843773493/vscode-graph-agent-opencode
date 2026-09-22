@@ -3,10 +3,8 @@ import { getJob } from "../../api";
 import { listPendingRequests } from "../../pendingRequestsApi";
 import { cloneMaps } from "../../state/appStateMaps";
 import { writePendingSnapshot } from "../../state/conversations";
-import {
-  parseSessionScopeKey,
-  sessionScopeKey,
-} from "../../state/session/sessionScope";
+import { parseSessionScopeKey } from "../../state/session/sessionScope";
+import { isSessionActivelyViewed } from "../../state/session/viewedSession";
 import type { AppState } from "../../types/frontend";
 import type { JobStatus } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
@@ -19,19 +17,6 @@ const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
   "cancelled",
   "timed_out",
 ]);
-
-function isActivelyViewed(state: AppState, sessionCacheKey: string): boolean {
-  const sessionId = state.currentSession?.session_id;
-  const workspaceId = state.currentSessionWorkspaceId;
-  if (
-    !sessionId
-    || !workspaceId
-    || sessionScopeKey(workspaceId, sessionId) !== sessionCacheKey
-  ) {
-    return false;
-  }
-  return document.visibilityState === "visible" && document.hasFocus();
-}
 
 export function useBackgroundSessionActivity({
   apiPort,
@@ -101,7 +86,7 @@ export function useBackgroundSessionActivity({
               !pendingSnapshot.active_job_id
               && (pendingSnapshot.requests?.length ?? 0) === 0
             ) {
-              if (isActivelyViewed(previous, sessionCacheKey)) {
+              if (isSessionActivelyViewed(previous, sessionCacheKey)) {
                 next.unreadSessionKeys.delete(sessionCacheKey);
               } else {
                 next.unreadSessionKeys.add(sessionCacheKey);
