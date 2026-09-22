@@ -395,6 +395,43 @@ describe("useSessionMessageStream 连接与终态语义", () => {
     return [...(mirror.current().messageStreamsByTurnStream ?? new Map()).values()][0];
   }
 
+  test("协议非法事件必须写出可见诊断，不能只标记断开后无限静默重连", async () => {
+    const port = 49_719;
+    installTestWindow(port);
+    installGatewayFetch(
+      (): Response => new Response(
+        // 信封缺失 event_id / turn_stream_id：非法事件，重复取同一字节永远失败。
+        "id: 1\n"
+        + "event: block.delta\n"
+        + 'data: {"session_id":"ses_protocol","turn_id":"turn_protocol","event_seq":1,"type":"block.delta","payload":{}}\n\n',
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      ),
+      { token: "ms-protocol-token" },
+    );
+
+    const mirror = createStateMirror(minimalState());
+    const Harness = useSessionMessageStreamHarness({
+      apiPort: port,
+      sessionId: "ses_protocol",
+      turnId: "turn_protocol",
+      workspaceId: "ws_protocol",
+      sessionCacheKey: "ws_protocol::ses_protocol",
+    }, mirror.setState);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    act(() => renderer!.unmount());
+
+    // 非法协议事件不会自愈；必须把真实原因写进诊断字段供用户与开发者定位。
+    expect(streamState(mirror)?.protocolError)
+      .toBe("消息流事件缺少合法的信封字段");
+  });
+
   test("游标失效且快照也读不到时写可见诊断，不停留在静默重连", async () => {
     const port = 49_720;
     installTestWindow(port);

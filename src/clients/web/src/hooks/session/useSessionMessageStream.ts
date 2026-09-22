@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import {
   getSessionMessageStreamSnapshot,
+  MessageStreamConnectionError,
   MessageStreamCursorGoneError,
   streamSessionMessageEvents,
 } from "../../api/stream/sessionMessageStream";
@@ -18,6 +19,8 @@ import { completePendingForJob } from "../../state/conversations";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { sessionStreamReconnectDelay } from "../sessionEventStream/sessionEventStreamPolicy";
 import { waitForReconnect } from "../sessionEventStream/waitForReconnect";
+import { isTransientNetworkError, HttpRequestError } from "../../api/http";
+import { errorMessage } from "../../utils/errorMessage";
 
 export function useSessionMessageStream({
   apiPort,
@@ -214,10 +217,24 @@ export function useSessionMessageStream({
                   : String(snapshotError),
               }));
             }
-          } else {
+          } else if (
+            isTransientNetworkError(error)
+            || error instanceof HttpRequestError
+            || error instanceof MessageStreamConnectionError
+          ) {
             // 连接失败统一走持续重连：runGatewayRequest 对非 2xx（含 404
-            // “流尚未就绪”）先抛 HttpRequestError，这里只需标记断开并退回重试。
+            // “流尚未就绪”）先抛 HttpRequestError，本地服务重连窗口抛 TypeError；
+            // 这类故障会自愈，只标记断开并退回重试。
             markConnection("disconnected");
+          } else {
+            // 事件解码/协议校验失败不会因为重连自愈（同一字节永远解析失败）。
+            // 必须把真实原因写进诊断字段，否则界面只显示“正在重连”，用户和
+            // 开发者都看不到根因。
+            updateState((current) => ({
+              ...current,
+              connectionStatus: "disconnected",
+              protocolError: errorMessage(error),
+            }));
           }
         }
         if (terminalSeen || controller.signal.aborted) return;
