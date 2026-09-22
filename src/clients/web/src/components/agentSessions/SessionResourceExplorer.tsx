@@ -127,6 +127,14 @@ export default function SessionResourceExplorer({
     workspaces.map((workspace) => [workspace.workspace_id, workspace]),
   );
   const navigationNodes = explorer.navigation?.nodes ?? [];
+  // 导航已加载但没有任何节点（也没有内联编辑器在创建）时，空树会看起来像坏掉了。
+  // 存在 navigationError 时优先展示错误卡：此时旧快照可能恰好是空的，
+  // 不能再并列宣称「还没有工作区」，否则用户分不清是空目录还是加载失败。
+  const navigationEmpty = explorer.navigation !== null
+    && explorer.navigation !== undefined
+    && !explorer.navigationError
+    && navigationNodes.length === 0
+    && workspaceFolderEditor?.mode !== "create";
 
   const handleError = (prefix: string, error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
@@ -829,6 +837,11 @@ export default function SessionResourceExplorer({
         </div>
       ) : null}
       {!explorer.navigation && !explorer.navigationError ? <div className="session-resource-state">正在加载工作区目录…</div> : null}
+      {navigationEmpty ? (
+        <div className="session-resource-state">
+          还没有工作区。可通过工具栏的「添加工作区」接入一个工作区，或先在连接管理中恢复已有连接。
+        </div>
+      ) : null}
       <ul
         className={`session-resource-list navigation-root${dropTargetClass("navigation_root")}`}
         role="tree"
