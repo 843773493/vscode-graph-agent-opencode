@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -853,6 +855,104 @@ def test_gateway_config_event_cursor_gone_after_full_prune(tmp_path):
             state.ensure_config_event_cursor(config_domain="gateway", after=1)
         # after 已追平前沿：没有新事件是合法结果
         state.ensure_config_event_cursor(config_domain="gateway", after=2)
+    finally:
+        state.close()
+
+
+def test_gateway_relay_claimed_with_null_lease_is_reclaimable(tmp_path):
+    """claim 租约列为 NULL 时不能被永丢弃，必须可被恢复者接管。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        _append_gateway_event(state, "gateway-null-lease")
+        connection = state.connection()
+        try:
+            # 模拟异常中断：状态是 claimed 但没有租约时间（列可空）
+            connection.execute(
+                "UPDATE config_events SET relay_state = 'claimed', "
+                "relay_claimed_until = NULL, relay_claimed_by = 'dead-relay'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        # outbox relay 读取必须把该行当作可投递，不能静默丢弃
+        assert [
+            event.event_id
+            for event in state.list_config_events_for_relay(config_domain="gateway")
+        ] == ["gateway-null-lease"]
+        # 单事件 claim 也必须能接管
+        reclaimed = state.claim_config_event_relay(
+            event_id="gateway-null-lease", consumer_id="recovery-relay"
+        )
+        assert reclaimed is not None
+        assert reclaimed.relay_claimed_by == "recovery-relay"
+    finally:
+        state.close()
+
+
+def test_gateway_consumer_ledger_claimed_with_null_lease_is_reclaimable(tmp_path):
+    """consumer 账本 claim 租约为 NULL 时也必须可被同一 consumer 重新认领。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        event = state.append_config_event(
+            ConfigEventInput(
+                event_id="gateway-ledger-null-lease",
+                config_domain="gateway",
+                candidate_id=None,
+                attempt_id=None,
+                apply_id=None,
+                idempotency_key=None,
+                commit_revision=None,
+                active_revision=1,
+                pending_revision=None,
+                source="watcher",
+                result="applied",
+            )
+        )
+        state.claim_config_events_for_consumer(
+            config_domain="gateway", after=0, consumer_id="consumer-a"
+        )
+        connection = state.connection()
+        try:
+            connection.execute(
+                "UPDATE config_event_relay_delivery SET state = 'claimed', "
+                "claimed_until = NULL WHERE consumer_id = 'consumer-a'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        reclaimed = state.claim_config_events_for_consumer(
+            config_domain="gateway", after=0, consumer_id="consumer-a"
+        )
+        assert [record.event_id for record in reclaimed] == [event.event_id]
+    finally:
+        state.close()
+
+
+def test_gateway_relay_next_attempt_at_is_not_null(tmp_path):
+    """relay_next_attempt_at 是 NOT NULL 列，写入端不得让 failed 行落入 NULL 静默丢失。"""
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        _append_gateway_event(state, "gateway-next-attempt")
+        assert state.claim_config_event_relay(
+            event_id="gateway-next-attempt", consumer_id="relay-a"
+        )
+        failed = state.fail_config_event_relay(
+            event_id="gateway-next-attempt", consumer_id="relay-a", error="boom"
+        )
+        assert failed.relay_state == "failed"
+        assert failed.relay_next_attempt_at is not None
+        connection = state.connection()
+        try:
+            # 模式保证：无法写入 NULL，因此不存在「failed 但重试时间缺失」的静默死行
+            with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
+                connection.execute(
+                    "UPDATE config_events SET relay_next_attempt_at = NULL"
+                )
+        finally:
+            connection.close()
     finally:
         state.close()
 

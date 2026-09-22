@@ -196,7 +196,8 @@ class GatewayConfigEventMixin:
                 + """WHERE config_domain = ? AND (
                     relay_state = 'pending'
                     OR (relay_state = 'failed' AND relay_next_attempt_at <= ?)
-                    OR (relay_state = 'claimed' AND relay_claimed_until <= ?)
+                    OR (relay_state = 'claimed'
+                        AND (relay_claimed_until IS NULL OR relay_claimed_until <= ?))
                 )
                 ORDER BY event_seq ASC
                 LIMIT ?
@@ -246,7 +247,8 @@ class GatewayConfigEventMixin:
                 WHERE e.config_domain = ? AND e.event_seq > ? AND (
                     d.event_id IS NULL
                     OR (d.state = 'failed' AND d.next_attempt_at <= ?)
-                    OR (d.state = 'claimed' AND d.claimed_until <= ?)
+                    OR (d.state = 'claimed'
+                        AND (d.claimed_until IS NULL OR d.claimed_until <= ?))
                 )
                 ORDER BY e.event_seq ASC
                 LIMIT ?
@@ -379,7 +381,8 @@ class GatewayConfigEventMixin:
                 WHERE event_id = ? AND (
                     relay_state = 'pending'
                     OR (relay_state = 'failed' AND relay_next_attempt_at <= ?)
-                    OR (relay_state = 'claimed' AND relay_claimed_until <= ?)
+                    OR (relay_state = 'claimed'
+                        AND (relay_claimed_until IS NULL OR relay_claimed_until <= ?))
                 )
                 """,
                 (consumer_id, claimed_until, event_id, now_text, now_text),
