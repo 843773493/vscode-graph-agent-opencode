@@ -8,6 +8,7 @@ import {
   type MessageStreamToolExecution,
   writeMessageStreamCache,
 } from "../messageStream/index";
+import { isTerminalStatus } from "../messageStream/state";
 import { validateMessageStreamSnapshotPayload } from "../../api/messageStreamSnapshot";
 
 function event(
@@ -2499,5 +2500,241 @@ describe("block model_call_id 还原", () => {
     expect(messageStreamToResponseParts(snapshotState)).toEqual(
       messageStreamToResponseParts(eventState),
     );
+  });
+});
+
+describe("active_state 越界写入收口", () => {
+  // 后端 store.py 的 block.delta 分支只调 _apply_block_delta，只有 block.started
+  // 写 active_state。前端 applyBlockDelta 原先无条件覆写 active_state，一旦 provider
+  // 在同一 model call 内于 on_tool_start 之后继续吐正文（真实 runtime 可复现：
+  // T->S->T2 产出 block.started/block.delta/tool_call.completed/tool.started/block.delta），
+  // 这条迟到的 block.delta 会把 active_state 从 tool_execution 拉回 model_output，
+  // 而同一时点的后端快照仍是 tool_execution，两条链路给出不同 UI。
+  const FIELDS = [
+    "kind",
+    "phase",
+    "entity_id",
+    "block_id",
+    "carrier_type",
+    "tool_call_id",
+    "tool_execution_id",
+    "tool_invocation_id",
+    "tool_attempt_id",
+    "status",
+    "last_kind",
+    "last_phase",
+    "reason",
+  ] as const;
+
+  function activeStateOf(state: MessageStreamState) {
+    return state.activeState;
+  }
+
+  function snapshotOf(seq: number, activeState: Record<string, unknown>) {
+    return applyMessageStreamEvent(
+      createMessageStreamState("ses_1", "turn_1"),
+      event(seq, "stream.snapshot", {
+        snapshot_seq: seq,
+        stream_status: "open",
+        agent_loop_status: "tool_running",
+        current_attempt: 1,
+        active_state: activeState,
+        resumable: true,
+      }),
+    );
+  }
+
+  test("迟到的 block.delta 不把 active_state 从 tool_execution 拉回 model_output", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, event(2, "model.started", {
+      model_call_id: "mc_1",
+      attempt: 1,
+    }));
+    state = applyMessageStreamEvent(state, event(3, "block.started", {
+      block_id: "b1",
+      block_index: 0,
+      carrier_type: "text",
+      projection: "streaming",
+    }));
+    state = applyMessageStreamEvent(state, event(4, "tool.started", {
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_name: "shell",
+    }));
+    // 工具已启动后，同一 block 的正文 delta 才到。
+    state = applyMessageStreamEvent(state, event(5, "block.delta", {
+      block_id: "b1",
+      operation: "append",
+      text: "迟到正文",
+    }));
+
+    // 正文必须照常累积，active_state 必须保持工具执行态。
+    expect(state.blocks[0]?.text).toBe("迟到正文");
+    expect(activeStateOf(state)).toEqual({
+      kind: "tool_execution",
+      phase: "running",
+      entity_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_execution_id: "exec_1",
+      status: "running",
+    });
+
+    const snapshotState = activeStateOf(snapshotOf(5, {
+      kind: "tool_execution",
+      phase: "running",
+      entity_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_execution_id: "exec_1",
+      status: "running",
+    }));
+    for (const field of FIELDS) {
+      expect(activeStateOf(state)?.[field] ?? null).toBe(snapshotState?.[field] ?? null);
+    }
+  });
+
+  test("tool_call 之后的迟到 block.delta 同样不覆写 active_state", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, event(2, "model.started", {
+      model_call_id: "mc_1",
+      attempt: 1,
+    }));
+    state = applyMessageStreamEvent(state, event(3, "block.started", {
+      block_id: "b1",
+      block_index: 0,
+      carrier_type: "text",
+      projection: "streaming",
+    }));
+    state = applyMessageStreamEvent(state, event(4, "tool_call.delta", {
+      tool_call_id: "c1",
+      tool_name: "shell",
+      arguments: { a: 1 },
+    }));
+    state = applyMessageStreamEvent(state, event(5, "block.delta", {
+      block_id: "b1",
+      operation: "append",
+      text: "又一段正文",
+    }));
+
+    expect(activeStateOf(state)).toEqual({
+      kind: "tool_call",
+      phase: "accumulating",
+      entity_id: "c1",
+      tool_call_id: "c1",
+      status: "accumulating",
+    });
+
+    const snapshotState = activeStateOf(snapshotOf(5, {
+      kind: "tool_call",
+      phase: "accumulating",
+      entity_id: "c1",
+      tool_call_id: "c1",
+      status: "accumulating",
+    }));
+    for (const field of FIELDS) {
+      expect(activeStateOf(state)?.[field] ?? null).toBe(snapshotState?.[field] ?? null);
+    }
+  });
+
+  test("block.started 仍然写入 active_state，与后端同一分支一致", () => {
+    // 收口只删除 block.delta 的越界写入，block.started 的写入必须保留。
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, event(2, "tool.started", {
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_name: "shell",
+    }));
+    state = applyMessageStreamEvent(state, event(3, "block.started", {
+      block_id: "b2",
+      block_index: 1,
+      carrier_type: "reasoning",
+      projection: "streaming",
+    }));
+
+    expect(activeStateOf(state)).toEqual({
+      kind: "model_output",
+      phase: "reasoning",
+      entity_id: "b2",
+      block_id: "b2",
+      carrier_type: "reasoning",
+      status: "running",
+    });
+
+    const snapshotState = activeStateOf(snapshotOf(3, {
+      kind: "model_output",
+      phase: "reasoning",
+      entity_id: "b2",
+      block_id: "b2",
+      carrier_type: "reasoning",
+      status: "running",
+    }));
+    for (const field of FIELDS) {
+      expect(activeStateOf(state)?.[field] ?? null).toBe(snapshotState?.[field] ?? null);
+    }
+  });
+
+  test("tool 链路的身份归一只有一处：payload 缺失时实体与 active_state 同源", () => {
+    // payload 只带 tool_name，身份仅出现在信封；实体与 active_state 必须得到
+    // 同一份补全结果，且与后端把身份写进 active_state 的行为一致。
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, {
+      ...event(1, "tool.started", { tool_name: "shell" }),
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_invocation_id: "inv_1",
+      tool_attempt_id: "att_1",
+    });
+    expect(state.toolExecutions[0]).toMatchObject({
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_invocation_id: "inv_1",
+      tool_attempt_id: "att_1",
+    });
+
+    const execution = state.toolExecutions[0];
+    const snapshotState = activeStateOf(snapshotOf(1, {
+      kind: "tool_execution",
+      phase: "running",
+      entity_id: "exec_1",
+      tool_execution_id: "exec_1",
+      tool_call_id: "call_1",
+      tool_invocation_id: "inv_1",
+      tool_attempt_id: "att_1",
+      status: "running",
+    }));
+    for (const field of FIELDS) {
+      expect(activeStateOf(state)?.[field] ?? null).toBe(snapshotState?.[field] ?? null);
+    }
+    expect(execution?.tool_attempt_id).toBe("att_1");
+  });
+});
+
+describe("终态白名单同域去重", () => {
+  // streamStatus 域（completed/interrupted/failed）的终态判定只允许存在唯一实现：
+  // state/messageStream/state.ts 的 isTerminalStatus。conversations.ts 曾有一份逐字
+  // 相同的 isTerminalMessageStreamStatus。两份实现一旦取值漂移，会话选择排序、活动
+  // 遮罩与 protocolError 归一就会与消息流连接状态判定分叉；这类行为型断言在只有一份
+  // 实现时无法发现重复回归，因此这里直接以源码级守卫钉住唯一实现。
+  // 注意：isTerminalEvent（事件类型域）与 TERMINAL_TURN_STATUSES（Turn 状态域，5 值）
+  // 是不同语义域，不在本去重范围内。
+
+  test("isTerminalStatus 覆盖且仅覆盖 streamStatus 的 3 个终态", () => {
+    const domain = ["open", "interrupting", "completed", "interrupted", "failed"] as const;
+    const terminal = domain.filter((status) => isTerminalStatus(status));
+    expect(terminal).toEqual(["completed", "interrupted", "failed"]);
+  });
+
+  test("conversations.ts 不再保留 streamStatus 域的第二套终态实现", async () => {
+    const source = await Bun.file(
+      new URL("../conversations.ts", import.meta.url),
+    ).text();
+    expect(source).not.toContain("isTerminalMessageStreamStatus");
+    // 必须复用唯一的 isTerminalStatus，而不是重新手写三个字面量比较。
+    expect(source).toContain('from "./messageStream/state"');
+    expect(source).toContain("isTerminalStatus(");
+    // 不同语义域的常量必须保留，不得被本次去重误删。
+    expect(source).toContain("TERMINAL_TURN_STATUSES");
   });
 });

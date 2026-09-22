@@ -254,42 +254,45 @@ export function applyMessageStreamEvent(
       break;
     }
     case "tool.started":
-      upsertTool(
-        state,
-        withToolIdentityFallback(payload, event),
-        "running",
-        event,
-      );
-      state.agentLoopStatus = "tool_running";
-      state.activeState = {
-        kind: "tool_execution",
-        phase: "running",
-        entity_id: stringValue(payload.tool_execution_id) ?? event.tool_execution_id ?? "",
-        tool_call_id: stringValue(payload.tool_call_id) ?? event.tool_call_id ?? undefined,
-        tool_invocation_id: stringValue(payload.tool_invocation_id) ?? event.tool_invocation_id ?? undefined,
-        tool_attempt_id: stringValue(payload.tool_attempt_id) ?? event.tool_attempt_id ?? undefined,
-        tool_execution_id: stringValue(payload.tool_execution_id) ?? event.tool_execution_id ?? undefined,
-        status: "running",
-      };
+      {
+        // 身份归一只有一处：实体与 active_state 共用同一份补全结果，避免
+        // 同一个「payload 缺失时补信封身份」的表达式在前端出现第二份实现。
+        const toolPayload = withToolIdentityFallback(payload, event);
+        upsertTool(state, toolPayload, "running", event);
+        state.agentLoopStatus = "tool_running";
+        state.activeState = {
+          kind: "tool_execution",
+          phase: "running",
+          entity_id: stringValue(toolPayload.tool_execution_id) ?? "",
+          tool_call_id: stringValue(toolPayload.tool_call_id) ?? undefined,
+          tool_invocation_id: stringValue(toolPayload.tool_invocation_id) ?? undefined,
+          tool_attempt_id: stringValue(toolPayload.tool_attempt_id) ?? undefined,
+          tool_execution_id: stringValue(toolPayload.tool_execution_id) ?? undefined,
+          status: "running",
+        };
+      }
       break;
     case "tool.completed":
-      upsertTool(
-        state,
-        withToolIdentityFallback(payload, event),
-        toolExecutionStatusValue(payload.status),
-        event,
-      );
-      // 后端 tool.completed 用 phase "stopping"，并带上执行的三个归属身份。
-      state.activeState = {
-        kind: "tool_execution",
-        phase: "stopping",
-        entity_id: stringValue(payload.tool_execution_id) ?? event.tool_execution_id ?? "",
-        tool_execution_id: stringValue(payload.tool_execution_id) ?? event.tool_execution_id ?? undefined,
-        tool_call_id: stringValue(payload.tool_call_id) ?? event.tool_call_id ?? undefined,
-        tool_invocation_id: stringValue(payload.tool_invocation_id) ?? event.tool_invocation_id ?? undefined,
-        tool_attempt_id: stringValue(payload.tool_attempt_id) ?? event.tool_attempt_id ?? undefined,
-        status: toolExecutionStatusValue(payload.status),
-      };
+      {
+        const toolPayload = withToolIdentityFallback(payload, event);
+        upsertTool(
+          state,
+          toolPayload,
+          toolExecutionStatusValue(payload.status),
+          event,
+        );
+        // 后端 tool.completed 用 phase "stopping"，并带上执行的三个归属身份。
+        state.activeState = {
+          kind: "tool_execution",
+          phase: "stopping",
+          entity_id: stringValue(toolPayload.tool_execution_id) ?? "",
+          tool_execution_id: stringValue(toolPayload.tool_execution_id) ?? undefined,
+          tool_call_id: stringValue(toolPayload.tool_call_id) ?? undefined,
+          tool_invocation_id: stringValue(toolPayload.tool_invocation_id) ?? undefined,
+          tool_attempt_id: stringValue(toolPayload.tool_attempt_id) ?? undefined,
+          status: toolExecutionStatusValue(payload.status),
+        };
+      }
       break;
     case "activity.started":
     case "activity.updated":
@@ -429,14 +432,11 @@ function applyBlockDelta(
 ): void {
   const block = upsertBlock(state, payload, "running", event);
   if (!block) return;
-  state.activeState = {
-    kind: "model_output",
-    phase: modelOutputPhase(block.carrier_type),
-    entity_id: block.block_id,
-    block_id: block.block_id,
-    carrier_type: block.carrier_type,
-    status: "running",
-  };
+  // block.delta 不改写 active_state：后端 store.py 的 block.delta 分支只调
+  // _apply_block_delta，只有 block.started 才写 active_state。若这里覆写，
+  // 一条迟到的 block.delta（provider 在同一 model call 内于 on_tool_start 之后
+  // 继续吐正文）会把 active_state 从 tool_call/tool_execution 拉回 model_output，
+  // 而同一时点的后端快照仍是 tool_call/tool_execution，两条链路给出不同 UI。
   const operation = stringValue(payload.operation) ?? "append";
   if (operation === "append" && typeof payload.text === "string") {
     block.text = boundedMessageStreamText(

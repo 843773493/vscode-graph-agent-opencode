@@ -329,7 +329,9 @@ describe("ChatTurn 轮次动作", () => {
       lastEventSeq: 12,
       failure: null,
       activeState: {
-        kind: "stream",
+        // 后端终态 active_state 的 kind 恒为 "terminal"，旧 fixture 的
+        // "stream" 是已下线字面量的过期残留，不参与任何判断。
+        kind: "terminal",
         phase: "completed",
         entity_id: "stream",
         status: "completed",
@@ -368,6 +370,10 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).toContain("上下文压缩失败");
     expect(html).toContain('data-activity-id="compaction_1"');
     expect(html).toContain('data-activity-id="compaction_2"');
+    // 终态 active_state 的 kind 由后端 _set_terminal_active_state 恒写作
+    // "terminal"。这条断言把 fixture 钉在后端真实字面量上，防止它再次回退到
+    // 已下线的 "stream"（组件当前不读该字段，故渲染结果不能发现回退）。
+    expect(value.messageStream.activeState?.kind).toBe("terminal");
   });
 
   test("进行中的压缩 Activity 显示实时状态", () => {

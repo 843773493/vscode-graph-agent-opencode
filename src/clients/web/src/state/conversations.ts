@@ -10,6 +10,7 @@ import {
   messageStreamToResponseParts,
   type MessageStreamState,
 } from "./messageStream/index";
+import { isTerminalStatus } from "./messageStream/state";
 import { isTurnDetail, type TurnRecord } from "./session/turnTimeline";
 import {
   dedupeTraceEvents,
@@ -818,8 +819,8 @@ function applyMessageStreamProjection(
       && candidate.turnId === (conversation.turnId ?? conversation.jobId),
     );
     const stream = streamCandidates.sort((left, right) =>
-      Number(isTerminalMessageStreamStatus(right.streamStatus))
-        - Number(isTerminalMessageStreamStatus(left.streamStatus))
+      Number(isTerminalStatus(right.streamStatus))
+        - Number(isTerminalStatus(left.streamStatus))
       || right.lastEventSeq - left.lastEventSeq
       || Number(right.connectionStatus === "terminal")
         - Number(left.connectionStatus === "terminal"),
@@ -850,7 +851,7 @@ function applyMessageStreamProjection(
       return {
         ...conversation,
         ...(conversation.displayMode === "live"
-          && isTerminalMessageStreamStatus(stream.streamStatus)
+          && isTerminalStatus(stream.streamStatus)
           ? {
               responseParts: liveResponseParts,
               activityStats: liveActivityStats,
@@ -886,7 +887,7 @@ function applyMessageStreamProjection(
       responseParts,
       activityStats: liveActivityStats,
       status: terminalStatus,
-      activeJobOverlay: !isTerminalMessageStreamStatus(stream.streamStatus),
+      activeJobOverlay: !isTerminalStatus(stream.streamStatus),
       messageStream: {
         connectionStatus: stream.connectionStatus,
         streamStatus: stream.streamStatus,
@@ -947,7 +948,7 @@ function terminalActivityStatsError(
 ): string | null {
   if (
     conversation.displayMode !== "history"
-    || !isTerminalMessageStreamStatus(stream.streamStatus)
+    || !isTerminalStatus(stream.streamStatus)
     || conversation.activityStats === undefined
     || conversation.activityStats.item_count === liveItemCount
   ) {
@@ -964,9 +965,3 @@ const TERMINAL_TURN_STATUSES = new Set([
   "cancelled",
   "timed_out",
 ]);
-
-function isTerminalMessageStreamStatus(
-  status: MessageStreamState["streamStatus"],
-): boolean {
-  return status === "completed" || status === "interrupted" || status === "failed";
-}
