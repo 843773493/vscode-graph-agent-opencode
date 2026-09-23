@@ -2,10 +2,6 @@ import WorkbenchStatusBar from "./components/WorkbenchStatusBar";
 import PendingQueueBar from "./components/chat/PendingQueueBar";
 import Composer from "./components/composer/Composer";
 import AgentSessionsPanel from "./components/panels/sessionPanels/AgentSessionsPanel";
-import GatewayLogPanel from "./components/panels/bottomPanel/GatewayLogPanel";
-import AutomationPanel from "./components/panels/bottomPanel/AutomationPanel";
-import PortForwardPanel from "./components/panels/bottomPanel/PortForwardPanel";
-import TerminalPanel from "./components/panels/bottomPanel/TerminalPanel";
 import ResourcePanel from "./components/panels/resourceTree/ResourcePanel";
 import ChildThreadPanel from "./components/panels/sessionPanels/ChildThreadPanel";
 import GatewayExtensionResourcePanel from "./components/panels/resourceTree/GatewayExtensionResourcePanel";
@@ -13,6 +9,7 @@ import SessionNameDialog from "./components/overlays/SessionNameDialog";
 import { useWarmConfirm } from "./components/shell/WarmConfirmProvider";
 import Toolbar, { type WorkbenchView } from "./components/shell/Toolbar";
 import ContentViewSlots from "./components/shell/ContentViewSlots";
+import WorkbenchBottomPanel from "./components/shell/WorkbenchBottomPanel";
 import GatewayControlCenter from "./components/workspace/gateway/GatewayControlCenter";
 import WorkspaceEditorHeader from "./components/workspace/WorkspaceEditorHeader";
 import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";
@@ -1080,75 +1077,27 @@ export default function AppShell() {
           ) : null}
         </div>
       </main>
-      {panelVisible ? (
-        <>
-          <button
-            type="button"
-            className="layout-sash layout-sash-gateway-panel"
-            title="拖拽调整底部面板高度，双击还原"
-            aria-label="调整底部面板高度"
-            onPointerDown={startBottomPanelResize}
-            onDoubleClick={resetBottomPanelHeight}
-          />
-          {bottomPanelState.tab === "terminal" ? (
-            <TerminalPanel
-              entries={workspaceTerminalEntries}
-              workspaceId={bottomPanelWorkspaceId}
-              workspaceName={state.workspaceName ?? ""}
-              selectedTerminalId={bottomPanelState.terminalId}
-              height={bottomPanelState.height}
-              loading={extensionResources.loading}
-              onSelectTerminal={(terminalId) => updateBottomPanelState({
-                tab: "terminal",
-                terminalId,
-              })}
-              onRefresh={() => void extensionResources.refresh()}
-              onSwitchToOutput={() => updateBottomPanelState({ tab: "output" })}
-              onSwitchToPorts={() => updateBottomPanelState({ tab: "ports" })}
-              onSwitchToAutomation={() => updateBottomPanelState({ tab: "automation" })}
-              onClose={() => updateBottomPanelState({ visible: false })}
-            />
-          ) : bottomPanelState.tab === "ports" ? (
-            <PortForwardPanel
-              apiPort={resolvedApiPort}
-              workspace={bottomPanelWorkspace}
-              height={bottomPanelState.height}
-              onSwitchToTerminal={() => updateBottomPanelState({ tab: "terminal" })}
-              onSwitchToOutput={() => updateBottomPanelState({ tab: "output" })}
-              onSwitchToAutomation={() => updateBottomPanelState({ tab: "automation" })}
-              onClose={() => updateBottomPanelState({ visible: false })}
-            />
-          ) : bottomPanelState.tab === "automation" ? (
-            <AutomationPanel
-              apiPort={resolvedApiPort}
-              generatorResources={generatorResources}
-              workspaces={state.gatewayWorkspaces}
-              activeWorkspaceId={bottomPanelWorkspaceId}
-              currentSessionId={activeSession?.session_id ?? ""}
-              workspaceName={bottomPanelWorkspace?.name ?? state.workspaceName ?? ""}
-              height={bottomPanelState.height}
-              onStatusChange={setStatus}
-              onOpenConnectionManager={() => handleWorkbenchViewChange("gateway")}
-              onReconnectWorkspace={reconnectGatewayWorkspace}
-              onStartWorkspace={startManagedGatewayWorkspaceBackend}
-              onSwitchToTerminal={() => updateBottomPanelState({ tab: "terminal" })}
-              onSwitchToOutput={() => updateBottomPanelState({ tab: "output" })}
-              onSwitchToPorts={() => updateBottomPanelState({ tab: "ports" })}
-              onClose={() => updateBottomPanelState({ visible: false })}
-            />
-          ) : (
-            <GatewayLogPanel
-              apiPort={resolvedApiPort}
-              workspaceId={bottomPanelWorkspaceId}
-              height={bottomPanelState.height}
-              onOpenTerminal={() => updateBottomPanelState({ tab: "terminal" })}
-              onOpenPorts={() => updateBottomPanelState({ tab: "ports" })}
-              onOpenAutomation={() => updateBottomPanelState({ tab: "automation" })}
-              onClose={() => updateBottomPanelState({ visible: false })}
-            />
-          )}
-        </>
-      ) : null}
+      <WorkbenchBottomPanel
+        visible={panelVisible}
+        state={bottomPanelState}
+        apiPort={resolvedApiPort}
+        workspaceId={bottomPanelWorkspaceId}
+        workspace={bottomPanelWorkspace}
+        workspaceName={state.workspaceName ?? ""}
+        currentSessionId={activeSession?.session_id ?? ""}
+        terminalEntries={workspaceTerminalEntries}
+        terminalLoading={extensionResources.loading}
+        generatorResources={generatorResources}
+        workspaces={state.gatewayWorkspaces}
+        onUpdateState={updateBottomPanelState}
+        onStartResize={startBottomPanelResize}
+        onResetHeight={resetBottomPanelHeight}
+        onRefreshTerminals={() => void extensionResources.refresh()}
+        onOpenConnectionManager={() => handleWorkbenchViewChange("gateway")}
+        onReconnectWorkspace={reconnectGatewayWorkspace}
+        onStartWorkspace={startManagedGatewayWorkspaceBackend}
+        onStatusChange={setStatus}
+      />
         </div>
       </div>
       {!extensionWindowVisible ? (
