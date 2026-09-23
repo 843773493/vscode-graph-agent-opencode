@@ -218,23 +218,3 @@ def emit_background_message(
         raise RuntimeError("agent_id 不能为空，必须显式传入")
 
     raise RuntimeError("BackgroundMessageBus 需要通过应用容器显式注入，不能直接调用 emit_background_message")
-
-
-def emit_interrupt_background_message(
-    content: str,
-    *,
-    source_id: str | None = None,
-    payload: dict | None = None,
-    session_id: str | None = None,
-    agent_id: str | None = None,
-    message_id: str | None = None,
-) -> BackgroundMessageDTO:
-    return emit_background_message(
-        content,
-        kind=BackgroundMessageKind.interrupt,
-        source_id=source_id,
-        payload=payload,
-        session_id=session_id,
-        agent_id=agent_id,
-        message_id=message_id,
-    )
