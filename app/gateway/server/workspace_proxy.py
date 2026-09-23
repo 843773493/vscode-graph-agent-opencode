@@ -18,6 +18,10 @@ from app.gateway.control.user_access import (
 )
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.protocol.proxy import proxy_target_to_proto
+from app.gateway.proxy_upstream import (
+    UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+    send_upstream_request,
+)
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceRouteLease,
@@ -404,7 +408,7 @@ async def _proxy_workspace_request(
             ),
         )
         try:
-            response = await client.send(forwarded, stream=True)
+            response = await send_upstream_request(client, forwarded)
             if retry_availability:
                 # availability 是小型 JSON。提前消费响应体，才能在连接于响应头
                 # 之后断开时仍在 Gateway 内重试，而不是把网络错误暴露给浏览器。
@@ -431,6 +435,18 @@ async def _proxy_workspace_request(
             raise HTTPException(
                 status_code=502,
                 detail=f"无法连接工作区后端 {target_url}: {error}",
+            ) from error
+        except TimeoutError as error:
+            if retry_upstream and attempt < len(retry_delays):
+                continue
+            release_route_reference()
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    "工作区后端在有限等待时间内未返回响应头: "
+                    f"{target_url}, "
+                    f"timeout_seconds={UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS:g}"
+                ),
             ) from error
     if response is None:
         release_route_reference()

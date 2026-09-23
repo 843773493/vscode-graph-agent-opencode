@@ -7,10 +7,11 @@ from typing import cast
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 
+from app.gateway.auth import GatewayAuthContext
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
@@ -385,3 +386,162 @@ async def test_proxy_waits_for_active_workspace_restore_before_returning_503(
         )
 
     assert registry.has_runtime("gw_stream") is True
+
+
+@pytest.mark.asyncio
+async def test_proxy_bounds_hung_upstream_response_headers_and_releases_connection(
+    registry: GatewayWorkspaceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """上游接受连接却不回写响应头时，代理必须有界失败并取消上游请求。
+
+    Gateway 的两个 httpx 客户端都不设读取超时（SSE 需要长期占用连接）。若不单独
+    约束响应头等待，上游挂起会让浏览器请求永久挂起，代理任务与上游连接一起泄漏。
+    """
+
+    application = FastAPI()
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="gw_stream",
+            name="stream",
+            root_path="/tmp/workspace",
+            backend_url="http://127.0.0.1:41001",
+            connection_kind="local",
+        ),
+        runtime=WorkspaceRuntime(
+            service_urls={"workspace_api": "http://127.0.0.1:41001"}
+        ),
+        activate=False,
+    )
+
+    released = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        entered.set()
+        try:
+            # 模拟“已接受 TCP 但永不回写响应头”的上游。
+            await asyncio.Event().wait()
+        finally:
+            released.set()
+        raise AssertionError("上游挂起分支不应返回响应")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    application.state.registry = registry
+    application.state.http_client = client
+    application.state.streaming_http_client = client
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/workspace",
+            "query_string": b"",
+            "headers": [(b"x-boxteam-workspace-id", b"gw_stream")],
+            "app": application,
+        }
+    )
+    request.state.request_id = "req_hung_upstream"
+    monkeypatch.setattr(
+        "app.gateway.proxy_upstream.UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS",
+        0.2,
+    )
+
+    try:
+        with pytest.raises(HTTPException) as captured:
+            # 用测试侧上限把回归固定成确定性失败：若代理失去响应头超时，
+            # 这里会抛 TimeoutError 而不是让整个用例挂死。
+            await asyncio.wait_for(
+                _proxy_workspace_request(
+                    "workspace",
+                    request,
+                    auth=None,
+                    user_access=None,
+                    include_credentials=False,
+                ),
+                timeout=2,
+            )
+    finally:
+        await client.aclose()
+
+    assert captured.value.status_code == 504
+    assert "有限等待时间内未返回响应头" in str(captured.value.detail)
+    assert entered.is_set() is True
+    # 取消必须传导到上游请求，否则挂起的上游连接会随代理任务一起泄漏。
+    await asyncio.wait_for(released.wait(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
+    registry: GatewayWorkspaceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """辅助服务代理与工作区 API 代理共用同一响应头上限，不能各自漏掉。"""
+
+    from app.gateway.auxiliary_proxy import proxy_auxiliary_http
+
+    application = FastAPI()
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="gw_stream",
+            name="stream",
+            root_path="/tmp/workspace",
+            backend_url="http://127.0.0.1:41001",
+            connection_kind="local",
+        ),
+        runtime=WorkspaceRuntime(
+            service_urls={
+                "workspace_api": "http://127.0.0.1:41001",
+                "terminal_manager": "http://127.0.0.1:41002",
+            }
+        ),
+        activate=False,
+    )
+
+    released = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            released.set()
+        raise AssertionError("上游挂起分支不应返回响应")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    application.state.registry = registry
+    application.state.http_client = client
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/gateway/workspaces/gw_stream/terminal-manager/api/terminals",
+            "query_string": b"",
+            "headers": [],
+            "app": application,
+        }
+    )
+    # 辅助代理会读取请求体；这里显式给出空体，避免依赖 ASGI receive 通道。
+    request._body = b""
+    request.state.request_id = "req_hung_auxiliary"
+    monkeypatch.setattr(
+        "app.gateway.proxy_upstream.UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS",
+        0.2,
+    )
+
+    try:
+        with pytest.raises(HTTPException) as captured:
+            await asyncio.wait_for(
+                proxy_auxiliary_http(
+                    workspace_id="gw_stream",
+                    service_path="terminal-manager",
+                    path="api/terminals",
+                    request=request,
+                    auth=GatewayAuthContext(kind="local"),
+                ),
+                timeout=2,
+            )
+    finally:
+        await client.aclose()
+
+    assert captured.value.status_code == 504
+    assert "辅助服务在有限等待时间内未返回响应头" in str(captured.value.detail)
+    await asyncio.wait_for(released.wait(), timeout=1)

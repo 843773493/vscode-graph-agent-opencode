@@ -21,6 +21,10 @@ from app.gateway.auth import (
 )
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.protocol.proxy import proxy_target_to_proto
+from app.gateway.proxy_upstream import (
+    UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+    send_upstream_request,
+)
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.service_types import GatewayServiceName
 
@@ -176,7 +180,7 @@ async def proxy_auxiliary_http(
             content=await request.body(),
             headers=_proxy_request_headers(request, target),
         )
-        response = await client.send(forwarded, stream=True)
+        response = await send_upstream_request(client, forwarded)
     except httpx.RequestError as error:
         release_route_reference()
         raise HTTPException(
@@ -184,6 +188,16 @@ async def proxy_auxiliary_http(
             detail=(
                 f"无法连接工作区辅助服务: workspace_id={workspace_id}, "
                 f"service={service}: {error}"
+            ),
+        ) from error
+    except TimeoutError as error:
+        release_route_reference()
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "工作区辅助服务在有限等待时间内未返回响应头: "
+                f"workspace_id={workspace_id}, service={service}, "
+                f"timeout_seconds={UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS:g}"
             ),
         ) from error
     except BaseException:
