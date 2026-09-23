@@ -182,6 +182,49 @@ describe("工作区端口转发面板", () => {
     renderer.unmount();
   });
 
+  test("筛选端口按端口号精确匹配，不误命中包含该子串的端口", async () => {
+    // 用户按 "80" 筛选时，8013 / 8080 / 41080 都包含 "80"，但都不是端口 80，
+    // 不得出现在结果里；只有远端端口恰好是 80 的条目应该留下。
+    const api: WorkspacePortForwardApi = {
+      list: async () => list([
+        forward({ forward_id: "pf_80", label: "精确命中", remote_port: 80, local_port: 41080 }),
+        forward({ forward_id: "pf_8013", label: "终端服务", remote_port: 8013, local_port: 41002 }),
+        forward({ forward_id: "pf_8080", label: "预览服务", remote_port: 8080, local_port: 41003 }),
+        forward({ forward_id: "pf_5173", label: "前端预览", remote_port: 5173, local_port: 41001 }),
+      ]),
+      create: async () => list([]),
+      remove: async () => list([]),
+      reconnect: async () => list([]),
+      changeLocalPort: async () => list([]),
+    };
+    const renderer = renderPanel(api);
+    await flush();
+
+    act(() => renderer.root.findByProps({ role: "table" }).props.onContextMenu({ preventDefault() {} }));
+    const filterMenuItem = renderer.root.findAllByProps({ role: "menuitem" }).find(
+      (item) => item.children.includes("筛选端口"),
+    );
+    act(() => filterMenuItem!.props.onClick());
+    const filter = renderer.root.findByProps({ placeholder: "筛选端口..." });
+
+    act(() => filter.props.onChange({ target: { value: "80" } }));
+    expect(renderer.root.findAllByType("article")).toHaveLength(1);
+    expect(renderedText(renderer)).toContain("精确命中");
+    expect(renderedText(renderer)).not.toContain("终端服务");
+    expect(renderedText(renderer)).not.toContain("预览服务");
+
+    // 本地端口按端口语义同样精确匹配。
+    act(() => filter.props.onChange({ target: { value: "41003" } }));
+    expect(renderer.root.findAllByType("article")).toHaveLength(1);
+    expect(renderedText(renderer)).toContain("预览服务");
+
+    // 非数字输入仍按标签/协议等文本字段模糊过滤。
+    act(() => filter.props.onChange({ target: { value: "终端" } }));
+    expect(renderer.root.findAllByType("article")).toHaveLength(1);
+    expect(renderedText(renderer)).toContain("终端服务");
+    renderer.unmount();
+  });
+
   test("通过更多操作更改本地端口并替换完整列表", async () => {
     const payloads: number[] = [];
     const api: WorkspacePortForwardApi = {

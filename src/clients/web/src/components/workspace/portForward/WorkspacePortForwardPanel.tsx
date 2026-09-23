@@ -409,14 +409,14 @@ export default function WorkspacePortForwardPanel({
   }
 
   const normalizedFilter = filterText.trim().toLocaleLowerCase();
-  const filteredForwards = forwards?.items.filter((forward) => [
-    forward.remote_port,
-    forward.local_port,
-    forward.label,
-    forward.protocol,
-    forward.local_url,
-    forward.status,
-  ].some((value) => String(value ?? "").toLocaleLowerCase().includes(normalizedFilter))) ?? [];
+  // 端口是数字而不是字符串：按 "80" 筛选不得命中 8013 / 41080。只有能构成端口的纯十进制
+  // 输入才走端口精确匹配（远端或本地端口相等），其余输入退回对标签、协议、转发地址与状态的
+  // 子串过滤，保留按名称/协议的模糊查找能力。
+  const portFilter = DECIMAL_PORT_PATTERN.test(normalizedFilter) ? Number(normalizedFilter) : null;
+  const filteredForwards = forwards?.items.filter((forward) => portFilter === null
+    ? [forward.label, forward.protocol, forward.local_url, forward.status]
+        .some((value) => String(value ?? "").toLocaleLowerCase().includes(normalizedFilter))
+    : forward.remote_port === portFilter || forward.local_port === portFilter) ?? [];
   const createDisabled = submitting || !isValidPortInput(remotePort) || (localPort !== "" && !isValidPortInput(localPort));
   // 输入不合法时按钮会被禁用；必须同时给出原因，避免「点了没反应」的静默失败。
   const remotePortInvalid = remotePort !== "" && !isValidPortInput(remotePort);
