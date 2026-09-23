@@ -21,9 +21,7 @@ import WorkspaceRuntimePreviewArea, {
   type WorkspaceRuntimePreviewTab,
 } from "./components/workspace/WorkspaceRuntimePreviewArea";
 import { WorkspaceFileReferenceProvider } from "./components/workspace/WorkspaceFileReferenceContext";
-import WorkspaceAuxiliaryPanel, {
-  type WorkspaceAuxiliaryTab,
-} from "./components/workspace/WorkspaceAuxiliaryPanel";
+import WorkspaceAuxiliaryPanel from "./components/workspace/WorkspaceAuxiliaryPanel";
 import WorkspaceAttachmentPreview from "./components/workspace/preview/WorkspaceAttachmentPreview";
 import {
   useCallback,
@@ -47,23 +45,15 @@ import { useGatewayExtensionResources } from "./hooks/gatewayExtensions/useGatew
 import { useGatewayExtensionWindow } from "./hooks/gatewayExtensions/useGatewayExtensionWindow";
 import { useWorkbenchPanelRouting } from "./hooks/panel/useWorkbenchPanelRouting";
 import { useSessionCatalogActions } from "./hooks/shell/useSessionCatalogActions";
+import { useWorkbenchLayoutPreferences } from "./hooks/shell/useWorkbenchLayoutPreferences";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import { createSessionConnection } from "./api/gateway/sessionConnections";
 import {
-  DEFAULT_GATEWAY_PANEL_HEIGHT,
   DEFAULT_MAIN_AREA_RATIOS,
-  clampGatewayPanelHeight,
-  defaultAuxiliaryVisible,
-  resolveMainAreaRatios,
 } from "./layout/workbenchLayout";
 import { sessionScopeKey } from "./state/session/sessionScope";
 import { shouldLoadDefaultViewChangesHint } from "./state/defaultViewChanges";
 import { getConversationsForSession } from "./state/conversations";
-import {
-  resolveWorkspaceBottomPanelState,
-  toWorkspaceBottomPanelSettings,
-  type WorkspaceBottomPanelState,
-} from "./state/workspaceBottomPanel";
 import { resolveAgentSessionsPreferences } from "./state/uiSettings/preferences";
 import {
   resolveExtensionWindowRequest,
@@ -73,16 +63,7 @@ import type {
   AttachmentRef,
   SessionChangesSummary,
   SessionFileChange,
-  WebUiSettings,
-  WebUiSettingsUpdate,
 } from "./types/backend";
-
-const DEFAULT_AUXILIARY_TAB_ORDER: WorkspaceAuxiliaryTab[] = [
-  "files",
-  "changes",
-  "debug",
-  "resources",
-];
 
 export default function AppShell() {
   const confirm = useWarmConfirm();
@@ -145,39 +126,9 @@ export default function AppShell() {
     ),
     [loadTurnDetails],
   );
-  const [workbenchView, setWorkbenchView] = useState<WorkbenchView>(
-    () => state.uiSettings.layout.workbench_view ?? "sessions",
-  );
-  const [auxiliaryTab, setAuxiliaryTab] = useState<WorkspaceAuxiliaryTab>(
-    () => extensionWindowRequested
-      ? extensionWindowRequest?.kind === "debug" ? "debug" : "resources"
-      : state.uiSettings.layout.auxiliary_tab ?? "files",
-  );
-  const [auxiliaryTabOrder, setAuxiliaryTabOrder] = useState<WorkspaceAuxiliaryTab[]>(
-    () => state.uiSettings.layout.auxiliary_tab_order
-      ? [...state.uiSettings.layout.auxiliary_tab_order]
-      : [...DEFAULT_AUXILIARY_TAB_ORDER],
-  );
-  const [auxiliaryVisible, setAuxiliaryVisible] = useState(
-    () => extensionWindowRequested
-      ? true
-      : state.uiSettings.layout.auxiliary_visible ?? defaultAuxiliaryVisible(),
-  );
-  const [chatVisible, setChatVisible] = useState(
-    () => extensionWindowRequested
-      ? false
-      : state.uiSettings.layout.chat_visible ?? true,
-  );
-  const [extensionWindowFallback, setExtensionWindowFallback] = useState(false);
-  const [workspaceBottomPanelStates, setWorkspaceBottomPanelStates] = useState<
-    Record<string, WorkspaceBottomPanelState>
-  >({});
   const [fileTreeSearchOpen, setFileTreeSearchOpen] = useState(false);
   const [fileTreeCollapseVersion, setFileTreeCollapseVersion] = useState(0);
   const [markdownSourceVisible, setMarkdownSourceVisible] = useState(false);
-  const [mainAreaRatios, setMainAreaRatios] = useState(() =>
-    resolveMainAreaRatios(state.uiSettings.layout.main_area_ratios),
-  );
   const [defaultViewChangesHint, setDefaultViewChangesHint] = useState<{
     sessionId: string;
     summary: SessionChangesSummary;
@@ -213,30 +164,34 @@ export default function AppShell() {
     ) ?? null,
     [bottomPanelWorkspaceId, state.gatewayWorkspaces],
   );
-  const bottomPanelState = useMemo(() => {
-    const persisted = bottomPanelWorkspaceId
-      ? state.uiSettings.layout.bottom_panel_by_workspace?.[bottomPanelWorkspaceId]
-      : null;
-    return workspaceBottomPanelStates[bottomPanelWorkspaceId ?? ""] ??
-      resolveWorkspaceBottomPanelState(persisted, {
-        visible: extensionWindowRequested
-          ? false
-          : state.uiSettings.layout.panel_visible ?? false,
-        height: clampGatewayPanelHeight(
-          state.uiSettings.layout.panel_height ?? DEFAULT_GATEWAY_PANEL_HEIGHT,
-        ),
-        tab: "output",
-        terminalId: null,
-      });
-  }, [
+  const {
+    workbenchView,
+    handleWorkbenchViewChange,
+    auxiliaryTab,
+    setAuxiliaryTab,
+    auxiliaryTabOrder,
+    setAuxiliaryTabOrder,
+    auxiliaryVisible,
+    setAuxiliaryVisible,
+    chatVisible,
+    setChatVisible,
+    mainAreaRatios,
+    setMainAreaRatios,
+    bottomPanelState,
+    panelVisible,
+    setWorkspaceBottomPanelStates,
+    extensionWindowFallback,
+    setExtensionWindowFallback,
+    persistUiSettings,
+    persistLayoutSettings,
+    updateBottomPanelState,
+  } = useWorkbenchLayoutPreferences({
+    uiSettings: state.uiSettings,
+    extensionWindowRequest,
     bottomPanelWorkspaceId,
-    extensionWindowRequested,
-    state.uiSettings.layout.bottom_panel_by_workspace,
-    state.uiSettings.layout.panel_height,
-    state.uiSettings.layout.panel_visible,
-    workspaceBottomPanelStates,
-  ]);
-  const panelVisible = !extensionWindowRequested && bottomPanelState.visible;
+    updateUiSettings,
+    setStatus,
+  });
   const activeSessionCacheKey =
     activeSession && activeSessionWorkspaceId
       ? sessionScopeKey(activeSessionWorkspaceId, activeSession.session_id)
@@ -259,29 +214,6 @@ export default function AppShell() {
       activeSessionWorkspaceId
     ] ?? [""];
   }, [activeSessionWorkspaceId, state.uiSettings.workspace_file_tree]);
-
-  useEffect(() => {
-    const layout = state.uiSettings.layout;
-    if (extensionWindowRequested) {
-      return;
-    }
-    if (layout.workbench_view) {
-      setWorkbenchView(layout.workbench_view);
-    }
-    if (typeof layout.auxiliary_visible === "boolean") {
-      setAuxiliaryVisible(layout.auxiliary_visible);
-    }
-    if (typeof layout.chat_visible === "boolean") {
-      setChatVisible(layout.chat_visible);
-    }
-    if (layout.auxiliary_tab) {
-      setAuxiliaryTab(layout.auxiliary_tab);
-    }
-    if (layout.auxiliary_tab_order) {
-      setAuxiliaryTabOrder([...layout.auxiliary_tab_order]);
-    }
-    setMainAreaRatios(resolveMainAreaRatios(layout.main_area_ratios));
-  }, [extensionWindowRequest?.kind, extensionWindowRequested, state.uiSettings]);
 
   const conversations = useMemo(
     () => activeSession
@@ -338,47 +270,6 @@ export default function AppShell() {
     ),
     [state.sessions],
   );
-  const persistUiSettings = useCallback(
-    (
-      input: WebUiSettingsUpdate
-        | ((current: WebUiSettings) => WebUiSettingsUpdate),
-    ) => {
-      void updateUiSettings(input).catch((error: unknown) => {
-        setStatus(`保存页面设置失败: ${errorMessage(error)}`);
-      });
-    },
-    [setStatus, updateUiSettings],
-  );
-  const persistLayoutSettings = useCallback(
-    (layout: WebUiSettingsUpdate["layout"]) => {
-      persistUiSettings({ layout });
-    },
-    [persistUiSettings],
-  );
-  const updateBottomPanelState = useCallback(
-    (patch: Partial<WorkspaceBottomPanelState>) => {
-      if (!bottomPanelWorkspaceId) {
-        return;
-      }
-      const nextState: WorkspaceBottomPanelState = {
-        ...bottomPanelState,
-        ...patch,
-      };
-      setWorkspaceBottomPanelStates((previous) => ({
-        ...previous,
-        [bottomPanelWorkspaceId]: nextState,
-      }));
-      persistUiSettings((current) => ({
-        layout: {
-          bottom_panel_by_workspace: {
-            ...(current.layout.bottom_panel_by_workspace ?? {}),
-            [bottomPanelWorkspaceId]: toWorkspaceBottomPanelSettings(nextState),
-          },
-        },
-      }));
-    },
-    [bottomPanelState, bottomPanelWorkspaceId, persistUiSettings],
-  );
   const {
     handleToggleAuxiliaryPanel,
     handleToggleChatPanel,
@@ -403,13 +294,6 @@ export default function AppShell() {
     setStatus,
   });
   const agentSessionsVisible = state.agentSessionsPanelOpen;
-  const handleWorkbenchViewChange = useCallback(
-    (view: WorkbenchView) => {
-      setWorkbenchView(view);
-      persistLayoutSettings({ workbench_view: view });
-    },
-    [persistLayoutSettings],
-  );
   const workspacePreview = useWorkspacePreviewTabs({
     apiPort: resolvedApiPort,
     workspaceId: activeSessionWorkspaceId,
