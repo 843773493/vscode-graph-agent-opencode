@@ -148,6 +148,10 @@ export function useWorkspaceSessionActivity({
           controller.signal,
           sessionStreamReconnectDelay(reconnectAttempt),
         );
+        // waitForReconnect 在中止时会立即兑现，若这里不重新判定就递归重连，
+        // 卸载/切换工作区后仍会发出新的 listSessionActivity 与 SSE 请求，
+        // 形成卸载后的幽灵订阅。
+        if (controller.signal.aborted) return;
         reconnectAttempt += 1;
         void connect();
       }

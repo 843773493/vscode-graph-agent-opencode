@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as sessionActivityApi from "../../api/session/sessionActivity";
@@ -24,6 +24,27 @@ function installWindow(): void {
       clearTimeout: (id: number) => globalThis.clearTimeout(id),
     },
   });
+  installDocument();
+}
+
+/**
+ * 假定时器版 window：保留真实退避延迟，让测试用 jest.advanceTimersByTime
+ * 精确推进到「退避等待中」这一时刻，不必真实等待 1 秒以上。
+ */
+function installControlledWindow(): void {
+  jest.useFakeTimers();
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      setTimeout: (handler: () => void, delayMs?: number) =>
+        globalThis.setTimeout(handler, delayMs),
+      clearTimeout: (id: number) => globalThis.clearTimeout(id),
+    },
+  });
+  installDocument();
+}
+
+function installDocument(): void {
   Object.defineProperty(globalThis, "document", {
     configurable: true,
     value: {
@@ -73,7 +94,17 @@ async function flush(): Promise<void> {
   });
 }
 
+/** 只排空微任务，不推进任何定时器。 */
+async function drainMicrotasks(): Promise<void> {
+  await act(async () => {
+    for (let round = 0; round < 50; round += 1) {
+      await Promise.resolve();
+    }
+  });
+}
+
 afterEach(() => {
+  jest.useRealTimers();
   if (renderer) {
     act(() => renderer!.unmount());
     renderer = undefined;
@@ -138,5 +169,31 @@ describe("useWorkspaceSessionActivity 重连与卸载", () => {
     streamSpy.mockRestore();
     refreshSpy.mockRestore();
   });
-});
 
+  test("退避等待期间卸载时不再发起新的会话活动订阅", async () => {
+    installControlledWindow();
+    const listSpy = spyOn(sessionActivityApi, "listSessionActivity")
+      .mockResolvedValue({ items: [], next_cursor: 0 } as never);
+    const streamSpy = spyOn(sessionActivityApi, "streamSessionActivity")
+      .mockRejectedValue(new Error("断开"));
+    await mountActivity(appState(), () => undefined);
+
+    // 首轮 list + stream 只依赖微任务；排空后即停在 waitForReconnect 退避等待中。
+    await drainMicrotasks();
+    expect(streamSpy.mock.calls.length).toBe(1);
+    const listsAtUnmount = listSpy.mock.calls.length;
+    const streamsAtUnmount = streamSpy.mock.calls.length;
+    act(() => {
+      renderer!.unmount();
+      renderer = undefined;
+    });
+    // 卸载会 abort；waitForReconnect 的 abort 监听同步兑现，若不复查 abort 就
+    // 递归重连，这里会在没有推进任何定时器的情况下再发出 list + stream。
+    await drainMicrotasks();
+
+    expect(listSpy.mock.calls.length).toBe(listsAtUnmount);
+    expect(streamSpy.mock.calls.length).toBe(streamsAtUnmount);
+    listSpy.mockRestore();
+    streamSpy.mockRestore();
+  });
+});
