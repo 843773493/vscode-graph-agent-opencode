@@ -5,6 +5,20 @@ export const DEFAULT_BACKEND_HOST = "127.0.0.1";
 export const DEFAULT_BACKEND_PORT = 8014;
 export const DEFAULT_API_REQUEST_TIMEOUT_MS = 15_000;
 
+/**
+ * 生命周期类接口的显式超时：Gateway 启动/重启本地工作区后端时会等到后端通过
+ * 健康检查（app/gateway/runtime/process.py 的 GATEWAY_PROCESS_READY_TIMEOUT_SECONDS
+ * 为 120s），远端 Gateway 委托重启的上游超时为 40s。这些接口天然可能阻塞数十秒，
+ * 必须显式放宽，不能被默认超时误杀成「请求超时」。
+ */
+export const LIFECYCLE_REQUEST_TIMEOUT_MS = 150_000;
+
+/**
+ * 工作区文件批量写操作（创建/粘贴/复制）的超时：后端在同一请求内同步落盘，
+ * 大批量目录复制可能超过默认 15s，但不涉及进程生命周期，取折中上限。
+ */
+export const BULK_FILE_OPERATION_TIMEOUT_MS = 60_000;
+
 interface GatewayResponseInit extends RequestInit {
   /**
    * 自行消费响应体的请求（SSE 实时流、二进制下载、multipart 上传）不建立 Gateway
@@ -343,8 +357,18 @@ async function ensureGatewayUserSession(
 export function getGatewayToken(port: number): Promise<string> {
   const existing = gatewayTokenByPort.get(port);
   if (existing) return existing;
-  const pending = fetch(`${getApiBaseUrl(port)}/api/gateway/auth/local-credential`, {
+  const path = "/api/gateway/auth/local-credential";
+  // 本地凭据是工作区业务请求的前置屏障：它一旦挂起，所有等待屏障的请求都会永久
+  // 卡住而没有任何可见反馈。因此这里必须与其它 JSON 请求使用同一超时上限，
+  // 超时后按统一文案抛错并作废缓存，让调用方能在重试时重新获取。
+  const abortState = createRequestAbortState(
+    undefined,
+    DEFAULT_API_REQUEST_TIMEOUT_MS,
+    `请求超时: ${path}`,
+  );
+  const pending = fetch(`${getApiBaseUrl(port)}${path}`, {
     credentials: "include",
+    signal: abortState.signal,
   })
     .then(async (response) => {
       if (!response.ok) {
@@ -357,8 +381,10 @@ export function getGatewayToken(port: number): Promise<string> {
     })
     .catch((error) => {
       gatewayTokenByPort.delete(port);
+      if (abortState.didTimeout()) throw new Error(`请求超时: ${path}`);
       throw error;
-    });
+    })
+    .finally(() => abortState.cleanup());
   gatewayTokenByPort.set(port, pending);
   return pending;
 }
@@ -469,7 +495,7 @@ export async function requestJson<T>(
   init?: RequestJsonInit,
 ): Promise<T> {
   const {
-    timeoutMs,
+    timeoutMs = DEFAULT_API_REQUEST_TIMEOUT_MS,
     parseInWorkerAboveBytes = null,
     headers,
     ...fetchInit

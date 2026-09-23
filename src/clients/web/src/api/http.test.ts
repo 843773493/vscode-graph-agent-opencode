@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { listSessionCatalogChildren } from "./session/sessionCatalog";
-import { getApiBaseUrl, HttpRequestError, normalizePageResult, requestJson } from "./http";
+import {
+  DEFAULT_API_REQUEST_TIMEOUT_MS,
+  getApiBaseUrl,
+  getGatewayToken,
+  HttpRequestError,
+  invalidateGatewayToken,
+  normalizePageResult,
+  requestJson,
+} from "./http";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -728,5 +736,80 @@ describe("Gateway 用户会话恢复循环边界", () => {
     expect((error as Error).name).toBe("AbortError");
     // abort 后恢复循环不再发出第二次目标请求。
     expect(targetCalls).toBe(1);
+  });
+});
+
+describe("默认请求超时", () => {
+  /** 捕获本次请求真实注册的超时毫秒数；把定时器压成 0 避免用例真的等 15 秒。 */
+  async function captureRegisteredTimeoutMs(
+    run: () => Promise<unknown>,
+  ): Promise<number> {
+    const originalSetTimeout = globalThis.setTimeout;
+    let captured = -1;
+    globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...rest: unknown[]) => {
+      if (captured < 0 && typeof timeout === "number" && timeout > 0) {
+        captured = timeout;
+      }
+      return (originalSetTimeout as (...a: unknown[]) => unknown)(handler, 0, ...rest);
+    }) as typeof globalThis.setTimeout;
+    try {
+      await run().catch(() => undefined);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+    return captured;
+  }
+
+  function installHangingFetch(port: number): void {
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = resolveTestUrl(args[0], port).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "default-timeout-token" } });
+        }
+        // 永不 resolve：只有注册了超时才能收口。
+        return await new Promise<Response>(() => undefined);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+  }
+
+  test("未显式指定 timeoutMs 的 JSON 请求也会注册默认超时", async () => {
+    const port = 49_370;
+    installWindow(port);
+    installHangingFetch(port);
+
+    const captured = await captureRegisteredTimeoutMs(() =>
+      requestJson(port, "/api/v1/workspace", { skipGatewayUserSession: true }),
+    );
+
+    expect(captured).toBe(DEFAULT_API_REQUEST_TIMEOUT_MS);
+  });
+
+  test("本地凭据获取自身也会注册默认超时并作废缓存", async () => {
+    const port = 49_371;
+    installWindow(port);
+    installHangingFetch(port);
+
+    const captured = await captureRegisteredTimeoutMs(() => getGatewayToken(port));
+
+    expect(captured).toBe(DEFAULT_API_REQUEST_TIMEOUT_MS);
+    // 超时后缓存必须作废，下一次调用能重新获取而不是永久复用已失败的 Promise。
+    invalidateGatewayToken(port);
+  });
+
+  test("显式指定的 timeoutMs 仍然优先于默认值", async () => {
+    const port = 49_372;
+    installWindow(port);
+    installHangingFetch(port);
+
+    const captured = await captureRegisteredTimeoutMs(() =>
+      requestJson(port, "/api/v1/workspace", {
+        skipGatewayUserSession: true,
+        timeoutMs: 60_000,
+      }),
+    );
+
+    expect(captured).toBe(60_000);
   });
 });

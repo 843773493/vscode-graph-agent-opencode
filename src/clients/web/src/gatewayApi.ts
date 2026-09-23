@@ -46,6 +46,7 @@ import { normalizeWebUiSettings } from "./state/uiSettings/preferences";
 import {
   DEFAULT_API_REQUEST_TIMEOUT_MS,
   HttpRequestError,
+  LIFECYCLE_REQUEST_TIMEOUT_MS,
   normalizePageResult,
   requestJson,
   unwrapApiData,
@@ -93,7 +94,7 @@ export async function restartDevelopmentRuntime(
     await requestJson<APIResponse<DevelopmentRuntimeRestartResult>>(
       port,
       "/api/gateway/runtime/restart-development",
-      { method: "POST" },
+      { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
     ),
   );
 }
@@ -459,7 +460,7 @@ export async function activateGatewayWorkspace(
     await requestJson<APIResponse<ActivateGatewayWorkspaceResultDTO>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/activate`,
-      { method: "POST", signal },
+      { method: "POST", signal, timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
     ),
   );
   return result.active_workspace_id;
@@ -475,6 +476,7 @@ export async function addManagedGatewayWorkspace(
       "/api/gateway/managed-workspaces",
       {
         method: "POST",
+        timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
           ...payload,
           create_directory: payload.create_directory ?? false,
@@ -494,6 +496,7 @@ export async function addSshGatewayWorkspace(
       "/api/gateway/remote-gateways",
       {
         method: "POST",
+        timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS,
         body: JSON.stringify(payload),
       },
     ),
@@ -546,7 +549,7 @@ export async function reconnectGatewayWorkspace(
     await requestJson<APIResponse<GatewayWorkspaceList>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/reconnect`,
-      { method: "POST" },
+      { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
     ),
   );
 }
@@ -559,7 +562,7 @@ export async function safeRestartManagedGatewayWorkspaceBackend(
     await requestJson<APIResponse<GatewayRuntimeRestartResult>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/restart-safe`,
-      { method: "POST" },
+      { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
     ),
   );
 }
@@ -572,7 +575,7 @@ export async function startManagedGatewayWorkspaceBackend(
     await requestJson<APIResponse<GatewayRuntimeStateResult>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/start`,
-      { method: "POST" },
+      { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
     ),
   );
 }
@@ -585,7 +588,7 @@ export async function stopManagedGatewayWorkspaceBackend(
     await requestJson<APIResponse<GatewayRuntimeStateResult>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/stop`,
-      { method: "POST" },
+      { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
     ),
   );
 }
@@ -598,7 +601,7 @@ export async function forceRestartManagedGatewayWorkspaceBackend(
     await requestJson<APIResponse<GatewayRuntimeRestartResult>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/restart-force`,
-      { method: "POST" },
+      { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
     ),
   );
 }
@@ -611,7 +614,7 @@ export async function probeExternalGatewayWorkspace(
     await requestJson<APIResponse<GatewayWorkspaceList>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/probe`,
-      { method: "POST" },
+      { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
     ),
   );
 }

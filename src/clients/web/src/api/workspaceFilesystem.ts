@@ -11,6 +11,7 @@ import type {
   WorkspaceFileUpdateRequest,
 } from "../types/backend";
 import {
+  BULK_FILE_OPERATION_TIMEOUT_MS,
   DEFAULT_API_REQUEST_TIMEOUT_MS,
   getApiBaseUrl,
   getGatewayToken,
@@ -138,6 +139,7 @@ export async function pasteWorkspaceFileEntries(
     {
       method: "POST",
       headers: workspaceHeader(workspaceId),
+      timeoutMs: BULK_FILE_OPERATION_TIMEOUT_MS,
       body: JSON.stringify(payload),
     },
   ));
@@ -166,6 +168,7 @@ export async function copyWorkspaceFileEntry(
     {
       method: "POST",
       headers: workspaceHeader(workspaceId),
+      timeoutMs: BULK_FILE_OPERATION_TIMEOUT_MS,
       body: JSON.stringify({
         source_path: source.path,
         source_scope: source.scope,
