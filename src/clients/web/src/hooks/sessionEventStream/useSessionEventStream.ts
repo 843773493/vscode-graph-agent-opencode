@@ -16,6 +16,7 @@ import {
   ACTIVE_JOB_STALE_PROBE_INTERVAL_MS,
   ACTIVE_JOB_TRACE_STALE_MS,
   SESSION_STREAM_IDLE_TIMEOUT_MS,
+  SESSION_STREAM_MAX_RECONNECT_ATTEMPTS,
   WORKSPACE_SESSION_FALLBACK_REFRESH_MS,
   sessionStreamReconnectDelay,
 } from "./sessionEventStreamPolicy";
@@ -217,13 +218,24 @@ export function useSessionEventStream({
           }
         }
 
-        if (!controller.signal.aborted) {
-          await waitForReconnect(
-            controller.signal,
-            sessionStreamReconnectDelay(reconnectAttempt),
-          );
-          reconnectAttempt += 1;
+        if (controller.signal.aborted) {
+          return;
         }
+        // 有界重连：连续到达上限后停止重连并给出可见终态说明，不再无限刷屏。
+        // onActivity 会在连接真正建立（收到任意字节，含心跳注释）时把计数归零，
+        // 因此这里限制的是「连续若干次都没能建立连接」。
+        if (reconnectAttempt >= SESSION_STREAM_MAX_RECONNECT_ATTEMPTS) {
+          setState((prev) => ({
+            ...prev,
+            status: `事件流连续 ${SESSION_STREAM_MAX_RECONNECT_ATTEMPTS} 次重连失败，已停止自动重连；请手动刷新或切换会话后重试`,
+          }));
+          return;
+        }
+        await waitForReconnect(
+          controller.signal,
+          sessionStreamReconnectDelay(reconnectAttempt),
+        );
+        reconnectAttempt += 1;
       }
     };
 
