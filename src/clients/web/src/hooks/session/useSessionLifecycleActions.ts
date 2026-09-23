@@ -24,6 +24,7 @@ import {
 import { replaceSessionMetadata } from "../../state/session/sessions";
 import { appendFrontendEvent } from "../../state/traceEvents";
 import { resetAgentStateFields } from "../runtime/useAgentStateSnapshot";
+import { resetSessionScopedFields } from "./sessionScopedState";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { errorMessage } from "../../utils/errorMessage";
@@ -329,15 +330,7 @@ export function useSessionLifecycleActions({
           next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
           next.currentSession = session;
           writeLastSessionId(session.session_id);
-          next.traceEvents = [];
-          next.llmRequestLogs = [];
-          next.llmRequestLogsLoadedAt = null;
-          next.llmRequestLogsLoading = false;
-          next.llmRequestLogsError = null;
-          next.sessionResources = [];
-          next.sessionResourcesLoadedAt = null;
-          next.sessionResourcesLoading = false;
-          next.sessionResourcesError = null;
+          Object.assign(next, resetSessionScopedFields(next));
           next.status = "已创建会话";
           next.contentView = "default";
           Object.assign(next, resetAgentStateFields(next));
@@ -413,15 +406,7 @@ export function useSessionLifecycleActions({
           next.sessionGatewayWorkspaceById.set(cacheKey, workspaceId);
           next.currentSession = childSession;
           next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-          next.traceEvents = [];
-          next.llmRequestLogs = [];
-          next.llmRequestLogsLoadedAt = null;
-          next.llmRequestLogsLoading = false;
-          next.llmRequestLogsError = null;
-          next.sessionResources = [];
-          next.sessionResourcesLoadedAt = null;
-          next.sessionResourcesLoading = false;
-          next.sessionResourcesError = null;
+          Object.assign(next, resetSessionScopedFields(next));
           next.pendingConversations.delete(cacheKey);
           next.contentView = "default";
           next.status = `已从上下文创建子会话: ${childSession.title}`;
@@ -736,15 +721,7 @@ export function useSessionLifecycleActions({
             // 为新选中的会话触发一次历史加载。
             next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
           }
-          next.traceEvents = [];
-          next.llmRequestLogs = [];
-          next.llmRequestLogsLoadedAt = null;
-          next.llmRequestLogsLoading = false;
-          next.llmRequestLogsError = null;
-          next.sessionResources = [];
-          next.sessionResourcesLoadedAt = null;
-          next.sessionResourcesLoading = false;
-          next.sessionResourcesError = null;
+          Object.assign(next, resetSessionScopedFields(next));
           next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
           Object.assign(next, resetAgentStateFields(next));
           if (nextSession) {

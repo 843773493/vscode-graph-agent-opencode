@@ -32,6 +32,7 @@ import { writeLastSessionId } from "../../state/storage";
 import { errorMessage } from "../../utils/errorMessage";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { sessionScopeKey } from "../../state/session/sessionScope";
+import { resetSessionScopedFields } from "./sessionScopedState";
 import { usePendingRequestActions } from "../runtime/usePendingRequestActions";
 
 export function useSessionRunActions({
@@ -116,15 +117,7 @@ export function useSessionRunActions({
           next.currentSession = createdSession;
           next.currentSessionWorkspaceId = resolvedWorkspaceId ?? null;
           writeLastSessionId(createdSession.session_id);
-          next.traceEvents = [];
-          next.llmRequestLogs = [];
-          next.llmRequestLogsLoadedAt = null;
-          next.llmRequestLogsLoading = false;
-          next.llmRequestLogsError = null;
-          next.sessionResources = [];
-          next.sessionResourcesLoadedAt = null;
-          next.sessionResourcesLoading = false;
-          next.sessionResourcesError = null;
+          Object.assign(next, resetSessionScopedFields(next));
           next.contentView = "default";
           appendFrontendEvent(
             next.eventQueuesBySession,
