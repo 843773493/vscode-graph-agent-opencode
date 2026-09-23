@@ -6,7 +6,7 @@ import {
   buildRequestLogKeyFlow,
   buildRequestReplayDisplay,
   normalizeRequestLogJsonForDisplay,
-} from "../requestLogDisplay/index";
+} from "./index";
 
 function requestLog(
   overrides: Partial<LLMRequestLogRecord>,

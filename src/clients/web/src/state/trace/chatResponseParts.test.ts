@@ -1,6 +1,6 @@
 import type { TraceEvent } from "../../types/backend";
 import { compactWorkMarkdown } from "../../components/chat/ThinkingSection";
-import { aggregateConversationEvents } from "../trace/traceAggregation";
+import { aggregateConversationEvents } from "./traceAggregation";
 import { buildTraceEvent } from "../traceEvents";
 import { errorMessage } from "../../utils/errorMessage";
 
