@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from functools import partial
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -20,6 +21,8 @@ from app.gateway.credentials import FederationCredentialStore
 from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.proxy_upstream import (
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+    build_upstream_url,
+    run_cleanup_shielded,
     send_upstream_request,
 )
 from app.gateway.registry import (
@@ -208,12 +211,24 @@ async def _stream_proxy_response(
         pending_tasks = [next_chunk, route_changed]
         if user_session_changed is not None:
             pending_tasks.append(user_session_changed)
-        await asyncio.gather(*pending_tasks, return_exceptions=True)
-        try:
-            await response.aclose()
-        finally:
-            if on_close is not None:
-                on_close()
+        await run_cleanup_shielded(
+            partial(_close_proxy_response, response, pending_tasks, on_close)
+        )
+
+
+async def _close_proxy_response(
+    response: httpx.Response,
+    pending_tasks: list[asyncio.Task[object]],
+    on_close: Callable[[], None] | None,
+) -> None:
+    """回收上游响应与本路由的代理引用；在取消下也必须完整跑完。"""
+
+    await asyncio.gather(*pending_tasks, return_exceptions=True)
+    try:
+        await response.aclose()
+    finally:
+        if on_close is not None:
+            on_close()
 
 
 async def _stream_proxy_body(
@@ -224,11 +239,9 @@ async def _stream_proxy_body(
         async for chunk in response.aiter_bytes():
             yield chunk
     finally:
-        try:
-            await response.aclose()
-        finally:
-            if on_close is not None:
-                on_close()
+        await run_cleanup_shielded(
+            partial(_close_proxy_response, response, [], on_close)
+        )
 
 
 async def _wait_for_workspace_runtime(
@@ -368,10 +381,16 @@ async def _proxy_workspace_request(
             and target.remote_gateway_connection_id is not None
         ):
             try:
-                target_url = (
-                    f"{registry.remote_gateway_url(target.remote_gateway_connection_id)}"
-                    f"/api/v1/{path}"
+                target_url = build_upstream_url(
+                    registry.remote_gateway_url(
+                        target.remote_gateway_connection_id
+                    ),
+                    ("api", "v1"),
+                    path,
                 )
+            except ValueError as error:
+                release_route_reference()
+                raise HTTPException(status_code=400, detail=str(error)) from error
             except LookupError:
                 release_route_reference()
                 raise
@@ -395,7 +414,15 @@ async def _proxy_workspace_request(
                         f"workspace_id={target.workspace_id}"
                     ),
                 ) from error
-            target_url = f"{backend_url.rstrip('/')}/api/v1/{path}"
+            try:
+                target_url = build_upstream_url(
+                    backend_url,
+                    ("api", "v1"),
+                    path,
+                )
+            except ValueError as error:
+                release_route_reference()
+                raise HTTPException(status_code=400, detail=str(error)) from error
         forwarded = client.build_request(
             request.method,
             target_url,

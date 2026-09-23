@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from functools import partial
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
@@ -23,6 +24,8 @@ from app.gateway.credentials import FederationCredentialStore
 from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.proxy_upstream import (
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+    build_upstream_url,
+    run_cleanup_shielded,
     send_upstream_request,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -122,10 +125,21 @@ async def _stream_response(
         async for chunk in response.aiter_bytes():
             yield chunk
     finally:
-        try:
-            await response.aclose()
-        finally:
-            on_close()
+        await run_cleanup_shielded(
+            partial(_close_auxiliary_response, response, on_close)
+        )
+
+
+async def _close_auxiliary_response(
+    response: httpx.Response,
+    on_close: Callable[[], None],
+) -> None:
+    """回收辅助服务上游响应与路由引用；在客户端取消下也必须完整跑完。"""
+
+    try:
+        await response.aclose()
+    finally:
+        on_close()
 
 
 @router.api_route(
@@ -171,7 +185,11 @@ async def proxy_auxiliary_http(
     except (LookupError, ValueError) as error:
         release_route_reference()
         raise HTTPException(status_code=503, detail=str(error)) from error
-    target_url = f"{service_url.rstrip('/')}/{path}"
+    try:
+        target_url = str(build_upstream_url(service_url, (), path))
+    except ValueError as error:
+        release_route_reference()
+        raise HTTPException(status_code=400, detail=str(error)) from error
     try:
         forwarded = client.build_request(
             request.method,
@@ -374,7 +392,10 @@ async def _proxy_attach_frontend(request: Request, *, kind: str, path: str):
     frontend_url = frontend_urls.get(kind)
     if not isinstance(frontend_url, str):
         raise HTTPException(status_code=404, detail=f"未知 attach 前端: {kind}")
-    target_url = f"{frontend_url.rstrip('/')}/{path}"
+    try:
+        target_url = str(build_upstream_url(frontend_url, (), path))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     client = _http_client(request.app)
     try:
         response = await client.get(

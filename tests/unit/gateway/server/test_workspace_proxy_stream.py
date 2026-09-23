@@ -545,3 +545,122 @@ async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
     assert captured.value.status_code == 504
     assert "辅助服务在有限等待时间内未返回响应头" in str(captured.value.detail)
     await asyncio.wait_for(released.wait(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_proxy_rejects_path_that_folds_out_of_v1_namespace(
+    registry: GatewayWorkspaceRegistry,
+) -> None:
+    """%2e%2e 折叠逃出 /api/v1 命名空间必须响亮失败，不得静默转发到工作区后端。
+
+    uvicorn 会把请求行里的 %2e%2e 解码成 ..，httpx 再按 RFC 3986 折叠点段，两者
+    叠加会让 /api/v1/%2e%2e/%2e%2e/api/gateway/health 折叠成 /api/gateway/health。
+    若代理不校验前缀，浏览器就能让 Gateway 把请求（含远程目标的联邦凭据）打到
+    工作区后端的控制面命名空间。
+    """
+
+    application = FastAPI()
+    calls: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, content=b"{}")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    application.state.registry = registry
+    application.state.http_client = client
+    application.state.streaming_http_client = client
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/%2e%2e/%2e%2e/api/gateway/health",
+            "headers": [(b"x-boxteam-workspace-id", b"gw_stream")],
+            "app": application,
+        }
+    )
+    request.state.request_id = "req_traversal"
+
+    try:
+        with pytest.raises(HTTPException) as captured:
+            await _proxy_workspace_request(
+                "../../api/gateway/health",
+                request,
+                auth=None,
+                user_access=None,
+                include_credentials=False,
+            )
+    finally:
+        await client.aclose()
+
+    assert captured.value.status_code == 400
+    assert "越出上游命名空间" in str(captured.value.detail)
+    # 关键：没有任何请求被转发到上游。
+    assert calls == []
+    assert registry.route_reference_counts("gw_stream") == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_stream_proxy_releases_route_reference_under_anyio_cancellation(
+    registry: GatewayWorkspaceRegistry,
+) -> None:
+    """客户端断开触发 anyio task group 取消时，上游响应与路由引用仍必须被释放。
+
+    uvicorn 声明 ASGI spec 2.3，starlette 的 StreamingResponse 用 anyio task group
+    驱动响应体；客户端断开时 cancel scope 取消流任务，finally 里每个 await 都会
+    立刻重新抛 CancelledError。清理若不做 shield，aclose 与 on_close 会被跳过，
+    路由引用计数不归零，工作区重启/删除随后被「仍有代理引用」永久挡住。
+    """
+
+    import anyio
+
+    closed = asyncio.Event()
+
+    class _Upstream:
+        def aiter_bytes(self) -> AsyncIterator[bytes]:
+            async def iterate():
+                while True:
+                    await asyncio.sleep(0.01)
+                    yield b": tick\n\n"
+
+            return iterate()
+
+        async def aclose(self) -> None:
+            closed.set()
+
+    lease = registry.acquire_route_reference("gw_stream", streaming=True)
+    released: list[str] = []
+
+    def on_close() -> None:
+        released.append("on_close")
+        registry.release_route_reference("gw_stream", streaming=True)
+
+    stream = _stream_proxy_response(
+        cast(httpx.Response, _Upstream()),
+        lease,
+        None,
+        on_close,
+    )
+    disconnected = asyncio.Event()
+
+    async def stream_response() -> None:
+        async for _ in stream:
+            await asyncio.sleep(0)
+
+    async def wait_for_disconnect() -> None:
+        await disconnected.wait()
+
+    async with anyio.create_task_group() as task_group:
+
+        async def wrap(func) -> None:
+            await func()
+            task_group.cancel_scope.cancel()
+
+        task_group.start_soon(wrap, stream_response)
+        await asyncio.sleep(0.1)
+        disconnected.set()
+        await wrap(wait_for_disconnect)
+
+    assert await asyncio.wait_for(closed.wait(), timeout=1)
+    assert released == ["on_close"]
+    assert registry.route_reference_counts("gw_stream") == (0, 0)
