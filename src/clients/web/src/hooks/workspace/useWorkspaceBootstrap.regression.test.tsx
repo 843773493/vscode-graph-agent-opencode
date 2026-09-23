@@ -100,6 +100,12 @@ async function mountBootstrap(initialState: AppState): Promise<Mounted> {
     renderer = create(<Probe />);
   });
   mountedRenderers.push(renderer!);
+  // 挂载 effect 会排一个 0ms 的初始 bootstrap。下面的用例都要自己驱动 refreshSessions，
+  // 必须在这里用 act + 0ms 定时器确定性地把它跑完：否则它会在用例的刷新途中才触发，
+  // 按 refreshGeneration 作废掉用例的刷新，断言就会读到上一轮的 gatewayWorkspacesStale=true。
+  await act(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  });
   return { refreshSessions: hook!.refreshSessions, state: () => current };
 }
 
