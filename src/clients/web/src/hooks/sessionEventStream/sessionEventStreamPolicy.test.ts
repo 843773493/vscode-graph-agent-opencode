@@ -4,7 +4,7 @@ import {
   ACTIVE_JOB_RECONCILE_INTERVAL_MS,
   ACTIVE_JOB_STALE_PROBE_INTERVAL_MS,
   ACTIVE_JOB_TRACE_STALE_MS,
-  SESSION_STREAM_IDLE_TIMEOUT_MS,
+  SESSION_STREAM_MAX_RECONNECT_ATTEMPTS,
   WORKSPACE_SESSION_FALLBACK_REFRESH_MS,
   sessionStreamReconnectDelay,
 } from "./sessionEventStreamPolicy";
@@ -27,11 +27,11 @@ describe("会话事件流策略", () => {
     );
   });
 
-  test("轮询频率保持低开销并容纳服务端心跳", () => {
+  test("轮询频率保持低开销，重连上限保持有界", () => {
     expect(ACTIVE_JOB_RECONCILE_INTERVAL_MS).toBe(5_000);
     expect(ACTIVE_JOB_TRACE_STALE_MS).toBe(8_000);
     expect(ACTIVE_JOB_STALE_PROBE_INTERVAL_MS).toBe(10_000);
-    expect(SESSION_STREAM_IDLE_TIMEOUT_MS).toBe(45_000);
+    expect(SESSION_STREAM_MAX_RECONNECT_ATTEMPTS).toBe(6);
     expect(WORKSPACE_SESSION_FALLBACK_REFRESH_MS).toBe(60_000);
   });
 });

@@ -4,6 +4,7 @@ import type {
   SessionActivity,
 } from "../../types/backend";
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
+import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import {
   HttpRequestError,
   requestGatewayResponse,
@@ -11,8 +12,6 @@ import {
   unwrapApiData,
   workspaceHeader,
 } from "../http";
-
-const ACTIVITY_STREAM_IDLE_TIMEOUT_MS = 45_000;
 
 export class SessionActivityCursorGoneError extends Error {
   readonly status = 410;
@@ -87,7 +86,7 @@ export async function streamSessionActivity(
   }
   await consumeSseResponse(response, {
     signal: options.signal,
-    idleTimeoutMs: ACTIVITY_STREAM_IDLE_TIMEOUT_MS,
+    idleTimeoutMs: SSE_IDLE_TIMEOUT_MS,
     onActivity: options.onActivity,
     events: {
       session_activity: defineSseEvent(

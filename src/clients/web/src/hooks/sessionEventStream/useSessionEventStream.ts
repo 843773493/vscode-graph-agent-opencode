@@ -9,13 +9,13 @@ import {
   TraceCursorGoneError,
 } from "../../api/stream/sessionTraceStream";
 import { isTransientNetworkError } from "../../api/http";
+import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import { isJobTerminalTraceType } from "../../state/traceEvents";
 import type { SessionStreamEvent } from "../../types/backend";
 import {
   ACTIVE_JOB_RECONCILE_INTERVAL_MS,
   ACTIVE_JOB_STALE_PROBE_INTERVAL_MS,
   ACTIVE_JOB_TRACE_STALE_MS,
-  SESSION_STREAM_IDLE_TIMEOUT_MS,
   SESSION_STREAM_MAX_RECONNECT_ATTEMPTS,
   WORKSPACE_SESSION_FALLBACK_REFRESH_MS,
   sessionStreamReconnectDelay,
@@ -192,7 +192,7 @@ export function useSessionEventStream({
                 }));
               }
             },
-            idleTimeoutMs: SESSION_STREAM_IDLE_TIMEOUT_MS,
+            idleTimeoutMs: SSE_IDLE_TIMEOUT_MS,
           });
         } catch (error) {
           if (controller.signal.aborted) {
