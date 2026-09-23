@@ -213,6 +213,14 @@ class MessageStreamStore:
         self._states.pop(turn_stream_id, None)
         self._event_ids.pop(turn_stream_id, None)
         self._event_ids_loaded.discard(turn_stream_id)
+        # 被淘汰的流不再需要串行锁；锁字典必须随缓存一起收敛，否则每处理一个
+        # 历史 Turn 都会永久留下两个 asyncio.Lock，进程内存随会话总量无界增长。
+        # 锁被持有时说明仍有协程在提交或等待同一 Turn，此时绝不能移除，否则
+        # 等待者与新锁会并行进入同一临界区，重新破坏 event_seq 串行性。
+        for locks in (self._locks, self._snapshot_locks):
+            lock = locks.get(turn_stream_id)
+            if lock is not None and not lock.locked():
+                locks.pop(turn_stream_id, None)
 
     def _touch_cached_state(
         self,
@@ -2090,8 +2098,9 @@ class MessageStreamStore:
         session_id: str,
         turn_stream_id: str,
         after_seq: int = 0,
-        limit: int = 1000,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
+        """返回游标之后的事件；``limit`` 为空表示不截断，供 SSE 续播使用。"""
         state = await self.get_state(turn_stream_id)
         path = self._stream_path(session_id, turn_stream_id)
         records = self._read_records(
@@ -2116,7 +2125,7 @@ class MessageStreamStore:
                 after_seq=after_seq,
                 first_seq=int(state["snapshot_seq"]),
             )
-        return events[:limit]
+        return events if limit is None else events[:limit]
 
     async def subscribe(self, turn_stream_id: str) -> MessageStreamSubscription:
         subscription = MessageStreamSubscription(

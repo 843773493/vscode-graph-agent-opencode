@@ -1563,3 +1563,76 @@ async def test_completed_stream_rejects_deprecated_auto_closed_blocks(
         "stream.opened",
         "block.started",
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_records_delivers_terminal_event_beyond_list_events_page_limit(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    """事件数超过 list_events 默认分页上限时，SSE 续播仍必须送达终态事件。
+
+    回归：``stream_records`` 曾直接复用 ``list_events`` 的默认 ``limit=1000``，
+    在超过 1000 条事件的 Turn 上静默丢弃尾部（含 ``stream.completed``），前端
+    收到前 1000 条后永久转圈。
+    """
+    store, _, session_id = message_stream_store
+    writer = await store.open(session_id=session_id, turn_id="job_sse_long_tail")
+    for index in range(1100):
+        await writer.commit(
+            "block.delta",
+            {"block_id": "block_1", "operation": "append", "text": f"x{index}"},
+            block_id="block_1",
+        )
+    await writer.commit(
+        "block.completed",
+        {
+            "block_id": "block_1",
+            "block_index": 0,
+            "carrier_type": "text",
+            "status": "completed",
+            "completion_reason": "upstream_completed",
+        },
+        block_id="block_1",
+    )
+    await writer.close_completed()
+    state = await store.get_state(writer.turn_stream_id)
+
+    stream = store.stream_records(
+        session_id=session_id,
+        turn_stream_id=writer.turn_stream_id,
+        after_seq=0,
+    )
+    events = []
+    try:
+        while True:
+            events.append(await asyncio.wait_for(anext(stream), timeout=5.0))
+    except StopAsyncIteration:
+        pass
+    finally:
+        await stream.aclose()
+
+    assert events[-1]["event_seq"] == state["snapshot_seq"]
+    assert events[-1]["type"] == "stream.completed"
+
+
+@pytest.mark.asyncio
+async def test_evicted_terminal_streams_release_serial_locks(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    """大量终态 Turn 后，逐流串行锁必须随缓存淘汰一起收敛。"""
+    store, _, session_id = message_stream_store
+    for index in range(64):
+        writer = await store.open(
+            session_id=session_id,
+            turn_id=f"job_lock_eviction_{index:04d}",
+        )
+        await writer.commit(
+            "block.delta",
+            {"block_id": "block_1", "operation": "append", "text": "t"},
+            block_id="block_1",
+        )
+        await writer.close_completed()
+
+    cache_limit = message_stream_store_module.MESSAGE_STREAM_TERMINAL_CACHE_MAX_ENTRIES
+    assert len(store._locks) <= cache_limit
+    assert len(store._snapshot_locks) <= cache_limit
