@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.hash_projection import hash_scope_for_plan
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.refs import ContextRef
 from app.domain.itemized.serialization import _hash_safe_value
@@ -19,36 +20,9 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
     # assembly 在 middleware 动态追加无关 contribution 时会发生假
     # mismatch。unsealed plan 尚无 selection，因此保留完整 registry，
     # 供创建阶段的幂等检查使用。
-    if plan.plan_state == "sealed":
-        selected_keys = {
-            (entry.ref.ref_type, entry.ref.ref_id) for entry in plan.selection
-        }
-        refs_for_hash = tuple(
-            ref
-            for ref in plan.refs
-            if (ref.ref_type, ref.ref_id) in selected_keys
-        )
-        tool_set_refs_for_hash = tuple(
-            ref
-            for ref in plan.tool_set_refs
-            if any(entry.included and entry.ref == ref for entry in plan.selection)
-        )
-        contribution_ids = {
-            entry.contribution_id
-            for entry in plan.selection
-            if isinstance(entry.ref, ContextRef)
-            and entry.ref.ref_type == "request_only"
-            and entry.contribution_id is not None
-        }
-        contributions_for_hash = tuple(
-            contribution
-            for contribution in plan.contributions
-            if contribution.contribution_id in contribution_ids
-        )
-    else:
-        refs_for_hash = plan.refs
-        tool_set_refs_for_hash = plan.tool_set_refs
-        contributions_for_hash = plan.contributions
+    refs_for_hash, tool_set_refs_for_hash, contributions_for_hash = hash_scope_for_plan(
+        plan
+    )
     refs = [
         {
             "session_id": ref.session_id,

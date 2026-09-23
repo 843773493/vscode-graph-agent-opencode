@@ -5,6 +5,7 @@
 # 可修改内容
 
 - 可以维护 v2 schema、枚举、JCS hash、不可变引用和 selection 校验。
+- 可以维护 `hash_projection.py` 中供 plan/request hash 共用的唯一哈希范围投影。
 - 可以维护 content part 与 Turn/Execution identity 的纯值对象。
 
 # 不可修改内容
