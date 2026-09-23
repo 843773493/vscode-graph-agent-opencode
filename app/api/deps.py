@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from fastapi import Header, HTTPException, Request
 
-from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
-from app.core.background_message_bus import BackgroundMessageBus
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.trace_middleware import get_request_id  # noqa: F401
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
@@ -41,14 +38,12 @@ from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
-from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
-from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 from app.tool_testing.service import ToolTestService
 
@@ -57,10 +52,7 @@ class _AppContainerProtocol:
     config_service: ConfigService
     agent_service: AgentService
     artifact_service: ArtifactService
-    background_message_bus: BackgroundMessageBus
-    background_task_registry: BackgroundTaskRegistry
     event_service: EventService
-    job_event_bus: JobEventBusProtocol
     job_service: JobServiceProtocol
     message_service: MessageService
     session_attachment_store: SessionAttachmentStore
@@ -82,11 +74,9 @@ class _AppContainerProtocol:
     log_service: LogService
     tool_service: ToolService
     tool_test_service: ToolTestService
-    tool_selection_store: ToolSelectionStore
     workspace_service: WorkspaceService
     workspace_file_watch_service: WorkspaceFileWatchService
     file_tree_settings_service: FileTreeSettingsService
-    agent_execution_service: AgentExecutionService
     node_debug_service: NodeDebugService
     session_orchestrator: SessionOrchestrator
     session_catalog_service: SessionCatalogService
@@ -132,31 +122,10 @@ def get_artifact_service(request: Request) -> ArtifactService:
     return service
 
 
-def get_background_message_bus(request: Request) -> BackgroundMessageBus:
-    service = getattr(_get_container(request), "background_message_bus", None)
-    if not isinstance(service, BackgroundMessageBus):
-        raise RuntimeError("BackgroundMessageBus 尚未在应用启动阶段初始化")
-    return service
-
-
-def get_background_task_registry(request: Request) -> BackgroundTaskRegistry:
-    service = getattr(_get_container(request), "background_task_registry", None)
-    if not isinstance(service, BackgroundTaskRegistry):
-        raise RuntimeError("BackgroundTaskRegistry 尚未在应用启动阶段初始化")
-    return service
-
-
 def get_event_service(request: Request) -> EventService:
     service = getattr(_get_container(request), "event_service", None)
     if not isinstance(service, EventService):
         raise RuntimeError("EventService 尚未在应用启动阶段初始化")
-    return service
-
-
-def get_job_event_bus(request: Request) -> JobEventBusProtocol:
-    service = getattr(_get_container(request), "job_event_bus", None)
-    if not isinstance(service, JobEventBusProtocol):
-        raise RuntimeError("JobEventBus 尚未在应用启动阶段初始化")
     return service
 
 
@@ -330,13 +299,6 @@ def get_tool_test_service(request: Request) -> ToolTestService:
     return service
 
 
-def get_tool_selection_store(request: Request) -> ToolSelectionStore:
-    service = getattr(_get_container(request), "tool_selection_store", None)
-    if not isinstance(service, ToolSelectionStore):
-        raise RuntimeError("ToolSelectionStore 尚未在应用启动阶段初始化")
-    return service
-
-
 def get_mcp_catalog_owner(request: Request) -> McpCatalogOwner:
     service = getattr(_get_container(request), "mcp_catalog_owner", None)
     if not isinstance(service, McpCatalogOwner):
@@ -362,13 +324,6 @@ def get_file_tree_settings_service(request: Request) -> FileTreeSettingsService:
     service = getattr(_get_container(request), "file_tree_settings_service", None)
     if not isinstance(service, FileTreeSettingsService):
         raise RuntimeError("FileTreeSettingsService 尚未在应用启动阶段初始化")
-    return service
-
-
-def get_agent_execution_service(request: Request) -> AgentExecutionService:
-    service = getattr(_get_container(request), "agent_execution_service", None)
-    if not isinstance(service, AgentExecutionService):
-        raise RuntimeError("AgentExecutionService 尚未在应用启动阶段初始化")
     return service
 
 
