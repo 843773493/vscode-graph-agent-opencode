@@ -176,7 +176,12 @@ def _resolve_terminal_workdir(
     *,
     workspace_root: Path | None,
 ) -> str:
-    """将模型的工作区相对路径解析为 PTY 唯一使用的绝对 cwd。"""
+    """解析 PTY 唯一使用的绝对 cwd。
+
+    相对路径以 workspace 根目录解析一次；显式绝对路径（含 '..' 越界）原样
+    采用，不施加 workspace 边界。PTY 不提供文件沙箱，cmd 本身即可访问任意
+    路径，因此这里不做仅具表面意义的边界校验。
+    """
     root = (workspace_root or get_workspace_root()).resolve()
     raw_workdir = workdir.strip() if isinstance(workdir, str) else ""
     if not raw_workdir:
@@ -242,7 +247,8 @@ def create_exec_command_tool(
     ) -> dict[str, Any]:
         """运行命令；未在等待窗口内结束时返回可供 write_stdin 使用的 session_id。
 
-        workdir 是相对于 workspace 根目录的一次性 PTY cwd，不要在 cmd 中再次 cd 到该目录。
+        workdir 是一次性 PTY cwd：相对路径以 workspace 根目录解析一次，显式绝对
+        路径按原样使用。不要在 cmd 中再次 cd 到该目录。
         Godot 使用 ``--path project`` 时，``--export-release`` 的输出路径相对于 project；
         例如从 workspace 根运行时使用 ``godot_export/game.html``，不要重复写成
         ``project/godot_export/game.html``。

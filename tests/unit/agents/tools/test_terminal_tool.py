@@ -278,6 +278,21 @@ def test_resolves_relative_workdir_once_against_workspace_root(tmp_path: Path) -
     ) == str((tmp_path / "parry_arena").resolve())
 
 
+def test_resolve_terminal_workdir_honors_absolute_path_outside_workspace(
+    tmp_path: Path,
+) -> None:
+    """contract：相对 workdir 锚定 workspace 根；显式绝对路径按原样采用。
+
+    PTY 不提供文件沙箱（cmd 本身即可访问任意路径），因此 workdir 不做
+    workspace 边界校验；此处锁定该现状，避免后续把它误当作安全边界。
+    """
+    assert _resolve_terminal_workdir("/etc", workspace_root=tmp_path) == "/etc"
+    assert _resolve_terminal_workdir(
+        "..",
+        workspace_root=tmp_path / "nested" / "proj",
+    ) == str((tmp_path / "nested").resolve())
+
+
 @pytest.mark.asyncio
 async def test_write_stdin_uses_model_session_id_as_terminal_id() -> None:
     client = _FakeTerminalClient()
