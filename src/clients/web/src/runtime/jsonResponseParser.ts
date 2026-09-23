@@ -10,6 +10,8 @@ interface JsonParseFailure {
 
 type JsonParseResult = JsonParseSuccess | JsonParseFailure;
 
+import { abortReason, awaitWithAbort } from "../utils/abortable";
+
 /**
  * JSON 解析失败时携带已读取的正文前缀。引擎自带的 SyntaxError 只说明语法错误，
  * 不含路径与响应体形态，调用方无法据此判断「Gateway 未启动返回了 HTML」还是
@@ -37,44 +39,6 @@ function bufferPrefix(buffer: ArrayBuffer): string {
 
 function parseJsonBuffer<T>(buffer: ArrayBuffer): T {
   return JSON.parse(new TextDecoder().decode(buffer)) as T;
-}
-
-function abortReason(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException("请求已取消", "AbortError");
-}
-
-async function awaitWithAbort<T>(
-  pending: Promise<T>,
-  signal: AbortSignal | undefined,
-): Promise<T> {
-  if (!signal) return await pending;
-  if (signal.aborted) throw abortReason(signal);
-
-  return await new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(abortReason(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    pending.then(
-      (value) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error);
-      },
-    );
-  });
 }
 
 export async function parseJsonResponse<T>(

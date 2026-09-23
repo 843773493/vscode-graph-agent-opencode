@@ -1,5 +1,6 @@
 import type { APIResponse, CursorPage } from "../types/backend";
 import { JsonResponseBodyError, parseJsonResponse } from "../runtime/jsonResponseParser";
+import { abortReason, awaitWithAbort } from "../utils/abortable";
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
 export const DEFAULT_BACKEND_PORT = 8014;
@@ -136,44 +137,6 @@ async function isGatewayUserSessionRequired(response: Response): Promise<boolean
     && typeof detail === "object"
     && "code" in detail
     && detail.code === "user_session_required";
-}
-
-function abortReason(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException("请求已取消", "AbortError");
-}
-
-async function awaitWithAbort<T>(
-  pending: Promise<T>,
-  signal: AbortSignal | undefined,
-): Promise<T> {
-  if (!signal) return await pending;
-  if (signal.aborted) throw abortReason(signal);
-
-  return await new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(abortReason(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    pending.then(
-      (value) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error);
-      },
-    );
-  });
 }
 
 interface RequestAbortState {
