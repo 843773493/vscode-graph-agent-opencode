@@ -2726,13 +2726,23 @@ describe("终态白名单同域去重", () => {
     expect(terminal).toEqual(["completed", "interrupted", "failed"]);
   });
 
-  test("conversations.ts 不再保留 streamStatus 域的第二套终态实现", async () => {
-    const source = await Bun.file(
-      new URL("../conversations.ts", import.meta.url),
-    ).text();
+  test("conversations 模块不再保留 streamStatus 域的第二套终态实现", async () => {
+    // conversations 已按职责拆分为 conversations/ 下沉模块，源码级守卫改为覆盖
+    // 整个 conversations 链路：入口门面加各职责模块。
+    const source = (
+      await Promise.all([
+        Bun.file(new URL("../conversations.ts", import.meta.url)).text(),
+        Bun.file(
+          new URL("../conversations/messageStreamProjection.ts", import.meta.url),
+        ).text(),
+        Bun.file(
+          new URL("../conversations/conversationMerge.ts", import.meta.url),
+        ).text(),
+      ])
+    ).join("\n");
     expect(source).not.toContain("isTerminalMessageStreamStatus");
     // 必须复用唯一的 isTerminalStatus，而不是重新手写三个字面量比较。
-    expect(source).toContain('from "./messageStream/state"');
+    expect(source).toContain('from "../messageStream/state"');
     expect(source).toContain("isTerminalStatus(");
     // 不同语义域的常量必须保留，不得被本次去重误删。
     expect(source).toContain("TERMINAL_TURN_STATUSES");
