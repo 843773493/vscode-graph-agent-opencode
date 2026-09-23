@@ -456,7 +456,16 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "heartbeat_interval_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 15 }
+            // 上界是跨层契约：浏览器端唯一空闲阈值 SSE_IDLE_TIMEOUT_MS=45000ms，
+            // 取 3×心跳余量，因此心跳必须 <= 15s。超过上界的配置在此响亮失败，
+            // 而不是让前端把健康长连误判为断线。见
+            // tests/contracts/api/test_sse_idle_heartbeat_contract.py。
+            "heartbeat_interval_seconds": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 15,
+              "default": 15
+            }
           }
         }
       }

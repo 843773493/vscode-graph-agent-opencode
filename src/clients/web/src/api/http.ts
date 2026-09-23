@@ -21,9 +21,18 @@ export const LIFECYCLE_REQUEST_TIMEOUT_MS = 150_000;
 export const BULK_FILE_OPERATION_TIMEOUT_MS = 60_000;
 
 /**
- * requestGatewayResponse（自行消费响应体的 SSE/二进制/multipart 入口）的默认超时：
- * 只落在「响应头等待」阶段，响应体一旦开始流动就由各入口既有的 SSE 空闲超时
- * （SSE_IDLE_TIMEOUT_MS）接管，健康长连不会被本上限截断。
+ * requestGatewayResponse（自行消费响应体的 SSE/二进制/multipart 入口）的默认超时。
+ *
+ * 覆盖范围是「一次 fetch 建立连接、发送请求体、等待响应头」这一整段；实测中
+ * 把上限压到 1s 并用 8MB multipart 请求体发给一个只接受连接、既不读也不回应的
+ * 服务端时，超时发生在请求体发送阶段（t=1.00s）而不是响应头等待阶段。响应头
+ * 一旦到达，consume 立即返回并清理定时器，响应体流动阶段由各入口既有的 SSE
+ * 空闲超时（SSE_IDLE_TIMEOUT_MS）接管，健康长连不会被本上限截断。
+ *
+ * 可达性：multipart 上传经本入口发送，前端 FILE_BATCH_LIMIT=100 只限制条目数，
+ * 不限制单文件字节数，后端 upload 也没有字节上限，因此「单个大文件 + 慢链路」
+ * 理论上能在响应头到达前耗尽本上限。本地回环与发行版默认部署下 90s 余量足够，
+ * 故本上限保留不放大；若日后支持远程/SSH 大文件上传，需要重新评估该取值。
  *
  * 为什么必须新增而不能复用现成常量：
  * - DEFAULT_API_REQUEST_TIMEOUT_MS(15s) 的语义是覆盖整次 JSON 交换（含响应体消费），
@@ -470,9 +479,9 @@ export async function requestGatewayResponse(
   path: string,
   init?: GatewayResponseInit & { timeoutMs?: number },
 ): Promise<Response> {
-  // 默认只给「响应头等待」一个有限上限；调用方显式传 timeoutMs 时仍以其为准。
-  // runGatewayRequest 的 consume 在这里是同步的，响应头一到就返回并清理定时器，
-  // 因此该上限天然不覆盖后续响应体消费，无需额外分支。
+  // 默认给「建连 + 发送请求体 + 等待响应头」一个有限上限；调用方显式传 timeoutMs
+  // 时仍以其为准。runGatewayRequest 的 consume 在这里是同步的，响应头一到就返回
+  // 并清理定时器，因此该上限天然不覆盖后续响应体消费，无需额外分支。
   return await runGatewayRequest(
     port,
     path,
