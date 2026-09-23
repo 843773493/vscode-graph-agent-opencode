@@ -6,26 +6,7 @@ import type {
 } from "../../../types/backend";
 import type { ConversationView } from "../../../types/frontend";
 import { errorMessage } from "../../../utils/errorMessage";
-
-export interface ChatTurnActionCallbacks {
-  onReplayTurn: (
-    targetMessageId: string,
-    action: MessageReplayRequest["action"],
-    displayContent: string,
-    content?: string,
-    attachments?: AttachmentRef[],
-  ) => Promise<void>;
-  onUpdatePending: (
-    messageId: string,
-    content: string,
-    attachments?: AttachmentRef[],
-  ) => Promise<void>;
-  onRemovePending: (messageId: string) => Promise<void>;
-  onChangePendingPolicy: (
-    messageId: string,
-    policy: DeliveryPolicy,
-  ) => Promise<void>;
-}
+import type { ChatTurnHandlers } from "./types";
 
 export type ReplayConfirmation = "retry_failed" | "regenerate" | null;
 
@@ -67,7 +48,7 @@ export function useChatTurnActions({
   sessionBusy,
   onReplayTurn,
   onUpdatePending,
-}: Pick<ChatTurnActionCallbacks, "onReplayTurn" | "onUpdatePending"> & {
+}: Pick<ChatTurnHandlers, "onReplayTurn" | "onUpdatePending"> & {
   conversation: ConversationView;
   sessionBusy: boolean;
 }): ChatTurnActions {

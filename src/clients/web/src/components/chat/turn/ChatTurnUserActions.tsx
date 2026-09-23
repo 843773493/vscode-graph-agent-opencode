@@ -6,10 +6,8 @@ import AnchoredOverlay from "../../overlays/AnchoredOverlay";
 import MessageAttachments from "../MessageAttachments";
 import PendingRequestActions from "../PendingRequestActions";
 import ProgressiveUserMessage from "../ProgressiveUserMessage";
-import type {
-  ChatTurnActionCallbacks,
-  ChatTurnActions,
-} from "./useChatTurnActions";
+import type { ChatTurnActions } from "./useChatTurnActions";
+import type { ChatTurnHandlers } from "./types";
 import { errorMessage } from "../../../utils/errorMessage";
 
 export function ChatTurnUserSection({
@@ -23,7 +21,7 @@ export function ChatTurnUserSection({
   onChangePendingPolicy,
   onOpenAttachment,
 }: Pick<
-  ChatTurnActionCallbacks,
+  ChatTurnHandlers,
   "onRemovePending" | "onChangePendingPolicy"
 > & {
   apiPort: number;

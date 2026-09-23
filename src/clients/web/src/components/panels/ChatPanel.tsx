@@ -5,10 +5,8 @@ import type {
   ComputeItemKey,
   ItemContent,
 } from "react-virtuoso";
-import type { TurnHistoryInclude } from "../../api/session/sessionTurnHistory";
 import type {
   AttachmentRef,
-  MessageReplayRequest,
   DeliveryPolicy,
   SessionChangesSummary,
   GatewayUserViewState,
@@ -23,8 +21,9 @@ import ChatTurn from "../chat/ChatTurn";
 import ChatTurnErrorBoundary from "../chat/ChatTurnErrorBoundary";
 import { useTurnVirtualScroller } from "../chat/useTurnVirtualScroller";
 import { errorMessage } from "../../utils/errorMessage";
+import type { ChatTurnHandlers, LoadToolDetails, LoadTurnDetails } from "../chat/turn/types";
 
-interface ChatPanelRenderState {
+interface ChatPanelRenderState extends ChatTurnHandlers {
   apiPort: number;
   workspaceId?: string | null;
   expandDetails: boolean;
@@ -35,31 +34,8 @@ interface ChatPanelRenderState {
     sessionId: string,
     messageId: string,
   ) => Promise<string>;
-  onLoadTurnDetails: (
-    turnIds: string[],
-    requestIdentity?: string | null,
-    refreshAfterInFlight?: boolean,
-    include?: TurnHistoryInclude[],
-    toolCallIds?: string[],
-  ) => Promise<void>;
-  onLoadToolDetails?: (turnId: string, toolCallId: string) => Promise<void>;
-  onReplayTurn: (
-    targetMessageId: string,
-    action: MessageReplayRequest["action"],
-    displayContent: string,
-    content?: string,
-    attachments?: AttachmentRef[],
-  ) => Promise<void>;
-  onUpdatePending: (
-    messageId: string,
-    content: string,
-    attachments?: AttachmentRef[],
-  ) => Promise<void>;
-  onRemovePending: (messageId: string) => Promise<void>;
-  onChangePendingPolicy: (
-    messageId: string,
-    policy: DeliveryPolicy,
-  ) => Promise<void>;
+  onLoadTurnDetails: LoadTurnDetails;
+  onLoadToolDetails?: LoadToolDetails;
   onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
   projectionState: TurnProjectionState;
   hasOlderMessages: boolean;
@@ -220,14 +196,8 @@ export default function ChatPanel({
   onLoadAroundTurn: (anchorTurnId: string) => Promise<void>;
   onLoadNewerMessages: () => Promise<void>;
   onLoadOlderMessages: () => Promise<void>;
-  onLoadTurnDetails: (
-    turnIds: string[],
-    requestIdentity?: string | null,
-    refreshAfterInFlight?: boolean,
-    include?: TurnHistoryInclude[],
-    toolCallIds?: string[],
-  ) => Promise<void>;
-  onLoadToolDetails?: (turnId: string, toolCallId: string) => Promise<void>;
+  onLoadTurnDetails: LoadTurnDetails;
+  onLoadToolDetails?: LoadToolDetails;
   onLoadAgentStateMessageRawContent: (
     sessionId: string,
     messageId: string,
@@ -236,24 +206,6 @@ export default function ChatPanel({
   sessionChangeSummary?: SessionChangesSummary | null;
   sessionChangesLoading?: boolean;
   onOpenChanges?: () => void;
-  onReplayTurn: (
-    targetMessageId: string,
-    action: MessageReplayRequest["action"],
-    displayContent: string,
-    content?: string,
-    attachments?: AttachmentRef[],
-  ) => Promise<void>;
-  onUpdatePending: (
-    messageId: string,
-    content: string,
-    attachments?: AttachmentRef[],
-  ) => Promise<void>;
-  onRemovePending: (messageId: string) => Promise<void>;
-  onChangePendingPolicy: (
-    messageId: string,
-    policy: DeliveryPolicy,
-    expectedSnapshotVersion?: number,
-  ) => Promise<void>;
   onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
   viewState?: GatewayUserViewState | null;
   onViewStateChange?: (payload: {
@@ -262,7 +214,7 @@ export default function ChatPanel({
     follow_latest: boolean;
   }) => void;
   onViewStateRestoreStatus?: (message: string) => void;
-}): React.ReactNode {
+} & ChatTurnHandlers): React.ReactNode {
   const [pendingActionError, setPendingActionError] = React.useState<string | null>(null);
   const [pendingActionRunning, setPendingActionRunning] = React.useState(false);
   const transcriptConversations = React.useMemo(
