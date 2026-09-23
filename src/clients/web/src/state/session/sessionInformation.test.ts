@@ -4,7 +4,7 @@ import {
   extractSessionIdFromClipboardText,
   formatSessionInformationDump,
   SESSION_INFORMATION_KIND,
-} from "../session/sessionInformation";
+} from "./sessionInformation";
 import type {
   GatewayWorkspace,
   SessionInformationSnapshot,

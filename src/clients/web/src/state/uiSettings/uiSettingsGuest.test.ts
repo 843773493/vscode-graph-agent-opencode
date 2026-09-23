@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import {
   createDefaultWebUiSettings,
   mergeGuestWebUiSettings,
-} from "../uiSettings/preferences";
+} from "./preferences";
 import type { WebUiSettings, WebUiSettingsUpdate } from "../../types/backend";
 
 const current: WebUiSettings = {

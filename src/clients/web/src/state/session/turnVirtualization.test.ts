@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { advanceTurnVirtualIndex } from "../session/turnVirtualization";
+import { advanceTurnVirtualIndex } from "./turnVirtualization";
 
 describe("Turn 虚拟列表索引", () => {
   test("只在历史前插时递减，尾部新增保持索引不变", () => {

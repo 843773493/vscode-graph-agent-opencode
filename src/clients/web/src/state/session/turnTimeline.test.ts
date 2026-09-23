@@ -18,7 +18,7 @@ import {
   upsertTurn,
   upsertTurns,
   writeTurnTimelineCache,
-} from "../session/turnTimeline";
+} from "./turnTimeline";
 
 const SESSION_ID = "ses_turns";
 const SCOPE_KEY = `workspace::${SESSION_ID}`;

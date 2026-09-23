@@ -1,4 +1,4 @@
-import { buildSessionTree } from "../session/sessionTree";
+import { buildSessionTree } from "./sessionTree";
 import type { Session } from "../../types/backend";
 
 function session(

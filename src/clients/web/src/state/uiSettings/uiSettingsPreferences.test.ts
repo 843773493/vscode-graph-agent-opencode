@@ -6,7 +6,7 @@ import {
   resolveAgentSessionsPreferences,
   stableUiSettingIds,
   toggleUiSettingId,
-} from "../uiSettings/preferences";
+} from "./preferences";
 import type { WebUiSettings } from "../../types/backend";
 
 const settings: WebUiSettings = {
