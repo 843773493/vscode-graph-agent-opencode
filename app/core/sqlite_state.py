@@ -109,21 +109,37 @@ class SQLiteStateDatabase:
         try:
             connection.execute(
                 """
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TEXT NOT NULL
-                )
-                """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
             )
-            current = int(
-                connection.execute(
-                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
-                ).fetchone()[0]
+            """
             )
+            applied = tuple(
+                int(row[0])
+                for row in connection.execute(
+                    "SELECT version FROM schema_migrations ORDER BY version"
+                ).fetchall()
+            )
+            current = applied[-1] if applied else 0
             if current > self._schema_version:
                 raise RuntimeError(
                     "SQLite schema 版本高于当前程序支持范围: "
                     f"path={self.path}, current={current}, supported={self._schema_version}"
+                )
+            # 迁移账本必须是连续的 1..current；任何缺号都说明有人绕过软件
+            # 直接改写了 schema_migrations，继续打开会让缺号迁移永久不生效，
+            # 因此明确报错而不是静默忽略。
+            expected_applied = tuple(range(1, current + 1))
+            if applied != expected_applied:
+                missing = tuple(
+                    version
+                    for version in expected_applied
+                    if version not in set(applied)
+                )
+                raise RuntimeError(
+                    "SQLite 迁移账本被外部改写，缺少已声明应用的版本: "
+                    f"path={self.path}, applied={applied}, missing={missing}"
                 )
             for version, migration in enumerate(self._migrations, start=1):
                 if version <= current:

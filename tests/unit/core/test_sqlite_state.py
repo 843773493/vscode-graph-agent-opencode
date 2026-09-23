@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from app.core.sqlite_state import SQLiteStateDatabase
@@ -79,3 +81,65 @@ def test_sqlite_state_allows_explicit_shared_processes(tmp_path):
     finally:
         second.close()
         first.close()
+
+
+def test_sqlite_state_rejects_migration_ledger_gap(tmp_path):
+    """迁移账本被外部改出缺号时必须响亮失败，不得静默忽略缺号迁移。"""
+
+    path = tmp_path / "state.sqlite"
+    database = SQLiteStateDatabase(
+        path=path,
+        schema_version=3,
+        migrations=(
+            "CREATE TABLE a (value TEXT NOT NULL);",
+            "CREATE TABLE b (value TEXT NOT NULL);",
+            "CREATE TABLE c (value TEXT NOT NULL);",
+        ),
+    )
+    database.close()
+
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("DELETE FROM schema_migrations WHERE version = 2")
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(RuntimeError, match="迁移账本被外部改写"):
+        SQLiteStateDatabase(
+            path=path,
+            schema_version=3,
+            migrations=(
+                "CREATE TABLE a (value TEXT NOT NULL);",
+                "CREATE TABLE b (value TEXT NOT NULL);",
+                "CREATE TABLE c (value TEXT NOT NULL);",
+            ),
+        )
+
+
+def test_sqlite_state_rejects_migration_ledger_ahead_of_program(tmp_path):
+    """账本版本高于程序支持的迁移数量时必须 fail-closed。"""
+
+    path = tmp_path / "state.sqlite"
+    database = SQLiteStateDatabase(
+        path=path,
+        schema_version=1,
+        migrations=("CREATE TABLE a (value TEXT NOT NULL);",),
+    )
+    database.close()
+
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (2, 'x')"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(RuntimeError, match="高于当前程序支持范围"):
+        SQLiteStateDatabase(
+            path=path,
+            schema_version=1,
+            migrations=("CREATE TABLE a (value TEXT NOT NULL);",),
+        )
