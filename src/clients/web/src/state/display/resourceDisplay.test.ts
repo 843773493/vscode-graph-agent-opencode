@@ -5,7 +5,7 @@ import {
   resourceTreeTitle,
   statusLabel,
   stripTerminalNamePrefix,
-} from "../display/resourceDisplay";
+} from "./resourceDisplay";
 
 function terminalResource(
   name: string,

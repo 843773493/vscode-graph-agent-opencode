@@ -5,7 +5,7 @@ import {
   formatToolCardContent,
   isRoutineInternalToolItem,
   toolCollapsedText,
-} from "../display/toolDisplay";
+} from "./toolDisplay";
 
 type AggregatedToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
 
