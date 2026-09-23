@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
-from contextlib import suppress
+from contextlib import aclosing
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -15,6 +14,10 @@ from app.api.deps import (
     get_message_stream_store,
     get_request_id,
     verify_local_token,
+)
+from app.api.sse_heartbeat import (
+    SSE_HEARTBEAT_INTERVAL_SECONDS,
+    stream_sse_with_heartbeat,
 )
 from app.protocol.codecs.message_stream import (
     message_stream_to_json,
@@ -31,9 +34,6 @@ from app.services.infrastructure.message_stream_store import (
 
 router = APIRouter(prefix="/sessions", tags=["message-stream"])
 MessageStreamEventRecord = Mapping[str, object]
-# 空闲心跳：与 trace 流、workspace 文件流保持同一口径（15s 间隔 + `: heartbeat` 注释）。
-# 该流在长工具运行期间会长时间没有新事件，若无心跳前端无法设置空闲阈值。
-MESSAGE_STREAM_HEARTBEAT_INTERVAL_SECONDS = 15.0
 # stream.snapshot 的定位字段只保留在事件信封中，payload 不重复承载。
 _SNAPSHOT_ENVELOPE_FIELDS = ("session_id", "turn_id", "turn_stream_id")
 
@@ -130,40 +130,26 @@ async def _stream_message_sse(
     records: AsyncIterator[MessageStreamEventRecord],
     *,
     request: Request,
-    heartbeat_interval_seconds: float = MESSAGE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
+    heartbeat_interval_seconds: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
 ) -> AsyncIterator[str]:
     """在真实消息流事件之间发送 SSE 注释心跳。
 
     与 ``_stream_trace_sse``、workspace 文件流同形：事件任务与心跳超时竞争，
     超时即发 ``: heartbeat`` 注释帧（不是业务事件），客户端断开时立即停止。
     """
-    iterator = aiter(records)
-    next_record = asyncio.create_task(anext(iterator))
-    try:
-        while True:
-            completed, _ = await asyncio.wait(
-                {next_record},
-                timeout=heartbeat_interval_seconds,
-            )
-            if not completed:
-                if await request.is_disconnected():
-                    return
-                yield ": heartbeat\n\n"
+    async with aclosing(
+        stream_sse_with_heartbeat(
+            records,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            close_source_on_exit=True,
+            is_disconnected=request.is_disconnected,
+        )
+    ) as stream:
+        async for item in stream:
+            if isinstance(item, str):
+                yield item
                 continue
-            try:
-                event = next_record.result()
-            except StopAsyncIteration:
-                return
-            if await request.is_disconnected():
-                return
-            yield _sse_frame(event)
-            next_record = asyncio.create_task(anext(iterator))
-    finally:
-        if not next_record.done():
-            next_record.cancel()
-            with suppress(asyncio.CancelledError):
-                await next_record
-        await iterator.aclose()
+            yield _sse_frame(item)
 
 
 @router.get(
@@ -219,7 +205,7 @@ async def stream_message_events(
                 after_seq=cursor,
             ),
             request=request,
-            heartbeat_interval_seconds=MESSAGE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
+            heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
         ),
         media_type="text/event-stream",
         headers={

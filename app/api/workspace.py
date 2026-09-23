@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-from contextlib import suppress
+from contextlib import aclosing
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -14,6 +13,10 @@ from app.api.deps import (
     get_workspace_file_watch_service,
     get_workspace_service,
     verify_local_token,
+)
+from app.api.sse_heartbeat import (
+    SSE_HEARTBEAT_INTERVAL_SECONDS,
+    stream_sse_with_heartbeat,
 )
 from app.core.exceptions import ForbiddenError
 from app.protocol.codecs.workspace_events import (
@@ -51,8 +54,6 @@ from app.services.infrastructure.workspace_service import (
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
-WORKSPACE_FILE_STREAM_HEARTBEAT_SECONDS = 15.0
-
 
 @router.post(
     "/files/events",
@@ -83,21 +84,17 @@ async def stream_workspace_file_events(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
     async def generate():
-        iterator = aiter(watch_service.subscribe_roots(roots))
-        next_batch = asyncio.create_task(anext(iterator))
-        try:
-            while True:
-                completed, _ = await asyncio.wait(
-                    {next_batch},
-                    timeout=WORKSPACE_FILE_STREAM_HEARTBEAT_SECONDS,
-                )
-                if not completed:
-                    yield ": heartbeat\n\n"
+        async with aclosing(
+            stream_sse_with_heartbeat(
+                watch_service.subscribe_roots(roots),
+                heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
+                close_source_on_exit=True,
+            )
+        ) as stream:
+            async for batch in stream:
+                if isinstance(batch, str):
+                    yield batch
                     continue
-                try:
-                    batch = next_batch.result()
-                except StopAsyncIteration:
-                    return
                 if batch.error is not None:
                     data = json.dumps(
                         sse_error_to_json(sse_error_to_proto(batch.error)),
@@ -122,13 +119,6 @@ async def stream_workspace_file_events(
                     separators=(",", ":"),
                 )
                 yield f"event: changes\ndata: {data}\n\n"
-                next_batch = asyncio.create_task(anext(iterator))
-        finally:
-            if not next_batch.done():
-                next_batch.cancel()
-                with suppress(asyncio.CancelledError):
-                    await next_batch
-            await iterator.aclose()
 
     return StreamingResponse(
         generate(),

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import AsyncIterator
-from contextlib import suppress
+from contextlib import aclosing
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -27,6 +26,10 @@ from app.api.deps import (
     get_session_service,
     get_session_skill_tracking_service,
     verify_local_token,
+)
+from app.api.sse_heartbeat import (
+    SSE_HEARTBEAT_INTERVAL_SECONDS,
+    stream_sse_with_heartbeat,
 )
 from app.core.exceptions import NotFoundError
 from app.protocol.codecs.workspace_events import trace_to_json, trace_to_proto
@@ -94,7 +97,6 @@ from app.services.infrastructure.turn_history.trace_page import (
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
-TRACE_STREAM_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 
 @router.get(
@@ -533,29 +535,24 @@ async def stream_session_traces(
 async def _stream_trace_sse(
     events: AsyncIterator[tuple[TraceEventDTO, str]],
     *,
-    heartbeat_interval_seconds: float = TRACE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
+    heartbeat_interval_seconds: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
 ) -> AsyncIterator[str]:
     """在真实 Trace 事件之间发送 SSE 注释心跳。"""
     if heartbeat_interval_seconds <= 0:
         raise ValueError("SSE 心跳间隔必须大于 0")
 
-    iterator = aiter(events)
-    next_event = asyncio.create_task(anext(iterator))
-    try:
-        while True:
-            completed, _ = await asyncio.wait(
-                {next_event},
-                timeout=heartbeat_interval_seconds,
-            )
-            if not completed:
-                yield ": heartbeat\n\n"
+    async with aclosing(
+        stream_sse_with_heartbeat(
+            events,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            close_source_on_exit=False,
+        )
+    ) as stream:
+        async for item in stream:
+            if isinstance(item, str):
+                yield item
                 continue
-
-            try:
-                event, cursor = next_event.result()
-            except StopAsyncIteration:
-                return
-
+            event, cursor = item
             event_payload = event.model_dump(mode="json")
             data = json.dumps(
                 trace_to_json(trace_to_proto(event_payload)),
@@ -563,12 +560,6 @@ async def _stream_trace_sse(
                 separators=(",", ":"),
             )
             yield f"id: {cursor}\nevent: trace\ndata: {data}\n\n"
-            next_event = asyncio.create_task(anext(iterator))
-    finally:
-        if not next_event.done():
-            next_event.cancel()
-            with suppress(asyncio.CancelledError):
-                await next_event
 
 
 def _trace_cursor_gone_http_error(exc: TraceCursorGoneError) -> HTTPException:
