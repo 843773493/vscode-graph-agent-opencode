@@ -34,8 +34,6 @@ import {
 } from "react";
 import {
   DEFAULT_BACKEND_PORT,
-  DEFAULT_SESSION_TITLE,
-  createSessionCatalogFolder,
 } from "./api";
 import {
   useAppState,
@@ -48,8 +46,8 @@ import { useChildThreadLoader } from "./hooks/session/useChildThreadLoader";
 import { useGatewayExtensionResources } from "./hooks/gatewayExtensions/useGatewayExtensionResources";
 import { useGatewayExtensionWindow } from "./hooks/gatewayExtensions/useGatewayExtensionWindow";
 import { useWorkbenchPanelRouting } from "./hooks/panel/useWorkbenchPanelRouting";
+import { useSessionCatalogActions } from "./hooks/shell/useSessionCatalogActions";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
-import { buildSessionCatalogSyncKeys } from "./hooks/sessionResourceExplorer/resourceTreeSync";
 import { createSessionConnection } from "./api/gateway/sessionConnections";
 import {
   DEFAULT_GATEWAY_PANEL_HEIGHT,
@@ -78,12 +76,6 @@ import type {
   WebUiSettings,
   WebUiSettingsUpdate,
 } from "./types/backend";
-
-type SessionNameDialogState = {
-  sessionId: string;
-  workspaceId: string;
-  initialTitle: string;
-};
 
 const DEFAULT_AUXILIARY_TAB_ORDER: WorkspaceAuxiliaryTab[] = [
   "files",
@@ -153,14 +145,9 @@ export default function AppShell() {
     ),
     [loadTurnDetails],
   );
-  const [nameDialog, setNameDialog] = useState<SessionNameDialogState | null>(null);
-  const [sessionCatalogRefreshVersions, setSessionCatalogRefreshVersions] =
-    useState<ReadonlyMap<string, number>>(new Map());
   const [workbenchView, setWorkbenchView] = useState<WorkbenchView>(
     () => state.uiSettings.layout.workbench_view ?? "sessions",
   );
-  const [nameDialogSubmitting, setNameDialogSubmitting] = useState(false);
-  const [nameDialogError, setNameDialogError] = useState<string | null>(null);
   const [auxiliaryTab, setAuxiliaryTab] = useState<WorkspaceAuxiliaryTab>(
     () => extensionWindowRequested
       ? extensionWindowRequest?.kind === "debug" ? "debug" : "resources"
@@ -264,17 +251,6 @@ export default function AppShell() {
     () => resolveAgentSessionsPreferences(state.uiSettings),
     [state.uiSettings],
   );
-  const sessionCatalogSyncKeys = useMemo(
-    () => buildSessionCatalogSyncKeys(state.sessionsByWorkspace),
-    [state.sessionsByWorkspace],
-  );
-  const invalidateSessionCatalog = useCallback((workspaceId: string) => {
-    setSessionCatalogRefreshVersions((previous) => {
-      const next = new Map(previous);
-      next.set(workspaceId, (previous.get(workspaceId) ?? 0) + 1);
-      return next;
-    });
-  }, []);
   const expandedFileTreePaths = useMemo(() => {
     if (!activeSessionWorkspaceId) {
       return [""];
@@ -860,174 +836,42 @@ export default function AppShell() {
     setWorkspaceBottomPanelStates,
     updateBottomPanelState,
   });
-  const handleCreateSession = async (workspaceId?: string | null) => {
-    setNameDialog(null);
-    setNameDialogError(null);
-    // 顶部“新建会话”属于当前 Gateway 工作区；只有尚未激活工作区时
-    // 才回退到系统默认 home，避免从测试/远程工作区误建到 home。
-    const targetWorkspaceId = workspaceId
-      ?? state.activeGatewayWorkspaceId
-      ?? state.gatewayWorkspaces.find(
-        (workspace) => workspace.system_default,
-      )?.workspace_id;
-    if (!targetWorkspaceId) {
-      const error = new Error("未找到默认 home 工作区，无法创建会话");
-      setStatus(`创建会话失败: ${error.message}`);
-      throw error;
-    }
-    try {
-      if (targetWorkspaceId !== state.activeGatewayWorkspaceId) {
-        await activateGatewayWorkspace(targetWorkspaceId);
-      }
-      await createSession(DEFAULT_SESSION_TITLE, targetWorkspaceId);
-      invalidateSessionCatalog(targetWorkspaceId);
-    } catch (error) {
-      setStatus(`创建会话失败: ${errorMessage(error)}`);
-      throw error;
-    }
-  };
-  const handleCreateSessionInFolder = async (
-    workspaceId: string,
-    folderId: string,
-  ) => {
-    if (workspaceId !== state.activeGatewayWorkspaceId) {
-      await activateGatewayWorkspace(workspaceId);
-    }
-    await createSession(DEFAULT_SESSION_TITLE, workspaceId, folderId);
-    invalidateSessionCatalog(workspaceId);
-  };
-  const handleCreateSessionFolder = async (
-    workspaceId: string,
-    parentNodeId: string | null,
-    name: string,
-  ) => {
-    await createSessionCatalogFolder(
-      resolvedApiPort,
-      workspaceId,
-      name,
-      parentNodeId,
-    );
-    invalidateSessionCatalog(workspaceId);
-  };
-  const handleSessionFolderDeleted = async (
-    workspaceId: string,
-    deletedCurrentSession: boolean,
-  ) => {
-    if (workspaceId !== state.activeGatewayWorkspaceId) {
-      return;
-    }
-    await activateGatewayWorkspace(
-      workspaceId,
-      deletedCurrentSession ? null : activeSession?.session_id ?? null,
-    );
-  };
-  const handleSelectAgentSession = async (
-    workspaceId: string,
-    sessionId: string,
-  ) => {
-    await openWorkspaceSession(workspaceId, sessionId);
-  };
-  const handleRemoveWorkspace = (workspaceId: string, workspaceName: string) => {
-    const label = workspaceName || workspaceId;
-    void confirm({
-      title: "删除工作区",
-      message: `从 Web Gateway 列表移除工作区“${label}”。会话文件不会被删除。`,
-      confirmText: "删除",
-      danger: true,
-    }).then(async (confirmed) => {
-      if (confirmed) {
-        await removeGatewayWorkspace(workspaceId);
-      }
-    }).catch((error: unknown) => {
-      setStatus(`删除工作区失败: ${errorMessage(error)}`);
-    });
-  };
-  const handleUseGatewayWorkspace = async (workspaceId: string) => {
-    if (workspaceId !== state.activeGatewayWorkspaceId) {
-      await activateGatewayWorkspace(workspaceId);
-    }
-    handleWorkbenchViewChange("sessions");
-  };
-  const handleRenameSession = (
-    sessionId: string,
-    currentTitle: string,
-    workspaceId: string,
-  ) => {
-    setNameDialog({
-      sessionId,
-      workspaceId,
-      initialTitle: currentTitle || "新会话",
-    });
-    setNameDialogError(null);
-  };
-  const handleDeleteSession = (
-    sessionId: string,
-    title: string,
-    workspaceId: string,
-  ) => {
-    const label = title || sessionId;
-    void confirm({
-      title: "永久删除会话",
-      message: `永久删除会话“${label}”。如果它包含子会话，将级联删除整棵子会话树及其消息、检查点、日志、附件和运行资源。此操作无法撤销。`,
-      confirmText: "删除",
-      danger: true,
-    }).then(async (confirmed) => {
-      if (!confirmed) {
-        return;
-      }
-      await deleteSession(sessionId, workspaceId);
-      invalidateSessionCatalog(workspaceId);
-    }).catch((error: unknown) => {
-      setStatus(`删除会话失败: ${errorMessage(error)}`);
-    });
-  };
-  const handleSetSessionParent = async (
-    workspaceId: string,
-    sessionId: string,
-    parentSessionId: string | null,
-  ) => {
-    await setSessionParent(workspaceId, sessionId, parentSessionId);
-    invalidateSessionCatalog(workspaceId);
-  };
-  const handleForkSessionContext = async (
-    workspaceId: string,
-    sourceSessionId: string,
-  ) => {
-    await forkSessionContext(workspaceId, sourceSessionId);
-    invalidateSessionCatalog(workspaceId);
-  };
-  const closeNameDialog = () => {
-    if (nameDialogSubmitting) {
-      return;
-    }
-    setNameDialog(null);
-    setNameDialogError(null);
-  };
-  const submitNameDialog = (title: string) => {
-    if (!nameDialog) {
-      return;
-    }
-
-    setNameDialogSubmitting(true);
-    setNameDialogError(null);
-    const action = renameSession(
-      nameDialog.sessionId,
-      title,
-      nameDialog.workspaceId,
-    );
-
-    void action
-      .then(() => {
-        invalidateSessionCatalog(nameDialog.workspaceId);
-        setNameDialog(null);
-      })
-      .catch((error: unknown) => {
-        setNameDialogError(errorMessage(error));
-      })
-      .finally(() => {
-        setNameDialogSubmitting(false);
-      });
-  };
+  const {
+    nameDialog,
+    nameDialogSubmitting,
+    nameDialogError,
+    sessionCatalogRefreshVersions,
+    sessionCatalogSyncKeys,
+    invalidateSessionCatalog,
+    createSessionInCatalog: handleCreateSession,
+    createSessionInFolder: handleCreateSessionInFolder,
+    createSessionFolder: handleCreateSessionFolder,
+    handleSessionFolderDeleted,
+    selectAgentSession: handleSelectAgentSession,
+    removeWorkspace: handleRemoveWorkspace,
+    openRenameDialog: handleRenameSession,
+    removeSession: handleDeleteSession,
+    changeSessionParent: handleSetSessionParent,
+    forkSession: handleForkSessionContext,
+    closeNameDialog,
+    submitNameDialog,
+  } = useSessionCatalogActions({
+    apiPort: resolvedApiPort,
+    activeGatewayWorkspaceId: state.activeGatewayWorkspaceId,
+    activeSessionId: activeSession?.session_id ?? null,
+    sessionsByWorkspace: state.sessionsByWorkspace,
+    gatewayWorkspaces: state.gatewayWorkspaces,
+    confirm,
+    setStatus,
+    activateGatewayWorkspace,
+    createSession,
+    openWorkspaceSession,
+    removeGatewayWorkspace,
+    deleteSession,
+    renameSession,
+    forkSessionContext,
+    setSessionParent,
+  });
   return (
     <WorkspaceFileReferenceProvider
       apiPort={resolvedApiPort}
