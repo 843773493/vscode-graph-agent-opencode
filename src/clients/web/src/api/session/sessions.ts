@@ -11,7 +11,6 @@ import type {
 } from "../../types/backend";
 import { parseChildThreadStatus } from "../../types/protocol";
 import {
-  DEFAULT_API_REQUEST_TIMEOUT_MS,
   normalizePageResult,
   requestJson,
   unwrapApiData,
@@ -60,12 +59,7 @@ export async function listSessions(
   const data = await requestJson<APIResponse<CursorPage<Session>>>(
     port,
     "/api/v1/sessions",
-    workspaceId
-      ? {
-          headers: workspaceHeader(workspaceId),
-          timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS,
-        }
-      : { timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
+    { headers: workspaceHeader(workspaceId) },
   );
   return normalizePageResult<Session>(unwrapApiData(data), "会话列表");
 }
