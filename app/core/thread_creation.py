@@ -86,6 +86,10 @@ from pathlib import Path
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
+    validate_path_budget,
+)
+from app.core.session_control_primitives import (
+    validate_thread_creation_key,
 )
 from app.core.session_control_store import (
     SessionControlStore,
@@ -280,6 +284,10 @@ def validate_artifact_manifest(artifact_manifest: dict[str, object]) -> None:
     相对路径必须是安全多段路径（无绝对路径/``..``/反斜杠/空段/NUL），
     落位 ``<child node>/artifacts/<相对路径>``；内容必须是 str（UTF-8
     文本）。空 dict 合法（无附加 artifact）。
+
+    路径之间不得语义冲突：同一相对路径既是文件又是另一路径的祖先目录
+    （如同时给出 ``x`` 与 ``x/y``），落盘时必然抛裸 ``FileExistsError``
+    并留下半成品 staging、重入永久 fail closed，故在准入前明确拒绝。
     """
     if not isinstance(artifact_manifest, dict):
         raise TypeError(
@@ -302,6 +310,16 @@ def validate_artifact_manifest(artifact_manifest: dict[str, object]) -> None:
             raise TypeError(
                 f"artifact 内容必须是 str（UTF-8 文本）: {rel_path!r}"
             )
+        # 本路径的每个祖先目录都被本文件占用；祖先目录若同时作为另一
+        # artifact 的文件路径出现，即 file/dir 语义冲突。逐路径检查即可
+        # 覆盖两种给出顺序（后出现者必然看到先前注册的祖先）。
+        for depth in range(1, len(segments)):
+            ancestor = "/".join(segments[:depth])
+            if ancestor in artifact_manifest:
+                raise ValueError(
+                    "artifact 路径与另一 artifact 互为文件/目录（语义冲突）: "
+                    f"{rel_path!r} 的祖先目录 {ancestor!r} 同时是文件"
+                )
 
 
 def compute_thread_creation_preimage_hash(
@@ -671,6 +689,15 @@ class ThreadCreationService:
                 self._control_store.verify_matches_catalog_main_thread(
                     str(node.main_thread_id)
                 )
+                # 落盘前先校验路径预算与 artifact 语义：超限/冲突的输入若
+                # 拖到 staging 准备阶段才失败，会留下裸 OSError 与半成品
+                # staging，且 record 已按同 preimage 冻结、重入永久 fail
+                # closed。故在冻结 record 前（任何状态变更之前）明确拒绝。
+                self._validate_filesystem_budget(
+                    session_dir=session_dir,
+                    idempotency_key=idempotency_key,
+                    artifact_manifest=artifact_manifest,
+                )
                 collaboration_revision: int | None = None
                 if collaboration_member is not None:
                     # ledger 登记先于 record 冻结（同一 gate 临界区内）：
@@ -806,22 +833,10 @@ class ThreadCreationService:
         collaboration_member: dict[str, object] | None = None,
     ) -> None:
         """create 入参校验（在任何状态变更之前 fail fast）。"""
-        if not isinstance(idempotency_key, str) or not idempotency_key:
-            raise ValueError(
-                f"idempotency_key 不能为空: {idempotency_key!r}"
-            )
-        # idempotency_key 是 session 内 .staging/ 目录名，必须是安全单段
-        # 路径名（与 store 侧校验同口径，服务层先行 fail fast）。
-        if (
-            idempotency_key in (".", "..")
-            or "/" in idempotency_key
-            or "\\" in idempotency_key
-            or "\x00" in idempotency_key
-        ):
-            raise ValueError(
-                "idempotency_key 必须是安全单段路径名（不含分隔符/./..）: "
-                f"{idempotency_key!r}"
-            )
+        # idempotency_key 是 session 内 .staging/ 目录名：与 store 侧共用
+        # 同一口径（session_control_primitives 单点定义），服务层先行
+        # fail fast。
+        validate_thread_creation_key(idempotency_key)
         if not isinstance(session_id, str) or not session_id:
             raise ValueError(f"session_id 不能为空: {session_id!r}")
         if thread_id is not None:
@@ -870,6 +885,37 @@ class ThreadCreationService:
                 raise ValueError(
                     f"collaboration_member[{key!r}] 必须是非空字符串: {value!r}"
                 )
+
+    def _validate_filesystem_budget(
+        self,
+        *,
+        session_dir: Path,
+        idempotency_key: str,
+        artifact_manifest: dict[str, object],
+    ) -> None:
+        """在冻结 record 前校验落盘路径的组件/总长预算。
+
+        staging 目录名（幂等键）与每个 artifact 相对路径都必须在落盘前
+        落在文件系统预算内（组件 ≤255 bytes、总长 ≤4096 bytes）；否则
+        ``_prepare_staging`` 会抛裸 ``OSError`` 并留下半成品 staging，而
+        record 已按输入 preimage 冻结、重入永久 fail closed（拒绝服务）。
+        预算口径复用 ``session_catalog_store.validate_path_budget``，不复制
+        第二份常量。
+
+        artifact 的最终落位是
+        ``<session_dir>/threads/YYYY/MM/DD/thr_<32hex>/artifacts/<rel>``；
+        ``thread_id``（恒定 36 字符）与日期桶（恒定 10 字符）长度固定，用
+        等长占位符即可精确复现总长预算。
+        """
+        validate_path_budget(
+            session_dir, f"{_STAGING_DIR_NAME}/{idempotency_key}"
+        )
+        node_locator = "threads/0000/00/00/" + "thr_" + "0" * 32
+        for rel_path in artifact_manifest:
+            validate_path_budget(
+                session_dir,
+                f"{node_locator}/{_ARTIFACTS_DIR_NAME}/{rel_path}",
+            )
 
     def _key_lock(self, idempotency_key: str) -> asyncio.Lock:
         """按 key create-or-get 进程内串行锁（锁随进程生命周期保留）。"""

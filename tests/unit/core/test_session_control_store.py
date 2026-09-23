@@ -121,6 +121,27 @@ def test_sha256_hex_pattern_has_single_neutral_definition() -> None:
     assert SHA256_HEX_PATTERN.fullmatch("A" * 64) is None
 
 
+def test_thread_creation_key_has_single_neutral_definition() -> None:
+    """幂等键形态校验只有一处实现（中立原语模块），store 与服务共用。
+
+    宿主曾自带一份 ``_validate_thread_creation_key`` 静态方法、thread
+    creation service 又逐字复制了同一段，三处口径分叉风险：任一处放宽
+    ``.``/``..``/分隔符/版本判定都会让另一处静默失效。本断言固化收敛结果。
+    """
+    import app.core.session_control_store as host
+    import app.core.thread_creation as creation
+    from app.core.session_control_primitives import validate_thread_creation_key
+
+    assert host.validate_thread_creation_key is validate_thread_creation_key
+    assert creation.validate_thread_creation_key is validate_thread_creation_key
+    # 宿主不再保留自带第二份实现（私有名一并下线）。
+    assert not hasattr(SessionControlStore, "_validate_thread_creation_key")
+    host_source = Path(host.__file__).read_text(encoding="utf-8")
+    assert "必须是安全单段路径名（不含分隔符/./..）" not in host_source
+    creation_source = Path(creation.__file__).read_text(encoding="utf-8")
+    assert "必须是安全单段路径名（不含分隔符/./..）" not in creation_source
+
+
 def test_initialize_is_idempotent_on_reopen(tmp_path: Path) -> None:
     target = tmp_path / "session-control.sqlite"
     first = SessionControlStore(target)
@@ -2788,6 +2809,84 @@ def test_outbox_idempotent_reentry_compares_receipt_column(
                 new_state="target_accepted",
                 receipt_json="[]",
                 abort_reason="sneaky",
+            )
+    finally:
+        store.close()
+
+
+def test_outbox_failure_state_preserves_authenticated_receipt(
+    tmp_path: Path,
+) -> None:
+    """失败/取消只写 abort_reason，既有受认证 receipt 不得被抹掉。
+
+    修复前：CAS 的 SET 子句把 ``latest_receipt`` 写成传入的 ``None``，
+    ``target_accepted → failed`` 会静默抹掉已认证 receipt；行不变量
+    “latest_receipt 记录最近一次受认证 target receipt，target_accepted
+    起非空”被破坏，迟到重试再也拿不到 receipt 验证字段。
+    """
+    store = SessionControlStore(tmp_path / "outbox-receipt-preserve.sqlite")
+    try:
+        record, _ = store.create_or_get_communication_outbox(
+            **outbox_kwargs(make_comm_id())
+        )
+        operation_id = record.send_operation_id
+        store.advance_communication_outbox_state(operation_id, new_state="routing")
+        accepted = store.advance_communication_outbox_state(
+            operation_id, new_state="target_accepted", receipt_json='{"r":1}'
+        )
+        assert accepted.latest_receipt == '{"r":1}'
+        # 失败态：receipt 保留、abort_reason 落库。
+        failed = store.advance_communication_outbox_state(
+            operation_id, new_state="failed", abort_reason="remote-unreachable"
+        )
+        assert failed.latest_receipt == '{"r":1}'
+        assert failed.abort_reason == "remote-unreachable"
+        # 失败态重入幂等（只比 abort_reason，receipt 由既有行保留）。
+        assert store.advance_communication_outbox_state(
+            operation_id, new_state="failed", abort_reason="remote-unreachable"
+        ).latest_receipt == '{"r":1}'
+        # 失败态夹带 receipt → 明确拒绝（不接受覆盖受认证 receipt）。
+        with pytest.raises(ValueError, match="不得携带 receipt JSON"):
+            store.advance_communication_outbox_state(
+                operation_id,
+                new_state="failed",
+                abort_reason="remote-unreachable",
+                receipt_json="{\"spoofed\":1}",
+            )
+    finally:
+        store.close()
+
+
+def test_outbox_success_state_rejects_abort_reason(
+    tmp_path: Path,
+) -> None:
+    """成功态不得夹带 abort_reason（非失败态不接受该列）。"""
+    store = SessionControlStore(tmp_path / "outbox-abort-reject.sqlite")
+    try:
+        record, _ = store.create_or_get_communication_outbox(
+            **outbox_kwargs(make_comm_id())
+        )
+        operation_id = record.send_operation_id
+        store.advance_communication_outbox_state(operation_id, new_state="routing")
+        with pytest.raises(ValueError, match="不得携带 abort_reason"):
+            store.advance_communication_outbox_state(
+                operation_id,
+                new_state="target_accepted",
+                receipt_json="[]",
+                abort_reason="sneaky",
+            )
+        # 未写入：仍停在 routing（拒绝不推进状态）。
+        assert store.connection.execute(
+            "SELECT state FROM communication_outbox WHERE send_operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0] == "routing"
+        # 非载荷中间态不接受任一载荷列（新 operation，accepted → routing）。
+        fresh, _ = store.create_or_get_communication_outbox(
+            **outbox_kwargs(make_comm_id())
+        )
+        with pytest.raises(ValueError, match="不接受 receipt/abort_reason"):
+            store.advance_communication_outbox_state(
+                fresh.send_operation_id, new_state="routing", abort_reason="x"
             )
     finally:
         store.close()

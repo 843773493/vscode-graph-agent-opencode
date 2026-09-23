@@ -611,21 +611,36 @@ class CommunicationLedgerMixin:
 
         - target_accepted/execution_bound/terminal 必须携带 receipt JSON；
         - failed/cancelled 必须携带 abort_reason；
-        - 已终态不可再迁移；重复提交相同 (state, receipt) 幂等返回。
+        - 两类载荷列互斥：成功态不得夹带 abort_reason，失败态不得夹带
+          receipt；非载荷中间态（routing）不得夹带任一载荷；
+        - 失败/取消只写 abort_reason，**保留既有受认证 receipt**（行不变量
+          “latest_receipt 记录最近一次受认证 target receipt，
+          target_accepted 起非空”；design.md §957 要求 terminal 后仍保留
+          receipt 验证字段供迟到重试返回原结果或冲突）；
+        - 已终态不可再迁移；重复提交相同载荷幂等返回。
         """
         _validate_communication_text(send_operation_id, field="send_operation_id")
         if new_state not in _COMMUNICATION_OUTBOX_TRANSITIONS and (
             new_state not in _COMMUNICATION_OUTBOX_TERMINAL_STATES
         ):
             raise ValueError(f"outbox 新状态非法: {new_state!r}")
-        if new_state in ("target_accepted", "execution_bound", "terminal") and (
-            receipt_json is None
-        ):
+        success_state = new_state in (
+            "target_accepted", "execution_bound", "terminal"
+        )
+        failure_state = new_state in ("failed", "cancelled")
+        if success_state and receipt_json is None:
             raise ValueError(f"outbox 迁移到 {new_state!r} 必须携带 receipt JSON")
-        if new_state in ("failed", "cancelled") and abort_reason is None:
-            raise ValueError(
-                f"outbox 迁移到 {new_state!r} 必须携带 abort_reason"
-            )
+        if failure_state:
+            if abort_reason is None:
+                raise ValueError(
+                    f"outbox 迁移到 {new_state!r} 必须携带 abort_reason"
+                )
+            if receipt_json is not None:
+                raise ValueError(
+                    f"outbox 迁移到 {new_state!r} 不得携带 receipt JSON"
+                    "（受认证 receipt 由既有行保留，不接受覆盖）"
+                )
+
         with self._write_transaction() as connection:
             row = _fetch_outbox_row_by_operation(connection, send_operation_id)
             if row is None:
@@ -637,10 +652,16 @@ class CommunicationLedgerMixin:
             if record.state == new_state:
                 # 幂等重入必须逐字复现本方法可写的两个载荷列（与 CAS 的
                 # SET 子句一一对应）；任一漂移 fail closed，不静默接受。
-                if (
-                    record.latest_receipt != receipt_json
-                    or record.abort_reason != abort_reason
-                ):
+                # failed/cancelled 只写 abort_reason（receipt 保留既有值），
+                # 其余状态 receipt/abort_reason 都必须逐字复现提交值。
+                if failure_state:
+                    drifted = record.abort_reason != abort_reason
+                else:
+                    drifted = (
+                        record.latest_receipt != receipt_json
+                        or record.abort_reason != abort_reason
+                    )
+                if drifted:
                     raise RuntimeError(
                         "outbox 重复提交同状态但载荷漂移（fail closed）: "
                         f"send_operation_id={send_operation_id!r}, "
@@ -658,14 +679,42 @@ class CommunicationLedgerMixin:
                     f"current={record.state!r}, requested={new_state!r}, "
                     f"allowed={allowed!r}"
                 )
+            # 载荷列必须与目标状态匹配：成功态禁带 abort_reason，非载荷中间
+            # 态（routing）两列都不得夹带。状态已一致的重入走上方幂等分支，
+            # 保持既有 RuntimeError「载荷漂移」契约不变。
+            if success_state and abort_reason is not None:
+                raise ValueError(
+                    f"outbox 迁移到 {new_state!r} 不得携带 abort_reason"
+                    "（abort_reason 只属于 failed|cancelled）"
+                )
+            if not success_state and not failure_state and (
+                receipt_json is not None or abort_reason is not None
+            ):
+                raise ValueError(
+                    f"outbox 迁移到 {new_state!r} 不接受 receipt/"
+                    "abort_reason 载荷"
+                )
+            # 失败/取消只写 abort_reason，保留既有受认证 receipt（行不变量：
+            # latest_receipt 记录最近一次受认证 target receipt，
+            # target_accepted 起非空）；成功态只写 receipt；非载荷中间态两列
+            # 都为空。载荷列与目标状态的合法性已在上方统一校验。
+            if failure_state:
+                target_receipt = record.latest_receipt
+                target_abort_reason: str | None = abort_reason
+            elif success_state:
+                target_receipt = receipt_json
+                target_abort_reason = None
+            else:
+                target_receipt = None
+                target_abort_reason = None
             cursor = connection.execute(
                 "UPDATE communication_outbox SET state = ?, "
                 "latest_receipt = ?, abort_reason = ?, updated_at = ? "
                 "WHERE send_operation_id = ? AND state = ?",
                 (
                     new_state,
-                    receipt_json,
-                    abort_reason,
+                    target_receipt,
+                    target_abort_reason,
                     datetime.now(UTC).isoformat(),
                     send_operation_id,
                     record.state,

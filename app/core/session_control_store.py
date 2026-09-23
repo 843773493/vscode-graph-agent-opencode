@@ -83,6 +83,7 @@ from app.core.session_control_primitives import (
     EXECUTION_JOB_ID_PATTERN,
     SHA256_HEX_PATTERN,
     validate_claim_fields,
+    validate_thread_creation_key,
 )
 from app.core.session_control_thread_catalog.thread_catalog import (
     LIFECYCLE_FENCE_TABLE_DDL,
@@ -709,8 +710,8 @@ class SessionControlStore(
             # 行级身份复验（防绕过软件直改 v2 库）：与落库闸门同口径。
             validate_session_id(session_id)
             validate_thread_id(thread_id)
-            self._validate_thread_creation_key(admission_key)
-            self._validate_thread_creation_key(creation_key)
+            validate_thread_creation_key(admission_key)
+            validate_thread_creation_key(creation_key)
             if initial_state not in _INITIAL_STATE_VALUES:
                 raise RuntimeError(
                     "thread_execution_intents v2→v3 升级发现非法 "
@@ -821,7 +822,7 @@ class SessionControlStore(
         - 同 delegation 内容漂移或已 ``cancelled``（同 delegation 不换
           绑）→ ``RuntimeError`` fail closed。
         """
-        self._validate_thread_creation_key(delegation_id)
+        validate_thread_creation_key(delegation_id)
         for name, value in (
             ("coordinator_session_id", coordinator_session_id),
             ("coordinator_thread_id", coordinator_thread_id),
@@ -884,7 +885,7 @@ class SessionControlStore(
 
     def get_collaboration_member(self, delegation_id: str) -> CollaborationMember:
         """按 delegation 幂等键返回 member 投影；不存在抛 KeyError。"""
-        self._validate_thread_creation_key(delegation_id)
+        validate_thread_creation_key(delegation_id)
         self._ensure_open()
         row = self._connection.execute(
             f"SELECT {_COLLABORATION_MEMBER_COLUMNS} "
@@ -926,27 +927,6 @@ class SessionControlStore(
     # ------------------------------------------------------------------
     # ThreadCreationRecord（8.5-A，R20：child thread 创建流 operation lease）
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _validate_thread_creation_key(idempotency_key: str) -> None:
-        """thread creation 幂等键校验：非空且是安全单段路径名。
-
-        幂等键是 session 目录内 ``.staging/<key>/`` staging 目录名（冻结
-        进 record 的 ``staging_locator``），含分隔符/``.``/``..`` 会破坏
-        定点定位，一律拒绝。
-        """
-        if not isinstance(idempotency_key, str) or not idempotency_key:
-            raise ValueError(f"idempotency_key 不能为空: {idempotency_key!r}")
-        if (
-            idempotency_key in (".", "..")
-            or "/" in idempotency_key
-            or "\\" in idempotency_key
-            or "\x00" in idempotency_key
-        ):
-            raise ValueError(
-                "idempotency_key 必须是安全单段路径名（不含分隔符/./..）: "
-                f"{idempotency_key!r}"
-            )
 
     @staticmethod
     def _validate_frozen_json_text(value: str, label: str) -> None:
@@ -1083,7 +1063,7 @@ class SessionControlStore(
         - ``collaboration_precondition_revision`` 本轮恒为 None（
           collaboration ledger 归 8.5）；publish 时遇非空值 fail closed。
         """
-        self._validate_thread_creation_key(idempotency_key)
+        validate_thread_creation_key(idempotency_key)
         if initial_state not in _INITIAL_STATE_VALUES:
             raise ValueError(f"initial_state 非法: {initial_state!r}")
         if not isinstance(preimage_hash, str) or not preimage_hash:
@@ -1328,7 +1308,7 @@ class SessionControlStore(
           fail closed）；
         - 仅 preparing 可冻结；published/aborted 拒绝。
         """
-        self._validate_thread_creation_key(idempotency_key)
+        validate_thread_creation_key(idempotency_key)
         self._validate_frozen_json_text(artifact_manifest, "artifact_manifest")
         parsed = json.loads(artifact_manifest)
         for key, value in parsed.items():
@@ -1400,7 +1380,7 @@ class SessionControlStore(
         idempotency_key: str,
     ) -> ThreadCreationRecord:
         """按幂等键返回 ThreadCreationRecord 投影；不存在抛 KeyError。"""
-        self._validate_thread_creation_key(idempotency_key)
+        validate_thread_creation_key(idempotency_key)
         self._ensure_open()
         row = self._fetch_thread_creation_record(self._connection, idempotency_key)
         if row is None:
@@ -1426,7 +1406,7 @@ class SessionControlStore(
         record 推进为 ``published``。任何失败回滚整个事务：child row 不
         发布、record 保持 preparing（调用方定点清理后 abort）。
         """
-        self._validate_thread_creation_key(idempotency_key)
+        validate_thread_creation_key(idempotency_key)
         with self._write_transaction() as connection:
             row = self._fetch_thread_creation_record(connection, idempotency_key)
             if row is None:
@@ -1639,7 +1619,7 @@ class SessionControlStore(
         已发布不回退）；已 aborted 幂等返回既有 record（不覆盖原
         abort_reason）。
         """
-        self._validate_thread_creation_key(idempotency_key)
+        validate_thread_creation_key(idempotency_key)
         if not isinstance(reason, str):
             raise TypeError(f"abort reason 必须是字符串: {reason!r}")
         if not reason:
@@ -1700,7 +1680,7 @@ class SessionControlStore(
         - record ``aborted`` → ``RuntimeError``；
         - record 缺失 → ``KeyError``。
         """
-        self._validate_thread_creation_key(idempotency_key)
+        validate_thread_creation_key(idempotency_key)
         self._ensure_open()
         row = self._fetch_thread_creation_record(self._connection, idempotency_key)
         if row is None:
@@ -1789,8 +1769,8 @@ class SessionControlStore(
         key 确定性派生、重试不变）与完整 preimage hash；claim 字段为
         NULL，等待 8.5-B worker 领取。
         """
-        self._validate_thread_creation_key(admission_idempotency_key)
-        self._validate_thread_creation_key(creation_idempotency_key)
+        validate_thread_creation_key(admission_idempotency_key)
+        validate_thread_creation_key(creation_idempotency_key)
         validate_session_id(session_id)
         validate_thread_id(thread_id)
         if initial_state not in _INITIAL_STATE_VALUES:
@@ -1913,7 +1893,7 @@ class SessionControlStore(
         admission_idempotency_key: str,
     ) -> ThreadExecutionIntent:
         """按 admission 幂等键返回 intent 投影；不存在抛 KeyError。"""
-        self._validate_thread_creation_key(admission_idempotency_key)
+        validate_thread_creation_key(admission_idempotency_key)
         self._ensure_open()
         row = _fetch_execution_intent_row(self._connection, admission_idempotency_key)
         if row is None:
@@ -1981,7 +1961,7 @@ class SessionControlStore(
 
         claim 不按 TTL 自动到期；intent 的可恢复事实一直保留。
         """
-        self._validate_thread_creation_key(admission_idempotency_key)
+        validate_thread_creation_key(admission_idempotency_key)
         validate_claim_fields(claim_owner, claim_generation)
         with self._write_transaction() as connection:
             row = _fetch_execution_intent_row(connection, admission_idempotency_key)
@@ -2083,7 +2063,7 @@ class SessionControlStore(
         - intent 未领取或 claim 不符 → ``RuntimeError``；不存在 →
           ``KeyError``。
         """
-        self._validate_thread_creation_key(admission_idempotency_key)
+        validate_thread_creation_key(admission_idempotency_key)
         _validate_execution_identity(execution_binding_id, job_id)
         validate_claim_fields(claim_owner, claim_generation)
         with self._write_transaction() as connection:
@@ -2197,7 +2177,7 @@ class SessionControlStore(
         ``pending``、claim 不符或 ``last_error`` 为空 → fail
         closed；不存在 → ``KeyError``。
         """
-        self._validate_thread_creation_key(admission_idempotency_key)
+        validate_thread_creation_key(admission_idempotency_key)
         validate_claim_fields(claim_owner, claim_generation)
         if not isinstance(last_error, str) or not last_error:
             raise ValueError(f"last_error 不能为空: {last_error!r}")

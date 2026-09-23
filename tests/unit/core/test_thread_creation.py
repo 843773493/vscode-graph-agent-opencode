@@ -625,6 +625,54 @@ def test_real_deep_agent_graph_binding_passes_validation() -> None:
     )
 
 
+async def test_create_rejects_file_directory_artifact_conflict(
+    service: ThreadCreationService,
+    owner: OwnerSession,
+) -> None:
+    """同一相对路径既是文件又是祖先目录 → 准入前明确拒绝（不落半成品）。
+
+    修复前：``validate_artifact_manifest`` 放行 ``{x, x/y}``，staging 准备
+    阶段抛裸 ``FileExistsError``，record 已按该 preimage 冻结为 preparing，
+    重入命中同一 preimage 后进入「staging 复验」永久 fail closed——该 key
+    既不能创建也不能换 key 复用同一 delegation，形成拒绝服务。
+    """
+    conflict = {"x": "hello", "x/y": "world"}
+    with pytest.raises(ValueError, match="互为文件/目录"):
+        await do_create(service, owner, artifacts=conflict)
+    # 未产生任何状态变更：无 record、无 staging 目录。
+    assert count_rows(owner.control, "thread_creation_records") == 0
+    assert not (owner.session_dir / ".staging" / "key-1").exists()
+    # 同 key 换合法 artifact 仍可正常创建（未把 key 打死）。
+    result = await do_create(service, owner, artifacts=make_artifacts())
+    assert result.record_state == "published"
+
+
+async def test_create_rejects_artifact_path_budget_exceeded(
+    service: ThreadCreationService,
+    owner: OwnerSession,
+) -> None:
+    """artifact 单组件超 255 bytes → 准入前明确拒绝，不留裸 OSError。
+
+    修复前：超限路径在 ``_atomic_write_bytes`` 抛裸 ``OSError``（Errno 36），
+    同时留下半成品 staging，重入永久 fail closed。
+    """
+    too_long = {"a" * 300 + "/f.txt": "x"}
+    with pytest.raises(ValueError, match="路径组件超出预算"):
+        await do_create(service, owner, artifacts=too_long)
+    assert count_rows(owner.control, "thread_creation_records") == 0
+    assert not (owner.session_dir / ".staging" / "key-1").exists()
+
+
+async def test_create_rejects_oversized_idempotency_key(
+    service: ThreadCreationService,
+    owner: OwnerSession,
+) -> None:
+    """staging 目录名（幂等键）超路径组件预算 → 准入前明确拒绝。"""
+    with pytest.raises(ValueError, match="路径组件超出预算"):
+        await do_create(service, owner, key="k" * 300)
+    assert count_rows(owner.control, "thread_creation_records") == 0
+
+
 # ----------------------------------------------------------------------
 # 幂等与冲突
 # ----------------------------------------------------------------------
