@@ -11,6 +11,7 @@ import WarmConfirmProvider from "../shell/WarmConfirmProvider";
 import type { AppState } from "../../types/frontend";
 import type { Agent } from "../../types/backend";
 import Composer from "./Composer";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const WORKSPACE_ID = "workspace";
 const SESSION_ID = "session";
@@ -245,32 +246,13 @@ function installOverlayDocument(): void {
 }
 
 afterEach(() => {
-  restoreDescriptor("document", originalDocument);
+  restoreGlobalDescriptor("document", originalDocument);
   for (const name of OVERLAY_CONSTRUCTOR_NAMES) {
     Reflect.deleteProperty(globalThis, name);
   }
-  if (originalWindow) {
-    Object.defineProperty(globalThis, "window", originalWindow);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
-  if (originalBroadcastChannel) {
-    Object.defineProperty(globalThis, "BroadcastChannel", originalBroadcastChannel);
-  } else {
-    Reflect.deleteProperty(globalThis, "BroadcastChannel");
-  }
+  restoreGlobalDescriptor("window", originalWindow);
+  restoreGlobalDescriptor("BroadcastChannel", originalBroadcastChannel);
 });
-
-function restoreDescriptor(
-  name: string,
-  descriptor: PropertyDescriptor | undefined,
-): void {
-  if (descriptor) {
-    Object.defineProperty(globalThis, name, descriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, name);
-  }
-}
 
 describe("Composer 切换类动作失败必须可见", () => {
   test("switchAgent 失败后界面出现错误文本，且不再被空 catch 吞掉", async () => {

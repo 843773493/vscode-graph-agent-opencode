@@ -5,6 +5,7 @@ import type { SessionResource } from "../../../types/backend";
 import type { GatewayExtensionResourceEntry } from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
 import GatewayExtensionResourcePanel from "./GatewayExtensionResourcePanel";
 import WarmConfirmProvider from "../../shell/WarmConfirmProvider";
+import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
 const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
@@ -15,11 +16,7 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(navigator, "clipboard");
   }
-  if (originalDocument) {
-    Object.defineProperty(globalThis, "document", originalDocument);
-  } else {
-    Reflect.deleteProperty(globalThis, "document");
-  }
+  restoreGlobalDescriptor("document", originalDocument);
 });
 
 /** 测试环境没有 DOM；用最小假 document 驱动 utils/clipboard 的兼容复制路径。 */

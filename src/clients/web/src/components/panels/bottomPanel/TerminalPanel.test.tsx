@@ -4,16 +4,13 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { SessionResource } from "../../../types/backend";
 import type { GatewayExtensionResourceEntry } from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
 import TerminalPanel from "./TerminalPanel";
+import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
 afterEach(() => {
   jest.useRealTimers();
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 /** buildGatewayAttachUrl 依赖 window.location.origin；测试环境没有 DOM。 */

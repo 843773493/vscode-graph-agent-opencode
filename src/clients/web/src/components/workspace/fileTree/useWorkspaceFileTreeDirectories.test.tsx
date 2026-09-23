@@ -3,6 +3,7 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useRef } from "react";
 import { useWorkspaceFileTreeDirectories } from "./useWorkspaceFileTreeDirectories";
+import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -93,11 +94,7 @@ function mountHarness(port: number): {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 describe("workspace 文件树目录缓存", () => {

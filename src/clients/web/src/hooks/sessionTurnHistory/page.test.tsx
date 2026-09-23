@@ -9,6 +9,7 @@ import {
 } from "../../state/session/turnTimeline";
 import type { AppState } from "../../types/frontend";
 import { useInitialTurnLoader, useOlderTurnLoader } from "./page";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -45,11 +46,7 @@ function state(timeline?: ReturnType<typeof createSessionTurnTimeline>): AppStat
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 async function runPageCase({

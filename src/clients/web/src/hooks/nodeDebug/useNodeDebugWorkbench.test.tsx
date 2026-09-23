@@ -11,6 +11,7 @@ import {
   useNodeDebugWorkbench,
   type NodeDebugWorkbenchBinding,
 } from "./useNodeDebugWorkbench";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 function state(threadId: string): NodeDebugState {
   return {
@@ -66,23 +67,12 @@ function installBrowserGlobals(): void {
   });
 }
 
-function restoreGlobal(
-  name: "window" | "BroadcastChannel",
-  descriptor: PropertyDescriptor | undefined,
-): void {
-  if (descriptor) {
-    Object.defineProperty(globalThis, name, descriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, name);
-  }
-}
-
 afterEach(() => {
   act(() => renderer?.unmount());
   renderer = undefined;
   restoreApi();
-  restoreGlobal("window", originalWindowDescriptor);
-  restoreGlobal("BroadcastChannel", originalBroadcastChannelDescriptor);
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
+  restoreGlobalDescriptor("BroadcastChannel", originalBroadcastChannelDescriptor);
 });
 
 describe("useNodeDebugWorkbench", () => {

@@ -11,6 +11,7 @@ import {
   useNodeDebugStateSync,
   type NodeDebugStateSync,
 } from "./useNodeDebugStateSync";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -73,17 +74,6 @@ function installBrowserGlobals(): void {
   });
 }
 
-function restoreGlobal(
-  name: "window" | "BroadcastChannel",
-  descriptor: PropertyDescriptor | undefined,
-): void {
-  if (descriptor) {
-    Object.defineProperty(globalThis, name, descriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, name);
-  }
-}
-
 function installApiSpies(pending: Deferred<NodeDebugState>[]): void {
   const stateSpy = spyOn(api, "getNodeDebugState").mockImplementation(
     async () => {
@@ -136,8 +126,8 @@ afterEach(() => {
   act(() => renderer?.unmount());
   renderer = undefined;
   restoreApi();
-  restoreGlobal("window", originalWindowDescriptor);
-  restoreGlobal("BroadcastChannel", originalBroadcastChannelDescriptor);
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
+  restoreGlobalDescriptor("BroadcastChannel", originalBroadcastChannelDescriptor);
 });
 
 describe("useNodeDebugStateSync", () => {

@@ -6,6 +6,7 @@ import type { WorkspaceRuntimePreviewTab } from "../../components/workspace/Work
 import type { GatewayExtensionResourceEntry } from "./useGatewayExtensionResources";
 import type { SessionResource } from "../../types/backend";
 import { useGatewayExtensionWindow } from "./useGatewayExtensionWindow";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
 
@@ -218,11 +219,7 @@ afterEach(() => {
   createSessionConnectionCalls.length = 0;
   createdConnectionResourceId = "created-browser-1";
   globalThis.fetch = originalFetch;
-  if (originalWindow) {
-    Object.defineProperty(globalThis, "window", originalWindow);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindow);
 });
 
 describe("useGatewayExtensionWindow 打开扩展窗口", () => {

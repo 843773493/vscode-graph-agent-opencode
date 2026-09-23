@@ -3,6 +3,7 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { AppState } from "../../types/frontend";
 import { useBackgroundSessionActivity } from "./useBackgroundSessionActivity";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -41,11 +42,7 @@ function emptyState(): AppState {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 describe("useBackgroundSessionActivity", () => {

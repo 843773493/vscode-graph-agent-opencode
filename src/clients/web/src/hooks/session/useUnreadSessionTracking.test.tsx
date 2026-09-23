@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as storage from "../../state/storage";
 import type { AppState } from "../../types/frontend";
 import { useUnreadSessionTracking } from "./useUnreadSessionTracking";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const SESSION_CACHE_KEY = "workspace-unread::session-unread";
 
@@ -64,16 +65,8 @@ afterEach(() => {
   act(() => renderer?.unmount());
   renderer = undefined;
   for (const restore of restores.splice(0)) restore();
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
-  if (originalDocumentDescriptor) {
-    Object.defineProperty(globalThis, "document", originalDocumentDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "document");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
+  restoreGlobalDescriptor("document", originalDocumentDescriptor);
 });
 
 interface Mounted {

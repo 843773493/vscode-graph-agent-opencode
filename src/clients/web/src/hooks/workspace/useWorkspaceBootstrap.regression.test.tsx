@@ -8,6 +8,7 @@ import * as userViewStateApi from "../../api/gateway/userViewState";
 import * as workspaceSessionListRefresh from "./workspaceSessionListRefresh";
 import type { AppState } from "../../types/frontend";
 import { useWorkspaceBootstrap } from "./useWorkspaceBootstrap";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const API_PORT = 49_713;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -113,11 +114,7 @@ afterEach(() => {
     act(() => renderer.unmount());
   }
   for (const restore of restoreSpies.splice(0)) restore();
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
   for (const [name, descriptor] of [
     ["document", originalDocumentDescriptor],
     ["Image", originalImageDescriptor],

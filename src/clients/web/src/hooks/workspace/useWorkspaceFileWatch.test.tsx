@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as apiBarrel from "../../api";
 import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS } from "../sessionEventStream/sessionEventStreamPolicy";
 import { useWorkspaceFileWatch } from "./useWorkspaceFileWatch";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -19,11 +20,7 @@ function installWindow(): void {
 }
 
 afterEach(() => {
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 async function flush(): Promise<void> {

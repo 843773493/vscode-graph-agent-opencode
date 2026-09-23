@@ -18,6 +18,7 @@ import {
 } from "../../state/composerDrafts/storage";
 import type { AppState } from "../../types/frontend";
 import { createSessionTurnTimeline } from "../../state/session/turnTimeline";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const SESSION_CACHE_KEY = "workspace::session";
 
@@ -144,11 +145,7 @@ function createMemoryStorage(): Storage {
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
 afterEach(() => {
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 describe("Composer React 状态边界", () => {

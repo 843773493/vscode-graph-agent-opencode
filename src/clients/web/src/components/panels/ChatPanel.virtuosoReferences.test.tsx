@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Virtuoso, VirtuosoMockContext } from "react-virtuoso";
 import ChatPanel from "./ChatPanel";
 import type { ConversationView } from "../../types/frontend";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 /** 真实 react-virtuoso 只在需要浏览器尺寸测量时才拒绝无 DOM 环境；
  * createNodeMock 提供宿主节点替身、VirtuosoMockContext 固定视口与条目高度，
@@ -69,11 +70,7 @@ let originalWindowDescriptor: PropertyDescriptor | undefined;
 afterEach(() => {
   // 真实 react-virtuoso 需要 window 才能走通尺寸测量；用完必须还原，
   // 否则这个桩会泄漏给同一进程后续所有测试文件（它们会误以为运行在浏览器里）。
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
   originalWindowDescriptor = undefined;
 });
 

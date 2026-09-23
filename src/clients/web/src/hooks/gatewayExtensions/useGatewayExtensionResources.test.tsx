@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useGatewayExtensionResources } from "./useGatewayExtensionResources";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -31,11 +32,7 @@ function apiResponse(data: unknown): Response {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 describe("useGatewayExtensionResources 请求协调", () => {

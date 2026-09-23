@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import { useSessionTraceHistory } from "./useSessionTraceHistory";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -59,11 +60,7 @@ function tracePage(sessionId: string, eventId: string) {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 describe("useSessionTraceHistory", () => {

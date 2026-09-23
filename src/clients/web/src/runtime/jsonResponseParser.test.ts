@@ -1,14 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { JsonResponseBodyError, parseJsonResponse } from "./jsonResponseParser";
+import { restoreGlobalDescriptor } from "../tests/testGlobals";
 
 const originalWorkerDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Worker");
 
 afterEach(() => {
-  if (originalWorkerDescriptor) {
-    Object.defineProperty(globalThis, "Worker", originalWorkerDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "Worker");
-  }
+  restoreGlobalDescriptor("Worker", originalWorkerDescriptor);
 });
 
 describe("JSON response 渐进解析", () => {

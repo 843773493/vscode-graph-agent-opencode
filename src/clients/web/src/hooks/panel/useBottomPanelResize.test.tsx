@@ -9,6 +9,7 @@ import {
 } from "../../layout/workbenchLayout";
 import type { WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
 import { useBottomPanelResize } from "./useBottomPanelResize";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 type PointerListener = (event: PointerEvent) => void;
 
@@ -64,14 +65,6 @@ function installFakePointerHost(): FakePointerHost {
       }
     },
   };
-}
-
-function restoreGlobal(name: "window" | "document", descriptor?: PropertyDescriptor): void {
-  if (descriptor) {
-    Object.defineProperty(globalThis, name, descriptor);
-    return;
-  }
-  Reflect.deleteProperty(globalThis, name);
 }
 
 function panelState(overrides: Partial<WorkspaceBottomPanelState> = {}): WorkspaceBottomPanelState {
@@ -147,8 +140,8 @@ afterEach(() => {
   for (const renderer of mountedRenderers.splice(0)) {
     act(() => renderer.unmount());
   }
-  restoreGlobal("window", originalWindowDescriptor);
-  restoreGlobal("document", originalDocumentDescriptor);
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
+  restoreGlobalDescriptor("document", originalDocumentDescriptor);
 });
 
 describe("useBottomPanelResize 拖拽落盘契约", () => {

@@ -7,6 +7,7 @@ import {
   WORKSPACE_FILE_CHANGES_EVENT,
   type WorkspaceFileChangesEventDetail,
 } from "../../../state/workspaceFileTreeEvents";
+import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -188,11 +189,7 @@ afterEach(() => {
     mountedRenderers.splice(0).forEach((renderer) => renderer.unmount());
   });
   globalThis.fetch = originalFetch;
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 describe("工作区文件树文件变更边界", () => {

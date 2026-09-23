@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { installPointerDrag } from "./pointerDrag";
+import { restoreGlobalDescriptor } from "../tests/testGlobals";
 
 type PointerListener = (event: PointerEvent) => void;
 
@@ -74,17 +75,9 @@ function installFakePointerHost(): FakePointerHost {
   };
 }
 
-function restoreGlobal(name: "window" | "document", descriptor?: PropertyDescriptor): void {
-  if (descriptor) {
-    Object.defineProperty(globalThis, name, descriptor);
-    return;
-  }
-  Reflect.deleteProperty(globalThis, name);
-}
-
 afterEach(() => {
-  restoreGlobal("window", originalWindowDescriptor);
-  restoreGlobal("document", originalDocumentDescriptor);
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
+  restoreGlobalDescriptor("document", originalDocumentDescriptor);
 });
 
 describe("installPointerDrag", () => {

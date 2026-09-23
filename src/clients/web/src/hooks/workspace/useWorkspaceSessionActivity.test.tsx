@@ -7,6 +7,7 @@ import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS } from "../sessionEventStream/ses
 import type { AppState } from "../../types/frontend";
 import type { SessionActivity } from "../../types/backend";
 import { useWorkspaceSessionActivity } from "./useWorkspaceSessionActivity";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const API_PORT = 49_712;
 const WORKSPACE_ID = "ws-activity";
@@ -77,16 +78,8 @@ afterEach(() => {
     act(() => renderer!.unmount());
     renderer = undefined;
   }
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
-  if (originalDocumentDescriptor) {
-    Object.defineProperty(globalThis, "document", originalDocumentDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "document");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
+  restoreGlobalDescriptor("document", originalDocumentDescriptor);
 });
 
 describe("useWorkspaceSessionActivity 重连与卸载", () => {

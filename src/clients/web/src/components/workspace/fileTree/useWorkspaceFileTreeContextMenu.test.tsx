@@ -9,6 +9,7 @@ import {
   type WorkspaceFileTreeContextMenuApi,
   type FileTreeContextMenuTarget,
 } from "./useWorkspaceFileTreeContextMenu";
+import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalFetch = globalThis.fetch;
@@ -98,11 +99,7 @@ function clickEvent(): { preventDefault: () => void; clientX: number; clientY: n
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 describe("文件树右键菜单", () => {

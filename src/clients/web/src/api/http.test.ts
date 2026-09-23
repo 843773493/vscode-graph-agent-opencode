@@ -9,6 +9,7 @@ import {
   normalizePageResult,
   requestJson,
 } from "./http";
+import { restoreGlobalDescriptor } from "../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -42,11 +43,7 @@ function resolveTestUrl(input: RequestInfo | URL, port: number): URL {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 describe("requestJson 请求取消", () => {

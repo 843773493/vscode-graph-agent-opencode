@@ -3,6 +3,7 @@ import {
   buildExtensionWindowUrl,
   resolveExtensionWindowRequest,
 } from "./extensionResourceWindow";
+import { restoreGlobalDescriptor } from "../tests/testGlobals";
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -16,11 +17,7 @@ function stubWindow(pathname: string, search: string, href?: string): void {
 }
 
 afterEach(() => {
-  if (originalWindow) {
-    Object.defineProperty(globalThis, "window", originalWindow);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindow);
 });
 
 describe("扩展窗口请求解析", () => {

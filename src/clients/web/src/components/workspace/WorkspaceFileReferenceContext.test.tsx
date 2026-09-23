@@ -6,6 +6,7 @@ import {
   useWorkspaceFileReferenceContext,
   type WorkspaceFileReferenceResolution,
 } from "./WorkspaceFileReferenceContext";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const port = 49_601;
 const workspaceRoot = "/home/user/project";
@@ -18,11 +19,7 @@ const originalWindowDescriptor = Object.getOwnPropertyDescriptor(
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "window");
-  }
+  restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
 function installWindow(): void {

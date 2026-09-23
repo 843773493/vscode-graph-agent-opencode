@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { AppState } from "../../types/frontend";
 import { isSessionActivelyViewed } from "./viewedSession";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const originalDocumentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
 
@@ -23,11 +24,7 @@ function state(overrides: Partial<AppState> = {}): AppState {
 }
 
 afterEach(() => {
-  if (originalDocumentDescriptor) {
-    Object.defineProperty(globalThis, "document", originalDocumentDescriptor);
-  } else {
-    Reflect.deleteProperty(globalThis, "document");
-  }
+  restoreGlobalDescriptor("document", originalDocumentDescriptor);
 });
 
 describe("isSessionActivelyViewed", () => {
