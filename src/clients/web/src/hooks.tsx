@@ -30,10 +30,6 @@ import { useWorkspaceSessionSelection } from "./hooks/workspace/useWorkspaceSess
 import { useWorkspaceRefreshOrchestration } from "./hooks/workspace/useWorkspaceRefreshOrchestration";
 import { useComposerStateProjection } from "./hooks/composer/useComposerStateProjection";
 import { useUiSettingsController } from "./hooks/settings/useUiSettingsController";
-import {
-  readCachedUiSettings,
-  readUnreadSessionKeys,
-} from "./state/storage";
 import { sessionScopeKey } from "./state/session/sessionScope";
 import { useSessionGoalController } from "./hooks/session/useSessionGoalController";
 import { useUnreadSessionTracking } from "./hooks/session/useUnreadSessionTracking";
@@ -56,76 +52,10 @@ export type {
   ComposerContextType,
 } from "./hooks/app/appContext";
 import { AppContext, ComposerContext } from "./hooks/app/appContext";
-
-const CACHED_UI_SETTINGS = readCachedUiSettings();
-const CACHED_UNREAD_SESSION_KEYS = readUnreadSessionKeys();
-
-const INITIAL_STATE: AppState = {
-  apiPort: DEFAULT_BACKEND_PORT,
-  gatewayWorkspaces: [],
-  activeGatewayWorkspaceId: null,
-  sessionsByWorkspace: new Map(),
-  sessionGatewayWorkspaceById: new Map(),
-  removingGatewayWorkspaceIds: new Set(),
-  sessionHistoryReloadNonce: 0,
-  workspaceSwitching: false,
-  gatewayError: null,
-  gatewayWorkspacesStale: false,
-  gatewayUserAccess: null,
-  gatewayUserViewStates: new Map(),
-  uiSettings: CACHED_UI_SETTINGS,
-  uiSettingsLoaded: false,
-  themeBackgroundWarning: null,
-  workspaceRoot: null,
-  workspaceName: null,
-  agents: [],
-  sessions: [],
-  sessionAttachmentSummaries: new Map(),
-  currentSession: null,
-  currentSessionWorkspaceId: null,
-  turnTimelinesBySession: new Map(),
-  traceEvents: [],
-  messageStreamsByTurnStream: new Map(),
-  llmRequestLogs: [],
-  llmRequestLogsLoadedAt: null,
-  llmRequestLogsLoading: false,
-  llmRequestLogsError: null,
-  sessionChangesets: [],
-  selectedChangesetId: null,
-  activeChangeset: null,
-  sessionChangesLoadedAt: null,
-  sessionChangesLoading: false,
-  sessionChangesError: null,
-  sessionResources: [],
-  sessionResourcesLoadedAt: null,
-  sessionResourcesLoading: false,
-  sessionResourcesError: null,
-  eventQueuesBySession: new Map(),
-  sessionTraceHistoryBySession: new Map(),
-  pendingConversations: new Map(),
-  activeJobIdsBySession: new Map(),
-  unreadSessionKeys: CACHED_UNREAD_SESSION_KEYS,
-  status: "准备就绪",
-  error: null,
-  isBootstrapping: true,
-  expandDetails: false,
-  agentSessionsPanelOpen: true,
-  contentView: "default",
-  agentStateJsonl: "",
-  agentStateMessageCount: 0,
-  agentStateLoadedAt: null,
-  agentStateLoading: false,
-  agentStateError: null,
-  compactLoading: false,
-  lastCompactResult: null,
-  currentGoal: null,
-  currentGoalSessionId: null,
-  goalLoading: false,
-  goalError: null,
-};
+import { INITIAL_APP_STATE } from "./hooks/app/appStateSeed";
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AppState>(INITIAL_STATE);
+  const [state, setState] = useState<AppState>(INITIAL_APP_STATE);
   const latestStateRef = useRef(state);
   latestStateRef.current = state;
   const currentSessionId = state.currentSession?.session_id ?? null;
