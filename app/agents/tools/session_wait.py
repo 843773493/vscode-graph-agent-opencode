@@ -27,6 +27,7 @@ from app.services.business.communication.wait import (
     CommunicationWaitBinding,
     WaitObservation,
     WaitSelector,
+    WaitSelectorKind,
     WaitState,
     freeze_wait_deadline,
     remaining_wait_budget_seconds,
@@ -118,14 +119,19 @@ class _SystemWaitClock:
 
 
 def _make_observation(
-    *, selector_kind: str, selector_id: str, state: WaitState
+    *, selector_kind: WaitSelectorKind, selector_id: str, state: WaitState
 ) -> WaitObservation:
     return WaitObservation(
-        selector_kind="job",  # type: ignore[arg-type]
+        selector_kind=selector_kind,
         selector_id=selector_id,
         state=state,
         revision=f"{selector_kind}:{selector_id}:{state}",
     )
+
+
+def _observations_revision(observations: list[WaitObservation]) -> str:
+    """聚合观察快照的唯一 revision；状态变化必须体现在 revision 上。"""
+    return ":".join(sorted(item.revision for item in observations)) or "none"
 
 
 def create_wait_for_session_tool(
@@ -210,8 +216,27 @@ def create_wait_for_session_tool(
                 job_ids=bound_job_ids,
             ), None
 
-        baseline_states, baseline_unbound = await _observe()
-        if selector is None and not baseline_states:
+        async def _snapshot() -> list[WaitObservation]:
+            states, unbound = await _observe()
+            if unbound == "pending":
+                return [
+                    _make_observation(
+                        selector_kind="communication",
+                        selector_id=communication_id or "",
+                        state="pending",
+                    )
+                ]
+            return [
+                _make_observation(
+                    selector_kind="job",
+                    selector_id=job_id_,
+                    state=state,
+                )
+                for job_id_, state in sorted(states.items())
+            ]
+
+        observed = await _snapshot()
+        if selector is None and not observed:
             return {
                 "status": "idle",
                 "target_session_id": target_session_id,
@@ -219,47 +244,27 @@ def create_wait_for_session_tool(
                 "baseline_revision": "none",
                 "latest_revision": "none",
             }
-        baseline_revision = (
-            f"communication-unbound:{communication_id}"
-            if baseline_unbound == "pending"
-            else ":".join(sorted(baseline_states)) or "none"
-        )
+        baseline_revision = _observations_revision(observed)
 
-        async def _snapshot() -> tuple[
-            list[WaitObservation], str, bool
-        ]:
-            states, unbound = await _observe()
-            if unbound == "pending":
-                observation = [
-                    _make_observation(
-                        selector_kind="communication",
-                        selector_id=communication_id or "",
-                        state="pending",
-                    )
-                ]
-            else:
-                observation = [
-                    _make_observation(selector_kind="job", selector_id=job_id_, state=state)
-                    for job_id_, state in sorted(states.items())
-                ]
-            latest_revision = (
-                f"communication-unbound:{communication_id}"
-                if unbound == "pending"
-                else ":".join(sorted(states)) or "none"
-            )
-            return observation, latest_revision, latest_revision != baseline_revision
-
-        observed, latest_revision, state_changed = await _snapshot()
         while True:
+            latest_revision = _observations_revision(observed)
             remaining = remaining_wait_budget_seconds(deadline, _SystemWaitClock())
             deadline_expired = remaining is None or remaining <= 0
+            state_changed = latest_revision != baseline_revision
             status = resolve_wait_status(
                 observed=observed,
                 until=until,
                 deadline_expired=deadline_expired,
                 state_changed=state_changed,
             )
-            if status not in ("pending", "running"):
+            # until=terminal 时终态聚合即为完成条件；until=state_change 时
+            # 以真实 revision 变化为唯一完成条件，聚合状态可能仍是 running。
+            condition_met = (
+                status not in ("pending", "running")
+                if until == "terminal"
+                else state_changed
+            )
+            if condition_met or deadline_expired:
                 return {
                     "status": status,
                     "target_session_id": target_session_id,
@@ -277,6 +282,6 @@ def create_wait_for_session_tool(
                 }
             budget = remaining if remaining is not None else _POLL_INTERVAL_SECONDS
             await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, max(budget, 0.0)))
-            observed, latest_revision, state_changed = await _snapshot()
+            observed = await _snapshot()
 
     return wait_for_session
