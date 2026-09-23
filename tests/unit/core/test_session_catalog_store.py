@@ -1802,6 +1802,35 @@ def test_schema_v0_fresh_creates_v2(tmp_path: Path, sessions_root: Path) -> None
         store.close()
 
 
+@pytest.mark.parametrize("table", ["nodes", "session_creation_records"])
+def test_store_rejects_lost_authoritative_table_on_reopen(
+    tmp_path: Path, sessions_root: Path, table: str
+) -> None:
+    """已登记的权威表被外部删掉时重开必须响亮失败，不得静默重建空表。
+
+    ``nodes`` 是会话位置与父子组织的唯一权威。若外部进程把已登记版本的
+    权威表删除而 ``user_version`` 仍停在当前版本，此前
+    ``CREATE TABLE IF NOT EXISTS`` 会悄悄把表重建为**空表**，等于把全部
+    会话静默丢失——违反 AGENTS.md “绝不返回虚假默认值”。重开必须
+    fail closed 并指明缺表。
+    """
+    database_path = tmp_path / "navigation" / "session-catalog.sqlite"
+    first = SessionCatalogStore(database_path, sessions_root)
+    folder_id = make_session_id()
+    first.create_folder(folder_id, WORKSPACE_ID, None, "外部改动前")
+    first.close()
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(f"DROP TABLE {table}")
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(RuntimeError, match=table):
+        SessionCatalogStore(database_path, sessions_root)
+
+
 # ----------------------------------------------------------------------
 # NavigationSubtreeDeleteRecord journal（8.1-B，R14）
 # ----------------------------------------------------------------------
@@ -2308,47 +2337,16 @@ def test_schema_upgrade_v2_database_adds_subtree_table(
 ) -> None:
     """R13 v2 库（无 subtree_delete_records 表）重开后幂等补建新表。"""
     database_path = tmp_path / "navigation" / "session-catalog.sqlite"
-    database_path.parent.mkdir(parents=True, exist_ok=True)
+    # 用真实 store 建立 v2 形态（nodes + session_creation_records,
+    # user_version=2），再仅删除 R14 才加法补建的 subtree_delete_records 表，
+    # 精确还原 R13 v2 缺表现场；不在此复制第二份 DDL。
+    first = SessionCatalogStore(database_path, sessions_root)
+    folder_id = make_session_id()
+    first.create_folder(folder_id, WORKSPACE_ID, None, "升级前文件夹")
+    first.close()
     connection = sqlite3.connect(database_path)
     try:
-        # 手工构建 R13 v2 形态（nodes + session_creation_records，
-        # user_version=2，无 subtree_delete_records）
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS nodes (
-                node_id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL CHECK (kind IN ('folder', 'session')),
-                parent_node_id TEXT REFERENCES nodes(node_id),
-                display_name TEXT NOT NULL,
-                state TEXT NOT NULL CHECK (state IN ('active', 'deleting')),
-                revision INTEGER NOT NULL DEFAULT 1,
-                workspace_id TEXT NOT NULL,
-                created_at TEXT,
-                storage_relative_locator TEXT,
-                main_thread_id TEXT,
-                CHECK (
-                    (kind = 'session'
-                        AND created_at IS NOT NULL
-                        AND storage_relative_locator IS NOT NULL
-                        AND main_thread_id IS NOT NULL)
-                    OR (kind = 'folder'
-                        AND created_at IS NULL
-                        AND storage_relative_locator IS NULL
-                        AND main_thread_id IS NULL)
-                ),
-                UNIQUE (workspace_id, main_thread_id),
-                UNIQUE (workspace_id, storage_relative_locator)
-            )
-            """
-        )
-        folder_id = make_session_id()
-        connection.execute(
-            "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
-            "state, revision, workspace_id) "
-            "VALUES (?, 'folder', NULL, '升级前文件夹', 'active', 1, ?)",
-            (folder_id, WORKSPACE_ID),
-        )
-        connection.execute("PRAGMA user_version = 2")
+        connection.execute("DROP TABLE subtree_delete_records")
         connection.commit()
     finally:
         connection.close()

@@ -166,6 +166,16 @@ _IDX_SUBTREE_DELETE_STATE_DDL = (
     "ON subtree_delete_records(state)"
 )
 
+# user_version 与「必须已存在」的表绑定：已登记应用的版本若缺表，说明库被
+# 外部进程改写（或被截断）。此时下面的 ``CREATE TABLE IF NOT EXISTS`` 会把
+# 权威表静默重建为**空表**，等于把全部会话位置与父子关系悄悄丢光，因此必须
+# 在写任何 DDL 之前 fail closed。``subtree_delete_records`` 是 R14 加法补表
+# （``user_version`` 保持 2），不属于任何版本的硬性要求，故不在绑定表中。
+_REQUIRED_TABLES_BY_VERSION = {
+    1: ("nodes",),
+    2: ("nodes", "session_creation_records"),
+}
+
 _SUBTREE_DELETE_RECORD_COLUMNS = (
     "subtree_delete_idempotency_key, workspace_id, root_node_id, "
     "frozen_node_ids, frozen_session_locators, state, abort_reason, "
@@ -586,6 +596,8 @@ class SessionCatalogStore:
                 f"path={self.database_path}, user_version={current}, "
                 f"supported={self.SCHEMA_VERSION}"
             )
+        if current:
+            self._require_tables_present(current)
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             self._connection.execute(_NODES_TABLE_DDL)
@@ -603,6 +615,31 @@ class SessionCatalogStore:
             self._connection.execute("ROLLBACK")
             raise
         self._connection.execute("COMMIT")
+
+    def _require_tables_present(self, current: int) -> None:
+        """校验已登记的版本对应表确实存在；缺表说明库被外部改写。
+
+        绝不允许用 ``CREATE TABLE IF NOT EXISTS`` 把权威表当空表重建：
+        ``nodes`` 一空，所有会话位置与父子关系即静默丢失。缺表一律响亮
+        失败并列出缺失表名，交由用户从备份恢复或执行维护迁移。
+        """
+        present = {
+            str(row[0])
+            for row in self._connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        missing = [
+            table
+            for table in _REQUIRED_TABLES_BY_VERSION.get(current, ())
+            if table not in present
+        ]
+        if missing:
+            raise RuntimeError(
+                "session catalog 缺表，拒绝以空表重建（库被外部改写）: "
+                f"path={self.database_path}, user_version={current}, "
+                f"missing={missing}"
+            )
 
     @contextmanager
     def _write_transaction(self) -> Iterator[sqlite3.Connection]:

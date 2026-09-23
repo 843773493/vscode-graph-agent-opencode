@@ -143,3 +143,34 @@ def test_sqlite_state_rejects_migration_ledger_ahead_of_program(tmp_path):
             schema_version=1,
             migrations=("CREATE TABLE a (value TEXT NOT NULL);",),
         )
+
+
+def test_sqlite_state_rejects_lost_migrated_table_on_reopen(tmp_path):
+    """已登记迁移建出的表被外部删掉时重开必须响亮失败，不得静默重建空表。
+
+    若外部进程把某次迁移建出的表删除而 ``schema_migrations`` 仍登记该版本，
+    此前 ``CREATE TABLE IF NOT EXISTS`` 会因``version <= current``被跳过，
+    库以“健康”姿态打开，直到首次真实查询才报 ``no such table``。这既不是
+    响亮失败也不是真实默认值。重开必须在建表前 fail closed 并指明缺表。
+    """
+    path = tmp_path / "state.sqlite"
+    migrations = (
+        "CREATE TABLE a (value TEXT NOT NULL);",
+        "CREATE TABLE b (value TEXT NOT NULL);",
+    )
+    database = SQLiteStateDatabase(
+        path=path, schema_version=2, migrations=migrations
+    )
+    database.close()
+
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("DROP TABLE b")
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(RuntimeError, match="b"):
+        SQLiteStateDatabase(
+            path=path, schema_version=2, migrations=migrations
+        )

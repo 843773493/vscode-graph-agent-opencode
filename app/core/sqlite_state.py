@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -9,6 +10,38 @@ from typing import Final
 
 
 SQLITE_BUSY_TIMEOUT_MS: Final = 5000
+
+# 迁移文本里的建表/删表语句；用于把「已登记应用的迁移」绑定到它应建出的表。
+_CREATE_TABLE_PATTERN: Final = re.compile(
+    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+    re.IGNORECASE,
+)
+_DROP_TABLE_PATTERN: Final = re.compile(
+    r"DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+
+def _required_tables(
+    migrations: tuple[str, ...],
+    current: int,
+) -> tuple[str, ...]:
+    """返回已登记应用的迁移理应留在库中的表。
+
+    只统计第 ``1..current`` 号迁移建出、且未被后续迁移删除的表；后续版本
+    建的表由各自的迁移负责，不在此要求。
+    """
+    created: list[str] = []
+    dropped: set[str] = set()
+    for migration in migrations[:current]:
+        created.extend(_CREATE_TABLE_PATTERN.findall(migration))
+        dropped.update(_DROP_TABLE_PATTERN.findall(migration))
+    required: list[str] = []
+    for table in created:
+        if table in dropped or table in required:
+            continue
+        required.append(table)
+    return tuple(required)
 
 
 def utc_now_text() -> str:
@@ -141,6 +174,8 @@ class SQLiteStateDatabase:
                     "SQLite 迁移账本被外部改写，缺少已声明应用的版本: "
                     f"path={self.path}, applied={applied}, missing={missing}"
                 )
+            if current:
+                self._require_migrated_tables(connection, current)
             for version, migration in enumerate(self._migrations, start=1):
                 if version <= current:
                     continue
@@ -157,6 +192,34 @@ class SQLiteStateDatabase:
                     raise
         finally:
             connection.close()
+
+    def _require_migrated_tables(
+        self,
+        connection: sqlite3.Connection,
+        current: int,
+    ) -> None:
+        """校验已登记迁移建出的表确实存在；缺表说明库被外部改写。
+
+        绝不允许以“健康”姿态打开一个缺表的库：由于缺号迁移的建表语句会被
+        ``version <= current`` 跳过，表会永久缺失，直到首次真实查询才以
+        ``no such table`` 失败。缺表一律响亮失败并列出缺失表名。
+        """
+        required = _required_tables(self._migrations, current)
+        if not required:
+            return
+        present = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        missing = [table for table in required if table not in present]
+        if missing:
+            raise RuntimeError(
+                "SQLite 迁移账本声明的表缺失，拒绝以缺表状态打开（库被"
+                f"外部改写）: path={self.path}, current={current}, "
+                f"missing={missing}"
+            )
 
     def connection(self) -> sqlite3.Connection:
         return self._connect()
