@@ -15,6 +15,7 @@ import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
 import {
   timelineForScope,
+  type TurnScopeLoaderProps,
   waitForDelayAborted,
   writeTurnLoadFailure,
 } from "./turnLoadSupport";
@@ -93,16 +94,7 @@ export function useInitialTurnLoader({
   requestSignal,
   setState,
   onMissingTurn,
-}: {
-  apiPort: number | null;
-  sessionId: string | null;
-  workspaceId: string | null;
-  sessionCacheKey: string | null;
-  generationRef: MutableRefObject<number>;
-  requestSignal: AbortSignal;
-  setState: SetAppState;
-  onMissingTurn: (turnIds: string[]) => void;
-}): (latestTurnId?: string) => Promise<void> {
+}: TurnScopeLoaderProps): (latestTurnId?: string) => Promise<void> {
   return useCallback(async (latestTurnId?: string) => {
     if (!apiPort || !sessionId || !sessionCacheKey) return;
     const targetGeneration = generationRef.current;

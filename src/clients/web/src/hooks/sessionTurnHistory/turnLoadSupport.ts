@@ -4,6 +4,7 @@ import {
   writeTurnTimelineCache,
   type SessionTurnTimeline,
 } from "../../state/session/turnTimeline";
+import type { MutableRefObject } from "react";
 import type { SetAppState } from "../contentViewLoaderTypes";
 
 /**
@@ -12,6 +13,22 @@ import type { SetAppState } from "../contentViewLoaderTypes";
  * 这三处此前各自复制了逐字相同的「按 scope 取时间线」「可取消重试等待」
  * 「最终失败投影」实现；收敛在这里后每种行为全仓只有一份。
  */
+
+/**
+ * 单个会话 scope 的 Turn 加载器入参。detail 与 page 两个 loader 此前各自
+ * 内联了一份逐字相同的 8 字段类型；收窄副本在新增字段时会漂移，因此统一
+ * 到本模块（与 contentViewLoaderTypes 的 FinishWorkspaceRefresh 同因）。
+ */
+export interface TurnScopeLoaderProps {
+  apiPort: number | null;
+  sessionId: string | null;
+  workspaceId: string | null;
+  sessionCacheKey: string | null;
+  generationRef: MutableRefObject<number>;
+  requestSignal: AbortSignal;
+  setState: SetAppState;
+  onMissingTurn: (turnIds: string[]) => void;
+}
 
 export function timelineForScope(
   timelines: Map<string, SessionTurnTimeline>,
@@ -60,4 +77,3 @@ export function writeTurnLoadFailure(
     };
   });
 }
-

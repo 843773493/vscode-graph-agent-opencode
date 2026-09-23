@@ -2,7 +2,6 @@ import {
   startTransition,
   useCallback,
   useRef,
-  type MutableRefObject,
 } from "react";
 import { HttpRequestError, isTransientNetworkError } from "../../api/http";
 import {
@@ -19,10 +18,10 @@ import {
   writeTurnTimelineCache,
 } from "../../state/session/turnTimeline";
 import type { TurnDetailBatchRequest } from "../../types/backend";
-import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
 import {
   timelineForScope,
+  type TurnScopeLoaderProps,
   waitForDelayAborted,
   writeTurnLoadFailure,
 } from "./turnLoadSupport";
@@ -51,16 +50,7 @@ export function useTurnDetailLoader({
   requestSignal,
   setState,
   onMissingTurn,
-}: {
-  apiPort: number | null;
-  sessionId: string | null;
-  workspaceId: string | null;
-  sessionCacheKey: string | null;
-  generationRef: MutableRefObject<number>;
-  requestSignal: AbortSignal;
-  setState: SetAppState;
-  onMissingTurn: (turnIds: string[]) => void;
-}): (
+}: TurnScopeLoaderProps): (
   turnIds: string[],
   requestIdentity?: string | null,
   refreshAfterInFlight?: boolean,
