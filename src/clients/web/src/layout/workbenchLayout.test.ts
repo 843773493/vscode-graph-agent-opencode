@@ -2,7 +2,7 @@ import {
   DEFAULT_MAIN_AREA_RATIOS,
   resizeAdjacentMainAreas,
   resolveMainAreaRatios,
-} from "../../layout/workbenchLayout";
+} from "./workbenchLayout";
 
 const defaults = resolveMainAreaRatios(null);
 if (JSON.stringify(defaults) !== JSON.stringify(DEFAULT_MAIN_AREA_RATIOS)) {

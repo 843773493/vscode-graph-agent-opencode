@@ -2,8 +2,8 @@ import {
   buildWorkspaceInformationDump,
   extractWorkspaceIdFromClipboardText,
   formatWorkspaceInformationDump,
-} from "../workspaceInformation";
-import type { GatewayWorkspace } from "../../types/backend";
+} from "./workspaceInformation";
+import type { GatewayWorkspace } from "../types/backend";
 
 function workspace(
   workspaceId: string,

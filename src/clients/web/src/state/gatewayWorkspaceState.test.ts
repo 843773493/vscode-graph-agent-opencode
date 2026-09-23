@@ -1,8 +1,8 @@
 import {
   applyGatewayWorkspaceListAfterRemoval,
   withFreshGatewayWorkspaceList,
-} from "../gatewayWorkspaceState";
-import type { GatewayWorkspace, Session } from "../../types/backend";
+} from "./gatewayWorkspaceState";
+import type { GatewayWorkspace, Session } from "../types/backend";
 
 function workspace(workspaceId: string, active: boolean): GatewayWorkspace {
   return {

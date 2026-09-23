@@ -5,7 +5,7 @@ import {
   plainWorkspaceFileReferences,
   remarkWorkspaceFileReferences,
   shouldResolveWorkspaceFileReference,
-} from "../../utils/workspaceFileReferences";
+} from "./workspaceFileReferences";
 
 const workspaceRoot = "/home/user/project";
 

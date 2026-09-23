@@ -5,8 +5,8 @@ import {
   goalNeedsReplacementConfirmation,
   goalStreamMutation,
   parseGoalSlashAction,
-} from "../sessionGoal";
-import type { SessionGoal } from "../../types/backend";
+} from "./sessionGoal";
+import type { SessionGoal } from "../types/backend";
 
 describe("Goal Slash Command", () => {
   test("裸命令展示状态，其余保留 Codex 控制命令", () => {

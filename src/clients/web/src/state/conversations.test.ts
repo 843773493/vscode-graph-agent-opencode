@@ -10,18 +10,18 @@ import {
   statusForConversationEvents,
   syncActiveJobConversation,
   writePendingSnapshot,
-} from "../conversations";
-import { createSessionTurnTimeline } from "../session/turnTimeline";
+} from "./conversations";
+import { createSessionTurnTimeline } from "./session/turnTimeline";
 import {
   buildPendingStatusItem,
   isLiveConversationView,
-} from "../trace/traceAggregation";
+} from "./trace/traceAggregation";
 import {
   createMessageStreamState,
   type MessageStreamState,
-} from "../messageStream/index";
-import type { AppState, ConversationView } from "../../types/frontend";
-import type { TraceEvent } from "../../types/backend";
+} from "./messageStream/index";
+import type { AppState, ConversationView } from "../types/frontend";
+import type { TraceEvent } from "../types/backend";
 
 test("历史 Turn 不显示实时事件流等待状态", () => {
   const historyConversation: ConversationView = {

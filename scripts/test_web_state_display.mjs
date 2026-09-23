@@ -1,16 +1,16 @@
 import { spawnSync } from "node:child_process";
 
 const testFiles = [
-  "./src/state/tests/skillDisplayFlow.test.ts",
-  "./src/state/tests/requestLogDisplay.test.ts",
-  "./src/state/tests/agentStateDisplay.test.ts",
-  "./src/state/tests/eventQueueDisplay.test.ts",
-  "./src/state/tests/chatResponseParts.test.ts",
-  "./src/state/tests/tokenUsage.test.ts",
-  "./src/state/tests/sessionTree.test.ts",
-  "./src/state/tests/workspaceFileReferences.test.ts",
-  "./src/state/tests/gatewayWorkspaceState.test.ts",
-  "./src/state/tests/workspaceInformation.test.ts",
+  "./src/state/timeline/skillDisplayFlow.test.ts",
+  "./src/state/requestLogDisplay/requestLogDisplay.test.ts",
+  "./src/state/display/agentStateDisplay.test.ts",
+  "./src/state/display/eventQueueDisplay.test.ts",
+  "./src/state/trace/chatResponseParts.test.ts",
+  "./src/state/tokenUsage.test.ts",
+  "./src/state/session/sessionTree.test.ts",
+  "./src/utils/workspaceFileReferences.test.ts",
+  "./src/state/gatewayWorkspaceState.test.ts",
+  "./src/state/workspaceInformation.test.ts",
   "./src/state/tests/workspaceTree.test.ts",
 ];
 

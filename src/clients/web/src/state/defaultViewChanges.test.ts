@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { createSessionTurnTimeline } from "../session/turnTimeline";
-import { shouldLoadDefaultViewChangesHint } from "../defaultViewChanges";
+import { createSessionTurnTimeline } from "./session/turnTimeline";
+import { shouldLoadDefaultViewChangesHint } from "./defaultViewChanges";
 
 describe("主聊天空历史的变更提示加载条件", () => {
   test("只有 ready 且没有历史和 live 消息时才加载", () => {

@@ -2,16 +2,16 @@ import { describe, expect, test } from "bun:test";
 import {
   appendTraceEventsToPendingConversations,
   PENDING_CONVERSATION_EVENT_LIMIT,
-} from "../conversations";
-import { aggregateConversationEvents } from "../trace/traceAggregation";
+} from "./conversations";
+import { aggregateConversationEvents } from "./trace/traceAggregation";
 import {
   appendBoundedLiveTraceEvents,
   appendReceivedEvents,
   FRONTEND_EVENT_QUEUE_LIMIT,
   LIVE_TRACE_EVENT_LIMIT,
-} from "../traceEvents";
-import type { TraceEvent } from "../../types/backend";
-import type { ConversationView, FrontendReceivedEvent } from "../../types/frontend";
+} from "./traceEvents";
+import type { TraceEvent } from "../types/backend";
+import type { ConversationView, FrontendReceivedEvent } from "../types/frontend";
 
 const SESSION_ID = "session-live-bound";
 const JOB_ID = "job-live-bound";

@@ -1,9 +1,9 @@
-import type { TraceEvent } from "../../types/backend";
-import type { ConversationView } from "../../types/frontend";
+import type { TraceEvent } from "../types/backend";
+import type { ConversationView } from "../types/frontend";
 import {
   conversationModelUsage,
   conversationTokenUsage,
-} from "../tokenUsage";
+} from "./tokenUsage";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {

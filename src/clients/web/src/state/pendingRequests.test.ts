@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { ConversationView } from "../../types/frontend";
+import type { ConversationView } from "../types/frontend";
 
 import {
   pendingSnapshotToConversations,
   sortConversationViews,
   writePendingSnapshot,
-} from "../conversations";
+} from "./conversations";
 
 
 describe("待处理消息状态", () => {

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { AppState } from "../../types/frontend";
+import type { AppState } from "../types/frontend";
 import {
   reuseComposerStateSnapshot,
   selectComposerState,
-} from "../composerState";
+} from "./composerState";
 
 function state(): AppState {
   return {
