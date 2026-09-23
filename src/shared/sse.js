@@ -120,7 +120,12 @@ export async function consumeSseResponse(response, options) {
     if (!frame) {
       return;
     }
-    const definition = options.events[frame.event] ?? options.events['*'];
+    // 事件名来自网络，只认注册表自身的键：用普通下标读取会把 Object.prototype
+    // 成员（constructor / toString / __proto__ 等）当成已注册事件并抛出掩盖根因的
+    // "definition.decode is not a function"，同时让 '*' 通配漏掉这些事件名。
+    const definition = Object.prototype.hasOwnProperty.call(options.events, frame.event)
+      ? options.events[frame.event]
+      : options.events['*'];
     if (!definition) {
       throw new Error(`未注册的 SSE 事件类型: ${frame.event}`);
     }
