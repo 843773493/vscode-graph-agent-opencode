@@ -16,21 +16,6 @@ class BaseAPIException(HTTPException):
         )
 
 
-class NotFoundException(BaseAPIException):
-    code = 404000
-    message = "resource not found"
-
-
-class InvalidRequestException(BaseAPIException):
-    code = 400000
-    message = "invalid request"
-
-
-class UnauthorizedException(BaseAPIException):
-    code = 401000
-    message = "unauthorized"
-
-
 class ForbiddenError(BaseAPIException):
     code = 403000
     message = "forbidden"
