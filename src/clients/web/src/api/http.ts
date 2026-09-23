@@ -20,6 +20,27 @@ export const LIFECYCLE_REQUEST_TIMEOUT_MS = 150_000;
  */
 export const BULK_FILE_OPERATION_TIMEOUT_MS = 60_000;
 
+/**
+ * requestGatewayResponse（自行消费响应体的 SSE/二进制/multipart 入口）的默认超时：
+ * 只落在「响应头等待」阶段，响应体一旦开始流动就由各入口既有的 SSE 空闲超时
+ * （SSE_IDLE_TIMEOUT_MS）接管，健康长连不会被本上限截断。
+ *
+ * 为什么必须新增而不能复用现成常量：
+ * - DEFAULT_API_REQUEST_TIMEOUT_MS(15s) 的语义是覆盖整次 JSON 交换（含响应体消费），
+ *   套到 SSE 上会把健康长连误杀；且 15s 也可能短于 Gateway 合法等待慢上游的时间；
+ * - LIFECYCLE_REQUEST_TIMEOUT_MS(150s) 的语义是「本地进程生命周期」（对齐
+ *   GATEWAY_PROCESS_READY_TIMEOUT_SECONDS=120s 的进程健康检查），与上游建连无关，
+ *   且远长于本场景所需，不构成有效上限。
+ *
+ * 取值推导：这些入口经 Gateway 代理到工作区后端，Gateway 自身的上游响应头等待上限是
+ * app/gateway/proxy_upstream.py 的 UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS=60.0
+ * （工作区代理与辅助服务代理共用）。在 60s 之内 Gateway 仍可能合法地在等待慢上游，
+ * 前端若先于它超时就会把健康建连误判为失败；因此前端上限必须严格大于 60s。
+ * 取 90s：比 Gateway 上限多 30s 余量，保证「Gateway 先于前端收口」，不会出现前端比
+ * Gateway 更早放弃的健康建连。
+ */
+export const RAW_RESPONSE_HEADER_TIMEOUT_MS = 90_000;
+
 interface GatewayResponseInit extends RequestInit {
   /**
    * 自行消费响应体的请求（SSE 实时流、二进制下载、multipart 上传）不建立 Gateway
@@ -449,7 +470,15 @@ export async function requestGatewayResponse(
   path: string,
   init?: GatewayResponseInit & { timeoutMs?: number },
 ): Promise<Response> {
-  return await runGatewayRequest(port, path, init, (response) => response);
+  // 默认只给「响应头等待」一个有限上限；调用方显式传 timeoutMs 时仍以其为准。
+  // runGatewayRequest 的 consume 在这里是同步的，响应头一到就返回并清理定时器，
+  // 因此该上限天然不覆盖后续响应体消费，无需额外分支。
+  return await runGatewayRequest(
+    port,
+    path,
+    { timeoutMs: RAW_RESPONSE_HEADER_TIMEOUT_MS, ...init },
+    (response) => response,
+  );
 }
 
 export async function requestJson<T>(
