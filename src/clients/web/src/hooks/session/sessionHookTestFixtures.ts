@@ -249,12 +249,12 @@ export function useSessionMessageStreamHarness(
 }
 
 /** useSessionRunActions 的入参：除 setState 外与生产签名逐字段一致。 */
-export type RunActionsProps = Omit<
+type RunActionsProps = Omit<
   Parameters<typeof useSessionRunActions>[0],
   "setState"
 >;
 type RunActions = ReturnType<typeof useSessionRunActions>;
-export type SessionRunActionsHandle = RunActions;
+type SessionRunActionsHandle = RunActions;
 
 /**
  * 挂载 useSessionRunActions 并把最新 state 镜像到闭包。所有用例共用同一组
@@ -288,7 +288,7 @@ export function mountSessionRunActions(options: {
 }
 
 type GoalController = ReturnType<typeof useSessionGoalController>;
-export type SessionGoalControllerHandle = GoalController;
+type SessionGoalControllerHandle = GoalController;
 
 /**
  * 挂载 useSessionGoalController，用真实 React 状态机把最新 AppState 镜像到闭包。
@@ -320,7 +320,7 @@ export async function mountSessionGoalController(options: {
   return { unmount, controller: () => controller!, state: () => latestState };
 }
 
-export type ResourceExplorerProps = Omit<
+type ResourceExplorerProps = Omit<
   Parameters<typeof useSessionResourceExplorer>[0],
   "generatorResources"
 >;
