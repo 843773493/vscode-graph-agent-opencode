@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, jest, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useSessionMessageStream } from "./useSessionMessageStream";
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
+import * as messageStreamApi from "../../api/stream/sessionMessageStream";
+import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS } from "../sessionEventStream/sessionEventStreamPolicy";
 import type { AppState } from "../../types/frontend";
 import {
   apiResponse,
@@ -109,6 +111,95 @@ afterEach(restoreSessionHookGlobals);
 
 afterEach(() => {
   jest.useRealTimers();
+});
+
+/**
+ * 把 window.setTimeout 压成 0 延迟，避免真实退避把有界重连用例拖到分钟级。
+ * 由 afterEach(restoreSessionHookGlobals) 还原。
+ */
+function installZeroDelayWindow(): void {
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      setTimeout: (handler: () => void) => globalThis.setTimeout(handler, 0),
+      clearTimeout: (id: number) => globalThis.clearTimeout(id),
+    },
+  });
+}
+
+describe("useSessionMessageStream 有界重连", () => {
+  test("连续建连失败到达上限后停止重连并写出可见终态", async () => {
+    installZeroDelayWindow();
+    const streamSpy = spyOn(messageStreamApi, "streamSessionMessageEvents")
+      .mockRejectedValue(
+        new messageStreamApi.MessageStreamConnectionError(404, "Not Found"),
+      );
+
+    const mirror = createStateMirror(minimalState());
+    const Harness = useSessionMessageStreamHarness({
+      apiPort: 49_731,
+      sessionId: "ses_bounded",
+      turnId: "turn_bounded",
+      workspaceId: "ws_bounded",
+      sessionCacheKey: "ws_bounded::ses_bounded",
+    }, mirror.setState);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    // 冲刷远超上限的轮次：若上限判定缺失，重连次数会继续无界增长。
+    for (let round = 0; round < SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 10; round += 1) {
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    const stream = [...(mirror.current().messageStreamsByTurnStream ?? new Map()).values()][0];
+    expect(streamSpy).toHaveBeenCalledTimes(SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 1);
+    expect(stream?.connectionStatus).toBe("retry_exhausted");
+    expect(stream?.protocolError).toContain("无法连接 Turn 消息流");
+    streamSpy.mockRestore();
+    act(() => renderer!.unmount());
+  });
+
+  test("建立连接并持续有心跳活动时不会被上限误判为放弃", async () => {
+    installZeroDelayWindow();
+    // 每次建连都立即报告活动（等价于收到心跳），随后断开重连；onActivity
+    // 归零计数，因此连续远超上限次「先建立后断开」必须一直重连。
+    const streamSpy = spyOn(messageStreamApi, "streamSessionMessageEvents")
+      .mockImplementation(async (_port, _sessionId, _turnId, options) => {
+        options?.onActivity?.();
+        options?.onConnected?.(null);
+        throw new Error("断开");
+      });
+
+    const mirror = createStateMirror(minimalState());
+    const Harness = useSessionMessageStreamHarness({
+      apiPort: 49_732,
+      sessionId: "ses_bounded_active",
+      turnId: "turn_bounded_active",
+      workspaceId: "ws_bounded_active",
+      sessionCacheKey: "ws_bounded_active::ses_bounded_active",
+    }, mirror.setState);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    for (let round = 0; round < SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 10; round += 1) {
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    expect(streamSpy.mock.calls.length)
+      .toBeGreaterThan(SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 1);
+    const stream = [...(mirror.current().messageStreamsByTurnStream ?? new Map()).values()][0];
+    expect(stream?.connectionStatus).not.toBe("retry_exhausted");
+    streamSpy.mockRestore();
+    act(() => renderer!.unmount());
+  });
 });
 
 describe("useSessionMessageStream 首次连接", () => {

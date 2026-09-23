@@ -161,6 +161,12 @@ export interface MessageStreamState {
   recovery: Record<string, unknown> | null;
   pendingEvents: MessageStreamEvent[];
   resumable: boolean;
-  connectionStatus: "connecting" | "connected" | "disconnected" | "gap" | "terminal";
+  connectionStatus:
+    | "connecting"
+    | "connected"
+    | "disconnected"
+    | "gap"
+    | "terminal"
+    | "retry_exhausted";
   protocolError: string | null;
 }

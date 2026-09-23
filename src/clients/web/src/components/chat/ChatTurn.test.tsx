@@ -583,6 +583,28 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).toContain("诊断：SSE 心跳超时");
   });
 
+  test("消息流耗尽重连上限时给出可见终态而不是继续显示重连", () => {
+    const value = conversation("running");
+    value.displayMode = "live";
+    value.source = "pending";
+    value.responseParts = [];
+    value.assistantMessages = [];
+    value.messageStream = {
+      connectionStatus: "retry_exhausted",
+      streamStatus: "open",
+      lastEventSeq: 8,
+      failure: null,
+      protocolError: "无法连接 Turn 消息流: 404 Not Found",
+      resumable: true,
+    };
+
+    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+
+    expect(html).toContain("已停止自动重连");
+    expect(html).not.toContain("实时消息流已断开，正在重连");
+    expect(html).toContain("诊断：无法连接 Turn 消息流: 404 Not Found");
+  });
+
   test("active_state 缺少 Activity 实体时显示通用回退", () => {
     const value = conversation("running");
     value.displayMode = "live";

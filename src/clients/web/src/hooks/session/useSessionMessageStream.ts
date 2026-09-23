@@ -17,7 +17,10 @@ import { failureFromValue } from "../../state/messageStream/state";
 import { cloneMaps } from "../../state/appStateMaps";
 import { completePendingForJob } from "../../state/conversations";
 import type { SetAppState } from "../contentViewLoaderTypes";
-import { sessionStreamReconnectDelay } from "../sessionEventStream/sessionEventStreamPolicy";
+import {
+  SESSION_STREAM_MAX_RECONNECT_ATTEMPTS,
+  sessionStreamReconnectDelay,
+} from "../sessionEventStream/sessionEventStreamPolicy";
 import { waitForReconnect } from "../sessionEventStream/waitForReconnect";
 import { isTransientNetworkError, HttpRequestError } from "../../api/http";
 import { errorMessage } from "../../utils/errorMessage";
@@ -57,6 +60,7 @@ export function useSessionMessageStream({
     let terminalStatus: MessageStreamState["streamStatus"] = "open";
     let terminalFailure: MessageStreamState["failure"] = null;
     let reconnectAttempt = 0;
+    let lastFailureMessage: string | null = null;
 
     const updateState = (update: (current: MessageStreamState) => MessageStreamState) => {
       setState((previous) => {
@@ -209,10 +213,11 @@ export function useSessionMessageStream({
               continue;
             } catch (snapshotError) {
               if (controller.signal.aborted) return;
+              lastFailureMessage = errorMessage(snapshotError);
               updateState((current) => ({
                 ...current,
                 connectionStatus: "disconnected",
-                protocolError: errorMessage(snapshotError),
+                protocolError: lastFailureMessage,
               }));
             }
           } else if (
@@ -224,18 +229,31 @@ export function useSessionMessageStream({
             // “流尚未就绪”）先抛 HttpRequestError，本地服务重连窗口抛 TypeError；
             // 这类故障会自愈，只标记断开并退回重试。
             markConnection("disconnected");
+            lastFailureMessage = errorMessage(error);
           } else {
             // 事件解码/协议校验失败不会因为重连自愈（同一字节永远解析失败）。
             // 必须把真实原因写进诊断字段，否则界面只显示“正在重连”，用户和
             // 开发者都看不到根因。
+            lastFailureMessage = errorMessage(error);
             updateState((current) => ({
               ...current,
               connectionStatus: "disconnected",
-              protocolError: errorMessage(error),
+              protocolError: lastFailureMessage,
             }));
           }
         }
         if (terminalSeen || controller.signal.aborted) return;
+        // 有界重连：连续到达上限后停止重连并给出可见终态，不再无限重连。
+        // onActivity 会在连接真正建立（收到任意字节，含心跳）时把计数归零，
+        // 因此这里限制的是「连续若干次都没能建立连接」。
+        if (reconnectAttempt >= SESSION_STREAM_MAX_RECONNECT_ATTEMPTS) {
+          updateState((current) => ({
+            ...current,
+            connectionStatus: "retry_exhausted",
+            protocolError: lastFailureMessage,
+          }));
+          return;
+        }
         await waitForReconnect(
           controller.signal,
           sessionStreamReconnectDelay(reconnectAttempt),

@@ -333,6 +333,17 @@ function MessageStreamStatusPart({ conversation }: { conversation: ConversationV
   if (stream.streamStatus === "completed") {
     return activityHistory;
   }
+  if (stream.connectionStatus === "retry_exhausted") {
+    return (
+      <div className="chat-inline-error" role="alert" data-status-kind="retry-exhausted">
+        <span className="codicon codicon-cloud-offline" aria-hidden="true" />
+        <span>实时消息流连续重连失败，已停止自动重连；请重新发送消息或刷新页面后重试</span>
+        {stream.protocolError ? (
+          <span className="chat-working-detail">诊断：{stream.protocolError}</span>
+        ) : null}
+      </div>
+    );
+  }
   if (stream.connectionStatus === "disconnected") {
     return (
       <div className="chat-working" role="status">
