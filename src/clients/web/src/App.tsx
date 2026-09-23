@@ -17,9 +17,7 @@ import GatewayControlCenter from "./components/workspace/gateway/GatewayControlC
 import WorkspaceEditorHeader from "./components/workspace/WorkspaceEditorHeader";
 import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";
 import NodeDebugWorkbench from "./components/nodeDebug/NodeDebugWorkbench";
-import WorkspaceRuntimePreviewArea, {
-  type WorkspaceRuntimePreviewTab,
-} from "./components/workspace/WorkspaceRuntimePreviewArea";
+import WorkspaceRuntimePreviewArea from "./components/workspace/WorkspaceRuntimePreviewArea";
 import { WorkspaceFileReferenceProvider } from "./components/workspace/WorkspaceFileReferenceContext";
 import WorkspaceAuxiliaryPanel from "./components/workspace/WorkspaceAuxiliaryPanel";
 import WorkspaceAttachmentPreview from "./components/workspace/preview/WorkspaceAttachmentPreview";
@@ -46,6 +44,7 @@ import { useWorkbenchPanelRouting } from "./hooks/panel/useWorkbenchPanelRouting
 import { useSessionCatalogActions } from "./hooks/shell/useSessionCatalogActions";
 import { useWorkbenchLayoutPreferences } from "./hooks/shell/useWorkbenchLayoutPreferences";
 import { useSessionChangesPreview } from "./hooks/shell/useSessionChangesPreview";
+import { projectWorkspacePreviewTabs } from "./hooks/shell/previewTabProjection";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import { createSessionConnection } from "./api/gateway/sessionConnections";
 import {
@@ -333,35 +332,30 @@ export default function AppShell() {
     [bottomPanelWorkspaceId, extensionResources.entries],
   );
   const activePreviewPath = workspacePreview.activePath;
-  const previewTabs = workspacePreview.tabs;
-  const previewLoadingPath = workspacePreview.loadingPath;
-  const previewError = workspacePreview.error;
-  const filePreviewTabs = previewTabs.filter(
-    (tab) => tab.previewType === "file" || tab.previewType === "file-placeholder",
+  const {
+    filePreviewTabs,
+    codePreviewTabs,
+    activeCodePreviewPath,
+    activeFilePath,
+    activeRuntimePreview,
+    codePreviewLoadingPath,
+    codePreviewError,
+  } = useMemo(
+    () => projectWorkspacePreviewTabs({
+      tabs: workspacePreview.tabs,
+      auxiliaryTab,
+      activePath: workspacePreview.activePath,
+      loadingPath: workspacePreview.loadingPath,
+      error: workspacePreview.error,
+    }),
+    [
+      auxiliaryTab,
+      workspacePreview.activePath,
+      workspacePreview.error,
+      workspacePreview.loadingPath,
+      workspacePreview.tabs,
+    ],
   );
-  const changePreviewTabs = previewTabs.filter(
-    (tab) => tab.previewType === "session-diff",
-  );
-  const runtimePreviewTabs = previewTabs.filter(
-    (tab): tab is WorkspaceRuntimePreviewTab =>
-      tab.previewType === "terminal" || tab.previewType === "browser",
-  );
-  const codePreviewTabs = auxiliaryTab === "changes"
-    ? changePreviewTabs
-    : filePreviewTabs;
-  const activeCodePreviewPath = codePreviewTabs.some(
-    (tab) => tab.path === activePreviewPath,
-  )
-    ? activePreviewPath
-    : codePreviewTabs[0]?.path ?? null;
-  const activeFilePath = filePreviewTabs.some(
-    (tab) => tab.path === activePreviewPath,
-  )
-    ? activePreviewPath
-    : filePreviewTabs[0]?.path ?? null;
-  const activeRuntimePreview = runtimePreviewTabs.find(
-    (tab) => tab.path === activePreviewPath,
-  ) ?? null;
 
   useEffect(() => {
     if (!activeRuntimePreview && !extensionWindowRequested) {
@@ -376,20 +370,6 @@ export default function AppShell() {
     setAuxiliaryVisible(true);
     setAuxiliaryTab(extensionWindowRequest?.kind === "debug" ? "debug" : "resources");
   }, [extensionWindowRequest?.kind, extensionWindowRequested]);
-  const codePreviewLoadingPath = codePreviewTabs.some(
-    (tab) => tab.path === previewLoadingPath,
-  )
-    ? previewLoadingPath
-    : null;
-  const codePreviewError = previewError && (
-    (auxiliaryTab === "changes" && activePreviewPath?.startsWith("session-diff://")) ||
-    (auxiliaryTab === "files" && activePreviewPath !== null &&
-      !activePreviewPath.startsWith("terminal://") &&
-      !activePreviewPath.startsWith("browser://") &&
-      !activePreviewPath.startsWith("session-diff://"))
-  )
-    ? previewError
-    : null;
   const resourcePanelActive =
     auxiliaryVisible
     && auxiliaryTab === "resources"
