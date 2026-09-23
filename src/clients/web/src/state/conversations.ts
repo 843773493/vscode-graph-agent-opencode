@@ -25,6 +25,7 @@ export {
 } from "./conversations/pendingQueue";
 export {
   appendTraceEventsToPendingConversations,
+  conversationMatchesTraceEvent,
   hasJobTerminalTraceEvent,
   PENDING_CONVERSATION_EVENT_LIMIT,
   statusForConversationEvents,
