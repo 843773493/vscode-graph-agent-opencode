@@ -594,7 +594,10 @@ async def test_proxy_rejects_path_that_folds_out_of_v1_namespace(
         await client.aclose()
 
     assert captured.value.status_code == 400
-    assert "越出上游命名空间" in str(captured.value.detail)
+    # 越界既可能在归一阶段被识别为 .. 点段，也可能在规范化后越出前缀；
+    # 两者都是同一道守卫的响亮拒绝，用例只要求拒绝原因明确。
+    detail = str(captured.value.detail)
+    assert "越出上游命名空间" in detail or "点段" in detail
     # 关键：没有任何请求被转发到上游。
     assert calls == []
     assert registry.route_reference_counts("gw_stream") == (0, 0)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from urllib.parse import unquote
 
 import httpx
 
@@ -41,12 +42,40 @@ def build_upstream_url(
 ) -> httpx.URL:
     """把代理路径拼到上游 base URL 的固定命名空间下，越界即响亮失败。
 
-    uvicorn 会把请求行里的 %2e%2e 解码成 ..，httpx 随后按 RFC 3986 折叠点段；
-    两者叠加会让 /api/v1/%2e%2e/%2e%2e/api/gateway/health 这类路径折叠出
-    /api/gateway/health，静默逃出被代理服务的命名空间，并带上 Gateway 为远程
-    目标附加的联邦凭据。这里用 httpx 的同一套规范化结果校验结果仍属于
-    「base_url 路径 + fixed_segments」这一前缀，绝不把脏路径当有效路径继续转发。
+    越界有两条来源，必须一起堵住：
+
+    1. uvicorn 把请求行里的 %2e%2e 解码成 ..，httpx 随后按 RFC 3986 折叠点段，
+       于是 /api/v1/%2e%2e/%2e%2e/api/gateway/health 折叠出 /api/gateway/health。
+    2. uvicorn 对请求行只解码一层，%252e%252e 会被解成字面量 %2e%2e；httpx 不再
+       二次解码、也就不会折叠，前缀校验看见的仍是 /api/v1/%2e%2e/...，于是放行。
+       但上游（工作区后端与辅助服务都是 uvicorn）会再解码一层并折叠点段，请求
+       照样落到上游自身命名空间之外。
+
+    第 2 条要求「判断归属之前先把百分号编码归一」。这里反复 unquote 到不动点：
+    每轮 unquote 都把 %XX 三个字节换成单个字节，字节长度严格递减，所以最多
+    len(path) 轮就到达不动点，不存在无限解码，也不依赖对输入的任何形状假设。
+
+    为什么不改成「解码后仍含 % 就拒绝」：文件名里的字面量百分号会被编码成 %25
+    （如 100%25.txt → 100%.txt），它解码后仍含 %，一律拒绝会误杀合法文件；而不
+    动点法只看最终形状里是否真的出现 .. 点段。
+
+    点段在解码过程中只增不减（unquote 只替换 %XX，不动字面量点），所以不动点形
+    式是解码链上「点段最多」的一端；只要它没有 .. 点段，上游无论解几层都构造不
+    出 ..，前缀校验因此成立。校验通过后仍按原始编码路径转发，保证 docs%2Fa.png
+    这类「编码斜杠」路径的分段语义不被改写。
     """
+
+    decoded = path
+    while True:
+        next_decoded = unquote(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    if ".." in decoded.split("/"):
+        raise ValueError(
+            "Gateway 代理路径归一后含 .. 点段: "
+            f"path={path!r}, 归一结果={decoded!r}"
+        )
 
     base = httpx.URL(base_url)
     base_prefix = base.path.rstrip("/")

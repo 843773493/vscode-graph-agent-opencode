@@ -81,7 +81,8 @@ async def test_auxiliary_proxy_rejects_path_folded_out_of_service_prefix(
         await client.aclose()
 
     assert captured.value.status_code == 400
-    assert "越出上游命名空间" in str(captured.value.detail)
+    detail = str(captured.value.detail)
+    assert "越出上游命名空间" in detail or "点段" in detail
     assert calls == []
     assert registry.route_reference_counts("gw_aux") == (0, 0)
 
