@@ -75,6 +75,8 @@ function portRangeError(label: string): string {
   return `${label}必须是 1–65535 之间的整数`;
 }
 
+const PORT_INPUT_HINT = "端口必须是 1–65535 之间的十进制整数，不接受科学计数法、小数、十六进制或空白字符。";
+
 function parsePort(value: string, label: string): number {
   if (!DECIMAL_PORT_PATTERN.test(value)) {
     throw new Error(portRangeError(label));
@@ -644,6 +646,9 @@ export default function WorkspacePortForwardPanel({
                       <label><span>本地端口</span><input type="number" min="1" max="65535" inputMode="numeric" value={editingLocalPort} onChange={(event) => setEditingLocalPort(event.target.value)} disabled={changingLocalPortId === forward.forward_id} autoFocus /></label>
                       <button type="submit" disabled={changingLocalPortId === forward.forward_id || !isValidPortInput(editingLocalPort)}>{changingLocalPortId === forward.forward_id ? "保存中…" : "保存"}</button>
                       <button type="button" onClick={() => { setEditingLocalPortId(null); setEditingLocalPort(""); }} disabled={changingLocalPortId === forward.forward_id}>取消</button>
+                      {!isValidPortInput(editingLocalPort) ? (
+                        <p className="port-forward-port-hint" role="alert">{PORT_INPUT_HINT}</p>
+                      ) : null}
                     </form>
                   ) : null}
                   {contextMenuId === forward.forward_id ? (
@@ -710,7 +715,7 @@ export default function WorkspacePortForwardPanel({
           </form>
           {remotePortInvalid || localPortInvalid ? (
             <p className="port-forward-port-hint" role="alert">
-              端口必须是 1–65535 之间的十进制整数，不接受科学计数法、小数、十六进制或空白字符。
+              {PORT_INPUT_HINT}
             </p>
           ) : null}
         </div>

@@ -108,6 +108,11 @@ export default function WorkspaceFileTree({
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [settings, setSettings] = useState<SessionFileTreeSettings | null>(null);
+  // 快捷路径设置读取失败的独立终态：settings 保持 null 是「尚未读到」，
+  // 若无此状态，设置接口一旦失败就再也无法区分「加载中」与「加载失败」，
+  // 顶部会永久停在「正在加载工作区文件…」。
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsReloadNonce, setSettingsReloadNonce] = useState(0);
   const lastCollapseVersionRef = useRef(collapseVersion);
   const restoredExpandedPathsRef = useRef(restoredExpandedPaths);
   const shortcutTreePathsRef = useRef<Set<string>>(new Set());
@@ -342,6 +347,7 @@ export default function WorkspaceFileTree({
   useEffect(() => {
     shortcutTreePathsRef.current.clear();
     setSettings(null);
+    setSettingsError(null);
     updateDirectories((current) => current);
     if (!sessionId) {
       return;
@@ -352,11 +358,14 @@ export default function WorkspaceFileTree({
         .then((result) => {
           if (!cancelled) {
             acceptFileTreeSettings(result);
+            setSettingsError(null);
           }
         })
         .catch((error: unknown) => {
           if (!cancelled) {
-            onStatusChange(`快捷路径加载失败: ${errorDisplayMessage(error)}`);
+            const message = errorDisplayMessage(error);
+            setSettingsError(message);
+            onStatusChange(`快捷路径加载失败: ${message}`);
           }
         });
     }, SESSION_AUXILIARY_LOAD_DELAY_MS);
@@ -369,6 +378,7 @@ export default function WorkspaceFileTree({
     onStatusChange,
     port,
     sessionId,
+    settingsReloadNonce,
     updateDirectories,
     workspaceId,
   ]);
@@ -704,8 +714,11 @@ export default function WorkspaceFileTree({
 
   const directoryLoading = Object.values(directories).some((directory) => directory.loading);
   const fileTreeLoading = Boolean(
-    active && sessionId && (settings === null || directoryLoading),
+    active && sessionId && (
+      (settings === null && settingsError === null) || directoryLoading
+    ),
   );
+  const showSettingsError = active && sessionId !== "" && settingsError !== null;
 
   const renderFlatRow = (row: WorkspaceFileTreeRow) => {
     if (row.kind === "root") {
@@ -827,6 +840,18 @@ export default function WorkspaceFileTree({
             onClick={menu.clearActionError}
           >
             <span className="codicon codicon-close" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+      {showSettingsError ? (
+        <div className="files-tree-error files-tree-settings-error" role="alert">
+          <span>快捷路径加载失败：{settingsError}</span>
+          <button
+            type="button"
+            className="files-tree-settings-retry"
+            onClick={() => setSettingsReloadNonce((nonce) => nonce + 1)}
+          >
+            重试
           </button>
         </div>
       ) : null}

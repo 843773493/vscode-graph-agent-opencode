@@ -439,7 +439,20 @@ export default function SessionResourceExplorer({
               }
               return;
             }
+            if (isFolder) {
+              // 文件夹节点缺 folder_id 属于权威索引契约被破坏。旧实现直接
+              // return，右键完全无反应，用户无法判断是节点损坏还是点空了。
+              handleError(
+                "打开会话菜单失败",
+                new Error(`会话目录文件夹节点缺少 folder_id: ${node.node_id}`),
+              );
+              return;
+            }
             if (!node.session_id) {
+              handleError(
+                "打开会话菜单失败",
+                new Error(`会话目录节点缺少会话 ID: ${node.node_id}`),
+              );
               return;
             }
             setFolderMenu(null);

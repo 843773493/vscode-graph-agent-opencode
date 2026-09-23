@@ -186,3 +186,56 @@ describe("端口输入只接受 1–65535 十进制整数", () => {
     });
   }
 });
+
+/** 打开某条转发的「更改本地端口」内联表单。 */
+function openLocalPortEditor(
+  renderer: ReactTestRenderer,
+  value: string,
+): void {
+  const menuItem = renderer.root.findAllByProps({ role: "menuitem" }).find(
+    (item) => item.children.includes("更改本地端口"),
+  );
+  act(() => menuItem!.props.onClick({
+    currentTarget: { closest: () => ({ removeAttribute() {} }) },
+  }));
+  const form = renderer.root.findByProps({ className: "port-forward-edit-form" });
+  act(() => form.findByType("input").props.onChange({ target: { value } }));
+}
+
+function localPortSaveButton(renderer: ReactTestRenderer) {
+  return renderer.root
+    .findByProps({ className: "port-forward-edit-form" })
+    .findAllByType("button")
+    .find((button) => button.props.type === "submit")!;
+}
+
+describe("内联更改本地端口与新增端口共享同一份校验反馈", () => {
+  for (const value of ["", "1e3", "0", "65536", "abc"]) {
+    test(`内联端口非法 ${JSON.stringify(value)} 时保存禁用且给出可见原因`, async () => {
+      const renderer = renderPanel(creates());
+      await flush();
+      openLocalPortEditor(renderer, value);
+
+      const form = renderer.root.findByProps({ className: "port-forward-edit-form" });
+      expect(localPortSaveButton(renderer).props.disabled).toBe(true);
+      // 禁用按钮必须同时给出原因；否则用户面对「点了没反应」的静默失败。
+      expect(
+        form.findByProps({ className: "port-forward-port-hint" }).props.role,
+      ).toBe("alert");
+      renderer.unmount();
+    });
+  }
+
+  test("内联端口合法时不弹校验提示且保存可用", async () => {
+    const renderer = renderPanel(creates());
+    await flush();
+    openLocalPortEditor(renderer, "41009");
+
+    const form = renderer.root.findByProps({ className: "port-forward-edit-form" });
+    expect(localPortSaveButton(renderer).props.disabled).toBe(false);
+    expect(
+      form.findAllByProps({ className: "port-forward-port-hint" }).length,
+    ).toBe(0);
+    renderer.unmount();
+  });
+});
