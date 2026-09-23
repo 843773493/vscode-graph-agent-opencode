@@ -1,8 +1,9 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { AppState } from "../../types/frontend";
+import { AppContext, type AppContextType } from "../../hooks";
 
 /**
  * 租约占用特判的回归契约。
@@ -16,8 +17,6 @@ import type { AppState } from "../../types/frontend";
  * 2. 组件源码里所有本地包装调用点都在，兜底只剩共享实现的唯一引用。
  */
 
-const realHooks = await import("../../hooks");
-
 const PORT = 49_401;
 const state = {
   apiPort: PORT,
@@ -25,20 +24,14 @@ const state = {
   status: null,
 } as unknown as AppState;
 
-// 只替身 useAppState；spread 真实模块命名空间会重新触发求值，afterAll 重新注册
-// 真实实现即可还原（与 AppErrorChannel.test.tsx 同形，探针已验证有效，不构成泄漏）。
-mock.module("../../hooks", () => ({
-  ...realHooks,
-  useAppState: () => ({
-    state,
-    refreshGatewayState: async () => {},
-    setStatus: () => {},
-  }),
-}));
-
-afterAll(() => {
-  mock.module("../../hooks", () => realHooks);
-});
+// 用真实 AppContext 注入状态。不替换 hooks 模块：bun 的 mock.module 是进程级且
+// 不可撤销，afterAll 重新注册也无法还原（spread 命名空间会重新触发求值，把替身
+// 又装回去），会污染同进程后续测试文件。
+const appContextValue = {
+  state,
+  refreshGatewayState: async () => {},
+  setStatus: () => {},
+} as unknown as AppContextType;
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -135,7 +128,11 @@ describe("Gateway 用户访问菜单的租约占用特判", () => {
     const { default: GatewayUserAccessMenu } = await import("./GatewayUserAccessMenu");
     let renderer!: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<GatewayUserAccessMenu />);
+      renderer = create(
+        <AppContext.Provider value={appContextValue}>
+          <GatewayUserAccessMenu />
+        </AppContext.Provider>,
+      );
     });
     await act(async () => {
       renderer.root

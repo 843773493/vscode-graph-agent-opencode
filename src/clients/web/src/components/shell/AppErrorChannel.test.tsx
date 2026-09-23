@@ -1,9 +1,14 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { AppState } from "../../types/frontend";
-import type { ComposerContextType } from "../../hooks";
+import {
+  AppContext,
+  ComposerContext,
+  type AppContextType,
+  type ComposerContextType,
+} from "../../hooks";
 import { useSessionRunActions } from "../../hooks/session/useSessionRunActions";
 import { selectComposerState } from "../../state/composerState";
 import {
@@ -18,12 +23,9 @@ import {
  * 替换成初始化失败大屏，错误归因也就完全错了。
  *
  * 本用例把真实链路串起来：真实 replayTurn 写出的 state → App 的真实外壳 → 真实
- * ContentViewSlots 渲染。只替身 useAppState（否则 App 会自己去拉后端）；Composer
- * 用真实实现挂上 ComposerContext，验证聊天区确实还在。
+ * ContentViewSlots 渲染。用真实 AppContext/ComposerContext 注入状态（否则 App 会
+ * 自己去拉后端），不替换 hooks 模块；验证聊天区确实还在。
  */
-
-const realHooks = await import("../../hooks");
-const controlled: { state: AppState } = { state: null as unknown as AppState };
 
 const noop = () => {};
 const asyncNoop = async () => {};
@@ -73,29 +75,10 @@ const noopActions = {
   refreshTraceHistory: asyncNoop,
 };
 
-// 只在本用例注入了 state 时替身 useAppState；没有注入时必须与真实实现一样抛错，
-// 这样同在 components/shell 下断言「Provider 之外必须抛错」的用例不受影响。
-mock.module("../../hooks", () => ({
-  ...realHooks,
-  useAppState: () => {
-    if (!controlled.state) {
-      throw new Error("useAppState must be used within AppProvider");
-    }
-    return {
-      ...noopActions,
-      state: controlled.state,
-    };
-  },
-}));
-
 const { default: App } = await import("../../App");
 const { default: WarmConfirmProvider } = await import("./WarmConfirmProvider");
 
-afterAll(() => {
-  mock.module("../../hooks", () => realHooks);
-});
 afterEach(() => {
-  controlled.state = null as unknown as AppState;
   restoreSessionHookGlobals();
 });
 
@@ -194,22 +177,23 @@ const composerContextValue = {
 
 /** 把 state 交给真实 App 渲染，返回静态 HTML。 */
 function renderApp(state: AppState): string {
-  controlled.state = state;
   return renderToStaticMarkup(
     <WarmConfirmProvider>
-      <realHooks.ComposerContext.Provider
-        value={{
-          ...composerContextValue,
-          state: selectComposerState(
-            state,
-            state.currentSession
-              ? WORKSPACE_ID + "::" + state.currentSession.session_id
-              : null,
-          ),
-        } as ComposerContextType}
-      >
-        <App />
-      </realHooks.ComposerContext.Provider>
+      <AppContext.Provider value={{ ...noopActions, state } as unknown as AppContextType}>
+        <ComposerContext.Provider
+          value={{
+            ...composerContextValue,
+            state: selectComposerState(
+              state,
+              state.currentSession
+                ? WORKSPACE_ID + "::" + state.currentSession.session_id
+                : null,
+            ),
+          } as ComposerContextType}
+        >
+          <App />
+        </ComposerContext.Provider>
+      </AppContext.Provider>
     </WarmConfirmProvider>,
   );
 }
