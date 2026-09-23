@@ -4,6 +4,7 @@ import {
   decodeJsonSseData,
   defineSseEvent,
 } from "../../sse/sseClient";
+import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import {
   validateSseError,
   validateWorkspaceFileChangeBatch,
@@ -47,7 +48,7 @@ export async function streamWorkspaceFileEvents(
   options?.onConnected?.();
   await consumeSseResponse(response, {
     signal: options?.signal,
-    idleTimeoutMs: 45_000,
+    idleTimeoutMs: SSE_IDLE_TIMEOUT_MS,
     idleTimeoutError: (timeoutMs) => new Error(
       `文件监听流超过 ${timeoutMs}ms 未收到任何数据`,
     ),

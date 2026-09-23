@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useSessionMessageStream } from "./useSessionMessageStream";
+import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import type { AppState } from "../../types/frontend";
 import {
   apiResponse,
@@ -105,6 +106,10 @@ function minimalState(): AppState {
 }
 
 afterEach(restoreSessionHookGlobals);
+
+afterEach(() => {
+  jest.useRealTimers();
+});
 
 describe("useSessionMessageStream 首次连接", () => {
   test("首个 404 后有限退避重试，随后 200 继续消费终态", async () => {
@@ -531,6 +536,55 @@ describe("useSessionMessageStream 连接与终态语义", () => {
     expect(mirror.current().status).toBe("任务已取消");
     const pending = mirror.current().pendingConversations.get("ws_cancel::ses_cancel") ?? [];
     expect(pending[0]?.turnStatus).toBe("cancelled");
+  });
+
+  test("半死连接在默认空闲阈值后写出可见断开诊断，而不是无限挂起", async () => {
+    const port = 49_723;
+    jest.useFakeTimers();
+    installTestWindow(port);
+    installGatewayFetch(({ path }) => {
+      if (path.includes("/message-stream")) {
+        // 建立连接后一个字节都不再发送：进程被 SIGSTOP / TCP 半开 / 网络黑洞。
+        return new Response(
+          new ReadableStream<Uint8Array>({ start() {} }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return undefined;
+    }, { token: "ms-idle-token" });
+
+    const mirror = createStateMirror(minimalState());
+    const Harness = useSessionMessageStreamHarness({
+      apiPort: port,
+      sessionId: "ses_idle_visible",
+      turnId: "turn_idle_visible",
+      workspaceId: "ws_idle_visible",
+      sessionCacheKey: "ws_idle_visible::ses_idle_visible",
+    }, mirror.setState);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    // 逐轮推进计时器直到连接建立：凭据 + 流两条请求都要落地，且全程无业务字节。
+    for (let round = 0; round < 20 && streamState(mirror)?.connectionStatus !== "connected"; round += 1) {
+      await act(async () => {
+        jest.advanceTimersByTime(200);
+        for (let micro = 0; micro < 50; micro += 1) await Promise.resolve();
+      });
+    }
+    expect(streamState(mirror)?.connectionStatus).toBe("connected");
+
+    await act(async () => {
+      // 越过全仓唯一的 SSE 空闲阈值：无字节连接必须响亮失败并留下可见诊断。
+      jest.advanceTimersByTime(SSE_IDLE_TIMEOUT_MS);
+      for (let round = 0; round < 60; round += 1) await Promise.resolve();
+    });
+
+    const stream = streamState(mirror);
+    expect(stream?.connectionStatus).toBe("disconnected");
+    expect(stream?.protocolError).toContain("未收到任何数据");
+    act(() => renderer!.unmount());
   });
 
   test("组件卸载会 abort 在途消息流连接", async () => {

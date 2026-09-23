@@ -5,6 +5,7 @@ import type {
   TraceEvent,
 } from "../../types/backend";
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
+import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import { validateTraceEvent } from "../../sse/sseRuntimeSchemas";
 import {
   HttpRequestError,
@@ -15,7 +16,6 @@ import {
 } from "../http";
 
 const SESSION_TRACE_TIMEOUT_MS = 10_000;
-const DEFAULT_SESSION_STREAM_IDLE_TIMEOUT_MS = 45_000;
 
 export class TraceCursorGoneError extends Error {
   readonly status = 410;
@@ -104,7 +104,7 @@ export async function streamSessionEvents(
     throw new Error(`无法连接会话事件流: ${response.status} ${response.statusText}`);
   }
   options?.onConnected?.(response.headers.get("X-BoxTeam-Route-Revision"));
-  const idleTimeoutMs = options?.idleTimeoutMs ?? DEFAULT_SESSION_STREAM_IDLE_TIMEOUT_MS;
+  const idleTimeoutMs = options?.idleTimeoutMs ?? SSE_IDLE_TIMEOUT_MS;
   try {
     await consumeSseResponse(response, {
       signal: options?.signal,

@@ -1,4 +1,5 @@
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
+import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import {
   HttpRequestError,
   requestGatewayResponse,
@@ -120,6 +121,10 @@ export async function streamSessionMessageEvents(
   options.onConnected?.(response.headers.get("X-Message-Stream-ID"));
   await consumeSseResponse(response, {
     signal: options.signal,
+    // 服务端每 15s 发一次 `: heartbeat` 注释；阈值必须大于该间隔，否则健康空闲
+    // 流会被误判断线。达到阈值即由 sse.js 统一抛错，绝不让页面在无字节连接上
+    // 无限静默挂起。
+    idleTimeoutMs: SSE_IDLE_TIMEOUT_MS,
     onActivity: options.onActivity,
     yieldBetweenEvents: true,
     events: {
