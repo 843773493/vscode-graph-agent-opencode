@@ -7,27 +7,23 @@ import {
 } from "../../api/session/sessionTurnHistory";
 import {
   applyTurnHistoryPage,
-  createSessionTurnTimeline,
   decideTurnProjectionEpoch,
-  failTurnTimeline,
   writeTurnTimelineCache,
   type SessionTurnTimeline,
 } from "../../state/session/turnTimeline";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
+import {
+  timelineForScope,
+  waitForDelayAborted,
+  writeTurnLoadFailure,
+} from "./turnLoadSupport";
 
 type TurnPageDirection = "before" | "after";
 
 const INITIAL_HISTORY_TURNS = 5;
 const CURSOR_HISTORY_TURNS = 3;
 const INITIAL_HISTORY_RETRY_DELAYS_MS = [100, 250, 500, 1000, 2000] as const;
-
-function timelineForScope(
-  timelines: Map<string, SessionTurnTimeline>,
-  scopeKey: string,
-): SessionTurnTimeline {
-  return timelines.get(scopeKey) ?? createSessionTurnTimeline(scopeKey);
-}
 
 function pageCursor(
   timeline: SessionTurnTimeline,
@@ -59,25 +55,6 @@ function isLoading(
   direction: TurnPageDirection,
 ): boolean {
   return direction === "before" ? timeline.loadingBefore : timeline.loadingAfter;
-}
-
-async function waitForInitialHistoryRetry(
-  delayMs: number,
-  signal: AbortSignal,
-): Promise<boolean> {
-  if (signal.aborted) return false;
-  await new Promise<void>((resolve) => {
-    const timer = globalThis.setTimeout(resolve, delayMs);
-    signal.addEventListener(
-      "abort",
-      () => {
-        globalThis.clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
-  return !signal.aborted;
 }
 
 function isInitialHistoryRetryableError(error: unknown): boolean {
@@ -173,7 +150,7 @@ export function useInitialTurnLoader({
           ) {
             throw error;
           }
-          const shouldContinue = await waitForInitialHistoryRetry(
+          const shouldContinue = await waitForDelayAborted(
             INITIAL_HISTORY_RETRY_DELAYS_MS[attempt],
             requestSignal,
           );
@@ -336,18 +313,7 @@ export function useInitialTurnLoader({
         return;
       }
       const message = errorMessage(error);
-      setState((previous) => {
-        const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
-        if (timeline.generation !== targetGeneration) return previous;
-        return {
-          ...previous,
-          turnTimelinesBySession: writeTurnTimelineCache(
-            previous.turnTimelinesBySession,
-            sessionCacheKey,
-            failTurnTimeline(timeline, targetGeneration, message),
-          ),
-        };
-      });
+      writeTurnLoadFailure(setState, sessionCacheKey, targetGeneration, message);
       throw error;
     }
   }, [
@@ -524,18 +490,7 @@ export function useDirectionalTurnLoader({
         return;
       }
       const message = errorMessage(error);
-      setState((previous) => {
-        const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
-        if (timeline.generation !== targetGeneration) return previous;
-        return {
-          ...previous,
-          turnTimelinesBySession: writeTurnTimelineCache(
-            previous.turnTimelinesBySession,
-            sessionCacheKey,
-            failTurnTimeline(timeline, targetGeneration, message),
-          ),
-        };
-      });
+      writeTurnLoadFailure(setState, sessionCacheKey, targetGeneration, message);
       throw error;
     }
   }, [
@@ -741,18 +696,7 @@ export function useAroundTurnLoader({
         return;
       }
       const message = errorMessage(error);
-      setState((previous) => {
-        const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
-        if (timeline.generation !== targetGeneration) return previous;
-        return {
-          ...previous,
-          turnTimelinesBySession: writeTurnTimelineCache(
-            previous.turnTimelinesBySession,
-            sessionCacheKey,
-            failTurnTimeline(timeline, targetGeneration, message),
-          ),
-        };
-      });
+      writeTurnLoadFailure(setState, sessionCacheKey, targetGeneration, message);
       throw error;
     }
   }, [

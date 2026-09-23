@@ -18,6 +18,7 @@ import {
 } from "../../state/session/turnTimeline";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
+import { timelineForScope } from "./turnLoadSupport";
 
 const PARTIAL_BOOTSTRAP_POLL_BASE_DELAY_MS = 250;
 const PARTIAL_BOOTSTRAP_POLL_MAX_DELAY_MS = 2_000;
@@ -31,13 +32,6 @@ export function partialBootstrapPollDelay(attempt: number): number {
     PARTIAL_BOOTSTRAP_POLL_BASE_DELAY_MS * (2 ** Math.min(attempt, 3)),
     PARTIAL_BOOTSTRAP_POLL_MAX_DELAY_MS,
   );
-}
-
-function timelineForScope(
-  timelines: Map<string, SessionTurnTimeline>,
-  scopeKey: string,
-): SessionTurnTimeline {
-  return timelines.get(scopeKey) ?? createSessionTurnTimeline(scopeKey);
 }
 
 export function useTurnBootstrap({

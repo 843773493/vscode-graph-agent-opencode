@@ -13,49 +13,25 @@ import {
 } from "../../api/session/sessionTurnHistory";
 import {
   applyTurnDetails,
-  createSessionTurnTimeline,
   decideTurnProjectionEpoch,
-  failTurnTimeline,
   markTurnsLoading,
   upsertTurns,
   writeTurnTimelineCache,
-  type SessionTurnTimeline,
 } from "../../state/session/turnTimeline";
 import type { TurnDetailBatchRequest } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
+import {
+  timelineForScope,
+  waitForDelayAborted,
+  writeTurnLoadFailure,
+} from "./turnLoadSupport";
 
 const TURN_DETAIL_COMMIT_RETRY_DELAYS_MS = [100, 250, 500, 1000] as const;
 
 function isTurnProjectionCommitConflict(error: unknown): boolean {
   return error instanceof StaleTurnCursorHttpError
     || (error instanceof HttpRequestError && error.status === 409);
-}
-
-async function waitForTurnCommit(
-  delayMs: number,
-  signal: AbortSignal,
-): Promise<boolean> {
-  if (signal.aborted) return false;
-  await new Promise<void>((resolve) => {
-    const timer = globalThis.setTimeout(resolve, delayMs);
-    signal.addEventListener(
-      "abort",
-      () => {
-        globalThis.clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
-  return !signal.aborted;
-}
-
-function timelineForScope(
-  timelines: Map<string, SessionTurnTimeline>,
-  scopeKey: string,
-): SessionTurnTimeline {
-  return timelines.get(scopeKey) ?? createSessionTurnTimeline(scopeKey);
 }
 
 function detailRequestIds(turnIds: string[]): TurnDetailBatchRequest["turn_ids"] {
@@ -162,7 +138,7 @@ export function useTurnDetailLoader({
           if (attempt >= TURN_DETAIL_COMMIT_RETRY_DELAYS_MS.length) {
             throw error;
           }
-          const shouldContinue = await waitForTurnCommit(
+          const shouldContinue = await waitForDelayAborted(
             TURN_DETAIL_COMMIT_RETRY_DELAYS_MS[attempt],
             requestSignal,
           );
@@ -247,18 +223,7 @@ export function useTurnDetailLoader({
         return;
       }
       const message = errorMessage(error);
-      setState((previous) => {
-        const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
-        if (timeline.generation !== targetGeneration) return previous;
-        return {
-          ...previous,
-          turnTimelinesBySession: writeTurnTimelineCache(
-            previous.turnTimelinesBySession,
-            sessionCacheKey,
-            failTurnTimeline(timeline, targetGeneration, message),
-          ),
-        };
-      });
+      writeTurnLoadFailure(setState, sessionCacheKey, targetGeneration, message);
       throw error;
     }
   }, [
