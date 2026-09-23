@@ -283,13 +283,37 @@ describe("AppState.error 只属于工作区初始化失败出口", () => {
 });
 
 describe("App.tsx 的错误文案归一只有唯一实现", () => {
-  test("不再内联 errorMessage 样板，统一走 utils/errorMessage", async () => {
+  test("App.tsx 不持有任何错误归一样板或调用", async () => {
     const source = await Bun.file(new URL("../../App.tsx", import.meta.url)).text();
 
     // 归一表达式只允许存在于 utils/errorMessage 这一处权威实现里。
     expect(source).not.toContain(
       "error instanceof Error ? error.message : String(error)",
     );
-    expect(source).toContain('from "./utils/errorMessage"');
+    // App.tsx 已经把编排下沉到 hooks；它既不该内联样板，也不该再直连归一函数。
+    // 断言“不含调用”比原先“必须 import”更强：搬家到任何新模块都不会让守卫失效。
+    expect(source).not.toContain("errorMessage(");
+  });
+
+  test("归一表达式全仓只有唯一实现，位于 utils/errorMessage", async () => {
+    const sourceRoot = Bun.fileURLToPath(new URL("../../", import.meta.url));
+    const normalizedExpression =
+      "error instanceof Error ? error.message : String(error)";
+    const hits: string[] = [];
+    const glob = new Bun.Glob("**/*.{ts,tsx}");
+
+    for await (const relativePath of glob.scan({ cwd: sourceRoot })) {
+      // 守卫只约束产品源码：测试可以合法地复述这段表达式来验证它。
+      if (/\.test\.tsx?$/.test(relativePath)) {
+        continue;
+      }
+      const text = await Bun.file(`${sourceRoot}/${relativePath}`).text();
+      if (text.includes(normalizedExpression)) {
+        hits.push(relativePath);
+      }
+    }
+
+    // 唯一实现被搬家、被复制回任何 hook/组件，这里都会变红。
+    expect(hits).toEqual(["utils/errorMessage.ts"]);
   });
 });

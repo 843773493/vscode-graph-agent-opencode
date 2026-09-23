@@ -27,7 +27,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import {
@@ -46,23 +45,20 @@ import { useGatewayExtensionWindow } from "./hooks/gatewayExtensions/useGatewayE
 import { useWorkbenchPanelRouting } from "./hooks/panel/useWorkbenchPanelRouting";
 import { useSessionCatalogActions } from "./hooks/shell/useSessionCatalogActions";
 import { useWorkbenchLayoutPreferences } from "./hooks/shell/useWorkbenchLayoutPreferences";
+import { useSessionChangesPreview } from "./hooks/shell/useSessionChangesPreview";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import { createSessionConnection } from "./api/gateway/sessionConnections";
 import {
   DEFAULT_MAIN_AREA_RATIOS,
 } from "./layout/workbenchLayout";
 import { sessionScopeKey } from "./state/session/sessionScope";
-import { shouldLoadDefaultViewChangesHint } from "./state/defaultViewChanges";
 import { getConversationsForSession } from "./state/conversations";
 import { resolveAgentSessionsPreferences } from "./state/uiSettings/preferences";
 import {
   resolveExtensionWindowRequest,
 } from "./utils/extensionResourceWindow";
-import { errorMessage } from "./utils/errorMessage";
 import type {
   AttachmentRef,
-  SessionChangesSummary,
-  SessionFileChange,
 } from "./types/backend";
 
 export default function AppShell() {
@@ -129,16 +125,10 @@ export default function AppShell() {
   const [fileTreeSearchOpen, setFileTreeSearchOpen] = useState(false);
   const [fileTreeCollapseVersion, setFileTreeCollapseVersion] = useState(0);
   const [markdownSourceVisible, setMarkdownSourceVisible] = useState(false);
-  const [defaultViewChangesHint, setDefaultViewChangesHint] = useState<{
-    sessionId: string;
-    summary: SessionChangesSummary;
-  } | null>(null);
-  const [defaultViewChangesLoading, setDefaultViewChangesLoading] = useState(false);
   const [selectedAttachmentPreview, setSelectedAttachmentPreview] = useState<{
     sessionId: string;
     attachment: AttachmentRef;
   } | null>(null);
-  const lastOpenedChangesPreviewKeyRef = useRef<string | null>(null);
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
@@ -492,167 +482,29 @@ export default function AppShell() {
     resourcePanelActive,
   ]);
 
-  const openSessionChangeInPreview = (file: SessionFileChange) => {
-    if (!state.activeChangeset) {
-      return;
-    }
-    const key = `${state.activeChangeset.changeset_id}:${file.file_path}:${file.reviewed}`;
-    lastOpenedChangesPreviewKeyRef.current = key;
-    workspacePreview.openSessionChangePreview(state.activeChangeset, file);
-  };
-
-  useEffect(() => {
-    const activeSessionId = activeSession?.session_id ?? null;
-    if (!activeSessionId || state.contentView !== "default") {
-      setDefaultViewChangesHint(null);
-      setDefaultViewChangesLoading(false);
-      return;
-    }
-
-    if (auxiliaryVisible && auxiliaryTab === "changes") {
-      if (state.activeChangeset?.session_id === activeSessionId) {
-        setDefaultViewChangesHint({
-          sessionId: activeSessionId,
-          summary: state.activeChangeset.summary,
-        });
-        setDefaultViewChangesLoading(false);
-      } else {
-        setDefaultViewChangesLoading(state.sessionChangesLoading);
-      }
-      return;
-    }
-
-    if (!shouldLoadDefaultViewChangesHint({
-      contentView: state.contentView,
-      sessionId: activeSessionId,
-      timeline: activeTurnTimeline,
-      conversationCount: conversations.length,
-    })) {
-      setDefaultViewChangesHint(null);
-      setDefaultViewChangesLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setDefaultViewChangesLoading(true);
-    const timerId = window.setTimeout(() => {
-      void loadSessionChangesets(activeSessionId)
-        .then((list) => {
-          if (cancelled) {
-            return;
-          }
-          const summary =
-            list.items.find((item) => item.is_default)?.summary ??
-            list.items[0]?.summary ??
-            { files: 0, additions: 0, deletions: 0 };
-          setDefaultViewChangesHint({
-            sessionId: activeSessionId,
-            summary,
-          });
-        })
-        .catch((error: unknown) => {
-          if (cancelled) {
-            return;
-          }
-          setDefaultViewChangesHint(null);
-          setStatus(`会话文件变更提示加载失败: ${errorMessage(error)}`);
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setDefaultViewChangesLoading(false);
-          }
-        });
-    }, 120);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timerId);
-    };
-  }, [
-    activeSession?.session_id,
-    activeSessionWorkspaceId,
-    activeTurnTimeline,
-    conversations.length,
-    loadSessionChangesets,
-    auxiliaryTab,
-    auxiliaryVisible,
-    setStatus,
-    state.activeChangeset,
-    state.contentView,
-    state.sessionChangesLoading,
-  ]);
-
-  useEffect(() => {
-    if (state.contentView !== "changes") {
-      return;
-    }
-
-    // 刷新恢复页面设置时，显式隐藏右侧栏的选择必须优先于上次内容视图。
-    // 用户重新打开右侧栏后，updateUiSettings 返回的新设置会移除此条件。
-    if (state.uiSettings.layout.auxiliary_visible !== false) {
-      setAuxiliaryVisible(true);
-    }
-  }, [state.contentView, state.uiSettings.layout.auxiliary_visible]);
-
-  useEffect(() => {
-    if (state.contentView !== "changes") {
-      return;
-    }
-
-    if (!state.activeChangeset || state.activeChangeset.files.length === 0) {
-      return;
-    }
-
-    const activeDiffFile = state.activeChangeset.files.find(
-      (file) =>
-        activePreviewPath ===
-        `session-diff://${state.activeChangeset?.changeset_id}/${encodeURIComponent(file.file_path)}`,
-    );
-    const targetFile = activeDiffFile ?? state.activeChangeset.files[0];
-    const key = `${state.activeChangeset.changeset_id}:${targetFile.file_path}:${targetFile.reviewed}`;
-    if (lastOpenedChangesPreviewKeyRef.current === key) {
-      return;
-    }
-    lastOpenedChangesPreviewKeyRef.current = key;
-    workspacePreview.openSessionChangePreview(state.activeChangeset, targetFile);
-  }, [
-    activePreviewPath,
-    state.activeChangeset,
-    state.contentView,
-    workspacePreview.openSessionChangePreview,
-  ]);
-
-  useEffect(() => {
-    if (
-      !activeSession ||
-      !auxiliaryVisible ||
-      auxiliaryTab !== "changes" ||
-      state.contentView === "changes"
-    ) {
-      return;
-    }
-    if (state.sessionChangesLoading || state.sessionChangesError) {
-      return;
-    }
-    if (state.activeChangeset?.session_id === activeSession.session_id) {
-      return;
-    }
-    const timerId = window.setTimeout(() => {
-      // 只切换到变更视图；请求由 useContentViewEffects 统一发起，
-      // 避免右侧栏 effect 和内容视图 effect 同时读取同一份变更。
-      void switchContentView("changes");
-    }, 120);
-    return () => window.clearTimeout(timerId);
-  }, [
+  const {
+    changesHint: defaultViewChangesHint,
+    changesHintLoading: defaultViewChangesLoading,
+    openChangesetFileInPreview: openSessionChangeInPreview,
+  } = useSessionChangesPreview({
     activeSession,
-    auxiliaryTab,
+    activeSessionWorkspaceId,
+    contentView: state.contentView,
+    activeChangeset: state.activeChangeset,
+    sessionChangesLoading: state.sessionChangesLoading,
+    sessionChangesError: state.sessionChangesError,
+    layoutAuxiliaryVisible: state.uiSettings.layout.auxiliary_visible,
     auxiliaryVisible,
+    auxiliaryTab,
+    activeTurnTimeline,
+    conversationCount: conversations.length,
+    activePreviewPath,
+    loadSessionChangesets,
     switchContentView,
-    state.activeChangeset,
-    state.contentView,
-    state.sessionChangesError,
-    state.sessionChangesLoading,
-  ]);
+    setAuxiliaryVisible,
+    setStatus,
+    openSessionChangePreview: workspacePreview.openSessionChangePreview,
+  });
   const handleOpenAttachment = useCallback(
     (sessionId: string, attachment: AttachmentRef) => {
       setSelectedAttachmentPreview({ sessionId, attachment });
