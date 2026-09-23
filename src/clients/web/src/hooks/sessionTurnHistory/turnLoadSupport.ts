@@ -77,3 +77,41 @@ export function writeTurnLoadFailure(
     };
   });
 }
+/** 瞬态网络失败：保留当前可见内容，只在没有内容时落错误态。 */
+export function preserveTimelineAfterTransientNetworkFailure(
+  timeline: SessionTurnTimeline,
+  targetGeneration: number,
+): SessionTurnTimeline {
+  const hasVisibleContent = timeline.orderedTurnIds.length > 0;
+  return {
+    ...timeline,
+    phase: hasVisibleContent ? timeline.phase : "error",
+    loadingBefore: false,
+    loadingAfter: false,
+    error: hasVisibleContent
+      ? null
+      : "历史服务暂时断开，当前没有可显示的历史；请稍后重试",
+    generation: targetGeneration,
+  };
+}
+
+/** 瞬态网络失败的唯一投影：保留当前内容并写入可重试状态文案。 */
+export function writeTransientNetworkPreserved(
+  setState: SetAppState,
+  sessionCacheKey: string,
+  targetGeneration: number,
+): void {
+  setState((previous) => {
+    const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
+    if (timeline.generation !== targetGeneration) return previous;
+    return {
+      ...previous,
+      turnTimelinesBySession: writeTurnTimelineCache(
+        previous.turnTimelinesBySession,
+        sessionCacheKey,
+        preserveTimelineAfterTransientNetworkFailure(timeline, targetGeneration),
+      ),
+      status: "历史连接暂时变化，已保留当前内容，可继续重试",
+    };
+  });
+}

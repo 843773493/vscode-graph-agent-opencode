@@ -14,10 +14,12 @@ import {
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
 import {
+  preserveTimelineAfterTransientNetworkFailure,
   timelineForScope,
   type TurnScopeLoaderProps,
   waitForDelayAborted,
   writeTurnLoadFailure,
+  writeTransientNetworkPreserved,
 } from "./turnLoadSupport";
 
 type TurnPageDirection = "before" | "after";
@@ -66,23 +68,6 @@ function isInitialHistoryRetryableError(error: unknown): boolean {
   if (isTransientNetworkError(error)) return true;
   return error instanceof HttpRequestError
     && (error.status === 404 || error.status === 409);
-}
-
-function preserveTimelineAfterTransientNetworkFailure(
-  timeline: SessionTurnTimeline,
-  targetGeneration: number,
-): SessionTurnTimeline {
-  const hasVisibleContent = timeline.orderedTurnIds.length > 0;
-    return {
-      ...timeline,
-      phase: hasVisibleContent ? timeline.phase : "error",
-      loadingBefore: false,
-      loadingAfter: false,
-      error: hasVisibleContent
-      ? null
-      : "历史服务暂时断开，当前没有可显示的历史；请稍后重试",
-    generation: targetGeneration,
-  };
 }
 
 export function useInitialTurnLoader({
@@ -282,22 +267,7 @@ export function useInitialTurnLoader({
         return;
       }
       if (isTransientNetworkError(error)) {
-        setState((previous) => {
-          const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
-          if (timeline.generation !== targetGeneration) return previous;
-          return {
-            ...previous,
-            turnTimelinesBySession: writeTurnTimelineCache(
-              previous.turnTimelinesBySession,
-              sessionCacheKey,
-              preserveTimelineAfterTransientNetworkFailure(
-                timeline,
-                targetGeneration,
-              ),
-            ),
-            status: "历史连接暂时变化，已保留当前内容，可继续重试",
-          };
-        });
+        writeTransientNetworkPreserved(setState, sessionCacheKey, targetGeneration);
         return;
       }
       if (error instanceof HttpRequestError && error.status === 404 && latestTurnId) {
@@ -669,22 +639,7 @@ export function useAroundTurnLoader({
         return;
       }
       if (isTransientNetworkError(error)) {
-        setState((previous) => {
-          const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
-          if (timeline.generation !== targetGeneration) return previous;
-          return {
-            ...previous,
-            turnTimelinesBySession: writeTurnTimelineCache(
-              previous.turnTimelinesBySession,
-              sessionCacheKey,
-              preserveTimelineAfterTransientNetworkFailure(
-                timeline,
-                targetGeneration,
-              ),
-            ),
-            status: "历史连接暂时变化，已保留当前内容，可继续重试",
-          };
-        });
+        writeTransientNetworkPreserved(setState, sessionCacheKey, targetGeneration);
         return;
       }
       const message = errorMessage(error);
