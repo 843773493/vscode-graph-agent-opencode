@@ -119,6 +119,7 @@ export async function streamSessionMessageEvents(
     throw new MessageStreamConnectionError(response.status, response.statusText);
   }
   options.onConnected?.(response.headers.get("X-Message-Stream-ID"));
+  const deliveredEventSeqs = new Set<number>();
   await consumeSseResponse(response, {
     signal: options.signal,
     // 服务端每 15s 发一次 `: heartbeat` 注释；阈值必须大于该间隔，否则健康空闲
@@ -131,7 +132,21 @@ export async function streamSessionMessageEvents(
       "*": defineSseEvent(
         (data, frame) => {
           if (!frame.id) throw new Error("SSE 消息流缺少 event_seq id 行");
-          return validateMessageStreamEvent(decodeJsonSseData(data, frame));
+          const event = validateMessageStreamEvent(decodeJsonSseData(data, frame));
+          const frameEventSeq = Number(frame.id);
+          if (!Number.isSafeInteger(frameEventSeq) || frameEventSeq < 0) {
+            throw new Error(`SSE 消息流 id 必须是非负整数: ${frame.id}`);
+          }
+          if (frameEventSeq !== event.event_seq) {
+            throw new Error(
+              `SSE 消息流 id 与 event_seq 不一致: id=${frame.id} event_seq=${event.event_seq}`,
+            );
+          }
+          if (deliveredEventSeqs.has(frameEventSeq)) {
+            throw new Error(`SSE 消息流重复 event_seq: ${frameEventSeq}`);
+          }
+          deliveredEventSeqs.add(frameEventSeq);
+          return event;
         },
         (event) => options.onEvent?.(event),
       ),

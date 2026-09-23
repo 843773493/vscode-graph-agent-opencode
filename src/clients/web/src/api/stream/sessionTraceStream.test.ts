@@ -157,6 +157,22 @@ describe("会话 SSE 客户端", () => {
     expect(receivedCursors).toEqual(["tc1.evt_new"]);
   });
 
+  test("拒绝同一连接内重复的 trace cursor", async () => {
+    const port = 49_007;
+    const event = traceEvent("evt_duplicate");
+    installStreamBackend(
+      port,
+      () => streamResponse([
+        traceBlock(event, "tc1.duplicate"),
+        traceBlock(event, "tc1.duplicate"),
+      ]),
+    );
+
+    await expect(
+      streamSessionEvents(port, "ses_stream_test", { idleTimeoutMs: 50 }),
+    ).rejects.toThrow("SSE trace 重复 cursor: tc1.duplicate");
+  });
+
   test("连接建立时暴露 Gateway 工作区路由代次", async () => {
     const port = 49_004;
     installStreamBackend(

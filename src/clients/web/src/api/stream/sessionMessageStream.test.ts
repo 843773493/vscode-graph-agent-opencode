@@ -38,6 +38,37 @@ function sseInit(): ResponseInit {
   return { status: 200, headers: { "content-type": "text/event-stream" } };
 }
 
+function streamResponse(chunks: string[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+        }
+        controller.close();
+      },
+    }),
+    sseInit(),
+  );
+}
+
+function messageEvent(eventSeq: number) {
+  return {
+    event_id: `evt_message_${eventSeq}`,
+    session_id: "ses_message_test",
+    turn_id: "turn_message_test",
+    turn_stream_id: "stream_message_test",
+    event_seq: eventSeq,
+    type: "stream.opened",
+    payload: { status: "open" },
+  };
+}
+
+function messageBlock(frameId: string, eventSeq: number): string {
+  return `id: ${frameId}\nevent: stream.opened\ndata: ${JSON.stringify(messageEvent(eventSeq))}\n\n`;
+}
+
 describe("Turn 消息流空闲超时", () => {
   test("阈值必须严格大于服务端 15s 心跳间隔", () => {
     // 小于心跳间隔会把健康空闲流误判断线；该断言把口径钉死在代码里。
@@ -171,5 +202,58 @@ describe("Turn 消息流空闲超时", () => {
     expect(activityCount).toBeGreaterThanOrEqual(8);
     expect(received).toEqual([]);
     if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
+  });
+});
+
+describe("Turn 消息流 SSE 序号校验", () => {
+  test("接受服务端生成的非负安全整数 id", async () => {
+    const port = 49_876;
+    const received: number[] = [];
+    installStreamBackend(port, () => streamResponse([messageBlock("1", 1)]));
+
+    await streamSessionMessageEvents(port, "ses_message_test", "turn_message_test", {
+      onEvent: (event) => received.push(event.event_seq),
+    });
+
+    expect(received).toEqual([1]);
+  });
+
+  test("拒绝非非负安全整数的 id", async () => {
+    const port = 49_873;
+    installStreamBackend(port, () => streamResponse([messageBlock("not-a-seq", 1)]));
+
+    await expect(
+      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test"),
+    ).rejects.toThrow("SSE 消息流 id 必须是非负整数");
+  });
+
+  test("拒绝负数 id", async () => {
+    const port = 49_877;
+    installStreamBackend(port, () => streamResponse([messageBlock("-1", 1)]));
+
+    await expect(
+      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test"),
+    ).rejects.toThrow("SSE 消息流 id 必须是非负整数");
+  });
+
+  test("拒绝与 event_seq 不一致的 id", async () => {
+    const port = 49_874;
+    installStreamBackend(port, () => streamResponse([messageBlock("2", 1)]));
+
+    await expect(
+      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test"),
+    ).rejects.toThrow("SSE 消息流 id 与 event_seq 不一致");
+  });
+
+  test("拒绝同一连接内重复的 event_seq", async () => {
+    const port = 49_875;
+    installStreamBackend(
+      port,
+      () => streamResponse([messageBlock("1", 1), messageBlock("1", 1)]),
+    );
+
+    await expect(
+      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test"),
+    ).rejects.toThrow("SSE 消息流重复 event_seq: 1");
   });
 });

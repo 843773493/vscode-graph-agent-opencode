@@ -105,6 +105,7 @@ export async function streamSessionEvents(
   }
   options?.onConnected?.(response.headers.get("X-BoxTeam-Route-Revision"));
   const idleTimeoutMs = options?.idleTimeoutMs ?? SSE_IDLE_TIMEOUT_MS;
+  const deliveredCursors = new Set<string>();
   try {
     await consumeSseResponse(response, {
       signal: options?.signal,
@@ -115,6 +116,10 @@ export async function streamSessionEvents(
         trace: defineSseEvent(
           (data, frame) => {
             if (!frame.id) throw new Error("SSE trace 缺少 id 行");
+            if (deliveredCursors.has(frame.id)) {
+              throw new Error(`SSE trace 重复 cursor: ${frame.id}`);
+            }
+            deliveredCursors.add(frame.id);
             return {
               cursor: frame.id,
               event: validateTraceEvent(decodeJsonSseData(data, frame)),
