@@ -331,4 +331,57 @@ describe("useSessionResourceExplorer 自动同步", () => {
     expect(failure?.message).toContain("目录重读崩了");
     unmount();
   });
+
+  test("刷新目录顶掉在途分支读取且刷新失败时，分支必须落到失败终态而不是永久加载", async () => {
+    let releaseChildren!: (response: Response) => void;
+    let childrenCalls = 0;
+    installGatewayFetch(withCatalogDefaults(({ path }) => {
+      if (path.includes("/api/v1/session-catalog/children")) {
+        childrenCalls += 1;
+        return new Promise<Response>((resolve) => {
+          releaseChildren = resolve;
+        });
+      }
+      if (path.includes("/api/v1/session-catalog/refresh")) {
+        return new Response(JSON.stringify({ detail: "目录刷新失败" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return undefined;
+    }));
+
+    let explorerHandle: SessionResourceExplorerHandle | null = null;
+    const Harness = useSessionResourceExplorerHarness({
+      props: explorerProps({ apiPort: 49_412, activeWorkspaceId: "ws-test" }),
+      onExplorer: (explorer) => {
+        explorerHandle = explorer;
+      },
+    });
+    const unmount = await mountHarness(Harness, 1);
+    expect(childrenCalls).toBe(1);
+    expect(explorerHandle!.branches.get("ws-test:root")?.loading).toBe(true);
+
+    await act(async () => {
+      await explorerHandle!.refreshResourceTree().catch(() => undefined);
+      await flushEffects();
+    });
+    const afterRefreshFailure = explorerHandle!.branches.get("ws-test:root");
+    expect(afterRefreshFailure?.loading).toBe(false);
+    expect(afterRefreshFailure?.error).toContain("目录刷新失败");
+    // 被顶掉的在途分支即使随后成功返回也不得覆盖失败终态（请求已失效）。
+    await act(async () => {
+      releaseChildren(apiResponse({
+        revision: "catalog",
+        parent_node_id: null,
+        items: [],
+        cursor: null,
+        total: 0,
+      }));
+      await flushEffects();
+      await flushEffects();
+    });
+    expect(explorerHandle!.branches.get("ws-test:root")?.loading).toBe(false);
+    unmount();
+  });
 });

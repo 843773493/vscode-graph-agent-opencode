@@ -248,4 +248,31 @@ describe("会话目录分支的加载失败与空态", () => {
     expect(JSON.stringify(tree.toJSON())).toContain("暂无会话或会话文件夹");
     expect(JSON.stringify(tree.toJSON())).not.toContain("无法读取工作区目录");
   });
+
+  test("节点缺 node_id 时显示可见错误卡，而不是走 React key 警告或无限递归", async () => {
+    const { tree } = await renderExplorer({
+      nodes: [navigationNode("gw_1", "gw_1")],
+      workspaces: [gatewayWorkspace("gw_1", "ready")],
+      branchItems: [{ kind: "folder", name: "坏文件夹", has_children: true }],
+    });
+    await expandFirstWorkspace(tree);
+    const html = JSON.stringify(tree.toJSON());
+    expect(html).toContain("无法读取工作区目录");
+    expect(html).toContain("node_id 必须是非空字符串");
+  });
+
+  test("同级节点重复 node_id 时显示可见错误卡", async () => {
+    const { tree } = await renderExplorer({
+      nodes: [navigationNode("gw_1", "gw_1")],
+      workspaces: [gatewayWorkspace("gw_1", "ready")],
+      branchItems: [
+        { node_id: "dup", kind: "session", name: "甲", session_id: "s-a", has_children: false },
+        { node_id: "dup", kind: "session", name: "乙", session_id: "s-b", has_children: false },
+      ],
+    });
+    await expandFirstWorkspace(tree);
+    const html = JSON.stringify(tree.toJSON());
+    expect(html).toContain("无法读取工作区目录");
+    expect(html).toContain("重复的 node_id: dup");
+  });
 });

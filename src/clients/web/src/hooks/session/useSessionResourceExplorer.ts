@@ -80,6 +80,27 @@ function updateParentNodeChildFlag(
   }
 }
 
+/**
+ * 读取失败的统一终态：沿用上一次的分页快照，只把 loading 落下并带上错误文案。
+ * 分支读取与目录刷新失败都必须收敛到这一个状态构造，避免两处各写一份八字段对象。
+ */
+function branchFailureState(
+  branch: CatalogBranchState | undefined,
+  parentNodeId: string | null,
+  message: string,
+): CatalogBranchState {
+  return {
+    revision: branch?.revision ?? "",
+    parent_node_id: parentNodeId,
+    items: branch?.items ?? [],
+    cursor: branch?.cursor ?? null,
+    total: branch?.total ?? 0,
+    consistency_warning: branch?.consistency_warning ?? null,
+    loading: false,
+    error: message,
+  };
+}
+
 export function useSessionResourceExplorer({
   apiPort,
   activeWorkspaceId,
@@ -229,17 +250,7 @@ export function useSessionResourceExplorer({
         const message = errorMessage(error);
         setBranches((previous) => {
           const next = new Map(previous);
-          const previousBranch = next.get(key);
-          next.set(key, {
-            revision: previousBranch?.revision ?? "",
-            parent_node_id: parentNodeId ?? null,
-            items: previousBranch?.items ?? [],
-            cursor: previousBranch?.cursor ?? null,
-            total: previousBranch?.total ?? 0,
-            consistency_warning: previousBranch?.consistency_warning ?? null,
-            loading: false,
-            error: message,
-          });
+          next.set(key, branchFailureState(next.get(key), parentNodeId ?? null, message));
           return next;
         });
         throw error;
@@ -282,7 +293,23 @@ export function useSessionResourceExplorer({
           const rootKey = branchKey(activeWorkspaceId, null);
           const requestId = (branchRequestRefs.current.get(rootKey) ?? 0) + 1;
           branchRequestRefs.current.set(rootKey, requestId);
-          const rootPage = await refreshSessionCatalog(apiPort, activeWorkspaceId);
+          let rootPage: SessionCatalogPage;
+          try {
+            rootPage = await refreshSessionCatalog(apiPort, activeWorkspaceId);
+          } catch (error) {
+            // 上面已经顶掉在途的根分支读取，它的结果不会再写回；刷新自身失败时
+            // 必须由这里写入失败终态，否则根分支会永远停在 loadBranch 留下的
+            // loading 占位上，界面永久显示「正在加载…」。
+            if (branchRequestRefs.current.get(rootKey) === requestId) {
+              const message = errorMessage(error);
+              setBranches((previous) => {
+                const next = new Map(previous);
+                next.set(rootKey, branchFailureState(next.get(rootKey), null, message));
+                return next;
+              });
+            }
+            throw error;
+          }
           if (branchRequestRefs.current.get(rootKey) === requestId) {
             setBranches((previous) => {
               const next = new Map(previous);
