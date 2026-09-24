@@ -43,7 +43,11 @@ function navigationNode(workspaceId: string, name: string) {
   };
 }
 
-function gatewayWorkspace(workspaceId: string, status: "ready" | "offline"): GatewayWorkspace {
+function gatewayWorkspace(
+  workspaceId: string,
+  status: "ready" | "offline",
+  connectionError: string | null = null,
+): GatewayWorkspace {
   return {
     workspace_id: workspaceId,
     parent_workspace_id: null,
@@ -59,7 +63,7 @@ function gatewayWorkspace(workspaceId: string, status: "ready" | "offline"): Gat
     runtime_action: "safe_restart_managed_backend",
     remote: null,
     services: {},
-    connection_error: null,
+    connection_error: connectionError,
     checked_at: "2026-07-31T00:00:00Z",
   };
 }
@@ -74,6 +78,10 @@ async function renderExplorer(options: {
   navigationFails?: string | null;
   branchItems?: unknown[];
   branchError?: string | null;
+  /** 激活工作区与当前会话：用于触发「定位当前会话」链路。 */
+  activeWorkspaceId?: string | null;
+  currentSessionId?: string;
+  breadcrumbFails?: string | null;
 }): Promise<{ html: string; tree: ReactTestRenderer }> {
   installTestWindow(8014);
   installGatewayFetch((request) => {
@@ -88,6 +96,12 @@ async function renderExplorer(options: {
         return undefined;
       }
       return apiResponse({ revision: "navigation", nodes: options.nodes });
+    }
+    if (request.path.includes("/api/v1/session-catalog/breadcrumb/")) {
+      if (options.breadcrumbFails) {
+        return errorResponse(options.breadcrumbFails);
+      }
+      return apiResponse({ items: [] });
     }
     if (request.path.includes("/api/v1/session-catalog/children")) {
       if (options.branchError) {
@@ -113,8 +127,8 @@ async function renderExplorer(options: {
       <SessionResourceExplorer
         apiPort={8014}
         workspaces={options.workspaces}
-        activeWorkspaceId={null}
-        currentSessionId=""
+        activeWorkspaceId={options.activeWorkspaceId ?? null}
+        currentSessionId={options.currentSessionId ?? ""}
         searchOpen={false}
         searchQuery=""
         workspaceSwitching={false}
@@ -249,6 +263,18 @@ describe("会话目录分支的加载失败与空态", () => {
     expect(JSON.stringify(tree.toJSON())).not.toContain("无法读取工作区目录");
   });
 
+  test("工作区离线且带连接错误、分支读取成功但为空时，不得把空态与错误卡并列", async () => {
+    const { tree } = await renderExplorer({
+      nodes: [navigationNode("gw_1", "gw_1")],
+      workspaces: [gatewayWorkspace("gw_1", "offline", "SSH 连接已断开")],
+    });
+    await expandFirstWorkspace(tree);
+    const html = JSON.stringify(tree.toJSON());
+    // branch.error 为空，但工作区自身连接错误必须优先：否则用户无法区分「真没会话」和「读不到」。
+    expect(html).toContain("无法读取工作区目录");
+    expect(html).not.toContain("暂无会话或会话文件夹");
+  });
+
   test("节点缺 node_id 时显示可见错误卡，而不是走 React key 警告或无限递归", async () => {
     const { tree } = await renderExplorer({
       nodes: [navigationNode("gw_1", "gw_1")],
@@ -274,5 +300,23 @@ describe("会话目录分支的加载失败与空态", () => {
     const html = JSON.stringify(tree.toJSON());
     expect(html).toContain("无法读取工作区目录");
     expect(html).toContain("重复的 node_id: dup");
+  });
+});
+
+describe("定位当前会话失败的错误归属", () => {
+  test("导航加载成功但定位当前会话失败时，不得误报工作区列表不可用", async () => {
+    const { html } = await renderExplorer({
+      nodes: [navigationNode("gw_1", "正常的工作区")],
+      workspaces: [gatewayWorkspace("gw_1", "ready")],
+      activeWorkspaceId: "gw_1",
+      currentSessionId: "s-hidden",
+      breadcrumbFails: "面包屑读取炸了",
+    });
+    // 工作区导航本身读到了，仍应正常渲染工作区行。
+    expect(html).toContain("正常的工作区");
+    // 定位失败必须走独立错误卡，而不是宣称整个工作区列表不可用。
+    expect(html).not.toContain("无法加载工作区列表");
+    expect(html).toContain("无法定位当前会话");
+    expect(html).toContain("面包屑读取炸了");
   });
 });

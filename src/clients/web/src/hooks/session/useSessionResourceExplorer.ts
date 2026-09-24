@@ -126,6 +126,10 @@ export function useSessionResourceExplorer({
   const navigationRef = useRef(navigation);
   navigationRef.current = navigation;
   const [navigationError, setNavigationError] = useState<string | null>(null);
+  // 定位当前会话失败与「工作区列表不可用」是两个不同层级的问题：前者只是当前会话
+  // 没能自动展开，工作区导航本身仍然可用。若写进 navigationError，界面会误报
+  // 「无法加载工作区列表」，并把重试指向重新加载工作区列表，用户点它永远不会重试定位。
+  const [revealError, setRevealError] = useState<string | null>(null);
   const [branches, setBranches] = useState<Map<string, CatalogBranchState>>(new Map());
   const branchesRef = useRef(branches);
   branchesRef.current = branches;
@@ -148,6 +152,17 @@ export function useSessionResourceExplorer({
   const currentSessionRevealRequestRef = useRef(0);
   const navigationRequestRef = useRef(0);
   const branchRequestRefs = useRef<Map<string, number>>(new Map());
+  // 导航请求的发布闸门：只有最新一次请求能把结果写回，且成功发布必须同时清掉
+  // 上一次的导航错误。六处调用点只允许走这一个入口，杜绝「漏清错误」或
+  // 「迟到响应覆盖新树」在某个分支被单独写错。
+  const publishNavigation = useCallback((requestId: number, next: WorkspaceNavigationTree) => {
+    if (navigationRequestRef.current !== requestId) {
+      return;
+    }
+    setNavigation(next);
+    setNavigationError(null);
+  }, []);
+
   const branchInFlightRequestsRef = useRef<
     Map<string, Promise<SessionCatalogPage | undefined>>
   >(new Map());
@@ -160,10 +175,7 @@ export function useSessionResourceExplorer({
     navigationRequestRef.current = requestId;
     try {
       const next = await getWorkspaceNavigation(apiPort);
-      if (navigationRequestRef.current === requestId) {
-        setNavigation(next);
-        setNavigationError(null);
-      }
+      publishNavigation(requestId, next);
       return next;
     } catch (error) {
       const message = errorMessage(error);
@@ -172,7 +184,7 @@ export function useSessionResourceExplorer({
       }
       throw error;
     }
-  }, [apiPort]);
+  }, [apiPort, publishNavigation]);
 
   const loadBranch = useCallback(async (
     workspaceId: string,
@@ -489,11 +501,8 @@ export function useSessionResourceExplorer({
     const requestId = navigationRequestRef.current + 1;
     navigationRequestRef.current = requestId;
     const next = await createWorkspaceNavigationFolder(apiPort, name, parentNodeId);
-    if (navigationRequestRef.current === requestId) {
-      setNavigation(next);
-      setNavigationError(null);
-    }
-  }, [apiPort]);
+    publishNavigation(requestId, next);
+  }, [apiPort, publishNavigation]);
 
   const revealSearchResult = useCallback(async (
     workspaceId: string,
@@ -553,11 +562,8 @@ export function useSessionResourceExplorer({
     const requestId = navigationRequestRef.current + 1;
     navigationRequestRef.current = requestId;
     const next = await renameWorkspaceNavigationFolder(apiPort, nodeId, name);
-    if (navigationRequestRef.current === requestId) {
-      setNavigation(next);
-      setNavigationError(null);
-    }
-  }, [apiPort]);
+    publishNavigation(requestId, next);
+  }, [apiPort, publishNavigation]);
 
   const placeWorkspaceNode = useCallback(async (
     nodeId: string,
@@ -574,10 +580,7 @@ export function useSessionResourceExplorer({
         mode,
         ...(targetNodeId ? { target_node_id: targetNodeId } : {}),
       });
-      if (navigationRequestRef.current === requestId) {
-        setNavigation(next);
-        setNavigationError(null);
-      }
+      publishNavigation(requestId, next);
     } catch (operationError) {
       try {
         await refreshNavigation();
@@ -588,17 +591,14 @@ export function useSessionResourceExplorer({
       }
       throw operationError;
     }
-  }, [apiPort, refreshNavigation]);
+  }, [apiPort, publishNavigation, refreshNavigation]);
 
   const deleteWorkspaceFolder = useCallback(async (nodeId: string) => {
     const requestId = navigationRequestRef.current + 1;
     navigationRequestRef.current = requestId;
     const next = await deleteWorkspaceNavigationFolder(apiPort, nodeId);
-    if (navigationRequestRef.current === requestId) {
-      setNavigation(next);
-      setNavigationError(null);
-    }
-  }, [apiPort]);
+    publishNavigation(requestId, next);
+  }, [apiPort, publishNavigation]);
 
   const renameSessionFolder = useCallback(async (
     workspaceId: string,
@@ -824,12 +824,14 @@ export function useSessionResourceExplorer({
     if (!activeWorkspaceId || !currentSessionId || !navigation) {
       currentSessionRevealRequestRef.current += 1;
       currentSessionRevealKeyRef.current = null;
+      setRevealError(null);
       return;
     }
     const revealKey = `${activeWorkspaceId}:${currentSessionId}`;
     if (currentSessionRevealKeyRef.current === revealKey) {
       return;
     }
+    setRevealError(null);
     const currentSessionIsVisible = [...branchesRef.current.entries()].some(([key, branch]) =>
       key.startsWith(`${activeWorkspaceId}:`)
       && branch.items.some((item) => item.session_id === currentSessionId),
@@ -855,9 +857,7 @@ export function useSessionResourceExplorer({
       .catch((error: unknown) => {
         if (currentSessionRevealRequestRef.current === requestId) {
           currentSessionRevealKeyRef.current = null;
-          setNavigationError(
-            `定位当前会话失败: ${errorMessage(error)}`,
-          );
+          setRevealError(`定位当前会话失败: ${errorMessage(error)}`);
         }
       });
   }, [
@@ -871,6 +871,7 @@ export function useSessionResourceExplorer({
   return useMemo(() => ({
     navigation,
     navigationError,
+    revealError,
     branches,
     expandedIds,
     searchResults,
@@ -917,6 +918,7 @@ export function useSessionResourceExplorer({
     loadBranch,
     navigation,
     navigationError,
+    revealError,
     placeWorkspaceNode,
     moveSessionFolder,
     moveCatalogNode,

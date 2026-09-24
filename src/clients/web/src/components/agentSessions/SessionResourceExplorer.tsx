@@ -331,7 +331,7 @@ export default function SessionResourceExplorer({
             </details>
           </li>
         ) : null}
-        {!branch.loading && !branch.error && branch.items.length === 0 ? (
+        {!branch.loading && !branchError && branch.items.length === 0 ? (
           <li className="session-resource-state">暂无会话或会话文件夹</li>
         ) : null}
         {branch.cursor ? (
@@ -864,6 +864,16 @@ export default function SessionResourceExplorer({
           <details>
             <summary>查看技术详情</summary>
             <code>{explorer.navigationError}</code>
+          </details>
+        </div>
+      ) : null}
+      {explorer.revealError ? (
+        <div className="session-resource-error-card" role="alert">
+          <strong>无法定位当前会话</strong>
+          <span>当前会话未能在资源树中自动展开，工作区列表仍可使用。</span>
+          <details>
+            <summary>查看技术详情</summary>
+            <code>{explorer.revealError}</code>
           </details>
         </div>
       ) : null}

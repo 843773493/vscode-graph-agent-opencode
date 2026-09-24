@@ -289,6 +289,53 @@ describe("useSessionResourceExplorer 自动同步", () => {
     act(() => renderer.unmount());
   });
 
+  test("定位当前会话失败不写入 navigationError，而是独立 revealError", async () => {
+    installGatewayFetch(withCatalogDefaults(({ path }) => {
+      if (path.includes("/api/v1/session-catalog/breadcrumb/")) {
+        return new Response(JSON.stringify({ detail: "面包屑读取炸了" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return undefined;
+    }));
+
+    const latest: { navigationError: string | null; revealError: string | null } = {
+      navigationError: null,
+      revealError: null,
+    };
+    function Harness(): React.ReactNode {
+      const generatorResources = useSessionGeneratorResources(49_409);
+      const explorer = useSessionResourceExplorer({
+        ...explorerProps({
+          apiPort: 49_409,
+          activeWorkspaceId: "ws-default",
+          workspaceNavigationSyncKey: "ws-default",
+          currentSessionId: "session-hidden",
+        }),
+        generatorResources,
+      });
+      latest.navigationError = explorer.navigationError;
+      latest.revealError = explorer.revealError;
+      return null;
+    }
+
+    let renderer: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<Harness />);
+      await flushEffects();
+      await flushEffects();
+      await flushEffects();
+    });
+
+    // 工作区导航本身读到了；定位当前会话失败必须走独立通道，
+    // 否则界面会误报「无法加载工作区列表」并把重试指向错误的操作。
+    expect(latest.navigationError).toBeNull();
+    expect(latest.revealError).toContain("定位当前会话失败");
+    expect(latest.revealError).toContain("面包屑读取炸了");
+    act(() => renderer.unmount());
+  });
+
   test("目录移动失败且补偿重读也失败时抛出错误必须同时含两条文案", async () => {
     installGatewayFetch(withCatalogDefaults(({ path, init }) => {
       if (
