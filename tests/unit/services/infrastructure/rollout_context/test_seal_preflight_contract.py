@@ -40,6 +40,8 @@ def _canonical_ref(
     semantic_kind: str = SemanticKind.ASSISTANT_OUTPUT.value,
     payload_kind: str = PayloadKind.STRUCTURED_CONTENT.value,
 ) -> ContextRef:
+    # thread_id 是 ref 的 (session_id, thread_id) 定位必填一半；这里用固定
+    # 冻结值，与 domain 层 ref 构造口径一致，不用 session id 冒充 thread。
     return ContextRef(
         ref_type="canonical_item",
         ref_id=ref_id,
@@ -50,6 +52,7 @@ def _canonical_ref(
         content_hash=sha256_jcs({"canonical": ref_id}),
         content_length=1,
         session_id="s1",
+        thread_id="thread-1",
     )
 
 
@@ -85,6 +88,7 @@ def _request_ref(
         overlay_to_revision=overlay_to_revision,
         overlay_diff_hash=overlay_diff_hash,
         session_id="s1",
+        thread_id="thread-1",
         plan_id="p1",
     )
 
