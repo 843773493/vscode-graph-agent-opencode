@@ -8,10 +8,10 @@ from app.abstractions.internal_message import PreparedInternalMessage
 from app.abstractions.job_service import JobServiceProtocol
 from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
+    get_attachment_blob_store,
     get_job_service,
     get_message_service,
     get_request_id,
-    get_attachment_blob_store,
     get_session_orchestrator,
     get_session_turn_replay_service,
     verify_local_token,
