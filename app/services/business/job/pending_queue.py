@@ -190,13 +190,18 @@ class JobPendingQueue:
     ) -> bool:
         if boundary == "idle":
             return True
+        # interrupt 边界只在当前 turn 已提交终止后到达，因此它同时满足
+        # "当前 turn 到达终止边界" 的 after_turn 语义；否则一条 after_turn
+        # 队首会在用户中断后永久阻塞整个 FIFO 队列。
+        if boundary == "after_interrupt":
+            return True
         if policy == "after_turn":
             return boundary == "after_turn"
         if policy == "after_tool_result":
             return boundary == "after_tool_result" or (
                 boundary == "after_turn" and not tool_result_available
             )
-        return policy == "after_interrupt" and boundary == "after_interrupt"
+        return False
 
     @staticmethod
     def _waiting_reason(policy: DeliveryPolicy, boundary: QueueBoundary) -> str:

@@ -918,15 +918,15 @@ class JobService:
             )
 
     async def _schedule_next_job_if_needed(self, finished_job: JobState) -> None:
+        # 任何终态都是 after_turn 语义下的已提交终止边界；取消同样会把
+        # Session 交还给队列，否则该会话的 FIFO 队首将永久无人消费。
         should_continue = finished_job.status in {
             JobStatus.completed,
             JobStatus.succeeded,
             JobStatus.failed,
             JobStatus.timed_out,
-        } or (
-            finished_job.status == JobStatus.cancelled
-            and finished_job.delivery_boundary == "after_interrupt"
-        )
+            JobStatus.cancelled,
+        }
         if not should_continue:
             async with self._dispatch_lock:
                 if finished_job.status == JobStatus.paused:

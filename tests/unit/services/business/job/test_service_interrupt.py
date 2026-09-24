@@ -9,6 +9,7 @@ from langchain_core.runnables import RunnableLambda
 from app.core.job_event_bus import JobEventBus
 from app.schemas.internal_v2.common import ControlAction, JobStatus
 from app.schemas.internal_v2.job import JobControlRequest
+from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.job.service import JobDrainBlocker, JobService, JobState
 
 
@@ -615,3 +616,55 @@ async def test_boundary_notification_keeps_fifo_head_and_records_waiting_reason(
     assert request.status == "queued"
     assert request.waiting_reason is None
     assert service._pending_queue.ids(session_id) == (queued.job_id,)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_releases_after_turn_head_instead_of_stalling_fifo(
+    monkeypatch,
+):
+    """用户中断当前 turn 后，after_turn 队首必须被投递，不能永久停留在队列中。"""
+    service = create_job_service()
+    started: list[str] = []
+
+    def fake_start_job_task(job):
+        started.append(job.job_id)
+        job.task = DummyTask(done=False)
+
+    monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
+    session_id = "session_interrupt_releases_after_turn"
+    active = await service.start_job(
+        session_id,
+        "active",
+        message_id="msg_active",
+        message_created_at="2026-07-28T00:00:00+00:00",
+    )
+    queued = await service.start_job(
+        session_id,
+        "queued",
+        message_id="msg_queued",
+        message_created_at="2026-07-28T00:00:01+00:00",
+        delivery_policy="after_turn",
+    )
+
+    await service.control(
+        active.job_id,
+        JobControlRequest(action=ControlAction.cancel),
+    )
+    await service.notify_boundary(
+        session_id,
+        "after_interrupt",
+        tool_result_available=False,
+    )
+    active_job = service._jobs[active.job_id]
+    active_job.task = DummyTask(done=True)
+    transition_job_status(
+        active_job,
+        JobStatus.cancelled,
+        error_message="任务被用户取消",
+    )
+    await service._schedule_next_job_if_needed(active_job)
+
+    assert started == [active.job_id, queued.job_id]
+    assert service._jobs[queued.job_id].status == JobStatus.running
+    assert service._session_current_job[session_id] == queued.job_id
+    assert service._pending_queue.ids(session_id) == ()

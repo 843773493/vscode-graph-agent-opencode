@@ -104,3 +104,13 @@ def test_restore_only_restores_still_queued_messages() -> None:
     queue.restore("session", [QueueEntry("job", 1, "after_turn")])
 
     assert queue.ids("session") == ("job",)
+
+
+def test_interrupt_boundary_also_releases_after_turn_head() -> None:
+    """interrupt 边界本身已是 turn 终止边界，不得让 after_turn 队首永久阻塞。"""
+    queue = JobPendingQueue()
+    entry = queue.append("session", "job", "after_turn")
+
+    assert queue.take_head("session", "after_tool_result") is None
+    assert queue.take_head("session", "after_interrupt") is entry
+    assert queue.ids("session") == ()
