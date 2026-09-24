@@ -196,6 +196,12 @@ v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migrat
 
 本台账首节记录Section 1–7上一次已闭合实现边界；后续带“阶段/历史”标题的段落保留实施过程快照。新增Section 8–9重新打开整个change，其20项未实施状态优先于旧“完成”快照，任何旧E2E或strict validate不得据此勾选8.x/9.x。
 
+### 2026-09-24 8.6 普通 Session main-thread 身份落地（部分推进，未勾选）
+
+- PASS（8.6 可见消息/分页的身份绑定）：普通 Session 入口的可见消息与历史分页游标改为显式解析权威 main thread。`MessageService` 装配期强制注入 `main_thread_resolver`（产品容器注入 catalog 解析器的 `main_thread_id`），`MessageDTO.thread_id` 变为必填，`visible_message_page` 的编码/解码游标都携带并校验 `thread_id`，跨线程复用游标显式报错，不再以 `session_id` 冒充 thread 身份。提交 `8abca4a8`（生产 5 文件 + 新增 `tests/support/message_service.py` 夹具 + 6 个测试文件）。
+- 验证（8.6 定向与变异）：`tests/unit/services/business` + `tests/unit/api` 为 `397 passed`；变异 A（游标去掉 `thread_id` 校验）令 `test_cursor_from_sibling_thread_is_rejected` 报 `DID NOT RAISE`，变异 B（`_resolve_main_thread_id` 返回 `session_id`）令 `test_message_service_loads_history_from_checkpoint` 断言失败，恢复后均转绿。
+- 边界说明（8.6 未完成部分）：本项**不勾选**。已落地的只是「普通 Session 聊天/历史显式绑定 main thread」这一条垂直切片；「thread 级 trace/history/message/operation 使用精确 ID」「不合并 child history」「所有响应、SSE/cursor/cache key 暴露并校验实际 thread identity」仍需 child thread 侧边栏（8.12）与 federation（8.9/8.10）落地后才能整体验收。`MessageDTO.thread_id` 的 OpenAPI 快照（`src/clients/web/openapi.json`、`src/clients/web/src/types/openapi/index.json`）尚未随本次契约变更重新生成，属待收口项；`tests/contracts/api` 的 6 个既有红与本变更无关，保持基线一致。
+
 ### 2026-09-09 Turn 逻辑 Item 权威投影增量
 
 - PASS（6.9 请求与内存边界）：history page 与 detail 同 revision 返回后端权威 summary，Web 历史详情不再请求 `message.v1` availability/snapshot；后端终态 stream 固定为最多 16 条/16 MiB，单 block 256 Ki 字符、tool result/error 64 Ki 字符，重启只恢复未完成流；Web 乱序缓冲最多 256 条、全局终态流最多 8 个，详情最多保留 8 个或约 1M richness units，跨会话 timeline 使用 64-session LRU，淘汰只恢复后端原始 summary。扩大后端组合 `141 passed in 233.62s`，覆盖重启、缓存、大正文、历史索引与 projection；Web 9 文件组合 `117 pass`，覆盖 LRU、详情重载、stream 截断/乱序和 DOM。
