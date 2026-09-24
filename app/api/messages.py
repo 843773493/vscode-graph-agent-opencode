@@ -16,6 +16,8 @@ from app.api.deps import (
     get_session_turn_replay_service,
     verify_local_token,
 )
+from app.api.errors import not_found_http_error
+from app.core.exceptions import NotFoundError
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.message import (
@@ -52,7 +54,10 @@ async def list_pending_requests(
     request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ):
-    result = await job_service.list_pending(session_id)
+    try:
+        result = await job_service.list_pending(session_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -84,6 +89,8 @@ async def update_pending_request(
             session_id,
             update_prepared,
         )
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except RuntimeError as error:
@@ -105,6 +112,8 @@ async def remove_pending_request(
 ):
     try:
         result = await job_service.remove_pending(session_id, message_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except RuntimeError as error:
@@ -125,6 +134,8 @@ async def clear_pending_requests(
 ):
     try:
         result = await job_service.clear_pending(session_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -150,6 +161,8 @@ async def update_pending_request_policy(
             delivery_policy=payload.delivery_policy,
             expected_snapshot_version=payload.expected_snapshot_version,
         )
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except RuntimeError as error:
@@ -235,6 +248,8 @@ async def list_messages(
             limit=limit,
             cursor=cursor,
         )
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -290,7 +305,10 @@ async def get_agent_state_messages(
     request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
 ):
-    result = await message_service.get_agent_state_messages(session_id=session_id)
+    try:
+        result = await message_service.get_agent_state_messages(session_id=session_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -306,7 +324,14 @@ async def get_message(
     request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
 ):
-    result = await message_service.get(session_id=session_id, message_id=message_id)
+    try:
+        result = await message_service.get(
+            session_id=session_id, message_id=message_id
+        )
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 

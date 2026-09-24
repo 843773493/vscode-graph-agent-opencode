@@ -27,6 +27,7 @@ from app.api.deps import (
     get_session_skill_tracking_service,
     verify_local_token,
 )
+from app.api.errors import not_found_http_error
 from app.api.sse_heartbeat import (
     SSE_HEARTBEAT_INTERVAL_SECONDS,
     stream_sse_with_heartbeat,
@@ -110,7 +111,11 @@ async def get_session_goal(
     request_id: str = Depends(get_request_id),
     goal_service: SessionGoalService = Depends(get_goal_service),
 ):
-    return APIResponse(data=await goal_service.get(session_id), request_id=request_id)
+    try:
+        goal = await goal_service.get(session_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    return APIResponse(data=goal, request_id=request_id)
 
 
 @router.put(
@@ -153,6 +158,8 @@ async def set_session_goal(
             ):
                 await runtime.apply_objective_update(goal)
             await runtime.ensure_active_goal_running(session_id)
+    except (KeyError, NotFoundError) as exc:
+        raise not_found_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return APIResponse(data=goal, request_id=request_id)
@@ -170,8 +177,11 @@ async def clear_session_goal(
     goal_service: SessionGoalService = Depends(get_goal_service),
     runtime: GoalRuntimeService = Depends(get_goal_runtime_service),
 ):
-    await runtime.settle_active_progress(session_id)
-    cleared = await goal_service.clear(session_id)
+    try:
+        await runtime.settle_active_progress(session_id)
+        cleared = await goal_service.clear(session_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     return APIResponse(
         data=SessionGoalClearResultDTO(session_id=session_id, cleared=cleared),
         request_id=request_id,
@@ -296,7 +306,10 @@ async def get_session_information(
         get_session_information_service
     ),
 ):
-    result = await information_service.get_information(session_id)
+    try:
+        result = await information_service.get_information(session_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -313,14 +326,17 @@ async def fork_session_context(
     fork_service: SessionContextForkService = Depends(get_session_context_fork_service),
 ):
     request = payload or SessionForkRequest()
-    result = await fork_service.fork(
-        session_id,
-        mode=request.mode,
-        turn_id=request.turn_id,
-        anchor_mode=request.anchor_mode,
-        pinned=request.pinned,
-        place_under_source=request.pinned,
-    )
+    try:
+        result = await fork_service.fork(
+            session_id,
+            mode=request.mode,
+            turn_id=request.turn_id,
+            anchor_mode=request.anchor_mode,
+            pinned=request.pinned,
+            place_under_source=request.pinned,
+        )
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -347,6 +363,8 @@ async def list_session_traces(
         raise _trace_cursor_gone_http_error(exc) from exc
     except TracePageBudgetExceededError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except (KeyError, NotFoundError) as exc:
+        raise not_found_http_error(exc) from exc
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -363,7 +381,10 @@ async def list_session_llm_request_logs(
         get_llm_request_log_service
     ),
 ):
-    result = llm_request_log_service.list_session_logs(session_id)
+    try:
+        result = llm_request_log_service.list_session_logs(session_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -386,8 +407,8 @@ async def list_session_resources(
             session_id,
             include_history=include_history,
         )
-    except NotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (KeyError, NotFoundError) as exc:
+        raise not_found_http_error(exc) from exc
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -404,7 +425,10 @@ async def list_session_changesets(
         get_session_changes_service
     ),
 ):
-    result = await session_changes_service.list_changesets(session_id)
+    try:
+        result = await session_changes_service.list_changesets(session_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -427,6 +451,8 @@ async def get_session_changeset(
             session_id=session_id,
             changeset_id=changeset_id,
         )
+    except (KeyError, NotFoundError) as exc:
+        raise not_found_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return APIResponse(data=result, request_id=request_id)
@@ -746,7 +772,10 @@ async def compact_session_context(
         get_context_compaction_service
     ),
 ):
-    result = await context_compaction_service.compact(session_id=session_id)
+    try:
+        result = await context_compaction_service.compact(session_id=session_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -765,6 +794,8 @@ async def interrupt_session(
 ):
     try:
         result = await session_interrupt_service.interrupt(session_id=session_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return APIResponse(data=result, request_id=request_id)
