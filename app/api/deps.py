@@ -29,6 +29,9 @@ from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    AttachmentBlobStore,
+)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
@@ -39,7 +42,6 @@ from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.runtime_service import RuntimeService
-from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
@@ -57,7 +59,7 @@ class _AppContainerProtocol:
     event_service: EventService
     job_service: JobServiceProtocol
     message_service: MessageService
-    session_attachment_store: SessionAttachmentStore
+    attachment_blob_store: AttachmentBlobStore
     runtime_service: RuntimeService
     goal_service: SessionGoalService
     goal_runtime_service: GoalRuntimeService
@@ -158,8 +160,8 @@ def get_message_service(request: Request) -> MessageService:
     return _require_service(request, "message_service", MessageService, "MessageService 尚未在应用启动阶段初始化")
 
 
-def get_session_attachment_store(request: Request) -> SessionAttachmentStore:
-    return _require_service(request, "session_attachment_store", SessionAttachmentStore, "SessionAttachmentStore 尚未在应用启动阶段初始化")
+def get_attachment_blob_store(request: Request) -> AttachmentBlobStore:
+    return _require_service(request, "attachment_blob_store", AttachmentBlobStore, "AttachmentBlobStore 尚未在应用启动阶段初始化")
 
 
 def get_runtime_service(request: Request) -> RuntimeService:

@@ -26,7 +26,9 @@ from app.services.business.session_turn_history.visible_page import visible_mess
 from app.services.business.system_reminder_checkpoint_service import (
     submit_checkpoint_reminder,
 )
-from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    AttachmentBlobStore,
+)
 from app.services.mapping.itemized.message_reasoning_merge import (
     merge_canonical_reasoning,
 )
@@ -37,7 +39,7 @@ class MessageService(MessageContentProjectionMixin):
     def __init__(
         self,
         checkpointer: BaseCheckpointSaver | None = None,
-        attachment_store: SessionAttachmentStore | None = None,
+        attachment_store: AttachmentBlobStore | None = None,
         canonical_item_reader: Callable[[str], Sequence[CanonicalItemRecord]]
         | None = None,
     ) -> None:
@@ -87,7 +89,9 @@ class MessageService(MessageContentProjectionMixin):
             )
         attachments = message_create.attachments
         if self._attachment_store is not None:
-            attachments = self._attachment_store.persist_inline(session_id, attachments)
+            attachments = await self._attachment_store.persist_inline(
+                session_id, attachments
+            )
         now = datetime.now(UTC)
         return MessageDTO(
             message_id=create_prefixed_id("msg"),

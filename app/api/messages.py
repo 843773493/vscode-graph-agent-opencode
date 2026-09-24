@@ -11,7 +11,7 @@ from app.api.deps import (
     get_job_service,
     get_message_service,
     get_request_id,
-    get_session_attachment_store,
+    get_attachment_blob_store,
     get_session_orchestrator,
     get_session_turn_replay_service,
     verify_local_token,
@@ -37,7 +37,9 @@ from app.schemas.internal_v2.pending_request import (
 from app.services.business.job.service import JobAdmissionClosedError
 from app.services.business.message_service import MessageService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
-from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    AttachmentBlobStore,
+)
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
 logger = logging.getLogger(__name__)
@@ -73,10 +75,12 @@ async def update_pending_request(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
-    attachment_store: SessionAttachmentStore = Depends(get_session_attachment_store),
+    attachment_store: AttachmentBlobStore = Depends(get_attachment_blob_store),
 ):
     async def update_prepared() -> PendingRequestListDTO:
-        attachments = attachment_store.persist_inline(session_id, payload.attachments)
+        attachments = await attachment_store.persist_inline(
+            session_id, payload.attachments
+        )
         return await job_service.update_pending(
             session_id,
             message_id,
@@ -262,7 +266,7 @@ async def get_session_attachment_content(
     variant: str = Query(default="original", pattern="^(original|thumbnail)$"),
     max_edge: int = Query(default=512, ge=64, le=1024),
     _: str = Depends(verify_local_token),
-    attachment_store: SessionAttachmentStore = Depends(get_session_attachment_store),
+    attachment_store: AttachmentBlobStore = Depends(get_attachment_blob_store),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ) -> Response:
     async def read_content():

@@ -74,6 +74,9 @@ from app.services.business.session_turn_replay_service import SessionTurnReplayS
 from app.services.business.team.service import TeamCoordinationService
 from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    AttachmentBlobStore,
+)
 from app.services.infrastructure.background_task_history_store import (
     BackgroundTaskHistoryStore,
 )
@@ -128,7 +131,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.runtime_service import RuntimeService
-from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.infrastructure.session_changes_store import SessionChangesStore
 from app.services.infrastructure.session_goal_store import SessionGoalStore
 from app.services.infrastructure.session_message_idempotency_store import (
@@ -297,7 +299,7 @@ class AppContainer:
     event_service: EventService
     job_service: JobServiceProtocol
     message_service: MessageService
-    session_attachment_store: SessionAttachmentStore
+    attachment_blob_store: AttachmentBlobStore
     runtime_service: RuntimeService
     goal_service: SessionGoalService
     goal_runtime_service: GoalRuntimeService
@@ -425,10 +427,10 @@ def build_app_container(
         workspace_root=resolved_workspace_root,
         event_service=job_event_bus.event_channel_service,
     )
-    session_attachment_store = SessionAttachmentStore(resolved_workspace_root)
+    attachment_blob_store = AttachmentBlobStore(resolved_workspace_root)
     message_service = MessageService(
         checkpointer=checkpointer,
-        attachment_store=session_attachment_store,
+        attachment_store=attachment_blob_store,
         canonical_item_reader=checkpointer.read_canonical_items,
     )
     session_service = SessionService(
@@ -696,6 +698,10 @@ def build_app_container(
         async def drain_session_resources(session_id: str) -> None:
             await node_debug_service.drain_session(session_id)
             await session_resource_service.cleanup_session(session_id)
+            # 附件引用释放与 ingest/claim 定点收敛必须先于 fence CAS 与物理
+            # 隔离：删除 owner 按 pin 阻断 canonical 使用、释放 reference 后
+            # 才隔离 Session 节点，且不留下指向已删除 owner 的 reference。
+            attachment_blob_store.release_session_references(session_id)
 
         session_path_resolver.bind_session_drain_callback(
             drain_session_resources
@@ -757,7 +763,7 @@ def build_app_container(
         event_service=event_service,
         job_service=job_service,
         message_service=message_service,
-        session_attachment_store=session_attachment_store,
+        attachment_blob_store=attachment_blob_store,
         runtime_service=runtime_service,
         goal_service=goal_service,
         goal_runtime_service=goal_runtime_service,

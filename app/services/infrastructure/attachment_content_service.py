@@ -1,3 +1,14 @@
+"""附件定位、读取与预览变体等基础设施能力。
+
+Session/thread 附件正文统一走 workspace 内容寻址 blob store
+（:class:`AttachmentBlobStore`）：逻辑引用是
+`boxteam-session://{session_id}/attachments/{attachment_id}`，物理 locator
+只由 catalog 冻结，调用方不得拼路径。非 session 的工作区文件附件仍按显式
+工作区相对/绝对路径解析。
+
+旧「按 session 目录拼 `attachments/{sha256}{suffix}`」的物理定位已物理下线。
+"""
+
 from __future__ import annotations
 
 import base64
@@ -11,15 +22,14 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 from app.core.path_utils import (
-    get_session_path_resolver,
     get_workspace_root,
     safe_join,
     validate_workspace_path,
 )
 from app.schemas.internal_v2.message import AttachmentRef
-from app.services.infrastructure.session_attachment_store import (
+from app.services.infrastructure.attachment_blob_catalog.store import (
     SESSION_ATTACHMENT_SCHEME,
-    SessionAttachmentStore,
+    AttachmentBlobStore,
 )
 
 SUPPORTED_VIDEO_MIME_TYPES = {
@@ -35,30 +45,32 @@ VIDEO_FRAME_WIDTH = 512
 ATTACHMENT_PREVIEW_MAX_EDGE = 512
 
 
-def _resolve_attachment_file(file_id: str, workspace_root: Path | None) -> Path:
+def _session_id_from_file_id(file_id: str) -> str:
+    """从逻辑引用取出 owner session id（形态非法即失败）。"""
     if not file_id.startswith(SESSION_ATTACHMENT_SCHEME):
-        if workspace_root is not None:
-            resolved_workspace_root = workspace_root.resolve()
-            candidate = Path(file_id)
-            if not candidate.is_absolute():
-                return safe_join(resolved_workspace_root, file_id)
-            resolved_candidate = candidate.resolve()
-            if not resolved_candidate.is_relative_to(resolved_workspace_root):
-                raise ValueError(
-                    "附件路径越出显式工作区: "
-                    f"workspace={resolved_workspace_root}, path={resolved_candidate}"
-                )
-            return resolved_candidate
-        return validate_workspace_path(file_id)
-    relative_locator = file_id.removeprefix(SESSION_ATTACHMENT_SCHEME)
-    session_id, separator, relative_path = relative_locator.partition("/")
-    if not separator or not session_id or not relative_path.startswith("attachments/"):
-        raise ValueError(f"会话附件逻辑定位符格式无效: {file_id}")
-    resolved_workspace_root = (workspace_root or get_workspace_root()).resolve()
-    resolver = get_session_path_resolver(
-        resolved_workspace_root / ".boxteam" / "sessions"
-    )
-    return safe_join(resolver.resolve_session_node(session_id), relative_path)
+        raise ValueError(f"附件必须使用会话逻辑定位符: {file_id!r}")
+    remainder = file_id[len(SESSION_ATTACHMENT_SCHEME):]
+    session_id, separator, _tail = remainder.partition("/")
+    if not separator or not session_id:
+        raise ValueError(f"附件逻辑定位符格式无效: {file_id!r}")
+    return session_id
+
+
+def _resolve_workspace_file(file_id: str, workspace_root: Path | None) -> Path:
+    """解析非 session 的工作区文件附件路径。"""
+    if workspace_root is not None:
+        resolved_workspace_root = workspace_root.resolve()
+        candidate = Path(file_id)
+        if not candidate.is_absolute():
+            return safe_join(resolved_workspace_root, file_id)
+        resolved_candidate = candidate.resolve()
+        if not resolved_candidate.is_relative_to(resolved_workspace_root):
+            raise ValueError(
+                "附件路径越出显式工作区: "
+                f"workspace={resolved_workspace_root}, path={resolved_candidate}"
+            )
+        return resolved_candidate
+    return validate_workspace_path(file_id)
 
 
 def _attachment_content_type(attachment: AttachmentRef, file_path: Path) -> str:
@@ -82,27 +94,6 @@ def _file_suffix_for_content_type(content_type: str) -> str:
     raise ValueError(f"无法根据 MIME 类型确定临时文件扩展名: {content_type!r}")
 
 
-def _read_workspace_attachment_bytes(
-    attachment: AttachmentRef,
-    *,
-    supported_types: set[str],
-    media_name: str,
-    workspace_root: Path | None,
-) -> tuple[str, bytes]:
-    file_path = _resolve_attachment_file(attachment.file_id, workspace_root)
-    if not file_path.exists():
-        raise FileNotFoundError(f"{media_name}附件不存在: {file_path}")
-    if not file_path.is_file():
-        raise ValueError(f"{media_name}附件必须是文件: {file_path}")
-
-    content_type = _attachment_content_type(attachment, file_path)
-    if content_type not in supported_types:
-        raise ValueError(
-            f"不支持的{media_name}附件类型: {content_type!r}，file_id={attachment.file_id!r}"
-        )
-    return content_type, file_path.read_bytes()
-
-
 def _frame_data_url(frame_path: Path) -> str:
     encoded = base64.b64encode(frame_path.read_bytes()).decode("ascii")
     return f"data:{VIDEO_FRAME_MIME_TYPE};base64,{encoded}"
@@ -115,15 +106,23 @@ class AttachmentContentService:
         self,
         *,
         workspace_root: Path | None = None,
-        attachment_store: SessionAttachmentStore | None = None,
+        attachment_store: AttachmentBlobStore | None = None,
     ) -> None:
         self._workspace_root = (workspace_root or get_workspace_root()).resolve()
-        self._attachment_store = attachment_store or SessionAttachmentStore(
+        self._attachment_store = attachment_store or AttachmentBlobStore(
             self._workspace_root
         )
 
     def resolve_content_type(self, attachment: AttachmentRef) -> str:
-        return _resolve_attachment_content_type(attachment, self._workspace_root)
+        content_type = attachment.content_type
+        if content_type is not None:
+            return content_type
+        if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
+            return self._read_session_attachment(attachment).content_type
+        file_path = _resolve_workspace_file(
+            attachment.file_id, self._workspace_root
+        )
+        return _attachment_content_type(attachment, file_path)
 
     def relative_path(self, attachment: AttachmentRef) -> str:
         if attachment.data_url:
@@ -132,21 +131,18 @@ class AttachmentContentService:
                 f"boxteam-session 定位符: file_id={attachment.file_id!r}"
             )
         if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
-            session_id = attachment.file_id.removeprefix(
-                SESSION_ATTACHMENT_SCHEME
-            ).split("/", 1)[0]
-            return self._attachment_store.relative_path(session_id, attachment.file_id)
-        file_path = _resolve_attachment_file(attachment.file_id, self._workspace_root)
+            session_id = _session_id_from_file_id(attachment.file_id)
+            return self._attachment_store.relative_path(
+                session_id, attachment.file_id
+            )
+        file_path = _resolve_workspace_file(attachment.file_id, self._workspace_root)
         if not file_path.is_file():
             raise FileNotFoundError(f"附件不存在: {file_path}")
         return file_path.relative_to(self._workspace_root).as_posix()
 
     def image_preview_data_url(self, attachment: AttachmentRef) -> str:
-        raw = self._read_attachment(attachment)
         if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
-            session_id = attachment.file_id.removeprefix(
-                SESSION_ATTACHMENT_SCHEME
-            ).split("/", 1)[0]
+            session_id = _session_id_from_file_id(attachment.file_id)
             preview = self._attachment_store.read_thumbnail(
                 session_id,
                 attachment.file_id,
@@ -155,6 +151,7 @@ class AttachmentContentService:
             preview_type = preview.content_type
             preview_data = preview.data
         else:
+            raw = self._read_workspace_attachment(attachment)
             with Image.open(BytesIO(raw)) as image:
                 normalized = ImageOps.exif_transpose(image)
                 normalized.thumbnail(
@@ -173,39 +170,43 @@ class AttachmentContentService:
         return f"data:{preview_type};base64,{encoded}"
 
     def video_preview_data_urls(self, attachment: AttachmentRef) -> list[str]:
-        content_type, video_bytes = _read_workspace_attachment_bytes(
-            attachment,
-            supported_types=SUPPORTED_VIDEO_MIME_TYPES,
-            media_name="视频",
-            workspace_root=self._workspace_root,
-        )
+        content_type, video_bytes = self._read_attachment(attachment)
+        if content_type not in SUPPORTED_VIDEO_MIME_TYPES:
+            raise ValueError(
+                "不支持的视频附件类型: "
+                f"{content_type!r}，file_id={attachment.file_id!r}"
+            )
         return _extract_video_frame_data_urls(
             video_bytes=video_bytes,
             content_type=content_type,
             attachment_name=attachment.name or attachment.file_id,
         )
 
-    def _read_attachment(self, attachment: AttachmentRef) -> bytes:
-        if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
-            session_id = attachment.file_id.removeprefix(
-                SESSION_ATTACHMENT_SCHEME
-            ).split("/", 1)[0]
-            return self._attachment_store.read(session_id, attachment.file_id).data
-        file_path = _resolve_attachment_file(attachment.file_id, self._workspace_root)
+    def _read_workspace_attachment(self, attachment: AttachmentRef) -> bytes:
+        file_path = _resolve_workspace_file(
+            attachment.file_id, self._workspace_root
+        )
         if not file_path.is_file():
             raise FileNotFoundError(f"附件不存在: {file_path}")
         return file_path.read_bytes()
 
+    def _read_session_attachment(self, attachment: AttachmentRef):
+        session_id = _session_id_from_file_id(attachment.file_id)
+        return self._attachment_store.read(session_id, attachment.file_id)
 
-def _resolve_attachment_content_type(
-    attachment: AttachmentRef,
-    workspace_root: Path | None,
-) -> str:
-    content_type = attachment.content_type
-    if content_type is None:
-        file_path = _resolve_attachment_file(attachment.file_id, workspace_root)
+    def _read_attachment(self, attachment: AttachmentRef) -> tuple[str, bytes]:
+        if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
+            stored = self._read_session_attachment(attachment)
+            return stored.content_type, stored.data
+        file_path = _resolve_workspace_file(
+            attachment.file_id, self._workspace_root
+        )
+        if not file_path.exists():
+            raise FileNotFoundError(f"附件不存在: {file_path}")
+        if not file_path.is_file():
+            raise ValueError(f"附件必须是文件: {file_path}")
         content_type = _attachment_content_type(attachment, file_path)
-    return content_type
+        return content_type, file_path.read_bytes()
 
 
 def _extract_video_frame_data_urls(
