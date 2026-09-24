@@ -38,6 +38,7 @@ from app.agents.graph_binding import (
     GRAPH_FACTORY_REGISTRY,
     GraphBindingOwnerKey,
     GraphBindingStorePort,
+    resolve_or_persist_graph_binding,
 )
 from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
@@ -392,17 +393,13 @@ def resolve_agent_id(agent_id: str | None, config_service: ConfigService | None 
     return service.resolve_agent_id(agent_id)
 
 
-# OpenSpec 8.4 缓存审计结论（R6a）：create_my_deep_agent 本体每次调用都全新
-# 执行 create_agent 并新建工具/middleware 闭包，本模块内不存在任何跨 invocation
-# 的已编译图缓存（无 lru_cache、无模块级实例表）。已知的调用方级例外：
-# AgentExecutionService._get_or_create_agent 以
-# (session_id, resolved_agent_id, config_revision, execution_overrides,
-# model_visibility_overrides) 为 key 缓存整个已编译 agent——key 含 session_id
-# 与配置 revision，不会跨 thread 泄漏闭包，且真实 step 路径每步全新构建不经
-# 该缓存；但被缓存的图仍捕获 session 闭包，与「只复用不捕获 thread 的
-# blueprint/topology」红线有差距。该缓存有专门回归测试
-# （test_agent_cache_rebuilds_after_config_revision_changes）锁定行为，blueprint
-# 与 invocation 依赖的拆分由 OpenSpec 8.4 后续轮次处理（TODO）。
+# OpenSpec 8.4：create_my_deep_agent 本体每次调用都全新执行 create_agent 并新建
+# 工具/middleware 闭包，本模块内不存在任何跨 invocation 的已编译图缓存（无
+# lru_cache、无模块级实例表）。唯一复用点 AgentExecutionService 只缓存「不含
+# Session/Thread 的 Provider 工具面定义」这一 blueprint 投影（键不含 session_id，
+# 值不捕获会话闭包，见 `_tool_face_definitions`）；调用方级复用捕获 session 闭包
+# 的已编译 agent 的旧缓存已物理删除。真实 invocation 的 session/thread 依赖由
+# 每次构建经 ThreadRuntimeBinding 注入。
 def create_my_deep_agent(
     *,
     model: BaseChatModel,
@@ -584,26 +581,35 @@ def create_my_deep_agent(
     extension_policies: dict[str, object] = {}
     extension_tools: list[BaseTool] = []
     extension_invoker: BaseTool | None = None
+
+    def _absorb_builtin_tool(tool: BaseTool) -> None:
+        """内置工具的唯一准入路径：策略解析 + 可见性/确认登记。
+
+        显式 ``tools`` 与默认工具集两条来源只在「是否过滤 denylist、是否跳过
+        非 BaseTool 项」上不同，策略准入与登记必须共用这一条实现。
+        """
+        policy = _resolve_tool_policy(
+            policy_resolver,
+            tool,
+            origin="builtin",
+            execution_overrides=resolved_execution_overrides,
+            model_visibility_overrides=resolved_model_visibility_overrides,
+        )
+        if not policy.execution_enabled:
+            return
+        resolved_tools.append(tool)
+        if not policy.model_visible:
+            hidden_direct_tool_names.add(tool.name)
+        if policy.confirmation_required:
+            direct_confirmation_names.add(tool.name)
+
     if tools is not None:
         resolved_tools = []
         for tool in tools:
             if not isinstance(tool, BaseTool):
                 resolved_tools.append(tool)
                 continue
-            policy = _resolve_tool_policy(
-                policy_resolver,
-                tool,
-                origin="builtin",
-                execution_overrides=resolved_execution_overrides,
-                model_visibility_overrides=resolved_model_visibility_overrides,
-            )
-            if not policy.execution_enabled:
-                continue
-            resolved_tools.append(tool)
-            if not policy.model_visible:
-                hidden_direct_tool_names.add(tool.name)
-            if policy.confirmation_required:
-                direct_confirmation_names.add(tool.name)
+            _absorb_builtin_tool(tool)
     else:
         if browser_manager_client is None:
             raise RuntimeError(
@@ -717,20 +723,7 @@ def create_my_deep_agent(
         for tool in visible_tools:
             if tool.name in resolved_tool_denylist:
                 continue
-            policy = _resolve_tool_policy(
-                policy_resolver,
-                tool,
-                origin="builtin",
-                execution_overrides=resolved_execution_overrides,
-                model_visibility_overrides=resolved_model_visibility_overrides,
-            )
-            if not policy.execution_enabled:
-                continue
-            resolved_tools.append(tool)
-            if not policy.model_visible:
-                hidden_direct_tool_names.add(tool.name)
-            if policy.confirmation_required:
-                direct_confirmation_names.add(tool.name)
+            _absorb_builtin_tool(tool)
     # 固定信封即使当前没有可执行 target 也必须存在；target 的启停只改变
     # 封存目录与执行准入，不改变 Provider 工具面。
     extension_invoker = create_extension_tool_invoker_tool(
@@ -840,24 +833,19 @@ def create_my_deep_agent(
 
     # OpenSpec 8.4：deep agent 构建路径产出 GraphBinding。持久化的是 factory
     # selector 四元组（见 app/agents/graph_binding.py），不是 CompiledStateGraph。
-    # 构建即 fail-fast 校验当前 revision 仍可被 registry 解析：descriptor 与
-    # 注册一旦脱节（改了图骨架却没 bump revision / 注册），立即失败而不是让
-    # 重启后的 resolve 才暴露。
-    GRAPH_FACTORY_REGISTRY.resolve(DEEP_AGENT_GRAPH_BINDING)
-    if graph_binding_store is not None:
-        # 持久化 owner 是精确 (session_id, thread_id)；当前单会话 Agent 运行在
-        # main thread。装配方（container）接线该 store 前保持 None，不伪造
-        # 持久化成功。
-        # TODO(OpenSpec 8.4 装配轮)：由 container.py 经统一会话路径解析器构造
-        # thread 节点附属目录的 JsonFileGraphBindingStore 并传入；本轮并行约束
-        # 禁止修改 container.py。
-        graph_binding_store.save_graph_binding(
-            GraphBindingOwnerKey(
-                session_id=session_id,
-                thread_id=MAIN_THREAD_ID,
-            ),
-            DEEP_AGENT_GRAPH_BINDING,
-        )
+    # OpenSpec 8.4：persist/load 该精确 owner 的 GraphBinding，并 fail-fast 校验
+    # 当前 revision 仍可被 registry 解析。该 owner 从未持久化时落盘当前 binding；
+    # 已持久化时按四元组精确解析受注册 factory，解析不到该精确 revision/hash 时
+    # 抛 graph_binding_unavailable，绝不静默改用旧 binding 或回退到最新 revision。
+    # 未装配 store（合成装配/测试替身）只做 fail-fast 校验，不伪造持久化成功。
+    resolve_or_persist_graph_binding(
+        store=graph_binding_store,
+        owner=GraphBindingOwnerKey(
+            session_id=session_id,
+            thread_id=MAIN_THREAD_ID,
+        ),
+        current_binding=DEEP_AGENT_GRAPH_BINDING,
+    )
 
     if hasattr(agent, "with_config"):
         return agent.with_config(
