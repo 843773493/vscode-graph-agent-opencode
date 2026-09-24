@@ -141,6 +141,7 @@ def _contribution(
     source_ordinal: int | None = None,
     contribution_kind: str = "prompt",
     source_kind: str = "workspace_instructions",
+    replaceable_source: bool = False,
 ) -> ContextContribution:
     return ContextContribution(
         contribution_id=contribution_id,
@@ -152,6 +153,7 @@ def _contribution(
         contribution_kind=contribution_kind,
         body=body,
         source_ordinal=source_ordinal,
+        replaceable_source=replaceable_source,
     )
 
 
@@ -474,12 +476,9 @@ class TestRegistryStabilityAcrossRestart:
             source_revision="rev-a",
             content_hash=contribution_content_hash("prompt", "v1"),
             request_only=True,
-            metadata={
-                "replaceable_source": True,
-                # TODO(OpenSpec 1.5-B): 该 flag 的 typed 闭包需要 registry
-                # typed 列 + schema v5，A4 不顺手做迁移；typed 契约可验证
-                # 的是同 slot 语义与 ordinal 稳定。
-            },
+            # replaceable slot 只能由 typed core 字段声明；metadata 中的
+            # 同名历史 key 不再拥有解释权（旧路径已物理下线）。
+            replaceable_source=True,
             contribution_kind="prompt",
             body="v1",
             source_ordinal=0,
@@ -496,6 +495,50 @@ class TestRegistryStabilityAcrossRestart:
         assert len(rows) == 1
         assert rows[0]["source_ordinal"] == first
         assert rows[0]["source_revision"] == "rev-b"
+
+    def test_typed_replaceable_source_enables_in_place_revision_update(
+        self, saver: RolloutCheckpointSaver,
+    ) -> None:
+        # (a) typed replaceable_source=True 时替换链路生效：同一 owner slot
+        # 原位更新 revision，不产生第二行、不漂移 registry slot。
+        original = _contribution("typed-replaceable", replaceable_source=True)
+        first = _register(saver, MAIN_SESSION_ID, original)
+        updated = replace(
+            original,
+            source_revision="rev-updated",
+            content_hash=contribution_content_hash("prompt", "updated body"),
+            content_length=None,
+            body="updated body",
+        )
+        saver.register_context_contribution(MAIN_SESSION_ID, updated)
+        rows = _rows(saver, MAIN_SESSION_ID)
+        assert len(rows) == 1
+        assert rows[0]["source_ordinal"] == first
+        assert rows[0]["source_revision"] == "rev-updated"
+
+    def test_metadata_only_replaceable_key_is_no_longer_replaceable(
+        self, saver: RolloutCheckpointSaver,
+    ) -> None:
+        # (b) 只放 metadata 键、没有 typed 字段时不再被视为可替换：旧
+        # metadata 路径已物理下线，内容漂移必须显式报 identity 冲突。
+        metadata_only = _contribution(
+            "metadata-only-replaceable",
+            metadata={"replaceable_source": True},
+        )
+        first = _register(saver, MAIN_SESSION_ID, metadata_only)
+        drifted = replace(
+            metadata_only,
+            source_revision="rev-drifted",
+            content_hash=contribution_content_hash("prompt", "drifted body"),
+            content_length=None,
+            body="drifted body",
+        )
+        with pytest.raises(ValueError, match="identity 冲突"):
+            saver.register_context_contribution(MAIN_SESSION_ID, drifted)
+        rows = _rows(saver, MAIN_SESSION_ID)
+        assert len(rows) == 1
+        assert rows[0]["source_ordinal"] == first
+        assert rows[0]["source_revision"] == "rev-metadata-only-replaceable"
 
     def test_reregistration_of_same_source_is_idempotent(
         self, saver: RolloutCheckpointSaver,

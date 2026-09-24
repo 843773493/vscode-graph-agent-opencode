@@ -195,9 +195,13 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
     # 往返；sealed manifest 不携带），只加入允许集，不进入必需集。
     # root_placement 是 E1 typed 控制字段；旧 envelope 不携带时应用规范
     # 文档化默认 tail_only（默认外部内容恒为 tail_only），不是旧别名兼容。
+    # replaceable_source 是 1.5 typed core 替换策略字段；它随 unsealed
+    # registry/source manifest 往返，旧 envelope 不携带时应用规范默认
+    # False（只有 middleware 显式声明的 slot 为 True），不是旧别名兼容。
     allowed_contribution_fields = required_contribution_fields | {
         "source_ordinal",
         "root_placement",
+        "replaceable_source",
     }
     if set(raw) - allowed_contribution_fields:
         raise ItemSchemaError("ContextContribution 含未知或不属于 registry 的字段")
@@ -224,6 +228,11 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
     if raw_root_placement not in ("root_eligible", "tail_only"):
         raise ItemSchemaError(
             f"未知 ContextContribution.root_placement: {raw_root_placement!r}"
+        )
+    raw_replaceable_source = raw.get("replaceable_source", False)
+    if not isinstance(raw_replaceable_source, bool):
+        raise ItemSchemaError(
+            "ContextContribution.replaceable_source 必须是 boolean"
         )
     return ContextContribution(
         contribution_id=_required_string(
@@ -266,6 +275,7 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         ),
         source_ordinal=raw_source_ordinal,
         root_placement=raw_root_placement,
+        replaceable_source=raw_replaceable_source,
     )
 
 

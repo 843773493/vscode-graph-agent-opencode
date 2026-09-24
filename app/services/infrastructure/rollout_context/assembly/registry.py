@@ -79,6 +79,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                 "contribution_kind",
                 "visibility",
                 "protection",
+                "replaceable_source",
             )
         }
         if (
@@ -92,6 +93,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
             )
             or not isinstance(values["request_only"], bool)
             or not isinstance(values["metadata"], Mapping)
+            or not isinstance(values["replaceable_source"], bool)
         ):
             raise ValueError("context contribution 字段不完整")
         if (
@@ -233,12 +235,11 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                     )
                     if stored == expected:
                         return
-                    previous_metadata = json.loads(stored[9])
-                    if (
-                        isinstance(previous_metadata, Mapping)
-                        and previous_metadata.get("replaceable_source") is True
-                        and dict(values["metadata"]).get("replaceable_source") is True
-                    ):
+                    # replaceable_source 是 producer 显式声明的 typed core
+                    # 字段，决定同一 owner slot 是否允许原位更新 revision；
+                    # 不再读取 metadata/extensions 的同名 key（旧路径已物理
+                    # 下线，不做双读或兼容分支）。
+                    if values["replaceable_source"] is True:
                         cursor = connection.execute(
                             "UPDATE context_contributions SET source_kind = ?, source_revision = ?, content_hash = ?, content_length = ?, redacted_stable_digest = ?, request_only = ?, contribution_kind = ?, visibility = ?, protection = ?, metadata_json = ? WHERE contribution_id = ?",
                             (*expected, contribution_id),

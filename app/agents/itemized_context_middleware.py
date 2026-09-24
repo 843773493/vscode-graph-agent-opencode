@@ -148,16 +148,15 @@ def _prompt_contributions(
             metadata={
                 "label": "assembled system prompt",
                 "operation": "replace",
-                # source_ordinal 由 itemized registry 列分配并经 typed 字段
-                # 承载；producer 不再向 metadata 写入控制 ordinal。
-                # TODO(OpenSpec 1.5-B): replaceable_source 的 typed 闭包需要
-                # registry 列与 schema 版本化迁移，当前仍由 metadata 承载。
-                "replaceable_source": True,
                 "runtime_projection": True,
             },
             contribution_kind="prompt",
             body=blocks,
             content_length=len(canonical_json_bytes(blocks)),
+            # 这是唯一可原位更新 revision 的 replaceable source slot；
+            # 替换/安全判定由 typed core 字段承载，metadata 中的同名 key
+            # 已物理下线，不再拥有任何解释权。
+            replaceable_source=True,
             # assembled system prompt 是唯一 root producer slot；显式声明
             # root_eligible，projector 按它编译唯一 system root。
             root_placement="root_eligible",

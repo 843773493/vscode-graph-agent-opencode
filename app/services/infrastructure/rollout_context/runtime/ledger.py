@@ -90,8 +90,9 @@ class RuntimeContextLedger:
     def replace_contribution(self, contribution: ContextContribution) -> None:
         """更新同一可变 source slot 的当前 revision。
 
-        只有明确标记为 replaceable_source 的 middleware source 才应使用此
-        入口；普通 provenance contribution 仍由 add_contribution 保持不可变。
+        只有显式声明 typed replaceable_source=True 的 middleware source 才
+        应使用此入口；普通 provenance contribution 仍由 add_contribution
+        保持不可变，自由 metadata/extensions 的同名 key 不参与该判定。
         """
         existing = self.contributions.get(contribution.contribution_id)
         self.contributions[contribution.contribution_id] = self._with_source_ordinal(

@@ -113,7 +113,10 @@ class ContextPlanCompositionMixin:
     ) -> None:
         """登记 middleware/source provenance；贡献正文仍由 request-only source 持有。"""
         composer = self._composer_for(session_id, checkpoint_ns)
-        replaceable = contribution.metadata.get("replaceable_source") is True
+        # replaceable 是 producer 声明的 typed core 字段，决定是否允许在
+        # 同一 owner slot 内原位更新 revision；自由 metadata/extensions 的
+        # 同名 key 不再拥有任何解释权（旧路径已物理下线）。
+        replaceable = contribution.replaceable_source
         with self._lock:
             existing = composer.ledger.contributions.get(contribution.contribution_id)
             if (
