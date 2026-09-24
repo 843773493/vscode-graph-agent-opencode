@@ -1247,9 +1247,8 @@ class SessionCatalogMigrator:
         locator = (
             f"sessions/{created_at.astimezone(UTC).date():%Y/%m/%d}/{node.node_id}"
         )
-        # TODO(identifier): "thr" 前缀待 8.5 thread catalog 落地时补入
-        # IdentifierPrefix Literal;create_prefixed_id 基于 uuid4().hex,
-        # 天然满足 v4 位 profile。
+        # "thr" 已在 IdentifierPrefix Literal 中声明；create_prefixed_id
+        # 基于 uuid4().hex，天然满足 v4 位 profile。
         main_thread_id = create_prefixed_id("thr")
         return _FrozenNode(
             node_id=node.node_id,

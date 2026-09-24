@@ -1181,9 +1181,9 @@ class SessionControlStore(
                 f"main_rows={[str(row['thread_id']) for row in main_rows]}"
             )
         main_thread_id = str(main_rows[0]["thread_id"])
-        # child ID：调用方传入（已验证 canonical）或软件分配（TODO(identifier):
-        # "thr" 前缀待补入 IdentifierPrefix Literal，对齐 session_catalog_store
-        # 同款 TODO；create_prefixed_id 基于 uuid4().hex，天然满足 v4 位 profile）。
+        # child ID：调用方传入（已验证 canonical）或软件分配（"thr" 已在
+        # IdentifierPrefix Literal 中声明；create_prefixed_id 基于
+        # uuid4().hex，天然满足 v4 位 profile）。
         child_thread_id = (
             thread_id if thread_id is not None else create_prefixed_id("thr")
         )

@@ -1811,10 +1811,8 @@ class SessionCatalogStore:
                     # 防御性兜底：_require_mutable_parent 刚验证过存在。
                     raise KeyError(f"会话目录节点不存在: {parent_node_id}")
                 parent_revision = int(parent_row["revision"])
-            # TODO(identifier): "thr" 前缀待 8.5 thread catalog 落地时补入
-            # IdentifierPrefix Literal（对齐 session_catalog_migration 的
-            # 同款 TODO）；create_prefixed_id 基于 uuid4().hex，天然满足
-            # v4 位 profile。
+            # "thr" 已在 IdentifierPrefix Literal 中声明；
+            # create_prefixed_id 基于 uuid4().hex，天然满足 v4 位 profile。
             allocated_session_id = (
                 session_id
                 if session_id is not None
