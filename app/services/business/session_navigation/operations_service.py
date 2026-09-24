@@ -110,9 +110,9 @@ class SessionCatalogOperationsService:
         self._workspace_id = workspace_id
         self._queue = queue
         self._executor = executor
-        # 进程内唯一 worker：首次使用时惰性启动（见 ensure_worker_started）。
+        # 进程内唯一 worker：首次使用时惰性启动（见 ensure_worker_started），
+        # 随应用事件循环结束而被取消，不需要额外的停止入口。
         self._worker_task: asyncio.Task[None] | None = None
-        self._worker_stop: asyncio.Event | None = None
 
     # ------------------------------------------------------------------
     # 进程内唯一执行 owner
@@ -128,19 +128,7 @@ class SessionCatalogOperationsService:
         """
         if self._worker_task is not None and not self._worker_task.done():
             return
-        self._worker_stop = asyncio.Event()
-        self._worker_task = asyncio.create_task(
-            run_worker(self, stop_event=self._worker_stop)
-        )
-
-    async def stop_worker(self) -> None:
-        """停止本进程 worker 并等待退出（应用关停时调用；幂等）。"""
-        if self._worker_stop is not None:
-            self._worker_stop.set()
-        task = self._worker_task
-        self._worker_task = None
-        if task is not None and not task.done():
-            await task
+        self._worker_task = asyncio.create_task(run_worker(self))
 
     # ------------------------------------------------------------------
     # 入队（短事务，202 durable acceptance）
@@ -435,19 +423,16 @@ async def run_worker(
     service: SessionCatalogOperationsService,
     *,
     poll_interval_seconds: float = 0.5,
-    stop_event: asyncio.Event,
 ) -> None:
     """以轮询方式持续排空队列的后台 worker（进程内唯一 owner）。
 
     首个周期先做崩溃恢复（重置遗留 ``running``），随后按 FIFO 排空；队列空时
-    等待 ``poll_interval_seconds``。``stop_event`` 置位后退出。
+    等待 ``poll_interval_seconds``。本任务与所属事件循环同生命周期：应用关停时
+    由事件循环取消，因此不额外维护停止事件（无调用方的停止入口属于死代码）。
     """
     await service.recover_after_restart()
-    while not stop_event.is_set():
+    while True:
         outcomes = await service.drain_once()
         if outcomes:
             continue
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=poll_interval_seconds)
-        except TimeoutError:
-            continue
+        await asyncio.sleep(poll_interval_seconds)

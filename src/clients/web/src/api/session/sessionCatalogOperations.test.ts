@@ -90,10 +90,14 @@ describe("会话目录批量入队协议", () => {
   });
 
   test("4xx 明确拒绝透明抛出 HttpRequestError", async () => {
-    installSessionCatalogFetchMock(() => Response.json(
-      { detail: "preimage 冲突" },
-      { status: 409, statusText: "Conflict" },
-    ));
+    const seen: string[] = [];
+    installSessionCatalogFetchMock(({ path, method }) => {
+      seen.push(`${method} ${path}`);
+      return Response.json(
+        { detail: "preimage 冲突" },
+        { status: 409, statusText: "Conflict" },
+      );
+    });
     try {
       await enqueueSessionCatalogOperations(48_503, "workspace-1", [{
         client_operation_id: "op_00000000000000000000000000000001",
@@ -110,6 +114,9 @@ describe("会话目录批量入队协议", () => {
       expect((error as HttpRequestError).status).toBe(409);
       expect((error as Error).message).toContain("preimage 冲突");
     }
+    // 桩只应答业务请求（屏障隧道由共享桩内部处理）。若这条断言失败，说明 409
+    // 来自屏障请求而非 enqueue：用例会退化成空转，必须响亮失败。
+    expect(seen).toEqual(["POST /api/v1/session-catalog/operations:enqueue"]);
   });
 });
 

@@ -70,11 +70,6 @@ describe("Turn 历史 API client", () => {
 
     expect(requests).toEqual([
       {
-        path: "/api/gateway/users/current",
-        method: "GET",
-        body: null,
-      },
-      {
         path: "/api/v1/sessions/ses_api/bootstrap",
         method: "GET",
         body: null,
@@ -97,7 +92,10 @@ describe("Turn 历史 API client", () => {
   });
 
   test("把 409 stale cursor 映射为可识别错误", async () => {
-    installSessionCatalogFetchMock(() => Response.json({
+    const seen: string[] = [];
+    installSessionCatalogFetchMock(({ path, method }) => {
+      seen.push(`${method} ${path}`);
+      return Response.json({
         detail: {
           code: "stale_turn_cursor",
           session_id: "ses_stale",
@@ -105,7 +103,8 @@ describe("Turn 历史 API client", () => {
           current_epoch: 2,
           message: "历史已重排",
         },
-      }, { status: 409, statusText: "Conflict" }), { credentialToken: "stale-token" });
+      }, { status: 409, statusText: "Conflict" });
+    }, { credentialToken: "stale-token" });
 
     expect(
       loadSessionHistory(
@@ -115,15 +114,22 @@ describe("Turn 历史 API client", () => {
         "workspace",
       ),
     ).rejects.toBeInstanceOf(StaleTurnCursorHttpError);
+    // 桩只应答业务请求（屏障隧道由共享桩内部处理）。若这条断言失败，说明 409
+    // 来自屏障请求而非 history 端点：用例会退化成空转，必须响亮失败。
+    expect(seen).toEqual(["POST /api/v1/sessions/ses_stale/history"]);
   });
 
   test("结构化后端错误保留可诊断 message", async () => {
-    installSessionCatalogFetchMock(() => Response.json({
+    const seen: string[] = [];
+    installSessionCatalogFetchMock(({ path, method }) => {
+      seen.push(`${method} ${path}`);
+      return Response.json({
         detail: {
           code: "turn_projection_corrupt",
           message: "Turn manifest 与 index epoch 不一致",
         },
-      }, { status: 500, statusText: "Internal Server Error" }), { credentialToken: "broken-token" });
+      }, { status: 500, statusText: "Internal Server Error" });
+    }, { credentialToken: "broken-token" });
 
     try {
       await getSessionTurnBootstrap(49_213, "ses_broken", "workspace");
@@ -134,5 +140,7 @@ describe("Turn 历史 API client", () => {
         "Turn manifest 与 index epoch 不一致",
       );
     }
+    // 同款防空转：错误必须来自 bootstrap 端点本身。
+    expect(seen).toEqual(["GET /api/v1/sessions/ses_broken/bootstrap"]);
   });
 });

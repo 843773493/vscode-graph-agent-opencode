@@ -508,3 +508,133 @@ async def test_sync_facade_uses_same_single_write_path(tmp_path: Path) -> None:
         ).fetchall()
     assert [(row["kind"], row["state"]) for row in rows] == [("create_folder", "committed")]
     assert catalog.operations.node_kind(created_id) == "folder"
+
+
+@pytest.mark.asyncio
+async def test_stale_base_catalog_revision_does_not_global_cas(tmp_path: Path) -> None:
+    """``base_catalog_revision`` 只供快照/事件对账，绝不充当全局 CAS。
+
+    钉死 spec.md 的「不得对无关 node 变更做全局 CAS」：客户端带着明显陈旧的
+    base revision（此处恒为 0）提交一次无关 node 上的新建，仍必须 committed。
+    若有人把它实现成全局 revision CAS，本用例立刻变红。
+    """
+    stack = _Stack(tmp_path / "sessions")
+    # 先推进 catalog revision 若干次，制造「客户端 base revision 明显陈旧」的局面。
+    for index in range(3):
+        seeded = stack.create_folder_intent(
+            seed=f"base_seed_{index}", sequence=1, name=f"基线目录{index}"
+        )
+        await stack.service.enqueue(
+            NavigationMutationEnqueueRequest(intents=[seeded]), stack.scope
+        )
+        await stack.settle(seeded.client_operation_id)
+    current = stack.service.snapshot().catalog_revision
+    assert current > 1
+
+    stale = NavigationMutationIntentDTO(
+        client_operation_id=operation_id("stale_base"),
+        client_sequence=1,
+        kind="create_folder",
+        base_catalog_revision=0,
+        name="陈旧基线目录",
+    )
+    await stack.service.enqueue(
+        NavigationMutationEnqueueRequest(intents=[stale]), stack.scope
+    )
+    await stack.settle(stale.client_operation_id)
+
+    record = stack.queue.get_record(
+        gateway_id=stack.scope.gateway_id,
+        workspace_id=stack.workspace_id,
+        actor=stack.scope.actor,
+        operation_id=stale.client_operation_id,
+    )
+    assert record is not None and record.state == "committed"
+    assert record.error_code is None
+    assert stack.service.node_kind(stack.node_id(stale.client_operation_id)) == "folder"
+
+
+@pytest.mark.asyncio
+async def test_intent_carries_base_catalog_revision_for_snapshot_reconciliation(
+    tmp_path: Path,
+) -> None:
+    """``base_catalog_revision`` 被持久化保留（供对账），但不参与 preimage。
+
+    两个可选收敛方向各自会失败在读哪一端：删掉该字段会让本用例读不到持久值；
+    把它纳入 preimage 会让「同 key 仅 base revision 变化的重试」误判为冲突。
+    """
+    stack = _Stack(tmp_path / "sessions")
+    intent = stack.create_folder_intent(seed="carry_base", sequence=1, name="留存目录")
+    base_revision = intent.base_catalog_revision
+    await stack.service.enqueue(
+        NavigationMutationEnqueueRequest(intents=[intent]), stack.scope
+    )
+
+    persisted = stack.queue.get_record(
+        gateway_id=stack.scope.gateway_id,
+        workspace_id=stack.workspace_id,
+        actor=stack.scope.actor,
+        operation_id=intent.client_operation_id,
+    )
+    assert persisted is not None
+    assert persisted.params["base_catalog_revision"] == base_revision
+
+    # 同 key、仅 base revision 变化（重试时客户端可能换用最新快照修订）：
+    # 意图未变，必须幂等复用原 record，而不是报 preimage 冲突。
+    retried = intent.model_copy(update={"base_catalog_revision": base_revision + 100})
+    replay = await stack.service.enqueue(
+        NavigationMutationEnqueueRequest(intents=[retried]), stack.scope
+    )
+    assert replay.receipts[0].operation_id == intent.client_operation_id
+    assert replay.receipts[0].queue_seq == persisted.queue_seq
+
+
+@pytest.mark.asyncio
+async def test_recursive_delete_reports_logical_commit_with_pending_settlement(
+    tmp_path: Path,
+) -> None:
+    """递归删除：导航逻辑 committed 与物理排空分开上报（8.1-G 删除链路契约）。
+
+    删除流自身的 mark 事务就是导航逻辑的 committed 点；物理排空是另一条链路，
+    因此 terminal 只能标 ``pending_settlement``，绝不假报「全部完成」。本用例钉死
+    这一区分：若有人把删除接进普通 node mutation 的单事务路径，或直接丢掉
+    ``pending_settlement``，这里立刻变红。
+    """
+    stack = _Stack(tmp_path / "sessions")
+    created = stack.create_folder_intent(seed="del_root", sequence=1, name="待删目录")
+    await stack.service.enqueue(
+        NavigationMutationEnqueueRequest(intents=[created]), stack.scope
+    )
+    await stack.settle(created.client_operation_id)
+    folder_id = stack.node_id(created.client_operation_id)
+
+    deletion = NavigationMutationIntentDTO(
+        client_operation_id=operation_id("del_folder"),
+        client_sequence=1,
+        kind="delete_folder",
+        base_catalog_revision=0,
+        target_node_id=folder_id,
+        recursive=True,
+    )
+    await stack.service.enqueue(
+        NavigationMutationEnqueueRequest(intents=[deletion]), stack.scope
+    )
+    record = await stack.service.await_terminal(
+        deletion.client_operation_id, stack.scope
+    )
+
+    assert record.state == "committed"
+    # 纯 Folder 子树没有需要物理排空的 Session，但仍必须显式携带该字段（默认
+    # False），而不是靠 None 或缺省糊过去。
+    assert record.pending_settlement is False
+    # 删除链路复用的是共享子树删除流：其 mark 事务关闭逻辑可见性、最终 tombstone
+    # 事务移除节点行。因此删除 committed 后，该节点对正常读者不再存在。
+    with pytest.raises(KeyError):
+        stack.resolver.get_node(folder_id)
+    assert folder_id not in {node.node_id for node in stack.resolver.list_nodes()}
+    # 删除的 terminal 同样进了导航事件 outbox（与普通 mutation 同一观测面）。
+    events = stack.service.events(after=0, limit=50)
+    assert [
+        event.operation_id for event in events.items
+    ] == [created.client_operation_id, deletion.client_operation_id]
+    assert events.items[-1].result_state == "committed"
