@@ -76,6 +76,9 @@ export default function GatewayLogPanel({
     key: string;
     promise: Promise<void>;
   } | null>(null);
+  // 工作区与输出通道可被连续切换，每次切换都会重发请求。先发后到的旧响应若不被
+  // 丢弃，底部输出面板会显示上一次工作区的日志，与当前工作区不符。
+  const requestRevisionRef = useRef(0);
 
   const workspaceLogs = useMemo(
     () => getWorkspaceLogs(diagnostics, workspaceId).filter((log) => log.service !== "workspace_api"),
@@ -89,6 +92,8 @@ export default function GatewayLogPanel({
   const loadDiagnostics = useCallback(
     async (logId: string | null, silent = false) => {
       if (!workspaceId) {
+        // 工作区解绑会让任何在途请求作废，避免它的迟到结果重新填回面板。
+        requestRevisionRef.current += 1;
         setDiagnostics(null);
         setSelectedLogId(null);
         setError("当前会话没有绑定工作区");
@@ -100,6 +105,8 @@ export default function GatewayLogPanel({
         await inFlight.promise;
         return;
       }
+      const revision = requestRevisionRef.current + 1;
+      requestRevisionRef.current = revision;
       if (!silent) setLoading(true);
       setError(null);
       const request = (async () => {
@@ -109,6 +116,7 @@ export default function GatewayLogPanel({
             logId,
             tailLines: 300,
           });
+          if (requestRevisionRef.current !== revision) return;
           const nextWorkspaceLogs = getWorkspaceLogs(next, workspaceId).filter(
             (log) => log.service !== "workspace_api",
           );
@@ -119,13 +127,14 @@ export default function GatewayLogPanel({
               : nextWorkspaceLogs[0]?.log_id ?? null,
           );
         } catch (loadError) {
+          if (requestRevisionRef.current !== revision) return;
           setError(errorMessage(loadError));
           if (!silent) {
             setDiagnostics(null);
             setSelectedLogId(null);
           }
         } finally {
-          if (!silent) setLoading(false);
+          if (!silent && requestRevisionRef.current === revision) setLoading(false);
         }
       })();
       inFlightRequestRef.current = { key: requestKey, promise: request };
