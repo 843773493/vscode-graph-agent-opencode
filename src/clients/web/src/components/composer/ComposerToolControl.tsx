@@ -64,8 +64,17 @@ export default function ComposerToolControl({
   const [error, setError] = useState<string | null>(null);
   const controlRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  // 加载归属代次：agentId/workspaceId 变化会重新加载，旧请求晚到时必须被丢弃，
+  // 否则界面会稳定显示上一个 Agent 的工具开关。
+  const loadGenerationRef = useRef(0);
+  // 轮询归属作用域：测试进度请求带着发起时的 owner，切换 Agent 或工作区后
+  // 迟到结果不得写回，也不能再用新 owner 去轮询上一个 owner 的 run_id。
+  const pollScopeKey = `${apiPort}:${agentId}:${workspaceId ?? ""}`;
+  const pollScopeKeyRef = useRef(pollScopeKey);
+  pollScopeKeyRef.current = pollScopeKey;
 
   const load = useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -73,14 +82,17 @@ export default function ComposerToolControl({
         getToolCatalog(apiPort, agentId, workspaceId),
         listToolTestRuns(apiPort, workspaceId),
       ]);
+      if (loadGenerationRef.current !== generation) return;
       setTools(catalog);
       setRuns(latestRunsByTool(history));
     } catch (loadError) {
-      const message = errorMessage(loadError);
-      setError(message);
+      // 失败始终向上抛出，不静默吞掉；只有当前代次才写本地错误态。
+      if (loadGenerationRef.current === generation) {
+        setError(errorMessage(loadError));
+      }
       throw loadError;
     } finally {
-      setLoading(false);
+      if (loadGenerationRef.current === generation) setLoading(false);
     }
   }, [agentId, apiPort, workspaceId]);
 
@@ -97,6 +109,7 @@ export default function ComposerToolControl({
     if (testingTools.size === 0) {
       return;
     }
+    const requestScopeKey = pollScopeKey;
     const timer = window.setInterval(() => {
       for (const toolName of testingTools) {
         const run = runs.get(toolName);
@@ -105,6 +118,7 @@ export default function ComposerToolControl({
         }
         void getToolTestRun(apiPort, run.run_id, workspaceId)
           .then((nextRun) => {
+            if (pollScopeKeyRef.current !== requestScopeKey) return;
             setRuns((current) => new Map(current).set(toolName, nextRun));
             if (nextRun.status === "completed" || nextRun.status === "failed") {
               setTestingTools((current) => {
@@ -115,13 +129,18 @@ export default function ComposerToolControl({
             }
           })
           .catch((pollError: unknown) => {
-            const message = errorMessage(pollError);
-            setError(`测试进度读取失败：${message}`);
+            if (pollScopeKeyRef.current !== requestScopeKey) return;
+            setError(`测试进度读取失败：${errorMessage(pollError)}`);
           });
       }
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [apiPort, runs, testingTools, workspaceId]);
+  }, [apiPort, runs, testingTools, workspaceId, pollScopeKey]);
+
+  useEffect(() => {
+    // owner 变化后旧的进行中测试不再属于当前上下文：清空以免用新 owner 复查旧 run。
+    setTestingTools((current) => (current.size === 0 ? current : new Set()));
+  }, [pollScopeKey]);
 
   const groups = useMemo<ToolGroup[]>(() => {
     const byId = new Map<string, ToolGroup>();

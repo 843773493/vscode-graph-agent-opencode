@@ -96,10 +96,6 @@ export default function NodeDebugPanel({
 
   const status = state?.status ?? "idle";
   const activeFrame = state?.call_stack?.[0] ?? null;
-  const localVariables = useMemo(
-    () => (activeFrame?.variables ?? []).filter((variable) => variable.scope !== "global"),
-    [activeFrame?.variables],
-  );
   const breakpoints = state?.breakpoints ?? [];
   const sourceSelection = resolveNodeDebugSourceSelection({
     state,

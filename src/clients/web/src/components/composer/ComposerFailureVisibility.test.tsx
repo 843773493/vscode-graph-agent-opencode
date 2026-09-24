@@ -205,46 +205,6 @@ function installOverlayConstructors(): void {
   }
 }
 
-function overlayDomNode(): Record<string, unknown> {
-  return {
-    nodeType: 1,
-    style: new Proxy({} as Record<string, string>, { get: () => "", set: () => true }),
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    appendChild: () => {},
-    removeChild: () => {},
-    setAttribute: () => {},
-    removeAttribute: () => {},
-    matches: () => false,
-    contains: () => false,
-    querySelector: () => null,
-    getBoundingClientRect: () => ({
-      x: 0, y: 0, top: 0, left: 0, right: 800, bottom: 600, width: 800, height: 600,
-      toJSON: () => undefined,
-    }),
-  };
-}
-
-/** @floating-ui 的 useDismiss/useFloating 内部会取 document 挂事件；纯 Node 环境
- * 没有 document，真实 AnchoredOverlay 会直接抛错。给一个最小 document 桩后，
- * 真实浮层仍然可用，不必替换模块。 */
-function installOverlayDocument(): void {
-  const documentStub: Record<string, unknown> = {
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    createElement: () => overlayDomNode(),
-    getElementById: () => null,
-    body: overlayDomNode(),
-    documentElement: overlayDomNode(),
-  };
-  Object.defineProperty(globalThis, "document", {
-    configurable: true,
-    value: documentStub,
-  });
-  (globalThis as unknown as { window: Record<string, unknown> }).window.document =
-    documentStub;
-}
-
 afterEach(() => {
   restoreGlobalDescriptor("document", originalDocument);
   for (const name of OVERLAY_CONSTRUCTOR_NAMES) {
