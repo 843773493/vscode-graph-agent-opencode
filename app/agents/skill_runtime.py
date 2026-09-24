@@ -53,12 +53,9 @@ WORKSPACE_AGENTS_URI = "boxteam://workspace/agents"
 WORKSPACE_AGENTS_SOURCE_ID = "agents:workspace"
 BUNDLED_SKILL_GROUP_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
 
-# 唯一 CSM 消费链的 delta 消息头按来源语义区分；未知 kind 直接失败，
-# 不回退到通用措辞。供 _build_source_delta_message 使用。
-_SOURCE_DELTA_HEADER_TEMPLATES = {
-    "skill": "上下文 Skill `{name} 已按 {kind} 注入。",
-    "workspace_agents": "工作区 AGENTS.md 指令来源已按 {kind} 注入。",
-}
+# 唯一 CSM 消费链只接受已知来源语义的 delta；未知 kind 直接失败，
+# 不回退到通用措辞。正文已由 ApplySourceLifecycleDecision 封存，这里只做准入。
+_KNOWN_SOURCE_KINDS: frozenset[str] = frozenset({"skill", "workspace_agents"})
 
 
 class WorkspaceSkillsState(AgentState):
@@ -241,7 +238,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         )
 
     def _build_source_delta_message(self, delta: ContextSourceDelta) -> HumanMessage:
-        if delta.source_kind not in _SOURCE_DELTA_HEADER_TEMPLATES:
+        if delta.source_kind not in _KNOWN_SOURCE_KINDS:
             raise RuntimeError(
                 "未知 context source kind，拒绝构造注入消息: "
                 f"source_id={delta.source_id} kind={delta.source_kind}"

@@ -151,3 +151,42 @@ async def test_before_model_consumes_event_driven_observation_only(
         assert registry.observation_channel.subscriber_ids == ()
     finally:
         await watch_service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_unknown_source_kind_is_rejected(tmp_path: Path) -> None:
+    """未知 source_kind 必须显式失败，不回退到通用措辞。"""
+    from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+        ContextSourceDelta,
+    )
+
+    middleware, _registry, _manager, _reactor, _scope, watch_service, _uri = (
+        _build_middleware(tmp_path)
+    )
+    try:
+        unknown = ContextSourceDelta(
+            source_id="mystery:1",
+            source_name="mystery",
+            source_kind="mystery_kind",
+            revision="rev_1",
+            previous_revision=None,
+            content="正文",
+            content_hash="hash_1",
+        )
+        with pytest.raises(RuntimeError, match="未知 context source kind"):
+            middleware._build_source_delta_message(unknown)
+
+        known = ContextSourceDelta(
+            source_id="agents:workspace",
+            source_name="AGENTS.md",
+            source_kind="workspace_agents",
+            revision="rev_2",
+            previous_revision=None,
+            content="已知正文",
+            content_hash="hash_2",
+        )
+        message = middleware._build_source_delta_message(known)
+        assert message.content == "已知正文"
+        assert message.response_metadata["context_source_kind"] == "workspace_agents"
+    finally:
+        await watch_service.shutdown()
