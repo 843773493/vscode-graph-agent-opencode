@@ -34,14 +34,6 @@ def read_json_object(path: Path) -> dict[str, object]:
     return {str(key): value for key, value in raw.items()}
 
 
-def parse_datetime(value: object, path: Path) -> datetime:
-    """解析必填 ISO 时间字段。"""
-    parsed = parse_optional_datetime(value)
-    if parsed is None:
-        raise RuntimeError(f"manifest 缺少合法时间字段: {path}")
-    return parsed
-
-
 def parse_optional_datetime(value: object) -> datetime | None:
     """解析可选 ISO 时间字段，缺失值返回 None。"""
     if not isinstance(value, str) or not value:
@@ -76,7 +68,6 @@ __all__ = [
     "SESSION_MANIFEST_NAME",
     "SessionPhysicalNode",
     "nearest_session_ancestor_from_nodes",
-    "parse_datetime",
     "parse_optional_datetime",
     "read_json_object",
 ]

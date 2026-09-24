@@ -227,10 +227,6 @@ def get_session_changes_dir(session_id: str) -> Path:
     return get_session_path(session_id) / "changes"
 
 
-def get_session_logs_dir(session_id: str) -> Path:
-    return get_session_path(session_id) / "logs"
-
-
 def initialize_directories() -> None:
     """初始化当前工作区运行时所需的目录与 SQLite catalog。"""
     get_boxteam_root().mkdir(exist_ok=True, parents=True)
