@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.canonical_params import CanonicalSessionId
@@ -20,6 +22,7 @@ from app.services.infrastructure.log_service import LogService, LogSnapshotRecor
 from app.services.infrastructure.runtime_service import RuntimeService
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
+logger = logging.getLogger(__name__)
 
 
 class UiSnapshotRequest(BaseModel):
@@ -92,18 +95,20 @@ async def save_log_snapshot(
     log_service: LogService = Depends(get_log_service),
 ):
     _ = runtime_service.get_log_dir()
-    result = log_service.write_html_snapshot(
-        LogSnapshotRecord(
-            workspace_root=payload.workspace_root,
-            session_id=payload.session_id,
-            html=payload.html,
-            page_title=payload.page_title,
-            status=payload.status,
-            source=payload.source,
-            category="webview",
+    try:
+        result = log_service.write_html_snapshot(
+            LogSnapshotRecord(
+                workspace_root=payload.workspace_root,
+                session_id=payload.session_id,
+                html=payload.html,
+                page_title=payload.page_title,
+                status=payload.status,
+                source=payload.source,
+                category="webview",
+            )
         )
-    )
-    import logging
-
-    logging.info("UI HTML 快照已落盘: %s", result.get("html_path"))
+    except OSError as error:
+        # workspace_root 来自请求体，指到不可写路径属于客户端输入错误。
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    logger.info("UI HTML 快照已落盘: %s", result.html_path)
     return APIResponse(data=result, request_id=request_id)

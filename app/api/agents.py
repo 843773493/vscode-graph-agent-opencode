@@ -35,7 +35,11 @@ async def set_workspace_default_agent(
     request_id: str = Depends(get_request_id),
     agent_service: AgentService = Depends(get_agent_service),
 ):
-    result = await agent_service.set_workspace_default_agent(payload.agent_id)
+    try:
+        result = await agent_service.set_workspace_default_agent(payload.agent_id)
+    except ValueError as error:
+        # 不存在的 agent 属于客户端输入错误，不能报成 500。
+        raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -51,10 +55,17 @@ async def set_workspace_default_provider(
     request_id: str = Depends(get_request_id),
     agent_service: AgentService = Depends(get_agent_service),
 ):
-    result = await agent_service.set_workspace_default_provider(
-        agent_id,
-        payload.provider_id,
-    )
+    try:
+        result = await agent_service.set_workspace_default_provider(
+            agent_id,
+            payload.provider_id,
+        )
+    except ValueError as error:
+        # agent 或 provider 不存在/不可用均来自请求输入。
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except TypeError as error:
+        # 工作区默认值文件结构损坏属于可恢复的本地状态冲突。
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 

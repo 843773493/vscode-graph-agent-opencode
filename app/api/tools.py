@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import (
     get_request_id,
@@ -35,7 +35,11 @@ async def list_tools(
     request_id: str = Depends(get_request_id),
     tool_service: ToolService = Depends(get_tool_service),
 ):
-    result = await tool_service.list(agent_id)
+    try:
+        result = await tool_service.list(agent_id)
+    except ValueError as error:
+        # agent_id 来自查询参数：不存在的 agent 属于客户端输入错误，不能报成 500。
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -64,7 +68,7 @@ async def update_tool_selection(
 )
 async def list_tool_tests(
     tool_name: str | None = None,
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=200),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     test_service: ToolTestService = Depends(get_tool_test_service),
@@ -103,7 +107,14 @@ async def start_tool_test(
     request_id: str = Depends(get_request_id),
     test_service: ToolTestService = Depends(get_tool_test_service),
 ):
-    result = await test_service.start(tool_name=tool_id, request=payload)
+    try:
+        result = await test_service.start(tool_name=tool_id, request=payload)
+    except ValueError as error:
+        # 不支持的工具、无可用 provider 等均来自请求输入。
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RuntimeError as error:
+        # 同一工具已有测试在跑：状态冲突而非服务端故障。
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -117,6 +128,8 @@ async def get_tool(
 ):
     try:
         result = await tool_service.get(tool_id, agent_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except ToolNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)

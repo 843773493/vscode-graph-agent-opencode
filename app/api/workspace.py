@@ -489,7 +489,11 @@ async def reveal_workspace_file_entry(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
-    except (ValueError, RuntimeError, OSError) as error:
+    except ValueError as error:
+        # 路径形态非法来自查询参数，属于客户端输入错误。
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except (RuntimeError, OSError) as error:
+        # 缺少系统文件管理器或 Popen 失败属于本机环境故障。
         raise HTTPException(status_code=500, detail=str(error)) from error
     return APIResponse(
         data=WorkspaceFileRevealDTO(path=str(result)),

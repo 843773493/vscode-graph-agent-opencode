@@ -21,6 +21,21 @@ from app.services.business.session_context_query_service import (
 router = APIRouter(prefix="/context", tags=["context"])
 
 
+def _revision_changed_http_error(
+    error: SessionContextRevisionChangedError,
+) -> HTTPException:
+    """上下文 revision 过期统一落 409，read/search 共用同一响应体。"""
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "snapshot_changed",
+            "expected_revision": error.expected_revision,
+            "actual_revision": error.actual_revision,
+            "message": str(error),
+        },
+    )
+
+
 @router.post(
     "/read",
     response_model=APIResponse[SessionContextReadResultDTO],
@@ -36,15 +51,7 @@ async def read_context(
     try:
         result = await query_service.read_context(payload)
     except SessionContextRevisionChangedError as error:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "snapshot_changed",
-                "expected_revision": error.expected_revision,
-                "actual_revision": error.actual_revision,
-                "message": str(error),
-            },
-        ) from error
+        raise _revision_changed_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except (TypeError, ValueError) as error:
@@ -78,13 +85,9 @@ async def search_context(
     try:
         result = await query_service.search_context(payload)
     except SessionContextRevisionChangedError as error:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "snapshot_changed",
-                "expected_revision": error.expected_revision,
-                "actual_revision": error.actual_revision,
-                "message": str(error),
-            },
-        ) from error
+        raise _revision_changed_http_error(error) from error
+    except (KeyError, NotFoundError) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
