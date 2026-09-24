@@ -8,14 +8,10 @@ from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Self
 
-from langchain_core.messages import BaseMessage
-from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
-    CheckpointMetadata,
-    CheckpointTuple,
 )
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
@@ -588,7 +584,7 @@ class RolloutCheckpointSaver(
         """解析 main thread 的 session-control 路径与 catalog main_thread_id。"""
         resolver = get_session_path_resolver(self._storage.sessions_dir)
         if not isinstance(resolver, SessionCatalogPathResolver):
-            raise RuntimeError(
+            raise TypeError(
                 "ToolSet owner 状态要求 catalog resolver（当前解析器不满足要求，"
                 f"fail closed）: sessions_dir={self._storage.sessions_dir}"
             )
@@ -880,48 +876,3 @@ class RolloutCheckpointSaver(
         traceback: TracebackType | None,
     ) -> None:
         return None
-
-    def _tuple_from_index(self, thread_id: str, index: Any) -> CheckpointTuple:
-        config = {
-            "configurable": {
-                "thread_id": thread_id,
-                "checkpoint_ns": index.checkpoint_ns,
-                "checkpoint_id": index.checkpoint_id,
-            }
-        }
-        value = self.get_tuple(config)
-        if value is None:
-            raise RuntimeError(
-                f"checkpoint 索引无法 materialize: {index.checkpoint_id}"
-            )
-        return value
-
-    def _decode_metadata(self, index: Any) -> CheckpointMetadata:
-        return self._storage.metadata(index)
-
-
-def _checkpoint_identity(config: RunnableConfig) -> tuple[str, str]:
-    configurable = config.get("configurable")
-    if not isinstance(configurable, dict):
-        raise TypeError("checkpoint config 缺少 configurable")
-    thread_id = configurable.get("thread_id")
-    checkpoint_ns = configurable.get("checkpoint_ns", "")
-    if not isinstance(thread_id, str) or not thread_id:
-        raise ValueError("checkpoint config 缺少 thread_id")
-    if not isinstance(checkpoint_ns, str):
-        raise TypeError("checkpoint config checkpoint_ns 必须是字符串")
-    return thread_id, checkpoint_ns
-
-
-def _messages_from_checkpoint(value: CheckpointTuple | None) -> list[BaseMessage]:
-    if value is None:
-        return []
-    channel_values = value.checkpoint.get("channel_values", {})
-    if not isinstance(channel_values, dict):
-        raise TypeError("checkpoint channel_values 必须是 dict")
-    messages = channel_values.get("messages", [])
-    if not isinstance(messages, list) or not all(
-        isinstance(message, BaseMessage) for message in messages
-    ):
-        raise TypeError("checkpoint messages 必须是 BaseMessage 列表")
-    return messages

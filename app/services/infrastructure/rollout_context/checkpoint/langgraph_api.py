@@ -530,3 +530,21 @@ class RolloutLangGraphCheckpointMixin:
                 "checkpoint_id": manifest.latest_checkpoint_id,
             }
         }
+
+    def _tuple_from_index(self, thread_id: str, index: Any) -> CheckpointTuple:
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_ns": index.checkpoint_ns,
+                "checkpoint_id": index.checkpoint_id,
+            }
+        }
+        value = self.get_tuple(config)
+        if value is None:
+            raise RuntimeError(
+                f"checkpoint 索引无法 materialize: {index.checkpoint_id}"
+            )
+        return value
+
+    def _decode_metadata(self, index: Any) -> CheckpointMetadata:
+        return self._storage.metadata(index)
