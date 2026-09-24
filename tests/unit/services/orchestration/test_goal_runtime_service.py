@@ -15,6 +15,12 @@ class _Sessions:
     async def get(self, session_id):
         return session_id
 
+    async def resolve_main_thread(self, session_id):
+        # 生产实现取自 catalog 冻结的 main_thread_id，绝不用 session_id 冒充
+        # thread_id；替身返回可区分的固定 thread 身份，使「误用 session_id」
+        # 的变异被 thread_id 断言杀掉。
+        return f"thr_{session_id}"
+
 
 class _Store:
     def __init__(self):
@@ -90,7 +96,11 @@ async def test_idle_goal_dispatch_is_idempotent_and_pause_stops_it():
     runtime = GoalRuntimeService(
         goal_service=goals, job_service=_Jobs(), session_orchestrator=orchestrator
     )
-    await goals.set("sess_1", objective="完成目标")
+    created = await goals.set("sess_1", objective="完成目标")
+    # Goal 只属于 main thread：thread_id 由 resolve_main_thread 解析，必须与
+    # session_id 可区分，不得由 session_id 冒充。
+    assert created.thread_id == "thr_sess_1"
+    assert (await goals.get("sess_1")).thread_id == "thr_sess_1"
 
     await runtime.ensure_active_goal_running("sess_1")
     await runtime.ensure_active_goal_running("sess_1")
