@@ -49,6 +49,56 @@ function state(currentSession: Session): AppState {
 }
 
 describe("会话文件变更请求协调", () => {
+  test("标记已审查失败时必须给出带原因的可见诊断", async () => {
+    const currentSession = session();
+    let currentState = state(currentSession);
+    let reviewSessionChangeFile!: ReturnType<
+      typeof useSessionChangesLoader
+    >["reviewSessionChangeFile"];
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const parsed = new URL(url);
+      if (parsed.pathname === "/api/gateway/auth/local-credential") {
+        return apiResponse({ token: "local-test-token" });
+      }
+      if (parsed.pathname === "/api/gateway/users/current") {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      if (parsed.pathname.endsWith("/review")) {
+        return Response.json({ detail: "审查后端崩溃" }, { status: 500 });
+      }
+      throw new Error("测试收到未声明请求: " + url);
+    }, { preconnect: originalFetch.preconnect });
+
+    function Harness(): React.ReactNode {
+      const loader = useSessionChangesLoader({
+        apiPort: 49_403,
+        currentSession,
+        workspaceId: "ws_changes_loader",
+        setState: (update) => {
+          currentState = typeof update === "function" ? update(currentState) : update;
+        },
+      });
+      reviewSessionChangeFile = loader.reviewSessionChangeFile;
+      return null;
+    }
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+
+    await reviewSessionChangeFile(
+      { file_path: "src/a.ts", reviewed: false } as never,
+      true,
+    ).catch(() => undefined);
+
+    // 失败后状态栏必须点明失败原因，绝不能停在「正在标记」的假进行态。
+    expect(currentState.status).toContain("审查");
+    expect(currentState.status).toContain("审查后端崩溃");
+    act(() => renderer!.unmount());
+  });
+
   test("并发和已缓存的变更列表只读取一次，显式刷新才重新读取列表", async () => {
     const currentSession = session();
     let currentState = state(currentSession);

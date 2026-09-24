@@ -168,40 +168,52 @@ export function useSessionChangesLoader({
       }
       const sessionId = currentSession.session_id;
       const changesetId = "all";
+      const action = reviewed ? "标记文件已审查" : "取消文件已审查";
       setState((prev) => ({
         ...prev,
         status: reviewed ? "正在标记文件已审查" : "正在取消文件已审查",
       }));
-      const result = await apiReviewSessionChangeFile(
-        apiPort,
-        sessionId,
-        changesetId,
-        file.file_path,
-        reviewed,
-        workspaceId,
-      );
-      setState((prev) => {
-        if (prev.currentSession?.session_id !== sessionId) {
-          return prev;
-        }
-        const nextActiveChangeset = prev.activeChangeset
-          ? {
-              ...prev.activeChangeset,
-              files: prev.activeChangeset.files.map((item) =>
-                item.file_path === result.file_path
-                  ? { ...item, reviewed: result.reviewed }
-                  : item,
-              ),
-            }
-          : prev.activeChangeset;
-        return {
+      try {
+        const result = await apiReviewSessionChangeFile(
+          apiPort,
+          sessionId,
+          changesetId,
+          file.file_path,
+          reviewed,
+          workspaceId,
+        );
+        setState((prev) => {
+          if (prev.currentSession?.session_id !== sessionId) {
+            return prev;
+          }
+          const nextActiveChangeset = prev.activeChangeset
+            ? {
+                ...prev.activeChangeset,
+                files: prev.activeChangeset.files.map((item) =>
+                  item.file_path === result.file_path
+                    ? { ...item, reviewed: result.reviewed }
+                    : item,
+                ),
+              }
+            : prev.activeChangeset;
+          return {
+            ...prev,
+            activeChangeset: nextActiveChangeset,
+            status: reviewed
+              ? `已标记为已审查: ${result.file_path}`
+              : `已取消已审查: ${result.file_path}`,
+          };
+        });
+      } catch (error) {
+        // 失败必须给出带原因的可见诊断：之前只把「正在标记」留在状态栏，
+        // 用户既看不到失败也看不到原因，属于静默失败。
+        const message = errorMessage(error);
+        setState((prev) => ({
           ...prev,
-          activeChangeset: nextActiveChangeset,
-          status: reviewed
-            ? `已标记为已审查: ${result.file_path}`
-            : `已取消已审查: ${result.file_path}`,
-        };
-      });
+          status: `${action}失败: ${message}`,
+        }));
+        throw error;
+      }
     },
     [apiPort, currentSession, workspaceId, setState],
   );
