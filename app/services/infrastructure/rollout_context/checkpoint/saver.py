@@ -584,7 +584,7 @@ class RolloutCheckpointSaver(
         """解析 main thread 的 session-control 路径与 catalog main_thread_id。"""
         resolver = get_session_path_resolver(self._storage.sessions_dir)
         if not isinstance(resolver, SessionCatalogPathResolver):
-            raise TypeError(
+            raise RuntimeError(  # noqa: TRY004 —— 运行时模式错误，非参数类型错误
                 "ToolSet owner 状态要求 catalog resolver（当前解析器不满足要求，"
                 f"fail closed）: sessions_dir={self._storage.sessions_dir}"
             )
