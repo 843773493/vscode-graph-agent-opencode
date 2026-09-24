@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TypeVar
+
 from fastapi import Header, HTTPException, Request
 
 from app.abstractions.job_service import JobServiceProtocol
@@ -86,19 +88,29 @@ class _AppContainerProtocol:
     message_stream_store: MessageStreamStore
 
 
+T = TypeVar("T")
+
+
+def _require_service(
+    request: Request,
+    attribute: str,
+    expected_type: type[T],
+    message: str,
+) -> T:
+    """从应用容器取服务实例；缺失或类型不符时显式报错，不返回虚假默认值。"""
+    service = getattr(_get_container(request), attribute, None)
+    # 容器装配缺失是启动期状态问题，必须沿用既有 RuntimeError 契约，
+    # 不改成 TypeError（那会泄漏成 500 且改变调用方可见的错误类型）。
+    if not isinstance(service, expected_type):
+        raise RuntimeError(message)  # noqa: TRY004
+    return service
+
+
 def verify_local_token(x_local_token: str | None = Header(default=None)) -> str:
     expected = "local-dev-token"
     if x_local_token != expected:
         raise HTTPException(status_code=401, detail="invalid local token")
     return x_local_token
-
-
-def get_config_service(request: Request) -> ConfigService:
-    container = getattr(request.app.state, "container", None)
-    config_service = getattr(container, "config_service", None) if container is not None else None
-    if not isinstance(config_service, ConfigService):
-        raise RuntimeError("ConfigService 尚未在应用启动阶段初始化")
-    return config_service
 
 
 def _get_container(request: Request) -> _AppContainerProtocol:
@@ -108,241 +120,147 @@ def _get_container(request: Request) -> _AppContainerProtocol:
     return container
 
 
-def get_agent_service(request: Request) -> AgentService:
-    service = getattr(_get_container(request), "agent_service", None)
-    if not isinstance(service, AgentService):
-        raise RuntimeError("AgentService 尚未在应用启动阶段初始化")
+def get_config_service(request: Request) -> ConfigService:
+    # 与其余提供者不同：容器整体缺失时也必须报 ConfigService 自身的文案，
+    # 保持该入口既有的可观察错误信息不变。
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "config_service", None) if container is not None else None
+    if not isinstance(service, ConfigService):
+        raise RuntimeError("ConfigService 尚未在应用启动阶段初始化")  # noqa: TRY004
     return service
+
+
+def get_agent_service(request: Request) -> AgentService:
+    return _require_service(request, "agent_service", AgentService, "AgentService 尚未在应用启动阶段初始化")
 
 
 def get_artifact_service(request: Request) -> ArtifactService:
-    service = getattr(_get_container(request), "artifact_service", None)
-    if not isinstance(service, ArtifactService):
-        raise RuntimeError("ArtifactService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "artifact_service", ArtifactService, "ArtifactService 尚未在应用启动阶段初始化")
 
 
 def get_event_service(request: Request) -> EventService:
-    service = getattr(_get_container(request), "event_service", None)
-    if not isinstance(service, EventService):
-        raise RuntimeError("EventService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "event_service", EventService, "EventService 尚未在应用启动阶段初始化")
 
 
 def get_job_service(request: Request) -> JobServiceProtocol:
-    service = getattr(_get_container(request), "job_service", None)
-    if not isinstance(service, JobServiceProtocol):
-        raise RuntimeError("JobService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "job_service", JobServiceProtocol, "JobService 尚未在应用启动阶段初始化")
 
 
 def get_workspace_activity_service(request: Request) -> WorkspaceActivityService:
-    service = getattr(_get_container(request), "workspace_activity_service", None)
-    if not isinstance(service, WorkspaceActivityService):
-        raise RuntimeError("Workspace 活动事件服务尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "workspace_activity_service", WorkspaceActivityService, "Workspace 活动事件服务尚未在应用启动阶段初始化")
 
 
 def get_node_debug_service(request: Request) -> NodeDebugService:
-    service = getattr(_get_container(request), "node_debug_service", None)
-    if not isinstance(service, NodeDebugService):
-        raise RuntimeError("NodeDebugService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "node_debug_service", NodeDebugService, "NodeDebugService 尚未在应用启动阶段初始化")
 
 
 def get_message_service(request: Request) -> MessageService:
-    service = getattr(_get_container(request), "message_service", None)
-    if not isinstance(service, MessageService):
-        raise RuntimeError("MessageService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "message_service", MessageService, "MessageService 尚未在应用启动阶段初始化")
 
 
 def get_session_attachment_store(request: Request) -> SessionAttachmentStore:
-    service = getattr(_get_container(request), "session_attachment_store", None)
-    if not isinstance(service, SessionAttachmentStore):
-        raise RuntimeError("SessionAttachmentStore 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_attachment_store", SessionAttachmentStore, "SessionAttachmentStore 尚未在应用启动阶段初始化")
 
 
 def get_runtime_service(request: Request) -> RuntimeService:
-    service = getattr(_get_container(request), "runtime_service", None)
-    if not isinstance(service, RuntimeService):
-        raise RuntimeError("RuntimeService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "runtime_service", RuntimeService, "RuntimeService 尚未在应用启动阶段初始化")
 
 
 def get_goal_service(request: Request) -> SessionGoalService:
-    service = getattr(_get_container(request), "goal_service", None)
-    if not isinstance(service, SessionGoalService):
-        raise RuntimeError("SessionGoalService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "goal_service", SessionGoalService, "SessionGoalService 尚未在应用启动阶段初始化")
 
 
 def get_goal_runtime_service(request: Request) -> GoalRuntimeService:
-    service = getattr(_get_container(request), "goal_runtime_service", None)
-    if not isinstance(service, GoalRuntimeService):
-        raise RuntimeError("GoalRuntimeService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "goal_runtime_service", GoalRuntimeService, "GoalRuntimeService 尚未在应用启动阶段初始化")
 
 
 def get_session_interrupt_service(request: Request) -> SessionInterruptService:
-    service = getattr(_get_container(request), "session_interrupt_service", None)
-    if not isinstance(service, SessionInterruptService):
-        raise RuntimeError("SessionInterruptService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_interrupt_service", SessionInterruptService, "SessionInterruptService 尚未在应用启动阶段初始化")
 
 
-def get_session_skill_tracking_service(
-    request: Request,
-) -> SessionSkillTrackingService:
-    service = getattr(_get_container(request), "session_skill_tracking_service", None)
-    if not isinstance(service, SessionSkillTrackingService):
-        raise RuntimeError("SessionSkillTrackingService 尚未在应用启动阶段初始化")
-    return service
+def get_session_skill_tracking_service(request: Request) -> SessionSkillTrackingService:
+    return _require_service(request, "session_skill_tracking_service", SessionSkillTrackingService, "SessionSkillTrackingService 尚未在应用启动阶段初始化")
 
 
 def get_message_stream_store(request: Request) -> MessageStreamStore:
-    service = getattr(_get_container(request), "message_stream_store", None)
-    if not isinstance(service, MessageStreamStore):
-        raise RuntimeError("MessageStreamStore 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "message_stream_store", MessageStreamStore, "MessageStreamStore 尚未在应用启动阶段初始化")
 
 
 def get_session_changes_service(request: Request) -> SessionChangesService:
-    service = getattr(_get_container(request), "session_changes_service", None)
-    if not isinstance(service, SessionChangesService):
-        raise RuntimeError("SessionChangesService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_changes_service", SessionChangesService, "SessionChangesService 尚未在应用启动阶段初始化")
 
 
 def get_session_information_service(request: Request) -> SessionInformationService:
-    service = getattr(_get_container(request), "session_information_service", None)
-    if not isinstance(service, SessionInformationService):
-        raise RuntimeError("SessionInformationService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_information_service", SessionInformationService, "SessionInformationService 尚未在应用启动阶段初始化")
 
 
 def get_session_context_query_service(request: Request) -> SessionContextQueryService:
-    service = getattr(_get_container(request), "session_context_query_service", None)
-    if not isinstance(service, SessionContextQueryService):
-        raise RuntimeError("SessionContextQueryService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_context_query_service", SessionContextQueryService, "SessionContextQueryService 尚未在应用启动阶段初始化")
 
 
 def get_context_compaction_service(request: Request) -> ContextCompactionService:
-    service = getattr(_get_container(request), "context_compaction_service", None)
-    if not isinstance(service, ContextCompactionService):
-        raise RuntimeError("ContextCompactionService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "context_compaction_service", ContextCompactionService, "ContextCompactionService 尚未在应用启动阶段初始化")
 
 
 def get_session_resource_service(request: Request) -> SessionResourceService:
-    service = getattr(_get_container(request), "session_resource_service", None)
-    if not isinstance(service, SessionResourceService):
-        raise RuntimeError("SessionResourceService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_resource_service", SessionResourceService, "SessionResourceService 尚未在应用启动阶段初始化")
 
 
 def get_session_service(request: Request) -> SessionService:
-    service = getattr(_get_container(request), "session_service", None)
-    if not isinstance(service, SessionService):
-        raise RuntimeError("SessionService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_service", SessionService, "SessionService 尚未在应用启动阶段初始化")
 
 
 def get_session_context_fork_service(request: Request) -> SessionContextForkService:
-    service = getattr(_get_container(request), "session_context_fork_service", None)
-    if not isinstance(service, SessionContextForkService):
-        raise RuntimeError("SessionContextForkService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_context_fork_service", SessionContextForkService, "SessionContextForkService 尚未在应用启动阶段初始化")
 
 
 def get_session_turn_replay_service(request: Request) -> SessionTurnReplayService:
-    service = getattr(_get_container(request), "session_turn_replay_service", None)
-    if not isinstance(service, SessionTurnReplayService):
-        raise RuntimeError("SessionTurnReplayService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_turn_replay_service", SessionTurnReplayService, "SessionTurnReplayService 尚未在应用启动阶段初始化")
 
 
 def get_session_turn_history_service(request: Request) -> SessionTurnHistoryService:
-    service = getattr(_get_container(request), "session_turn_history_service", None)
-    if not isinstance(service, SessionTurnHistoryService):
-        raise RuntimeError("SessionTurnHistoryService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_turn_history_service", SessionTurnHistoryService, "SessionTurnHistoryService 尚未在应用启动阶段初始化")
 
 
 def get_llm_request_log_service(request: Request) -> LLMRequestLogService:
-    service = getattr(_get_container(request), "llm_request_log_service", None)
-    if not isinstance(service, LLMRequestLogService):
-        raise RuntimeError("LLMRequestLogService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "llm_request_log_service", LLMRequestLogService, "LLMRequestLogService 尚未在应用启动阶段初始化")
 
 
 def get_log_service(request: Request) -> LogService:
-    service = getattr(_get_container(request), "log_service", None)
-    if not isinstance(service, LogService):
-        raise RuntimeError("LogService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "log_service", LogService, "LogService 尚未在应用启动阶段初始化")
 
 
 def get_tool_service(request: Request) -> ToolService:
-    service = getattr(_get_container(request), "tool_service", None)
-    if not isinstance(service, ToolService):
-        raise RuntimeError("ToolService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "tool_service", ToolService, "ToolService 尚未在应用启动阶段初始化")
 
 
 def get_tool_test_service(request: Request) -> ToolTestService:
-    service = getattr(_get_container(request), "tool_test_service", None)
-    if not isinstance(service, ToolTestService):
-        raise RuntimeError("ToolTestService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "tool_test_service", ToolTestService, "ToolTestService 尚未在应用启动阶段初始化")
 
 
 def get_mcp_catalog_owner(request: Request) -> McpCatalogOwner:
-    service = getattr(_get_container(request), "mcp_catalog_owner", None)
-    if not isinstance(service, McpCatalogOwner):
-        raise RuntimeError("McpCatalogOwner 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "mcp_catalog_owner", McpCatalogOwner, "McpCatalogOwner 尚未在应用启动阶段初始化")
 
 
 def get_workspace_service(request: Request) -> WorkspaceService:
-    service = getattr(_get_container(request), "workspace_service", None)
-    if not isinstance(service, WorkspaceService):
-        raise RuntimeError("WorkspaceService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "workspace_service", WorkspaceService, "WorkspaceService 尚未在应用启动阶段初始化")
 
 
 def get_workspace_file_watch_service(request: Request) -> WorkspaceFileWatchService:
-    service = getattr(_get_container(request), "workspace_file_watch_service", None)
-    if not isinstance(service, WorkspaceFileWatchService):
-        raise RuntimeError("WorkspaceFileWatchService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "workspace_file_watch_service", WorkspaceFileWatchService, "WorkspaceFileWatchService 尚未在应用启动阶段初始化")
 
 
 def get_file_tree_settings_service(request: Request) -> FileTreeSettingsService:
-    service = getattr(_get_container(request), "file_tree_settings_service", None)
-    if not isinstance(service, FileTreeSettingsService):
-        raise RuntimeError("FileTreeSettingsService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "file_tree_settings_service", FileTreeSettingsService, "FileTreeSettingsService 尚未在应用启动阶段初始化")
 
 
 def get_session_orchestrator(request: Request) -> SessionOrchestrator:
-    service = getattr(_get_container(request), "session_orchestrator", None)
-    if not isinstance(service, SessionOrchestrator):
-        raise RuntimeError("SessionOrchestrator 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_orchestrator", SessionOrchestrator, "SessionOrchestrator 尚未在应用启动阶段初始化")
 
 
 def get_session_catalog_service(request: Request) -> SessionCatalogService:
-    service = getattr(_get_container(request), "session_catalog_service", None)
-    if not isinstance(service, SessionCatalogService):
-        raise RuntimeError("SessionCatalogService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_catalog_service", SessionCatalogService, "SessionCatalogService 尚未在应用启动阶段初始化")
 
 
 def get_session_generation_service(request: Request) -> SessionGenerationService:
-    service = getattr(_get_container(request), "session_generation_service", None)
-    if not isinstance(service, SessionGenerationService):
-        raise RuntimeError("SessionGenerationService 尚未在应用启动阶段初始化")
-    return service
+    return _require_service(request, "session_generation_service", SessionGenerationService, "SessionGenerationService 尚未在应用启动阶段初始化")
