@@ -40,6 +40,7 @@ HISTORY_LOADING_HEADER = "x-boxteam-history-loading"
 PROXY_ONLY_DROPPED_HEADERS = frozenset(
     {
         "host",
+        "x-request-id",
         "x-local-token",
         "x-boxteam-federation-token",
         "x-boxteam-workspace-id",

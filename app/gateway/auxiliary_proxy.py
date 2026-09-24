@@ -37,6 +37,7 @@ router = APIRouter()
 AUXILIARY_PROXY_DROPPED_HEADERS = frozenset(
     {
         "host",
+        "x-request-id",
         "x-local-token",
         "x-boxteam-federation-token",
         "x-boxteam-workspace-id",
