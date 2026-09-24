@@ -13,6 +13,9 @@ from uuid import uuid4
 from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
+from app.services.infrastructure.rollout_context.storage.resource_activation_reads import (
+    read_activation_refs_for_turns,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -142,6 +145,25 @@ class RolloutCheckpointOperationsMixin:
                         ) from error
                     cutoff = anchor_index + (1 if anchor_mode == "inclusive" else 0)
                 visible_sequences = source_sequences[:cutoff]
+                # rewind/compaction 必须保留被切断/隐藏的 sealed assembly 的精确
+                # activation snapshot/ref：这些引用写入同一 control event，后续
+                # restore 只读该引用，永不解析当前 URI 或 Registry。schema 未 bootstrap
+                # 或没有任何 sealed activation 绑定时不写该键，保持既有 payload 字节。
+                source_turn_ids = tuple(
+                    dict.fromkeys(
+                        strict_text(row[0], field="context_view_turns.turn_id")
+                        for row in connection.execute(
+                            "SELECT turn_id FROM context_view_turns "
+                            "WHERE view_id = ? ORDER BY logical_turn_ordinal",
+                            (source_view_id,),
+                        ).fetchall()
+                    )
+                )
+                activation_refs = read_activation_refs_for_turns(
+                    connection,
+                    session_id=thread_id,
+                    turn_ids=source_turn_ids,
+                )
                 # 在创建目标 view/branch 前验证 tool protocol closure：
                 # 冲突时旧 active view 与全部状态保持零副作用。
                 validate_tool_protocol_closure(
@@ -186,6 +208,20 @@ class RolloutCheckpointOperationsMixin:
                     "UPDATE checkpoint_namespace_state SET active_branch_id = ?, projection_epoch = projection_epoch + 1, updated_at = ? WHERE checkpoint_ns = ?",
                     (branch_id, timestamp, checkpoint_ns),
                 )
+                control_payload: dict[str, object] = {
+                    "source_checkpoint_id": source_checkpoint_id,
+                    "source_anchor": source_anchor,
+                    "source_turn_id": source_turn_id,
+                    "source_view_id": source_view_id,
+                    "anchor_mode": anchor_mode,
+                    "cutoff_message_sequence": (
+                        visible_sequences[-1] if visible_sequences else None
+                    ),
+                }
+                if activation_refs:
+                    control_payload["resource_activation_refs"] = [
+                        dict(ref) for ref in activation_refs
+                    ]
                 control_sequence = self._insert_control(
                     connection,
                     boundary,
@@ -194,16 +230,7 @@ class RolloutCheckpointOperationsMixin:
                     branch_id,
                     view_id,
                     source_checkpoint_value,
-                    {
-                        "source_checkpoint_id": source_checkpoint_id,
-                        "source_anchor": source_anchor,
-                        "source_turn_id": source_turn_id,
-                        "source_view_id": source_view_id,
-                        "anchor_mode": anchor_mode,
-                        "cutoff_message_sequence": (
-                            visible_sequences[-1] if visible_sequences else None
-                        ),
-                    },
+                    control_payload,
                     uuid4().hex,
                     timestamp,
                 )

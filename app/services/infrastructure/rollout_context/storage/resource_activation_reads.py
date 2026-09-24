@@ -16,6 +16,9 @@ from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
 )
+from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
+    DetailUnavailableError,
+)
 from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
     ASSEMBLY_BINDING_COLUMNS,
     BINDING_COLUMNS,
@@ -31,6 +34,68 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
+
+LINEAGE_BODY_UNAVAILABLE_CODE = "resource-activation-lineage-unavailable"
+
+
+def activation_tables_ready(connection: sqlite3.Connection) -> bool:
+    """activation catalog 是否已 bootstrap；未建立时该库没有 activation 事实。"""
+
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'resource_activation_assembly_bindings'"
+        ).fetchone()
+        is not None
+    )
+
+
+def read_activation_refs_for_turns(
+    connection: sqlite3.Connection,
+    *,
+    session_id: str,
+    turn_ids: tuple[str, ...],
+) -> tuple[dict[str, object], ...]:
+    """在同一事务内读取指定 Turn 的 sealed activation 引用摘要。
+
+    rewind/compaction 边界用它把「旧 assembly 的精确 activation identity」写进
+    control payload；这里只读已提交事实，不解析当前 URI、不访问 Registry。schema
+    未 bootstrap 时返回空，表示该库没有 activation 事实可保留。
+    """
+
+    if not turn_ids or not activation_tables_ready(connection):
+        return ()
+    placeholders = ",".join("?" for _ in turn_ids)
+    rows = connection.execute(
+        "SELECT b.assembly_id, a.turn_id, b.activation_snapshot_id, "
+        "b.plan_hash, b.request_hash, b.bindings_hash, "
+        "b.activation_provenance_hash "
+        "FROM resource_activation_assembly_bindings b "
+        "JOIN context_assemblies a ON a.assembly_id = b.assembly_id "
+        "AND a.session_id = b.session_id "
+        f"WHERE b.session_id = ? AND a.turn_id IN ({placeholders}) "
+        "AND a.status IN ('sealed','terminal') "
+        "ORDER BY a.turn_id, b.assembly_id",
+        (session_id, *turn_ids),
+    ).fetchall()
+    return tuple(
+        {
+            "assembly_id": strict_text(row[0], field="activation_ref.assembly_id"),
+            "turn_id": strict_text(row[1], field="activation_ref.turn_id"),
+            "activation_snapshot_id": strict_text(
+                row[2], field="activation_ref.activation_snapshot_id"
+            ),
+            "plan_hash": strict_text(row[3], field="activation_ref.plan_hash"),
+            "request_hash": strict_text(row[4], field="activation_ref.request_hash"),
+            "bindings_hash": strict_text(
+                row[5], field="activation_ref.bindings_hash"
+            ),
+            "activation_provenance_hash": strict_text(
+                row[6], field="activation_ref.activation_provenance_hash"
+            ),
+        }
+        for row in rows
+    )
 
 
 class ResourceActivationReadMixin:
@@ -68,10 +133,36 @@ class ResourceActivationReadMixin:
     ) -> Mapping[str, object]:
         """读取 assembly 绑定的 activation identity/hash 与 snapshot。"""
 
+        binding = self.find_assembly_binding(
+            session_id, assembly_id=assembly_id, checkpoint_ns=checkpoint_ns
+        )
+        if binding is None:
+            raise KeyError(
+                "resource-activation-unavailable: assembly 未绑定 activation "
+                f"snapshot: {assembly_id}"
+            )
+        return binding
+
+    def find_assembly_binding(
+        self,
+        session_id: str,
+        *,
+        assembly_id: str,
+        checkpoint_ns: str = "",
+    ) -> Mapping[str, object] | None:
+        """只读查找 assembly activation 绑定；无 activation 事实时返回 None。
+
+        schema 未 bootstrap 表示该库根本没有 activation 事实（接入前的 seal），
+        返回 None 而不报错；一旦 schema 存在但 hash 冲突、snapshot 缺失或正文被
+        retention 清理，仍显式失败，绝不静默返回替代 snapshot。
+        """
+
         with self._storage._connect(
             session_id, checkpoint_ns, read_only=True
         ) as connection:
             self._storage._require_v2_runtime(connection)
+            if not activation_tables_ready(connection):
+                return None
             self.require_schema(connection)
             row = connection.execute(
                 f"SELECT {','.join(ASSEMBLY_BINDING_COLUMNS)} "
@@ -80,10 +171,7 @@ class ResourceActivationReadMixin:
                 (assembly_id, session_id),
             ).fetchone()
             if row is None:
-                raise KeyError(
-                    "resource-activation-unavailable: assembly 未绑定 activation "
-                    f"snapshot: {assembly_id}"
-                )
+                return None
             record = dict(zip(ASSEMBLY_BINDING_COLUMNS, row, strict=True))
             raw = self._read_raw_snapshot(
                 connection,
@@ -174,9 +262,17 @@ class ResourceActivationReadMixin:
             record["lineage_detail_ref"], field="lineage_detail_ref"
         )
         body_ref.require_owner(session_id)
-        manifest = self._lineage_body.read_lineage_manifest(
-            detail_ref=body_ref, checkpoint_ns=checkpoint_ns
-        )
+        try:
+            manifest = self._lineage_body.read_lineage_manifest(
+                detail_ref=body_ref, checkpoint_ns=checkpoint_ns
+            )
+        except (KeyError, DetailUnavailableError) as error:
+            # retention/权限/篡改导致正文不可用时必须显式 loss，绝不按同名新资源
+            # 或空 manifest 重建 lineage。
+            raise ResourceActivationStoreError(
+                LINEAGE_BODY_UNAVAILABLE_CODE,
+                f"受保护 activation lineage 正文不可用: {activation_snapshot_id}",
+            ) from error
         if record["lineage_manifest_digest"] != sha256_jcs(manifest):
             raise ResourceActivationStoreError(
                 "resource-activation-hash-mismatch",
@@ -296,4 +392,9 @@ class ResourceActivationReadMixin:
         )
 
 
-__all__ = ["ResourceActivationReadMixin"]
+__all__ = [
+    "LINEAGE_BODY_UNAVAILABLE_CODE",
+    "ResourceActivationReadMixin",
+    "activation_tables_ready",
+    "read_activation_refs_for_turns",
+]

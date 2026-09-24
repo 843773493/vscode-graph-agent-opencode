@@ -14,6 +14,46 @@ from app.services.infrastructure.rollout_context.assembly.detail_identity import
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
 
+def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _activation_referenced(
+    connection: sqlite3.Connection,
+    session_id: str,
+    detail_ref: str,
+) -> bool:
+    """activation catalog 引用同一受保护 detail 时也必须保护正文。
+
+    activation snapshot 的 lineage manifest 与逐资源正文以 activation
+    snapshot id（而不是 assembly id）作为 detail 的 assembly 段，因此无法被上面的
+    context_assemblies 连接命中；retention 必须独立检查这几列，否则 sealed
+    activation provenance 会被 tombstone 掉。schema 未 bootstrap 时该库没有
+    activation 事实，直接视为无引用。
+    """
+    if not _table_exists(connection, "resource_activation_snapshots"):
+        return False
+    if connection.execute(
+        "SELECT 1 FROM resource_activation_snapshots WHERE session_id = ? "
+        "AND lineage_detail_ref = ? LIMIT 1",
+        (session_id, detail_ref),
+    ).fetchone() is not None:
+        return True
+    if not _table_exists(connection, "resource_activation_bindings"):
+        return False
+    return connection.execute(
+        "SELECT 1 FROM resource_activation_bindings WHERE session_id = ? "
+        "AND (snapshot_ref = ? OR detail_ref = ?) LIMIT 1",
+        (session_id, detail_ref, detail_ref),
+    ).fetchone() is not None
+
+
 def _referenced(
     connection: sqlite3.Connection,
     session_id: str,
@@ -23,7 +63,7 @@ def _referenced(
 ) -> bool:
     # assembly 整体诊断 detail 与每个 included source detail 都受保护。
     # 即使两个 selection 索引尚待完整性审计，只要任一仍引用正文就不能删。
-    return connection.execute(
+    if connection.execute(
         "SELECT 1 FROM context_plan_details d JOIN context_assemblies a "
         "ON a.assembly_id = d.assembly_id AND a.session_id = d.session_id "
         "WHERE d.session_id = ? AND d.checkpoint_ns = ? AND d.detail_ref = ? "
@@ -34,7 +74,11 @@ def _referenced(
         "SELECT 1 FROM assembly_item_refs r WHERE r.assembly_id = a.assembly_id "
         "AND r.detail_ref = d.detail_ref)) LIMIT 1",
         (session_id, checkpoint_ns, detail_ref, assembly_id, assembly_id),
-    ).fetchone() is not None
+    ).fetchone() is not None:
+        return True
+    # sealed activation provenance/lineage 不是 context assembly 的附属 detail，
+    # 必须由 activation catalog 自己的引用列保护。
+    return _activation_referenced(connection, session_id, detail_ref)
 
 
 class DetailRetentionMixin:

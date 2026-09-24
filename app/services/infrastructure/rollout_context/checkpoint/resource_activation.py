@@ -169,6 +169,79 @@ class ResourceActivationOwnerMixin:
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
         )
 
+    def load_sealed_resource_activation(
+        self,
+        session_id: str,
+        *,
+        assembly_id: str,
+        plan_hash: str,
+        request_hash: str,
+        checkpoint_ns: str = "",
+    ) -> ResourceActivationSnapshotRef:
+        """restore/replay/rewind/compaction 的唯一只读 activation 入口。
+
+        只按已提交 assembly identity 读取 sealed binding 与 snapshot，并重算
+        hash；绝不解析 display URI、当前文件、网络 endpoint 或当前 Registry。
+        binding 缺失、owner/ordinal/hash 不符或正文被 retention 清理时必须显式
+        失败（``resource-activation-unavailable``/``...-hash-mismatch``/
+        ``...-lineage-unavailable``），不返回任何替代 snapshot。
+        """
+
+        store = self._activation_store()
+        binding = store.find_assembly_binding(
+            session_id,
+            assembly_id=assembly_id,
+            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+        )
+        if binding is None:
+            raise RuntimeError(
+                "resource-activation-unavailable: 已提交 assembly 缺少 activation "
+                f"绑定: {assembly_id}"
+            )
+        if binding["plan_hash"] != plan_hash or binding["request_hash"] != request_hash:
+            raise RuntimeError(
+                "resource-activation-hash-mismatch: sealed assembly 的 activation "
+                f"binding 与已提交 plan/request hash 不一致: {assembly_id}"
+            )
+        snapshot = binding["snapshot"]
+        if not isinstance(snapshot, ResourceActivationSnapshotRef):
+            raise TypeError(
+                "load_sealed_resource_activation 需要 domain "
+                "ResourceActivationSnapshotRef"
+            )
+        expected_owner = (session_id, binding["thread_id"])
+        if (snapshot.owner_session_id, snapshot.owner_thread_id) != expected_owner:
+            raise RuntimeError(
+                "resource-activation-snapshot-conflict: sealed activation owner "
+                f"与 assembly owner 不一致: {assembly_id}"
+            )
+        return snapshot
+
+    def read_sealed_resource_activation(
+        self,
+        session_id: str,
+        *,
+        assembly_id: str,
+        plan_hash: str,
+        request_hash: str,
+        checkpoint_ns: str = "",
+    ) -> ResourceActivationSnapshotRef | None:
+        """restore/projection 边界读取 sealed activation；未接入时返回 None。
+
+        未注入 ``ResourceActivationStore`` 时（接入前的部署/测试）保持既有行为；
+        一旦接入，sealed assembly 必须有可核对的 activation 事实，缺失即失败。
+        """
+
+        if self._resource_activation_store is None:
+            return None
+        return self.load_sealed_resource_activation(
+            session_id,
+            assembly_id=assembly_id,
+            plan_hash=plan_hash,
+            request_hash=request_hash,
+            checkpoint_ns=checkpoint_ns,
+        )
+
     def verify_resource_activation_binding(
         self,
         session_id: str,

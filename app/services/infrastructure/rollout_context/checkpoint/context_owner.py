@@ -445,6 +445,16 @@ class ContextOwnerMixin(
             raise ValueError(
                 "plan-order-integrity: projector plan 与已提交 assembly 不一致"
             )
+        # restore/history/retry/rewind/compaction 的每个投影都必须复用已封存的
+        # activation snapshot；缺失、owner/hash 不符或正文被 retention 清理时在
+        # 这里显式失败，绝不回退当前 URI、文件或 Registry。
+        self.read_sealed_resource_activation(
+            session_id,
+            assembly_id=persisted.assembly_id,
+            plan_hash=persisted.plan_hash,
+            request_hash=persisted.request_hash,
+            checkpoint_ns=checkpoint_ns,
+        )
         return persisted_plan
 
     def get_canonical_item(
