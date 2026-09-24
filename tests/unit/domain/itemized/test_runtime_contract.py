@@ -23,6 +23,7 @@ from app.domain.itemized.runtime import (
 def turn_record() -> TurnRecord:
     return TurnRecord(
         turn_id="turn-1",
+        thread_id="thread-1",
         turn_ordinal=1,
         source_branch_id="branch-1",
         root_input_item_id="root-1",
@@ -30,6 +31,39 @@ def turn_record() -> TurnRecord:
         acceptance_idempotency_key="acceptance-1",
         initial_execution_id="execution-1",
     )
+
+
+@pytest.mark.parametrize("thread_id", [None, ""])
+def test_turn_record_requires_non_empty_thread_identity(thread_id: object) -> None:
+    # Turn 的 thread 归属是 (session_id, thread_id) 定位的一半；缺失或空串
+    # 必须拒绝，不能回退到 session-only 的隐式 owner。
+    with pytest.raises(TypeError, match="thread_id"):
+        TurnRecord(
+            turn_id="turn-1",
+            turn_ordinal=1,
+            source_branch_id="branch-1",
+            root_input_item_id="root-1",
+            accepted_ingress_id="ingress-1",
+            acceptance_idempotency_key="acceptance-1",
+            initial_execution_id="execution-1",
+        )
+    with pytest.raises(ItemSchemaError, match="thread_id"):
+        TurnRecord(
+            turn_id="turn-1",
+            thread_id=thread_id,
+            turn_ordinal=1,
+            source_branch_id="branch-1",
+            root_input_item_id="root-1",
+            accepted_ingress_id="ingress-1",
+            acceptance_idempotency_key="acceptance-1",
+            initial_execution_id="execution-1",
+        )
+
+
+def test_turn_record_thread_identity_roundtrips(turn_record: TurnRecord) -> None:
+    raw = json.loads(canonical_json_bytes(asdict(turn_record)))
+    assert raw["thread_id"] == "thread-1"
+    assert TurnRecord(**raw) == turn_record
 
 
 @pytest.fixture

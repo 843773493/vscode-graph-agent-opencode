@@ -63,6 +63,7 @@ def parse_context_ref(raw: Mapping[str, object]) -> ContextRef:
         raise ItemSchemaError("ContextRef 缺少 ref_type")
     required_ref_fields = {
         "session_id",
+        "thread_id",
         "plan_id",
         "ref_type",
         "ref_id",
@@ -109,6 +110,7 @@ def parse_context_ref(raw: Mapping[str, object]) -> ContextRef:
         )
     return ContextRef(
         session_id=_required_string(raw["session_id"], "ContextRef.session_id"),
+        thread_id=_required_string(raw["thread_id"], "ContextRef.thread_id"),
         plan_id=_optional_string(raw["plan_id"], "ContextRef.plan_id"),
         ref_type=ref_type,
         ref_id=_required_string(raw["ref_id"], "ContextRef.ref_id"),

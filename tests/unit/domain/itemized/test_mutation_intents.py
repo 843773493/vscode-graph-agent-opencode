@@ -245,7 +245,7 @@ class TestTypedSourceOrdinal:
         body: dict[str, object] = {"text": "a"}
         return ContextRef.request_only_ref(
             contribution_id,
-            session_id=plan.session_id,
+            session_id=plan.session_id, thread_id="thread-1",
             plan_id=plan.plan_id,
             source_revision="rev-1",
             semantic_kind=SemanticKind.EXTENSION.value,

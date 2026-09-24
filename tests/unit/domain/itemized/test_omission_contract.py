@@ -90,7 +90,7 @@ def test_available_omitted_overlay_seals_without_resolving_contribution(
 ) -> None:
     ref = ContextRef.request_only_ref(
         "overlay-omitted",
-        session_id=omitted_snapshot.session_id,
+        session_id=omitted_snapshot.session_id, thread_id="thread-1",
         plan_id=omitted_snapshot.plan_id,
         source_revision="revision-2",
         content={"text": "omitted"},
@@ -169,7 +169,7 @@ def overlay_chain() -> tuple[ContextRequestPlan, tuple[ContextSelectionEntry, ..
         )
         ref = ContextRef.request_only_ref(
             f"ref-{role}",
-            session_id="session-chain",
+            session_id="session-chain", thread_id="thread-1",
             plan_id="plan-chain",
             source_revision=contribution.source_revision,
             content_hash_value=contribution.content_hash,

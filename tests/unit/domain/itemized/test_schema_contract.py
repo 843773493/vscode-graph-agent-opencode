@@ -249,7 +249,7 @@ def test_provenance_edge_keeps_explicit_relation_order_and_visibility(
 def test_context_ref_and_tool_set_ref_are_disjoint_selection_union(
     user_item,
 ) -> None:
-    context_ref = ContextRef.canonical_item(user_item, session_id="session-1")
+    context_ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
     tool_ref = ToolSetRef.from_tool_snapshot(
         snapshot_id="tools-1",
         session_id="session-1",
@@ -282,7 +282,7 @@ def test_context_ref_and_tool_set_ref_are_disjoint_selection_union(
     with pytest.raises(ItemSchemaError):
         ContextRef.request_only_ref(
             "request-1",
-            session_id="session-1",
+            session_id="session-1", thread_id="thread-1",
             plan_id="plan-1",
             source_revision="revision-1",
             content="body",

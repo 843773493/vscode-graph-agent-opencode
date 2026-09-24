@@ -24,7 +24,7 @@ def draft() -> ContextRequestPlan:
         body=body, source_ordinal=0,
     )
     ref = ContextRef.request_only_ref(
-        "plan-item", session_id="session", plan_id="plan", source_revision="revision-1",
+        "plan-item", session_id="session", thread_id="thread-1", plan_id="plan", source_revision="revision-1",
         content_hash_value=contribution.content_hash, content_length=contribution.content_length,
         source_ref=DetailRef("session", "source-assembly", "source-detail"),
     )

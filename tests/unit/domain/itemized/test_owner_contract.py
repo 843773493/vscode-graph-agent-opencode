@@ -43,7 +43,7 @@ def owned_omitted_snapshot(
         )
     else:
         ref = ContextRef(
-            session_id=session_id,
+            session_id=session_id, thread_id="thread-1",
             plan_id=None if kind == "canonical_history" else plan_id,
             ref_type="canonical_item"
             if kind == "canonical_history"
@@ -87,7 +87,7 @@ def owned_omitted_snapshot(
 def test_canonical_fact_can_be_selected_by_two_plans_in_its_session(
     user_item: CanonicalItemRecord,
 ) -> None:
-    ref = ContextRef.canonical_item(user_item, session_id="session-owner")
+    ref = ContextRef.canonical_item(user_item, session_id="session-owner", thread_id="thread-1")
     assert ref.plan_id is None
     fingerprints = []
     for plan_id in ("plan-owner-a", "plan-owner-b"):
@@ -103,14 +103,14 @@ def test_canonical_fact_can_be_selected_by_two_plans_in_its_session(
 def test_request_owner_is_plan_local_even_when_ref_ids_match() -> None:
     first = ContextRef.request_only_ref(
         "same-ref",
-        session_id="session-owner",
+        session_id="session-owner", thread_id="thread-1",
         plan_id="plan-owner-a",
         source_revision="r1",
         content="body",
     )
     second = ContextRef.request_only_ref(
         "same-ref",
-        session_id="session-owner",
+        session_id="session-owner", thread_id="thread-1",
         plan_id="plan-owner-b",
         source_revision="r1",
         content="body",
@@ -156,7 +156,7 @@ def test_owner_is_a_required_argument_not_a_default(
 def test_request_factory_requires_plan_argument() -> None:
     with pytest.raises(TypeError, match="plan_id"):
         ContextRef.request_only_ref(
-            "ref", session_id="session-owner", source_revision="r1", content="body"
+            "ref", session_id="session-owner", thread_id="thread-1", source_revision="r1", content="body"
         )
 
 
@@ -176,7 +176,7 @@ def test_invalid_session_owner_is_rejected(value: object, kind: str) -> None:
             )
         else:
             ContextRef(
-                session_id=value,
+                session_id=value, thread_id="thread-1",
                 plan_id="plan-owner" if kind == "request_only" else None,
                 ref_type=kind,
                 ref_id="ref",
@@ -188,7 +188,7 @@ def test_invalid_session_owner_is_rejected(value: object, kind: str) -> None:
 def test_request_ref_cannot_omit_or_coerce_plan_owner(value: object) -> None:
     with pytest.raises(ItemSchemaError, match="plan_id"):
         ContextRef(
-            session_id="session-owner",
+            session_id="session-owner", thread_id="thread-1",
             plan_id=value,
             ref_type="request_only",
             ref_id="ref",
@@ -199,7 +199,7 @@ def test_request_ref_cannot_omit_or_coerce_plan_owner(value: object) -> None:
 def test_canonical_ref_cannot_gain_plan_ownership(
     user_item: CanonicalItemRecord,
 ) -> None:
-    ref = ContextRef.canonical_item(user_item, session_id="session-owner")
+    ref = ContextRef.canonical_item(user_item, session_id="session-owner", thread_id="thread-1")
     with pytest.raises(ItemSchemaError, match="plan_id"):
         replace(ref, plan_id="not-canonical-owner")
 
@@ -299,11 +299,11 @@ def test_unselected_registry_cannot_hide_a_foreign_session(
     kind: str,
 ) -> None:
     if kind == "canonical_item":
-        ref = ContextRef.canonical_item(user_item, session_id="foreign-session")
+        ref = ContextRef.canonical_item(user_item, session_id="foreign-session", thread_id="thread-1")
     elif kind == "request_only":
         ref = ContextRef.request_only_ref(
             "foreign-ref",
-            session_id="foreign-session",
+            session_id="foreign-session", thread_id="thread-1",
             plan_id="plan-owner",
             source_revision="r1",
             content="body",
@@ -333,11 +333,11 @@ def owned_included_snapshot(
 ) -> ContextAssemblySnapshot:
     snapshot = omitted_snapshot
     if request.param == "canonical_history":
-        ref = ContextRef.canonical_item(user_item, session_id=snapshot.session_id)
+        ref = ContextRef.canonical_item(user_item, session_id=snapshot.session_id, thread_id="thread-1")
     elif request.param == "request_only":
         ref = ContextRef.request_only_ref(
             "included-owner-ref",
-            session_id=snapshot.session_id,
+            session_id=snapshot.session_id, thread_id="thread-1",
             plan_id=snapshot.plan_id,
             source_revision="r1",
             content="owner body",

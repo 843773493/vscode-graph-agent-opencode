@@ -38,7 +38,7 @@ def item_matrix() -> dict[str, object]:
 def golden_plan(hash_vectors: dict[str, object]) -> ContextRequestPlan:
     scenario = hash_vectors["scenario"]
     item = CanonicalItemRecord.from_dict(scenario["item"])
-    ref = ContextRef.canonical_item(item, session_id=scenario["session_id"])
+    ref = ContextRef.canonical_item(item, session_id=scenario["session_id"], thread_id="thread-1")
     tools = ToolSetRef.from_tool_snapshot(
         snapshot_id="tools-golden",
         session_id=scenario["session_id"],
@@ -100,7 +100,7 @@ def user_item() -> CanonicalItemRecord:
 
 @pytest.fixture
 def omitted_snapshot(user_item: CanonicalItemRecord) -> ContextAssemblySnapshot:
-    item_ref = ContextRef.canonical_item(user_item, session_id="session-1")
+    item_ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
     omitted = ContextSelectionEntry(
         assembly_id="assembly-omitted",
         plan_ordinal=0,

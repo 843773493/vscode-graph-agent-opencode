@@ -34,7 +34,7 @@ def typed_detail_plan(typed_detail_vectors) -> ContextRequestPlan:
     final = DetailRef(**scenario["detail_ref"])
     ref = ContextRef.request_only_ref(
         scenario["ref_id"],
-        session_id=scenario["session_id"],
+        session_id=scenario["session_id"], thread_id="thread-1",
         plan_id=scenario["plan_id"],
         source_revision=scenario["source_revision"],
         payload_kind="text",
@@ -196,7 +196,7 @@ def test_context_ref_constructor_rejects_final_detail_field(typed_detail_plan, f
     with pytest.raises(TypeError, match="detail_ref"):
         ContextRef.request_only_ref(
             "request",
-            session_id="session-detail",
+            session_id="session-detail", thread_id="thread-1",
             plan_id="plan-detail",
             source_revision="r1",
             source_ref="policy",

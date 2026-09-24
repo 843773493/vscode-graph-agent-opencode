@@ -204,7 +204,7 @@ def test_plan_registry_order_does_not_override_selection_order(
     source = CanonicalItemRecord.from_dict(hash_vectors["scenario"]["item"])
     second_ref = ContextRef.canonical_item(
         replace(source, item_id="item-second", item_sequence=2),
-        session_id=golden_plan.session_id,
+        session_id=golden_plan.session_id, thread_id="thread-1",
     )
     second_entry = replace(golden_plan.selection[0], ref=second_ref, plan_ordinal=2)
     selected = replace(

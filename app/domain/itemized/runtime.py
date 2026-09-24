@@ -23,6 +23,10 @@ def _non_empty_string(value: object, field_name: str) -> str:
 @dataclass(frozen=True, slots=True)
 class TurnRecord:
     turn_id: str
+    # thread_id 是 (session_id, thread_id) 定位的一半：Turn 归属的真实
+    # thread，不能由 turn_id 或 branch 反推；同一 session 下的 sibling
+    # thread 各自拥有独立 Turn 序列。
+    thread_id: str
     turn_ordinal: int
     source_branch_id: str
     root_input_item_id: str
@@ -36,6 +40,7 @@ class TurnRecord:
     def __post_init__(self) -> None:
         for name in (
             "turn_id",
+            "thread_id",
             "source_branch_id",
             "root_input_item_id",
             "accepted_ingress_id",

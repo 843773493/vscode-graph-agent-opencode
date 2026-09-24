@@ -95,7 +95,7 @@ def test_contribution_alias_is_resolved_from_explicit_source_metadata(
     )
     ref = ContextRef.request_only_ref(
         "plan-item-alias",
-        session_id="session-alias",
+        session_id="session-alias", thread_id="thread-1",
         plan_id="plan-alias",
         source_revision=contribution.source_revision,
         source_ref="workspace:policy",
@@ -127,7 +127,7 @@ def test_overlay_binding_requires_ref_role_and_epoch(
     )
     ref = ContextRef.request_only_ref(
         "overlay-1",
-        session_id="session-overlay",
+        session_id="session-overlay", thread_id="thread-1",
         plan_id="plan-overlay",
         source_revision=contribution.source_revision,
         source_ref="workspace:policy",
@@ -184,7 +184,7 @@ def test_restore_preserves_an_unavailable_ref_without_inventing_source_identity(
     ref_type: str,
 ) -> None:
     ref = ContextRef(
-        session_id=omitted_snapshot.session_id,
+        session_id=omitted_snapshot.session_id, thread_id="thread-1",
         plan_id=omitted_snapshot.plan_id if ref_type == "request_only" else None,
         ref_type=ref_type,
         ref_id="unavailable-source",
@@ -243,7 +243,7 @@ def test_contribution_kind_is_closed(
 def test_unsealed_plan_has_no_selection_or_assembly(
     user_item: CanonicalItemRecord,
 ) -> None:
-    ref = ContextRef.canonical_item(user_item, session_id="session-1")
+    ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
     plan = ContextRequestPlan(session_id="session-1", plan_id="plan-draft", refs=(ref,))
     assert plan.assembly_id is None and plan.selection == ()
     with pytest.raises(ItemSchemaError, match="unsealed"):
@@ -265,7 +265,7 @@ def test_selection_order_cannot_be_invented(
 def test_sealed_plan_freezes_selection_and_contribution_ordinals(
     user_item: CanonicalItemRecord,
 ) -> None:
-    item_ref = ContextRef.canonical_item(user_item, session_id="session-1")
+    item_ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
     body = {"text": "必须先读取配置"}
     contribution = ContextContribution(
         contribution_id="contribution-1",
@@ -278,7 +278,7 @@ def test_sealed_plan_freezes_selection_and_contribution_ordinals(
     )
     request_ref = ContextRef.request_only_ref(
         "contribution-1",
-        session_id="session-1",
+        session_id="session-1", thread_id="thread-1",
         plan_id="plan-1",
         source_revision=contribution.source_revision,
         payload_kind=PayloadKind.STRUCTURED_CONTENT,
@@ -396,7 +396,7 @@ def test_seal_rejects_included_contribution_binding_drift(
     )
     request_ref = ContextRef.request_only_ref(
         contribution.contribution_id,
-        session_id="session-bound",
+        session_id="session-bound", thread_id="thread-1",
         plan_id="plan-bound",
         source_revision=contribution.source_revision,
         payload_kind=PayloadKind.STRUCTURED_CONTENT,

@@ -14,7 +14,12 @@ from app.domain.itemized.hashing import (
     canonical_json_bytes,
 )
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import ContextRef, ToolSetRef
+from app.domain.itemized.refs import (
+    ContextRef,
+    ToolSetRef,
+    ref_identity,
+    unique_ref_identities,
+)
 from app.domain.itemized.schema import validate_selection_compatibility
 from app.domain.itemized.selection import ContextSelectionEntry
 
@@ -58,7 +63,7 @@ def omitted_entry(
     role = {"overlay_base": "base", "overlay_delta": "delta"}.get(kind, "none")
     if kind == "canonical_history":
         ref = ContextRef(
-            session_id="session-1",
+            session_id="session-1", thread_id="thread-1",
             ref_type="canonical_item",
             ref_id=user_item.item_id,
             availability="unavailable",
@@ -77,7 +82,7 @@ def omitted_entry(
         )
     else:
         ref = ContextRef(
-            session_id="session-1",
+            session_id="session-1", thread_id="thread-1",
             plan_id="plan-omitted",
             ref_type="request_only",
             ref_id="request-omitted",
@@ -138,7 +143,7 @@ def test_omission_rejects_fabricated_bindings_or_missing_loss(
 def test_included_selection_requires_full_manifest(
     user_item: CanonicalItemRecord, field: str
 ) -> None:
-    ref = ContextRef.canonical_item(user_item, session_id="session-1")
+    ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
     raw = {
         "assembly_id": "assembly",
         "plan_ordinal": 0,
@@ -161,7 +166,7 @@ def test_ref_rejects_unknown_security_tags(
 ) -> None:
     with pytest.raises(ItemSchemaError):
         replace(
-            ContextRef.canonical_item(user_item, session_id="session-1"),
+            ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1"),
             **{field: value},
         )
 
@@ -176,7 +181,7 @@ def test_context_ref_cannot_gain_an_alias_or_assembly_scope(
         ContextRef(
             **{
                 **ContextRef.canonical_item(
-                    user_item, session_id="session-1"
+                    user_item, session_id="session-1", thread_id="thread-1"
                 ).to_dict(),
                 alias: True,
             }
@@ -186,11 +191,81 @@ def test_context_ref_cannot_gain_an_alias_or_assembly_scope(
 def test_context_ref_binds_canonical_item_manifest(
     user_item: CanonicalItemRecord,
 ) -> None:
-    ref = ContextRef.canonical_item(user_item, session_id="session-1")
+    ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
     assert ref.ref_type == "canonical_item"
     assert ref.content_hash == user_item.content_hash
     assert ref.content_length == len("读取 README".encode())
     assert ref.to_dict()["content_hash"] == ref.content_hash
+
+
+@pytest.mark.parametrize("thread_id", [None, ""])
+def test_context_ref_requires_non_empty_thread_identity(
+    user_item: CanonicalItemRecord, thread_id: object
+) -> None:
+    # thread_id 是 (session_id, thread_id) 定位的一半，缺失或空串必须拒绝；
+    # 不能回退成 session-only 的隐式默认值。
+    with pytest.raises(TypeError, match="thread_id"):
+        ContextRef.canonical_item(user_item, session_id="session-1")
+    with pytest.raises(ItemSchemaError, match="thread_id"):
+        ContextRef.canonical_item(
+            user_item, session_id="session-1", thread_id=thread_id
+        )
+    with pytest.raises(ItemSchemaError, match="thread_id"):
+        ContextRef(
+            ref_type="canonical_item",
+            ref_id=user_item.item_id,
+            session_id="session-1",
+            thread_id=thread_id,
+            availability="unavailable",
+        )
+
+
+def test_ref_identity_is_thread_qualified(user_item: CanonicalItemRecord) -> None:
+    main_thread = ContextRef.canonical_item(
+        user_item, session_id="session-1", thread_id="thread-main"
+    )
+    child_thread = ContextRef.canonical_item(
+        user_item, session_id="session-1", thread_id="thread-child"
+    )
+    assert main_thread != child_thread
+    assert ref_identity(main_thread) == ("canonical_item", user_item.item_id, "thread-main")
+    assert ref_identity(child_thread) == ("canonical_item", user_item.item_id, "thread-child")
+
+
+def test_unique_ref_identities_separates_sibling_threads(
+    user_item: CanonicalItemRecord,
+) -> None:
+    # 两个仅 thread_id 不同的 ref 不是同一 identity，不得被判为重复。
+    main_thread = ContextRef.canonical_item(
+        user_item, session_id="session-1", thread_id="thread-main"
+    )
+    child_thread = ContextRef.canonical_item(
+        user_item, session_id="session-1", thread_id="thread-child"
+    )
+    assert unique_ref_identities((main_thread, child_thread)) == (
+        main_thread,
+        child_thread,
+    )
+    with pytest.raises(ItemSchemaError, match="重复 ref_type/ref_id/thread_id"):
+        unique_ref_identities((main_thread, main_thread))
+
+
+def test_context_ref_restore_requires_thread_identity(
+    user_item: CanonicalItemRecord,
+) -> None:
+    # 持久化 manifest 必须携带 thread_id；缺失时不得由 enclosing owner 补造。
+    ref = ContextRef.canonical_item(
+        user_item, session_id="session-1", thread_id="thread-main"
+    )
+    assert ref.to_dict()["thread_id"] == "thread-main"
+    forged = ref.to_dict()
+    forged["thread_id"] = ""
+    with pytest.raises(ItemSchemaError, match="thread_id"):
+        ContextRef(**forged)
+    missing = ref.to_dict()
+    missing.pop("thread_id")
+    with pytest.raises(TypeError, match="thread_id"):
+        ContextRef(**missing)
 
 
 @pytest.mark.parametrize(
@@ -213,7 +288,7 @@ def test_canonical_ref_does_not_coerce_metadata_identity(
     metadata[field_name] = value
     with pytest.raises(ItemSchemaError, match="CanonicalItemRecord.metadata"):
         ContextRef.canonical_item(
-            replace(item, metadata=metadata), session_id="session-1"
+            replace(item, metadata=metadata), session_id="session-1", thread_id="thread-1"
         )
 
 
@@ -221,7 +296,7 @@ def test_request_only_ref_rejects_empty_source_and_unknown_payload_kind() -> Non
     with pytest.raises(ItemSchemaError, match="source_ref"):
         ContextRef.request_only_ref(
             "request-invalid-source",
-            session_id="session-invalid-source",
+            session_id="session-invalid-source", thread_id="thread-1",
             plan_id="plan-invalid-source",
             source_revision="revision-1",
             content="正文",
@@ -230,7 +305,7 @@ def test_request_only_ref_rejects_empty_source_and_unknown_payload_kind() -> Non
     with pytest.raises(ItemSchemaError, match="payload_kind"):
         ContextRef.request_only_ref(
             "request-invalid-kind",
-            session_id="session-invalid-kind",
+            session_id="session-invalid-kind", thread_id="thread-1",
             plan_id="plan-invalid-kind",
             source_revision="revision-1",
             payload_kind="not-a-payload-kind",
@@ -259,7 +334,7 @@ def test_request_only_ref_requires_consistent_body_manifest() -> None:
     body = {"text": "项目约束", "source": "workspace"}
     ref = ContextRef.request_only_ref(
         "request-1",
-        session_id="session-1",
+        session_id="session-1", thread_id="thread-1",
         plan_id="plan-1",
         source_revision="workspace-rev-1",
         payload_kind=PayloadKind.STRUCTURED_CONTENT,
@@ -271,7 +346,7 @@ def test_request_only_ref_requires_consistent_body_manifest() -> None:
     with pytest.raises(ItemSchemaError, match="content_length"):
         ContextRef.request_only_ref(
             "request-1",
-            session_id="session-1",
+            session_id="session-1", thread_id="thread-1",
             plan_id="plan-1",
             source_revision="workspace-rev-1",
             payload_kind=PayloadKind.STRUCTURED_CONTENT,
@@ -315,11 +390,11 @@ def test_selection_matrix_rejects_union_mismatch_before_projection(
     ref_type: str,
     base_delta_role: str,
 ) -> None:
-    ref = ContextRef.canonical_item(user_item, session_id="session-1")
+    ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
     if ref_type == "request_only":
         ref = ContextRef.request_only_ref(
             "request-matrix",
-            session_id="session-1",
+            session_id="session-1", thread_id="thread-1",
             plan_id="plan-matrix",
             source_revision="rev-matrix",
             content="request",
@@ -353,7 +428,7 @@ def test_selection_matrix_rejects_union_mismatch_before_projection(
 def test_omitted_selection_cannot_carry_two_manifest_tokens(
     user_item: CanonicalItemRecord,
 ) -> None:
-    ref = ContextRef.canonical_item(user_item, session_id="session-1")
+    ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
     with pytest.raises(ItemSchemaError, match="不能同时携带"):
         ContextSelectionEntry(
             assembly_id="assembly-omitted-two-tokens",
@@ -388,7 +463,7 @@ def test_selection_rejects_non_contract_scalar_types(
     field_name: str,
     value: object,
 ) -> None:
-    ref = ContextRef.canonical_item(user_item, session_id="session-1")
+    ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
     entry = {
         "assembly_id": "assembly-scalar-types",
         "plan_ordinal": 0,
@@ -419,7 +494,7 @@ def test_omitted_selection_rejects_known_manifest_drift(
     field_name: str,
     value: object,
 ) -> None:
-    ref = ContextRef.canonical_item(user_item, session_id="session-1")
+    ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
     entry = {
         "assembly_id": "assembly-omitted-drift",
         "plan_ordinal": 0,

@@ -32,14 +32,20 @@ def _non_empty_string(value: object, field_name: str) -> str:
     return value
 
 
-def ref_identity(ref: object) -> tuple[str, str]:
+def ref_identity(ref: object) -> tuple[str, str, str]:
+    # context ref 的唯一 identity 是 thread-qualified 的
+    # (ref_type, ref_id, thread_id)；session 层不再足以区分两个 sibling
+    # thread 中同名 item/source。
     ref_type = getattr(ref, "ref_type", None)
     ref_id = getattr(ref, "ref_id", None)
+    thread_id = getattr(ref, "thread_id", None)
     if not isinstance(ref_type, str) or not ref_type:
         raise ItemSchemaError("context ref 缺少非空 ref_type")
     if not isinstance(ref_id, str) or not ref_id:
         raise ItemSchemaError("context ref 缺少非空 ref_id")
-    return ref_type, ref_id
+    if not isinstance(thread_id, str) or not thread_id:
+        raise ItemSchemaError("context ref 缺少非空 thread_id")
+    return ref_type, ref_id, thread_id
 
 
 def require_manifest_token(ref: object) -> str:
@@ -61,7 +67,9 @@ def unique_ref_identities(refs: object) -> tuple[object, ...]:
     result = tuple(refs)
     identities = [ref_identity(ref) for ref in result]
     if len(identities) != len(set(identities)):
-        raise ItemSchemaError("context ref registry 存在重复 ref_type/ref_id")
+        raise ItemSchemaError(
+            "context ref registry 存在重复 ref_type/ref_id/thread_id"
+        )
     return result
 
 
@@ -93,6 +101,7 @@ class ContextRef:
     ref_type: str
     ref_id: str
     session_id: str
+    thread_id: str
     plan_id: str | None
     semantic_kind: str | None
     payload_kind: str | None
@@ -123,6 +132,7 @@ class ContextRef:
         source_revision: str | None = None,
         *,
         session_id: str,
+        thread_id: str,
         plan_id: str | None = None,
         item_sequence: int | None = None,
         content_length: int | None = None,
@@ -140,6 +150,7 @@ class ContextRef:
         object.__setattr__(self, "ref_type", ref_type)
         object.__setattr__(self, "ref_id", ref_id)
         object.__setattr__(self, "session_id", session_id)
+        object.__setattr__(self, "thread_id", thread_id)
         object.__setattr__(self, "plan_id", plan_id)
         object.__setattr__(self, "semantic_kind", semantic_kind)
         object.__setattr__(self, "payload_kind", payload_kind)
@@ -164,6 +175,10 @@ class ContextRef:
         _non_empty_string(self.ref_type, "ContextRef.ref_type")
         _non_empty_string(self.ref_id, "ContextRef.ref_id")
         _non_empty_string(self.session_id, "ContextRef.session_id")
+        # thread_id 是 (session_id, thread_id) 定位的一半：同一 session 下的
+        # main/child thread 各自拥有独立的 canonical context，跨 thread 的
+        # 同名 ref 不是同一 identity。
+        _non_empty_string(self.thread_id, "ContextRef.thread_id")
         if self.ref_type not in {"canonical_item", "request_only"}:
             raise ItemSchemaError(f"未知 ContextRef.ref_type: {self.ref_type}")
         if self.ref_type == "request_only":
@@ -327,7 +342,13 @@ class ContextRef:
                 )
 
     @classmethod
-    def canonical_item(cls, item: CanonicalItemRecord, *, session_id: str) -> ContextRef:
+    def canonical_item(
+        cls,
+        item: CanonicalItemRecord,
+        *,
+        session_id: str,
+        thread_id: str,
+    ) -> ContextRef:
         if not isinstance(item, CanonicalItemRecord):
             raise TypeError("canonical ContextRef 只接受 CanonicalItemRecord")
         if "source_revision" in item.metadata:
@@ -343,6 +364,7 @@ class ContextRef:
             ref_type="canonical_item",
             ref_id=item.item_id,
             session_id=session_id,
+            thread_id=thread_id,
             semantic_kind=item.semantic_kind,
             payload_kind=item.payload_kind,
             status=item.status,
@@ -366,6 +388,7 @@ class ContextRef:
         ref_id: str,
         *,
         session_id: str,
+        thread_id: str,
         plan_id: str,
         source_revision: str,
         semantic_kind: str | None = None,
@@ -421,6 +444,7 @@ class ContextRef:
             ref_type="request_only",
             ref_id=ref_id,
             session_id=session_id,
+            thread_id=thread_id,
             plan_id=plan_id,
             source_revision=source_revision,
             semantic_kind=semantic_kind,
@@ -447,6 +471,7 @@ class ContextRef:
             "ref_type": self.ref_type,
             "ref_id": self.ref_id,
             "session_id": self.session_id,
+            "thread_id": self.thread_id,
             "plan_id": self.plan_id,
             "semantic_kind": self.semantic_kind,
             "payload_kind": self.payload_kind,
