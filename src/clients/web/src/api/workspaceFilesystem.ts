@@ -254,6 +254,32 @@ export async function revealWorkspaceFileEntry(
   ));
 }
 
+/**
+ * 文件内容响应契约校验的唯一实现。
+ *
+ * 后端 WorkspaceFileContentDTO 的 content / path 均为必填字符串；非字符串即契约
+ * 被破坏。此前只做信封校验（unwrapApiData），畸形 content（数字 / null / 缺失）
+ * 会一路透传到预览组件，在 `content.replace` 处抛英文引擎错误并让整页被错误边界
+ * 接管（真实浏览器审查实测白屏）；path 为数字时同理会落到 decodeFileTreePath 的
+ * `path.startsWith` 抛 TypeError。这里与同文件 encodeWorkspaceFileList 的数组校验
+ * 保持同一标准：不符就带上下文响亮失败，由上层既有错误展示链路接管。
+ */
+function decodeWorkspaceFileContent(
+  result: WorkspaceFileContent,
+  scope: "workspace" | "filesystem",
+): WorkspaceFileContent {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error("工作区文件内容响应必须是对象");
+  }
+  if (typeof result.content !== "string") {
+    throw new Error("工作区文件内容响应 content 必须是字符串");
+  }
+  if (typeof result.path !== "string") {
+    throw new Error("工作区文件内容响应 path 必须是字符串");
+  }
+  return { ...result, path: encodeFileTreeResultPath(result.path, scope) };
+}
+
 export async function getWorkspaceFileContent(
   port: number,
   path: string,
@@ -265,7 +291,7 @@ export async function getWorkspaceFileContent(
     `/api/v1/workspace/files/content?${query.toString()}`,
     workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
   ));
-  return { ...result, path: encodeFileTreeResultPath(result.path, location.scope) };
+  return decodeWorkspaceFileContent(result, location.scope);
 }
 
 export async function getWorkspaceRawFileBlob(
@@ -304,7 +330,7 @@ export async function updateWorkspaceFileContent(
       body: JSON.stringify(payload),
     },
   ));
-  return { ...result, path: encodeFileTreeResultPath(result.path, location.scope) };
+  return decodeWorkspaceFileContent(result, location.scope);
 }
 
 export async function getSessionFileTreeSettings(
