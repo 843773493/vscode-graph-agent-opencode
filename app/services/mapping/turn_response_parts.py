@@ -329,7 +329,7 @@ def _enrich_activity_parts(
         results_by_sequence,
     ) = _tool_payloads(records)
     result_call_ids = {
-        part.tool_call_id
+        _raw_tool_call_id(part.tool_call_id)
         for part in parts
         if part.kind == "tool_result" and part.tool_call_id is not None
     }
@@ -357,7 +357,10 @@ def _enrich_activity_parts(
                 # 只能在原始 call ID 全局唯一时回填，复用 ID 则保持为空并
                 # 继续透明暴露数据不完整，不能猜测参数归属。
                 payload = calls_by_id.get(_raw_tool_call_id(part.tool_call_id))
-            outcome_unknown = terminal_turn and part.tool_call_id not in result_call_ids
+            outcome_unknown = (
+                terminal_turn
+                and _raw_tool_call_id(part.tool_call_id) not in result_call_ids
+            )
             enriched.append(
                 part.model_copy(
                     update={

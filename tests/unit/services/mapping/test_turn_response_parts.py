@@ -252,6 +252,67 @@ def test_detail_backfills_scoped_canonical_tool_call_arguments_by_raw_id() -> No
     )
 
 
+def test_detail_matches_scoped_tool_call_to_raw_result_id() -> None:
+    records = [
+        _record(
+            10,
+            {
+                "type": "ai",
+                "data": {
+                    "content": [],
+                    "tool_calls": [
+                        {
+                            "id": "call-pwd",
+                            "name": "exec_command",
+                            "args": {"cmd": "pwd"},
+                        }
+                    ],
+                },
+            },
+        ),
+        _record(
+            11,
+            {
+                "type": "tool",
+                "data": {
+                    "tool_call_id": "call-pwd",
+                    "content": '{"output":"/workspace","exit_code":0}',
+                },
+            },
+        ),
+    ]
+    parts = response_parts_from_records(
+        records,
+        projection=_projection(
+            _activity(
+                "scoped-tool-call",
+                21,
+                "tool_call",
+                tool_call_id="model-call:tool-call:call-pwd",
+                tool_name="exec_command",
+                assistant_message_sequence=10,
+                call_index=0,
+            ),
+            _activity(
+                "raw-tool-result",
+                22,
+                "tool_result",
+                tool_call_id="call-pwd",
+                tool_name="exec_command",
+                assistant_message_sequence=10,
+                call_index=0,
+                result_message_sequence=11,
+            ),
+        ),
+        mode="detail",
+        include=frozenset({"tool_call", "tool_result"}),
+    )
+
+    assert parts[0].status == "completed"
+    assert parts[0].outcome_unknown is False
+    assert parts[1].result == '{"output":"/workspace","exit_code":0}'
+
+
 def test_detail_does_not_guess_arguments_when_raw_tool_call_id_is_ambiguous() -> None:
     records = [
         _record(
