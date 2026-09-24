@@ -91,8 +91,10 @@ class ContextPlanCompositionMixin:
         compiler_version: str = "itemized-context-v1",
     ) -> ContextRequestPlan:
         """业务层唯一的 ContextRequestPlan 入口。"""
+        thread_id = self._resolve_main_thread_control(session_id)[1]
         return self._composer_for(session_id).compose(
             session_id=session_id,
+            thread_id=thread_id,
             plan_id=plan_id,
             refs=refs,
             tool_snapshot=tool_snapshot,
@@ -177,6 +179,9 @@ class ContextPlanCompositionMixin:
         持有同一个 read snapshot，同时读取 item refs 和 revision，避免 plan
         在 view 切换过程中拼出跨 snapshot 的混合上下文。
         """
+        # thread identity 只能由该 owner 经权威 catalog 解析一次，并同时供
+        # overlay ref 与 composer 使用；composer 不得自行解析 session→thread。
+        thread_id = self._resolve_main_thread_control(session_id)[1]
         with self._context_reader.open_snapshot(
             session_id,
             checkpoint_ns,
@@ -356,6 +361,7 @@ class ContextPlanCompositionMixin:
                         ContextRef.request_only_ref(
                             source_ref,
                             session_id=session_id,
+                            thread_id=thread_id,
                             plan_id=plan_id,
                             source_revision=source_revision,
                             semantic_kind=SemanticKind.RUNTIME_NOTICE.value,
@@ -499,6 +505,7 @@ class ContextPlanCompositionMixin:
             composer.ledger.reconcile_contributions(loaded_contributions)
         return composer.compose(
             session_id=session_id,
+            thread_id=thread_id,
             plan_id=plan_id,
             refs=tuple(refs),
             tool_snapshot=tool_snapshot,

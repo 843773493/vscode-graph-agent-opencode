@@ -435,6 +435,7 @@ def _ref_for(contribution: ContextContribution, plan_id: str):
     return ContextRef.request_only_ref(
         contribution.contribution_id,
         session_id="assembly-1",
+        thread_id=MAIN_THREAD_ID,
         plan_id=plan_id,
         source_revision=contribution.source_revision,
         semantic_kind=SemanticKind.EXTENSION.value,
@@ -555,6 +556,25 @@ class TestRegistryStabilityAcrossRestart:
 
 
 # ------------------------------------------------ watch/rewind/恢复 typed 消费
+
+
+class TestComposerThreadIdentity:
+    def test_request_only_refs_carry_catalog_main_thread_id(
+        self, saver: RolloutCheckpointSaver,
+    ) -> None:
+        # composer 不持有 resolver，thread identity 只能由唯一 owner 从权威
+        # catalog 解析后显式传入；request-only ref 必须携带该 main_thread_id，
+        # 不能留空或自造，否则 (session_id, thread_id) 定位与其它 ref 不一致。
+        _register(saver, MAIN_SESSION_ID, _contribution("thread-identity"))
+        expected_thread_id = saver._resolve_main_thread_control(MAIN_SESSION_ID)[1]
+        plan = saver.compose_committed_context_plan(
+            MAIN_SESSION_ID, plan_id="plan-thread",
+        )
+        request_only_refs = [
+            ref for ref in plan.refs if ref.ref_type == "request_only"
+        ]
+        assert request_only_refs
+        assert {ref.thread_id for ref in request_only_refs} == {expected_thread_id}
 
 
 class TestSealedTypedFieldConsumption:

@@ -46,6 +46,7 @@ class ContextPlanComposer:
         self,
         *,
         session_id: str,
+        thread_id: str,
         plan_id: str,
         refs: Sequence[ContextRef],
         tool_snapshot: Sequence[Mapping[str, object]] = (),
@@ -55,6 +56,11 @@ class ContextPlanComposer:
         active_view_id: str | None = None,
         selection_policy: str = "active_view",
     ) -> ContextRequestPlan:
+        # composer 不持有 storage/resolver，不能自行从 session 推断 thread；
+        # thread identity 必须由唯一 owner（Saver composition）解析后显式传入，
+        # 保证 request-only ref 的 (session_id, thread_id) 定位与其它 ref 一致。
+        if not isinstance(thread_id, str) or not thread_id:
+            raise ValueError("ContextPlanComposer.compose 缺少非空 thread_id")
         contribution_refs: list[ContextRef] = []
         for contribution in self.ledger.snapshot_contributions():
             # overlay base/delta contributions are manifest backing records for
@@ -73,6 +79,7 @@ class ContextPlanComposer:
                 ContextRef.request_only_ref(
                     contribution.contribution_id,
                     session_id=session_id,
+                    thread_id=thread_id,
                     plan_id=plan_id,
                     source_revision=contribution.source_revision,
                     semantic_kind=SemanticKind.RUNTIME_NOTICE.value
