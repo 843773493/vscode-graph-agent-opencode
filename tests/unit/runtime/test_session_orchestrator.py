@@ -24,16 +24,24 @@ def _running_dispatch(session_id: str, job_id: str) -> JobDispatchSnapshotDTO:
     )
 
 
+_UNSET = object()
+
+
 class _FakeSession:
     def __init__(
         self,
         session_id: str,
         current_agent_id: str,
         current_provider_id: str = "primary",
+        thread_id: object = _UNSET,
     ):
         self.session_id = session_id
         self.current_agent_id = current_agent_id
         self.current_provider_id = current_provider_id
+        # SessionDTO 的权威 main thread 身份。生产实现取自 catalog 冻结的
+        # main_thread_id，绝不用 session_id 冒充；替身默认给可区分的 thr_ 前缀，
+        # 使「误用 session_id」的变异能被 thread_id 断言杀掉。
+        self.thread_id = f"thr_{session_id}" if thread_id is _UNSET else thread_id
         self.created_at = datetime.now()
         self.updated_at = self.created_at
 
@@ -70,11 +78,12 @@ class _FakeMessageService:
 
 
 class _FakeSessionService:
-    def __init__(self, current_agent_id: str = "default"):
+    def __init__(self, current_agent_id: str = "default", thread_id: object = _UNSET):
         self._current_agent_id = current_agent_id
+        self._thread_id = thread_id
 
     async def get(self, session_id: str):
-        return _FakeSession(session_id, self._current_agent_id)
+        return _FakeSession(session_id, self._current_agent_id, thread_id=self._thread_id)
 
 
 @pytest.mark.asyncio
@@ -109,6 +118,10 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
     assert captured["message"] == "hello"
     assert captured["agent_id"] == "default"
     assert result.job_id == "job_test_001"
+    # 普通聊天入口的 Turn 归属必须来自 SessionDTO 的权威 main thread，
+    # 不得由 session_id 冒充。
+    assert result.thread_id == "thr_ses_test"
+    assert result.thread_id != "ses_test"
 
 
 @pytest.mark.asyncio
@@ -345,3 +358,26 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch
 
     assert captured["agent_id"] == "coder"
     assert captured["provider_id"] == "primary"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_fails_closed_when_session_lacks_main_thread():
+    """SessionDTO 缺权威 main thread 身份时必须显式失败，不得用 session_id 冒充。"""
+
+    class _FakeJobService:
+        async def run_session_preparation(self, _session_id, operation):
+            return await operation()
+
+        async def start_job(self, session_id, *_args, **_kwargs):
+            return _running_dispatch(session_id, "job_should_not_start")
+
+    orchestrator = SessionOrchestrator(
+        message_service=_FakeMessageService(),
+        session_service=_FakeSessionService("default", thread_id=None),
+        config_service=_FakeConfigService(),
+        job_service=_FakeJobService(),
+        job_event_bus=JobEventBus(),
+    )
+
+    with pytest.raises(RuntimeError, match="缺少权威 main thread 身份"):
+        await orchestrator.create_and_run("ses_target", "hello")
