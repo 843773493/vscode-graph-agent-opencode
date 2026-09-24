@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getGatewayDiagnostics } from "../../../gatewayApi";
 import type {
   GatewayDiagnostics,
@@ -42,6 +42,9 @@ export default function GatewayDiagnosticsPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  // 诊断范围可被连续切换；只有最后一次发起的响应才允许写入展示态，否则先发后到的
+  // 旧范围响应会覆盖新范围，用户看到与当前选择不符的工作区/日志。
+  const requestRevisionRef = useRef(0);
 
   const selectedGroup = useMemo(
     () =>
@@ -55,6 +58,8 @@ export default function GatewayDiagnosticsPanel({
 
   const loadDiagnostics = useCallback(
     async (logId?: string | null) => {
+      const revision = requestRevisionRef.current + 1;
+      requestRevisionRef.current = revision;
       setLoading(true);
       setError(null);
       try {
@@ -64,14 +69,16 @@ export default function GatewayDiagnosticsPanel({
           logId: logId ?? null,
           tailLines: 300,
         });
+        if (requestRevisionRef.current !== revision) return;
         setDiagnostics(next);
         setSelectedLogId(next.selected_log_id);
       } catch (loadError) {
+        if (requestRevisionRef.current !== revision) return;
         setDiagnostics(null);
         setSelectedLogId(null);
         setError(errorMessage(loadError));
       } finally {
-        setLoading(false);
+        if (requestRevisionRef.current === revision) setLoading(false);
       }
     }, [apiPort, gatewayConnectionId, workspaceId],
   );

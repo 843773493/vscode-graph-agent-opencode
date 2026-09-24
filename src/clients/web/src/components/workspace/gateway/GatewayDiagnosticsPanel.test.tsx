@@ -4,6 +4,7 @@ import type { GatewayDiagnostics, GatewayWorkspace } from "../../../types/backen
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 import { installGatewayFetch, restoreSessionHookGlobals } from "../../../hooks/session/sessionHookTestFixtures";
 import GatewayDiagnosticsPanel from "./GatewayDiagnosticsPanel";
+import type { GatewayDiagnosticLog } from "../../../types/backend";
 
 const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
@@ -33,6 +34,33 @@ const workspace: GatewayWorkspace = {
   services: {},
   checked_at: "2026-08-02T00:00:00Z",
 };
+
+function secondWorkspace(): GatewayWorkspace {
+  return { ...workspace, workspace_id: "gw_second", name: "第二个工作区" };
+}
+
+function logFor(label: string): GatewayDiagnosticLog {
+  return {
+    log_id: `log_${label}`,
+    source: "gateway",
+    workspace_id: null,
+    workspace_name: null,
+    service: "gateway",
+    label: `日志-${label}`,
+    status: "available",
+    tail: `TAIL_${label}`,
+    truncated: false,
+    line_count: 1,
+    size_bytes: 10,
+    updated_at: "2026-08-02T00:00:00Z",
+    error: null,
+  } as unknown as GatewayDiagnosticLog;
+}
+
+function diagnosticsFor(label: string): GatewayDiagnostics {
+  const base = diagnostics();
+  return { ...base, gateway_name: label, selected_log_id: `log_${label}`, logs: [logFor(label)] };
+}
 
 function diagnostics(): GatewayDiagnostics {
   return {
@@ -125,5 +153,57 @@ test("非安全上下文下复制日志仍走兼容复制，而不是直接报�
 
   expect(execCommandCalls).toBe(1);
   expect(JSON.stringify(renderer.toJSON())).not.toContain("Cannot read properties of undefined");
+  renderer.unmount();
+});
+
+test("先发后到的旧诊断响应不得覆盖切换后的新范围", async () => {
+  // 诊断范围（Gateway/工作区/日志入口）可被连续切换，每次切换都会重发请求。
+  // 慢的旧请求若在快的旧请求之后返回，必须被丢弃，否则展示态会回退到用户
+  // 已经不看的那个范围，出现「选了 B 却显示 A 的日志」。
+  const pending: Array<{ label: string; resolve: () => void }> = [];
+  const labels = ["first", "second"];
+  let callIndex = 0;
+  installGatewayFetch(({ path }) => {
+    if (path !== "/api/gateway/diagnostics") return undefined;
+    const label = labels[callIndex] ?? `extra${callIndex}`;
+    callIndex += 1;
+    return new Promise<Response>((resolve) => {
+      pending.push({
+        label,
+        resolve: () =>
+          resolve(
+            Response.json({ data: diagnosticsFor(label), request_id: `req_${label}` }),
+          ),
+      });
+    });
+  }, { token: "race-token" });
+
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(
+      <GatewayDiagnosticsPanel apiPort={8023} workspaces={[workspace, secondWorkspace()]} />,
+    );
+  });
+  await flush();
+
+  // 第一次请求仍在途时切换工作区，触发第二次请求。
+  const workspaceSelect = renderer.root.findAllByType("select")[1];
+  act(() => workspaceSelect.props.onChange({ target: { value: "gw_second" } }));
+  await flush();
+  expect(pending.length).toBe(2);
+
+  // 新范围先返回，旧范围后返回。
+  await act(async () => {
+    pending[1].resolve();
+    await Promise.resolve();
+  });
+  await act(async () => {
+    pending[0].resolve();
+    await Promise.resolve();
+  });
+
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain("TAIL_second");
+  expect(text).not.toContain("TAIL_first");
   renderer.unmount();
 });
