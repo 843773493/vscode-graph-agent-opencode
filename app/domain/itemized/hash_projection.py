@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.refs import ContextRef, selection_ref_identity
 
 if TYPE_CHECKING:
     from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
@@ -20,12 +20,12 @@ def hash_scope_for_plan(
     """按 plan 状态返回哈希范围内的 refs、工具 refs 和 contributions。"""
     if plan.plan_state == "sealed":
         selected_keys = {
-            (entry.ref.ref_type, entry.ref.ref_id) for entry in plan.selection
+            selection_ref_identity(entry.ref) for entry in plan.selection
         }
         refs_for_hash = tuple(
             ref
             for ref in plan.refs
-            if (ref.ref_type, ref.ref_id) in selected_keys
+            if selection_ref_identity(ref) in selected_keys
         )
         tool_set_refs_for_hash = tuple(
             ref

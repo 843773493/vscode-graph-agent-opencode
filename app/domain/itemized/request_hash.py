@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.domain.itemized.hash_projection import hash_scope_for_plan
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.refs import selection_ref_identity
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.serialization import (
     _contribution_order_key,
@@ -122,7 +123,7 @@ def context_request_hash(
                 }
                 for ref in sorted(
                     refs_for_hash,
-                    key=lambda value: (value.ref_type, value.ref_id),
+                    key=selection_ref_identity,
                 )
             ],
             "contributions": [

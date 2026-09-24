@@ -12,7 +12,11 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     _ensure_json_value,
 )
-from app.domain.itemized.refs import ContextRef, ToolSetRef
+from app.domain.itemized.refs import (
+    ContextRef,
+    ToolSetRef,
+    selection_ref_identity,
+)
 from app.domain.itemized.request_hash import context_request_hash
 from app.domain.itemized.request_plan import (
     ContextContribution,
@@ -183,7 +187,7 @@ class ContextAssemblySnapshot:
         ordinals = [entry.plan_ordinal for entry in self.selection]
         if ordinals != list(range(len(ordinals))):
             raise ItemSchemaError("assembly selection.plan_ordinal 必须连续")
-        ref_registry = {(ref.ref_type, ref.ref_id): ref for ref in self.refs}
+        ref_registry = {selection_ref_identity(ref): ref for ref in self.refs}
         tool_registry = {ref.ref_id: ref for ref in self.tool_set_refs}
         contribution_registry = {
             item.contribution_id: item for item in self.contributions
@@ -204,7 +208,7 @@ class ContextAssemblySnapshot:
                 if (entry.included or registered_tool is not None) and registered_tool != entry.ref:
                     raise ItemSchemaError("selection ToolSetRef manifest 不一致")
                 continue
-            if ref_registry.get((entry.ref.ref_type, entry.ref.ref_id)) != entry.ref:
+            if ref_registry.get(selection_ref_identity(entry.ref)) != entry.ref:
                 raise ItemSchemaError("selection ContextRef manifest 不一致")
             resolved_contribution = resolve_contribution_for_ref(
                 entry.ref,

@@ -60,6 +60,7 @@ from app.domain.itemized.refs import (
     ToolSetRef,
     ref_identity,
     require_manifest_token,
+    selection_ref_identity,
     unique_ref_identities,
 )
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
@@ -157,6 +158,7 @@ __all__ = [
     "ordered_selection",
     "ref_identity",
     "require_manifest_token",
+    "selection_ref_identity",
     "resolve_source_wire_role",
     "seal_assembly",
     "sha256_jcs",

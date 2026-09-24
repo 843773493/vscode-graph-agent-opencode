@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.redaction import validate_hash_redaction
+from app.domain.itemized.refs import selection_ref_identity
 
 # 凭据字段必须先由 producer 显式脱敏；token 数量、工具 schema 等不是凭据。
 _CREDENTIAL_KEYS = frozenset({
@@ -112,16 +113,11 @@ def ordered_selection(entries: Sequence[object]) -> tuple[object, ...]:
         for ordinal in ordinals
     ) or ordinals != list(range(len(values))):
         raise ItemSchemaError("selection.plan_ordinal 必须从 0 连续递增")
-    identities: list[tuple[str, str]] = []
-    for value in values:
-        ref = getattr(value, "ref", None)
-        ref_type = getattr(ref, "ref_type", None)
-        ref_id = getattr(ref, "ref_id", None)
-        if not isinstance(ref_type, str) or not ref_type:
-            raise ItemSchemaError("selection ref 缺少非空 ref_type")
-        if not isinstance(ref_id, str) or not ref_id:
-            raise ItemSchemaError("selection ref 缺少非空 ref_id")
-        identities.append((ref_type, ref_id))
+    # identity 口径统一由 selection_ref_identity 提供：ContextRef 使用
+    # thread-qualified (ref_type, ref_id, thread_id)，不得在这里退回二元组。
+    identities = [
+        selection_ref_identity(getattr(value, "ref", None)) for value in values
+    ]
     if len(identities) != len(set(identities)):
         raise ItemSchemaError("selection 不得重复引用同一个 ref")
     return values

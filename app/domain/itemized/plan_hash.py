@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash_projection import hash_scope_for_plan
 from app.domain.itemized.hashing import sha256_jcs
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.serialization import _hash_safe_value
 
 if TYPE_CHECKING:
@@ -44,7 +44,7 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
                     "overlay_diff_hash": ref.overlay_diff_hash,
                 }
         for ref in sorted(
-            refs_for_hash, key=lambda value: (value.ref_type, value.ref_id)
+            refs_for_hash, key=selection_ref_identity
         )
     ]
     selection = [

@@ -73,6 +73,26 @@ def unique_ref_identities(refs: object) -> tuple[object, ...]:
     return result
 
 
+def selection_ref_identity(ref: object) -> tuple[str, ...]:
+    """selection/registry 中一个 ref 的唯一 identity 键。
+
+    ContextRef 必须使用 thread-qualified (ref_type, ref_id, thread_id)，
+    与注册表校验 unique_ref_identities 保持同一口径，禁止在去重、查找、
+    排序或哈希范围选择时退回只看 (ref_type, ref_id)；否则同一 Session 下
+    两个 sibling thread 的同名 ref 会被误判为重复或互相覆盖。
+
+    ToolSetRef 尚未携带 thread_id（其 registry scope 由 plan 内
+    tool_set_snapshot_id 表达），因此这里的键只保留 plan/assembly 内唯一的
+    ref_id；不得用 session_id 冒充 thread，也不得据此声称已 thread 化。
+    """
+    if getattr(ref, "ref_type", None) == "tool_set":
+        return (
+            "tool_set",
+            _non_empty_string(getattr(ref, "ref_id", None), "ToolSetRef.ref_id"),
+        )
+    return ref_identity(ref)
+
+
 def _tool_identity(value: Mapping[str, object]) -> str:
     """返回工具 manifest 的显式稳定 identity。"""
     for field_name in ("tool_id", "id"):

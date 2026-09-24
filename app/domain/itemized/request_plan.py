@@ -18,7 +18,12 @@ from app.domain.itemized.hashing import (
     validate_hash_token,
 )
 from app.domain.itemized.plan_hash import context_plan_hash
-from app.domain.itemized.refs import ContextRef, ToolSetRef, unique_ref_identities
+from app.domain.itemized.refs import (
+    ContextRef,
+    ToolSetRef,
+    selection_ref_identity,
+    unique_ref_identities,
+)
 from app.domain.itemized.root_compilation import RootPlacement
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serialization import (
@@ -314,7 +319,9 @@ class ContextRequestPlan:
             if ref.ref_type == "request_only" and ref.plan_id != self.plan_id:
                 raise ItemSchemaError("source-mismatch: ContextRef 不属于当前 plan")
         unique_ref_identities(self.refs)
-        ref_ids = {(ref.ref_type, ref.ref_id) for ref in self.refs}
+        # registry 查找统一按 thread-qualified identity，禁止退回
+        # (ref_type, ref_id) 二元组，否则 sibling thread 的同名 ref 会互相覆盖。
+        ref_ids = {selection_ref_identity(ref) for ref in self.refs}
         for contribution in self.contributions:
             if not isinstance(contribution, ContextContribution):
                 raise ItemSchemaError("ContextRequestPlan.contributions 元素非法")
@@ -380,14 +387,14 @@ class ContextRequestPlan:
         ordered_selection(self.selection)
         if any(entry.assembly_id != self.assembly_id for entry in self.selection):
             raise ItemSchemaError("selection entry 必须绑定当前 plan assembly")
-        selected_keys: set[tuple[str, str]] = set()
+        selected_keys: set[tuple[str, ...]] = set()
         for entry in self.selection:
             if not isinstance(entry, ContextSelectionEntry):
                 raise ItemSchemaError("ContextRequestPlan.selection 元素非法")
             ref = entry.ref
             if ref.session_id != self.session_id:
                 raise ItemSchemaError("source-mismatch: selection ref 不属于当前 session")
-            identity = (ref.ref_type, ref.ref_id)
+            identity = selection_ref_identity(ref)
             if identity in selected_keys:
                 raise ItemSchemaError(f"selection 重复 ref: {identity}")
             selected_keys.add(identity)
@@ -419,7 +426,7 @@ class ContextRequestPlan:
                 (
                     candidate
                     for candidate in self.refs
-                    if (candidate.ref_type, candidate.ref_id) == identity
+                    if selection_ref_identity(candidate) == identity
                 ),
                 None,
             )
