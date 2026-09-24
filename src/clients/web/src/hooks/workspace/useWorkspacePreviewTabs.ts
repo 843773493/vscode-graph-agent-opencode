@@ -180,9 +180,14 @@ export function useWorkspacePreviewTabs({
         onStatusChange(`恢复文件选择失败: ${message}`);
       })
       .finally(() => {
-        if (!cancelled && fileOpenIntentRef.current === intent) {
+        if (cancelled) {
+          return;
+        }
+        // persistenceReady 是恢复流程的单向闸门，不是某个页签的归属：即使恢复的
+        // 读取已被用户的点击顶替，也必须放行，否则布局落库会被永久禁用。
+        setPersistenceReady(true);
+        if (fileOpenIntentRef.current === intent) {
           setLoadingPath(null);
-          setPersistenceReady(true);
         }
       });
 

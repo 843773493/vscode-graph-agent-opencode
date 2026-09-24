@@ -78,6 +78,14 @@ async function flush(): Promise<void> {
 async function mountPreviewTabs(): Promise<{
   current: () => ReturnType<typeof useWorkspacePreviewTabs>;
 }> {
+  return await mountPreviewTabsWith(() => undefined);
+}
+
+async function mountPreviewTabsWith(
+  onPersistLayout: (layout: WebUiLayoutSettings) => void,
+): Promise<{
+  current: () => ReturnType<typeof useWorkspacePreviewTabs>;
+}> {
   installWindow();
   let current: ReturnType<typeof useWorkspacePreviewTabs> | undefined;
 
@@ -88,7 +96,7 @@ async function mountPreviewTabs(): Promise<{
       workspaceRoot: "/workspace-root",
       settingsLoaded: true,
       restoredLayout: layout(),
-      onPersistLayout: () => undefined,
+      onPersistLayout,
       onStatusChange: () => undefined,
     });
     return null;
@@ -188,5 +196,35 @@ describe("useWorkspacePreviewTabs 预览页签切换的在途归属", () => {
     requestB.resolve(fileContent("/b.txt"));
     await flush();
     expect(current().tabs.some((tab) => tab.path === "/b.txt")).toBe(false);
+  });
+
+  test("恢复读取被用户点击顶替后，布局落库闸门不得被永久关闭", async () => {
+    const persisted: WebUiLayoutSettings[] = [];
+    const requestA = deferred<WorkspaceFileContent>();
+    const getContent = spyOn(api, "getWorkspaceFileContent")
+      .mockImplementation(async (_port, path) => (
+        path === "/a.txt" ? await requestA.promise : fileContent(path)
+      ));
+    restores.push(() => getContent.mockRestore());
+
+    const { current } = await mountPreviewTabsWith((layout) => persisted.push(layout));
+    await flush();
+    // 挂载恢复的 /a.txt 尚未返回时，用户先点了 B 并等它装载完成。
+    act(() => {
+      current().selectWorkspacePreviewTab("/b.txt");
+    });
+    await flush();
+    // 顶替发生后，恢复读取才迟到返回：加载指示属于 B，但落库闸门必须已放行。
+    requestA.resolve(fileContent("/a.txt"));
+    await flush();
+
+    act(() => {
+      current().setVisible(true);
+    });
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 260));
+    });
+    expect(persisted.length).toBeGreaterThan(0);
+    expect(current().activePath).toBe("/b.txt");
   });
 });
