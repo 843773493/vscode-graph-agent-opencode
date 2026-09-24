@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import {
@@ -43,6 +43,43 @@ function state(currentSession: Session): AppState {
 }
 
 describe("发送消息状态更新", () => {
+  test("同一毫秒并发两次发送时，一次失败的回滚不得抹掉仍在途的另一条", async () => {
+    const currentSession = session();
+    const nowSpy = spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    let sendCalls = 0;
+    installGatewayFetch(({ path, method }) => {
+      if (path === "/api/v1/sessions/ses_send_regression/messages" && method === "POST") {
+        sendCalls += 1;
+        if (sendCalls === 1) {
+          return Response.json({ detail: "第一条发送被拒绝" }, { status: 502 });
+        }
+        return new Promise<Response>((resolve) => {
+          // 第二条一直挂在途，用来观察第一条失败回滚时的队列状态。
+          void resolve;
+        });
+      }
+      if (path === "/api/v1/sessions/ses_send_regression/pending-requests") {
+        // 快照重取也失败：触发本地回滚分支。
+        return Response.json({ detail: "队列不可读" }, { status: 503 });
+      }
+      return undefined;
+    }, { token: "probe-concurrent-token" });
+
+    const mounted = mountSessionRunActions({
+      currentSession,
+      state: state(currentSession),
+      cacheKey: CACHE_KEY,
+    });
+    const first = mounted.actions.sendMessage("第一条");
+    void mounted.actions.sendMessage("第二条").catch(() => undefined);
+    await first.catch(() => undefined);
+
+    // 第一条失败回滚后，第二条仍在途：它的乐观回合必须还在队列里。
+    const conversations = mounted.state().pendingConversations.get(CACHE_KEY) ?? [];
+    expect(conversations.length).toBe(1);
+    nowSpy.mockRestore();
+  });
+
   test("W9-d 发送失败后按后端队列快照校准而不是抹掉已接受的回合", async () => {
     const currentSession = session();
     let pendingCalls = 0;

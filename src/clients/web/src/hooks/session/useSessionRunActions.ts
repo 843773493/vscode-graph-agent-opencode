@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { HttpRequestError } from "../../api/http";
 import {
   compactSessionContext as apiCompactSessionContext,
@@ -56,6 +56,9 @@ export function useSessionRunActions({
   setState: SetAppState;
   refreshAgentStateSnapshot: (sessionId: string) => Promise<void>;
 }) {
+  // 乐观提交标识必须单调递增：用时间戳时同一毫秒的两次发送会拿到同一个 id，
+  // 第一条失败回滚（或成功替换）会把仍在途的第二条乐观回合一起顶掉。
+  const pendingSubmissionSeqRef = useRef(0);
   const pendingRequestActions = usePendingRequestActions({
     apiPort,
     currentSession,
@@ -147,7 +150,8 @@ export function useSessionRunActions({
         (activeSessionGatewayWorkspaceId
           ? sessionScopeKey(activeSessionGatewayWorkspaceId, activeSession.session_id)
           : activeSession.session_id);
-      const pendingSubmissionId = `pending_submission_${Date.now()}`;
+      pendingSubmissionSeqRef.current += 1;
+      const pendingSubmissionId = `pending_submission_${pendingSubmissionSeqRef.current}`;
       const submittedAt = new Date().toISOString();
       setState((prev) => {
         const next = cloneMaps(prev);
