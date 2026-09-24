@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Protocol
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import SemanticKind
@@ -26,7 +27,26 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
     DetailUnavailableError,
     detail_record_from_mapping,
 )
+from app.services.mapping.itemized.projection import build_projection_evidence
 
+
+class ActivationSealBinding(Protocol):
+    """assembly 事务内的 activation 绑定参与者（唯一 Saver 提供）。
+
+    只在既有 ``assembly_sealed`` 事务内写 activation snapshot/binding 行；
+    不读取当前资源、不做源 I/O。
+    """
+
+    def bind_assembly(
+        self,
+        connection,
+        *,
+        assembly_id: str,
+        plan_id: str,
+        plan_hash: str,
+        request_hash: str,
+        selection_manifest_hash: str,
+    ) -> None: ...
 
 def _seal_tool_pairings(
     owner,
@@ -56,6 +76,34 @@ def _seal_tool_pairings(
     return canonical_tool_pairings(items)
 
 
+def _activation_binding_callable(
+    activation_binding: ActivationSealBinding | None,
+    snapshot: ContextAssemblySnapshot,
+):
+    """把 activation 绑定参与者包装成 assembly 事务内的单次回调。
+
+    selection manifest hash 由同一 sealed plan 纯映射导出（无 I/O），必须与
+    assembly 的 plan/request hash 在同一次提交里绑定。
+    """
+
+    if activation_binding is None:
+        return None
+    sealed_plan = snapshot.as_sealed_plan()
+    evidence = build_projection_evidence(sealed_plan, projection="assembly-seal")
+
+    def _bind(connection) -> None:
+        activation_binding.bind_assembly(
+            connection,
+            assembly_id=snapshot.assembly_id,
+            plan_id=snapshot.plan_id,
+            plan_hash=snapshot.plan_hash,
+            request_hash=snapshot.request_hash,
+            selection_manifest_hash=evidence.selection_manifest_hash,
+        )
+
+    return _bind
+
+
 def seal_snapshot(
     owner,
     snapshot: ContextAssemblySnapshot,
@@ -66,9 +114,14 @@ def seal_snapshot(
     required_detail: bool,
     sensitive_detail: bool,
     checkpoint_ns: str,
+    activation_binding: ActivationSealBinding | None = None,
 ) -> int:
+
     require_key(seal_idempotency_key, field="seal_idempotency_key")
     require_key(seal_input_hash, field="seal_input_hash")
+    # 已提交 assembly 的幂等重试不重新绑定 activation：旧 assembly 若在接入前
+    # 封存，其 activation 事实必须由显式迁移 quarantine 表达，不得在重试时补造。
+    bind_activation = _activation_binding_callable(activation_binding, snapshot)
     # seal 与已提交 retry 都必须先通过唯一 preflight；冲突 fail closed，
     # 不进入字节比对或 detail 写入。
     validate_seal_dispatch_invariants(
@@ -175,6 +228,7 @@ def seal_snapshot(
             seal_input_hash=seal_input_hash,
             detail_ref=record.detail_ref if record else None,
             checkpoint_ns=checkpoint_ns,
+            activation_binding=bind_activation,
         )
     except BaseException as error:
         record_failed_seal(

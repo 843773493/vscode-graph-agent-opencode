@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
@@ -55,8 +57,15 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
         seal_input_hash: str,
         detail_ref: DetailRef | None = None,
         checkpoint_ns: str = "",
+        activation_binding: Callable[[sqlite3.Connection], None] | None = None,
     ) -> int:
-        """在 dispatch 前持久化不可变 assembly snapshot。"""
+        """在 dispatch 前持久化不可变 assembly snapshot。
+
+        ``activation_binding`` 是 activation coordinator 冻结 snapshot 的显式
+        事务参与者：它只在同一个 ``assembly_sealed`` 事务内写入 activation
+        snapshot/binding 行，不重读当前资源、不做源 I/O。为 None 时（尚未接入
+        activation 的调用方）不写 activation 行，行为与接入前一致。
+        """
         detail_key = optional_detail_ref_key(detail_ref)
         if detail_ref is not None:
             detail_ref.require_owner(snapshot.session_id, snapshot.assembly_id)
@@ -291,6 +300,11 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     seal_input_hash=seal_input_hash,
                     detail_key=detail_key,
                 )
+                if activation_binding is not None:
+                    # activation 行与 assembly 行必须原子提交：任何一侧失败都在
+                    # 同一回滚边界内，绝不留下「assembly 已 dispatch 但无
+                    # provenance」或反之的半发布状态。
+                    activation_binding(connection)
                 self._validate_context_assembly_manifest(
                     connection, snapshot, header_detail_ref=detail_key,
                     checkpoint_ns=checkpoint_ns,

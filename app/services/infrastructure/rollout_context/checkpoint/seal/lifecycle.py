@@ -30,13 +30,27 @@ def seal_registered_plan(
     assembly_options: Mapping[str, object],
     request_only_content: Mapping[str, object] | None,
     request_input_hash: str | None,
+    activation_snapshot=None,
 ) -> ContextAssemblySnapshot:
     require_key(seal_idempotency_key, field="seal_idempotency_key")
     with owner._lock:
         registered = require_registered_draft(owner, session_id, plan, checkpoint_ns)
         draft = runtime_draft(registered)
+        # activation binding identity 进入 seal input preimage：重试必须复用同一
+        # 冻结 snapshot，不得在同一 seal key 下换成另一个 activation 结果。
+        activation_bindings_hash = (
+            None
+            if activation_snapshot is None
+            else f"{activation_snapshot.activation_snapshot_id}|"
+            f"{activation_snapshot.bindings_hash}|"
+            f"{activation_snapshot.activation_provenance_hash}"
+        )
         input_hash = seal_input_hash(
-            draft, checkpoint_ns, assembly_options, request_input_hash
+            draft,
+            checkpoint_ns,
+            assembly_options,
+            request_input_hash,
+            activation_bindings_hash,
         )
         retry = committed_retry(
             owner,
@@ -48,7 +62,23 @@ def seal_registered_plan(
             request_only_content=request_only_content,
         )
         if retry is not None:
+            # 重试不得重新绑定 activation；已提交 assembly 的 activation 事实
+            # 必须与本冻结 snapshot 一致，否则显式拒绝而非覆盖。
+            if activation_snapshot is not None:
+                owner.verify_resource_activation_binding(
+                    session_id,
+                    assembly_id=retry.assembly_id,
+                    activation_snapshot=activation_snapshot,
+                    checkpoint_ns=checkpoint_ns,
+                )
             return retry
+        # activation 正文必须在 assemble 之前准备：正文写入失败不能留下已完成
+        # assemble 的中间状态；绑定闭包只在 assembly_sealed 事务内使用。
+        activation_binding = None
+        if activation_snapshot is not None:
+            _, activation_binding = owner.prepare_resource_activation_binding(
+                activation_snapshot, checkpoint_ns=checkpoint_ns
+            )
         assembly_id = f"assembly-{uuid4().hex}"
         records = ()
         try:
@@ -86,6 +116,7 @@ def seal_registered_plan(
                 seal_idempotency_key=seal_idempotency_key,
                 seal_input_hash=input_hash,
                 checkpoint_ns=checkpoint_ns,
+                activation_binding=activation_binding,
             )
         except BaseException:
             release_uncommitted_details(owner, session_id, checkpoint_ns, records)

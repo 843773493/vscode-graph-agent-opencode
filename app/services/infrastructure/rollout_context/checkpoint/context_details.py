@@ -8,6 +8,9 @@ from datetime import datetime
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.detail_ref import DetailRef
 from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.resource_activation import (
+    ResourceActivationSnapshotRef,
+)
 from app.services.infrastructure.rollout_context.checkpoint.seal.assembly import (
     seal_snapshot,
 )
@@ -38,8 +41,14 @@ class ContextDetailOwnerMixin:
         request_only_content: Mapping[str, object] | None = None,
         omitted_ref_ids: Iterable[str] = (),
         checkpoint_ns: str = "",
+        activation_snapshot: ResourceActivationSnapshotRef | None = None,
     ) -> ContextAssemblySnapshot:
-        """只封存显式注册的 draft；重复请求在分配 detail 之前校验并返回。"""
+        """只封存显式注册的 draft；重复请求在分配 detail 之前校验并返回。
+
+        ``activation_snapshot`` 是 activation coordinator 冻结的内存 snapshot；
+        它必须与 assembly 在同一次 ``assembly_sealed`` 提交原子绑定。为 None 时
+        不写 activation 行（尚未接入 activation 的调用方）。
+        """
         self._require_context_plan_owner(session_id, plan)
         return seal_registered_plan(
             self,
@@ -58,6 +67,7 @@ class ContextDetailOwnerMixin:
             },
             request_only_content=request_only_content,
             request_input_hash=request_input_hash,
+            activation_snapshot=activation_snapshot,
         )
 
     def seal_context_assembly(
@@ -70,6 +80,7 @@ class ContextDetailOwnerMixin:
         required_detail: bool = False,
         sensitive_detail: bool = False,
         checkpoint_ns: str = "",
+        activation_binding=None,
     ) -> int:
         """在 provider dispatch 前完成 snapshot 与可选详情的 sealed 提交。"""
         return seal_snapshot(
@@ -81,6 +92,7 @@ class ContextDetailOwnerMixin:
             required_detail=required_detail,
             sensitive_detail=sensitive_detail,
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            activation_binding=activation_binding,
         )
 
     def read_context_plan_detail(

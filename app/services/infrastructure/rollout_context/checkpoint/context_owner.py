@@ -28,6 +28,9 @@ from app.services.infrastructure.rollout_context.checkpoint.context_dispatch imp
 from app.services.infrastructure.rollout_context.checkpoint.context_projection import (
     ContextProjectionOwnerMixin,
 )
+from app.services.infrastructure.rollout_context.checkpoint.resource_activation import (
+    ResourceActivationOwnerMixin,
+)
 from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     require_key,
     runtime_draft,
@@ -48,6 +51,7 @@ class ContextOwnerMixin(
     ContextDetailOwnerMixin,
     ContextPlanCompositionMixin,
     ContextProjectionOwnerMixin,
+    ResourceActivationOwnerMixin,
 ):
     def seal_context_for_dispatch(
         self,

@@ -35,21 +35,25 @@ def seal_input_hash(
     checkpoint_ns: str,
     assembly_options: Mapping[str, object],
     request_input_hash: str | None,
+    activation_bindings_hash: str | None = None,
 ) -> str:
-    return sha256_jcs(
-        {
-            "schema": "saver-context-seal-input:v1",
-            "session_id": draft.session_id,
-            "checkpoint_ns": checkpoint_ns,
-            "draft_manifest": draft_manifest(draft),
-            "assembly_options": {
-                **assembly_options,
-                "omitted_ref_ids": sorted(assembly_options["omitted_ref_ids"]),
-                "loss": list(assembly_options["loss"]),
-            },
-            "request_input_hash": request_input_hash,
-        }
-    )
+    preimage = {
+        "schema": "saver-context-seal-input:v1",
+        "session_id": draft.session_id,
+        "checkpoint_ns": checkpoint_ns,
+        "draft_manifest": draft_manifest(draft),
+        "assembly_options": {
+            **assembly_options,
+            "omitted_ref_ids": sorted(assembly_options["omitted_ref_ids"]),
+            "loss": list(assembly_options["loss"]),
+        },
+        "request_input_hash": request_input_hash,
+    }
+    # 未接入 activation 的调用方保持 preimage 逐字节不变（升级前已提交 seal
+    # 的 input hash 仍需可幂等复用）；只有携带 activation binding 时才扩键。
+    if activation_bindings_hash is not None:
+        preimage["activation_bindings_hash"] = activation_bindings_hash
+    return sha256_jcs(preimage)
 
 
 def require_registered_draft(
