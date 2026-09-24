@@ -28,6 +28,7 @@ import {
   persistCatalogOutboxPendingOperations,
   type CatalogOutboxPersistencePort,
 } from "../../state/session/sessionCatalogOutboxStore";
+import { errorMessage } from "../../utils/errorMessage";
 
 /**
  * 会话目录 outbox 的编排驱动（OpenSpec 8.1-H）。
@@ -274,7 +275,7 @@ export function createSessionCatalogOutboxDriver(
         publish(rollback.outbox, true);
         throw new Error(
           "会话目录 pending 变更未能本地持久化，已撤销该操作及依赖: "
-          + (error instanceof Error ? error.message : String(error)),
+          + errorMessage(error),
         );
       }
       publish(markCatalogOutboxOperationPersisted(requireOutbox(), clientOperationId), false);
