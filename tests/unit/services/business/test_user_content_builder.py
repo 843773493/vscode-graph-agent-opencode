@@ -90,19 +90,29 @@ def test_user_content_builder_rejects_unpersisted_inline_image():
         )
 
 
-def test_user_content_builder_converts_workspace_video_attachment_to_frames(monkeypatch):
+def test_user_content_builder_converts_workspace_video_attachment_to_frames(
+    tmp_path, monkeypatch
+):
     """视频附件应被转换成按时间顺序排列的 image_url 关键帧块。"""
     if shutil.which("ffmpeg") is None:
         pytest.skip("需要 ffmpeg 才能验证视频抽帧")
 
-    workspace_root = (
+    # 真实 mp4 是只读模板资源，必须复制到隔离工作区再使用；直接把
+    # WORKSPACE_ROOT 指向 fixture 源目录会让产品路径在只读模板上初始化
+    # .boxteam/navigation 的 SQLite 并改写受版本控制的文件。
+    video_source = (
         Path.cwd()
         / "tests"
         / "fixtures"
         / "workspaces"
         / "default_test_workspace"
+        / "assets"
+        / "multimodal-test.mp4"
     )
-    monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    shutil.copy2(video_source, assets / "multimodal-test.mp4")
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
 
     content = _build_user_content(
         "请描述视频",
