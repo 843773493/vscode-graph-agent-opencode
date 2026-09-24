@@ -119,8 +119,8 @@
 4. 同一会话的 manifest、检查点、LLM 请求日志、Trace、后台任务、上下文历史、变更和工具结果必须统一聚合在 `${workspace_abs_path}/.boxteam/sessions/` 物理目录树中的同一个会话节点目录；保留的 `children/` 目录只承载物理子会话树，不属于父会话自身的附属数据。
 5. `.boxteam/sessions/{session_id}/` 只描述根级会话的物理形态，不是允许业务代码拼接的固定定位方式；会话可以位于文件夹或父会话 `children/` 边界下，必须通过稳定 ID 和统一路径解析器取得绝对路径。
 6. 会话与会话文件夹的物理目录名必须分别严格等于 `session_id` 与 `folder_id`，显示名只存入权威目录索引，不得参与路径命名。
-7. `${workspace_abs_path}/.boxteam/navigation/session-catalog-index.json` 是会话位置和父子组织的唯一权威来源；物理树是受索引约束的存储结果。软件操作必须同步更新索引和物理目录；检测到绕过软件修改目录结构时必须明确报错，不得扫描磁盘并静默吸收改动。
-8. `parent_session_id` 必须与权威索引中最近的祖先会话一致；不得再维护第二套父子关系或把索引降级为可重建缓存。
+7. `${workspace_abs_path}/.boxteam/navigation/session-catalog.sqlite` 是会话位置和父子组织的唯一权威来源；物理树（`sessions/YYYY/MM/DD/{session_id}`）是受权威 SQLite catalog 约束的存储结果，folder 是 SQLite-only 节点、无物理目录。软件操作必须同步更新 catalog 与物理目录；检测到绕过软件修改目录结构时必须明确报错，不得扫描磁盘并静默吸收改动。旧 JSON 索引只作显式一次性迁移输入，生产读写链路不双读、不扫盘重建。
+8. `parent_session_id` 必须与权威 SQLite catalog 中最近的祖先会话一致；不得再维护第二套父子关系或把 catalog 降级为可重建缓存。
 
 ### 架构原则
 
@@ -190,6 +190,8 @@
 ### 协作方式
 
 1. 本项目在整个过程中由 vibe 编码辅助生成。代理的上下文和智能有限，因此如果遇到任何不符合开发标准的情况，请主动告知用户。
+2. **派生 subagent 必须显式指定模型 `newapi-local/deepseek-v4.1-flash`，并显式设置 reasoning effort（该模型只接受 `low`/`high`/`xhigh`/`max` 或 1–100 整数，缺省 effort 会直接 400 失败）。** 不指定模型时会静默回退到默认的 gpt 系列；该系列在本仓库有已知问题，且已实测会在「纯结构搬迁」中夹带语义改动（例如把 `RuntimeError` 静默改成 `TypeError` 并删除原有 `noqa` 说明）。模型在 subagent 创建时固定，`followup_task` 无法更改，因此复用旧 subagent 前必须先确认其会话的 `turn_context.model`；凡未显式指定模型的既有 subagent，一律不要复用。
+3. **subagent 声称「纯搬迁 / 无行为变更」时，必须独立核验**：用删除行与新增行的规范化多重集比较（例如对 `git show <commit>` 的 `-`/`+` 代码行做逐行多重集差），逐条判定未逐字保留的行属于重命名、注释改写，还是真实语义改动；不得只凭提交信息与测试通过就接受。被删除的符号还须全仓 `rg`（含 `configs/`、`tools/`、`scripts/`）复核是否真的零引用。
 
 ### 环境配置
 
