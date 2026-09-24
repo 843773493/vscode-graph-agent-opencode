@@ -394,7 +394,7 @@ async function runGatewayRequest<T>(
   port: number,
   path: string,
   init: (GatewayResponseInit & { timeoutMs?: number }) | undefined,
-  consume: (response: Response, signal: AbortSignal) => T | Promise<T>,
+  consume: (response: Response, signal: AbortSignal | undefined) => T | Promise<T>,
 ): Promise<T> {
   const {
     timeoutMs,
@@ -462,7 +462,7 @@ async function runGatewayRequest<T>(
         path,
       );
     }
-    return await consume(response, abortState.signal!);
+    return await consume(response, abortState.signal);
   } catch (error) {
     // 超时同时可能发生在响应体消费阶段，统一按既有超时文案收口。
     if (abortState.didTimeout()) throw new Error(timeoutErrorMessage);
@@ -537,7 +537,7 @@ async function parseJsonResponseOrThrowDiagnostic<T>(
   response: Response,
   path: string,
   parseInWorkerAboveBytes: number | null,
-  signal: AbortSignal,
+  signal: AbortSignal | undefined,
 ): Promise<T> {
   try {
     return await parseJsonResponse<T>(response, parseInWorkerAboveBytes, signal);
