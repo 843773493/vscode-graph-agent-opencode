@@ -329,6 +329,6 @@ v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migrat
 - ARCHITECTURE REVIEW/PARTIAL：当前 checkout 的 `wc -l` 为 `storage/service.py=792`、`assembly/store.py=135`、`checkpoint/saver.py=768`、`checkpoint/owner.py=643`；`app/domain/itemized/plans.py` 不存在。但 `storage/` 仍有 23 个直接 `.py` 文件，`service.py` 仍聚合连接/路径、schema/offset、快照/备份恢复和事务路由，Saver/owner 仍混合 checkpoint、Turn/execution、context、history 与 projection facade。该审计不把已有模块数量当作拆分完成证据，A0-A11/7.5-F 继续未完成。
 - PASS（最新 OpenSpec）：`openspec validate add-itemized-rollout-context --type change --strict --no-interactive`，退出码 0；本轮未新增完成证据，按 1.2 的实现/恢复边界撤销不相称勾选，当前为 26/43。
 
-当前勾选计数为46/66：Section 1–7的46项保留既有完成证据，新增Section 8的13项与Section 9的7项全部未实施。旧核心E2E与strict validate只证明当时边界，不能覆盖SessionThread、federated Session协作、resource activation snapshot或扩展验收。
+当前勾选计数仍为46/66（不据部分实现勾选8.x/9.x）：Section 1–7的46项保留既有完成证据；Section 8的13项与Section 9的7项均未整体完成，但经只读审计（`out/tests/temp/openspec_8_9_gap_audit/artifacts/report.md`）确认并非“全部未实施”：Section 8已落地大量基础设施（8.1主体含权威/gate/resolver、8.1-B、8.1-C、8.5-A、8.8、8.8-A、8.3-C 已达到可验收深度），Section 9仍基本为零（仅9.1 domain冻结已落地）。旧核心E2E与strict validate只证明当时边界，不能覆盖SessionThread、federated Session协作、resource activation snapshot或扩展验收。
 
-本change当前未完成且不得归档：Section 1–7的既有实现边界已闭合，但Section 8–9仍为0/20，整体为46/66。保留工作树中其它既有dirty改动；本次规划修订未同步主spec、未归档、未提交Git。后续历史失败/PARTIAL条目仅记录当时快照，不改变当前20项未实施事实。
+本change当前未完成且不得归档：Section 1–7的既有实现边界已闭合，Section 8–9仍无一项整体完成，整体仍为46/66。上一版台账把Section 8–9记为“0/20”属失真结论，已按上述审计证据纠正；勾选状态不变，纠正的是对现有实现深度的描述。另需注意两条同源失真的文档声明：`app/core/session_catalog_migration.py` 模块docstring声称“8.2-A 调试域步骤已作为同一journal phase接入”，但该文件中debug域命中为0，属虚假声明，须随8.2-A实现一并修正或删除。保留工作树中其它既有dirty改动；本次台账修订未同步主spec、未归档；后续历史失败/PARTIAL条目仅记录当时快照。
