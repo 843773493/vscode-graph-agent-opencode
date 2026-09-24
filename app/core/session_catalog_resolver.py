@@ -39,7 +39,10 @@ from app.core.session_catalog_store import (
     validate_thread_id,
 )
 from app.core.session_control_store import SessionControlStore
-from app.core.session_subtree_delete import SessionSubtreeDeleteService
+from app.core.session_subtree_delete import (
+    SessionSubtreeDeleteService,
+    SubtreeDeleteResult,
+)
 
 __all__ = [
     "SessionCatalogFolderProjection",
@@ -140,6 +143,28 @@ class SessionCatalogPathResolver:
     def catalog_store(self) -> SessionCatalogStore:
         """权威 catalog store 只读访问（8.5 装配面；不开放写事务）。"""
         return self._store
+
+    @property
+    def workspace_id(self) -> str:
+        """返回本 resolver 绑定的 workspace_id（catalog 行归属键）。"""
+        return self._workspace_id
+
+    async def delete_subtree(
+        self,
+        *,
+        idempotency_key: str,
+        root_node_id: str,
+    ) -> SubtreeDeleteResult:
+        """以调用方给定 key 进入**共享**子树删除流（确定性恢复锚点）。
+
+        直接转发到已装配、已绑定 drain 回调的共享 ``_delete_service``：同 key
+        重入按既有 record 定点继续，不新造第二套删除实现。供 8.1-G 的导航
+        mutation worker 以 operation_id 作稳定恢复 key。
+        """
+        return await self._delete_service.delete(
+            idempotency_key=idempotency_key,
+            root_node_id=root_node_id,
+        )
 
     def bind_session_drain_callback(
         self,

@@ -41,8 +41,14 @@
 - **简化边界（如实记录）**：read guard/旧 lease/通信/附件收敛等待属
   8.1-C/8.8——当前进程内无跨进程 reader 与 waiter，drain 不实现等待段；
   跨进程 topology/lifecycle 文件锁与 shared/exclusive gate 语义归 8.1-C
-  （``NavigationTopologyGate`` 为进程内原语）；retention/
-  ForkRetentionClaim 预检属 8.1-D。
+  （``NavigationTopologyGate`` 为进程内原语）。**8.1-D**：整树 catalog
+  deleting 提交前的 pinned ``ForkRetentionClaim`` 预检已落在
+  ``SessionCatalogStore.mark_subtree_deleting`` 的单写事务内——冻结集合
+  内任一 session 存在未释放（preparing/active）claim 即在提交前抛
+  ``SourceRetainedByForkError``/``SourceRetentionOperationPendingError``、
+  整棵子树保持 active；claim 准入（要求 source active）与本预检在同一 DB
+  的 ``BEGIN IMMEDIATE`` 事务序列上竞争，不保留任何独立 journal 提交后、
+  本地 fence 前补 pin 的旧窗口。
 - **并发边界**：进程内同 key 并发由 per-key ``asyncio.Lock`` 串行收敛到
   同一结果；同 key 的 preimage 是 (workspace_id, root_node_id)，不同
   preimage 冲突；子树闭包由 gate 纪律与 mark CAS（revision 漂移即拒绝）

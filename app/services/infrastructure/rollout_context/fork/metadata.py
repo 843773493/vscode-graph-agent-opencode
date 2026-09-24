@@ -9,6 +9,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from app.core.session_catalog_store import (
+    ForkRetentionClaim,
+    SessionCatalogStore,
+)
 from app.services.infrastructure.rollout_context.fork.validation import (
     json_mapping,
     non_negative_int,
@@ -24,6 +28,69 @@ def _now() -> str:
 
 class ForkMetadataMixin:
     """fork identity mapping、lineage 和 source retention owner。"""
+
+    def _catalog_store(self) -> SessionCatalogStore | None:
+        """返回共享 workspace catalog store（pinned claim 的唯一权威载体）。
+
+        crawler 侧通过 path resolver 取得 store；resolver 缺失（低层存储单元
+        测试无 catalog 装配）时返回 None，claim 生命周期整体跳过。
+        """
+        resolver = getattr(self, "_path_resolver", None)
+        store = getattr(resolver, "catalog_store", None)
+        return store if isinstance(store, SessionCatalogStore) else None
+
+    def begin_pinned_fork_retention_claim(
+        self,
+        *,
+        claim_id: str,
+        source_session_id: str,
+        target_session_id: str,
+        source_lifecycle_generation: int,
+    ) -> ForkRetentionClaim | None:
+        """在 source capture 前建立 ``preparing`` pinned claim（8.1-D）。
+
+        准入侧与整树删除在同一 workspace catalog 的 ``BEGIN IMMEDIATE`` 事务
+        序列上竞争：source 已 deleting 时本调用零副作用失败。返回 None 表示
+        当前装配无 catalog（claim 生命周期不适用）。
+        """
+        store = self._catalog_store()
+        if store is None:
+            return None
+        return store.create_or_get_fork_retention_claim(
+            claim_id=claim_id,
+            workspace_id=self._workspace_id(),
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            source_lifecycle_generation=source_lifecycle_generation,
+        )
+
+    def activate_pinned_fork_retention_claim(
+        self,
+        claim_id: str,
+        *,
+        expected_generation: int,
+    ) -> ForkRetentionClaim | None:
+        """target ``target_committed`` 后把同一 claim CAS 为 ``active``（8.1-D）。
+
+        只激活既有 claim，不首次补写；claim 缺失即 KeyError（fail closed）。
+        """
+        store = self._catalog_store()
+        if store is None:
+            return None
+        return store.activate_fork_retention_claim(
+            claim_id, expected_generation=expected_generation
+        )
+
+    def _workspace_id(self) -> str:
+        """从共享 resolver 取得 workspace_id（claim 行归属键）。"""
+        resolver = getattr(self, "_path_resolver", None)
+        workspace_id = getattr(resolver, "workspace_id", None)
+        if not isinstance(workspace_id, str) or not workspace_id:
+            raise RuntimeError(
+                "共享 path resolver 缺少 workspace_id，无法建立 pinned "
+                "retention claim"
+            )
+        return workspace_id
 
     def list_fork_identity_mappings(
         self,
@@ -289,6 +356,14 @@ class ForkMetadataMixin:
             raise TypeError("fork retention checkpoint_ns 必须是字符串")
         if source_view_id is None and source_checkpoint_id is None:
             return
+        # 8.1-D：pinned fork 的 durable retention admit 同时写 workspace catalog
+        # claim（与整树删除竞争同一 DB 写事务序列）。create-or-get 幂等，崩溃
+        # 重入不重复建 claim；source 已 deleting 时此处零副作用失败。
+        self._admit_pinned_fork_retention_claim(
+            claim_id=fork_id,
+            source_session_id=source_session_id,
+            target_session_id=owner_session_id,
+        )
         with self._lock(source_session_id, checkpoint_ns):
             self.initialize(source_session_id, checkpoint_ns)
             with self._connect(source_session_id, checkpoint_ns) as connection:
@@ -313,10 +388,66 @@ class ForkMetadataMixin:
                 if cursor.rowcount != 1:
                     raise RuntimeError(f"fork retention 未写入: {fork_id}")
 
+    def _admit_pinned_fork_retention_claim(
+        self,
+        *,
+        claim_id: str,
+        source_session_id: str,
+        target_session_id: str,
+    ) -> None:
+        """create-or-get 并把 pinned claim 推进为 ``active``（8.1-D）。"""
+        store = self._catalog_store()
+        if store is None:
+            return
+        fence = self._source_lifecycle_generation(source_session_id)
+        store.create_or_get_fork_retention_claim(
+            claim_id=claim_id,
+            workspace_id=self._workspace_id(),
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            source_lifecycle_generation=fence,
+        )
+        store.activate_fork_retention_claim(
+            claim_id, expected_generation=fence
+        )
+
+    def _source_lifecycle_generation(self, session_id: str) -> int:
+        """读取 source session-control fence generation（claim 准入冻结值）。
+
+        控制库或 fence 缺失 → fail closed（claim 的 generation 必须来自真实
+        durable fence，绝不用虚假默认值）。
+        """
+        from app.core.session_control_store import SessionControlStore
+
+        session_dir = self.root(session_id).parent
+        control_path = session_dir / "session-control.sqlite"
+        if not control_path.is_file():
+            raise RuntimeError(
+                "source session 缺少 session-control.sqlite，无法读取 "
+                f"lifecycle generation（fail closed）: session_id={session_id}"
+            )
+        control = SessionControlStore(control_path)
+        try:
+            _state, generation = control.get_fence()
+        finally:
+            control.close()
+        return int(generation)
+
     def release_fork_retentions(self, child_session_id: str) -> None:
+        """释放 child（target）引用的全部 source retention 与 pinned claim。"""
         from app.services.infrastructure.rollout_context.storage.primitives import (
             _RolloutFileLock,
         )
+
+        # 8.1-D：pinned claim 住在 workspace catalog（nodes 同库），与 rollout
+        # 的 retention_refs 是**同一** retention 事实的两种投影：catalog 侧
+        # claim 承担删除准入 blocker，rollout retention_refs 承担 checkpoint
+        # pruning 保护。两者必须一起释放，否则删除准入会永久卡住。
+        catalog_store = self._catalog_store()
+        if catalog_store is not None:
+            catalog_store.release_fork_retention_claims_for_target(
+                child_session_id, "target session 删除"
+            )
 
         child_session_id = required_text(child_session_id, field="child_session_id")
         child_root = self.root(child_session_id)

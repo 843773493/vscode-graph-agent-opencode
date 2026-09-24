@@ -43,8 +43,6 @@ from app.services.mapping.trace_event_mapper import TraceEventMapper
 
 
 class ForkRelationshipChecker(Protocol):
-    def pinned_fork_children(self, source_thread_id: str) -> tuple[str, ...]: ...
-
     def release_fork_retentions(self, child_session_id: str) -> None: ...
 
 
@@ -694,16 +692,6 @@ class SessionService:
             session_dir = self._path_resolver.resolve_session_node(session_id)
         except KeyError as error:
             raise NotFoundError(f"Session {session_id} not found") from error
-
-        if self._fork_relationship_checker is not None:
-            pinned_children = self._fork_relationship_checker.pinned_fork_children(
-                session_id
-            )
-            if pinned_children:
-                raise RuntimeError(
-                    "会话存在 pinned fork，不能删除源会话: "
-                    f"session_id={session_id}, children={','.join(pinned_children)}"
-                )
 
         physical_children = self._path_resolver.child_nodes(session_id)
         descendant_session_ids = self._path_resolver.descendant_session_ids(session_id)

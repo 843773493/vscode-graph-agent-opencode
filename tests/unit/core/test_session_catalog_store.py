@@ -19,10 +19,15 @@ from pathlib import Path
 import pytest
 
 from app.core.session_catalog_store import (
+    CatalogBackupManifest,
+    CatalogMaintenanceRequiredError,
+    ForkRetentionClaim,
     SessionCatalogNode,
     SessionCatalogStore,
     SessionCreationRecord,
     SessionLifecycleFence,
+    SourceRetainedByForkError,
+    SourceRetentionOperationPendingError,
     SubtreeDeleteRecord,
     validate_path_budget,
     validate_session_id,
@@ -310,7 +315,7 @@ def test_store_initializes_wal_and_pragmas(store: SessionCatalogStore) -> None:
     )
     assert int(store.connection.execute("PRAGMA foreign_keys").fetchone()[0]) == 1
     assert int(store.connection.execute("PRAGMA busy_timeout").fetchone()[0]) == 5000
-    assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 2
+    assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 3
 
 
 def test_store_does_not_create_sessions_root(
@@ -346,7 +351,7 @@ def test_store_reopens_existing_database(
     second = SessionCatalogStore(database_path, sessions_root)
     try:
         assert second.get_node(folder_id).display_name == "持久文件夹"
-        assert int(second.connection.execute("PRAGMA user_version").fetchone()[0]) == 2
+        assert int(second.connection.execute("PRAGMA user_version").fetchone()[0]) == 3
     finally:
         second.close()
 
@@ -1715,7 +1720,7 @@ def test_abort_creation_record_missing_raises_keyerror(
 def test_schema_upgrade_v1_database_adds_records_table(
     tmp_path: Path, sessions_root: Path
 ) -> None:
-    """v1 库（手工建 nodes 表 + user_version=1）打开后自动升 v2。"""
+    """v1 库（手工建 nodes 表 + user_version=1）打开后自动升 v3。"""
     database_path = tmp_path / "navigation" / "session-catalog.sqlite"
     database_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(database_path)
@@ -1771,7 +1776,7 @@ def test_schema_upgrade_v1_database_adds_records_table(
     try:
         assert (
             int(store.connection.execute("PRAGMA user_version").fetchone()[0])
-            == 2
+            == 3
         )
         # 加法升级：records 表存在且可用
         record = create_record(store, key="key-upgraded")
@@ -1782,14 +1787,14 @@ def test_schema_upgrade_v1_database_adds_records_table(
         store.close()
 
 
-def test_schema_v0_fresh_creates_v2(tmp_path: Path, sessions_root: Path) -> None:
+def test_schema_v0_fresh_creates_v3(tmp_path: Path, sessions_root: Path) -> None:
     store = SessionCatalogStore(
         tmp_path / "navigation" / "session-catalog.sqlite", sessions_root
     )
     try:
         assert (
             int(store.connection.execute("PRAGMA user_version").fetchone()[0])
-            == 2
+            == 3
         )
         tables = {
             str(row[0])
@@ -1798,6 +1803,8 @@ def test_schema_v0_fresh_creates_v2(tmp_path: Path, sessions_root: Path) -> None
             ).fetchall()
         }
         assert "session_creation_records" in tables
+        assert "fork_retention_claims" in tables
+        assert "catalog_metadata" in tables
     finally:
         store.close()
 
@@ -2335,11 +2342,10 @@ def test_delete_empty_folder_missing_raises_keyerror(
 def test_schema_upgrade_v2_database_adds_subtree_table(
     tmp_path: Path, sessions_root: Path
 ) -> None:
-    """R13 v2 库（无 subtree_delete_records 表）重开后幂等补建新表。"""
+    """库缺 subtree_delete_records 表（R14 加法补表）重开后幂等补建，不动版本。"""
     database_path = tmp_path / "navigation" / "session-catalog.sqlite"
-    # 用真实 store 建立 v2 形态（nodes + session_creation_records,
-    # user_version=2），再仅删除 R14 才加法补建的 subtree_delete_records 表，
-    # 精确还原 R13 v2 缺表现场；不在此复制第二份 DDL。
+    # 用真实 store 建立当前形态，再仅删除 R14 加法补建的 subtree_delete_records
+    # 表，精确还原缺表现场；不在此复制第二份 DDL。
     first = SessionCatalogStore(database_path, sessions_root)
     folder_id = make_session_id()
     first.create_folder(folder_id, WORKSPACE_ID, None, "升级前文件夹")
@@ -2352,10 +2358,10 @@ def test_schema_upgrade_v2_database_adds_subtree_table(
         connection.close()
     store = SessionCatalogStore(database_path, sessions_root)
     try:
-        # 加法补表：user_version 不动（保持 2），新表可用
+        # 加法补表：user_version 不动（保持 3），新表可用
         assert (
             int(store.connection.execute("PRAGMA user_version").fetchone()[0])
-            == 2
+            == 3
         )
         record = create_subtree_record(store, root_node_id=folder_id)
         assert record.state == "preparing"
@@ -2582,3 +2588,518 @@ def test_same_thread_reentrant_lock_within_write_transaction(
         assert int(row[0]) >= 1
     # 事务正常提交后状态一致（重入未破坏提交语义）。
     assert store.get_node(node.node_id).node_id == node.node_id
+
+
+# ----------------------------------------------------------------------
+# 8.1-D：pinned ForkRetentionClaim 与整树删除竞争同一 CAS 事务
+# ----------------------------------------------------------------------
+
+
+def _create_claim(
+    store: SessionCatalogStore,
+    *,
+    source_session_id: str,
+    target_session_id: str,
+    claim_id: str = "fork-claim-1",
+    generation: int = 1,
+    workspace_id: str = WORKSPACE_ID,
+) -> ForkRetentionClaim:
+    return store.create_or_get_fork_retention_claim(
+        claim_id=claim_id,
+        workspace_id=workspace_id,
+        source_session_id=source_session_id,
+        target_session_id=target_session_id,
+        source_lifecycle_generation=generation,
+    )
+
+
+def test_fork_retention_claim_create_is_preparing_and_idempotent(
+    store: SessionCatalogStore,
+) -> None:
+    ids = build_delete_tree(store)
+    claim = _create_claim(
+        store, source_session_id=ids["s1"], target_session_id=ids["s2"]
+    )
+    assert claim.state == "preparing"
+    assert claim.source_session_id == ids["s1"]
+    assert claim.target_session_id == ids["s2"]
+    assert claim.source_lifecycle_generation == 1
+    assert claim.release_reason is None
+    # 同 preimage 幂等返回（崩溃恢复不重复建 claim）。
+    again = _create_claim(
+        store, source_session_id=ids["s1"], target_session_id=ids["s2"]
+    )
+    assert again == claim
+    assert store.get_fork_retention_claim("fork-claim-1") == claim
+
+
+def test_fork_retention_claim_preimage_conflict_rejected(
+    store: SessionCatalogStore,
+) -> None:
+    ids = build_delete_tree(store)
+    _create_claim(
+        store, source_session_id=ids["s1"], target_session_id=ids["s2"]
+    )
+    with pytest.raises(RuntimeError, match="preimage 冲突"):
+        _create_claim(
+            store,
+            source_session_id=ids["s1"],
+            target_session_id=ids["s3"],
+        )
+
+
+def test_fork_retention_claim_rejects_deleting_source(
+    store: SessionCatalogStore,
+) -> None:
+    """删除先行（source 已 deleting）时 claim 零副作用失败。"""
+    ids = build_delete_tree(store)
+    store.set_node_state(ids["s1"], "deleting")
+    with pytest.raises(RuntimeError, match="零副作用失败"):
+        _create_claim(
+            store, source_session_id=ids["s1"], target_session_id=ids["s2"]
+        )
+    # 零副作用：未产生任何 claim 行。
+    assert store.list_pinned_claims_for_source(ids["s1"]) == []
+
+
+def test_fork_retention_claim_activate_then_release(
+    store: SessionCatalogStore,
+) -> None:
+    ids = build_delete_tree(store)
+    _create_claim(
+        store,
+        source_session_id=ids["s1"],
+        target_session_id=ids["s2"],
+        generation=7,
+    )
+    active = store.activate_fork_retention_claim(
+        "fork-claim-1", expected_generation=7
+    )
+    assert active.state == "active"
+    # 幂等重激活。
+    assert store.activate_fork_retention_claim(
+        "fork-claim-1", expected_generation=7
+    ).state == "active"
+    released = store.release_fork_retention_claim("fork-claim-1", "target 删除")
+    assert released.state == "released"
+    assert released.release_reason == "target 删除"
+    # 已 released 不从 preparing/active 复活。
+    with pytest.raises(RuntimeError, match="状态不允许激活"):
+        store.activate_fork_retention_claim(
+            "fork-claim-1", expected_generation=7
+        )
+    # released 不再计入 blocker。
+    assert store.list_pinned_claims_for_source(ids["s1"]) == []
+
+
+def test_fork_retention_claim_activate_generation_drift_fails_closed(
+    store: SessionCatalogStore,
+) -> None:
+    ids = build_delete_tree(store)
+    _create_claim(
+        store,
+        source_session_id=ids["s1"],
+        target_session_id=ids["s2"],
+        generation=3,
+    )
+    with pytest.raises(RuntimeError, match="generation 已漂移"):
+        store.activate_fork_retention_claim(
+            "fork-claim-1", expected_generation=4
+        )
+
+
+def test_release_fork_retention_claim_missing_raises_keyerror(
+    store: SessionCatalogStore,
+) -> None:
+    with pytest.raises(KeyError):
+        store.release_fork_retention_claim("missing", "原因")
+
+
+def test_mark_subtree_deleting_reports_active_claim_blocker(
+    store: SessionCatalogStore,
+) -> None:
+    """claim 先行：删除在整树 catalog deleting 前返回具体 blocker 且全树 active。"""
+    ids = build_delete_tree(store)
+    _create_claim(
+        store, source_session_id=ids["s1"], target_session_id=ids["s2"]
+    )
+    store.activate_fork_retention_claim(
+        "fork-claim-1", expected_generation=1
+    )
+    record = create_subtree_record(store, root_node_id=ids["root"])
+    with pytest.raises(SourceRetainedByForkError) as excinfo:
+        store.mark_subtree_deleting("del-key-1")
+    # blocker 具体到 Session 与 claim。
+    assert excinfo.value.source_session_id == ids["s1"]
+    assert excinfo.value.claim_id == "fork-claim-1"
+    assert excinfo.value.target_session_id == ids["s2"]
+    # 整棵子树保持 active，record 保持 preparing。
+    for node_id in (ids["root"], ids["s1"], ids["s2"], ids["s3"]):
+        assert store.get_node(node_id).state == "active"
+    assert store.get_subtree_delete_record("del-key-1").state == "preparing"
+    assert record.frozen_node_ids
+
+
+def test_mark_subtree_deleting_reports_preparing_claim_blocker(
+    store: SessionCatalogStore,
+) -> None:
+    """preparing claim 无墙钟过期，删除须 fail closed 要求 recovery。"""
+    ids = build_delete_tree(store)
+    _create_claim(
+        store, source_session_id=ids["s2"], target_session_id=ids["s3"]
+    )
+    create_subtree_record(store, root_node_id=ids["root"])
+    with pytest.raises(SourceRetentionOperationPendingError) as excinfo:
+        store.mark_subtree_deleting("del-key-1")
+    assert excinfo.value.source_session_id == ids["s2"]
+    assert excinfo.value.claim_id == "fork-claim-1"
+    for node_id in (ids["root"], ids["s1"], ids["s2"], ids["s3"]):
+        assert store.get_node(node_id).state == "active"
+
+
+def test_mark_subtree_deleting_blocker_in_nested_child_session(
+    store: SessionCatalogStore,
+) -> None:
+    """blocker 位于不同子 Session 时同样被整树预检捕获。"""
+    ids = build_delete_tree(store)
+    # s3 是 s1→folder_b→s3 的深层后代。
+    _create_claim(
+        store, source_session_id=ids["s3"], target_session_id=ids["s2"]
+    )
+    create_subtree_record(store, root_node_id=ids["root"])
+    with pytest.raises(SourceRetentionOperationPendingError) as excinfo:
+        store.mark_subtree_deleting("del-key-1")
+    assert excinfo.value.source_session_id == ids["s3"]
+
+
+def test_mark_subtree_deleting_succeeds_without_claims(
+    store: SessionCatalogStore,
+) -> None:
+    """无 claim 时既有删除语义不变（零回归）。"""
+    ids = build_delete_tree(store)
+    create_subtree_record(store, root_node_id=ids["root"])
+    store.mark_subtree_deleting("del-key-1")
+    for node_id in (ids["root"], ids["s1"], ids["s2"], ids["s3"]):
+        assert store.get_node(node_id).state == "deleting"
+
+
+def test_claim_after_delete_committed_catalog_deleting_fails(
+    store: SessionCatalogStore,
+) -> None:
+    """删除先行：整树 deleting 提交后 fork 建 claim 零副作用失败。"""
+    ids = build_delete_tree(store)
+    create_subtree_record(store, root_node_id=ids["root"])
+    store.mark_subtree_deleting("del-key-1")
+    with pytest.raises(RuntimeError, match="非 active"):
+        _create_claim(
+            store, source_session_id=ids["s1"], target_session_id=ids["s2"]
+        )
+    assert store.list_pinned_claims_for_source(ids["s1"]) == []
+
+
+def test_released_claim_then_delete_succeeds(
+    store: SessionCatalogStore,
+) -> None:
+    """claim 释放后删除可继续（active/preparing/released 三态覆盖）。"""
+    ids = build_delete_tree(store)
+    _create_claim(
+        store, source_session_id=ids["s1"], target_session_id=ids["s2"]
+    )
+    store.activate_fork_retention_claim("fork-claim-1", expected_generation=1)
+    store.release_fork_retention_claim("fork-claim-1", "target 删除")
+    create_subtree_record(store, root_node_id=ids["root"])
+    store.mark_subtree_deleting("del-key-1")
+    assert store.get_node(ids["s1"]).state == "deleting"
+
+
+def test_claim_and_delete_share_write_transaction_generation(
+    store: SessionCatalogStore,
+) -> None:
+    """claim 与删除提交都推进 generation（同一写事务序列竞争的证据）。"""
+    ids = build_delete_tree(store)
+    before = store.current_generation()
+    _create_claim(
+        store, source_session_id=ids["s1"], target_session_id=ids["s2"]
+    )
+    assert store.current_generation() == before + 1
+
+
+def test_create_or_get_claim_in_caller_transaction_rolls_back_together(
+    store: SessionCatalogStore,
+) -> None:
+    """caller 事务内建 claim 与旁挂写入可整体回滚（原子性 seam）。"""
+    ids = build_delete_tree(store)
+    with (
+        pytest.raises(RuntimeError, match="注入失败"),
+        store.write_transaction() as connection,
+    ):
+        store.create_or_get_fork_retention_claim(
+            claim_id="fork-claim-atomic",
+            workspace_id=WORKSPACE_ID,
+            source_session_id=ids["s1"],
+            target_session_id=ids["s2"],
+            source_lifecycle_generation=1,
+            connection=connection,
+        )
+        raise RuntimeError("注入失败")
+    with pytest.raises(KeyError):
+        store.get_fork_retention_claim("fork-claim-atomic")
+
+
+# ----------------------------------------------------------------------
+# 8.1-F：SQLite online backup / generation+checksum / 维护模式 fail-closed
+# ----------------------------------------------------------------------
+
+
+def test_online_backup_records_generation_and_checksum(
+    store: SessionCatalogStore, tmp_path: Path
+) -> None:
+    create_session(store, display_name="备份会话")
+    backup_path = tmp_path / "backup" / "session-catalog.sqlite"
+    manifest = store.create_consistent_backup(backup_path)
+    assert isinstance(manifest, CatalogBackupManifest)
+    assert manifest.generation == store.current_generation()
+    assert backup_path.is_file()
+    assert manifest.checksum == hashlib.sha256(backup_path.read_bytes()).hexdigest()
+    # 备份是可打开的完整库（online backup 而非 WAL 复制）。
+    restored = SessionCatalogStore(backup_path, store.sessions_root)
+    try:
+        assert restored.current_generation() == manifest.generation
+    finally:
+        restored.close()
+
+
+def test_online_backup_rejects_existing_target(
+    store: SessionCatalogStore, tmp_path: Path
+) -> None:
+    backup_path = tmp_path / "session-catalog.sqlite"
+    store.create_consistent_backup(backup_path)
+    with pytest.raises(RuntimeError, match="拒绝覆盖"):
+        store.create_consistent_backup(backup_path)
+
+
+def test_verify_backup_rejects_checksum_mismatch(
+    store: SessionCatalogStore, tmp_path: Path
+) -> None:
+    backup_path = tmp_path / "session-catalog.sqlite"
+    manifest = store.create_consistent_backup(backup_path)
+    backup_path.write_bytes(b"corrupted")
+    with pytest.raises(CatalogMaintenanceRequiredError, match="checksum 不符"):
+        store.verify_consistent_backup(
+            backup_path,
+            expected_checksum=manifest.checksum,
+            backup_generation=manifest.generation,
+        )
+
+
+def test_verify_backup_rejects_stale_generation(
+    store: SessionCatalogStore, tmp_path: Path
+) -> None:
+    """备份落后于已提交操作 → 维护模式，不扫盘补齐。"""
+    backup_path = tmp_path / "session-catalog.sqlite"
+    manifest = store.create_consistent_backup(backup_path)
+    # 备份之后又提交了新的操作：backup_generation < current。
+    create_session(store, display_name="备份后会话")
+    with pytest.raises(CatalogMaintenanceRequiredError, match="落后于已提交操作"):
+        store.verify_consistent_backup(
+            backup_path,
+            expected_checksum=manifest.checksum,
+            backup_generation=manifest.generation,
+        )
+    # 一致备份则通过。
+    fresh = store.create_consistent_backup(tmp_path / "fresh.sqlite")
+    report = store.verify_consistent_backup(
+        tmp_path / "fresh.sqlite",
+        expected_checksum=fresh.checksum,
+        backup_generation=fresh.generation,
+    )
+    assert report.generation == fresh.generation
+    assert report.quick_check == "ok"
+
+
+def test_verify_backup_missing_enters_maintenance(
+    store: SessionCatalogStore, tmp_path: Path
+) -> None:
+    with pytest.raises(CatalogMaintenanceRequiredError, match="备份缺失"):
+        store.verify_consistent_backup(
+            tmp_path / "nope.sqlite",
+            expected_checksum="deadbeef",
+            backup_generation=0,
+        )
+
+
+def test_startup_detects_unregistered_date_directory(
+    store: SessionCatalogStore, sessions_root: Path, tmp_path: Path
+) -> None:
+    """未登记日期目录 → 维护模式，保留原数据且不补 active node。"""
+    node = create_session(store, display_name="已登记会话")
+    # 手工放一个 catalog 未登记的日期桶目录（绕过软件写入）。
+    rogue = sessions_root / "2026" / "07" / "15" / make_session_id()
+    rogue.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(CatalogMaintenanceRequiredError, match="未登记日期目录"):
+        store.verify_registered_date_directories()
+    # 原数据保留，未吸收为 active node。
+    assert rogue.is_dir()
+    assert store.get_node(node.node_id).state == "active"
+    assert store.get_node(node.node_id).display_name == "已登记会话"
+
+
+def test_registered_date_directories_pass(
+    store: SessionCatalogStore,
+) -> None:
+    """catalog locator 与日期桶一一对应时校验通过。"""
+    node = create_session(store, display_name="正常会话")
+    sessions_root = store.sessions_root
+    locator = store.get_node(node.node_id).storage_relative_locator
+    assert locator is not None
+    target = sessions_root / locator[len("sessions/"):]
+    target.mkdir(parents=True, exist_ok=True)
+    store.verify_registered_date_directories()
+
+
+def test_store_rejects_corrupt_catalog_on_open(
+    tmp_path: Path, sessions_root: Path
+) -> None:
+    """catalog 文件被截断/损坏时打开 fail closed（quick_check）。"""
+    database_path = tmp_path / "navigation" / "session-catalog.sqlite"
+    first = SessionCatalogStore(database_path, sessions_root)
+    create_session(first, display_name="将被损坏")
+    first.close()
+    # 覆写文件头，破坏页结构。
+    database_path.write_bytes(b"\x00" * 4096)
+    with pytest.raises(CatalogMaintenanceRequiredError, match="无法打开"):
+        SessionCatalogStore(database_path, sessions_root)
+
+
+def test_schema_upgrade_v2_database_adds_claim_and_metadata_tables(
+    tmp_path: Path, sessions_root: Path
+) -> None:
+    """v2 库（无 claim/metadata 表）打开后显式一次性迁移升 v3。"""
+    database_path = tmp_path / "navigation" / "session-catalog.sqlite"
+    first = SessionCatalogStore(database_path, sessions_root)
+    folder_id = make_session_id()
+    first.create_folder(folder_id, WORKSPACE_ID, None, "升级前文件夹")
+    first.close()
+    connection = sqlite3.connect(database_path)
+    try:
+        # 精确还原 v2 缺表现场：删两新表并回退 user_version。
+        connection.execute("DROP TABLE fork_retention_claims")
+        connection.execute("DROP TABLE catalog_metadata")
+        connection.execute("PRAGMA user_version = 2")
+        connection.commit()
+    finally:
+        connection.close()
+    store = SessionCatalogStore(database_path, sessions_root)
+    try:
+        assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 3
+        # 迁移后新表可用，generation 从 0 起。
+        assert store.current_generation() == 0
+        # v2 数据完整保留。
+        assert store.get_node(folder_id).display_name == "升级前文件夹"
+    finally:
+        store.close()
+
+
+# ----------------------------------------------------------------------
+# 8.1-G 复用面：write/read 事务公开别名与 CAS 导航写
+# ----------------------------------------------------------------------
+
+
+def test_apply_navigation_mutation_rename_cas(store: SessionCatalogStore) -> None:
+    node = store.create_folder(make_session_id(), WORKSPACE_ID, None, "旧名")
+    updated = store.apply_navigation_mutation(
+        node.node_id, expected_revision=1, new_display_name="新名"
+    )
+    assert updated.display_name == "新名"
+    assert updated.revision == 2
+
+
+def test_apply_navigation_mutation_revision_drift_rejected(
+    store: SessionCatalogStore,
+) -> None:
+    node = store.create_folder(make_session_id(), WORKSPACE_ID, None, "名")
+    store.rename_node(node.node_id, "先改名")
+    with pytest.raises(RuntimeError, match="CAS 失败"):
+        store.apply_navigation_mutation(
+            node.node_id, expected_revision=1, new_display_name="再加名"
+        )
+
+
+def test_apply_navigation_mutation_move_and_sentinel(
+    store: SessionCatalogStore, tree: CatalogTree
+) -> None:
+    # 只改名（不改父）：哨兵让父保持不变。
+    renamed = store.apply_navigation_mutation(
+        tree.session_s5, expected_revision=1, new_display_name="仅改名"
+    )
+    assert renamed.parent_node_id is None
+    # 移到根：显式传 None。
+    moved = store.apply_navigation_mutation(
+        tree.session_s2, expected_revision=1, new_parent_node_id=None
+    )
+    assert moved.parent_node_id is None
+    assert moved.revision == 2
+
+
+def test_apply_navigation_mutation_rejects_duplicate_sibling_name(
+    store: SessionCatalogStore,
+) -> None:
+    parent = store.create_folder(make_session_id(), WORKSPACE_ID, None, "父")
+    store.create_folder(make_session_id(), WORKSPACE_ID, parent.node_id, "同名")
+    other = store.create_folder(
+        make_session_id(), WORKSPACE_ID, parent.node_id, "另一个"
+    )
+    with pytest.raises(RuntimeError, match="同名兄弟冲突"):
+        store.apply_navigation_mutation(
+            other.node_id, expected_revision=1, new_display_name="同名"
+        )
+
+
+def test_apply_navigation_mutation_cycle_rejected(
+    store: SessionCatalogStore, tree: CatalogTree
+) -> None:
+    with pytest.raises(RuntimeError, match="循环"):
+        store.apply_navigation_mutation(
+            tree.folder_a, expected_revision=1, new_parent_node_id=tree.session_s3
+        )
+
+
+def test_apply_navigation_mutation_in_caller_transaction(
+    store: SessionCatalogStore,
+) -> None:
+    """同一 caller 事务内做 node CAS + 旁挂写入（原子性 seam）。"""
+    node = store.create_folder(make_session_id(), WORKSPACE_ID, None, "原子")
+    with store.write_transaction() as connection:
+        updated = store.apply_navigation_mutation(
+            node.node_id,
+            expected_revision=1,
+            new_display_name="原子改",
+            connection=connection,
+        )
+        assert updated.revision == 2
+    assert store.get_node(node.node_id).display_name == "原子改"
+
+
+def test_read_transaction_alias_shared_snapshot(
+    store: SessionCatalogStore,
+) -> None:
+    node = create_session(store, display_name="读事务")
+    with store.read_transaction() as connection:
+        row = connection.execute(
+            "SELECT display_name FROM nodes WHERE node_id = ?", (node.node_id,)
+        ).fetchone()
+        assert str(row[0]) == "读事务"
+
+
+def test_create_folder_in_caller_transaction(
+    store: SessionCatalogStore,
+) -> None:
+    with store.write_transaction() as connection:
+        created = store.create_folder(
+            make_session_id(),
+            WORKSPACE_ID,
+            None,
+            "事务内 folder",
+            connection=connection,
+        )
+    assert store.get_node(created.node_id).display_name == "事务内 folder"

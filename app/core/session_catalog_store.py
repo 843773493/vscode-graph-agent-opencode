@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
 import json
 import re
 import sqlite3
@@ -35,10 +36,16 @@ from app.core.identifier import create_prefixed_id
 from app.core.sqlite_state import SQLITE_BUSY_TIMEOUT_MS
 
 __all__ = [
+    "CatalogBackupManifest",
+    "CatalogIntegrityReport",
+    "CatalogMaintenanceRequiredError",
+    "ForkRetentionClaim",
     "SessionCatalogNode",
     "SessionCatalogStore",
     "SessionCreationRecord",
     "SessionLifecycleFence",
+    "SourceRetainedByForkError",
+    "SourceRetentionOperationPendingError",
     "SubtreeDeleteRecord",
     "SubtreeFrozenNode",
     "validate_path_budget",
@@ -166,15 +173,73 @@ _IDX_SUBTREE_DELETE_STATE_DDL = (
     "ON subtree_delete_records(state)"
 )
 
+# ForkRetentionClaim 表（8.1-D）：pinned fork 在 source capture 前的 durable
+# retention 占位，与导航 node 同库、不是第二权威。claim 准入与整树删除在
+# **同一个 SQLite 写事务序列**上竞争（同一 DB 的 BEGIN IMMEDIATE），因此
+# 「claim 先行则删除返回 blocker」与「删除先行则 claim 零副作用失败」不需要
+# 任何额外的本地 fence 窗口。``state`` 闭集 preparing/active/released；
+# ``fork_retention_claim_id`` 即 fork_id（uuid hex）。claim 自身按
+# ``operation_kind=fork_retention`` 承担 Session operation lease（由
+# session-control.sqlite 侧的 lease 承载，本表只保存导航层可见的占位）。
+_FORK_RETENTION_CLAIMS_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS fork_retention_claims (
+    fork_retention_claim_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    source_session_id TEXT NOT NULL,
+    target_session_id TEXT NOT NULL,
+    source_lifecycle_generation INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('preparing', 'active', 'released')),
+    release_reason TEXT,
+    record_created_at TEXT NOT NULL,
+    record_updated_at TEXT NOT NULL
+)
+"""
+
+_IDX_FORK_RETENTION_SOURCE_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_fork_retention_source "
+    "ON fork_retention_claims(workspace_id, source_session_id, state)"
+)
+
+_FORK_RETENTION_CLAIM_COLUMNS = (
+    "fork_retention_claim_id, workspace_id, source_session_id, "
+    "target_session_id, source_lifecycle_generation, state, release_reason, "
+    "record_created_at, record_updated_at"
+)
+
+# catalog 单调 generation（8.1-F）：每个写事务提交时自增一次，作为可校验
+# 一致性快照/备份的版本锚点。备份清单记录 snapshot 时刻的 generation 与
+# sqlite 文件 checksum；当前 generation 大于备份 generation 即「备份落后于
+# 已提交操作」，只能进入维护模式核对。
+_CATALOG_METADATA_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS catalog_metadata (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    generation INTEGER NOT NULL
+)
+"""
+
 # user_version 与「必须已存在」的表绑定：已登记应用的版本若缺表，说明库被
 # 外部进程改写（或被截断）。此时下面的 ``CREATE TABLE IF NOT EXISTS`` 会把
 # 权威表静默重建为**空表**，等于把全部会话位置与父子关系悄悄丢光，因此必须
-# 在写任何 DDL 之前 fail closed。``subtree_delete_records`` 是 R14 加法补表
-# （``user_version`` 保持 2），不属于任何版本的硬性要求，故不在绑定表中。
+# 在写任何 DDL 之前 fail closed。
+#
+# v3（8.1-D/8.1-F）新增 ``fork_retention_claims``（pinned retention 占位）
+# 与 ``catalog_metadata``（单调 generation）两张表，是**显式一次性 schema
+# 迁移**：v2 库在同一 ``_initialize`` 事务内加法补建并升 v3，无动态分支、无
+# 双读路径。``subtree_delete_records`` 是 R14 加法补表（``user_version``
+# 保持 2），不属于任何版本的硬性要求，故不在绑定表中。
 _REQUIRED_TABLES_BY_VERSION = {
     1: ("nodes",),
     2: ("nodes", "session_creation_records"),
+    3: (
+        "nodes",
+        "session_creation_records",
+        "fork_retention_claims",
+        "catalog_metadata",
+    ),
 }
+
+# 首批 catalog_metadata 行（v3 迁移时写入；generation 从 0 起，写事务自增）。
+_CATALOG_METADATA_SEED = "INSERT OR IGNORE INTO catalog_metadata (singleton_id, generation) VALUES (1, 0)"
 
 _SUBTREE_DELETE_RECORD_COLUMNS = (
     "subtree_delete_idempotency_key, workspace_id, root_node_id, "
@@ -495,6 +560,118 @@ def _parse_drained_session_ids(raw: str) -> tuple[str, ...]:
     return tuple(str(session_id) for session_id in payload)
 
 
+class CatalogMaintenanceRequiredError(RuntimeError):
+    """catalog 损坏、备份落后或存在未登记日期目录：只能进入维护模式核对（8.1-F）。
+
+    这是 fail-closed 的单一错误合同：绝不允许扫盘补 active node、回退旧 JSON
+    或把未知目录交给 GC。调用方收到本错误必须停止自动恢复，保留原数据，交由
+    operator 从可校验备份恢复或人工核对。
+    """
+
+
+class SourceRetainedByForkError(RuntimeError):
+    """整树删除提交前发现 source Session 被 **active** pinned fork claim 保留。
+
+    删除必须在提交 catalog deleting 之前返回具体 blocker（哪个 Session、哪个
+    claim），且整棵子树保持 active。本错误不重试；调用方须先释放对应 pinned
+    fork（删除 target）或换新 key。
+    """
+
+    def __init__(
+        self,
+        *,
+        source_session_id: str,
+        claim_id: str,
+        target_session_id: str,
+    ) -> None:
+        self.source_session_id = source_session_id
+        self.claim_id = claim_id
+        self.target_session_id = target_session_id
+        super().__init__(
+            "source_retained_by_fork: Session 被 active pinned fork 保留，"
+            "拒绝提交整树 catalog deleting（整棵子树保持 active）: "
+            f"source_session_id={source_session_id}, "
+            f"claim_id={claim_id}, target_session_id={target_session_id}"
+        )
+
+
+class SourceRetentionOperationPendingError(RuntimeError):
+    """整树删除提交前发现 source Session 存在 **preparing** pinned fork claim。
+
+    preparing claim 无墙钟过期；删除必须 fail closed 并要求显式 recovery，不能
+    猜测为 stale 后释放。``SourceRetainedByForkError`` 的对应准备期变体。
+    """
+
+    def __init__(
+        self,
+        *,
+        source_session_id: str,
+        claim_id: str,
+        target_session_id: str,
+    ) -> None:
+        self.source_session_id = source_session_id
+        self.claim_id = claim_id
+        self.target_session_id = target_session_id
+        super().__init__(
+            "source_retention_operation_pending: Session 存在 preparing pinned "
+            "fork claim，拒绝提交整树 catalog deleting（整棵子树保持 active，"
+            "须显式 recovery）: "
+            f"source_session_id={source_session_id}, "
+            f"claim_id={claim_id}, target_session_id={target_session_id}"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ForkRetentionClaim:
+    """fork_retention_claims 表行的不可变投影（8.1-D pinned retention 占位）。
+
+    ``state`` 闭集为 ``preparing/active/released``：``preparing`` 在 source
+    capture 前建立、无墙钟过期；target ``target_committed`` 后 CAS 为
+    ``active``；abort/target 删除经 ``released`` 终结。``claim_id`` 即 fork_id
+    （uuid hex）；``source_lifecycle_generation`` 冻结准入时的 source fence
+    generation，激活时 CAS 校验漂移。
+    """
+
+    fork_retention_claim_id: str
+    workspace_id: str
+    source_session_id: str
+    target_session_id: str
+    source_lifecycle_generation: int
+    state: str
+    release_reason: str | None
+    record_created_at: str
+    record_updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogBackupManifest:
+    """一次 SQLite online backup 的完整性清单（8.1-F generation/checksum）。
+
+    ``generation`` 是备份时刻 catalog 的单调 generation；``checksum`` 是备份
+    DB 文件的 sha256。恢复/启动核对时 generation 落后于当前值即「备份落后于
+    已提交操作」，只能进入维护模式。
+    """
+
+    generation: int
+    checksum: str
+    database_path: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogIntegrityReport:
+    """catalog 启动/备份核对的结果投影（8.1-F）。"""
+
+    generation: int
+    quick_check: str
+    backup_generation: int | None
+    backup_checksum: str | None
+
+
+# ``apply_navigation_mutation`` 区分「不改父」与「显式移到根(None)」的哨兵。
+_UNSET: object = object()
+
+
 class SessionCatalogStore:
     """session-catalog.sqlite 的 nodes 表与 creation record journal 基础设施。
 
@@ -503,7 +680,7 @@ class SessionCatalogStore:
     创建和删除 journal 与 nodes 同库，由事务保证目录可见性和恢复进度的一致性。
     """
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, database_path: Path, sessions_root: Path) -> None:
         self.database_path = database_path.expanduser().resolve()
@@ -565,11 +742,21 @@ class SessionCatalogStore:
             check_same_thread=False,
         )
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
-        journal_mode = str(
-            connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
-        )
+        try:
+            # 已存在的库若页结构损坏（被截断/覆写），``PRAGMA`` 本身即抛
+            # ``sqlite3.DatabaseError``；统一转成维护模式错误，绝不允许以
+            # 半损坏的权威表继续读写（8.1-F「绝不默默失败」）。
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+            journal_mode = str(
+                connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+            )
+        except sqlite3.DatabaseError as error:
+            connection.close()
+            raise CatalogMaintenanceRequiredError(
+                "session catalog 无法打开（文件损坏或被外部改写，须从备份恢复"
+                f"或进入维护模式核对）: path={self.database_path}: {error}"
+            ) from error
         if journal_mode.lower() != "wal":
             connection.close()
             raise RuntimeError(
@@ -581,22 +768,24 @@ class SessionCatalogStore:
     def _initialize(self) -> None:
         """幂等建表并设置 user_version；未知版本 fail-closed 拒绝打开。
 
-        支持的 current：0（全新库，建全部表并置 v2）、1（R10 v1 库，
-        同一事务内加法建 ``session_creation_records`` 表并升 v2，不动
-        nodes 表）、2（已是当前版本；R14 起以 ``CREATE TABLE IF NOT
-        EXISTS`` 幂等补建 ``subtree_delete_records`` 表——加法式补表，
-        不改 user_version，既有表 DDL 与数据不受影响）。
+        支持的 current：0（全新库，建全部表并置 v3）、1（R10 v1 库）、
+        2（R14 v2 库）、3（当前版本）。1/2→3 是**显式一次性 schema
+        迁移**：同一 ``BEGIN IMMEDIATE`` 事务内加法建
+        ``fork_retention_claims``/``catalog_metadata`` 两张表并升 v3，不动
+        既有表 DDL 与数据、无动态分支。``subtree_delete_records`` 是 R14
+        加法补表（不改 user_version），每次打开幂等补建。
         """
         current = int(
             self._connection.execute("PRAGMA user_version").fetchone()[0]
         )
-        if current not in (0, 1, self.SCHEMA_VERSION):
+        if current > self.SCHEMA_VERSION:
             raise RuntimeError(
                 "session catalog schema 版本未知，fail-closed 拒绝打开: "
                 f"path={self.database_path}, user_version={current}, "
                 f"supported={self.SCHEMA_VERSION}"
             )
         if current:
+            self._verify_quick_integrity()
             self._require_tables_present(current)
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -607,6 +796,10 @@ class SessionCatalogStore:
             self._connection.execute(_IDX_CREATION_RECORDS_STATE_DDL)
             self._connection.execute(_SUBTREE_DELETE_RECORDS_TABLE_DDL)
             self._connection.execute(_IDX_SUBTREE_DELETE_STATE_DDL)
+            self._connection.execute(_FORK_RETENTION_CLAIMS_TABLE_DDL)
+            self._connection.execute(_IDX_FORK_RETENTION_SOURCE_DDL)
+            self._connection.execute(_CATALOG_METADATA_TABLE_DDL)
+            self._connection.execute(_CATALOG_METADATA_SEED)
             if current != self.SCHEMA_VERSION:
                 self._connection.execute(
                     f"PRAGMA user_version = {self.SCHEMA_VERSION}"
@@ -615,6 +808,22 @@ class SessionCatalogStore:
             self._connection.execute("ROLLBACK")
             raise
         self._connection.execute("COMMIT")
+
+    def _verify_quick_integrity(self) -> None:
+        """启动期 ``PRAGMA quick_check``：catalog 损坏时 fail closed（8.1-F）。
+
+        只对已存在的库执行。返回非 ``ok`` 说明页级损坏，绝不允许继续以
+        半损坏的权威表读写——立刻抛错，由 operator 从备份恢复或进入维护
+        模式核对，不得扫盘重建。
+        """
+        result = self._connection.execute("PRAGMA quick_check").fetchone()
+        status = str(result[0]) if result is not None else "<empty>"
+        if status.lower() != "ok":
+            raise CatalogMaintenanceRequiredError(
+                "session catalog 完整性校验失败，拒绝打开（须从备份恢复或进入"
+                "维护模式核对，不得扫盘重建）: "
+                f"path={self.database_path}, quick_check={status!r}"
+            )
 
     def _require_tables_present(self, current: int) -> None:
         """校验已登记的版本对应表确实存在；缺表说明库被外部改写。
@@ -649,6 +858,9 @@ class SessionCatalogStore:
         ROLLBACK）持有连接串行锁——跨线程的后到事务阻塞至先到事务结束，
         共享连接上不再出现事务交叠（OperationalError 两种变体的根源）。
         SQL 语义与 BEGIN 模式不变；RLock 可重入，同线程嵌套安全。
+
+        提交前自增 ``catalog_metadata.generation``（8.1-F）：每个提交的写
+        事务恰好推进一次 generation，作为备份/一致性快照的版本锚点。
         """
         with self._connection_lock:
             self._ensure_open()
@@ -658,7 +870,51 @@ class SessionCatalogStore:
             except BaseException:
                 self._connection.execute("ROLLBACK")
                 raise
+            self._bump_generation(self._connection)
             self._connection.execute("COMMIT")
+
+    def write_transaction(self) -> Iterator[sqlite3.Connection]:
+        """公开写事务入口（同一实现对象的别名，零逻辑变更）。
+
+        供需要把「nodes 变更 + 同库旁挂 journal/事件 outbox」放进**同一个**
+        SQLite 写事务的调用方组合使用：调用方在自己持有的连接上执行 node
+        写方法与自己的表写入，由本事务一次性提交或回滚。
+        """
+        return self._write_transaction()
+
+    def read_transaction(self) -> Iterator[sqlite3.Connection]:
+        """公开只读事务入口（同一实现对象的别名，零逻辑变更）。
+
+        供需要在**只读单事务**快照里读取 nodes 与同库旁挂表（按 ID 状态查询、
+        revision-pinned snapshot、事件重放）的调用方使用；不推进 generation。
+        """
+        return self._read_transaction()
+
+    @staticmethod
+    def _bump_generation(connection: sqlite3.Connection) -> None:
+        """写事务提交前自增单调 generation（8.1-F）。"""
+        cursor = connection.execute(
+            "UPDATE catalog_metadata SET generation = generation + 1 "
+            "WHERE singleton_id = 1"
+        )
+        if cursor.rowcount != 1:
+            raise CatalogMaintenanceRequiredError(
+                "session catalog 缺少 catalog_metadata 单例行，拒绝提交写事务"
+                "（库被外部改动，须进入维护模式核对）"
+            )
+
+    def current_generation(self) -> int:
+        """返回 catalog 当前单调 generation（备份/一致性快照的版本锚点）。"""
+        with self._read_transaction() as connection:
+            row = connection.execute(
+                "SELECT generation FROM catalog_metadata WHERE singleton_id = 1"
+            ).fetchone()
+            if row is None:
+                raise CatalogMaintenanceRequiredError(
+                    "session catalog 缺少 catalog_metadata 单例行（库被外部改动，"
+                    f"须进入维护模式核对）: path={self.database_path}"
+                )
+            return int(row[0])
 
     @contextmanager
     def _read_transaction(self) -> Iterator[sqlite3.Connection]:
@@ -855,24 +1111,46 @@ class SessionCatalogStore:
         workspace_id: str,
         parent_node_id: str | None,
         display_name: str,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> SessionCatalogNode:
         """创建 folder 节点；folder 无物理 locator/manifest。
 
         folder 节点 ID 使用与 session 相同的 canonical ``ses_`` 前缀形态，
         但 folder 本身不分配物理 locator。
+
+        ``connection`` 非 None 时在调用方已开的写事务连接上执行同一段校验
+        + INSERT，不 BEGIN/COMMIT/ROLLBACK（供调用方把 nodes 变更与同库旁挂
+        journal/事件放进同一事务）；为 None 时自行开写事务。
         """
         validate_session_id(node_id)
         self._validate_common_fields(workspace_id, display_name)
-        with self._write_transaction() as connection:
-            self._require_node_id_available(connection, node_id)
-            self._require_mutable_parent(connection, parent_node_id, workspace_id)
-            connection.execute(
-                "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
-                "state, revision, workspace_id) "
-                "VALUES (?, 'folder', ?, ?, 'active', 1, ?)",
-                (node_id, parent_node_id, display_name, workspace_id),
-            )
-            return self._node_from_row(self._require_node(connection, node_id))
+        if connection is None:
+            with self._write_transaction() as owned:
+                return self._insert_folder_node(
+                    owned, node_id, workspace_id, parent_node_id, display_name
+                )
+        return self._insert_folder_node(
+            connection, node_id, workspace_id, parent_node_id, display_name
+        )
+
+    def _insert_folder_node(
+        self,
+        connection: sqlite3.Connection,
+        node_id: str,
+        workspace_id: str,
+        parent_node_id: str | None,
+        display_name: str,
+    ) -> SessionCatalogNode:
+        self._require_node_id_available(connection, node_id)
+        self._require_mutable_parent(connection, parent_node_id, workspace_id)
+        connection.execute(
+            "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
+            "state, revision, workspace_id) "
+            "VALUES (?, 'folder', ?, ?, 'active', 1, ?)",
+            (node_id, parent_node_id, display_name, workspace_id),
+        )
+        return self._node_from_row(self._require_node(connection, node_id))
 
     def create_session_node(
         self,
@@ -947,36 +1225,156 @@ class SessionCatalogStore:
     ) -> SessionCatalogNode:
         """调整父节点；只改导航关系，不搬移物理目录。"""
         with self._write_transaction() as connection:
-            node = self._require_node(connection, node_id)
-            if new_parent_node_id == node_id:
-                raise RuntimeError(f"移动目标不能是节点自身: {node_id}")
-            if new_parent_node_id is not None:
-                parent = self._require_node(connection, new_parent_node_id)
-                if parent["state"] == "deleting":
-                    raise RuntimeError(
-                        f"目标父节点正在删除: {new_parent_node_id}"
-                    )
-                if parent["workspace_id"] != node["workspace_id"]:
-                    raise RuntimeError(
-                        "目标父节点属于其他 workspace: "
-                        f"node={node_id}, node_workspace={node['workspace_id']}, "
-                        f"parent={new_parent_node_id}, "
-                        f"parent_workspace={parent['workspace_id']}"
-                    )
-                if new_parent_node_id in self._descendant_node_ids(
-                    connection,
-                    node_id,
-                ):
-                    raise RuntimeError(
-                        "移动会形成循环: "
-                        f"node={node_id}, new_parent={new_parent_node_id}"
-                    )
+            self._validate_move_target(connection, node_id, new_parent_node_id)
             connection.execute(
                 "UPDATE nodes SET parent_node_id = ?, revision = revision + 1 "
                 "WHERE node_id = ?",
                 (new_parent_node_id, node_id),
             )
             return self._node_from_row(self._require_node(connection, node_id))
+
+    def _validate_move_target(
+        self,
+        connection: sqlite3.Connection,
+        node_id: str,
+        new_parent_node_id: str | None,
+    ) -> sqlite3.Row:
+        """校验移动目标：自环、父存在/active/同 workspace、无祖先环。
+
+        返回被移动节点行，供调用方复用。move_node 与 apply_navigation_mutation
+        共用本实现，不是第二套校验。
+        """
+        node = self._require_node(connection, node_id)
+        if new_parent_node_id == node_id:
+            raise RuntimeError(f"移动目标不能是节点自身: {node_id}")
+        if new_parent_node_id is not None:
+            parent = self._require_node(connection, new_parent_node_id)
+            if parent["state"] == "deleting":
+                raise RuntimeError(f"目标父节点正在删除: {new_parent_node_id}")
+            if parent["workspace_id"] != node["workspace_id"]:
+                raise RuntimeError(
+                    "目标父节点属于其他 workspace: "
+                    f"node={node_id}, node_workspace={node['workspace_id']}, "
+                    f"parent={new_parent_node_id}, "
+                    f"parent_workspace={parent['workspace_id']}"
+                )
+            if new_parent_node_id in self._descendant_node_ids(connection, node_id):
+                raise RuntimeError(
+                    "移动会形成循环: "
+                    f"node={node_id}, new_parent={new_parent_node_id}"
+                )
+        return node
+
+    def apply_navigation_mutation(
+        self,
+        node_id: str,
+        *,
+        expected_revision: int,
+        new_parent_node_id: object = _UNSET,
+        new_display_name: str | None = None,
+        connection: sqlite3.Connection | None = None,
+    ) -> SessionCatalogNode:
+        """带 expected-revision CAS 的组合导航写（8.1-G 复用面，单事务）。
+
+        单事务内复用现有校验（父存在/active/同 workspace/无祖先环、同名兄弟
+        唯一）后校验 ``revision == expected_revision``（漂移 → ``RuntimeError``）
+        再 ``UPDATE nodes ... revision = revision + 1``。``new_parent_node_id``
+        用哨兵 ``_UNSET`` 区分「不改父」与「显式移到根(None)」；
+        ``new_display_name=None`` 表示不改名。本方法是 create_folder/move_node/
+        rename_node 已有校验的**外部组合入口**，不是第二套实现。
+
+        ``connection`` 非 None 时在调用方写事务连接上执行，不自行 BEGIN/COMMIT，
+        供调用方把 node CAS、terminal record 与事件 outbox 放进同一事务。
+        """
+        if not isinstance(expected_revision, int) or isinstance(expected_revision, bool):
+            raise TypeError(f"expected_revision 必须是整数: {expected_revision!r}")
+        if new_display_name is not None:
+            if not isinstance(new_display_name, str):
+                raise TypeError(
+                    f"new_display_name 必须是字符串或 None: {new_display_name!r}"
+                )
+            if not new_display_name:
+                raise ValueError("new_display_name 不能为空字符串")
+        if connection is None:
+            with self._write_transaction() as owned:
+                return self._apply_navigation_mutation(
+                    owned,
+                    node_id,
+                    expected_revision=expected_revision,
+                    new_parent_node_id=new_parent_node_id,
+                    new_display_name=new_display_name,
+                )
+        return self._apply_navigation_mutation(
+            connection,
+            node_id,
+            expected_revision=expected_revision,
+            new_parent_node_id=new_parent_node_id,
+            new_display_name=new_display_name,
+        )
+
+    def _apply_navigation_mutation(
+        self,
+        connection: sqlite3.Connection,
+        node_id: str,
+        *,
+        expected_revision: int,
+        new_parent_node_id: object,
+        new_display_name: str | None,
+    ) -> SessionCatalogNode:
+        if new_parent_node_id is not _UNSET:
+            self._validate_move_target(connection, node_id, new_parent_node_id)  # type: ignore[arg-type]
+        else:
+            self._require_node(connection, node_id)
+        row = self._require_node(connection, node_id)
+        actual_revision = int(row["revision"])
+        if actual_revision != expected_revision:
+            raise RuntimeError(
+                "导航 mutation CAS 失败：节点 revision 已漂移: "
+                f"node_id={node_id}, expected_revision={expected_revision}, "
+                f"actual_revision={actual_revision}"
+            )
+        updates: list[str] = ["revision = revision + 1"]
+        params: list[object] = []
+        if new_parent_node_id is not _UNSET:
+            updates.append("parent_node_id = ?")
+            params.append(new_parent_node_id)
+        if new_display_name is not None:
+            self._require_display_name_available(
+                connection, node_id, new_display_name
+            )
+            updates.append("display_name = ?")
+            params.append(new_display_name)
+        params.append(node_id)
+        connection.execute(
+            f"UPDATE nodes SET {', '.join(updates)} WHERE node_id = ?",
+            tuple(params),
+        )
+        return self._node_from_row(self._require_node(connection, node_id))
+
+    def _require_display_name_available(
+        self,
+        connection: sqlite3.Connection,
+        node_id: str,
+        display_name: str,
+    ) -> None:
+        """拒绝同一父下与其它节点同名的兄弟（8.1-E 同名兄弟冲突）。"""
+        row = self._require_node(connection, node_id)
+        duplicate = connection.execute(
+            "SELECT node_id FROM nodes WHERE parent_node_id IS ? AND "
+            "workspace_id = ? AND display_name = ? AND node_id != ? LIMIT 1",
+            (
+                row["parent_node_id"],
+                row["workspace_id"],
+                display_name,
+                node_id,
+            ),
+        ).fetchone()
+        if duplicate is not None:
+            raise RuntimeError(
+                "同名兄弟冲突，拒绝改名: "
+                f"node_id={node_id}, display_name={display_name!r}, "
+                f"existing_node={duplicate[0]}"
+            )
 
     def set_node_state(self, node_id: str, state: str) -> SessionCatalogNode:
         """设置节点状态；active→deleting 允许，deleting→active 拒绝（不可复活）。"""
@@ -997,6 +1395,353 @@ class SessionCatalogStore:
                 (state, node_id),
             )
             return self._node_from_row(self._require_node(connection, node_id))
+
+    # ------------------------------------------------------------------
+    # ForkRetentionClaim（8.1-D pinned retention 占位）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fork_retention_claim_from_row(row: sqlite3.Row) -> ForkRetentionClaim:
+        return ForkRetentionClaim(
+            fork_retention_claim_id=str(row["fork_retention_claim_id"]),
+            workspace_id=str(row["workspace_id"]),
+            source_session_id=str(row["source_session_id"]),
+            target_session_id=str(row["target_session_id"]),
+            source_lifecycle_generation=int(row["source_lifecycle_generation"]),
+            state=str(row["state"]),
+            release_reason=(
+                str(row["release_reason"])
+                if row["release_reason"] is not None
+                else None
+            ),
+            record_created_at=str(row["record_created_at"]),
+            record_updated_at=str(row["record_updated_at"]),
+        )
+
+    @staticmethod
+    def _fetch_fork_retention_claim(
+        connection: sqlite3.Connection,
+        claim_id: str,
+    ) -> sqlite3.Row | None:
+        return connection.execute(
+            f"SELECT {_FORK_RETENTION_CLAIM_COLUMNS} FROM fork_retention_claims "
+            "WHERE fork_retention_claim_id = ?",
+            (claim_id,),
+        ).fetchone()
+
+    def create_or_get_fork_retention_claim(
+        self,
+        *,
+        claim_id: str,
+        workspace_id: str,
+        source_session_id: str,
+        target_session_id: str,
+        source_lifecycle_generation: int,
+        connection: sqlite3.Connection | None = None,
+    ) -> ForkRetentionClaim:
+        """create-or-get pinned fork retention 占位（8.1-D，``state=preparing``）。
+
+        在 source capture **之前**建立、不依赖 target 提交。同 claim_id 已存在
+        且 preimage（workspace/source/target/generation）一致 → 幂等返回既有
+        record（崩溃恢复不重复建 claim）；不一致 → ``RuntimeError``（冲突）。
+        新插入路径要求 source Session 节点存在且 active（deleting 源拒绝建立
+        claim，即「删除先行则 fork 零副作用失败」的准入侧）。
+
+        ``connection`` 非 None 时在调用方写事务连接上执行，不自行 BEGIN/COMMIT
+        （供 fork journal 与 claim 占位原子提交）。
+        """
+        if not isinstance(claim_id, str) or not claim_id:
+            raise ValueError(f"claim_id 不能为空: {claim_id!r}")
+        _validate_workspace_id(workspace_id)
+        validate_session_id(source_session_id)
+        validate_session_id(target_session_id)
+        if not isinstance(source_lifecycle_generation, int) or isinstance(
+            source_lifecycle_generation, bool
+        ):
+            raise TypeError(
+                f"source_lifecycle_generation 必须是整数: "
+                f"{source_lifecycle_generation!r}"
+            )
+        if connection is None:
+            with self._write_transaction() as owned:
+                return self._create_or_get_fork_retention_claim(
+                    owned,
+                    claim_id=claim_id,
+                    workspace_id=workspace_id,
+                    source_session_id=source_session_id,
+                    target_session_id=target_session_id,
+                    source_lifecycle_generation=source_lifecycle_generation,
+                )
+        return self._create_or_get_fork_retention_claim(
+            connection,
+            claim_id=claim_id,
+            workspace_id=workspace_id,
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            source_lifecycle_generation=source_lifecycle_generation,
+        )
+
+    def _create_or_get_fork_retention_claim(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        claim_id: str,
+        workspace_id: str,
+        source_session_id: str,
+        target_session_id: str,
+        source_lifecycle_generation: int,
+    ) -> ForkRetentionClaim:
+        existing = self._fetch_fork_retention_claim(connection, claim_id)
+        if existing is not None:
+            record = self._fork_retention_claim_from_row(existing)
+            if (
+                record.workspace_id != workspace_id
+                or record.source_session_id != source_session_id
+                or record.target_session_id != target_session_id
+                or record.source_lifecycle_generation != source_lifecycle_generation
+            ):
+                raise RuntimeError(
+                    "fork retention claim preimage 冲突（同 claim_id 不同 "
+                    "workspace/source/target/generation，拒绝复用）: "
+                    f"claim_id={claim_id!r}, existing_source="
+                    f"{record.source_session_id!r}, existing_target="
+                    f"{record.target_session_id!r}, requested_source="
+                    f"{source_session_id!r}, requested_target="
+                    f"{target_session_id!r}"
+                )
+            return record
+        source_node = self._require_node(connection, source_session_id)
+        if str(source_node["workspace_id"]) != workspace_id:
+            raise RuntimeError(
+                "fork source 属于其他 workspace，拒绝建立 retention claim: "
+                f"source={source_session_id}, "
+                f"source_workspace={source_node['workspace_id']!r}, "
+                f"requested_workspace={workspace_id!r}"
+            )
+        if str(source_node["state"]) != "active":
+            # 8.1-D 删除先行语义：source 已 deleting（删除先提交了 catalog
+            # deleting）→ fork 不得建立 claim，零副作用失败。
+            raise RuntimeError(
+                "source Session 非 active，拒绝建立 fork retention claim"
+                "（删除先行则 fork 零副作用失败）: "
+                f"claim_id={claim_id!r}, source_session_id={source_session_id}, "
+                f"source_state={source_node['state']!r}"
+            )
+        now = datetime.now(UTC).isoformat()
+        connection.execute(
+            "INSERT INTO fork_retention_claims ("
+            "fork_retention_claim_id, workspace_id, source_session_id, "
+            "target_session_id, source_lifecycle_generation, state, "
+            "release_reason, record_created_at, record_updated_at) "
+            "VALUES (?, ?, ?, ?, ?, 'preparing', NULL, ?, ?)",
+            (
+                claim_id,
+                workspace_id,
+                source_session_id,
+                target_session_id,
+                source_lifecycle_generation,
+                now,
+                now,
+            ),
+        )
+        inserted = self._fetch_fork_retention_claim(connection, claim_id)
+        if inserted is None:
+            raise RuntimeError(
+                f"fork retention claim 插入后不可见（事务异常）: {claim_id!r}"
+            )
+        return self._fork_retention_claim_from_row(inserted)
+
+    def activate_fork_retention_claim(
+        self,
+        claim_id: str,
+        *,
+        expected_generation: int,
+    ) -> ForkRetentionClaim:
+        """把 ``preparing`` claim CAS 为 ``active``（target 提交后激活同一 claim）。
+
+        校验 claim 存在、``state=preparing``、``source_lifecycle_generation``
+        等于 ``expected_generation``（漂移 → ``RuntimeError``）。已 ``active``
+        幂等返回；``released`` → ``RuntimeError``（已终结，不可复活）。
+        """
+        with self._write_transaction() as connection:
+            row = self._fetch_fork_retention_claim(connection, claim_id)
+            if row is None:
+                raise KeyError(f"fork retention claim 不存在: {claim_id!r}")
+            state = str(row["state"])
+            if state == "active":
+                return self._fork_retention_claim_from_row(row)
+            if state != "preparing":
+                raise RuntimeError(
+                    "fork retention claim 状态不允许激活: "
+                    f"claim_id={claim_id!r}, state={state!r}"
+                )
+            actual_generation = int(row["source_lifecycle_generation"])
+            if actual_generation != expected_generation:
+                raise RuntimeError(
+                    "fork retention claim 激活失败：source generation 已漂移: "
+                    f"claim_id={claim_id!r}, "
+                    f"expected_generation={expected_generation}, "
+                    f"actual_generation={actual_generation}"
+                )
+            connection.execute(
+                "UPDATE fork_retention_claims SET state = 'active', "
+                "record_updated_at = ? WHERE fork_retention_claim_id = ?",
+                (datetime.now(UTC).isoformat(), claim_id),
+            )
+            updated = self._fetch_fork_retention_claim(connection, claim_id)
+            if updated is None:
+                raise RuntimeError(
+                    f"fork retention claim 激活后不可见（事务异常）: {claim_id!r}"
+                )
+            return self._fork_retention_claim_from_row(updated)
+
+    def release_fork_retention_claim(
+        self,
+        claim_id: str,
+        reason: str,
+    ) -> ForkRetentionClaim:
+        """把 claim 终结为 ``released``（abort/target 删除的 source 侧释放）。
+
+        ``preparing``/``active`` → ``released``；已 ``released`` 幂等返回既有
+        record（不覆盖原 reason）。
+        """
+        if not isinstance(reason, str):
+            raise TypeError(f"release reason 必须是字符串: {reason!r}")
+        if not reason:
+            raise ValueError("release reason 不能为空")
+        with self._write_transaction() as connection:
+            row = self._fetch_fork_retention_claim(connection, claim_id)
+            if row is None:
+                raise KeyError(f"fork retention claim 不存在: {claim_id!r}")
+            if str(row["state"]) == "released":
+                return self._fork_retention_claim_from_row(row)
+            self._mark_claim_released(connection, claim_id, reason)
+            updated = self._fetch_fork_retention_claim(connection, claim_id)
+            if updated is None:
+                raise RuntimeError(
+                    f"fork retention claim 释放后不可见（事务异常）: {claim_id!r}"
+                )
+            return self._fork_retention_claim_from_row(updated)
+
+    @staticmethod
+    def _mark_claim_released(
+        connection: sqlite3.Connection,
+        claim_id: str,
+        reason: str,
+    ) -> None:
+        """把指定 claim 置为 ``released``（唯一释放 SQL 实现）。"""
+        connection.execute(
+            "UPDATE fork_retention_claims SET state = 'released', "
+            "release_reason = ?, record_updated_at = ? "
+            "WHERE fork_retention_claim_id = ?",
+            (reason, datetime.now(UTC).isoformat(), claim_id),
+        )
+
+    def get_fork_retention_claim(self, claim_id: str) -> ForkRetentionClaim:
+        """按 claim_id 返回 claim 投影；不存在抛 KeyError。"""
+        with self._read_transaction() as connection:
+            row = self._fetch_fork_retention_claim(connection, claim_id)
+            if row is None:
+                raise KeyError(f"fork retention claim 不存在: {claim_id!r}")
+            return self._fork_retention_claim_from_row(row)
+
+    def release_fork_retention_claims_for_target(
+        self,
+        target_session_id: str,
+        reason: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> tuple[str, ...]:
+        """释放全部以 ``target_session_id`` 为 target 的未释放 claim。
+
+        用于 target 会话被删除时的 source 侧释放：删除 target 先去本地记录
+        ``ForkRetentionReleaseRecord``，再取 source gate 释放精确 claim（本方法
+        承担 source 侧一步）。返回被释放的 claim_id 元组（已 released 的跳过）。
+        """
+        validate_session_id(target_session_id)
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("release reason 不能为空")
+        if connection is None:
+            with self._write_transaction() as owned:
+                return self._release_claims_for_target(
+                    owned, target_session_id, reason
+                )
+        return self._release_claims_for_target(
+            connection, target_session_id, reason
+        )
+
+    def _release_claims_for_target(
+        self,
+        connection: sqlite3.Connection,
+        target_session_id: str,
+        reason: str,
+    ) -> tuple[str, ...]:
+        rows = connection.execute(
+            f"SELECT {_FORK_RETENTION_CLAIM_COLUMNS} FROM fork_retention_claims "
+            "WHERE target_session_id = ? AND state IN ('preparing', 'active') "
+            "ORDER BY fork_retention_claim_id",
+            (target_session_id,),
+        ).fetchall()
+        released: list[str] = []
+        for row in rows:
+            claim_id = str(row["fork_retention_claim_id"])
+            self._mark_claim_released(connection, claim_id, reason)
+            released.append(claim_id)
+        return tuple(released)
+
+    def list_pinned_claims_for_source(
+        self,
+        source_session_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> list[ForkRetentionClaim]:
+        """返回 source Session 上全部未释放（preparing/active）pinned claim。
+
+        供整树删除在提交 catalog deleting **之前**做拓扑预检；``released``
+        claim 不属于 blocker。按 claim_id 稳定排序。
+        """
+        validate_session_id(source_session_id)
+        if connection is None:
+            with self._read_transaction() as owned:
+                return self._list_pinned_claims_for_source(
+                    owned, source_session_id
+                )
+        return self._list_pinned_claims_for_source(connection, source_session_id)
+
+    @staticmethod
+    def _list_pinned_claims_for_source(
+        connection: sqlite3.Connection,
+        source_session_id: str,
+    ) -> list[ForkRetentionClaim]:
+        rows = connection.execute(
+            f"SELECT {_FORK_RETENTION_CLAIM_COLUMNS} FROM fork_retention_claims "
+            "WHERE source_session_id = ? AND state IN ('preparing', 'active') "
+            "ORDER BY fork_retention_claim_id",
+            (source_session_id,),
+        ).fetchall()
+        return [
+            SessionCatalogStore._fork_retention_claim_from_row(row)
+            for row in rows
+        ]
+
+    @staticmethod
+    def _raise_for_source_claims(
+        claims: list[ForkRetentionClaim],
+    ) -> None:
+        """任一未释放 claim 即 fail closed：active 优先于 preparing 报告。"""
+        for claim in claims:
+            if claim.state == "active":
+                raise SourceRetainedByForkError(
+                    source_session_id=claim.source_session_id,
+                    claim_id=claim.fork_retention_claim_id,
+                    target_session_id=claim.target_session_id,
+                )
+        for claim in claims:
+            raise SourceRetentionOperationPendingError(
+                source_session_id=claim.source_session_id,
+                claim_id=claim.fork_retention_claim_id,
+                target_session_id=claim.target_session_id,
+            )
 
     # ------------------------------------------------------------------
     # SessionCreationRecord journal（8.1-A，R13 加法扩展）
@@ -1584,6 +2329,18 @@ class SessionCatalogStore:
                     f"key={idempotency_key!r}, state={state!r}"
                 )
             record = self._subtree_delete_record_from_row(row)
+            # 8.1-D：整树 catalog deleting 提交前的 pinned retention 预检。
+            # 冻结集合内任一 session 存在未释放（preparing/active）claim 即
+            # fail closed，且本事务不写任何节点状态——整棵子树保持 active。
+            # claim 准入（_create_or_get_fork_retention_claim 要求 source
+            # active）与本预检在同一 DB 的 BEGIN IMMEDIATE 事务序列上竞争，
+            # 因此无需任何本地 fence 窗口。
+            for session_id in sorted(record.frozen_session_locators):
+                claims = self._list_pinned_claims_for_source(
+                    connection, session_id
+                )
+                if claims:
+                    self._raise_for_source_claims(claims)
             for item in record.frozen_node_ids:
                 node = self._fetch_node(connection, item.node_id)
                 if node is None:
@@ -2007,3 +2764,136 @@ class SessionCatalogStore:
         relative = locator[len(_LOCATOR_PREFIX):]
         validate_path_budget(self.sessions_root, relative)
         return self.sessions_root / relative
+
+    # ------------------------------------------------------------------
+    # SQLite online backup / 一致性快照（8.1-F）
+    # ------------------------------------------------------------------
+
+    def create_consistent_backup(
+        self,
+        backup_path: Path,
+    ) -> CatalogBackupManifest:
+        """用 SQLite online backup API 生成可校验一致性快照并记录 generation/checksum。
+
+        绝不允许直接复制活动 WAL 文件：``sqlite3.Connection.backup`` 在源库
+        持读锁期间复制一致页视图，产出与任何已提交 generation 一致的快照。
+        目标必须不存在（不覆盖既有备份）。返回清单的 ``generation`` 是备份
+        时刻 catalog generation，``checksum`` 是备份文件 sha256。
+        """
+        if not isinstance(backup_path, Path):
+            raise TypeError(f"backup_path 必须是 Path: {backup_path!r}")
+        resolved = backup_path.expanduser().resolve()
+        if resolved == self.database_path:
+            raise ValueError(f"备份目标不能是 catalog 本体: {resolved}")
+        if resolved.exists():
+            raise RuntimeError(f"备份目标已存在，拒绝覆盖: {resolved}")
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        generation = self.current_generation()
+        with self._connection_lock:
+            self._ensure_open()
+            destination = sqlite3.connect(resolved)
+            try:
+                self._connection.backup(destination)
+            finally:
+                destination.close()
+        checksum = _sha256_file(resolved)
+        return CatalogBackupManifest(
+            generation=generation,
+            checksum=checksum,
+            database_path=str(resolved),
+            created_at=datetime.now(UTC).isoformat(),
+        )
+
+    def verify_consistent_backup(
+        self,
+        backup_path: Path,
+        *,
+        expected_checksum: str,
+        backup_generation: int,
+    ) -> CatalogIntegrityReport:
+        """核对一致性备份：checksum 不符或 generation 落后即进入维护模式。
+
+        - checksum 与 ``expected_checksum`` 不符 → ``CatalogMaintenanceRequiredError``
+          （备份被外部改动或损坏）；
+        - ``backup_generation`` 小于当前 generation → 备份落后于已提交操作，
+          ``CatalogMaintenanceRequiredError``；
+        - 相等 → 返回核对报告（不修改任何数据）。
+        """
+        if not isinstance(backup_path, Path):
+            raise TypeError(f"backup_path 必须是 Path: {backup_path!r}")
+        resolved = backup_path.expanduser().resolve()
+        if not resolved.is_file():
+            raise CatalogMaintenanceRequiredError(
+                f"一致性备份缺失，须进入维护模式核对: {resolved}"
+            )
+        actual_checksum = _sha256_file(resolved)
+        if actual_checksum != expected_checksum:
+            raise CatalogMaintenanceRequiredError(
+                "一致性备份 checksum 不符（被外部改动或损坏，须进入维护模式"
+                "核对并保留原数据）: "
+                f"path={resolved}, expected={expected_checksum}, "
+                f"actual={actual_checksum}"
+            )
+        current = self.current_generation()
+        if backup_generation < current:
+            raise CatalogMaintenanceRequiredError(
+                "一致性备份落后于已提交操作（须进入维护模式核对，不得扫盘补齐）: "
+                f"backup_generation={backup_generation}, "
+                f"current_generation={current}, path={resolved}"
+            )
+        return CatalogIntegrityReport(
+            generation=current,
+            quick_check="ok",
+            backup_generation=backup_generation,
+            backup_checksum=actual_checksum,
+        )
+
+    def verify_registered_date_directories(self) -> None:
+        """校验 ``sessions/YYYY/MM/DD`` 日期桶与 catalog locator 一一对应（8.1-F）。
+
+        存在**未登记**日期目录（磁盘上有而 catalog 无对应 locator）→
+        ``CatalogMaintenanceRequiredError``：只保留原数据、进入维护模式核对，
+        绝不扫盘补 active node、绝不 GC 未知目录。反向（catalog 有而磁盘缺）
+        由 locator 解析层 fail closed，不在本方法重复。
+        """
+        if not self.sessions_root.is_dir():
+            return
+        registered: set[str] = set()
+        with self._read_transaction() as connection:
+            rows = connection.execute(
+                "SELECT storage_relative_locator FROM nodes "
+                "WHERE kind = 'session' AND storage_relative_locator IS NOT NULL"
+            ).fetchall()
+        for row in rows:
+            locator = str(row[0])
+            parts = locator.split("/")
+            registered.add("/".join(parts[1:4]))
+        unknown: list[str] = []
+        for year_dir in sorted(self.sessions_root.iterdir()):
+            if not year_dir.is_dir() or not year_dir.name.isdigit():
+                # 非日期桶目录（如 .staging/.deleting）不属于本校验面。
+                continue
+            for month_dir in sorted(year_dir.iterdir()):
+                if not month_dir.is_dir() or not month_dir.name.isdigit():
+                    continue
+                for day_dir in sorted(month_dir.iterdir()):
+                    if not day_dir.is_dir() or not day_dir.name.isdigit():
+                        continue
+                    bucket = f"{year_dir.name}/{month_dir.name}/{day_dir.name}"
+                    if bucket not in registered:
+                        unknown.append(bucket)
+        if unknown:
+            raise CatalogMaintenanceRequiredError(
+                "sessions 下存在未登记日期目录（须进入维护模式核对并保留原数据，"
+                "不得扫盘补 active node 或交给 GC）: "
+                f"sessions_root={self.sessions_root}, unknown={sorted(unknown)}"
+            )
+
+
+def _sha256_file(path: Path) -> str:
+    """计算文件 sha256（备份清单 checksum）。"""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
