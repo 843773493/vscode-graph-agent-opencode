@@ -367,7 +367,10 @@ export function getGatewayToken(port: number): Promise<string> {
       if (!response.ok) {
         throw new Error(`获取 Gateway 本地凭据失败: HTTP ${response.status}`);
       }
-      const payload = await response.json() as APIResponse<{ token: string }>;
+      const payload = await awaitWithAbort(
+        response.json() as Promise<APIResponse<{ token: string }>>,
+        abortState.signal,
+      );
       const token = payload.data?.token;
       if (!token) throw new Error("Gateway 本地凭据响应缺少 token");
       return token;
@@ -391,7 +394,7 @@ async function runGatewayRequest<T>(
   port: number,
   path: string,
   init: (GatewayResponseInit & { timeoutMs?: number }) | undefined,
-  consume: (response: Response) => T | Promise<T>,
+  consume: (response: Response, signal: AbortSignal) => T | Promise<T>,
 ): Promise<T> {
   const {
     timeoutMs,
@@ -459,7 +462,7 @@ async function runGatewayRequest<T>(
         path,
       );
     }
-    return await consume(response);
+    return await consume(response, abortState.signal!);
   } catch (error) {
     // 超时同时可能发生在响应体消费阶段，统一按既有超时文案收口。
     if (abortState.didTimeout()) throw new Error(timeoutErrorMessage);
@@ -514,13 +517,14 @@ export async function requestJson<T>(
           : { "Content-Type": "application/json" }),
       },
     },
-    async (response) =>
+    async (response, signal) =>
       response.status === 204
         ? undefined as T
         : await parseJsonResponseOrThrowDiagnostic<T>(
           response,
           path,
           parseInWorkerAboveBytes,
+          signal,
         ),
   );
 }
@@ -533,9 +537,10 @@ async function parseJsonResponseOrThrowDiagnostic<T>(
   response: Response,
   path: string,
   parseInWorkerAboveBytes: number | null,
+  signal: AbortSignal,
 ): Promise<T> {
   try {
-    return await parseJsonResponse<T>(response, parseInWorkerAboveBytes);
+    return await parseJsonResponse<T>(response, parseInWorkerAboveBytes, signal);
   } catch (error) {
     if (error instanceof JsonResponseBodyError) {
       throw new Error(

@@ -41,6 +41,12 @@ function resolveTestUrl(input: RequestInfo | URL, port: number): URL {
   return new URL(String(input), `http://127.0.0.1:${port}`);
 }
 
+function withFetchPreconnect(
+  implementation: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,
+): typeof fetch {
+  return Object.assign(implementation, { preconnect: originalFetch.preconnect });
+}
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
   restoreGlobalDescriptor("window", originalWindowDescriptor);
@@ -51,7 +57,7 @@ describe("requestJson 请求取消", () => {
     const port = 49_302;
     installWindow(port);
     const requestedPaths: string[] = [];
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
         const path = resolveTestUrl(input, port).pathname;
@@ -76,7 +82,6 @@ describe("requestJson 请求取消", () => {
         }
         throw new Error(`Unexpected request: ${path}`);
       },
-      { preconnect: originalFetch.preconnect },
     );
 
     await expect(requestJson<{ data: { workspace_id: string } }>(
@@ -95,7 +100,7 @@ describe("requestJson 请求取消", () => {
     installWindow(port);
     let credentialCalls = 0;
     const apiTokens: string[] = [];
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input, init] = args;
         const path = resolveTestUrl(input, port).pathname;
@@ -114,7 +119,6 @@ describe("requestJson 请求取消", () => {
         }
         return Response.json({ value: "ok" });
       },
-      { preconnect: originalFetch.preconnect },
     );
 
     await expect(requestJson<{ value: string }>(port, "/api/v1/retry-after-gateway-restart", {
@@ -132,7 +136,7 @@ describe("requestJson 请求取消", () => {
     let currentCalls = 0;
     let guestCalls = 0;
     let catalogCalls = 0;
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
         const url = resolveTestUrl(input, port);
@@ -177,7 +181,6 @@ describe("requestJson 请求取消", () => {
         }
         throw new Error(`Unexpected request: ${url.pathname}`);
       },
-      { preconnect: originalFetch.preconnect },
     );
 
     await expect(
@@ -204,7 +207,7 @@ describe("requestJson 请求取消", () => {
     const downloadStarted = new Promise<void>((resolve) => {
       markDownloadStarted = resolve;
     });
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input, init] = args;
         const path = resolveTestUrl(input, port).pathname;
@@ -221,7 +224,6 @@ describe("requestJson 请求取消", () => {
         markDownloadStarted!();
         return new Response(body);
       },
-      { preconnect: originalFetch.preconnect },
     );
 
     const pending = requestJson(port, "/api/v1/slow-download", {
@@ -235,6 +237,72 @@ describe("requestJson 请求取消", () => {
     expect((requestSignal as AbortSignal | null)?.aborted).toBe(true);
   });
 
+  test("响应头已返回但响应体不结束时超时也会终止 JSON 解析", async () => {
+    const port = 49_303;
+    installWindow(port);
+    let bodyController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    globalThis.fetch = withFetchPreconnect(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = resolveTestUrl(input, port).pathname;
+        if (path === "/api/gateway/auth/local-credential") return tokenResponse();
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            bodyController = controller;
+          },
+        }));
+      },
+    );
+
+    const pending = requestJson(port, "/api/v1/stalled-body", {
+      timeoutMs: 20,
+      skipGatewayUserSession: true,
+    });
+    const result = await Promise.race([
+      pending.then(() => "resolved", (error: unknown) => error),
+      new Promise<"hung">((resolve) => globalThis.setTimeout(() => resolve("hung"), 100)),
+    ]);
+    (bodyController as ReadableStreamDefaultController<Uint8Array> | null)?.error(
+      new Error("test cleanup"),
+    );
+
+    expect(result).not.toBe("hung");
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toBe("请求超时: /api/v1/stalled-body");
+  });
+
+  test("本地凭据响应体不结束时超时会终止 token 解析并清除缓存", async () => {
+    const port = 49_304;
+    installWindow(port);
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((handler: TimerHandler, _timeout?: number, ...rest: unknown[]) =>
+      (originalSetTimeout as (...args: unknown[]) => unknown)(handler, 0, ...rest)) as typeof globalThis.setTimeout;
+    let bodyController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    globalThis.fetch = withFetchPreconnect(
+      async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          bodyController = controller;
+        },
+      })),
+    );
+
+    try {
+      const result = await getGatewayToken(port).then(
+        () => "resolved",
+        (error: unknown) => error,
+      );
+      (bodyController as ReadableStreamDefaultController<Uint8Array> | null)?.error(
+        new Error("test cleanup"),
+      );
+
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).message).toBe("请求超时: /api/gateway/auth/local-credential");
+      invalidateGatewayToken(port);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  });
+
   test("外部 signal 与 timeout 组合时保留外部取消语义", async () => {
     const port = 49_302;
     installWindow(port);
@@ -244,7 +312,7 @@ describe("requestJson 请求取消", () => {
     const fetchStarted = new Promise<void>((resolve) => {
       markFetchStarted = resolve;
     });
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input, init] = args;
         const path = resolveTestUrl(input, port).pathname;
@@ -262,7 +330,6 @@ describe("requestJson 请求取消", () => {
           requestSignal?.addEventListener("abort", rejectAbort, { once: true });
         });
       },
-      { preconnect: originalFetch.preconnect },
     );
 
     const pending = requestJson(port, "/api/v1/external-abort", {
@@ -282,7 +349,7 @@ describe("requestJson 请求取消", () => {
 
 describe("HttpRequestError 错误体诊断", () => {
   function installErrorResponse(port: number, body: BodyInit | null, contentType?: string): void {
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
         const path = resolveTestUrl(input, port).pathname;
@@ -300,7 +367,6 @@ describe("HttpRequestError 错误体诊断", () => {
           headers: contentType ? { "content-type": contentType } : undefined,
         });
       },
-      { preconnect: originalFetch.preconnect },
     );
   }
 
@@ -372,7 +438,7 @@ describe("2xx 非 JSON 响应体的可诊断错误", () => {
     statusText = "OK",
     contentType?: string,
   ): void {
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
         const path = resolveTestUrl(input, port).pathname;
@@ -390,7 +456,6 @@ describe("2xx 非 JSON 响应体的可诊断错误", () => {
           headers: contentType ? { "content-type": contentType } : undefined,
         });
       },
-      { preconnect: originalFetch.preconnect },
     );
   }
 
@@ -544,7 +609,7 @@ describe("Gateway 用户会话恢复循环边界", () => {
     installWindow(port);
     let targetCalls = 0;
     let currentCalls = 0;
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
         const path = resolveTestUrl(input, port).pathname;
@@ -568,7 +633,6 @@ describe("Gateway 用户会话恢复循环边界", () => {
         }
         throw new Error("Unexpected request: " + path);
       },
-      { preconnect: originalFetch.preconnect },
     );
 
     const error = await requestJson(port, "/api/v1/always-401")
@@ -588,7 +652,7 @@ describe("Gateway 用户会话恢复循环边界", () => {
     installWindow(port);
     let targetCalls = 0;
     let credentialCalls = 0;
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
         const path = resolveTestUrl(input, port).pathname;
@@ -617,7 +681,6 @@ describe("Gateway 用户会话恢复循环边界", () => {
         }
         throw new Error("Unexpected request: " + path);
       },
-      { preconnect: originalFetch.preconnect },
     );
 
     const error = await requestJson(port, "/api/v1/mixed-401")
@@ -634,7 +697,7 @@ describe("Gateway 用户会话恢复循环边界", () => {
     const port = 49_362;
     installWindow(port);
     let currentCalls = 0;
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
         const path = resolveTestUrl(input, port).pathname;
@@ -654,7 +717,6 @@ describe("Gateway 用户会话恢复循环边界", () => {
         }
         throw new Error("Unexpected request: " + path);
       },
-      { preconnect: originalFetch.preconnect },
     );
 
     const error = await requestJson(port, "/api/v1/needs-recovery")
@@ -668,7 +730,7 @@ describe("Gateway 用户会话恢复循环边界", () => {
   test("恢复期间凭据端点失败时透出可诊断根因", async () => {
     const port = 49_364;
     installWindow(port);
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
         const path = resolveTestUrl(input, port).pathname;
@@ -683,7 +745,6 @@ describe("Gateway 用户会话恢复循环边界", () => {
         }
         throw new Error("Unexpected request: " + path);
       },
-      { preconnect: originalFetch.preconnect },
     );
 
     const error = await requestJson(port, "/api/v1/needs-credential")
@@ -698,7 +759,7 @@ describe("Gateway 用户会话恢复循环边界", () => {
     const externalController = new AbortController();
     let targetCalls = 0;
     let currentCalls = 0;
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
         const path = resolveTestUrl(input, port).pathname;
@@ -723,7 +784,6 @@ describe("Gateway 用户会话恢复循环边界", () => {
         }
         throw new Error("Unexpected request: " + path);
       },
-      { preconnect: originalFetch.preconnect },
     );
 
     const error = await requestJson(port, "/api/v1/abort-during-recovery", {
@@ -758,7 +818,7 @@ describe("默认请求超时", () => {
   }
 
   function installHangingFetch(port: number): void {
-    globalThis.fetch = Object.assign(
+    globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const path = resolveTestUrl(args[0], port).pathname;
         if (path === "/api/gateway/auth/local-credential") {
@@ -767,7 +827,6 @@ describe("默认请求超时", () => {
         // 永不 resolve：只有注册了超时才能收口。
         return await new Promise<Response>(() => undefined);
       },
-      { preconnect: originalFetch.preconnect },
     );
   }
 
