@@ -3,6 +3,7 @@ import type {
   ConversationModelUsage,
   ConversationTokenUsage,
 } from "../../types/frontend";
+import { copyTextToClipboard } from "../../utils/clipboard";
 
 const RESPONSE_ACTIONS = [
   // TODO: 接入后端反馈接口后，实现点赞状态持久化与撤销。
@@ -10,31 +11,6 @@ const RESPONSE_ACTIONS = [
   // TODO: 接入后端反馈接口后，实现点踩原因收集与状态持久化。
   { label: "没有帮助", icon: "thumbsdown" },
 ] as const;
-
-async function writeClipboardText(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-
-  // TODO: 浏览器前端强制使用 HTTPS 后，移除非安全 HTTP 上下文的兼容分支。
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  let copied = false;
-  try {
-    copied = document.execCommand("copy");
-  } finally {
-    textarea.remove();
-  }
-  if (!copied) {
-    throw new Error("浏览器拒绝写入剪贴板");
-  }
-}
 
 export default function ResponseActionToolbar({
   responseText,
@@ -60,7 +36,7 @@ export default function ResponseActionToolbar({
       return;
     }
     try {
-      await writeClipboardText(responseText);
+      await copyTextToClipboard(responseText);
       setCopyState("copied");
       if (resetTimerRef.current !== null) {
         window.clearTimeout(resetTimerRef.current);

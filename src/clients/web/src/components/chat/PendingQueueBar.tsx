@@ -1,20 +1,12 @@
 import React from "react";
 import { errorMessage } from "../../utils/errorMessage";
+import {
+  DELIVERY_POLICIES,
+  DELIVERY_POLICY_LABELS,
+} from "../deliveryPolicyPresentation";
 
 import type { AttachmentRef, DeliveryPolicy } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
-
-const POLICY_LABELS: Record<DeliveryPolicy, string> = {
-  after_turn: "本轮结束后投递",
-  after_tool_result: "工具结果后投递",
-  after_interrupt: "中断边界后投递",
-};
-
-const POLICIES: DeliveryPolicy[] = [
-  "after_turn",
-  "after_tool_result",
-  "after_interrupt",
-];
 
 function PendingQueueItem({
   conversation,
@@ -147,7 +139,7 @@ function PendingQueueItem({
       </div>
       {directionOpen ? (
         <div className="chat-pending-direction-menu" role="menu" aria-label="调整投递方向">
-          {POLICIES.map((policy) => (
+          {DELIVERY_POLICIES.map((policy) => (
             <button
               key={policy}
               type="button"
@@ -163,7 +155,7 @@ function PendingQueueItem({
                 ));
               }}
             >
-              <span>{POLICY_LABELS[policy]}</span>
+              <span>{DELIVERY_POLICY_LABELS[policy]}</span>
               {conversation.deliveryPolicy === policy ? <span aria-hidden="true">✓</span> : null}
             </button>
           ))}

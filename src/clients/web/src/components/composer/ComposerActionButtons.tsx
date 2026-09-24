@@ -1,10 +1,6 @@
 import React from "react";
-
-const DELIVERY_POLICY_LABELS = {
-  after_turn: "本轮结束后投递",
-  after_tool_result: "工具结果后投递",
-  after_interrupt: "中断边界后投递",
-} as const;
+import type { DeliveryPolicy } from "../../types/backend";
+import { DELIVERY_POLICY_LABELS } from "../deliveryPolicyPresentation";
 
 export default function ComposerActionButtons({
   hasContent,
@@ -23,7 +19,7 @@ export default function ComposerActionButtons({
   onSend: () => void;
   onAlternate: () => void;
   onToggleDefault: () => void;
-  defaultDeliveryPolicy: "after_turn" | "after_tool_result" | "after_interrupt";
+  defaultDeliveryPolicy: DeliveryPolicy;
 }): React.ReactNode {
   return (
     <>

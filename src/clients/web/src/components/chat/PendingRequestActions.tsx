@@ -1,12 +1,10 @@
 import React from "react";
 
 import type { DeliveryPolicy } from "../../types/backend";
-
-const POLICY_LABELS: Record<DeliveryPolicy, string> = {
-  after_turn: "本轮结束后投递",
-  after_tool_result: "工具结果后投递",
-  after_interrupt: "中断边界后投递",
-};
+import {
+  DELIVERY_POLICIES,
+  DELIVERY_POLICY_LABELS,
+} from "../deliveryPolicyPresentation";
 
 export default function PendingRequestActions({
   deliveryPolicy,
@@ -27,15 +25,15 @@ export default function PendingRequestActions({
       role="toolbar"
       aria-label="待处理消息投递策略"
     >
-      <span className="chat-pending-kind">{POLICY_LABELS[deliveryPolicy]}</span>
-      {(Object.keys(POLICY_LABELS) as DeliveryPolicy[]).map((policy) => (
+      <span className="chat-pending-kind">{DELIVERY_POLICY_LABELS[deliveryPolicy]}</span>
+      {DELIVERY_POLICIES.map((policy) => (
         <button
           key={policy}
           type="button"
           disabled={disabled || policy === deliveryPolicy}
           aria-pressed={policy === deliveryPolicy}
-          title={POLICY_LABELS[policy]}
-          aria-label={POLICY_LABELS[policy]}
+          title={DELIVERY_POLICY_LABELS[policy]}
+          aria-label={DELIVERY_POLICY_LABELS[policy]}
           onClick={() => onChangePolicy(policy)}
         >
           {policy === deliveryPolicy ? "✓" : "·"}
