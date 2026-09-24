@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.domain.itemized.detail_ref import DetailRef
@@ -186,6 +188,13 @@ async def test_freeze_turn_and_model_call_reuses_parent_bytes() -> None:
     assert second_call.bindings[-1].revision == "rev-mcp:catalog:2"
     assert second_call.bindings[-1].content_hash != first_call.bindings[-1].content_hash
     assert len(saver.snapshots) == 3
+    # model-call snapshot 只追加，绝不重复 parent 的 turn-bound binding。
+    for call in (first_call, second_call):
+        resource_ids = [binding.resource_id for binding in call.bindings]
+        assert len(resource_ids) == len(set(resource_ids))
+        assert resource_ids[: len(turn.bindings)] == [
+            binding.resource_id for binding in turn.bindings
+        ]
 
 
 @pytest.mark.asyncio
@@ -202,6 +211,47 @@ async def test_no_model_call_kind_reuses_turn_snapshot_without_saving() -> None:
         parent=turn, model_call_id="call-1", policy=policy
     )
     assert prepared is turn
+
+
+@pytest.mark.asyncio
+async def test_model_call_policy_without_published_kind_reuses_parent() -> None:
+    """policy 声明 model_call boundary 但当前无该 kind 资源时复用 parent，不漂移。"""
+
+    registry = ResourceRegistry()
+    registry.register_descriptor(
+        SemanticResourceDescriptor(
+            resource_id="skill:demo",
+            resource_kind="skills",
+            facet="activation",
+            display_uri="boxteam://workspace/test/skills",
+        )
+    )
+    # mcp_tool_catalog 已登记但尚未发布任何可用 snapshot。
+    registry.register_descriptor(
+        SemanticResourceDescriptor(
+            resource_id="mcp:catalog",
+            resource_kind="mcp_tool_catalog",
+            facet="activation",
+            display_uri="boxteam://workspace/test/mcp_tool_catalog",
+        )
+    )
+    registry.publish(_snapshot("skill:demo", "skills", {"skill": 1}, generation=2))
+    saver = _FakeSaver()
+    coordinator = _coordinator(registry, saver)
+    policy = _policy()
+    turn = await coordinator.freeze_turn(
+        owner_session_id=SESSION_ID,
+        owner_thread_id="main",
+        turn_id="turn-1",
+        policy=policy,
+    )
+    assert [binding.resource_kind for binding in turn.bindings] == ["skills"]
+
+    prepared = await coordinator.prepare_model_call(
+        parent=turn, model_call_id="call-1", policy=policy
+    )
+    assert prepared is turn
+    assert len(saver.snapshots) == 1
 
 
 @pytest.mark.asyncio
@@ -250,6 +300,43 @@ async def test_unavailable_required_resource_fails_closed_after_bounded_wait() -
         )
     assert error.value.code == "resource-unavailable"
     assert saver.snapshots == []
+
+
+@pytest.mark.asyncio
+async def test_unavailable_required_resource_does_bounded_wait_before_failing() -> None:
+    """不可用 required resource 必须先有界等待，不能立即或无限重试。"""
+
+    registry = _registry()
+    registry.publish(
+        _snapshot("skill:demo", "skills", None, generation=5, available=False)
+    )
+    sleeps: list[float] = []
+
+    async def _sleep(seconds: float) -> None:
+        if len(sleeps) > 100:
+            raise AssertionError("bounded wait 未收敛：等待次数无上界")
+        sleeps.append(seconds)
+        # 真实推进事件循环时间，使 time.monotonic() 预算真实耗尽。
+        await asyncio.sleep(seconds)
+
+    coordinator = ResourceActivationCoordinator(
+        registry=registry,
+        saver=_FakeSaver(),  # type: ignore[arg-type]
+        body_store=_FakeBodyStore(),  # type: ignore[arg-type]
+        wait_seconds=0.05,
+        poll_seconds=0.005,
+        sleep=_sleep,
+    )
+    with pytest.raises(ResourceActivationError) as error:
+        await coordinator.freeze_turn(
+            owner_session_id=SESSION_ID,
+            owner_thread_id="main",
+            turn_id="turn-wait",
+            policy=_policy(),
+        )
+    assert error.value.code == "resource-unavailable"
+    assert sleeps, "required resource 不可用时必须经过有界等待"
+    assert all(seconds == 0.005 for seconds in sleeps)
 
 
 @pytest.mark.asyncio

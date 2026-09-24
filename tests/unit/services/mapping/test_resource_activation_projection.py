@@ -7,6 +7,7 @@ import json
 import pytest
 
 from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
@@ -85,8 +86,28 @@ def test_projection_exposes_only_safe_fields() -> None:
         payload = projection.to_dict()
         assert set(payload) == SAFE_RESOURCE_PROJECTION_FIELDS
         assert payload["display_uri"].startswith("boxteam://")
-        # opaque provenance ref 不外泄 raw resource_id。
+        # opaque provenance ref 不外泄 raw resource_id，且是合法 hash token。
         assert "skill:" not in payload["provenance_ref"]
+        assert payload["provenance_ref"].startswith("sha256:jcs:v1:")
+    # opaque ref 必须由 owner/snapshot/binding 关系确定性导出，而不是自由常量。
+    binding = snapshot.bindings[0]
+    assert projections[0].provenance_ref == sha256_jcs(
+        {
+            "schema": "resource-provenance-ref:v1",
+            "owner_session_id": SESSION_ID,
+            "owner_thread_id": "main",
+            "activation_snapshot_id": snapshot.activation_snapshot_id,
+            "resource_id": binding.resource_id,
+            "revision": binding.revision,
+        }
+    )
+    # 不同 binding 必须得到不同 opaque ref，不能退化成同一个常量。
+    assert projections[0].provenance_ref != projections[1].provenance_ref
+    # 同一 binding 跨 snapshot 重建保持同一 ref。
+    rebuilt = ResourceActivationSnapshotRef.from_dict(snapshot.to_dict())
+    assert project_sealed_resource_refs(rebuilt)[0].provenance_ref == (
+        projections[0].provenance_ref
+    )
 
 
 def test_projection_never_leaks_locator_credential_or_body() -> None:

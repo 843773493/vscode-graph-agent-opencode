@@ -154,7 +154,6 @@ class ResourceActivationCoordinator:
         if not turn_policy.has_model_call_boundary():
             return parent
         snapshots = await self._await_required_snapshots()
-        parent_resource_ids = {binding.resource_id for binding in parent.bindings}
         snapshot = self._build_snapshot(
             snapshot_kind="model_call",
             owner_session_id=parent.owner_session_id,
@@ -166,7 +165,6 @@ class ResourceActivationCoordinator:
             model_call_id=model_call_id,
             checkpoint_ns=checkpoint_ns,
             reuse_parent_bindings=parent.bindings,
-            exclude_resource_ids=parent_resource_ids,
         )
         if len(snapshot.bindings) == len(parent.bindings):
             return parent
@@ -220,7 +218,6 @@ class ResourceActivationCoordinator:
         model_call_id: str | None,
         checkpoint_ns: str,
         reuse_parent_bindings: tuple[ResourceProvenanceRef, ...] = (),
-        exclude_resource_ids: frozenset[str] = frozenset(),
     ) -> ResourceActivationSnapshotRef:
         snapshot_id = _snapshot_id(
             snapshot_kind=snapshot_kind,
@@ -229,12 +226,9 @@ class ResourceActivationCoordinator:
             turn_id=turn_id,
             model_call_id=model_call_id,
         )
-        reuse_ids = {binding.resource_id for binding in reuse_parent_bindings}
         new_bindings: list[ResourceProvenanceRef] = list(reuse_parent_bindings)
         ordinal = len(reuse_parent_bindings)
         for item in sorted(snapshots, key=lambda entry: entry.resource_id):
-            if item.resource_id in reuse_ids or item.resource_id in exclude_resource_ids:
-                continue
             boundary = policy.effective_boundary(item.resource_kind)
             if snapshot_kind == "turn" and boundary != "turn":
                 continue
