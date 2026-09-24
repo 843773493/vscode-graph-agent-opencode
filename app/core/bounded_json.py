@@ -15,16 +15,42 @@ def _encoded(value: object) -> bytes:
 
 
 def _truncated_text(value: str, max_bytes: int) -> str:
+    """截断文本；结果按 JSON 字符串编码后不超过 ``max_bytes``。
+
+    ``max_bytes`` 是 JSON 形态的字节预算，所以先扣掉两侧引号再裁剪文本，
+    否则截断结果会被引号顶出上限。
+    """
     original_bytes = len(value.encode("utf-8"))
     marker = (
         f"...[BoxTeam 已截断，原始字节数={original_bytes}，"
         f"sha256={hashlib.sha256(value.encode('utf-8')).hexdigest()}]"
     )
+    text_budget = max_bytes - 2
     marker_bytes = len(marker.encode("utf-8"))
-    if marker_bytes >= max_bytes:
-        return marker.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
-    prefix = value.encode("utf-8")[: max_bytes - marker_bytes]
+    if marker_bytes >= text_budget:
+        return marker.encode("utf-8")[:text_budget].decode("utf-8", errors="ignore")
+    prefix = value.encode("utf-8")[: text_budget - marker_bytes]
     return prefix.decode("utf-8", errors="ignore") + marker
+
+
+def _truncation_fallback(encoded: bytes, max_bytes: int) -> object:
+    """预算不足以容纳结构化标记时，退化为有界的文本截断标记。
+
+    结构化标记固定占用百余字节，小预算下自身即超限；此时改用文本形态，
+    由 :func:`_truncated_text` 保证严格落在预算内。
+    """
+    marker = {
+        "__boxteam_truncated__": True,
+        "__boxteam_original_bytes__": len(encoded),
+        "__boxteam_sha256__": hashlib.sha256(encoded).hexdigest(),
+    }
+    if len(_encoded(marker)) <= max_bytes:
+        return marker
+    return _truncated_text(
+        "...[BoxTeam JSON payload 已截断，原始字节数="
+        f"{len(encoded)}，sha256={hashlib.sha256(encoded).hexdigest()}]",
+        max_bytes,
+    )
 
 
 def _compact(value: object, max_bytes: int) -> object:
@@ -46,10 +72,7 @@ def _compact(value: object, max_bytes: int) -> object:
             result["__boxteam_truncated__"] = True
         if len(_encoded(result)) <= max_bytes:
             return result
-        return {
-            "__boxteam_truncated__": True,
-            "__boxteam_original_bytes__": len(_encoded(value)),
-        }
+        return _truncation_fallback(_encoded(value), max_bytes)
     if isinstance(value, (list, tuple)):
         child_budget = max(64, max_bytes // max(len(value), 1))
         result = [_compact(item, child_budget) for item in value]
@@ -59,10 +82,7 @@ def _compact(value: object, max_bytes: int) -> object:
             result.append("...[BoxTeam list items 已截断]")
         if len(_encoded(result)) <= max_bytes:
             return result
-        return {
-            "__boxteam_truncated__": True,
-            "__boxteam_original_bytes__": len(_encoded(value)),
-        }
+        return _truncation_fallback(_encoded(value), max_bytes)
     return value
 
 
@@ -76,8 +96,4 @@ def bound_json_value(value: Any, *, max_bytes: int) -> object:
     compacted = _compact(value, max_bytes)
     if len(_encoded(compacted)) <= max_bytes:
         return compacted
-    return {
-        "__boxteam_truncated__": True,
-        "__boxteam_original_bytes__": len(encoded),
-        "__boxteam_sha256__": hashlib.sha256(encoded).hexdigest(),
-    }
+    return _truncation_fallback(encoded, max_bytes)
