@@ -126,7 +126,6 @@ export function useWorkspaceSessionActivity({
               status: `活动游标失效且会话摘要刷新失败: ${message}`,
             }));
           }
-          reconnectAttempt = 0;
         } else {
           const message = errorMessage(error);
           setState((previous) => ({

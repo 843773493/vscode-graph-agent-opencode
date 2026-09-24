@@ -197,3 +197,29 @@ describe("useWorkspaceSessionActivity 重连与卸载", () => {
     streamSpy.mockRestore();
   });
 });
+describe("useWorkspaceSessionActivity 游标失效有界重连", () => {
+  test("上游持续 410 时同走有界重连，不会无限重连", async () => {
+    installWindow();
+    const listSpy = spyOn(sessionActivityApi, "listSessionActivity")
+      .mockResolvedValue({ items: [], next_cursor: 0 } as never);
+    // 服务端保留窗口已裁掉游标：每次订阅都以 410 失败；摘要刷新则成功。
+    const streamSpy = spyOn(sessionActivityApi, "streamSessionActivity")
+      .mockRejectedValue(new sessionActivityApi.SessionActivityCursorGoneError(7));
+    const refreshSpy = spyOn(sessionRefresh, "refreshWorkspaceSessionList")
+      .mockResolvedValue(undefined as never);
+    const state = appState();
+    await mountActivity(state, () => undefined);
+
+    for (let round = 0; round < SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 3; round += 1) {
+      await flush();
+    }
+
+    // 游标恢复能力必须保留：每轮都刷新了会话摘要。
+    expect(refreshSpy).toHaveBeenCalledTimes(SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 1);
+    expect(streamSpy).toHaveBeenCalledTimes(SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 1);
+    expect(state.status).toContain("已停止自动重连");
+    listSpy.mockRestore();
+    streamSpy.mockRestore();
+    refreshSpy.mockRestore();
+  });
+});
