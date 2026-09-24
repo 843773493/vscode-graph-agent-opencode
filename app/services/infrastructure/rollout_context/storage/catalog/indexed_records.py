@@ -9,9 +9,11 @@ from typing import TYPE_CHECKING
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_helpers import (
+    _raw_call_id_from_scoped,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projections import (
     VISIBLE_NORMAL_TURN_PREDICATE,
-    _raw_call_id_from_scoped,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,

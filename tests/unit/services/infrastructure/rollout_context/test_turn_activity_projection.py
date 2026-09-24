@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.infrastructure.rollout_context.storage.catalog.turn_projections import (
+from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_helpers import (
     _final_reasoning_source_refs,
     _finalize_activity_projection,
     _logical_activity_key,

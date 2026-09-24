@@ -98,6 +98,9 @@ from app.services.infrastructure.rollout_context.storage.catalog.parts import (
 from app.services.infrastructure.rollout_context.storage.catalog.projections import (
     RolloutProjectionMixin,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_reads import (
+    TurnProjectionReadMixin,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projections import (
     TurnProjectionQueryMixin,
 )
@@ -179,6 +182,7 @@ class RolloutStorage(
     RolloutMessageMaterializerMixin,
     IndexedRecordQueryMixin,
     TurnProjectionQueryMixin,
+    TurnProjectionReadMixin,
     RolloutWriteMixin,
     ForkIdentityMappingMixin,
     RolloutIdentityMixin,
