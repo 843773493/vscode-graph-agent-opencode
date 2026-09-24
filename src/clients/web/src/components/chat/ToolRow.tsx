@@ -88,12 +88,14 @@ function ToolRow({
       setError(null);
       try {
         await onLoadDetails(item.toolCallId);
-        setOpen(true);
       } catch (loadError) {
         setError(errorMessage(loadError));
       } finally {
         setLoading(false);
       }
+      // 详情区是错误提示的唯一出口：加载失败也必须展开，否则用户点击后
+      // 只看到按钮停止转圈，失败被静默吞掉，表现为「点了没反应」。
+      setOpen(true);
       return;
     }
     setOpen((current) => !current);

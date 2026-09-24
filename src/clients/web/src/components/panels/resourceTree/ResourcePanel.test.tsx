@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionResource } from "../../../types/backend";
 import {
@@ -11,6 +12,30 @@ import {
 } from "../../../state/display/resourceDisplay";
 import ResourcePanel from "./ResourcePanel";
 import WarmConfirmProvider from "../../shell/WarmConfirmProvider";
+import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
+
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+
+/** 递归收集子节点文本，避开 React 元素树的循环引用。 */
+function nodeText(node: unknown): string {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(nodeText).join("");
+  if (node && typeof node === "object" && "props" in node) {
+    return nodeText((node as { props: { children?: unknown } }).props.children);
+  }
+  return "";
+}
+
+afterEach(() => {
+  if (originalClipboard) {
+    Object.defineProperty(navigator, "clipboard", originalClipboard);
+  } else {
+    Reflect.deleteProperty(navigator, "clipboard");
+  }
+  restoreGlobalDescriptor("document", originalDocument);
+});
 
 function resource(
   index: number,
@@ -164,5 +189,74 @@ describe("后台连接目录", () => {
     expect(html).toContain("resource-tree-item is-selected");
     expect(html).toContain(">当前</span>");
     expect((html.match(/resource-tree-item/g) ?? []).length).toBe(12);
+  });
+
+  test("复制 ID 失败时给出可见原因，而不是把失败静默吞成成功提示", async () => {
+    // Clipboard API 被拒绝 + 兼容复制也失败：这是非安全上下文下真实可达的组合。
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        writeText: async () => {
+          throw new Error("权限被拒绝");
+        },
+      },
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: {
+        createElement: () => ({
+          value: "",
+          style: { position: "", left: "" },
+          setAttribute: () => undefined,
+          focus: () => undefined,
+          select: () => undefined,
+          remove: () => undefined,
+        }),
+        body: { appendChild: () => undefined },
+        execCommand: () => false,
+      },
+    });
+
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <WarmConfirmProvider>
+          <ResourcePanel
+            resources={[resource(1)]}
+            loading={false}
+            error={null}
+            loadedAt={null}
+            sessionId="ses_resource_tree"
+            workspaceId="workspace_test"
+            activePreviewPath={null}
+            onRefresh={() => {}}
+            onControl={async () => {}}
+            onOpenTerminalPreview={() => {}}
+            onOpenBrowserPreview={() => {}}
+            onCloseResourcePreview={async () => {}}
+            onCreateConnection={async () => {}}
+          />
+        </WarmConfirmProvider>,
+      );
+    });
+
+    // 展开资源行后才能点到「复制 ID」。
+    act(() => {
+      renderer.root.findByProps({ className: "resource-tree-chevron" }).props.onClick();
+    });
+    const copyButton = renderer.root.findByProps({ children: "复制 ID" });
+    await act(async () => {
+      copyButton.props.onClick();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const notice = renderer.root.findAll(
+      (node) => typeof node.props.className === "string"
+        && node.props.className.split(" ").includes("resource-notice"),
+    );
+    const text = notice.map((node) => nodeText(node.props.children)).join(" ");
+    expect(text).toContain("复制失败");
+    expect(text).not.toContain("已复制 UUID");
+    renderer.unmount();
   });
 });

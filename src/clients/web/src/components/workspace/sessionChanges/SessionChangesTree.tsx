@@ -96,7 +96,7 @@ export default function SessionChangesTree({
               </button>
             ))}
           </div>
-        ) : !loading ? (
+        ) : !loading && !error ? (
           <div className="auxiliary-empty-row muted">当前会话没有文件变更。</div>
         ) : null}
       </section>
@@ -140,7 +140,7 @@ export default function SessionChangesTree({
               </div>
             ))}
           </div>
-        ) : !loading ? (
+        ) : !loading && !error ? (
           <div className="auxiliary-empty-row muted">没有可展示的会话文件变更。</div>
         ) : null}
       </section>

@@ -18,6 +18,7 @@ import { CREATABLE_SESSION_CONNECTIONS } from "../../../state/sessionConnections
 import type { CreatableSessionConnectionKind } from "../../../types/frontend";
 import AnchoredOverlay from "../../overlays/AnchoredOverlay";
 import ResourceTreeRow from "./ResourceTreeRow";
+import { copyTextToClipboard } from "../../../utils/clipboard";
 import { errorMessage } from "../../../utils/errorMessage";
 
 const DEFAULT_GROUP_OPEN: Record<ResourceAttentionGroup, boolean> = {
@@ -175,46 +176,17 @@ export default function ResourcePanel({
   };
 
   const handleCopy = (resourceId: string) => {
-    const fallbackCopy = () => {
-      const textarea = document.createElement("textarea");
-      textarea.value = resourceId;
-      textarea.style.position = "fixed";
-      textarea.style.left = "-9999px";
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      const copied = document.execCommand("copy");
-      textarea.remove();
-      if (!copied) {
-        throw new Error("浏览器拒绝复制");
-      }
-    };
-
-    try {
-      if (navigator.clipboard) {
-        void navigator.clipboard
-          .writeText(resourceId)
-          .then(() => {
-            setNoticeTechnicalDetails("");
-            setNotice(`已复制 UUID: ${resourceId}`);
-          })
-          .catch(() => {
-            fallbackCopy();
-            setNoticeTechnicalDetails("");
-            setNotice(`已复制 UUID: ${resourceId}`);
-          });
-        return;
-      }
-      fallbackCopy();
-      setNoticeTechnicalDetails("");
-      setNotice(`已复制 UUID: ${resourceId}`);
-    } catch (copyError) {
-      setNotice(
-        `复制失败: ${
-          errorMessage(copyError)
-        }`,
-      );
-    }
+    // 复制统一走 utils/clipboard 的唯一实现：Clipboard API 被拒绝、非安全上下文
+    // 下兼容复制也失败时，必须在同一处给出可见原因，不能把失败静默吞掉。
+    void copyTextToClipboard(resourceId)
+      .then(() => {
+        setNoticeTechnicalDetails("");
+        setNotice(`已复制 UUID: ${resourceId}`);
+      })
+      .catch((copyError: unknown) => {
+        setNoticeTechnicalDetails(errorMessage(copyError));
+        setNotice("复制失败：可展开技术详情查看原因，或选中 ID 手动复制。");
+      });
   };
 
   const handleOpenTerminal = (resourceId: string) => {

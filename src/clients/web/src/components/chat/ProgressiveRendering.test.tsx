@@ -61,6 +61,46 @@ describe("渐进 Markdown 渲染", () => {
 });
 
 describe("折叠详情按需解析", () => {
+  test("工具详情加载失败时展开并显示原因，而不是静默停在折叠态", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <ToolRow
+          showRawDetails={false}
+          item={{
+            kind: "aggregated_tool",
+            id: "tool-load-failure",
+            toolName: "custom_tool",
+            toolCallId: "call-load-failure",
+            inputText: "",
+            resultText: "",
+            timestamp: null,
+            rawStart: {},
+            rawEnd: {},
+            active: false,
+          }}
+          onLoadDetails={async () => {
+            throw new Error("详情读取超时");
+          }}
+        />,
+      );
+    });
+
+    const summary = renderer!.root.findByProps({ className: "chat-tool-summary" });
+    await act(async () => {
+      await summary.props.onClick();
+    });
+
+    // 失败必须可见：展开且带 role=alert 的原因文案，不能只留下停止的转圈。
+    expect(summary.props["aria-expanded"]).toBe(true);
+    const alert = renderer!.root.findAll(
+      (node) => node.props.role === "alert",
+    );
+    expect(alert).toHaveLength(1);
+    expect(alert[0]!.children.join("")).toContain("详情读取超时");
+    renderer!.unmount();
+  });
+
   test("折叠 reasoning 不挂载完整 Markdown", () => {
     const hiddenTail = "REASONING_HIDDEN_TAIL";
     const html = renderToStaticMarkup(
