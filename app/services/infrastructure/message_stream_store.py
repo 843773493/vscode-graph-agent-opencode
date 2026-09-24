@@ -2187,10 +2187,10 @@ class MessageStreamStore:
                     after_seq=after_seq,
                 )
             except MessageStreamCursorGoneError:
-                snapshot_event = await self.snapshot_event(turn_stream_id)
+                snapshot_event, terminal = await self._recovery_snapshot(turn_stream_id)
                 last_seq = int(snapshot_event["event_seq"])
                 yield snapshot_event
-                if self._is_terminal_snapshot(snapshot_event["payload"]):
+                if terminal:
                     return
                 initial_events = []
             for event in initial_events:
@@ -2203,9 +2203,8 @@ class MessageStreamStore:
             # 非终态事件。此时必须立刻用控制帧收敛并关闭；否则生成器会永久阻塞在
             # 订阅队列上，SSE 连接既收不到帧也不结束。
             if self._is_terminal_snapshot(await self.get_state(turn_stream_id)):
-                initial_snapshot = await self.snapshot_event(turn_stream_id)
-                last_seq = int(initial_snapshot["event_seq"])
-                yield initial_snapshot
+                snapshot_event, _ = await self._recovery_snapshot(turn_stream_id)
+                yield snapshot_event
                 return
             while True:
                 record = await subscription.get()
@@ -2213,10 +2212,12 @@ class MessageStreamStore:
                 if event_seq <= last_seq:
                     continue
                 if event_seq != last_seq + 1:
-                    snapshot_event = await self.snapshot_event(turn_stream_id)
+                    snapshot_event, terminal = await self._recovery_snapshot(
+                        turn_stream_id
+                    )
                     last_seq = int(snapshot_event["event_seq"])
                     yield snapshot_event
-                    if self._is_terminal_snapshot(snapshot_event["payload"]):
+                    if terminal:
                         return
                     continue
                 last_seq = event_seq
@@ -2233,6 +2234,18 @@ class MessageStreamStore:
             "stream.interrupted",
             "stream.failed",
         }
+
+    async def _recovery_snapshot(
+        self,
+        turn_stream_id: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """构造续播恢复用的控制帧，并同时返回该快照是否已终态。
+
+        SSE 的三条恢复路径（游标失效、重放窗口无终态、事件序号跳变）都必须先
+        发同一个控制帧、再据终态决定是否收敛，收敛为唯一实现以免三处各自漂移。
+        """
+        snapshot_event = await self.snapshot_event(turn_stream_id)
+        return snapshot_event, self._is_terminal_snapshot(snapshot_event["payload"])
 
     @staticmethod
     def _is_terminal_snapshot(snapshot: Mapping[str, Any]) -> bool:
