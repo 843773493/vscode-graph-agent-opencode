@@ -411,6 +411,8 @@ class JobEventBus:
 
     async def list_events(self, job_id: str, after: str | None = None, limit: int = 20) -> list[Event]:
         """获取事件列表（返回 discriminated union 类型）"""
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            raise ValueError(f"list_events limit 必须是正整数: {limit!r}")
         channel = self._event_service.find_channel(
             channel_name(JOB_EVENTS_CHANNEL_KIND, job_id)
         )

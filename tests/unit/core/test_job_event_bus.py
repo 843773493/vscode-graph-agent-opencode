@@ -241,3 +241,28 @@ async def test_concurrent_events_for_same_job_keep_publish_order():
     release_first.set()
     await asyncio.gather(first_task, second_task)
     assert recorded_results == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_list_events_rejects_non_positive_limit():
+    """``limit<=0`` 必须显式失败，不得静默返回全量或错误子集。
+
+    ``events[-limit:]`` 在 ``limit=0`` 时退化为 ``events[0:]``（返回全部
+    历史），``limit<0`` 时退化为 ``events[abs(limit):]``（丢掉最旧的若干条）。
+    两者都是静默的错误结果；HTTP 路由 ``GET /jobs/{id}/events`` 的
+    ``limit`` 没有下限约束，调用方传入 0 会拿到整段历史。
+    """
+    bus = JobEventBus()
+    for index in range(5):
+        await bus.publish(
+            job_id="job_limit",
+            event_type=EventType.JOB_COMPLETED,
+            payload={"result": str(index)},
+            agent_id="test",
+        )
+
+    assert len(await bus.list_events("job_limit", limit=2)) == 2
+    with pytest.raises(ValueError, match="limit"):
+        await bus.list_events("job_limit", limit=0)
+    with pytest.raises(ValueError, match="limit"):
+        await bus.list_events("job_limit", limit=-1)
