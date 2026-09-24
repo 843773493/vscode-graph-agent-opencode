@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, get_args
 
 HistoryInclude = Literal[
     "user",
@@ -32,24 +32,9 @@ DEFAULT_ANCHOR_INCLUDE: tuple[str, ...] = ("user", "final_response")
 DEFAULT_INITIAL_TURNS = 5
 DEFAULT_ANCHOR_BEFORE_TURNS = 3
 DEFAULT_ANCHOR_AFTER_TURNS = 3
-_VALID_INCLUDES = frozenset(
-    {
-        "user",
-        "text",
-        "reasoning_summary",
-        "reasoning_detail",
-        "encrypted_reasoning_meta",
-        "assistant_text",
-        "assistant",
-        "tool_summary",
-        "tool_call",
-        "tool_result",
-        "thinking",
-        "internal",
-        "metadata",
-        "final_response",
-    }
-)
+# 合法投影字段集直接从 ``HistoryInclude`` 派生，避免在同一模块内维护
+# 第二份逐字重复的字段清单（两份清单一旦漂移，校验口径就与类型声明分叉）。
+_VALID_INCLUDES = frozenset(get_args(HistoryInclude))
 
 
 @dataclass(frozen=True, slots=True)
