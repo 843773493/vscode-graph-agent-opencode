@@ -140,6 +140,13 @@ def test_thread_creation_key_has_single_neutral_definition() -> None:
     assert "必须是安全单段路径名（不含分隔符/./..）" not in host_source
     creation_source = Path(creation.__file__).read_text(encoding="utf-8")
     assert "必须是安全单段路径名（不含分隔符/./..）" not in creation_source
+    # session 创建流同样只复用中立原语，不得再内联第三份逐字副本。
+    from app.core import session_creation
+
+    session_creation_source = Path(session_creation.__file__).read_text(
+        encoding="utf-8"
+    )
+    assert "必须是安全单段路径名（不含分隔符/./..）" not in session_creation_source
 
 
 def test_initialize_is_idempotent_on_reopen(tmp_path: Path) -> None:
