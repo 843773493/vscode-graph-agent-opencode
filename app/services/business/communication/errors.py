@@ -14,6 +14,7 @@ COMMUNICATION_CONTRACT_ERROR_CODES: frozenset[str] = frozenset(
         "communication-id-conflict",
         "communication-reply-correlation-conflict",
         "wait-selector-invalid",
+        "wait-binding-invalid",
         "wait-timeout-out-of-range",
         "wait-until-invalid",
         "deadline-clock-unavailable",

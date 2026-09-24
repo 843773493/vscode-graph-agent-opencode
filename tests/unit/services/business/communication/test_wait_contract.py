@@ -12,6 +12,7 @@ from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.business.communication.errors import CommunicationContractError
 from app.services.business.communication.wait import (
     DEFAULT_WAIT_TIMEOUT_SECONDS,
+    CommunicationWaitBinding,
     DurableDeadline,
     WaitObservation,
     WaitSelector,
@@ -19,6 +20,7 @@ from app.services.business.communication.wait import (
     freeze_wait_deadline,
     remaining_wait_budget_seconds,
     resolve_wait_outcome,
+    resolve_wait_status,
 )
 
 
@@ -63,6 +65,43 @@ def make_observation(state: str, revision: str = "rev-1") -> WaitObservation:
 def test_selector_rejects_blank_id() -> None:
     with pytest.raises(CommunicationContractError, match="wait-selector-invalid"):
         WaitSelector(kind="job", selector_id="  ")
+
+
+def test_binding_rejects_blank_job_id_with_closed_code() -> None:
+    """空 job_id 必须以闭集错误码抛出 typed 合同错误，不能降级成裸 ValueError。"""
+    target = make_target()
+    with pytest.raises(CommunicationContractError) as caught:
+        CommunicationWaitBinding(
+            target_session_id=target.session_id,
+            target_main_thread_id=target.thread_id,
+            job_id="  ",
+            turn_id=None,
+        )
+    assert caught.value.code == "wait-binding-invalid"
+
+
+def test_binding_rejects_blank_turn_id_with_closed_code() -> None:
+    target = make_target()
+    with pytest.raises(CommunicationContractError) as caught:
+        CommunicationWaitBinding(
+            target_session_id=target.session_id,
+            target_main_thread_id=target.thread_id,
+            job_id=None,
+            turn_id="  ",
+        )
+    assert caught.value.code == "wait-binding-invalid"
+
+
+def test_binding_accepts_none_selectors() -> None:
+    target = make_target()
+    binding = CommunicationWaitBinding(
+        target_session_id=target.session_id,
+        target_main_thread_id=target.thread_id,
+        job_id=None,
+        turn_id=None,
+    )
+    assert binding.job_id is None
+    assert binding.turn_id is None
 
 
 def test_timeout_boundaries() -> None:
@@ -221,3 +260,95 @@ def test_state_change_wait_times_out_without_revision_change() -> None:
         state_changed=False,
     )
     assert result.status == "timed_out"
+
+
+@pytest.mark.parametrize("until", ["terminal", "state_change"])
+def test_light_and_full_resolvers_agree(until: str) -> None:
+    """轻量裁决与完整裁决必须来自同一实现，状态逐例完全一致。"""
+    cases: list[tuple[tuple[WaitObservation, ...], bool, bool]] = [
+        ((), False, False),
+        ((), True, False),
+        ((make_observation("completed"),), False, False),
+        ((make_observation("failed"),), True, False),
+        ((make_observation("running"), make_observation("pending")), True, False),
+        # 混合终态 + 预算耗尽：until=terminal 要求全部终态，必须 timed_out。
+        ((make_observation("completed"), make_observation("running")), True, False),
+        ((make_observation("running", revision="rev-3"),), False, True),
+        ((make_observation("pending"),), True, False),
+    ]
+    for observed, deadline_expired, state_changed in cases:
+        light = resolve_wait_status(
+            observed=observed,
+            until=until,  # type: ignore[arg-type]
+            deadline_expired=deadline_expired,
+            state_changed=state_changed,
+        )
+        full = resolve_wait_outcome(
+            target=make_target(),
+            observed=observed,
+            baseline_revision="rev-0",
+            latest_revision="rev-1",
+            until=until,  # type: ignore[arg-type]
+            deadline_expired=deadline_expired,
+            state_changed=state_changed,
+        )
+        assert full.status == light
+        assert tuple(item.state for item in full.observed) == tuple(
+            item.state for item in observed
+        )
+
+
+def test_terminal_requires_all_observed_terminal_at_deadline() -> None:
+    """until=terminal 且预算耗尽：只有全部终态才算完成，部分终态必须 timed_out。"""
+    partial = resolve_wait_outcome(
+        target=make_target(),
+        observed=(make_observation("completed"), make_observation("running")),
+        baseline_revision="rev-0",
+        latest_revision="rev-1",
+        until="terminal",
+        deadline_expired=True,
+        state_changed=True,
+    )
+    assert partial.status == "timed_out"
+    assert tuple(item.state for item in partial.observed) == ("completed", "running")
+
+    light = resolve_wait_status(
+        observed=(make_observation("completed"), make_observation("running")),
+        until="terminal",
+        deadline_expired=True,
+        state_changed=True,
+    )
+    assert light == "timed_out"
+
+    complete = resolve_wait_outcome(
+        target=make_target(),
+        observed=(make_observation("completed"), make_observation("cancelled")),
+        baseline_revision="rev-0",
+        latest_revision="rev-9",
+        until="terminal",
+        deadline_expired=True,
+        state_changed=True,
+    )
+    assert complete.status == "cancelled"
+
+
+def test_both_resolvers_reject_unknown_until_with_closed_code() -> None:
+    with pytest.raises(CommunicationContractError) as light:
+        resolve_wait_status(
+            observed=(make_observation("running"),),
+            until="never",  # type: ignore[arg-type]
+            deadline_expired=False,
+            state_changed=False,
+        )
+    assert light.value.code == "wait-until-invalid"
+    with pytest.raises(CommunicationContractError) as full:
+        resolve_wait_outcome(
+            target=make_target(),
+            observed=(make_observation("running"),),
+            baseline_revision="rev-0",
+            latest_revision="rev-0",
+            until="never",  # type: ignore[arg-type]
+            deadline_expired=False,
+            state_changed=False,
+        )
+    assert full.value.code == "wait-until-invalid"

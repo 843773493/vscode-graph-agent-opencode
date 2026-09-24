@@ -219,6 +219,25 @@ def aggregate_wait_status(states: tuple[WaitState, ...] | list[WaitState]) -> Wa
     raise ValueError(f"未知等待状态: {states!r}")
 
 
+def _require_wait_until(until: WaitUntil) -> None:
+    if until not in ("terminal", "state_change"):
+        raise CommunicationContractError(
+            "wait-until-invalid",
+            f"until 必须是 terminal|state_change: {until!r}",
+        )
+
+
+def _wait_condition_met(
+    observed: tuple[WaitObservation, ...] | list[WaitObservation],
+    until: WaitUntil,
+    state_changed: bool,
+) -> bool:
+    """完成条件：terminal 要求全部观察对象已终态，state_change 看 revision 变化。"""
+    if until == "terminal":
+        return all(item.state in _TERMINAL_STATES for item in observed)
+    return state_changed
+
+
 def resolve_wait_status(
     *,
     observed: tuple[WaitObservation, ...] | list[WaitObservation],
@@ -231,21 +250,13 @@ def resolve_wait_status(
     deadline 与 terminal/state-change 并发时，以 target owner 已提交的
     revision 裁决：条件已满足则返回该状态，否则 timed_out。
     """
-    if until not in ("terminal", "state_change"):
-        raise CommunicationContractError(
-            "wait-until-invalid",
-            f"until 必须是 terminal|state_change: {until!r}",
-        )
+    _require_wait_until(until)
     if not observed:
         return "idle"
-    states = tuple(item.state for item in observed)
-    if until == "terminal":
-        condition_met = all(state in _TERMINAL_STATES for state in states)
-    else:
-        condition_met = state_changed
+    condition_met = _wait_condition_met(observed, until, state_changed)
     if deadline_expired and not condition_met:
         return "timed_out"
-    return aggregate_wait_status(list(states))
+    return aggregate_wait_status([item.state for item in observed])
 
 
 def resolve_wait_outcome(
@@ -264,28 +275,12 @@ def resolve_wait_outcome(
     revision 裁决：条件已满足则返回该状态，否则 timed_out；observed 始终
     保留真实状态。
     """
-    if until not in ("terminal", "state_change"):
-        raise CommunicationContractError(
-            "wait-until-invalid",
-            f"until 必须是 terminal|state_change: {until!r}",
-        )
-    if not observed:
-        return WaitForSessionResult(
-            status="idle",
-            target=target,
-            observed=(),
-            baseline_revision=baseline_revision,
-            latest_revision=latest_revision,
-        )
-    states = tuple(item.state for item in observed)
-    if until == "terminal":
-        condition_met = all(state in _TERMINAL_STATES for state in states)
-    else:
-        condition_met = state_changed
-    if deadline_expired and not condition_met:
-        status: WaitTopStatus = "timed_out"
-    else:
-        status = aggregate_wait_status(list(states))
+    status = resolve_wait_status(
+        observed=observed,
+        until=until,
+        deadline_expired=deadline_expired,
+        state_changed=state_changed,
+    )
     return WaitForSessionResult(
         status=status,
         target=target,

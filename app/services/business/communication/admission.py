@@ -198,21 +198,18 @@ def decide_send_admission(
                 "同一 send_operation_id 幂等复用必须返回既有 communication_id: "
                 f"候选 {communication_id!r} != 既有 {existing.communication_id!r}"
             )
-        return CommunicationAdmissionDecision(
-            communication_id=existing.communication_id,
-            payload_hash=existing.payload_hash,
-            is_duplicate=True,
+    elif existing_preimage != request_preimage_pair:
+        raise CommunicationContractError(
+            "communication-id-conflict",
+            "同一 (source, communication_id) 已绑定不同 payload/target；"
+            "新逻辑 send 必须分配新的 communication_id",
         )
-    if existing_preimage == request_preimage_pair:
-        return CommunicationAdmissionDecision(
-            communication_id=existing.communication_id,
-            payload_hash=existing.payload_hash,
-            is_duplicate=True,
-        )
-    raise CommunicationContractError(
-        "communication-id-conflict",
-        "同一 (source, communication_id) 已绑定不同 payload/target；"
-        "新逻辑 send 必须分配新的 communication_id",
+    # 两条幂等命中路径（同 operation 复现、不同 operation 同 preimage）
+    # 返回同一决策，只在这里构造一次。
+    return CommunicationAdmissionDecision(
+        communication_id=existing.communication_id,
+        payload_hash=existing.payload_hash,
+        is_duplicate=True,
     )
 
 

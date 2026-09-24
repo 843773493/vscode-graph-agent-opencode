@@ -164,6 +164,27 @@ def test_same_communication_id_same_preimage_dedupes_across_operations() -> None
     assert decision.communication_id == "comm_shared"
 
 
+def test_both_idempotent_hit_paths_return_identical_decision() -> None:
+    """同 operation 复现与跨 operation 同 preimage 必须收敛到同一决策构造。"""
+    request = make_request(operation_id="op-2")
+    existing = make_existing(request, communication_id="comm_shared")
+    retry_same_operation = decide_send_admission(
+        request=request, communication_id="comm_shared", existing=existing
+    )
+    other_operation = make_request(
+        source=request.source,
+        target=request.target_binding.target,
+        operation_id="op-3",
+        payload=request.payload,
+    )
+    same_preimage = decide_send_admission(
+        request=other_operation, communication_id="comm_shared", existing=existing
+    )
+    assert retry_same_operation == same_preimage
+    assert retry_same_operation.is_duplicate is True
+    assert retry_same_operation.payload_hash == existing.payload_hash
+
+
 def test_same_communication_id_different_payload_conflicts() -> None:
     request = make_request(operation_id="op-2")
     existing = make_existing(request, communication_id="comm_shared")
