@@ -200,6 +200,113 @@ describe("useSessionMessageStream 有界重连", () => {
     streamSpy.mockRestore();
     act(() => renderer!.unmount());
   });
+
+  test("410 游标失效且快照非终态时同走有界重连，不形成无上限紧循环", async () => {
+    installZeroDelayWindow();
+    // 上游持续对该 Turn 返回 410（保留窗口已裁掉游标），而快照端点仍可用且
+    // 始终是非终态：恢复路径若不退避也不计数，就会退化成「流请求→快照→流请求」
+    // 的紧循环，状态永远停在 connecting。这里必须与普通重连同一口径收敛。
+    const streamSpy = spyOn(messageStreamApi, "streamSessionMessageEvents")
+      .mockRejectedValue(new messageStreamApi.MessageStreamCursorGoneError(7));
+    const snapshotSpy = spyOn(messageStreamApi, "getSessionMessageStreamSnapshot")
+      .mockResolvedValue({
+        session_id: "ses_gone_loop",
+        turn_id: "turn_gone_loop",
+        turn_stream_id: "strm_gone_loop",
+        snapshot_seq: 7,
+        stream_status: "open",
+        agent_loop_status: "running",
+        current_attempt: 1,
+        blocks: [],
+        tool_executions: [],
+        tool_calls: [],
+        model_calls: [],
+        activities: [],
+        resource_refs: [],
+        resumable: true,
+      });
+
+    const mirror = createStateMirror(minimalState());
+    const Harness = useSessionMessageStreamHarness({
+      apiPort: 49_733,
+      sessionId: "ses_gone_loop",
+      turnId: "turn_gone_loop",
+      workspaceId: "ws_gone_loop",
+      sessionCacheKey: "ws_gone_loop::ses_gone_loop",
+    }, mirror.setState);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    for (let round = 0; round < SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 10; round += 1) {
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    const stream = [...(mirror.current().messageStreamsByTurnStream ?? new Map()).values()][0];
+    // 快照恢复能力必须保留：每一轮都先读了权威快照。
+    expect(snapshotSpy).toHaveBeenCalledTimes(SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 1);
+    // 到达上限即停止，流请求次数与普通重连完全一致，不得无界增长。
+    expect(streamSpy).toHaveBeenCalledTimes(SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 1);
+    expect(stream?.connectionStatus).toBe("retry_exhausted");
+    expect(stream?.protocolError).toBe("消息流 event_seq 游标已失效: 7");
+    streamSpy.mockRestore();
+    snapshotSpy.mockRestore();
+    act(() => renderer!.unmount());
+  });
+
+  test("410 游标失效后快照给出终态时立即收口且不再重连", async () => {
+    installZeroDelayWindow();
+    const streamSpy = spyOn(messageStreamApi, "streamSessionMessageEvents")
+      .mockRejectedValue(new messageStreamApi.MessageStreamCursorGoneError(7));
+    const snapshotSpy = spyOn(messageStreamApi, "getSessionMessageStreamSnapshot")
+      .mockResolvedValue({
+        session_id: "ses_gone_terminal",
+        turn_id: "turn_gone_terminal",
+        turn_stream_id: "strm_gone_terminal",
+        snapshot_seq: 7,
+        stream_status: "completed",
+        agent_loop_status: "completed",
+        current_attempt: 1,
+        blocks: [],
+        tool_executions: [],
+        tool_calls: [],
+        model_calls: [],
+        activities: [],
+        resource_refs: [],
+        resumable: false,
+      });
+
+    const mirror = createStateMirror(minimalState());
+    const Harness = useSessionMessageStreamHarness({
+      apiPort: 49_734,
+      sessionId: "ses_gone_terminal",
+      turnId: "turn_gone_terminal",
+      workspaceId: "ws_gone_terminal",
+      sessionCacheKey: "ws_gone_terminal::ses_gone_terminal",
+    }, mirror.setState);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    for (let round = 0; round < SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 10; round += 1) {
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    const stream = [...(mirror.current().messageStreamsByTurnStream ?? new Map()).values()][0];
+    expect(streamSpy).toHaveBeenCalledTimes(1);
+    expect(snapshotSpy).toHaveBeenCalledTimes(1);
+    expect(stream?.streamStatus).toBe("completed");
+    expect(stream?.connectionStatus).toBe("terminal");
+    streamSpy.mockRestore();
+    snapshotSpy.mockRestore();
+    act(() => renderer!.unmount());
+  });
 });
 
 describe("useSessionMessageStream 首次连接", () => {

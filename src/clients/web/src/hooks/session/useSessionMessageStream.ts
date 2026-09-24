@@ -204,13 +204,18 @@ export function useSessionMessageStream({
         } catch (error) {
           if (controller.signal.aborted) return;
           if (error instanceof MessageStreamCursorGoneError) {
+            // 游标失效说明服务端保留窗口已裁掉 after_seq：先用权威快照补齐本地镜像，
+            // 再落回下方与普通重连同一口径的有界退避。这里绝不能直接 continue，
+            // 那条路径既不退避也不累加 reconnectAttempt，会让「上游持续 410 且快照
+            // 仍可用」退化成无上限紧循环：状态永远停在 connecting，用户既看不到
+            // 终结也拿不到诊断。
+            lastFailureMessage = errorMessage(error);
             try {
               await applySnapshot();
               if (terminalSeen) {
                 notifyTerminal();
                 return;
               }
-              continue;
             } catch (snapshotError) {
               if (controller.signal.aborted) return;
               lastFailureMessage = errorMessage(snapshotError);
