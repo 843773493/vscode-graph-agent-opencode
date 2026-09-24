@@ -87,6 +87,24 @@ def tool_message_from_output(
     )
 
 
+def declared_tool_payload_status(parsed: Mapping[str, Any]) -> str | None:
+    """解析工具返回体中显式声明的执行状态，未声明时返回 None。
+
+    工作区工具结果用两种显式声明表达同一事实：`status` 取 error/success，
+    `ok` 取布尔值。二者都是可信的执行结论，缺一不可；只认其中一种会把
+    另一种显式失败静默当成成功。
+    """
+    result_status = parsed.get("status")
+    if result_status == "error":
+        return "error"
+    if result_status == "success":
+        return "success"
+    result_ok = parsed.get("ok")
+    if isinstance(result_ok, bool):
+        return "success" if result_ok else "error"
+    return None
+
+
 def tool_output_status(output: Any) -> str:
     """合并 ToolMessage 状态与工具返回体中的状态。"""
     status = getattr(output, "status", None)
@@ -98,11 +116,9 @@ def tool_output_status(output: Any) -> str:
     except json.JSONDecodeError:
         parsed = None
     if isinstance(parsed, Mapping):
-        result_status = parsed.get("status")
-        if result_status == "error":
-            return "error"
-        if result_status == "success":
-            return "success"
+        payload_status = declared_tool_payload_status(parsed)
+        if payload_status is not None:
+            return payload_status
     if status == "success":
         return "success"
     return "success" if text and not text.startswith("Error:") else "error"
@@ -203,7 +219,7 @@ def activity_result_detail(
     except json.JSONDecodeError:
         parsed = None
     if isinstance(parsed, Mapping):
-        if parsed.get("status") == "error":
+        if declared_tool_payload_status(parsed) == "error":
             detail["phase"] = "failed"
         code = parsed.get("code")
         if isinstance(code, str) and code:
