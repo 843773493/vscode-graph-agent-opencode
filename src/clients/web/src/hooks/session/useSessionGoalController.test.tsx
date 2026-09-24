@@ -226,4 +226,55 @@ describe("useSessionGoalController 跨会话守卫", () => {
     expect(latestState.currentGoalSessionId).toBe("ses_b");
     unmount();
   });
+
+  test("先设置后清除 Goal 时，迟到的设置回包不得复活已清除的 Goal", async () => {
+    installTestWindow(49_406);
+    installTestDocument();
+    let releaseUpdate!: () => void;
+    installGatewayFetch(({ path, method }) => {
+      if (path.includes("/api/v1/sessions/session-test/goal")) {
+        if (method === "DELETE") {
+          return apiResponse({ cleared: true });
+        }
+        if (method === "POST" || method === "PATCH" || method === "PUT") {
+          return new Promise<Response>((resolve) => {
+            releaseUpdate = () => resolve(apiResponse({
+              goal_id: "goal_late",
+              session_id: "session-test",
+              objective: "迟到的设置",
+              status: "active",
+              token_budget: null,
+              tokens_used: 0,
+              time_used_seconds: 0,
+              created_at: "2026-09-02T00:00:00Z",
+              updated_at: "2026-09-02T00:00:00Z",
+            }));
+          });
+        }
+      }
+      return undefined;
+    }, { token: "goal-order-token" });
+
+    const { controller, state: readState, unmount } = await mountSessionGoalController({
+      initial: state(),
+    });
+
+    let updateRequest: Promise<unknown>;
+    await act(async () => {
+      updateRequest = controller().updateGoal({ objective: "迟到的设置" })
+        .catch(() => undefined);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await controller().clearGoal();
+    });
+    releaseUpdate();
+    await act(async () => {
+      await updateRequest!;
+    });
+
+    // 用户最后一次操作是清除：迟到的设置回包不得把它复活。
+    expect(readState().currentGoal).toBeNull();
+    unmount();
+  });
 });

@@ -15,6 +15,11 @@ interface GoalTarget {
 
 const SESSION_AUXILIARY_LOAD_DELAY_MS = 200;
 
+/** 三条 Goal 链路（读取、设置、清除）共用的请求合并键与写入代际键。 */
+function goalRequestKey(apiPort: number, target: GoalTarget): string {
+  return `${apiPort}:${target.workspaceId ?? ""}:${target.sessionId}`;
+}
+
 export function useSessionGoalController({
   apiPort,
   currentSessionId,
@@ -28,6 +33,23 @@ export function useSessionGoalController({
 }) {
   const inFlightGoalRequestsRef = useRef<Map<string, Promise<SessionGoal | null>>>(
     new Map(),
+  );
+  // 每条 Goal 请求键的写入代际：只有序列里最新的那次写（设置/清除）才有权把
+  // 结果写回 AppState。否则「先设置后清除」时，迟到的设置回包会把用户刚刚
+  // 清除的 Goal 复活。读取不参与这条序列：读取是对后端真值的采样，若读取也
+  // 抢占代际，一次并发的聚焦校准会把用户已完成的清除判定成过期结果。
+  const goalWriteSeqRef = useRef<Map<string, number>>(new Map());
+
+  const beginGoalWrite = useCallback((requestKey: string): number => {
+    const next = (goalWriteSeqRef.current.get(requestKey) ?? 0) + 1;
+    goalWriteSeqRef.current.set(requestKey, next);
+    return next;
+  }, []);
+
+  const isLatestGoalWrite = useCallback(
+    (requestKey: string, writeSeq: number): boolean =>
+      goalWriteSeqRef.current.get(requestKey) === writeSeq,
+    [],
   );
 
   const refreshGoal = useCallback(async (
@@ -54,7 +76,7 @@ export function useSessionGoalController({
         goalError: null,
       }));
     }
-    const requestKey = `${apiPort}:${target.workspaceId ?? ""}:${target.sessionId}`;
+    const requestKey = goalRequestKey(apiPort, target);
     const inFlight = inFlightGoalRequestsRef.current.get(requestKey);
     if (inFlight) {
       return inFlight;
@@ -132,6 +154,8 @@ export function useSessionGoalController({
     if (!target.sessionId) {
       throw new Error("当前没有可设置 Goal 的会话");
     }
+    const requestKey = goalRequestKey(apiPort, target);
+    const writeSeq = beginGoalWrite(requestKey);
     setState((previous) => ({ ...previous, goalLoading: true, goalError: null }));
     try {
       const goal = await apiUpdateSessionGoal(
@@ -141,7 +165,10 @@ export function useSessionGoalController({
         target.workspaceId,
       );
       setState((previous) => {
-        if (previous.currentSession?.session_id !== target.sessionId) {
+        if (
+          !isLatestGoalWrite(requestKey, writeSeq)
+          || previous.currentSession?.session_id !== target.sessionId
+        ) {
           return previous;
         }
         return {
@@ -156,7 +183,15 @@ export function useSessionGoalController({
     } catch (error) {
       return reconcileAfterFailure(target, error);
     }
-  }, [apiPort, currentSessionId, currentWorkspaceId, reconcileAfterFailure, setState]);
+  }, [
+    apiPort,
+    beginGoalWrite,
+    currentSessionId,
+    currentWorkspaceId,
+    isLatestGoalWrite,
+    reconcileAfterFailure,
+    setState,
+  ]);
 
   const clearGoal = useCallback(async (
     target: GoalTarget = {
@@ -167,11 +202,16 @@ export function useSessionGoalController({
     if (!target.sessionId) {
       throw new Error("当前没有可清除 Goal 的会话");
     }
+    const requestKey = goalRequestKey(apiPort, target);
+    const writeSeq = beginGoalWrite(requestKey);
     setState((previous) => ({ ...previous, goalLoading: true, goalError: null }));
     try {
       await apiClearSessionGoal(apiPort, target.sessionId, target.workspaceId);
       setState((previous) => {
-        if (previous.currentSession?.session_id !== target.sessionId) {
+        if (
+          !isLatestGoalWrite(requestKey, writeSeq)
+          || previous.currentSession?.session_id !== target.sessionId
+        ) {
           return previous;
         }
         return {
@@ -185,7 +225,15 @@ export function useSessionGoalController({
     } catch (error) {
       await reconcileAfterFailure(target, error);
     }
-  }, [apiPort, currentSessionId, currentWorkspaceId, reconcileAfterFailure, setState]);
+  }, [
+    apiPort,
+    beginGoalWrite,
+    currentSessionId,
+    currentWorkspaceId,
+    isLatestGoalWrite,
+    reconcileAfterFailure,
+    setState,
+  ]);
 
   useEffect(() => {
     setState((previous) => ({
