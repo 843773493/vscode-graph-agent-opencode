@@ -16,6 +16,7 @@ from app.api.deps import (
 )
 from app.api.sse_heartbeat import (
     SSE_HEARTBEAT_INTERVAL_SECONDS,
+    SSE_NO_CACHE_HEADERS,
     stream_sse_with_heartbeat,
 )
 from app.core.exceptions import ForbiddenError
@@ -123,7 +124,7 @@ async def stream_workspace_file_events(
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=SSE_NO_CACHE_HEADERS,
     )
 
 

@@ -12,6 +12,7 @@ from app.api.deps import (
     get_workspace_activity_service,
     verify_local_token,
 )
+from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.services.infrastructure.workspace_state_store import (
     WorkspaceActivityCursorGoneError,
@@ -87,5 +88,5 @@ async def stream_session_activity(
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=SSE_NO_CACHE_HEADERS,
     )

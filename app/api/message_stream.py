@@ -17,6 +17,7 @@ from app.api.deps import (
 )
 from app.api.sse_heartbeat import (
     SSE_HEARTBEAT_INTERVAL_SECONDS,
+    SSE_NO_CACHE_HEADERS,
     stream_sse_with_heartbeat,
 )
 from app.protocol.codecs.message_stream import (
@@ -209,8 +210,7 @@ async def stream_message_events(
         ),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
+            **SSE_NO_CACHE_HEADERS,
             "X-Message-Stream-ID": writer.turn_stream_id,
             "X-Request-ID": request_id,
         },

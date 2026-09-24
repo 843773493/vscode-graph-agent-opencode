@@ -73,6 +73,26 @@ async def _open_stream(
 
 
 @pytest.mark.asyncio
+async def test_workspace_file_sse_uses_shared_no_cache_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """文件流与其它 SSE 端点必须发出同一份反缓存响应头。"""
+    monkeypatch.setattr(workspace_api, "SSE_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    response = await stream_workspace_file_events(
+        WorkspaceFileWatchRequest(paths=[]),
+        "local-dev-token",
+        watch_service=_WatchService(_Source([])),
+    )
+
+    try:
+        assert response.headers["Cache-Control"] == "no-cache"
+        assert response.headers["X-Accel-Buffering"] == "no"
+        assert response.media_type == "text/event-stream"
+    finally:
+        await response.body_iterator.aclose()
+
+
+@pytest.mark.asyncio
 async def test_workspace_file_sse_emits_heartbeat_while_idle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

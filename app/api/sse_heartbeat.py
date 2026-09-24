@@ -12,6 +12,13 @@ T = TypeVar("T")
 SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 SSE_HEARTBEAT_COMMENT = ": heartbeat\n\n"
 
+# 所有 SSE 端点共用的反缓存响应头；此前每个路由各抄一份，取值必须一致，
+# 否则代理或浏览器会对某一条流做缓冲而拖住实时事件。
+SSE_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+}
+
 
 async def stream_sse_with_heartbeat(
     source: AsyncIterator[T],
