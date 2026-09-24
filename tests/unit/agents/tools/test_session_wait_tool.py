@@ -119,3 +119,26 @@ async def test_communication_unbound_selector_reports_communication_kind(until: 
     assert result["status"] == "timed_out"
     assert result["observed"][0]["selector_kind"] == "communication"
     assert result["observed"][0]["state"] == "pending"
+
+
+async def test_timed_out_job_status_is_a_terminal_wait_state() -> None:
+    """JobStatus.timed_out 是真实终态，必须映射为闭集内状态而不是内部报错。"""
+    service = _ProgrammableJobService(job_id="job_to_1", states=["timed_out"])
+    tool = create_wait_for_session_tool(
+        _SESSION_ID,
+        job_service=service,
+        binding_lookup=_NeverBoundLookup(),
+    )
+
+    result = await tool.ainvoke(
+        {
+            "target_session_id": _SESSION_ID,
+            "job_id": "job_to_1",
+            "until": "terminal",
+            "timeout_seconds": 1,
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert result["observed"][0]["state"] == "failed"
+    assert result["latest_revision"] == "job:job_to_1:failed"

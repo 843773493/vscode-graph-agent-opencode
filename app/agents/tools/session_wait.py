@@ -58,6 +58,7 @@ _JOB_STATUS_TO_WAIT_STATE: dict[str, WaitState] = {
     "succeeded": "completed",
     "failed": "failed",
     "cancelled": "cancelled",
+    "timed_out": "failed",
 }
 
 
