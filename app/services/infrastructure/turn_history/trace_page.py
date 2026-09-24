@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,11 +9,15 @@ from pydantic import RootModel
 
 from app.schemas.event import Event
 
-from .trace_cursor import TraceCursorGoneError
+from .trace_cursor import (
+    TRACE_EVENT_LINE_SAMPLE_BYTES,
+    TraceCursorGoneError,
+    event_line_digest,
+    event_line_sample,
+)
 
 TRACE_PAGE_MAX_BYTES = 512 * 1024
 _TRACE_PAGE_CURSOR_PREFIX = "tp1."
-_CURSOR_SAMPLE_BYTES = 256
 
 
 class TracePageBudgetExceededError(RuntimeError):
@@ -40,19 +43,10 @@ class _PageCursorPosition:
     digest: str
 
 
-def _line_digest(line: bytes) -> str:
-    sample = (
-        line
-        if len(line) <= _CURSOR_SAMPLE_BYTES * 2
-        else line[:_CURSOR_SAMPLE_BYTES] + line[-_CURSOR_SAMPLE_BYTES:]
-    )
-    framed = len(line).to_bytes(8, "big") + sample
-    return hashlib.sha256(framed).hexdigest()[:32]
-
-
 def _encode_page_cursor(*, start: int, end: int, line: bytes) -> str:
     raw = json.dumps(
-        {"s": start, "n": end, "h": _line_digest(line)},
+        {"s": start, "n": end,
+         "h": event_line_digest(len(line), event_line_sample(line))},
         separators=(",", ":"),
     ).encode("utf-8")
     return _TRACE_PAGE_CURSOR_PREFIX + base64.urlsafe_b64encode(raw).decode(
@@ -95,14 +89,13 @@ def _validate_page_cursor(file: Path, cursor: str) -> int:
             if stream.read(1) != b"\n":
                 raise ValueError("Trace page cursor 未指向事件行起点")
         stream.seek(position.start)
-        if size <= _CURSOR_SAMPLE_BYTES * 2:
+        if size <= TRACE_EVENT_LINE_SAMPLE_BYTES * 2:
             sample = stream.read(size)
         else:
-            prefix = stream.read(_CURSOR_SAMPLE_BYTES)
-            stream.seek(position.end - _CURSOR_SAMPLE_BYTES)
-            sample = prefix + stream.read(_CURSOR_SAMPLE_BYTES)
-    framed = size.to_bytes(8, "big") + sample
-    if hashlib.sha256(framed).hexdigest()[:32] != position.digest:
+            prefix = stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
+            stream.seek(position.end - TRACE_EVENT_LINE_SAMPLE_BYTES)
+            sample = prefix + stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
+    if event_line_digest(size, sample) != position.digest:
         raise ValueError("Trace page cursor 对应事件已变化")
     return position.start
 

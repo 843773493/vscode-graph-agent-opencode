@@ -35,17 +35,20 @@ class _TraceCursorPosition:
 
 
 _TRACE_CURSOR_PREFIX = "tc1."
-_CURSOR_SAMPLE_BYTES = 256
+TRACE_EVENT_LINE_SAMPLE_BYTES = 256
 
 
-def _cursor_digest(line: bytes) -> str:
-    sample = (
-        line
-        if len(line) <= _CURSOR_SAMPLE_BYTES * 2
-        else line[:_CURSOR_SAMPLE_BYTES] + line[-_CURSOR_SAMPLE_BYTES:]
-    )
-    framed = len(line).to_bytes(8, "big") + sample
-    return hashlib.sha256(framed).hexdigest()[:32]
+def event_line_sample(line: bytes) -> bytes:
+    """取事件行首尾字节样本；短行直接整行参与摘要。"""
+    limit = TRACE_EVENT_LINE_SAMPLE_BYTES
+    if len(line) <= limit * 2:
+        return line
+    return line[:limit] + line[-limit:]
+
+
+def event_line_digest(size: int, sample: bytes) -> str:
+    """事件行摘要：长度前缀加首尾样本，传输游标与诊断页游标共用此唯一实现。"""
+    return hashlib.sha256(size.to_bytes(8, "big") + sample).hexdigest()[:32]
 
 
 def encode_trace_cursor(
@@ -58,7 +61,8 @@ def encode_trace_cursor(
     if start < 0 or end <= start or end - start != len(line):
         raise ValueError("Trace cursor offset 与事件行长度不一致")
     raw = json.dumps(
-        {"e": event_id, "s": start, "n": end, "h": _cursor_digest(line)},
+        {"e": event_id, "s": start, "n": end,
+         "h": event_line_digest(len(line), event_line_sample(line))},
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -103,14 +107,13 @@ def _offset_from_transport_cursor(file: Path, cursor: str) -> int | None:
             if stream.read(1) != b"\n":
                 raise ValueError("Trace transport cursor 未指向事件行起点")
         stream.seek(position.start)
-        if size <= _CURSOR_SAMPLE_BYTES * 2:
+        if size <= TRACE_EVENT_LINE_SAMPLE_BYTES * 2:
             sample = stream.read(size)
         else:
-            prefix = stream.read(_CURSOR_SAMPLE_BYTES)
-            stream.seek(position.end - _CURSOR_SAMPLE_BYTES)
-            sample = prefix + stream.read(_CURSOR_SAMPLE_BYTES)
-    framed = size.to_bytes(8, "big") + sample
-    if hashlib.sha256(framed).hexdigest()[:32] != position.digest:
+            prefix = stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
+            stream.seek(position.end - TRACE_EVENT_LINE_SAMPLE_BYTES)
+            sample = prefix + stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
+    if event_line_digest(size, sample) != position.digest:
         raise ValueError("Trace transport cursor 对应事件已变化")
     return position.end
 
