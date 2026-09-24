@@ -46,6 +46,19 @@ HOP_BY_HOP_HEADERS = frozenset(
     }
 )
 
+# 工作区 API 代理与辅助服务代理都要剥离的 Gateway 凭据与目标选择头部。它们绝不
+# 能透传给上游，否则客户端可以伪造工作区选择或把本地凭据漂到被代理服务。集合与
+# 逐跳头部一样只此一份，避免两条代理各写一份而漏掉其中一个。
+GATEWAY_PROXY_DROPPED_HEADERS = frozenset(
+    {
+        "host",
+        "x-request-id",
+        "x-local-token",
+        "x-boxteam-federation-token",
+        "x-boxteam-workspace-id",
+    }
+)
+
 
 def filter_hop_by_hop_headers(
     headers: Iterable[tuple[str, str]],

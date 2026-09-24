@@ -13,10 +13,23 @@ from starlette.requests import Request
 
 from app.gateway.auxiliary_proxy import _proxy_response_headers
 from app.gateway.proxy_upstream import (
+    GATEWAY_PROXY_DROPPED_HEADERS,
     HOP_BY_HOP_HEADERS,
     filter_hop_by_hop_headers,
 )
 from app.gateway.server.workspace_proxy import _response_headers
+
+# 两条代理共用的 Gateway 凭据/目标选择剥离集合。任一代理只用逐跳集合、漏掉其中
+# 一项，都会让客户端伪造的 workspace_id 或本地凭据漂到上游。
+_EXPECTED_GATEWAY_DROPPED_HEADERS = frozenset(
+    {
+        "host",
+        "x-request-id",
+        "x-local-token",
+        "x-boxteam-federation-token",
+        "x-boxteam-workspace-id",
+    }
+)
 
 
 def test_hop_by_hop_set_is_exactly_the_rfc7230_hop_headers() -> None:
@@ -99,3 +112,56 @@ def test_gateway_proxy_headers_drop_hop_and_credential_headers() -> None:
     assert "cookie" not in {key.lower() for key in headers}
     assert headers["X-Local-Token"] == "local-dev-token"
     assert "X-BoxTeam-Workspace-Id" not in headers
+
+
+def test_gateway_proxy_dropped_header_set_is_exactly_the_shared_contract() -> None:
+    """两条代理共用的凭据/目标选择剥离集合必须只此一份且逐项完整。"""
+
+    from app.gateway.server.workspace_proxy import PROXY_ONLY_DROPPED_HEADERS
+
+    assert GATEWAY_PROXY_DROPPED_HEADERS == _EXPECTED_GATEWAY_DROPPED_HEADERS
+    # 工作区 API 代理只在其上追加会话加载策略与浏览器 Cookie。
+    assert PROXY_ONLY_DROPPED_HEADERS == GATEWAY_PROXY_DROPPED_HEADERS | {
+        "x-boxteam-history-loading",
+        "cookie",
+    }
+
+
+@pytest.mark.parametrize("header", sorted(_EXPECTED_GATEWAY_DROPPED_HEADERS))
+def test_both_proxies_never_forward_the_client_supplied_credential_header(
+    header: str,
+) -> None:
+    """变异：任一条代理漏掉集合里的一项，本用例必须红。
+
+    其中 x-request-id 与 x-local-token 会被代理用自己的权威值覆盖，因此这里断言
+    「上游看不到客户端的 attacker 值」，而不是该键彻底不存在。
+    """
+
+    from app.gateway.auxiliary_proxy import _proxy_request_headers
+    from app.gateway.server.workspace_proxy import _proxy_headers
+
+    application = FastAPI()
+
+    def build(builder) -> dict[str, str]:
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/v1/workspace",
+                "app": application,
+                "headers": [(header.encode(), b"attacker"), (b"x-kept", b"ok")],
+            }
+        )
+        request.state.request_id = "req_drop"
+        return builder(request)
+
+    for builder in (_proxy_headers, _proxy_request_headers):
+        headers = build(builder)
+        assert headers["x-kept"] == "ok"
+        # 客户端值一旦没被剥离，代理再写权威值时就会留下两个同名键
+        # （大小写可能不同）；按大小写不敏感计数才能真正发现泄漏。
+        occurrences = [
+            value for key, value in headers.items() if key.lower() == header
+        ]
+        assert occurrences != ["attacker"]
+        assert len(occurrences) <= 1

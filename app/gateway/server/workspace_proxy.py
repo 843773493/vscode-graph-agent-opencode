@@ -20,6 +20,7 @@ from app.gateway.control.user_access import (
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.proxy_upstream import (
+    GATEWAY_PROXY_DROPPED_HEADERS,
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
     build_upstream_url,
     filter_hop_by_hop_headers,
@@ -35,19 +36,12 @@ from app.gateway.registry import (
 router = APIRouter()
 
 HISTORY_LOADING_HEADER = "x-boxteam-history-loading"
-# 工作区 API 代理在逐跳头部之外还要剥离 Gateway 凭据、目标选择与浏览器 Cookie，
-# 这些绝不透传给工作区后端。
-PROXY_ONLY_DROPPED_HEADERS = frozenset(
-    {
-        "host",
-        "x-request-id",
-        "x-local-token",
-        "x-boxteam-federation-token",
-        "x-boxteam-workspace-id",
-        HISTORY_LOADING_HEADER,
-        "cookie",
-    }
-)
+# 工作区 API 代理在逐跳头部之外还要剥离会话加载策略与浏览器 Cookie；Gateway 凭据
+# 与目标选择头部共用代理的同一份集合。
+PROXY_ONLY_DROPPED_HEADERS = GATEWAY_PROXY_DROPPED_HEADERS | {
+    HISTORY_LOADING_HEADER,
+    "cookie",
+}
 MESSAGE_STREAM_AVAILABILITY_RETRY_DELAYS_SECONDS = (0.05,)
 MESSAGE_STREAM_RETRY_DELAYS_SECONDS = (0.05, 0.25, 0.75)
 WORKSPACE_RUNTIME_READY_WAIT_SECONDS = 120.0

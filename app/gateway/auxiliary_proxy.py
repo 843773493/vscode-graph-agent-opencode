@@ -23,6 +23,7 @@ from app.gateway.auth import (
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.proxy_upstream import (
+    GATEWAY_PROXY_DROPPED_HEADERS,
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
     build_upstream_url,
     filter_hop_by_hop_headers,
@@ -33,16 +34,6 @@ from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.service_types import GatewayServiceName
 
 router = APIRouter()
-
-AUXILIARY_PROXY_DROPPED_HEADERS = frozenset(
-    {
-        "host",
-        "x-request-id",
-        "x-local-token",
-        "x-boxteam-federation-token",
-        "x-boxteam-workspace-id",
-    }
-)
 
 SERVICE_PATHS: dict[str, GatewayServiceName] = {
     "terminal-manager": "terminal_manager",
@@ -86,7 +77,7 @@ def _proxy_request_headers(
     headers = filter_hop_by_hop_headers(
         (key, value)
         for key, value in request.headers.items()
-        if key.lower() not in AUXILIARY_PROXY_DROPPED_HEADERS
+        if key.lower() not in GATEWAY_PROXY_DROPPED_HEADERS
     )
     headers["X-Request-ID"] = get_request_id(request)
     if target is not None and target.connection_kind == "remote_gateway":
