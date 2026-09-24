@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar, Token
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage
@@ -15,6 +15,9 @@ from app.abstractions.session_changes import SessionChangesRecorderProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.agent_factory import resolve_agent_id
 from app.agents.graph_binding import GraphBindingStorePort
+from app.agents.tools.custom_invocation import (
+    seal_extension_catalog_binding_from_tools,
+)
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
 from app.core.turn_execution_scope import (
@@ -49,6 +52,10 @@ from app.services.orchestration.thread_residency import (
     ThreadUnloadRequest,
 )
 
+# 工具面 blueprint 检查用的合成会话：只用于装配一次完整工具面并抽取定义，
+# 不进入任何业务会话账目。抽出的定义不捕获该会话，仅用于 Provider 工具目录。
+_TOOL_INSPECTION_SESSION_ID: Final[str] = "tools_inspection_session"
+
 
 class AgentExecutionService(JobStepExecutor):
     def __init__(
@@ -72,11 +79,13 @@ class AgentExecutionService(JobStepExecutor):
         # OpenSpec 2.8：ThreadResidency tracker；None 时不做 residency 记账。
         residency_tracker: ThreadResidencyTracker | None = None,
     ):
-        # TODO(OpenSpec 8.4 后续)：该缓存复用捕获 session 闭包的已编译图，与
-        # 「只复用不捕获 thread 的 graph blueprint/topology」红线有差距（R6a
-        # 审计结论，行为由 test_agent_cache_rebuilds_after_config_revision_changes
-        # 锁定）；blueprint/invocation 拆分留 8.4 后续轮，不在接线轮处理。
-        self._agent_cache = {}
+        # OpenSpec 8.4：进程内复用的只有不含 Session/Thread 的 graph
+        # blueprint/topology 投影——这里缓存的是 Provider 工具面定义（纯 DTO）
+        # 与它的 MCP 工具面指纹；键不含 session/thread，值不捕获会话闭包，也
+        # 不携带任何执行状态。真实 invocation 的 session/thread 依赖由每次构建
+        # 经 ThreadRuntimeBinding 注入。旧的「按 (session_id, agent, revision,
+        # overrides) 复用整个已编译 agent」的捕获式缓存已物理删除。
+        self._tool_face_cache: dict[tuple[object, ...], list[dict[str, Any]]] = {}
         self._config_service = config_service
         self._background_task_registry = background_task_registry
         self._background_message_bus = background_message_bus
@@ -135,8 +144,20 @@ class AgentExecutionService(JobStepExecutor):
         model_visibility_overrides: Mapping[str, bool],
         preferred_provider_id: str | None,
         include_team_tools: bool,
+        owns_thread: bool = True,
     ) -> AgentEventSource:
-        """缓存读取与真实 step 共用同一个 runtime 构建边界。"""
+        """一次 invocation 的唯一 runtime 构建边界。
+
+        OpenSpec 8.4：session/thread 依赖只来自本次构建经
+        ``build_session_agent_runtime`` 注入的 ``ThreadRuntimeBinding``；本服务
+        不跨 invocation 复用任何捕获会话闭包的对象。
+
+        ``owns_thread=False`` 只用于抽取工具面 blueprint 的合成构建：该构建不
+        代表任何 durable thread，因此既不建立捕获会话身份的 workspace source
+        reactor/CSM 订阅，也不为合成会话持久化 GraphBinding。Provider 可见工具面
+        （信封 + ``skill_load`` + 内置/自定义工具）由同一工厂规则产出，与是否
+        拥有 thread 无关。
+        """
         return build_session_agent_runtime(
             session_id=session_id,
             agent_id=agent_id,
@@ -149,10 +170,16 @@ class AgentExecutionService(JobStepExecutor):
             model_visibility_overrides=model_visibility_overrides,
             preferred_provider_id=preferred_provider_id,
             tool_timeout_seconds=self._tool_timeout_seconds,
-            workspace_file_resource_registry=self._workspace_file_resource_registry,
-            reactor_lifetime_scope=self._reaction_registry_scope,
-            on_reactor_created=self._record_reactor,
-            graph_binding_store=self._graph_binding_store,
+            workspace_file_resource_registry=(
+                self._workspace_file_resource_registry if owns_thread else None
+            ),
+            reactor_lifetime_scope=(
+                self._reaction_registry_scope if owns_thread else None
+            ),
+            on_reactor_created=(
+                self._record_reactor if owns_thread else None
+            ),
+            graph_binding_store=self._graph_binding_store if owns_thread else None,
             workspace_root=self._workspace_root,
             include_team_tools=include_team_tools,
         )
@@ -167,11 +194,13 @@ class AgentExecutionService(JobStepExecutor):
         preferred_provider_id: str | None,
         include_team_tools: bool,
     ) -> AgentEventSource:
-        """StepRunner 每步直接构建 agent，不经过 _get_or_create_agent 缓存。
+        """StepRunner 每步直接构建一个全新 agent（唯一 invocation 边界）。
 
-        该路径没有缓存 key，reactor 登记到 step 级 owner key（每次构建唯一，
-        避免重试构建重复登记），并收集到本次 run_step 的收集器，step 结束后
-        由 run_step 精确释放——不能按前缀释放，否则会误伤其它会话在途 step。
+        OpenSpec 8.4：真实执行路径没有跨 invocation 的会话复用，工具面
+        blueprint 缓存只服务于工具目录查询。reactor 登记到 step 级 owner key
+        （每次构建唯一，避免重试构建重复登记），并收集到本次 run_step 的收集
+        器，step 结束后由 run_step 精确释放——不能按前缀释放，否则会误伤其它
+        会话在途 step。
         """
         collected_keys = self._step_reactor_keys.get()
         if collected_keys is None:
@@ -201,28 +230,13 @@ class AgentExecutionService(JobStepExecutor):
         _build_key: tuple[object, ...],
         reactor: ContextSourceReactor,
     ) -> None:
-        """把本次 agent 构建产生的 reactor 登记到当前缓存 key 下。"""
+        """把本次 agent 构建产生的 reactor 登记到当前 step 级 owner key 下。"""
         owner_key = self._reactor_owner_key.get()
         if owner_key is None:
             raise RuntimeError(
-                "构建 context source reactor 时缺少 agent 缓存 owner key"
+                "构建 context source reactor 时缺少 step 级 owner key"
             )
         self._reaction_registry.record(owner_key, reactor)
-
-    async def release_evicted_reactors(self) -> None:
-        """释放不再属于当前 agent 缓存条目的 context source 订阅。"""
-        if self._reactor_owner_key.get() is not None:
-            # agent 构建失败时 owner key 可能还没被 reset；这里不猜测归属。
-            raise RuntimeError("仍在构建 agent 时不能释放 context source reactor")
-        active_keys = set(self._agent_cache)
-        for owner_key in self._reaction_registry.active_keys:
-            if owner_key in active_keys:
-                continue
-            if owner_key and owner_key[0] == "step":
-                # step 级订阅由其所属 run_step 在结束时精确释放；其它会话
-                # 的在途 step 不能被这里当作淘汰对象。
-                continue
-            await self._reaction_registry.release(owner_key)
 
     def _record_thread_residency_activity(self, session_id: str) -> None:
         """OpenSpec 2.8：runtime owner 唯一 residency 调用点。
@@ -241,13 +255,16 @@ class AgentExecutionService(JobStepExecutor):
         tracker.record_activity(session_id, thread_id)
 
     async def unload_thread_runtime(self, request: ThreadUnloadRequest) -> None:
-        """idle unload 回调：只释放该 thread 的可重建 runtime 资源。
+        """idle unload 回调：核验 generation fence 后收敛该 thread 的可重建资源。
 
         generation fence：迟到 callback 必须先核验当前代，过期代 fail closed
-        （直接返回，绝不释放）。只淘汰该 session 的 agent 缓存条目及其 context
-        source 订阅；持久 source/tracking/prefix/ToolSet/assembly 状态逐字段
-        不变。cold 后的读取路径（如 get_for_session）惰性重建全新 runtime，属
-        重建而非持久状态物化，history/detail 不产生 materialize writer。
+        （直接返回，绝不释放）。
+
+        OpenSpec 8.4：runtime 构建已改为按 invocation 进行，agent 与其 context
+        source reactor 都是 step 级、在该 step 结束时精确释放，本服务不再按
+        session 复用任何捕获会话闭包的对象。因此本回调没有 per-invocation
+        会话缓存可淘汰；持久 source/tracking/prefix/ToolSet/assembly 状态与
+        工具面 blueprint 缓存逐字段不变，cold 后由下一次 invocation 全新构建。
         """
         tracker = self._residency_tracker
         if tracker is None:
@@ -257,16 +274,10 @@ class AgentExecutionService(JobStepExecutor):
         ):
             # 迟到 callback：该 generation 已被新一代取代，按当前 owner fail closed。
             return
-        evicted_keys = [
-            key for key in self._agent_cache if key[0] == request.session_id
-        ]
-        for key in evicted_keys:
-            del self._agent_cache[key]
-        await self.release_evicted_reactors()
 
     async def shutdown(self) -> None:
         """服务停止时释放全部 context source 订阅。"""
-        self._agent_cache.clear()
+        self._tool_face_cache.clear()
         await self._reaction_registry.close()
 
     async def run_step(
@@ -283,9 +294,6 @@ class AgentExecutionService(JobStepExecutor):
         progress_reporter: Callable[[str], None] | None = None,
     ) -> str:
         """保持 JobStepExecutor 公共接口，由独立 runner 拥有执行流程。"""
-        # 每次 step 开始前收敛一次订阅：上一轮因配置 revision 变化而被淘汰的
-        # agent 不应继续持有来源订阅。
-        await self.release_evicted_reactors()
         # OpenSpec 2.8：runtime owner 唯一 residency 调用点——记录 main thread
         # 活动，并在重启/卸载后重建时注册新一代 resident runtime。
         self._record_thread_residency_activity(session_id)
@@ -318,9 +326,23 @@ class AgentExecutionService(JobStepExecutor):
             for owner_key in collected_keys:
                 await self._reaction_registry.release(owner_key)
 
-    def _get_or_create_agent(self, session_id: str, agent_id: str | None = None):
+    def _tool_face_definitions(self, agent_id: str) -> list[dict[str, Any]]:
+        """Provider 工具面定义（不含 Session/Thread 的 blueprint 投影）。
+
+        缓存有正当的非会话价值：装配一个完整 deep agent 并按图抽取工具定义
+        是昂贵构建产物，工具目录/选择查询会反复命中原样结果。缓存键不含
+        session/thread，缓存值只是导出的纯 DTO；建立它时用的合成会话仅用于
+        装配一次工具面，抽取出的定义不捕获该会话，也不携带执行状态。真实
+        invocation 的 session/thread 依赖由每次构建经 ThreadRuntimeBinding
+        注入。
+        """
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
+
+        mcp_tools = list(self._dependency_provider.get_mcp_tools())
+        # MCP 工具集是运行时可变的：用它的内容指纹参与缓存键，避免复用过期
+        # 工具面。指纹复用 extension catalog 的唯一 payload 摘要实现。
+        mcp_binding = seal_extension_catalog_binding_from_tools(mcp_tools)()
 
         config_snapshot = self._config_service.get_snapshot()
         with self._config_service.use_snapshot(config_snapshot):
@@ -338,42 +360,44 @@ class AgentExecutionService(JobStepExecutor):
                 run_mode == "team" if isinstance(run_mode, str) else False
             )
             cache_key = (
-                session_id,
                 resolved_agent_id,
                 config_revision,
                 tuple(sorted(execution_overrides.items())),
                 tuple(sorted(model_visibility_overrides.items())),
+                include_team_tools,
+                mcp_binding.catalog_revision,
+                mcp_binding.generation,
             )
-            if cache_key in self._agent_cache:
-                return self._agent_cache[cache_key]
+            cached = self._tool_face_cache.get(cache_key)
+            if cached is not None:
+                return cached
 
-            # reactor 在 agent 构建期间同步产生，用 ContextVar 绑定精确的
-            # 缓存 key，避免依赖构建完成后才可知的调用栈信息。
-            token: Token[tuple[object, ...] | None] = self._reactor_owner_key.set(
-                cache_key
+            agent = self._build_agent(
+                session_id=_TOOL_INSPECTION_SESSION_ID,
+                agent_id=resolved_agent_id,
+                execution_overrides=execution_overrides,
+                model_visibility_overrides=model_visibility_overrides,
+                preferred_provider_id=None,
+                include_team_tools=include_team_tools,
+                owns_thread=False,
             )
-            try:
-                agent = self._build_agent(
-                    session_id=session_id,
-                    agent_id=resolved_agent_id,
-                    execution_overrides=execution_overrides,
-                    model_visibility_overrides=model_visibility_overrides,
-                    preferred_provider_id=None,
-                    include_team_tools=include_team_tools,
-                )
-            finally:
-                self._reactor_owner_key.reset(token)
+            definitions = build_agent_tool_definitions(
+                agent,
+                extension_tools=mcp_tools,
+            )
 
-        self._agent_cache[cache_key] = agent
+        # 只保留该 agent 的当前工具面：旧配置 revision / override 组合的子项
+        # 不再被查询命中，留在表里只会无界增长。正在读取的调用方已持有返回值，
+        # 移除旧项不影响它在途使用。
         stale_keys = [
             key
-            for key in self._agent_cache
-            if key[:2] == cache_key[:2] and key != cache_key
+            for key in self._tool_face_cache
+            if key[0] == cache_key[0] and key != cache_key
         ]
         for stale_key in stale_keys:
-            # 正在执行的 Job 已持有 Agent 局部引用；移除旧缓存不会中途改变该轮执行。
-            del self._agent_cache[stale_key]
-        return agent
+            del self._tool_face_cache[stale_key]
+        self._tool_face_cache[cache_key] = definitions
+        return definitions
 
     def _extract_final_text(self, result: dict[str, Any]) -> str:
         messages = result.get("messages", []) if isinstance(result, dict) else []
@@ -393,13 +417,6 @@ class AgentExecutionService(JobStepExecutor):
             " 这通常表示最终消息不是 assistant 文本，或者消息链路中出现了空响应。"
         )
 
-    def get_for_session(self, session_id: str, agent_id: str | None = None):
-        return self._get_or_create_agent(session_id, agent_id)
-
     def get_available_tools(self, agent_id: str = "default") -> list[dict[str, Any]]:
-        session_id = "tools_inspection_session"
-        agent = self._get_or_create_agent(session_id, agent_id)
-        return build_agent_tool_definitions(
-            agent,
-            extension_tools=self._dependency_provider.get_mcp_tools(),
-        )
+        """工具目录读写路径：返回 Provider 工具面定义（blueprint 投影）。"""
+        return self._tool_face_definitions(agent_id)

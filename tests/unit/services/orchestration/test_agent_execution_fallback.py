@@ -211,29 +211,48 @@ def _make_service(deps):
     )
 
 
-def test_agent_cache_rebuilds_after_config_revision_changes(
+def test_tool_face_blueprint_cache_is_keyed_without_session(
     mock_dependencies,
 ):
+    """OpenSpec 8.4：复用的是不含 session/thread 的工具面 blueprint 投影。
+
+    同一配置 revision 反复查询命中同一份定义；配置 revision 变化则重建。
+    缓存键不含 session_id，真实 invocation 的 session/thread 依赖不在其中。
+    """
     service = _make_service(mock_dependencies)
+    mock_dependencies["dependency_provider"].get_mcp_tools.return_value = []
     mock_dependencies["config_service"].get_revision.side_effect = [
         "revision-a",
         "revision-a",
         "revision-b",
     ]
-    first_agent = object()
-    second_agent = object()
+
+    def fake_definitions(_agent: object, *, extension_tools: object) -> list[dict]:
+        assert list(extension_tools) == []
+        return [{"id": "read_file", "name": "read_file"}]
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
-        side_effect=[first_agent, second_agent],
-    ) as build_runtime:
-        assert service._get_or_create_agent("ses_test", "test_agent") is first_agent
-        assert service._get_or_create_agent("ses_test", "test_agent") is first_agent
-        assert service._get_or_create_agent("ses_test", "test_agent") is second_agent
+        side_effect=[object(), object()],
+    ) as build_runtime, patch(
+        "app.services.orchestration.agent_execution_service.build_agent_tool_definitions",
+        side_effect=fake_definitions,
+    ):
+        first = service.get_available_tools("test_agent")
+        assert service.get_available_tools("test_agent") is first  # 命中缓存
+        second = service.get_available_tools("test_agent")
 
-    assert build_runtime.call_count == 2
-    assert list(service._agent_cache) == [
-        ("ses_test", "test_agent", "revision-b", (), ()),
+    assert build_runtime.call_count == 2  # 配置 revision 变化 → 重建
+    assert second is not first
+    # 缓存键不含 session_id：不含任何会话身份。
+    keys = list(service._tool_face_cache)
+    assert len(keys) == 1
+    key = keys[0]
+    assert key[0] == "test_agent"
+    assert key[1] == "revision-b"
+    assert "ses_test" not in str(key)
+    assert service._tool_face_cache[key] == [
+        {"id": "read_file", "name": "read_file"}
     ]
 
 

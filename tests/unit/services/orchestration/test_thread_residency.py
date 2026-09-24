@@ -1186,28 +1186,32 @@ def test_generation_fence_rejects_stale_unknown_and_illegal_generations() -> Non
 
 
 @pytest.mark.asyncio
-async def test_runtime_owner_unload_evicts_agent_cache_with_generation_fence() -> None:
-    """unload 回调：当前代只淘汰该 session 的可重建缓存；过期代 fail closed 不动缓存。"""
+async def test_runtime_owner_unload_honors_generation_fence_without_touching_blueprint_cache() -> None:
+    """unload 回调：当前代触达卸载，过期代 fail closed，且都不动工具面 blueprint 缓存。
+
+    OpenSpec 8.4：真实执行路径按 invocation 构建，agent 与 context source
+    reactor 都是 step 级资源，本服务不再按 session 复用捕获会话闭包的对象；
+    因此 unload 没有 per-invocation 会话缓存可淘汰，只保留 generation fence
+    语义与「不误伤不含 session/thread 的 blueprint 缓存」这一红线。
+    """
     clock = _FakeMonotonicClock()
     tracker = _make_tracker(clock)
     service = _make_wired_execution_service(tracker)
     tracker.set_unload_callback(service.unload_thread_runtime)
 
-    target_key = (_PARENT_SESSION_ID, "agent_a", "rev-1", (), ())
-    other_key = ("ses_other", "agent_a", "rev-1", (), ())
-    service._agent_cache[target_key] = object()
-    service._agent_cache[other_key] = object()
+    blueprint_key = ("agent_a", "rev-1", (), (), False, "sha256:" + "0" * 64, 1)
+    blueprint_value = [{"id": "read_file"}]
+    service._tool_face_cache[blueprint_key] = blueprint_value
 
     generation = tracker.register_generation(*_OWNER)
     service._record_thread_residency_activity(_PARENT_SESSION_ID)
     clock.advance(1800)
     unloaded = await tracker.sweep()
     assert len(unloaded) == 1
-    assert target_key not in service._agent_cache  # 该 session 缓存被释放
-    assert other_key in service._agent_cache  # 其它 session 不受影响
+    # blueprint 缓存不含 session/thread，不随 thread 卸载被淘汰。
+    assert service._tool_face_cache[blueprint_key] is blueprint_value
 
-    # 迟到 callback：同 generation 再次到达 → fence 拒绝，重建的缓存不被误释放。
-    service._agent_cache[target_key] = object()
+    # 迟到 callback：同 generation 再次到达 → fence 拒绝，blueprint 缓存仍不变。
     stale_request = ThreadUnloadRequest(
         session_id=_PARENT_SESSION_ID,
         thread_id=_THREAD_ID,
@@ -1215,7 +1219,7 @@ async def test_runtime_owner_unload_evicts_agent_cache_with_generation_fence() -
         idle_seconds=1800.0,
     )
     await service.unload_thread_runtime(stale_request)
-    assert target_key in service._agent_cache
+    assert service._tool_face_cache[blueprint_key] is blueprint_value
 
 
 @pytest.mark.asyncio
@@ -1245,8 +1249,6 @@ async def test_run_step_records_activity_and_rehydrates_generation_after_cold() 
             return "done"
 
     service._step_runner = _StubStepRunner()
-    cache_key = (_PARENT_SESSION_ID, "agent_a", "rev-1", (), ())
-    service._agent_cache[cache_key] = object()
 
     await service.run_step(
         _PARENT_SESSION_ID,
@@ -1260,11 +1262,9 @@ async def test_run_step_records_activity_and_rehydrates_generation_after_cold() 
     assert snapshot.residency == "resident"
 
     clock.advance(1800)
-    await tracker.sweep()  # idle 卸载：回调释放可重建缓存
-    assert cache_key not in service._agent_cache
+    await tracker.sweep()  # idle 卸载：回调通过 generation fence 收敛该 thread
     assert tracker.snapshot(*_OWNER).residency == "cold"
 
-    service._agent_cache[cache_key] = object()  # cold 后读取路径重建新 runtime
     await service.run_step(
         _PARENT_SESSION_ID,
         "继续",
