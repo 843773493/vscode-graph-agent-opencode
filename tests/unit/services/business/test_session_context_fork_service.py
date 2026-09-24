@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -394,3 +395,77 @@ async def test_full_rollout_copy_clones_single_rollout_as_independent_storage(
     )
     assert restored is not None
     assert restored.checkpoint["channel_values"]["messages"][0].content == "原始内容"
+
+
+@pytest.mark.asyncio
+async def test_full_rollout_copy_without_activation_schema_succeeds(
+    fork_services: ForkServices,
+) -> None:
+    """source 库有 context_plan_details 但无 activation 表时 full copy 仍成功。
+
+    regression：remap_prepare 曾无条件解引用 activation_snapshot 映射键，而该键
+    只在 resource_activation_snapshots 表存在时才创建，未 bootstrap activation
+    schema 的 source 会直接 KeyError 崩溃。
+    """
+
+    source = await fork_services.session_service.create(
+        SessionCreateRequest(title="无 activation schema 源会话")
+    )
+    checkpoint = {
+        "v": 1,
+        "id": "checkpoint-no-activation-1",
+        "ts": "2026-07-13T00:00:00+00:00",
+        "channel_values": {
+            "messages": [
+                HumanMessage(
+                    content="无 activation 内容",
+                    id="u1",
+                    response_metadata={"turn_id": "turn-1"},
+                ),
+                AIMessage(content="无 activation 回答", id="a1"),
+            ],
+        },
+        "channel_versions": {"messages": "1"},
+        "versions_seen": {},
+        "pending_sends": [],
+        "updated_channels": ["messages"],
+    }
+    await fork_services.checkpointer.aput(
+        build_checkpoint_config(source.session_id),
+        checkpoint,
+        {"source": "test", "step": 1, "parents": {}},
+        {"messages": "1"},
+    )
+    fork_services.checkpointer.finalize_turn(
+        session_id=source.session_id,
+        turn_id="turn-1",
+        final_message_id="a1",
+    )
+
+    source_index = fork_services.checkpointer._storage.index_path(source.session_id, "")
+    with sqlite3.connect(source_index) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+    # 前置事实：必须复现「有 context_plan_details 但无 activation 表」才有效。
+    assert "context_plan_details" in tables
+    assert "resource_activation_snapshots" not in tables
+
+    child = await fork_services.fork_service.fork(
+        source.session_id,
+        mode="full_rollout_copy",
+    )
+
+    child_index = fork_services.checkpointer._storage.index_path(child.session_id, "")
+    assert child_index.is_file()
+    restored = await fork_services.checkpointer.aget_tuple(
+        build_checkpoint_config(child.session_id)
+    )
+    assert restored is not None
+    assert (
+        restored.checkpoint["channel_values"]["messages"][0].content
+        == "无 activation 内容"
+    )

@@ -199,7 +199,7 @@ def prepare_full_copy_remap(
         )
     detail_assembly_map = {
         **maps["assembly"],
-        **maps["activation_snapshot"],
+        **maps.get("activation_snapshot", {}),
     }
     maps["detail"] = collect_detail_mappings(
         connection,
