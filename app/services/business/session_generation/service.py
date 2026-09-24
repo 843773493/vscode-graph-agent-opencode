@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -225,7 +225,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
                 "run_id": payload.run_id,
                 "generator_id": payload.generator_id,
                 "idempotency_key": payload.idempotency_key,
-                "started_at": datetime.now(timezone.utc).isoformat(),
+                "started_at": datetime.now(UTC).isoformat(),
                 "request": payload.model_dump(mode="json"),
             },
         )
@@ -244,7 +244,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
                     "run_id": payload.run_id,
                     "generator_id": payload.generator_id,
                     "idempotency_key": payload.idempotency_key,
-                    "ended_at": datetime.now(timezone.utc).isoformat(),
+                    "ended_at": datetime.now(UTC).isoformat(),
                     "error": f"{type(error).__name__}: {error}",
                     "request": payload.model_dump(mode="json"),
                 },
@@ -343,7 +343,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
             record.update(
                 {
                     "status": "failed",
-                    "ended_at": datetime.now(timezone.utc).isoformat(),
+                    "ended_at": datetime.now(UTC).isoformat(),
                     "error": f"恢复执行失败: {type(error).__name__}: {error}",
                 }
             )
@@ -632,7 +632,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
     def _ledger_path(self, generator_id: str, idempotency_key: str) -> Path:
         generator_digest = hashlib.sha256(generator_id.encode("utf-8")).hexdigest()
         digest = hashlib.sha256(
-            f"{generator_id}\n{idempotency_key}".encode("utf-8")
+            f"{generator_id}\n{idempotency_key}".encode()
         ).hexdigest()
         return self._runs_dir / generator_digest / f"{digest}.json"
 

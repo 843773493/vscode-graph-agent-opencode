@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Itemized Context Storage Demo</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main>
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">STORAGE TEACHING DEMO</p>
+          <h1>Itemized Context Storage</h1>
+          <p class="lede">同一轮上下文从 canonical item 到模型请求的可视化剖面。</p>
+        </div>
+        <div class="runtime-badge" id="runtime-root">loading...</div>
+      </header>
+
+      <section class="flow" aria-label="存储和组装流程">
+        <div class="flow-step"><strong>1</strong><span>canonical item</span><small>完整 payload</small></div>
+        <div class="arrow">→</div>
+        <div class="flow-step"><strong>2</strong><span>JSONL + SQLite</span><small>正文 + 定位/投影</small></div>
+        <div class="arrow">→</div>
+        <div class="flow-step"><strong>3</strong><span>active view</span><small>included / omitted</small></div>
+        <div class="arrow">→</div>
+        <div class="flow-step"><strong>4</strong><span>request plan</span><small>wire projection</small></div>
+      </section>
+
+      <section class="metrics" id="metrics"></section>
+
+      <section class="grid">
+        <article class="panel panel-wide">
+          <div class="panel-heading">
+            <div><p class="eyebrow">SOURCE OF TRUTH</p><h2>rollout.jsonl</h2></div>
+            <span class="tag tag-source">canonical payload</span>
+          </div>
+          <pre class="code" id="jsonl"></pre>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">LOOKUP STATE</p><h2>index.sqlite / item_catalog</h2></div>
+            <span class="tag tag-index">index + projection</span>
+          </div>
+          <div class="table-wrap"><table id="catalog"><thead><tr><th>seq</th><th>item</th><th>kind</th><th>offset</th><th>len</th></tr></thead><tbody></tbody></table></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">VIEW TRACE</p><h2>active view</h2></div>
+            <span class="tag tag-view">selection</span>
+          </div>
+          <div class="table-wrap"><table id="view"><thead><tr><th>seq</th><th>kind</th><th>included</th><th>reason</th></tr></thead><tbody></tbody></table></div>
+        </article>
+
+        <article class="panel panel-wide">
+          <div class="panel-heading">
+            <div><p class="eyebrow">PROVIDER BOUNDARY</p><h2>request-plan.json</h2></div>
+            <span class="tag tag-plan">request-only + wire</span>
+          </div>
+          <pre class="code" id="plan"></pre>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">UI PROJECTION</p><h2>transcript.json</h2></div>
+            <span class="tag tag-transcript">not model context</span>
+          </div>
+          <pre class="code" id="transcript"></pre>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">ON DISK</p><h2>demo runtime</h2></div>
+            <span class="tag tag-disk">self-contained</span>
+          </div>
+          <ul class="file-list" id="files"></ul>
+        </article>
+      </section>
+    </main>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

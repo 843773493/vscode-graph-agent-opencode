@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.identifier import create_prefixed_id
 from app.core.path_segments import validate_generator_physical_segment
+from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.schemas.gateway_control import (
     GenerationRunDTO,
     GenerationRunListDTO,
@@ -18,8 +19,6 @@ from app.schemas.gateway_control import (
     GeneratorPlacementPreviewDTO,
     GeneratorPlacementPreviewRequest,
 )
-from app.gateway.control.storage import atomic_write_json, read_json_object
-
 
 _TOKEN_PATTERN = re.compile(r"\{([^{}]+)\}")
 
@@ -50,7 +49,7 @@ class SessionGeneratorStore:
         self,
         payload: GeneratorDefinitionCreateRequest,
     ) -> GeneratorDefinitionDTO:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         definition = GeneratorDefinitionDTO(
             **payload.model_dump(),
             generator_id=create_prefixed_id("gen"),
@@ -79,7 +78,7 @@ class SessionGeneratorStore:
                 ),
                 "status_reason": None,
                 "revision": current.revision + 1,
-                "updated_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(UTC),
             }
         )
         self._write_definition(updated)
@@ -106,7 +105,7 @@ class SessionGeneratorStore:
                 "status": status,
                 "status_reason": reason,
                 "revision": current.revision + 1,
-                "updated_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(UTC),
             }
         )
         self._write_definition(updated)
@@ -129,7 +128,7 @@ class SessionGeneratorStore:
                     "（不创建物理目录）"
                 ),
             )
-        generated_at = payload.generated_at or datetime.now(timezone.utc)
+        generated_at = payload.generated_at or datetime.now(UTC)
         values = {
             "generator.name": payload.name,
             "session.title": payload.session_title,
