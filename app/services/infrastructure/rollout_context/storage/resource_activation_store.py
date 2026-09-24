@@ -1,38 +1,38 @@
-"""thread-owned SQLite 中 activation snapshot 的唯一持久化 owner（9.2）。
+"""activation snapshot 的唯一 SQLite writer/catalog owner（9.2）。
 
-本模块是整个 activation catalog 的唯一 writer/reader：
-
-- 只接受 domain 已冻结的 :class:`ResourceActivationSnapshotRef`；不得从当前
-  文件、URI、middleware 状态或 generic read 记录补造 provenance/lineage。
-- 正文与 source lineage manifest 不进 SQLite；catalog 只保存 manifest、
-  typed ref 与 digest，正文由受保护 detail/snapshot body store 持有。
-- 正常 runtime 只打开当前 activation schema；marker 缺失或版本不符一律
-  fail closed（``resource-activation-schema-unavailable``），不保留旧表读取、
-  不动态升级、不留双版本分支。
+只接受 domain 已冻结的 :class:`ResourceActivationSnapshotRef`；正文与 source
+lineage manifest 不进 SQLite，由受保护 detail/snapshot body store 持有。正常
+runtime 只打开当前 activation schema，否则 fail closed。
 
 组合而非继承：本类包装既有 ``RolloutStorage`` 的连接、锁、路径与 v2 校验，
-不成为第二个 ContextStore owner。
+不成为第二个 ContextStore owner；只读恢复路径在 ``resource_activation_reads``。
 """
 
 from __future__ import annotations
 
 import hashlib
 import sqlite3
-from collections.abc import Mapping
-from datetime import UTC, datetime
-from typing import Final, Protocol
 
 from app.domain.itemized.detail_ref import DetailRef
-from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
-    ResourceActivationContractError,
     ResourceActivationSnapshotRef,
-    ResourceProvenanceRef,
-    SourceLineageRef,
 )
-from app.services.infrastructure.rollout_context.assembly.detail_identity import (
-    detail_ref_from_key,
-    detail_ref_key,
+from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
+    ASSEMBLY_BINDING_COLUMNS,
+    BINDING_COLUMNS,
+    LINEAGE_MANIFEST_SCHEMA,
+    SCHEMA_UNAVAILABLE_CODE,
+    SNAPSHOT_COLUMNS,
+    ResourceActivationLineageBodyStore,
+    ResourceActivationStoreError,
+    _detail_ref_from_key,
+    _detail_ref_key,
+    _now,
+    lineage_manifest,
+    lineage_manifest_digest,
+)
+from app.services.infrastructure.rollout_context.storage.resource_activation_reads import (
+    ResourceActivationReadMixin,
 )
 from app.services.infrastructure.rollout_context.storage.resource_activation_schema import (
     RESOURCE_ACTIVATION_MIGRATION_NAME,
@@ -42,214 +42,11 @@ from app.services.infrastructure.rollout_context.storage.resource_activation_sch
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
-    strict_optional_text,
     strict_text,
 )
 
-SCHEMA_UNAVAILABLE_CODE: Final = "resource-activation-schema-unavailable"
-LINEAGE_MANIFEST_SCHEMA: Final = "resource-activation-lineage-manifest:v1"
 
-SNAPSHOT_COLUMNS: Final = (
-    "session_id",
-    "thread_id",
-    "activation_snapshot_id",
-    "snapshot_kind",
-    "parent_turn_snapshot_id",
-    "activation_policy_revision",
-    "activation_policy_hash",
-    "registry_generation",
-    "turn_id",
-    "model_call_id",
-    "captured_at",
-    "bindings_hash",
-    "activation_provenance_hash",
-    "binding_count",
-    "lineage_manifest_digest",
-    "lineage_detail_ref",
-    "created_at",
-)
-
-BINDING_COLUMNS: Final = (
-    "session_id",
-    "thread_id",
-    "activation_snapshot_id",
-    "activation_ordinal",
-    "resource_id",
-    "display_uri",
-    "resource_kind",
-    "owner_scope",
-    "facet",
-    "revision",
-    "availability",
-    "content_length",
-    "content_hash",
-    "redacted_stable_digest",
-    "effective_boundary",
-    "captured_registry_generation",
-    "source_lineage_digest",
-    "snapshot_ref",
-    "detail_ref",
-)
-
-ASSEMBLY_BINDING_COLUMNS: Final = (
-    "assembly_id",
-    "session_id",
-    "thread_id",
-    "activation_snapshot_id",
-    "plan_id",
-    "plan_hash",
-    "request_hash",
-    "selection_manifest_hash",
-    "bindings_hash",
-    "activation_provenance_hash",
-    "bound_at",
-)
-
-
-class ResourceActivationStoreError(RuntimeError):
-    """activation storage 的显式失败；``code`` 是闭合错误码。"""
-
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(f"[{code}] {message}")
-        self.code = code
-
-
-class ResourceActivationLineageBodyStore(Protocol):
-    """受保护 lineage body store：catalog 只保存 ref/digest，正文在此。"""
-
-    def write_lineage_manifest(
-        self,
-        *,
-        owner_session_id: str,
-        activation_snapshot_id: str,
-        checkpoint_ns: str,
-        manifest: Mapping[str, object],
-    ) -> DetailRef: ...
-
-    def read_lineage_manifest(
-        self,
-        *,
-        detail_ref: DetailRef,
-        checkpoint_ns: str,
-    ) -> Mapping[str, object]: ...
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _optional_detail_ref_from_key(value: object, *, field: str) -> DetailRef | None:
-    return None if value is None else _detail_ref_from_key(value, field=field)
-
-
-def _detail_ref_key(ref: DetailRef, *, field: str) -> str:
-    """复用 assembly 的唯一 typed detail key 编码；不接受裸 ID 或路径。"""
-
-    if not isinstance(ref, DetailRef):
-        raise ResourceActivationStoreError(
-            "resource-activation-schema-invalid", f"{field} 必须是 typed DetailRef"
-        )
-    return detail_ref_key(ref)
-
-
-def _detail_ref_from_key(value: object, *, field: str) -> DetailRef:
-    return detail_ref_from_key(strict_text(value, field=field))
-
-
-def lineage_manifest(snapshot: ResourceActivationSnapshotRef) -> dict[str, object]:
-    """来源 manifest 的受保护投影：source 向量、derivation 版本与 digest。"""
-
-    return {
-        "schema": LINEAGE_MANIFEST_SCHEMA,
-        "activation_snapshot_id": snapshot.activation_snapshot_id,
-        "lineages": [
-            {
-                "resource_id": binding.resource_id,
-                "activation_ordinal": binding.activation_ordinal,
-                "source_lineage_ref": binding.source_lineage_ref.to_dict(),
-                "source_lineage_digest": binding.source_lineage_digest,
-            }
-            for binding in snapshot.bindings
-        ],
-    }
-
-
-def lineage_manifest_digest(snapshot: ResourceActivationSnapshotRef) -> str:
-    """由内存 snapshot 确定性导出 lineage manifest digest。"""
-
-    return sha256_jcs(lineage_manifest(snapshot))
-
-
-def _lineage_by_resource(
-    manifest: Mapping[str, object],
-) -> dict[str, Mapping[str, object]]:
-    if not isinstance(manifest, Mapping) or manifest.get("schema") != (
-        LINEAGE_MANIFEST_SCHEMA
-    ):
-        raise ResourceActivationStoreError(
-            "resource-activation-lineage-invalid",
-            "受保护 lineage manifest schema 不匹配",
-        )
-    entries = manifest.get("lineages")
-    if not isinstance(entries, list) or not entries:
-        raise ResourceActivationStoreError(
-            "resource-activation-lineage-invalid",
-            "受保护 lineage manifest 缺少 lineages",
-        )
-    result: dict[str, Mapping[str, object]] = {}
-    for entry in entries:
-        if not isinstance(entry, Mapping):
-            raise ResourceActivationStoreError(
-                "resource-activation-lineage-invalid", "lineage entry 必须是对象"
-            )
-        resource_id = strict_text(
-            entry.get("resource_id"), field="lineage.resource_id"
-        )
-        if resource_id in result:
-            raise ResourceActivationStoreError(
-                "resource-activation-lineage-invalid",
-                f"lineage manifest 重复 resource_id: {resource_id}",
-            )
-        result[resource_id] = entry
-    return result
-
-
-def _source_lineage_ref_for_binding(
-    lineages: Mapping[str, Mapping[str, object]],
-    *,
-    resource_id: str,
-    expected_ordinal: int,
-    expected_digest: str,
-) -> SourceLineageRef:
-    entry = lineages.get(resource_id)
-    if entry is None:
-        raise ResourceActivationStoreError(
-            "resource-activation-lineage-invalid",
-            f"binding 缺失受保护 lineage manifest: {resource_id}",
-        )
-    ordinal = strict_non_negative_int(
-        entry.get("activation_ordinal"), field="lineage.activation_ordinal"
-    )
-    if ordinal != expected_ordinal:
-        raise ResourceActivationStoreError(
-            "resource-activation-lineage-invalid",
-            f"lineage ordinal 与 binding 不一致: {resource_id}",
-        )
-    lineage = SourceLineageRef.from_dict(entry.get("source_lineage_ref"))
-    if entry.get("source_lineage_digest") != lineage.digest:
-        raise ResourceActivationStoreError(
-            "resource-activation-hash-mismatch",
-            f"lineage digest 与 lineage ref 不一致: {resource_id}",
-        )
-    if lineage.digest != expected_digest:
-        raise ResourceActivationStoreError(
-            "resource-activation-hash-mismatch",
-            f"lineage digest 与 binding 列不一致: {resource_id}",
-        )
-    return lineage
-
-
-class ResourceActivationStore:
+class ResourceActivationStore(ResourceActivationReadMixin):
     """activation snapshot catalog / resource binding manifest / assembly binding。"""
 
     def __init__(
@@ -633,267 +430,6 @@ class ResourceActivationStore:
             f"({','.join(ASSEMBLY_BINDING_COLUMNS)}) VALUES "
             f"({','.join('?' for _ in ASSEMBLY_BINDING_COLUMNS)})",
             values,
-        )
-
-    # ---- 读取 -----------------------------------------------------------
-
-    def read_snapshot(
-        self,
-        session_id: str,
-        *,
-        thread_id: str,
-        activation_snapshot_id: str,
-        checkpoint_ns: str = "",
-    ) -> ResourceActivationSnapshotRef:
-        """按稳定 identity 读取并重算 hash；篡改 fail closed。"""
-
-        with self._storage._connect(
-            session_id, checkpoint_ns, read_only=True
-        ) as connection:
-            self._storage._require_v2_runtime(connection)
-            self.require_schema(connection)
-            raw = self._read_raw_snapshot(
-                connection,
-                session_id=session_id,
-                thread_id=thread_id,
-                activation_snapshot_id=activation_snapshot_id,
-            )
-        return self._build_snapshot(raw, checkpoint_ns=checkpoint_ns)
-
-    def read_assembly_binding(
-        self,
-        session_id: str,
-        *,
-        assembly_id: str,
-        checkpoint_ns: str = "",
-    ) -> Mapping[str, object]:
-        """读取 assembly 绑定的 activation identity/hash 与 snapshot。"""
-
-        with self._storage._connect(
-            session_id, checkpoint_ns, read_only=True
-        ) as connection:
-            self._storage._require_v2_runtime(connection)
-            self.require_schema(connection)
-            row = connection.execute(
-                f"SELECT {','.join(ASSEMBLY_BINDING_COLUMNS)} "
-                "FROM resource_activation_assembly_bindings "
-                "WHERE assembly_id = ? AND session_id = ?",
-                (assembly_id, session_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(
-                    "resource-activation-unavailable: assembly 未绑定 activation "
-                    f"snapshot: {assembly_id}"
-                )
-            record = dict(zip(ASSEMBLY_BINDING_COLUMNS, row, strict=True))
-            raw = self._read_raw_snapshot(
-                connection,
-                session_id=session_id,
-                thread_id=strict_text(record["thread_id"], field="thread_id"),
-                activation_snapshot_id=strict_text(
-                    record["activation_snapshot_id"],
-                    field="activation_snapshot_id",
-                ),
-            )
-        snapshot = self._build_snapshot(raw, checkpoint_ns=checkpoint_ns)
-        if record["bindings_hash"] != snapshot.bindings_hash or record[
-            "activation_provenance_hash"
-        ] != snapshot.activation_provenance_hash:
-            raise ResourceActivationStoreError(
-                "resource-activation-hash-mismatch",
-                f"assembly binding 与 snapshot hash 不一致: {assembly_id}",
-            )
-        return {**record, "snapshot": snapshot}
-
-    def _read_raw_snapshot(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        session_id: str,
-        thread_id: str,
-        activation_snapshot_id: str,
-    ) -> dict[str, object]:
-        """在单个只读连接内读取 snapshot 行 + binding 行 + parent 链原始事实。"""
-
-        row = connection.execute(
-            f"SELECT {','.join(SNAPSHOT_COLUMNS)} "
-            "FROM resource_activation_snapshots WHERE session_id = ? "
-            "AND thread_id = ? AND activation_snapshot_id = ?",
-            (session_id, thread_id, activation_snapshot_id),
-        ).fetchone()
-        if row is None:
-            raise KeyError(
-                "resource-activation-unavailable: activation snapshot 不存在: "
-                f"{activation_snapshot_id}"
-            )
-        record = dict(zip(SNAPSHOT_COLUMNS, tuple(row), strict=True))
-        parent_key = strict_optional_text(
-            record["parent_turn_snapshot_id"], field="parent_turn_snapshot_id"
-        )
-        parent = (
-            self._read_raw_snapshot(
-                connection,
-                session_id=session_id,
-                thread_id=thread_id,
-                activation_snapshot_id=parent_key,
-            )
-            if parent_key is not None
-            else None
-        )
-        binding_rows = tuple(
-            tuple(binding_row)
-            for binding_row in connection.execute(
-                f"SELECT {','.join(BINDING_COLUMNS)} "
-                "FROM resource_activation_bindings WHERE session_id = ? "
-                "AND thread_id = ? AND activation_snapshot_id = ? "
-                "ORDER BY activation_ordinal",
-                (session_id, thread_id, activation_snapshot_id),
-            ).fetchall()
-        )
-        return {
-            "record": record,
-            "binding_rows": binding_rows,
-            "parent": parent,
-        }
-
-    def _build_snapshot(
-        self, raw: Mapping[str, object], *, checkpoint_ns: str
-    ) -> ResourceActivationSnapshotRef:
-        record = raw["record"]
-        assert isinstance(record, dict)
-        parent_raw = raw["parent"]
-        parent = (
-            self._build_snapshot(parent_raw, checkpoint_ns=checkpoint_ns)
-            if isinstance(parent_raw, dict)
-            else None
-        )
-        session_id = strict_text(record["session_id"], field="session_id")
-        activation_snapshot_id = strict_text(
-            record["activation_snapshot_id"], field="activation_snapshot_id"
-        )
-        body_ref = _detail_ref_from_key(
-            record["lineage_detail_ref"], field="lineage_detail_ref"
-        )
-        body_ref.require_owner(session_id)
-        manifest = self._lineage_body.read_lineage_manifest(
-            detail_ref=body_ref, checkpoint_ns=checkpoint_ns
-        )
-        if record["lineage_manifest_digest"] != sha256_jcs(manifest):
-            raise ResourceActivationStoreError(
-                "resource-activation-hash-mismatch",
-                "受保护 lineage manifest digest 与 catalog 不一致: "
-                f"{activation_snapshot_id}",
-            )
-        lineages = _lineage_by_resource(manifest)
-        binding_rows = raw["binding_rows"]
-        assert isinstance(binding_rows, tuple)
-        bindings = tuple(
-            self._binding_from_row(row, lineages=lineages) for row in binding_rows
-        )
-        declared_count = strict_non_negative_int(
-            record["binding_count"], field="binding_count"
-        )
-        if declared_count != len(bindings):
-            raise ResourceActivationStoreError(
-                "resource-activation-hash-mismatch",
-                "binding_count 与实际 binding 行数不一致: "
-                f"{activation_snapshot_id}",
-            )
-        try:
-            snapshot = ResourceActivationSnapshotRef.from_dict(
-                {
-                    "activation_snapshot_id": activation_snapshot_id,
-                    "snapshot_kind": record["snapshot_kind"],
-                    "parent_turn_snapshot_id": record["parent_turn_snapshot_id"],
-                    "activation_policy_revision": record[
-                        "activation_policy_revision"
-                    ],
-                    "activation_policy_hash": record["activation_policy_hash"],
-                    "registry_generation": record["registry_generation"],
-                    "owner_session_id": session_id,
-                    "owner_thread_id": record["thread_id"],
-                    "turn_id": record["turn_id"],
-                    "model_call_id": record["model_call_id"],
-                    "captured_at": record["captured_at"],
-                    "bindings_hash": record["bindings_hash"],
-                    "activation_provenance_hash": record[
-                        "activation_provenance_hash"
-                    ],
-                    "bindings": [binding.to_dict() for binding in bindings],
-                },
-                parent=parent,
-            )
-        except ResourceActivationContractError as error:
-            raise ResourceActivationStoreError(
-                "resource-activation-hash-mismatch",
-                f"恢复 activation snapshot 失败: {error}",
-            ) from error
-        if record["bindings_hash"] != snapshot.bindings_hash:
-            raise ResourceActivationStoreError(
-                "resource-activation-hash-mismatch",
-                f"bindings_hash 与重算结果不一致: {activation_snapshot_id}",
-            )
-        if record["activation_provenance_hash"] != (
-            snapshot.activation_provenance_hash
-        ):
-            raise ResourceActivationStoreError(
-                "resource-activation-hash-mismatch",
-                "activation_provenance_hash 与重算结果不一致: "
-                f"{activation_snapshot_id}",
-            )
-        return snapshot
-
-    @staticmethod
-    def _binding_from_row(
-        row: tuple[object, ...], *, lineages: Mapping[str, Mapping[str, object]]
-    ) -> ResourceProvenanceRef:
-        record = dict(zip(BINDING_COLUMNS, row, strict=True))
-        resource_id = strict_text(record["resource_id"], field="resource_id")
-        ordinal = strict_non_negative_int(
-            record["activation_ordinal"], field="activation_ordinal"
-        )
-        expected_digest = strict_text(
-            record["source_lineage_digest"], field="source_lineage_digest"
-        )
-        lineage = _source_lineage_ref_for_binding(
-            lineages,
-            resource_id=resource_id,
-            expected_ordinal=ordinal,
-            expected_digest=expected_digest,
-        )
-        return ResourceProvenanceRef(
-            resource_id=resource_id,
-            display_uri=strict_text(record["display_uri"], field="display_uri"),
-            resource_kind=strict_text(record["resource_kind"], field="resource_kind"),
-            owner_scope=strict_text(record["owner_scope"], field="owner_scope"),
-            facet=strict_text(record["facet"], field="facet"),
-            revision=strict_text(record["revision"], field="revision"),
-            availability=strict_text(record["availability"], field="availability"),
-            content_length=strict_non_negative_int(
-                record["content_length"], field="content_length"
-            ),
-            content_hash=strict_optional_text(
-                record["content_hash"], field="content_hash"
-            ),
-            redacted_stable_digest=strict_optional_text(
-                record["redacted_stable_digest"], field="redacted_stable_digest"
-            ),
-            source_lineage_ref=lineage,
-            source_lineage_digest=expected_digest,
-            activation_ordinal=ordinal,
-            effective_boundary=strict_text(
-                record["effective_boundary"], field="effective_boundary"
-            ),
-            captured_registry_generation=strict_non_negative_int(
-                record["captured_registry_generation"],
-                field="captured_registry_generation",
-            ),
-            snapshot_ref=_optional_detail_ref_from_key(
-                record["snapshot_ref"], field="snapshot_ref"
-            ),
-            detail_ref=_optional_detail_ref_from_key(
-                record["detail_ref"], field="detail_ref"
-            ),
         )
 
 
