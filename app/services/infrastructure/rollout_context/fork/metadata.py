@@ -359,11 +359,17 @@ class ForkMetadataMixin:
         # 8.1-D：pinned fork 的 durable retention admit 同时写 workspace catalog
         # claim（与整树删除竞争同一 DB 写事务序列）。create-or-get 幂等，崩溃
         # 重入不重复建 claim；source 已 deleting 时此处零副作用失败。
-        self._admit_pinned_fork_retention_claim(
-            claim_id=fork_id,
-            source_session_id=source_session_id,
-            target_session_id=owner_session_id,
-        )
+        if self._catalog_store() is not None:
+            fence = self._source_lifecycle_generation(source_session_id)
+            self.begin_pinned_fork_retention_claim(
+                claim_id=fork_id,
+                source_session_id=source_session_id,
+                target_session_id=owner_session_id,
+                source_lifecycle_generation=fence,
+            )
+            self.activate_pinned_fork_retention_claim(
+                fork_id, expected_generation=fence
+            )
         with self._lock(source_session_id, checkpoint_ns):
             self.initialize(source_session_id, checkpoint_ns)
             with self._connect(source_session_id, checkpoint_ns) as connection:
@@ -387,29 +393,6 @@ class ForkMetadataMixin:
                 )
                 if cursor.rowcount != 1:
                     raise RuntimeError(f"fork retention 未写入: {fork_id}")
-
-    def _admit_pinned_fork_retention_claim(
-        self,
-        *,
-        claim_id: str,
-        source_session_id: str,
-        target_session_id: str,
-    ) -> None:
-        """create-or-get 并把 pinned claim 推进为 ``active``（8.1-D）。"""
-        store = self._catalog_store()
-        if store is None:
-            return
-        fence = self._source_lifecycle_generation(source_session_id)
-        store.create_or_get_fork_retention_claim(
-            claim_id=claim_id,
-            workspace_id=self._workspace_id(),
-            source_session_id=source_session_id,
-            target_session_id=target_session_id,
-            source_lifecycle_generation=fence,
-        )
-        store.activate_fork_retention_claim(
-            claim_id, expected_generation=fence
-        )
 
     def _source_lifecycle_generation(self, session_id: str) -> int:
         """读取 source session-control fence generation（claim 准入冻结值）。

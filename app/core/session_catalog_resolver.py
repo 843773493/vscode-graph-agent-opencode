@@ -746,7 +746,7 @@ class SessionCatalogPathResolver:
             if node.kind != "session":
                 raise RuntimeError(f"节点不是会话: {session_id}")
             idempotency_key = uuid.uuid4().hex
-        result = await self._delete_service.delete(
+        result = await self.delete_subtree(
             idempotency_key=idempotency_key,
             root_node_id=session_id,
         )

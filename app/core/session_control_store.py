@@ -579,7 +579,7 @@ class SessionControlStore(
         """单个写事务：BEGIN IMMEDIATE 内先验证后写入。
 
         正常退出（含事务体内 ``return``）一律 COMMIT，任何异常 ROLLBACK
-        后原样抛出——模式对齐 ``session_catalog_store._write_transaction``，
+        后原样抛出——模式对齐 ``session_catalog_store.write_transaction``，
         吸取 R14 审查 M1 教训：禁止在打开事务内裸 ``return`` 造成事务
         泄漏（本类既有方法以「先判态后写入 + 成功路径末尾 COMMIT」的
         手写模式保持不变；8.5-A 新增方法统一走本 CM）。

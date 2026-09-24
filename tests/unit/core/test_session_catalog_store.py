@@ -2394,13 +2394,13 @@ def _park_inside_transaction(
     """
     try:
         if kind == "read":
-            with store._read_transaction() as connection:
+            with store.read_transaction() as connection:
                 connection.execute("SELECT COUNT(*) FROM nodes")
                 entered.set()
                 while not (settled.wait(0.01) or release.is_set()):
                     pass
         else:
-            with store._write_transaction() as connection:
+            with store.write_transaction() as connection:
                 connection.execute("SELECT COUNT(*) FROM nodes")
                 entered.set()
                 while not (settled.wait(0.01) or release.is_set()):
@@ -2573,7 +2573,7 @@ def test_same_thread_reentrant_lock_within_write_transaction(
       SELECT（R18 审查 M2 构造探针的功能等价物）。
     """
     node = create_session(store)
-    with store._write_transaction() as connection:
+    with store.write_transaction() as connection:
         # 探针 1：非阻塞重入（同线程持锁期间的第二次获取）。
         assert store._connection_lock.acquire(blocking=False), (
             "同线程写事务内无法重入连接串行锁——_connection_lock 已不是"
@@ -3080,7 +3080,7 @@ def test_apply_navigation_mutation_in_caller_transaction(
     assert store.get_node(node.node_id).display_name == "原子改"
 
 
-def test_read_transaction_alias_shared_snapshot(
+def test_read_transaction_shared_snapshot(
     store: SessionCatalogStore,
 ) -> None:
     node = create_session(store, display_name="读事务")

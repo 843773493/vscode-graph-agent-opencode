@@ -27,7 +27,7 @@ import re
 import sqlite3
 import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -689,7 +689,7 @@ class SessionCatalogStore:
         self._closed = False
         # R18-3：单连接跨线程串行锁（可重入）。本 store 只持有一条共享
         # sqlite3 连接（check_same_thread=False），历史实现无任何锁——跨
-        # 线程并发进入 _read_transaction/_write_transaction 会在同一连接
+        # 线程并发进入 read_transaction/write_transaction 会在同一连接
         # 上交叠出 sqlite3.OperationalError（读侧 BEGIN：
         # cannot start a transaction within a transaction；交叠窗口内的
         # COMMIT 侧变体：cannot commit - no transaction is active，见
@@ -851,7 +851,7 @@ class SessionCatalogStore:
             )
 
     @contextmanager
-    def _write_transaction(self) -> Iterator[sqlite3.Connection]:
+    def write_transaction(self) -> Iterator[sqlite3.Connection]:
         """单个写事务：BEGIN IMMEDIATE 内先验证后写入，异常回滚。
 
         R18-3：事务全程（BEGIN → yield 出的语句执行窗口 → COMMIT/
@@ -861,6 +861,9 @@ class SessionCatalogStore:
 
         提交前自增 ``catalog_metadata.generation``（8.1-F）：每个提交的写
         事务恰好推进一次 generation，作为备份/一致性快照的版本锚点。
+
+        公开入口：调用方可在自己持有的连接上执行 node 写方法与同库旁挂
+        journal/事件写入，由本事务一次性提交或回滚。
         """
         with self._connection_lock:
             self._ensure_open()
@@ -872,23 +875,6 @@ class SessionCatalogStore:
                 raise
             self._bump_generation(self._connection)
             self._connection.execute("COMMIT")
-
-    def write_transaction(self) -> Iterator[sqlite3.Connection]:
-        """公开写事务入口（同一实现对象的别名，零逻辑变更）。
-
-        供需要把「nodes 变更 + 同库旁挂 journal/事件 outbox」放进**同一个**
-        SQLite 写事务的调用方组合使用：调用方在自己持有的连接上执行 node
-        写方法与自己的表写入，由本事务一次性提交或回滚。
-        """
-        return self._write_transaction()
-
-    def read_transaction(self) -> Iterator[sqlite3.Connection]:
-        """公开只读事务入口（同一实现对象的别名，零逻辑变更）。
-
-        供需要在**只读单事务**快照里读取 nodes 与同库旁挂表（按 ID 状态查询、
-        revision-pinned snapshot、事件重放）的调用方使用；不推进 generation。
-        """
-        return self._read_transaction()
 
     @staticmethod
     def _bump_generation(connection: sqlite3.Connection) -> None:
@@ -905,7 +891,7 @@ class SessionCatalogStore:
 
     def current_generation(self) -> int:
         """返回 catalog 当前单调 generation（备份/一致性快照的版本锚点）。"""
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             row = connection.execute(
                 "SELECT generation FROM catalog_metadata WHERE singleton_id = 1"
             ).fetchone()
@@ -917,11 +903,13 @@ class SessionCatalogStore:
             return int(row[0])
 
     @contextmanager
-    def _read_transaction(self) -> Iterator[sqlite3.Connection]:
+    def read_transaction(self) -> Iterator[sqlite3.Connection]:
         """单个读事务：多语句读共享同一快照。
 
-        R18-3：事务全程持有连接串行锁（语义同 ``_write_transaction``），
+        R18-3：事务全程持有连接串行锁（语义同 ``write_transaction``），
         跨线程读/写/读在共享连接上完全串行，不再交叠。
+
+        公开入口：只读单事务快照，不推进 generation。
         """
         with self._connection_lock:
             self._ensure_open()
@@ -1125,32 +1113,21 @@ class SessionCatalogStore:
         """
         validate_session_id(node_id)
         self._validate_common_fields(workspace_id, display_name)
-        if connection is None:
-            with self._write_transaction() as owned:
-                return self._insert_folder_node(
-                    owned, node_id, workspace_id, parent_node_id, display_name
-                )
-        return self._insert_folder_node(
-            connection, node_id, workspace_id, parent_node_id, display_name
+        transaction = (
+            self.write_transaction()
+            if connection is None
+            else nullcontext(connection)
         )
-
-    def _insert_folder_node(
-        self,
-        connection: sqlite3.Connection,
-        node_id: str,
-        workspace_id: str,
-        parent_node_id: str | None,
-        display_name: str,
-    ) -> SessionCatalogNode:
-        self._require_node_id_available(connection, node_id)
-        self._require_mutable_parent(connection, parent_node_id, workspace_id)
-        connection.execute(
-            "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
-            "state, revision, workspace_id) "
-            "VALUES (?, 'folder', ?, ?, 'active', 1, ?)",
-            (node_id, parent_node_id, display_name, workspace_id),
-        )
-        return self._node_from_row(self._require_node(connection, node_id))
+        with transaction as active:
+            self._require_node_id_available(active, node_id)
+            self._require_mutable_parent(active, parent_node_id, workspace_id)
+            active.execute(
+                "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
+                "state, revision, workspace_id) "
+                "VALUES (?, 'folder', ?, ?, 'active', 1, ?)",
+                (node_id, parent_node_id, display_name, workspace_id),
+            )
+            return self._node_from_row(self._require_node(active, node_id))
 
     def create_session_node(
         self,
@@ -1177,7 +1154,7 @@ class SessionCatalogStore:
             storage_relative_locator,
         )
         self._validate_locator_budget(storage_relative_locator)
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             self._require_node_id_available(connection, node_id)
             self._require_unique_session_fields(
                 connection,
@@ -1209,7 +1186,7 @@ class SessionCatalogStore:
             raise TypeError(f"显示名必须是字符串: {display_name!r}")
         if not display_name:
             raise ValueError(f"显示名不能为空: {display_name!r}")
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             self._require_node(connection, node_id)
             connection.execute(
                 "UPDATE nodes SET display_name = ?, revision = revision + 1 "
@@ -1224,7 +1201,7 @@ class SessionCatalogStore:
         new_parent_node_id: str | None,
     ) -> SessionCatalogNode:
         """调整父节点；只改导航关系，不搬移物理目录。"""
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             self._validate_move_target(connection, node_id, new_parent_node_id)
             connection.execute(
                 "UPDATE nodes SET parent_node_id = ?, revision = revision + 1 "
@@ -1295,61 +1272,41 @@ class SessionCatalogStore:
                 )
             if not new_display_name:
                 raise ValueError("new_display_name 不能为空字符串")
-        if connection is None:
-            with self._write_transaction() as owned:
-                return self._apply_navigation_mutation(
-                    owned,
-                    node_id,
-                    expected_revision=expected_revision,
-                    new_parent_node_id=new_parent_node_id,
-                    new_display_name=new_display_name,
+        transaction = (
+            self.write_transaction()
+            if connection is None
+            else nullcontext(connection)
+        )
+        with transaction as active:
+            if new_parent_node_id is not _UNSET:
+                self._validate_move_target(active, node_id, new_parent_node_id)  # type: ignore[arg-type]
+            else:
+                self._require_node(active, node_id)
+            row = self._require_node(active, node_id)
+            actual_revision = int(row["revision"])
+            if actual_revision != expected_revision:
+                raise RuntimeError(
+                    "导航 mutation CAS 失败：节点 revision 已漂移: "
+                    f"node_id={node_id}, expected_revision={expected_revision}, "
+                    f"actual_revision={actual_revision}"
                 )
-        return self._apply_navigation_mutation(
-            connection,
-            node_id,
-            expected_revision=expected_revision,
-            new_parent_node_id=new_parent_node_id,
-            new_display_name=new_display_name,
-        )
-
-    def _apply_navigation_mutation(
-        self,
-        connection: sqlite3.Connection,
-        node_id: str,
-        *,
-        expected_revision: int,
-        new_parent_node_id: object,
-        new_display_name: str | None,
-    ) -> SessionCatalogNode:
-        if new_parent_node_id is not _UNSET:
-            self._validate_move_target(connection, node_id, new_parent_node_id)  # type: ignore[arg-type]
-        else:
-            self._require_node(connection, node_id)
-        row = self._require_node(connection, node_id)
-        actual_revision = int(row["revision"])
-        if actual_revision != expected_revision:
-            raise RuntimeError(
-                "导航 mutation CAS 失败：节点 revision 已漂移: "
-                f"node_id={node_id}, expected_revision={expected_revision}, "
-                f"actual_revision={actual_revision}"
+            updates: list[str] = ["revision = revision + 1"]
+            params: list[object] = []
+            if new_parent_node_id is not _UNSET:
+                updates.append("parent_node_id = ?")
+                params.append(new_parent_node_id)
+            if new_display_name is not None:
+                self._require_display_name_available(
+                    active, node_id, new_display_name
+                )
+                updates.append("display_name = ?")
+                params.append(new_display_name)
+            params.append(node_id)
+            active.execute(
+                f"UPDATE nodes SET {', '.join(updates)} WHERE node_id = ?",
+                tuple(params),
             )
-        updates: list[str] = ["revision = revision + 1"]
-        params: list[object] = []
-        if new_parent_node_id is not _UNSET:
-            updates.append("parent_node_id = ?")
-            params.append(new_parent_node_id)
-        if new_display_name is not None:
-            self._require_display_name_available(
-                connection, node_id, new_display_name
-            )
-            updates.append("display_name = ?")
-            params.append(new_display_name)
-        params.append(node_id)
-        connection.execute(
-            f"UPDATE nodes SET {', '.join(updates)} WHERE node_id = ?",
-            tuple(params),
-        )
-        return self._node_from_row(self._require_node(connection, node_id))
+            return self._node_from_row(self._require_node(active, node_id))
 
     def _require_display_name_available(
         self,
@@ -1380,7 +1337,7 @@ class SessionCatalogStore:
         """设置节点状态；active→deleting 允许，deleting→active 拒绝（不可复活）。"""
         if state not in ("active", "deleting"):
             raise ValueError(f"节点状态非法: {state!r}")
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             row = self._require_node(connection, node_id)
             current = str(row["state"])
             if current == state:
@@ -1462,26 +1419,22 @@ class SessionCatalogStore:
                 f"source_lifecycle_generation 必须是整数: "
                 f"{source_lifecycle_generation!r}"
             )
-        if connection is None:
-            with self._write_transaction() as owned:
-                return self._create_or_get_fork_retention_claim(
-                    owned,
-                    claim_id=claim_id,
-                    workspace_id=workspace_id,
-                    source_session_id=source_session_id,
-                    target_session_id=target_session_id,
-                    source_lifecycle_generation=source_lifecycle_generation,
-                )
-        return self._create_or_get_fork_retention_claim(
-            connection,
-            claim_id=claim_id,
-            workspace_id=workspace_id,
-            source_session_id=source_session_id,
-            target_session_id=target_session_id,
-            source_lifecycle_generation=source_lifecycle_generation,
+        transaction = (
+            self.write_transaction()
+            if connection is None
+            else nullcontext(connection)
         )
+        with transaction as active:
+            return self._register_fork_retention_claim(
+                active,
+                claim_id=claim_id,
+                workspace_id=workspace_id,
+                source_session_id=source_session_id,
+                target_session_id=target_session_id,
+                source_lifecycle_generation=source_lifecycle_generation,
+            )
 
-    def _create_or_get_fork_retention_claim(
+    def _register_fork_retention_claim(
         self,
         connection: sqlite3.Connection,
         *,
@@ -1491,6 +1444,7 @@ class SessionCatalogStore:
         target_session_id: str,
         source_lifecycle_generation: int,
     ) -> ForkRetentionClaim:
+        """claim 占位的 create-or-get 主体（单写事务内，由公开入口调用）。"""
         existing = self._fetch_fork_retention_claim(connection, claim_id)
         if existing is not None:
             record = self._fork_retention_claim_from_row(existing)
@@ -1563,7 +1517,7 @@ class SessionCatalogStore:
         等于 ``expected_generation``（漂移 → ``RuntimeError``）。已 ``active``
         幂等返回；``released`` → ``RuntimeError``（已终结，不可复活）。
         """
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             row = self._fetch_fork_retention_claim(connection, claim_id)
             if row is None:
                 raise KeyError(f"fork retention claim 不存在: {claim_id!r}")
@@ -1609,7 +1563,7 @@ class SessionCatalogStore:
             raise TypeError(f"release reason 必须是字符串: {reason!r}")
         if not reason:
             raise ValueError("release reason 不能为空")
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             row = self._fetch_fork_retention_claim(connection, claim_id)
             if row is None:
                 raise KeyError(f"fork retention claim 不存在: {claim_id!r}")
@@ -1639,7 +1593,7 @@ class SessionCatalogStore:
 
     def get_fork_retention_claim(self, claim_id: str) -> ForkRetentionClaim:
         """按 claim_id 返回 claim 投影；不存在抛 KeyError。"""
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             row = self._fetch_fork_retention_claim(connection, claim_id)
             if row is None:
                 raise KeyError(f"fork retention claim 不存在: {claim_id!r}")
@@ -1661,33 +1615,24 @@ class SessionCatalogStore:
         validate_session_id(target_session_id)
         if not isinstance(reason, str) or not reason:
             raise ValueError("release reason 不能为空")
-        if connection is None:
-            with self._write_transaction() as owned:
-                return self._release_claims_for_target(
-                    owned, target_session_id, reason
-                )
-        return self._release_claims_for_target(
-            connection, target_session_id, reason
+        transaction = (
+            self.write_transaction()
+            if connection is None
+            else nullcontext(connection)
         )
-
-    def _release_claims_for_target(
-        self,
-        connection: sqlite3.Connection,
-        target_session_id: str,
-        reason: str,
-    ) -> tuple[str, ...]:
-        rows = connection.execute(
-            f"SELECT {_FORK_RETENTION_CLAIM_COLUMNS} FROM fork_retention_claims "
-            "WHERE target_session_id = ? AND state IN ('preparing', 'active') "
-            "ORDER BY fork_retention_claim_id",
-            (target_session_id,),
-        ).fetchall()
-        released: list[str] = []
-        for row in rows:
-            claim_id = str(row["fork_retention_claim_id"])
-            self._mark_claim_released(connection, claim_id, reason)
-            released.append(claim_id)
-        return tuple(released)
+        with transaction as active:
+            rows = active.execute(
+                f"SELECT {_FORK_RETENTION_CLAIM_COLUMNS} FROM fork_retention_claims "
+                "WHERE target_session_id = ? AND state IN ('preparing', 'active') "
+                "ORDER BY fork_retention_claim_id",
+                (target_session_id,),
+            ).fetchall()
+            released: list[str] = []
+            for row in rows:
+                claim_id = str(row["fork_retention_claim_id"])
+                self._mark_claim_released(active, claim_id, reason)
+                released.append(claim_id)
+            return tuple(released)
 
     def list_pinned_claims_for_source(
         self,
@@ -1701,28 +1646,19 @@ class SessionCatalogStore:
         claim 不属于 blocker。按 claim_id 稳定排序。
         """
         validate_session_id(source_session_id)
-        if connection is None:
-            with self._read_transaction() as owned:
-                return self._list_pinned_claims_for_source(
-                    owned, source_session_id
-                )
-        return self._list_pinned_claims_for_source(connection, source_session_id)
-
-    @staticmethod
-    def _list_pinned_claims_for_source(
-        connection: sqlite3.Connection,
-        source_session_id: str,
-    ) -> list[ForkRetentionClaim]:
-        rows = connection.execute(
-            f"SELECT {_FORK_RETENTION_CLAIM_COLUMNS} FROM fork_retention_claims "
-            "WHERE source_session_id = ? AND state IN ('preparing', 'active') "
-            "ORDER BY fork_retention_claim_id",
-            (source_session_id,),
-        ).fetchall()
-        return [
-            SessionCatalogStore._fork_retention_claim_from_row(row)
-            for row in rows
-        ]
+        transaction = (
+            self.read_transaction()
+            if connection is None
+            else nullcontext(connection)
+        )
+        with transaction as active:
+            rows = active.execute(
+                f"SELECT {_FORK_RETENTION_CLAIM_COLUMNS} FROM fork_retention_claims "
+                "WHERE source_session_id = ? AND state IN ('preparing', 'active') "
+                "ORDER BY fork_retention_claim_id",
+                (source_session_id,),
+            ).fetchall()
+            return [self._fork_retention_claim_from_row(row) for row in rows]
 
     @staticmethod
     def _raise_for_source_claims(
@@ -1843,7 +1779,7 @@ class SessionCatalogStore:
         # 非法形态直接 ValueError，不静默回退到软件分配）。
         if session_id is not None:
             validate_session_id(session_id)
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             existing = self._fetch_creation_record(connection, idempotency_key)
             if existing is not None:
                 if str(existing["preimage_hash"]) != preimage_hash:
@@ -1931,7 +1867,7 @@ class SessionCatalogStore:
     def get_creation_record(self, idempotency_key: str) -> SessionCreationRecord:
         """按幂等键返回 creation record 投影；不存在抛 KeyError。"""
         self._validate_idempotency_key(idempotency_key)
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             row = self._fetch_creation_record(connection, idempotency_key)
             if row is None:
                 raise KeyError(
@@ -1953,7 +1889,7 @@ class SessionCatalogStore:
         整个事务：node 不发布、record 保持 preparing。
         """
         self._validate_idempotency_key(idempotency_key)
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             row = self._fetch_creation_record(connection, idempotency_key)
             if row is None:
                 raise KeyError(
@@ -2068,7 +2004,7 @@ class SessionCatalogStore:
             raise TypeError(f"abort reason 必须是字符串: {reason!r}")
         if not reason:
             raise ValueError("abort reason 不能为空")
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             row = self._fetch_creation_record(connection, idempotency_key)
             if row is None:
                 raise KeyError(
@@ -2186,7 +2122,7 @@ class SessionCatalogStore:
         self._validate_idempotency_key(idempotency_key)
         _validate_workspace_id(workspace_id)
         validate_session_id(root_node_id)
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             existing = self._fetch_subtree_delete_record(
                 connection, idempotency_key
             )
@@ -2313,7 +2249,7 @@ class SessionCatalogStore:
         保持 active、record 保持 preparing。
         """
         self._validate_idempotency_key(idempotency_key)
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             row = self._fetch_subtree_delete_record(connection, idempotency_key)
             if row is None:
                 raise KeyError(
@@ -2332,12 +2268,12 @@ class SessionCatalogStore:
             # 8.1-D：整树 catalog deleting 提交前的 pinned retention 预检。
             # 冻结集合内任一 session 存在未释放（preparing/active）claim 即
             # fail closed，且本事务不写任何节点状态——整棵子树保持 active。
-            # claim 准入（_create_or_get_fork_retention_claim 要求 source
+            # claim 准入（create_or_get_fork_retention_claim 要求 source
             # active）与本预检在同一 DB 的 BEGIN IMMEDIATE 事务序列上竞争，
             # 因此无需任何本地 fence 窗口。
             for session_id in sorted(record.frozen_session_locators):
-                claims = self._list_pinned_claims_for_source(
-                    connection, session_id
+                claims = self.list_pinned_claims_for_source(
+                    session_id, connection=connection
                 )
                 if claims:
                     self._raise_for_source_claims(claims)
@@ -2384,7 +2320,7 @@ class SessionCatalogStore:
         """
         self._validate_idempotency_key(idempotency_key)
         validate_session_id(session_id)
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             row = self._fetch_subtree_delete_record(connection, idempotency_key)
             if row is None:
                 raise KeyError(
@@ -2430,7 +2366,7 @@ class SessionCatalogStore:
         自引用外键）并把 record 推进为 ``completed``。
         """
         self._validate_idempotency_key(idempotency_key)
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             row = self._fetch_subtree_delete_record(connection, idempotency_key)
             if row is None:
                 raise KeyError(
@@ -2519,7 +2455,7 @@ class SessionCatalogStore:
             raise TypeError(f"abort reason 必须是字符串: {reason!r}")
         if not reason:
             raise ValueError("abort reason 不能为空")
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             row = self._fetch_subtree_delete_record(connection, idempotency_key)
             if row is None:
                 raise KeyError(
@@ -2553,7 +2489,7 @@ class SessionCatalogStore:
     def get_subtree_delete_record(self, idempotency_key: str) -> SubtreeDeleteRecord:
         """按幂等键返回 subtree delete record 投影；不存在抛 KeyError。"""
         self._validate_idempotency_key(idempotency_key)
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             row = self._fetch_subtree_delete_record(connection, idempotency_key)
             if row is None:
                 raise KeyError(
@@ -2571,7 +2507,7 @@ class SessionCatalogStore:
         删除协议，不经本方法。
         """
         validate_session_id(folder_id)
-        with self._write_transaction() as connection:
+        with self.write_transaction() as connection:
             row = self._require_node(connection, folder_id)
             if str(row["kind"]) != "folder":
                 raise RuntimeError(
@@ -2602,7 +2538,7 @@ class SessionCatalogStore:
 
     def count_children(self, node_id: str) -> int:
         """返回直接子节点数。"""
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             self._require_node(connection, node_id)
             row = connection.execute(
                 "SELECT COUNT(*) FROM nodes WHERE parent_node_id = ?",
@@ -2612,7 +2548,7 @@ class SessionCatalogStore:
 
     def get_node(self, node_id: str) -> SessionCatalogNode:
         """返回节点投影；不存在抛 KeyError。"""
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             return self._node_from_row(self._require_node(connection, node_id))
 
     def list_children(
@@ -2629,7 +2565,7 @@ class SessionCatalogStore:
         """
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise ValueError(f"limit 必须是正整数: {limit!r}")
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             if parent_node_id is not None:
                 self._require_node(connection, parent_node_id)
             if cursor is None:
@@ -2652,7 +2588,7 @@ class SessionCatalogStore:
 
     def breadcrumb(self, node_id: str) -> list[SessionCatalogNode]:
         """返回从根到该节点（含自身）的节点链。"""
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             chain: list[SessionCatalogNode] = []
             visited: set[str] = set()
             current_id: str | None = node_id
@@ -2671,7 +2607,7 @@ class SessionCatalogStore:
 
         从父节点开始向上找第一个 kind 为 session 的祖先。
         """
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             row = self._require_node(connection, node_id)
             current_id = row["parent_node_id"]
             visited: set[str] = set()
@@ -2687,7 +2623,7 @@ class SessionCatalogStore:
 
     def descendant_session_ids(self, node_id: str) -> list[str]:
         """递归 CTE 返回全部后代 session ID（不含自身，按 node_id 排序）。"""
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             self._require_node(connection, node_id)
             rows = connection.execute(
                 """
@@ -2710,7 +2646,7 @@ class SessionCatalogStore:
         main_thread_id: str,
     ) -> SessionCatalogNode:
         """按 (workspace_id, main_thread_id) 返回唯一 session 节点。"""
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             row = connection.execute(
                 f"SELECT {_NODE_COLUMNS} FROM nodes "
                 "WHERE workspace_id = ? AND main_thread_id = ? AND kind = 'session'",
@@ -2725,7 +2661,7 @@ class SessionCatalogStore:
 
     def verify_workspace_consistency(self) -> None:
         """全表校验：父节点存在、父子同 workspace、无环；违反抛 RuntimeError。"""
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             rows = connection.execute(
                 "SELECT node_id, parent_node_id, workspace_id FROM nodes"
             ).fetchall()
@@ -2859,7 +2795,7 @@ class SessionCatalogStore:
         if not self.sessions_root.is_dir():
             return
         registered: set[str] = set()
-        with self._read_transaction() as connection:
+        with self.read_transaction() as connection:
             rows = connection.execute(
                 "SELECT storage_relative_locator FROM nodes "
                 "WHERE kind = 'session' AND storage_relative_locator IS NOT NULL"
