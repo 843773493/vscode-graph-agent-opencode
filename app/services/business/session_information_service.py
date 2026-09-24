@@ -137,11 +137,17 @@ class SessionInformationService:
     def _build_execution(
         trace_events: list[TraceEventDTO],
     ) -> SessionInformationExecutionDTO:
-        if not trace_events:
+        # Goal 事件是会话级事实，其 job_id 是 "goal:{session_id}" 合成标识，
+        # 不代表任何真实 Job；把它们计入执行投影会伪造出一个永远 running 的
+        # 执行状态，并让 execution.job_id 指向不存在的 Job。
+        job_events_all = [event for event in trace_events if event.phase != "goal"]
+        if not job_events_all:
             return SessionInformationExecutionDTO()
 
-        latest_job_id = trace_events[-1].job_id
-        job_events = [event for event in trace_events if event.job_id == latest_job_id]
+        latest_job_id = job_events_all[-1].job_id
+        job_events = [
+            event for event in job_events_all if event.job_id == latest_job_id
+        ]
         status = "running"
         current_tool: str | None = None
         last_error: str | None = None
