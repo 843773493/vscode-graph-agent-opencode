@@ -6,14 +6,9 @@ relist 失败 fail closed、revision 冲突显式拒绝、未启动显式失败�
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
-from langchain_core.tools import BaseTool, StructuredTool
-from pydantic import BaseModel
 
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp import (
@@ -29,7 +24,6 @@ from app.services.infrastructure.mcp import (
     build_extension_catalog_binding,
     mcp_catalog_activation_payload,
 )
-from app.services.infrastructure.mcp.config import McpServerConfig
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
     ExtensionDispatchBindingMismatchError,
@@ -38,66 +32,12 @@ from app.services.infrastructure.mcp.extension_catalog import (
 from app.services.orchestration.resource_activation.contracts import (
     ResourceActivationPolicySnapshot,
 )
-
-
-class _EchoInput(BaseModel):
-    text: str
-
-
-def _make_remote_tool(name: str) -> StructuredTool:
-    async def _call(text: str) -> str:
-        return f"{name}:{text}"
-
-    return StructuredTool.from_function(
-        coroutine=_call,
-        name=name,
-        description=f"{name} 工具",
-        args_schema=_EchoInput,
-    )
-
-
-class _FakeSession:
-    def __init__(self, *, tool_names: list[str], supports_notifications: bool = True):
-        self.tool_names = list(tool_names)
-        self.supports_notifications = supports_notifications
-        self.relist_error: Exception | None = None
-        self.list_calls = 0
-
-    async def initialize(self) -> None:
-        return None
-
-    async def list_tools(self) -> list[BaseTool]:
-        self.list_calls += 1
-        if self.relist_error is not None:
-            raise self.relist_error
-        return [_make_remote_tool(name) for name in self.tool_names]
-
-    def supports_tool_list_changed(self) -> bool:
-        return self.supports_notifications
-
-
-class _FakeSessionFactory:
-    def __init__(self, initial_tools: dict[str, list[str]] | None = None):
-        self._initial_tools = initial_tools or {}
-        self.sessions: dict[str, _FakeSession] = {}
-        self.notify_callbacks: dict[str, Callable[[], None]] = {}
-
-    def __call__(
-        self,
-        server: McpServerConfig,
-        on_tools_list_changed: Callable[[], None],
-    ) -> object:
-        session = _FakeSession(
-            tool_names=list(self._initial_tools.get(server.server_id, [])),
-        )
-        self.sessions[server.server_id] = session
-        self.notify_callbacks[server.server_id] = on_tools_list_changed
-
-        @asynccontextmanager
-        async def _session() -> AsyncIterator[_FakeSession]:
-            yield session
-
-        return _session()
+from tests.support.mcp_session_doubles import (
+    FakeMcpSessionFactory as _FakeSessionFactory,
+)
+from tests.support.mcp_session_doubles import (
+    drain_pending_relists as _drain_pending_relists,
+)
 
 
 class _MemorySaver:
@@ -157,12 +97,6 @@ def _make_owner(
         event_service=EventChannelService(),
         session_factory=factory,
     )
-
-
-async def _drain_pending_relists(owner: McpCatalogOwner) -> None:
-    tasks = tuple(owner._pending_relist_tasks)
-    if tasks:
-        await asyncio.gather(*tasks)
 
 
 async def test_freeze_turn_seals_binding_and_guidance_atomically(
