@@ -35,7 +35,10 @@ async def get_job(
     request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ):
-    result = await job_service.get(job_id)
+    try:
+        result = await job_service.get(job_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -48,7 +51,10 @@ async def list_job_steps(
     request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ):
-    result = await job_service.list_steps(job_id)
+    try:
+        result = await job_service.list_steps(job_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 

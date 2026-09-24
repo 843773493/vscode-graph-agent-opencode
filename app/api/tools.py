@@ -84,7 +84,11 @@ async def get_tool_test(
     request_id: str = Depends(get_request_id),
     test_service: ToolTestService = Depends(get_tool_test_service),
 ):
-    return APIResponse(data=test_service.get(run_id), request_id=request_id)
+    try:
+        result = test_service.get(run_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.post(

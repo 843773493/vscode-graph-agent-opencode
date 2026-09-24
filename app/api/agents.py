@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import get_agent_service, get_request_id, verify_local_token
 from app.schemas.internal_v2.agent import (
@@ -65,5 +65,8 @@ async def get_agent(
     request_id: str = Depends(get_request_id),
     agent_service: AgentService = Depends(get_agent_service),
 ):
-    result = await agent_service.get(agent_id)
+    try:
+        result = await agent_service.get(agent_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
