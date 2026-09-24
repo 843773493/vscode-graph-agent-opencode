@@ -18,6 +18,7 @@ import type {
   SessionGeneratorList,
 } from "../../types/backend";
 import { errorMessage } from "../../utils/errorMessage";
+import { trackInFlightRequest } from "../runtime/inFlightRequests";
 
 export function useSessionGeneratorResources(apiPort: number, enabled = true) {
   const [generators, setGenerators] = useState<SessionGeneratorList | null>(null);
@@ -64,16 +65,7 @@ export function useSessionGeneratorResources(apiPort: number, enabled = true) {
       });
       return result.items;
     })();
-    generationRunRequestsRef.current.set(requestKey, request);
-    void request.then(() => {
-      if (generationRunRequestsRef.current.get(requestKey) === request) {
-        generationRunRequestsRef.current.delete(requestKey);
-      }
-    }, () => {
-      if (generationRunRequestsRef.current.get(requestKey) === request) {
-        generationRunRequestsRef.current.delete(requestKey);
-      }
-    });
+    trackInFlightRequest(generationRunRequestsRef.current, requestKey, request);
     return request;
   }, [apiPort]);
 

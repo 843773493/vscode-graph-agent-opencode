@@ -7,6 +7,7 @@ import {
 import type { SessionGoal, SessionGoalUpdateRequest } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
+import { trackInFlightRequest } from "../runtime/inFlightRequests";
 
 interface GoalTarget {
   sessionId: string;
@@ -116,16 +117,7 @@ export function useSessionGoalController({
         throw error;
       }
     })();
-    inFlightGoalRequestsRef.current.set(requestKey, request);
-    void request.then(() => {
-      if (inFlightGoalRequestsRef.current.get(requestKey) === request) {
-        inFlightGoalRequestsRef.current.delete(requestKey);
-      }
-    }, () => {
-      if (inFlightGoalRequestsRef.current.get(requestKey) === request) {
-        inFlightGoalRequestsRef.current.delete(requestKey);
-      }
-    });
+    trackInFlightRequest(inFlightGoalRequestsRef.current, requestKey, request);
     return request;
   }, [apiPort, currentSessionId, currentWorkspaceId, setState]);
 

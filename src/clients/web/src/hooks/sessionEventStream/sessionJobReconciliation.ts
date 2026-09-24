@@ -19,14 +19,7 @@ import type {
 import type { AppState } from "../../types/frontend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { isSessionActivelyViewed } from "../../state/session/viewedSession";
-
-const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
-  "completed",
-  "succeeded",
-  "failed",
-  "cancelled",
-  "timed_out",
-]);
+import { TERMINAL_JOB_STATUSES } from "./sessionEventStreamPolicy";
 
 const terminalSessionRefreshes = new Map<string, Promise<void>>();
 

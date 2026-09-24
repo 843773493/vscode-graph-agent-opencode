@@ -22,6 +22,7 @@ import {
   type NodeDebugMutation,
 } from "./nodeDebugMutationGate";
 import { createNodeDebugSyncChannel } from "./nodeDebugSync";
+import { trackInFlightRequest } from "../runtime/inFlightRequests";
 
 interface UseNodeDebugStateSyncOptions {
   apiPort: number;
@@ -95,16 +96,7 @@ export function useNodeDebugStateSync({
       if (inFlight) return inFlight;
     }
     const request = getNodeDebugState(apiPort, sessionId, threadId, workspaceId);
-    stateRequestsRef.current.set(requestKey, request);
-    void request.then(() => {
-      if (stateRequestsRef.current.get(requestKey) === request) {
-        stateRequestsRef.current.delete(requestKey);
-      }
-    }, () => {
-      if (stateRequestsRef.current.get(requestKey) === request) {
-        stateRequestsRef.current.delete(requestKey);
-      }
-    });
+    trackInFlightRequest(stateRequestsRef.current, requestKey, request);
     return request;
   }, [apiPort, sessionId, threadId, workspaceId]);
 

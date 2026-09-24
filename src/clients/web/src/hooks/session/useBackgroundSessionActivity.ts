@@ -6,18 +6,12 @@ import { writePendingSnapshot } from "../../state/conversations";
 import { parseSessionScopeKey } from "../../state/session/sessionScope";
 import { isSessionActivelyViewed } from "../../state/session/viewedSession";
 import type { AppState } from "../../types/frontend";
-import type { JobStatus } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
-import { ACTIVE_JOB_RECONCILE_INTERVAL_MS } from "../sessionEventStream/sessionEventStreamPolicy";
+import {
+  ACTIVE_JOB_RECONCILE_INTERVAL_MS,
+  TERMINAL_JOB_STATUSES,
+} from "../sessionEventStream/sessionEventStreamPolicy";
 import { errorMessage } from "../../utils/errorMessage";
-
-const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
-  "completed",
-  "succeeded",
-  "failed",
-  "cancelled",
-  "timed_out",
-]);
 
 export function useBackgroundSessionActivity({
   apiPort,

@@ -1,7 +1,20 @@
+import type { JobStatus } from "../../types/backend";
+
 export const ACTIVE_JOB_RECONCILE_INTERVAL_MS = 5_000;
 export const ACTIVE_JOB_TRACE_STALE_MS = 8_000;
 export const ACTIVE_JOB_STALE_PROBE_INTERVAL_MS = 10_000;
 export const WORKSPACE_SESSION_FALLBACK_REFRESH_MS = 60_000;
+
+/** Job 已终结的状态集合：主动对账与后台会话活动只要命中其一，就必须停止把
+ * 该 Job 当作在运行任务。此前两份逐字相同的副本分别存在于 job 对账与后台
+ * 会话活动 hook，取值漂移会让两条链路对「任务是否已结束」给出不同判断。 */
+export const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
+  "completed",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+]);
 
 /** 连续重连次数上限：连接成功（有活动）会把计数归零，因此这里限制的是
  * 「连续若干次都没能建立连接」的退避上限，耗尽后调用方必须给出可见终态。 */

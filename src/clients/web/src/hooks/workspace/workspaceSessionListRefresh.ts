@@ -1,6 +1,7 @@
 import { getSession, listSessions } from "../../api";
 import { listSessionCatalogChildren } from "../../api/session/sessionCatalog";
 import type { Session } from "../../types/backend";
+import { trackInFlightRequest } from "../runtime/inFlightRequests";
 
 const generations = new Map<string, number>();
 const inFlightRequests = new Map<string, Promise<WorkspaceSessionListSnapshot>>();
@@ -55,13 +56,8 @@ export async function fetchWorkspaceSessionListSnapshot(
     );
     return { apiPort, workspaceId, generation, sessions: catalogSessions };
   })();
-  const trackedRequest = request.finally(() => {
-    if (inFlightRequests.get(scopeKey) === trackedRequest) {
-      inFlightRequests.delete(scopeKey);
-    }
-  });
-  inFlightRequests.set(scopeKey, trackedRequest);
-  return await trackedRequest;
+  trackInFlightRequest(inFlightRequests, scopeKey, request);
+  return await request;
 }
 
 export function isCurrentWorkspaceSessionListSnapshot(

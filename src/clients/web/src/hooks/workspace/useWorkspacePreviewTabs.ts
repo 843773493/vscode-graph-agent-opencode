@@ -20,6 +20,7 @@ import type {
 import { isWorkspaceTextFilePath } from "../../utils/workspaceFileReferences";
 import { errorDisplayMessage } from "../../utils/errorMessage";
 import { useWarmConfirm } from "../../components/shell/WarmConfirmProvider";
+import { trackInFlightRequest } from "../runtime/inFlightRequests";
 
 interface UseWorkspacePreviewTabsOptions {
   apiPort: number;
@@ -82,16 +83,7 @@ export function useWorkspacePreviewTabs({
       path,
       workspaceId,
     );
-    fileContentRequestsRef.current.set(requestKey, request);
-    void request.then(() => {
-      if (fileContentRequestsRef.current.get(requestKey) === request) {
-        fileContentRequestsRef.current.delete(requestKey);
-      }
-    }, () => {
-      if (fileContentRequestsRef.current.get(requestKey) === request) {
-        fileContentRequestsRef.current.delete(requestKey);
-      }
-    });
+    trackInFlightRequest(fileContentRequestsRef.current, requestKey, request);
     return request;
   }, [apiPort, workspaceId]);
 

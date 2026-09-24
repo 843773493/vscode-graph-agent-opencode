@@ -14,6 +14,7 @@ import { cloneMaps } from "../../state/appStateMaps";
 import { errorMessage } from "../../utils/errorMessage";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { canAcceptUserViewStateMutation } from "../workspace/useWorkspaceBootstrap";
+import { trackInFlightRequest } from "../runtime/inFlightRequests";
 
 const SESSION_VIEW_STATE_CACHE_LIMIT = 64;
 
@@ -217,12 +218,7 @@ export function useSessionViewState({
         }
         return { kind: "failed", error } as const;
       });
-      requestsRef.current.set(requestKey, request);
-      void request.then(() => {
-        if (requestsRef.current.get(requestKey) === request) {
-          requestsRef.current.delete(requestKey);
-        }
-      });
+      trackInFlightRequest(requestsRef.current, requestKey, request);
       return await request;
     }, [applyLoadedViewState, setStatus],
   );

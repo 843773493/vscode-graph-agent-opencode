@@ -26,6 +26,7 @@ import type {
 import type { SessionGeneratorResourcesController } from "../sessionResourceExplorer/useSessionGeneratorResources";
 import { changedCatalogWorkspaceIds } from "../sessionResourceExplorer/resourceTreeSync";
 import { errorMessage } from "../../utils/errorMessage";
+import { trackInFlightRequest } from "../runtime/inFlightRequests";
 
 export interface CatalogBranchState extends SessionCatalogPage {
   loading: boolean;
@@ -268,16 +269,7 @@ export function useSessionResourceExplorer({
         throw error;
       }
     })();
-    branchInFlightRequestsRef.current.set(requestKey, request);
-    void request.then(() => {
-      if (branchInFlightRequestsRef.current.get(requestKey) === request) {
-        branchInFlightRequestsRef.current.delete(requestKey);
-      }
-    }, () => {
-      if (branchInFlightRequestsRef.current.get(requestKey) === request) {
-        branchInFlightRequestsRef.current.delete(requestKey);
-      }
-    });
+    trackInFlightRequest(branchInFlightRequestsRef.current, requestKey, request);
     return request;
   }, [apiPort]);
 
