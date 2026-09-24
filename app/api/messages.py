@@ -354,6 +354,9 @@ async def replay_message_turn(
 ):
     try:
         result = await replay_service.replay(session_id, message_id, payload)
+    except (KeyError, NotFoundError) as exc:
+        # _assert_session_idle 先经 JobService.list 解析会话物理目录，缺失时抛 KeyError。
+        raise not_found_http_error(exc) from exc
     except ValueError as exc:
         logger.exception(
             "消息重放失败: session_id=%s message_id=%s action=%s",
@@ -380,6 +383,9 @@ async def replay_turn(
 ):
     try:
         result = await replay_service.replay_turn(session_id, turn_id, payload)
+    except (KeyError, NotFoundError) as exc:
+        # 会话缺失时由 message/job 链路的 catalog 解析抛 KeyError。
+        raise not_found_http_error(exc) from exc
     except ValueError as exc:
         logger.exception(
             "Turn 重放失败: session_id=%s turn_id=%s action=%s",

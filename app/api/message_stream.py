@@ -15,11 +15,13 @@ from app.api.deps import (
     get_request_id,
     verify_local_token,
 )
+from app.api.errors import not_found_http_error
 from app.api.sse_heartbeat import (
     SSE_HEARTBEAT_INTERVAL_SECONDS,
     SSE_NO_CACHE_HEADERS,
     stream_sse_with_heartbeat,
 )
+from app.core.exceptions import NotFoundError
 from app.protocol.codecs.message_stream import (
     message_stream_to_json,
     message_stream_to_proto,
@@ -165,10 +167,14 @@ async def get_message_stream_availability(
     request_id: str = Depends(get_request_id),
     store: MessageStreamStore = Depends(get_message_stream_store),  # noqa: B008
 ):
-    streams = await store.existing_stream_ids(
-        session_id=session_id,
-        turn_ids=list(dict.fromkeys(turn_ids)),
-    )
+    try:
+        streams = await store.existing_stream_ids(
+            session_id=session_id,
+            turn_ids=list(dict.fromkeys(turn_ids)),
+        )
+    except (KeyError, NotFoundError) as error:
+        # 存储层先按 session_id 解析物理目录，会话缺失时抛 KeyError。
+        raise not_found_http_error(error) from error
     return APIResponse(data=streams, request_id=request_id)
 
 
@@ -195,6 +201,9 @@ async def stream_message_events(
             turn_id=turn_id,
             turn_stream_id=turn_stream_id,
         )
+    except (KeyError, NotFoundError) as error:
+        # 会话不存在由 catalog 解析器抛 KeyError，不能落成无上下文 500。
+        raise not_found_http_error(error) from error
     except (MessageStreamError, FileNotFoundError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -238,6 +247,9 @@ async def get_message_stream_snapshot(
             turn_stream_id=turn_stream_id,
         )
         snapshot = await store.get_state(writer.turn_stream_id)
+    except (KeyError, NotFoundError) as error:
+        # 会话不存在由 catalog 解析器抛 KeyError，不能落成无上下文 500。
+        raise not_found_http_error(error) from error
     except (MessageStreamNotFoundError, MessageStreamError, FileNotFoundError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(
@@ -288,6 +300,9 @@ async def list_message_stream_events(
                 "first_seq": error.first_seq,
             },
         ) from error
+    except (KeyError, NotFoundError) as error:
+        # 会话不存在由 catalog 解析器抛 KeyError，不能落成无上下文 500。
+        raise not_found_http_error(error) from error
     except (MessageStreamNotFoundError, MessageStreamError, FileNotFoundError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(

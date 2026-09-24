@@ -508,6 +508,9 @@ async def review_session_changeset_file(
             file_path=payload.file_path,
             reviewed=payload.reviewed,
         )
+    except (KeyError, NotFoundError) as exc:
+        # 服务入口先用 SessionService.get 校验会话，缺失时抛 NotFoundError。
+        raise not_found_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return APIResponse(data=result, request_id=request_id)
@@ -572,6 +575,10 @@ async def stream_session_traces(
         await session_service.ensure_trace_cursor(session_id, cursor)
     except TraceCursorGoneError as exc:
         raise _trace_cursor_gone_http_error(exc) from exc
+    except (KeyError, NotFoundError) as exc:
+        # ensure_trace_cursor 先经 SessionService.get 校验会话，缺失时抛 NotFoundError；
+        # 漏接会把「找不到会话」落成无上下文 500（NotFoundError 默认 status_code=500）。
+        raise not_found_http_error(exc) from exc
 
     events = session_service.stream_trace_events(session_id, cursor)
     return StreamingResponse(
