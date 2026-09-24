@@ -23,6 +23,9 @@ from app.services.infrastructure.rollout_context.fork.remap_finalize import (
 from app.services.infrastructure.rollout_context.fork.remap_prepare import (
     prepare_full_copy_remap,
 )
+from app.services.infrastructure.rollout_context.fork.sql.activation import (
+    rewrite_full_copy_activation_catalog,
+)
 from app.services.infrastructure.rollout_context.fork.sql.catalog import (
     rewrite_full_copy_fast_columns,
 )
@@ -80,6 +83,9 @@ class ForkRemapMixin:
 
                 refresh_detail_manifests(state)
             refresh_copied_assemblies(state)
+            # activation 行的 lineage_detail_ref/assembly binding 依赖已本地化的
+            # target detail ref 与 assembly plan/request hash，必须在它们之后重造。
+            rewrite_full_copy_activation_catalog(state)
             record_full_copy_lineage(state)
             write_copied_plan_registry(state)
             if detail_capability is not None:

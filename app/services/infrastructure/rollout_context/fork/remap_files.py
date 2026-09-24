@@ -80,14 +80,15 @@ def materialize_full_copy_files(state: FullCopyRemapState) -> None:
             raise RuntimeError(f"full_rollout_copy detail path 越界: {old_detail_ref}")
         old_path = self._safe_session_relative_path(session_root, old_relative)
         new_detail_ref = mapped("detail", old_detail_ref)
-        new_assembly_id = mapped("assembly", old_assembly_id)
-        if new_detail_ref is None or new_assembly_id is None:
+        if new_detail_ref is None:
             raise RuntimeError(
                 "full_rollout_copy detail target identity mapping 缺失: "
                 f"{old_detail_ref}"
             )
         target_ref = detail_ref_from_key(new_detail_ref)
-        target_ref.require_owner(state.target_session_id, new_assembly_id)
+        # target assembly 段由 typed target detail ref 决定：activation lineage
+        # detail 的 assembly 段是 activation snapshot id，不在 assembly mapping 中。
+        target_ref.require_owner(state.target_session_id)
         new_relative = detail_relative_path(target_ref)
         self._safe_session_relative_path(session_root, new_relative.parent)
         new_path = session_root / new_relative

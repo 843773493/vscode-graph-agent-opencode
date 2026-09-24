@@ -185,11 +185,27 @@ def prepare_full_copy_remap(
     collect("tool_set", rows("tool_set_snapshot_id", "tool_set_snapshots"))
     collect("source_overlay", rows("overlay_id", "source_overlays"))
     collect("assembly", rows("assembly_id", "context_plan_details"))
+    # activation 行的 owner/catalog identity 也必须 target-local；activation
+    # snapshot 是 lineage detail 的 assembly 段，因此必须先收集，再并入 detail
+    # 的 assembly mapping。schema 未 bootstrap 时该库没有 activation 事实。
+    activation_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'resource_activation_snapshots'"
+    ).fetchone()
+    if activation_table is not None:
+        collect(
+            "activation_snapshot",
+            rows("activation_snapshot_id", "resource_activation_snapshots"),
+        )
+    detail_assembly_map = {
+        **maps["assembly"],
+        **maps["activation_snapshot"],
+    }
     maps["detail"] = collect_detail_mappings(
         connection,
         source_session_id=source_session_id,
         target_session_id=target_session_id,
-        assembly_map=maps["assembly"],
+        assembly_map=detail_assembly_map,
         allocate=lambda key: self._full_copy_identity(
             fork_id, target_session_id, "detail", key
         ),
