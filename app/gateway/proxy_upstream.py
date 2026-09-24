@@ -18,6 +18,19 @@ import httpx
 
 UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS = 60.0
 
+# httpx 按 RFC 3986 解析 path 组件：`#` 之后算 fragment、`?` 之后算 query，两者都
+# 不能出现在 path 里，ASCII 控制字符同样非法。uvicorn 只对请求行解码一层，因此
+# 文件名里的 `#`/`?`（客户端编码成 %23/%3F 发送）到达代理时已是字面量形态，必须
+# 在这里重新编码，否则 httpx 抛 InvalidURL，合法文件名被代理解析成 500。
+_PATH_COMPONENT_DELIMITER_ESCAPES = str.maketrans(
+    {
+        "#": "%23",
+        "?": "%3F",
+        **{chr(code): f"%{code:02X}" for code in range(0x20)},
+        "\x7f": "%7F",
+    }
+)
+
 # 代理两端（工作区 API 与辅助服务）必须剔除同一组逐跳头部，否则上游的
 # 连接管理头部会漂到浏览器侧或被转发回上游。集合与过滤函数只此一份。
 HOP_BY_HOP_HEADERS = frozenset(
@@ -107,7 +120,11 @@ def build_upstream_url(
     base_prefix = base.path.rstrip("/")
     namespace = "/".join(fixed_segments)
     head = f"{namespace}/" if namespace else ""
-    url = base.copy_with(path=f"{base_prefix}/{head}{path.lstrip('/')}")
+    url = base.copy_with(
+        path=f"{base_prefix}/{head}{path.lstrip('/')}".translate(
+            _PATH_COMPONENT_DELIMITER_ESCAPES
+        )
+    )
     allowed_prefix = f"{base_prefix}/{head}" if head else f"{base_prefix}/"
     if not url.path.startswith(allowed_prefix):
         raise ValueError(

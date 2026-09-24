@@ -102,3 +102,46 @@ def test_build_upstream_url_terminates_on_degenerate_encoding() -> None:
             path,
         )
         assert url.path.startswith("/api/v1/")
+
+
+@pytest.mark.parametrize(
+    ("label", "path", "expected_raw_path"),
+    [
+        # 文件名里的 # 与 ? 由客户端编码成 %23/%3F；uvicorn 解一层后路由参数
+        # 就是含字面量 #/? 的形态，httpx 会直接拒绝这样的 path。
+        ("hash_in_name", "files/a#b.txt", b"/api/v1/files/a%23b.txt"),
+        ("question_in_name", "files/a?b.txt", b"/api/v1/files/a%3Fb.txt"),
+        # 其余字符的线上形态必须与修复前逐字节一致。
+        ("plain", "files/plain.txt", b"/api/v1/files/plain.txt"),
+        ("space", "files/a b.txt", b"/api/v1/files/a%20b.txt"),
+        ("literal_percent", "files/100%.txt", b"/api/v1/files/100%.txt"),
+        ("encoded_slash", "files/docs%2Fa.png", b"/api/v1/files/docs%2Fa.png"),
+        ("non_ascii", "files/\u4e2d\u6587.txt", b"/api/v1/files/%E4%B8%AD%E6%96%87.txt"),
+        ("plus", "files/a+b.txt", b"/api/v1/files/a+b.txt"),
+        ("ampersand", "files/a&b.txt", b"/api/v1/files/a&b.txt"),
+    ],
+)
+def test_build_upstream_url_encodes_path_component_delimiters(
+    label: str,
+    path: str,
+    expected_raw_path: bytes,
+) -> None:
+    """路由参数里的 #/? 必须编码后转发，而不是让 httpx 抛 InvalidURL。
+
+    uvicorn 只对请求行解码一层，因此 ``/api/v1/files/a%23b.txt`` 到达代理时
+    ``path`` 参数是 ``files/a#b.txt``。原实现把它直接交给 ``httpx.URL.copy_with``，
+    httpx 按 RFC 3986 判定 # 是 fragment 起始、? 是 query 起始，两者都不能出现在
+    path 组件里，于是抛 ``InvalidURL``；TraceMiddleware 把它转成 500，前端对这类
+    文件名（例如 ``a#b.txt``、``a?b.txt``）看到的是「边界输入泄漏成 500」。
+
+    修复只针对 path 组件里会被误解为分隔符的字符做百分号编码；已编码的 %XX、
+    编码斜杠、非 ASCII 与其它已合法字符的线上字节必须完全不变。
+    """
+
+    url = build_upstream_url(
+        "http://127.0.0.1:41001",
+        ("api", "v1"),
+        path,
+    )
+
+    assert url.raw_path == expected_raw_path
