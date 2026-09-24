@@ -280,6 +280,33 @@ async def test_deep_search_builds_breadcrumbs_only_for_returned_page(
 
 
 @pytest.mark.asyncio
+async def test_refresh_returns_complete_root_page_without_silent_cap(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    """refresh 无 limit/cursor 入参，必须返回完整根页。
+
+    旧实现把根节点硬切到 500 条却仍报 ``total`` 为真实数量且 ``cursor=None``，
+    超过 500 的根节点既不在 items 里也无法继续分页，被静默吞掉。
+    """
+    sessions_root = tmp_path / "sessions"
+    session_service = _SessionService(sessions_root)
+    total = 520
+    for index in range(total):
+        session_bundle_factory(
+            sessions_root,
+            canonical(f"refresh_truncation_{index:04d}"),
+        )
+    catalog = SessionCatalogService(session_service=session_service)
+
+    page = await catalog.refresh()
+
+    assert page.total == total
+    assert len(page.items) == total
+    assert page.cursor is None
+
+
+@pytest.mark.asyncio
 async def test_recursive_delete_uses_catalog_subtree_protocol_without_folder_paths(
     tmp_path: Path,
     session_bundle_factory,

@@ -189,12 +189,15 @@ class SessionCatalogService:
         self.invalidate()
         nodes, revision = await self._snapshot(force=True)
         roots = self._sorted_children(nodes, None)
-        return SessionCatalogPageDTO(
-            revision=revision,
+        # 刷新语义是「重载根页并校验索引」：没有 limit/cursor 入参，必须返回
+        # 完整根页且 cursor 为空，否则超过上限的根节点会既不在 items 里、也没
+        # 有可继续分页的 cursor，被静默吞掉。分页由 list_children 承担。
+        return self._build_page(
+            roots,
             parent_node_id=None,
-            items=roots[:500],
-            cursor=None,
-            total=len(roots),
+            offset=0,
+            limit=None,
+            revision=revision,
         )
 
     async def list_children(
@@ -211,7 +214,25 @@ class SessionCatalogService:
             raise KeyError(f"会话目录节点不存在: {parent_node_id}")
         offset = self._decode_cursor(cursor, revision)
         children = self._sorted_children(nodes, parent_node_id)
-        page = children[offset : offset + limit]
+        return self._build_page(
+            children,
+            parent_node_id=parent_node_id,
+            offset=offset,
+            limit=limit,
+            revision=revision,
+        )
+
+    def _build_page(
+        self,
+        children: list[SessionCatalogNodeDTO],
+        *,
+        parent_node_id: str | None,
+        offset: int,
+        limit: int | None,
+        revision: str,
+    ) -> SessionCatalogPageDTO:
+        """构造目录分页页；limit 为 None 表示返回 offset 之后的全部节点。"""
+        page = children[offset:] if limit is None else children[offset : offset + limit]
         next_offset = offset + len(page)
         return SessionCatalogPageDTO(
             revision=revision,
