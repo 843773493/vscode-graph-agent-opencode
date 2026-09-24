@@ -37,26 +37,6 @@ interface StartNodeDebugOptions {
   args?: string[];
 }
 
-function actionRequest(
-  sessionId: string,
-  threadId: string,
-  command: NodeDebugActionCommand,
-): NodeDebugActionRequest {
-  if (command.action === "set_breakpoint") {
-    return { ...command, session_id: sessionId, thread_id: threadId };
-  }
-  if (command.action === "update_breakpoint") {
-    return { ...command, session_id: sessionId, thread_id: threadId };
-  }
-  if (command.action === "clear_breakpoint") {
-    return { ...command, session_id: sessionId, thread_id: threadId };
-  }
-  if (command.action === "evaluate") {
-    return { ...command, session_id: sessionId, thread_id: threadId };
-  }
-  return { ...command, session_id: sessionId, thread_id: threadId };
-}
-
 export function useNodeDebugController({
   apiPort,
   workspaceId,
@@ -122,7 +102,11 @@ export function useNodeDebugController({
     if (!mutation) return null;
     setError(null);
     try {
-      const payload = actionRequest(sessionId, threadId, command);
+      const payload: NodeDebugActionRequest = {
+        ...command,
+        session_id: sessionId,
+        thread_id: threadId,
+      };
       const nextState = await applyNodeDebugAction(
         apiPort,
         payload,
