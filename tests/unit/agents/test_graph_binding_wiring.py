@@ -23,6 +23,7 @@ from app.agents.graph_binding import (
     GraphBindingStorePort,
     GraphBindingUnavailableError,
     JsonFileGraphBindingStore,
+    resolve_or_persist_graph_binding,
 )
 from app.runtime.agent_runtime import build_session_agent_runtime
 
@@ -210,3 +211,120 @@ def test_store_directory_is_created_on_first_save(tmp_path: Path) -> None:
     store.save_graph_binding(owner, DEEP_AGENT_GRAPH_BINDING)
     assert (tmp_path / ".boxteam" / "graph-bindings").is_dir()
     assert store.load_graph_binding(owner) == DEEP_AGENT_GRAPH_BINDING
+
+
+# ---------------------------------------------------------------------------
+# 构建路径：resolve_or_persist_graph_binding 三态与 graph_binding_unavailable
+# ---------------------------------------------------------------------------
+
+
+def _owner() -> GraphBindingOwnerKey:
+    return GraphBindingOwnerKey(
+        session_id="ses_00000000000000000000000000000000",
+        thread_id=MAIN_THREAD_ID,
+    )
+
+
+def test_resolve_or_persist_without_store_only_validates_current(tmp_path: Path) -> None:
+    """未装配 store：只 fail-fast 校验当前 binding，不伪造持久化成功。"""
+
+    directory = tmp_path / "graph-bindings"
+
+    result = resolve_or_persist_graph_binding(
+        store=None,
+        owner=_owner(),
+        current_binding=DEEP_AGENT_GRAPH_BINDING,
+    )
+
+    assert result is DEEP_AGENT_GRAPH_BINDING
+    assert not directory.exists()  # 没有 store 就没有任何持久化副作用
+
+
+def test_resolve_or_persist_persists_when_absent_then_reuses_exact(tmp_path: Path) -> None:
+    """三态之一：该 owner 从未持久化 → 落盘当前值；再调用读到同一精确值。"""
+
+    store = _make_store(tmp_path)
+    owner = _owner()
+    assert store.load_graph_binding(owner) is None
+
+    first = resolve_or_persist_graph_binding(
+        store=store,
+        owner=owner,
+        current_binding=DEEP_AGENT_GRAPH_BINDING,
+    )
+    assert first is DEEP_AGENT_GRAPH_BINDING
+    assert store.load_graph_binding(owner) == DEEP_AGENT_GRAPH_BINDING
+
+    second = resolve_or_persist_graph_binding(
+        store=store,
+        owner=owner,
+        current_binding=DEEP_AGENT_GRAPH_BINDING,
+    )
+    assert second == DEEP_AGENT_GRAPH_BINDING
+
+
+def test_resolve_or_persist_reuses_persisted_without_overwriting(tmp_path: Path) -> None:
+    """三态之二：该 owner 已持久化精确 revision → 复用已存值，不再写盘。"""
+
+    store = _make_store(tmp_path)
+    owner = _owner()
+    store.save_graph_binding(owner, DEEP_AGENT_GRAPH_BINDING)
+    persisted_before = store.load_graph_binding(owner)
+
+    result = resolve_or_persist_graph_binding(
+        store=store,
+        owner=owner,
+        current_binding=DEEP_AGENT_GRAPH_BINDING,
+    )
+
+    assert result == persisted_before == DEEP_AGENT_GRAPH_BINDING
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["graph_id", "graph_revision", "graph_schema_hash", "capability_profile_hash"],
+)
+def test_resolve_or_persist_raises_graph_binding_unavailable_on_drift(
+    tmp_path: Path, field_name: str
+) -> None:
+    """三态之三：精确 revision 缺失/漂移 → graph_binding_unavailable，绝不回退。
+
+    持久 selector 的任一字段与注册表不匹配都必须阻塞构建，而不是静默改用旧
+    binding 或回退到当前最新 revision。
+    """
+
+    store = _make_store(tmp_path)
+    owner = _owner()
+    drift = {
+        "graph_id": "deep-agent-legacy",
+        "graph_revision": DEEP_AGENT_GRAPH_BINDING.graph_revision + 1,
+        "graph_schema_hash": "sha256:" + "0" * 64,
+        "capability_profile_hash": "sha256:" + "0" * 64,
+    }
+    tampered = GraphBinding(
+        graph_id=drift["graph_id"] if field_name == "graph_id" else DEEP_AGENT_GRAPH_BINDING.graph_id,
+        graph_revision=(
+            drift["graph_revision"]
+            if field_name == "graph_revision"
+            else DEEP_AGENT_GRAPH_BINDING.graph_revision
+        ),
+        graph_schema_hash=(
+            drift["graph_schema_hash"]
+            if field_name == "graph_schema_hash"
+            else DEEP_AGENT_GRAPH_BINDING.graph_schema_hash
+        ),
+        capability_profile_hash=(
+            drift["capability_profile_hash"]
+            if field_name == "capability_profile_hash"
+            else DEEP_AGENT_GRAPH_BINDING.capability_profile_hash
+        ),
+    )
+    store.save_graph_binding(owner, tampered)
+
+    with pytest.raises(GraphBindingUnavailableError) as error:
+        resolve_or_persist_graph_binding(
+            store=store,
+            owner=owner,
+            current_binding=DEEP_AGENT_GRAPH_BINDING,
+        )
+    assert "graph_binding_unavailable" in str(error.value)

@@ -663,6 +663,36 @@ def binding_for(
     )
 
 
+def resolve_or_persist_graph_binding(
+    *,
+    store: GraphBindingStorePort | None,
+    owner: GraphBindingOwnerKey,
+    current_binding: GraphBinding,
+) -> GraphBinding:
+    """按精确 revision 解析该 owner 已持久化的 selector，缺失即持久化当前值。
+
+    构建路径的唯一入口：持久化的是可验证的 factory selector，不是已编译图。
+
+    - 未装配 store（合成装配/测试替身）：只能 fail-fast 校验当前 binding 仍在
+      注册表内，不伪造持久化成功。
+    - 该 owner 从未持久化：把当前 binding 落盘并返回它。
+    - 该 owner 已持久化：按四元组精确解析受注册 factory；解析不到该精确
+      revision/hash 时抛 :class:`GraphBindingUnavailableError`
+      （``graph_binding_unavailable``），绝不静默改用旧 binding 或回退到当前
+      最新 revision。
+    """
+    GRAPH_FACTORY_REGISTRY.resolve(current_binding)
+    if store is None:
+        return current_binding
+    persisted = store.load_graph_binding(owner)
+    if persisted is None:
+        store.save_graph_binding(owner, current_binding)
+        return current_binding
+    # 精确 revision 校验：不匹配即 fail closed，阻塞构建而不是回退。
+    GRAPH_FACTORY_REGISTRY.resolve(persisted)
+    return persisted
+
+
 __all__ = [
     "DEEP_AGENT_CAPABILITY_PROFILE",
     "DEEP_AGENT_GRAPH_BINDING",
@@ -683,4 +713,5 @@ __all__ = [
     "binding_for",
     "compute_capability_profile_hash",
     "compute_graph_schema_hash",
+    "resolve_or_persist_graph_binding",
 ]
