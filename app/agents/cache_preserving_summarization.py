@@ -36,7 +36,6 @@ from app.agents.itemized_context_middleware import (
 )
 from app.agents.workspace_tool_paths import backend_virtual_to_workspace_relative
 from app.core.identifier import create_uuid_hex
-from app.core.model_delta_context import get_current_model_delta_sink
 from app.prompting import internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
     CompactionPreflightPort,
@@ -45,7 +44,10 @@ from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_
 from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
 )
-from app.services.orchestration.activity_runtime import ActivityRuntime
+from app.services.orchestration.activity_runtime import (
+    ActivityRuntime,
+    current_activity_runtime,
+)
 
 CACHE_PRESERVING_STRATEGY = "cache_preserving"
 CACHE_REPLACEMENT_STRATEGY = "cache_replacement"
@@ -980,16 +982,6 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             )
 
     @staticmethod
-    def _current_activity_runtime() -> ActivityRuntime | None:
-        sink = get_current_model_delta_sink()
-        activity_runtime = getattr(sink, "activities", None)
-        return (
-            activity_runtime
-            if isinstance(activity_runtime, ActivityRuntime)
-            else None
-        )
-
-    @staticmethod
     def _compaction_activity_id(activity_runtime: ActivityRuntime) -> str:
         return (
             f"{activity_runtime.writer.turn_stream_id}:context-compaction:"
@@ -1083,9 +1075,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             return await handler(
                 request.override(messages=self._get_effective_messages(request))
             )
-        activity_runtime = (
-            CachePreservingSummarizationMiddleware._current_activity_runtime()
-        )
+        activity_runtime = current_activity_runtime()
         if activity_runtime is None:
             return await CachePreservingSummarizationMiddleware._awrap_model_call_impl(
                 self,

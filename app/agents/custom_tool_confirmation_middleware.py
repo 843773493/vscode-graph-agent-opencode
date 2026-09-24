@@ -16,8 +16,10 @@ from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
-from app.core.model_delta_context import get_current_model_delta_sink
-from app.services.orchestration.activity_runtime import ActivityRuntime
+from app.services.orchestration.activity_runtime import (
+    ActivityRuntime,
+    current_activity_runtime,
+)
 
 _ALLOWED_DECISIONS = ["approve", "edit", "reject", "respond"]
 
@@ -88,16 +90,6 @@ class CustomToolConfirmationMiddleware(AgentMiddleware):
                 ),
             )
         raise ValueError(f"不支持的扩展工具人工确认决定: {decision_type}")
-
-    @staticmethod
-    def _current_activity_runtime() -> ActivityRuntime | None:
-        sink = get_current_model_delta_sink()
-        activity_runtime = getattr(sink, "activities", None)
-        return (
-            activity_runtime
-            if isinstance(activity_runtime, ActivityRuntime)
-            else None
-        )
 
     @staticmethod
     def _approval_activity_id(
@@ -228,7 +220,7 @@ class CustomToolConfirmationMiddleware(AgentMiddleware):
         if prepared is None:
             return None
         requested, action_requests, review_configs = prepared
-        activity_runtime = self._current_activity_runtime()
+        activity_runtime = current_activity_runtime()
         activity_id: str | None = None
         if activity_runtime is not None:
             activity_id = self._approval_activity_id(activity_runtime, requested)

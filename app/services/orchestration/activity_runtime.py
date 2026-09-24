@@ -6,10 +6,20 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol, TypeVar
 
+from app.core.model_delta_context import get_current_model_delta_sink
 from app.services.infrastructure.message_stream_store import MessageStreamWriter
 
 logger = logging.getLogger(__name__)
 ActivityResult = TypeVar("ActivityResult")
+
+
+def current_activity_runtime() -> ActivityRuntime | None:
+    """从当前模型调用 sink 上取回唯一 ActivityRuntime，没有绑定则返回 None。"""
+    sink = get_current_model_delta_sink()
+    activity_runtime = getattr(sink, "activities", None)
+    return (
+        activity_runtime if isinstance(activity_runtime, ActivityRuntime) else None
+    )
 
 
 class ActivityHandler(Protocol):
