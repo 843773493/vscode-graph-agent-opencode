@@ -171,7 +171,6 @@ def _provider_registry(
         [
             BackgroundTaskResourceProvider(
                 task_registry=task_registry,
-                message_service=message_service,
                 resource_mapper=mapper,
             ),
             TerminalResourceProvider(

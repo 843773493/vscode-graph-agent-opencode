@@ -669,7 +669,6 @@ def build_app_container(
         [
             BackgroundTaskResourceProvider(
                 task_registry=background_task_registry,
-                message_service=message_service,
                 resource_mapper=session_resource_mapper,
             ),
             TerminalResourceProvider(

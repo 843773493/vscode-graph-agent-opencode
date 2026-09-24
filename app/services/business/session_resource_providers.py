@@ -32,11 +32,9 @@ class BackgroundTaskResourceProvider:
         self,
         *,
         task_registry: BackgroundTaskRegistryProtocol,
-        message_service: SessionResourceMessageProtocol,
         resource_mapper: SessionResourceMapper,
     ) -> None:
         self._task_registry = task_registry
-        self._message_service = message_service
         self._resource_mapper = resource_mapper
 
     async def list_resources(
