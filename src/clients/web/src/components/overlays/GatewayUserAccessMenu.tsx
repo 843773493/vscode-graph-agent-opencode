@@ -8,7 +8,7 @@ import {
   selectGatewayUser,
   takeoverGatewayUser,
 } from "../../api/gateway/userAccess";
-import { HttpRequestError } from "../../api";
+import { DEFAULT_BACKEND_PORT, HttpRequestError } from "../../api";
 import { useAppState } from "../../hooks";
 import AnchoredOverlay from "./AnchoredOverlay";
 import { errorMessage } from "../../utils/errorMessage";
@@ -31,7 +31,7 @@ export default function GatewayUserAccessMenu() {
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const anchorRef = useRef<HTMLDivElement | null>(null);
-  const apiPort = state.apiPort ?? 8014;
+  const apiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
   const current = state.gatewayUserAccess;
 
   const refreshUsers = async () => {
