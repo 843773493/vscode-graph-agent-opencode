@@ -192,6 +192,9 @@
 1. 本项目在整个过程中由 vibe 编码辅助生成。代理的上下文和智能有限，因此如果遇到任何不符合开发标准的情况，请主动告知用户。
 2. **派生 subagent 必须显式指定模型 `newapi-local/deepseek-v4.1-flash`，并显式设置 reasoning effort（该模型只接受 `low`/`high`/`xhigh`/`max` 或 1–100 整数，缺省 effort 会直接 400 失败）。** 不指定模型时会静默回退到默认的 gpt 系列；该系列在本仓库有已知问题，且已实测会在「纯结构搬迁」中夹带语义改动（例如把 `RuntimeError` 静默改成 `TypeError` 并删除原有 `noqa` 说明）。模型在 subagent 创建时固定，`followup_task` 无法更改，因此复用旧 subagent 前必须先确认其会话的 `turn_context.model`；凡未显式指定模型的既有 subagent，一律不要复用。
 3. **subagent 声称「纯搬迁 / 无行为变更」时，必须独立核验**：用删除行与新增行的规范化多重集比较（例如对 `git show <commit>` 的 `-`/`+` 代码行做逐行多重集差），逐条判定未逐字保留的行属于重命名、注释改写，还是真实语义改动；不得只凭提交信息与测试通过就接受。被删除的符号还须全仓 `rg`（含 `configs/`、`tools/`、`scripts/`）复核是否真的零引用。
+4. **多个 agent 共用一个工作树与 `.git` 时，严禁 `git commit --amend`。** 2026-09-24 实测发生一起真实事故：某 agent 执行 `git commit --amend` 时叠加了并发的陈旧共享索引，把已提交的修复从 HEAD 中静默回退，并产生了提交信息与实际内容完全不符的提交。需要修正上一笔提交时，一律**新开一笔提交**，不得改写历史。
+5. **多个 agent 共用一个工作树时，除了自己的独立临时索引，严禁直接操作共享 `.git/index`。** 包括不带 `GIT_INDEX_FILE` 的 `git add`、`git reset`（含 `--soft`）、`git rm --cached`、`git update-index`。提交必须固定使用独立临时索引：`GIT_INDEX_FILE=/tmp/<任务名>.idx git read-tree HEAD` → `git add <精确路径>` → `git commit -m "中文" -- <精确路径>`；提交前重新取 `git rev-parse HEAD`，提交后 `git show --name-status` 自检。
+6. **并发提交后必须核对祖先链。** 每次提交后确认该提交是当前 HEAD 的祖先（`git merge-base --is-ancestor <hash> HEAD`），并确认前一次读取的 HEAD 仍是祖先（`git merge-base --is-ancestor <提交前的 HEAD> HEAD`）。若前一次 HEAD 不再是祖先，说明历史被改写，必须立即用 `git reflog` 取证并前向恢复被吞掉的内容，不得静默继续。
 
 ### 环境配置
 
