@@ -4,16 +4,16 @@ import asyncio
 import base64
 import hashlib
 import json
-from collections.abc import Awaitable, Callable
-from typing import TypeVar
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
     SessionCatalogPathResolver,
     SessionCatalogSessionProjection,
 )
+from app.core.session_subtree_delete import SubtreeDeleteResult
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
@@ -25,9 +25,56 @@ from app.schemas.internal_v2.session_navigation import (
     SessionFolderCreateRequest,
     SessionFolderUpdateRequest,
 )
+from app.schemas.internal_v2.session_navigation.operations import (
+    NavigationEventsPageDTO,
+    NavigationMutationEnqueueRequest,
+    NavigationMutationEnqueueResultDTO,
+    NavigationMutationIntentDTO,
+    NavigationMutationStatusPageDTO,
+    NavigationSnapshotDTO,
+)
+from app.services.business.session_navigation.executor import NavigationMutationExecutor
+from app.services.business.session_navigation.operations_service import (
+    NavigationAuthScope,
+    SessionCatalogOperationsService,
+    local_navigation_scope,
+)
+from app.services.business.session_navigation.queue_store import (
+    NavigationMutationQueueStore,
+    NavigationMutationRecord,
+)
 from app.services.business.session_service import SessionService
 
-T = TypeVar("T")
+
+def _committed_node_id(record: NavigationMutationRecord) -> str:
+    """返回已提交 operation 的结果 node ID；未提交即明确报错（不猜测）。"""
+    if record.state != "committed" or record.result_node_id is None:
+        raise RuntimeError(
+            "导航 operation 未成功提交，无法取得结果节点 ID: "
+            f"operation_id={record.operation_id}, state={record.state}, "
+            f"error_code={record.error_code}, error_detail={record.error_detail}"
+        )
+    return record.result_node_id
+
+
+def _raise_for_rejected(record: NavigationMutationRecord) -> None:
+    """按既有错误分类重新抛出被拒绝的 operation（同步 API 的零回归契约）。
+
+    既有同步端点把未知节点映射为 404、把形态/语义冲突映射为 400/409；这里按
+    durable record 的 ``error_code`` 还原同一分类，避免调用方观察不到失败。
+    """
+    detail = record.error_detail or record.error_code or "导航 operation 被拒绝"
+    if record.error_code == "node_not_found":
+        raise KeyError(detail)
+    if record.error_code in (
+        "invalid_operation",
+        "dependency_failed",
+        "session_deletion_pending",
+        "source_retained_by_fork",
+        "source_retention_operation_pending",
+    ):
+        raise ValueError(detail)
+    raise RuntimeError(detail)
 
 
 class SessionCatalogService:
@@ -39,15 +86,87 @@ class SessionCatalogService:
         session_service: SessionService,
         job_service: JobServiceProtocol | None = None,
         background_task_registry: BackgroundTaskRegistry | None = None,
+        operations_service: SessionCatalogOperationsService | None = None,
     ) -> None:
         self._session_service = session_service
         self._path_resolver: SessionCatalogPathResolver = session_service.path_resolver
         self._job_service = job_service
         self._background_task_registry = background_task_registry
+        # 未显式注入时按容器装配的同一 resolver/store 构造导航 operation 栈。
+        self._operations_service = operations_service or self._build_operations()
         self._cached_nodes: list[SessionCatalogNodeDTO] | None = None
         self._cached_revision: str | None = None
         self._cached_physical_revision: int | None = None
         self._session_service.register_change_listener(self._on_session_changed)
+
+    def _build_operations(self) -> SessionCatalogOperationsService | None:
+        """构造导航 operation 栈（enqueue/worker/status/snapshot/events）。
+
+        共享 ``SessionCatalogPathResolver`` 的同一 catalog store 与子树删除流，
+        因此不会出现第二套写入实现或第二份 catalog 连接。resolver 不是 SQLite
+        catalog 实现时（非生产装配）返回 None，相关入口显式报错。
+        """
+        resolver = self._path_resolver
+        if not isinstance(resolver, SessionCatalogPathResolver):
+            return None
+        store = resolver.catalog_store
+        # workspace 身份取 resolver 绑定值（catalog 行归属键）：与 catalog 写入
+        # 同源，避免出现两个可能不一致的 workspace 口径。
+        workspace_id = resolver.workspace_id
+        queue = NavigationMutationQueueStore(store)
+        executor = NavigationMutationExecutor(
+            store=store,
+            workspace_id=workspace_id,
+            queue=queue,
+            path_resolver=resolver,
+            delete_runner=self._run_shared_delete,
+        )
+        return SessionCatalogOperationsService(
+            store=store,
+            workspace_id=workspace_id,
+            queue=queue,
+            executor=executor,
+        )
+
+    async def _run_shared_delete(
+        self,
+        idempotency_key: str,
+        root_node_id: str,
+    ) -> SubtreeDeleteResult:
+        """以确定性 key 进入共享子树删除流，保留既有 admission/预检语义。
+
+        与删除前既有行为一致：先取得本次操作的 session 集合，在 JobService 删除
+        admission 下做后台任务预检，再执行共享删除流（含运行时 drain 回调）。
+        """
+        frozen_session_ids = self._path_resolver.descendant_session_ids(root_node_id)
+
+        if self._background_task_registry is not None:
+            target_ids = set(frozen_session_ids)
+            blockers = [
+                handle
+                for handle in self._background_task_registry.list_active_handles()
+                if handle.session_id in target_ids
+            ]
+            if blockers:
+                raise RuntimeError(
+                    "会话存在运行中后台任务，拒绝递归删除: "
+                    + ",".join(
+                        f"{handle.session_id}:{handle.task_id}" for handle in blockers
+                    )
+                )
+
+        async def run() -> SubtreeDeleteResult:
+            return await self._path_resolver.delete_subtree(
+                idempotency_key=idempotency_key,
+                root_node_id=root_node_id,
+            )
+
+        if self._job_service is None:
+            return await run()
+        return await self._job_service.run_sessions_delete_operation(
+            frozen_session_ids,
+            run,
+        )
 
     def invalidate(self) -> None:
         self._cached_nodes = None
@@ -57,6 +176,11 @@ class SessionCatalogService:
     @property
     def path_resolver(self) -> SessionCatalogPathResolver:
         return self._path_resolver
+
+    @property
+    def workspace_id(self) -> str:
+        """本工作区后端的权威 workspace 身份（导航 operation 幂等 scope 的一维）。"""
+        return self._path_resolver.workspace_id
 
     def _on_session_changed(self, action: str, session_id: str) -> None:
         self.invalidate()
@@ -174,62 +298,45 @@ class SessionCatalogService:
         self,
         payload: SessionFolderCreateRequest,
     ) -> SessionCatalogBreadcrumbDTO:
-        if payload.parent_folder_id is not None:
-            self._path_resolver.get_node(payload.parent_folder_id)
-        folder = self._path_resolver.create_folder(
-            name=payload.name,
-            parent_node_id=payload.parent_folder_id,
+        record = await self._submit(
+            NavigationMutationIntentDTO(
+                client_operation_id=create_prefixed_id("op"),
+                client_sequence=1,
+                kind="create_folder",
+                base_catalog_revision=self._catalog_revision(),
+                name=payload.name,
+                parent_node_id=payload.parent_folder_id,
+            )
         )
         self.invalidate()
-        return await self.breadcrumb(folder.node_id)
+        return await self.breadcrumb(_committed_node_id(record))
 
     async def update_folder(
         self,
         folder_id: str,
         payload: SessionFolderUpdateRequest,
     ) -> SessionCatalogBreadcrumbDTO:
-        folder = self._path_resolver.get_node(folder_id)
-        if folder.kind != "folder":
+        if self._operations_service.node_kind(folder_id) != "folder":
             raise KeyError(f"会话文件夹不存在: {folder_id}")
-        parent_node_id = (
-            payload.parent_folder_id
-            if "parent_folder_id" in payload.model_fields_set
-            else folder.parent_node_id
-        )
-        name = payload.name if payload.name is not None else folder.name
-        async def move_folder() -> SessionCatalogNodeProjection:
-            if parent_node_id != folder.parent_node_id:
-                return await self._session_service.relocate_folder_tree(
-                    folder_id=folder_id,
-                    parent_node_id=parent_node_id,
-                    name=name,
-                )
-            if (
-                name != folder.name
-                and isinstance(self._path_resolver, SessionCatalogPathResolver)
-            ):
-                # 新模型：move_node 只承担逻辑挂载变更，不重命名；纯改名
-                # 走 update_node_name（切换期已接受的语义拆分，见
-                # session_service._relocate_folder_tree_catalog docstring）。
-                self._path_resolver.update_node_name(folder_id, name)
-            return self._path_resolver.move_node(
-                node_id=folder_id,
-                parent_node_id=parent_node_id,
-            )
-
-        moved = await self._run_sessions_idle(
-            self._descendant_session_ids(folder_id),
-            move_folder,
-        )
+        intents = self._folder_update_intents(folder_id, payload)
+        if not intents:
+            self.invalidate()
+            return await self.breadcrumb(folder_id)
+        await self._submit_batch(intents)
         self.invalidate()
-        return await self.breadcrumb(moved.node_id)
+        return await self.breadcrumb(folder_id)
 
     async def assign_session(
         self,
         session_id: str,
         folder_id: str | None,
     ) -> SessionCatalogBreadcrumbDTO:
-        await self._session_service.move_to_folder(session_id, folder_id)
+        """把会话分配进文件夹；目标必须是 folder（保持该端点的既有契约）。"""
+        if folder_id is not None and self.operations.node_kind(folder_id) != "folder":
+            raise ValueError(f"目标节点不是会话文件夹: {folder_id}")
+        await self._submit_batch(
+            [self._move_intent(session_id, folder_id, sequence=1)]
+        )
         self.invalidate()
         return await self.breadcrumb(session_id)
 
@@ -239,20 +346,8 @@ class SessionCatalogService:
         parent_node_id: str | None,
     ) -> SessionCatalogBreadcrumbDTO:
         """按目标节点类型移动会话或会话文件夹。"""
-        node = self._path_resolver.get_node(node_id)
-        parent = (
-            self._path_resolver.get_node(parent_node_id)
-            if parent_node_id is not None
-            else None
-        )
-        if node.kind == "folder":
-            return await self.update_folder(
-                node_id,
-                SessionFolderUpdateRequest(parent_folder_id=parent_node_id),
-            )
-        await self._session_service.move_session(
-            node_id,
-            parent.node_id if parent is not None else None,
+        await self._submit_batch(
+            [self._move_intent(node_id, parent_node_id, sequence=1)]
         )
         self.invalidate()
         return await self.breadcrumb(node_id)
@@ -264,32 +359,204 @@ class SessionCatalogService:
         parent_folder_id: str | None = None,
     ) -> str | None:
         parent_node_id = parent_folder_id
+        intents: list[NavigationMutationIntentDTO] = []
+        # 依赖链（created_by_operation_id）让执行侧按前序 committed
+        # result_node_id 解析父节点，因此重建过程中不必猜测 canonical ID。
+        previous_operation_id: str | None = None
         for raw_segment in path_segments:
             segment = raw_segment.strip()
             if not segment:
                 raise ValueError("会话目录路径段不能为空")
-            nodes = self._path_resolver.list_nodes()
-            matches = [
-                node
-                for node in nodes
-                if node.kind == "folder"
-                and node.parent_node_id == parent_node_id
-                and node.name == segment
-            ]
+            matches = self._existing_child_folders(parent_node_id, segment)
             if len(matches) > 1:
                 raise RuntimeError(
                     f"物理目录存在同名兄弟文件夹: parent={parent_node_id}, name={segment}"
                 )
             if matches:
                 parent_node_id = matches[0].node_id
+                previous_operation_id = None
                 continue
-            created = self._path_resolver.create_folder(
-                name=segment,
-                parent_node_id=parent_node_id,
+            operation_id = create_prefixed_id("op")
+            intents.append(
+                NavigationMutationIntentDTO(
+                    client_operation_id=operation_id,
+                    client_sequence=len(intents) + 1,
+                    kind="create_folder",
+                    base_catalog_revision=self._catalog_revision(),
+                    name=segment,
+                    # 链式创建时父节点由 created_by_operation_id 在执行侧解析，
+                    # 这里不能塞入尚未分配的空 ID。
+                    parent_node_id=None if previous_operation_id else parent_node_id,
+                    created_by_operation_id=previous_operation_id,
+                )
             )
-            parent_node_id = created.node_id
+            previous_operation_id = operation_id
+        if intents:
+            records = await self._submit_batch(intents)
+            parent_node_id = _committed_node_id(records[-1])
         self.invalidate()
-        return parent_node_id
+        return parent_node_id or None
+
+    def _existing_child_folders(
+        self,
+        parent_node_id: str | None,
+        name: str,
+    ) -> list:
+        """返回父节点下同名 folder 投影（只读查询，不构成写路径）。"""
+        return [
+            node
+            for node in self._path_resolver.list_nodes()
+            if node.kind == "folder"
+            and node.parent_node_id == parent_node_id
+            and node.name == name
+        ]
+
+    # ------------------------------------------------------------------
+    # 导航 mutation 单一写路径（同步 API 与异步 enqueue 共用）
+    # ------------------------------------------------------------------
+
+    @property
+    def operations(self) -> SessionCatalogOperationsService:
+        """异步导航 operation 的服务面（enqueue/status/snapshot/events）。"""
+        if self._operations_service is None:
+            raise RuntimeError(
+                "SessionCatalogOperationsService 尚未在应用启动阶段初始化"
+            )
+        return self._operations_service
+
+    async def submit_operation_batch(
+        self,
+        request: NavigationMutationEnqueueRequest,
+        scope: NavigationAuthScope,
+    ) -> NavigationMutationEnqueueResultDTO:
+        """typed 批量入队（202 durable acceptance）。"""
+        return await self.operations.enqueue(request, scope)
+
+    def operation_status(
+        self,
+        operation_ids: list[str],
+        scope: NavigationAuthScope,
+    ) -> NavigationMutationStatusPageDTO:
+        return self.operations.status(operation_ids, scope)
+
+    def navigation_snapshot(self) -> NavigationSnapshotDTO:
+        return self.operations.snapshot()
+
+    def navigation_events(
+        self,
+        *,
+        after: int,
+        limit: int | None = None,
+    ) -> NavigationEventsPageDTO:
+        return self.operations.events(after=after, limit=limit)
+
+    def decode_navigation_events_cursor(self, cursor: str) -> tuple[int, int]:
+        """解析 navigation 事件 cursor：返回 (after, 签发时水位)。"""
+        return self.operations.decode_events_cursor(cursor)
+
+    async def drain_navigation_operations(self) -> None:
+        """显式驱动一次 FIFO 排空（测试与同步 façade 使用）。"""
+        await self.operations.drain_once()
+
+    def _catalog_revision(self) -> int:
+        return self.operations.snapshot().catalog_revision
+
+    async def _submit(
+        self,
+        intent: NavigationMutationIntentDTO,
+    ) -> NavigationMutationRecord:
+        return await self.operations.submit_single(intent, self._scope())
+
+    async def _submit_batch(
+        self,
+        intents: list[NavigationMutationIntentDTO],
+    ) -> list[NavigationMutationRecord]:
+        """提交一批 intent 并驱动到终态；返回按 ``client_sequence`` 的记录。
+
+        同步 API 的所有写操作都经此入口，因此与原异步链路完全同一实现。批内
+        任一 operation 未到达终态即明确报错（不伪造成功）。
+        """
+        request = NavigationMutationEnqueueRequest(intents=intents)
+        await self.operations.enqueue(request, self._scope())
+        records: list[NavigationMutationRecord] = []
+        for intent in sorted(intents, key=lambda item: item.client_sequence):
+            record = await self.operations.await_terminal(
+                intent.client_operation_id, self._scope()
+            )
+            if record.state != "committed":
+                # 同步 API 保留既有错误契约：拒绝原因按既有分类重新抛出，绝不
+                # 把 rejected/dependency_failed 当成功返回。
+                _raise_for_rejected(record)
+            records.append(record)
+        return records
+
+    def _scope(self) -> NavigationAuthScope:
+        """本地工作区后端的 operation 幂等 scope（gateway/actor 固定本地身份）。
+
+        当前架构不存在可区分的第二认证主体；workspace 取后端自身身份，永不信任
+        请求体自报。联邦/多主体接入时由 Gateway 认证后传入真实 peer/用户身份。
+        """
+        return local_navigation_scope(self._path_resolver.workspace_id)
+
+    def _move_intent(
+        self,
+        node_id: str,
+        parent_node_id: str | None,
+        *,
+        sequence: int,
+    ) -> NavigationMutationIntentDTO:
+        return NavigationMutationIntentDTO(
+            client_operation_id=create_prefixed_id("op"),
+            client_sequence=sequence,
+            kind="move_node",
+            base_catalog_revision=self._catalog_revision(),
+            expected_revision=self.operations.node_revision(node_id),
+            target_node_id=node_id,
+            parent_node_id=parent_node_id,
+        )
+
+    def _folder_update_intents(
+        self,
+        folder_id: str,
+        payload: SessionFolderUpdateRequest,
+    ) -> list[NavigationMutationIntentDTO]:
+        """把 folder 更新拆成 typed intent 序列（改名 + 移动可同批提交）。
+
+        同 node 连续编辑通过 ``depends_on`` 建立依赖：执行时以后序 intent 引用
+        前序已提交结果 revision 作 CAS 前置，因此不会因自身前一条命令推进了
+        revision 而误判冲突。
+        """
+        intents: list[NavigationMutationIntentDTO] = []
+        previous_id: str | None = None
+        if payload.name is not None:
+            rename_id = create_prefixed_id("op")
+            intents.append(
+                NavigationMutationIntentDTO(
+                    client_operation_id=rename_id,
+                    client_sequence=1,
+                    kind="rename_node",
+                    base_catalog_revision=self._catalog_revision(),
+                    expected_revision=self.operations.node_revision(folder_id),
+                    target_node_id=folder_id,
+                    name=payload.name,
+                )
+            )
+            previous_id = rename_id
+        if "parent_folder_id" in payload.model_fields_set:
+            move_id = create_prefixed_id("op")
+            intents.append(
+                NavigationMutationIntentDTO(
+                    client_operation_id=move_id,
+                    client_sequence=len(intents) + 1,
+                    kind="move_node",
+                    base_catalog_revision=self._catalog_revision(),
+                    expected_revision=self.operations.node_revision(folder_id),
+                    target_node_id=folder_id,
+                    parent_node_id=payload.parent_folder_id,
+                    depends_on=[previous_id] if previous_id else [],
+                )
+            )
+        return intents
 
     async def delete_folder(
         self,
@@ -297,96 +564,29 @@ class SessionCatalogService:
         *,
         recursive: bool = False,
     ) -> None:
-        folder = self._path_resolver.get_node(folder_id)
-        if folder.kind != "folder":
+        """删除 folder：非递归要求为空，递归走共享子树删除 operation。"""
+        if self._operations_service.node_kind(folder_id) != "folder":
             raise KeyError(f"会话文件夹不存在: {folder_id}")
-        if recursive:
-            await self._delete_folder_tree(folder_id)
+        if not recursive:
+            try:
+                self._path_resolver.delete_folder(folder_id)
+            except RuntimeError as error:
+                raise ValueError(str(error)) from error
             self.invalidate()
             return
-        try:
-            self._path_resolver.delete_folder(folder_id)
-        except RuntimeError as error:
-            raise ValueError(str(error)) from error
-        self.invalidate()
-
-    async def _delete_folder_tree(self, folder_id: str) -> None:
-        # 递归删除统一走 catalog 子树协议。folder 没有物理路径，不能再
-        # 不通过节点投影遍历物理树或逐个调用旧的 session/folder 删除接口。
-        # begin 的 mark CAS 是唯一拓扑快照和可见性关闭点；只有冻结完成后
-        # 才能取得本次操作的 session 集合并做资源依赖校验。
-        self._path_resolver.begin_subtree_delete(folder_id)
-        frozen_session_ids = self._path_resolver.descendant_session_ids(folder_id)
-
-        async def delete_prepared() -> None:
-            if self._background_task_registry is not None:
-                target_ids = set(frozen_session_ids)
-                blockers = [
-                    handle
-                    for handle in self._background_task_registry.list_active_handles()
-                    if handle.session_id in target_ids
-                ]
-                if blockers:
-                    raise RuntimeError(
-                        "会话存在运行中后台任务，拒绝递归删除: "
-                        + ",".join(
-                            f"{handle.session_id}:{handle.task_id}"
-                            for handle in blockers
-                        )
-                    )
-            # finish 通过 resolver 绑定的逐 session drain 回调完成资源清理，
-            # 然后才执行 fence、物理隔离和 drain 进度记录。任一步骤失败
-            # 都保留 catalog deleting 状态和 resolver 删除锁，供同一
-            # resolver 实例显式重试；不得回滚 active 或扫盘恢复。
-            await self._path_resolver.finish_subtree_delete(folder_id)
-
-        if self._job_service is None:
-            await delete_prepared()
-        else:
-            # JobService 在进入 operation 前登记删除 admission，operation
-            # 执行期间保持该 admission，避免资源清理与 finish 之间重新创建
-            # Job；其内部 dispatch lock 不跨 await operation 持有。
-            await self._job_service.run_sessions_delete_operation(
-                frozen_session_ids,
-                delete_prepared,
-            )
-
-    async def _run_sessions_idle(
-        self,
-        session_ids: list[str],
-        operation: Callable[[], Awaitable[T]],
-    ) -> T:
-        if not session_ids:
-            return await operation()
-
-        async def reject_active_background_tasks() -> T:
-            if self._background_task_registry is not None:
-                target_ids = set(session_ids)
-                blockers = [
-                    handle
-                    for handle in self._background_task_registry.list_active_handles()
-                    if handle.session_id in target_ids
-                ]
-                if blockers:
-                    details = ",".join(
-                        f"{handle.session_id}:{handle.task_id}"
-                        for handle in blockers
-                    )
-                    raise RuntimeError(
-                        "会话存在运行中后台任务，不能移动物理存储: "
-                        f"{details}"
-                    )
-            return await operation()
-
-        if self._job_service is None:
-            return await reject_active_background_tasks()
-        return await self._job_service.run_sessions_idle_operation(
-            session_ids,
-            reject_active_background_tasks,
+        await self._submit_batch(
+            [
+                NavigationMutationIntentDTO(
+                    client_operation_id=create_prefixed_id("op"),
+                    client_sequence=1,
+                    kind="delete_folder",
+                    base_catalog_revision=self._catalog_revision(),
+                    target_node_id=folder_id,
+                    recursive=True,
+                )
+            ]
         )
-
-    def _descendant_session_ids(self, node_id: str) -> list[str]:
-        return self._path_resolver.descendant_session_ids(node_id)
+        self.invalidate()
 
     async def _snapshot(
         self,

@@ -9,11 +9,11 @@ from .models import (
     SessionFolderAssignmentRequest,
     SessionFolderCreateRequest,
     SessionFolderUpdateRequest,
+    SessionGenerationCapabilitiesDTO,
+    SessionGenerationCapabilityDTO,
     SessionGenerationExecuteRequest,
     SessionGenerationExecuteResultDTO,
     SessionGenerationOutputDTO,
-    SessionGenerationCapabilitiesDTO,
-    SessionGenerationCapabilityDTO,
 )
 
 __all__ = [
@@ -27,9 +27,9 @@ __all__ = [
     "SessionFolderAssignmentRequest",
     "SessionFolderCreateRequest",
     "SessionFolderUpdateRequest",
+    "SessionGenerationCapabilitiesDTO",
+    "SessionGenerationCapabilityDTO",
     "SessionGenerationExecuteRequest",
     "SessionGenerationExecuteResultDTO",
     "SessionGenerationOutputDTO",
-    "SessionGenerationCapabilitiesDTO",
-    "SessionGenerationCapabilityDTO",
 ]

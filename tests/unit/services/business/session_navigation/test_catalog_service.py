@@ -196,10 +196,15 @@ async def test_catalog_read_keeps_authoritative_nodes_when_physical_tree_has_orp
 
 
 @pytest.mark.asyncio
-async def test_moving_folder_uses_idle_guard_for_every_descendant_session(
+async def test_renaming_folder_does_not_require_descendant_sessions_idle(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
+    """逻辑导航改名不搬物理存储，不得再要求后代 Session 的 Job 进入 idle。
+
+    8.1-E 明确删除「移动/改名时强制所有后代 Job idle」的旧逻辑：folder 是
+    SQLite-only 节点、逻辑移动不动磁盘，活跃 Session 可随时被移动或改名。
+    """
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
@@ -221,13 +226,23 @@ async def test_moving_folder_uses_idle_guard_for_every_descendant_session(
         job_service=job_service,
     )
 
+    before = {
+        session_id: resolver.resolve_session_node(session_id)
+        for session_id in session_ids
+    }
+
     await catalog.update_folder(
         folder.node_id,
         SessionFolderUpdateRequest(name="任务目录已改名"),
     )
 
-    assert job_service.locked_session_ids == sorted(session_ids)
+    # 不再经过 idle guard，且物理 locator 不变。
+    assert job_service.locked_session_ids == []
     assert resolver.get_node(folder.node_id).name == "任务目录已改名"
+    assert {
+        session_id: resolver.resolve_session_node(session_id)
+        for session_id in session_ids
+    } == before
 
 
 @pytest.mark.asyncio

@@ -23,10 +23,111 @@ from app.schemas.internal_v2.session_navigation import (
     SessionGenerationExecuteRequest,
     SessionGenerationExecuteResultDTO,
 )
+from app.schemas.internal_v2.session_navigation.operations import (
+    NavigationEventsPageDTO,
+    NavigationMutationEnqueueRequest,
+    NavigationMutationEnqueueResultDTO,
+    NavigationMutationStatusPageDTO,
+    NavigationSnapshotDTO,
+)
 from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.operations_service import (
+    NavigationAuthScope,
+    local_navigation_scope,
+)
+from app.services.business.session_navigation.queue_store import (
+    NavigationBackpressureError,
+    NavigationMutationConflictError,
+)
 
 router = APIRouter(tags=["session-navigation"])
+
+
+def _navigation_scope(service: SessionCatalogService) -> NavigationAuthScope:
+    """构造导航 operation 的认证 scope（gateway/actor 取后端本地身份）。
+
+    工作区后端只被同机 Gateway 以本地 token 访问，且 Gateway 代理时已剥离
+    ``X-BoxTeam-Workspace-Id``/``X-Local-Token``，故不接受客户端自报 gateway/actor；
+    workspace 取后端自身身份（永不信任请求体）。联邦/多主体接入后由认证层传入。
+    """
+    return local_navigation_scope(service.workspace_id)
+
+
+@router.post(
+    "/session-catalog/operations:enqueue",
+    status_code=202,
+    response_model=APIResponse[NavigationMutationEnqueueResultDTO],
+)
+async def enqueue_session_catalog_operations(
+    payload: NavigationMutationEnqueueRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    service: SessionCatalogService = Depends(get_session_catalog_service),
+):
+    """typed 导航 operation 批量入队：202 只表示 durable acceptance。"""
+    try:
+        result = await service.submit_operation_batch(payload, _navigation_scope(service))
+    except NavigationBackpressureError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except NavigationMutationConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (KeyError, ValueError, TypeError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
+    "/session-catalog/operations",
+    response_model=APIResponse[NavigationMutationStatusPageDTO],
+)
+async def get_session_catalog_operation_status(
+    operation_id: list[str] = Query(min_length=1),
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    service: SessionCatalogService = Depends(get_session_catalog_service),
+):
+    """按精确 operation ID 返回 durable 状态；未知 ID 显式回报。"""
+    try:
+        result = service.operation_status(operation_id, _navigation_scope(service))
+    except (KeyError, ValueError, TypeError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
+    "/session-catalog/snapshot",
+    response_model=APIResponse[NavigationSnapshotDTO],
+)
+async def get_session_catalog_snapshot(
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    service: SessionCatalogService = Depends(get_session_catalog_service),
+):
+    """revision-pinned catalog snapshot：同一只读事务返回 revision 与事件水位。"""
+    return APIResponse(data=service.navigation_snapshot(), request_id=request_id)
+
+
+@router.get(
+    "/session-catalog/navigation-events",
+    response_model=APIResponse[NavigationEventsPageDTO],
+)
+async def list_session_catalog_navigation_events(
+    after: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=1000),
+    cursor: str | None = None,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    service: SessionCatalogService = Depends(get_session_catalog_service),
+):
+    """独立 navigation channel 的终态事件页（cursor 可恢复）。"""
+    try:
+        if cursor is not None:
+            after, _watermark = service.decode_navigation_events_cursor(cursor)
+        result = service.navigation_events(after=after, limit=limit)
+    except (ValueError, TypeError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.get(
