@@ -355,3 +355,81 @@ def test_information_keeps_non_closed_browser_resource_states_active() -> None:
         "discarded",
     ]
     assert summary.recent_closed == []
+
+
+@pytest.mark.asyncio
+async def test_information_excludes_user_interrupt_from_recent_errors(
+    tmp_path: Path,
+) -> None:
+    """用户主动打断不是故障，不得出现在 recent_errors 里。
+
+    _build_execution 只把 execution_lost/process_exit 判为失败，recent_errors
+    必须与它同口径；把普通打断计入错误列表会把用户主动行为误报成系统故障。
+    """
+    now = datetime.now(UTC)
+    events = [
+        _trace_event(
+            event_id="evt_user_interrupt",
+            job_id="job_interrupt",
+            event_type="session_interrupted",
+            content="会话已打断（tool 阶段，工具：shell）",
+            timestamp=now,
+            raw={"payload": {"phase": "tool", "tool_name": "shell"}},
+        )
+    ]
+    service = SessionInformationService(
+        session_service=_Sessions(events),  # type: ignore[arg-type]
+        session_resource_service=_Resources(),  # type: ignore[arg-type]
+        workspace_service=_Workspace(),  # type: ignore[arg-type]
+        path_resolver=SimpleNamespace(
+            resolve_session_node=lambda session_id: tmp_path / session_id
+        ),
+    )
+
+    result = await service.get_information("ses_information")
+
+    assert result.recent_errors == []
+    assert result.execution.status == "cancelled"
+    assert result.execution.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_information_keeps_execution_lost_interrupt_in_recent_errors(
+    tmp_path: Path,
+) -> None:
+    """执行丢失是真实故障，必须同时进入 recent_errors 与 execution.last_error。"""
+    now = datetime.now(UTC)
+    events = [
+        _trace_event(
+            event_id="evt_execution_lost",
+            job_id="job_lost",
+            event_type="session_interrupted",
+            content="工作区后端重启，无法安全续接原 AgentLoop 执行",
+            timestamp=now,
+            raw={
+                "payload": {
+                    "phase": "process_exit",
+                    "code": "execution_lost",
+                }
+            },
+        )
+    ]
+    service = SessionInformationService(
+        session_service=_Sessions(events),  # type: ignore[arg-type]
+        session_resource_service=_Resources(),  # type: ignore[arg-type]
+        workspace_service=_Workspace(),  # type: ignore[arg-type]
+        path_resolver=SimpleNamespace(
+            resolve_session_node=lambda session_id: tmp_path / session_id
+        ),
+    )
+
+    result = await service.get_information("ses_information")
+
+    assert [error.event_id for error in result.recent_errors] == [
+        "evt_execution_lost"
+    ]
+    assert result.recent_errors[0].type == "session_interrupted"
+    assert result.execution.status == "failed"
+    assert result.execution.last_error == (
+        "工作区后端重启，无法安全续接原 AgentLoop 执行"
+    )

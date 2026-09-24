@@ -28,6 +28,32 @@ _TERMINAL_STATUS_BY_EVENT_TYPE = {
     "session_interrupted": "cancelled",
 }
 
+
+def _is_execution_lost_interrupt(event: TraceEventDTO) -> bool:
+    """判定 session_interrupted 是否为基础设施导致的执行丢失。
+
+    用户主动打断发出的 phase 只会是 text/tool（取自 SessionInterruptState）；
+    只有健康检查与进程退出路径会把 code=execution_lost 或 phase=process_exit
+    写进 payload。
+    """
+    raw_payload = event.raw.get("payload") if event.raw else None
+    if not isinstance(raw_payload, dict):
+        return False
+    return (
+        raw_payload.get("code") == "execution_lost"
+        or raw_payload.get("phase") == "process_exit"
+    )
+
+
+def _is_failure_event(event: TraceEventDTO) -> bool:
+    """诊断失败集合的唯一判定：用户主动打断不算失败，执行丢失才算。"""
+    if event.type in {"error", "job_failed"}:
+        return True
+    return event.type == "session_interrupted" and _is_execution_lost_interrupt(
+        event
+    )
+
+
 _CHILD_SESSION_ID_LIMIT = 32
 _ACTIVE_RESOURCE_LIMIT = 32
 _RECENT_CLOSED_RESOURCE_LIMIT = 16
@@ -158,13 +184,10 @@ class SessionInformationService:
                 status = "queued"
             elif event.type in _TERMINAL_STATUS_BY_EVENT_TYPE:
                 status = _TERMINAL_STATUS_BY_EVENT_TYPE[event.type]
-                if event.type == "session_interrupted":
-                    raw_payload = event.raw.get("payload") if event.raw else None
-                    if isinstance(raw_payload, dict) and (
-                        raw_payload.get("code") == "execution_lost"
-                        or raw_payload.get("phase") == "process_exit"
-                    ):
-                        status = "failed"
+                if event.type == "session_interrupted" and (
+                    _is_execution_lost_interrupt(event)
+                ):
+                    status = "failed"
             elif event.type == "status_change":
                 raw_payload = event.raw.get("payload")
                 raw_status = raw_payload.get("status") if isinstance(raw_payload, dict) else None
@@ -178,9 +201,7 @@ class SessionInformationService:
             elif event.type == "tool_call_end":
                 current_tool = None
 
-            if event.type in {"error", "job_failed"} or (
-                event.type == "session_interrupted" and status == "failed"
-            ):
+            if _is_failure_event(event):
                 last_error, last_error_truncated = _truncate_text(event.content)
 
         return SessionInformationExecutionDTO(
@@ -264,7 +285,7 @@ class SessionInformationService:
     ) -> list[SessionInformationErrorDTO]:
         errors = []
         for event in trace_events:
-            if event.type not in {"error", "job_failed", "session_interrupted"}:
+            if not _is_failure_event(event):
                 continue
             message, message_truncated = _truncate_text(event.content)
             errors.append(
