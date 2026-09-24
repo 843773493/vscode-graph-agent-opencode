@@ -387,7 +387,7 @@ def test_typed_detail_mapping_keeps_leaf_owner_and_selection_separate(
     source = refs[0]
     raw_ref = ContextRef.request_only_ref(
         "source-plan-item",
-        session_id=SOURCE_SESSION_ID,
+        session_id=SOURCE_SESSION_ID, thread_id="thread-1",
         plan_id="source-plan",
         source_revision="source-revision",
         source_ref=source,
@@ -496,7 +496,7 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
         ref_id, plan_id = f"source-extra-ref-{ordinal}", f"source-extra-plan-{ordinal}"
         ref = ContextRef.request_only_ref(
             ref_id,
-            session_id=SOURCE_SESSION_ID,
+            session_id=SOURCE_SESSION_ID, thread_id="thread-1",
             plan_id=plan_id,
             source_revision="existing-source-revision",
             content=body,

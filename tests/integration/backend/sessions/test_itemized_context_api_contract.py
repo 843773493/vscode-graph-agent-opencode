@@ -288,7 +288,7 @@ async def test_http_selection_preserves_order_omission_toolset_and_typed_details
     plain_body = [{"type": "text", "text": "private request-only API body"}]
     plain = ContextRef.request_only_ref(
         "plain-api",
-        session_id=session_id,
+        session_id=session_id, thread_id="thread-1",
         plan_id=draft.plan_id,
         source_revision="api-v1",
         source_ref="source:plain-api",

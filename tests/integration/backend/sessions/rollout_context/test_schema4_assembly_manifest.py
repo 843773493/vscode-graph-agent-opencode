@@ -115,7 +115,7 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
         refs=tuple(
             ContextRef.request_only_ref(
                 f"{item.contribution_id}-ref",
-                session_id=case.session_id,
+                session_id=case.session_id, thread_id="thread-1",
                 plan_id=plan_id,
                 source_revision=item.source_revision,
                 source_ref=item.contribution_id,

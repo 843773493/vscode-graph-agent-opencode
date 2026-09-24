@@ -36,7 +36,7 @@ def omitted_draft(registry_db):
         refs=(
             ContextRef.request_only_ref(
                 "omitted-ref",
-                session_id=session,
+                session_id=session, thread_id="thread-1",
                 plan_id="omitted-import-plan",
                 source_revision="known-revision",
                 availability="unavailable",

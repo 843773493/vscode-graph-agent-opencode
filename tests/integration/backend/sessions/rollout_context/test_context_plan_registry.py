@@ -78,7 +78,7 @@ def draft(registry_db):
     )
     ref = ContextRef.request_only_ref(
         "request-ref",
-        session_id=session,
+        session_id=session, thread_id="thread-1",
         plan_id="plan",
         source_revision="revision-1",
         content_hash_value=contribution.content_hash,

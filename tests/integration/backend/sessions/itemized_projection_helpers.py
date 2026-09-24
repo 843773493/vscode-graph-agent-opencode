@@ -100,7 +100,7 @@ def projection_draft(projection_saver):
     ]
     plain = ContextRef.request_only_ref(
         "plain-ref",
-        session_id=session_id,
+        session_id=session_id, thread_id="thread-1",
         plan_id=plan.plan_id,
         source_revision="plain-v1",
         content=plain_body,

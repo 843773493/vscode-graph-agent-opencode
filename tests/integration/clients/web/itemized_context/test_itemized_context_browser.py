@@ -223,7 +223,7 @@ async def browser_source(browser_runtime, native_http_server):
         plain_body = [{"type": "text", "text": "BROWSER_PRIVATE_REQUEST_BODY"}]
         plain = ContextRef.request_only_ref(
             "browser-plain",
-            session_id=session_id,
+            session_id=session_id, thread_id="thread-1",
             plan_id=draft.plan_id,
             content=plain_body,
             payload_kind="structured_content",

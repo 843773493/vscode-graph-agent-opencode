@@ -261,7 +261,7 @@ async def test_draft_omission_stub_stays_target_local_without_body_or_contributi
         refs=(
             ContextRef.request_only_ref(
                 "unavailable-ref",
-                session_id=SOURCE_SESSION_ID,
+                session_id=SOURCE_SESSION_ID, thread_id="thread-1",
                 plan_id="omitted-draft",
                 source_revision="unavailable-revision",
                 availability="unavailable",
@@ -304,7 +304,7 @@ async def test_draft_only_contributions_and_aliases_are_remapped_without_source_
         )
         ref = ContextRef.request_only_ref(
             "same-request-id",
-            session_id=SOURCE_SESSION_ID,
+            session_id=SOURCE_SESSION_ID, thread_id="thread-1",
             plan_id=plan_id,
             source_ref="draft-alias",
             source_revision=contribution.source_revision,

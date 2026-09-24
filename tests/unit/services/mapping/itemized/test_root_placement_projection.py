@@ -42,7 +42,7 @@ def _contribution(root_placement: str) -> ContextContribution:
 def _sealed_plan(contribution: ContextContribution) -> ContextRequestPlan:
     request_ref = ContextRef.request_only_ref(
         contribution.contribution_id,
-        session_id=SESSION,
+        session_id=SESSION, thread_id="thread-1",
         plan_id=PLAN,
         source_revision=contribution.source_revision,
         payload_kind=PayloadKind.STRUCTURED_CONTENT,

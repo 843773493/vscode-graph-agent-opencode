@@ -635,7 +635,7 @@ def test_protected_request_digest_restores_with_backend_and_rejects_missing_key(
         )
         ref = ContextRef.request_only_ref(
             "protected-plan-ref",
-            session_id=session_id,
+            session_id=session_id, thread_id="thread-1",
             plan_id=draft.plan_id,
             source_revision="protected-v1",
             content_length=source.length,

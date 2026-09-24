@@ -250,7 +250,7 @@ def test_omitted_tool_identity_does_not_resolve_to_request_only_tag(
     saver, session, connection, accepted = registry_db
     ref = ContextRef.request_only_ref(
         "z",
-        session_id=session,
+        session_id=session, thread_id="thread-1",
         plan_id=tool_draft.plan_id,
         source_revision="request-revision",
         content="另一种 tagged source",
@@ -400,7 +400,7 @@ def test_same_raw_id_keeps_request_and_tool_selection_separate(registry_db, tool
     saver, session, connection, accepted = registry_db
     request_ref = ContextRef.request_only_ref(
         "z",
-        session_id=session,
+        session_id=session, thread_id="thread-1",
         plan_id=tool_draft.plan_id,
         source_revision="request-revision",
         content="不会读取的 request-only 正文",

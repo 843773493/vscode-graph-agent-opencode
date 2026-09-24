@@ -609,16 +609,16 @@ def _native_tool_plan(
         ContextSelectionEntry(
             assembly_id=assembly_id,
             plan_ordinal=index,
-            ref=ContextRef.canonical_item(item, session_id=session_id),
+            ref=ContextRef.canonical_item(item, session_id=session_id, thread_id="thread-1"),
             selection_kind=SelectionKind.CANONICAL_HISTORY,
             source_revision=ContextRef.canonical_item(
-                item, session_id=session_id
+                item, session_id=session_id, thread_id="thread-1"
             ).source_revision,
             content_length=ContextRef.canonical_item(
-                item, session_id=session_id
+                item, session_id=session_id, thread_id="thread-1"
             ).content_length,
             content_hash=ContextRef.canonical_item(
-                item, session_id=session_id
+                item, session_id=session_id, thread_id="thread-1"
             ).content_hash,
             visibility="internal",
             protection="public",
@@ -1021,7 +1021,7 @@ def test_content_plan_request_and_idempotency_golden_vectors(
         message_group_id="group-golden",
         wire_role="user",
     )
-    ref = ContextRef.canonical_item(item, session_id="session-golden")
+    ref = ContextRef.canonical_item(item, session_id="session-golden", thread_id="thread-1")
     selection = ContextSelectionEntry(
         assembly_id="assembly-golden",
         plan_ordinal=0,
@@ -1195,7 +1195,7 @@ def test_history_and_provider_consume_the_same_sealed_selection_order(
     user_item: CanonicalItemRecord,
 ) -> None:
     item = user_item
-    item_ref = ContextRef.canonical_item(item, session_id="session-shared-selection")
+    item_ref = ContextRef.canonical_item(item, session_id="session-shared-selection", thread_id="thread-1")
     body = {"text": "必须先读取配置"}
     contribution = ContextContribution(
         contribution_id="contribution-shared-selection",
@@ -1210,7 +1210,7 @@ def test_history_and_provider_consume_the_same_sealed_selection_order(
     )
     request_ref = ContextRef.request_only_ref(
         contribution.contribution_id,
-        session_id="session-shared-selection",
+        session_id="session-shared-selection", thread_id="thread-1",
         plan_id="plan-shared-selection",
         source_revision=contribution.source_revision,
         payload_kind=PayloadKind.STRUCTURED_CONTENT,

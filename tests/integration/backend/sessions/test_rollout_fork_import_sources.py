@@ -72,7 +72,7 @@ def omitted_source(fork_workspace, session_bundle_factory, forbid_detail_body, r
             contribution_kind=kind, metadata=metadata, source_ordinal=0,
         )
         ref = ContextRef.request_only_ref(
-            "omitted-ref", session_id=SOURCE_SESSION_ID, plan_id="actual-runtime-plan",
+            "omitted-ref", session_id=SOURCE_SESSION_ID, thread_id="thread-1", plan_id="actual-runtime-plan",
             source_revision=unavailable.source_revision,
             content_hash_value=unavailable.content_hash, content_length=unavailable.content_length,
             availability="unavailable", source_ref="registered-alias", base_delta_role=role,
