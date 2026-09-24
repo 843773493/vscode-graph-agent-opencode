@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 import type {
   CreateGatewayPortForwardRequest,
   GatewayPortForward,
@@ -10,6 +11,18 @@ import WarmConfirmProvider from "../../shell/WarmConfirmProvider";
 import WorkspacePortForwardPanel, {
   type WorkspacePortForwardApi,
 } from "./WorkspacePortForwardPanel";
+
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+
+afterEach(() => {
+  if (originalClipboard) {
+    Object.defineProperty(navigator, "clipboard", originalClipboard);
+  } else {
+    Reflect.deleteProperty(navigator, "clipboard");
+  }
+  restoreGlobalDescriptor("document", originalDocument);
+});
 
 const remoteWorkspace: GatewayWorkspace = {
   workspace_id: "gw_remote_project",
@@ -479,6 +492,52 @@ describe("工作区端口转发面板", () => {
     expect(requestedWorkspaceIds).toEqual(["gw_remote_project", "gw_remote_api"]);
     expect(renderedText(renderer)).toContain("gw_remote_api");
     expect(renderedText(renderer)).not.toContain("pf_gw_remote_project");
+    renderer.unmount();
+  });
+
+  test("非安全上下文下复制本地地址仍走兼容复制，而不是直接报剪贴板不可用", async () => {
+    // navigator.clipboard 在非安全上下文（http 局域网访问）下真实缺失。此时复制
+    // 必须回退到 utils/clipboard 的兼容路径，不能把「没有 Clipboard API」直接当成
+    // 复制失败；否则用户在这类部署下永远复制不了转发地址。
+    Reflect.deleteProperty(navigator, "clipboard");
+    let execCommandCalls = 0;
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: {
+        createElement: () => ({
+          value: "",
+          style: { position: "", left: "", top: "" },
+          setAttribute: () => undefined,
+          focus: () => undefined,
+          select: () => undefined,
+          remove: () => undefined,
+        }),
+        body: { appendChild: () => undefined },
+        execCommand: () => {
+          execCommandCalls += 1;
+          return true;
+        },
+      },
+    });
+    const api: WorkspacePortForwardApi = {
+      list: async () => list([forward()]),
+      create: async () => list([]),
+      remove: async () => list([]),
+      reconnect: async () => list([]),
+      changeLocalPort: async () => list([]),
+    };
+    const renderer = renderPanel(api);
+    await flush();
+
+    const copyButton = renderer.root.findByProps({ "aria-label": "复制本地地址" });
+    await act(async () => {
+      copyButton.props.onClick();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(execCommandCalls).toBe(1);
+    expect(renderedText(renderer)).not.toContain("当前页面不允许访问剪贴板");
+    expect(copyButton.props.title).toBe("已复制本地地址");
     renderer.unmount();
   });
 });

@@ -11,6 +11,7 @@ import {
   diagnosticLogUnavailableHint,
 } from "../../panels/gatewayLogPresentation";
 import { errorMessage } from "../../../utils/errorMessage";
+import { copyTextToClipboard } from "../../../utils/clipboard";
 
 interface GatewayDiagnosticsPanelProps {
   apiPort: number;
@@ -116,8 +117,10 @@ export default function GatewayDiagnosticsPanel({
 
   const copySelectedLog = async () => {
     if (!selectedLog?.tail) return;
+    // 复制统一走 utils/clipboard 的唯一实现：非安全上下文下 navigator.clipboard 真实
+    // 缺失，必须回退兼容复制，不能把「没有 Clipboard API」当 TypeError 暴露给用户。
     try {
-      await navigator.clipboard.writeText(selectedLog.tail);
+      await copyTextToClipboard(selectedLog.tail);
       setCopyNotice("当前日志尾部已复制。 ");
     } catch (copyError) {
       setCopyNotice(errorMessage(copyError));

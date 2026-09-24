@@ -18,6 +18,7 @@ import type {
 } from "../../../types/backend";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import { errorMessage } from "../../../utils/errorMessage";
+import { copyTextToClipboard } from "../../../utils/clipboard";
 
 export interface WorkspacePortForwardApi {
   list(port: number, workspaceId: string): Promise<GatewayPortForwardList>;
@@ -279,9 +280,10 @@ export default function WorkspacePortForwardPanel({
 
   const handleCopyAddress = async (forward: GatewayPortForward) => {
     if (!forward.local_url) return;
+    // 复制统一走 utils/clipboard 的唯一实现：非安全上下文下 navigator.clipboard 真实
+    // 缺失，必须回退兼容复制，不能把「没有 Clipboard API」直接判成复制失败。
     try {
-      if (!navigator.clipboard) throw new Error("当前页面不允许访问剪贴板");
-      await navigator.clipboard.writeText(forward.local_url);
+      await copyTextToClipboard(forward.local_url);
       setCopiedId(forward.forward_id);
       setCopyRetryId(null);
       window.setTimeout(() => {
