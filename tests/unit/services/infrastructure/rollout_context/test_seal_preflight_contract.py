@@ -280,6 +280,40 @@ def test_duplicate_included_identity_fails_closed() -> None:
     assert error.value.code == "seal-dispatch-source-identity-conflict"
 
 
+def test_seal_identity_is_ref_type_and_ref_id_pair_only_current_boundary() -> None:
+    """锁定**现状边界**：seal preflight 的 source identity 目前只用二元组
+    (ref_type, ref_id)，thread_id 完全不参与判定。
+
+    这是对**当前实现事实**的刻画，不是 thread 契约：同一 (ref_type, ref_id)
+    但 thread_id 不同的两个 ref，现在会被判为同一 identity 而冲突放行失败。
+    一旦有人把该 identity 改成 thread-qualified 三元组，本用例必须变红
+    （届时不再抛错），从而立刻暴露改动的真实影响面。
+    """
+    snapshot = _minimal_snapshot()
+    ref_a = snapshot.selection[0].ref
+    ref_b = replace(ref_a, thread_id="thread-2")
+    # 前提自检：两者 thread 不同而 (ref_type, ref_id) 逐字相同；否则本用例
+    # 鉴别的就不是二元组边界，而是别的东西。
+    assert ref_a != ref_b
+    assert (ref_a.ref_type, ref_a.ref_id) == (ref_b.ref_type, ref_b.ref_id)
+    with pytest.raises(ContextAssemblySealPreflightError) as error:
+        validate_seal_dispatch_invariants(
+            _clone_with(
+                snapshot,
+                refs=(ref_a, ref_b),
+                selection=(
+                    snapshot.selection[0],
+                    _entry(
+                        1,
+                        ref_b,
+                        selection_kind=SelectionKind.CANONICAL_HISTORY.value,
+                    ),
+                ),
+            )
+        )
+    assert error.value.code == "seal-dispatch-source-identity-conflict"
+
+
 def test_selection_ref_manifest_mismatch_fails_closed() -> None:
     # domain 构造器只拦截部分字段漂移；seal 边界必须独立兜底（例如恢复的
     # 旧快照 content_hash 与 ref manifest 不一致）。
