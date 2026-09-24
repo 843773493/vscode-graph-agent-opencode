@@ -181,6 +181,8 @@ evaluate_expression
 - **WHEN** 调用方试图通过公开fork、Gateway federation grant或migration-only child copy把调试方案复制到另一Workspace
 - **THEN** 本次变更明确拒绝该操作；无owner的可移植正文仅是未来独立授权export/import协议的格式基础，不代表当前已提供跨Workspace方案复制或绕过目标Workspace校验的能力
 
+## MODIFIED Requirements
+
 ### Requirement: Execution controls report authoritative debug state
 
 系统 SHALL 支持 `stop_debugging`、`restart_debugging`、`continue_execution`、`pause_execution`、`step_over`、`step_into` 和 `step_out`。每个成功的控制动作 SHALL 返回后端确认后的完整调试状态，而不是只返回本地预期状态。
@@ -228,10 +230,25 @@ Node Inspector当前通过条件表达式实现不暂停logpoint，命中时写�
 - **WHEN** Agent 为 `add_breakpoint` 提供 condition
 - **THEN** 系统将条件传递给调试后端，或返回明确说明当前 adapter 不支持条件断点的错误
 
+#### Scenario: Agent requests a hit-count breakpoint
+
+- **WHEN** Agent 为 add_breakpoint 提供正整数 hitCondition
+- **THEN** Node adapter 仅在当前目标进程第 N 次到达该位置且可选 condition 同时为真时暂停；重新启动目标进程后从第一次命中重新计数
+
 #### Scenario: Agent requests a logpoint
 
 - **WHEN** Agent 调用 `add_logpoint`
 - **THEN** Node adapter安装条件表达式日志点，命中时在当前thread输出日志且不中断执行；无该能力的其它adapter才返回明确的不支持错误，不得把日志点降级为暂停断点
+
+#### Scenario: Human edits a special breakpoint from a source gutter
+
+- **WHEN** 用户在右侧侧边栏源码预览或扩展窗口源码区右键点击行号槽
+- **THEN** Web 展示普通断点、条件断点、命中次数断点和日志点选项，并允许对该行已有断点编辑或删除；左键仍快速切换普通断点
+
+#### Scenario: One source location has one authoritative breakpoint
+
+- **WHEN** 同一路径、行和列已经存在任意类型断点
+- **THEN** 新增操作返回明确的位置占用错误，编辑操作原子替换该定义，Web 和 Agent 随后读取到同一份权威状态
 
 ### Requirement: Paused state supports variable inspection and evaluation
 

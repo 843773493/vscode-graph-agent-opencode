@@ -2,7 +2,7 @@
 
 为thread-owned源码调试资源提供可验证、可分层覆盖的Workspace运行模板，统一管理调试adapter、启动profile、Node Inspector和未来debugpy的端口与执行边界；thread活动方案与运行时状态不反写Workspace配置，也不向模型暴露内部句柄。
 
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Workspace configuration provides a debug namespace
 

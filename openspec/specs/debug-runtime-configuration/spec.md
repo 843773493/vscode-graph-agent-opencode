@@ -40,6 +40,8 @@ Workspace 有效配置 SHALL 支持可选的 `runtime.debug` 命名空间，并�
 }
 ```
 
+`runtime.debug`是Workspace级默认值/启动模板，不以Session或Thread为新的JSONC覆盖层；每个`(session_id, thread_id)`的活动方案由受检thread目录/归属manifest绑定，方案正文不包含owner。本次只在同Workspace公开fork的明确模式中复制方案正文，目标owner重新验证源码/工作目录/断点路径及有效profile的adapter/runtime，并在必要时映射目标本地方案ID及记录lineage；不复制活动指针、进程/端口/连接。方案正文保留未来跨Workspace可移植格式，但本次没有跨Workspace复制API。配置仍按Workspace inline→用户→用户本地→工作区递归合并，`workspace_dev.jsonc`是完整开发模板而非隐式合并层。新增thread owner不引入`runtime.debug.thread`开关、不改变已有字段取值语义、不因此升级`config_version`；生效中的调试进程不因其它thread启动或Workspace模板热更新被悄悄替换。
+
 #### Scenario: Existing configuration without debug settings remains valid
 
 - **WHEN** 工作区使用没有 `runtime.debug` 的既有有效配置启动
@@ -48,7 +50,12 @@ Workspace 有效配置 SHALL 支持可选的 `runtime.debug` 命名空间，并�
 #### Scenario: Workspace override selects a debug profile
 
 - **WHEN** 工作区 `.boxteam/workspace.jsonc` 覆盖 `runtime.debug.launch_profiles`
-- **THEN** 后续该工作区的调试启动按照合并后的 profile 解析，且不修改其他工作区配置
+- **THEN** 后续该工作区各thread的新调试启动按合并后的profile解析；已有进程和各thread已保存的活动方案不被静默改写，也不修改其他工作区配置
+
+#### Scenario: 同Workspace方案复制与Workspace模板分离
+
+- **WHEN** 同Workspace公开fork按模式把已保存方案复制到目标thread，且source capture之后Workspace模板可能变化
+- **THEN** target在staging冻结自身已生效Workspace模板revision/hash，按该快照解析profile并验证adapter/runtime、源码/工作目录和全部断点路径，发布前复核revision仍相同；任一缺失、漂移或不兼容使整个fork失败，不静默更换profile；方案正文仍无source/target owner字段，活动方案指针、源进程、Inspector端口和运行状态不复制
 
 ### Requirement: Debug configuration separates logical intent from runtime endpoints
 
@@ -70,8 +77,13 @@ Node Inspector 配置 SHALL 默认绑定 `127.0.0.1` 且默认端口为 `0`。�
 
 #### Scenario: Concurrent debug sessions use isolated dynamic ports
 
-- **WHEN** 同一工作区或不同 session 同时启动多个 Node 调试会话且 `inspector_port` 为 0
-- **THEN** 每个会话获得独立的 Inspector 连接，且不会因为固定端口冲突而错误连接到其他会话
+- **WHEN** 同一Session的main/child、同一工作区的不同Session或不同工作区thread同时启动Node调试且`inspector_port`为0
+- **THEN** 每个thread获得独立的Inspector连接和动态端口；端口分配、方案选择、状态或动作不能串到其它thread
+
+#### Scenario: 显式固定端口与已有thread冲突
+
+- **WHEN** 两个thread的有效Workspace模板显式指定同一固定Inspector端口且第一thread已占用
+- **THEN** 第二thread的启动明确返回端口占用错误且不接管、重启或停止第一thread进程；不会静默改用另一端口
 
 #### Scenario: Invalid or unsafe Inspector endpoint is rejected
 
