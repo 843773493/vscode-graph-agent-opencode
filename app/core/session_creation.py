@@ -61,6 +61,7 @@ from app.core.session_catalog_store import (
     SessionCatalogStore,
     SessionCreationRecord,
 )
+from app.core.session_control_primitives import validate_thread_creation_key
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 
@@ -393,21 +394,9 @@ class SessionCreationService:
         session_metadata: dict[str, object],
     ) -> None:
         """create 入参校验（在任何状态变更之前 fail fast）。"""
-        if not isinstance(idempotency_key, str) or not idempotency_key:
-            raise ValueError(
-                f"idempotency_key 不能为空: {idempotency_key!r}"
-            )
-        # idempotency_key 是 staging/隔离目录名，必须是安全单段路径名。
-        if (
-            idempotency_key in (".", "..")
-            or "/" in idempotency_key
-            or "\\" in idempotency_key
-            or "\x00" in idempotency_key
-        ):
-            raise ValueError(
-                "idempotency_key 必须是安全单段路径名（不含分隔符/./..）: "
-                f"{idempotency_key!r}"
-            )
+        # idempotency_key 是 staging/隔离目录名；形态口径与 store、thread
+        # creation 共用同一实现，避免任一处放宽后其它链路静默失效。
+        validate_thread_creation_key(idempotency_key)
         if not isinstance(title, str) or not title:
             raise ValueError(f"title 不能为空: {title!r}")
         if parent_node_id is not None and not isinstance(parent_node_id, str):
