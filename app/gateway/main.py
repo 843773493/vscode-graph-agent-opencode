@@ -78,6 +78,18 @@ from app.gateway.federation import (
     FEDERATION_PROTOCOL_VERSION,
     request_remote_gateway_management,
 )
+from app.gateway.federation.identity import load_or_create_signing_key
+from app.gateway.federation.policy import FederationPolicyStore, normalize_policy
+from app.gateway.federation.router import router as federation_router
+from app.gateway.federation.rpc import FederationRpcService
+from app.gateway.federation.store import (
+    FederationControlStore,
+    federation_control_database,
+)
+from app.gateway.federation.workspace_port import (
+    WorkspaceCatalogPort,
+    WorkspaceSessionMainPort,
+)
 from app.gateway.managed_workspaces import (
     create_direct_managed_workspace,
     list_direct_managed_workspaces,
@@ -200,6 +212,52 @@ logger = logging.getLogger(__name__)
 
 def _gateway_root() -> Path:
     return get_gateway_root()
+
+
+def _gateway_federation_policy_payload(config: GatewayConfig) -> dict[str, object]:
+    """从 Gateway 配置域读取 ``permissions.federation`` 候选（缺省即内置默认）。"""
+
+    raw = config.payload.get("permissions")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise TypeError("Gateway 配置 permissions 必须是对象")
+    federation = raw.get("federation")
+    if federation is None:
+        return {}
+    if not isinstance(federation, dict):
+        raise TypeError("Gateway 配置 permissions.federation 必须是对象")
+    return federation
+
+
+def _normalize_federation_policy(config: GatewayConfig) -> None:
+    """候选校验：非法 federation 策略必须在 apply 前响亮失败且不部分生效。"""
+
+    normalize_policy(_gateway_federation_policy_payload(config))
+
+
+def _refresh_federation_workspace_ports(
+    service: FederationRpcService,
+    registry: GatewayWorkspaceRegistry,
+) -> None:
+    """把本地工作区 backend_url 注入联邦只读端口；远端子工作区不参与。"""
+
+    if not isinstance(service.catalog, WorkspaceCatalogPort):
+        return
+    if not isinstance(service.session_main, WorkspaceSessionMainPort):
+        return
+    for target in registry.targets():
+        if target.connection_kind != "local":
+            continue
+        backend_url = target.backend_url.strip()
+        if not backend_url:
+            continue
+        service.catalog.register_workspace(
+            workspace_id=target.workspace_id, backend_url=backend_url
+        )
+        service.session_main.register_workspace(
+            workspace_id=target.workspace_id, backend_url=backend_url
+        )
 
 
 async def _cleanup_user_access_periodically(
@@ -520,6 +578,36 @@ def _gateway_runtime_consumer_stages(
                     poll_interval_seconds=(
                         previous.gateway_process_health_poll_interval_seconds
                     ),
+                ),
+                fencing_token_digest=fencing_token_digest,
+                fence_check=fence_check,
+            )
+        )
+
+    federation_policy_store = getattr(app.state, "federation_policy_store", None)
+    if isinstance(federation_policy_store, FederationPolicyStore):
+        # 权限域属于 ``current`` 生效范围：候选在同一事务内原子热发布，
+        # 不重启既有 channel，也不改 ToolSet/context/stable prefix。
+        stages.append(
+            GatewayRuntimeConsumerStage(
+                consumer_id="federation-policy",
+                generation=generation,
+                prepare=lambda: _normalize_federation_policy(candidate),
+                apply=lambda: federation_policy_store.publish(
+                    _gateway_federation_policy_payload(candidate)
+                ),
+                health=lambda: GatewayRuntimeHealthProof(
+                    consumer_id="federation-policy",
+                    generation=generation,
+                    state="healthy",
+                    details={
+                        "policy_revision": federation_policy_store.snapshot.revision
+                    },
+                    fencing_token_digest=fencing_token_digest,
+                ),
+                promote=lambda: None,
+                rollback=lambda: federation_policy_store.publish(
+                    _gateway_federation_policy_payload(previous)
                 ),
                 fencing_token_digest=fencing_token_digest,
                 fence_check=fence_check,
@@ -997,6 +1085,30 @@ async def lifespan(app: FastAPI):
         gateway_id=gateway_id,
     )
     app.state.gateway_config_reload = gateway_config_reload
+    federation_policy = FederationPolicyStore(
+        initial=_gateway_federation_policy_payload(gateway_config)
+    )
+    federation_control = FederationControlStore(
+        database=federation_control_database(gateway_root=_gateway_root())
+    )
+    app.state.federation_credential_store = FederationCredentialStore(
+        storage_path=_gateway_root() / "credentials" / "federation.json"
+    )
+    app.state.federation_gateway_root = _gateway_root()
+    app.state.federation_policy_store = federation_policy
+    app.state.federation_control_store = federation_control
+    app.state.federation_rpc_service = FederationRpcService(
+        gateway_id=gateway_id,
+        policy_store=federation_policy,
+        control_store=federation_control,
+        signing_key=load_or_create_signing_key(_gateway_root()),
+        catalog=WorkspaceCatalogPort(),
+        session_main=WorkspaceSessionMainPort(),
+        spoke_directory=None,
+    )
+    _refresh_federation_workspace_ports(
+        app.state.federation_rpc_service, registry
+    )
     app.state.port_forward_manager = SshPortForwardManager(
         registry=registry,
         storage_path=_gateway_root() / "port-forwards.json",
@@ -1526,6 +1638,11 @@ async def lifespan(app: FastAPI):
             shutdown_errors.append(error)
             logger.exception("Gateway 关闭托管工作区运行时失败")
         await gateway_config_reload.stop()
+        federation_control_store = getattr(
+            app.state, "federation_control_store", None
+        )
+        if isinstance(federation_control_store, FederationControlStore):
+            federation_control_store.close()
         gateway_state.close()
         if shutdown_errors:
             raise RuntimeError(
@@ -3697,6 +3814,7 @@ app.include_router(device_connections_router)
 app.include_router(port_forwards_router)
 app.include_router(auxiliary_proxy_router)
 app.include_router(workspace_proxy_router)
+app.include_router(federation_router)
 
 # 静态 UI 必须最后挂载，确保 Gateway API、工作区代理、SSE 和 WebSocket
 # 路由优先匹配；源码开发未声明 BOXTEAM_WEB_ASSETS 时由 Vite 提供页面。
