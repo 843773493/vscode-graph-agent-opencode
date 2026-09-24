@@ -251,6 +251,17 @@ describe("useWorkbenchPanelRouting 面板路由契约", () => {
     expect(mounted.statuses).toEqual(["底部面板已收起"]);
   });
 
+  test("handleTogglePanel 无活动工作区时明确失败，不得虚报已展开", async () => {
+    // 底部面板状态按工作区保存，没有归属工作区时 updateBottomPanelState 会静默丢弃
+    // 写入。若这里仍报「已展开」，用户点开关却看不到任何变化，且状态栏给了假成功。
+    const mounted = await mountHook({ bottomPanelWorkspaceId: null });
+
+    act(() => mounted.hook.handleTogglePanel());
+
+    expect(mounted.panelUpdates).toEqual([]);
+    expect(mounted.statuses).toEqual(["切换底部面板失败：当前没有活动工作区"]);
+  });
+
   test("openTerminalPanel 无活动工作区时报错早退，不写面板状态", async () => {
     const mounted = await mountHook({ bottomPanelWorkspaceId: null });
 

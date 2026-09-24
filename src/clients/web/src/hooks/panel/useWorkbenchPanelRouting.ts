@@ -48,6 +48,13 @@ export function useWorkbenchPanelRouting({
     setStatus(nextVisible ? "会话区已展开" : "会话区已收起");
   };
   const handleTogglePanel = () => {
+    // 底部面板状态按工作区保存：没有归属工作区时 updateBottomPanelState 会直接
+    // 丢弃写入（见 useWorkbenchLayoutPreferences）。这里必须与 openTerminalPanel
+    // 同口径明确失败，绝不能把「什么都没发生」报成「已展开」。
+    if (!bottomPanelWorkspaceId) {
+      setStatus("切换底部面板失败：当前没有活动工作区");
+      return;
+    }
     const nextVisible = !bottomPanelState.visible;
     updateBottomPanelState({ visible: nextVisible });
     setStatus(nextVisible ? "底部面板已展开" : "底部面板已收起");

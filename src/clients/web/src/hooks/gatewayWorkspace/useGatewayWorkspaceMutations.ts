@@ -20,6 +20,7 @@ import {
 } from "../../state/gatewayWorkspaceState";
 import type { FinishWorkspaceRefresh, SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
+import { activeGatewayWorkspaceFields } from "./activeGatewayWorkspaceFields";
 
 export function useGatewayWorkspaceMutations({
   apiPort,
@@ -174,15 +175,10 @@ export function useGatewayWorkspaceMutations({
           if (!removedActiveWorkspace && !activeWorkspaceChanged) {
             return reconciledState;
           }
-          const activeWorkspace = workspaceList.items.find(
-            (workspace) =>
-              workspace.workspace_id === workspaceList.active_workspace_id,
-          );
           return {
             ...reconciledState,
+            ...activeGatewayWorkspaceFields(workspaceList),
             workspaceSwitching: true,
-            workspaceRoot: activeWorkspace?.root_path ?? null,
-            workspaceName: activeWorkspace?.name ?? null,
             sessions: workspaceList.active_workspace_id
               ? reconciledState.sessionsByWorkspace.get(
                   workspaceList.active_workspace_id,
@@ -236,7 +232,7 @@ export function useGatewayWorkspaceMutations({
             removingGatewayWorkspaceIds.delete(workspaceId);
             return {
               ...withFreshGatewayWorkspaceList(prev, workspaceList.items),
-              activeGatewayWorkspaceId: workspaceList.active_workspace_id,
+              ...activeGatewayWorkspaceFields(workspaceList),
               removingGatewayWorkspaceIds,
             };
           });
@@ -325,15 +321,9 @@ export function useGatewayWorkspaceMutations({
           throw new Error(`Gateway 重命名响应缺少工作区: ${workspaceId}`);
         }
         setState((prev) => {
-          const activeWorkspace = workspaceList.items.find(
-            (workspace) =>
-              workspace.workspace_id === workspaceList.active_workspace_id,
-          );
           return {
             ...withFreshGatewayWorkspaceList(prev, workspaceList.items),
-            activeGatewayWorkspaceId: workspaceList.active_workspace_id,
-            workspaceRoot: activeWorkspace?.root_path ?? null,
-            workspaceName: activeWorkspace?.name ?? null,
+            ...activeGatewayWorkspaceFields(workspaceList),
             gatewayError: null,
             error: null,
             status: `工作区已重命名为「${renamedWorkspace.name}」`,
@@ -347,15 +337,9 @@ export function useGatewayWorkspaceMutations({
         try {
           const workspaceList = await apiListGatewayWorkspaces(resolvedApiPort);
           setState((prev) => {
-            const activeWorkspace = workspaceList.items.find(
-              (workspace) =>
-                workspace.workspace_id === workspaceList.active_workspace_id,
-            );
             return {
               ...withFreshGatewayWorkspaceList(prev, workspaceList.items),
-              activeGatewayWorkspaceId: workspaceList.active_workspace_id,
-              workspaceRoot: activeWorkspace?.root_path ?? null,
-              workspaceName: activeWorkspace?.name ?? null,
+              ...activeGatewayWorkspaceFields(workspaceList),
             };
           });
         } catch (reconciliationError) {

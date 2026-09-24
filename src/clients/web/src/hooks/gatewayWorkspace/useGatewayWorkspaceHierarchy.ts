@@ -6,6 +6,7 @@ import {
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { withFreshGatewayWorkspaceList } from "../../state/gatewayWorkspaceState";
 import { errorMessage } from "../../utils/errorMessage";
+import { activeGatewayWorkspaceFields } from "./activeGatewayWorkspaceFields";
 
 export function useGatewayWorkspaceHierarchy(
   apiPort: number,
@@ -29,15 +30,9 @@ export function useGatewayWorkspaceHierarchy(
           throw new Error(`Gateway 更新响应缺少工作区: ${workspaceId}`);
         }
         setState((previous) => {
-          const activeWorkspace = workspaceList.items.find(
-            (workspace) =>
-              workspace.workspace_id === workspaceList.active_workspace_id,
-          );
           return {
             ...withFreshGatewayWorkspaceList(previous, workspaceList.items),
-            activeGatewayWorkspaceId: workspaceList.active_workspace_id,
-            workspaceRoot: activeWorkspace?.root_path ?? null,
-            workspaceName: activeWorkspace?.name ?? null,
+            ...activeGatewayWorkspaceFields(workspaceList),
             gatewayError: null,
             error: null,
             status: parentWorkspaceId
@@ -53,7 +48,7 @@ export function useGatewayWorkspaceHierarchy(
           const workspaceList = await listGatewayWorkspaces(apiPort);
           setState((previous) => ({
             ...withFreshGatewayWorkspaceList(previous, workspaceList.items),
-            activeGatewayWorkspaceId: workspaceList.active_workspace_id,
+            ...activeGatewayWorkspaceFields(workspaceList),
           }));
         } catch (reconciliationError) {
           const reconciliationMessage = errorMessage(reconciliationError);

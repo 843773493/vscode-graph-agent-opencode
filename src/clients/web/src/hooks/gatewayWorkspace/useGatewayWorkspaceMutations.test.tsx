@@ -436,6 +436,33 @@ describe("Gateway 工作区删除", () => {
     expect(next.workspaceSwitching).toBe(false);
   });
 
+  test("删除失败对账时工作区根路径与名称必须跟着活动工作区一起替换", async () => {
+    // 对账把 activeGatewayWorkspaceId 换成回滚结果里的活动工作区后，若还留着旧
+    // 的 workspaceRoot/workspaceName，文件树与预览就会按新工作区 id 去读旧根路径。
+    spyOnGatewayApi("removeGatewayWorkspace").mockRejectedValue(new Error("删除被拒绝"));
+    spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(
+      workspaceList("ws-other", [
+        gatewayWorkspace({
+          workspace_id: "ws-other",
+          name: "回滚后的新活动工作区",
+          root_path: "/tmp/rollback-active",
+        }),
+      ]),
+    );
+    const { hook, state } = await mountHook(appState({
+      activeGatewayWorkspaceId: "ws-active",
+      workspaceRoot: "/tmp/stale-root",
+      workspaceName: "陈旧的工作区",
+    }));
+
+    await expect(hook.removeGatewayWorkspace("ws-other")).rejects.toThrow("删除被拒绝");
+
+    const next = state();
+    expect(next.activeGatewayWorkspaceId).toBe("ws-other");
+    expect(next.workspaceRoot).toBe("/tmp/rollback-active");
+    expect(next.workspaceName).toBe("回滚后的新活动工作区");
+  });
+
   test("删除接口与回滚列表同时失败时拼接复合文案并清理删除中标记", async () => {
     const failure = new Error("删除被拒绝");
     spyOnGatewayApi("removeGatewayWorkspace").mockRejectedValue(failure);

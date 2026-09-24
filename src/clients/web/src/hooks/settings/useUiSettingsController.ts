@@ -9,6 +9,7 @@ import { mergeGuestWebUiSettings } from "../../state/uiSettings/preferences";
 import type { WebUiSettings, WebUiSettingsUpdate } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { loadAndApplyResolvedGatewayTheme } from "../../theme/theme";
+import { errorMessage } from "../../utils/errorMessage";
 
 async function applyUiSettings(setState: SetAppState, settings: WebUiSettings): Promise<void> {
   if (!settings.theme.resolved_theme) {
@@ -80,7 +81,7 @@ export function useUiSettingsController({
           await applyUiSettings(setState, settingsToApply);
         } catch (reloadError) {
           throw new Error(
-            `页面设置保存失败，且重新读取 Gateway 设置失败：保存错误=${String(updateError)}；读取错误=${String(reloadError)}`,
+            `页面设置保存失败，且重新读取 Gateway 设置失败：保存错误=${errorMessage(updateError)}；读取错误=${errorMessage(reloadError)}`,
           );
         }
         throw updateError;
