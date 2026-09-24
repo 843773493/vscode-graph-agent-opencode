@@ -48,7 +48,6 @@ from app.services.infrastructure.attachment_blob_catalog.locator import (
 
 __all__ = [
     "CATALOG_DATABASE_NAME",
-    "INGEST_RECORD_STATES",
     "INGEST_RECORD_TERMINAL_STATES",
     "AttachmentBlobCatalog",
     "AttachmentBlobRecord",
@@ -62,19 +61,9 @@ __all__ = [
 # catalog 数据库文件名（位于附件 store 根下，与日期分桶同级）。
 CATALOG_DATABASE_NAME = "catalog.sqlite"
 
-# ingest record 状态闭集：terminal 后不得再被恢复路径改写。
-INGEST_RECORD_STATES = ("preparing", "hashed", "published", "aborted")
+# ingest record 终态闭集：进入终态后不得再被恢复路径改写。其余状态形态由
+# 表的 CHECK 约束单点冻结，不在此重复声明。
 INGEST_RECORD_TERMINAL_STATES = ("published", "aborted")
-
-# blob commit claim 状态闭集。
-_CLAIM_STATES = ("claimed", "published", "aborted")
-_CLAIM_TERMINAL_STATES = ("published", "aborted")
-
-# owner reference 状态闭集。
-_OWNER_REF_STATES = ("active", "released")
-
-# blob availability 闭集。
-_BLOB_AVAILABILITIES = ("available", "tombstoned")
 
 _SCHEMA_VERSION = 1
 
