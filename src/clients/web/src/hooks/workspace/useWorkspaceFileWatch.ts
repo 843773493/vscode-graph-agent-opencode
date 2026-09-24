@@ -56,6 +56,11 @@ export function useWorkspaceFileWatch({
           signal: controller.signal,
           onBatch: handleBatch,
           onConnected: () => {
+            // 只有真的从断流里接回来才写恢复文案：计数归零之后不再宣称
+            // 「正在重连」，否则状态栏会永久停留在一条与事实不符的失败文案上。
+            if (reconnectAttempt > 0) {
+              onStatusChange("文件监听流已恢复实时同步");
+            }
             reconnectDelayMs = 500;
             reconnectAttempt = 0;
           },
