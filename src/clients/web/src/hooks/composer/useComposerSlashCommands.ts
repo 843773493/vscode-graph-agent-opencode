@@ -10,33 +10,7 @@ import type { ConversationContentView } from "../../types/frontend";
 import type { Session, SessionCompactResult } from "../../types/backend";
 import type { SelectedAttachment } from "../../utils/media/mediaAttachments";
 import { errorMessage } from "../../utils/errorMessage";
-
-function copyTextWithSelection(text: string): boolean {
-  // TODO: 兼容本地浏览器禁用 Clipboard API 权限的场景；后续统一权限策略后可收敛。
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.top = "-9999px";
-  textarea.style.left = "-9999px";
-  textarea.style.opacity = "0";
-  const previousFocus =
-    document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
-  let copied = false;
-  try {
-    document.body.appendChild(textarea);
-    textarea.focus();
-    textarea.select();
-    copied = document.execCommand("copy");
-  } catch {
-    copied = false;
-  } finally {
-    textarea.remove();
-    previousFocus?.focus();
-  }
-  return copied;
-}
+import { copyTextToClipboard } from "../../utils/clipboard";
 
 export function useComposerSlashCommands({
   input,
@@ -119,17 +93,9 @@ export function useComposerSlashCommands({
             setAttachmentError("没有可复制的助手回复");
             break;
           }
-          if (copyTextWithSelection(latestAssistantContent)) {
-            setStatus("已复制最近助手回复");
-            setComposerNotice("已复制最近助手回复");
-            break;
-          }
-          if (!navigator.clipboard) {
-            setAttachmentError("当前浏览器不支持剪贴板写入");
-            break;
-          }
-          void navigator.clipboard
-            .writeText(latestAssistantContent)
+          // 剪贴板写入只走 utils/clipboard 的唯一实现：Clipboard API 与兼容复制的
+          // 取舍、非安全上下文回退都在那里收口，这里不重复造第二套。
+          void copyTextToClipboard(latestAssistantContent)
             .then(() => {
               setStatus("已复制最近助手回复");
               setComposerNotice("已复制最近助手回复");

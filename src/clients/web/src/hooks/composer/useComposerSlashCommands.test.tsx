@@ -1,9 +1,47 @@
 import React from "react";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { act, create } from "react-test-renderer";
 import { COMPOSER_SLASH_COMMANDS, type SlashCommandOption } from "../../state/slashCommands";
 import type { SessionCompactResult } from "../../types/backend";
 import { useComposerSlashCommands } from "./useComposerSlashCommands";
+import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+
+afterEach(() => {
+  if (originalClipboard) {
+    Object.defineProperty(navigator, "clipboard", originalClipboard);
+  } else {
+    Reflect.deleteProperty(navigator, "clipboard");
+  }
+  restoreGlobalDescriptor("document", originalDocument);
+});
+
+/** 测试环境没有 DOM；用最小假 document 驱动 utils/clipboard 的兼容复制路径。 */
+function installFakeDocument(): { copied: number } {
+  const state = { copied: 0 };
+  const textarea = {
+    value: "",
+    style: { position: "", left: "", top: "" },
+    setAttribute: () => undefined,
+    focus: () => undefined,
+    select: () => undefined,
+    remove: () => undefined,
+  };
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: {
+      createElement: () => textarea,
+      body: { appendChild: () => undefined },
+      execCommand: (command: string) => {
+        if (command === "copy") state.copied += 1;
+        return true;
+      },
+    },
+  });
+  return state;
+}
 
 describe("Composer /new 命令", () => {
   test("没有标题时直接创建后端会话", () => {
@@ -185,5 +223,88 @@ describe("Composer /compact 命令", () => {
 
     expect(notice).toBe("已安排上下文压缩，将在下一条消息发送前执行");
     renderer?.unmount();
+  });
+});
+
+describe("Composer /copy 命令的剪贴板唯一实现", () => {
+  test("Clipboard API 不可用时改走兼容复制并提示成功", async () => {
+    // 非安全上下文里 navigator.clipboard 真实缺失；兼容复制只能由
+    // utils/clipboard 的实现承担，hook 不得再持有第二套 execCommand 样板。
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+    const documentState = installFakeDocument();
+    let copyCommand:
+      | ((command: SlashCommandOption, args?: string) => void)
+      | undefined;
+    let notice = "";
+
+    function Harness() {
+      ({ runSlashCommand: copyCommand } = useComposerSlashCommands({
+        input: "/copy",
+        currentSession: null,
+        compactLoading: false,
+        getLatestAssistantContent: () => "最近一条助手回复",
+        setInput: () => undefined,
+        setAttachments: () => undefined,
+        setAttachmentError: () => undefined,
+        setComposerNotice: (update) => {
+          notice = typeof update === "function" ? update(notice) : update;
+        },
+        setAgentMenuOpen: () => undefined,
+        setViewMenuOpen: () => undefined,
+        setStatus: () => undefined,
+        createSession: async () => undefined,
+        renameCurrentSession: () => undefined,
+        switchContentView: () => undefined,
+        compactSession: async () => {
+          throw new Error("/copy 测试不会执行压缩");
+        },
+        runGoalCommand: () => undefined,
+      }));
+      return null;
+    }
+
+    let renderer: ReturnType<typeof create> | undefined;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    const copySlashCommand = COMPOSER_SLASH_COMMANDS.find(
+      (command) => command.id === "copy",
+    );
+    if (!copySlashCommand || !copyCommand) {
+      throw new Error("测试未找到 /copy 命令执行器");
+    }
+
+    await act(async () => {
+      copyCommand?.(copySlashCommand);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(documentState.copied).toBe(1);
+    expect(notice).toBe("已复制最近助手回复");
+    renderer?.unmount();
+  });
+
+  test("document.execCommand 兼容复制在全仓只有 utils/clipboard 一处实现", async () => {
+    const sourceRoot = Bun.fileURLToPath(new URL("../../", import.meta.url));
+    const hits: string[] = [];
+    const glob = new Bun.Glob("**/*.{ts,tsx}");
+
+    for await (const relativePath of glob.scan({ cwd: sourceRoot })) {
+      // 守卫只约束产品源码：测试可以合法地桩掉 execCommand 来验证兼容路径。
+      if (/\.test\.tsx?$/.test(relativePath)) {
+        continue;
+      }
+      const source = await Bun.file(`${sourceRoot}/${relativePath}`).text();
+      if (source.includes('execCommand("copy")')) {
+        hits.push(relativePath);
+      }
+    }
+
+    // 唯一实现被复制回任何 hook/组件，这里都会变红。
+    expect(hits).toEqual(["utils/clipboard.ts"]);
   });
 });
