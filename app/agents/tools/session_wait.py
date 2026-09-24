@@ -96,7 +96,10 @@ class JobServiceSessionWaitObservationPort(SessionWaitObservationPort):
         for job in jobs:
             if job_ids is not None and job.job_id not in job_ids:
                 continue
-            state = _JOB_STATUS_TO_WAIT_STATE.get(str(job.status))
+            # JobStatus 继承 str，成员与字符串键的 hash/eq 一致，可直接查表；
+            # 不能用 str(job.status)——str-Enum 的 __str__ 会得到
+            # "JobStatus.running" 这类限定名，使任何真实状态都 miss。
+            state = _JOB_STATUS_TO_WAIT_STATE.get(job.status)
             if state is None:
                 raise RuntimeError(
                     f"未知 JobStatus，fail closed: {job.status!r}"

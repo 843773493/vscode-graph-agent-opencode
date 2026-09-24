@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 import pytest
 
 from app.agents.tools.session_wait import create_wait_for_session_tool
+from app.schemas.internal_v2.common import JobStatus, RunMode
+from app.schemas.internal_v2.job import JobDTO
 
 _SESSION_ID = "ses_5a2c9d1f0e3b4a7c8d9e0f1a2b3c4d5e"
 
@@ -33,6 +35,29 @@ class _ProgrammableJobService:
 class _NeverBoundLookup:
     async def resolve(self, *, target_session_id, communication_id):
         return None
+
+
+class _RealDTOJobService:
+    """按生产形态返回 JobDTO：status 是 JobStatus 枚举，不是裸字符串。"""
+
+    def __init__(self, *, job_id: str, status: JobStatus) -> None:
+        self._job_id = job_id
+        self._status = status
+
+    async def list(self, session_id=None):
+        now = datetime.now(UTC)
+        return [
+            JobDTO(
+                job_id=self._job_id,
+                message_id="msg_1",
+                session_id=_SESSION_ID,
+                mode=RunMode.single_agent,
+                status=self._status,
+                entry_agent="default",
+                created_at=now,
+                updated_at=now,
+            )
+        ]
 
 
 async def test_state_change_wait_returns_on_real_wait_state_transition() -> None:
@@ -142,3 +167,62 @@ async def test_timed_out_job_status_is_a_terminal_wait_state() -> None:
     assert result["status"] == "failed"
     assert result["observed"][0]["state"] == "failed"
     assert result["latest_revision"] == "job:job_to_1:failed"
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (JobStatus.completed, "completed"),
+        (JobStatus.succeeded, "completed"),
+        (JobStatus.failed, "failed"),
+        (JobStatus.cancelled, "cancelled"),
+        (JobStatus.timed_out, "failed"),
+    ],
+)
+async def test_jobstatus_enum_from_real_dto_maps_to_wait_state(
+    status: JobStatus,
+    expected: str,
+) -> None:
+    """生产 JobService.list 返回 JobDTO(status=JobStatus 枚举)；枚举必须能查表。
+
+    str(JobStatus.running) 是 "JobStatus.running" 限定名而非 "running"，
+    用 str() 查字符串键映射会让任何真实状态都 miss 并抛内部 RuntimeError。
+    """
+    tool = create_wait_for_session_tool(
+        _SESSION_ID,
+        job_service=_RealDTOJobService(job_id="job_real_1", status=status),
+        binding_lookup=_NeverBoundLookup(),
+    )
+
+    result = await tool.ainvoke(
+        {
+            "target_session_id": _SESSION_ID,
+            "job_id": "job_real_1",
+            "until": "terminal",
+            "timeout_seconds": 1,
+        }
+    )
+
+    assert result["observed"][0]["state"] == expected
+    assert result["status"] == expected
+
+
+async def test_jobstatus_enum_non_terminal_is_reported_as_running() -> None:
+    """非终态枚举（running）查表必须命中 running，而不是抛内部 RuntimeError。"""
+    tool = create_wait_for_session_tool(
+        _SESSION_ID,
+        job_service=_RealDTOJobService(job_id="job_real_2", status=JobStatus.running),
+        binding_lookup=_NeverBoundLookup(),
+    )
+
+    result = await tool.ainvoke(
+        {
+            "target_session_id": _SESSION_ID,
+            "job_id": "job_real_2",
+            "until": "terminal",
+            "timeout_seconds": 1,
+        }
+    )
+
+    assert result["observed"][0]["state"] == "running"
+    assert result["status"] == "timed_out"
