@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
@@ -33,7 +32,6 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.sessions import Connection, create_session
 from langchain_mcp_adapters.tools import load_mcp_tools
 
-from app.domain.itemized.hashing import ItemSchemaError, canonical_json_bytes
 from app.services.infrastructure.events.channel_events import McpCatalogEventPublisher
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp.config import (
@@ -45,6 +43,7 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetBindingInput,
     build_extension_catalog_binding,
     extension_args_fingerprint,
+    payload_digest,
 )
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
 from mcp import types as mcp_types
@@ -195,11 +194,11 @@ def _compute_catalog_revision(
                 ]
             )
         payload.append([server_id, server_entries])
-    try:
-        payload_bytes = canonical_json_bytes(payload)
-    except ItemSchemaError as error:
-        raise McpCatalogError(f"MCP 目录语义载荷无法 canonical 编码: {error}") from error
-    return "sha256:" + hashlib.sha256(payload_bytes).hexdigest()
+    return payload_digest(
+        payload,
+        context="MCP 目录语义载荷",
+        error_type=McpCatalogError,
+    )
 
 
 def _adapt_server_tools(

@@ -1,9 +1,12 @@
 from app.services.infrastructure.mcp.catalog_activation import (
+    DurableMcpCatalogActivationSaver,
     McpCatalogActivationBinder,
+    McpCatalogActivationBodyStore,
     McpCatalogActivationConflictError,
     McpCatalogActivationError,
     McpCatalogActivationSnapshot,
     McpCatalogActivationSnapshotSaver,
+    mcp_catalog_activation_payload,
 )
 from app.services.infrastructure.mcp.catalog_owner import (
     McpCatalogError,
@@ -15,15 +18,23 @@ from app.services.infrastructure.mcp.catalog_owner import (
     production_mcp_session_factory,
 )
 from app.services.infrastructure.mcp.extension_catalog import (
+    EXTENSION_CATALOG_BINDING_SCHEMA,
+    EXTENSION_CATALOG_UNAVAILABLE_CODE,
+    EXTENSION_DISPATCH_BINDING_MISMATCH_CODE,
+    EXTENSION_DISPATCH_BINDING_SCHEMA,
     EXTENSION_TOOL_ENVELOPE_IDENTITY,
     ExtensionCatalogBindingError,
     ExtensionCatalogBindingRef,
+    ExtensionCatalogUnavailableError,
+    ExtensionDispatchBindingMismatchError,
+    ExtensionDispatchBindingRef,
     ExtensionTargetBinding,
     ExtensionTargetBindingInput,
     ExtensionTargetConflictError,
     ExtensionTargetResolutionError,
     build_extension_catalog_binding,
     extension_schema_hash,
+    sha256_token,
 )
 from app.services.infrastructure.mcp.guidance_source_port import (
     MCP_GUIDANCE_SOURCE_ID,
@@ -41,18 +52,27 @@ from app.services.infrastructure.mcp.tool_guidance import (
 )
 
 __all__ = [
+    "EXTENSION_CATALOG_BINDING_SCHEMA",
+    "EXTENSION_CATALOG_UNAVAILABLE_CODE",
+    "EXTENSION_DISPATCH_BINDING_MISMATCH_CODE",
+    "EXTENSION_DISPATCH_BINDING_SCHEMA",
     "EXTENSION_TOOL_ENVELOPE_IDENTITY",
     "MAX_GUIDANCE_ARGS_FIELDS",
     "MAX_GUIDANCE_ARGS_SUMMARY_LENGTH",
     "MAX_GUIDANCE_DESCRIPTION_LENGTH",
     "MCP_GUIDANCE_SOURCE_ID",
+    "DurableMcpCatalogActivationSaver",
     "ExtensionCatalogBindingError",
     "ExtensionCatalogBindingRef",
+    "ExtensionCatalogUnavailableError",
+    "ExtensionDispatchBindingMismatchError",
+    "ExtensionDispatchBindingRef",
     "ExtensionTargetBinding",
     "ExtensionTargetBindingInput",
     "ExtensionTargetConflictError",
     "ExtensionTargetResolutionError",
     "McpCatalogActivationBinder",
+    "McpCatalogActivationBodyStore",
     "McpCatalogActivationConflictError",
     "McpCatalogActivationError",
     "McpCatalogActivationSnapshot",
@@ -71,5 +91,7 @@ __all__ = [
     "McpToolGuidanceSourceRegistration",
     "build_extension_catalog_binding",
     "extension_schema_hash",
+    "mcp_catalog_activation_payload",
     "production_mcp_session_factory",
+    "sha256_token",
 ]

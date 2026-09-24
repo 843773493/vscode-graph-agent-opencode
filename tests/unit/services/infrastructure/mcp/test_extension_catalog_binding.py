@@ -17,7 +17,7 @@ import pytest
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp import (
     ExtensionCatalogBindingRef,
@@ -29,7 +29,7 @@ from app.services.infrastructure.mcp import (
 )
 from app.services.infrastructure.mcp.config import McpServerConfig
 from app.services.infrastructure.mcp.extension_catalog import (
-    _BINDING_HASH_DOMAIN,
+    EXTENSION_CATALOG_BINDING_SCHEMA,
     extension_args_fingerprint,
 )
 
@@ -130,18 +130,23 @@ async def _started_owner(
 
 def _expected_binding_hash(ref: ExtensionCatalogBindingRef) -> str:
     """按文档化 payload 形状独立重算 binding_hash，验证可核对性。"""
-    payload = [
-        _BINDING_HASH_DOMAIN,
-        ref.binding_id,
-        ref.catalog_revision,
-        ref.generation,
-        ref.provider_binding_identity,
-        [
-            [t.target_id, t.origin, t.server_id, t.schema_hash]
+    payload = {
+        "schema": EXTENSION_CATALOG_BINDING_SCHEMA,
+        "binding_id": ref.binding_id,
+        "catalog_revision": ref.catalog_revision,
+        "generation": ref.generation,
+        "provider_binding_identity": ref.provider_binding_identity,
+        "targets": [
+            {
+                "target_id": t.target_id,
+                "origin": t.origin,
+                "server_id": t.server_id,
+                "schema_hash": t.schema_hash,
+            }
             for t in sorted(ref.targets.values(), key=lambda item: item.target_id)
         ],
-    ]
-    return "sha256:" + hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+    }
+    return sha256_jcs(payload)
 
 
 async def test_binding_snapshot_frozen_and_verifiable(tmp_path: Path) -> None:
@@ -168,6 +173,8 @@ async def test_binding_snapshot_frozen_and_verifiable(tmp_path: Path) -> None:
         )
         # binding_hash 可按文档化 payload 独立重算核对。
         assert ref.binding_hash == _expected_binding_hash(ref)
+        # binding_hash 使用 domain 的 JCS 合同 token，而非自造 sha256 前缀。
+        assert ref.binding_hash.startswith("sha256:jcs:v1:")
         # frozen：targets 不可变。
         with pytest.raises(TypeError):
             ref.targets["new"] = target  # type: ignore[index]

@@ -9,14 +9,13 @@ user-role 内容；指引文本不得更改授权、工具 schema、root 资格�
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from langchain_core.tools import BaseTool
 
-from app.domain.itemized.hashing import ItemSchemaError, canonical_json_bytes
 from app.services.infrastructure.mcp.catalog_owner import McpToolDescriptor
+from app.services.infrastructure.mcp.extension_catalog import payload_digest
 
 MAX_GUIDANCE_DESCRIPTION_LENGTH = 200
 MAX_GUIDANCE_ARGS_FIELDS = 8
@@ -126,13 +125,11 @@ class McpToolGuidanceProducer:
             ]
             for entry in entries
         ]
-        try:
-            payload_bytes = canonical_json_bytes(payload)
-        except ItemSchemaError as error:
-            raise McpToolGuidanceError(
-                f"MCP 工具指引载荷无法 canonical 编码: {error}"
-            ) from error
-        guidance_revision = "sha256:" + hashlib.sha256(payload_bytes).hexdigest()
+        guidance_revision = payload_digest(
+            payload,
+            context="MCP 工具指引载荷",
+            error_type=McpToolGuidanceError,
+        )
         previous_entries = (
             {entry.tool_id: entry for entry in previous.entries}
             if previous is not None

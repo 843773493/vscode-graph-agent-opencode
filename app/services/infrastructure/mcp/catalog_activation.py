@@ -10,14 +10,16 @@ fail closed，不做半发布。
 
 from __future__ import annotations
 
-import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
-from app.domain.itemized.hashing import ItemSchemaError, canonical_json_bytes
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingRef,
+    ExtensionCatalogUnavailableError,
+    ExtensionDispatchBindingRef,
+    payload_digest,
 )
 from app.services.infrastructure.mcp.guidance_source_port import (
     MCP_GUIDANCE_SOURCE_ID,
@@ -45,7 +47,11 @@ class McpCatalogActivationConflictError(McpCatalogActivationError):
 
 
 class McpCatalogActivationSnapshotSaver(Protocol):
-    """唯一持久化口；生产实现后续接线，测试注入内存替身。"""
+    """唯一持久化口：生产实现是受保护 snapshot body store 之上的唯一 writer。
+
+    实现必须原子保存 binding/guidance/dispatch hash 三者；任何失败都显式抛出，
+    不允许 binder 伪造成功或做半发布。
+    """
 
     async def save_mcp_catalog_activation_snapshot(
         self,
@@ -55,7 +61,12 @@ class McpCatalogActivationSnapshotSaver(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class McpCatalogActivationSnapshot:
-    """一次激活边界冻结的原子结果：binding ref + 指引 + provenance。"""
+    """一次激活边界冻结的原子结果：binding ref + 指引 + dispatch binding。
+
+    ``binding_ref``/``guidance``/``dispatch_binding`` 必须在同一
+    ModelCallResourceSnapshot 内原子绑定，不能只更新一侧；provenance hash 覆盖
+    三者，``dispatch_binding.dispatch_binding_hash`` 是独立 dispatch 校验 hash。
+    """
 
     activation_snapshot_id: str
     snapshot_kind: Literal["turn", "model_call"]
@@ -65,6 +76,7 @@ class McpCatalogActivationSnapshot:
     effective_boundary: str
     binding_ref: ExtensionCatalogBindingRef
     guidance: McpToolGuidanceSnapshot
+    dispatch_binding: ExtensionDispatchBindingRef
     model_call_id: str | None = None
     parent_activation_id: str | None = None
     activation_provenance_hash: str = field(init=False, repr=False, compare=False)
@@ -76,6 +88,27 @@ class McpCatalogActivationSnapshot:
                 f"binding={self.binding_ref.catalog_revision} "
                 f"guidance={self.guidance.catalog_revision}"
             )
+        # dispatch binding 与同一 snapshot 的 binding/指引必须逐字段一致，
+        # 否则 seal 就是只更新一侧的半发布。
+        if self.dispatch_binding.binding_ref.binding_hash != self.binding_ref.binding_hash:
+            raise McpCatalogActivationConflictError(
+                "dispatch binding 与 sealed catalog binding 不一致，拒绝原子冻结"
+            )
+        if self.dispatch_binding.guidance_revision != self.guidance.guidance_revision:
+            raise McpCatalogActivationConflictError(
+                "dispatch binding 与指引 revision 不一致，拒绝原子冻结: "
+                f"dispatch={self.dispatch_binding.guidance_revision} "
+                f"guidance={self.guidance.guidance_revision}"
+            )
+        if (
+            self.dispatch_binding.owner_session_id != self.owner_session_id
+            or self.dispatch_binding.owner_thread_id != self.owner_thread_id
+            or self.dispatch_binding.turn_id != self.turn_id
+            or self.dispatch_binding.model_call_id != self.model_call_id
+        ):
+            raise McpCatalogActivationConflictError(
+                "dispatch binding 与 activation snapshot 运行 identity 不一致"
+            )
         if self.effective_boundary not in {"turn", "model_call"}:
             raise ValueError(
                 f"effective_boundary 必须是 turn|model_call: {self.effective_boundary!r}"
@@ -85,30 +118,30 @@ class McpCatalogActivationSnapshot:
                 raise ValueError("turn snapshot 不得携带 model_call/parent 字段")
         elif not self.model_call_id or not self.parent_activation_id:
             raise ValueError("model_call snapshot 必须携带 model_call_id 与 parent")
-        payload = [
-            _ACTIVATION_HASH_DOMAIN,
-            self.activation_snapshot_id,
-            self.snapshot_kind,
-            self.owner_session_id,
-            self.owner_thread_id,
-            self.turn_id,
-            self.effective_boundary,
-            self.binding_ref.binding_hash,
-            self.binding_ref.generation,
-            self.guidance.guidance_revision,
-            self.model_call_id,
-            self.parent_activation_id,
-        ]
-        try:
-            payload_bytes = canonical_json_bytes(payload)
-        except ItemSchemaError as error:
-            raise McpCatalogActivationError(
-                f"MCP catalog activation 载荷无法 canonical 编码: {error}"
-            ) from error
         object.__setattr__(
             self,
             "activation_provenance_hash",
-            "sha256:" + hashlib.sha256(payload_bytes).hexdigest(),
+            payload_digest(
+                {
+                    "schema": _ACTIVATION_HASH_DOMAIN,
+                    "activation_snapshot_id": self.activation_snapshot_id,
+                    "snapshot_kind": self.snapshot_kind,
+                    "owner_session_id": self.owner_session_id,
+                    "owner_thread_id": self.owner_thread_id,
+                    "turn_id": self.turn_id,
+                    "effective_boundary": self.effective_boundary,
+                    "catalog_binding_hash": self.binding_ref.binding_hash,
+                    "generation": self.binding_ref.generation,
+                    "guidance_revision": self.guidance.guidance_revision,
+                    "extension_dispatch_binding_hash": (
+                        self.dispatch_binding.dispatch_binding_hash
+                    ),
+                    "model_call_id": self.model_call_id,
+                    "parent_activation_id": self.parent_activation_id,
+                },
+                context="MCP catalog activation 载荷",
+                error_type=McpCatalogActivationError,
+            ),
         )
 
 
@@ -216,6 +249,15 @@ class McpCatalogActivationBinder:
                 f"mcp-activation:{owner_session_id}:{owner_thread_id}:{turn_id}:"
                 f"{model_call_id}"
             )
+        dispatch_binding = ExtensionDispatchBindingRef(
+            binding_ref=binding_ref,
+            guidance_revision=guidance.guidance_revision,
+            activation_policy_revision=self._policy.revision,
+            owner_session_id=owner_session_id,
+            owner_thread_id=owner_thread_id,
+            turn_id=turn_id,
+            model_call_id=model_call_id,
+        )
         snapshot = McpCatalogActivationSnapshot(
             activation_snapshot_id=snapshot_id,
             snapshot_kind=snapshot_kind,
@@ -225,6 +267,7 @@ class McpCatalogActivationBinder:
             effective_boundary=self._effective_boundary(),
             binding_ref=binding_ref,
             guidance=guidance,
+            dispatch_binding=dispatch_binding,
             model_call_id=model_call_id,
             parent_activation_id=(
                 parent.activation_snapshot_id if parent is not None else None
@@ -243,3 +286,131 @@ class McpCatalogActivationBinder:
         await self._saver.save_mcp_catalog_activation_snapshot(snapshot)
         self._last_guidance = guidance
         return snapshot
+
+
+class McpCatalogActivationBodyStore(Protocol):
+    """受保护 snapshot body store 的窄端口；正文不进 mcp 包或 SQLite 列。
+
+    生产实现由 rollout owner 提供（复用既有 ``ContextPlanDetailStore`` 受保护
+    detail 文件路径），mcp 包只按 typed identity 提交/读取，不 import CSM、
+    不触 SQLite、不建第二 writer。
+    """
+
+    def write_activation_snapshot(
+        self,
+        *,
+        owner_session_id: str,
+        owner_thread_id: str,
+        activation_snapshot_id: str,
+        checkpoint_ns: str,
+        body: Mapping[str, object],
+    ) -> None: ...
+
+    def read_activation_snapshot(
+        self,
+        *,
+        owner_session_id: str,
+        owner_thread_id: str,
+        activation_snapshot_id: str,
+        checkpoint_ns: str,
+    ) -> Mapping[str, object] | None: ...
+
+
+def mcp_catalog_activation_payload(
+    snapshot: McpCatalogActivationSnapshot,
+) -> dict[str, object]:
+    """把 sealed activation snapshot 序列化为受保护 body store 的确定性正文。"""
+    return {
+        "schema": _ACTIVATION_HASH_DOMAIN,
+        "activation_snapshot_id": snapshot.activation_snapshot_id,
+        "snapshot_kind": snapshot.snapshot_kind,
+        "owner_session_id": snapshot.owner_session_id,
+        "owner_thread_id": snapshot.owner_thread_id,
+        "turn_id": snapshot.turn_id,
+        "effective_boundary": snapshot.effective_boundary,
+        "model_call_id": snapshot.model_call_id,
+        "parent_activation_id": snapshot.parent_activation_id,
+        "activation_provenance_hash": snapshot.activation_provenance_hash,
+        "catalog_binding": snapshot.binding_ref.binding_preimage(),
+        "catalog_binding_hash": snapshot.binding_ref.binding_hash,
+        "guidance": {
+            "catalog_revision": snapshot.guidance.catalog_revision,
+            "guidance_revision": snapshot.guidance.guidance_revision,
+            "entries": [
+                {
+                    "tool_id": entry.tool_id,
+                    "server_id": entry.server_id,
+                    "remote_name": entry.remote_name,
+                    "description": entry.description,
+                    "args_summary": entry.args_summary,
+                }
+                for entry in snapshot.guidance.entries
+            ],
+            "added_tool_ids": list(snapshot.guidance.added_tool_ids),
+            "modified_tool_ids": list(snapshot.guidance.modified_tool_ids),
+            "tombstones": list(snapshot.guidance.tombstones),
+        },
+        "extension_dispatch_binding": snapshot.dispatch_binding.to_dict(),
+    }
+
+
+class DurableMcpCatalogActivationSaver:
+    """生产 saver：把 sealed activation snapshot 提交到唯一受保护 body store。
+
+    与测试替身相比，本实现是真实生产路径：正文只经 typed body store 落盘，
+    同一 snapshot 的 binding/指引/dispatch hash 一次提交；提交失败显式抛出，
+    binder 不会得到半发布结果。读取时缺失或损坏一律显式
+    ``extension-catalog-unavailable``，绝不回退当前 MCP 目录或同名 target。
+    """
+
+    def __init__(
+        self,
+        *,
+        body_store: McpCatalogActivationBodyStore,
+        checkpoint_ns: str = "",
+    ) -> None:
+        self._body_store = body_store
+        self._checkpoint_ns = checkpoint_ns
+
+    async def save_mcp_catalog_activation_snapshot(
+        self, snapshot: McpCatalogActivationSnapshot
+    ) -> None:
+        if not isinstance(snapshot, McpCatalogActivationSnapshot):
+            raise TypeError(
+                "save_mcp_catalog_activation_snapshot 需要 "
+                "McpCatalogActivationSnapshot"
+            )
+        # 提交前重算 dispatch hash，防止被篡改的 snapshot 进入 durable store。
+        snapshot.dispatch_binding.verify()
+        self._body_store.write_activation_snapshot(
+            owner_session_id=snapshot.owner_session_id,
+            owner_thread_id=snapshot.owner_thread_id,
+            activation_snapshot_id=snapshot.activation_snapshot_id,
+            checkpoint_ns=self._checkpoint_ns,
+            body=mcp_catalog_activation_payload(snapshot),
+        )
+
+    def load_mcp_catalog_activation_snapshot(
+        self,
+        *,
+        owner_session_id: str,
+        owner_thread_id: str,
+        activation_snapshot_id: str,
+        checkpoint_ns: str | None = None,
+    ) -> ExtensionDispatchBindingRef:
+        """恢复 dispatch binding；历史 binding 丢失显式 ``extension-catalog-unavailable``。"""
+        body = self._body_store.read_activation_snapshot(
+            owner_session_id=owner_session_id,
+            owner_thread_id=owner_thread_id,
+            activation_snapshot_id=activation_snapshot_id,
+            checkpoint_ns=(
+                self._checkpoint_ns if checkpoint_ns is None else checkpoint_ns
+            ),
+        )
+        if body is None:
+            raise ExtensionCatalogUnavailableError(
+                "历史 extension activation snapshot 丢失，拒绝 dispatch: "
+                f"activation_snapshot_id={activation_snapshot_id}"
+            )
+        dispatch_body = body.get("extension_dispatch_binding")
+        return ExtensionDispatchBindingRef.from_sealed_snapshot(dispatch_body)

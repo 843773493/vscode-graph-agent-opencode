@@ -10,6 +10,7 @@
 - MCP Tool 名称映射和 LangChain 适配。
 - 扩展目录 binding（ExtensionCatalogBindingRef）与目录 generation lease 的维护。
 - MCP 工具指引派生（McpToolGuidanceProducer）与激活边界 binding/指引原子冻结（McpCatalogActivationBinder）。
+- 独立扩展 dispatch binding（ExtensionDispatchBindingRef）与其生产 saver（DurableMcpCatalogActivationSaver）在受保护 snapshot body store 之上的提交/恢复。
 
 # 不可修改内容
 
@@ -19,6 +20,7 @@
 - 目录事件只携带 identity/revision，不得携带工具 schema 正文/credential，不得进入 job.events，也不得注册 ResourceRegistry source 或 CSM 来源。
 - 不得绕过 `McpCatalogOwner` 建立第二套工具发现/刷新路径。
 - sealed binding ref 一经返回不可变；目录增删改/权限变化不得改写已封存 ref，旧 tool call 只按 sealed ref 解析。
+- `extension_dispatch_binding_hash` 只服务扩展 dispatch/restore 校验，不得混入 `context-plan-hash:v2`、Provider `ToolSetRef` manifest 或 `request_hash`；内层目录/指引变化不得制造 `toolset_changed` epoch。
 
 # 规范
 
@@ -27,6 +29,8 @@
 - MCP 工具名称必须带 Server 命名空间，禁止同名工具静默覆盖。
 - 目录 relist 必须完整读取并验证；连续 relist payload 不变时不得推进 revision；增删改发布新 immutable revision，删除以 tombstone 事件标记；目录为空也发布固定 envelope/revision。
 - 目录 generation 只在 revision 实际推进时递增；binding ref 的 binding_id/binding_hash 必须可重算核对。
+- `binding_hash` 与 `extension_dispatch_binding_hash` 必须复用 domain 的 `sha256_jcs` JCS token（`sha256:jcs:v1:<64hex>`），不得自造第二套 canonical 编码或摘要前缀。
 - 指引只从已验证目录派生并保持有界确定性；外部 description 是不可信数据；binding 与指引必须同 revision 原子冻结，relist/派生失败 fail closed，不半发布。
+- 历史 binding/快照丢失必须显式 `extension-catalog-unavailable` 并拒绝 dispatch，不从当前 MCP 目录、当前同名 target 或空目录恢复。
 - 不具备 `tools/list_changed` 通知能力的 server 只在显式激活边界 relist，不得谎称立即生效。
 - 凭据只允许通过环境变量引用解析，不得写入日志或模型工具描述。
