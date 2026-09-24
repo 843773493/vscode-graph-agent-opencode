@@ -668,3 +668,58 @@ async def test_interrupt_releases_after_turn_head_instead_of_stalling_fifo(
     assert service._jobs[queued.job_id].status == JobStatus.running
     assert service._session_current_job[session_id] == queued.job_id
     assert service._pending_queue.ids(session_id) == ()
+
+
+@pytest.mark.asyncio
+async def test_direct_cancel_releases_after_turn_head_when_boundary_stays_idle(
+    monkeypatch,
+):
+    """直接取消（未经过 notify_boundary、边界仍是 idle）也必须交还 Session。
+
+    旧实现把 cancelled 的续跑条件锁定在 delivery_boundary == "after_interrupt"，
+    只有中断边界路径才能放行 after_turn 队首；直接取消会让该会话的活动槽被腾空
+    而队列队首永久滞留 pending。
+    """
+    service = create_job_service()
+    started: list[str] = []
+
+    def fake_start_job_task(job):
+        started.append(job.job_id)
+        job.task = DummyTask(done=False)
+
+    monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
+    session_id = "session_direct_cancel_idle_boundary"
+    active = await service.start_job(
+        session_id,
+        "active",
+        message_id="msg_active",
+        message_created_at="2026-07-28T00:00:00+00:00",
+    )
+    queued = await service.start_job(
+        session_id,
+        "queued",
+        message_id="msg_queued",
+        message_created_at="2026-07-28T00:00:01+00:00",
+        delivery_policy="after_turn",
+    )
+
+    await service.control(
+        active.job_id,
+        JobControlRequest(action=ControlAction.cancel),
+    )
+    # 刻意不调用 notify_boundary：活动槽的边界保持投递时的 "idle"。
+    active_job = service._jobs[active.job_id]
+    assert active_job.delivery_boundary == "idle"
+
+    active_job.task = DummyTask(done=True)
+    transition_job_status(
+        active_job,
+        JobStatus.cancelled,
+        error_message="任务被用户取消",
+    )
+    await service._schedule_next_job_if_needed(active_job)
+
+    assert started == [active.job_id, queued.job_id]
+    assert service._jobs[queued.job_id].status == JobStatus.running
+    assert service._session_current_job[session_id] == queued.job_id
+    assert service._pending_queue.ids(session_id) == ()
