@@ -48,6 +48,7 @@ async def test_children_maps_unknown_parent_node_to_404() -> None:
         )
 
     assert captured.value.status_code == 404
+    assert captured.value.detail == "会话目录节点不存在: missing"
 
 
 @pytest.mark.asyncio

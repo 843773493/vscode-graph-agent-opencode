@@ -14,7 +14,7 @@ from app.api.deps import (
 from app.api.errors import unimplemented_http_error
 from app.schemas.event import Event
 from app.schemas.internal_v2.artifact import ArtifactDTO
-from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.common import APIResponse, ControlAction
 from app.schemas.internal_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
@@ -27,6 +27,34 @@ from app.services.event_service import EventService, JobEventCursorGoneError
 from app.services.infrastructure.artifact_service import ArtifactService
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+# JobControlService 当前只实现了这三个动作，其余动作由它显式拒绝为「尚未实现」。
+UNIMPLEMENTED_CONTROL_ACTIONS = frozenset(
+    set(ControlAction)
+    - {ControlAction.pause, ControlAction.resume, ControlAction.cancel}
+)
+
+
+def _job_control_http_error(
+    job_id: str,
+    payload: JobControlRequest,
+    error: ValueError,
+) -> HTTPException:
+    """把 Job 控制被拒落成对客户端有意义的响应，而不是无上下文 500。
+
+    ``JobService.control`` 与 ``JobControlService`` 已用同一个类型名和同一句
+    「Job {id} not found」表达未知 Job；本适配层对 ``get_job``/``list_job_steps``
+    也按同一句文本落 404，这里保持一致。
+
+    TODO: ``JobControlValueError`` 目前把「未知 Job」「动作未实现」「状态不允许」
+    压在同一类型上，只能靠文本区分；业务层暴露独立错误身份后应改为按类型判定。
+    """
+    if error.args == (f"Job {job_id} not found",):
+        return HTTPException(status_code=404, detail=str(error))
+    if payload.action in UNIMPLEMENTED_CONTROL_ACTIONS:
+        return unimplemented_http_error(error)
+    # 状态不允许该动作，或会话已有其他 active Job：状态冲突而非服务端故障。
+    return HTTPException(status_code=409, detail=str(error))
 
 
 @router.get("/{job_id}", response_model=APIResponse[JobDTO], summary="获取任务详情")
@@ -139,7 +167,10 @@ async def control_job(
     request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ):
-    result = await job_service.control(job_id, payload)
+    try:
+        result = await job_service.control(job_id, payload)
+    except ValueError as error:
+        raise _job_control_http_error(job_id, payload, error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

@@ -201,7 +201,7 @@ async def create_session(
     try:
         result = await session_service.create(payload)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -238,7 +238,7 @@ async def get_session(
     try:
         result = await session_service.get(session_id)
     except NotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error.detail)) from error
+        raise not_found_http_error(error) from error
     except (RuntimeError, TimeoutError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -258,7 +258,7 @@ async def list_session_child_threads(
     try:
         result = await session_service.list_child_threads(session_id)
     except NotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error.detail)) from error
+        raise not_found_http_error(error) from error
     except (RuntimeError, TimeoutError) as error:
         # 目录索引/物理树异常属于可恢复的工作区状态，不能伪装成空列表。
         raise HTTPException(status_code=409, detail=str(error)) from error
@@ -312,7 +312,7 @@ async def untrack_session_skill(
             name=payload.name,
         )
     except NotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error.detail)) from error
+        raise not_found_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except (RuntimeError, TimeoutError) as error:
@@ -536,6 +536,9 @@ async def control_session_resource(
             resource_id=resource_id,
             action=payload.action,
         )
+    except (KeyError, NotFoundError) as exc:
+        # 会话缺失由 SessionService.get 抛 NotFoundError：与 list_session_resources 同口径落 404。
+        raise not_found_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return APIResponse(data=result, request_id=request_id)
@@ -640,7 +643,7 @@ async def get_session_file_tree_settings(
     try:
         result = service.get(session_id)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -663,7 +666,7 @@ async def add_session_file_tree_shortcut(
             label=payload.label,
         )
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except (FileNotFoundError, NotADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -684,7 +687,7 @@ async def remove_session_file_tree_shortcut(
     try:
         result = service.remove_session_shortcut(session_id, path=path)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -709,7 +712,7 @@ async def apply_file_tree_shortcut_to_workspace(
             label=payload.label,
         )
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except (FileNotFoundError, NotADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -730,7 +733,7 @@ async def remove_workspace_file_tree_shortcut(
     try:
         result = service.remove_workspace_shortcut(session_id, path=path)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -749,7 +752,7 @@ async def update_session(
     try:
         result = await session_service.update(session_id, payload)
     except NotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc.detail)) from exc
+        raise not_found_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return APIResponse(data=result, request_id=request_id)
@@ -778,7 +781,7 @@ async def delete_session(
             lambda: session_service.delete(session_id, cascade=cascade),
         )
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)

@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from app.api import messages as messages_api
 from app.api import sessions as sessions_api
 from app.core.exceptions import NotFoundError
+from app.schemas.internal_v2.session_resource import SessionResourceControlRequest
 
 MISSING = "ses_0d3e5c937a5f4c12becd97dd1390a51e"
 CATALOG_KEY_ERROR = KeyError(f"会话目录节点不存在: {MISSING}")
@@ -73,6 +74,13 @@ class _FakeLlmLogService:
 
 class _FakeCompactionService:
     async def compact(self, *, session_id: str):
+        raise NotFoundError(f"Session {session_id} not found")
+
+
+class _FakeSessionResourceService:
+    """control 在会话缺失时先由 SessionService.get 抛 NotFoundError。"""
+
+    async def control(self, *, session_id: str, kind: str, resource_id: str, action: str):
         raise NotFoundError(f"Session {session_id} not found")
 
 
@@ -222,3 +230,20 @@ async def test_compact_session_context_maps_missing_session_to_404() -> None:
         )
 
     assert captured.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_control_session_resource_maps_missing_session_to_404() -> None:
+    with pytest.raises(HTTPException) as captured:
+        await sessions_api.control_session_resource(
+            MISSING,
+            "terminal",
+            "res_x",
+            SessionResourceControlRequest(action="cancel"),
+            _="local",
+            request_id="req",
+            session_resource_service=_FakeSessionResourceService(),
+        )
+
+    assert captured.value.status_code == 404
+    assert captured.value.detail == f"Session {MISSING} not found"

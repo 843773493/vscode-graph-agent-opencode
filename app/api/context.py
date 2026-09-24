@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
 from app.api.deps import get_request_id, get_session_context_query_service
+from app.api.errors import not_found_http_error
 from app.core.exceptions import NotFoundError
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.session_context import (
@@ -53,7 +54,7 @@ async def read_context(
     except SessionContextRevisionChangedError as error:
         raise _revision_changed_http_error(error) from error
     except (KeyError, NotFoundError) as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
@@ -87,7 +88,7 @@ async def search_context(
     except SessionContextRevisionChangedError as error:
         raise _revision_changed_http_error(error) from error
     except (KeyError, NotFoundError) as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)

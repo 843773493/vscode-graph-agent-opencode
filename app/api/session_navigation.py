@@ -9,6 +9,7 @@ from app.api.deps import (
     get_session_generation_service,
     verify_local_token,
 )
+from app.api.errors import client_error_message, not_found_http_error
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
@@ -73,7 +74,7 @@ async def enqueue_session_catalog_operations(
     except NavigationMutationConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (KeyError, ValueError, TypeError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=400, detail=client_error_message(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -91,7 +92,7 @@ async def get_session_catalog_operation_status(
     try:
         result = service.operation_status(operation_id, _navigation_scope(service))
     except (KeyError, ValueError, TypeError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=400, detail=client_error_message(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -157,7 +158,7 @@ async def get_session_generation_status(
             idempotency_key=idempotency_key,
         )
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -179,7 +180,7 @@ async def list_session_catalog_children(
             cursor=cursor,
         )
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except (TypeError, ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -234,7 +235,7 @@ async def get_session_catalog_breadcrumb(
     try:
         result = await service.breadcrumb(node_id)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -286,7 +287,7 @@ async def create_session_folder(
     try:
         result = await service.create_folder(payload)
     except (KeyError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=400, detail=client_error_message(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -304,7 +305,7 @@ async def update_session_folder(
     try:
         result = await service.update_folder(folder_id, payload)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except (ValueError, RuntimeError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -320,7 +321,7 @@ async def delete_session_folder(
     try:
         await service.delete_folder(folder_id, recursive=recursive)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except (ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return Response(status_code=204)
@@ -340,7 +341,7 @@ async def assign_session_folder(
     try:
         result = await service.assign_session(session_id, payload.folder_id)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except (ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -360,7 +361,7 @@ async def move_session_catalog_node(
     try:
         result = await service.move_node(node_id, payload.parent_node_id)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise not_found_http_error(error) from error
     except (ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -379,5 +380,5 @@ async def execute_session_generation(
     try:
         result = await service.execute(payload)
     except (KeyError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=400, detail=client_error_message(error)) from error
     return APIResponse(data=result, request_id=request_id)

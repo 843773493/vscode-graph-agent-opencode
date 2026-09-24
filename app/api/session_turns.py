@@ -10,6 +10,7 @@ from app.api.deps import (
     get_session_turn_history_service,
     verify_local_token,
 )
+from app.api.errors import client_error_message, not_found_http_error
 from app.core.exceptions import NotFoundError
 from app.core.history_loading import parse_history_loading_header
 from app.schemas.internal_v2.common import APIResponse
@@ -42,7 +43,9 @@ def _turn_history_http_error(
             status_code=409, detail=error.detail.model_dump(mode="json")
         )
     if isinstance(error, KeyError):
-        return HTTPException(status_code=404, detail=str(error))
+        # rollout 历史的 KeyError 是「按 ID 查不到 Turn」；str() 会补一对引号，
+        # 这里与其余 404 入口共用同一套消息抽取。
+        return HTTPException(status_code=404, detail=client_error_message(error))
     if isinstance(error, InvalidTurnCursorError):
         return HTTPException(status_code=400, detail=str(error))
     if isinstance(error, ValueError):
@@ -79,7 +82,7 @@ async def get_session_turn_bootstrap(
             ),
         )
     except NotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error.detail)) from error
+        raise not_found_http_error(error) from error
     except Exception as error:
         raise _turn_history_http_error(session_id, error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -110,7 +113,7 @@ async def load_session_history(
             ),
         )
     except NotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error.detail)) from error
+        raise not_found_http_error(error) from error
     except Exception as error:
         raise _turn_history_http_error(session_id, error) from error
     return APIResponse(data=result, request_id=request_id)

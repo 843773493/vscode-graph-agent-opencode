@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from app.api.errors import not_found_http_error
+from app.api.errors import client_error_message, not_found_http_error
 from app.core.exceptions import NotFoundError
 
 
@@ -37,3 +37,11 @@ def test_not_found_error_falls_back_to_message_when_no_details() -> None:
 
     assert isinstance(detail, str)
     assert "{" not in detail
+
+
+def test_client_error_message_strips_key_error_quotes_for_400() -> None:
+    """400 入口（非法 cursor、未知 operation ID）复用同一套抽取，不出现两种形态。"""
+    assert client_error_message(KeyError("会话目录 cursor 格式无效")) == (
+        "会话目录 cursor 格式无效"
+    )
+    assert client_error_message(ValueError("bad cursor")) == "bad cursor"

@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 from fastapi import HTTPException
 
@@ -45,6 +43,10 @@ class _StubService:
         self.workspace_id = "11111111-1111-4111-8111-111111111111"
         self.error = error
         self.enqueue_scope_calls = 0
+        # 计数而非仅抛错：空转断言（如「某个恒真表达式」）无法区分
+        # 「cursor 解码失败后短路返回」与「仍继续调用 events 服务」。
+        self.decode_cursor_calls = 0
+        self.navigation_events_calls = 0
 
     async def submit_operation_batch(self, request, scope):
         self.enqueue_scope_calls += 1
@@ -67,9 +69,11 @@ class _StubService:
         raise AssertionError("本用例不应调用 snapshot")
 
     def navigation_events(self, *, after, limit):
+        self.navigation_events_calls += 1
         raise AssertionError("本用例不应调用 events")
 
     def decode_navigation_events_cursor(self, cursor: str):
+        self.decode_cursor_calls += 1
         raise ValueError(f"navigation 事件 cursor 无效: {cursor!r}")
 
 
@@ -138,4 +142,8 @@ async def test_navigation_events_decodes_cursor_then_serves_page() -> None:
         )
 
     assert captured.value.status_code == 409
-    assert datetime.now(UTC).tzinfo is not None
+    # cursor 已给出且解码失败：必须先短路返回 409，绝不继续调用 events 服务
+    # （否则调用方会拿到一个基于错误 cursor 的事件页）。
+    assert service.decode_cursor_calls == 1
+    assert service.navigation_events_calls == 0
+    assert "cursor 无效" in str(captured.value.detail)

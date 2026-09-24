@@ -9,6 +9,9 @@ detail 只取面向调用方的可读文本：``NotFoundError`` 的 ``detail`` �
 ``{"code", "message", "details"}`` 字典，``KeyError`` 的 ``str()`` 会补上
 一对引号；直接 ``str()`` 会把内部字典 或 带引号字面量泄漏成对外契约，
 这里统一只抽其中的消息本体。
+
+同一套抽取也用于把 ``KeyError`` 落成 400 的入口（非法 cursor、未知 operation
+ID 等），避免同一份消息在不同状态码下出现两种文本形态。
 """
 
 from __future__ import annotations
@@ -17,15 +20,23 @@ from fastapi import HTTPException
 
 from app.core.exceptions import NotFoundError
 
-__all__ = ["not_found_http_error", "unimplemented_http_error"]
+__all__ = [
+    "client_error_message",
+    "not_found_http_error",
+    "unimplemented_http_error",
+]
 
 
 def not_found_http_error(error: NotFoundError | KeyError) -> HTTPException:
-    return HTTPException(status_code=404, detail=_not_found_message(error))
+    return HTTPException(status_code=404, detail=client_error_message(error))
 
 
-def _not_found_message(error: NotFoundError | KeyError) -> str:
-    """抽取稳定的「找不到」消息，不泄漏 Python repr。"""
+def client_error_message(error: Exception) -> str:
+    """抽取稳定的对外错误文本，不泄漏 Python repr。
+
+    ``NotFoundError`` 只取内部字典里的消息本体；``KeyError`` 取原始参数，
+    因为 ``str()`` 会给消息补一对引号。其余异常类型仍是 ``str(error)``。
+    """
     if isinstance(error, NotFoundError):
         detail = error.detail
         if isinstance(detail, dict):
@@ -33,8 +44,7 @@ def _not_found_message(error: NotFoundError | KeyError) -> str:
             if message:
                 return str(message)
         return str(detail)
-    # KeyError 的 str() 会给原始消息补一对引号，取原始参数即可。
-    if error.args and isinstance(error.args[0], str):
+    if isinstance(error, KeyError) and error.args and isinstance(error.args[0], str):
         return error.args[0]
     return str(error)
 
