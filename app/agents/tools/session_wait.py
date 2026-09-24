@@ -193,8 +193,14 @@ def create_wait_for_session_tool(
         elif turn_id:
             selector = WaitSelector(kind="turn", selector_id=turn_id)
 
+        # 无 selector 时冻结准入快照的 identity 集合：首次观察到的 job id
+        # 集合即为冻结范围，后续轮询只观察同一集合，绝不订阅准入之后新建
+        # 的 Job（否则新 Job 会凭 revision 变化伪造 state_change 完成条件）。
+        frozen_selectorless_job_ids: frozenset[str] | None = None
+
         async def _observe() -> tuple[dict[str, WaitState], str | None]:
             """返回当前观察快照；communication selector 返回未绑定标记。"""
+            nonlocal frozen_selectorless_job_ids
             if communication_id_value is not None:
                 binding = await binding_lookup.resolve(
                     target_session_id=target_session_id,
@@ -215,6 +221,18 @@ def create_wait_for_session_tool(
                     "selector_not_found: turn_id 观察数据源属 turn-binding "
                     f"切片: turn_id={turn_id!r}"
                 )
+            if selector is None:
+                if frozen_selectorless_job_ids is None:
+                    admission = await observer.observe_jobs(
+                        target_session_id=target_session_id,
+                        job_ids=None,
+                    )
+                    frozen_selectorless_job_ids = frozenset(admission)
+                    return admission, None
+                return await observer.observe_jobs(
+                    target_session_id=target_session_id,
+                    job_ids=frozen_selectorless_job_ids,
+                ), None
             return await observer.observe_jobs(
                 target_session_id=target_session_id,
                 job_ids=bound_job_ids,

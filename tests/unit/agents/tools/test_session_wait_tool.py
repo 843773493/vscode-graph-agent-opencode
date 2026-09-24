@@ -37,6 +37,34 @@ class _NeverBoundLookup:
         return None
 
 
+class _GrowingJobService:
+    """按调用次序返回不同 Job 快照的 fake；用于验证准入范围冻结。"""
+
+    def __init__(self, *, snapshot_sets: list[list[tuple[str, JobStatus]]]) -> None:
+        self._snapshot_sets = snapshot_sets
+        self._cursor = 0
+
+    async def list(self, session_id=None):
+        snapshot = self._snapshot_sets[
+            min(self._cursor, len(self._snapshot_sets) - 1)
+        ]
+        self._cursor += 1
+        now = datetime.now(UTC)
+        return [
+            JobDTO(
+                job_id=job_id,
+                message_id="msg_1",
+                session_id=_SESSION_ID,
+                mode=RunMode.single_agent,
+                status=status,
+                entry_agent="default",
+                created_at=now,
+                updated_at=now,
+            )
+            for job_id, status in snapshot
+        ]
+
+
 class _RealDTOJobService:
     """按生产形态返回 JobDTO：status 是 JobStatus 枚举，不是裸字符串。"""
 
@@ -226,3 +254,36 @@ async def test_jobstatus_enum_non_terminal_is_reported_as_running() -> None:
 
     assert result["observed"][0]["state"] == "running"
     assert result["status"] == "timed_out"
+
+
+async def test_selectorless_wait_does_not_observe_jobs_created_after_admission() -> None:
+    """无 selector 时必须冻结准入快照 identity 集合，不得订阅未来 Job。
+
+    准入时只有 job_admitted(running)；随后新建的 job_late(running) 不在冻结
+    集合内，必须既不进入 observed，也不通过 revision 变化伪造 state_change
+    完成条件。
+    """
+    service = _GrowingJobService(
+        snapshot_sets=[
+            [("job_admitted", JobStatus.running)],
+            [("job_admitted", JobStatus.running), ("job_late", JobStatus.running)],
+        ]
+    )
+    tool = create_wait_for_session_tool(
+        _SESSION_ID,
+        job_service=service,
+        binding_lookup=_NeverBoundLookup(),
+    )
+
+    result = await tool.ainvoke(
+        {
+            "target_session_id": _SESSION_ID,
+            "until": "state_change",
+            "timeout_seconds": 1,
+        }
+    )
+
+    observed_ids = [item["selector_id"] for item in result["observed"]]
+    assert observed_ids == ["job_admitted"]
+    assert result["status"] == "timed_out"
+    assert result["baseline_revision"] == result["latest_revision"]
