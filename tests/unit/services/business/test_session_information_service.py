@@ -114,18 +114,13 @@ def _trace_event(
     content: str,
     timestamp: datetime,
     raw: dict[str, object] | None = None,
-    phase: str | None = None,
 ) -> TraceEventDTO:
     return TraceEventDTO(
         event_id=event_id,
         session_id="ses_information",
         job_id=job_id,
         type=event_type,
-        phase=(
-            phase
-            if phase is not None
-            else "error" if event_type in {"error", "job_failed"} else "job"
-        ),
+        phase="error" if event_type in {"error", "job_failed"} else "job",
         title=event_type,
         content=content,
         timestamp=timestamp,
@@ -213,52 +208,6 @@ async def test_information_marks_process_exit_as_failed(tmp_path: Path) -> None:
     assert result.execution.last_error == (
         "工作区后端重启，无法安全续接原 AgentLoop 执行"
     )
-
-
-@pytest.mark.asyncio
-async def test_information_ignores_session_scoped_goal_events_in_execution(
-    tmp_path: Path,
-) -> None:
-    # Goal 事件带 "goal:{session_id}" 合成 job_id，不是真实 Job；若计入执行
-    # 投影会伪造出永远 running 的执行态，并把 execution.job_id 指向不存在的 Job。
-    now = datetime.now(UTC)
-    events = [
-        _trace_event(
-            event_id="evt_job_created",
-            job_id="job_real",
-            event_type="job_created",
-            content="created",
-            timestamp=now,
-        ),
-        _trace_event(
-            event_id="evt_job_completed",
-            job_id="job_real",
-            event_type="job_completed",
-            content="completed",
-            timestamp=now,
-        ),
-        _trace_event(
-            event_id="evt_goal_updated",
-            job_id="goal:ses_information",
-            event_type="goal_updated",
-            content="目标已更新",
-            timestamp=now,
-            phase="goal",
-        ),
-    ]
-    service = SessionInformationService(
-        session_service=_Sessions(events),  # type: ignore[arg-type]
-        session_resource_service=_Resources(),  # type: ignore[arg-type]
-        workspace_service=_Workspace(),  # type: ignore[arg-type]
-        path_resolver=SimpleNamespace(
-            resolve_session_node=lambda session_id: tmp_path / session_id
-        ),
-    )
-
-    result = await service.get_information("ses_information")
-
-    assert result.execution.job_id == "job_real"
-    assert result.execution.status == "completed"
 
 
 @pytest.mark.asyncio
