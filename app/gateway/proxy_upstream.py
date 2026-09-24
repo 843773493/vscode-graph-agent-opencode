@@ -11,12 +11,38 @@ Gateway 的两个 httpx 客户端都不设读取超时：SSE 必须能长期占�
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from urllib.parse import unquote
 
 import httpx
 
 UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS = 60.0
+
+# 代理两端（工作区 API 与辅助服务）必须剔除同一组逐跳头部，否则上游的
+# 连接管理头部会漂到浏览器侧或被转发回上游。集合与过滤函数只此一份。
+HOP_BY_HOP_HEADERS = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
+
+
+def filter_hop_by_hop_headers(
+    headers: Iterable[tuple[str, str]],
+) -> dict[str, str]:
+    """按 RFC 7230 剔除逐跳头部，保留其余头部的原样顺序。"""
+    return {
+        key: value
+        for key, value in headers
+        if key.lower() not in HOP_BY_HOP_HEADERS
+    }
 
 
 async def send_upstream_request(

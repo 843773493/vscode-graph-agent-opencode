@@ -22,6 +22,7 @@ from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.proxy_upstream import (
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
     build_upstream_url,
+    filter_hop_by_hop_headers,
     run_cleanup_shielded,
     send_upstream_request,
 )
@@ -33,17 +34,19 @@ from app.gateway.registry import (
 
 router = APIRouter()
 
-HOP_BY_HOP_HEADERS = {
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-}
 HISTORY_LOADING_HEADER = "x-boxteam-history-loading"
+# 工作区 API 代理在逐跳头部之外还要剥离 Gateway 凭据、目标选择与浏览器 Cookie，
+# 这些绝不透传给工作区后端。
+PROXY_ONLY_DROPPED_HEADERS = frozenset(
+    {
+        "host",
+        "x-local-token",
+        "x-boxteam-federation-token",
+        "x-boxteam-workspace-id",
+        HISTORY_LOADING_HEADER,
+        "cookie",
+    }
+)
 MESSAGE_STREAM_AVAILABILITY_RETRY_DELAYS_SECONDS = (0.05,)
 MESSAGE_STREAM_RETRY_DELAYS_SECONDS = (0.05, 0.25, 0.75)
 WORKSPACE_RUNTIME_READY_WAIT_SECONDS = 120.0
@@ -122,20 +125,11 @@ def _proxy_headers(
     *,
     include_credentials: bool = True,
 ) -> dict[str, str]:
-    headers = {
-        key: value
+    headers = filter_hop_by_hop_headers(
+        (key, value)
         for key, value in request.headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS
-        and key.lower()
-        not in {
-            "host",
-            "x-local-token",
-            "x-boxteam-federation-token",
-            "x-boxteam-workspace-id",
-            HISTORY_LOADING_HEADER,
-            "cookie",
-        }
-    }
+        if key.lower() not in PROXY_ONLY_DROPPED_HEADERS
+    )
     headers["X-Request-ID"] = get_request_id(request)
     application = request.scope.get("app")
     gateway_config = getattr(getattr(application, "state", None), "gateway_config", None)
@@ -160,11 +154,7 @@ def _proxy_headers(
 
 
 def _response_headers(response: httpx.Response) -> dict[str, str]:
-    return {
-        key: value
-        for key, value in response.headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS
-    }
+    return filter_hop_by_hop_headers(response.headers.items())
 
 
 async def _stream_proxy_response(

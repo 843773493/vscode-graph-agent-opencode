@@ -25,6 +25,7 @@ from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.proxy_upstream import (
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
     build_upstream_url,
+    filter_hop_by_hop_headers,
     run_cleanup_shielded,
     send_upstream_request,
 )
@@ -33,16 +34,14 @@ from app.gateway.service_types import GatewayServiceName
 
 router = APIRouter()
 
-HOP_BY_HOP_HEADERS = {
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-}
+AUXILIARY_PROXY_DROPPED_HEADERS = frozenset(
+    {
+        "host",
+        "x-local-token",
+        "x-boxteam-federation-token",
+        "x-boxteam-workspace-id",
+    }
+)
 
 SERVICE_PATHS: dict[str, GatewayServiceName] = {
     "terminal-manager": "terminal_manager",
@@ -83,18 +82,11 @@ def _proxy_request_headers(
     request: Request,
     target: WorkspaceTarget | None = None,
 ) -> dict[str, str]:
-    headers = {
-        key: value
+    headers = filter_hop_by_hop_headers(
+        (key, value)
         for key, value in request.headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS
-        and key.lower()
-        not in {
-            "host",
-            "x-local-token",
-            "x-boxteam-federation-token",
-            "x-boxteam-workspace-id",
-        }
-    }
+        if key.lower() not in AUXILIARY_PROXY_DROPPED_HEADERS
+    )
     headers["X-Request-ID"] = get_request_id(request)
     if target is not None and target.connection_kind == "remote_gateway":
         connection_id = target.remote_gateway_connection_id
@@ -110,11 +102,7 @@ def _proxy_request_headers(
 
 
 def _proxy_response_headers(response: httpx.Response) -> dict[str, str]:
-    return {
-        key: value
-        for key, value in response.headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS
-    }
+    return filter_hop_by_hop_headers(response.headers.items())
 
 
 async def _stream_response(
