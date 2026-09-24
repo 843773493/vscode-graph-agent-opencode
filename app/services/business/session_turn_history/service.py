@@ -42,6 +42,12 @@ class SessionTurnHistoryService:
         history_loading: HistoryLoadingConfig | None = None,
     ) -> SessionTurnBootstrapDTO:
         session = await self._session_service.get(session_id)
+        thread_id = session.thread_id
+        if thread_id is None:
+            raise RuntimeError(
+                "SessionDTO 缺少权威 main thread 身份，无法解析历史归属（fail closed）: "
+                f"session_id={session_id}"
+            )
         latest, older_cursor, projection_epoch = self._checkpointer.bootstrap_history(
             session_id,
             policy=history_loading,
@@ -76,6 +82,7 @@ class SessionTurnHistoryService:
         active_page = active_jobs[:_BOOTSTRAP_ACTIVE_JOB_LIMIT]
         return SessionTurnBootstrapDTO(
             session=session,
+            thread_id=thread_id,
             latest_turn=latest,
             active_job_id=pending.active_job_id,
             active_jobs=active_page,
@@ -94,13 +101,13 @@ class SessionTurnHistoryService:
         *,
         history_loading: HistoryLoadingConfig | None = None,
     ) -> TurnHistoryPageDTO:
-        await self._session_service.get(session_id)
+        thread_id = await self._session_service.resolve_main_thread(session_id)
         page = self._checkpointer.load_history(
             session_id,
             request,
             policy=history_loading,
         )
-        return page
+        return page.model_copy(update={"thread_id": thread_id})
 
 
 __all__ = ["SessionTurnHistoryService"]

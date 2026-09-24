@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import aclosing
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -51,6 +52,7 @@ from app.schemas.internal_v2.session import (
     SessionForkRequest,
     SessionInformationSnapshotDTO,
     SessionInterruptResultDTO,
+    SessionMainThreadDTO,
     SessionSkillUntrackRequest,
     SessionSkillUntrackResultDTO,
     SessionUpdateRequest,
@@ -261,6 +263,31 @@ async def list_session_child_threads(
         # 目录索引/物理树异常属于可恢复的工作区状态，不能伪装成空列表。
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
+    "/{session_id}/main-thread",
+    response_model=APIResponse[SessionMainThreadDTO],
+    summary="解析会话的权威 main thread",
+)
+async def resolve_session_main_thread(
+    session_id: CanonicalSessionId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_service: Annotated[SessionService, Depends(get_session_service)],
+):
+    """工作区权威 main pointer 合同，供 Gateway 联邦路由解析 target main。"""
+    try:
+        thread_id = await session_service.resolve_main_thread(session_id)
+    except NotFoundError as error:
+        raise not_found_http_error(error) from error
+    except (RuntimeError, TimeoutError) as error:
+        # catalog 缺 main pointer 或外部改动属于工作区状态冲突，不返回假默认值。
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(
+        data=SessionMainThreadDTO(session_id=session_id, thread_id=thread_id),
+        request_id=request_id,
+    )
 
 
 @router.post(

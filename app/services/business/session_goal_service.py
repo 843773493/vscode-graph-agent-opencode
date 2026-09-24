@@ -49,9 +49,12 @@ class SessionGoalService:
         return self._locks.setdefault(session_id, asyncio.Lock())
 
     async def get(self, session_id: str) -> SessionGoalDTO | None:
-        await self._session_service.get(session_id)
+        thread_id = await self._session_service.resolve_main_thread(session_id)
         async with self.lock_for(session_id):
-            return self._store.read(session_id)
+            goal = self._store.read(session_id)
+        if goal is None:
+            return None
+        return goal.model_copy(update={"thread_id": thread_id})
 
     async def set(
         self,
@@ -62,7 +65,7 @@ class SessionGoalService:
         token_budget: int | None | object = _UNSET,
         replace: bool = False,
     ) -> SessionGoalDTO:
-        await self._session_service.get(session_id)
+        thread_id = await self._session_service.resolve_main_thread(session_id)
         if (
             token_budget is not _UNSET
             and token_budget is not None
@@ -109,13 +112,14 @@ class SessionGoalService:
                     update={"status": GoalStatus.budget_limited}
                 )
             self._store.write(current)
-            await self._publish_updated(current)
-            return current
+            projected = current.model_copy(update={"thread_id": thread_id})
+            await self._publish_updated(projected)
+            return projected
 
     async def create_for_agent(
         self, session_id: str, objective: str, token_budget: int | None
     ) -> SessionGoalDTO:
-        await self._session_service.get(session_id)
+        thread_id = await self._session_service.resolve_main_thread(session_id)
         if token_budget is not None and token_budget <= 0:
             raise ValueError("token_budget 必须大于 0")
         async with self.lock_for(session_id):
@@ -133,8 +137,9 @@ class SessionGoalService:
                 updated_at=now,
             )
             self._store.write(goal)
-            await self._publish_updated(goal)
-            return goal
+            projected = goal.model_copy(update={"thread_id": thread_id})
+            await self._publish_updated(projected)
+            return projected
 
     async def update_for_agent(
         self, session_id: str, status: GoalStatus
@@ -144,7 +149,7 @@ class SessionGoalService:
         return await self.set(session_id, status=status)
 
     async def clear(self, session_id: str) -> bool:
-        await self._session_service.get(session_id)
+        await self._session_service.resolve_main_thread(session_id)
         async with self.lock_for(session_id):
             cleared = self._store.clear(session_id)
             if cleared:

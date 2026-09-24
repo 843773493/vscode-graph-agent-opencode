@@ -353,6 +353,9 @@ class TurnHistoryLoadRequest(BaseModel):
 class TurnHistoryPageDTO(BaseModel):
     items: list[TurnDetailDTO] = Field(max_length=256)
     summaries: list[TurnSummaryDTO] = Field(default_factory=list, max_length=256)
+    # 本页历史实际读取的 thread 身份；由业务服务层按权威 main pointer 回填，
+    # 内部 rollout 读取器只按 session 定位，不在此处伪造 thread 身份。
+    thread_id: str | None = None
     next_cursor: str | None = None
     has_more: bool = False
     before_cursor: str | None = None
@@ -371,6 +374,8 @@ class TurnJobSummaryDTO(BaseModel):
 
 class SessionTurnBootstrapDTO(BaseModel):
     session: SessionDTO
+    # 历史/实时事件实际读取的 thread 身份；普通入口恒为权威 main thread。
+    thread_id: str = Field(min_length=1)
     latest_turn: TurnSummaryDTO | None = None
     active_job_id: str | None = None
     active_jobs: list[TurnJobSummaryDTO] = Field(default_factory=list, max_length=8)

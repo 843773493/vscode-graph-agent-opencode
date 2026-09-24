@@ -62,6 +62,9 @@ class SessionDTO(TimestampedDTO):
     context_source_session_id: Optional[str] = None
     kind: SessionKind = "normal"
     generation_origin: Optional[SessionGenerationOriginDTO] = None
+    # 普通 Session 入口显式解析出的 main thread 身份；child thread 只能经
+    # 精确 (session_id, thread_id) 定位，这里不回退成 session_id。
+    thread_id: str | None = None
 
     @model_validator(mode="after")
     def validate_internal_origin(self) -> Self:
@@ -100,6 +103,13 @@ class ChildThreadListDTO(BaseModel):
     parent_session_id: str
     items: list[ChildThreadSummaryDTO] = Field(default_factory=list)
     total: int
+
+
+class SessionMainThreadDTO(BaseModel):
+    """Session 唯一权威 main thread 解析结果（8.6 工作区合同）。"""
+
+    session_id: str
+    thread_id: str = Field(min_length=1)
 
 
 class SessionInformationWorkspaceDTO(BaseModel):

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.exceptions import NotFoundError
 from app.core.path_utils import (
     get_session_creation_service,
     get_session_path_resolver,
@@ -300,3 +301,40 @@ async def test_get_parent_derivation_none_without_session_ancestor(
     assert got_deep.parent_session_id is None
     assert got_deep.parent_session_id != folder_b_id
     assert got_sibling.parent_session_id is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_main_thread_reads_catalog_frozen_pointer(
+    catalog_service,
+) -> None:
+    """普通 Session 入口的 main thread 必须来自 catalog 冻结指针。"""
+    service, workspace = catalog_service
+
+    session = await service.create(SessionCreateRequest(title="普通会话"))
+    # 独立读 catalog 冻结行，避免与被测方法同源而自证。
+    catalog_main_thread_id = workspace.store.get_node(
+        session.session_id
+    ).main_thread_id
+
+    assert catalog_main_thread_id is not None
+    assert catalog_main_thread_id.startswith("thr_")
+    assert await service.resolve_main_thread(session.session_id) == (
+        catalog_main_thread_id
+    )
+    # 不得用 session_id 冒充 thread_id。
+    assert catalog_main_thread_id != session.session_id
+    # get() 的响应投影与解析结果同口径，且不写回 manifest。
+    got = await service.get(session.session_id)
+    assert got.thread_id == catalog_main_thread_id
+    assert "thread_id" not in workspace.manifest(session.session_id)
+
+
+@pytest.mark.asyncio
+async def test_resolve_main_thread_missing_session_is_not_found(
+    catalog_service,
+) -> None:
+    """未知 session 必须显式 404，不返回伪造的 main thread 默认值。"""
+    service, _ = catalog_service
+
+    with pytest.raises(NotFoundError):
+        await service.resolve_main_thread("ses_00000000000040008000000000000000")

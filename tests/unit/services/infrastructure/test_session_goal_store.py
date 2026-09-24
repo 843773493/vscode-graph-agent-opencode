@@ -36,3 +36,25 @@ def test_goal_store_atomic_round_trip(tmp_path):
     assert not list(session_path.glob("*.tmp"))
     assert store.clear("sess_goal") is True
     assert store.read("sess_goal") is None
+
+
+def test_goal_store_does_not_persist_derived_thread_identity(tmp_path):
+    """main thread 身份的唯一权威是 catalog，goal.json 不得落第二指针。"""
+    session_path = tmp_path / "sess_goal"
+    session_path.mkdir()
+    store = SessionGoalStore(_Resolver(session_path))
+    goal = SessionGoalDTO(
+        goal_id="goal_1",
+        session_id="sess_goal",
+        objective="完成目标",
+        status=GoalStatus.active,
+        created_at="2026-07-27T00:00:00Z",
+        updated_at="2026-07-27T00:00:00Z",
+        thread_id="thr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+
+    store.write(goal)
+
+    raw = (session_path / "goal.json").read_text(encoding="utf-8")
+    assert "thread_id" not in raw
+    assert store.read("sess_goal").thread_id is None

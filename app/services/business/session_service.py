@@ -48,6 +48,8 @@ class ForkRelationshipChecker(Protocol):
 
 # SQLite catalog 是导航字段的唯一权威，session manifest 只保存会话业务字段。
 _MANIFEST_NAVIGATION_KEYS = ("title", "title_source", "parent_session_id")
+# 由 catalog 冻结指针派生的投影字段同样不能写回 manifest，避免出现第二权威。
+_MANIFEST_DERIVED_KEYS = (*_MANIFEST_NAVIGATION_KEYS, "thread_id")
 
 
 class SessionService:
@@ -222,6 +224,9 @@ class SessionService:
             node.parent_node_id,
             nodes_by_id,
         )
+        # 普通 Session 入口只定位 main thread；身份取自 catalog 冻结指针，
+        # 不接受 session_id 冒充 thread_id。
+        data["thread_id"] = self._path_resolver.main_thread_id(session_id)
 
         session = SessionDTO.model_validate(data)
         self._assert_workspace_binding(session)
@@ -230,6 +235,17 @@ class SessionService:
                 self._config_service.resolve_agent_provider_id(session.current_agent_id)
             )
         return session
+
+    async def resolve_main_thread(self, session_id: str) -> str:
+        """解析 Session 的权威 main thread id（普通入口的唯一事实来源）。
+
+        身份取自 catalog 冻结 ``main_thread_id``，缺指针或节点非 session
+        时 fail closed；不得用 session_id 冒充 thread_id。
+        """
+        try:
+            return self._path_resolver.main_thread_id(session_id)
+        except KeyError as error:
+            raise NotFoundError(f"Session {session_id} not found") from error
 
     async def list(
         self,
@@ -258,6 +274,7 @@ class SessionService:
                 node.parent_node_id,
                 nodes_by_id,
             )
+            data["thread_id"] = self._path_resolver.main_thread_id(node.node_id)
             session = SessionDTO.model_validate(data)
             self._assert_workspace_binding(session)
             if session.current_provider_id is None:
@@ -476,6 +493,7 @@ class SessionService:
             generation_origin=generation_origin,
             created_at=created_at,
             updated_at=created_at,
+            thread_id=result.main_thread_id,
         )
 
         self._notify_changed("create", result.session_id)
@@ -724,7 +742,7 @@ class SessionService:
         return DeleteSessionResultDTO(session_id=session_id, status="deleted")
 
     def _write_session_file(self, path: Path, session: SessionDTO) -> None:
-        payload = session.model_dump(exclude=set(_MANIFEST_NAVIGATION_KEYS))
+        payload = session.model_dump(exclude=set(_MANIFEST_DERIVED_KEYS))
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{path.name}.",
             dir=path.parent,

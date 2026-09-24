@@ -10,6 +10,9 @@ from app.schemas.internal_v2.goal import SessionGoalDTO
 
 class SessionGoalStore:
     FILE_NAME = "goal.json"
+    # Goal 恒属于 main thread；thread 身份的唯一权威是 workspace catalog，
+    # goal.json 只保存业务字段，不落第二 main 指针。
+    _DERIVED_KEYS = ("thread_id",)
 
     def __init__(self, path_resolver: SessionCatalogPathResolver) -> None:
         self._path_resolver = path_resolver
@@ -28,7 +31,11 @@ class SessionGoalStore:
         path = self._path(goal.session_id)
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         temporary.write_text(
-            json.dumps(goal.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            json.dumps(
+                goal.model_dump(mode="json", exclude=set(self._DERIVED_KEYS)),
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8",
         )
         os.replace(temporary, path)

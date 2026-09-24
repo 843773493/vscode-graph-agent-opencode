@@ -8,6 +8,9 @@ class _SessionService:
     async def get(self, session_id: str):
         return {"session_id": session_id}
 
+    async def resolve_main_thread(self, session_id: str) -> str:
+        return f"thr_{session_id}"
+
 
 class _Store:
     def __init__(self):
@@ -154,3 +157,16 @@ async def test_accounting_does_not_override_non_active_status(goal_service):
 
     assert accounted.status == GoalStatus.paused
     assert accounted.tokens_used == 10
+
+
+@pytest.mark.asyncio
+async def test_goal_responses_carry_authoritative_main_thread(goal_service):
+    """Goal 只属于 main thread；响应必须暴露解析出的 thread 身份。"""
+    created = await goal_service.set("sess_1", objective="目标")
+
+    assert created.thread_id == "thr_sess_1"
+    read = await goal_service.get("sess_1")
+    assert read is not None
+    assert read.thread_id == "thr_sess_1"
+    # Goal 的持久化载荷不落第二 main 指针。
+    assert goal_service._store.goal.thread_id is None

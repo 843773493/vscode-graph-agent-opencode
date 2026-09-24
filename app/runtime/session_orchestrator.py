@@ -226,6 +226,14 @@ class SessionOrchestrator:
         import logging
         logger = logging.getLogger(__name__)
         session = await self._session_service.get(session_id)
+        # 普通聊天入口显式解析 main thread：执行 Turn 归属由 catalog 冻结指针
+        # 决定，并由 SessionDTO 投影回响应；不得用 session_id 冒充 thread_id。
+        thread_id = session.thread_id
+        if thread_id is None:
+            raise RuntimeError(
+                "SessionDTO 缺少权威 main thread 身份，无法派发消息（fail closed）: "
+                f"session_id={session_id}"
+            )
         if requested_agent_id is None:
             requested_agent_id = session.current_agent_id
         effective_agent_id = self._config_service.resolve_agent_id(requested_agent_id)
@@ -279,4 +287,5 @@ class SessionOrchestrator:
             job_id=job_id,
             status=dispatch.job_status,
             dispatch=dispatch,
+            thread_id=thread_id,
         )
