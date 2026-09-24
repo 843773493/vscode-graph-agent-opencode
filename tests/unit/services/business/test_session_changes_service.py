@@ -252,3 +252,41 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     assert second_turn.summary.deletions == 0
     assert second_turn.files[0].file_path == "/src/first.txt"
     assert "+three" in second_turn.files[0].diff_text
+
+
+@pytest.mark.asyncio
+async def test_counts_changed_lines_that_start_with_diff_prefixes(
+    tmp_path: Path,
+    session_service: SessionService,
+) -> None:
+    """正文以 ++/-- 开头时仍是变更行，不能被当成 diff 文件头丢弃。"""
+    session = await session_service.create(SessionCreateRequest(title="prefix lines"))
+    service = SessionChangesService(
+        session_service=session_service,
+        store=SessionChangesStore(workspace_root=tmp_path),
+    )
+    target = tmp_path / "src" / "counter.txt"
+    target.parent.mkdir(parents=True)
+
+    before = service.capture_before("/src/counter.txt")
+    target.write_text("++added\n--removed\n", encoding="utf-8")
+    record = await service.record_tool_file_edit(
+        session_id=session.session_id,
+        turn_id="job_prefix",
+        tool_call_id="call_prefix",
+        execution_id="run_prefix",
+        tool_name="write_file",
+        before=before,
+    )
+
+    assert record is not None
+    assert record.additions == 2
+    assert record.deletions == 0
+
+    detail = await service.get_changeset(
+        session_id=session.session_id,
+        changeset_id="all",
+    )
+    assert detail.summary.files == 1
+    assert detail.summary.additions == 2
+    assert detail.summary.deletions == 0

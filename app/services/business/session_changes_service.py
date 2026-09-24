@@ -20,6 +20,7 @@ from app.services.business.session_changes_logic import (
     build_edit_id,
     build_unified_diff,
     changeset_kind_and_turn,
+    changeset_records,
     count_diff_lines,
     detect_change_kind,
     preview,
@@ -123,35 +124,24 @@ class SessionChangesService:
     async def list_changesets(self, session_id: str) -> SessionChangesetListDTO:
         await self._session_service.get(session_id)
         records = self._store.read_records(session_id)
-        all_changeset = self._build_changeset(
-            session_id=session_id,
-            changeset_id="all",
-            records=records,
-        )
-        items = [
-            SessionChangesetListItemDTO(
-                changeset_id="all",
-                label="All Changes",
-                description="显示本会话内文件工具产生的全部可审查变更",
-                change_kind="all",
-                is_default=True,
-                summary=all_changeset.summary,
-            )
-        ]
-        for turn_id in sorted_turn_ids(records):
-            changeset_id = f"turn:{turn_id}"
+        items: list[SessionChangesetListItemDTO] = []
+        for changeset_id in (
+            "all",
+            *(f"turn:{turn_id}" for turn_id in sorted_turn_ids(records)),
+        ):
             changeset = self._build_changeset(
                 session_id=session_id,
                 changeset_id=changeset_id,
-                records=[record for record in records if record.turn_id == turn_id],
+                records=changeset_records(records, changeset_id),
             )
             items.append(
                 SessionChangesetListItemDTO(
                     changeset_id=changeset_id,
-                    label="This Turn",
-                    description=f"显示任务 {turn_id} 中产生的文件变更",
-                    change_kind="turn",
-                    turn_id=turn_id,
+                    label=changeset.label,
+                    description=changeset.description,
+                    change_kind=changeset.change_kind,
+                    is_default=changeset.change_kind == "all",
+                    turn_id=changeset.turn_id,
                     summary=changeset.summary,
                 )
             )
@@ -167,7 +157,10 @@ class SessionChangesService:
         return self._build_changeset(
             session_id=session_id,
             changeset_id=changeset_id,
-            records=self._records_for_changeset(session_id, changeset_id),
+            records=changeset_records(
+                self._store.read_records(session_id),
+                changeset_id,
+            ),
             persist=True,
         )
 
@@ -191,21 +184,6 @@ class SessionChangesService:
             file_path=normalized_path,
             reviewed=reviewed,
         )
-
-    def _records_for_changeset(
-        self,
-        session_id: str,
-        changeset_id: str,
-    ) -> list[StoredFileEdit]:
-        records = self._store.read_records(session_id)
-        if changeset_id == "all":
-            return records
-        if changeset_id.startswith("turn:"):
-            turn_id = changeset_id.removeprefix("turn:")
-            if not turn_id:
-                raise ValueError("turn changeset 缺少 turn_id")
-            return [record for record in records if record.turn_id == turn_id]
-        raise ValueError(f"不支持的 changeset_id: {changeset_id}")
 
     def _build_changeset(
         self,

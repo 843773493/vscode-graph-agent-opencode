@@ -39,9 +39,10 @@ def build_unified_diff(
 def count_diff_lines(diff_text: str) -> tuple[int, int]:
     additions = 0
     deletions = 0
-    for line in diff_text.splitlines():
-        if line.startswith("+++") or line.startswith("---"):
-            continue
+    # unified_diff 只在最前面固定输出 "---" / "+++" 两行文件头，hunk 之后
+    # 的所有 +/- 行都是真实变更。不能按前缀识别文件头：正文本身以 ++ 或
+    # -- 开头时会被误删，导致该类文件的 additions/deletions 恒为 0。
+    for line in diff_text.splitlines()[2:]:
         if line.startswith("+"):
             additions += 1
         elif line.startswith("-"):
@@ -121,8 +122,22 @@ def changeset_kind_and_turn(
     if changeset_id == "all":
         return "all", None
     if changeset_id.startswith("turn:"):
-        return "turn", changeset_id.removeprefix("turn:")
+        turn_id = changeset_id.removeprefix("turn:")
+        if not turn_id:
+            raise ValueError("turn changeset 缺少 turn_id")
+        return "turn", turn_id
     raise ValueError(f"不支持的 changeset_id: {changeset_id}")
+
+
+def changeset_records(
+    records: list[StoredFileEdit],
+    changeset_id: str,
+) -> list[StoredFileEdit]:
+    """按 changeset_id 唯一解析并筛选记录，供列表与详情共用。"""
+    kind, turn_id = changeset_kind_and_turn(changeset_id)
+    if kind == "all":
+        return records
+    return [record for record in records if record.turn_id == turn_id]
 
 
 def preview(content: str | None) -> str | None:
