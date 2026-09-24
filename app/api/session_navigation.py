@@ -77,7 +77,9 @@ async def list_session_catalog_children(
             limit=limit,
             cursor=cursor,
         )
-    except (ValueError, RuntimeError) as error:
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (TypeError, ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -98,7 +100,7 @@ async def list_session_catalog_roots(
             limit=limit,
             cursor=cursor,
         )
-    except (ValueError, RuntimeError) as error:
+    except (TypeError, ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -165,7 +167,7 @@ async def search_session_catalog(
 ):
     try:
         result = await service.search(query=query, limit=limit, cursor=cursor)
-    except (ValueError, RuntimeError) as error:
+    except (TypeError, ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
