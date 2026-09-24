@@ -72,6 +72,20 @@ export function applyMessageStreamEvent(
       protocolError: "消息流 turn_stream_id 在同一 Turn 内发生变化",
     };
   }
+  // 终态互斥且幂等：completed/interrupted/failed 一旦确定，后续业务事件一律不得
+  // 改写 streamStatus、failure 或连接镜像，否则第二个终态会覆盖第一个，乱序或重复
+  // 帧还会把连接状态翻回 connected。后端在同一状态机上以 MessageStreamTerminalError
+  // 拒绝终态后的业务事件，只放行 interrupt.rejected 与 stream.snapshot 两类控制帧
+  // （app/services/infrastructure/message_stream_store.py:1106），前端镜像同一准入集合。
+  // interrupt.rejected 是「中断请求在终态后到达」的可见反馈；快照控制帧仍是恢复权威，
+  // 二者都必须继续走各自分支，其余事件直接丢弃。
+  if (
+    isTerminalStatus(state.streamStatus)
+    && event.type !== "interrupt.rejected"
+    && event.type !== "stream.snapshot"
+  ) {
+    return state;
+  }
   if (event.type === "stream.snapshot") {
     if (event.payload.snapshot_seq < state.lastEventSeq) return state;
     return drainPendingEvents(applySnapshotState(state, event.payload, event));
@@ -100,7 +114,11 @@ export function applyMessageStreamEvent(
   state.lastEventSeq = event.event_seq;
   state.workspaceId = event.workspace_id ?? state.workspaceId;
   state.turnStreamId = event.turn_stream_id;
-  state.connectionStatus = isTerminalEvent(event.type) ? "terminal" : "connected";
+  // 连接镜像同样只由终态决定：上一步放行的 interrupt.rejected 落在已终态的消息流上
+  // 时，不得把连接状态重开。
+  state.connectionStatus = isTerminalStatus(state.streamStatus) || isTerminalEvent(event.type)
+    ? "terminal"
+    : "connected";
   state.protocolError = null;
   const payload = event.payload;
   switch (event.type) {
@@ -379,6 +397,12 @@ export function drainPendingEvents(state: MessageStreamState): MessageStreamStat
   if (state.pendingEvents.length === 0) return state;
   let next: MessageStreamState = { ...state, pendingEvents: [] };
   for (const pending of [...state.pendingEvents].sort((left, right) => left.event_seq - right.event_seq)) {
+    // 缓冲按 event_seq 回放时，终态仍是硬边界：后端拒绝终态后的新业务事件，
+    // 因此回放中一旦收口，剩余的更高序号事件在协议上不可达，既不能再应用，
+    // 也不能留在 pendingEvents 里假装还有待补齐的缺口。
+    if (isTerminalStatus(next.streamStatus)) {
+      break;
+    }
     if (pending.event_seq === next.lastEventSeq + 1) {
       next = applyMessageStreamEvent(next, pending);
     } else if (pending.event_seq > next.lastEventSeq) {

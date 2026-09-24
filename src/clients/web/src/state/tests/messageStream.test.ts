@@ -2749,6 +2749,136 @@ describe("终态白名单同域去重", () => {
   });
 });
 
+describe("终态准入与连接镜像收敛", () => {
+  // 后端在终态消息流上以 MessageStreamTerminalError 拒绝新业务事件，只放行
+  // interrupt.rejected 与 stream.snapshot 两类控制帧
+  // （app/services/infrastructure/message_stream_store.py 的 current_status in
+  // TERMINAL_STREAM_STATUSES 分支）。前端 reducer 必须镜像同一准入集合，否则
+  // 重复或乱序的第二个终态会覆盖第一个终态，终态后的业务帧还会把连接状态翻回
+  // connected，界面把已结束的 Turn 重新显示成运行中。
+
+  test("终态后到达的业务事件与第二个终态都被丢弃，连接镜像保持 terminal", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.completed", { status: "completed" }));
+    expect([
+      state.lastEventSeq,
+      state.streamStatus,
+      state.connectionStatus,
+    ]).toEqual([1, "completed", "terminal"]);
+
+    state = applyMessageStreamEvent(state, event(2, "block.delta", {
+      block_id: "b1",
+      operation: "append",
+      text: "终态后残留帧",
+    }));
+    state = applyMessageStreamEvent(state, event(3, "stream.failed", {
+      code: "execution_lost",
+      message: "后端重启导致执行丢失",
+      resumable: false,
+    }));
+
+    expect([
+      state.lastEventSeq,
+      state.streamStatus,
+      state.connectionStatus,
+      state.failure,
+      state.blocks.length,
+    ]).toEqual([1, "completed", "terminal", null, 0]);
+  });
+
+  test("终态后的 interrupt.rejected 仍放行，但不得把连接镜像重开为 connected", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.completed", { status: "completed" }));
+    state = applyMessageStreamEvent(state, event(2, "interrupt.rejected", {
+      interrupt_request_id: "intr_1",
+      reason: "already_terminal",
+    }));
+
+    expect([
+      state.lastEventSeq,
+      state.streamStatus,
+      state.connectionStatus,
+      state.interruptState?.status,
+      state.interruptState?.reason,
+    ]).toEqual([2, "completed", "terminal", "rejected", "already_terminal"]);
+  });
+
+  test("终态后的 stream.snapshot 仍是恢复权威，按 snapshot_seq 决定是否应用", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, event(2, "stream.completed", { status: "completed" }));
+
+    const applied = applyMessageStreamEvent(state, event(3, "stream.snapshot", {
+      snapshot_seq: 3,
+      stream_status: "completed",
+      agent_loop_status: "completed",
+      current_attempt: 1,
+      blocks: [{
+        block_id: "mc_1:block:b1",
+        block_index: 0,
+        carrier_type: "text",
+        status: "completed",
+        text: "终态快照恢复",
+        items: [],
+        redacted: false,
+        projection: "final",
+        completion_reason: "upstream_completed",
+        partial: false,
+        started_seq: 1,
+        last_event_seq: 2,
+        completed_seq: 2,
+      }],
+      resumable: false,
+    }));
+    expect([
+      applied.lastEventSeq,
+      applied.streamStatus,
+      applied.connectionStatus,
+      applied.blocks.length,
+      applied.blocks[0]?.text,
+    ]).toEqual([3, "completed", "terminal", 1, "终态快照恢复"]);
+
+    const stale = applyMessageStreamEvent(applied, event(3, "stream.snapshot", {
+      snapshot_seq: 1,
+      stream_status: "open",
+      agent_loop_status: "running",
+      current_attempt: 1,
+      resumable: true,
+    }));
+    expect([stale.lastEventSeq, stale.streamStatus, stale.blocks.length])
+      .toEqual([3, "completed", 1]);
+  });
+
+  test("缓冲回放在终态处收口，更高序号的残留帧不留在 pendingEvents", () => {
+    let state = createMessageStreamState("ses_1", "turn_1");
+    state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
+    state = applyMessageStreamEvent(state, event(4, "block.delta", {
+      block_id: "b1",
+      operation: "append",
+      text: "终态之后才到的高序号帧",
+    }));
+    expect([
+      state.lastEventSeq,
+      state.connectionStatus,
+      state.pendingEvents.map((item) => item.event_seq),
+    ]).toEqual([1, "gap", [4]]);
+
+    state = applyMessageStreamEvent(state, event(2, "stream.failed", {
+      code: "execution_lost",
+      message: "后端重启导致执行丢失",
+      resumable: false,
+    }));
+
+    expect([
+      state.lastEventSeq,
+      state.streamStatus,
+      state.connectionStatus,
+      state.pendingEvents,
+      state.blocks.length,
+    ]).toEqual([2, "failed", "terminal", [], 0]);
+  });
+});
+
 describe("block model_call_id 归属真源", () => {
   // 归属真源是 block_id 前缀：后端 _scoped_block_id 恒定构造
   // `${model_call_id or "unbound-model-call"}:block:${provider_block_id}`，与
