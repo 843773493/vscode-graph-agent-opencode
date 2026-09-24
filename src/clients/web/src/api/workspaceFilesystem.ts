@@ -43,10 +43,12 @@ export function filesystemFileTreePath(absolutePath: string): string {
   return `${FILESYSTEM_PATH_PREFIX}${absolutePath}`;
 }
 
-export function decodeFileTreePath(path: string): {
+export interface WorkspaceFileLocation {
   path: string;
   scope: "workspace" | "filesystem";
-} {
+}
+
+export function decodeFileTreePath(path: string): WorkspaceFileLocation {
   if (path.startsWith(FILESYSTEM_PATH_PREFIX)) {
     return { path: path.slice(FILESYSTEM_PATH_PREFIX.length), scope: "filesystem" };
   }
@@ -58,6 +60,21 @@ function encodeFileTreeResultPath(
   scope: "workspace" | "filesystem",
 ): string {
   return scope === "filesystem" ? filesystemFileTreePath(path) : path;
+}
+
+/**
+ * decodeFileTreePath 与 path/scope 查询参数的唯一组合实现。
+ * 多个文件接口此前各写一遍同样的两行，收敛后调用点只保留一行。
+ */
+function fileTreeLocationQuery(path: string): {
+  location: WorkspaceFileLocation;
+  query: URLSearchParams;
+} {
+  const location = decodeFileTreePath(path);
+  return {
+    location,
+    query: new URLSearchParams({ path: location.path, scope: location.scope }),
+  };
 }
 
 function encodeWorkspaceFileList(
@@ -110,8 +127,7 @@ export async function createWorkspaceFileEntry(
   payload: WorkspaceFileCreateRequest,
   workspaceId?: string | null,
 ): Promise<WorkspaceFileList> {
-  const location = decodeFileTreePath(directoryPath);
-  const query = new URLSearchParams({ path: location.path, scope: location.scope });
+  const { location, query } = fileTreeLocationQuery(directoryPath);
   const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
     port,
     `/api/v1/workspace/files/entries?${query.toString()}`,
@@ -131,8 +147,7 @@ export async function pasteWorkspaceFileEntries(
   workspaceId?: string | null,
 ): Promise<WorkspaceFileList> {
   assertBatchWithinLimit(payload.source_paths.length, "粘贴");
-  const location = decodeFileTreePath(directoryPath);
-  const query = new URLSearchParams({ path: location.path, scope: location.scope });
+  const { location, query } = fileTreeLocationQuery(directoryPath);
   const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
     port,
     `/api/v1/workspace/files/paste?${query.toString()}`,
@@ -146,22 +161,13 @@ export async function pasteWorkspaceFileEntries(
   return encodeWorkspaceFileList(result, location.scope);
 }
 
-export interface WorkspaceFileLocation {
-  path: string;
-  scope: "workspace" | "filesystem";
-}
-
 export async function copyWorkspaceFileEntry(
   port: number,
   directoryPath: string,
   source: WorkspaceFileLocation,
   workspaceId?: string | null,
 ): Promise<WorkspaceFileList> {
-  const destination = decodeFileTreePath(directoryPath);
-  const query = new URLSearchParams({
-    path: destination.path,
-    scope: destination.scope,
-  });
+  const { location: destination, query } = fileTreeLocationQuery(directoryPath);
   const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
     port,
     `/api/v1/workspace/files/copy?${query.toString()}`,
@@ -188,11 +194,7 @@ export async function uploadWorkspaceFileEntries(
     throw new Error("没有需要上传的本地文件");
   }
   assertBatchWithinLimit(files.length, "上传");
-  const destination = decodeFileTreePath(directoryPath);
-  const query = new URLSearchParams({
-    path: destination.path,
-    scope: destination.scope,
-  });
+  const { location: destination, query } = fileTreeLocationQuery(directoryPath);
   const body = new FormData();
   for (const file of files) {
     body.append("files", file, file.name);
@@ -231,8 +233,7 @@ export async function createWorkspaceFileDownloadRequest(
   // 普通 Error 失败且不会重试（非 HttpRequestError，调用方无法按状态码降级）；待把
   // 下载改为经 requestGatewayResponse 由页面发起后即可与其余入口共享同一屏障。
   const localToken = await getGatewayToken(port);
-  const location = decodeFileTreePath(path);
-  const query = new URLSearchParams({ path: location.path, scope: location.scope });
+  const { location, query } = fileTreeLocationQuery(path);
   return {
     url: `${getApiBaseUrl(port)}/api/v1/workspace/files/download?${query.toString()}`,
     headers: { "X-Local-Token": localToken, ...workspaceHeader(workspaceId) },
@@ -245,8 +246,7 @@ export async function revealWorkspaceFileEntry(
   path: string,
   workspaceId?: string | null,
 ): Promise<WorkspaceFileReveal> {
-  const location = decodeFileTreePath(path);
-  const query = new URLSearchParams({ path: location.path, scope: location.scope });
+  const { location, query } = fileTreeLocationQuery(path);
   return unwrapApiData(await requestJson<APIResponse<WorkspaceFileReveal>>(
     port,
     `/api/v1/workspace/files/reveal?${query.toString()}`,
@@ -259,8 +259,7 @@ export async function getWorkspaceFileContent(
   path: string,
   workspaceId?: string | null,
 ): Promise<WorkspaceFileContent> {
-  const location = decodeFileTreePath(path);
-  const query = new URLSearchParams({ path: location.path, scope: location.scope });
+  const { location, query } = fileTreeLocationQuery(path);
   const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileContent>>(
     port,
     `/api/v1/workspace/files/content?${query.toString()}`,
@@ -275,8 +274,7 @@ export async function getWorkspaceRawFileBlob(
   workspaceId?: string | null,
   signal?: AbortSignal,
 ): Promise<Blob> {
-  const location = decodeFileTreePath(path);
-  const query = new URLSearchParams({ path: location.path, scope: location.scope });
+  const { location, query } = fileTreeLocationQuery(path);
   // 二进制下载只共享统一凭据与刷新重试，不建立 Gateway 用户会话屏障。
   const response = await requestGatewayResponse(
     port,
@@ -296,8 +294,7 @@ export async function updateWorkspaceFileContent(
   payload: WorkspaceFileUpdateRequest,
   workspaceId?: string | null,
 ): Promise<WorkspaceFileContent> {
-  const location = decodeFileTreePath(path);
-  const query = new URLSearchParams({ path: location.path, scope: location.scope });
+  const { location, query } = fileTreeLocationQuery(path);
   const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileContent>>(
     port,
     `/api/v1/workspace/files/content?${query.toString()}`,
