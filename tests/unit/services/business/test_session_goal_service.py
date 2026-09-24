@@ -121,3 +121,36 @@ async def test_accounting_ledger_rejects_out_of_order_replay_and_freezes_time(
 
     assert final.tokens_used == 37
     assert final.time_used_seconds == 12
+
+
+@pytest.mark.asyncio
+async def test_budget_limited_is_derived_only_while_goal_is_active(goal_service):
+    # budget_limited 只是 active Goal 的派生状态；一旦预算耗尽，Agent 仍必须
+    # 能把真实完成的 Goal 收敛到 complete，用户也必须能显式改回 active。
+    await goal_service.set("sess_1", objective="目标", token_budget=10)
+    await goal_service.account_job(
+        "sess_1", job_id="job_1", tokens=10, elapsed_seconds=1
+    )
+    assert (await goal_service.get("sess_1")).status == GoalStatus.budget_limited
+
+    completed = await goal_service.update_for_agent("sess_1", GoalStatus.complete)
+    assert completed.status == GoalStatus.complete
+
+    reactivated = await goal_service.set("sess_1", status=GoalStatus.active)
+    assert reactivated.status == GoalStatus.budget_limited
+
+    paused = await goal_service.set("sess_1", status=GoalStatus.paused)
+    assert paused.status == GoalStatus.paused
+
+
+@pytest.mark.asyncio
+async def test_accounting_does_not_override_non_active_status(goal_service):
+    await goal_service.set("sess_1", objective="目标", token_budget=10)
+    await goal_service.set("sess_1", status=GoalStatus.paused)
+
+    accounted = await goal_service.account_job(
+        "sess_1", job_id="job_1", tokens=10, elapsed_seconds=1
+    )
+
+    assert accounted.status == GoalStatus.paused
+    assert accounted.tokens_used == 10

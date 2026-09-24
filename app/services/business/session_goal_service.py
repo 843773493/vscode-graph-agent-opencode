@@ -97,8 +97,12 @@ class SessionGoalService:
                 if token_budget is not _UNSET:
                     updates["token_budget"] = token_budget
                 current = current.model_copy(update=updates)
+            # budget_limited 是 active Goal 的派生状态：预算耗尽只应终止仍在
+            # 推进的目标。用户在 active 之外显式选择的终态/暂停态必须保留，
+            # 否则 complete 会被静默改回 budget_limited，Goal 永远无法收敛。
             if (
-                current.token_budget is not None
+                current.status == GoalStatus.active
+                and current.token_budget is not None
                 and current.tokens_used >= current.token_budget
             ):
                 current = current.model_copy(
@@ -175,7 +179,11 @@ class SessionGoalService:
             )
             used = goal.tokens_used + token_delta
             status = goal.status
-            if goal.token_budget is not None and used >= goal.token_budget:
+            if (
+                status == GoalStatus.active
+                and goal.token_budget is not None
+                and used >= goal.token_budget
+            ):
                 status = GoalStatus.budget_limited
             accounted_jobs = dict(goal.accounted_jobs)
             accounted_jobs[job_id] = GoalJobAccountingDTO(
