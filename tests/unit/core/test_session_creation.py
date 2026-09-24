@@ -407,6 +407,38 @@ async def test_create_unsafe_idempotency_key_rejected(
             store.get_creation_record(key)
 
 
+@pytest.mark.parametrize("key_len", [256, 300, 4096])
+async def test_create_over_long_idempotency_key_rejected_before_record(
+    service: SessionCreationService, store: SessionCatalogStore, key_len: int
+) -> None:
+    """幂等键超出单段路径预算时，必须在冻结 record 之前就拒绝。
+
+    幂等键是 ``.staging/<key>/`` 目录名。键长超过文件系统单段上限
+    （255 bytes）时，旧实现先在 catalog 冻结一个 preparing record，随后
+    ``mkdir`` 抛裸 ``OSError``；record 已按输入 preimage 冻结，同 key
+    重入必然再次失败，形成永久 fail closed（拒绝服务）。本断言固化
+    「路径预算在落盘前校验」的修复：既不落 record，也不留 staging。
+    """
+    key = "k" * key_len
+    with pytest.raises(ValueError, match="超出预算"):
+        await do_create(service, key=key)
+    with pytest.raises(KeyError):
+        store.get_creation_record(key)
+    # 超长键的绝对路径本身已无法 stat，改查 `.staging` 目录项集合。
+    staging_root = store.sessions_root / ".staging"
+    assert not staging_root.exists() or key not in {
+        entry.name for entry in staging_root.iterdir()
+    }
+
+
+async def test_create_idempotency_key_at_component_budget_accepted(
+    service: SessionCreationService,
+) -> None:
+    """255 bytes 是单段路径上限本身，边界内必须照常创建成功。"""
+    result = await do_create(service, key="k" * 255)
+    assert result.record_state == "published"
+
+
 async def test_create_missing_parent_rejected(
     service: SessionCreationService, store: SessionCatalogStore
 ) -> None:

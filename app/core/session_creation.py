@@ -60,6 +60,7 @@ from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
     SessionCreationRecord,
+    validate_path_budget,
 )
 from app.core.session_control_primitives import validate_thread_creation_key
 from app.core.session_control_store import SessionControlStore
@@ -397,6 +398,7 @@ class SessionCreationService:
         # idempotency_key 是 staging/隔离目录名；形态口径与 store、thread
         # creation 共用同一实现，避免任一处放宽后其它链路静默失效。
         validate_thread_creation_key(idempotency_key)
+        self._validate_filesystem_budget(idempotency_key)
         if not isinstance(title, str) or not title:
             raise ValueError(f"title 不能为空: {title!r}")
         if parent_node_id is not None and not isinstance(parent_node_id, str):
@@ -426,6 +428,26 @@ class SessionCreationService:
 
     def _staging_dir(self, idempotency_key: str) -> Path:
         return self._sessions_root / _STAGING_DIR_NAME / idempotency_key
+
+    def _validate_filesystem_budget(self, idempotency_key: str) -> None:
+        """在冻结 record 前校验落盘路径的组件/总长预算。
+
+        staging 目录名（幂等键）必须在文件系统预算内（组件 ≤255 bytes、
+        总长 ≤4096 bytes）；否则 prepare/回收阶段抛裸 ``OSError``，而
+        record 已按输入 preimage 冻结为 preparing，重入永久 fail closed
+        （拒绝服务）。预算口径复用 ``session_catalog_store.
+        validate_path_budget``，不复制第二份常量。
+
+        幂等键只出现在 staging 与 CAS 失败隔离区两处路径；日期桶与
+        session_id 长度固定，不含调用方可变输入。
+        """
+        validate_path_budget(
+            self._sessions_root, f"{_STAGING_DIR_NAME}/{idempotency_key}"
+        )
+        validate_path_budget(
+            self._sessions_root.parent,
+            f"{_ORPHANED_DIR_NAME}/{_ORPHANED_CREATION_DIR_NAME}/{idempotency_key}",
+        )
 
     def _date_bucket_dir(self, storage_relative_locator: str) -> Path:
         relative = storage_relative_locator[len("sessions/"):]
