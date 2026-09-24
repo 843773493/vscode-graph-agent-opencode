@@ -37,4 +37,21 @@ def direct_content_blocks(content: Any) -> list[dict[str, Any]]:
     return blocks
 
 
-__all__ = ["direct_content_blocks"]
+def reasoning_content_text(block: Mapping[str, Any]) -> str:
+    """从 provider reasoning block 提取正文，兼容直接 reasoning 字段与内容块。"""
+    direct = block.get("reasoning")
+    if isinstance(direct, str):
+        return direct.strip()
+    content = block.get("content")
+    if isinstance(content, list):
+        return "".join(
+            str(item.get("text"))
+            for item in content
+            if isinstance(item, Mapping)
+            and item.get("type") in {"reasoning_text", "text"}
+            and isinstance(item.get("text"), str)
+        ).strip()
+    return ""
+
+
+__all__ = ["direct_content_blocks", "reasoning_content_text"]

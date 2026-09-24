@@ -6,7 +6,10 @@ import copy
 from collections.abc import Mapping
 from typing import Any
 
-from app.services.mapping.itemized.content_blocks import direct_content_blocks
+from app.services.mapping.itemized.content_blocks import (
+    direct_content_blocks,
+    reasoning_content_text,
+)
 
 _SERVER_OWNED_FIELDS = {
     "id",
@@ -248,22 +251,6 @@ def _summary_text(value: Any) -> str:
     return ""
 
 
-def _reasoning_content_text(block: Mapping[str, Any]) -> str:
-    direct = block.get("reasoning")
-    if isinstance(direct, str):
-        return direct.strip()
-    content = block.get("content")
-    if isinstance(content, list):
-        return "".join(
-            str(item.get("text"))
-            for item in content
-            if isinstance(item, Mapping)
-            and item.get("type") in {"reasoning_text", "text"}
-            and isinstance(item.get("text"), str)
-        ).strip()
-    return ""
-
-
 def _without_server_state(item: Mapping[str, Any]) -> dict[str, Any]:
     return {
         str(key): copy.deepcopy(value)
@@ -317,7 +304,7 @@ def project_ai_message_content(
     reasoning_items: list[dict[str, Any]] = []
 
     def add_reasoning_item(item: Mapping[str, Any]) -> None:
-        text = _reasoning_content_text(item)
+        text = reasoning_content_text(item)
         summary = _summary_text(item.get("summary"))
         if text:
             reasoning_content.append(text)

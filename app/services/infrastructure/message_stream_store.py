@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import threading
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -351,6 +351,79 @@ class MessageStreamStore:
     def _index_path(self, session_id: str) -> Path:
         return self._stream_dir(session_id) / "index.json"
 
+    def _applied_event_ids_path(self, session_id: str, turn_stream_id: str) -> Path:
+        return self._stream_dir(session_id) / f"{turn_stream_id}.applied-event-ids.json"
+
+    def _read_applied_event_ids_file(
+        self,
+        session_id: str,
+        turn_stream_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        path = self._applied_event_ids_path(session_id, turn_stream_id)
+        if not path.is_file():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise MessageStreamError(
+                f"消息流已应用 event_id 记录损坏: path={path}"
+            ) from error
+        if not isinstance(raw, dict):
+            raise MessageStreamError(
+                f"消息流已应用 event_id 记录必须是对象: path={path}"
+            )
+        entries: dict[str, dict[str, Any]] = {}
+        for key, value in raw.items():
+            if not isinstance(value, dict):
+                raise MessageStreamError(
+                    f"消息流已应用 event_id 记录项非法: path={path} event_id={key}"
+                )
+            entries[str(key)] = value
+        return entries
+
+    def _write_applied_event_ids_file(
+        self,
+        session_id: str,
+        turn_stream_id: str,
+        entries: Mapping[str, Mapping[str, Any]],
+    ) -> None:
+        path = self._applied_event_ids_path(session_id, turn_stream_id)
+        with self._snapshot_file_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_suffix(".tmp")
+            with temp_path.open("w", encoding="utf-8") as stream:
+                json.dump(
+                    dict(entries),
+                    stream,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                stream.flush()
+                os.fsync(stream.fileno())
+            temp_path.replace(path)
+
+    def _event_ids_from_records(
+        self,
+        session_id: str,
+        turn_stream_id: str,
+        records: Sequence[MessageStreamRecord],
+    ) -> dict[str, dict[str, Any]]:
+        """构成唯一的 event_id 幂等查找表。
+
+        保留窗口裁剪会物理移除旧事件记录；显式 event_id 的已应用事实由
+        ``*.applied-event-ids.json`` 单独持久化，必须与保留日志合并，否则旧
+        id 会被遗忘并静默重复应用副作用。保留记录是权威正文，优先采用。
+        """
+        event_ids = {
+            str(record.event["event_id"]): record.event for record in records
+        }
+        for event_id, event in self._read_applied_event_ids_file(
+            session_id,
+            turn_stream_id,
+        ).items():
+            event_ids.setdefault(event_id, event)
+        return event_ids
+
     def _empty_state(
         self,
         *,
@@ -666,7 +739,12 @@ class MessageStreamStore:
             separators=(",", ":"),
         ).encode("utf-8") + b"\n"
 
-    def _compact_stream_log(self, path: Path, turn_stream_id: str) -> None:
+    def _compact_stream_log(
+        self,
+        session_id: str,
+        path: Path,
+        turn_stream_id: str,
+    ) -> None:
         """保留最近事件，使用最新 state snapshot 继续完整恢复。"""
         records = self._read_records(path)
         retained: list[MessageStreamRecord] = []
@@ -685,9 +763,11 @@ class MessageStreamStore:
             stream.flush()
             os.fsync(stream.fileno())
         temp_path.replace(path)
-        self._event_ids[turn_stream_id] = {
-            str(record.event["event_id"]): record.event for record in retained
-        }
+        self._event_ids[turn_stream_id] = self._event_ids_from_records(
+            session_id,
+            turn_stream_id,
+            retained,
+        )
         self._event_ids_loaded.add(turn_stream_id)
         logger.warning(
             "消息流超过保留上限，已保留尾部事件并依赖 snapshot 恢复: "
@@ -705,6 +785,7 @@ class MessageStreamStore:
         encoded: bytes,
         turn_stream_id: str,
         state: Mapping[str, Any],
+        event: Mapping[str, Any] | None = None,
     ) -> None:
         """在线程中完成事件追加，确保 fsync 不阻塞消息流事件循环。"""
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -717,11 +798,21 @@ class MessageStreamStore:
             stream.flush()
             # 事件日志是消息流的崩溃恢复边界；fanout 必须在这里之后。
             os.fsync(stream.fileno())
+        if event is not None and event.get("event_id") is not None:
+            # 调用方显式 event_id 的已应用事实必须独立于保留窗口持久化，否则
+            # 日志被裁剪后无法区分「已应用」与「从未出现」，会静默重放副作用。
+            entries = self._read_applied_event_ids_file(session_id, turn_stream_id)
+            entries[str(event["event_id"])] = dict(event)
+            self._write_applied_event_ids_file(
+                session_id,
+                turn_stream_id,
+                entries,
+            )
         if needs_compaction:
             # 先让当前事件成为恢复事实，再写入同序号快照，最后才能裁剪旧
             # 事件；否则后台快照尚未执行时，裁剪可能移除 stream.opened。
             self._write_state_snapshot(session_id, turn_stream_id, state)
-            self._compact_stream_log(path, turn_stream_id)
+            self._compact_stream_log(session_id, path, turn_stream_id)
 
     @staticmethod
     def _should_write_state_snapshot(event_type: str, event_seq: int) -> bool:
@@ -839,9 +930,11 @@ class MessageStreamStore:
             state["workspace_id"] = self._workspace_id
         self._backfill_lifecycle_metadata(state, records)
         self._touch_cached_state(turn_stream_id, state)
-        self._event_ids[turn_stream_id] = {
-            str(record.event["event_id"]): record.event for record in records
-        }
+        self._event_ids[turn_stream_id] = self._event_ids_from_records(
+            session_id,
+            turn_stream_id,
+            records,
+        )
         self._event_ids_loaded.add(turn_stream_id)
         return copy.deepcopy(state)
 
@@ -853,9 +946,11 @@ class MessageStreamStore:
             expected_session_id=session_id,
             expected_turn_stream_id=turn_stream_id,
         )
-        self._event_ids[turn_stream_id] = {
-            str(record.event["event_id"]): record.event for record in records
-        }
+        self._event_ids[turn_stream_id] = self._event_ids_from_records(
+            session_id,
+            turn_stream_id,
+            records,
+        )
         self._event_ids_loaded.add(turn_stream_id)
 
     async def open(
@@ -1169,6 +1264,9 @@ class MessageStreamStore:
                 encoded,
                 turn_stream_id,
                 next_state,
+                # 只有调用方显式指定的 event_id 才需要跨保留窗口记忆；自动生成
+                # 的 evt_* 不会被重放，写入侧车只会让文件无界增长。
+                event if event_id is not None else None,
             )
         except Exception:
             # append/fsync 失败后，磁盘可能已经包含完整记录，也可能只包含

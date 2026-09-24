@@ -11,7 +11,10 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
-from app.services.mapping.itemized.content_blocks import direct_content_blocks
+from app.services.mapping.itemized.content_blocks import (
+    direct_content_blocks,
+    reasoning_content_text,
+)
 
 
 def visible_text(content: Any) -> str:
@@ -32,22 +35,6 @@ def visible_text(content: Any) -> str:
 
 def _summary_text(value: Any) -> str:
     return extract_reasoning_summary(value).strip()
-
-
-def _reasoning_content_text(block: Mapping[str, Any]) -> str:
-    direct = block.get("reasoning")
-    if isinstance(direct, str):
-        return direct.strip()
-    content = block.get("content")
-    if isinstance(content, list):
-        return "".join(
-            str(item.get("text"))
-            for item in content
-            if isinstance(item, Mapping)
-            and item.get("type") in {"reasoning_text", "text"}
-            and isinstance(item.get("text"), str)
-        ).strip()
-    return ""
 
 
 def reasoning_projection_rows(content: Any) -> list[dict[str, object]]:
@@ -120,7 +107,7 @@ def reasoning_projection_rows(content: Any) -> list[dict[str, object]]:
                                 if isinstance(item.get("id"), str)
                                 else None
                             ),
-                            reasoning_text=_reasoning_content_text(item),
+                            reasoning_text=reasoning_content_text(item),
                             summary_text=_summary_text(item.get("summary")),
                             encrypted=(
                                 item.get("encrypted_content")
@@ -134,7 +121,7 @@ def reasoning_projection_rows(content: Any) -> list[dict[str, object]]:
                 item_index=0,
                 carrier_type="reasoning_items",
                 item_id=block.get("id") if isinstance(block.get("id"), str) else None,
-                reasoning_text=_reasoning_content_text(block),
+                reasoning_text=reasoning_content_text(block),
                 summary_text=_summary_text(block.get("summary")),
                 encrypted=(
                     block.get("encrypted_content")

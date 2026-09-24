@@ -1798,3 +1798,119 @@ async def test_stream_records_closes_when_cursor_is_at_terminal_event(
     ]
     assert tail_events[-1]["payload"]["stream_status"] == "completed"
     assert not store._subscriptions.get(writer.turn_stream_id)
+
+
+@pytest.mark.asyncio
+async def test_explicit_event_id_idempotence_survives_retention_compaction(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """保留窗口裁剪掉旧记录后，显式 event_id 重放仍必须幂等。
+
+    回归：``_compact_stream_log`` 只按保留尾部重建 event_id 表，已被裁剪的 id
+    从此与「从未出现」无法区分，重放会静默追加第二条事件并重复应用副作用。
+    """
+    store, _, session_id = message_stream_store
+    monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_MAX_BYTES", 1_200)
+    monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_RETAINED_BYTES", 500)
+    writer = await store.open(session_id=session_id, turn_id="job_idempotent_compaction")
+    first = await writer.commit(
+        "block.delta",
+        {"block_id": "block_1", "operation": "append", "text": "DUP"},
+        block_id="block_1",
+        event_id="evt_stable_explicit",
+    )
+    # 把日志挤过保留上限，使 evt_stable_explicit 的物理记录被裁剪掉。
+    for _ in range(30):
+        await writer.commit(
+            "block.delta",
+            {"block_id": "block_1", "operation": "append", "text": "." * 30},
+            block_id="block_1",
+        )
+    retained_ids = [
+        record.event["event_id"]
+        for record in store._read_records(
+            store._stream_path(session_id, writer.turn_stream_id)
+        )
+    ]
+    assert "evt_stable_explicit" not in retained_ids
+    text_before = (await store.get_state(writer.turn_stream_id))["blocks"][0]["text"]
+
+    replay = await writer.commit(
+        "block.delta",
+        {"block_id": "block_1", "operation": "append", "text": "DUP"},
+        block_id="block_1",
+        event_id="evt_stable_explicit",
+    )
+
+    assert replay == first
+    text_after = (await store.get_state(writer.turn_stream_id))["blocks"][0]["text"]
+    assert text_after.count("DUP") == text_before.count("DUP")
+
+
+@pytest.mark.asyncio
+async def test_explicit_event_id_idempotence_survives_restart_after_compaction(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """重启后从被裁剪日志重建时，显式 event_id 重放同样必须幂等。"""
+    store, resolver, session_id = message_stream_store
+    monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_MAX_BYTES", 1_200)
+    monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_RETAINED_BYTES", 500)
+    writer = await store.open(session_id=session_id, turn_id="job_idempotent_restart")
+    first = await writer.commit(
+        "block.delta",
+        {"block_id": "block_1", "operation": "append", "text": "DUP"},
+        block_id="block_1",
+        event_id="evt_stable_restart",
+    )
+    for _ in range(30):
+        await writer.commit(
+            "block.delta",
+            {"block_id": "block_1", "operation": "append", "text": "." * 30},
+            block_id="block_1",
+        )
+
+    restarted = MessageStreamStore(path_resolver=resolver)
+    restarted_writer = await restarted.open(
+        session_id=session_id,
+        turn_id="job_idempotent_restart",
+    )
+    duplicate = await restarted_writer.commit(
+        "block.delta",
+        {"block_id": "block_1", "operation": "append", "text": "DUP"},
+        block_id="block_1",
+        event_id="evt_stable_restart",
+    )
+
+    assert duplicate == first
+    assert (await restarted.get_state(writer.turn_stream_id))["blocks"][0]["text"].count(
+        "DUP"
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_fresh_explicit_event_id_is_accepted_after_compaction(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """修复幂等遗忘不能反过来拒绝裁剪后到达的全新显式 event_id。"""
+    store, _, session_id = message_stream_store
+    monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_MAX_BYTES", 1_200)
+    monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_RETAINED_BYTES", 500)
+    writer = await store.open(session_id=session_id, turn_id="job_fresh_after_compaction")
+    for _ in range(30):
+        await writer.commit(
+            "block.delta",
+            {"block_id": "block_1", "operation": "append", "text": "." * 30},
+            block_id="block_1",
+        )
+
+    fresh = await writer.commit(
+        "interrupt.requested",
+        {"interrupt_request_id": "intr_fresh", "reason": "user_requested"},
+        event_id="intr_fresh",
+    )
+
+    assert fresh["type"] == "interrupt.requested"
+    assert fresh["event_id"] == "intr_fresh"
