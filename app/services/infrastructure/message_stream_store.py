@@ -1504,6 +1504,7 @@ class MessageStreamStore:
             next_state["stream_status"] = "interrupted"
             next_state["agent_loop_status"] = "interrupted"
             next_state["resumable"] = False
+            self._finish_running_model_calls(next_state, outcome="user_interrupt")
             self._finish_running_blocks(next_state, status="interrupted")
             self._finish_running_tool_calls(next_state, reason="user_interrupt")
             self._mark_running_tools_unknown(next_state)
@@ -1526,6 +1527,7 @@ class MessageStreamStore:
             next_state["agent_loop_status"] = "failed"
             next_state["failure"] = copy.deepcopy(dict(payload))
             next_state["resumable"] = bool(payload.get("resumable", False))
+            self._finish_running_model_calls(next_state, outcome="execution_lost")
             self._finish_running_blocks(next_state, status="failed")
             self._finish_running_tool_calls(next_state, reason="execution_lost")
             self._mark_running_tools_unknown(next_state)
@@ -1746,6 +1748,9 @@ class MessageStreamStore:
                         cls._mark_entity_lifecycle(activity, event, completed=completed)
                         break
         elif event_type in {"stream.interrupted", "stream.failed"}:
+            for model_call in state.get("model_calls", []):
+                if isinstance(model_call, dict) and "completed_seq" not in model_call:
+                    cls._mark_entity_lifecycle(model_call, event, completed=True)
             for block in state.get("blocks", []):
                 if isinstance(block, dict) and "completed_seq" not in block:
                     cls._mark_entity_lifecycle(block, event, completed=True)
@@ -1883,6 +1888,28 @@ class MessageStreamStore:
                     "user_interrupt" if status == "interrupted" else "execution_lost"
                 )
                 block["partial"] = True
+
+    @staticmethod
+    def _finish_running_model_calls(
+        state: dict[str, Any],
+        *,
+        outcome: str,
+    ) -> None:
+        """终态收敛仍未闭合的 model_call，避免快照留下不可解释的运行态。
+
+        与前端 ``finishRunningModelCalls`` 保持一致：终态流里任何仍为 running 的
+        model_call 都必须显式改写为 failed，并带上 outcome/retryable/完成原因，
+        否则 SSE 事件重放与快照 hydrate 会得到不同的 model_call 状态。
+        """
+        for model_call in state.get("model_calls", []):
+            if not isinstance(model_call, dict):
+                continue
+            if model_call.get("status") != "running":
+                continue
+            model_call["status"] = "failed"
+            model_call["outcome"] = outcome
+            model_call["retryable"] = False
+            model_call["completion_reason"] = outcome
 
     @staticmethod
     def _finish_running_tool_calls(state: dict[str, Any], *, reason: str) -> None:
@@ -2171,6 +2198,15 @@ class MessageStreamStore:
                 yield event
                 if self._is_terminal_event(event):
                     return
+            # 重放窗口里没有终态事件，但流本身可能已经终态：客户端用 Last-Event-ID
+            # 指到它已经收到的终态帧上，或终态之后只追加了 interrupt.rejected 这类
+            # 非终态事件。此时必须立刻用控制帧收敛并关闭；否则生成器会永久阻塞在
+            # 订阅队列上，SSE 连接既收不到帧也不结束。
+            if self._is_terminal_snapshot(await self.get_state(turn_stream_id)):
+                initial_snapshot = await self.snapshot_event(turn_stream_id)
+                last_seq = int(initial_snapshot["event_seq"])
+                yield initial_snapshot
+                return
             while True:
                 record = await subscription.get()
                 event_seq = int(record.event["event_seq"])

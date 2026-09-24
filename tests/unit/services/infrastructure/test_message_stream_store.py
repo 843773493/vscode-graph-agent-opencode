@@ -6,6 +6,7 @@ import os
 import shutil
 import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -1636,3 +1637,164 @@ async def test_evicted_terminal_streams_release_serial_locks(
     cache_limit = message_stream_store_module.MESSAGE_STREAM_TERMINAL_CACHE_MAX_ENTRIES
     assert len(store._locks) <= cache_limit
     assert len(store._snapshot_locks) <= cache_limit
+
+
+@pytest.mark.asyncio
+async def test_terminal_stream_converges_running_model_calls(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    """终态收敛必须同时闭合 running model_call，否则快照/事件两条路径不一致。
+
+    回归：``stream.interrupted`` / ``stream.failed`` 收敛了 blocks、tool_calls、
+    tool_executions 与 activities，却漏掉 model_calls；重启恢复
+    （``reconcile_unfinished_streams`` 提交 stream.failed）或中断收口后，
+    snapshot 仍把 model_call 报为 running。前端事件路径会
+    ``finishRunningModelCalls``，快照路径直接采用 ``snapshot.model_calls``，
+    于是同一条终态流按事件重放与按快照 hydrate 会得到不同的 model_call 状态。
+    """
+    store, _, session_id = message_stream_store
+
+    interrupted = await store.open(
+        session_id=session_id,
+        turn_id="job_terminal_model_call_interrupted",
+    )
+    await interrupted.commit(
+        "model.started",
+        {"model_call_id": "mc_interrupted", "attempt": 1},
+        model_call_id="mc_interrupted",
+    )
+    await interrupted.commit(
+        "stream.interrupted",
+        {"interrupt_request_id": "intr_mc", "status": "interrupted"},
+    )
+    interrupted_state = await store.get_state(interrupted.turn_stream_id)
+    assert interrupted_state["stream_status"] == "interrupted"
+    assert interrupted_state["model_calls"][0]["status"] == "failed"
+    assert interrupted_state["model_calls"][0]["outcome"] == "user_interrupt"
+    assert interrupted_state["model_calls"][0]["retryable"] is False
+    assert (
+        interrupted_state["model_calls"][0]["completion_reason"]
+        == "user_interrupt"
+    )
+
+    failed = await store.open(
+        session_id=session_id,
+        turn_id="job_terminal_model_call_failed",
+    )
+    await failed.commit(
+        "model.started",
+        {"model_call_id": "mc_failed", "attempt": 1},
+        model_call_id="mc_failed",
+    )
+    await failed.commit(
+        "stream.failed",
+        {"code": "execution_lost", "message": "boom", "resumable": False},
+    )
+    failed_state = await store.get_state(failed.turn_stream_id)
+    assert failed_state["stream_status"] == "failed"
+    assert failed_state["model_calls"][0]["status"] == "failed"
+    assert failed_state["model_calls"][0]["outcome"] == "execution_lost"
+    assert failed_state["model_calls"][0]["retryable"] is False
+
+    # 重启恢复路径（reconcile 提交 stream.failed）同样不得遗留 running model_call。
+    crashed = await store.open(
+        session_id=session_id,
+        turn_id="job_terminal_model_call_restart",
+    )
+    await crashed.commit(
+        "model.started",
+        {"model_call_id": "mc_restart", "attempt": 1},
+        model_call_id="mc_restart",
+    )
+    restarted_store = MessageStreamStore(path_resolver=store._path_resolver)
+    assert await restarted_store.reconcile_unfinished_streams() >= 1
+    restarted_state = await restarted_store.get_state(crashed.turn_stream_id)
+    assert restarted_state["stream_status"] == "failed"
+    assert restarted_state["model_calls"][0]["status"] == "failed"
+    assert restarted_state["model_calls"][0]["completed_seq"] == (
+        restarted_state["snapshot_seq"]
+    )
+
+
+async def _collect_stream(store: MessageStreamStore, session_id: str, turn_stream_id: str, after_seq: int) -> list[dict[str, Any]]:
+    stream = store.stream_records(
+        session_id=session_id,
+        turn_stream_id=turn_stream_id,
+        after_seq=after_seq,
+    )
+    events: list[dict[str, Any]] = []
+    try:
+        while True:
+            events.append(await asyncio.wait_for(anext(stream), timeout=3.0))
+    except StopAsyncIteration:
+        pass
+    finally:
+        await stream.aclose()
+    return events
+
+
+@pytest.mark.asyncio
+async def test_stream_records_closes_when_cursor_is_at_terminal_event(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    """游标已落在终态事件上时，SSE 续播必须收敛并关闭，不能永久挂起等待。
+
+    回归：``stream_records`` 只在重放窗口里出现终态事件时才 ``return``；若客户端
+    用 ``Last-Event-ID`` 指向它已经收到过的终态帧（或终态之后又追加了
+    ``interrupt.rejected`` 这类非终态事件），重放窗口里就不再有终态事件，
+    生成器于是永久阻塞在订阅队列上、一直占着订阅。前端 SSE 连接既不结束也收不到
+    任何帧，表现为连接一直挂着。
+    """
+    store, _, session_id = message_stream_store
+    writer = await store.open(
+        session_id=session_id,
+        turn_id="job_sse_terminal_cursor",
+    )
+    await writer.commit(
+        "block.started",
+        {"block_id": "block_1", "block_index": 0, "carrier_type": "text"},
+        block_id="block_1",
+    )
+    await writer.commit(
+        "block.completed",
+        {
+            "block_id": "block_1",
+            "block_index": 0,
+            "carrier_type": "text",
+            "status": "completed",
+            "completion_reason": "upstream_completed",
+        },
+        block_id="block_1",
+    )
+    await writer.close_completed()
+    terminal_seq = int((await store.get_state(writer.turn_stream_id))["snapshot_seq"])
+
+    # 场景 A：Last-Event-ID 恰好指向已收到的终态帧。
+    events = await _collect_stream(
+        store,
+        session_id,
+        writer.turn_stream_id,
+        after_seq=terminal_seq,
+    )
+    assert events[-1]["type"] == "stream.snapshot"
+    assert events[-1]["payload"]["stream_status"] == "completed"
+    assert not store._subscriptions.get(writer.turn_stream_id)
+
+    # 场景 B：终态之后又追加了终态闸门允许的非终态事件（interrupt.rejected）。
+    await writer.commit(
+        "interrupt.requested",
+        {"interrupt_request_id": "late", "reason": "user_requested"},
+    )
+    tail_seq = int((await store.get_state(writer.turn_stream_id))["snapshot_seq"])
+    tail_events = await _collect_stream(
+        store,
+        session_id,
+        writer.turn_stream_id,
+        after_seq=tail_seq - 1,
+    )
+    assert [event["type"] for event in tail_events] == [
+        "interrupt.rejected",
+        "stream.snapshot",
+    ]
+    assert tail_events[-1]["payload"]["stream_status"] == "completed"
+    assert not store._subscriptions.get(writer.turn_stream_id)
