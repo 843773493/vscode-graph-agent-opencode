@@ -33,6 +33,12 @@ _PATH_COMPONENT_DELIMITER_ESCAPES = str.maketrans(
 
 # 代理两端（工作区 API 与辅助服务）必须剔除同一组逐跳头部，否则上游的
 # 连接管理头部会漂到浏览器侧或被转发回上游。集合与过滤函数只此一份。
+#
+# 逐跳头部的完整定义有两部分，缺一不可：RFC 7230 6.1 的固定清单，以及由
+# Connection 头部逐个点名的字段（Connection 值为 X-Internal 时，X-Internal
+# 也是这条连接专属的）。只剔固定清单会让「被点名」的字段原样漂到对端；上游
+# 用它标注内部/私有头部时会直接泄漏给浏览器。固定清单里的名字取 RFC 7230 的
+# 规范拼写：Trailer（RFC 2616 的 Trailers 是历史拼写，不是真实头部名）。
 HOP_BY_HOP_HEADERS = frozenset(
     {
         "connection",
@@ -40,7 +46,7 @@ HOP_BY_HOP_HEADERS = frozenset(
         "proxy-authenticate",
         "proxy-authorization",
         "te",
-        "trailers",
+        "trailer",
         "transfer-encoding",
         "upgrade",
     }
@@ -63,11 +69,25 @@ GATEWAY_PROXY_DROPPED_HEADERS = frozenset(
 def filter_hop_by_hop_headers(
     headers: Iterable[tuple[str, str]],
 ) -> dict[str, str]:
-    """按 RFC 7230 剔除逐跳头部，保留其余头部的原样顺序。"""
+    """按 RFC 7230 剔除逐跳头部，保留其余头部的原样顺序。
+
+    逐跳头部 = 固定清单里的名字并上 Connection 头部点名的名字。点名的名字要
+    按大小写不敏感比较，且可能出现在任意一条 Connection 里；因此先扫出全部
+    Connection 值中的逗号分隔 token，再连同固定清单一并过滤。
+    """
+    normalized = list(headers)
+    nominated: set[str] = set()
+    for key, value in normalized:
+        if key.lower() != "connection":
+            continue
+        nominated.update(
+            token.strip().lower() for token in value.split(",") if token.strip()
+        )
     return {
         key: value
-        for key, value in headers
+        for key, value in normalized
         if key.lower() not in HOP_BY_HOP_HEADERS
+        and key.lower() not in nominated
     }
 
 

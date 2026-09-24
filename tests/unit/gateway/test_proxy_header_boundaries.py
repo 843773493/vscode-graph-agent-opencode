@@ -17,7 +17,10 @@ from app.gateway.proxy_upstream import (
     HOP_BY_HOP_HEADERS,
     filter_hop_by_hop_headers,
 )
-from app.gateway.server.workspace_proxy import _response_headers
+from app.gateway.server.workspace_proxy import (
+    _response_headers,
+    _set_authoritative_header,
+)
 
 # 两条代理共用的 Gateway 凭据/目标选择剥离集合。任一代理只用逐跳集合、漏掉其中
 # 一项，都会让客户端伪造的 workspace_id 或本地凭据漂到上游。
@@ -40,7 +43,7 @@ def test_hop_by_hop_set_is_exactly_the_rfc7230_hop_headers() -> None:
             "proxy-authenticate",
             "proxy-authorization",
             "te",
-            "trailers",
+            "trailer",
             "transfer-encoding",
             "upgrade",
         }
@@ -60,6 +63,51 @@ def test_filter_keeps_end_to_end_headers_in_inbound_order() -> None:
     )
 
     assert list(filtered) == ["Content-Type", "X-Trace"]
+
+
+def test_filter_drops_headers_nominated_by_connection() -> None:
+    """变异：漏掉 Connection 点名的头部，本用例必须红。
+
+    RFC 7230 6.1 规定 Connection 列出的字段名也是逐跳的。只剔固定清单会让
+    上游用来标注内部/私有含义的头部原样漂到浏览器侧。
+    """
+    filtered = filter_hop_by_hop_headers(
+        [
+            ("Connection", "keep-alive, x-internal-hop"),
+            ("X-Internal-Hop", "MUST-BE-DROPPED"),
+            ("X-Kept", "keep-me"),
+        ]
+    )
+
+    assert filtered == {"X-Kept": "keep-me"}
+
+
+def test_filter_drops_connection_nominated_headers_regardless_of_case() -> None:
+    """Connection 值与被点名头部的大小写都不敏感。"""
+    filtered = filter_hop_by_hop_headers(
+        [
+            ("connection", "X-Internal-Hop"),
+            ("x-internal-hop", "MUST-BE-DROPPED"),
+            ("X-Kept", "keep-me"),
+        ]
+    )
+
+    assert filtered == {"X-Kept": "keep-me"}
+
+
+def test_filter_drops_nominated_headers_from_every_connection_value() -> None:
+    """点名可能分散在多条 Connection 里，必须全部收集。"""
+    filtered = filter_hop_by_hop_headers(
+        [
+            ("Connection", "x-first"),
+            ("Connection", "x-second"),
+            ("X-First", "MUST-BE-DROPPED"),
+            ("X-Second", "MUST-BE-DROPPED"),
+            ("X-Kept", "keep-me"),
+        ]
+    )
+
+    assert filtered == {"X-Kept": "keep-me"}
 
 
 def _upstream_response_with(header: str) -> httpx.Response:
@@ -165,3 +213,22 @@ def test_both_proxies_never_forward_the_client_supplied_credential_header(
         ]
         assert occurrences != ["attacker"]
         assert len(occurrences) <= 1
+
+
+def test_authoritative_header_replaces_upstream_case_variant() -> None:
+    """变异：不先剔除同名条目，上游值会与本机权威值并存，本用例必须红。
+
+    httpx 把上游响应头名统一小写；嵌套 Gateway 也会带自己的
+    X-BoxTeam-Route-Revision。若直接赋值，响应里会出现两个仅大小写不同的同名
+    头部，浏览器的大小写不敏感 get() 只读第一条，拿到的是上游值。
+    """
+    headers = {"x-boxteam-route-revision": "gw_stream:REMOTE", "content-type": "text/plain"}
+
+    _set_authoritative_header(headers, "X-BoxTeam-Route-Revision", "gw_stream:LOCAL")
+
+    assert headers["X-BoxTeam-Route-Revision"] == "gw_stream:LOCAL"
+    assert [
+        value
+        for key, value in headers.items()
+        if key.lower() == "x-boxteam-route-revision"
+    ] == ["gw_stream:LOCAL"]

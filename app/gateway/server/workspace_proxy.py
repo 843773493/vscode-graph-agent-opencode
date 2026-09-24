@@ -152,6 +152,24 @@ def _response_headers(response: httpx.Response) -> dict[str, str]:
     return filter_hop_by_hop_headers(response.headers.items())
 
 
+def _set_authoritative_header(
+    headers: dict[str, str],
+    name: str,
+    value: str,
+) -> None:
+    """按大小写不敏感地写入 Gateway 自己的权威头部值。
+
+    httpx 把上游响应头名统一小写，而这里写入的是规范拼写。若上游带了同名头部
+    （嵌套 Gateway 也会带自己的 X-BoxTeam-Route-Revision），直接赋值会在同一个
+    dict 里留下两个仅大小写不同的键；Starlette 原样序列化成两条同名头部，浏览器
+    的大小写不敏感 get() 只取第一条，读到的是上游值而非本机权威值。先剔除全部
+    同名条目再写入。
+    """
+    for key in [key for key in headers if key.lower() == name.lower()]:
+        del headers[key]
+    headers[name] = value
+
+
 async def _stream_proxy_response(
     response: httpx.Response,
     route_lease: WorkspaceRouteLease,
@@ -469,7 +487,12 @@ async def _proxy_workspace_request(
     media_type = response.headers.get("content-type")
     if media_type and "text/event-stream" in media_type:
         headers = _response_headers(response)
-        headers["X-BoxTeam-Route-Revision"] = route_lease.token
+        # 路由 revision 是本机权威信息，上游的同名头部一律被这里覆盖。
+        _set_authoritative_header(
+            headers,
+            "X-BoxTeam-Route-Revision",
+            route_lease.token,
+        )
         release_route_reference()
         route_lease = registry.acquire_route_reference(
             target.workspace_id,
