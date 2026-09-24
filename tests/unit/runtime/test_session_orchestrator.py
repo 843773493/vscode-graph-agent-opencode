@@ -69,6 +69,9 @@ class _FakeMessageService:
         return MessageDTO(
             message_id="msg_test",
             session_id=session_id,
+            # 该可见消息所属的权威 thread；生产由服务层按 catalog 冻结 main
+            # pointer 回填，替身保持一致，绝不用 session_id 冒充。
+            thread_id=f"thr_{session_id}",
             role=message_create.role,
             content=message_create.content,
             metadata=message_create.metadata,
