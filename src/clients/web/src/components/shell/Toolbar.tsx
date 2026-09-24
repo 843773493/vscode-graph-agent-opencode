@@ -1,5 +1,4 @@
 import React, { useRef, useState } from 'react';
-import { useAppState } from '../../hooks';
 import AnchoredOverlay from '../overlays/AnchoredOverlay';
 import GatewayUserAccessMenu from '../overlays/GatewayUserAccessMenu';
 
@@ -38,9 +37,6 @@ export default function Toolbar({
   onWorkbenchViewChange: (view: WorkbenchView) => void;
   showAuxiliaryToggle: boolean;
 }) {
-  const {
-    setStatus,
-  } = useAppState();
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
   const titleLabel = sessionTitle?.trim() || '新会话';
@@ -136,11 +132,16 @@ export default function Toolbar({
       </div>
       <div className="toolbar-group toolbar-group-right">
         <GatewayUserAccessMenu />
+        {/* 本地运行时没有任何「检查更新 / 拉取新版本」接口，也没有把当前构建版本
+            暴露给前端。原先点击只写死一条宣称已是最新的状态文案，既不发请求也不读
+            版本，等于凭空宣称检查成功（真实浏览器审查判为假成功）。在真正具备更新
+            能力前，保持为禁用态并如实说明，避免伪造成功结果。 */}
         <button
           type="button"
           className="toolbar-update-button"
-          title="检查更新"
-          onClick={() => setStatus("Web UI 已是当前本地构建")}
+          title="Web 端暂无更新检查"
+          aria-label="更新"
+          disabled
         >
           更新
         </button>
