@@ -103,7 +103,6 @@ class HistoricalTerminalRecordReader:
                 f"exec_command 工具结果应为 object，实际类型: {type(payload).__name__}"
             )
 
-        terminal: dict[str, object] = {}
         terminal_id = payload.get("terminal_id") or payload.get("session_id")
         # TODO: 兼容迁移前 chunk_id 同时充当 terminal_id 的历史工具结果。
         if not terminal_id:
@@ -111,41 +110,32 @@ class HistoricalTerminalRecordReader:
         if not isinstance(terminal_id, str) or not terminal_id:
             return None
 
-        created_at = terminal.get("created_at")
-        updated_at = terminal.get("updated_at") or created_at
-        fallback_time = (
-            self._event_time(
-                session_id=session_id,
-                terminal_id=terminal_id,
-            )
-            or "1970-01-01T00:00:00+00:00"
-        )
-        terminal.update(
-            {
-                "terminal_id": terminal_id,
-                "session_id": session_id,
-                "status": "deleted",
-                "created_at": created_at
-                if isinstance(created_at, str) and created_at
-                else fallback_time,
-                "updated_at": updated_at
-                if isinstance(updated_at, str) and updated_at
-                else fallback_time,
-                "ended_at": terminal.get("ended_at")
-                or updated_at
-                or created_at
-                or fallback_time,
-                "historical_only": True,
-                "historical_status": (
-                    "running" if payload.get("session_id") else "completed"
-                ),
-                "last_command": None,
-                "last_command_status": (
-                    "deleted" if payload.get("session_id") else "completed"
-                ),
-                "last_command_exit_code": payload.get("exit_code"),
-            }
-        )
+        # exec_command 工具结果只包含 chunk_id/terminal_id/wall_time_seconds/
+        # output/exit_code/cwd 等执行结果字段，不携带任何时间戳；历史终端的
+        # 唯一真实时间来源是同一会话 Trace 中该终端的 tool_call_end 事件时间。
+        # TODO: 会话 Trace 缺失时以 epoch 兜底；待确认无 Trace 缺失的残留记录后
+        # 改为显式失败，避免向 UI 暴露虚假的 1970 时间。
+        terminal_time = self._event_time(
+            session_id=session_id,
+            terminal_id=terminal_id,
+        ) or "1970-01-01T00:00:00+00:00"
+        terminal: dict[str, object] = {
+            "terminal_id": terminal_id,
+            "session_id": session_id,
+            "status": "deleted",
+            "created_at": terminal_time,
+            "updated_at": terminal_time,
+            "ended_at": terminal_time,
+            "historical_only": True,
+            "historical_status": (
+                "running" if payload.get("session_id") else "completed"
+            ),
+            "last_command": None,
+            "last_command_status": (
+                "deleted" if payload.get("session_id") else "completed"
+            ),
+            "last_command_exit_code": payload.get("exit_code"),
+        }
         terminal["last_command_completed_at"] = terminal.get("ended_at")
         return terminal
 
