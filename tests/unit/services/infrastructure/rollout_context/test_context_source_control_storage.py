@@ -344,6 +344,33 @@ def test_owner_rejects_thread_from_other_session(
         )
 
 
+def test_owner_rejects_non_canonical_thread_id_shape(
+    rollout_storage: RolloutStorage,
+) -> None:
+    """非 ses_ 前缀的非法 thread id 必须落在 canonical 形态验证器上。
+
+    这是「越界 thread」之外的另一条真实拒绝路径：它既不是可寻址 session
+    节点，也不是合法 canonical thread id，最终由 validate_thread_id 拒绝。
+    """
+    with pytest.raises(ValueError, match="thread_id 形态非法"):
+        rollout_storage.read_context_source_control_states(
+            SESSION_ID,
+            thread_id="../escape",
+        )
+    # 非法但形态近似 canonical 的短 thr_ id 同样必须显式拒绝，不能短路成空。
+    with pytest.raises(ValueError, match="thread_id 形态非法"):
+        rollout_storage.read_context_source_control_states(
+            SESSION_ID,
+            thread_id="thr_short",
+        )
+    # 未登记的合法 canonical thread id 不得被当作「没有控制状态」短路。
+    with pytest.raises(RuntimeError, match="非 main thread 物理形态未落地"):
+        rollout_storage.read_context_source_control_states(
+            SESSION_ID,
+            thread_id="thr_bfc75d66aebc4b7984711000b05bc503",
+        )
+
+
 def test_write_is_idempotent_and_does_not_advance_state_revision(
     rollout_storage: RolloutStorage,
     owner: ContextSourceOwnerKey,
