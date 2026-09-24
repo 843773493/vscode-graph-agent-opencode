@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
 import { getLLMRequestLogs, listMessages } from "./sessionMessages";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+import {
+  installSessionCatalogFetchMock,
+  unwrapSessionCatalogFetch,
+} from "./sessionApiFetchMock";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -16,24 +20,13 @@ function installWindow(port: number): void {
   });
 }
 
-/** mock fetch：第一次返回 Gateway 本地凭据，之后返回给定的 API 响应。 */
 function installFetchMock(respond: () => Response): void {
-  let count = 0;
-  globalThis.fetch = Object.assign(
-    async () => {
-      count += 1;
-      if (count === 1) {
-        return Response.json({ data: { token: "messages-token" } });
-      }
-      return respond();
-    },
-    { preconnect: originalFetch.preconnect },
-  );
+  installSessionCatalogFetchMock(() => respond(), { credentialToken: "messages-token" });
 }
 
 afterEach(() => {
   jest.useRealTimers();
-  globalThis.fetch = originalFetch;
+  unwrapSessionCatalogFetch();
   restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 

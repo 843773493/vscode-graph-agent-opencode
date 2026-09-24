@@ -5,8 +5,10 @@ import {
   streamSessionActivity,
   SessionActivityCursorGoneError,
 } from "./sessionActivity";
-
-const originalFetch = globalThis.fetch;
+import {
+  installSessionCatalogFetchMock,
+  unwrapSessionCatalogFetch,
+} from "./sessionApiFetchMock";
 
 function streamResponse(chunks: string[], status = 200): Response {
   const encoder = new TextEncoder();
@@ -23,7 +25,7 @@ function streamResponse(chunks: string[], status = 200): Response {
 
 afterEach(() => {
   jest.useRealTimers();
-  globalThis.fetch = originalFetch;
+  unwrapSessionCatalogFetch();
 });
 
 async function flushMicrotasks(rounds = 50): Promise<void> {
@@ -35,11 +37,8 @@ async function flushMicrotasks(rounds = 50): Promise<void> {
 describe("Workspace 会话活动 API", () => {
   test("列表请求携带工作区并返回持久游标", async () => {
     let request: RequestInit | undefined;
-    let count = 0;
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      count += 1;
-      if (count === 1) return Response.json({ data: { token: "activity-token" } });
-      request = args[1];
+    installSessionCatalogFetchMock(({ init }) => {
+      request = init;
       return Response.json({
         data: {
           items: [{
@@ -55,7 +54,7 @@ describe("Workspace 会话活动 API", () => {
         },
         request_id: "req-activity",
       });
-    }, { preconnect: originalFetch.preconnect });
+    }, { credentialToken: "activity-token" });
 
     const page = await listSessionActivity(48_201, "workspace-1", { after: 6 });
     expect(page.items[0]?.event_seq).toBe(7);
@@ -64,14 +63,9 @@ describe("Workspace 会话活动 API", () => {
   });
 
   test("SSE 活动事件解析 id 并转发游标", async () => {
-    let count = 0;
-    globalThis.fetch = Object.assign(async () => {
-      count += 1;
-      if (count === 1) return Response.json({ data: { token: "activity-token" } });
-      return streamResponse([
+    installSessionCatalogFetchMock(() => streamResponse([
         "id: 8\nevent: session_activity\ndata: {\"event_seq\":8,\"event_id\":\"evt-8\",\"session_id\":\"session-8\",\"status\":\"failed\",\"summary\":\"任务失败\",\"occurred_at\":\"2026-08-16T00:00:00Z\"}\n\n",
-      ]);
-    }, { preconnect: originalFetch.preconnect });
+      ]), { credentialToken: "activity-token" });
     const received: number[] = [];
 
     await streamSessionActivity(48_202, "workspace-1", {
@@ -85,12 +79,9 @@ describe("Workspace 会话活动 API", () => {
   });
 
   test("游标失效直接暴露给调用方", async () => {
-    let count = 0;
-    globalThis.fetch = Object.assign(async () => {
-      count += 1;
-      if (count === 1) return Response.json({ data: { token: "activity-token" } });
-      return new Response("{}", { status: 410, statusText: "Gone" });
-    }, { preconnect: originalFetch.preconnect });
+    installSessionCatalogFetchMock(() => new Response("{}", { status: 410, statusText: "Gone" }), {
+      credentialToken: "activity-token",
+    });
 
     await expect(
       streamSessionActivity(48_203, "workspace-1", { after: 3 }),
@@ -105,13 +96,7 @@ describe("Workspace 会话活动流空闲超时", () => {
 
     const port = 48_204;
     let streamCancelled = false;
-    let requestCount = 0;
-    globalThis.fetch = Object.assign(async () => {
-      requestCount += 1;
-      if (requestCount === 1) {
-        return Response.json({ data: { token: "activity-token" } });
-      }
-      return new Response(new ReadableStream<Uint8Array>({
+    installSessionCatalogFetchMock(() => new Response(new ReadableStream<Uint8Array>({
         start() {},
         cancel() {
           streamCancelled = true;
@@ -119,8 +104,7 @@ describe("Workspace 会话活动流空闲超时", () => {
       }), {
         status: 200,
         headers: { "content-type": "text/event-stream" },
-      });
-    }, { preconnect: originalFetch.preconnect });
+      }), { credentialToken: "activity-token" });
 
     jest.useFakeTimers();
     const settled: { outcome: string | null; failure: Error | null } = {

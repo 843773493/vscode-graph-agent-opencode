@@ -5,8 +5,10 @@ import {
   StaleTurnCursorHttpError,
 } from "./sessionTurnHistory";
 import { HttpRequestError } from "../http";
-
-const originalFetch = globalThis.fetch;
+import {
+  installSessionCatalogFetchMock,
+  unwrapSessionCatalogFetch,
+} from "./sessionApiFetchMock";
 
 function apiResponse(data: unknown, status = 200): Response {
   return Response.json(
@@ -16,24 +18,19 @@ function apiResponse(data: unknown, status = 200): Response {
 }
 
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  unwrapSessionCatalogFetch();
 });
 
 describe("Turn 历史 API client", () => {
   test("按约定路径请求 bootstrap 和语义化历史", async () => {
     const requests: Array<{ path: string; method: string; body: unknown }> = [];
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      const [input, init] = args;
-      const url = new URL(String(input));
-      if (url.pathname === "/api/gateway/auth/local-credential") {
-        return apiResponse({ token: "turn-api-token" });
-      }
+    installSessionCatalogFetchMock(({ url: rawUrl, path, method, init }) => {
       requests.push({
-        path: `${url.pathname}${url.search}`,
-        method: init?.method ?? "GET",
+        path: `${path}${new URL(rawUrl).search}`,
+        method: method,
         body: init?.body ? JSON.parse(String(init.body)) : null,
       });
-      if (url.pathname.endsWith("/bootstrap")) {
+      if (path.endsWith("/bootstrap")) {
         return apiResponse({
           session: {
             session_id: "ses_api",
@@ -51,7 +48,7 @@ describe("Turn 历史 API client", () => {
         });
       }
       return apiResponse({ items: [], projection_epoch: 1 });
-    }, originalFetch);
+    }, { credentialToken: "turn-api-token" });
 
     await getSessionTurnBootstrap(49_211, "ses_api", "workspace");
     await loadSessionHistory(
@@ -100,13 +97,7 @@ describe("Turn 历史 API client", () => {
   });
 
   test("把 409 stale cursor 映射为可识别错误", async () => {
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      const [input] = args;
-      const url = new URL(String(input));
-      if (url.pathname === "/api/gateway/auth/local-credential") {
-        return apiResponse({ token: "stale-token" });
-      }
-      return Response.json({
+    installSessionCatalogFetchMock(() => Response.json({
         detail: {
           code: "stale_turn_cursor",
           session_id: "ses_stale",
@@ -114,8 +105,7 @@ describe("Turn 历史 API client", () => {
           current_epoch: 2,
           message: "历史已重排",
         },
-      }, { status: 409, statusText: "Conflict" });
-    }, originalFetch);
+      }, { status: 409, statusText: "Conflict" }), { credentialToken: "stale-token" });
 
     expect(
       loadSessionHistory(
@@ -128,19 +118,12 @@ describe("Turn 历史 API client", () => {
   });
 
   test("结构化后端错误保留可诊断 message", async () => {
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      const [input] = args;
-      const url = new URL(String(input));
-      if (url.pathname === "/api/gateway/auth/local-credential") {
-        return apiResponse({ token: "broken-token" });
-      }
-      return Response.json({
+    installSessionCatalogFetchMock(() => Response.json({
         detail: {
           code: "turn_projection_corrupt",
           message: "Turn manifest 与 index epoch 不一致",
         },
-      }, { status: 500, statusText: "Internal Server Error" });
-    }, originalFetch);
+      }, { status: 500, statusText: "Internal Server Error" }), { credentialToken: "broken-token" });
 
     try {
       await getSessionTurnBootstrap(49_213, "ses_broken", "workspace");

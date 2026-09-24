@@ -1,29 +1,21 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { HttpRequestError } from "../http";
 import { listChildThreads, listSessions } from "./sessions";
+import {
+  installSessionCatalogFetchMock,
+  unwrapSessionCatalogFetch,
+} from "./sessionApiFetchMock";
 
-const originalFetch = globalThis.fetch;
-
-/** mock fetch：第一次返回 Gateway 本地凭据，之后返回给定的 API 响应。 */
 function installFetchMock(
   respond: (init: RequestInit | undefined, url: string) => Response,
 ): void {
-  let count = 0;
-  globalThis.fetch = Object.assign(
-    async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
-      count += 1;
-      const url = typeof input === "string" ? input : input.toString();
-      if (count === 1) {
-        return Response.json({ data: { token: "child-threads-token" } });
-      }
-      return respond(init, url);
-    },
-    { preconnect: originalFetch.preconnect },
-  );
+  installSessionCatalogFetchMock(({ init, url }) => respond(init, url), {
+    credentialToken: "child-threads-token",
+  });
 }
 
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  unwrapSessionCatalogFetch();
 });
 
 describe("child thread 列表 API", () => {
