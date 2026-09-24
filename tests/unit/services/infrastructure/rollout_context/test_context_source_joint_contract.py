@@ -619,6 +619,46 @@ class TestComposerThreadIdentity:
         assert request_only_refs
         assert {ref.thread_id for ref in request_only_refs} == {expected_thread_id}
 
+    def test_canonical_refs_carry_catalog_main_thread_id(
+        self, saver: RolloutCheckpointSaver,
+    ) -> None:
+        # committed_context_refs 从已提交 item 生成 canonical ref 时，thread 半
+        # 必须取 catalog 权威 main_thread_id，不能把承载 session 定位的
+        # snapshot.thread_id 同时当 session_id 与 thread_id 填两遍。
+        from app.domain.itemized.enums import (
+            CanonicalItemStatus,
+            PayloadKind,
+            SemanticKind,
+            TurnScope,
+        )
+        from app.domain.itemized.records import CanonicalItemRecord
+
+        expected_thread_id = saver._resolve_main_thread_control(MAIN_SESSION_ID)[1]
+        item = CanonicalItemRecord.create(
+            item_sequence=1,
+            item_id="item-thread-identity",
+            semantic_kind=SemanticKind.ASSISTANT_OUTPUT.value,
+            payload_kind=PayloadKind.TEXT.value,
+            status=CanonicalItemStatus.COMPLETED,
+            producer_ref={"producer_kind": "provider", "producer_id": "model-call-1"},
+            payload="最终回答",
+            metadata={"projection_message_id": "message-thread-identity"},
+            turn_id="turn-thread-identity",
+            turn_scope=TurnScope.TURN_MEMBER,
+        )
+        saver.append_items(MAIN_SESSION_ID, (item,))
+        plan = saver.compose_committed_context_plan(
+            MAIN_SESSION_ID,
+            plan_id="plan-canonical-thread",
+            include_pending_notices=False,
+        )
+        canonical_refs = [ref for ref in plan.refs if ref.ref_type == "canonical_item"]
+        assert canonical_refs
+        assert {ref.session_id for ref in canonical_refs} == {MAIN_SESSION_ID}
+        assert {ref.thread_id for ref in canonical_refs} == {expected_thread_id}
+        # thread 半绝不能退化成 session id。
+        assert expected_thread_id != MAIN_SESSION_ID
+
 
 class TestSealedTypedFieldConsumption:
     def test_rewind_reconciles_only_from_frozen_control_state(

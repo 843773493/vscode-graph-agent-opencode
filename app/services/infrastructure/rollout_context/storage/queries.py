@@ -209,8 +209,20 @@ class RolloutCheckpointQueriesMixin:
                     f"canonical assistant 被多个消息替代: {superseded}"
                 )
             superseded_message_ids.add(superseded)
+        # 注意：snapshot.thread_id 承载的是 session 定位 id（见 root() 把它喂给
+        # resolve_session_node_for_runtime），不是 (session_id, thread_id) 定位的
+        # thread 半。canonical ref 的 thread 半必须取该 session 的权威 main
+        # thread，不得用 session id 冒充。
+        session_id = strict_text(
+            snapshot.thread_id, field="committed_context_refs.session_id"
+        )
+        thread_id = self._path_resolver.main_thread_id(session_id)
         return tuple(
-            ContextRef.canonical_item(item, session_id=snapshot.thread_id)
+            ContextRef.canonical_item(
+                item,
+                session_id=session_id,
+                thread_id=thread_id,
+            )
             for item in items
             if item.metadata.get("projection_message_id")
             not in superseded_message_ids

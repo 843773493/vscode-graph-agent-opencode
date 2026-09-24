@@ -410,6 +410,23 @@ class SessionCatalogPathResolver:
         """运行时解析会话目录，统一走 SQLite catalog 路径校验。"""
         return self.resolve_session_node(session_id)
 
+    def main_thread_id(self, session_id: str) -> str:
+        """返回 Session 的唯一权威 main thread id（catalog 冻结指针）。
+
+        ``(session_id, thread_id)`` 定位中的 thread 半必须来自 catalog，不能由
+        调用方用 session id 冒充；节点不是 session、缺 main_thread_id 或
+        catalog 被外部改动时 fail closed。
+        """
+        self._ensure_consistency_verified()
+        node = self._store.get_node(session_id)
+        if node.kind != "session" or node.main_thread_id is None:
+            raise RuntimeError(
+                "main thread 解析要求 session 节点且 catalog 已冻结 "
+                f"main_thread_id（fail closed）: session_id={session_id!r}, "
+                f"kind={node.kind!r}, main_thread_id={node.main_thread_id!r}"
+            )
+        return node.main_thread_id
+
     def resolve_folder_dir(self, folder_id: str) -> Path:
         """恒 RuntimeError：新模型 folder 无物理目录（design.md §9）。
 
