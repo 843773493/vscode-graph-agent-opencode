@@ -122,4 +122,42 @@ if (tree.children[2]?.children?.[0]?.type !== "text") {
   throw new Error("remark 插件不应改写已有外部链接的文本");
 }
 
+
+// 无空白的整段文本（超长中文段落、压缩成一行的文本）曾让 A+\.A+ 在每个起始
+// 位置都把整段消费完再逐字回退，扫描退化为 O(n²)：1600 字中文段落实测 3.5 秒。
+// 这里同时守住「结果不变」与「代价不退化」两条。
+const LONG_WITHOUT_DOTS = "中文段落没有任何英文空格标点".repeat(100);
+
+if (plainWorkspaceFileReferences(LONG_WITHOUT_DOTS).length !== 0) {
+  throw new Error("无点号的整段文本不应产生文件引用");
+}
+
+const scanStartedAt = performance.now();
+plainWorkspaceFileReferences(LONG_WITHOUT_DOTS);
+const scanElapsedMs = performance.now() - scanStartedAt;
+if (scanElapsedMs > 250) {
+  throw new Error(`无点号整段文本的扫描代价退化: ${scanElapsedMs.toFixed(1)}ms`);
+}
+
+// 点号只在首位或末位时两侧不满足「各有非分隔字符」，不构成路径形态。
+for (const boundary of [
+  "abcdefghijklmnopqrstuvwxyz.",
+  ".abcdefghijklmnopqrstuvwxyz",
+  ".",
+  "..",
+  "ab",
+]) {
+  if (plainWorkspaceFileReferences(boundary).length !== 0) {
+    throw new Error(`边界形态不应产生文件引用: ${JSON.stringify(boundary)}`);
+  }
+}
+
+// 中位点号仍必须命中，末尾标点与行号后缀的既有口径不变。
+if (
+  plainWorkspaceFileReferences("见 a.ts 与 b.md.")
+    .map((item) => item.target)
+    .join("|") !== "a.ts|b.md"
+) {
+  throw new Error("中位点号的文件引用识别被破坏");
+}
 console.log("workspaceFileReferences tests passed");

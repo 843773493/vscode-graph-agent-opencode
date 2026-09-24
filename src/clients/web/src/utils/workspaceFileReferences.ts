@@ -17,7 +17,7 @@ interface MarkdownNode {
 }
 
 const GENERATED_REFERENCE_PREFIX = "/__boxteam_workspace_file__?target=";
-const PLAIN_FILE_PATH_PATTERN = /[^\s`*${}()<>,;!?、，。；：！？]+\.[^\s`*${}()<>,;!?、，。；：！？]+/gu;
+const PLAIN_FILE_PATH_RUN_PATTERN = /[^\s`*${}()<>,;!?、，。；：！？]+/gu;
 const TRAILING_PUNCTUATION_PATTERN = /[,.!?;，。！？；]+$/u;
 const COMMON_FILE_EXTENSIONS = new Set([
   "c", "cc", "cjs", "cpp", "css", "csv", "go", "h", "hpp", "html",
@@ -187,11 +187,20 @@ export function plainWorkspaceFileReferences(value: string): Array<{
   target: string;
 }> {
   const references: Array<{ start: number; end: number; target: string }> = [];
-  for (const match of value.matchAll(PLAIN_FILE_PATH_PATTERN)) {
-    if (match.index === undefined || match[0].includes("://")) {
+  for (const run of value.matchAll(PLAIN_FILE_PATH_RUN_PATTERN)) {
+    const text = run[0];
+    if (run.index === undefined || text.includes("://")) {
       continue;
     }
-    const target = match[0].replace(TRAILING_PUNCTUATION_PATTERN, "");
+    // 路径形态要求点号两侧各留一个非分隔字符。原式 A+\.A+ 在整段没有点号
+    // 时（超长中文段落、压缩成一行的文本）每个起始位置都要把整段消费完再逐字
+    // 回退，扫描退化为 O(n²)：实测 1600 字中文段落需要 3.5 秒。这里直接判
+    // 「整段里存在一个既不在首位、也不在末位的点号」，与原式完全等价。
+    const dotIndex = text.indexOf(".", 1);
+    if (dotIndex < 0 || dotIndex > text.length - 2) {
+      continue;
+    }
+    const target = text.replace(TRAILING_PUNCTUATION_PATTERN, "");
     if (
       !target
       || target.startsWith("@")
@@ -201,8 +210,8 @@ export function plainWorkspaceFileReferences(value: string): Array<{
       continue;
     }
     references.push({
-      start: match.index,
-      end: match.index + target.length,
+      start: run.index,
+      end: run.index + target.length,
       target,
     });
   }
