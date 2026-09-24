@@ -10,7 +10,6 @@ from app.prompting.registry import (
 from app.prompting.validation import internal_prompt_metadata, validate_internal_message
 
 DISPLAY_CONTENT_METADATA_KEY = "display_content"
-INTERNAL_DISPLAY_KIND_METADATA_KEY = "internal_display_kind"
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,17 +69,8 @@ def project_message_for_display(
     )
 
 
-def resolve_message_display_content(
-    content: str,
-    metadata: Mapping[str, object],
-) -> str:
-    return project_message_for_display(content, metadata).content
-
-
 __all__ = [
     "DISPLAY_CONTENT_METADATA_KEY",
-    "INTERNAL_DISPLAY_KIND_METADATA_KEY",
     "MessageDisplayProjection",
     "project_message_for_display",
-    "resolve_message_display_content",
 ]

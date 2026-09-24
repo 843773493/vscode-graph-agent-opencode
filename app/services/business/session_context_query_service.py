@@ -36,6 +36,7 @@ from app.services.business.session_context_resource import (
     SessionContextCursorCodec,
     parse_session_context_resource,
     require_session_context_revision,
+    set_exact_returned_chars,
     validate_session_context_read_view,
 )
 
@@ -494,12 +495,7 @@ class SessionContextQueryService:
             total_matches=total_matches,
             matches=matches,
         )
-        for _ in range(8):
-            length = len(result.model_dump_json())
-            if result.returned_chars == length:
-                return result
-            result.returned_chars = length
-        raise RuntimeError("无法稳定计算 search_context 响应字符数")
+        return set_exact_returned_chars(result, operation="search_context")
 
     async def _overview_items(
         self,

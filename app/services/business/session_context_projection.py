@@ -11,7 +11,10 @@ from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextReadResultDTO,
 )
-from app.services.business.session_context_resource import SessionContextCursorCodec
+from app.services.business.session_context_resource import (
+    SessionContextCursorCodec,
+    set_exact_returned_chars,
+)
 from app.services.mapping.itemized.provider_history import reasoning_projection_rows
 from app.services.mapping.itemized.provider_history import (
     visible_text as litellm_visible_text,
@@ -331,18 +334,7 @@ def _build_read_result(
         next_cursor=next_cursor,
         items=items,
     )
-    return _set_exact_returned_chars(result)
-
-
-def _set_exact_returned_chars(
-    result: SessionContextReadResultDTO,
-) -> SessionContextReadResultDTO:
-    for _ in range(8):
-        length = len(result.model_dump_json())
-        if result.returned_chars == length:
-            return result
-        result.returned_chars = length
-    raise RuntimeError("无法稳定计算 read_context 响应字符数")
+    return set_exact_returned_chars(result, operation="read_context")
 
 
 def _content_blocks(record: dict[str, object]) -> list[dict[str, object]]:

@@ -5,7 +5,7 @@ import binascii
 import json
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol, TypeVar
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
 
@@ -110,6 +110,33 @@ def require_session_context_revision(expected: str | None, actual: str) -> None:
             expected_revision=expected,
             actual_revision=actual,
         )
+
+
+class _SerializedResult(Protocol):
+    returned_chars: int
+
+    def model_dump_json(self) -> str: ...
+
+
+_SerializedResultT = TypeVar("_SerializedResultT", bound=_SerializedResult)
+
+
+def set_exact_returned_chars(
+    result: _SerializedResultT,
+    *,
+    operation: str,
+) -> _SerializedResultT:
+    """把 result.returned_chars 收敛为序列化后的真实字符数。
+
+    returned_chars 自身参与序列化，写入新值会改变响应长度，因此需要迭代
+    直到稳定；迭代上限用于在长度无法自洽时立刻暴露，而不是静默返回错误值。
+    """
+    for _ in range(8):
+        length = len(result.model_dump_json())
+        if result.returned_chars == length:
+            return result
+        result.returned_chars = length
+    raise RuntimeError(f"无法稳定计算 {operation} 响应字符数")
 
 
 class SessionContextCursorCodec:

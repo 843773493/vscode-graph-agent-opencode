@@ -5,7 +5,6 @@ import base64
 import binascii
 import hashlib
 import json
-from typing import TypeVar
 
 from app.abstractions.session_context import (
     WorkspaceSessionContextAccessError,
@@ -21,16 +20,12 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchMatchDTO,
     SessionContextSearchResultDTO,
 )
+from app.services.business.session_context_resource import set_exact_returned_chars
 
 
 _SEARCH_CONCURRENCY = 8
 _PER_WORKSPACE_MATCH_LIMIT = 200
 _ERROR_CHARS = 500
-ResultDTO = TypeVar(
-    "ResultDTO",
-    SessionContextReadResultDTO,
-    SessionContextSearchResultDTO,
-)
 
 
 class GatewayContextQueryService:
@@ -252,7 +247,7 @@ def _build_gateway_read_result(
         ),
         items=items,
     )
-    return _set_exact_returned_chars(result)
+    return set_exact_returned_chars(result, operation="gateway read_context")
 
 
 def _build_gateway_search_result(
@@ -286,18 +281,7 @@ def _build_gateway_search_result(
         partial_errors=errors,
         omitted_partial_error_count=omitted_error_count,
     )
-    return _set_exact_returned_chars(result)
-
-
-def _set_exact_returned_chars(
-    result: ResultDTO,
-) -> ResultDTO:
-    while True:
-        serialized_chars = len(result.model_dump_json())
-        if result.returned_chars == serialized_chars:
-            break
-        result.returned_chars = serialized_chars
-    return result
+    return set_exact_returned_chars(result, operation="gateway search_context")
 
 
 def _require_within_budget(returned_chars: int, max_chars: int) -> None:
