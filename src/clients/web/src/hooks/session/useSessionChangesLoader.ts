@@ -11,6 +11,7 @@ import type {
 } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
+import { trackInFlightRequest } from "../runtime/inFlightRequests";
 
 export type SessionChangesRefreshOptions = {
   refreshList?: boolean;
@@ -59,7 +60,16 @@ export function useSessionChangesLoader({
       const key = `${workspaceId ?? ""}:${sessionId}`;
       const inFlight = changesetsRequestRef.current.get(key);
       if (inFlight) {
-        return await inFlight;
+        if (!force) {
+          return await inFlight;
+        }
+        // 显式刷新必须读取突变后的快照，不能被在途的普通读取吞掉：先等它结束，
+        // 若期间已有别的请求接手则复用它，否则再发起一次强制读取。
+        await inFlight;
+        const replacement = changesetsRequestRef.current.get(key);
+        if (replacement) {
+          return await replacement;
+        }
       }
       const cached = changesetsCacheRef.current.get(key);
       if (!force && cached) {
@@ -73,16 +83,7 @@ export function useSessionChangesLoader({
           return value;
         },
       );
-      changesetsRequestRef.current.set(key, promise);
-      void promise.then(() => {
-        if (changesetsRequestRef.current.get(key) === promise) {
-          changesetsRequestRef.current.delete(key);
-        }
-      }, () => {
-        if (changesetsRequestRef.current.get(key) === promise) {
-          changesetsRequestRef.current.delete(key);
-        }
-      });
+      trackInFlightRequest(changesetsRequestRef.current, key, promise);
       return await promise;
     },
     [apiPort, workspaceId],

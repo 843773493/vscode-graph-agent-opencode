@@ -89,7 +89,7 @@ describe("待处理消息状态", () => {
     ]);
   });
 
-  test("后端快照移除终态任务时不保留实时失败回合", () => {
+  test("后端空快照移除终态任务时仍保留实时失败回合，直到 canonical 历史回填", () => {
     const pending = new Map<string, ConversationView[]>([
       ["workspace::ses_failed", [{
         conversationId: "msg_failed",
@@ -135,7 +135,18 @@ describe("待处理消息状态", () => {
       "workspace::ses_failed",
     );
 
-    expect(pending.has("workspace::ses_failed")).toBe(false);
+    // 终态 SSE 可能早于 rollout 投影提交到达，此时历史详情会返回 409；空 pending
+    // 快照不得提前删掉实时失败回合，必须留到下一次 bootstrap 用 canonical 历史替换。
+    // 该期望与本文件之外的两条契约一致：conversations.test.ts 的「历史提交期间的
+    // 终态 live Turn 不会被空 pending 快照删除」与 sessionJobReconciliation.test.ts
+    // 的「失败 Job 在缺少终态 Trace 时保留可见错误回合」。
+    expect(pending.get("workspace::ses_failed")).toEqual([
+      expect.objectContaining({
+        conversationId: "msg_failed",
+        jobId: "job_failed",
+        status: "error",
+      }),
+    ]);
   });
 
   test("历史刷新期间的空快照仍保留乐观 replay 回合", () => {

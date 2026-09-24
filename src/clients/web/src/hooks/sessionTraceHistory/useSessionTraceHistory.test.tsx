@@ -102,7 +102,9 @@ describe("useSessionTraceHistory", () => {
     let resolveOld: (response: Response) => void = () => undefined;
     const oldResponse = new Promise<Response>((resolve) => { resolveOld = resolve; });
     globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      const path = new URL(String(args[0])).pathname;
+      // window 桩只提供 location.port，getApiBaseUrl() 因此返回同源相对路径；
+      // 必须显式给出 base，否则 new URL(相对路径) 会抛错并让被测 hook 看不到响应。
+      const path = new URL(String(args[0]), `http://127.0.0.1:${port}`).pathname;
       if (path === "/api/gateway/auth/local-credential") {
         return Response.json({ request_id: "req_token", data: { token: "trace-token" } });
       }
@@ -159,7 +161,7 @@ describe("useSessionTraceHistory", () => {
     installWindow(port);
     let traceFetchCount = 0;
     globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      const path = new URL(String(args[0])).pathname;
+      const path = new URL(String(args[0]), `http://127.0.0.1:${port}`).pathname;
       if (path === "/api/gateway/auth/local-credential") {
         return Response.json({ request_id: "req_token", data: { token: "trace-token" } });
       }
@@ -208,7 +210,7 @@ describe("useSessionTraceHistory", () => {
     const port = 49_303;
     installWindow(port);
     globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      const url = new URL(String(args[0]));
+      const url = new URL(String(args[0]), `http://127.0.0.1:${port}`);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return Response.json({ request_id: "req_token", data: { token: "page-token" } });
       }

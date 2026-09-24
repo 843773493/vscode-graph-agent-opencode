@@ -52,7 +52,9 @@ describe("useBackgroundSessionActivity", () => {
     let jobRequests = 0;
     globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : String(input);
-      const path = new URL(url).pathname;
+      // window 桩只提供 location.port，getApiBaseUrl() 因此返回同源相对路径；
+      // 必须显式给出 base，否则 new URL(相对路径) 会抛错并让被测 hook 看不到响应。
+      const path = new URL(url, `http://127.0.0.1:${port}`).pathname;
       if (path === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "local-background-activity-test-token" });
       }

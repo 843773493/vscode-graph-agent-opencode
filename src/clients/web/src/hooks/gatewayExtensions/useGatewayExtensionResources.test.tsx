@@ -41,7 +41,7 @@ describe("useGatewayExtensionResources 请求协调", () => {
     let resourceRequests = 0;
     globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : String(input);
-      const path = new URL(url).pathname;
+      const path = new URL(url, "http://127.0.0.1:49507").pathname;
       if (path === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "local-extension-resource-test-token" });
       }

@@ -192,4 +192,81 @@ describe("会话文件变更请求协调", () => {
     expect(currentState.activeChangeset?.changeset_id).toBe("cs_default");
     act(() => renderer!.unmount());
   });
+
+  test("显式刷新列表时不能被在途的普通列表读取吞掉", async () => {
+    const currentSession = session();
+    let currentState = state(currentSession);
+    let loadSessionChangesets:
+      | ReturnType<typeof useSessionChangesLoader>["loadSessionChangesets"];
+    let listRequestCount = 0;
+    let resolveFirstList: (response: Response) => void = () => undefined;
+    const firstListResponse = new Promise<Response>((resolve) => {
+      resolveFirstList = resolve;
+    });
+
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const parsed = new URL(url);
+      if (parsed.pathname === "/api/gateway/auth/local-credential") {
+        return apiResponse({ token: "local-test-token" });
+      }
+      if (parsed.pathname === "/api/gateway/users/current") {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      if (/^\/api\/v1\/sessions\/[^/]+\/changesets$/.test(parsed.pathname)) {
+        listRequestCount += 1;
+        if (listRequestCount === 1) {
+          return await firstListResponse;
+        }
+        return apiResponse({
+          items: [{
+            changeset_id: "cs_refreshed",
+            session_id: currentSession.session_id,
+            title: "刷新后的变更",
+            is_default: true,
+            summary: { files: 2, additions: 4, deletions: 1 },
+          }],
+        });
+      }
+      throw new Error("测试收到未声明请求: " + url);
+    }, { preconnect: originalFetch.preconnect });
+
+    function Harness(): React.ReactNode {
+      const loader = useSessionChangesLoader({
+        apiPort: 49_404,
+        currentSession,
+        workspaceId: "ws_changes_loader",
+        setState: (update) => {
+          currentState = typeof update === "function" ? update(currentState) : update;
+        },
+      });
+      loadSessionChangesets = loader.loadSessionChangesets;
+      return null;
+    }
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+
+    const inFlight = loadSessionChangesets!(currentSession.session_id);
+    await Promise.resolve();
+    const refreshed = loadSessionChangesets!(currentSession.session_id, true);
+    await Promise.resolve();
+    resolveFirstList(apiResponse({
+      items: [{
+        changeset_id: "cs_stale",
+        session_id: currentSession.session_id,
+        title: "在途的旧列表",
+        is_default: true,
+        summary: { files: 1, additions: 1, deletions: 0 },
+      }],
+    }));
+    const [staleList, refreshedList] = await Promise.all([inFlight, refreshed]);
+
+    expect(listRequestCount).toBe(2);
+    expect(staleList.items.map((item) => item.changeset_id)).toEqual(["cs_stale"]);
+    expect(refreshedList.items.map((item) => item.changeset_id)).toEqual(["cs_refreshed"]);
+    act(() => renderer!.unmount());
+  });
 });
