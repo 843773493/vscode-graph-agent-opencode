@@ -13,7 +13,7 @@ import type {
 } from "../../../types/backend";
 import { copyTextToClipboard } from "../../../utils/clipboard";
 import { errorMessage } from "../../../utils/errorMessage";
-import { parsePortLiteral } from "../../../utils/portLiteral";
+import { parsePortLiteral } from "../portLiteral";
 
 type ConnectionPage = "ssh-select" | "ssh-manual" | "external-device" | "device-info";
 type ConnectionDialogMode = "ssh" | "external-device";

@@ -19,7 +19,7 @@ import type {
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import { errorMessage } from "../../../utils/errorMessage";
 import { copyTextToClipboard } from "../../../utils/clipboard";
-import { DECIMAL_PORT_PATTERN, isValidPortLiteral, parsePortLiteral } from "../../../utils/portLiteral";
+import { DECIMAL_PORT_PATTERN, isValidPortLiteral, parsePortLiteral } from "../portLiteral";
 
 export interface WorkspacePortForwardApi {
   list(port: number, workspaceId: string): Promise<GatewayPortForwardList>;
