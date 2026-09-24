@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import BinaryIO
 
 from app.core.path_utils import (
-    get_runtime_workspace_root,
     get_user_workspace_root,
+    get_workspace_root,
     safe_join,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
@@ -76,7 +76,7 @@ class WorkspaceService:
         workspace_root: Path | None = None,
     ):
         self._workspace_root = (
-            workspace_root or get_runtime_workspace_root()
+            workspace_root or get_workspace_root()
         ).expanduser().resolve()
         self._workspace_id: str | None = None
         self.root_path = str(self._workspace_root)

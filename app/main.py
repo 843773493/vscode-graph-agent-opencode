@@ -31,7 +31,7 @@ from app.api.workspace import router as workspace_router
 from app.container import build_app_container
 from app.core.env import load_boxteam_env
 from app.core.logging_config import configure_application_logging
-from app.core.path_utils import get_runtime_workspace_root
+from app.core.path_utils import get_workspace_root
 from app.core.trace_middleware import TraceMiddleware, get_request_id
 from app.schemas.internal_v2.sse import install_sse_openapi_components
 from app.services.infrastructure.config import (
@@ -98,7 +98,7 @@ async def lifespan(_: FastAPI):
         "工作区后端日志已初始化: level=%s pretty=%s workspace=%s",
         logger_level,
         logger_pretty,
-        workspace_root or path_utils.get_runtime_workspace_root(),
+        workspace_root or path_utils.get_workspace_root(),
     )
 
     await container.mcp_catalog_owner.start()
@@ -305,7 +305,7 @@ async def health(request: Request):
     return {
         "status": "degraded" if degraded else "ok",
         "process_id": os.getpid(),
-        "workspace_root": str(get_runtime_workspace_root()),
+        "workspace_root": str(get_workspace_root()),
         "config_proof": config_proof,
         "startup_reconciliation": {"errors": trace_reconciliation_errors},
     }
