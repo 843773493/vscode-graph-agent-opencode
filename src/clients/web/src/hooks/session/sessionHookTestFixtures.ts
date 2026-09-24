@@ -261,7 +261,7 @@ type SessionRunActionsHandle = RunActions;
  * 网关工作区标识与固定 refreshAgentStateSnapshot，只覆盖自己关心的动作句柄。
  */
 export function mountSessionRunActions(options: {
-  currentSession: Session;
+  currentSession: Session | null;
   state: AppState;
   cacheKey: string;
 }): { state: () => AppState; actions: SessionRunActionsHandle } {

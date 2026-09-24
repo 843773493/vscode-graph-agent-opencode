@@ -8,6 +8,7 @@ import {
   restoreSessionHookGlobals,
 } from "./sessionHookTestFixtures";
 import { errorMessage } from "../../utils/errorMessage";
+import { INITIAL_APP_STATE } from "../app/appStateSeed";
 
 const CACHE_KEY = "gw_send_regression::ses_send_regression";
 
@@ -26,8 +27,9 @@ function session(): Session {
   };
 }
 
-function state(currentSession: Session): AppState {
+function state(currentSession: Session | null): AppState {
   return {
+    ...INITIAL_APP_STATE,
     eventQueuesBySession: new Map(),
     pendingConversations: new Map(),
     activeJobIdsBySession: new Map(),
@@ -39,7 +41,7 @@ function state(currentSession: Session): AppState {
     sessionHistoryReloadNonce: 0,
     status: "",
     contentView: "default",
-  } as AppState;
+  };
 }
 
 describe("发送消息状态更新", () => {
@@ -351,5 +353,149 @@ describe("发送消息状态更新", () => {
     expect(conversation?.blockedByJobId).toBeUndefined();
     expect(conversation?.queuedJobCount).toBe(0);
     expect(conversation?.pendingJobCount).toBe(1);
+  });
+
+  test("中断失败且运行状态重取也失败时，两条原因都要拼进可见失败文案", async () => {
+    const currentSession = session();
+    installGatewayFetch(({ path }) => {
+      if (path === "/api/v1/sessions/ses_send_regression/interrupt") {
+        return Response.json({ detail: "中断执行器崩溃" }, { status: 500 });
+      }
+      if (path === "/api/v1/sessions/ses_send_regression/pending-requests") {
+        // 补偿重取也失败：用户必须同时看到「中断失败」和「重取失败」两条事实。
+        return Response.json({ detail: "队列服务不可用" }, { status: 503 });
+      }
+      return undefined;
+    }, { token: "test-interrupt-recovery-token" });
+
+    const mounted = mountSessionRunActions({
+      currentSession,
+      state: state(currentSession),
+      cacheKey: CACHE_KEY,
+    });
+
+    await expect(mounted.actions.interruptSession())
+      .rejects.toThrow("中断执行器崩溃");
+
+    // 两条事实必须同时可见：中断失败本身 + 补偿重取也失败。
+    expect(mounted.state().status).toBe(
+      "中断生成失败: 请求失败 500 : 中断执行器崩溃"
+      + "；重新读取运行状态也失败: 请求失败 503 : 队列服务不可用",
+    );
+  });
+
+  test("发送失败且待处理队列重取也失败时，两条原因都要拼进可见失败文案", async () => {
+    const currentSession = session();
+    installGatewayFetch(({ path, method }) => {
+      if (path === "/api/v1/sessions/ses_send_regression/messages" && method === "POST") {
+        return Response.json({ detail: "模型网关拒绝" }, { status: 502 });
+      }
+      if (path === "/api/v1/sessions/ses_send_regression/pending-requests") {
+        // 补偿快照也读不到：用户必须同时看到「发送失败」和「重取失败」两条事实。
+        return Response.json({ detail: "队列不可读" }, { status: 503 });
+      }
+      return undefined;
+    }, { token: "test-send-recovery-token" });
+
+    const mounted = mountSessionRunActions({
+      currentSession,
+      state: state(currentSession),
+      cacheKey: CACHE_KEY,
+    });
+
+    await expect(mounted.actions.sendMessage("你好")).rejects.toThrow("模型网关拒绝");
+
+    // 两条事实必须同时可见：发送失败本身 + 补偿读队列也失败。
+    expect(mounted.state().status).toBe(
+      "发送失败: 请求失败 502 : 模型网关拒绝"
+      + "；重新读取待处理队列也失败: 请求失败 503 : 队列不可读",
+    );
+  });
+
+  test("replay 失败时必须递增历史重载计数，界面不停在脏状态", async () => {
+    const currentSession = session();
+    installGatewayFetch(({ path }) => {
+      if (path === "/api/v1/sessions/ses_send_regression/messages/msg_original/replay") {
+        return Response.json({ detail: "上下文窗口已失效" }, { status: 409 });
+      }
+      return undefined;
+    }, { token: "test-replay-failure-token" });
+
+    const mounted = mountSessionRunActions({
+      currentSession,
+      state: state(currentSession),
+      cacheKey: CACHE_KEY,
+    });
+
+    await expect(
+      mounted.actions.replayTurn("msg_original", "regenerate", "原始回复"),
+    ).rejects.toThrow("上下文窗口已失效");
+
+    // 轮次回放失败会改动后端历史投影，必须触发一次历史 bootstrap 重载。
+    expect(mounted.state().sessionHistoryReloadNonce).toBe(1);
+    expect(mounted.state().status).toBe("轮次操作失败: 请求失败 409 : 上下文窗口已失效");
+  });
+
+  test("未选中会话时发送消息会先创建会话再发送", async () => {
+    // 空工作区首次发消息：currentSession 为空，必须显式创建会话后继续发送。
+    let createCalls = 0;
+    // 用对象承载被闭包写入的观测值：裸变量会被 TS 的类型收窄判成 null，
+    // 这里必须如实反映「闭包内异步赋值」这一契约。
+    const observed: { sentSessionId: string | null } = { sentSessionId: null };
+    installGatewayFetch(({ path, method }) => {
+      if (path === "/api/v1/sessions" && method === "POST") {
+        createCalls += 1;
+        return apiResponse({
+          session_id: "ses_created_on_send",
+          workspace_id: "workspace_send_regression",
+          title: "新会话",
+          current_agent_id: "default",
+          created_at: "2026-07-20T00:00:00Z",
+          updated_at: "2026-07-20T00:00:00Z",
+        });
+      }
+      if (path === "/api/v1/sessions/ses_created_on_send/messages" && method === "POST") {
+        observed.sentSessionId = "ses_created_on_send";
+        return apiResponse({
+          message_id: "msg_created_on_send",
+          job_id: "job_created_on_send",
+          status: "running",
+          dispatch: {
+            session_id: "ses_created_on_send",
+            job_id: "job_created_on_send",
+            job_status: "running",
+            active_job_id: "job_created_on_send",
+            queued_jobs_ahead: 0,
+            queued_job_count: 0,
+            pending_job_count: 0,
+          },
+        });
+      }
+      return undefined;
+    }, { token: "test-create-on-send-token" });
+
+    const mounted = mountSessionRunActions({
+      currentSession: null,
+      state: state(null),
+      cacheKey: CACHE_KEY,
+    });
+
+    await mounted.actions.sendMessage("空工作区首条消息");
+
+    expect(createCalls).toBe(1);
+    expect(observed.sentSessionId).toBe("ses_created_on_send");
+    expect(mounted.state().currentSession?.session_id).toBe("ses_created_on_send");
+  });
+
+  test("未选中会话时中断必须显式失败，不能静默成功", async () => {
+    installGatewayFetch(() => undefined, { token: "test-no-session-interrupt-token" });
+    const mounted = mountSessionRunActions({
+      currentSession: null,
+      state: state(null),
+      cacheKey: CACHE_KEY,
+    });
+
+    await expect(mounted.actions.interruptSession())
+      .rejects.toThrow("当前没有可中断的会话");
   });
 });

@@ -278,3 +278,83 @@ describe("useSessionGoalController 跨会话守卫", () => {
     unmount();
   });
 });
+
+describe("useSessionGoalController 会话身份守卫", () => {
+  test("目标会话为空时 refreshGoal 清空残留 Goal 状态并短路，绝不发请求", async () => {
+    installTestWindow(49_406);
+    installTestDocument();
+    let goalRequests = 0;
+    installGatewayFetch(({ path }) => {
+      if (path.includes("/api/v1/sessions/")) {
+        goalRequests += 1;
+        return apiResponse({});
+      }
+      return undefined;
+    }, { token: "gc-empty-target-token" });
+
+    // 切到空会话时 AppState 里可能仍残留上一个会话的 Goal；refreshGoal 收到
+    // sessionless 目标必须把它清干净。这里保留自持状态机的 Harness，才能把残留
+    // 状态显式注入到调用前。
+    const initial = {
+      currentSession: null,
+      currentSessionWorkspaceId: null,
+      currentGoal: null,
+      currentGoalSessionId: null,
+      goalLoading: false,
+      goalError: null,
+    } as unknown as AppState;
+    let latestState = initial;
+    let controller: ReturnType<typeof useSessionGoalController> | null = null;
+    let injectStaleGoal: (() => void) | null = null;
+    function Harness(): React.ReactNode {
+      const [state, setState] = React.useState<AppState>(() => initial);
+      latestState = state;
+      controller = useSessionGoalController({
+        apiPort: 49_406,
+        currentSessionId: state.currentSession?.session_id ?? null,
+        currentWorkspaceId: state.currentSessionWorkspaceId,
+        setState,
+      });
+      injectStaleGoal = () => setState((prev) => ({
+        ...prev,
+        // 模拟上一个会话残留的 Goal 与错误文本。
+        currentGoal: {
+          goal_id: "goal_stale",
+          session_id: "ses_stale",
+          objective: "上一个会话的目标",
+          status: "active",
+          token_budget: null,
+          tokens_used: 0,
+          time_used_seconds: 0,
+          created_at: "2026-09-02T00:00:00Z",
+          updated_at: "2026-09-02T00:00:00Z",
+        } as never,
+        currentGoalSessionId: "ses_stale",
+        goalError: "上一个会话的错误",
+      }));
+      return null;
+    }
+    const unmount = await mountHarness(Harness, 1);
+
+    await act(async () => {
+      injectStaleGoal!();
+      await Promise.resolve();
+    });
+    expect(latestState.currentGoal?.objective).toBe("上一个会话的目标");
+
+    let result: unknown = "unset";
+    await act(async () => {
+      result = await controller!.refreshGoal({ sessionId: "", workspaceId: null });
+    });
+
+    // sessionless 目标必须清空 Goal 状态并短路返回 null，绝不能残留上一个会话。
+    expect(result).toBeNull();
+    expect(latestState.currentGoal).toBeNull();
+    expect(latestState.currentGoalSessionId).toBeNull();
+    expect(latestState.goalLoading).toBe(false);
+    expect(latestState.goalError).toBeNull();
+    // 短路必须在任何网络请求之前发生。
+    expect(goalRequests).toBe(0);
+    unmount();
+  });
+});
