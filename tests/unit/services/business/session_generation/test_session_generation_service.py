@@ -415,6 +415,7 @@ async def test_start_recovers_executing_run_with_same_session_message_and_job_id
     message = MessageDTO(
         message_id="msg_restart_prepared",
         session_id=session.session_id,
+        thread_id="thr_restart_prepared",
         role=MessageRole.user,
         content="继续执行",
         metadata={

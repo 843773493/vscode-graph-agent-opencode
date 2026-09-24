@@ -6,12 +6,14 @@ import json
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from app.core.path_utils import get_session_path_resolver
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.support.message_service import build_message_service
 
 MESSAGE_TIME = "2026-07-14T00:00:00+00:00"
 
@@ -64,7 +66,7 @@ async def test_message_service_loads_history_from_checkpoint(
         {"messages": "1"},
     )
 
-    service = MessageService(checkpointer=saver)
+    service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_2b802e1903204588891039a3fc6ef4cd", limit=10)
 
     assert len(messages.items) == 2
@@ -73,6 +75,12 @@ async def test_message_service_loads_history_from_checkpoint(
     assert messages.items[1].role.value == "assistant"
     assert messages.items[1].content == "hello"
     assert messages.items[1].metadata.get("phase") == "text"
+    # 普通 Session 入口的可见消息必须携带权威 main thread，不得用 session_id 冒充。
+    resolved = get_session_path_resolver(tmp_path).main_thread_id(
+        "ses_2b802e1903204588891039a3fc6ef4cd"
+    )
+    assert {item.thread_id for item in messages.items} == {resolved}
+    assert resolved != "ses_2b802e1903204588891039a3fc6ef4cd"
 
 
 @pytest.mark.asyncio
@@ -112,7 +120,7 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
         {"messages": "1"},
     )
 
-    service = MessageService(checkpointer=saver)
+    service = build_message_service(tmp_path, checkpointer=saver)
     latest = await service.list(session_id="ses_6f3014ef05814de18703956b657ea3ae", limit=4)
     assert [item.content for item in latest.items] == [
         "问题 4",
@@ -155,7 +163,7 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
         {"messages": "1"},
     )
     with pytest.raises(ValueError, match="消息历史已更新"):
-        await MessageService(checkpointer=other_saver).list(
+        await build_message_service(tmp_path, checkpointer=other_saver).list(
             "ses_63f3c9ef1b6944b388806112c47da251", cursor=latest.next_cursor
         )
 
@@ -209,7 +217,7 @@ async def test_visible_history_omits_inline_media_payload_from_metadata(
         {"messages": "1"},
     )
 
-    page = await MessageService(checkpointer=saver).list(
+    page = await build_message_service(tmp_path, checkpointer=saver).list(
         "ses_1db3e57dd1b54855806754956ed663e1",
         limit=10,
     )
@@ -310,7 +318,7 @@ async def test_human_message_role_and_source_survive_legacy_system_metadata(
         {"messages": "1"},
     )
 
-    messages = await MessageService(checkpointer=saver).list(
+    messages = await build_message_service(tmp_path, checkpointer=saver).list(
         session_id="ses_6a460fb1ede24f9b83befbeeabf35f10",
         limit=10,
     )
@@ -328,7 +336,10 @@ async def test_message_service_rejects_non_user_new_turn():
     from app.schemas.internal_v2.common import MessageRole
     from app.schemas.internal_v2.message import MessageCreateRequest
 
-    service = MessageService()
+    def _unexpected_resolution(session_id: str) -> str:
+        pytest.fail(f"role 校验必须先于 main thread 解析: {session_id}")
+
+    service = MessageService(main_thread_resolver=_unexpected_resolution)
     with pytest.raises(ValueError, match="role 必须为 user"):
         await service.create(
             "sess_invalid_role",
@@ -345,7 +356,7 @@ async def test_message_service_returns_empty_when_no_checkpoint(
     session_bundle_factory,
 ):
     saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_40cc4258059d4fd583f9b2d710032b9c")
-    service = MessageService(checkpointer=saver)
+    service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_40cc4258059d4fd583f9b2d710032b9c", limit=10)
     assert messages.items == []
 
@@ -376,7 +387,7 @@ async def test_message_service_restores_identity_from_rollout_index(
         {"messages": "1"},
     )
 
-    messages = await MessageService(checkpointer=saver).list(
+    messages = await build_message_service(tmp_path, checkpointer=saver).list(
         session_id="ses_00f90d52b18f47068e06ede2aa8f4135",
         limit=10,
     )
@@ -421,7 +432,7 @@ async def test_agent_context_state_applies_summarization_event(
         {"messages": "1", "_summarization_event": "1"},
     )
 
-    state = await MessageService(checkpointer=saver).get_agent_context_state(
+    state = await build_message_service(tmp_path, checkpointer=saver).get_agent_context_state(
         "ses_cbd344c00430463482e8595356c6e117"
     )
 
@@ -482,7 +493,7 @@ async def test_agent_context_state_applies_cache_preserving_event(
         {"messages": "1", "_summarization_event": "1"},
     )
 
-    state = await MessageService(checkpointer=saver).get_agent_context_state(
+    state = await build_message_service(tmp_path, checkpointer=saver).get_agent_context_state(
         "ses_62e61175069149bb8780e8f6f11473c9"
     )
 
@@ -529,7 +540,7 @@ async def test_message_service_preserves_distinct_canonical_message_ids(
         {"messages": "1"},
     )
 
-    service = MessageService(checkpointer=saver)
+    service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_8a7c09d6021645f583b6247d317a4689", limit=10)
 
     assert [(item.role.value, item.message_id) for item in messages.items] == [
@@ -576,7 +587,7 @@ async def test_agent_state_preserves_distinct_canonical_message_records(
         {"messages": "1"},
     )
 
-    service = MessageService(checkpointer=saver)
+    service = build_message_service(tmp_path, checkpointer=saver)
     state_snapshot = await service.get_agent_state_messages("ses_b588ce3ccd714842848cb4780164fec2")
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
 
@@ -625,7 +636,7 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(
         {"messages": "1"},
     )
 
-    service = MessageService(checkpointer=saver)
+    service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_f83e7b429f3148d686a6f1fbf4da61dc", limit=10)
 
     assert len(messages.items) == 2
@@ -686,7 +697,7 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(
         {"messages": "1"},
     )
 
-    service = MessageService(checkpointer=saver)
+    service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_1833a18a73d74f20857056c42205891c", limit=10)
     assert len(messages.items) == 1
     assert messages.items[0].role.value == "user"
@@ -753,7 +764,7 @@ async def test_message_service_hides_empty_assistant_tool_call_messages(
         {"messages": "1"},
     )
 
-    service = MessageService(checkpointer=saver)
+    service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_629e24840acb4f1784b914c0a6cc43a0", limit=10)
 
     assert [message.role.value for message in messages.items] == ["user", "assistant"]
@@ -801,7 +812,7 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
         {"messages": "1"},
     )
 
-    service = MessageService(checkpointer=saver)
+    service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_b9abad624e5b4ff688a49162a647fb0f", limit=10)
     assert messages.items[0].content == "请描述图片"
     assert messages.items[0].attachments[0].file_id == "assets/test.jpg"
@@ -871,7 +882,7 @@ async def test_message_service_uses_user_content_blocks_for_user_message_text(
         {"messages": "1"},
     )
 
-    service = MessageService(checkpointer=saver)
+    service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_c21438f10b4845798dcdd7f1561b7bc6", limit=10)
     assert messages.items[0].content == "请按时间顺序说明这个视频。"
     assert "已抽取为" not in messages.items[0].content
@@ -948,7 +959,7 @@ async def test_message_service_refusal_block(tmp_path, session_bundle_factory):
         {"messages": "1"},
     )
 
-    service = MessageService(checkpointer=saver)
+    service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_82a51b14dca749e3861ba7fd0b164c15", limit=10)
 
     assert messages.items[1].content == "[拒绝]我拒绝回答"

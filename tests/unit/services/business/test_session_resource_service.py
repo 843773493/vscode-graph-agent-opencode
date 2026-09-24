@@ -29,6 +29,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
+from tests.support.message_service import build_message_service
 
 
 class FakeTerminalManagerClient:
@@ -554,7 +555,7 @@ async def test_cancel_background_task_does_not_inject_monitor_reminder(
             "source_id": "monitor:ses_46a586acaf1a4fa5865c0b98fc8da879:test",
         },
     )
-    message_service = MessageService(checkpointer=saver)
+    message_service = build_message_service(sessions_dir, checkpointer=saver)
     service = SessionResourceService(
         session_service=FakeSessionService(),
         job_service=FakeJobService(count=0),

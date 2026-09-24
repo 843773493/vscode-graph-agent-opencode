@@ -12,11 +12,11 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.schemas.internal_v2.common import JobStatus, RunMode
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO, JobDTO
 from app.schemas.internal_v2.message import MessageReplayRequest, MessageRunAccepted
-from app.services.business.message_service import MessageService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.support.message_service import build_message_service
 
 NOW = datetime(2026, 7, 16, tzinfo=UTC)
 
@@ -228,7 +228,7 @@ async def _build_service(
     session_service.get = get_session
     service = SessionTurnReplayService(
         checkpointer=saver,
-        message_service=MessageService(checkpointer=saver),
+        message_service=build_message_service(tmp_path, checkpointer=saver),
         session_service=session_service,
         job_service=FakeJobService(jobs),
         dispatcher=dispatcher,

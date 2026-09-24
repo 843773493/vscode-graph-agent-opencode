@@ -82,6 +82,9 @@ class MessageReplayAccepted(MessageRunAccepted):
 class MessageDTO(TimestampedDTO):
     message_id: str
     session_id: str
+    # 该可见消息所属的权威 thread；由服务层按 catalog 冻结 main pointer 回填，
+    # 不得用 session_id 冒充（普通 Session 入口恒为 main thread）。
+    thread_id: str = Field(min_length=1)
     role: MessageRole
     content: str
     attachments: list[AttachmentRef] = Field(default_factory=list)

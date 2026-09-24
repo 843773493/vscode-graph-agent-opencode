@@ -24,6 +24,7 @@ class MessageContentProjectionMixin:
     @staticmethod
     def _message_to_dto(
         session_id: str,
+        thread_id: str,
         index: int,
         message: BaseMessage,
     ) -> MessageDTO:
@@ -105,6 +106,7 @@ class MessageContentProjectionMixin:
         return MessageDTO(
             message_id=message_id,
             session_id=session_id,
+            thread_id=thread_id,
             role=role,
             content=content,
             attachments=MessageContentProjectionMixin._attachments_for_message(

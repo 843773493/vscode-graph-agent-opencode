@@ -38,15 +38,23 @@ from app.services.mapping.message_content import MessageContentProjectionMixin
 class MessageService(MessageContentProjectionMixin):
     def __init__(
         self,
+        *,
+        main_thread_resolver: Callable[[str], str],
         checkpointer: BaseCheckpointSaver | None = None,
         attachment_store: AttachmentBlobStore | None = None,
         canonical_item_reader: Callable[[str], Sequence[CanonicalItemRecord]]
         | None = None,
     ) -> None:
+        # 普通 Session 的消息、历史与新建 DTO 只归属权威 main thread；
+        # 身份一律由 catalog 冻结指针解析，禁止用 session_id 冒充。
+        self._main_thread_resolver = main_thread_resolver
         self._checkpointer = checkpointer
         self._attachment_store = attachment_store
         self._canonical_item_reader = canonical_item_reader
 
+    def _resolve_main_thread_id(self, session_id: str) -> str:
+        """解析会话的权威 main thread id；缺指针时保持 KeyError 语义。"""
+        return self._main_thread_resolver(session_id)
 
     async def list(
         self,
@@ -54,6 +62,7 @@ class MessageService(MessageContentProjectionMixin):
         limit: int = 50,
         cursor: str | None = None,
     ) -> CursorPage[MessageDTO]:
+        thread_id = self._resolve_main_thread_id(session_id)
         checkpoint_tuple = (
             await self._checkpointer.aget_tuple(build_checkpoint_config(session_id))
             if self._checkpointer is not None
@@ -62,8 +71,11 @@ class MessageService(MessageContentProjectionMixin):
         if checkpoint_tuple is None:
             return CursorPage(items=[], next_cursor=None, has_more=False)
         return visible_message_page(
-            self._visible_messages_from_checkpoint(session_id, checkpoint_tuple),
+            self._visible_messages_from_checkpoint(
+                session_id, thread_id, checkpoint_tuple
+            ),
             session_id=session_id,
+            thread_id=thread_id,
             checkpoint_id=str(checkpoint_tuple.checkpoint.get("id") or ""),
             limit=limit,
             cursor=cursor,
@@ -87,6 +99,7 @@ class MessageService(MessageContentProjectionMixin):
                 "创建并执行新一轮消息时 role 必须为 user；"
                 "委派、跨会话和团队消息的来源请写入 metadata"
             )
+        thread_id = self._resolve_main_thread_id(session_id)
         attachments = message_create.attachments
         if self._attachment_store is not None:
             attachments = await self._attachment_store.persist_inline(
@@ -96,6 +109,7 @@ class MessageService(MessageContentProjectionMixin):
         return MessageDTO(
             message_id=create_prefixed_id("msg"),
             session_id=session_id,
+            thread_id=thread_id,
             role=message_create.role,
             content=message_create.content,
             attachments=attachments,
@@ -272,33 +286,28 @@ class MessageService(MessageContentProjectionMixin):
         return raw_messages
 
     async def _load_messages(self, session_id: str) -> list[MessageDTO]:
-        messages, _ = await self._load_messages_with_checkpoint_id(session_id)
-        return messages
-
-    async def _load_messages_with_checkpoint_id(
-        self,
-        session_id: str,
-    ) -> tuple[list[MessageDTO], str]:
         if self._checkpointer is None:
-            return [], ""
+            return []
         checkpoint_tuple = await self._checkpointer.aget_tuple(
             build_checkpoint_config(session_id)
         )
         if checkpoint_tuple is None:
-            return [], ""
+            return []
         raw_messages = checkpoint_tuple.checkpoint.get("channel_values", {}).get(
             "messages", []
         )
         if not isinstance(raw_messages, list):
-            return [], str(checkpoint_tuple.checkpoint.get("id") or "")
-
-        return self._visible_messages_from_checkpoint(session_id, checkpoint_tuple), str(
-            checkpoint_tuple.checkpoint.get("id") or ""
+            return []
+        return self._visible_messages_from_checkpoint(
+            session_id,
+            self._resolve_main_thread_id(session_id),
+            checkpoint_tuple,
         )
 
     def _visible_messages_from_checkpoint(
         self,
         session_id: str,
+        thread_id: str,
         checkpoint_tuple: CheckpointTuple,
     ) -> list[MessageDTO]:
         raw_messages = checkpoint_tuple.checkpoint.get("channel_values", {}).get(
@@ -316,7 +325,7 @@ class MessageService(MessageContentProjectionMixin):
             # system_reminder 与空 assistant 仍可通过 Agent State 调试视图查看。
             if not self._is_user_visible_message(message):
                 continue
-            dto = self._message_to_dto(session_id, index, message)
+            dto = self._message_to_dto(session_id, thread_id, index, message)
             visible_key = (dto.role.value, dto.message_id)
             if visible_key in seen_visible_messages:
                 continue

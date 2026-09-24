@@ -429,6 +429,7 @@ def build_app_container(
     )
     attachment_blob_store = AttachmentBlobStore(resolved_workspace_root)
     message_service = MessageService(
+        main_thread_resolver=session_path_resolver.main_thread_id,
         checkpointer=checkpointer,
         attachment_store=attachment_blob_store,
         canonical_item_reader=checkpointer.read_canonical_items,

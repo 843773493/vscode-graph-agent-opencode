@@ -12,12 +12,12 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.session_interrupt_state import SessionInterruptState
 from app.schemas.internal_v2.common import ControlAction, JobStatus, RunMode
 from app.schemas.internal_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO
-from app.services.business.message_service import MessageService
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.support.message_service import build_message_service
 
 
 class FakeJobService:
@@ -107,7 +107,7 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    message_service = MessageService(checkpointer=saver)
+    message_service = build_message_service(tmp_path, checkpointer=saver)
     message_stream_store = MessageStreamStore(
         path_resolver=get_session_path_resolver(tmp_path),
     )
@@ -220,7 +220,7 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
     session_bundle_factory(tmp_path, session_id)
 
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    message_service = MessageService(checkpointer=saver)
+    message_service = build_message_service(tmp_path, checkpointer=saver)
     message_stream_store = MessageStreamStore(
         path_resolver=get_session_path_resolver(tmp_path),
     )

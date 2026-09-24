@@ -16,7 +16,6 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.prompting import internal_message_factory
 from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
-from app.services.business.message_service import MessageService
 from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
     persist_user_message_checkpoint,
@@ -35,6 +34,7 @@ from app.services.infrastructure.rollout_history_reader import RolloutHistoryRea
 from app.services.mapping.itemized.message_reasoning_merge import (
     merge_canonical_reasoning,
 )
+from tests.support.message_service import build_message_service
 
 MESSAGE_TIME = datetime(2026, 7, 14, tzinfo=UTC)
 
@@ -334,7 +334,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
         {"type": "text", "text": final_text},
     ]
 
-    messages_page = await MessageService(checkpointer=saver).list(session_id, limit=10)
+    messages_page = await build_message_service(tmp_path, checkpointer=saver).list(session_id, limit=10)
     assert messages_page.items[-1].content == final_text
     assert messages_page.items[-1].metadata["token_usage"] == {
         "input_tokens": 100,
@@ -345,7 +345,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
         "reported_model_calls": 2,
     }
 
-    message_service = MessageService(checkpointer=saver)
+    message_service = build_message_service(tmp_path, checkpointer=saver)
     state_snapshot = await message_service.get_agent_state_messages(session_id)
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
     state_assistant = records[-1]
@@ -515,7 +515,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
     )
 
     assert changed is True
-    state_snapshot = await MessageService(checkpointer=saver).get_agent_state_messages(
+    state_snapshot = await build_message_service(tmp_path, checkpointer=saver).get_agent_state_messages(
         session_id
     )
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
@@ -529,7 +529,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
     ]
     assert first_reasoning not in json.dumps(records[-1], ensure_ascii=False)
 
-    visible_messages = await MessageService(checkpointer=saver).list(
+    visible_messages = await build_message_service(tmp_path, checkpointer=saver).list(
         session_id,
         limit=10,
     )
