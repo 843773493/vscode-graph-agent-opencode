@@ -233,10 +233,17 @@ def create_wait_for_session_tool(
                     target_session_id=target_session_id,
                     job_ids=frozen_selectorless_job_ids,
                 ), None
-            return await observer.observe_jobs(
+            observed_jobs = await observer.observe_jobs(
                 target_session_id=target_session_id,
                 job_ids=bound_job_ids,
-            ), None
+            )
+            # 显式 job selector 必须能在目标 session 观察到；否则报
+            # selector_not_found，绝不把未知 job_id 伪装成 idle。
+            if job_id is not None and job_id not in observed_jobs:
+                raise ValueError(
+                    f"selector_not_found: job_id={job_id!r}"
+                )
+            return observed_jobs, None
 
         async def _snapshot() -> list[WaitObservation]:
             states, unbound = await _observe()

@@ -287,3 +287,26 @@ async def test_selectorless_wait_does_not_observe_jobs_created_after_admission()
     assert observed_ids == ["job_admitted"]
     assert result["status"] == "timed_out"
     assert result["baseline_revision"] == result["latest_revision"]
+
+
+async def test_unknown_job_selector_is_not_reported_as_idle() -> None:
+    """显式 job_id 在目标 session 不存在时必须报 selector_not_found，不是 idle。
+
+    idle 只表示「无 selector 且准入快照为空」；把未知 job_id 伪装成 idle 会让
+    调用方以为目标已无活跃工作，从而放过一个从未存在的 selector。
+    """
+    tool = create_wait_for_session_tool(
+        _SESSION_ID,
+        job_service=_GrowingJobService(snapshot_sets=[[]]),
+        binding_lookup=_NeverBoundLookup(),
+    )
+
+    with pytest.raises(ValueError, match="selector_not_found"):
+        await tool.ainvoke(
+            {
+                "target_session_id": _SESSION_ID,
+                "job_id": "job_missing",
+                "until": "terminal",
+                "timeout_seconds": 1,
+            }
+        )
