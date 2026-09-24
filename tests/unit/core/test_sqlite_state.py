@@ -174,3 +174,37 @@ def test_sqlite_state_rejects_lost_migrated_table_on_reopen(tmp_path):
         SQLiteStateDatabase(
             path=path, schema_version=2, migrations=migrations
         )
+
+
+def test_sqlite_state_releases_ownership_when_initialize_fails(tmp_path):
+    """初始化失败时必须在构造体内释放进程所有权锁。
+
+    ``__init__`` 在 ``_ownership.acquire()`` 之后才开始迁移；迁移失败
+    （非法 SQL、磁盘错误等）时若不释放，锁 fd 会随异常对象的 traceback
+    一起存活。调用方捕获并记录该异常后重试同一路径，只会看到
+    「已被另一个进程占用」这一错误分类，真实迁移错误被掩盖。
+    """
+    path = tmp_path / "state.sqlite"
+
+    failure = None
+    try:
+        SQLiteStateDatabase(
+            path=path,
+            schema_version=1,
+            migrations=("THIS IS NOT SQL;",),
+        )
+    except sqlite3.OperationalError as error:
+        # 真实运行时同样会保留该异常对象（日志、异常链、测试断言）。
+        failure = error
+    assert failure is not None
+
+    # 修复后：所有权锁已随构造失败释放，同路径可重新初始化。
+    database = SQLiteStateDatabase(
+        path=path,
+        schema_version=1,
+        migrations=("CREATE TABLE a (value TEXT NOT NULL);",),
+    )
+    try:
+        assert database.diagnostics().schema_version == 1
+    finally:
+        database.close()

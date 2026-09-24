@@ -112,9 +112,19 @@ class SQLiteStateDatabase:
         self._allow_shared_processes = allow_shared_processes
         self._closed = False
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self._allow_shared_processes:
-            self._ownership.acquire()
-        self._initialize()
+        # 构造期任一步骤失败都必须归还进程所有权锁：异常对象会连同
+        # traceback 一起被调用方长期持有，锁 fd 若随之存活，调用方重试
+        # 同一路径时只会看到「已被另一个进程占用」，真实迁移错误被掩盖。
+        acquired = False
+        try:
+            if not self._allow_shared_processes:
+                self._ownership.acquire()
+                acquired = True
+            self._initialize()
+        except BaseException:
+            if acquired:
+                self._ownership.release()
+            raise
 
     def _connect(self) -> sqlite3.Connection:
         if self._closed:
