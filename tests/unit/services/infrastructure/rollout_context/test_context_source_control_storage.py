@@ -65,15 +65,6 @@ def _descriptor() -> ContextSourceDescriptor:
     )
 
 
-def _is_catalog_mode(sessions_root: Path) -> bool:
-    """R18 catalog 模式探测：工厂在 catalog 模式建立 SQLite navigation 库。
-
-    与 path_utils 开关工厂同源（fixture 的会话即经工厂构造）——catalog
-    模式下该库必然存在，旧模式不存在。
-    """
-    return (sessions_root.parent / "navigation" / "session-catalog.sqlite").is_file()
-
-
 def _new_manager(
     owner: ContextSourceOwnerKey,
     port: ContextSourceControlOwnerMixin,
@@ -219,25 +210,16 @@ def test_restart_recovery_keeps_untrack_state(
 
 
 def test_restart_recovery_keeps_threads_isolated(
-    sessions_root: Path,
     control_state_port: RolloutCheckpointSaver,
 ) -> None:
     main_owner = ContextSourceOwnerKey(session_id=SESSION_ID, thread_id=MAIN_THREAD_ID)
-    # R18 catalog 模式适配：当前模型下 child thread 物理形态即 delegated
-    # child session（R6b 形态），owner 以 child session 自身为主键
-    # （thread_id=MAIN）；旧模型（子 thread 注册为子节点，thread_id=子节点
-    # ID）保留原 owner 形态。两类 owner 的隔离语义等价：不同 owner 各自
-    # 持有独立 rollout 与控制状态。
-    if _is_catalog_mode(sessions_root):
-        child_owner = ContextSourceOwnerKey(
-            session_id=CHILD_THREAD_ID,
-            thread_id=MAIN_THREAD_ID,
-        )
-    else:
-        child_owner = ContextSourceOwnerKey(
-            session_id=SESSION_ID,
-            thread_id=CHILD_THREAD_ID,
-        )
+    # 当前模型下 child thread 的物理形态就是 delegated child session（R6b
+    # 形态），owner 以 child session 自身为主键（thread_id=MAIN）。不同 owner
+    # 各自持有独立 rollout 与控制状态。
+    child_owner = ContextSourceOwnerKey(
+        session_id=CHILD_THREAD_ID,
+        thread_id=MAIN_THREAD_ID,
+    )
     main = _new_manager(main_owner, control_state_port)
     _track_skill(main)
 
@@ -322,26 +304,18 @@ def test_synthetic_session_has_no_restorable_control_state(
 
 
 def test_read_short_circuits_for_owner_outside_authoritative_index(
-    sessions_root: Path,
     rollout_storage: RolloutStorage,
 ) -> None:
     assert rollout_storage.read_context_source_control_states(
         "ses_ffffffffffffffffffffffffffffffff"
     ) == ()
-    if _is_catalog_mode(sessions_root):
-        # catalog 模式：非 main thread 物理形态未落地（OpenSpec 8.5 前），
-        # 解析 fail closed——这是新模型的显式合同，短路语义仅覆盖「节点
-        # 不在权威目录」（上一条断言）。
-        with pytest.raises(RuntimeError, match="非 main thread 物理形态未落地"):
-            rollout_storage.read_context_source_control_states(
-                SESSION_ID,
-                thread_id="thr_bfc75d66aebc4b7984711000b05bc503",
-            )
-    else:
-        assert rollout_storage.read_context_source_control_states(
+    # 非 main thread 物理形态尚未落地（OpenSpec 8.5 前），解析 fail closed——
+    # 这是新模型的显式合同，短路语义仅覆盖「节点不在权威目录」（上一条断言）。
+    with pytest.raises(RuntimeError, match="非 main thread 物理形态未落地"):
+        rollout_storage.read_context_source_control_states(
             SESSION_ID,
             thread_id="thr_bfc75d66aebc4b7984711000b05bc503",
-        ) == ()
+        )
 
 
 def test_read_fails_closed_when_indexed_node_directory_is_missing(
@@ -353,33 +327,21 @@ def test_read_fails_closed_when_indexed_node_directory_is_missing(
     session_dir = resolver.resolve_session_node(SESSION_ID)
     shutil.rmtree(session_dir)
 
-    if _is_catalog_mode(sessions_root):
-        # catalog 模式：防篡改收敛到物理解析点（fail closed），不扫盘比对。
-        with pytest.raises(RuntimeError, match="会话物理目录缺失"):
-            rollout_storage.read_context_source_control_states(SESSION_ID)
-    else:
-        with pytest.raises(RuntimeError, match="绕过软件修改"):
-            rollout_storage.read_context_source_control_states(SESSION_ID)
+    # 防篡改收敛到物理解析点（fail closed），不扫盘比对。
+    with pytest.raises(RuntimeError, match="会话物理目录缺失"):
+        rollout_storage.read_context_source_control_states(SESSION_ID)
 
 
 def test_owner_rejects_thread_from_other_session(
-    sessions_root: Path,
     rollout_storage: RolloutStorage,
 ) -> None:
-    if _is_catalog_mode(sessions_root):
-        # catalog 模式：thread_id 先过 canonical thread 验证器（session_id
-        # 的 ses_ 形态对 thread 位非法），归属校验之前即被拒绝——防线更靠前。
-        with pytest.raises(ValueError, match="thread_id 形态非法"):
-            rollout_storage.read_context_source_control_states(
-                CHILD_THREAD_ID,
-                thread_id=SESSION_ID,
-            )
-    else:
-        with pytest.raises(RuntimeError, match="thread 不属于目标 session"):
-            rollout_storage.read_context_source_control_states(
-                CHILD_THREAD_ID,
-                thread_id=SESSION_ID,
-            )
+    # SESSION_ID 是可寻址的 session 节点，先命中 child session 别名分支；它
+    # 不是 CHILD_THREAD_ID 的子节点，归属校验拒绝，不会是形态错误。
+    with pytest.raises(RuntimeError, match="thread 不属于目标 session"):
+        rollout_storage.read_context_source_control_states(
+            CHILD_THREAD_ID,
+            thread_id=SESSION_ID,
+        )
 
 
 def test_write_is_idempotent_and_does_not_advance_state_revision(
