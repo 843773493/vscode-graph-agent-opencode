@@ -37,6 +37,74 @@ function normalizeSessionTitle(title: string): string {
   return trimmed;
 }
 
+/** 移除一条已消失会话的全部会话级附属缓存。删除会话的抢占分支与列表收敛
+ * 分支共用这一份：之前两处各写一串 delete，键集互不相同（收敛分支漏了
+ * 时间线与 Trace 历史，抢占分支漏了事件队列、未读与工作区归属），被删会话
+ * 的缓存因此留成幽灵条目。 */
+function purgeSessionScopedCaches(
+  state: AppState,
+  sessionId: string,
+  cacheKey: string,
+): void {
+  state.sessionAttachmentSummaries.delete(sessionId);
+  state.eventQueuesBySession.delete(cacheKey);
+  state.sessionTraceHistoryBySession.delete(cacheKey);
+  state.pendingConversations.delete(cacheKey);
+  state.activeJobIdsBySession.delete(cacheKey);
+  state.unreadSessionKeys.delete(cacheKey);
+  state.sessionGatewayWorkspaceById.delete(cacheKey);
+  state.turnTimelinesBySession.delete(cacheKey);
+}
+
+/** 把一条会话登记为当前会话后的共同落点：复位会话级显示缓存、写入历史加载
+ * 状态并追加一条 session_selected 事件。selectSession 与 selectWorkspaceSession
+ * 原本逐字复制同一段 25 行，只差事件载荷；新增会话级字段时极易只改一处。 */
+function applySessionSelected(
+  next: AppState,
+  previous: AppState,
+  selected: Session,
+  cacheKey: string,
+  eventPayload: Record<string, unknown>,
+): void {
+  next.unreadSessionKeys.delete(cacheKey);
+  next.traceEvents = [];
+  next.llmRequestLogs = [];
+  next.llmRequestLogsLoadedAt = null;
+  next.llmRequestLogsLoading = previous.contentView === "requests";
+  next.llmRequestLogsError = null;
+  next.sessionResources = [];
+  next.sessionResourcesLoadedAt = null;
+  next.sessionResourcesLoading = previous.contentView === "resources";
+  next.sessionResourcesError = null;
+  next.pendingConversations.delete(cacheKey);
+  next.contentView = previous.contentView === "agent" ? "default" : previous.contentView;
+  next.status = "正在加载会话历史";
+  Object.assign(next, resetAgentStateFields(next));
+  writeLastSessionId(selected.session_id);
+  appendFrontendEvent(
+    next.eventQueuesBySession,
+    selected.session_id,
+    "session_selected",
+    "切换会话",
+    eventPayload,
+    selected.title,
+    cacheKey,
+  );
+}
+
+/** 把一条会话标记为已读的唯一出口。原本 selectSession 与 selectWorkspaceSession
+ * 各写一份逐字相同的 setState 块，未读判定与写回必须只有一处。 */
+function clearUnreadSessionKey(setState: SetAppState, cacheKey: string): void {
+  setState((prev) => {
+    if (!prev.unreadSessionKeys.has(cacheKey)) {
+      return prev;
+    }
+    const next = cloneMaps(prev);
+    next.unreadSessionKeys.delete(cacheKey);
+    return next;
+  });
+}
+
 /** 用权威会话列表整表替换本地镜像，并清掉已消失会话的附属缓存。 */
 function applySessionListConvergence(
   state: AppState,
@@ -53,13 +121,11 @@ function applySessionListConvergence(
   );
   for (const removed of previousSessions) {
     if (remainingIds.has(removed.session_id)) continue;
-    const cacheKey = sessionScopeKey(workspaceId, removed.session_id);
-    next.sessionAttachmentSummaries.delete(removed.session_id);
-    next.eventQueuesBySession.delete(cacheKey);
-    next.pendingConversations.delete(cacheKey);
-    next.activeJobIdsBySession.delete(cacheKey);
-    next.unreadSessionKeys.delete(cacheKey);
-    next.sessionGatewayWorkspaceById.delete(cacheKey);
+    purgeSessionScopedCaches(
+      next,
+      removed.session_id,
+      sessionScopeKey(workspaceId, removed.session_id),
+    );
   }
   return next;
 }
@@ -94,14 +160,7 @@ export function useSessionLifecycleActions({
         const cacheKey = currentSessionGatewayWorkspaceId
           ? sessionScopeKey(currentSessionGatewayWorkspaceId, sessionId)
           : sessionId;
-        setState((prev) => {
-          if (!prev.unreadSessionKeys.has(cacheKey)) {
-            return prev;
-          }
-          const next = cloneMaps(prev);
-          next.unreadSessionKeys.delete(cacheKey);
-          return next;
-        });
+        clearUnreadSessionKey(setState, cacheKey);
         return;
       }
       abortCurrentStream();
@@ -130,33 +189,10 @@ export function useSessionLifecycleActions({
             workspaceId,
           );
         }
-        next.unreadSessionKeys.delete(cacheKey);
-        next.traceEvents = [];
-        next.llmRequestLogs = [];
-        next.llmRequestLogsLoadedAt = null;
-        next.llmRequestLogsLoading = prev.contentView === "requests";
-        next.llmRequestLogsError = null;
-        next.sessionResources = [];
-        next.sessionResourcesLoadedAt = null;
-        next.sessionResourcesLoading = prev.contentView === "resources";
-        next.sessionResourcesError = null;
-        next.pendingConversations.delete(cacheKey);
-        next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
-        next.status = "正在加载会话历史";
-        Object.assign(next, resetAgentStateFields(next));
-        writeLastSessionId(selected.session_id);
-        appendFrontendEvent(
-          next.eventQueuesBySession,
-          selected.session_id,
-          "session_selected",
-          "切换会话",
-          {
-            session_id: selected.session_id,
-            title: selected.title,
-          },
-          selected.title,
-          cacheKey,
-        );
+        applySessionSelected(next, prev, selected, cacheKey, {
+          session_id: selected.session_id,
+          title: selected.title,
+        });
         return next;
       });
     },
@@ -182,14 +218,7 @@ export function useSessionLifecycleActions({
         && activeGatewayWorkspaceId === workspaceId
       ) {
         const cacheKey = sessionScopeKey(workspaceId, sessionId);
-        setState((prev) => {
-          if (!prev.unreadSessionKeys.has(cacheKey)) {
-            return prev;
-          }
-          const next = cloneMaps(prev);
-          next.unreadSessionKeys.delete(cacheKey);
-          return next;
-        });
+        clearUnreadSessionKey(setState, cacheKey);
         return;
       }
       abortCurrentStream();
@@ -238,36 +267,13 @@ export function useSessionLifecycleActions({
         next.currentSessionWorkspaceId = workspaceId;
         const cacheKey = sessionScopeKey(workspaceId, selected.session_id);
         next.sessionGatewayWorkspaceById.set(cacheKey, workspaceId);
-        next.unreadSessionKeys.delete(cacheKey);
-        next.traceEvents = [];
-        next.llmRequestLogs = [];
-        next.llmRequestLogsLoadedAt = null;
-        next.llmRequestLogsLoading = prev.contentView === "requests";
-        next.llmRequestLogsError = null;
-        next.sessionResources = [];
-        next.sessionResourcesLoadedAt = null;
-        next.sessionResourcesLoading = prev.contentView === "resources";
-        next.sessionResourcesError = null;
-        next.pendingConversations.delete(cacheKey);
-        next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
-        next.status = "正在加载会话历史";
         next.workspaceSwitching = false;
         next.error = null;
-        Object.assign(next, resetAgentStateFields(next));
-        writeLastSessionId(selected.session_id);
-        appendFrontendEvent(
-          next.eventQueuesBySession,
-          selected.session_id,
-          "session_selected",
-          "切换会话",
-          {
-            session_id: selected.session_id,
-            title: selected.title,
-            workspace_id: workspaceId,
-          },
-          selected.title,
-          cacheKey,
-        );
+        applySessionSelected(next, prev, selected, cacheKey, {
+          session_id: selected.session_id,
+          title: selected.title,
+          workspace_id: workspaceId,
+        });
         return next;
       });
     },
@@ -614,9 +620,7 @@ export function useSessionLifecycleActions({
           const cacheKey = workspaceIdForRequest
             ? sessionScopeKey(workspaceIdForRequest, sessionId)
             : sessionId;
-          next.pendingConversations.delete(cacheKey);
-          next.activeJobIdsBySession.delete(cacheKey);
-          next.turnTimelinesBySession.delete(cacheKey);
+          purgeSessionScopedCaches(next, sessionId, cacheKey);
           next.traceEvents = [];
           next.llmRequestLogs = [];
           next.llmRequestLogsLoadedAt = null;

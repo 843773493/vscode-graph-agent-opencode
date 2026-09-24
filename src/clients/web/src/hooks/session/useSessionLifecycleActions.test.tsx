@@ -244,6 +244,69 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     expect(readState().sessions.map((item) => item.session_id)).toEqual(["ses_a"]);
   });
 
+  test("删除会话后不得把它的事件队列残留在本地镜像", async () => {
+    const sesA = raceSession("ses_a");
+    const sesB = raceSession("ses_b");
+    installGatewayFetch(({ path, method }) => {
+      if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
+        return apiResponse({ session_id: sesA.session_id });
+      }
+      if (path === "/api/v1/sessions") {
+        return apiResponse({ items: [sesB], has_more: false, next_cursor: null });
+      }
+      return undefined;
+    });
+
+    const initial = raceState(sesB, [sesA, sesB]);
+    const deletedKey = sessionScopeKey(RACE_WORKSPACE, sesA.session_id);
+    initial.eventQueuesBySession.set(deletedKey, []);
+    initial.turnTimelinesBySession = new Map([
+      [deletedKey, { session_id: sesA.session_id, turns: [], details: new Map() } as never],
+    ]);
+    const { state: readState, actions } = mountSessionLifecycleActions({
+      apiPort: 8014,
+      currentSession: sesB,
+      workspaceId: RACE_WORKSPACE,
+      state: initial,
+    });
+    await actions.deleteSession(sesA.session_id);
+
+    // 被删会话的所有会话级缓存都必须随之一并消失，绝不能留成幽灵条目。
+    expect(readState().eventQueuesBySession.has(deletedKey)).toBe(false);
+    expect(readState().turnTimelinesBySession.has(deletedKey)).toBe(false);
+  });
+
+  test("删除当前会话的抢占分支同样清空它的事件队列与未读标记", async () => {
+    const sesA = raceSession("ses_a");
+    const sesB = raceSession("ses_b");
+    installGatewayFetch(({ path, method }) => {
+      if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
+        return apiResponse({ session_id: sesA.session_id });
+      }
+      if (path === "/api/v1/sessions") {
+        return apiResponse({ items: [sesB], has_more: false, next_cursor: null });
+      }
+      return undefined;
+    });
+
+    const initial = raceState(sesA, [sesA, sesB]);
+    const deletedKey = sessionScopeKey(RACE_WORKSPACE, sesA.session_id);
+    initial.eventQueuesBySession.set(deletedKey, []);
+    initial.unreadSessionKeys = new Set([deletedKey]);
+    const { state: readState, actions } = mountSessionLifecycleActions({
+      apiPort: 8014,
+      currentSession: sesA,
+      workspaceId: RACE_WORKSPACE,
+      state: initial,
+    });
+    await actions.deleteSession(sesA.session_id);
+
+    // 抢占分支在删除请求发出前就切走了当前会话，它同样必须清空被删会话的缓存。
+    expect(readState().currentSession?.session_id).toBe("ses_b");
+    expect(readState().eventQueuesBySession.has(deletedKey)).toBe(false);
+    expect(readState().unreadSessionKeys.has(deletedKey)).toBe(false);
+  });
+
   test("W7 选择不存在的会话时显式失败且不产生切换副作用", () => {
     const sesA = raceSession("ses_a");
     let aborts = 0;
@@ -409,4 +472,3 @@ describe("会话生命周期失败后的后端重取校准", () => {
     expect(readState().workspaceRoot).toBe("/prev/root");
   });
 });
-
