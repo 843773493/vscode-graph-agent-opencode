@@ -1,8 +1,6 @@
 import type {
   APIResponse,
   Job,
-  JobControlRequest,
-  JobControlResponse,
 } from "../types/backend";
 import { requestJson, unwrapApiData, workspaceHeader } from "./http";
 
@@ -19,26 +17,6 @@ export async function getJob(
       `/api/v1/jobs/${encodeURIComponent(jobId)}`,
       {
         headers: workspaceHeader(workspaceId),
-        timeoutMs: AGENT_STATE_TIMEOUT_MS,
-      },
-    ),
-  );
-}
-
-export async function controlJob(
-  port: number,
-  jobId: string,
-  payload: JobControlRequest,
-  workspaceId?: string | null,
-): Promise<JobControlResponse> {
-  return unwrapApiData(
-    await requestJson<APIResponse<JobControlResponse>>(
-      port,
-      `/api/v1/jobs/${encodeURIComponent(jobId)}/control`,
-      {
-        method: "POST",
-        headers: workspaceHeader(workspaceId),
-        body: JSON.stringify(payload),
         timeoutMs: AGENT_STATE_TIMEOUT_MS,
       },
     ),

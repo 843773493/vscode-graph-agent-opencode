@@ -9,10 +9,10 @@ import {
 } from "./turn/ChatTurnUserActions";
 import {
   useChatTurnActions,
-  type ChatTurnActionCallbacks,
 } from "./turn/useChatTurnActions";
+import type { ChatTurnHandlers } from "./turn/types";
 
-export interface ChatTurnProps extends ChatTurnActionCallbacks {
+export interface ChatTurnProps extends ChatTurnHandlers {
   apiPort: number;
   workspaceId?: string | null;
   conversation: ConversationView;

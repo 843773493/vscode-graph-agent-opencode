@@ -4,10 +4,6 @@ import {
 } from "./uiSettings/preferences";
 
 // 用户会话和视图位置由 Gateway 用户状态保存；这些函数保留空实现只为让会话动作不再写共享浏览器状态。
-export function readLastSessionId(): string | null {
-  return null;
-}
-
 export function writeLastSessionId(_sessionId: string): void {}
 
 export function clearLastSessionId(): void {}

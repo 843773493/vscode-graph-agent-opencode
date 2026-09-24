@@ -51,10 +51,3 @@ export function groupGatewayWorkspaces(
   }
   return [...groups.values()];
 }
-
-export function workspaceKindLabel(workspace: GatewayWorkspace): string {
-  if (workspace.connection_kind === "local") {
-    return workspace.managed ? "local · managed" : "local · external";
-  }
-  return "remote_gateway · projected";
-}

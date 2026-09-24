@@ -693,19 +693,6 @@ export function markTurnsLoading(
   return { ...timeline, loadingDetailIds: [...loading] };
 }
 
-export function invalidateTurn(
-  timeline: SessionTurnTimeline,
-  turnId: string,
-): SessionTurnTimeline {
-  if (!turnId || timeline.invalidatedTurnIds.includes(turnId)) {
-    return timeline;
-  }
-  return {
-    ...timeline,
-    invalidatedTurnIds: [...timeline.invalidatedTurnIds, turnId],
-  };
-}
-
 /**
  * 从当前视图移除已经失效的 Turn，同时留下不可见标记，防止旧的异步响应再次把它加入时间线。
  * 新的 projection epoch 会由 replaceProjection 创建全新的标记集合。

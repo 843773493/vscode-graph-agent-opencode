@@ -199,30 +199,6 @@ export function buildTimeSections(sessions: Session[], sortMode: SessionSortMode
   return sections;
 }
 
-export function reorderWorkspaceIds(
-  workspaceIds: string[],
-  sourceWorkspaceId: string,
-  targetWorkspaceId: string,
-  position: 'before' | 'after',
-): string[] {
-  if (sourceWorkspaceId === targetWorkspaceId) {
-    return workspaceIds;
-  }
-  const remainingIds = workspaceIds.filter(
-    (workspaceId) => workspaceId !== sourceWorkspaceId,
-  );
-  const targetIndex = remainingIds.indexOf(targetWorkspaceId);
-  if (targetIndex < 0) {
-    throw new Error(`工作区排序目标不存在: ${targetWorkspaceId}`);
-  }
-  const insertIndex = position === 'after' ? targetIndex + 1 : targetIndex;
-  return [
-    ...remainingIds.slice(0, insertIndex),
-    sourceWorkspaceId,
-    ...remainingIds.slice(insertIndex),
-  ];
-}
-
 export function buildVisibleWorkspaceTree(
   workspaces: GatewayWorkspace[],
   collapsedWorkspaceIds: Set<string>,

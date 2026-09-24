@@ -105,7 +105,7 @@ export {
   reviewSessionChangeFile,
 } from "./api/session/sessionResources";
 export { streamWorkspaceFileEvents } from "./api/stream/workspaceFileEvents";
-export { controlJob, getJob } from "./api/jobs";
+export { getJob } from "./api/jobs";
 export {
   activateNodeDebugConfiguration,
   applyNodeDebugAction,
