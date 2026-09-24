@@ -11,6 +11,7 @@ from app.api.deps import (
     get_request_id,
     verify_local_token,
 )
+from app.api.errors import unimplemented_http_error
 from app.schemas.event import Event
 from app.schemas.internal_v2.artifact import ArtifactDTO
 from app.schemas.internal_v2.common import APIResponse
@@ -64,7 +65,7 @@ async def list_job_steps(
 async def list_job_events(
     job_id: str,
     after: str | None = None,
-    limit: int = 100,
+    limit: int = Query(default=100, ge=1, le=1000),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     event_service: EventService = Depends(get_event_service),
@@ -153,5 +154,9 @@ async def list_job_artifacts(
     request_id: str = Depends(get_request_id),
     artifact_service: ArtifactService = Depends(get_artifact_service),
 ):
-    result = await artifact_service.list_by_job(job_id)
+    try:
+        result = await artifact_service.list_by_job(job_id)
+    except RuntimeError as error:
+        # 产物存储尚未实现：服务端能力缺失，显式落 501 而不是无上下文的 500。
+        raise unimplemented_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)

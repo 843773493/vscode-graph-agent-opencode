@@ -56,6 +56,23 @@ from app.services.infrastructure.workspace_service import (
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
 
+def _file_operation_error(error: Exception) -> HTTPException:
+    """工作区文件写操作的统一异常翻译。
+
+    create/paste/copy/upload 四个入口逐字重复同一套映射，这里收敛为唯一实现；
+    判定顺序与原有 except 子句顺序一致（子类优先，OSError 兜底落 500）。
+    """
+    if isinstance(error, FileNotFoundError):
+        return HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, FileExistsError):
+        return HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, PermissionError):
+        return HTTPException(status_code=403, detail=str(error))
+    if isinstance(error, (NotADirectoryError, ValueError)):
+        return HTTPException(status_code=400, detail=str(error))
+    return HTTPException(status_code=500, detail=str(error))
+
+
 @router.post(
     "/files/events",
     response_class=StreamingResponse,
@@ -355,16 +372,8 @@ async def create_workspace_file_entry(
             name=payload.name,
             kind=payload.kind,
         )
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except FileExistsError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    except PermissionError as error:
-        raise HTTPException(status_code=403, detail=str(error)) from error
-    except (NotADirectoryError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except OSError as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
+    except (OSError, ValueError) as error:
+        raise _file_operation_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -387,16 +396,8 @@ async def paste_workspace_file_entries(
             scope=scope,
             source_paths=payload.source_paths,
         )
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except FileExistsError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    except PermissionError as error:
-        raise HTTPException(status_code=403, detail=str(error)) from error
-    except (NotADirectoryError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except OSError as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
+    except (OSError, ValueError) as error:
+        raise _file_operation_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -420,16 +421,8 @@ async def copy_workspace_file_entry(
             source_path=payload.source_path,
             source_scope=payload.source_scope,
         )
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except FileExistsError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    except PermissionError as error:
-        raise HTTPException(status_code=403, detail=str(error)) from error
-    except (NotADirectoryError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except OSError as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
+    except (OSError, ValueError) as error:
+        raise _file_operation_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -458,16 +451,8 @@ async def upload_workspace_file_entries(
                 for upload, relative_path in zip(files, relative_paths, strict=True)
             ],
         )
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except FileExistsError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    except PermissionError as error:
-        raise HTTPException(status_code=403, detail=str(error)) from error
-    except (NotADirectoryError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except OSError as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
+    except (OSError, ValueError) as error:
+        raise _file_operation_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
