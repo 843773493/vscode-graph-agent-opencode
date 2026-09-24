@@ -13,6 +13,7 @@ import type {
 } from "../../../types/backend";
 import { copyTextToClipboard } from "../../../utils/clipboard";
 import { errorMessage } from "../../../utils/errorMessage";
+import { parsePortLiteral } from "../../../utils/portLiteral";
 
 type ConnectionPage = "ssh-select" | "ssh-manual" | "external-device" | "device-info";
 type ConnectionDialogMode = "ssh" | "external-device";
@@ -62,14 +63,6 @@ export function buildSelectedSshConnectionRequest(
   throw new Error(`远程连接 ${connection.label} 缺少可用的 SSH 配置`);
 }
 
-function parsePort(value: string, label: string): number {
-  const port = Number(value.trim());
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`${label}必须是 1-65535 的整数`);
-  }
-  return port;
-}
-
 export function buildManualSshConnectionRequest(
   form: ManualSshForm,
 ): AddSshGatewayWorkspaceRequest {
@@ -82,10 +75,10 @@ export function buildManualSshConnectionRequest(
   return {
     name: form.name.trim() || null,
     host,
-    port: parsePort(form.port, "SSH 端口"),
+    port: parsePortLiteral(form.port, "SSH 端口"),
     username,
     private_key_path: privateKeyPath,
-    remote_gateway_port: parsePort(form.remoteGatewayPort, "远程 Gateway 端口"),
+    remote_gateway_port: parsePortLiteral(form.remoteGatewayPort, "远程 Gateway 端口"),
   };
 }
 

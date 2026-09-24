@@ -19,6 +19,7 @@ import type {
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import { errorMessage } from "../../../utils/errorMessage";
 import { copyTextToClipboard } from "../../../utils/clipboard";
+import { DECIMAL_PORT_PATTERN, isValidPortLiteral, parsePortLiteral } from "../../../utils/portLiteral";
 
 export interface WorkspacePortForwardApi {
   list(port: number, workspaceId: string): Promise<GatewayPortForwardList>;
@@ -70,28 +71,7 @@ const STATUS_LABELS: Record<GatewayPortForward["status"], string> = {
 // 端口只接受十进制整数字面量：`Number()` 会把 "1e3"、"12.0"、" 80 "、"0x50"
 // 静默收敛成数字，导致非法输入被当成合法端口提交。解析与合法性判定共用同一
 // 份实现，避免「按钮判定」与「提交解析」两套口径漂移。
-const DECIMAL_PORT_PATTERN = /^\d{1,5}$/;
-
-function portRangeError(label: string): string {
-  return `${label}必须是 1–65535 之间的整数`;
-}
-
 const PORT_INPUT_HINT = "端口必须是 1–65535 之间的十进制整数，不接受科学计数法、小数、十六进制或空白字符。";
-
-function parsePort(value: string, label: string): number {
-  if (!DECIMAL_PORT_PATTERN.test(value)) {
-    throw new Error(portRangeError(label));
-  }
-  const port = Number(value);
-  if (port < 1 || port > 65535) {
-    throw new Error(portRangeError(label));
-  }
-  return port;
-}
-
-function isValidPortInput(value: string): boolean {
-  return DECIMAL_PORT_PATTERN.test(value) && Number(value) >= 1 && Number(value) <= 65535;
-}
 
 function portLabel(forward: GatewayPortForward): string {
   return forward.label
@@ -220,8 +200,8 @@ export default function WorkspacePortForwardPanel({
     let payload: CreateGatewayPortForwardRequest;
     try {
       payload = {
-        remote_port: parsePort(remotePort, "远端端口"),
-        local_port: localPort ? parsePort(localPort, "本地端口") : null,
+        remote_port: parsePortLiteral(remotePort, "远端端口"),
+        local_port: localPort ? parsePortLiteral(localPort, "本地端口") : null,
         protocol,
         label: label.trim() || null,
       };
@@ -325,7 +305,7 @@ export default function WorkspacePortForwardPanel({
     if (!workspace) return;
     let payload: ChangeGatewayPortForwardLocalPortRequest;
     try {
-      payload = { local_port: parsePort(editingLocalPort, "本地端口") };
+      payload = { local_port: parsePortLiteral(editingLocalPort, "本地端口") };
     } catch (validationError) {
       setError(errorMessage(validationError));
       return;
@@ -421,10 +401,10 @@ export default function WorkspacePortForwardPanel({
     ? [forward.label, forward.protocol, forward.local_url, forward.status]
         .some((value) => String(value ?? "").toLocaleLowerCase().includes(normalizedFilter))
     : forward.remote_port === portFilter || forward.local_port === portFilter) ?? [];
-  const createDisabled = submitting || !isValidPortInput(remotePort) || (localPort !== "" && !isValidPortInput(localPort));
+  const createDisabled = submitting || !isValidPortLiteral(remotePort) || (localPort !== "" && !isValidPortLiteral(localPort));
   // 输入不合法时按钮会被禁用；必须同时给出原因，避免「点了没反应」的静默失败。
-  const remotePortInvalid = remotePort !== "" && !isValidPortInput(remotePort);
-  const localPortInvalid = localPort !== "" && !isValidPortInput(localPort);
+  const remotePortInvalid = remotePort !== "" && !isValidPortLiteral(remotePort);
+  const localPortInvalid = localPort !== "" && !isValidPortLiteral(localPort);
 
   return (
     <section className="port-forward-panel" aria-label="工作区 SSH 端口转发">
@@ -646,9 +626,9 @@ export default function WorkspacePortForwardPanel({
                   {editingLocalPortId === forward.forward_id ? (
                     <form className="port-forward-edit-form" onSubmit={(event) => void handleChangeLocalPort(event, forward)}>
                       <label><span>本地端口</span><input type="number" min="1" max="65535" inputMode="numeric" value={editingLocalPort} onChange={(event) => setEditingLocalPort(event.target.value)} disabled={changingLocalPortId === forward.forward_id} autoFocus /></label>
-                      <button type="submit" disabled={changingLocalPortId === forward.forward_id || !isValidPortInput(editingLocalPort)}>{changingLocalPortId === forward.forward_id ? "保存中…" : "保存"}</button>
+                      <button type="submit" disabled={changingLocalPortId === forward.forward_id || !isValidPortLiteral(editingLocalPort)}>{changingLocalPortId === forward.forward_id ? "保存中…" : "保存"}</button>
                       <button type="button" onClick={() => { setEditingLocalPortId(null); setEditingLocalPort(""); }} disabled={changingLocalPortId === forward.forward_id}>取消</button>
-                      {!isValidPortInput(editingLocalPort) ? (
+                      {!isValidPortLiteral(editingLocalPort) ? (
                         <p className="port-forward-port-hint" role="alert">{PORT_INPUT_HINT}</p>
                       ) : null}
                     </form>

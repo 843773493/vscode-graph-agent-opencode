@@ -45,6 +45,21 @@ describe("添加 SSH 连接请求", () => {
       username: "developer",
       privateKeyPath: "~/.ssh/id_ed25519",
       remoteGatewayPort: "8014",
-    })).toThrow("SSH 端口必须是 1-65535 的整数");
+    })).toThrow("SSH 端口必须是 1–65535 之间的十进制整数");
+  });
+
+  test("十六进制与科学计数法不被静默收敛成别的端口", () => {
+    // 旧实现用 Number() 解析，"0x50" 会被当成 80、"1e3" 当成 1000，SSH 会连到
+    // 用户没填的端口上。端口字面量必须与端口转发面板共用同一份严格口径。
+    for (const port of ["0x50", "1e3", "0b101", " 2222 ", "12.0", "65536", "0"]) {
+      expect(() => buildManualSshConnectionRequest({
+        name: "",
+        host: "100.64.0.60",
+        port,
+        username: "developer",
+        privateKeyPath: "~/.ssh/id_ed25519",
+        remoteGatewayPort: "8014",
+      })).toThrow("SSH 端口必须是 1–65535 之间的十进制整数");
+    }
   });
 });
