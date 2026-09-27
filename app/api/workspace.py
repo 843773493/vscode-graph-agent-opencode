@@ -14,6 +14,7 @@ from app.api.deps import (
     get_workspace_service,
     verify_local_token,
 )
+from app.api.errors import forbidden_http_error, state_conflict_http_error
 from app.api.sse_heartbeat import (
     SSE_HEARTBEAT_INTERVAL_SECONDS,
     SSE_NO_CACHE_HEADERS,
@@ -65,7 +66,9 @@ def _file_operation_error(error: Exception) -> HTTPException:
     if isinstance(error, FileNotFoundError):
         return HTTPException(status_code=404, detail=str(error))
     if isinstance(error, FileExistsError):
-        return HTTPException(status_code=409, detail=str(error))
+        return state_conflict_http_error(error)
+    if isinstance(error, ForbiddenError):
+        return forbidden_http_error(error)
     if isinstance(error, PermissionError):
         return HTTPException(status_code=403, detail=str(error))
     if isinstance(error, (NotADirectoryError, ValueError)):
@@ -230,6 +233,8 @@ async def list_workspace_files(
         )
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except ForbiddenError as error:
+        raise forbidden_http_error(error) from error
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except (NotADirectoryError, ValueError) as error:
@@ -254,7 +259,7 @@ async def get_workspace_file_content(
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ForbiddenError as error:
-        raise HTTPException(status_code=403, detail=str(error)) from error
+        raise forbidden_http_error(error) from error
     except (IsADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -279,7 +284,7 @@ async def get_workspace_raw_file(
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ForbiddenError as error:
-        raise HTTPException(status_code=403, detail=str(error)) from error
+        raise forbidden_http_error(error) from error
     except (IsADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return FileResponse(
@@ -311,6 +316,8 @@ async def download_workspace_file_entry(
         )
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except ForbiddenError as error:
+        raise forbidden_http_error(error) from error
     except (IsADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return FileResponse(
@@ -346,7 +353,9 @@ async def update_workspace_file_content(
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except WorkspaceFileConflictError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
+    except ForbiddenError as error:
+        raise forbidden_http_error(error) from error
     except (IsADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -372,7 +381,7 @@ async def create_workspace_file_entry(
             name=payload.name,
             kind=payload.kind,
         )
-    except (OSError, ValueError) as error:
+    except (ForbiddenError, OSError, ValueError) as error:
         raise _file_operation_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -396,7 +405,7 @@ async def paste_workspace_file_entries(
             scope=scope,
             source_paths=payload.source_paths,
         )
-    except (OSError, ValueError) as error:
+    except (ForbiddenError, OSError, ValueError) as error:
         raise _file_operation_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -421,7 +430,7 @@ async def copy_workspace_file_entry(
             source_path=payload.source_path,
             source_scope=payload.source_scope,
         )
-    except (OSError, ValueError) as error:
+    except (ForbiddenError, OSError, ValueError) as error:
         raise _file_operation_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -451,7 +460,7 @@ async def upload_workspace_file_entries(
                 for upload, relative_path in zip(files, relative_paths, strict=True)
             ],
         )
-    except (OSError, ValueError) as error:
+    except (ForbiddenError, OSError, ValueError) as error:
         raise _file_operation_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -474,6 +483,8 @@ async def reveal_workspace_file_entry(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
+    except ForbiddenError as error:
+        raise forbidden_http_error(error) from error
     except ValueError as error:
         # 路径形态非法来自查询参数，属于客户端输入错误。
         raise HTTPException(status_code=400, detail=str(error)) from error

@@ -5,6 +5,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import get_node_debug_service, get_request_id, verify_local_token
+from app.api.errors import forbidden_http_error, state_conflict_http_error
+from app.core.exceptions import ForbiddenError
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRequest,
@@ -41,7 +43,9 @@ def _configuration_error(error: Exception) -> HTTPException:
         )
     if isinstance(error, (TypeError, ValueError)):
         return HTTPException(status_code=400, detail=str(error))
-    return HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, ForbiddenError):
+        return forbidden_http_error(error)
+    return state_conflict_http_error(error)
 
 
 @router.get(
@@ -109,7 +113,7 @@ async def get_node_debug_configuration(
         result = node_debug_service.get_configuration(
             session_id, configuration_id, thread_id
         )
-    except (FileNotFoundError, KeyError, TypeError, ValueError, RuntimeError) as error:
+    except (FileNotFoundError, KeyError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -127,7 +131,7 @@ async def create_node_debug_configuration(
 ):
     try:
         result = await node_debug_service.create_configuration(payload)
-    except (FileNotFoundError, TypeError, ValueError, RuntimeError) as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -149,7 +153,7 @@ async def update_node_debug_configuration(
             configuration_id,
             payload,
         )
-    except (FileNotFoundError, TypeError, ValueError, RuntimeError) as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -172,7 +176,7 @@ async def activate_node_debug_configuration(
             configuration_id,
             thread_id=payload.thread_id,
         )
-    except (FileNotFoundError, TypeError, ValueError, RuntimeError) as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -196,7 +200,7 @@ async def delete_node_debug_configuration(
             configuration_id,
             thread_id=thread_id,
         )
-    except (FileNotFoundError, TypeError, ValueError, RuntimeError) as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -219,7 +223,7 @@ async def import_node_debug_configuration(
             thread_id=payload.thread_id,
             activate=payload.activate,
         )
-    except (FileNotFoundError, TypeError, ValueError, RuntimeError) as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -246,7 +250,7 @@ async def copy_node_debug_configuration(
             name=payload.name,
             activate=payload.activate,
         )
-    except (FileNotFoundError, TypeError, ValueError, RuntimeError) as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -271,10 +275,12 @@ async def start_node_debug(
         )
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except ForbiddenError as error:
+        raise forbidden_http_error(error) from error
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -291,6 +297,8 @@ async def apply_node_debug_action(
         )
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except ForbiddenError as error:
+        raise forbidden_http_error(error) from error
     except (TypeError, ValueError, RuntimeError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)

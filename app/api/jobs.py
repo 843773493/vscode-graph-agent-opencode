@@ -11,7 +11,7 @@ from app.api.deps import (
     get_request_id,
     verify_local_token,
 )
-from app.api.errors import unimplemented_http_error
+from app.api.errors import state_conflict_http_error, unimplemented_http_error
 from app.schemas.event import Event
 from app.schemas.internal_v2.artifact import ArtifactDTO
 from app.schemas.internal_v2.common import APIResponse, ControlAction
@@ -54,7 +54,7 @@ def _job_control_http_error(
     if payload.action in UNIMPLEMENTED_CONTROL_ACTIONS:
         return unimplemented_http_error(error)
     # 状态不允许该动作，或会话已有其他 active Job：状态冲突而非服务端故障。
-    return HTTPException(status_code=409, detail=str(error))
+    return state_conflict_http_error(error)
 
 
 @router.get("/{job_id}", response_model=APIResponse[JobDTO], summary="获取任务详情")

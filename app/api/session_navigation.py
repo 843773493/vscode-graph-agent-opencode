@@ -9,7 +9,11 @@ from app.api.deps import (
     get_session_generation_service,
     verify_local_token,
 )
-from app.api.errors import client_error_message, not_found_http_error
+from app.api.errors import (
+    client_error_message,
+    not_found_http_error,
+    state_conflict_http_error,
+)
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
@@ -72,7 +76,7 @@ async def enqueue_session_catalog_operations(
     except NavigationBackpressureError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except NavigationMutationConflictError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     except (KeyError, ValueError, TypeError) as error:
         raise HTTPException(status_code=400, detail=client_error_message(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -127,7 +131,7 @@ async def list_session_catalog_navigation_events(
             after, _watermark = service.decode_navigation_events_cursor(cursor)
         result = service.navigation_events(after=after, limit=limit)
     except (ValueError, TypeError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -182,7 +186,7 @@ async def list_session_catalog_children(
     except KeyError as error:
         raise not_found_http_error(error) from error
     except (TypeError, ValueError, RuntimeError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -203,7 +207,7 @@ async def list_session_catalog_roots(
             cursor=cursor,
         )
     except (TypeError, ValueError, RuntimeError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -219,7 +223,7 @@ async def refresh_session_catalog(
     try:
         result = await service.refresh()
     except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -237,7 +241,7 @@ async def get_session_catalog_breadcrumb(
     except KeyError as error:
         raise not_found_http_error(error) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -252,7 +256,7 @@ async def export_session_catalog(
     try:
         result = await service.export_index()
     except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -270,7 +274,7 @@ async def search_session_catalog(
     try:
         result = await service.search(query=query, limit=limit, cursor=cursor)
     except (TypeError, ValueError, RuntimeError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -323,7 +327,7 @@ async def delete_session_folder(
     except KeyError as error:
         raise not_found_http_error(error) from error
     except (ValueError, RuntimeError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return Response(status_code=204)
 
 
@@ -343,7 +347,7 @@ async def assign_session_folder(
     except KeyError as error:
         raise not_found_http_error(error) from error
     except (ValueError, RuntimeError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -363,7 +367,7 @@ async def move_session_catalog_node(
     except KeyError as error:
         raise not_found_http_error(error) from error
     except (ValueError, RuntimeError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

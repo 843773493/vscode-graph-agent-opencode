@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
 from app.api.deps import get_request_id, get_session_context_query_service
-from app.api.errors import not_found_http_error
+from app.api.errors import not_found_http_error, state_conflict_http_error
 from app.core.exceptions import NotFoundError
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.session_context import (
@@ -67,7 +67,7 @@ async def read_context(
             )
         ):
             raise
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

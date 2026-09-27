@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import get_agent_service, get_request_id, verify_local_token
+from app.api.errors import state_conflict_http_error
 from app.schemas.internal_v2.agent import (
     AgentDTO,
     WorkspaceDefaultAgentUpdateRequest,
@@ -65,7 +66,7 @@ async def set_workspace_default_provider(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except TypeError as error:
         # 工作区默认值文件结构损坏属于可恢复的本地状态冲突。
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

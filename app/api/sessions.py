@@ -28,7 +28,7 @@ from app.api.deps import (
     get_session_skill_tracking_service,
     verify_local_token,
 )
-from app.api.errors import not_found_http_error
+from app.api.errors import not_found_http_error, state_conflict_http_error
 from app.api.sse_heartbeat import (
     SSE_HEARTBEAT_INTERVAL_SECONDS,
     SSE_NO_CACHE_HEADERS,
@@ -222,7 +222,7 @@ async def list_sessions(
     except (RuntimeError, TimeoutError) as error:
         # 目录索引/物理树异常属于可恢复的工作区状态，不能伪装成空列表，
         # 也不能让前端收到无上下文的 500。
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -240,7 +240,7 @@ async def get_session(
     except NotFoundError as error:
         raise not_found_http_error(error) from error
     except (RuntimeError, TimeoutError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -261,7 +261,7 @@ async def list_session_child_threads(
         raise not_found_http_error(error) from error
     except (RuntimeError, TimeoutError) as error:
         # 目录索引/物理树异常属于可恢复的工作区状态，不能伪装成空列表。
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -283,7 +283,7 @@ async def resolve_session_main_thread(
         raise not_found_http_error(error) from error
     except (RuntimeError, TimeoutError) as error:
         # catalog 缺 main pointer 或外部改动属于工作区状态冲突，不返回假默认值。
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(
         data=SessionMainThreadDTO(session_id=session_id, thread_id=thread_id),
         request_id=request_id,
@@ -317,7 +317,7 @@ async def untrack_session_skill(
         raise HTTPException(status_code=400, detail=str(error)) from error
     except (RuntimeError, TimeoutError) as error:
         # rollout 目录/控制状态存储异常（含 owner CAS 冲突）不能伪装成功。
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -790,7 +790,7 @@ async def delete_session(
     except KeyError as error:
         raise not_found_http_error(error) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_config_service, get_request_id, verify_local_token
+from app.api.errors import state_conflict_http_error
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.config import (
     ConfigDTO,
@@ -133,7 +134,7 @@ async def get_pending_startup_contract(
             candidate_ref=candidate_ref
         )
     except (ConfigConflictError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(
         data=ConfigStartupContractDTO.model_validate(contract),
         request_id=request_id,
@@ -159,7 +160,7 @@ async def record_pending_restart_failure(
             old_runtime_recovered=payload.old_runtime_recovered,
         )
     except (ConfigConflictError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=_reload_status_dto(config_service), request_id=request_id)
 
 
@@ -177,7 +178,7 @@ async def retry_pending_restart(
     try:
         config_service.retry_pending_restart(candidate_ref=candidate_ref)
     except (ConfigConflictError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=_reload_status_dto(config_service), request_id=request_id)
 
 
@@ -199,7 +200,7 @@ async def resolve_pending_restart(
             health_proof=payload.model_dump(exclude_none=True),
         )
     except (ConfigConflictError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=_reload_status_dto(config_service), request_id=request_id)
 
 
@@ -222,7 +223,7 @@ async def discard_pending_restart(
             expected_active_digest=payload.expected_active_digest,
         )
     except (ConfigConflictError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=_reload_status_dto(config_service), request_id=request_id)
 
 

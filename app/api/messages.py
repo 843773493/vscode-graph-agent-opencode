@@ -16,7 +16,7 @@ from app.api.deps import (
     get_session_turn_replay_service,
     verify_local_token,
 )
-from app.api.errors import not_found_http_error
+from app.api.errors import not_found_http_error, state_conflict_http_error
 from app.core.exceptions import NotFoundError
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.common import APIResponse, CursorPage
@@ -98,7 +98,7 @@ async def update_pending_request(
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -121,7 +121,7 @@ async def remove_pending_request(
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -141,7 +141,7 @@ async def clear_pending_requests(
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -168,9 +168,9 @@ async def update_pending_request_policy(
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -255,7 +255,7 @@ async def list_messages(
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -290,7 +290,7 @@ async def get_session_attachment_content(
     except ValueError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return Response(
         content=content.data,
         media_type=content.content_type,
@@ -364,7 +364,7 @@ async def replay_message_turn(
             message_id,
             payload.action,
         )
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise state_conflict_http_error(exc) from exc
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -393,5 +393,5 @@ async def replay_turn(
             turn_id,
             payload.action,
         )
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise state_conflict_http_error(exc) from exc
     return APIResponse(data=result, request_id=request_id)

@@ -8,6 +8,7 @@ from app.api.deps import (
     get_tool_test_service,
     verify_local_token,
 )
+from app.api.errors import state_conflict_http_error
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.tool import (
     ToolDTO,
@@ -114,7 +115,7 @@ async def start_tool_test(
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
         # 同一工具已有测试在跑：状态冲突而非服务端故障。
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
