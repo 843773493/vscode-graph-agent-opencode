@@ -19,11 +19,11 @@ from app.services.infrastructure.rollout_context.assembly.plans.imported import 
 from app.services.infrastructure.rollout_context.assembly.plans.imported_sources import (
     build_source_manifest,
 )
-from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
-    json_text,
-)
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as json_text,
 )
 from tests.integration.backend.sessions.rollout_context.test_context_plan_imported import (
     draft as draft,  # noqa: PLC0414 - 各测试文件独立正式工作区

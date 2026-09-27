@@ -25,6 +25,9 @@ from app.services.infrastructure.rollout_context.storage.guards import (
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
 )
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
+)
 
 CanonicalItemWriter = Callable[
     [sqlite3.Connection, CanonicalItemRecord, int, int, int, str], None
@@ -97,11 +100,6 @@ def _now() -> str:
     from datetime import UTC, datetime
 
     return datetime.now(UTC).isoformat()
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 def _required_text(value: object, *, field: str) -> str:
     """读取提交账本中的必填文本，不把 SQLite 值强转成字符串。"""

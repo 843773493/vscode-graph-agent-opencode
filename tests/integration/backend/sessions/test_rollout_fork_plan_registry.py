@@ -12,13 +12,15 @@ from app.domain.itemized.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     draft_manifest,
-    json_text,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     read_registration,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as json_text,
 )
 from tests.integration.backend.sessions.test_rollout_fork_protected import (
     _artifacts,

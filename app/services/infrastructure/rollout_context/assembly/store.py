@@ -10,9 +10,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.hashing import (
-    canonical_json_bytes,
-)
 from app.services.infrastructure.rollout_context.assembly.overlays import (
     ContextOverlayStorageMixin,
 )
@@ -28,15 +25,13 @@ from app.services.infrastructure.rollout_context.assembly.registry import (
 from app.services.infrastructure.rollout_context.assembly.sealing import (
     ContextAssemblySealMixin,
 )
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
+)
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 def _v2_json(value: object) -> str:
     return _json(value)

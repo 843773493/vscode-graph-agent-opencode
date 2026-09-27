@@ -13,10 +13,12 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from app.domain.itemized.enums import SemanticKind
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -34,11 +36,6 @@ def _now() -> str:
 
 def _hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 class RolloutMessageProjectionMixin:
     """维护 message、tool 和 reasoning 的派生 projection。"""

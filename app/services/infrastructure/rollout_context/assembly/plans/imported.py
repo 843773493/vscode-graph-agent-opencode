@@ -23,7 +23,6 @@ from app.services.infrastructure.rollout_context.assembly.plans.imported_sources
     validate_source_bindings,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
-    json_text,
     sealed_hash,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.privacy import (
@@ -35,6 +34,9 @@ from app.services.infrastructure.rollout_context.assembly.plans.registry import 
 )
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as json_text,
 )
 
 _PROVENANCE_FIELDS = frozenset(

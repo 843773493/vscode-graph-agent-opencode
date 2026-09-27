@@ -15,6 +15,9 @@ from app.domain.itemized.runtime import ProvenanceEdge
 from app.services.infrastructure.rollout_context.fork.validation import (
     json_mapping,
 )
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_non_negative_int,
@@ -25,11 +28,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 def _hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()

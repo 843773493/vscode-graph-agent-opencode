@@ -19,7 +19,6 @@ from pathlib import Path
 
 from app.domain.itemized.enums import CommitKind, CommitMode
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
@@ -40,6 +39,9 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
     validate_schema_journal,
 )
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     V2ItemCommitCoordinator,
     strict_non_negative_int,
@@ -51,11 +53,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 def _hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()

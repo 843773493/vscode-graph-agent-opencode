@@ -18,7 +18,6 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
 from app.domain.itemized.hashing import (
-    canonical_json_bytes,
     payload_content_length,
     sha256_jcs,
 )
@@ -29,6 +28,9 @@ from app.services.infrastructure.rollout_context.storage.catalog.message_groups 
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line as _v2_json_line,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     validate_item_storage_metadata,
@@ -42,11 +44,6 @@ if TYPE_CHECKING:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 def _hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()

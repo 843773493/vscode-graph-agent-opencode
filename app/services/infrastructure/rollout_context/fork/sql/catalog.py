@@ -12,7 +12,6 @@ from app.services.infrastructure.rollout_context.fork.remap_state import (
     FullCopyRemapState,
 )
 from app.services.infrastructure.rollout_context.fork.sql.common import (
-    _json,
     rewrite_column,
     rewrite_reference_column,
 )
@@ -23,6 +22,9 @@ from app.services.infrastructure.rollout_context.fork.validation import (
 )
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_relative_path,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
 )
 
 

@@ -15,9 +15,6 @@ from app.domain.itemized.hashing import (
 from app.domain.itemized.refs import ContextRef
 from app.domain.itemized.request_hash import context_request_hash
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
-from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
-    json_text,
-)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -26,6 +23,9 @@ from app.services.infrastructure.rollout_context.runtime.composer import (
 )
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as json_text,
 )
 from tests.integration.backend.sessions.test_rollout_fork_protected import (
     _artifacts,

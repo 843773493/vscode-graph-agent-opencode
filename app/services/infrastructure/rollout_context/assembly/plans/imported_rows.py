@@ -8,10 +8,10 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.services.infrastructure.rollout_context.assembly.plans.imported_sources import (
     ParsedSourceManifest,
 )
-from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
-    json_text,
-)
 from app.services.infrastructure.rollout_context.assembly.plans.rows import tool_rows
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as json_text,
+)
 
 
 def _ref_rows(sources: ParsedSourceManifest) -> set[tuple[object, ...]]:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import sqlite3
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     optional_detail_ref_key,
 )
@@ -15,10 +14,9 @@ from app.services.infrastructure.rollout_context.assembly.detail_registry import
 from app.services.infrastructure.rollout_context.assembly.validation import (
     exact_row,
 )
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
+)
 
 
 class Schema3AssemblyManifestValidator:

@@ -8,7 +8,9 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from app.domain.itemized.hashing import canonical_json_bytes
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -22,11 +24,6 @@ def _now() -> str:
 
 def _hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 class RolloutTransactionProjectionMixin:
     """只写 checkpoint/control 的 SQLite projection，不写 canonical item。"""

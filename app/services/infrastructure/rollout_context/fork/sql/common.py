@@ -5,16 +5,9 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 
-from app.domain.itemized.hashing import (
-    canonical_json_bytes,
-)
 from app.services.infrastructure.rollout_context.fork.validation import (
     non_negative_int,
 )
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
 
 
 def _hash_bytes(value: bytes) -> str:

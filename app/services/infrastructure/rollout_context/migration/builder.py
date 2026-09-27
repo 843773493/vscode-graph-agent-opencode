@@ -6,11 +6,14 @@ import hashlib
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.migration.semantics import (
     candidate_audit,
     terminal_evidence,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -19,11 +22,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 class LegacyImportBuilder:
     def build_import(

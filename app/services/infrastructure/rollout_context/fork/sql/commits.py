@@ -10,7 +10,6 @@ from app.services.infrastructure.rollout_context.fork.remap_state import (
 )
 from app.services.infrastructure.rollout_context.fork.sql.common import (
     _hash_bytes,
-    _json,
     rewrite_column,
 )
 from app.services.infrastructure.rollout_context.fork.validation import (
@@ -18,6 +17,9 @@ from app.services.infrastructure.rollout_context.fork.validation import (
     one_of_text,
     optional_text,
     required_text,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     validate_commit_contract,

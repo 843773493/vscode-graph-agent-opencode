@@ -7,9 +7,11 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.assembly.detail_registry import (
     DetailRegistryMixin,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -26,11 +28,6 @@ if TYPE_CHECKING:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 def _strict_bool(value: object, *, field: str) -> bool:
     if not isinstance(value, int) or isinstance(value, bool) or value not in {0, 1}:

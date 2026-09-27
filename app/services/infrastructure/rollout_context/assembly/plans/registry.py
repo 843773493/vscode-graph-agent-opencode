@@ -13,7 +13,6 @@ from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     creation_hash,
     draft_manifest,
-    json_text,
     runtime_seal_hash,
     validate_sealed_plan,
 )
@@ -24,6 +23,9 @@ from app.services.infrastructure.rollout_context.assembly.plans.rows import (
 )
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as json_text,
 )
 
 

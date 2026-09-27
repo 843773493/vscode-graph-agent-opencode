@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.domain.itemized.errors import FormatDispatchError
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
 )
@@ -39,11 +38,6 @@ _DEFAULT_NAMESPACE = ""
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 def _hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()

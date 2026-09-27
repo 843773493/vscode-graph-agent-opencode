@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from uuid import uuid4
 
 from app.domain.itemized.hashing import (
-    canonical_json_bytes,
     payload_content_length,
     sha256_jcs,
 )
@@ -26,6 +25,9 @@ from app.services.infrastructure.rollout_context.fork.validation import (
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_relative_path,
 )
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
+)
 
 
 def _update_one(
@@ -38,11 +40,6 @@ def _update_one(
     result = connection.execute(sql, parameters)
     if result.rowcount != 1:
         raise RuntimeError(f"full_rollout_copy {context} 行数不一致: {result.rowcount}")
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 def _hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()

@@ -18,10 +18,6 @@ from app.services.infrastructure.rollout_context.assembly.plans.privacy import (
 )
 
 
-def json_text(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
-
 def draft_manifest(plan: ContextRequestPlan) -> dict[str, object]:
     """registry 只保存 source manifest；正文仍通过 source/detail owner 恢复。"""
     if plan.plan_state != "unsealed" or plan.assembly_id is not None or plan.selection:

@@ -20,11 +20,6 @@ if TYPE_CHECKING:
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
-
 def _required_text(values: dict[str, object], name: str) -> str:
     value = values[name]
     if not isinstance(value, str) or not value:

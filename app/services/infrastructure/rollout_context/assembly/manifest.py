@@ -7,7 +7,6 @@ import sqlite3
 from collections.abc import Iterable
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.serialization import ordered_selection
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     optional_detail_ref_key,
@@ -21,16 +20,14 @@ from app.services.infrastructure.rollout_context.assembly.plans.registry import 
 from app.services.infrastructure.rollout_context.assembly.validation import (
     exact_row,
 )
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
+)
 
 
 def validate_sealed_selection(entries: Iterable[object]) -> tuple[object, ...]:
     """确认 selection 由 Saver 预先编号，禁止 assembly 层重新排序。"""
     return ordered_selection(entries)
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 def _persisted_manifest_rows(
     rows: Iterable[tuple[object, ...]],

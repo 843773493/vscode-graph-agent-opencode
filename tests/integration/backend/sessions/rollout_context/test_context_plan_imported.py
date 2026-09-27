@@ -21,7 +21,6 @@ from app.services.infrastructure.rollout_context.assembly.plans.imported_sources
     build_source_manifest,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
-    json_text,
     sealed_hash,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
@@ -32,6 +31,9 @@ from app.services.infrastructure.rollout_context.assembly.plans.sealing import (
 )
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as json_text,
 )
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     _insert_snapshot,

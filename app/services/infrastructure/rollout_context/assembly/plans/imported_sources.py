@@ -13,11 +13,11 @@ from app.domain.itemized.request_plan import (
     resolve_contribution_for_ref,
 )
 from app.domain.itemized.serde.registry import parse_context_ref, parse_contribution
-from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
-    json_text,
-)
 from app.services.infrastructure.rollout_context.assembly.plans.privacy import (
     _validate_metadata,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as json_text,
 )
 
 _FIELDS = {"schema", "session_id", "plan_id", "refs", "contributions"}

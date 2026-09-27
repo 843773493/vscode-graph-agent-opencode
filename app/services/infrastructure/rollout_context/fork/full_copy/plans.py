@@ -27,13 +27,15 @@ from app.services.infrastructure.rollout_context.assembly.plans.imported_sources
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     creation_hash,
     draft_manifest,
-    json_text,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     read_registration,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.rows import (
     write_registry,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as json_text,
 )
 
 

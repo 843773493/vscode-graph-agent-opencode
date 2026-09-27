@@ -29,6 +29,9 @@ from app.services.infrastructure.rollout_context.assembly.validation import (
     non_negative_int,
     required_text,
 )
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text as _json,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
@@ -37,11 +40,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _json(value: object) -> str:
-    return canonical_json_bytes(value).decode("utf-8")
-
 
 def _assert_one_row(cursor, *, context: str) -> None:
     if cursor.rowcount != 1:
