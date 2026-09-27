@@ -59,6 +59,16 @@ export function useSessionEventStream({
   const lastBusinessEventAtRef = useRef<number>(Date.now());
   const lastStaleProbeAtRef = useRef<number>(0);
   const routeRevisionRef = useRef<string | null>(null);
+  // 游标失效恢复的有界计数。410 恢复必须触发 Turn bootstrap 重载，而重载会把
+  // 本 effect 重建：计数若只放局部变量，每次重建都会归零，上限永远不可达，
+  // 「上游持续 410」就会退化成无上限的流重建风暴。计数按会话作用域保存在
+  // ref 里，只在切换会话或连接真正建立（收到任意活动，含心跳注释）时归零。
+  // 绝不能因为 bootstrap 交回了一个「新」游标就归零：若服务端持续轮换游标
+  // 而每个游标都立即失效，那种归零会把上限重新变成不可达。
+  const cursorGoneRecoveryRef = useRef<{ scopeKey: string; count: number }>({
+    scopeKey: "",
+    count: 0,
+  });
 
   const abortCurrentStream = useCallback(() => {
     streamAbortRef.current?.abort();
@@ -81,6 +91,11 @@ export function useSessionEventStream({
     lastStaleProbeAtRef.current = 0;
     routeRevisionRef.current = null;
     let sessionListRefreshInFlight = false;
+    // 游标失效恢复的作用域键：会话不变则沿用既有计数，切换会话才归零。
+    const recoveryScopeKey = `${targetSessionCacheKey}::${sessionId}`;
+    if (cursorGoneRecoveryRef.current.scopeKey !== recoveryScopeKey) {
+      cursorGoneRecoveryRef.current = { scopeKey: recoveryScopeKey, count: 0 };
+    }
     const refreshWorkspaceSessionsForStream = (force: boolean = false) => {
       if (
         !targetWorkspaceId
@@ -174,6 +189,9 @@ export function useSessionEventStream({
             onEvent: enqueueStreamEvent,
             onActivity: () => {
               reconnectAttempt = 0;
+              // 连接真正建立（收到任意字节，含心跳注释）说明游标已可用，
+              // 允许下一轮失效重新走完整的有界恢复。
+              cursorGoneRecoveryRef.current.count = 0;
             },
             onConnected: (routeRevision) => {
               const previousRevision = routeRevisionRef.current;
@@ -199,6 +217,20 @@ export function useSessionEventStream({
             return;
           }
           if (error instanceof TraceCursorGoneError) {
+            // 410 恢复不能像普通重连那样只靠局部计数：它会触发 Turn bootstrap
+            // 重载并用 refreshTurnHistory 重建本 effect，局部计数每次都会被清零。
+            // 因此这里累加 ref 计数并给出可见终态，杜绝「上游持续 410」的无上限风暴。
+            cursorGoneRecoveryRef.current.count += 1;
+            if (
+              cursorGoneRecoveryRef.current.count
+              >= SESSION_STREAM_MAX_RECONNECT_ATTEMPTS
+            ) {
+              setState((prev) => ({
+                ...prev,
+                status: `事件流连续 ${SESSION_STREAM_MAX_RECONNECT_ATTEMPTS} 次游标失效，已停止自动恢复；请手动刷新或切换会话后重试`,
+              }));
+              return;
+            }
             setState((prev) => ({
               ...prev,
               status: "事件游标已失效，正在重新加载有界 Turn bootstrap",

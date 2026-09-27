@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as traceStream from "../../api/stream/sessionTraceStream";
+import { TraceCursorGoneError } from "../../api/stream/sessionTraceStream";
 import type { AppState } from "../../types/frontend";
 import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS } from "./sessionEventStreamPolicy";
 import { useSessionEventStream } from "./useSessionEventStream";
@@ -157,5 +158,114 @@ describe("useSessionEventStream 有界重连", () => {
     expect(state.value.status).not.toContain("已停止自动重连");
     streamSpy.mockRestore();
     act(() => renderer.unmount());
+  });
+});
+
+describe("useSessionEventStream 有界游标失效恢复", () => {
+  test("上游持续 410 时停在上限并给出可见终态，不再无上限重建事件流", async () => {
+    installWindow();
+    const streamSpy = spyOn(traceStream, "streamSessionEvents")
+      .mockRejectedValue(new TraceCursorGoneError("stale-cursor"));
+    const state = { value: initialAppState() };
+
+    // 410 恢复会调用 refreshTurnHistory，真实链路里该调用会重载 Turn bootstrap
+    // 并因 timelineReady 变化而重建事件流 effect。这里用 ready 的收敛来回放同一
+    // 序列：若游标失效计数只放局部变量，每次 effect 重建都会把它清零。
+    function Probe(): React.ReactNode {
+      const [timelineReady, setTimelineReady] = React.useState(true);
+      const refreshTurnHistory = React.useCallback(() => {
+        setTimelineReady(false);
+        globalThis.setTimeout(() => {
+          setTimelineReady(true);
+        }, 0);
+      }, []);
+      useSessionEventStream({
+        apiPort: 49_903,
+        sessionId: "session-cursor-gone",
+        workspaceId: "workspace-cursor-gone",
+        sessionCacheKey: "workspace-cursor-gone::session-cursor-gone",
+        activeJobId: null,
+        timelineReady,
+        initialEventCursor: "stale-cursor",
+        refreshTurnHistory,
+        loadTerminalTurn: async () => undefined,
+        setState: (update) => {
+          state.value = typeof update === "function"
+            ? update(state.value)
+            : update;
+        },
+      });
+      return null;
+    }
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<Probe />);
+    });
+
+    // 冲刷远超上限的轮次：若游标失效计数缺失，重建次数会随轮次线性无界增长。
+    for (let round = 0; round < 40; round += 1) {
+      await flush();
+    }
+
+    expect(streamSpy.mock.calls.length)
+      .toBe(SESSION_STREAM_MAX_RECONNECT_ATTEMPTS);
+    expect(state.value.status).toContain("已停止自动恢复");
+    streamSpy.mockRestore();
+    act(() => renderer!.unmount());
+  });
+
+  test("连接建立并收到活动后游标失效计数归零，恢复重新获得完整预算", async () => {
+    installWindow();
+    let connectedCount = 0;
+    // 每轮先真正建立连接（上报活动）再以 410 断开：onActivity 归零计数，
+    // 因此只要持续有活动，就不能被误判为停止自动恢复。
+    const streamSpy = spyOn(traceStream, "streamSessionEvents")
+      .mockImplementation(async (_port, _sessionId, options) => {
+        options?.onActivity?.();
+        connectedCount += 1;
+        throw new TraceCursorGoneError("stale-cursor");
+      });
+    const state = { value: initialAppState() };
+
+    function Probe(): React.ReactNode {
+      const [timelineReady, setTimelineReady] = React.useState(true);
+      const refreshTurnHistory = React.useCallback(() => {
+        setTimelineReady(false);
+        globalThis.setTimeout(() => setTimelineReady(true), 0);
+      }, []);
+      useSessionEventStream({
+        apiPort: 49_904,
+        sessionId: "session-cursor-gone-active",
+        workspaceId: "workspace-cursor-gone-active",
+        sessionCacheKey: "workspace-cursor-gone-active::session-cursor-gone-active",
+        activeJobId: null,
+        timelineReady,
+        initialEventCursor: "stale-cursor",
+        refreshTurnHistory,
+        loadTerminalTurn: async () => undefined,
+        setState: (update) => {
+          state.value = typeof update === "function"
+            ? update(state.value)
+            : update;
+        },
+      });
+      return null;
+    }
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<Probe />);
+    });
+
+    for (let round = 0; round < 30; round += 1) {
+      await flush();
+    }
+
+    expect(connectedCount)
+      .toBeGreaterThan(SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 1);
+    expect(state.value.status).not.toContain("已停止自动恢复");
+    streamSpy.mockRestore();
+    act(() => renderer!.unmount());
   });
 });
