@@ -13,7 +13,7 @@
 | 移除依赖 | `bun remove <package>` |
 | 安装所有依赖 | `bun install` |
 | 安装纯 Web 依赖 | `bun install --cwd src/clients/web` |
-| 安装已发布 BoxTeam | `bun run scripts/install/install-release.mjs` |
+| 本地打包并安装当前 BoxTeam | `mask install release` |
 | 安装用户级配置 | `bun run install:config` |
 | 执行 package.json 脚本 | `bun run <script-name>` |
 | 构建当前纯 Web 客户端 | `bun run build:web` |
@@ -33,7 +33,7 @@
 
 > 当前只开发 `src/clients/web/` 纯 Web 客户端。Electron、React Native 及其 parity 客户端仅保留清晰的运行面边界。首次运行请分别执行根目录 `bun install` 与 `bun install --cwd src/clients/web`。
 
-`bun run scripts/install/install-release.mjs` 会直接从 npm 安装当前项目发布版本，平台 runtime 由 npm 的可选依赖自动安装。安装完成后运行 `boxteam start`；安装版 Launcher 会启动内置 Gateway，Gateway 再启动 Workspace 后端并托管打包后的 Web UI，不会启动 Vite dev server。
+`mask install release` 会检查当前平台的本地打包指纹；产物缺失或源码变化时，先重新打包，再从本地 CLI 与 runtime tarball 安装，不从公共 npm registry 获取 BoxTeam 包。安装完成后运行 `boxteam start`；安装版 Launcher 会启动内置 Gateway，Gateway 再启动 Workspace 后端并托管打包后的 Web UI，不会启动 Vite dev server。
 
 ## 测试分层
 

@@ -8,8 +8,12 @@ import {
 } from "./install-release.mjs";
 
 describe("发布版安装入口", () => {
-  test("默认使用唯一发布版本来源和平台 runtime", () => {
-    const command = buildReleaseInstallCommand({ platform: "linux" });
+  test("默认从当前源码的 Linux 本地 tarball 安装", () => {
+    const command = buildReleaseInstallCommand({
+      platform: "linux",
+      architecture: "x64",
+      projectRoot: "/workspace",
+    });
 
     expect(command).toEqual({
       command: "npm",
@@ -18,15 +22,28 @@ describe("发布版安装入口", () => {
         "--global",
         "--no-audit",
         "--no-fund",
-        `boxteam@${BOXTEAM_VERSION}`,
+        "--offline",
+        "--omit=optional",
+        `/workspace/out/packaging/linux-x64/tarballs/boxteam-${BOXTEAM_VERSION}.tgz`,
+        `/workspace/out/packaging/linux-x64/release-assets/boxteam-runtime-linux-x64-${BOXTEAM_VERSION}.tgz`,
       ],
-      packageSpec: `boxteam@${BOXTEAM_VERSION}`,
+      targetPlatform: "linux-x64",
+      version: BOXTEAM_VERSION,
+      prefix: null,
+      packageTarballs: [
+        `/workspace/out/packaging/linux-x64/tarballs/boxteam-${BOXTEAM_VERSION}.tgz`,
+        `/workspace/out/packaging/linux-x64/release-assets/boxteam-runtime-linux-x64-${BOXTEAM_VERSION}.tgz`,
+      ],
+      buildScript: "/workspace/scripts/release/package-linux-x64.mjs",
+      buildResult: "/workspace/out/packaging/linux-x64/build-result.json",
     });
   });
 
-  test("Windows 使用 npm.cmd 并支持隔离 prefix", () => {
+  test("Windows 从本地 tarball 安装并支持隔离 prefix", () => {
     const command = buildReleaseInstallCommand({
       platform: "win32",
+      architecture: "x64",
+      projectRoot: "/workspace",
       prefix: "/tmp/boxteam-install",
     });
 
@@ -36,9 +53,12 @@ describe("发布版安装入口", () => {
       "--global",
       "--no-audit",
       "--no-fund",
+      "--offline",
+      "--omit=optional",
       "--prefix",
       "/tmp/boxteam-install",
-      `boxteam@${BOXTEAM_VERSION}`,
+      `/workspace/out/packaging/windows-x64/tarballs/boxteam-${BOXTEAM_VERSION}.tgz`,
+      `/workspace/out/packaging/windows-x64/release-assets/boxteam-runtime-windows-x64-${BOXTEAM_VERSION}.tgz`,
     ]);
   });
 

@@ -91,7 +91,7 @@
 ```
 ## install
 > ### release
-> [安装] 安装当前发布版本的 BoxTeam CLI 和平台 runtime
+> [安装] 本地打包并安装当前项目的 BoxTeam CLI 和平台 runtime
 ```sh
   bun run scripts/install/install-release.mjs
 ```

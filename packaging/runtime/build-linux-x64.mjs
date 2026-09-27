@@ -18,10 +18,12 @@ import {
   PYTHON_RUNTIME,
 } from "./versions.mjs";
 import {
+  sha256File,
   runtimeAssetUrl,
   stageRuntimeDownloaderPackage,
   stampReleasePackageManifest,
 } from "./runtime-release-assets.mjs";
+import { computeBuildInputFingerprint } from "./build-input-fingerprint.mjs";
 
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
@@ -392,9 +394,43 @@ async function main() {
     },
   ];
   writeSizeReport({ npmTarballs, releaseAssets });
+  const sourceFingerprint = computeBuildInputFingerprint({
+    projectRoot,
+    targetPlatform: "linux-x64",
+  });
+  const launcherTarball = npmTarballs.find(
+    (tarball) => path.basename(tarball) === `boxteam-${BOXTEAM_VERSION}.tgz`,
+  );
+  const runtimeAsset = releaseAssets.find(
+    (asset) =>
+      asset.filename === `boxteam-runtime-linux-x64-${BOXTEAM_VERSION}.tgz`,
+  );
+  if (!launcherTarball || !runtimeAsset) {
+    throw new Error("本地安装 tarball 清单缺少 Launcher 或 Linux runtime");
+  }
   writeFileSync(
     path.join(outputRoot, "build-result.json"),
-    `${JSON.stringify({ npm_tarballs: npmTarballs, release_assets: releaseAssets }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        platform: "linux-x64",
+        version: BOXTEAM_VERSION,
+        source_fingerprint: sourceFingerprint,
+        install_tarballs: {
+          launcher: {
+            filename: path.basename(launcherTarball),
+            sha256: await sha256File(launcherTarball),
+          },
+          runtime: {
+            filename: runtimeAsset.filename,
+            sha256: runtimeAsset.sha256,
+          },
+        },
+        npm_tarballs: npmTarballs,
+        release_assets: releaseAssets,
+      },
+      null,
+      2,
+    )}\n`,
   );
   process.stdout.write(`构建完成: ${outputRoot}\n`);
 }
