@@ -163,6 +163,10 @@ async def get_session_generation_status(
         )
     except KeyError as error:
         raise not_found_http_error(error) from error
+    except RuntimeError as error:
+        # 账本处于 failed 终态但缺 result（执行期失败只落状态、不落输出）：
+        # 记录存在、但当前状态无法给出可读结果，属于可恢复的状态冲突而非 500。
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -385,4 +389,8 @@ async def execute_session_generation(
         result = await service.execute(payload)
     except (KeyError, ValueError) as error:
         raise HTTPException(status_code=400, detail=client_error_message(error)) from error
+    except RuntimeError as error:
+        # 同一幂等键撞上未完成/失败的既有运行：拒绝重复创建是状态冲突，
+        # 客户端可查询该运行终态后再决定重试，不能伪装成服务端故障。
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
