@@ -50,6 +50,11 @@
 
 1. 每次编写代码文件时，都运行静态分析。
 2. 每次修改浏览器 UI（`src/clients/web/`）后，都要执行 `bun run --cwd src/clients/web build`。
+3. **跑任何测试都要带进程外保护，不能裸 `bun test` / `pytest`。** 2026-09-27 实测确证：当工作树的测试文件与生产代码不匹配（例如只覆盖测试文件、没覆盖对应的生产修复）时，`useSessionMessageStream.test.tsx` 的 410 重连用例会进入永不收敛的紧循环，内存无界增长（t=66s 已 6.9GB 仍在涨），曾把整机 16GB 吃到 OOM。此时 bun 自带 `--timeout` 和进程内 preload 看门狗都会失效——事件循环被紧循环占死，实测 preload 只跑到 1 个 tick；保护必须做在进程外：
+   - 优先走 `bun run test:matrix -- --suite=<id>`，runner 已内置数据段内存上限和硬超时。
+   - 临时命令用 `timeout <秒> bash -c 'ulimit -d 4194304; exec "$@"' bash <命令>`；`ulimit -d` 上限对 bun 立即生效（实测无界分配 5s 内 `RangeError: Out of memory`），且不会误杀正常用例（整仓 1179 用例在此上限下全绿）。
+   - `ulimit -v` 对 bun 不可用（0 秒 abort）；`Bun.spawn` 的 `rlimit` 选项被静默忽略（实测设 1GB 仍分配 8GB）。
+   - 探针与变异实验必须整体 `git archive` 解包，不要手工只覆盖测试文件，避免测试与生产错配；单文件跑优先，且始终带超时。
 
 ### 代码组织
 

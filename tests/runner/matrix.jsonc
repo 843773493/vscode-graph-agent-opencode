@@ -1,5 +1,6 @@
 {
   // 当前只实现纯 Web 客户端。其他客户端保留 disabled TODO，不能被报告为通过。
+  // 每个已启用 suite 默认带数据段内存上限与硬超时，防止无界增长的用例吃满整机内存。
   "schemaVersion": 1,
   "suites": [
     {
@@ -8,6 +9,13 @@
       "client": null,
       "enabled": true,
       "command": ["uv", "run", "pytest", "tests/unit"]
+    },
+    {
+      "id": "unit-web",
+      "layer": "unit",
+      "client": "web",
+      "enabled": true,
+      "command": ["bun", "test", "src/clients/web/src"]
     },
     {
       "id": "contracts-python",
