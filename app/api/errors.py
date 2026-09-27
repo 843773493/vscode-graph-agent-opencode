@@ -42,18 +42,14 @@ def client_error_message(error: Exception) -> str:
     """抽取稳定的对外错误文本，不泄漏 Python repr。
 
     ``BaseAPIException`` 家族（``NotFoundError``/``ForbiddenError``）的
-    ``detail`` 是 ``{"code", "message", "details"}`` 字典，只取其中的消息本体；
-    直接 ``str(error)`` 会返回 ``"500: {...}"`` 这种带状态码前缀的字典 repr。
+    ``detail`` 是 ``{"code", "message", "details"}`` 字典，只取其中的消息本体
+    （唯一实现是 ``BaseAPIException.readable_message``，此处直接复用）；
+    直接 ``str(error)`` 会返回 ``"403: {...}"`` 这种带状态码前缀的字典 repr。
     ``KeyError`` 取原始参数，因为 ``str()`` 会给消息补一对引号。
     其余异常类型仍是 ``str(error)``。
     """
     if isinstance(error, BaseAPIException):
-        detail = error.detail
-        if isinstance(detail, dict):
-            message = detail.get("details") or detail.get("message")
-            if message:
-                return str(message)
-        return str(detail)
+        return error.readable_message()
     if isinstance(error, KeyError) and error.args and isinstance(error.args[0], str):
         return error.args[0]
     return str(error)

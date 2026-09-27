@@ -30,6 +30,7 @@ from app.api.tools import router as tools_router
 from app.api.workspace import router as workspace_router
 from app.container import build_app_container
 from app.core.env import load_boxteam_env
+from app.core.exceptions import BaseAPIException
 from app.core.logging_config import configure_application_logging
 from app.core.path_utils import get_workspace_root
 from app.core.trace_middleware import TraceMiddleware, get_request_id
@@ -242,6 +243,39 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(BaseAPIException)
+async def workspace_base_api_exception_handler(
+    request: Request,
+    error: BaseAPIException,
+) -> JSONResponse:
+    """``BaseAPIException`` 家族冒泡时的唯一收口点。
+
+    ``ForbiddenError``/``NotFoundError`` 继承 ``HTTPException``；若某路由漏接，
+    异常会冒泡到这里。没有本处理器时 Starlette 会命中上面的 ``HTTPException``
+    处理器，把内部 ``detail`` 字典原样下发（历史实现还会带 500 状态码）。
+
+    这里按异常自身的语义状态码与 ``readable_message()`` 下发，使「任何
+    ``BaseAPIException`` 冒泡」都得到 4xx + 纯文本 detail，与路由显式映射
+    （``not_found_http_error`` / ``forbidden_http_error``）复用同一份状态码与
+    文本抽取，结构性消除「漏接即 500 + 泄漏」。
+
+    Starlette 按异常类型的具体程度派发处理器，故本处理器优先于
+    ``HTTPException`` 通用处理器，且不影响其它 ``HTTPException``。
+    """
+    request_id = get_request_id(request)
+    response_headers = {
+        key: value
+        for key, value in (error.headers or {}).items()
+        if key.lower() != "x-request-id"
+    }
+    response_headers["X-Request-ID"] = request_id
+    return JSONResponse(
+        status_code=error.status_code,
+        headers=response_headers,
+        content={"detail": error.readable_message(), "request_id": request_id},
+    )
 
 
 @app.exception_handler(HTTPException)
