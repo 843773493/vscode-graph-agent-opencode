@@ -23,9 +23,10 @@ from app.agents.providers.openai_responses import (
     BoxteamOpenAIResponsesModel,
 )
 from app.agents.upstream_request_trace import (
-    UpstreamRequestTraceCallback,
+    apply_upstream_call_details,
     begin_upstream_capture,
     end_upstream_capture,
+    record_upstream_request,
     record_upstream_response,
 )
 from app.services.orchestration.agent_stream_helpers import (
@@ -1285,26 +1286,37 @@ def test_responses_interleaved_function_call_deltas_keep_call_identity() -> None
     assert observed_names == ["read_file", "read_file", None, None, None, None]
 
 
+def _fake_llm_stream(model_call_details: dict[str, object]) -> SimpleNamespace:
+    """构造只带 LiteLLM 调用细节的最小流对象。"""
+    return SimpleNamespace(
+        logging_obj=SimpleNamespace(model_call_details=model_call_details)
+    )
+
+
 def test_responses_upstream_trace_uses_final_payload_when_litellm_input_is_empty():
-    callback = UpstreamRequestTraceCallback(
-        fallback_request={
+    token = begin_upstream_capture()
+    record_upstream_request(
+        request={
             "model": "gpt-5.6-luna",
             "input": [{"type": "message", "role": "user", "content": "hello"}],
             "include": ["reasoning.encrypted_content"],
             "store": False,
             "api_key": "secret",
-        }
-    )
-    token = begin_upstream_capture()
-    callback.log_pre_api_call(
-        "gpt-5.6-luna",
-        None,
-        {
-            "litellm_call_id": "responses-1",
-            "call_type": "aresponses",
-            "custom_llm_provider": "openai",
-            "additional_args": {"complete_input_dict": {}},
         },
+        model="gpt-5.6-luna",
+        provider="openai",
+        api_base="https://example.com/v1",
+        call_type="aresponses",
+    )
+    apply_upstream_call_details(
+        _fake_llm_stream(
+            {
+                "call_type": "aresponses",
+                "custom_llm_provider": "openai",
+                "model": "gpt-5.6-luna",
+                "additional_args": {"complete_input_dict": {}},
+            }
+        )
     )
     attempts = end_upstream_capture(token)
 
@@ -1314,25 +1326,36 @@ def test_responses_upstream_trace_uses_final_payload_when_litellm_input_is_empty
 
 
 def test_responses_stream_terminal_event_records_complete_upstream_response():
-    callback = UpstreamRequestTraceCallback()
     token = begin_upstream_capture()
-    callback.log_pre_api_call(
-        "gpt-5.6-luna",
-        None,
-        {
-            "litellm_call_id": "responses-stream-1",
-            "call_type": "aresponses",
-            "custom_llm_provider": "openai",
-            "additional_args": {
-                "complete_input_dict": {
-                    "model": "gpt-5.6-luna",
-                    "input": [{"type": "message", "role": "user"}],
-                }
-            },
+    record_upstream_request(
+        request={
+            "model": "gpt-5.6-luna",
+            "input": [{"type": "message", "role": "user"}],
         },
+        model="gpt-5.6-luna",
+        provider="openai",
+        api_base="https://example.com/v1",
+        call_type="aresponses",
+    )
+    apply_upstream_call_details(
+        _fake_llm_stream(
+            {
+                "call_type": "aresponses",
+                "custom_llm_provider": "openai",
+                "model": "gpt-5.6-luna",
+                "additional_args": {
+                    "api_base": "https://example.com/v1/responses",
+                    "complete_input_dict": {
+                        "model": "gpt-5.6-luna",
+                        "input": [{"type": "message", "role": "user"}],
+                    },
+                },
+            }
+        )
     )
 
     record_upstream_response({"id": "resp_stream", "output": []})
     attempts = end_upstream_capture(token)
 
+    assert attempts[0]["api_base"] == "https://example.com/v1/responses"
     assert attempts[0]["response"] == {"id": "resp_stream", "output": []}

@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAda
 from app.agents.upstream_request_trace import (
     begin_upstream_capture,
     end_upstream_capture,
+    record_upstream_error,
 )
 from app.core.bounded_json import bound_json_value
 from app.core.job_context import get_current_job_id
@@ -287,6 +288,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             response = handler(request)
             upstream_attempts = end_upstream_capture(capture_token)
         except BaseException as error:
+            record_upstream_error(error)
             upstream_attempts = end_upstream_capture(capture_token)
             self._save_log(
                 session_id,
@@ -312,6 +314,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             response = await handler(request)
             upstream_attempts = end_upstream_capture(capture_token)
         except BaseException as error:
+            record_upstream_error(error)
             upstream_attempts = end_upstream_capture(capture_token)
             self._save_log(
                 session_id,

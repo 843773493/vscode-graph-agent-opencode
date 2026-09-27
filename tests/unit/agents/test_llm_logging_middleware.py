@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from langchain.agents.middleware import ModelRequest, ModelResponse
@@ -10,7 +11,11 @@ from langgraph.runtime import ExecutionInfo, Runtime
 
 from app.agents import llm_logging_middleware
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
-from app.agents.upstream_request_trace import UpstreamRequestTraceCallback
+from app.agents.upstream_request_trace import (
+    apply_upstream_call_details,
+    record_upstream_request,
+    record_upstream_response,
+)
 
 
 def test_llm_log_persists_request_and_tool_stats_without_prompt_replay(
@@ -101,32 +106,38 @@ def test_llm_log_merges_redacted_upstream_request_and_response(
     middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
 
     def invoke(_: ModelRequest) -> ModelResponse:
-        callback = UpstreamRequestTraceCallback()
-        callback.log_pre_api_call(
-            "big-pickle",
-            [{"role": "user", "content": "hello"}],
-            {
-                "litellm_call_id": "call-1",
-                "call_type": "acompletion",
-                "custom_llm_provider": "openai",
+        record_upstream_request(
+            request={
+                "model": "big-pickle",
+                "messages": [{"role": "user", "content": "hello"}],
                 "api_key": "secret",
-                "additional_args": {
-                    "api_base": "https://example.com/v1",
-                    "headers": {"Authorization": "Bearer secret"},
-                    "complete_input_dict": {
-                        "model": "big-pickle",
-                        "messages": [{"role": "user", "content": "hello"}],
-                        "api_key": "secret",
-                    },
-                },
             },
+            model="big-pickle",
+            provider="openai",
+            api_base="https://example.com/v1",
+            call_type="acompletion",
         )
-        callback.log_success_event(
-            {"litellm_call_id": "call-1"},
-            {"choices": [{"message": {"content": "done"}}]},
-            None,
-            None,
+        apply_upstream_call_details(
+            SimpleNamespace(
+                logging_obj=SimpleNamespace(
+                    model_call_details={
+                        "call_type": "acompletion",
+                        "custom_llm_provider": "openai",
+                        "model": "big-pickle",
+                        "additional_args": {
+                            "api_base": "https://example.com/v1",
+                            "headers": {"Authorization": "Bearer secret"},
+                            "complete_input_dict": {
+                                "model": "big-pickle",
+                                "messages": [{"role": "user", "content": "hello"}],
+                                "api_key": "secret",
+                            },
+                        },
+                    }
+                )
+            )
         )
+        record_upstream_response({"choices": [{"message": {"content": "done"}}]})
         return ModelResponse(result=[AIMessage(content="done")])
 
     middleware.wrap_model_call(request, invoke)
@@ -216,34 +227,22 @@ def test_llm_log_persists_failed_upstream_attempt(
     middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
 
     def invoke(_: ModelRequest) -> ModelResponse:
-        callback = UpstreamRequestTraceCallback()
-        callback.log_pre_api_call(
-            "failed-model",
-            [{"role": "user", "content": "hello"}],
-            {
-                "litellm_call_id": "failed-call",
-                "call_type": "acompletion",
-                "custom_llm_provider": "openai",
-                "additional_args": {
-                    "complete_input_dict": {
-                        "model": "failed-model",
-                        "messages": [{"role": "user", "content": "hello"}],
-                    }
-                },
+        record_upstream_request(
+            request={
+                "model": "failed-model",
+                "messages": [{"role": "user", "content": "hello"}],
             },
+            model="failed-model",
+            provider="openai",
+            api_base=None,
+            call_type="acompletion",
         )
-        callback.log_failure_event(
-            {"litellm_call_id": "failed-call"},
-            RuntimeError("upstream unavailable"),
-            None,
-            None,
-        )
-        raise RuntimeError("model call failed")
+        raise RuntimeError("upstream unavailable")
 
-    with pytest.raises(RuntimeError, match="model call failed"):
+    with pytest.raises(RuntimeError, match="upstream unavailable"):
         middleware.wrap_model_call(request, invoke)
 
     log_file = next((session_dir / "logs" / "llm_requests").glob("*.json"))
     payload = json.loads(log_file.read_text(encoding="utf-8"))
-    assert payload["response"]["error"] == "model call failed"
+    assert payload["response"]["error"] == "upstream unavailable"
     assert "upstream unavailable" in payload["upstream"]["attempts"][0]["error"]

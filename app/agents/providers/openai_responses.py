@@ -42,7 +42,8 @@ from app.agents.providers.openai_response_history import (
 )
 from app.agents.sealed_assembly_dispatch import read_sealed_native_projection
 from app.agents.upstream_request_trace import (
-    attach_upstream_trace_callback,
+    apply_upstream_call_details,
+    record_upstream_request,
     record_upstream_response,
 )
 from app.core.cancelable_stream import CancelableStream, close_async_stream
@@ -593,12 +594,16 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
-        raw_payload = self._responses_payload(messages, stop, kwargs)
-        payload = attach_upstream_trace_callback(
-            raw_payload,
-            fallback_request=raw_payload,
+        payload = self._responses_payload(messages, stop, kwargs)
+        record_upstream_request(
+            request=payload,
+            model=self.model,
+            provider=self.custom_llm_provider,
+            api_base=self.api_base,
+            call_type="responses",
         )
         stream = litellm.responses(**payload)
+        apply_upstream_call_details(stream)
         current_index = current_output_index = current_sub_index = -1
         part_state = _StreamPartState()
         original_schema = kwargs.get("response_format")
@@ -673,11 +678,14 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 "Responses 请求 payload 构造超过时间预算: "
                 f"timeout_seconds={DEFAULT_RESPONSES_PAYLOAD_BUILD_TIMEOUT_SECONDS:g}"
             ) from error
-        payload = attach_upstream_trace_callback(
-            raw_payload,
-            fallback_request=raw_payload,
-        )
         provider_id = self.provider_id or self.custom_llm_provider or "<unknown>"
+        record_upstream_request(
+            request=raw_payload,
+            model=self.model,
+            provider=self.custom_llm_provider,
+            api_base=self.api_base,
+            call_type="aresponses",
+        )
         logger.info(
             "Responses provider stream open begin: provider=%s model=%s",
             provider_id,
@@ -685,7 +693,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         )
         try:
             stream = await asyncio.wait_for(
-                litellm.aresponses(**payload),
+                litellm.aresponses(**raw_payload),
                 timeout=DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS,
             )
         except TimeoutError as error:
@@ -701,6 +709,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 f"provider={provider_id} model={self.model} "
                 f"timeout_seconds={DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS:g}"
             ) from error
+        apply_upstream_call_details(stream)
         logger.info(
             "Responses provider stream open complete: provider=%s model=%s",
             provider_id,

@@ -6,7 +6,6 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
-from litellm.integrations.custom_logger import CustomLogger
 from pydantic import SecretStr
 
 _REDACTED_KEYS = {
@@ -73,137 +72,88 @@ def end_upstream_capture(
 
 def record_upstream_response(response: Any) -> None:
     """记录流式 Responses 在 terminal event 中携带的完整响应。"""
+    if response is None:
+        return
+    _fill_pending(key="response", value=response)
+
+
+def record_upstream_error(error: Any) -> None:
+    """记录当前模型调用中尚未成功收尾的上游 attempt 的失败原因。"""
+    if error is None:
+        return
+    _fill_pending(key="error", value=error)
+
+
+def record_upstream_request(
+    *,
+    request: Any,
+    model: str | None,
+    provider: str | None,
+    api_base: str | None,
+    call_type: str,
+) -> None:
+    """在 Provider 发起上游请求前登记本次 attempt。
+
+    先按 Provider 已知信息登记，保证建立流之前的失败也有据可查；调用建立后由
+    ``apply_upstream_call_details`` 用 LiteLLM 解析结果校正。
+    """
     attempts = _UPSTREAM_ATTEMPTS.get()
-    if attempts is None or response is None:
+    if attempts is None:
+        return
+    attempts.append(
+        {
+            "call_type": call_type,
+            "provider": provider,
+            "model": model,
+            "api_base": api_base,
+            "request": _safe_value(request),
+            "response": None,
+            "error": None,
+        }
+    )
+
+
+def apply_upstream_call_details(stream: Any) -> None:
+    """用 LiteLLM 流对象上已解析的调用细节校正最后一条 attempt。
+
+    取值与旧的 pre-call 回调同源，因此 api_base / call_type / request 与之前一致。
+    TODO: LiteLLM 暴露公开的调用细节查询接口后，替换对 logging_obj 私有字段的读取。
+    """
+    attempts = _UPSTREAM_ATTEMPTS.get()
+    if not attempts:
+        return
+    logging_obj = getattr(stream, "logging_obj", None)
+    model_call_details = getattr(logging_obj, "model_call_details", None)
+    if not isinstance(model_call_details, Mapping):
+        raise TypeError(
+            "LiteLLM 流对象缺少 model_call_details，无法校正 upstream attempt"
+        )
+    attempt = attempts[-1]
+    additional_args = model_call_details.get("additional_args")
+    if isinstance(additional_args, Mapping):
+        api_base = additional_args.get("api_base")
+        if api_base is not None:
+            attempt["api_base"] = str(api_base)
+        complete_input = additional_args.get("complete_input_dict")
+        if isinstance(complete_input, Mapping) and complete_input:
+            attempt["request"] = _safe_value(complete_input)
+    for key, source in (
+        ("call_type", "call_type"),
+        ("provider", "custom_llm_provider"),
+        ("model", "model"),
+    ):
+        value = model_call_details.get(source)
+        if value is not None:
+            attempt[key] = _safe_value(value)
+
+
+def _fill_pending(*, key: str, value: Any) -> None:
+    """把终结结果写入最后一条尚未收尾的 attempt。"""
+    attempts = _UPSTREAM_ATTEMPTS.get()
+    if attempts is None:
         return
     for attempt in reversed(attempts):
         if attempt.get("response") is None and attempt.get("error") is None:
-            attempt["response"] = _safe_value(response)
+            attempt[key] = _safe_value(value)
             return
 
-
-def _request_payload(
-    model: str,
-    messages: Any,
-    kwargs: Mapping[str, Any],
-    fallback_request: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    additional_args = kwargs.get("additional_args")
-    if isinstance(additional_args, Mapping):
-        complete_input = additional_args.get("complete_input_dict")
-        if isinstance(complete_input, Mapping) and complete_input:
-            return _safe_value(complete_input)
-    if fallback_request is not None:
-        return _safe_value(fallback_request)
-
-    payload: dict[str, Any] = {"model": model}
-    optional_params = kwargs.get("optional_params")
-    if isinstance(optional_params, Mapping):
-        payload.update(optional_params)
-    raw_input = kwargs.get("input")
-    if raw_input is not None:
-        payload["input"] = raw_input
-    elif messages is not None:
-        payload["messages"] = messages
-    return _safe_value(payload)
-
-
-class UpstreamRequestTraceCallback(CustomLogger):
-    """把 LiteLLM 单次真实调用附加到当前 LangChain 模型请求日志。"""
-
-    def __init__(self, *, fallback_request: Mapping[str, Any] | None = None) -> None:
-        super().__init__()
-        self._fallback_request = (
-            dict(fallback_request) if fallback_request is not None else None
-        )
-
-    def log_pre_api_call(self, model: str, messages: Any, kwargs: dict[str, Any]) -> None:
-        attempts = _UPSTREAM_ATTEMPTS.get()
-        if attempts is None:
-            return
-        additional_args = kwargs.get("additional_args")
-        api_base = (
-            additional_args.get("api_base")
-            if isinstance(additional_args, Mapping)
-            else None
-        )
-        attempts.append(
-            {
-                "litellm_call_id": kwargs.get("litellm_call_id"),
-                "call_type": kwargs.get("call_type"),
-                "provider": kwargs.get("custom_llm_provider"),
-                "model": model,
-                "api_base": str(api_base) if api_base is not None else None,
-                "request": _request_payload(
-                    model,
-                    messages,
-                    kwargs,
-                    self._fallback_request,
-                ),
-                "response": None,
-                "error": None,
-            }
-        )
-
-    def _finish(self, kwargs: Mapping[str, Any], *, response: Any, error: Any) -> None:
-        attempts = _UPSTREAM_ATTEMPTS.get()
-        if attempts is None:
-            return
-        call_id = kwargs.get("litellm_call_id")
-        for attempt in reversed(attempts):
-            if attempt.get("litellm_call_id") == call_id:
-                attempt["response"] = _safe_value(response)
-                attempt["error"] = _safe_value(error)
-                return
-        raise RuntimeError(f"LiteLLM 回调找不到对应的 upstream attempt: {call_id!r}")
-
-    def log_success_event(
-        self,
-        kwargs: dict[str, Any],
-        response_obj: Any,
-        start_time: Any,
-        end_time: Any,
-    ) -> None:
-        self._finish(kwargs, response=response_obj, error=None)
-
-    async def async_log_success_event(
-        self,
-        kwargs: dict[str, Any],
-        response_obj: Any,
-        start_time: Any,
-        end_time: Any,
-    ) -> None:
-        self._finish(kwargs, response=response_obj, error=None)
-
-    def log_failure_event(
-        self,
-        kwargs: dict[str, Any],
-        response_obj: Any,
-        start_time: Any,
-        end_time: Any,
-    ) -> None:
-        self._finish(kwargs, response=None, error=response_obj)
-
-    async def async_log_failure_event(
-        self,
-        kwargs: dict[str, Any],
-        response_obj: Any,
-        start_time: Any,
-        end_time: Any,
-    ) -> None:
-        self._finish(kwargs, response=None, error=response_obj)
-
-
-def attach_upstream_trace_callback(
-    params: Mapping[str, Any],
-    *,
-    fallback_request: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    result = dict(params)
-    existing = result.get("callbacks")
-    callbacks = list(existing) if isinstance(existing, Sequence) else []
-    callbacks.append(
-        UpstreamRequestTraceCallback(fallback_request=fallback_request)
-    )
-    result["callbacks"] = callbacks
-    return result

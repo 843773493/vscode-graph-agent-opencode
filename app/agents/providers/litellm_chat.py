@@ -68,7 +68,8 @@ from app.agents.providers.provider_http_client import (
 )
 from app.agents.providers.response_normalization import canonicalize_ai_message
 from app.agents.upstream_request_trace import (
-    attach_upstream_trace_callback,
+    apply_upstream_call_details,
+    record_upstream_request,
     record_upstream_response,
 )
 from app.core.cancelable_stream import CancelableStream
@@ -502,7 +503,6 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
     ) -> Iterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
-        params = attach_upstream_trace_callback(params)
         params["stream_options"] = self.stream_options or {"include_usage": True}
 
         delta_sink = get_current_model_delta_sink()
@@ -511,11 +511,20 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             first_chunk_yielded = False
             part_state = _StreamPartState()
             semantic_delta_seen = False
+            streamed_chunks: list[AIMessageChunk] = []
+            record_upstream_request(
+                request={**params, "messages": message_dicts},
+                model=self.model_name or self.model,
+                provider=self.custom_llm_provider,
+                api_base=self.api_base,
+                call_type="completion",
+            )
             raw_stream = self.completion_with_retry(
                 messages=message_dicts,
                 run_manager=run_manager,
                 **params,
             )
+            apply_upstream_call_details(raw_stream)
             scope = get_current_turn_execution_scope()
             hook_id = None
             if scope is not None:
@@ -531,6 +540,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                         first_chunk_yielded=first_chunk_yielded,
                         part_state=part_state,
                     ):
+                        streamed_chunks.append(cg_chunk.message)
                         if self._message_chunk_has_semantic_delta(cg_chunk.message):
                             semantic_delta_seen = True
                             if delta_sink is not None:
@@ -552,6 +562,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             if scope is not None:
                 scope.raise_if_cancelled()
             if self._has_real_stream_termination(raw_stream):
+                record_upstream_response(_streamed_response_payload(streamed_chunks))
                 return
             if semantic_delta_seen:
                 raise self._incomplete_stream_error(attempt)
@@ -566,7 +577,6 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
     ) -> AsyncIterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
-        params = attach_upstream_trace_callback(params)
         params["stream_options"] = self.stream_options or {"include_usage": True}
 
         delta_sink = get_current_model_delta_sink()
@@ -577,11 +587,19 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             part_state = _StreamPartState()
             semantic_delta_seen = False
             streamed_chunks: list[AIMessageChunk] = []
+            record_upstream_request(
+                request={**params, "messages": message_dicts},
+                model=self.model_name or self.model,
+                provider=self.custom_llm_provider,
+                api_base=self.api_base,
+                call_type="acompletion",
+            )
             raw_stream = await self.acompletion_with_retry(
                 messages=message_dicts,
                 run_manager=run_manager,
                 **params,
             )
+            apply_upstream_call_details(raw_stream)
             scope = get_current_turn_execution_scope()
             signal = scope.effective_cancellation_signal if scope else None
             async with CancelableStream(raw_stream, signal) as cancelable_stream:
