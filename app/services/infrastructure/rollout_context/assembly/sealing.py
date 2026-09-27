@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, datetime
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.detail_ref import DetailRef
 from app.domain.itemized.enums import CommitKind, CommitMode, TurnStatus
@@ -37,9 +37,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_text,
 )
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 def _assert_one_row(cursor, *, context: str) -> None:
     if cursor.rowcount != 1:

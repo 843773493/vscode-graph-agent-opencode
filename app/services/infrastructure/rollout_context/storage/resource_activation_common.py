@@ -7,7 +7,6 @@ writer（``resource_activation_store``）与 reader（``resource_activation_read
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Final, Protocol
 
 from app.domain.itemized.detail_ref import DetailRef
@@ -111,10 +110,6 @@ class ResourceActivationLineageBodyStore(Protocol):
         detail_ref: DetailRef,
         checkpoint_ns: str,
     ) -> Mapping[str, object]: ...
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _optional_detail_ref_from_key(value: object, *, field: str) -> DetailRef | None:

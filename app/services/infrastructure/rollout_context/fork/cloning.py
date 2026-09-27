@@ -6,10 +6,10 @@ import os
 import shutil
 import sqlite3
 from contextlib import closing, contextmanager
-from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_key,
@@ -33,10 +33,6 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.runtime.detail_payload import (
     parse_detail_payload,
 )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 @contextmanager

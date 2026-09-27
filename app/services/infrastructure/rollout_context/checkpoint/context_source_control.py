@@ -26,9 +26,9 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import replace
-from datetime import UTC, datetime
 from typing import cast
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import CommitKind
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
@@ -64,10 +64,6 @@ _COLUMNS = (
     "updated_at",
 )
 _SELECT_COLUMNS = ", ".join(_COLUMNS)
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _tracking_status(value: object) -> ContextSourceTrackingStatus:

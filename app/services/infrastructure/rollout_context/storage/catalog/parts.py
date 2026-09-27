@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
@@ -25,9 +25,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_text,
 )
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 def _hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()

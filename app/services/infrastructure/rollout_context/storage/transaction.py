@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import CommitKind, CommitMode, ControlOutcome
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
@@ -95,11 +96,6 @@ def default_idempotency_key(
         f"{sha256_jcs(dict(metadata))}"
     )
 
-
-def _now() -> str:
-    from datetime import UTC, datetime
-
-    return datetime.now(UTC).isoformat()
 
 def _required_text(value: object, *, field: str) -> str:
     """读取提交账本中的必填文本，不把 SQLite 值强转成字符串。"""

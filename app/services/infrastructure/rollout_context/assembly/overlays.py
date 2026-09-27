@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
@@ -16,9 +16,6 @@ if TYPE_CHECKING:
         RolloutReadSnapshot,
     )
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 def _required_text(values: dict[str, object], name: str) -> str:
     value = values[name]

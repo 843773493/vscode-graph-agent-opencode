@@ -6,13 +6,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.core.session_catalog_store import (
     ForkRetentionClaim,
     SessionCatalogStore,
 )
+from app.core.sqlite_state import utc_now_text as _now
 from app.services.infrastructure.rollout_context.fork.validation import (
     json_mapping,
     non_negative_int,
@@ -20,10 +20,6 @@ from app.services.infrastructure.rollout_context.fork.validation import (
     optional_text,
     required_text,
 )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 class ForkMetadataMixin:

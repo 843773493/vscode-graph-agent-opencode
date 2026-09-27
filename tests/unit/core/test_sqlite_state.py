@@ -1,10 +1,30 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 
 import pytest
 
-from app.core.sqlite_state import SQLiteStateDatabase
+from app.core.sqlite_state import SQLiteStateDatabase, utc_now_text
+
+
+def test_utc_now_text_is_iso8601_utc():
+    """时间戳契约：UTC ISO-8601，带 ``+00:00`` 偏移且可被 fromisoformat 解析。
+
+    该值会被写入多张持久化表的 ``created_at``/``updated_at`` 列并被其它
+    reader 解析，格式漂移（换时区、换分隔符、换精度）会破坏跨模块契约。
+    """
+    text = utc_now_text()
+    parsed = datetime.fromisoformat(text)
+    assert parsed.tzinfo is not None
+    assert parsed.utcoffset() == UTC.utcoffset(None)
+    assert text == parsed.isoformat()
+
+
+def test_utc_now_text_advances_with_wall_clock():
+    first = datetime.fromisoformat(utc_now_text())
+    second = datetime.fromisoformat(utc_now_text())
+    assert second >= first
 
 
 def test_sqlite_state_initializes_wal_and_migrations(tmp_path):

@@ -14,8 +14,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import UTC, datetime
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.storage.resource_activation_schema import (
     RESOURCE_ACTIVATION_MIGRATION_NAME,
@@ -28,10 +28,6 @@ from app.services.infrastructure.rollout_context.storage.resource_activation_sto
 )
 
 MIGRATION_LOSS_REASON_MISSING_ACTIVATION = "missing-activation-provenance"
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _checksum() -> str:

@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
@@ -27,7 +28,6 @@ from app.services.infrastructure.rollout_context.storage.resource_activation_com
     ResourceActivationStoreError,
     _detail_ref_from_key,
     _detail_ref_key,
-    _now,
     lineage_manifest,
     lineage_manifest_digest,
 )

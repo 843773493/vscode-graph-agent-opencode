@@ -14,9 +14,9 @@ import json
 import os  # noqa: F401
 import sqlite3
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import CommitKind, CommitMode
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.records import CanonicalItemRecord
@@ -50,9 +50,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     validate_commit_contract,
 )
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 def _hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()

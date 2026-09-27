@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
-from datetime import UTC, datetime
 
 from app.services.infrastructure.rollout_context.fork.validation import (
     optional_text,
@@ -22,10 +21,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_non_negative_int,
     strict_text,
 )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _legacy_source_identity_map(

@@ -6,9 +6,9 @@ import hashlib
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
@@ -37,10 +37,6 @@ _VISIBLE_NORMAL_TURN_PREDICATE = (
     "AND visible_user_message.role = 'user' "
     "AND visible_user_message.visibility = 'visible')"
 )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _json(value: object) -> str:

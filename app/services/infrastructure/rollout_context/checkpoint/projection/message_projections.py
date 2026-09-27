@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from collections.abc import Mapping
-from datetime import UTC, datetime
 
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.records import CanonicalItemRecord
@@ -28,10 +27,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 )
 
 _VISIBLE_TEXT_LIMIT = 64 * 1024
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _hash_bytes(value: bytes) -> str:

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -25,10 +24,6 @@ if TYPE_CHECKING:
         RolloutReadSnapshot,
         RolloutTurnAnchor,
     )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 from app.services.infrastructure.rollout_context.storage.serialization import (

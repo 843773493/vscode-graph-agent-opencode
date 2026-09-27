@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.services.infrastructure.rollout_context.assembly.detail_registry import (
     DetailRegistryMixin,
 )
@@ -25,9 +25,6 @@ if TYPE_CHECKING:
         RolloutReadSnapshot,
     )
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 def _strict_bool(value: object, *, field: str) -> bool:
     if not isinstance(value, int) or isinstance(value, bool) or value not in {0, 1}:

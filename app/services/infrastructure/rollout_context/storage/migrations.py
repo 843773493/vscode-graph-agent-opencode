@@ -5,10 +5,10 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
@@ -35,9 +35,6 @@ if TYPE_CHECKING:
 
 _DEFAULT_NAMESPACE = ""
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 def _hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()

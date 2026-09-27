@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.services.infrastructure.node_debug.session.thread_owner import MAIN_THREAD_ID
 from app.services.infrastructure.rollout_context.fork.node_debug_materialization import (
     publish_target_snapshot,
@@ -22,10 +22,6 @@ from app.services.infrastructure.rollout_context.fork.validation import (
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
 )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def reconcile_jsonl_tail(path: Path, committed_offset: int) -> None:

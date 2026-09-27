@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.services.infrastructure.rollout_context.fork.identity import (
@@ -28,10 +27,6 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_text,
 )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 class ForkAcceptanceMappingMixin:

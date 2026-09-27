@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.services.infrastructure.rollout_context.assembly.overlays import (
@@ -20,10 +19,6 @@ from app.services.infrastructure.rollout_context.fork.validation import (
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 class ForkOverlayCopyMixin:

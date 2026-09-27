@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.services.infrastructure.rollout_context.storage.serialization import (
@@ -16,10 +15,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _hash_bytes(value: bytes) -> str:

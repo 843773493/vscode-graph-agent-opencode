@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
+
+from app.core.sqlite_state import utc_now_text as _now
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.storage.primitives import (
         RolloutPruningCandidate,
         RolloutPruningPlan,
     )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 class RolloutPruningMixin:

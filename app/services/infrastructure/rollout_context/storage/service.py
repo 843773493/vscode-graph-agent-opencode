@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
@@ -159,10 +158,6 @@ class SerializerPort(Protocol):
     def dumps_typed(self, value: object) -> tuple[str, bytes]: ...
 
     def loads_typed(self, value: tuple[str, bytes]) -> object: ...
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 class RolloutStorage(

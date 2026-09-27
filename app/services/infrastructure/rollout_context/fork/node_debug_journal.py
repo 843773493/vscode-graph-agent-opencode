@@ -3,19 +3,15 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.services.infrastructure.node_debug.session.fork import (
     NodeDebugSourceCopySnapshot,
     NodeDebugTargetPrepublication,
 )
 from app.services.infrastructure.rollout_context.fork.validation import required_text
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 class NodeDebugForkJournalMixin:

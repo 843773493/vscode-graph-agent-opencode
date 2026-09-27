@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import uuid4
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import CommitKind, CommitMode, ControlOutcome
 from app.services.infrastructure.rollout_context.fork.node_debug_journal import (
     NodeDebugForkJournalMixin,
@@ -22,10 +22,6 @@ from app.services.infrastructure.rollout_context.fork.validation import (
     optional_text,
     required_text,
 )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):

@@ -9,13 +9,13 @@ from __future__ import annotations
 import shutil
 import sqlite3
 from collections.abc import Iterable
-from datetime import UTC, datetime
 from hashlib import sha256
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from langgraph.checkpoint.base import PendingWrite
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -26,10 +26,6 @@ if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.storage.primitives import (
         RolloutReadSnapshot,
     )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _pending_write_row(

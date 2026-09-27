@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from datetime import UTC, datetime
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.migration.semantics import (
@@ -19,9 +19,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
 )
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 class LegacyImportBuilder:
     def build_import(

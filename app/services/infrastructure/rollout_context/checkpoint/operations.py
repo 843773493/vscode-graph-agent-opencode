@@ -6,10 +6,10 @@ transaction/domain port，不提供旧 v1 runtime fallback。
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
@@ -26,10 +26,6 @@ if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.storage.primitives import (
         RolloutManifest,
     )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 class RolloutCheckpointOperationsMixin:

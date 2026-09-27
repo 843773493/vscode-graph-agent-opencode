@@ -7,9 +7,9 @@ import json
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
     CommitKind,
     CommitMode,
@@ -41,9 +41,6 @@ if TYPE_CHECKING:
         RolloutReadSnapshot,
     )
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 def _hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()

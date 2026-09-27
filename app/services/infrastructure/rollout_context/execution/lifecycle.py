@@ -6,8 +6,7 @@ ports；它们不承担 LangChain/provider projection，也不读取 v1 数据�
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     CommitKind,
@@ -26,11 +25,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
-
 
 _V2_TO_HISTORY_STATUS = {
     TurnStatus.OPEN.value: "accepted",
