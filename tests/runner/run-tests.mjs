@@ -7,7 +7,8 @@ const projectRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd
 const matrixPath = path.join(projectRoot, "tests", "runner", "matrix.jsonc");
 
 // 套件默认上限：无界增长的用例必须先撞上限失败，而不是把整机内存吃到 OOM。
-const defaultTimeoutMs = 45 * 60 * 1000;
+// 实测最慢套件 unit-python（4825 用例）约 24:20、峰值 683MB，故默认超时留约 3.7 倍余量。
+const defaultTimeoutMs = 90 * 60 * 1000;
 const timeoutGraceMs = 30 * 1000;
 const defaultDataLimitKb = 8 * 1024 * 1024;
 const isPosix = process.platform !== "win32";
