@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
+from app.core.hashing import sha256_hex as _hash_bytes
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.refs import ContextRef
 from app.services.infrastructure.rollout_context.storage.transaction import (
@@ -26,12 +27,6 @@ if TYPE_CHECKING:
         RolloutCheckpointIndex,
         RolloutReadSnapshot,
     )
-
-
-def _hash_bytes(value: bytes) -> str:
-    import hashlib
-
-    return hashlib.sha256(value).hexdigest()
 
 
 class RolloutCheckpointQueriesMixin:

@@ -7,6 +7,7 @@ import stat
 from contextlib import closing
 from pathlib import Path
 
+from app.core.hashing import sha256_hex as digest
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     read_regular,
     require_safe_path,
@@ -21,7 +22,6 @@ from app.services.infrastructure.rollout_context.migration.schema_v3.details imp
 )
 from app.services.infrastructure.rollout_context.migration.schema_v3.journal import (
     PreparedSchemaV3Upgrade,
-    digest,
     persist_prepared,
 )
 from app.services.infrastructure.rollout_context.migration.schema_v3.model import (

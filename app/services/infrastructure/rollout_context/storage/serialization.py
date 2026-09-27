@@ -6,20 +6,16 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from collections.abc import Mapping
 
+from app.core.hashing import sha256_hex as _hash_bytes
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
 )
 from app.services.infrastructure.rollout_context.storage.format_dispatch import (
     require_v2_runtime,
 )
-
-
-def _hash_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
 
 
 def canonical_json_text(value: object) -> str:

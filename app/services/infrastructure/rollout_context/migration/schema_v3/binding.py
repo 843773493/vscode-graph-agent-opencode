@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path, PurePosixPath
 
+from app.core.hashing import sha256_hex as digest
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.migration.schema_v3.model import (
     SchemaV3UpgradeError,
@@ -16,10 +16,6 @@ from app.services.infrastructure.rollout_context.migration.schema_v3.publication
 
 _PREFIX = "-- schema-v3-artifacts-sha256:"
 _FIELDS = {"audit_id", "source_fingerprint", "target_fingerprint", "migration_checksum", "original_files", "new_files", "checkpoint_ns"}
-
-
-def digest(raw: bytes) -> str:
-    return hashlib.sha256(raw).hexdigest()
 
 
 def audit_identity(source: str, original_files: dict[str, str], base_sql: str) -> str:

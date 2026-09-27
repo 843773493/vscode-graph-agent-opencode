@@ -7,10 +7,10 @@ canonical item 是 JSONL/catalog 的唯一正文事实；本模块只把已提�
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from collections.abc import Mapping
 
+from app.core.hashing import sha256_hex as _hash_bytes
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
@@ -28,9 +28,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 _VISIBLE_TEXT_LIMIT = 64 * 1024
 
-
-def _hash_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
 
 class RolloutMessageProjectionMixin:
     """维护 message、tool 和 reasoning 的派生 projection。"""

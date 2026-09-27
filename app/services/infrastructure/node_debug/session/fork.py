@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from app.core.hashing import sha256_hex as _raw_sha256
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
@@ -227,10 +228,6 @@ class NodeDebugTargetPrepublication:
     @property
     def active_configuration_id(self) -> None:
         return None
-
-
-def _raw_sha256(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
 
 
 def _snapshot_id(

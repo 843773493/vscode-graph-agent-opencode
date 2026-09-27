@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
+from app.core.hashing import sha256_hex as _hash_bytes
 from app.core.sqlite_state import utc_now_text as _now
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepare import (
     prepare_messages,
@@ -33,12 +34,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
-
-
-def _hash_bytes(value: bytes) -> str:
-    import hashlib
-
-    return hashlib.sha256(value).hexdigest()
 
 
 def _v2_json_line(value: object) -> bytes:

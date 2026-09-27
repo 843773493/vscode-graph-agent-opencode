@@ -7,7 +7,6 @@ durability barrier、SQLite commit chain、备份文件和读取快照生命周�
 
 from __future__ import annotations
 
-import hashlib
 import json
 
 # 保留 storage maintenance 的 fsync monkeypatch seam，事务 owner 与它共享 os 模块对象。
@@ -49,10 +48,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_text,
     validate_commit_contract,
 )
-
-
-def _hash_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
 
 
 def _strict_non_negative_int(value: object, *, field: str) -> int:

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from collections.abc import Mapping
 from uuid import uuid4
 
+from app.core.hashing import sha256_hex as _hash_bytes
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
@@ -16,9 +16,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_text,
 )
 
-
-def _hash_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
 
 class RolloutTransactionProjectionMixin:
     """只写 checkpoint/control 的 SQLite projection，不写 canonical item。"""

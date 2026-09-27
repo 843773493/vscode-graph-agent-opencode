@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from app.core.hashing import sha256_hex as _hash_bytes
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
     CommitKind,
@@ -40,10 +40,6 @@ if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.storage.primitives import (
         RolloutReadSnapshot,
     )
-
-
-def _hash_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
 
 
 def _strict_non_negative_int(value: object, *, field: str) -> int:

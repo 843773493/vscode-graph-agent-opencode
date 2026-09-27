@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from app.core.hashing import sha256_hex as digest
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     read_regular,
@@ -18,7 +19,6 @@ from app.services.infrastructure.rollout_context.migration.artifacts import (
     write_private,
 )
 from app.services.infrastructure.rollout_context.migration.schema_v3.binding import (
-    digest,
     validate_bound_sql,
 )
 from app.services.infrastructure.rollout_context.migration.schema_v3.model import (

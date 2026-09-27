@@ -31,12 +31,6 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 )
 
 
-def _hash_bytes(value: bytes) -> str:
-    import hashlib
-
-    return hashlib.sha256(value).hexdigest()
-
-
 def _v2_json_line(value: object) -> bytes:
     from app.services.infrastructure.rollout_context.storage.serialization import (
         canonical_json_line,

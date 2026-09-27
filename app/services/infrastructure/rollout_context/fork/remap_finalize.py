@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping
 from uuid import uuid4
 
+from app.core.hashing import sha256_hex as _hash_bytes
 from app.domain.itemized.hashing import (
     payload_content_length,
     sha256_jcs,
@@ -40,9 +40,6 @@ def _update_one(
     result = connection.execute(sql, parameters)
     if result.rowcount != 1:
         raise RuntimeError(f"full_rollout_copy {context} 行数不一致: {result.rowcount}")
-
-def _hash_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
 
 
 _VISIBLE_TEXT_LIMIT = 64 * 1024

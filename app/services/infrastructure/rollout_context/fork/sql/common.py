@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 
 from app.services.infrastructure.rollout_context.fork.validation import (
     non_negative_int,
 )
-
-
-def _hash_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
 
 _VISIBLE_TEXT_LIMIT = 64 * 1024
 

@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
+from app.core.hashing import sha256_hex as _hash_bytes
 from app.services.infrastructure.rollout_context.fork.remap_state import (
     FullCopyRemapState,
 )
 from app.services.infrastructure.rollout_context.fork.sql.common import (
-    _hash_bytes,
     rewrite_column,
 )
 from app.services.infrastructure.rollout_context.fork.validation import (

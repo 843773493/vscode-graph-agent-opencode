@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import codecs
-import hashlib
 import heapq
 import json
 import mimetypes
@@ -18,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 
+from app.core.hashing import sha256_hex
 from app.core.path_utils import (
     get_user_workspace_root,
     get_workspace_root,
@@ -369,7 +369,7 @@ class WorkspaceService:
                 stat_result.st_mtime,
                 UTC,
             ).isoformat(),
-            revision=self._content_revision(raw_content),
+            revision=sha256_hex(raw_content),
         )
 
     def resolve_raw_file(
@@ -417,7 +417,7 @@ class WorkspaceService:
             raise IsADirectoryError(f"工作区路径不是文件: {relative_path}")
 
         current_content = target_path.read_bytes()
-        current_revision = self._content_revision(current_content)
+        current_revision = sha256_hex(current_content)
         if current_revision != expected_revision:
             raise WorkspaceFileConflictError(
                 f"文件已在编辑期间发生变化，请重新载入后再保存: {relative_path}"
@@ -455,7 +455,7 @@ class WorkspaceService:
             # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
             if os.name != "nt":
                 os.chmod(temporary_path, original_mode)
-            latest_revision = self._content_revision(target_path.read_bytes())
+            latest_revision = sha256_hex(target_path.read_bytes())
             if latest_revision != expected_revision:
                 raise WorkspaceFileConflictError(
                     f"文件在保存期间发生变化，请重新载入后再保存: {relative_path}"
@@ -757,10 +757,6 @@ class WorkspaceService:
         if "/" in normalized or "\\" in normalized or "\x00" in normalized:
             raise ValueError(f"文件名只能包含一个路径片段: {name!r}")
         return normalized
-
-    @staticmethod
-    def _content_revision(raw_content: bytes) -> str:
-        return hashlib.sha256(raw_content).hexdigest()
 
     def _looks_like_binary(self, raw_content: bytes) -> bool:
         sample_size = self._config_service.get_workspace_preview_binary_sample_bytes()

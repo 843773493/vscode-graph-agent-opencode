@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.core.hashing import sha256_hex as digest
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     require_safe_path,
 )
 from app.services.infrastructure.rollout_context.migration.schema_v3.binding import (
-    digest,
     read_prepared_audit,
     validate_bound_sql,
 )

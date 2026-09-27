@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app.core.hashing import sha256_hex as _hash_bytes
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.storage import (
@@ -34,10 +34,6 @@ if TYPE_CHECKING:
     )
 
 _DEFAULT_NAMESPACE = ""
-
-
-def _hash_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
 
 
 class RolloutSchemaMigrationMixin(RolloutSchemaUpgradeMixin):

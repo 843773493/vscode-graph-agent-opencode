@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping
 
+from app.core.hashing import sha256_hex as _hash_bytes
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.errors import ItemSchemaError
@@ -24,10 +24,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
-
-
-def _hash_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
 
 
 def _view_in_active_branch_lineage(
