@@ -40,13 +40,18 @@ import os
 import re
 import shutil
 import sqlite3
-import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
+from app.core.atomic_fs import (
+    atomic_write_bytes as _atomic_write_bytes,
+)
+from app.core.atomic_fs import (
+    fsync_directory as _fsync_directory,
+)
 from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_legacy_layout import (
     FOLDER_MANIFEST_NAME,
@@ -180,34 +185,6 @@ class _MigrationContext:
 
 class SessionCatalogMigrationError(RuntimeError):
     """迁移 fail-closed 总类:旧权威不一致、journal 冲突、恢复无法证明、备份复验失败。"""
-
-
-def _fsync_directory(directory: Path) -> None:
-    """fsync 目录项,保证 rename 后的持久性(Linux 上目录可以打开 fsync)。"""
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _atomic_write_bytes(path: Path, payload: bytes) -> None:
-    """tempfile + fsync + os.replace 的原子写。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        dir=path.parent,
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-    _fsync_directory(path.parent)
 
 
 def _topological_order(nodes: list[SessionPhysicalNode]) -> list[SessionPhysicalNode]:

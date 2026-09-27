@@ -68,6 +68,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.atomic_fs import (
+    fsync_directory as _fsync_directory,
+)
 from app.core.session_catalog_store import (
     SessionCatalogStore,
     SubtreeDeleteRecord,
@@ -89,15 +92,6 @@ _CONTROL_DATABASE_NAME = "session-control.sqlite"
 
 # fence 初始 generation（R12/R13 初始化值）；CAS 成功后推进为 2。
 _FENCE_INITIAL_GENERATION = 1
-
-
-def _fsync_directory(directory: Path) -> None:
-    """fsync 目录项，保证新建/改名条目的持久性（模式对齐 R12/R13）。"""
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 @dataclass(frozen=True, slots=True)

@@ -51,11 +51,19 @@ import json
 import os
 import shutil
 import sqlite3
-import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.atomic_fs import (
+    atomic_write_bytes as _atomic_write_bytes,
+)
+from app.core.atomic_fs import (
+    fsync_directory as _fsync_directory,
+)
+from app.core.atomic_fs import (
+    fsync_file as _fsync_file,
+)
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -107,44 +115,6 @@ _METADATA_CALLER_KEYS = frozenset(
 
 # 禁止进入剥离 manifest 的可变导航字段（catalog 是唯一权威）。
 _FORBIDDEN_MANIFEST_KEYS = ("title", "title_source", "parent_session_id")
-
-
-def _fsync_directory(directory: Path) -> None:
-    """fsync 目录项，保证新建/改名条目的持久性（模式对齐 R12 迁移机器）。"""
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _fsync_file(path: Path) -> None:
-    """fsync 已存在文件（durability barrier 组成部分）。"""
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _atomic_write_bytes(path: Path, payload: bytes) -> None:
-    """tempfile + fsync + os.replace 的原子写（模式对齐 R12 迁移机器，
-    自行实现）。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        dir=path.parent,
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-    _fsync_directory(path.parent)
 
 
 def validate_session_metadata_keys(session_metadata: dict[str, object]) -> None:

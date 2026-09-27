@@ -1350,30 +1350,21 @@ async def test_durability_barrier_fsync_observable(
     import app.core.thread_creation as thread_creation_module
 
     fsync_dir_calls: list[Path] = []
-    fsync_file_calls: list[Path] = []
     original_dir = thread_creation_module._fsync_directory
-    original_file = thread_creation_module._fsync_file
 
     def counting_dir(directory: Path) -> None:
         fsync_dir_calls.append(directory)
         original_dir(directory)
 
-    def counting_file(path: Path) -> None:
-        fsync_file_calls.append(path)
-        original_file(path)
-
     monkeypatch.setattr(
         thread_creation_module, "_fsync_directory", counting_dir
-    )
-    monkeypatch.setattr(
-        thread_creation_module, "_fsync_file", counting_file
     )
     await do_create(service, owner)
     # 目录 fsync：staging 树（4 目录）+ .staging 父目录 + rename 后父目录
     # 链（threads/YYYY/MM/DD + session 目录）等，至少覆盖 6 次调用。
     assert len(fsync_dir_calls) >= 6
-    # 文件级 fsync（原子写内 os.fsync + _fsync_file）由目录屏障补足；
-    # 此处断言 atomic write 的 replace 目录项 fsync 已被计入目录调用。
+    # 文件级 fsync（原子写内 os.fsync）由目录屏障补足；此处
+    # 断言 atomic write 的 replace 目录项 fsync 已被计入目录调用。
     staged_paths = {str(path) for path in fsync_dir_calls}
     assert any(".staging" in path for path in staged_paths)
     assert any("threads" in path for path in staged_paths)
