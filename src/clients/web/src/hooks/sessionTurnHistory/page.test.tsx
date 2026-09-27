@@ -75,7 +75,12 @@ async function runPageCase({
         return Response.json({ data: { token: `token-${port}` } });
       }
       if (path === "/api/gateway/users/current") {
-        return Response.json({ data: { kind: "guest", user_id: null } });
+        return Response.json({
+          code: 0,
+          message: "ok",
+          request_id: "request-page-current-user",
+          data: { kind: "guest", user_id: null },
+        });
       }
       if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
         if (abortResponse) abortRequest?.();
@@ -141,7 +146,12 @@ describe("Turn 历史分页 epoch 协调", () => {
           return Response.json({ data: { token: `token-${port}` } });
         }
         if (path === "/api/gateway/users/current") {
-          return Response.json({ data: { kind: "guest", user_id: null } });
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "request-page-current-user",
+            data: { kind: "guest", user_id: null },
+          });
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
           historyRequests += 1;
@@ -213,7 +223,12 @@ describe("Turn 历史分页 epoch 协调", () => {
           return Response.json({ data: { token: `token-${port}` } });
         }
         if (path === "/api/gateway/users/current") {
-          return Response.json({ data: { kind: "guest", user_id: null } });
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "request-page-current-user",
+            data: { kind: "guest", user_id: null },
+          });
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
           requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -299,7 +314,12 @@ describe("Turn 历史分页 epoch 协调", () => {
           return Response.json({ data: { token: `token-${port}` } });
         }
         if (path === "/api/gateway/users/current") {
-          return Response.json({ data: { kind: "guest", user_id: null } });
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "request-page-current-user",
+            data: { kind: "guest", user_id: null },
+          });
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
           requestCount += 1;
