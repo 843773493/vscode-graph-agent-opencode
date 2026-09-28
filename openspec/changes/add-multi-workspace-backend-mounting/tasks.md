@@ -16,14 +16,14 @@
 
 - [ ] 3.1 按设计 D1 引入路径段载体 `/api/v1/workspaces/{workspace_id}/...`；保留 `X-BoxTeam-Workspace-Id` 作为 Gateway 代理层等价载体，并实现「两载体不一致即显式失败」。
 - [ ] 3.2 实现「缺失 workspace 身份即显式拒绝」：不复用激活态、不使用默认工作区补齐。
-- [ ] 3.3 更新 Gateway：仍负责选目标，但 MUST 显式把目标传给后端；移除「每个工作区一个后端进程」的默认假设，使一个后端进程可服务多个工作区。跨 gateway 时 `gateway authority` 承载稳定 gateway_id，拓扑为 hub-spoke；解析命中只返回稳定身份与内容、不返回 locator，不可解析 fail-closed；上界（visited set / max_transit_gateways=1 / max_gateway_hops=2 / 总 deadline）作为显式策略常量。解析链本体引用「统一虚拟资源寻址」change。
+- [ ] 3.3 更新 Gateway：仍负责选目标，但 MUST 显式把目标传给后端；移除「每个工作区一个后端进程」的默认假设，使一个后端进程可服务多个工作区。跨 gateway 时**网关授权段 / gateway authority**承载稳定 gateway_id，拓扑为**星型解析 / star-topology resolution**（hub-spoke）；解析命中只返回稳定**资源身份 / ResourceIdentity**与内容、不返回 locator，不可解析 fail-closed；上界（visited set / max_transit_gateways=1 / max_gateway_hops=2 / 总 deadline）作为显式策略常量。解析链本体引用「统一虚拟资源寻址」change。
 - [ ] 3.4 明确破坏边界并更新对外说明：不带工作区前缀或依赖激活态的既有客户端调用失效。
 
 ## 4. 持久化与迁移
 
 - [ ] 4.1 盘点只描述单工作区前提的持久化字段，逐项决定「显式迁移」或「显式失效」，不双读、不留别名。
 - [ ] 4.2 实现幂等迁移步骤；迁移遇到旧字段 MUST 显式处理，MUST NOT 静默按旧语义继续解释。
-- [ ] 4.3 校验 real path 不变量：迁移后新增/变更的持久化记录与 API 响应体 MUST NOT 出现 real path，只允许 identity + VRN（+ 独立 revision 字段）。
+- [ ] 4.3 校验**真实路径 / real path** 不变量（**三层分离 / three-layer separation**）：迁移后新增/变更的持久化记录与 API 响应体 MUST NOT 出现 real path，只允许 `资源身份 / ResourceIdentity` + `虚拟资源地址 / VRN`（+ 独立 revision 字段）。
 - [ ] 4.4 记录不可回滚点与其理由；确认回滚边界可被明确陈述。
 
 ## 5. 契约快照与门禁
@@ -37,9 +37,9 @@
 - [ ] 6.2 「必须重写」层：重写断言单一工作区/直接读 `WORKSPACE_ROOT`/跨工作区复用解析器实例的用例。
 - [ ] 6.3 「不受影响」层：确认纯算法/值对象/语法单测无需改动，避免无谓改动。
 
-## 7. 收口在途 change 与命名一致性
+## 7. 收口手续（具名、对称）与命名一致性
 
-- [ ] 7.1 用 `rg` 复核仓库中所有在途 change / 现有 spec 涉及工作区解析或 Gateway 选目标约定者，逐条更新为**指向本 change 的 workspace 身份定义**，消除两套前提并存。
+- [ ] 7.1 具名收口（与本 change 对称）：本 change 的 workspace 身份以 **`add-unified-virtual-resource-addressing` 的 requirement「多工作区场景下寻址层必须显式承载 scope_id 身份」**（见 `openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md`）为唯一权威定义，本 change 承接其实现细节；收口校验以该具名 requirement 为准，不采用「`rg` 复核全仓」这类无目标的表述。
 - [ ] 7.2 校验跨 change 命名一致性：逐字使用**冻结契约 v2** 的 `资源身份 / ResourceIdentity`、`虚拟资源地址 / VRN`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`，无同义异名；且本 change 不复述 scope 闭合集与 scope_id 取值语义、不新增拒绝码（以「统一虚拟资源寻址」change 的权威表为准，收到前不定稿）。
 
 ## 8. 校验与收尾

@@ -9,7 +9,7 @@
 - 工作区**后端**身份是 `app/core/workspace_identity.py` 的 `load_or_create_workspace_id`（严格标准 UUID 文本，拒绝 `gw_` 形式）；这与 Gateway 的 `gw_` 命名空间是**两个不同命名空间**。
 - 已提交的 OpenAPI 快照位于 `src/clients/web/openapi.json` 与 `src/clients/web/src/types/openapi/index.json`，由 `scripts/export_openapi_snapshot.py`（`bun run gen:openapi`）生成，并被 `tests/contracts/api/**` 断言与路由一致。
 
-**冻结契约 v2**（三层分离、scope 闭合集、VRN 语法、hub-spoke 星型解析、拒绝码集中登记、命名一致性）由「统一虚拟资源寻址」change 独占；本设计只处理 **workspace 身份这一层**。
+**冻结契约 v2** 由「统一虚拟资源寻址」change 独占，本设计逐字引用其契约术语：`资源身份 / ResourceIdentity`、`虚拟资源地址 / VRN`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`。本设计只处理 **workspace 身份这一层**，不复述 scope 闭合集、`scope_id` 语义与拒绝码登记（以该 change 的权威表为准）。
 
 **未定稿、待权威表**：scope 名与 `scope_id` 取值语义、以及拒绝码登记，按契约修正 v2 的 G 条只能引用、不得定稿；本设计只引用「统一虚拟资源寻址」change 的登记处与权威表，不自行罗列这些取值。
 
@@ -23,9 +23,9 @@
 - 给出测试影响面的分层口径。
 
 **Non-Goals:**
-- 不定义 VRN 语法 / scope 闭合集 / scope_id 语义 / 拒绝码（引用「统一虚拟资源寻址」change 的权威表）。
+- 不定义 VRN 语法 / `作用域 / scope` 闭合集 / `scope_id` 语义 / `拒绝码 / rejection code`（引用「统一虚拟资源寻址」change 的权威表）。
 - 不改造会话上下文资源的承载（引用「会话上下文 URI 统一改造」change）。
-- 不实现跨 gateway 星型转发（引用寻址 change 的解析链）。
+- 不实现跨 gateway 的**星型解析 / star-topology resolution** 转发（引用寻址 change 的解析链）。
 - 不落地任何生产代码；本 change 只写规划产物。
 
 ## Decisions
@@ -36,7 +36,7 @@
 
 **理由**：
 1. **可观测、可缓存、可幂等**：工作区是资源层级的一部分，放进路径使每个工作区资源有唯一 URL，符合 REST 资源定位语义；请求头不参与 URL 身份，会导致「同一资源多种表示」与缓存/重放/日志歧义。
-2. **与 VRN 语义对齐（契约 v2）**：VRN 的 `workspace` scope 里 `scope_id` **必填且等于 workspace_id**，即 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/{kind}/{...canonical path segments}`（语法本体由「统一虚拟资源寻址」change 拥有，此处仅举例说明同构）。HTTP 路径段把 `workspace_id` 放在同一层级，前端与后端可在同一「工作区路径前缀」概念下工作，避免「URL 里没有、头里有」的双重寻址。
+2. **与虚拟资源地址 / VRN 语义对齐（契约 v2）**：`workspace` **作用域 / scope** 里 `scope_id` **必填且等于 workspace_id**，即 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}`（`{gateway_authority?}` 即可选的**网关授权段 / gateway authority**；`{scope}`/`{scope_id}` 取值由「统一虚拟资源寻址」change 的权威表规定；语法本体属该 change，此处仅举例说明与 HTTP 路径段同构）。HTTP 路径段把 `workspace_id` 放在同一层级，前端与后端可在同一「工作区路径前缀」概念下工作，避免「URL 里没有、头里有」的双重寻址。
 3. **Gateway 已具头部基础**：现有远端投影分支已在发 `X-BoxTeam-Workspace-Id`（`workspace_proxy.py`），`GatewaySessionContextClient` 也已发该头。保留头作为**代理内部**载体改动最小，但**规范身份**必须是路径段，避免把内部代理约定升格为对外契约。
 4. **不选查询参数**：查询参数会被分页/过滤等参数淹没，且不构成资源层级；也不选「请求头为唯一载体」：那会使浏览器直连调试、curl 复现与 URL 级授权都失去工作区维度。
 
@@ -46,7 +46,7 @@
 
 ### D2: 为什么必须放弃「当前激活工作区」
 
-「当前激活工作区」是**进程级可变状态**，与多个要求冲突：并发请求无法各自指向不同工作区；持久化记录一旦隐含它，语义就随写入/读取时刻的激活态漂移；跨 gateway（星型解析）时激活态无意义。多工作区挂载把这些矛盾从「理论问题」变成「必然故障」，因此 MUST 显式化。契约 v2 把 `scope_id` 对**所有** scope 都设为必填，正是把「workspace_id 必须显式」这条原则扩展到全部 scope，与本决策方向一致。
+「当前激活工作区」是**进程级可变状态**，与多个要求冲突：并发请求无法各自指向不同工作区；持久化记录一旦隐含它，语义就随写入/读取时刻的激活态漂移；跨 gateway（**星型解析 / star-topology resolution**）时激活态无意义。多工作区挂载把这些矛盾从「理论问题」变成「必然故障」，因此 MUST 显式化。契约 v2 把 `scope_id` 对**所有** scope 都设为必填，正是把「workspace_id 必须显式」这条原则扩展到全部 scope，与本决策方向一致。
 
 ### D3: 注册表是进程内权威，且与 Gateway 注册表分属两层
 
@@ -60,11 +60,11 @@
 
 **理由**：长期常开的 SQLite 连接是**每工作区状态**，共享会导致跨工作区事务串扰、锁范围错误、以及 A 工作区的数据被 B 工作区请求读到。惰性构造避免为未使用工作区付出启动代价。
 
-### D5: Gateway 角色 = 仍选目标，但目标显式传递，且与 hub-spoke 解析一致
+### D5: Gateway 角色 = 仍选目标，但目标显式传递，且与星型解析 / star-topology resolution 一致
 
-**决策**：Gateway 仍负责为请求选择目标工作区，但目标 MUST 经 D1 的显式载体传下去，后端 MUST NOT 猜测。跨 gateway 时，`gateway_authority` 承载**稳定 gateway_id**；拓扑是 **hub-spoke**（非全互联）：本机是自身联邦 hub 时可直接解析其直接 spoke；本机是 spoke 时经其唯一 hub 做**一次有界 transit**（`visited set` / `max_transit_gateways=1` / `max_gateway_hops=2` / 总 deadline）。**解析命中只返回稳定身份与内容，不携带 locator**（locator 是输入不是输出）。不可解析一律 fail-closed 返回结构化拒绝码。这些上界 MUST 作为**显式策略常量**，不得散落为硬编码魔法数字。
+**决策**：Gateway 仍负责为请求选择目标工作区，但目标 MUST 经 D1 的显式载体传下去，后端 MUST NOT 猜测。跨 gateway 时，**网关授权段 / gateway authority** 承载**稳定 gateway_id**；拓扑是**星型解析 / star-topology resolution**（hub-spoke，非全互联）：本机是自身联邦 hub 时可直接解析其直接 spoke；本机是 spoke 时经其唯一 hub 做**一次有界 transit**（`visited set` / `max_transit_gateways=1` / `max_gateway_hops=2` / 总 deadline）。解析命中只返回稳定的**资源身份 / ResourceIdentity** 与内容，不携带 locator（locator 是输入不是输出）。不可解析一律 fail-closed 返回结构化**拒绝码 / rejection code**。这些上界 MUST 作为**显式策略常量**，不得散落为硬编码魔法数字。
 
-**理由**：契约 v2 的 D 条已把星型解析细化为 hub-spoke 有界 transit；Gateway 的「选目标」职责与此一致——选出的目标必须以稳定身份显式表达并向下传递，解析结果不得把 locator 反向带回，否则跨边界会泄漏本机路径语义。
+**理由**：契约 v2 的 D 条已把**星型解析 / star-topology resolution** 细化为 hub-spoke 有界 transit；Gateway 的「选目标」职责与此一致——选出的目标必须以稳定**资源身份 / ResourceIdentity** 显式表达并向下传递，解析结果不得把 locator（含**真实路径 / real path**）反向带回，否则跨边界会泄漏本机路径语义。
 
 **Non-Goal**：本 change 不实现解析链本身（属寻址 change），只声明 Gateway 角色与传递约定同它一致。
 
@@ -98,13 +98,13 @@
 2. 把所有工作区根/数据目录定位改为「显式 workspace_id → 注册表」。
 3. 把 `build_app_container` 改为「注册表 + 按需服务图」；把 `lru_cache` 键改为 workspace 维度。
 4. 迁移只描述单工作区前提的持久化字段（显式迁移或显式失效）。
-5. Gateway 改为显式传目标（路径前缀或等价头），并与 hub-spoke 有界 transit 约定一致。
+5. Gateway 改为显式传目标（路径前缀或等价头），并与**星型解析 / star-topology resolution** 的 hub-spoke 有界 transit 约定一致。
 6. 重新生成 OpenAPI 快照与前端类型；更新契约测试。
 7. **回滚**：步骤 1–3 可在代码层回滚（不改变持久化形态）；步骤 4 之后一旦按新形态持久化，回滚需再次迁移；步骤 6 可随时重生成。
 
 ## Open Questions
 
-- **scope / scope_id / 拒绝码 未定稿**：按契约修正 v2（B/C/G），这些取值以用户随后下发的**权威表**为准；本 change 只引用「统一虚拟资源寻址」change 的登记处，不自行定稿。收到权威表前，本 change 不新增对这些取值的断言。
+- **`作用域 / scope`、`scope_id` 与 `拒绝码 / rejection code` 未定稿**：按契约修正 v2（B/C/G），这些取值以用户随后下发的**权威表**为准；本 change 只引用「统一虚拟资源寻址」change 的登记处，不自行定稿。收到权威表前，本 change 不新增对这些取值的断言。
 - 后端身份命名空间（严格 UUID）与 Gateway `gw_` 工作区 ID 是**收敛为一个**还是保留「Gateway 控制面 ID + 后端寻址 UUID」两层映射？本 change 已规定**寻址层只用后端 UUID 命名空间**，此问仅影响 Gateway 控制面是否继续保留 `gw_` 别名，属可延后决定，不改变 spec 的工作区身份定义与任务分解。
 - 已挂载工作区的**发现方式**（静态配置 / Gateway 下发 / 启动参数）不影响寻址语义，可延后到实施细节。
 

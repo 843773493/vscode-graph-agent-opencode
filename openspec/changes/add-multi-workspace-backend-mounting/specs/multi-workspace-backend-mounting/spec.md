@@ -1,6 +1,6 @@
 ## Purpose
 
-定义「一个后端进程挂载多个工作区」这一运行形态的**workspace 身份层**：进程内权威的已挂载工作区注册表、workspace 身份在 HTTP API 上的显式寻址载体、工作区根目录与 `.boxteam/` 数据目录的定位规则、按 workspace_id 分区的进程级资源边界、Gateway 显式传目标的角色变化，以及破坏性迁移与回滚边界。本 capability 是 workspace 身份在寻址层的唯一 owner，只引用「统一虚拟资源寻址」change 的 scope/拒绝码/术语，不重新定义 VRN 语法。
+定义「一个后端进程挂载多个工作区」这一运行形态的**workspace 身份层**：进程内权威的已挂载工作区注册表、workspace 身份在 HTTP API 上的显式寻址载体、工作区根目录与 `.boxteam/` 数据目录的定位规则、按 workspace_id 分区的进程级资源边界、Gateway 显式传目标的角色变化，以及破坏性迁移与回滚边界。本 capability 是 workspace 身份在寻址层的唯一 owner，只引用「统一虚拟资源寻址」change 的 `作用域 / scope`、`拒绝码 / rejection code` 与术语（含`资源身份 / ResourceIdentity`、`虚拟资源地址 / VRN`、`真实路径 / real path`、`三层分离 / three-layer separation`、`网关授权段 / gateway authority`、`星型解析 / star-topology resolution`），不重新定义 VRN 语法。
 
 ## ADDED Requirements
 
@@ -44,7 +44,7 @@
 
 ### Requirement: workspace_id 必须与 VRN workspace scope 使用同一份身份
 
-`workspace_id` MUST 是**寻址层身份**。HTTP API 中显式携带的 `workspace_id` 与 VRN `workspace` scope **必填**的 `scope_id` MUST 是同一个稳定 `workspace_id`（`workspace` scope 的 `scope_id` 必填且等于 workspace_id；语法本体与取值来源表属「统一虚拟资源寻址」change）；两处 MUST NOT 各自为政或存在换算层。跨 gateway 引用另一工作区时，MUST 使用同一台机器上那个稳定 `workspace_id`，否则跨 gateway 寻址从根上不成立。本 capability MUST NOT 定义 VRN 语法、scope 闭合集、`scope_id` 语义或拒绝码，只引用其 owner change。
+`workspace_id` MUST 是**寻址层身份**。HTTP API 中显式携带的 `workspace_id` 与**虚拟资源地址 / VRN** 的 `workspace` **作用域 / scope** 里**必填**的 `scope_id` MUST 是同一个稳定 `workspace_id`（`workspace` scope 的 `scope_id` 必填且等于 workspace_id；语法本体与取值来源表属「统一虚拟资源寻址」change）；两处 MUST NOT 各自为政或存在换算层。跨 gateway 引用另一工作区时，MUST 使用同一台机器上那个稳定 `workspace_id`，否则跨 gateway 寻址从根上不成立。本 capability MUST NOT 定义 VRN 语法、`作用域 / scope` 闭合集、`scope_id` 语义或`拒绝码 / rejection code`，只引用其 owner change。
 
 #### Scenario: 同一工作区在两处取值一致
 
@@ -77,7 +77,7 @@
 
 ### Requirement: Gateway 必须显式传目标工作区且后端不得猜
 
-Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传递给后端（经本 capability 规定的显式载体）。后端 MUST NOT 猜测、推断或回退目标工作区。Gateway 的生命周期所有权 MUST NOT 再以「一个工作区一个后端进程」为隐含前提。跨 gateway 时 `gateway authority` 承载**稳定 gateway_id**，拓扑是 **hub-spoke**；解析命中 MUST 只返回稳定身份与内容，MUST NOT 返回或携带 locator（locator 是输入不是输出）；不可解析 MUST fail-closed。解析链本体属「统一虚拟资源寻址」change，本 capability 只要求 Gateway 的目标传递与其一致。
+Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传递给后端（经本 capability 规定的显式载体）。后端 MUST NOT 猜测、推断或回退目标工作区。Gateway 的生命周期所有权 MUST NOT 再以「一个工作区一个后端进程」为隐含前提。跨 gateway 时**网关授权段 / gateway authority**承载**稳定 gateway_id**，拓扑是**星型解析 / star-topology resolution**（hub-spoke）；解析命中 MUST 只返回稳定的**资源身份 / ResourceIdentity** 与内容，MUST NOT 返回或携带 locator（locator 是输入不是输出）；不可解析 MUST fail-closed。解析链本体属「统一虚拟资源寻址」change，本 capability 只要求 Gateway 的目标传递与其一致。
 
 #### Scenario: Gateway 显式传目标
 
@@ -94,29 +94,29 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 - **WHEN** 同一后端进程挂载多个工作区
 - **THEN** Gateway MUST 能对其中任一工作区发请求，且 MUST NOT 要求为每个工作区各拉起一个后端进程
 
-#### Scenario: 跨 gateway 解析不返回 locator
+#### Scenario: 跨 gateway 解析不返回 locator（星型解析 / star-topology resolution）
 
-- **WHEN** Gateway 经 hub-spoke 有界 transit 解析另一个 gateway 上的工作区资源
-- **THEN** 命中结果 MUST 只包含稳定身份与内容，MUST NOT 返回或携带 locator（含本机真实路径 / real path）
+- **WHEN** Gateway 经**星型解析 / star-topology resolution** 的 hub-spoke 有界 transit 解析另一个 gateway 上的工作区资源
+- **THEN** 命中结果 MUST 只包含稳定的**资源身份 / ResourceIdentity** 与内容，MUST NOT 返回或携带 locator（含本机**真实路径 / real path**）
 
 #### Scenario: 跨 gateway 不可解析时 fail-closed
 
 - **WHEN** 目标 gateway 未登记、不可达或未共享目标资源
-- **THEN** 系统 MUST fail-closed 返回「统一虚拟资源寻址」change 登记的结构化拒绝码，MUST NOT 用本机同名资源、空结果或缓存猜值替代
+- **THEN** 系统 MUST fail-closed 返回「统一虚拟资源寻址」change 登记的结构化**拒绝码 / rejection code**，MUST NOT 用本机同名资源、空结果或缓存猜值替代
 
 ### Requirement: 持久化数据不得以「当前激活工作区」为前提
 
-新增或迁移的持久化字段 MUST NOT 以「当前激活工作区」作为隐含前提；凡引用工作区资源者，其含义 MUST 只由记录内显式的 workspace 身份（及所需 VRN/独立 revision 字段）决定，与写入时或读取时的进程激活态无关。真实路径 / real path MUST NOT 出现在持久化记录或 API 响应体中。
+新增或迁移的持久化字段 MUST NOT 以「当前激活工作区」作为隐含前提；凡引用工作区资源者，MUST 遵守**三层分离 / three-layer separation**：记录只承载 `资源身份 / ResourceIdentity` 与 `虚拟资源地址 / VRN`（及独立 revision 字段），其含义 MUST 只由记录内显式的 workspace 身份决定，与写入时或读取时的进程激活态无关。真实路径 / real path MUST NOT 出现在持久化记录或 API 响应体中。
 
 #### Scenario: 记录自带工作区身份
 
 - **WHEN** 一条持久化记录引用某工作区资源
-- **THEN** 其含义 MUST 由记录内显式 workspace 身份决定，切换或改变进程激活态 MUST NOT 改变其解析结果
+- **THEN** 其含义 MUST 由记录内显式 workspace 身份决定，切换或改变进程激活态 MUST NOT 改变其解析结果（**三层分离 / three-layer separation** 不变量）
 
-#### Scenario: real path 不落盘
+#### Scenario: 真实路径 / real path 不落盘
 
 - **WHEN** 系统写入一条引用工作区资源的持久化记录或返回一个 API 响应体
-- **THEN** 其中 MUST NOT 出现 real path，只允许 identity 与 VRN（必要时加独立 revision 字段）
+- **THEN** 其中 MUST NOT 出现**真实路径 / real path**，只允许 `资源身份 / ResourceIdentity` 与`虚拟资源地址 / VRN`（必要时加独立 revision 字段）
 
 ### Requirement: 破坏性迁移与回滚必须有明确边界
 

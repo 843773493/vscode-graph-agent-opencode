@@ -12,7 +12,7 @@
 - 明确 `workspace_id` 是**寻址层身份**，与 VRN `workspace` scope 必填的 `scope_id` MUST 是同一个稳定 `workspace_id`（VRN 的 `workspace` scope 中 `scope_id` 必填且等于 workspace_id，语法本体属「统一虚拟资源寻址」change）；两处 MUST NOT 各自为政。本 change 不定义 VRN 语法，只声明 workspace 身份在寻址层的唯一来源。
 - 进程级资源按 workspace_id 分区（清单与理由见 design）：会话目录解析器与 `lru_cache`、SQLite catalog/状态库及进程所有权锁、会话生命周期 gate/operation lease、Job 事件总线与事件通道、后台任务注册表、配置服务与 `workspace-root` 绑定、Workspace 活动/资源注册表、持久资源账本、消息流与 trace 存储。
 - **BREAKING** 破坏性迁移步骤、旧持久化字段（只描述单工作区前提者）的迁移与失效判定、回滚边界（见 design）。
-- 收口在途 change：`rg` 命中的既有 change/spec 若已涉及工作区解析或 Gateway 选目标约定，一律更新为**指向本 change 的 workspace 身份定义**，消除两套前提并存。
+- 收口手续（具名、对称）：本 change 的 workspace 身份以 **`add-unified-virtual-resource-addressing` 的 requirement「多工作区场景下寻址层必须显式承载 scope_id 身份」** 为唯一权威定义（该 requirement 亦具名引用本 change 承接实现细节）；收口以该具名定义为准，不采用「`rg` 复核全仓」这类无目标的表述。
 - 命名一致性作为跨 change 硬约束：逐字使用**冻结契约 v2** 的 `资源身份 / ResourceIdentity`、`虚拟资源地址 / VRN`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`，禁止同义异名。scope 闭合集与 `scope_id` 取值语义、拒绝码登记以「统一虚拟资源寻址」change 的**权威表**为准，本 change 不复述具体取值。
 
 ## Capabilities
@@ -27,7 +27,7 @@
 
 ## Impact
 
-- **规划产物**：新增本 change 的 `proposal.md` / `specs/multi-workspace-backend-mounting/spec.md` / `specs/managed-backend-lifecycle/spec.md`（delta）/ `design.md` / `tasks.md`；收口修改既有在途 change 中涉及工作区解析/选目标的 requirement 与 task。
+- **规划产物**：新增本 change 的 `proposal.md` / `specs/multi-workspace-backend-mounting/spec.md` / `specs/managed-backend-lifecycle/spec.md`（delta）/ `design.md` / `tasks.md`；并按具名引用与 `add-unified-virtual-resource-addressing` 的 requirement「多工作区场景下寻址层必须显式承载 scope_id 身份」互为对称收口。
 - **本轮已收口**：`add-workspace-persistent-resource-management` 的 `proposal.md`/`design.md`/`tasks.md` 与 `specs/workspace-persistent-resources/spec.md` 中「当前工作区」「`${workspace_abs_path}`」的单工作区前提已改为指向本 change 的显式 `workspace_id` 身份与已挂载工作区注册表（该 change 当时空闲，无并发编辑冲突）。
 - **受影响系统（实施阶段，本 change 不写生产代码）**：`app/container.py`（`build_app_container` 单根装配 → 多工作区注册表）、`app/core/path_utils.py`（`lru_cache` 解析器与 `get_workspace_root` 系列）、`app/main.py`（`WORKSPACE_ROOT` 启动前提）、`app/api/**`（受影响路由的 workspace 身份载体）、`app/core/sqlite_state.py` 的 `SQLiteProcessOwnership`、`app/services/**` 中按工作区构造的服务/注册表/总线、`app/gateway/registry.py` 与 `app/gateway/server/workspace_proxy.py`（目标显式传递）、已提交的 OpenAPI 快照。
 - **破坏性**：既有「一个后端进程一个工作区」的部署形态、只描述单工作区前提的持久化字段、以「当前激活工作区」为隐含前提的客户端调用一并收敛；不提供旧形态兼容层或双读。
