@@ -4,8 +4,8 @@
 - [ ] 1.2 把工作区根目录与 `.boxteam/` 数据目录定位从 `app/core/path_utils.py` 的环境变量单例改为「显式 `workspace_id` → 注册表」；`get_workspace_root()`/`get_boxteam_root()`/`get_sessions_dir()` 不再作为业务解析入口（保留或删除由实施时确认调用方全量平移后决定）。
 - [ ] 1.3 把 `get_session_path_resolver()`/`get_session_creation_service()` 的 `lru_cache` 键从「会话根目录」改为 workspace 维度；每工作区独立 catalog 连接与 `SQLiteProcessOwnership` 锁。
 - [ ] 1.4 确认 workspace_id 只有**一个**命名空间：寻址层统一使用后端身份 UUID；`app/gateway/workspace_ids.py` 的 `gw_` ID 若保留，MUST 只作 Gateway 控制面内部标识，不进入工作区寻址。且 MUST 与 VRN `workspace` scope 必填 `scope_id` 取值同源（同一个稳定 workspace_id）。
-- [ ] 1.5 落实 `scope_id` 推导原则（权威表 R2）：`scope_id` MUST 推导自该 scope 的稳定身份、MUST NOT 硬编码；`workspace` scope 取真实 workspace_id，`gateway` scope 取真实 gateway_id，`inline`（原 `builtin`）scope 取真实 distribution_id。
-- [ ] 1.6 登记两处既存硬编码违反点并定界：`app/agents/skill_runtime.py:539` 的 `else` 分支对 `gateway` 与 `inline`（原 `builtin`）共用同一字面量 `"local"`；`distribution_id` 全仓零生产赋值（`app/container.py` 无装配）、`ResolutionContext` 生产侧零构造。本 change 只登记为接口前提，取值来源由「统一虚拟资源寻址」change 或 Gateway 侧建立。
+- [ ] 1.5 落实 `scope_id` 推导原则（权威表 R2）：`scope_id` MUST 推导自该 scope 的稳定身份、MUST NOT 硬编码；`workspace` scope 取真实 workspace_id，`gateway` scope 取真实 gateway_id，`inline`（原 `builtin`）scope 取真实 distribution_id（来源与编码已由「统一虚拟资源寻址」change 定稿为 manifest 的 `distribution` + `version`，此处只引用）。
+- [ ] 1.6 登记两处既存硬编码违反点并定界：`app/agents/skill_runtime.py:539` 的 `else` 分支对 `gateway` 与 `inline`（原 `builtin`）共用同一字面量 `"local"`；`distribution_id` 全仓零生产赋值（`app/container.py` 无装配）、`ResolutionContext` 生产侧零构造。**来源已裁定**：`distribution_id` 由发行包 runtime manifest（`packages/launcher/runtime-manifest.schema.json`）的 `distribution` + `version` 推导，编码规则与缺失 fail-closed 见「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」；本 change 只登记为接口前提，装配由该 change 实施。
 - [ ] 1.7 全仓 `rg` 复核「当前激活工作区 / active workspace / WORKSPACE_ROOT / 进程级单根」全部调用方，形成平移清单，确认无遗留悬空调用。
 
 ## 2. 服务图按 workspace_id 分区

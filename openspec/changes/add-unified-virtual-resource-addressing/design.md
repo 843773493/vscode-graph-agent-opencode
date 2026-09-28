@@ -57,9 +57,27 @@
 
 ### D4：scope_id 必须由真实身份推导，禁止硬编码
 
-**理由**：现状 `skill_runtime.py:539` 把 `gateway` 与 `builtin` 的 scope_id 都硬编码为 `local`，二者逐字相同；resolver 期望的 `distribution_id` 全仓零生产赋值。让 `gateway`→真实 gateway_id、`inline`→真实 distribution_id，才能让 scope_id 真正承担身份，否则「必填」只是形式。`user`→`local` 依据 AGENTS.md 的单用户本地程序前提。
+**理由**：现状 `skill_runtime.py:539` 把 `gateway` 与 `builtin` 的 scope_id 都硬编码为 `local`，二者逐字相同；resolver 期望的 `distribution_id` 全仓零生产赋值。让 `gateway`→真实 gateway_id、`inline`→真实 distribution_id，才能让 scope_id 真正承担身份，否则「必填」只是形式。`user`→`local` 依据 AGENTS.md 的单用户本地程序前提。`inline` 的来源已由 D4b 定稿为发行 manifest 的 `distribution` + `version`。
 
 **备选**：继续用 `local` 字面量（被否：scope_id 失去区分能力，且 `inline` 与 `gateway` 冲突）。
+
+### D4b：inline 的 distribution_id 来源与编码定稿（用户裁定）
+
+**决定**：`inline` scope 的 `distribution_id` 由发行包 runtime manifest（`packages/launcher/runtime-manifest.schema.json`）的 `distribution` + `version` 确定性推导；编码规则为「`version` 先 `_`→`__`、再把 `.`→`_`，然后以 `-` 连接 `distribution`」。
+
+**实测依据**：manifest 实测路径 `out/development-runtime/runtime-manifest.json`（由 `scripts/launch/dev.mjs:177-207` 写、`packages/launcher/src/gateway-supervisor.mjs:90` 以 `BOXTEAM_RUNTIME_MANIFEST` 传给 Python 侧），真实字段 `distribution: "source-development"`、`version: "0.0.2"`；`version` 取自根 `package.json`（`packaging/runtime/versions.mjs` 的 `BOXTEAM_VERSION`）。`distribution` 是 schema 枚举 `source-development`/`source-installed`/`npm`/`standalone`，全部落在 VRN charset `[A-Za-z0-9_-]` 内。
+
+**风险与真实反驳**：`version` 实测含点号（`0.0.2`），而 `_NAME_CHARSET`（`grammar.py:20`）不含 `.`。用真实 `parse_vrn` 实测，`boxteam://workspace/source-development-0.0.2/resources/skills/x/SKILL.md` 被 `invalid_character` 拒绝 —— 直接拼接不可行。改用 `_` 转义后 `source-development-0_0_2` 解析通过，且 `Escape`/`Unescape` 互为逆（实测覆盖 `0.0.2`/`1.0.0`/`1.0.0-beta.1`/`10.20.30`/`2.0` 往返一致）。
+
+**为什么不用「去点法」**：`version.replace(".", "")` 会把 `0.0.2`/`0.02`/`00.2` 全部压成 `002`（实测碰撞），不可逆；且若 `version` 含 `_` 会与点号映射歧义，故列为备选而非首选。
+
+**为什么 MUST NOT 放宽 charset**：charset 与拒绝码是已登记 grammar 的一部分；为解决一个编码问题而放宽 `.`，会引入 `.`/`..` 段混淆与规范化歧义，并与「不新增转义后门」冲突。故选编码、不放宽语法。
+
+**为什么 MUST NOT 用目录名/安装路径**：同一发行包在不同机器、不同路径安装时路径必不同；用它会让跨 gateway 寻址从根上不成立。manifest 的 `distribution`+`version` 是发行包自带的稳定身份。
+
+**缺失 fail-closed**：`distribution`/`version` 缺失即显式失败，不设 `local` 默认（AGENTS.md「永不返回虚假的默认值」）；开发态 `source-development` 亦走同一 manifest，不单开分支。
+
+**备选**：放宽 charset 允许 `.`（被否，见上）；用目录名或环境变量（被否：不稳定）；缺字段时回退 `local`（被否：虚假默认值）。
 
 ### D5：authority 缺省 == 本机 gateway == 显式本机 gateway_id
 
@@ -138,14 +156,14 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 - **[scope_id 由字面量 local 改为真实身份推导会改变既有字符串]** → `gateway`/`inline` 现共用 `local`，改动产生不同 VRN 字符串；因这些字符串只进内存 registry 与响应、不落盘，属契约级调整而非数据迁移（见 D11）。
 - **[破坏性语法改动打断在途实现]** → 迁移计划显式列出旧形态（含 `skill_runtime.py:52/:619` 裸拼接、`:538` 的 shim、layer 名）一并收敛，不留别名或双读；tasks 把「删旧解析实现」与「修消费方」合并为单一步骤，避免悬挂中间态。
 - **[跨 gateway 解析引入新失败模式]** → 拒绝码分两套闭合且 fail-closed；对「未授权存在」与「不存在」返回同一结果，避免 locator 泄露；上界为 policy 常量，便于审计。
-- **[distribution_id 是空洞]** → 权威表证明其全仓零生产赋值；`inline` scope_id 要落真实来源，MUST 在实施期先建立该来源，否则 scope_id 仍是假值（列入 tasks 的显式前置）。
+- **[distribution_id 曾是空洞]** → 权威表证明其全仓零生产赋值；来源已由本 change 定稿为发行 manifest 的 `distribution` + `version`（编码规则见 spec 对应 requirement），空洞从「来源未定」降为「尚未实现装配」，实施期按 D4b 接线。
 - **[memory 语义不明可能诱使猜测]** → 已确证它不是 VRN scope，列入 Non-Goals 并明确「移出闭集 + 两点式只作非 VRN 示意」。
 
 ## Migration Plan
 
 1. 本 change 落地寻址 capability：术语表、scope 闭集与 scope_id 表、kind 闭集、**分两套**拒绝码集中登记处（spec 层）。
 2. 实现统一语法与规范化单一实现，替换 `virtual_resources/grammar.py` 的旧形态；同一步内修正 `skill_runtime.py:52` 与 `:619` 的裸拼接、删除 `:538` 的 `bundled`→`builtin` shim、并把 layer 名同步正名为 `inline`（不暴露中间态）。
-3. 建立 `distribution_id` 的真实来源（当前零赋值），落实 `gateway`/`inline` 的 scope_id 由真实身份推导。
+3. 把 `distribution_id` 接到已定稿来源（发行 manifest 的 `distribution` + `version`，编码规则见 D4b；当前零装配），落实 `gateway`/`inline` 的 scope_id 由真实身份推导。
 4. 接入解析链（本机分支），使 Skill/配置/状态链路改用 VRN 解析，而非仅打印。
 5. 按 D10 把配置来源 real path 迁移为 VRN 兄弟字段（`config/state.py` + `config_sources.py` + `api/config.py` 对齐）；`sqlite` 层显式不编 VRN。
 6. 接入 gateway 层星型解析、policy 常量上界与集中登记的拒绝码。
@@ -158,7 +176,7 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 以下是契约层仍需 owner 拍板的点，**不自行放宽**：
 
 1. **gateway authority 与既有 connection_id/gateway_id 的对应**：v2 要求承载**稳定 gateway_id**；需确认稳定 id 的确切来源字段（避免与持久 `connection_id` 或瞬时 channel 标识混淆）。
-2. **distribution_id 的真实来源**：权威表证明其全仓零生产赋值；需 owner 指定由发行 manifest（`packages/launcher/runtime-manifest.schema.json:9` 的 `distribution` 字段）还是其它稳定字段承接。
+2. **distribution_id 的真实来源（已定稿，不再是 open question）**：用户裁定采用发行 manifest（`packages/launcher/runtime-manifest.schema.json`）的 `distribution` + `version`；编码规则与缺失 fail-closed 见 D4b 与 spec 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」。剩余仅为实施期装配（当前零生产赋值），不影响契约定稿。
 3. **悬空 VRN 的保留期与 GC 归属**：spec 只要求「悬空是合法值」，未定义留存策略；可能与 Session 删除 tombstone 的恢复窗口相关。
 4. **ResourceIdentity 的编码形态**：只要求「不透明、稳定、revision-free」，未限 length/charset 上界；是否由本 change 一并闭合需确认。
 

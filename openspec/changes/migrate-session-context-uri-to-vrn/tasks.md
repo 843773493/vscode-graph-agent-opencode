@@ -1,7 +1,7 @@
 ## 1. 依赖与前置对齐
 
 - [ ] 1.1 确认「统一虚拟资源寻址」change 已登记 scope 闭集（`workspace`/`user`/`gateway`/`inline`；`memory` 已移出）、VRN grammar、`kind` 闭集与拒绝码命名空间；未登记前不得进入第 3 组实施。
-- [ ] 1.2 采用已下发的**权威表**：scope 闭集 = `workspace`/`user`/`gateway`/`inline`；`scope_id` 由真实身份推导、MUST NOT 硬编码字面量（`workspace`→真实 workspace_id、`gateway`→真实 gateway_id、`inline`→真实 distribution_id、`user`→`local`）。`memory` MUST NOT 作为 scope 出现。
+- [ ] 1.2 采用已下发的**权威表**：scope 闭集 = `workspace`/`user`/`gateway`/`inline`；`scope_id` 由真实身份推导、MUST NOT 硬编码字面量（`workspace`→真实 workspace_id、`gateway`→真实 gateway_id、`inline`→真实 distribution_id（来源与编码按「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从其发行包 runtime manifest 的 `distribution` + `version` 推导，本 change 只引用）、`user`→`local`）。`memory` MUST NOT 作为 scope 出现。
 - [ ] 1.2-A 与其对齐段序与闭集落地：保留 `resources` 固定段、`scope_id` 对**所有** scope 必填；`builtin` 正名为 `inline`（含 layer `bundled`→`inline`，由 change 1 owner 负责，带持久化影响评估）；本 change 不自行改动 grammar。
 - [ ] 1.2-B 落地 `memory` 非 VRN 声明：入口对 `boxteam://memory/{scope}/{name}` 两点式以「未登记 scope」拒绝，并把该形态标注为**非 VRN 示意**。
 - [ ] 1.2-C 采用「统一虚拟资源寻址」change 已定稿的**会话上下文资源自身 `kind` = `session`**（闭集 `agent-spec`|`skills`|`config`|`session`）；本 change 直接引用、无需新登记、无待裁定。config 来源用 `config`。

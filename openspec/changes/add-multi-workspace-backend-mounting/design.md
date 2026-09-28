@@ -74,7 +74,7 @@
 
 - `workspace` → 真实 workspace_id（本 change 的核心，保持）。
 - `gateway` → 真实 gateway_id。
-- `inline`（原 `builtin`，正名由「统一虚拟资源寻址」change 的 owner 执行，本 change 只引用新名）→ 真实 distribution_id。
+- `inline`（原 `builtin`，正名由「统一虚拟资源寻址」change 的 owner 执行，本 change 只引用新名）→ 真实 distribution_id，**来源已裁定**为该发行包 runtime manifest（`packages/launcher/runtime-manifest.schema.json`）的 `distribution` + `version`（编码规则与缺失 fail-closed 见该 change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」）；本 change 只引用，不复述取值规则。
 - `user` → `local`，显式声明单用户本地程序约定（该 scope 为本次新增）。此为**已定稿终值**，见 `add-unified-virtual-resource-addressing` 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」中 normative 的 `user` → `local` 与「MUST 显式声明为单用户本地程序的约定，MUST NOT 虚构用户名」；本 change 只引用该定稿结论，不再标注为待定。
 
 **为什么完整化**：只要求 `workspace` 一处显式，等于允许其它 scope 继续靠硬编码隐含上下文——而「当前激活工作区」这条要根除的原则，其本质是「不得有隐含上下文」。因此把同一原则同构地施加到全部 scope，才是与 change 1 一致的做法（与 D2 同源）。
@@ -86,7 +86,7 @@
 | `gateway` | gateway_id | 硬编码字面量（`app/agents/skill_runtime.py:539` 的 `else` 分支） | 未推导真实 gateway_id |
 | `inline`（原 `builtin`） | distribution_id | 同一硬编码字面量（同一 `else` 分支），与 `gateway` **逐字相同** | 未推导真实 distribution_id |
 
-`distribution_id` 更是**零生产赋值**：全仓只在字段定义 `app/services/infrastructure/resource_platform/virtual_resources/values.py:157`、resolver 读取 `resolver.py:205` 与测试中出现，`app/container.py` 无任何装配——这是一个**空洞**。`ResolutionContext` 的唯一构造方也全在测试，生产侧从未构造它、`parse_vrn`/resolver 生产 caller 为零。
+`distribution_id` 更是**零生产赋值**：全仓只在字段定义 `app/services/infrastructure/resource_platform/virtual_resources/values.py:157`、resolver 读取 `resolver.py:205` 与测试中出现，`app/container.py` 无任何装配。**来源现已裁定**（发行包 runtime manifest 的 `distribution` + `version`，见 `add-unified-virtual-resource-addressing` 的对应 requirement），故该空洞从「**来源未定**」降级为「**尚未实现装配**」——前提已补齐，只剩实现。`ResolutionContext` 的唯一构造方也全在测试，生产侧从未构造它、`parse_vrn`/resolver 生产 caller 为零。
 
 **边界**：本 change **不实现**这些取值来源（属「统一虚拟资源寻址」change 或 Gateway 侧），只做两件事：把原则写进 spec，并把空洞登记为本 change 的**接口前提**与风险项。
 
@@ -118,7 +118,7 @@
 - [**惰性构造服务图导致首次请求延迟/装配竞态**] → 规定每工作区服务图构造为**进程内幂等**（同一 workspace_id 只构造一次），并沿用既有 SQLite 进程所有权锁语义 fail-closed。
 - [**存量 VRN 数据风险已消除**（权威表实测）] → VRN 零落盘（157 live + 44 dev/temp SQLite 对 `boxteam://` 零命中、无 `resource_activation*` 表；`display_uri` 仅测试写入、container 无装配、生产 seal 恒为 `None`），迁移章节因此**不含存量 VRN 迁移**，只需新写字段与读路径切换。
 - [**gateway_id 硬编码使跨 gateway 前提未成立**] → `gateway` scope 的 `scope_id` 现为硬编码字面量，而跨 gateway 的**星型解析 / star-topology resolution** 依赖真实 gateway_id；在该值建立真实来源前，跨 gateway 寻址 MUST 视为**未满足的接口前提**（spec 已冻结该场景）。
-- [**distribution_id 零赋值空洞**] → `distribution_id` 全仓仅在字段定义、resolver 读取与测试中出现，`app/container.py` 无装配；`inline` scope 的 `scope_id` 推导无真实来源，属待由「统一虚拟资源寻址」change 或 Gateway 侧消除的空洞。
+- [**distribution_id 零赋值空洞（来源已补齐，剩实现）**] → `distribution_id` 全仓仅在字段定义、resolver 读取与测试中出现，`app/container.py` 无装配；其**来源已由「统一虚拟资源寻址」change 裁定**为发行包 runtime manifest 的 `distribution` + `version`（编码规则见该 change 的 requirement），故空洞性质从「来源未定」变为「尚未实现装配」，实施期按该规则接线即可消除。
 - [**gateway 与 inline 共用同一 scope_id 字面量**] → 二者当前 `scope_id` 逐字相同（`"local"`），与各自稳定身份（gateway_id / distribution_id）不一致；MUST 登记为既有违反点，不得升格为契约形态。
 
 ## Migration Plan
@@ -128,7 +128,7 @@
 1. 引入注册表与显式身份载体（先不改语义，仅并存读取；但**不**长期保留旧路径）。
 2. 把所有工作区根/数据目录定位改为「显式 workspace_id → 注册表」。
 3. 把 `build_app_container` 改为「注册表 + 按需服务图」；把 `lru_cache` 键改为 workspace 维度。
-4. 按 `scope_id` 推导原则落实身份来源：`workspace` scope 的 `scope_id` 取真实 workspace_id；`gateway`/`inline` 的硬编码字面量 MUST 改为推导自真实 gateway_id / distribution_id（后者来源空洞须先消除，否则 fail-closed，不得继续硬编码）。
+4. 按 `scope_id` 推导原则落实身份来源：`workspace` scope 的 `scope_id` 取真实 workspace_id；`gateway`/`inline` 的硬编码字面量 MUST 改为推导自真实 gateway_id / distribution_id（`distribution_id` 来源已裁定为 manifest 的 `distribution` + `version`，按「统一虚拟资源寻址」change 的编码规则实施，缺失时 fail-closed，不得继续硬编码）。
 5. 处理只描述单工作区前提的**非 VRN** 持久化字段（显式迁移或显式失效）；**无存量 VRN 数据迁移**。
 6. Gateway 改为显式传目标（路径前缀或等价头），并与**星型解析 / star-topology resolution** 的 hub-spoke 有界 transit 约定一致。
 7. 重新生成 OpenAPI 快照与前端类型；更新契约测试。
@@ -136,6 +136,6 @@
 
 ## Open Questions
 
-- **权威表已下发，`作用域 / scope` 与 `scope_id` 取值语义已按 R1/R2/R3 定稿**：scope 闭集终值、kind 闭集、`builtin`→`inline` 正名与各 scope 的 `scope_id` 推导来源（含 `user`→`local` 为**已定稿终值**，见 `add-unified-virtual-resource-addressing` 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」），均以「统一虚拟资源寻址」change 的权威表为准，本 change 只引用、不复述。**未决项中不含 `user`**；仍待定的实现项仅有：(1) `memory` scope 移出 VRN 后的替代 owner；(2) `gateway_id` 与 `distribution_id` 的真实来源由谁实现。多用户场景若将来出现、`user` 取值如何演进属**未来可能**，不属于当前待定项。
+- **权威表已下发，`作用域 / scope` 与 `scope_id` 取值语义已按 R1/R2/R3 定稿**：scope 闭集终值、kind 闭集、`builtin`→`inline` 正名与各 scope 的 `scope_id` 推导来源（含 `user`→`local` 为**已定稿终值**，见 `add-unified-virtual-resource-addressing` 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」），均以「统一虚拟资源寻址」change 的权威表为准，本 change 只引用、不复述。**未决项中不含 `user`**；仍待定的实现项仅有：(1) `memory` scope 移出 VRN 后的替代 owner；(2) `gateway_id` 的真实来源由谁实现（`distribution_id` 的来源已裁定为 manifest 的 `distribution` + `version`，剩装配）。多用户场景若将来出现、`user` 取值如何演进属**未来可能**，不属于当前待定项。
 - 后端身份命名空间（严格 UUID）与 Gateway `gw_` 工作区 ID 是**收敛为一个**还是保留「Gateway 控制面 ID + 后端寻址 UUID」两层映射？本 change 已规定**寻址层只用后端 UUID 命名空间**，此问仅影响 Gateway 控制面是否继续保留 `gw_` 别名，属可延后决定，不改变 spec 的工作区身份定义与任务分解。
 - 已挂载工作区的**发现方式**（静态配置 / Gateway 下发 / 启动参数）不影响寻址语义，可延后到实施细节。

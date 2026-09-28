@@ -103,7 +103,7 @@ SessionContextResourceRef {
 
 **`memory` 移出闭合集（权威表裁定）**：实测 `memory` 无资源、无生产调用方、无持久化载体；resolver 连 `scope_id` 都不比对，`kind` 为 `None`，container 未装配，configs 自述未接入。把 `boxteam://memory/{scope}/{name}` 当 VRN 会让它绕过 `resources` 固定段与 kind 校验，等于在统一语法上开一个特例后门。故它 MUST 只作**非 VRN 示意**，入口 MUST 以「未登记 scope」拒绝。
 
-**`scope_id` 必须由真实身份推导**：`gateway` 现状在 skill 目录生成链路上把 `scope_id` 硬编码为字面量 `"local"`（`app/agents/skill_runtime.py:539` 的 `else "local"`），`inline`（现名 `builtin`）与它共用同一字面量，而 `distribution_id` 全仓零赋值——这是**既有不一致**。定稿表要求 `gateway`→真实 gateway_id、`inline`→真实 distribution_id，落地时按真实身份推导，不得继续共用字面量；`user`→`local` 为单用户本地程序约定。
+**`scope_id` 必须由真实身份推导**：`gateway` 现状在 skill 目录生成链路上把 `scope_id` 硬编码为字面量 `"local"`（`app/agents/skill_runtime.py:539` 的 `else "local"`），`inline`（现名 `builtin`）与它共用同一字面量，而 `distribution_id` 全仓零赋值——这是**既有不一致**。定稿表要求 `gateway`→真实 gateway_id、`inline`→真实 distribution_id，落地时按真实身份推导，不得继续共用字面量；`distribution_id` 的来源与编码已由「统一虚拟资源寻址」change 定稿为发行包 runtime manifest 的 `distribution` + `version`（见其 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」，本 change 只具名引用、不复述取值规则）；`user`→`local` 为单用户本地程序约定。
 
 **注意（权威表与现状的差距）**：资源平台现有 grammar 的 scope 闭集为 `{workspace, gateway, builtin, memory}`，`kind` 闭集为 `{agent-spec, skills}`，且**没有 `resources` 固定段**（现为 `boxteam://{scope}/{id}/{kind}/...`）。权威表要求闭集改为 `{workspace, user, gateway, inline}` 并保留 `resources` 固定段。本 change **不自行改动**该闭集、`kind` 闭集或段序——VRN 语法本体归「统一虚拟资源寻址」change。本 change 只声明会话上下文侧遵循该形态，并把闭集/段序/scope_id 表的落地留给该 change 统一登记。
 

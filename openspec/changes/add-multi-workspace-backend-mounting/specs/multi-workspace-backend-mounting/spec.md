@@ -58,7 +58,7 @@
 
 ### Requirement: scope_id 必须推导自该 scope 的稳定身份，禁止硬编码
 
-**虚拟资源地址 / VRN** 的 `scope_id` 段对所有 scope MUST 必填，且 MUST **推导自该 scope 的稳定身份**；MUST NOT 使用硬编码字面量、进程级单例或「当前激活」态补齐。`workspace` **作用域 / scope** 的 `scope_id` MUST 等于显式 workspace_id（本 capability 的核心），此原则对其它 scope **同构**：`gateway` scope 的 `scope_id` MUST 推导自真实 gateway_id，`inline` scope 的 `scope_id` MUST 推导自真实 distribution_id。本 capability 只声明该推导原则与两个既存违反点的归属；`作用域 / scope` 闭合集终值、各 scope 的 `scope_id` 取值表与 `拒绝码 / rejection code` 登记，以「统一虚拟资源寻址」change 的权威表为准。
+**虚拟资源地址 / VRN** 的 `scope_id` 段对所有 scope MUST 必填，且 MUST **推导自该 scope 的稳定身份**；MUST NOT 使用硬编码字面量、进程级单例或「当前激活」态补齐。`workspace` **作用域 / scope** 的 `scope_id` MUST 等于显式 workspace_id（本 capability 的核心），此原则对其它 scope **同构**：`gateway` scope 的 `scope_id` MUST 推导自真实 gateway_id，`inline` scope 的 `scope_id` MUST 推导自真实 distribution_id（其来源与编码 MUST 按「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从发行包 runtime manifest 推导，本 capability 只引用、不复述取值规则）。本 capability 只声明该推导原则与两个既存违反点的归属；`作用域 / scope` 闭合集终值、各 scope 的 `scope_id` 取值表与 `拒绝码 / rejection code` 登记，以「统一虚拟资源寻址」change 的权威表为准。
 
 #### Scenario: scope_id 推导自稳定身份而非硬编码
 
@@ -77,7 +77,7 @@
 
 ### Requirement: gateway 身份与 workspace 身份同属寻址层身份，且 gateway_id 必须真实
 
-**网关授权段 / gateway authority** 承载稳定 gateway_id；gateway 身份与 workspace 身份 MUST 同属**寻址层身份**、遵循同一显式化原则：两者 MUST 都能由请求或持久化记录显式表达，MUST NOT 依赖进程级单例或「当前激活」态。作为本 capability 的**接口前提**：跨 gateway 的**星型解析 / star-topology resolution** 要求 gateway_id 真实可用；而权威表实测 `gateway` scope 的 `scope_id` 为硬编码字面量（与 `inline`/原 `builtin` 逐字相同），且 `distribution_id` 全仓**无生产赋值方**（仅在字段定义、resolver 读取与测试中出现）。这两处空洞 MUST 在「统一虚拟资源寻址」change 或 Gateway 侧建立真实来源后才能支撑跨 gateway 寻址。本 capability 只登记该前提与影响面，不实现其取值来源。
+**网关授权段 / gateway authority** 承载稳定 gateway_id；gateway 身份与 workspace 身份 MUST 同属**寻址层身份**、遵循同一显式化原则：两者 MUST 都能由请求或持久化记录显式表达，MUST NOT 依赖进程级单例或「当前激活」态。作为本 capability 的**接口前提**：跨 gateway 的**星型解析 / star-topology resolution** 要求 gateway_id 真实可用；而权威表实测 `gateway` scope 的 `scope_id` 为硬编码字面量（与 `inline`/原 `builtin` 逐字相同），且 `distribution_id` 全仓**无生产赋值方**（仅在字段定义、resolver 读取与测试中出现）。`distribution_id` 的**来源已裁定**为发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），剩装配；`gateway_id` 的真实来源仍 MUST 由该 change 或 Gateway 侧建立，之后才能支撑跨 gateway 寻址。本 capability 只登记该前提与影响面，不实现其取值来源。
 
 #### Scenario: gateway 身份与 workspace 身份同属寻址层身份
 
@@ -89,10 +89,10 @@
 - **WHEN** 跨 gateway 寻址依赖 `gateway` scope 的 `scope_id`
 - **THEN** 该值 MUST 是真实 gateway_id；当前硬编码字面量的形态 MUST 被视为**未满足的接口前提**，MUST NOT 被当作跨 gateway 寻址已成立
 
-#### Scenario: distribution_id 空洞影响 inline scope_id
+#### Scenario: distribution_id 来源已裁定，剩装配
 
 - **WHEN** 系统需要为 `inline` scope 推导 `scope_id`
-- **THEN** MUST 先建立 `distribution_id` 的真实来源；在其零赋值空洞未消除前，MUST NOT 以硬编码字面量冒充已推导
+- **THEN** 其来源 MUST 取发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一虚拟资源寻址」change 的 requirement），在此之前 MUST NOT 以硬编码字面量冒充已推导
 
 ### Requirement: 进程级资源必须按 workspace_id 分区
 

@@ -32,7 +32,7 @@ real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST
 
 - `workspace` → 真实 workspace_id；
 - `gateway` → 真实 gateway_id（现状在 skill 目录生成链路上硬编码字面量 `"local"`，落地时改为真实身份推导，MUST NOT 继续硬编码字面量）；
-- `inline` → 真实 distribution_id（现状与 `gateway` 共用字面量 `"local"`，且 `distribution_id` 全仓零赋值，属既有不一致，以此表为准落地）；
+- `inline` → 真实 distribution_id（现状与 `gateway` 共用字面量 `"local"`，且 `distribution_id` 全仓零赋值，属既有不一致）；来源与编码 MUST 按「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从其发行包 runtime manifest 的 `distribution` + `version` 推导，本 capability 只引用、不复述取值规则；
 - `user` → `local`，并 MUST 显式声明为单用户本地程序的约定。
 
 「当前工作区」MUST NOT 作为寻址概念的隐含前提，也 MUST NOT 作为持久化数据的隐含前提。

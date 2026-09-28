@@ -49,7 +49,7 @@ VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 
 - `workspace` → 真实 workspace_id（现状即为真实 id）；
 - `gateway` → **真实 gateway_id**（现状在 skill 目录生成链路上硬编码字面量 `local`，`skill_runtime.py:539` 的 `else "local"`，落地时改为真实身份推导）；
-- `inline` → **真实 distribution_id**（现状与 `gateway` 逐字共用字面量 `local`，且 `distribution_id` 全仓零生产赋值，属既有不一致；MUST 建立真实来源）；
+- `inline` → **真实 distribution_id**（现状与 `gateway` 逐字共用字面量 `local`，且 `distribution_id` 全仓零生产赋值，属既有不一致）；来源与编码 MUST 按本 capability 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」定稿落地；
 - `user` → `local`，并 MUST 显式声明为**单用户本地程序的约定**（AGENTS.md 明确无云服务、无多租户），MUST NOT 虚构用户名。
 
 「当前工作区」不是寻址概念，MUST NOT 作为持久化数据的隐含前提。其它工作区 MUST 复用 `workspace` scope 加另一个 `workspace_id` 表达，MUST NOT 引入新 scope。
@@ -67,7 +67,7 @@ VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 #### Scenario: gateway 与 inline 的 scope_id 由真实身份推导而非硬编码
 
 - **WHEN** 系统为一个 `gateway` 或 `inline` scope 构造 VRN
-- **THEN** `gateway` 的 `scope_id` 取真实 gateway_id（而非字面量 `local`）、`inline` 的 `scope_id` 取真实 distribution_id（而非与 gateway 共用的 `local`）
+- **THEN** `gateway` 的 `scope_id` 取真实 gateway_id（而非字面量 `local`）、`inline` 的 `scope_id` 取真实 distribution_id（而非与 gateway 共用的 `local`）；后者按 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」的编码规则从 manifest 推导
 
 #### Scenario: user scope 的 scope_id 是单用户约定值 local
 
@@ -88,6 +88,55 @@ VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 
 - **WHEN** 调用方提交 `boxteam://memory/{scope}/{name}` 一类两点式字符串
 - **THEN** 系统以「未登记 scope」显式拒绝，MUST NOT 按 VRN 解释该字符串，MUST NOT 为其定义 scope_id
+
+### Requirement: inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导
+
+`inline` scope 的 `scope_id` MUST 由该发行包的 runtime manifest（`packages/launcher/runtime-manifest.schema.json`）中的 `distribution` 与 `version` 两个字段**确定性推导**，MUST NOT 取自目录名、安装路径或任何随环境变化的量（否则跨 gateway 与跨机器寻址从根上不成立）。
+
+**为什么需要编码**：VRN 动态段的闭合 charset 为 `[A-Za-z0-9_-]`（`grammar.py:20` 的 `_NAME_CHARSET`），MUST NOT 放宽。而 `version` 的实测形态是语义化版本（发行包 `version` 取自根 `package.json` 的 `version`，实测为 `0.0.2`），**含点号 `.`，不在 charset 内** —— 直接拼接（如 `source-development-0.0.2`）会被 grammar 以「含未登记字符」结构化拒绝。因此 MUST 在 charset 内选择编码，MUST NOT 放宽 charset 或新增转义后门。
+
+**编码规则（定稿，两种候选，优先方案 1）**：令 `distribution`、`version` 取 manifest 原值：
+
+1. **转义点号（首选）**：`Escape(version)` 先 `_`→`__`、再 `.`→`_`（顺序不可颠倒），`scope_id = distribution + "-" + Escape(version)`。
+   - 实测：`(source-development, 0.0.2)` → `source-development-0_0_2`；`(npm, 1.0.0-beta.1)` → `npm-1_0_0-beta_1`。
+2. **去掉点号（备选）**：`scope_id = distribution + "-" + version.replace(".", "")`。
+   - 实测：`(source-development, 0.0.2)` → `source-development-002`；但 `0.0.2`/`0.02`/`00.2` 均压成 `002`，**有碰撞、不可逆**，故仅作备选。
+
+**MUST 同时满足的编码性质**：
+
+- **在 charset 内**：结果只含 `[A-Za-z0-9_-]`；`distribution` 实测为闭合枚举 `source-development` / `source-installed` / `npm` / `standalone`（均在 charset 内、无点号）；
+- **可逆**：由 `scope_id` 能无歧义还原出唯一的 `(distribution, version)`（方案 1 的 `_` 转义是标准转义、无碰撞）；
+- **稳定**：同一发行包在任意机器、任意安装路径下算出逐字相同的 `scope_id`（只依赖 manifest 两字段）；
+- **唯一**：不同 `(distribution, version)` 组合必得不同 `scope_id`（方案 1 由转义保证无碰撞）。
+
+**`version` 合法形态**：MUST 只含 `[A-Za-z0-9._-]`（可选 `+` 构建元数据）；若含 `_`，MUST 使用方案 1（下划线转义）以保证可逆。
+
+**缺失时 MUST fail-closed**：`distribution` 或 `version` 缺失（含空串）时，系统 MUST fail-closed 拒绝构造 `inline` 的 `scope_id` 并显式报错，MUST NOT 回退为 `local`、「当前发行版」或任何虚假默认值（AGENTS.md「永不返回虚假的默认值」）。开发态（`source-development`）也 MUST 走同一 manifest 路径，MUST NOT 为其单开默认分支。
+
+#### Scenario: inline scope_id 从 manifest 确定性推导
+
+- **WHEN** 系统为 `inline` scope 构造 VRN
+- **THEN** `scope_id` 由 manifest 的 `distribution` 与其 `version` 按上述编码规则算出（如 `source-development` + `0.0.2` → `source-development-0_0_2`），不含目录名或安装路径
+
+#### Scenario: 带点版本号不得直接拼接
+
+- **WHEN** `version` 含点号（如 `0.0.2`）而被直接拼进 `scope_id`（如 `source-development-0.0.2`）
+- **THEN** grammar MUST 以「含未登记字符」结构化拒绝；系统 MUST 改用 charset 内的编码规则，MUST NOT 放宽 charset、MUST NOT 新增转义后门
+
+#### Scenario: 编码可逆且无碰撞
+
+- **WHEN** 给定一个由本规则算出的 `scope_id`
+- **THEN** 它能无歧义还原为唯一的 `(distribution, version)`；不同 `(distribution, version)` 必不相同
+
+#### Scenario: 跨机器与安装路径稳定
+
+- **WHEN** 同一发行包安装在不同机器或不同路径
+- **THEN** 算出的 `inline` `scope_id` MUST 逐字相同
+
+#### Scenario: manifest 缺字段时 fail-closed
+
+- **WHEN** manifest 的 `distribution` 或 `version` 缺失或为空
+- **THEN** 系统显式失败并报出缺失字段，MUST NOT 使用 `local` 或任何默认值代替
 
 ### Requirement: VRN 语法必须保留固定段序并单一实现
 
