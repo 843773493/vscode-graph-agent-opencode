@@ -314,15 +314,6 @@
           "rerank": true
         }
       },
-      "memory": {
-        "enabled": true,
-        "scope": "workspace",
-        "backend": "redis",
-        "ttl_seconds": 2592000,
-        "max_items": 500,
-        "store_user_preferences": true,
-        "store_sensitive_data": false
-      },
       "safety": {
         "policy_mode": "standard",
         "prompt_injection_protection": true,
@@ -393,9 +384,6 @@
           "score_threshold": 0.65,
           "rerank": true
         }
-      },
-      "memory": {
-        "enabled": false
       },
       "safety": {
         "policy_mode": "standard",
@@ -478,9 +466,6 @@
           "score_threshold": 0.7,
           "rerank": true
         }
-      },
-      "memory": {
-        "enabled": false
       },
       "safety": {
         "policy_mode": "strict",
@@ -568,9 +553,6 @@
           "score_threshold": 0.6,
           "rerank": true
         }
-      },
-      "memory": {
-        "enabled": false
       },
       "safety": {
         "policy_mode": "standard",

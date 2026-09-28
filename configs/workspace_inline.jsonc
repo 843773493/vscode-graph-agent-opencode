@@ -424,14 +424,6 @@
           "rerank": false // 当前未接入知识检索运行时。
         }
       },
-      "memory": {
-        "enabled": false, // 当前未接入持久化 Agent memory。
-        "scope": "workspace", // 当前未接入持久化 Agent memory。
-        "ttl_seconds": 2592000, // 当前未接入持久化 Agent memory。
-        "max_items": 200, // 当前未接入持久化 Agent memory。
-        "store_user_preferences": true, // 当前未接入持久化 Agent memory。
-        "store_sensitive_data": false // 当前未接入持久化 Agent memory。
-      },
       "safety": {
         "policy_mode": "standard", // 当前未接入独立 safety middleware。
         "prompt_injection_protection": true, // 当前未接入独立 safety middleware。

@@ -1049,9 +1049,6 @@
         "knowledge": {
           "$ref": "#/$defs/agentKnowledge"
         },
-        "memory": {
-          "$ref": "#/$defs/agentMemory"
-        },
         "safety": {
           "$ref": "#/$defs/agentSafety"
         },
@@ -1425,74 +1422,6 @@
           "default": false
         }
       }
-    },
-
-    "agentMemory": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false
-        },
-        "scope": {
-          "type": "string",
-          "enum": [
-            "session",
-            "user",
-            "workspace"
-          ],
-          "default": "workspace"
-        },
-        "backend": {
-          "type": "string",
-          "enum": [
-            "redis",
-            "postgres",
-            "vector-db",
-            "custom"
-          ]
-        },
-        "ttl_seconds": {
-          "type": "integer",
-          "minimum": 60,
-          "maximum": 315360000,
-          "default": 2592000
-        },
-        "max_items": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 100000,
-          "default": 200
-        },
-        "store_user_preferences": {
-          "type": "boolean",
-          "default": true
-        },
-        "store_sensitive_data": {
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "enabled": {
-                "const": true
-              }
-            },
-            "required": [
-              "enabled"
-            ]
-          },
-          "then": {
-            "required": [
-              "backend"
-            ]
-          }
-        }
-      ]
     },
 
     "agentSafety": {
