@@ -18,15 +18,16 @@
 
 因此冲突的**技术根因是两种信息被塞进同一个字符串**：上下文侧把「资源位置」与「修订/视图绑定」编在一起，而 VRN 明确只承担前者。
 
-### 约束（冻结契约 v2）
+### 约束（权威表已下发，本轮定稿）
 
 - VRN **禁止编码 revision/hash**；identity 独立于 VRN；`real path` 永不持久化 / 永不进模型可见载荷 / 永不跨 gateway。
 - 权威 VRN 形态（保留既有段序，**不得简化**）：`boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}`。`resources` 固定段保留；`scope_id` 对**所有** scope 都必填。
-- scope 为闭合集（`workspace`/`user`/`gateway`/`inline`/`memory`；`builtin` 正名为 `inline`）；scope 名与 scope_id 语义以「统一虚拟资源寻址」change 的**权威表**为准。
+- scope 闭合集定稿为 `workspace` / `user` / `gateway` / `inline`：`builtin` 正名为 `inline`，`user` 为本次新增；`memory` **已确证不是 VRN scope，移出闭合集**（零生产构造方、resolver 不比对 scope_id、container 未装配、configs 自述未接入）。
+- `scope_id` 必须由真实身份推导：`workspace`→真实 workspace_id、`gateway`→真实 gateway_id、`inline`→真实 distribution_id、`user`→`local`（单用户本地约定）。
 - 星型解析唯一顺序，上界为显式策略常量；不可达/未共享/未找到 fail-closed 结构化拒绝码；**locator 是输入不是输出**。
-- 拒绝码命名空间由「统一虚拟资源寻址」change 集中登记，本 change **只能引用不能自造**；VRN 语法本体与固定段序同样不由本 change 拥有。
+- 拒绝码有**两套不可混用的独立闭集**——`grammar.py` 的 17 个与 `resolver.py` 的 6 个——由「统一虚拟资源寻址」change 集中登记；本 change **只能引用不能自造**。VRN 语法本体、固定段序与 `kind` 闭集同样不由本 change 拥有。
+- `memory` 不是 VRN scope：不基于它做设计、不为它规定 scope_id；既有两点式 `boxteam://memory/{scope}/{name}` 只作**非 VRN 示意**（它无 `resources` 段、无 kind、恰好两段，走的是独立特例分支）。
 - 命名必须逐字使用：`资源身份 / ResourceIdentity`、`虚拟资源地址 / VRN`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`。
-- 不基于未重新定义的 scope（`memory`）做设计；不为其规定 scope_id。
 
 ## Goals / Non-Goals
 
@@ -34,12 +35,12 @@
 
 - 把会话上下文从「两套并行语法」变成「一套资源语法 + 一层修订绑定」。
 - 论证并落地「VRN 不编码 revision」与「上下文可重读修订 locator」**同时成立**。
-- 给出破坏性迁移与回滚边界。
+- 给出入口破坏性拒绝与「新写字段」迁移面，说明为何不需要历史数据迁移。
 - 收口在途 change `add-itemized-rollout-context` 的会话上下文 URI requirement，消除两套定义并存。
 
 **Non-Goals:**
 
-- 不定义 VRN 语法本体、scope 关键字集合、kind 闭集与拒绝码登记（归「统一虚拟资源寻址」change）。
+- 不定义 VRN 语法本体、scope 关键字集合、`kind` 闭集与拒绝码登记（归「统一虚拟资源寻址」change）。
 - 不实现任何生产代码；本 change 只产出规划产物。
 - 不设计「单后端多工作区挂载」（归另一个并行 change）。
 - 不改变会话上下文的**业务语义**（读什么视图、投影边界、权限判定），只改变其**寻址表示与解析**。
@@ -94,13 +95,17 @@ SessionContextResourceRef {
 
 ### D3：scope 与必填 `scope_id` 的处理
 
-**决定**：会话上下文资源使用权威表的 scope 闭集；权威形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`。**每个 scope 的 `scope_id` 段一律必填**，本 change MUST NOT 把 `scope_id` 改为可选、MUST NOT 简化段序、MUST NOT 省略 `resources` 固定段。
+**决定**：会话上下文资源使用权威表的 scope 闭集 `workspace` / `user` / `gateway` / `inline`；权威形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`。**每个 scope 的 `scope_id` 段一律必填**，本 change MUST NOT 把 `scope_id` 改为可选、MUST NOT 简化段序、MUST NOT 省略 `resources` 固定段。
 
 旧形态里 `boxteam://session/{session_id}`（不带 scope_id）等价于「按当前工作区隐式解析」，统一后 MUST 显式化为带 scope_id 的规范形态，或由软件在**入口**规范化后立即冻结为显式形态。「当前工作区」MUST NOT 成为持久化数据的隐含前提。
 
 **为什么是「保留既有段序」而不是简化段序**：简化版会把 `scope_id` 改成可选（旧模板曾如此），那等于对非 workspace 的 scope **重新引入隐含上下文**——而这正是本次改造要根除的东西。`scope_id` 全部必填，就是把「workspace_id 必须显式」这条原则扩展到所有 scope；这不是「改动更小」的妥协，而是原则上更对。
 
-**注意（权威表与现状的差距）**：资源平台现有 grammar 的 scope 闭集为 `{workspace, gateway, builtin, memory}`，且**没有 `resources` 固定段**（现为 `boxteam://{scope}/{id}/{kind}/...`）。契约 v2 要求 scope 闭集扩为 `{workspace, user, gateway, inline, memory}`（`builtin` 正名为 `inline`）并保留 `resources` 固定段。本 change **不自行改动**该闭集或段序——VRN 语法本体归「统一虚拟资源寻址」change。本 change 只声明会话上下文侧遵循 v2 形态，并把闭集/段序/scope_id 表的落地留给该 change 统一登记。这是契约与现状的差距点（见 Open Questions）。
+**`memory` 移出闭合集（权威表裁定）**：实测 `memory` 无资源、无生产调用方、无持久化载体；resolver 连 `scope_id` 都不比对，`kind` 为 `None`，container 未装配，configs 自述未接入。把 `boxteam://memory/{scope}/{name}` 当 VRN 会让它绕过 `resources` 固定段与 kind 校验，等于在统一语法上开一个特例后门。故它 MUST 只作**非 VRN 示意**，入口 MUST 以「未登记 scope」拒绝。
+
+**`scope_id` 必须由真实身份推导**：`gateway` 现状在 skill 目录生成链路上把 `scope_id` 硬编码为字面量 `"local"`（`app/agents/skill_runtime.py:539` 的 `else "local"`），`inline`（现名 `builtin`）与它共用同一字面量，而 `distribution_id` 全仓零赋值——这是**既有不一致**。定稿表要求 `gateway`→真实 gateway_id、`inline`→真实 distribution_id，落地时按真实身份推导，不得继续共用字面量；`user`→`local` 为单用户本地程序约定。
+
+**注意（权威表与现状的差距）**：资源平台现有 grammar 的 scope 闭集为 `{workspace, gateway, builtin, memory}`，`kind` 闭集为 `{agent-spec, skills}`，且**没有 `resources` 固定段**（现为 `boxteam://{scope}/{id}/{kind}/...`）。权威表要求闭集改为 `{workspace, user, gateway, inline}` 并保留 `resources` 固定段。本 change **不自行改动**该闭集、`kind` 闭集或段序——VRN 语法本体归「统一虚拟资源寻址」change。本 change 只声明会话上下文侧遵循该形态，并把闭集/段序/scope_id 表的落地留给该 change 统一登记。
 
 ### D4：星型解析与会话上下文的接入
 
@@ -120,49 +125,61 @@ SessionContextResourceRef {
 
 **理由**：与既有 federation/跨 Session 目标解析的有界拓扑（`B → A → C`、最多一个 hub transit）天然兼容；复用同一份 VRN 避免为会话上下文单开一条解析路径。
 
+### D5：迁移面是「新写字段」而非「存量数据迁移」（U1 实测定稿）
+
+**决定**：本次寻址统一的迁移工作**不含历史数据迁移**，只含两点——(a) 入口对旧形态 fail-closed 拒绝；(b) 既有持久化字段改为按新格式**新写入**并在读路径切换。
+
+**已确证的零存量（本轮独立取证）**：旧式会话上下文 URI 没有任何持久化实例。
+
+- 旧形态字符串全部在请求/响应链路内构造并随响应返回调用方：`app/services/business/session_context_resource.py:12-16` 的自有正则只做解析、`ParsedSessionContextResource.canonical` 只是内存值、`session_context_query_service.py`/`session_context_projection.py` 的 `locator` 与 base64 `next_cursor` 只进 API DTO（`app/schemas/internal_v2/session_context.py:99,123`）。全仓不存在把 `SessionContextCursorCodec` 输出写入 session/catalog/checkpoint/rollout 存储的路径。
+- 全仓唯一承载 `boxteam://` 的持久化列是 `resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`）；其唯一写入方 `ResourceActivationStore.persist_snapshot` 的**调用方全在测试**，`app/container.py` 未装配，生产 seal 链路从未传入 `activation_snapshot`（恒为默认 `None`），故生产中该列从不被写入。
+- 磁盘取证：157 个 live 库 + 44 个 dev/temp 库中 **0 个 activation 表、0 个 `boxteam://` 命中**；`out/development-runtime` 的真实 `rollout.jsonl`（含 2026/09/24、2026/09/27 会话）与 `tests/fixtures/` 亦 0 命中。
+- 唯一 `cursor` 持久化列 `workspace_event_cursors.cursor_value`（`app/services/infrastructure/workspace_state_store.py:71`）承载的是工作区活动 `event_seq`，与上下文游标无关。
+
+**新写字段的挂点**（既已存在、只是尚未承载 VRN）：`context_source_control_states`（`runtime/context_sources/registry.py`）已持久化来源追踪事实（`source_id`/`name`/`revision`）但无 URI 列；`resource_activation_bindings.display_uri` 已建表但生产从不写。落地方向是让它们按 identity + VRN 的新格式写入。
+
+**理由**：不构造不存在的迁移脚本，既省成本，也避免「为一个不存在的存量对象写规范化/失效逻辑」这种虚假工作。
+
 ### D6：配置来源真实路径持久化的迁移（已确证义务）
 
 **决定**：把配置来源的真实路径持久化改造为 VRN 表达，**直接复用 config 侧已跑通的形态**。
 
-现状（已实测）：`app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord` 含 `source_path: str` 与 `backup_path: str | None`——真实路径已写入 SQLite；`app/schemas/internal_v2/config.py` 的 `ConfigSourceDTO.path: str` 又把它经 API 响应体对外。两处都违反「real path 永不持久化 / 永不进模型可见载荷」。
+现状（已实测）：`app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord` 含 `source_path: str` 与 `backup_path: str | None`——真实路径已写入 SQLite；`app/schemas/internal_v2/config.py` 的 `ConfigSourceDTO.path: str` 又把它经 API 响应体对外（`app/api/config.py:102` 的 `path=str(source.path)`，实测 `GET /api/v1/config/sources` 回真实绝对路径）。两处都违反「real path 永不持久化 / 永不进模型可见载荷」。
 
 改造形态：`app/core/config_sources.py` 的 `ConfigSource` 已是 `path: Path` + `layer` + `precedence` 平级属性，且 `layer_revision` / `layer_digest` / `source_generation` 已是**兄弟字段**。因此改造等价于**把 `path: Path` 换成 `vrn: VRN`，其余兄弟字段原样保留**。MUST NOT 另发明一套结构。
 
-**理由**：这是 v2 明示的迁移义务，属「已确证」而非假设。复用既有 sibling 字段形态可以同时达成两点——真实路径不再持久化、不再进 API 响应体；且不引入第三套来源层结构（避免双轨）。
+**config 寻址形态**：config 资源用**独立 kind** 标识来源文件本身（kind 具体取名归「统一虚拟资源寻址」change 的 kind 闭集登记）；`layer` 作为**兄弟字段**保留，**不塞进 VRN**。`inline` 层有稳定 disk 载体（发行包内 `configs/*_inline.jsonc`，经 `resolve_config_resource_source` 校验 `is_file()`），故有 VRN。`sqlite` 层 MUST NOT 编 VRN：`user` / `user_local` / `workspace` 三层共享同一个 `workspace.sqlite`（`app/services/infrastructure/config_service.py` 的 `_config_source` 在 `_workspace_state_store` 存在时统一返回 `self._workspace_state_store.path`），单一 VRN 会立刻对应多个逻辑来源。
 
-### D5：命名与 owner 收口
+**理由**：这是明示的迁移义务，属「已确证」而非假设。复用既有 sibling 字段形态可以同时达成两点——真实路径不再持久化、不再进 API 响应体；且不引入第三套来源层结构（避免双轨）。
 
-**决定**：本 change 严格使用契约 v1 的逐字命名（见 Context）。在途 change `add-itemized-rollout-context` 的会话上下文 URI requirement（`specs/itemized-rollout-context/spec.md:262/278/288` 及 `design.md:890-967`、`tasks.md:126`）MUST 改为**引用本 change**，不再自行定义会话上下文 URI 语法，从而消除两套定义并存。
+### D7：命名与 owner 收口
+
+**决定**：本 change 严格使用契约的逐字命名（见 Context）。在途 change `add-itemized-rollout-context` 的会话上下文 URI requirement（`specs/itemized-rollout-context/spec.md:262/278/288` 及 `design.md:890-967`、`tasks.md:126`）MUST 改为**引用本 change**，不再自行定义会话上下文 URI 语法，从而消除两套定义并存。
 
 **理由**：一个语法只能有一个定义源；在途 change 尚未归档，可安全改指向。
 
 ## Risks / Trade-offs
 
-- **[破坏性迁移会打断已持久化记录]** → 提供显式一次性迁移：可规范化者迁到 identity+VRN 并表示并保留 lineage；不可规范化者显式标记失效并报错；迁移前原始记录保留至整体确认成功，回滚恢复到等价只读状态。
-- **[scope 闭集/段序与资源平台现有 grammar 不一致]** → 本 change 不自行扩张 VRN 闭集或改段序，只声明会话上下文侧遵循 v2 形态并要求「统一虚拟寻址」change 集中登记；在权威表与 grammar 对齐前，接口 MUST fail-closed，禁止临时映射悄悄上线。
-- **[配置来源真实路径迁移影响既有 API 响应体字段]** → `ConfigSourceDTO.path` 是既有对外字段，改为 VRN 属**破坏性**变更；按 v2 允许破坏性迁移，落地时同步改 schema 与前端消费点，并在迁移计划中保留回滚边界。
-- **[调用方习惯把 revision 拼进地址]** → 入口 MUST 显式拒绝旧式 fragment/`%` 形态，并在错误信息中指向结构化字段，避免调用方误以为「换个分隔符还能拼」。
-- **[结构化字段被写成持久化事实的第三份拷贝]** → requirement 明确三层的唯一 owner（D1），新增字段一律 identity + VRN + 独立 revision，禁止存 real path。
+- **[入口破坏性拒绝会打断调用方]** → 入口对旧式 fragment/`%` 形态显式拒绝并在错误信息中指向结构化字段；因已确证无历史落盘实例，不存在需要保持可读的旧记录。
+- **[scope 闭集/段序与资源平台现有 grammar 不一致]** → 本 change 不自行扩张 VRN 闭集或改段序，只声明会话上下文侧遵循权威形态并要求「统一虚拟寻址」change 集中登记；在 grammar 与权威表对齐前，接口 MUST fail-closed，禁止临时映射悄悄上线。
+- **[配置来源真实路径迁移影响既有 API 响应体字段]** → `ConfigSourceDTO.path` 是既有对外字段，改为 VRN 属**破坏性**变更；按允许破坏性迁移处理，落地时同步改 schema 与前端消费点，并在迁移计划中保留回滚边界。注意这是单用户本地程序，实际安全影响低，主要属契约卫生，故按常规迁移任务处理，不单独开紧急修复。
+- **[结构化字段被写成持久化事实的第三份拷贝]** → requirement 明确三层的唯一 owner（D1），持久化字段一律 identity + VRN + 独立 revision，禁止存 real path。
 - **[star-topology 引入对端信任边界]** → 沿用既有「对端本地解析并只回内容」的强制约定：本机不代对端解析 locator，对端不泄露 real path。
+- **[`scope_id` 从硬编码字面量转为真实身份推导会改变既有字符串]** → `gateway`/`inline` 现共用字面量 `"local"`，改动会产生不同的 VRN 字符串；因这些字符串当前只进内存 registry 与响应、不落盘（见 D5），属契约级调整而非数据迁移。
 
 ## Migration Plan
 
-1. **冻结入口**：新增/切换会话上下文入口时，先按 D1 的结构化引用表示；旧式字符串入口对**新写入**直接拒绝（`%`/`#`/未登记 scope）。
-2. **扫描既有持久化记录**：识别内嵌旧式上下文 URI 的 cursor、审计、引用字段；逐条判定可规范化 / 不可规范化。
-3. **迁移可规范化记录**：解析旧记录 → 提取资源身份 + 位置 → 生成带必填 scope_id 的规范 VRN → revision/视图/游标落到结构化字段 → 保留来源 lineage。
-4. **失效不可规范化记录**：显式标记失效并记录原因，**不得**静默丢弃或猜测。
-5. **整体确认**：全部记录迁移成功且校验通过后，才允许清理旧表示；确认前原始记录保留。
-6. **回滚边界**：任一步失败即停止并回滚——旧记录仍是权威，系统行为与迁移前等价；已迁移记录的回滚按 lineage 反向恢复。
-7. **配置来源真实路径迁移（已确证义务，见 D6）**：把 `ConfigSource.path: Path` 换成 `vrn: VRN`，兄弟字段（`layer`/`precedence`/`layer_revision`/`layer_digest`/`source_generation`）原样保留；同步移除 `ConfigSourceLayerRecord.source_path`/`backup_path` 与 `ConfigSourceDTO.path` 对真实路径的持久化/输出。
-8. **删除 bundled 到 builtin 的改名 shim**：落地时移除 `app/agents/skill_runtime.py:538` 的 bundled/builtin 映射，向 `inline` 正名收敛。
+1. **冻结入口**：会话上下文入口按 D1 的结构化引用表示；旧式字符串入口对**新写入**直接拒绝（`%`/`#`/未登记 scope，含 `memory` 两点式）。
+2. **确认无存量**：按 D5 的取证确认不存在内嵌旧式上下文 URI 的持久化记录，**不构造**扫描/规范化/失效的存量迁移脚本。
+3. **新写字段切换**：让既有持久化挂点（`display_uri` 列、`context_source_control_states` 的来源事实）按 identity + VRN 的新格式写入，并在读路径切换到新格式，旧写入形态物理下线。
+4. **配置来源真实路径迁移（已确证义务，见 D6）**：把 `ConfigSource.path: Path` 换成 `vrn: VRN`，兄弟字段（`layer`/`precedence`/`layer_revision`/`layer_digest`/`source_generation`）原样保留；同步移除 `ConfigSourceLayerRecord.source_path`/`backup_path` 与 `ConfigSourceDTO.path` 对真实路径的持久化/输出。
+5. **删除 bundled 到 builtin 的改名 shim**：落地时移除 `app/agents/skill_runtime.py:538` 的 `bundled`→`builtin` 映射并同步 `inline` 正名；注意 `layer` 名（`bundled`）进入 `entry_identity` 与 catalog payload，属契约级变更，需评估同步面而非纯改名。
 
-**部署顺序约束**：本 change 的 spec/design/tasks 先于「统一虚拟资源寻址」的 VRN 语法与拒绝码登记落地之前**不得**进入实施，因为会话上下文解析直接依赖其 grammar 与拒绝码。
+**部署顺序约束**：本 change 的 spec/design/tasks 先于「统一虚拟资源寻址」的 VRN grammar、`kind` 闭集与拒绝码登记落地之前**不得**进入实施，因为会话上下文解析直接依赖其 grammar 与拒绝码。
 
 ## Open Questions
 
-- **权威表下发前不得定稿**：scope 名、scope_id 语义、拒绝码三类内容必须以「统一虚拟资源寻址」change 随后下发的**权威表**为准。权威表到达前，本 change 的接口 MUST fail-closed，不得上线临时映射。
-- **段序与闭集落地**：v2 要求保留 `resources` 固定段并把 scope 闭集扩为 `{workspace, user, gateway, inline, memory}`（builtin 正名为 inline）；资源平台现有 grammar 尚无 `resources` 段且闭集为 `{workspace, gateway, builtin, memory}`。该对齐由寻址 change 完成，本 change 不自行改动。
-- **`memory` 归属冻结**：`memory` 未经本次重新定义，本 change 不基于它做设计、不为其定 scope_id；其归属等权威表。
-- **拒绝码具体取值**：会话上下文新增拒绝场景（如「旧式 fragment 形态」「view 与资源不兼容」）落到哪个既有拒绝码或由寻址 change 登记的新码，待寻址 change 集中登记后引用。
+- **接入 `kind` 与 `scope_id` 表的方式**：`kind` 闭集当前只有 `{agent-spec, skills}`，会话上下文资源与 config 来源都需要新增 kind；具体取名与登记由「统一虚拟资源寻址」change 独占，本 change 只声明需要它并为接口 fail-closed 兜底。
+- **拒绝码的具体归属**：会话上下文新增拒绝场景（如「旧式 fragment 形态」「view 与资源不兼容」「memory 两点式」）落到 `grammar.py` 的 17 个码还是 `resolver.py` 的 6 个码，由寻址 change 集中登记后引用；本 change 不新增码、不混用两套闭集。
 - **`assembly_ref` 的表示**：D2 中 `assembly={id}` 迁为 `assembly_ref`，其具体采用资源身份还是专用 ref 类型，待与 itemized rollout context 的 assembly 身份模型对齐后确定（不改变本 change 的结构化方向）。
-- **待验证项（不得在 spec 断言）**：(1) VRN 是否已落进持久化的 session/catalog/checkpoint 数据（决定迁移是新写字段还是真数据迁移）；(2) `ConfigSource.path` 是否经**间接路径**进 API 响应体（已确证 `ConfigSourceDTO.path` 为直接路径，间接路径待查）；(3) `inline`/`sqlite` 两层是否有可解析载体（不得照抄「inline 挂 gateway、sqlite 挂 workspace」这类推测）；(4) `memory` 的真实形态与归属。
+- **`user` scope 的引用来源**：`user` 为本次新增且 scope_id 约定为 `local`（单用户本地程序）；是否有需要等到多用户场景再扩展语义，待 owner 后续判定；当前按 `local` 单值定稿。

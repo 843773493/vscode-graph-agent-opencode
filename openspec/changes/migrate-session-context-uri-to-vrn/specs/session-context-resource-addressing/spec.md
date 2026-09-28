@@ -24,23 +24,32 @@ real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST
 
 ### Requirement: scope 必须取自闭合集且每个 scope 的 scope_id 一律必填
 
-系统 MUST 只承认闭合集内的 scope，MUST 拒绝任何其它 scope 取值。scope 闭集与每个 scope 的 scope_id 取值来源 MUST 由「统一虚拟资源寻址」change 的**唯一权威表**规定；本 capability MUST NOT 自行发明 scope 名或 scope_id 语义。
+系统 MUST 只承认闭合集内的 scope，MUST 拒绝任何其它 scope 取值。scope 闭集为 **`workspace` | `user` | `gateway` | `inline`**（依据权威表：`builtin` 正名为 `inline`；`user` 为本次新增）。scope 闭集与每个 scope 的 scope_id 取值来源 MUST 由「统一虚拟资源寻址」change 的**唯一权威表**规定；本 capability MUST NOT 自行发明 scope 名或 scope_id 语义。
 
-**每个 scope 的 `scope_id` 段一律必填**，MUST NOT 只对某个 scope 必填而对其它 scope 可选。这条把「workspace_id 必须显式」的原则扩展到所有 scope：任何 scope 的寻址都不得依赖隐含上下文。
+**`memory` 已确证不是 VRN scope，MUST NOT 出现在闭合集内**：它零生产构造方、resolver 连 scope_id 都不比对、container 未装配、configs 自述未接入。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段）MUST 被显式标注为**非 VRN 示意**，MUST NOT 被当作合法 VRN 接受或产出。
+
+**每个 scope 的 `scope_id` 段一律必填**，MUST NOT 只对某个 scope 必填而对其它 scope 可选。`scope_id` MUST 由真实身份推导，MUST NOT 依赖隐含上下文：
+
+- `workspace` → 真实 workspace_id；
+- `gateway` → 真实 gateway_id（现状在 skill 目录生成链路上硬编码字面量 `"local"`，落地时改为可推导）；
+- `inline` → 真实 distribution_id（现状与 `gateway` 共用字面量 `"local"`，且 `distribution_id` 全仓零赋值，属既有不一致，以此表为准落地）；
+- `user` → `local`，并 MUST 显式声明为单用户本地程序的约定。
 
 「当前工作区」MUST NOT 作为寻址概念的隐含前提，也 MUST NOT 作为持久化数据的隐含前提。
 
 「其它工作区」MUST 表达为同一 scope 加另一个 scope_id 取值，MUST NOT 引入新 scope；「其它 gateway」MUST 表达为可选的**网关授权段 / gateway authority**，其缺省值为本机。
 
-本 capability MUST NOT 依赖未经本次重新定义的 scope（例如既有 `memory`）作设计，MUST NOT 把其当作文件 locator，也 MUST NOT 为它规定 scope_id。
-
 #### Scenario: 拒绝未登记的 scope
-- **WHEN** 调用方提交 scope 不属于闭合集的 VRN
+- **WHEN** 调用方提交 scope 不属于闭合集的 VRN（例如 `memory`、`session`）
 - **THEN** 解析在访问任何 provider 之前以结构化拒绝码显式失败，不读取文件、网络或内存资源
 
-#### Scenario: 任何 scope 缺少 scope_id 都必须失败
+#### Scenario: 任何 scope 缺少 scope_id 必须失败
 - **WHEN** 调用方提交的 VRN 在 scope 段之后缺少 scope_id 段（对任意 scope，而非仅某一种）
 - **THEN** 解析显式失败，且不得回退到隐含上下文补全
+
+#### Scenario: memory 两点式形态被拒绝
+- **WHEN** 调用方提交 `boxteam://memory/{scope}/{name}` 一类两点式字符串
+- **THEN** 系统以不明 scope 显式拒绝，不得按 VRN 解释该字符串
 
 ### Requirement: VRN 语法形态统一且由单一 owner 规范化
 
@@ -57,7 +66,7 @@ real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST
 
 VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码与 `#fragment`；规范化 MUST 由**单一实现**完成。
 
-本 capability MUST NOT 定义 VRN 语法本体，MUST NOT 自行变更固定段序，MUST NOT 把 `scope_id` 改为可选，也 MUST NOT 新增拒绝码；VRN grammar、固定段序与**拒绝码 / rejection code** 登记由「统一虚拟资源寻址」change 独占，本 capability 只引用。
+本 capability MUST NOT 定义 VRN 语法本体，MUST NOT 自行变更固定段序，MUST NOT 把 `scope_id` 改为可选，也 MUST NOT 新增拒绝码；VRN grammar、固定段序、kind 闭集与**拒绝码 / rejection code** 登记由「统一虚拟资源寻址」change 独占，本 capability 只引用。
 
 #### Scenario: 拒绝百分号编码与 fragment
 - **WHEN** 调用方提交含 `%` 编码或 `#fragment` 的 VRN
@@ -140,41 +149,48 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 - **WHEN** 调用方提交非法或不完整 VRN
 - **THEN** 系统在发起任何跨进程或跨 gateway 转发之前就本地显式拒绝
 
-### Requirement: 新增持久化字段必须使用身份加 VRN
+### Requirement: 持久化资源引用必须使用身份加 VRN
 
-新增的持久化资源引用字段 MUST 使用资源身份加 VRN 的组合表达，并 MUST 在需要修订绑定时另设**独立的 revision 字段**；MUST NOT 持久化 real path。
+持久化的资源引用字段 MUST 使用资源身份加 VRN 的组合表达，并 MUST 在需要修订绑定时另设**独立的 revision 字段**；MUST NOT 持久化 real path。
 
-既有的待迁移记录若内嵌旧式上下文 URI 字符串，MUST 依据破坏性迁移规则规范化或标记失效（见本 capability 的迁移 requirement）。
-
-#### Scenario: 新字段不含 real path
-- **WHEN** 引入新的持久化资源引用字段
+#### Scenario: 字段不含 real path
+- **WHEN** 会话上下文资源引用被写入持久化记录
 - **THEN** 该字段由资源身份、VRN 与独立 revision 组成，不含任何真实路径
 
-### Requirement: 旧式上下文 URI 必须显式破坏性迁移
+### Requirement: 旧式上下文 URI 只能被入口拒绝，且已确证无历史落盘实例
 
-系统 MUST 停止接受旧式上下文 URI 形态（含 `%` 编码、`#fragment`、未登记 scope 的自有正则语法）。
+系统 MUST 停止接受旧式上下文 URI 形态（含 `%` 编码、`#fragment`、未登记 scope 的自有正则语法），入口 MUST 显式拒绝并指向结构化字段表示。
 
-对可能已持久化的旧式上下文 URI 字符串，系统 MUST 提供显式的一次性迁移：可规范化的记录 MUST 迁到新的资源身份加 VRN 表示并保留来源 lineage；**不可规范化的记录 MUST 显式标记失效并报错**，MUST NOT 被静默按新语法解释。
+**已确证的存量事实（本轮实测取证）**：旧式会话上下文 URI **没有任何持久化实例**，因此本 capability MUST NOT 要求对历史记录做数据迁移。取证：
 
-迁移 MUST 有明确回滚边界：迁移前的原始记录 MUST 保留至迁移整体确认成功，回滚后系统 MUST 恢复到只读旧记录的等价状态。
+- 旧形态字符串（自有正则 `app/services/business/session_context_resource.py:12-16`、`ParsedSessionContextResource.canonical`、`session_context_query_service.py` 的 `locator` 字段、`app/services/business/session_context_projection.py:317` 与 `session_context_query_service.py:481` 的 base64 `next_cursor`）**全部在请求/响应链路内构造并随响应返回调用方**，不存在把它写入 session/catalog/checkpoint/rollout 存储的代码路径；
+- 全仓唯一承载 `boxteam://` 的持久化列是 `resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`），其唯一写入方 `ResourceActivationStore.persist_snapshot` 的**调用方全在测试**，`app/container.py` 未装配，生产 seal 链路从未传入 `activation_snapshot`（恒为默认 `None`），故该列在生产中从不被写入；
+- 磁盘取证：157 个 live 库 + 44 个 dev/temp 库中 **0 个 activation 表、0 个 `boxteam://` 命中**，`out/development-runtime` 的真实 `rollout.jsonl` 与 `tests/fixtures/` 亦 0 命中；
+- 会话上下文分页游标从不落盘：全仓不存在承载 `SessionContextCursorCodec` 输出的持久化列（唯一 `cursor` 持久化列 `workspace_event_cursors.cursor_value` 是工作区活动 `event_seq`，与上下文游标无关）。
+
+因此本 capability 的迁移面只有两点：(a) 入口对旧形态 fail-closed 拒绝；(b) 既有持久化字段（`display_uri` 列、`context_source_control_states` 的来源事实）改为按新格式**新写入**并在读路径切换——属「新写字段」，不是「存量数据迁移」。
 
 #### Scenario: 旧式 fragment 形态被拒绝
 - **WHEN** 调用方提交 `boxteam://session/{session_id}#assembly={id}` 一类旧式 URI
 - **THEN** 系统显式拒绝并提示使用新的资源身份加结构化字段表示，不得按新语法静默解释该字符串
 
-#### Scenario: 不可规范化的历史记录显式失效
-- **WHEN** 迁移遇到无法规范化的旧式上下文 URI 记录
-- **THEN** 该记录被显式标记失效并报错，不得被猜测或静默丢弃
+#### Scenario: 不构造历史数据迁移
+- **WHEN** 实施本次寻址统一
+- **THEN** 不扫描、不规范化、不失效任何既有记录，因为已确证不存在内嵌旧式上下文 URI 的持久化记录
 
-#### Scenario: 迁移可回滚
-- **WHEN** 迁移在整体确认成功之前被判定失败并回滚
-- **THEN** 原始旧记录仍完整可用，系统行为与迁移前等价
+#### Scenario: 新写入字段即迁移面
+- **WHEN** 某个既有持久化字段（如 `display_uri`、来源事实）需要承载资源引用
+- **THEN** 它以资源身份加 VRN 的新格式写入并在读路径切换，旧写入形态物理下线，不留兼容层
 
 ### Requirement: 配置来源的真实路径持久化必须迁移到 VRN
 
-已确证存在一处真实违约：配置来源的真实路径已写入 SQLite（`app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord` 含 `source_path: str` 与 `backup_path: str | None`），且该真实路径还会经 API 响应体对外（`ConfigSourceDTO.path`）。按三层分离，真实路径 MUST NOT 被持久化，也 MUST NOT 进入 API 响应体。
+已确证存在真实违约：配置来源的真实路径已写入 SQLite（`app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord` 含 `source_path: str` 与 `backup_path: str | None`），且该真实路径还会经 API 响应体对外（`app/api/config.py:102` 的 `path=str(source.path)`，经 `ConfigSourceDTO.path` 输出，实测 `GET /api/v1/config/sources` 回真实绝对路径）。按三层分离，真实路径 MUST NOT 被持久化，也 MUST NOT 进入 API 响应体。
 
 迁移 MUST **直接复用 config 侧已跑通的形态**：`app/core/config_sources.py` 的 `ConfigSource` 已是 `path` + `layer` + `precedence` 平级属性，且 `layer_revision` / `layer_digest` / `source_generation` 已是**兄弟字段**。因此改造等价于「把 `path: Path` 换成 `vrn: VRN`，其余兄弟字段原样保留」，MUST NOT 另发明一套结构。
+
+配置来源资源的 VRN MUST 标识来源文件本身，并使用属于「统一虚拟资源寻址」change 登记的 kind 闭集内的取值；`layer` MUST 作为**兄弟字段**保留、MUST NOT 塞进 VRN。
+
+**`sqlite` 层 MUST NOT 被赋予 VRN**：`user` / `user_local` / `workspace` 三层共享同一个 `workspace.sqlite` 文件（`app/services/infrastructure/config_service.py` 的 `_config_source` 在 state store 存在时统一返回 `self._workspace_state_store.path`），把它映射成单一 VRN 会立刻产生「同一 URI 对应多个逻辑来源」的冲突。`inline` 层有稳定 disk 载体（发行包内 `configs/*_inline.jsonc`），故有 VRN。
 
 迁移后：来源层身份 MUST 由 VRN 表达，API 响应体 MUST NOT 输出真实路径；真实路径只允许存在于最后访问点。
 
@@ -183,17 +199,33 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 - **THEN** 记录中用 VRN 表达来源，不含 `source_path`/`backup_path` 一类真实路径字段
 
 #### Scenario: API 不输出配置来源真实路径
-- **WHEN** 客户端请求配置来源列表
+- **WHEN** 客户端请求配置来源列表（`GET /api/v1/config/sources`）
 - **THEN** 响应体只含 VRN 与兄弟字段（layer/precedence/layer_revision/layer_digest/source_generation 等），不含真实路径
+
+#### Scenario: sqlite 层不编 VRN
+- **WHEN** 迁移处理 `user` / `user_local` / `workspace` 这些共享同一 `workspace.sqlite` 的来源
+- **THEN** 不为该 sqlite 文件编造 VRN，并显式说明其共享载体导致的不可寻址性
 
 #### Scenario: 复用既有 sibling 字段形态
 - **WHEN** 实施把配置来源改造成 VRN 表达
 - **THEN** 直接以 `ConfigSource` 既有的平级 `layer`/`precedence`/`layer_revision`/`layer_digest`/`source_generation` 兄弟字段承载，不新增第二套结构
 
-### Requirement: 迁移义务与未验证项必须显式区分
+### Requirement: 已确证义务与待登记项必须显式区分
 
-本 capability MUST 把**已确证**的迁移义务（配置来源真实路径持久化）写为可执行任务，并将**尚未验证**的假设（VRN 是否已落进持久化的 session/catalog/checkpoint 数据、`ConfigSource.path` 的间接泄漏路径、`inline`/`sqlite` 两层是否有可解析载体、`memory` 的真实形态与归属）标记为待验证，MUST NOT 在 spec 中断言其结论。
+本 capability MUST 把**已确证**的结论写成可执行任务或 normative 断言，并 MUST 区分**已确证**与**待「统一虚拟资源寻址」change 登记**的两类内容，MUST NOT 把待登记项当作已定稿事实。
 
-#### Scenario: 未验证项不被断言
-- **WHEN** 存在尚未验证的归属或形态假设
-- **THEN** 该假设以待验证项出现，不得写为 normative 断言或据此设计
+已确证（本轮实测取证）：
+
+- 旧式会话上下文 URI **零历史落盘实例**，迁移面只有「入口拒绝 + 新写字段」；
+- 配置来源真实路径**已持久化且已外泄**（`ConfigSourceLayerRecord.source_path`/`backup_path` 与 `app/api/config.py:102` 的 `ConfigSourceDTO.path`）；
+- `inline` 层有稳定 disk 载体、`sqlite` 层是共享载体不可寻址，`memory` 不是 VRN scope。
+
+待「统一虚拟资源寻址」change 登记（本 capability 只引用、不定稿）：scope 闭集的最终取值、每个 scope 的 scope_id 语义、kind 闭集内**会话上下文资源自身 kind 的具体取值**、以及全部拒绝码取值。
+
+#### Scenario: 待登记项不被当作已定稿
+- **WHEN** 某内容属于 scope 闭集/scope_id 语义/kind 取值/拒绝码
+- **THEN** 它以待登记项出现，引用「统一虚拟资源寻址」change，不得写为本地定稿结论
+
+#### Scenario: 已确证结论可直接执行
+- **WHEN** 某内容已由本轮实测取证确证
+- **THEN** 它可直接写成 normative 断言或可执行任务，不再列作待验证
