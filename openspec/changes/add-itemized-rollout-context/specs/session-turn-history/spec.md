@@ -24,36 +24,6 @@
 - **WHEN** 一个隐藏的 `system_reminder` 在下一条普通用户输入之前存在，且它在 LangChain/provider projection 中暂时使用 user role
 - **THEN** 历史服务仍以普通用户 input 的 `root_input_item_id` 开始新 Turn；runtime notice 只按其 semantic kind、scope 和 relation 展示或隐藏
 
-### Requirement: Agent state 快照不等同于默认历史 projection
-
-系统 SHALL 将 LangChain checkpoint 的 agent-state 快照、canonical item 和 Web/history projection 视为三个不同层次。`get_agent_state_messages` 在兼容序列化时必须保留 `AIMessage.content` 中经过规范化的有序 reasoning/text/content carrier、tool call 字段和必要的 content-part identity，包括最终 assistant 的 reasoning 与可见文本；它不得因为旧调用方只需要可见 text 而静默删掉 reasoning，也不得把该快照写回为第二份 canonical item。
-
-默认历史与 Web projection SHALL 从 canonical item/index 派生 `assistant_text`、thinking、tool summary、可见`compaction_summary`和 `final_response`；它可以隐藏 reasoning/compaction正文并只返回受权限控制的摘要/引用。Provider request projector SHALL 在 request 边界依据目标能力过滤或编码 reasoning，不得通过改写 agent-state 快照、canonical item 或已提交 checkpoint 来过滤。
-
-#### Scenario: final assistant 的两种读取视图
-
-- **WHEN** 一个已完成 Turn 的 checkpoint 含有按顺序排列的 reasoning 和 text content blocks
-- **THEN** agent-state 快照保留两个 blocks 以支持 LangChain/诊断恢复；默认 history 只返回 `assistant_text` 和按策略决定的 thinking projection；两者都引用同一 canonical item，不创建 `assistant_text` canonical 记录
-
-#### Scenario: 旧 text-only consumer
-
-- **WHEN** 旧调用方断言 final agent-state 只有 text
-- **THEN** 系统将其标记为 legacy compatibility mismatch；不能为了通过该断言静默删除 canonical checkpoint 中的 reasoning，Provider projector 也不能绕过目标能力策略直接发送该快照
-
-### Requirement: Turn acceptance identity 在历史层保持 thread-local 唯一
-
-历史服务和 Turn resolver SHALL 将 `accepted_ingress_id` 与 `acceptance_idempotency_key` 视为两个不同的 thread-local identity，并分别约束 `(session_id, thread_id, accepted_ingress_id)` 与 `(session_id, thread_id, acceptance_idempotency_key)` 唯一；每个 identity 只能一对一指向一个 accepted Turn。相同 ingress、相同 acceptance key、相同 payload hash 和相同 origin branch 的重复 acceptance 只能返回既有 `turn_id`、root 和 initial execution，不创建第二个历史 Turn；同 ingress 被不同 key 重用、同 key 搭配不同 ingress/payload/branch，或跨 thread 直接复用裸 identity 时，必须返回明确 acceptance idempotency conflict，且不修改原 Turn 或历史顺序。跨 session fork 的 copied acceptance identity 必须先映射为 target-local 值，source identity 只在 lineage/audit 中可见。
-
-#### Scenario: 重复 acceptance 不产生第二个历史 Turn
-
-- **WHEN** 同一 SessionThread 收到相同 `accepted_ingress_id`、`acceptance_idempotency_key` 和 payload hash 的重试
-- **THEN** resolver 返回原 Turn 的 root 和 initial execution，历史分页仍只显示一个 Turn
-
-#### Scenario: acceptance identity 冲突不修改历史
-
-- **WHEN** 同一 `accepted_ingress_id` 被不同 acceptance key 使用，或同一 key 的 payload hash/origin branch 不同
-- **THEN** 服务返回可诊断的 acceptance idempotency conflict，不创建、重编号或覆盖任何 Turn/item
-
 ### Requirement: 历史摘要不 materialize 完整消息
 
 历史投影 SHALL 识别统一的 `Turn.status` 闭合集合 `open | active | completed | completed_empty | interrupted | cancelled | failed | unknown`；`completed_empty` 是唯一的无 canonical output 正常终态名称。`completed` 才能通过 `final_item_id` 返回正常 final response，`completed_empty`、`interrupted`、`cancelled`、`failed` 和 `unknown` 不得伪装成成功响应；普通 `cancelled` 与 `full_rollout_copy` 的 `cancelled` historical 均不可对原 Turn 执行 `resume_turn` 或 `dispatch_replay`，请求必须返回 `turn_not_resumable`；`history_replay` 只能在同一 owner namespace 的 history view 中复用 source Turn/root 且不创建 execution；若需要重新执行，只能由独立的 `replay_as_new_turn` 创建新的 Turn/root/acceptance/initial execution，在 active view 登记新的 `logical_turn_ordinal`，并记录 `replay_of_turn_id`；source history 可以作为上下文前缀，但 source Turn/root 不是新 Turn 的 root；新输入也创建新的 Turn。
@@ -249,3 +219,33 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 
 - **WHEN**target/board已经发布但claim仍为owner_reserved，同一pytest模块让copy finalizer与target/coordinator Session删除竞争同一gate，并在两个顺序的settlement中途重启
 - **THEN**finalizer先行时先完成全部claim commit并把settlement/board record分别推进成功终态`committed|published`，删除再正常释放owner；删除先行时排空流程释放reserved claim/ref，或验证committed claim归属后持久释放其target/child owner ref，再把record分别推进删除终态`target_deleted|coordinator_deleted`，恢复不重建或保留owner、不复活target/child、不隔离含非终态record的节点且不留下GC泄漏
+
+### Requirement: Agent state 快照不等同于默认历史 projection
+
+系统 SHALL 将 LangChain checkpoint 的 agent-state 快照、canonical item 和 Web/history projection 视为三个不同层次。`get_agent_state_messages` 在兼容序列化时必须保留 `AIMessage.content` 中经过规范化的有序 reasoning/text/content carrier、tool call 字段和必要的 content-part identity，包括最终 assistant 的 reasoning 与可见文本；它不得因为旧调用方只需要可见 text 而静默删掉 reasoning，也不得把该快照写回为第二份 canonical item。
+
+默认历史与 Web projection SHALL 从 canonical item/index 派生 `assistant_text`、thinking、tool summary、可见`compaction_summary`和 `final_response`；它可以隐藏 reasoning/compaction正文并只返回受权限控制的摘要/引用。Provider request projector SHALL 在 request 边界依据目标能力过滤或编码 reasoning，不得通过改写 agent-state 快照、canonical item 或已提交 checkpoint 来过滤。
+
+#### Scenario: final assistant 的两种读取视图
+
+- **WHEN** 一个已完成 Turn 的 checkpoint 含有按顺序排列的 reasoning 和 text content blocks
+- **THEN** agent-state 快照保留两个 blocks 以支持 LangChain/诊断恢复；默认 history 只返回 `assistant_text` 和按策略决定的 thinking projection；两者都引用同一 canonical item，不创建 `assistant_text` canonical 记录
+
+#### Scenario: 旧 text-only consumer
+
+- **WHEN** 旧调用方断言 final agent-state 只有 text
+- **THEN** 系统将其标记为 legacy compatibility mismatch；不能为了通过该断言静默删除 canonical checkpoint 中的 reasoning，Provider projector 也不能绕过目标能力策略直接发送该快照
+
+### Requirement: Turn acceptance identity 在历史层保持 thread-local 唯一
+
+历史服务和 Turn resolver SHALL 将 `accepted_ingress_id` 与 `acceptance_idempotency_key` 视为两个不同的 thread-local identity，并分别约束 `(session_id, thread_id, accepted_ingress_id)` 与 `(session_id, thread_id, acceptance_idempotency_key)` 唯一；每个 identity 只能一对一指向一个 accepted Turn。相同 ingress、相同 acceptance key、相同 payload hash 和相同 origin branch 的重复 acceptance 只能返回既有 `turn_id`、root 和 initial execution，不创建第二个历史 Turn；同 ingress 被不同 key 重用、同 key 搭配不同 ingress/payload/branch，或跨 thread 直接复用裸 identity 时，必须返回明确 acceptance idempotency conflict，且不修改原 Turn 或历史顺序。跨 session fork 的 copied acceptance identity 必须先映射为 target-local 值，source identity 只在 lineage/audit 中可见。
+
+#### Scenario: 重复 acceptance 不产生第二个历史 Turn
+
+- **WHEN** 同一 SessionThread 收到相同 `accepted_ingress_id`、`acceptance_idempotency_key` 和 payload hash 的重试
+- **THEN** resolver 返回原 Turn 的 root 和 initial execution，历史分页仍只显示一个 Turn
+
+#### Scenario: acceptance identity 冲突不修改历史
+
+- **WHEN** 同一 `accepted_ingress_id` 被不同 acceptance key 使用，或同一 key 的 payload hash/origin branch 不同
+- **THEN** 服务返回可诊断的 acceptance idempotency conflict，不创建、重编号或覆盖任何 Turn/item

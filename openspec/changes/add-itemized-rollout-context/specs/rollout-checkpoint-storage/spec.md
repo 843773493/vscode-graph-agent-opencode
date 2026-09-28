@@ -392,17 +392,9 @@ selection source 的逻辑唯一性必须由持久化约束表达：draft Contex
 - **WHEN** Saver 为一个已通过 preflight 的 plan 持久化 canonical/request-only/overlay/tool-set selection
 - **THEN** storage 将其 `plan_ordinal`、适用的 `contribution_id`/`contribution_ordinal`、manifest 和 assembly identity 原子写入并可在重启后恢复；不适用字段保持 NULL
 
-### Requirement: selection_kind 与 ref_type 必须使用唯一兼容矩阵
+### Requirement: selection_kind 与 ref_type 的兼容矩阵必须唯一登记且被存储消费
 
-存储 SHALL 在 source lookup、detail 解析和 restore/projector 之前按下表校验 `ContextSelectionEntry.selection_kind` 与 tagged-union `ref`；included 与 omitted entry 都必须满足同一 tag/type 关系。矩阵外组合必须返回 `plan-order-integrity`，不能由存储根据 payload、wire role、`ref_id` 或 registry 猜测生命周期：
-
-| `selection_kind` | 唯一合法 ref | `included=true` 合同 | `included=false` optional 合同及存储行为 |
-|---|---|---|---|
-| `canonical_history` | `ContextRef.ref_type=canonical_item` | 只允许同一 owner thread `item_catalog`；source revision、logical content length、恰一个 hash token 必填；`contribution_id`、`contribution_ordinal`、`detail_ref`、`source_overlay_epoch` NULL，`base_delta_role=none` | 保留 canonical tag/id、plan ordinal、omission/loss/availability 和可得 identity；正文不解析、不生成 canonical message |
-| `request_only` | `ContextRef.ref_type=request_only` | detail_ref 必须是同 assembly sealed detail；contribution-backed 时非空 contribution_id/ordinal 唯一指向同一 plan contribution manifest；base role none、source epoch NULL | 保留 request-only tag/id、plan ordinal、omission/loss/availability 和可得 identity；detail、正文完整性字段与 contribution binding 可 NULL，不回退当前 source |
-| `overlay_base` | `ContextRef.ref_type=request_only` | 必须 contribution-backed，非空 contribution_id/ordinal、detail、source revision/length/hash、`base_delta_role=base`、source epoch，并绑定完整 base | 保留 request-only tag/id、plan ordinal、base role 及可得 epoch/identity；不应用 base，不以当前 source 替代 |
-| `overlay_delta` | `ContextRef.ref_type=request_only` | 必须 contribution-backed，非空 contribution_id/ordinal、detail、source revision/length/hash、`base_delta_role=delta`、source epoch，并校验 from/to revision、diff algorithm/version、diff hash chain | 保留 request-only tag/id、plan ordinal、delta role 及可得 epoch/identity；不应用 delta、不重建 overlay |
-| `tool_set` | `ToolSetRef.ref_type=tool_set` | 只允许同 plan/assembly ToolSetSnapshot manifest；manifest source/length/hash/schema/policy 必填；base role none，contribution_id/ordinal/detail_ref/source epoch NULL | 保留 tool_set tag/id、plan ordinal、omission/loss/availability 和可得 identity；不生成工具定义、不回退 registry 或空 tools |
+本 requirement MUST NOT 登记第二份 `selection_kind` 与 tagged-union `ref` 兼容矩阵；唯一权威登记是 `add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md` 的 requirement「selection_kind 与 ref_type 必须使用唯一兼容矩阵」。存储 SHALL 在 source lookup、detail 解析和 restore/projector 之前按该权威矩阵校验 `ContextSelectionEntry.selection_kind` 与 tagged-union `ref`；included 与 omitted entry 都必须满足同一 tag/type 关系。矩阵外组合必须返回 `plan-order-integrity`，不能由存储根据 payload、wire role、`ref_id` 或 registry 猜测生命周期。
 
 `ContextRef.ref_id` 仍是 canonical `item_id` 或 request-only `plan_item_id`，不是 contribution identity；普通 included request-only 若非 contribution-backed，只通过同 assembly 的 `detail_ref`/source manifest 读取正文并校验 source revision、length/hash；included 且 contribution-backed 的 request-only/overlay 才必须用非空 `assembly_item_refs.contribution_id` + `contribution_ordinal` 唯一读取同一 `(session_id, thread_id, plan_id)` 的 contribution manifest/body，再校验 detail、source revision、length/hash 与 ordinal，overlay 本身必须 contribution-backed。canonical/tool_set entry（包括 omitted）的 contribution_id/ordinal/detail_ref 必须 NULL；只有 omitted request-only/overlay entry 可保留已有且与同一 manifest 一致的 contribution_id，不得新分配 contribution_id/ordinal 或读取正文/detail，没有既有映射则为 NULL。omitted entry 仍必须保留矩阵规定的 tag/type，正文和 contribution/detail binding 可 NULL/未分配，已知 metadata 必须与 manifest 一致；required omission/detail failure 拒绝 seal/dispatch。restore、history 与 Provider/LangChain projector 对 omitted entry 只保留 omission/loss，并分别跳过正文、detail、overlay 应用或 tools。
 

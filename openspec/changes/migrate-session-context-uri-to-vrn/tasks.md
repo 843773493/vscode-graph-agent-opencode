@@ -47,8 +47,8 @@
 
 ## 6. 收口在途 change
 
-- [ ] 6.1 更新 `openspec/changes/add-itemized-rollout-context/specs/itemized-rollout-context/spec.md` 的会话上下文 URI requirement（约 262/278/288 行）：声明语法与解析以本 change 为准，删除本地自有的 URI 形态定义。
-- [ ] 6.2 更新同 change 的 `design.md`（约 890-967 行）与 `tasks.md` 第 8.10 项，使其会话上下文寻址描述引用本 change，不再并列定义第二套 URI 语法。
+- [ ] 6.1 更新 `openspec/changes/add-itemized-rollout-context/specs/itemized-rollout-context/spec.md` 的 requirement「跨 Session 协作必须只面向目标 main thread 且不共享协作状态」：声明语法与解析以本 change 为准，删除本地自有的 URI 形态定义。该收敛已由 `e8e65b97` 落地，本任务只做核验，按 requirement 名定位、不使用裸行号。
+- [ ] 6.2 更新同 change 的 `design.md` 小节「跨 Session 地址与无共享状态协作」与 `tasks.md` 任务 8.10，使其会话上下文寻址描述引用本 change，不再并列定义第二套 URI 语法。该收敛同样已由 `e8e65b97` 落地，按小节名与任务号定位、不使用裸行号。
 - [ ] 6.3 运行 `openspec validate add-itemized-rollout-context --strict` 与 `openspec validate migrate-session-context-uri-to-vrn --strict`，确认两 change 均通过且不存在互相矛盾的 URI 定义。
 
 ## 7. 命名与校验收口

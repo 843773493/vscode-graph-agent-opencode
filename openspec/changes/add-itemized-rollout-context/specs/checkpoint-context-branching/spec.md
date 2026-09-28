@@ -59,59 +59,6 @@ Thread-owned Node调试方案是额外的可移植业务资源，不属于canoni
 - **WHEN** 同一source thread依次运行`context_fork`、锚定较早history的`history_prefix_fork`及`full_rollout_copy`，且capture时存在一个活动方案和其它已保存方案
 - **THEN** 三种target分别只得到活动方案当前正文、无调试方案、以及全部已保存方案当前正文；每个被复制方案获得target-local ID/lineage但target均无活动方案指针、活进程/端口/动作审计，旧history anchor不会捏造历史方案状态
 
-### Requirement: 跨 Session copy 必须冻结 source 后再写 target
-
-`context_fork`、`history_prefix_fork`和`full_rollout_copy` MUST从解析source catalog开始，到全部source node/SQLite read handle关闭并durably提交不可变source snapshot manifest与已校验staging bytes为止，持有source Session的shared `SessionReadGuard`。manifest MUST绑定source lifecycle generation、thread/view/checkpoint上界、artifact清单、逐对象hash和所需detail capability；guard释放后copy只能消费该冻结manifest/bytes，不得重新打开source。source删除先取得exclusive gate并关闭fence时，copy MUST返回`source_session_deletion_pending|source_session_deleted`且不创建可用target；guard先行时删除等待snapshot capture完成，随后可继续删除而不等待target staging/publication。target creation/publication MUST在不持source guard时独立准入；实现 MUST NOT同时持有两个Session gate、一个Session gate与另一个Session的read guard或两个数据库写事务。同一Session内的rewind/replay/compaction沿用owner operation lease/view事务，不建立虚假的跨Session source guard。
-
-当模式选择调试方案时，source debug owner MUST在同一read guard期间冻结已登记的方案manifest、当前revision和逐方案bytes/hash，读取前后验证manifest/revision不漂移，并把选择结果列入同一个`SourceCopySnapshot` artifact清单；不允许fork worker离开guard后重新打开source调试目录或以更新revision补齐。target debug owner MUST在不可见staging里冻结当前有效Workspace debug配置revision/hash，基于同一配置快照逐项校验方案入口、工作目录、全部断点路径与profile/adapter/runtime；发布前复核配置仍为冻结revision，若漂移则整个fork失败并以新operation重试，不在原operation里静默换配置。任一方案缺失、hash漂移或不兼容也使整个fork失败而不发布target，不跳过坏方案或默换默认profile。target-local方案ID/lineage映射及manifest作为fork materialization journal核验的artifact在target Session发布前完成；崩溃仅从冻结snapshot与journal幂等恢复/清理，不建立第二copy协调器或让普通reader看见半个方案。
-
-对应的fork/Session creation journal MUST在capture前预分配唯一`source_snapshot_id`和正常resolver不可见的内部locator。capture MUST在source SQLite固定read snapshot内取得同一revision的view/checkpoint/control rows、`storage_commits`和各JSONL committed end offset，以可验证SQLite snapshot/online backup冻结数据库页，并只复制这些offset以内的JSONL与manifest引用且hash/length/capability校验通过的thread-local immutable detail；冻结revision后的并发append、view切换或terminal convergence不得混入。capture完成时 MUST先在预登记locator原子发布`SourceCopySnapshot(state=captured)`，绑定operation/preimage hash、source lifecycle generation、database snapshot hash、逐文件committed offset/length/hash、view/checkpoint revision、detail manifest hash和attachment claim manifest hash并完成目录durability barrier，释放guard后才把target operation CAS为`source_captured`。恢复只可定点接受完整且hash一致的captured snapshot；prepared/partial或冲突snapshot MUST使原operation abort并清理，不得扫盘、读取当前source补齐或换成更新revision。
-
-workspace attachment blob MUST NOT复制进`SourceCopySnapshot`或Session/thread staging。source SQLite snapshot只冻结logical attachment/variant identity、digest、length、availability、source owner/item ref与attachment catalog revision，并 MUST以journal绑定的IdentifierFactory为每个source attachment item/ref预分配target-local item/attachment identity与mapping到source snapshot staging manifest，不能复用source identity或等待guard释放后再决定。关闭source SQLite read transaction后且释放source guard前，copy MUST以单个workspace attachment catalog事务为每个需要保持available的target-local attachment ref按`(copy_operation_id,source_attachment_ref,target_owner_ref)` create-or-get `ForkAttachmentClaim(state=preparing)`，绑定`source_snapshot_id`、target Session/thread/item、digest/length、受控blob locator和operation preimage，并原子验证source owner ref、blob未tombstone及正文digest/length；claim提交后阻止GC。全部claim成功后才将有序claim ID清单/hash写入captured marker；中途崩溃只可按精确copy operation ID查询并释放本operation claim，不按digest/locator扫描。source已unavailable且不参与可运行request的历史ref MAY显式映射unavailable，active view/required replay需要正文而claim失败时copy MUST失败。
-
-target可见性发布前，worker MUST把全部required attachment claim推进`owner_reserved`并建立target owner ref；capability resolver还必须验证target Session/thread catalog active，因此reserved ref不提前授权未发布target。全部required claim reserved后才可发布target Session/board。存在required claim的公开copy target MUST在staging control DB预置绑定copy/preimage、target lifecycle generation、publication preimage及有序claim ID/hash的`CopyAttachmentSettlementRecord(state=preparing)`；board由`BoardMigrationRecord`保存等价字段。publication把对应record推进为非终态`published_pending_attachment_commit`；无required claim的公开copy不创建settlement record，board则直接进入终态`published`。随后finalizer单独取得target/coordinator gate并复核active generation/preimage，以不重叠的attachment catalog和session-control事务依次把claim推进`committed`，再把copy record推进`committed`或把board record推进`published`。
-
-`CopyAttachmentSettlementRecord`状态闭集 MUST为非终态`preparing|published_pending_attachment_commit`和终态`committed|aborted|target_deleted`；`BoardMigrationRecord`状态闭集 MUST为非终态`preparing|published_pending_attachment_commit`和终态`published|aborted|coordinator_deleted`。未发布失败进入`aborted`；已经发布但target/coordinator删除抢先时，对`owner_reserved`必须精确释放claim/ref，对已`committed` claim必须先验证其属于record冻结的target owner，再按普通删除协议幂等且持久释放该owner ref；只有全部claim、owner ref与release outcome收敛后才进入`target_deleted|coordinator_deleted`，不得伪装成成功终态。恢复 MUST按带类型终态继续，不得以无类型terminal标志猜测publication或attachment是否成功。
-
-target删除与finalizer竞争同一gate：finalizer先行时完成全部claim并把copy/board record分别推进成功终态`committed|published`后，删除按普通owner ref释放；删除先关闭fence时，排空流程按record中的精确claim ID释放`owner_reserved`的ref/claim，或验证已`committed` claim的精确target owner并按普通删除协议持久释放该owner ref，再把copy/board record分别推进终态`target_deleted|coordinator_deleted`。崩溃恢复只有在target仍active且publication preimage一致时才确认原owner ref用于finalization；target deleting/tombstoned时 MUST走删除settlement，不得重建owner、保留target owner ref、恢复active、写成功终态或报告target可用。未发布失败仍只按journal claim ID释放并进入`aborted`；不得扫描digest补claim、复用其它operation claim、复制blob bytes、留下GC空窗或在record非终态时隔离Session节点。
-
-#### Scenario: full rollout copy 与 source 删除按 gate 次序裁决
-
-- **WHEN** `full_rollout_copy`和source Session删除并发，且copy先取得source `SessionReadGuard`
-- **THEN**删除在关闭source fence前等待capture完成；copy释放guard后仅用冻结manifest/bytes完成target-local物化，source随后可删除且target不回读source
-- **WHEN**删除先取得exclusive gate并关闭source fence
-- **THEN**copy明确失败且不发布target，不从隔离节点、删除journal或tombstone旁路读取source
-
-#### Scenario: target publication 不与 source guard 重叠
-
-- **WHEN**copy已经冻结source snapshot并准备创建或发布target Session/main thread
-- **THEN**source `SessionReadGuard`已经释放，target gate/事务才可取得；锁顺序检查拒绝同时持有source与target Session gate/guard或两个数据库写事务
-
-#### Scenario: source 并发 append 不产生混合快照
-
-- **WHEN**capture已在source SQLite固定revision和JSONL committed offsets，随后source writer提交新item、terminal convergence或active view变化
-- **THEN**本次`SourceCopySnapshot`只包含冻结revision及其committed offsets以内的数据库/JSONL/detail集合；target校验不得看见更新后的SQLite配旧JSONL、旧SQLite配新JSONL或部分checkpoint channel
-
-#### Scenario: source capture 崩溃只能定点恢复
-
-- **WHEN**进程在复制部分数据库/JSONL/detail后退出，或在captured marker durable后、target operation记录`source_captured`前退出
-- **THEN**恢复仅检查journal预登记的`source_snapshot_id`/locator；前者abort并清理，后者验证完整manifest/hash后继续同一snapshot，不扫描其它目录、不回读当前source补齐或换revision
-
-#### Scenario: fork attachment claim 防止 source 删除后的 blob GC
-
-- **WHEN**source snapshot引用available attachment，copy在释放source guard前建立claim，随后source Session删除并释放自己的owner ref，而target尚未发布
-- **THEN**workspace blob由该claim保留且不复制正文；target发布前claim转为owner_reserved并建立target owner ref，发布后target仍可按digest/length读取同一blob
-
-#### Scenario: attachment claim 崩溃恢复不暴露未发布 target
-
-- **WHEN**进程在claim preparing、owner_reserved或target publication后/claim committed前退出
-- **THEN**正常resolver在target catalog发布前始终拒绝预留ref；发布后settlement record保持非终态，恢复只在target仍active且preimage一致时按fork journal中的claim ID继续，target deleting/tombstoned则由删除排空释放/确认且不得重建owner；全程不扫描digest、不遗留GC空窗或把其它fork的claim当成本次owner
-
-#### Scenario: target 删除与 attachment claim finalization 串行
-
-- **WHEN**target已经发布但claim仍为owner_reserved，target Session删除与copy finalizer竞争同一gate
-- **THEN**finalizer先行时在释放gate前提交全部claim并把copy/board record分别推进成功终态`committed|published`，删除随后按普通owner ref释放；删除先关闭fence时由排空流程释放reserved claim/ref，或验证committed claim归属后持久释放其target owner ref，再把copy/board record分别推进终态`target_deleted|coordinator_deleted`，copy恢复不得让已删除target重新可用或留下target owner ref
-
 ### Requirement: Fork 来源不形成默认运行时依赖
 
 默认 fork SHALL 在 target SQLite 的 `fork_origins` 保存 source/target session、source checkpoint/view/branch、fork mode、mapping version、overlay/detail mapping 和 relationship，但运行时不得读取 source rollout、source SQLite 或 source detail path。一次 fork 只能产生一条新的 provenance/mapping 记录；`full_rollout_copy` 的文件复制步骤不得额外重复插入来源记录。`detached` fork 在 target 物化提交后不依赖 source，target 自己保存被复制的 overlay base/delta 和可用 detail；`pinned` fork 也必须使用 target-local active ref，只在 source SQLite 的 `retention_refs` 保留 source lineage/detail，供审计而不是供 target request 直接读取。source deletion 对 detached target 无影响；pinned source 删除必须等 retention release。required detail 无法复制时 fork 失败，optional detail 记录 unavailable；本 change 不提供单独的 unpin API。
@@ -227,7 +174,7 @@ target删除与finalizer竞争同一gate：finalizer先行时完成全部claim�
 - **WHEN** 用户编辑并重新执行 B:3
 - **THEN** 新 view 只包含 B:3 之前的 item，再追加编辑后的 B:3 item 和新的后续 item
 
-### Requirement: 用户操作使用 Turn 入口并解析到细粒度 item anchor
+### Requirement: 用户操作使用 Turn anchor，compaction 保留 Message anchor
 
 系统 SHALL 继续允许用户可见的 rewind、replay 以及从历史 Turn 发起的上下文操作使用稳定的 `turn_id` 和 `inclusive`/`before` 语义；backend resolver MUST 通过 `RolloutCheckpointSaver` 读取已提交的 active-lineage source view，并解析到 `TurnRecord.root_input_item_id` 对应的 canonical item 起点，再在需要时解析到 `content_part_id`/fragment anchor。业务层和 projector 不得直接扫描 RolloutStorage、AppendWriter 或内部 context reader。内部 compaction、fork 和恢复流程可以直接使用细粒度 durable item anchor；interrupt 首先使用当前 stream 的内存 cursor/ItemDraft，只有需要跨重启恢复或审计时才保存对应的 item/content-part reference。request-only context reference 与 pending runtime notice 不属于 view，不能直接作为 durable operation anchor。前端和普通调用方不需要传递 `view_id`、`checkpoint_id` 或物理 message 序号。
 
@@ -335,3 +282,56 @@ checkpoint、branch 和 view SHALL 保存 Turn 的 `turn_id`、owner-thread-glob
 
 - **WHEN** 同一 Turn 出现在两个不同 fork lineage 的 view 中
 - **THEN** resolver 先按 view lineage 定位 `context_view_turns`，再解析同一个 `root_input_item_id`；每个 view 可有不同 `logical_turn_ordinal`，不得按 `MIN(item_sequence)`、wire role 或 view 第一条 item 创建第二个 root
+
+### Requirement: 跨 Session copy 必须冻结 source 后再写 target
+
+`context_fork`、`history_prefix_fork`和`full_rollout_copy` MUST从解析source catalog开始，到全部source node/SQLite read handle关闭并durably提交不可变source snapshot manifest与已校验staging bytes为止，持有source Session的shared `SessionReadGuard`。manifest MUST绑定source lifecycle generation、thread/view/checkpoint上界、artifact清单、逐对象hash和所需detail capability；guard释放后copy只能消费该冻结manifest/bytes，不得重新打开source。source删除先取得exclusive gate并关闭fence时，copy MUST返回`source_session_deletion_pending|source_session_deleted`且不创建可用target；guard先行时删除等待snapshot capture完成，随后可继续删除而不等待target staging/publication。target creation/publication MUST在不持source guard时独立准入；实现 MUST NOT同时持有两个Session gate、一个Session gate与另一个Session的read guard或两个数据库写事务。同一Session内的rewind/replay/compaction沿用owner operation lease/view事务，不建立虚假的跨Session source guard。
+
+当模式选择调试方案时，source debug owner MUST在同一read guard期间冻结已登记的方案manifest、当前revision和逐方案bytes/hash，读取前后验证manifest/revision不漂移，并把选择结果列入同一个`SourceCopySnapshot` artifact清单；不允许fork worker离开guard后重新打开source调试目录或以更新revision补齐。target debug owner MUST在不可见staging里冻结当前有效Workspace debug配置revision/hash，基于同一配置快照逐项校验方案入口、工作目录、全部断点路径与profile/adapter/runtime；发布前复核配置仍为冻结revision，若漂移则整个fork失败并以新operation重试，不在原operation里静默换配置。任一方案缺失、hash漂移或不兼容也使整个fork失败而不发布target，不跳过坏方案或默换默认profile。target-local方案ID/lineage映射及manifest作为fork materialization journal核验的artifact在target Session发布前完成；崩溃仅从冻结snapshot与journal幂等恢复/清理，不建立第二copy协调器或让普通reader看见半个方案。
+
+对应的fork/Session creation journal MUST在capture前预分配唯一`source_snapshot_id`和正常resolver不可见的内部locator。capture MUST在source SQLite固定read snapshot内取得同一revision的view/checkpoint/control rows、`storage_commits`和各JSONL committed end offset，以可验证SQLite snapshot/online backup冻结数据库页，并只复制这些offset以内的JSONL与manifest引用且hash/length/capability校验通过的thread-local immutable detail；冻结revision后的并发append、view切换或terminal convergence不得混入。capture完成时 MUST先在预登记locator原子发布`SourceCopySnapshot(state=captured)`，绑定operation/preimage hash、source lifecycle generation、database snapshot hash、逐文件committed offset/length/hash、view/checkpoint revision、detail manifest hash和attachment claim manifest hash并完成目录durability barrier，释放guard后才把target operation CAS为`source_captured`。恢复只可定点接受完整且hash一致的captured snapshot；prepared/partial或冲突snapshot MUST使原operation abort并清理，不得扫盘、读取当前source补齐或换成更新revision。
+
+workspace attachment blob MUST NOT复制进`SourceCopySnapshot`或Session/thread staging。source SQLite snapshot只冻结logical attachment/variant identity、digest、length、availability、source owner/item ref与attachment catalog revision，并 MUST以journal绑定的IdentifierFactory为每个source attachment item/ref预分配target-local item/attachment identity与mapping到source snapshot staging manifest，不能复用source identity或等待guard释放后再决定。关闭source SQLite read transaction后且释放source guard前，copy MUST以单个workspace attachment catalog事务为每个需要保持available的target-local attachment ref按`(copy_operation_id,source_attachment_ref,target_owner_ref)` create-or-get `ForkAttachmentClaim(state=preparing)`，绑定`source_snapshot_id`、target Session/thread/item、digest/length、受控blob locator和operation preimage，并原子验证source owner ref、blob未tombstone及正文digest/length；claim提交后阻止GC。全部claim成功后才将有序claim ID清单/hash写入captured marker；中途崩溃只可按精确copy operation ID查询并释放本operation claim，不按digest/locator扫描。source已unavailable且不参与可运行request的历史ref MAY显式映射unavailable，active view/required replay需要正文而claim失败时copy MUST失败。
+
+target可见性发布前，worker MUST把全部required attachment claim推进`owner_reserved`并建立target owner ref；capability resolver还必须验证target Session/thread catalog active，因此reserved ref不提前授权未发布target。全部required claim reserved后才可发布target Session/board。存在required claim的公开copy target MUST在staging control DB预置绑定copy/preimage、target lifecycle generation、publication preimage及有序claim ID/hash的`CopyAttachmentSettlementRecord(state=preparing)`；board由`BoardMigrationRecord`保存等价字段。publication把对应record推进为非终态`published_pending_attachment_commit`；无required claim的公开copy不创建settlement record，board则直接进入终态`published`。随后finalizer单独取得target/coordinator gate并复核active generation/preimage，以不重叠的attachment catalog和session-control事务依次把claim推进`committed`，再把copy record推进`committed`或把board record推进`published`。
+
+`CopyAttachmentSettlementRecord`状态闭集 MUST为非终态`preparing|published_pending_attachment_commit`和终态`committed|aborted|target_deleted`；`BoardMigrationRecord`状态闭集 MUST为非终态`preparing|published_pending_attachment_commit`和终态`published|aborted|coordinator_deleted`。未发布失败进入`aborted`；已经发布但target/coordinator删除抢先时，对`owner_reserved`必须精确释放claim/ref，对已`committed` claim必须先验证其属于record冻结的target owner，再按普通删除协议幂等且持久释放该owner ref；只有全部claim、owner ref与release outcome收敛后才进入`target_deleted|coordinator_deleted`，不得伪装成成功终态。恢复 MUST按带类型终态继续，不得以无类型terminal标志猜测publication或attachment是否成功。
+
+target删除与finalizer竞争同一gate：finalizer先行时完成全部claim并把copy/board record分别推进成功终态`committed|published`后，删除按普通owner ref释放；删除先关闭fence时，排空流程按record中的精确claim ID释放`owner_reserved`的ref/claim，或验证已`committed` claim的精确target owner并按普通删除协议持久释放该owner ref，再把copy/board record分别推进终态`target_deleted|coordinator_deleted`。崩溃恢复只有在target仍active且publication preimage一致时才确认原owner ref用于finalization；target deleting/tombstoned时 MUST走删除settlement，不得重建owner、保留target owner ref、恢复active、写成功终态或报告target可用。未发布失败仍只按journal claim ID释放并进入`aborted`；不得扫描digest补claim、复用其它operation claim、复制blob bytes、留下GC空窗或在record非终态时隔离Session节点。
+
+#### Scenario: full rollout copy 与 source 删除按 gate 次序裁决
+
+- **WHEN** `full_rollout_copy`和source Session删除并发，且copy先取得source `SessionReadGuard`
+- **THEN**删除在关闭source fence前等待capture完成；copy释放guard后仅用冻结manifest/bytes完成target-local物化，source随后可删除且target不回读source
+- **WHEN**删除先取得exclusive gate并关闭source fence
+- **THEN**copy明确失败且不发布target，不从隔离节点、删除journal或tombstone旁路读取source
+
+#### Scenario: target publication 不与 source guard 重叠
+
+- **WHEN**copy已经冻结source snapshot并准备创建或发布target Session/main thread
+- **THEN**source `SessionReadGuard`已经释放，target gate/事务才可取得；锁顺序检查拒绝同时持有source与target Session gate/guard或两个数据库写事务
+
+#### Scenario: source 并发 append 不产生混合快照
+
+- **WHEN**capture已在source SQLite固定revision和JSONL committed offsets，随后source writer提交新item、terminal convergence或active view变化
+- **THEN**本次`SourceCopySnapshot`只包含冻结revision及其committed offsets以内的数据库/JSONL/detail集合；target校验不得看见更新后的SQLite配旧JSONL、旧SQLite配新JSONL或部分checkpoint channel
+
+#### Scenario: source capture 崩溃只能定点恢复
+
+- **WHEN**进程在复制部分数据库/JSONL/detail后退出，或在captured marker durable后、target operation记录`source_captured`前退出
+- **THEN**恢复仅检查journal预登记的`source_snapshot_id`/locator；前者abort并清理，后者验证完整manifest/hash后继续同一snapshot，不扫描其它目录、不回读当前source补齐或换revision
+
+#### Scenario: fork attachment claim 防止 source 删除后的 blob GC
+
+- **WHEN**source snapshot引用available attachment，copy在释放source guard前建立claim，随后source Session删除并释放自己的owner ref，而target尚未发布
+- **THEN**workspace blob由该claim保留且不复制正文；target发布前claim转为owner_reserved并建立target owner ref，发布后target仍可按digest/length读取同一blob
+
+#### Scenario: attachment claim 崩溃恢复不暴露未发布 target
+
+- **WHEN**进程在claim preparing、owner_reserved或target publication后/claim committed前退出
+- **THEN**正常resolver在target catalog发布前始终拒绝预留ref；发布后settlement record保持非终态，恢复只在target仍active且preimage一致时按fork journal中的claim ID继续，target deleting/tombstoned则由删除排空释放/确认且不得重建owner；全程不扫描digest、不遗留GC空窗或把其它fork的claim当成本次owner
+
+#### Scenario: target 删除与 attachment claim finalization 串行
+
+- **WHEN**target已经发布但claim仍为owner_reserved，target Session删除与copy finalizer竞争同一gate
+- **THEN**finalizer先行时在释放gate前提交全部claim并把copy/board record分别推进成功终态`committed|published`，删除随后按普通owner ref释放；删除先关闭fence时由排空流程释放reserved claim/ref，或验证committed claim归属后持久释放其target owner ref，再把copy/board record分别推进终态`target_deleted|coordinator_deleted`，copy恢复不得让已删除target重新可用或留下target owner ref

@@ -170,63 +170,6 @@ history/restore 在消费 selection 前必须校验每个 ToolSetRef 的 `tool_s
 - **WHEN** history/restore 请求一个已 sealed 的 ContextAssemblySnapshot
 - **THEN** 读取面使用 Saver 返回的同一 `selection[{plan_ordinal, ref}]` 和 manifest，不从低层 storage、当前 source 或 registry 重建顺序
 
-### Requirement: selection_kind 与 ref_type 必须使用唯一兼容矩阵
-
-history/restore SHALL 在 source lookup、detail 解析和 message/tool projection 之前按下表校验 `ContextSelectionEntry.selection_kind` 与 tagged-union `ref`；included 与 omitted entry 都必须满足同一 tag/type 关系。矩阵外组合必须返回 `plan-order-integrity`，不得按历史 role、`ref_id` 或当前 registry 改派：
-
-| `selection_kind` | 唯一合法 ref | `included=true` 合同 | `included=false` optional 合同及 history/restore 行为 |
-|---|---|---|---|
-| `canonical_history` | `ContextRef.ref_type=canonical_item` | 只读同一 owner thread `item_catalog`；source revision、logical length、恰一个 hash token 必填；`contribution_id`、`contribution_ordinal`、`detail_ref`、`source_overlay_epoch` NULL，`base_delta_role=none` | 保留 canonical tag/id、plan ordinal、omission/loss/availability 和可得 identity；不生成 canonical message、不读当前 item |
-| `request_only` | `ContextRef.ref_type=request_only` | detail_ref 必须解析同 assembly sealed detail；contribution-backed 时非空 contribution_id/ordinal 唯一指向同一 plan contribution manifest；base role none、source epoch NULL | 保留 request-only tag/id、plan ordinal、omission/loss/availability 和可得 identity；跳过 detail/body，不回退当前 middleware/source |
-| `overlay_base` | `ContextRef.ref_type=request_only` | 必须 contribution-backed，非空 contribution_id/ordinal、detail、source revision/length/hash、`base_delta_role=base`、source epoch，并绑定完整 base | 保留 request-only tag/id、plan ordinal、base role/可得 epoch；不应用 base、不重建 overlay |
-| `overlay_delta` | `ContextRef.ref_type=request_only` | 必须 contribution-backed，非空 contribution_id/ordinal、detail、source revision/length/hash、`base_delta_role=delta`、source epoch，并校验 from/to revision、diff algorithm/version、diff hash chain | 保留 request-only tag/id、plan ordinal、delta role/可得 epoch；不应用 delta、不重建 overlay |
-| `tool_set` | `ToolSetRef.ref_type=tool_set` | 只读同一 plan/assembly ToolSetSnapshot manifest；manifest source/length/hash/schema/policy 必填；base role none，contribution_id/ordinal/detail_ref/source epoch NULL | 保留 tool_set tag/id、plan ordinal、omission/loss/availability 和可得 identity；不生成工具定义、不回退 registry 或空 tools |
-
-`ContextRef.ref_id` 仍是 canonical `item_id` 或 request-only `plan_item_id`，不是 contribution identity；普通 included request-only 若非 contribution-backed，只通过同 assembly 的 `detail_ref`/source manifest 读取正文；included 且 contribution-backed 的 request-only/overlay 才必须通过非空 `contribution_id` + `contribution_ordinal` 唯一读取同一 `(session_id, thread_id, plan_id)` 的 contribution manifest/body，并校验 detail、source revision、logical length、hash 和 ordinal，overlay 本身必须 contribution-backed。canonical/tool_set 的 contribution_id/ordinal/detail_ref 必须 NULL。omitted entry 仍必须保留矩阵规定的 tag/type，正文和 contribution/detail binding 可 NULL/未分配，已知 identity metadata 必须一致；required omission/detail failure 不得恢复为部分成功。history/restore 与 LangChain/native Provider projector 对 omitted entry 只保留 omission/loss，并分别跳过 canonical message、request-only detail/body、overlay 应用和 tool definition。
-
-#### Scenario: history 在 source lookup 前拒绝 union mismatch
-
-- **WHEN** `canonical_history` 使用 request-only、`request_only|overlay_base|overlay_delta` 使用 canonical_item，或 `tool_set` 使用非 ToolSetRef
-- **THEN** history/restore 返回 `plan-order-integrity`，不读取 item/contribution/detail/tool registry，不生成替代 message/tool projection
-
-#### Scenario: history/restore 保留 omitted entry 的矩阵 tag
-
-- **WHEN** optional source 在 sealed selection 中为 `included=false`
-- **THEN** 保留对应 tag/type、assembly/plan ordinal、omission/loss/availability 和可得 identity；omitted canonical_history/tool_set 的 `contribution_id`、`contribution_ordinal`、`detail_ref` 必须为 NULL；omitted request-only/overlay 可保留已有且与同一 manifest 一致的 `contribution_id`，但不得新分配 contribution_id/ordinal 或读取正文/detail，没有既有映射则为 NULL；其它正文 length/hash、detail_ref、contribution_ordinal 可不分配
-- **AND** history/restore 只展示 omission/loss metadata，不从当前 source 或 registry 回退，也不生成空 message、detail 或 tools
-
-#### Scenario: 默认 Web projection
-
-- **WHEN** Web 请求最新 Turn 或向前加载历史摘要
-- **THEN** RolloutCheckpointSaver 使用内部 reader 的 projection 模式，不调用 full materialize，不构造完整 checkpoint messages 列表
-
-#### Scenario: LangGraph 恢复 full
-
-- **WHEN** LangGraph saver 或 context fork 需要可执行消息列表
-- **THEN** Saver 从 active canonical view 构造 ContextRequestPlan，再返回按目标能力投影的 BaseMessage，不把 request-only prompt 或 pending notice 伪造成历史 user message
-
-#### Scenario: history 与 request projector 共享 selection/order
-
-- **WHEN** history projection、LangChain restore 和 native Provider request 读取同一 active view 或同一 source overlay epoch
-- **THEN** 三者都消费 Saver 已提交 snapshot 的 `selection[{plan_ordinal, ref}]`；request-only contribution 使用持久 `contribution_ordinal` 与 canonical/base→delta 顺序，ToolSetRef 使用同一 `plan_ordinal` 进入 Provider tools/tool-config，history 仅保留受策略控制的 metadata；不按 `created_at`、`contribution_id`、物理邻接或 projector 本地 prepend 规则重排
-- **AND** included canonical ref/contribution 正文必须与 sealed `source_revision`、逻辑 `content_length` 和 `content_hash` 或 `redacted_stable_digest` 匹配；optional omitted entry 只校验其 tagged ref、`plan_ordinal`、omission/loss/availability 及可得 identity metadata，不读取正文或 detail；缺失、覆盖或错误 source 返回 `source-mismatch`/`detail-unavailable`，不得返回看似完整的部分 request
-
-#### Scenario: history/restore 保留 optional omission
-
-- **WHEN** sealed snapshot 中存在 `included=false` 的 optional canonical、request-only 或 tool-set entry
-- **THEN** history 与 restore 保留该 entry 的 tagged ref、`plan_ordinal`、`omission_reason`、`loss`、`availability` 和可得 source identity，但不生成 canonical message、request-only message/detail 或 Provider tool definition
-- **AND** projector 不从当前 registry/source 回退、不创建空值；如果同一 source 在该 assembly 中是 required，则 seal/restore 返回 `source-mismatch` 或 `detail-unavailable`，不得将 omission 视为成功
-
-#### Scenario: 非法 view 所有模式统一失败
-
-- **WHEN** SQLite view range、item membership 或 Turn root 缺失、越界或成环
-- **THEN** projection、detail 和 full 都返回明确 context view 错误，不返回部分结果或按最大 sequence 猜测边界
-
-#### Scenario: 旁路读取被禁止
-
-- **WHEN** 业务 service 或 projector 试图直接读取 RolloutStorage、AppendWriter 或内部 context reader 以构造 ContextRequestPlan
-- **THEN** 系统拒绝该旁路访问；只有 RolloutCheckpointSaver 返回的已提交 view/plan/snapshot 可以进入编译与请求投影
-
 ## ADDED Requirements
 
 ### Requirement: checkpoint/history loading 必须显式选择 product thread
@@ -277,3 +220,52 @@ loader MUST 校验 resource ref 的 owner session/thread、assembly、activation
 
 - **WHEN** v1 到 v2 migration 在临时 artifact 校验或安装前失败
 - **THEN** 正常 history 返回 `v1_migration_required` 或 migration incomplete 错误；v1 原 artifact 不被覆盖，不能返回半成品 v2 view，也不能重新启用 v1 只读 history 路径
+
+### Requirement: selection_kind 与 ref_type 的兼容矩阵必须唯一登记且被历史读取消费
+
+本 requirement MUST NOT 登记第二份 `selection_kind` 与 tagged-union `ref` 兼容矩阵；唯一权威登记是 `add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md` 的 requirement「selection_kind 与 ref_type 必须使用唯一兼容矩阵」。history/restore SHALL 在 source lookup、detail 解析和 message/tool projection 之前按该权威矩阵校验 `ContextSelectionEntry.selection_kind` 与 tagged-union `ref`；included 与 omitted entry 都必须满足同一 tag/type 关系。矩阵外组合必须返回 `plan-order-integrity`，不得按历史 role、`ref_id` 或当前 registry 改派。
+
+`ContextRef.ref_id` 仍是 canonical `item_id` 或 request-only `plan_item_id`，不是 contribution identity；普通 included request-only 若非 contribution-backed，只通过同 assembly 的 `detail_ref`/source manifest 读取正文；included 且 contribution-backed 的 request-only/overlay 才必须通过非空 `contribution_id` + `contribution_ordinal` 唯一读取同一 `(session_id, thread_id, plan_id)` 的 contribution manifest/body，并校验 detail、source revision、logical length、hash 和 ordinal，overlay 本身必须 contribution-backed。canonical/tool_set 的 contribution_id/ordinal/detail_ref 必须 NULL。omitted entry 仍必须保留矩阵规定的 tag/type，正文和 contribution/detail binding 可 NULL/未分配，已知 identity metadata 必须一致；required omission/detail failure 不得恢复为部分成功。history/restore 与 LangChain/native Provider projector 对 omitted entry 只保留 omission/loss，并分别跳过 canonical message、request-only detail/body、overlay 应用和 tool definition。
+
+#### Scenario: history 在 source lookup 前拒绝 union mismatch
+
+- **WHEN** `canonical_history` 使用 request-only、`request_only|overlay_base|overlay_delta` 使用 canonical_item，或 `tool_set` 使用非 ToolSetRef
+- **THEN** history/restore 返回 `plan-order-integrity`，不读取 item/contribution/detail/tool registry，不生成替代 message/tool projection
+
+#### Scenario: history/restore 保留 omitted entry 的矩阵 tag
+
+- **WHEN** optional source 在 sealed selection 中为 `included=false`
+- **THEN** 保留对应 tag/type、assembly/plan ordinal、omission/loss/availability 和可得 identity；omitted canonical_history/tool_set 的 `contribution_id`、`contribution_ordinal`、`detail_ref` 必须为 NULL；omitted request-only/overlay 可保留已有且与同一 manifest 一致的 `contribution_id`，但不得新分配 contribution_id/ordinal 或读取正文/detail，没有既有映射则为 NULL；其它正文 length/hash、detail_ref、contribution_ordinal 可不分配
+- **AND** history/restore 只展示 omission/loss metadata，不从当前 source 或 registry 回退，也不生成空 message、detail 或 tools
+
+#### Scenario: 默认 Web projection
+
+- **WHEN** Web 请求最新 Turn 或向前加载历史摘要
+- **THEN** RolloutCheckpointSaver 使用内部 reader 的 projection 模式，不调用 full materialize，不构造完整 checkpoint messages 列表
+
+#### Scenario: LangGraph 恢复 full
+
+- **WHEN** LangGraph saver 或 context fork 需要可执行消息列表
+- **THEN** Saver 从 active canonical view 构造 ContextRequestPlan，再返回按目标能力投影的 BaseMessage，不把 request-only prompt 或 pending notice 伪造成历史 user message
+
+#### Scenario: history 与 request projector 共享 selection/order
+
+- **WHEN** history projection、LangChain restore 和 native Provider request 读取同一 active view 或同一 source overlay epoch
+- **THEN** 三者都消费 Saver 已提交 snapshot 的 `selection[{plan_ordinal, ref}]`；request-only contribution 使用持久 `contribution_ordinal` 与 canonical/base→delta 顺序，ToolSetRef 使用同一 `plan_ordinal` 进入 Provider tools/tool-config，history 仅保留受策略控制的 metadata；不按 `created_at`、`contribution_id`、物理邻接或 projector 本地 prepend 规则重排
+- **AND** included canonical ref/contribution 正文必须与 sealed `source_revision`、逻辑 `content_length` 和 `content_hash` 或 `redacted_stable_digest` 匹配；optional omitted entry 只校验其 tagged ref、`plan_ordinal`、omission/loss/availability 及可得 identity metadata，不读取正文或 detail；缺失、覆盖或错误 source 返回 `source-mismatch`/`detail-unavailable`，不得返回看似完整的部分 request
+
+#### Scenario: history/restore 保留 optional omission
+
+- **WHEN** sealed snapshot 中存在 `included=false` 的 optional canonical、request-only 或 tool-set entry
+- **THEN** history 与 restore 保留该 entry 的 tagged ref、`plan_ordinal`、`omission_reason`、`loss`、`availability` 和可得 source identity，但不生成 canonical message、request-only message/detail 或 Provider tool definition
+- **AND** projector 不从当前 registry/source 回退、不创建空值；如果同一 source 在该 assembly 中是 required，则 seal/restore 返回 `source-mismatch` 或 `detail-unavailable`，不得将 omission 视为成功
+
+#### Scenario: 非法 view 所有模式统一失败
+
+- **WHEN** SQLite view range、item membership 或 Turn root 缺失、越界或成环
+- **THEN** projection、detail 和 full 都返回明确 context view 错误，不返回部分结果或按最大 sequence 猜测边界
+
+#### Scenario: 旁路读取被禁止
+
+- **WHEN** 业务 service 或 projector 试图直接读取 RolloutStorage、AppendWriter 或内部 context reader 以构造 ContextRequestPlan
+- **THEN** 系统拒绝该旁路访问；只有 RolloutCheckpointSaver 返回的已提交 view/plan/snapshot 可以进入编译与请求投影
