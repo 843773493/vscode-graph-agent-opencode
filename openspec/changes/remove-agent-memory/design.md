@@ -62,7 +62,7 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 
 **`agent.knowledge.retrieval` 边界**：该 4 键与 `agent.memory` 同为「零读取的未接入占位」，但按 D6（非目标）本次**只移除 memory**；`agent.knowledge` 的 `enabled`/`sources`/`retrieval` 是否一并清理**留待 owner 另行裁定**，本 change 记为显式待裁定项。
 
-**`enable_workspace_memory`（`default.jsonc:342`）**：`feature_flags` 是开放布尔 map 且 `app/` 零读取；归属未确证（可能属另一 feature 开关）。裁定：**本 change 不动该键**，按 E 类处理并登记为待裁定项（见 D7）。
+**`enable_workspace_memory`（`default.jsonc:333`）**：`feature_flags` 是开放布尔 map 且 `app/` 零读取；它是 memory 命名的死 flag，与已删除的 `agent.memory` 属同一类死配置，不属于 B/E 类无关同名（非 `ZeroMemory`/in-memory/`docs/memory/` 等）。**裁定：owner 已裁定删除并落地（提交 1488b8f7 删除 `configs/tests/workspace/default.jsonc:333` 该行；同段 `enable_kb`/`enable_code_tools` 与其它 agent 的 `feature_flags` 段不动，`app/`/`src/` 对该键本为零读取，删除不改变运行时行为）。**
 
 ### D4. 灰色的 `agent_memory` policy key / tag（`untrusted_reference` 死值已按裁定删除）
 
@@ -94,10 +94,10 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 ### D7. 显式待裁定项（MUST NOT 在本 change 内擅自替 owner 决定）
 
 1. ~~`PromptTrustLevel.untrusted_reference` 是否回收~~（D4）：**已裁定删除并落地**（提交 e0c45e4f；全仓零引用），**不再是待裁定项**。
-2. **`agent.knowledge.retrieval` 等 4 键是否一并清理**（D3）：本次留作未变，需 owner 裁定。
+2. **`agent.knowledge.retrieval` 等 4 键是否一并清理**（D3）：**保留待 owner 裁定**。它非 memory 能力（`add-context-injection-lifecycle` 的 D6 明确「不得为完整预先实现 knowledge」），本次留作未变。
 3. **`gateway_snapshot` source kind 是否一并回收**（D5）：本次保留。
-4. **`configs/tests/workspace/default.jsonc:342` 的 `enable_workspace_memory`**（D3）：本次不动，需 owner 确证其归属。
-5. **`docs/middleware-prompt-vscode-comparison.html:173-181`** 的 `MemoryMiddleware` 整卡：代码删除后该设计对照文档将与实现不符。是否随本 change 一并收口**待 owner 裁定**（`docs/` 不在本 change 的 `openspec/**` 写入范围，若需收口应由独立轮次或本 change 扩展范围）。
+4. ~~`configs/tests/workspace/default.jsonc` 的 `enable_workspace_memory`~~（D3）：**已裁定删除并落地**（提交 1488b8f7；`app/`/`src/` 对该键零读取），**不再是待裁定项**。
+5. ~~`docs/middleware-prompt-vscode-comparison.html` 的 `MemoryMiddleware` 整卡~~（D7 第 5 项）：**已裁定整卡删除并落地**（提交 1488b8f7；该卡描述的 `StructuredMemoryMiddleware`/`MEMORY_SYSTEM_PROMPT`/`untrusted_reference`/graph slot 均已物理删除，且徽章「仅配置启用时」暗示其仍可启用属失实；删除后 `grep -n -i 'memory' docs/middleware-prompt-vscode-comparison.html` 零命中，周围卡片与 HTML 结构完好），**不再是待裁定项**。
 
 > **原第 6 项「历史 workspace graph binding 的重绑流程」已按 owner 裁定（D-3）移出待裁定列表**：重绑能力**必须在本 change 内登记为可实施任务**（tasks 7.3.1–7.3.3），见 D2 的真实缺口登记。
 
@@ -140,5 +140,5 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 - **R3 配置 fail-closed**：删 schema 键后旧用户残留 memory 键会启动报错。属预期行为，但等价 BREAKING；已登记为迁移义务。
 - **R4 持久化契约**：graph revision bump 使历史 persisted binding fail-closed。属预期行为，已登记为迁移义务；代价是历史 workspace 需重绑。
 - **R5 测试覆盖退化**：`test_source_reconciler.py:165-187` 若直接删而非改用 `gateway_snapshot`，会丢失 token 来源保留分支覆盖。缓解：改造而非删除。
-- **R6 文档/在途 change 不一致**：`docs/middleware-prompt-vscode-comparison.html` 与多个在途 change 仍描述 memory。缓解：登记跨 change 同步项；`docs/` 收口列为待裁定。
+- **R6 文档/在途 change 不一致**：`docs/middleware-prompt-vscode-comparison.html` 与多个在途 change 仍描述 memory。缓解：登记跨 change 同步项；`docs/middleware-prompt-vscode-comparison.html` 的 `MemoryMiddleware` 整卡已按 owner 裁定删除并落地（提交 1488b8f7）。
 - **R7 stable prefix**：`agent_memory` 作为 `PromptPlacement.system_prompt` root tag，其渲染顺序若进 stable prefix，删除可能影响前缀。缓解：落地时显式运行结构化提示契约测试验证。

@@ -18,7 +18,7 @@ memory 相关实现全部未接入生产，属"未接线占位 / 虚假声明"�
 - **删除 graph slot 并 bump revision**（**BREAKING**）：删除 `"StructuredMemoryMiddleware"` slot，并把 `DEEP_AGENT_GRAPH_REVISION` 由 1 bump 到 2。历史 workspace 的 persisted binding 一次性 fail-closed 失效，这是本仓库「graph 定义变更即 fail-closed、绝不回退到最新图」设计下的预期行为，登记为显式迁移义务。**真实缺口必须一并登记（H2）**：当前仓库**不存在任何自动重绑入口**——`save_graph_binding` 对同 owner 写不同 selector 抛 `graph-binding-store-conflict`，`resolve_or_persist_graph_binding` 不重建；历史 owner（含 live 用户会话）在无显式迁移时永久阻断。因此本 change **必须**登记一次性、幂等、显式、可审计的重绑/清理任务（不得静默覆盖），覆盖 live 工作区与 `out/` 下既有 binding。
 - **删除配置键与 schema 定义**（**BREAKING**）：删除 `agent.memory`（含 `workspace_schema.jsonc` 的 `$defs.agentMemory`）与测试基线中的 memory 块。schema 逐层 `additionalProperties:false`，旧用户残留键会在配置验证时显式报「配置验证失败」，属预期的 fail-closed 收紧。
 - **同步修正既有 change 文档矛盾**：`add-unified-virtual-resource-addressing` 的 `spec.md:211`/`proposal.md:19`/`tasks.md:7` 称描述符闭集「含 memory」，而代码 `32bc6256` 已删除；作为跨 change 同步项登记。
-- 明确**不实现** `knowledge`/`safety` 接线；明确**不动** B/E 类无关同名（含 `docs/memory/`、`ZeroMemory`、in-memory、`enable_workspace_memory` 待裁定项等）。
+- 明确**不实现** `knowledge`/`safety` 接线；明确**不动** B/E 类无关同名（含 `docs/memory/`、`ZeroMemory`、in-memory 等）。`docs/middleware-prompt-vscode-comparison.html` 的 `MemoryMiddleware` 整卡与 `configs/tests/workspace/default.jsonc` 的 `enable_workspace_memory` 死 flag 不属于 B/E 类无关同名，已按 owner 裁定删除并落地（提交 1488b8f7）。
 
 ## Capabilities
 
