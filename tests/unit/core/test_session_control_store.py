@@ -2272,7 +2272,7 @@ def test_owner_binding_update_scalar_and_append(tmp_path: Path) -> None:
             append_attachment_ref={"attachment_id": "att-1", "revision": 2},
             append_resource_ref={
                 "resource_id": "res-1",
-                "display_uri": "boxteam://memory/session/notes",
+                "display_uri": "boxteam://workspace/ws-1/resources/skills/notes/SKILL.md",
                 "revision": 5,
             },
         )

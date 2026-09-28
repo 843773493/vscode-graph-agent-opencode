@@ -621,7 +621,7 @@ def test_protected_request_digest_restores_with_backend_and_rejects_missing_key(
                 session_id,
                 ContextContribution(
                     contribution_id="protected-contribution",
-                    source_kind="memory",
+                    source_kind="protected_source",
                     source_revision="protected-v1",
                     content_length=source.length,
                     redacted_stable_digest=source.redacted_stable_digest,
