@@ -62,11 +62,11 @@
 
 ## 9. 精确到用例名的测试删改收口
 
-- [ ] 9.1 复核 `tests/unit/agents/test_middleware_prompts.py` 已无 memory import/用例（第 1.1 步）。
+- [x] 9.1 复核 `tests/unit/agents/test_middleware_prompts.py` 已无 memory import/用例（第 1.1 步）。
 - [x] 9.2 复核 `tests/unit/services/infrastructure/resource_platform/test_bootstrap.py` 已无 `_FakeMemoryReader`/`memory_states`/`test_memory_state_adapter_rejects_unregistered_key`（第 1.3 步）。
-- [ ] 9.3 `tests/unit/services/infrastructure/resource_platform/virtual_resources/test_vrn_grammar.py:38-41` 的 `test_memory_scope_is_rejected_fail_closed` **MUST 保留**（memory 非 VRN scope 的反向守卫），MUST NOT 误删。
-- [ ] 9.4 按 AGENTS.md 纪律，跑测试一律带进程外保护：`timeout <秒> bash -c 'ulimit -d 4194304; exec "$@"' bash <命令>`，或 `bun run test:matrix -- --suite=<id>`。**Python 测试一律走 `uv run pytest`（unit-python suite 为 `uv run pytest tests/unit`），MUST NOT 出现对 `.py` 的 `bun test`（`bun test` 对 `.py` 不匹配任何测试文件）；`bun test` 只用于 TS/TSX（如 unit-web suite 的 `bun test src/clients/web/src`）。**
-- [ ] 9.5 全量回归：`bun run test:matrix`（或等价受保护全量命令）全绿。
+- [x] 9.3 `tests/unit/services/infrastructure/resource_platform/virtual_resources/test_vrn_grammar.py:38-41` 的 `test_memory_scope_is_rejected_fail_closed` **MUST 保留**（memory 非 VRN scope 的反向守卫），MUST NOT 误删。
+- [x] 9.4 按 AGENTS.md 纪律，跑测试一律带进程外保护：`timeout <秒> bash -c 'ulimit -d 4194304; exec "$@"' bash <命令>`，或 `bun run test:matrix -- --suite=<id>`。**Python 测试一律走 `uv run pytest`（unit-python suite 为 `uv run pytest tests/unit`），MUST NOT 出现对 `.py` 的 `bun test`（`bun test` 对 `.py` 不匹配任何测试文件）；`bun test` 只用于 TS/TSX（如 unit-web suite 的 `bun test src/clients/web/src`）。**
+- [x] 9.5 全量回归：`bun run test:matrix`（或等价受保护全量命令）全绿。
 
 ## 10. 跨 change 文档同步项（MUST NOT 在本 change 内直接改写别个 change）
 
@@ -84,7 +84,7 @@
 
 ## 11. OpenSpec 校验与交付
 
-- [ ] 11.1 `/home/hyf/.bun/bin/openspec validate remove-agent-memory --strict`（贴原始输出）。
-- [ ] 11.2 `/home/hyf/.bun/bin/openspec validate --strict --all` 必须 0 failed（含本 change 后的基线为 39 passed / 0 failed）。
-- [ ] 11.3 提交遵循独立索引纪律：`GIT_INDEX_FILE=/tmp/<任务名>.idx git read-tree HEAD` → `GIT_INDEX_FILE=/tmp/<任务名>.idx git add <精确路径>` → `git commit -m "中文" -- <精确路径>`；禁 `--amend`、禁裸 `git add -A`、禁无路径 commit。
-- [ ] 11.4 提交后自检：`git show --name-status <hash>`、`git merge-base --is-ancestor <hash> HEAD`、`git merge-base --is-ancestor <提交前HEAD> HEAD`。
+- [x] 11.1 `/home/hyf/.bun/bin/openspec validate remove-agent-memory --strict`（贴原始输出）。
+- [x] 11.2 `/home/hyf/.bun/bin/openspec validate --strict --all` 必须 0 failed（含本 change 后的基线为 39 passed / 0 failed）。
+- [x] 11.3 提交遵循独立索引纪律：`GIT_INDEX_FILE=/tmp/<任务名>.idx git read-tree HEAD` → `GIT_INDEX_FILE=/tmp/<任务名>.idx git add <精确路径>` → `git commit -m "中文" -- <精确路径>`；禁 `--amend`、禁裸 `git add -A`、禁无路径 commit。
+- [x] 11.4 提交后自检：`git show --name-status <hash>`、`git merge-base --is-ancestor <hash> HEAD`、`git merge-base --is-ancestor <提交前HEAD> HEAD`。
