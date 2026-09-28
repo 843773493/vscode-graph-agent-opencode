@@ -200,7 +200,7 @@ loader MUST 校验 resource ref 的 owner session/thread、assembly、activation
 #### Scenario: request path 不做资源 I/O
 
 - **WHEN** Saver 为 retry、resume 或后续 tool-loop model call materialize 已提交 plan
-- **THEN** 资源选择只来自内存中已冻结 activation snapshot或持久 sealed refs，trace 证明没有额外 `stat`、scan、read、HTTP fetch 或 memory-provider lookup
+- **THEN** 资源选择只来自内存中已冻结 activation snapshot或持久 sealed refs，trace 证明没有额外 `stat`、scan、read、HTTP fetch 或 provider source lookup
 
 ### Requirement: 正常历史 reader 只服务 v2，v1 仅用于一次性 migration/import
 

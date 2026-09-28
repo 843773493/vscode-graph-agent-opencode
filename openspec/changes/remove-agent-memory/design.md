@@ -64,9 +64,9 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 
 **`enable_workspace_memory`（`default.jsonc:342`）**：`feature_flags` 是开放布尔 map 且 `app/` 零读取；归属未确证（可能属另一 feature 开关）。裁定：**本 change 不动该键**，按 E 类处理并登记为待裁定项（见 D7）。
 
-### D4. 灰色的 `agent_memory` policy key / tag 与 `untrusted_reference` 死值
+### D4. 灰色的 `agent_memory` policy key / tag（`untrusted_reference` 死值已按裁定删除）
 
-**裁定：一并删除 `agent_memory` policy key 与 prompt tag；同时删除因此成为死值的 `PromptTrustLevel.untrusted_reference`。**
+**裁定：一并删除 `agent_memory` policy key 与 prompt tag；同时删除因此成为死值的 `PromptTrustLevel.untrusted_reference`。（已落地：见提交 e0c45e4f 删除 `app/prompting/registry.py` 的 `PromptTrustLevel.untrusted_reference`，全仓 `rg 'untrusted_reference' app configs tests` 零命中；本项已不再是待裁定项。）**
 
 - `app/agents/instruction_producers.py:43`（`ConditionalPolicyKey` 成员）、`:319`（`_POLICY_KEYS` 成员）、注释 `:3`/`:140` 的「R01–R07/R09」「R09 memory」措辞 → 删除。该 key 从不被 `build_toolset_policy_keys`（`:178` 定义，体在 `:187-197`；原登记 `:186-206` 区间不准，已修正）产出，删除不改变运行时行为。
 - **代码侧 R09 残留（M2，登记为待删除项，本 change MUST NOT 改代码）**：`app/agents/instruction_producers.py:35` 的 `InstructionProducerId = Literal[... "R07", "R09"]` 与 `:311` 的 `_KNOWN_PRODUCER_IDS = frozenset({..., "R09"})` 仍含 `"R09"`。R09 即被移除的 memory 能力在 producer 身份层的编号，与 policy key `agent_memory`（`:43`/`:319`）是同一能力的两处登记；二者须随 5.1 一并物理下线。本 change 只登记精确路径行号与符号名，实施轮次再删。
@@ -93,7 +93,7 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 
 ### D7. 显式待裁定项（MUST NOT 在本 change 内擅自替 owner 决定）
 
-1. **`PromptTrustLevel.untrusted_reference` 是否回收**（D4）：我倾向删除，但需 owner 确认。
+1. ~~`PromptTrustLevel.untrusted_reference` 是否回收~~（D4）：**已裁定删除并落地**（提交 e0c45e4f；全仓零引用），**不再是待裁定项**。
 2. **`agent.knowledge.retrieval` 等 4 键是否一并清理**（D3）：本次留作未变，需 owner 裁定。
 3. **`gateway_snapshot` source kind 是否一并回收**（D5）：本次保留。
 4. **`configs/tests/workspace/default.jsonc:342` 的 `enable_workspace_memory`**（D3）：本次不动，需 owner 确证其归属。

@@ -26,7 +26,7 @@
 - 不在本 change 内写生产代码；实施由 tasks 驱动。
 - 不设计会话上下文 URI 的统一改造（由并行 change 承载），本 change 只承认其归属与 scope/kind 复用。
 - 不设计 HTTP API 的多工作区路由细节（由「单后端多工作区挂载」change 承载），本 change 只要求 scope_id 身份在寻址层显式。
-- **不为 `memory` 做任何设计**：它已确证不是 VRN scope，且其 domain owner 与状态本体从未接入，故无 VRN 替代 owner 的需求；解析器侧 MUST 物理移除既有两点式特例分支，并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（同期由独立代码切片落地）。
+- **不为 `memory` 做任何设计**：它已确证不是 VRN scope，且其 domain owner 与状态本体从未接入，故无 VRN 替代 owner 的需求；解析器侧 MUST 物理移除既有两点式特例分支，并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（**已由提交 32bc6256 落地**）。
 - 不引入资源插件宿主、动态 provider 装配或可安装资源 API。
 
 ## Decisions
@@ -51,7 +51,7 @@
 
 ### D3：scope 闭集定稿为 workspace/user/gateway/inline，memory 移出
 
-**理由**：权威表实测既有闭集只有 `workspace`/`gateway`/`builtin`/`memory`；`user` 是用户要求新增。`memory` 零生产构造方、resolver 不比对 scope_id、`kind="memory"` 零构造、container 未装配，且两点式形态（无 `resources`、无 kind）会绕过固定段与 kind 校验——把它当 scope 等于在统一语法上开后门。故移出并显式标注「`memory` 不是 VRN scope」，且因其 domain owner 与状态本体从未接入（无 VRN 替代 owner 的需求），解析器侧 MUST 物理移除该两点式特例分支并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（同期由独立代码切片落地）。
+**理由**：权威表实测**当时的**既有闭集只有 `workspace`/`gateway`/`builtin`/`memory`；`user` 是用户要求新增。`memory` 零生产构造方、resolver 不比对 scope_id、`kind="memory"` 零构造、container 未装配，且两点式形态（无 `resources`、无 kind）会绕过固定段与 kind 校验——把它当 scope 等于在统一语法上开后门。故移出并显式标注「`memory` 不是 VRN scope」，且因其 domain owner 与状态本体从未接入（无 VRN 替代 owner 的需求），解析器侧 MUST 物理移除该两点式特例分支并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（**已由提交 32bc6256 落地**：特例分支与 `memory_display_uri` 已删除，`_SCOPE_KEYWORDS`/`_DESCRIPTOR_KINDS` 均不再含 `memory`）。
 
 **备选**：保留 `memory` 于闭集并为其定义 scope_id（被否：无任何事实支撑，会固化一个空洞）；把 `memory` 两点式当合法特例（被否：破坏「单一语法」，即本次要根除的双轨）。
 
@@ -169,7 +169,7 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 - **[破坏性语法改动打断在途实现]** → 迁移计划显式列出旧形态（含 `skill_runtime.py:52/:619` 裸拼接、`:538` 的 shim、layer 名）一并收敛，不留别名或双读；tasks 把「删旧解析实现」与「修消费方」合并为单一步骤，避免悬挂中间态。
 - **[跨 gateway 解析引入新失败模式]** → 拒绝码分两套闭合且 fail-closed；对「未授权存在」与「不存在」返回同一结果，避免 locator 泄露；上界为 policy 常量，便于审计。
 - **[distribution_id 曾是空洞]** → 权威表证明其全仓零生产赋值；来源已由本 change 定稿为发行 manifest 的 `distribution` + `version`（编码规则见 spec 对应 requirement），空洞从「来源未定」降为「尚未实现装配」，实施期按 D4b 接线。
-- **[memory 语义不明可能诱使猜测]** → 已确证它不是 VRN scope，列入 Non-Goals；因其 domain owner 与状态本体从未接入（无 VRN 替代 owner 的需求），解析器侧 MUST 物理移除两点式特例分支并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（同期由独立代码切片落地）。
+- **[memory 语义不明可能诱使猜测]** → 已确证它不是 VRN scope，列入 Non-Goals；因其 domain owner 与状态本体从未接入（无 VRN 替代 owner 的需求），解析器侧 MUST 物理移除两点式特例分支并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（**已由提交 32bc6256 落地**）。
 
 ## Migration Plan
 
@@ -180,7 +180,7 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 5. 按 D10 把配置来源 real path 迁移为 VRN 兄弟字段（`config/state.py` + `config_sources.py` + `api/config.py` 对齐）；`sqlite` 层显式不编 VRN。
 6. 接入 gateway 层星型解析、policy 常量上界与集中登记的拒绝码。
 7. **迁移面**：全部为「加列 + 写路径 + 切读路径」（VRN 零落盘，已确证）；MUST NOT 构造存量扫描或数据改写。
-8. 与其它 change 对表：会话上下文 URI 与多工作区复用本 change 的 scope/scope_id/kind 归属；`memory` 在各方均按「非 VRN scope」处理，解析器侧特例分支物理移除后以 `unknown_scope` 类拒绝码 fail-closed 拒绝。
+8. 与其它 change 对表：会话上下文 URI 与多工作区复用本 change 的 scope/scope_id/kind 归属；`memory` 在各方均按「非 VRN scope」处理，解析器侧特例分支已物理移除（提交 32bc6256）并以 `unknown_scope` 类拒绝码 fail-closed 拒绝。
 9. **回滚策略**：本 change 为规划产物；实施若需回滚，回滚到「旧语法 + 单一打印用途」状态，但必须在同一原子步骤内恢复所有消费方，不得停留半接入态。
 
 ## Open Questions

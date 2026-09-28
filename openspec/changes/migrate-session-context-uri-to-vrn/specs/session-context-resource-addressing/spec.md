@@ -26,7 +26,7 @@ real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST
 
 系统 MUST 只承认闭合集内的 scope，MUST 拒绝任何其它 scope 取值。scope 闭集为 **`workspace` | `user` | `gateway` | `inline`**（依据权威表：`builtin` 正名为 `inline`；`user` 为本次新增）。scope 闭集与每个 scope 的 scope_id 取值来源 MUST 由「统一虚拟资源寻址」change 的**唯一权威表**规定；本 capability MUST NOT 自行发明 scope 名或 scope_id 语义。
 
-**`memory` 已确证不是 VRN scope，MUST NOT 出现在闭合集内**：它零生产构造方、resolver 连 scope_id 都不比对、container 未装配、configs 自述未接入。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段）MUST 被显式标注为**非 VRN 示意**，MUST NOT 被当作合法 VRN 接受或产出。
+**`memory` 已确证不是 VRN scope，MUST NOT 出现在闭合集内**：它零生产构造方、resolver 连 scope_id 都不比对、container 未装配、configs 自述未接入。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段）MUST 被显式标注为**非 VRN 示意**，MUST NOT 被当作合法 VRN 接受或产出（其解析期特例分支已由提交 32bc6256 物理删除，现以 `unknown_scope` 类拒绝码 fail-closed 拒绝）。
 
 **每个 scope 的 `scope_id` 段一律必填**，MUST NOT 只对某个 scope 必填而对其它 scope 可选。`scope_id` MUST 由**真实身份推导**，MUST NOT 硬编码字面量，MUST NOT 依赖隐含上下文：
 

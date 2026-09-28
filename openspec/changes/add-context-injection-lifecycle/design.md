@@ -2,7 +2,7 @@
 
 参见 `proposal.md` 的动机。已有 `add-itemized-rollout-context` 提供 v2 canonical item、`ContextRequestPlan`、source overlay、sealed assembly 和 Saver ownership；本设计补齐统一 mutation 边界、producer、追踪、ToolSet hard rebase、wire role 与稳定前缀合同，不建立第二套上下文存储。
 
-当前 Agent 配置、runtime identity、Todo/Filesystem/Skill/AGENTS/压缩/Memory middleware 会在不同阶段拼接 system prompt；Goal、委派、跨会话、团队、终端、retry 和 checkpoint reminder 又会直接产生 `HumanMessage` 或通过内部 `MessageRole.user` 创建 Job/Turn。最后，`PromptReplayCaptureMiddleware` 再从已组装请求反推 source 边界。这些路径会重新组装旧 system prompt、重复投影 source、绕过 checkpoint owner，或者让内部状态伪装成真实用户输入。
+当前 Agent 配置、runtime identity、Todo/Filesystem/Skill/AGENTS/压缩等 middleware 会在不同阶段拼接 system prompt（原还包括 Memory middleware，已随 change `remove-agent-memory` 连 `StructuredMemoryMiddleware`/`MEMORY_SYSTEM_PROMPT` 一并物理移除，不再属于本文的迁移闭包）；Goal、委派、跨会话、团队、终端、retry 和 checkpoint reminder 又会直接产生 `HumanMessage` 或通过内部 `MessageRole.user` 创建 Job/Turn。最后，`PromptReplayCaptureMiddleware` 再从已组装请求反推 source 边界。这些路径会重新组装旧 system prompt、重复投影 source、绕过 checkpoint owner，或者让内部状态伪装成真实用户输入。
 
 目标链路为：
 
@@ -175,7 +175,7 @@ bundled resources/skills
 ```text
 代码内composition root
   ├── 内置file monitor / stable reader
-  ├── Gateway受认证snapshot adapter / 权威memory mutation adapter
+  ├── Gateway受认证snapshot adapter（原「权威memory mutation adapter」已随 `remove-agent-memory` 移除 `MemoryStateAdapter`/`MemoryStateReader` 与 `memory_states` 装配点，不再存在）
   └── AGENTS / Skill / config / team业务loader和owner reaction
           │
           └── dirty/gap事件 ──> EventChannelService
@@ -245,7 +245,7 @@ boxteam://gateway/{gateway_id}/resources/skills/{skill_name}/SKILL.md
 boxteam://inline/{distribution_id}/resources/skills/{skill_name}/SKILL.md
 ```
 
-**注意**：`memory` 已确证**不是 VRN scope**（零生产构造方、resolver 不比对 scope_id、container 未装配）。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段）MUST 只作**非 VRN 示意**，MUST NOT 被当合法 VRN；本 capability 不给出 memory 的 VRN 示意，也不为其定义 scope_id。
+**注意**：`memory` 已确证**不是 VRN scope**（零生产构造方、resolver 不比对 scope_id、container 未装配）。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段）MUST 只作**非 VRN 示意**，MUST NOT 被当合法 VRN；本 capability 不给出 memory 的 VRN 示意，也不为其定义 scope_id。（该两点式特例分支已由提交 `32bc6256` 物理删除，解析侧以 `unknown_scope` 类拒绝码 fail-closed 拒绝。）
 
 同一资源同时具有四种不能混用的标识/定位：模型可见且可安全展示的`display_uri`；来源registry内稳定的`source_id`；语义Registry内稳定、跨rename/locator变化保持不变的`resource_id`；实际owner私有的`provider_locator`（绝对路径、Gateway内部snapshot引用、credential ref、memory key等）。`display_uri`表达逻辑scope/kind/name，但不是任一内部identity、授权凭据、dedupe key或业务幂等键。URI不携带revision；精确revision/hash/snapshot_ref由activation/assembly provenance另存。解析必须通过`VirtualResourceResolver.resolve(uri, operation, ResolutionContext)`得到绑定`resource_id/source_id/provider/语义revision/snapshot_ref/capabilities`的typed handle，不能percent-decode后直接join到文件系统。
 
@@ -325,7 +325,7 @@ app/
 │   │   │   ├── derivation/                      # source→semantic依赖DAG、解析调度与CAS
 │   │   │   ├── registry/                        # 已发布语义ResourceSnapshot与只读索引
 │   │   │   ├── virtual_resources/               # boxteam://语法、身份绑定与typed resolver
-│   │   │   └── adapters/                        # 内置file、Gateway内部snapshot、权威memory适配
+│   │   │   └── adapters/                        # 内置file、Gateway内部snapshot适配（权威memory适配已随 remove-agent-memory 移除）
 │   │   ├── config/                              # 既有配置层合并、schema与reload owner
 │   │   └── rollout_context/                     # 既有SessionThread唯一I/O owner
 │   │       ├── runtime/context_sources/         # CSM registration、diff与恢复决策
@@ -352,7 +352,7 @@ app/
 | `app/services/infrastructure/resource_platform/` | 资源设施的composition root；在Gateway/Workspace各自代码中显式装配已知适配、loader和owner reaction，不成为巨型`ResourceManager`、插件宿主或第二ContextStore。 |
 | `.../bootstrap.py` | 固定启动本进程事件服务、process-root scope、内置file snapshot能力和已知配置locator，不受动态配置关闭。config owner可借独立`LifetimeScope`验证受影响的候选来源登记和有效配置，完成readiness/health后原子发布并关闭旧scope；没有可执行贡献注册表、plugin manifest或通用发布策略。 |
 | `.../observation/` | provider monitor订阅、规范化watch key、内部引用计数、防抖及dirty/gap/overflow事件；每个consumer取得可释放handle，最后一个释放才停止底层watch。同资源可供UI和多个业务consumer共享，但不同filter/correlation语义不得误共用。只标脏，不读正文或推进revision。 |
-| `.../sources/` | 实际owner私有source descriptor/read handle映射、`SourceReconciler`和不可变`ObservedSourceRevision`；file稳定双读及根边界在这里执行，Gateway内部snapshot与权威memory状态用各自一致性token。locator永不出现在模型、普通history或sealed context。 |
+| `.../sources/` | 实际owner私有source descriptor/read handle映射、`SourceReconciler`和不可变`ObservedSourceRevision`；file稳定双读及根边界在这里执行，Gateway内部snapshot用自身一致性token（原「权威memory状态」token 已随 `remove-agent-memory` 移除 `memory_state` source kind，`_SOURCE_KINDS` 现为 `{file, gateway_snapshot}`）。locator永不出现在模型、普通history或sealed context。 |
 | `.../derivation/` | `ResourceDerivationGraph`解析依赖DAG、调度typed loader、校验多输入版本向量、执行语义diff/CAS；这里只放通用求值框架，AGENTS/Skill/config/team的领域规则由其owner在代码中实现。 |
 | `.../registry/` | `ResourceRegistry`发布/查询不可变语义revision、readiness和generation；不拥有provider读取、目录扫描、Session SQLite写入或tool结果。旧valid与当前unavailable必须可区分。 |
 | `.../virtual_resources/` | `boxteam://` parser、scope/operation/capability校验与typed resolver；URI仅作安全展示与解析入口，不是稳定identity、文件挂载、授权凭据或历史重读入口。 |
@@ -466,7 +466,7 @@ snapshot/untracked 内容不允许重新读取源文件。压缩器只能根据 
 | R06 | 文件系统静态规则：`FilesystemMiddleware(system_prompt=FILESYSTEM_SYSTEM_PROMPT, custom_tool_descriptions=...)` | 每次请求前追加 filesystem/environment system block，并注册/改写文件工具说明 | system block 依赖请求期拼接；其中 Skill 路径例外与旧 read 激活方案绑定；工具说明不是独立 ToolSet 事实 | 文件系统行为规则注册为绑定 ToolSet policy的 root source并删除 Skill 读取例外；所有 tool descriptions 归 C02；工具 policy变化触发 hard rebase并重编译新 epoch，不能重写旧 context item |
 | R07 | 手动压缩工具静态规则：`CachePreservingSummarizationToolMiddleware(... COMPACT_CONVERSATION_SYSTEM_PROMPT)` | 启用 `compact_conversation` 时，每次 model request 前追加 system block并提供工具 | 与压缩派生请求、压缩结果的生命周期混在一起 | 静态使用规则注册为绑定 ToolSet policy的条件化 root source；工具 schema与启停归 C02并以 hard rebase生效；真正的派生摘要请求与结果归 D01，不把它们伪装成同一 CSM source |
 | R08 | 工作区 `AGENTS.md`：`WorkspaceAgentsMiddleware` 初次读取完整内容，`before_model` 检测变化后追加 `workspace_agents_change` `HumanMessage`，发现 compaction marker 时又把当前完整内容拼回 system prompt | 每次 model request 前读单文件；变化时生成 unified diff；middleware 内存保存 applied/observed 内容 | 直接改 LangChain state/system prompt；控制状态不随 checkpoint 版本化；重启/rewind 容易重复或错基准 | 注册`workspace-agents:content` resource/source，由实际owner声明`root_placement`；共享file monitor标脏，Reconciler稳定读取并发布snapshot，普通激活边界按latest-visible-committed追加user-role delta；实际rewind/compaction新epoch仅在资格为`root_eligible`时将完整有效状态合并新root，否则恢复为独立user item。状态由Saver/ContextStore持久化，删除旧middleware直接读盘/拼接和消息注入，不运行`rg`扫盘 |
-| R09 | Agent memory：`StructuredMemoryMiddleware` 可读取配置的 memory sources，并用 `MEMORY_SYSTEM_PROMPT` 包裹为 system block | 仅 `create_my_deep_agent(memory=...)` 非空时启用；当前默认生产 runtime 未传入，属于已实现但未接线能力 | 一旦启用仍会每请求拼接，正文与 source revision 无统一 owner；当前配置状态容易被误报为已生效 | 保持默认未启用；任何生产接线前必须把 memory descriptor/content 注册为独立 source：首次可进 root，后续变化按 user-role source item；memory 是不可信 reference，不能借 CSM 提升优先级 |
+| ~~R09~~ | **已移除，不再是迁移闭包成员**：原「Agent memory：`StructuredMemoryMiddleware` 读取配置的 memory sources 并用 `MEMORY_SYSTEM_PROMPT` 包裹为 system block」 | 原仅 `create_my_deep_agent(memory=...)` 非空时启用，默认生产 runtime 未传入 | 该能力已被 change `remove-agent-memory` 整体移除（`StructuredMemoryMiddleware`、`MEMORY_SYSTEM_PROMPT`、`agent.memory` 配置键与 schema、`agent_memory` policy key/prompt tag、`memory_state` source kind 均已物理删除） | 无迁移目标；编号 R09 仅作历史记录保留，后续 R 集合一律为 R01–R07 与 R08，MUST NOT 再为 R09 登记 producer、source 或矩阵项 |
 | E01 | main-thread Goal生命周期：`goal_continuation`、`goal_objective_updated`、`goal_budget_limited` | `GoalRuntimeService` 构造`PreparedInternalMessage`，再用`create_and_run_internal()`创建`MessageRole.user`消息和Job；当前只以Session定位 | 内部控制状态成为普通user message/Turn root，注入与execution唤醒绑死；若按thread机械复制会错误地让child拥有Goal | Goal capability只允许Session main thread；作为`goal:<goal_id>:state` ambient/pending event source提交，保留事件revision与用户目标边界并由独立wakeup启动execution，不创建真实user Turn。child thread收到Goal操作必须明确拒绝，不能fallback到main |
 | E02 | Session内委派与跨Session生成结果：`delegated_task`、`generated_session_result` | `SessionSubagentService`或session-generation reporting通过internal message准备/派发Job；新生成Session的seed prompt另有`prepare_user_message()`路径 | durable委派当前创建child Session且回报只按Session定位；系统委派/回报可伪装user root | durable委派改为同一Session的child thread，任务seed进入精确child，完成汇报按持久parent thread地址注册幂等ambient event；不复制child history。生成Session result回到发起thread；seed由producer显式声明`user_derived_root`或`internal_source`，禁止根据文本/role猜测 |
 | E03 | 跨Session主thread协作：`session_message`、`read_context`、`monitor_session_agent_end`；本地或Gateway远程路由 | 当前`send_message_to_session`向模型暴露`simulate_user`；`read_context`返回JSON工具结果；`monitor_session_agent_end`轮询并订阅当前及未来Job的`AGENT_END`，目标都只到Session | Agent可伪造真实user ingress；send→monitor存在queued/accepted竞态和无界未来订阅；read结果与目标canonical复制边界未明确 | 模型侧send删除`simulate_user`并返回resolved target、`communication_id`及job/turn binding；read返回有界projection并只作为调用方canonical tool result；以接受`communication_id | job_id | turn_id`的有界`wait_for_session`替换旧monitor，communication selector可等待execution binding。三者只解析目标main，read/wait不修改或materialize目标runtime，跨Session协议拒绝team/task/role/Goal状态 |
@@ -481,7 +481,7 @@ snapshot/untracked 内容不允许重新读取源文件。压缩器只能根据 
 | C03 | 模型与工具协议事实：assistant/reasoning、Provider tool call/result，以及 invalid args、timeout、confirmation、patch repair、compact tool生成的 synthetic `ToolMessage` | 模型流或 middleware在执行内追加 `AIMessage`/`ToolMessage`，随后进入 canonical item/checkpoint | 它们是会话事实或协议配对，不是 instruction source；误纳入 CSM 会破坏 tool_call_id 和 Provider role合同 | 不进入 CSM；由 canonical item、tool execution与terminal convergence owner构造 `AppendCanonicalItemIntent`并经统一 ContextStore owner提交，保持原生 role/配对、item identity和 plan ordinal；只能参与稳定前缀选择，不能按文本去重 |
 | P01 | 请求捕获与投影管线：`PromptReplayCaptureMiddleware`、`ItemizedContextProjectionMiddleware._prompt_contributions()`、`project_context_plan()` | 逐 middleware 比较 system blocks，推断 append/replace并全部记为 request-only contribution；LangChain projector把连续贡献合成 `request-only-system-prompt` | 这是从最终请求反推 provenance，不是 producer 权威；replace/合并会丢 item边界并破坏稳定前缀；无捕获时 synthetic fallback掩盖漏接来源 | 删除 PromptReplay、捕获标签和 instrument 链；废弃 `ItemizedContextProjectionMiddleware` 的 prompt/tool/context反向捕获。每个 R/E producer在 seal 前显式登记；若框架必须保留 middleware hook，只实现无状态 sealed-assembly dispatch bridge，按 Saver-issued reference转发精确 messages/tools/frames，缺失或不匹配即 fail closed |
 
-迁移闭包之外，`app/tool_testing` 的 `tool_test_retry` 只是模型测试 harness；当前未接线的 knowledge/safety 配置也不是生产上下文来源，不得为了“完整”预先实现。R09 memory 只有在显式传入 sources 时才算活跃，测试存在不等于默认生产已启用。
+迁移闭包之外，`app/tool_testing` 的 `tool_test_retry` 只是模型测试 harness；当前未接线的 knowledge/safety 配置也不是生产上下文来源，不得为了“完整”预先实现。R09 memory 已随 change `remove-agent-memory` 整体移除（middleware、prompt tag 与配置键均物理删除），不再是迁移闭包成员，也 MUST NOT 被重新登记为 source。
 
 ### 10. 删除反向捕获，middleware 最多只是无状态 dispatch bridge
 

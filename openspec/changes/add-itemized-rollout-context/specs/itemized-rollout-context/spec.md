@@ -808,7 +808,7 @@ middleware MUST NOT 原地修改既有 canonical item，也不得把对 `ModelRe
 
 #### Scenario: 临时 system prompt 注入
 
-- **WHEN** workspace instructions、skill、memory 或运行时身份只对本次 model call 生效
+- **WHEN** workspace instructions、skill 或运行时身份只对本次 model call 生效
 - **THEN** middleware 返回带来源、版本、顺序和 hash 的 prompt contribution，ContextRequestPlan 使用它生成 system/developer input，但不会生成普通历史 message 或修改既有 canonical item
 
 #### Scenario: 持久化提醒注入
@@ -818,7 +818,7 @@ middleware MUST NOT 原地修改既有 canonical item，也不得把对 `ModelRe
 
 ### Requirement: Canonical item、request-only context 和 wire role 必须分离
 
-系统 SHALL 将 context plan 中的引用区分为 canonical item reference 和 request-only reference。静态 system prompt、动态 skill 说明、workspace/environment snapshot、memory injection 以及 tool definition 默认 MUST 以 request-only contribution 或 tool-set snapshot 参与本次请求；只有显式声明为后续上下文事实时，才允许追加对应的 canonical item。Provider wire role 只是编码投影，不得改变引用的生命周期、来源或关系。
+系统 SHALL 将 context plan 中的引用区分为 canonical item reference 和 request-only reference。静态 system prompt、动态 skill 说明、workspace/environment snapshot 以及 tool definition 默认 MUST 以 request-only contribution 或 tool-set snapshot 参与本次请求；只有显式声明为后续上下文事实时，才允许追加对应的 canonical item。Provider wire role 只是编码投影，不得改变引用的生命周期、来源或关系。
 
 已被某次 sealed request 使用的 source revision 可以作为 request-only overlay 的稳定 base；后续 source revision 不得静默替换该 base。需要跨 checkpoint 延续的 source diff 必须通过结构化 `PersistItemIntent` 追加为 ambient `runtime_notice` item，或明确标记为只对下一次 request 有效的 request-only delta；二者都必须带 source revision、base/delta 关系和 hash，不得退化为无 provenance 的普通 message。
 
@@ -1115,7 +1115,7 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 ### Requirement: 历史 view 变化与运行时 source 变化必须独立重协调
 
-系统 SHALL 将一次运行时上下文表示为相互独立的 `history_view_revision`、`source_overlay_epoch`、source revision set、`ToolSetSnapshot`/Provider-projector assembly policy snapshot、`prefix_epoch`/reason 和 assembly identity。rewind、replay、fork、checkpoint restore、compaction、source edit、skill/environment/memory 变化、tool schema/可见性/执行policy变化以及附件上下文可用性变化等会影响有效上下文的操作，必须在下一次 Provider dispatch 前通过统一的 `ContextReconciliation` 比较上一份已提交 snapshot 与当前状态，并生成明确 outcome：`history_view_changed`、`overlay_reused`、`delta_appended`、`overlay_materialized` 或 `overlay_invalid`。只有首次组装、实际compaction、rewind重建和ToolSet hard rebase可以改变prefix epoch；其它变化必须保留旧wire bytes并尾部追加或显式失败。source/ToolSet/Provider-projector assembly policy变化不得伪装成普通history message或隐式创建Turn。Gateway federation operation policy明确排除在该表示与reconciliation之外：它不修改ToolSet、assembly或prefix，只在discovery/send/read/wait/transit等实际操作边界读取最新revision。reconciliation未完成或返回invalid时不得发起Provider request。
+系统 SHALL 将一次运行时上下文表示为相互独立的 `history_view_revision`、`source_overlay_epoch`、source revision set、`ToolSetSnapshot`/Provider-projector assembly policy snapshot、`prefix_epoch`/reason 和 assembly identity。rewind、replay、fork、checkpoint restore、compaction、source edit、skill/environment 变化、tool schema/可见性/执行policy变化以及附件上下文可用性变化等会影响有效上下文的操作，必须在下一次 Provider dispatch 前通过统一的 `ContextReconciliation` 比较上一份已提交 snapshot 与当前状态，并生成明确 outcome：`history_view_changed`、`overlay_reused`、`delta_appended`、`overlay_materialized` 或 `overlay_invalid`。只有首次组装、实际compaction、rewind重建和ToolSet hard rebase可以改变prefix epoch；其它变化必须保留旧wire bytes并尾部追加或显式失败。source/ToolSet/Provider-projector assembly policy变化不得伪装成普通history message或隐式创建Turn。Gateway federation operation policy明确排除在该表示与reconciliation之外：它不修改ToolSet、assembly或prefix，只在discovery/send/read/wait/transit等实际操作边界读取最新revision。reconciliation未完成或返回invalid时不得发起Provider request。
 
 #### Scenario: rewind 创建显式重建 epoch
 
@@ -1129,7 +1129,7 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 #### Scenario: 非文本上下文变化使用同一重协调边界
 
-- **WHEN** Provider直接工具/信封schema、内部扩展target目录、环境状态、memory、附件权限或 provider/projector capability 发生变化
+- **WHEN** Provider直接工具/信封schema、内部扩展target目录、环境状态、附件权限或 provider/projector capability 发生变化
 - **THEN** 普通source与扩展工具指引变化只追加独立user-role delta；仅Provider可见ToolSet有效变化在safe boundary执行hard rebase，内部target目录变动不改变ToolSetRef/epoch；其它会破坏已提交wire prefix的policy/profile变化显式失败。assembly记录变化原因和hash，不把这些变化追加为真实用户/assistant history，也不在非法边界物化overlay
 
 #### Scenario: 重协调失败阻止请求
@@ -1243,7 +1243,7 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 #### Scenario: 动态 request-only context 不占 canonical 索引
 
-- **WHEN** skill 说明、环境快照或 memory injection 只为一次 model call 提供 system/developer context
+- **WHEN** skill 说明或环境快照只为一次 model call 提供 system/developer context
 - **THEN** 系统只在 assembly/plan metadata 中记录其 request-only reference、来源和 hash，不创建 canonical item catalog 行，不占用 canonical item sequence，也不参与 rewind/fork view
 
 ### Requirement: 操作 anchor 可以细于 message 和 Turn

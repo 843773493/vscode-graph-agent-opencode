@@ -12,7 +12,7 @@
 
 与此并存的资源平台 VRN（`resource_platform/virtual_resources/`）实测形态：
 
-- `parse_vrn` 只接受 `boxteam://{scope}/...`，scope 闭集 `{workspace, gateway, builtin, memory}`，`kind` 闭集 `{agent-spec, skills}`；
+- `parse_vrn` 只接受 `boxteam://{scope}/...`，scope 闭集 `{workspace, gateway, builtin, memory}`（**`memory` 已于本 change 编写后由提交 32bc6256 物理移除，现闭集为 `{workspace, gateway, builtin}`；`builtin` 上游正名为 `inline`**），`kind` 闭集 `{agent-spec, skills}`；
 - 整体拒绝 `%`（`percent_encoding_rejected`）与 `#`（`fragment_rejected`）；
 - 双向交叉解析**实测 100% 互斥**：VRN 拒绝全部 6 条上下文 URI；上下文 parser 拒绝全部 3 条 VRN 地址。
 
@@ -26,7 +26,7 @@
 - `scope_id` 必须由真实身份推导、MUST NOT 硬编码字面量：`workspace`→真实 workspace_id、`gateway`→真实 gateway_id（取值来源与注入 owner 按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿，本 change 只具名引用、不复述取值规则）、`inline`→真实 distribution_id、`user`→`local`（单用户本地约定，已由 owner 定为终值）。
 - 星型解析唯一顺序，上界为显式策略常量；不可达/未共享/未找到 fail-closed 结构化拒绝码；**locator 是输入不是输出**。
 - 拒绝码有**两套不可混用的独立闭集**——`grammar.py` 的 17 个与 `resolver.py` 的 6 个——由「统一虚拟资源寻址」change 集中登记；本 change **只能引用不能自造**。VRN 语法本体、固定段序与 `kind` 闭集同样不由本 change 拥有。
-- `memory` 不是 VRN scope：不基于它做设计、不为它规定 scope_id；既有两点式 `boxteam://memory/{scope}/{name}` 只作**非 VRN 示意**（它无 `resources` 段、无 kind、恰好两段，走的是独立特例分支）。
+- `memory` 不是 VRN scope：不基于它做设计、不为它规定 scope_id；既有两点式 `boxteam://memory/{scope}/{name}` 只作**非 VRN 示意**（它无 `resources` 段、无 kind、恰好两段，曾走独立特例分支；**该特例分支已由提交 32bc6256 物理删除，现以 `unknown_scope` 类拒绝码 fail-closed 拒绝**）。
 - 命名必须逐字使用：`资源身份 / ResourceIdentity`、`虚拟资源地址 / VRN`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`。
 
 ## Goals / Non-Goals
@@ -105,7 +105,7 @@ SessionContextResourceRef {
 
 **`scope_id` 必须由真实身份推导**：`gateway` 现状在 skill 目录生成链路上把 `scope_id` 硬编码为字面量 `"local"`（`app/agents/skill_runtime.py:539` 的 `else "local"`），`inline`（现名 `builtin`）与它共用同一字面量，而 `distribution_id` 全仓零赋值——这是**既有不一致**。定稿表要求 `gateway`→真实 gateway_id、`inline`→真实 distribution_id，落地时按真实身份推导，不得继续共用字面量；`distribution_id` 的来源与编码已由「统一虚拟资源寻址」change 定稿为发行包 runtime manifest 的 `distribution` + `version`（见其 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」，本 change 只具名引用、不复述取值规则）；`gateway_id` 的来源与注入 owner 亦已由该 change 定稿（见其 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」，本 change 只具名引用、不复述取值规则）；`user`→`local` 为单用户本地程序约定。
 
-**注意（权威表与现状的差距）**：资源平台现有 grammar 的 scope 闭集为 `{workspace, gateway, builtin, memory}`，`kind` 闭集为 `{agent-spec, skills}`，且**没有 `resources` 固定段**（现为 `boxteam://{scope}/{id}/{kind}/...`）。权威表要求闭集改为 `{workspace, user, gateway, inline}` 并保留 `resources` 固定段。本 change **不自行改动**该闭集、`kind` 闭集或段序——VRN 语法本体归「统一虚拟资源寻址」change。本 change 只声明会话上下文侧遵循该形态，并把闭集/段序/scope_id 表的落地留给该 change 统一登记。
+**注意（权威表与现状的差距）**：资源平台 grammar 的 scope 闭集编写时曾为 `{workspace, gateway, builtin, memory}`（其中 `memory` 已由提交 32bc6256 物理移除），`kind` 闭集为 `{agent-spec, skills}`。现存 grammar 已含 `resources` 固定段（`boxteam://{scope}/{id}/resources/{kind}/...`）。权威表要求闭集改为 `{workspace, user, gateway, inline}` 并保留 `resources` 固定段。本 change **不自行改动**该闭集、`kind` 闭集或段序——VRN 语法本体归「统一虚拟资源寻址」change。本 change 只声明会话上下文侧遵循该形态，并把闭集/段序/scope_id 表的落地留给该 change 统一登记。
 
 ### D4：星型解析与会话上下文的接入
 

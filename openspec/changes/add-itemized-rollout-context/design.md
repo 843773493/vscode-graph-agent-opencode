@@ -192,7 +192,7 @@ v2 reader 遇到未知 `payload_kind`、缺失必填 extension schema/version、
 
 v2 `rollout.jsonl` 是 append-only 的 immutable item fact log：一行必须包含一个完整、已终态化的 `CanonicalItemRecord`，行内 UTF-8 字节范围和 `item_sequence` 在提交后永久不变；不得通过修改旧行改变 status/payload/hash、删除旧行、插入中间行或重排既有行。JSONL 行先完成 durability barrier，再由 SQLite `storage_commits` 和 `item_catalog` 宣布可见；只有已提交 offset 以内且有 catalog/commit 记录的行对 reader 可见。JSONL 尾部若已写入但 SQLite 未提交，只能作为未收敛尾部回收或隔离，不能被 reader 猜测为事实。对已提交事实的修正只能追加新 item 并建立显式 relation；SQLite projection/index 也不得反向覆盖 JSONL payload。
 
-每个 draft、contribution、assembly 和终态 item 还关联不影响 payload 语义的 provenance。`producer_ref` 只描述谁产生了 payload；middleware、memory、environment source 等没有产生该 payload 时，必须作为独立的关系边记录，而不是冒充 item producer：
+每个 draft、contribution、assembly 和终态 item 还关联不影响 payload 语义的 provenance。`producer_ref` 只描述谁产生了 payload；middleware、environment source 等没有产生该 payload 时，必须作为独立的关系边记录，而不是冒充 item producer：
 
 ```text
 producer_ref
@@ -472,7 +472,7 @@ history/live projection只能返回策略允许的`display_uri`、resource kind/
 
 middleware 的统一输出类型为 `ContextContribution`，按用途分为：
 
-- `PromptContribution`：请求级 system/developer/context segment，带 source、version/hash、scope、order、visibility 和可选 supersedes reference；若 source 已进入缓存保持型 overlay，还必须带 source revision、source overlay epoch、base/delta 角色和 diff/materialization reference。静态 system prompt、skill 说明、workspace/environment snapshot、动态 memory 等默认属于此类 request-only contribution；只有通过 `PersistItemIntent` 明确提升，才成为 canonical `runtime_notice` 或其它明确语义的 item；
+- `PromptContribution`：请求级 system/developer/context segment，带 source、version/hash、scope、order、visibility 和可选 supersedes reference；若 source 已进入缓存保持型 overlay，还必须带 source revision、source overlay epoch、base/delta 角色和 diff/materialization reference。静态 system prompt、skill 说明、workspace/environment snapshot 等默认属于此类 request-only contribution；只有通过 `PersistItemIntent` 明确提升，才成为 canonical `runtime_notice` 或其它明确语义的 item；
 - `ToolSetSnapshot`：本次请求可见工具、schema、execution policy、provider capability 和 snapshot hash；
 - `ContextViewTransform`：选择/过滤/压缩 item references，不修改 JSONL 正文；
 - `PersistItemIntent`：需要成为后续上下文事实时，请求 writer 追加新的 canonical item；

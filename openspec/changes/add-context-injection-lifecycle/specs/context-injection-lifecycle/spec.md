@@ -591,7 +591,7 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 
 ### Requirement: 生产上下文来源必须完整登记并由正确 owner 接管
 
-系统 SHALL 维护可验证的生产上下文来源迁移闭包，并为每类来源明确唯一 domain owner以及进入统一 ContextStore mutation owner的 intent。Agent 基础说明、运行时身份/路径、条件化团队规则、Todo/Filesystem/Skill catalog/AGENTS/压缩工具说明以及显式启用的 memory 属于 instruction/file source；Goal、委派与分支结果、内部跨Session消息、团队动态事实、终端完成、模型重试控制和 checkpoint/runtime reminder属于 runtime event source。真实用户输入与附件、assistant/reasoning/tool协议事实通过 canonical append进入 owner；ToolSet通过 switch/hard-rebase进入 owner；compaction summary由 compaction owner产生。它们不得仅因参与同一模型请求而改造成 CSM source。生产请求不得包含来源闭包之外、没有 provenance的 system/user控制内容；模型工具不得把内部消息伪造为可信用户ingress。
+系统 SHALL 维护可验证的生产上下文来源迁移闭包，并为每类来源明确唯一 domain owner以及进入统一 ContextStore mutation owner的 intent。Agent 基础说明、运行时身份/路径、条件化团队规则、Todo/Filesystem/Skill catalog/AGENTS/压缩工具说明属于 instruction/file source（原文另有「显式启用的 memory」一项，已随 remove-agent-memory 整体移除，不再属于迁移闭包）；Goal、委派与分支结果、内部跨Session消息、团队动态事实、终端完成、模型重试控制和 checkpoint/runtime reminder属于 runtime event source。真实用户输入与附件、assistant/reasoning/tool协议事实通过 canonical append进入 owner；ToolSet通过 switch/hard-rebase进入 owner；compaction summary由 compaction owner产生。它们不得仅因参与同一模型请求而改造成 CSM source。生产请求不得包含来源闭包之外、没有 provenance的 system/user控制内容；模型工具不得把内部消息伪造为可信用户ingress。
 
 #### Scenario: 首次组装全部初始 instruction source
 
