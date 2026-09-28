@@ -14,7 +14,6 @@ class PromptTrustLevel(StrEnum):
     control = "control"
     workspace_instruction = "workspace_instruction"
     untrusted_data = "untrusted_data"
-    untrusted_reference = "untrusted_reference"
 
 
 class PromptContentCodec(StrEnum):
@@ -223,13 +222,6 @@ TAG_SPECS = (
         PromptContentCodec.json,
         PromptPlacement.internal_human,
         "system_reminder",
-    ),
-    PromptTagSpec(
-        "agent_memory",
-        PromptTrustLevel.untrusted_reference,
-        PromptContentCodec.text,
-        PromptPlacement.system_prompt,
-        None,
     ),
 )
 

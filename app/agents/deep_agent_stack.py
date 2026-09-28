@@ -28,7 +28,6 @@ from app.agents.middleware_prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,
     FILESYSTEM_TOOL_DESCRIPTIONS,
-    MEMORY_SYSTEM_PROMPT,
     SKILLS_SYSTEM_PROMPT,
     TODO_SYSTEM_PROMPT,
     TODO_TOOL_DESCRIPTION,
@@ -38,7 +37,6 @@ from app.agents.skill_runtime import (
     PublishedSkillCatalog,
     append_skill_middlewares,
 )
-from app.agents.structured_memory_middleware import StructuredMemoryMiddleware
 from app.agents.structured_prompt_validation_middleware import (
     StructuredPromptValidationMiddleware,
 )
@@ -127,7 +125,6 @@ def build_deep_agent_middleware(
     model_routing_middleware: AgentMiddleware | None,
     tool_invocation_context_middleware: ToolInvocationContextMiddleware,
     tool_output_middleware: ToolOutputMiddleware,
-    memory: list[str] | None,
     custom_tool_confirmation_names: frozenset[str] = frozenset(),
     model_hidden_tool_names: frozenset[str] = frozenset(),
 ) -> list[AgentMiddleware]:
@@ -198,15 +195,6 @@ def build_deep_agent_middleware(
 
     for middleware_item in deepagent_middleware:
         _filter_middleware_tools(middleware_item, resolved_tool_denylist)
-
-    if memory:
-        deepagent_middleware.append(
-            StructuredMemoryMiddleware(
-                backend=backend,
-                sources=memory,
-                system_prompt=MEMORY_SYSTEM_PROMPT,
-            )
-        )
 
     if custom_tool_confirmation_names:
         deepagent_middleware.append(

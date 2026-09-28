@@ -184,7 +184,6 @@ def test_policy_default_names_match_actual_agent_graph_tools(
             invocation_context
         ),
         tool_output_middleware=AgentMiddleware(),
-        memory=None,
     )
     agent = create_agent(model, tools=direct_tools, middleware=middleware)
 

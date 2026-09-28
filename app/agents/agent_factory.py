@@ -416,7 +416,6 @@ def create_my_deep_agent(
     tools: Sequence[BaseTool | Callable[..., Any] | dict[str, Any]] | None = None,
     middleware: Sequence[AgentMiddleware] | None = None,
     skill_catalog: PublishedSkillCatalog | None = None,
-    memory: list[str] | None = None,
     permissions: list[FilesystemPermission] | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
     custom_tool_confirmation_names: frozenset[str] = frozenset(),
@@ -810,7 +809,6 @@ def create_my_deep_agent(
         model_routing_middleware=model_routing_middleware,
         tool_invocation_context_middleware=tool_invocation_context_middleware,
         tool_output_middleware=tool_output_middleware,
-        memory=memory,
         custom_tool_confirmation_names=frozenset(
             set(custom_tool_confirmation_names) | extension_confirmation_names
         ),

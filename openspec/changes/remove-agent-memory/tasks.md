@@ -2,20 +2,20 @@
 
 > 目的：先删/改测试引用，使 `rg` 残留引用即等于待删生产符号清单（AGENTS.md「废除旧接口前先全仓检索调用方与测试用例」）。每步后跑该层 focused 测试。
 
-- [ ] 1.1 `tests/unit/agents/test_middleware_prompts.py`：删除模块级 memory 相关 import（`MemoryMiddleware`、`MEMORY_SYSTEM_PROMPT`、`StructuredMemoryMiddleware`，约 `:8/:27/:36`）、`_build_middleware` 的 `memory` 形参（`:69/:87`）；`test_middleware_uses_project_prompts_without_upstream_demo_agents`（`:98`）删去 `memory=["/memory.md"]` 实参与 `agent_memory` 断言（`:121-122`），保留其余断言；整条删除纯 memory 用例 `test_memory_content_uses_registered_system_prompt_section`（`:134-144`）；`test_project_middleware_prompt_budget_stays_small`（`:179`）删去 `memory=["/memory.md"]`（`:180`），保留预算断言。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/test_middleware_prompts.py -q`。
-- [ ] 1.2 `tests/unit/agents/policy/test_tool_policy.py`：删除调用 `build_deep_agent_middleware` 处的 `memory=None,`（`:187`）。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/policy/test_tool_policy.py -q`。
+- [x] 1.1 `tests/unit/agents/test_middleware_prompts.py`：删除模块级 memory 相关 import（`MemoryMiddleware`、`MEMORY_SYSTEM_PROMPT`、`StructuredMemoryMiddleware`，约 `:8/:27/:36`）、`_build_middleware` 的 `memory` 形参（`:69/:87`）；`test_middleware_uses_project_prompts_without_upstream_demo_agents`（`:98`）删去 `memory=["/memory.md"]` 实参与 `agent_memory` 断言（`:121-122`），保留其余断言；整条删除纯 memory 用例 `test_memory_content_uses_registered_system_prompt_section`（`:134-144`）；`test_project_middleware_prompt_budget_stays_small`（`:179`）删去 `memory=["/memory.md"]`（`:180`），保留预算断言。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/test_middleware_prompts.py -q`。
+- [x] 1.2 `tests/unit/agents/policy/test_tool_policy.py`：删除调用 `build_deep_agent_middleware` 处的 `memory=None,`（`:187`）。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/policy/test_tool_policy.py -q`。
 - [x] 1.3 `tests/unit/services/infrastructure/resource_platform/test_bootstrap.py`：删除 `_FakeMemoryReader`（`:40-48`）、memory 相关 import（`:17-19`）、`test_bootstrap_assembles_platform_with_fixed_adapters` 中的 `memory_state_reader=`/`memory_state_keys=`（`:59-60`）与 `platform.memory_states` 断言（`:64/:70`）；整条删除 `test_memory_state_adapter_rejects_unregistered_key`（`:180-188`）。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/services/infrastructure/resource_platform/test_bootstrap.py -q`。
-- [ ] 1.4 `tests/unit/services/infrastructure/test_source_reconciler.py`：`test_token_source_error_retains_previous_revision`（`:165-187`）把 `source_kind="memory_state"` 与 `display_uri="boxteam://memory/team"` **改为 `gateway_snapshot` 同类构造**（参照同文件 `:142`），保留「token 来源失败保留上一 revision」分支覆盖，MUST NOT 直接删用例。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/services/infrastructure/test_source_reconciler.py -q`。
-- [ ] 1.5 `tests/unit/agents/test_instruction_producers.py`：`test_unwired_producer_cannot_pose_as_enabled` 附近以 `source_kind="agent_memory"`、`policy_key="agent_memory"`（`:88-100`）举例；随 D4 裁定删除 `agent_memory` policy key 后，改用其它未接线 producer 举例，保留「未接线 producer 不得伪装启用」断言。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/test_instruction_producers.py -q`。
+- [x] 1.4 `tests/unit/services/infrastructure/test_source_reconciler.py`：`test_token_source_error_retains_previous_revision`（`:165-187`）把 `source_kind="memory_state"` 与 `display_uri="boxteam://memory/team"` **改为 `gateway_snapshot` 同类构造**（参照同文件 `:142`），保留「token 来源失败保留上一 revision」分支覆盖，MUST NOT 直接删用例。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/services/infrastructure/test_source_reconciler.py -q`。
+- [x] 1.5 `tests/unit/agents/test_instruction_producers.py`：`test_unwired_producer_cannot_pose_as_enabled` 附近以 `source_kind="agent_memory"`、`policy_key="agent_memory"`（`:88-100`）举例；随 D4 裁定删除 `agent_memory` policy key 后，改用其它未接线 producer 举例，保留「未接线 producer 不得伪装启用」断言。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/test_instruction_producers.py -q`。
 
 ## 2. 删除 memory middleware 链（agents 层）
 
-- [ ] 2.1 删除整文件 `app/agents/structured_memory_middleware.py`（`StructuredMemoryMiddleware`）。
-- [ ] 2.2 `app/agents/middleware_prompts.py`：删除 `MEMORY_SYSTEM_PROMPT`（`:66-68`）及其 `__all__` 导出项（`:87`）。
-- [ ] 2.3 `app/agents/deep_agent_stack.py`：删除 memory 相关 import（`:31` 的 `MEMORY_SYSTEM_PROMPT`、`:41` 的 `StructuredMemoryMiddleware`）、形参 `memory: list[str] | None`（`:130`）与 `if memory:` 分支（`:202-208`）。
-- [ ] 2.4 `app/agents/agent_factory.py`：删除 `create_my_deep_agent` 的 `memory` 形参（`:419`）与唯一透传 `memory=memory,`（`:813`）。
-- [ ] 2.5 复核生产链无残留 memory 实参：`create_runtime_deep_agent_for_session`（`agent_factory.py:951-1001`）与 `app/runtime/agent_runtime.py:120` 确认不传 `memory`。验证：`rg -n "memory" app/agents app/runtime` 应零 A 类命中（仅允许无关同名）。
-- [ ] 2.6 验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents -q`；静态分析：`uv run python -m compileall -q app/agents app/runtime`（仓库 `pyproject.toml` 未配置 ruff/lint 工具，故不做 ruff check；`uv run ruff check ...` 会因未安装 ruff 直接失败，不得写入验证命令）。
+- [x] 2.1 删除整文件 `app/agents/structured_memory_middleware.py`（`StructuredMemoryMiddleware`）。
+- [x] 2.2 `app/agents/middleware_prompts.py`：删除 `MEMORY_SYSTEM_PROMPT`（`:66-68`）及其 `__all__` 导出项（`:87`）。
+- [x] 2.3 `app/agents/deep_agent_stack.py`：删除 memory 相关 import（`:31` 的 `MEMORY_SYSTEM_PROMPT`、`:41` 的 `StructuredMemoryMiddleware`）、形参 `memory: list[str] | None`（`:130`）与 `if memory:` 分支（`:202-208`）。
+- [x] 2.4 `app/agents/agent_factory.py`：删除 `create_my_deep_agent` 的 `memory` 形参（`:419`）与唯一透传 `memory=memory,`（`:813`）。
+- [x] 2.5 复核生产链无残留 memory 实参：`create_runtime_deep_agent_for_session`（`agent_factory.py:951-1001`）与 `app/runtime/agent_runtime.py:120` 确认不传 `memory`。验证：`rg -n "memory" app/agents app/runtime` 应零 A 类命中（仅允许无关同名）。
+- [x] 2.6 验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents -q`；静态分析：`uv run python -m compileall -q app/agents app/runtime`（仓库 `pyproject.toml` 未配置 ruff/lint 工具，故不做 ruff check；`uv run ruff check ...` 会因未安装 ruff 直接失败，不得写入验证命令）。
 
 ## 3. 删除 memory state 适配链（resource_platform 层）
 
@@ -27,20 +27,20 @@
 
 ## 4. 删除 memory_state source kind
 
-- [ ] 4.1 `app/services/infrastructure/resource_platform/sources/observed_source.py`：从 `_SOURCE_KINDS`（`:28`）删除 `"memory_state"`；同步修正 `:87` docstring 与 `:122` 错误文案，改为只提 `gateway`（`gateway_snapshot` 分支 MUST 保留）。
-- [ ] 4.2 验证：`rg -n "memory_state" app` 零命中；`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/services/infrastructure/test_source_reconciler.py tests/unit/services/infrastructure/resource_platform -q`。
+- [x] 4.1 `app/services/infrastructure/resource_platform/sources/observed_source.py`：从 `_SOURCE_KINDS`（`:28`）删除 `"memory_state"`；同步修正 `:87` docstring 与 `:122` 错误文案，改为只提 `gateway`（`gateway_snapshot` 分支 MUST 保留）。
+- [x] 4.2 验证：`rg -n "memory_state" app` 零命中；`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/services/infrastructure/test_source_reconciler.py tests/unit/services/infrastructure/resource_platform -q`。
 
 ## 5. 删除 instruction producer 的 agent_memory 类型占位
 
-- [ ] 5.1 `app/agents/instruction_producers.py`：删除 `ConditionalPolicyKey` 的 `"agent_memory"` 成员（`:43`）与 `_POLICY_KEYS` 的 `"agent_memory"`（`:319`）；同步清理 `:4`/`:140` 的「显式 memory」「R09 memory」措辞。
-- [ ] 5.2 验证：`rg -n "agent_memory" app/agents` 零命中；`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/test_instruction_producers.py -q`。
-- [ ] 5.3 **登记代码侧 R09 残留为待删除项（M2，本 change 不动代码）**：`app/agents/instruction_producers.py:35` 的 `InstructionProducerId = Literal[... "R07", "R09"]` 与 `:311` 的 `_KNOWN_PRODUCER_IDS = frozenset({"R01".."R07", "R09"})` 仍含 `"R09"`，且 `:3`（模块 docstring「R01–R07/R09」）与 `:140`（`assert_producer_registrable` docstring「R09 memory」）仍以 R09 指代 memory。R09 就是本 change 删除的 `agent_memory` 能力在 producer 身份层的编号；它与 policy key `agent_memory`（`:43` 的 `ConditionalPolicyKey` 成员、`:319` 的 `_POLICY_KEYS` 成员，见 5.1）是同一能力的两处登记。**待删除项**：`:35` 的 `"R09"`、`:311` 的 `"R09"`、`:3`/`:140` 的 R09 措辞，由实施轮次随 5.1 一并物理下线；本次只作路径行号与符号名登记，MUST NOT 在规划轮改动 `app/**`。
+- [x] 5.1 `app/agents/instruction_producers.py`：删除 `ConditionalPolicyKey` 的 `"agent_memory"` 成员（`:43`）与 `_POLICY_KEYS` 的 `"agent_memory"`（`:319`）；同步清理 `:4`/`:140` 的「显式 memory」「R09 memory」措辞。
+- [x] 5.2 验证：`rg -n "agent_memory" app/agents` 零命中；`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/test_instruction_producers.py -q`。
+- [x] 5.3 **登记代码侧 R09 残留为待删除项（M2，本 change 不动代码）**：`app/agents/instruction_producers.py:35` 的 `InstructionProducerId = Literal[... "R07", "R09"]` 与 `:311` 的 `_KNOWN_PRODUCER_IDS = frozenset({"R01".."R07", "R09"})` 仍含 `"R09"`，且 `:3`（模块 docstring「R01–R07/R09」）与 `:140`（`assert_producer_registrable` docstring「R09 memory」）仍以 R09 指代 memory。R09 就是本 change 删除的 `agent_memory` 能力在 producer 身份层的编号；它与 policy key `agent_memory`（`:43` 的 `ConditionalPolicyKey` 成员、`:319` 的 `_POLICY_KEYS` 成员，见 5.1）是同一能力的两处登记。**待删除项**：`:35` 的 `"R09"`、`:311` 的 `"R09"`、`:3`/`:140` 的 R09 措辞，由实施轮次随 5.1 一并物理下线；本次只作路径行号与符号名登记，MUST NOT 在规划轮改动 `app/**`。
 
 ## 6. 删除 prompt tag 并处置 untrusted_reference 死值
 
-- [ ] 6.1 `app/prompting/registry.py`：删除 `PromptTagSpec("agent_memory", ...)`（`:227-233`）。
-- [ ] 6.2 依 D4 裁定处置 `PromptTrustLevel.untrusted_reference`（`:17`）：按倾向一并删除；若 owner 选择保留，则在本 change 文档显式登记保留理由。**删除前 MUST 先跑结构化提示契约测试确认无 red**。
-- [ ] 6.3 验证：`rg -n "agent_memory|untrusted_reference" app tests` 符合裁定结果；`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents -q`；显式确认 stable prefix / 结构化提示测试不因 tag 顺序变化而 red。
+- [x] 6.1 `app/prompting/registry.py`：删除 `PromptTagSpec("agent_memory", ...)`（`:227-233`）。
+- [x] 6.2 依 D4 裁定处置 `PromptTrustLevel.untrusted_reference`（`:17`）：按倾向一并删除；若 owner 选择保留，则在本 change 文档显式登记保留理由。**删除前 MUST 先跑结构化提示契约测试确认无 red**。
+- [x] 6.3 验证：`rg -n "agent_memory|untrusted_reference" app tests` 符合裁定结果；`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents -q`；显式确认 stable prefix / 结构化提示测试不因 tag 顺序变化而 red。
 
 ## 7. 删除 graph slot 并 bump graph revision
 
