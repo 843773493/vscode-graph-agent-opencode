@@ -12,7 +12,7 @@ revision/hash；解析不到或不匹配时抛 :class:`GraphBindingUnavailableEr
 invocation 的 :class:`ThreadRuntimeBinding` 取得（见 ``binding_for``），避免一个
 已编译图把其它 thread 的闭包带入请求。
 
-hash 口径（deep-agent revision 1）：两个 hash 都是「确定性 canonical JSON →
+hash 口径（deep-agent revision 2）：两个 hash 都是「确定性 canonical JSON →
 sha256」的稳定内容摘要，摘要形状遵循
 ``app/services/infrastructure/events/channel_events.py`` 的同一标准
 （``sha256:`` + 恰好 64 位小写 hex，fullmatch 全匹配校验）：
@@ -21,7 +21,7 @@ sha256」的稳定内容摘要，摘要形状遵循
   （有序）+ graph_id 的确定性序列化。
 - ``capability_profile_hash``：能力 profile 平面键值映射的确定性序列化。
 
-revision 1 的 slot/profile 是代码内声明式骨架（``DEEP_AGENT_MIDDLEWARE_STACK``
+revision 2 的 slot/profile 是代码内声明式骨架（``DEEP_AGENT_MIDDLEWARE_STACK``
 等常量），而不是按 invocation 实际构建产物逐次计算：resolved 工具面与
 middleware 的实际出现会随 denylist/overrides/MCP 连接状态按 invocation 漂移，
 若把它们直接纳入 hash，同一 ``(graph_id, graph_revision)`` 的重复注册会触发
@@ -343,10 +343,10 @@ def compute_capability_profile_hash(
 DEEP_AGENT_GRAPH_ID: Final[str] = "deep-agent"
 """deep agent graph family 的固定标识。"""
 
-DEEP_AGENT_GRAPH_REVISION: Final[int] = 1
+DEEP_AGENT_GRAPH_REVISION: Final[int] = 2
 """deep agent 当前代码的 graph revision；改动图骨架/能力面时必须 +1。"""
 
-# revision 1 的 middleware 栈声明式骨架：与 build_deep_agent_middleware 的
+# revision 2 的 middleware 栈声明式骨架：与 build_deep_agent_middleware 的
 # 有序 slot 一一对应。条件 slot（按 denylist/配置/MCP 状态出现）也以固定 slot
 # 名进入声明；按 invocation 的实际出现不属于 selector 校验范围（见模块
 # docstring 的 TODO）。
@@ -363,13 +363,12 @@ DEEP_AGENT_MIDDLEWARE_STACK: Final[tuple[str, ...]] = (
     "ModelToolVisibilityMiddleware",
     "InjectedRuntimeMiddleware",
     "CapabilityRoutingMiddleware",
-    "StructuredMemoryMiddleware",
     "CustomToolConfirmationMiddleware",
     "HumanInTheLoopMiddleware",
     "StructuredPromptValidationMiddleware",
 )
 
-# revision 1 的工具面声明式骨架：内置默认工具、custom specs、扩展工具统一
+# revision 2 的工具面声明式骨架：内置默认工具、custom specs、扩展工具统一
 # invoke_extension_tool 信封、skill_load 工具。
 DEEP_AGENT_TOOL_FACE: Final[tuple[str, ...]] = (
     "builtin-default-tools",
@@ -378,7 +377,7 @@ DEEP_AGENT_TOOL_FACE: Final[tuple[str, ...]] = (
     "skill-load-tool",
 )
 
-# revision 1 的能力 profile：main thread 产品合同（child profile
+# revision 2 的能力 profile：main thread 产品合同（child profile
 # goal_enabled=false 属于后续 ThreadRuntimePolicy 轮次）。
 DEEP_AGENT_CAPABILITY_PROFILE: Final[Mapping[str, object]] = MappingProxyType(
     {
@@ -466,8 +465,12 @@ class JsonFileGraphBindingStore:
     风险。
 
     语义：``save`` 对同一 owner 幂等（同一 selector 重复写入不产生副作用），
-    写入不同 selector 视为绑定漂移并显式失败（fail closed）；重绑流程属于
-    OpenSpec 后续轮次，本类不静默覆盖。
+    写入不同 selector 视为绑定漂移并显式失败（fail closed）。
+
+    图骨架变更（例如删除 slot 并 bump revision）会让既有 owner 的持久 selector
+    失配，必须在升级窗口内显式重绑：``rebind_graph_binding`` 要求调用方逐
+    owner 声明它读到的既有 selector，只有与磁盘完全一致才改写，否则显式失败。
+    正常 resolve 路径永远不会调用它，fail-closed 语义不被削弱。
     """
 
     def __init__(self, directory: Path) -> None:
@@ -531,6 +534,83 @@ class JsonFileGraphBindingStore:
         }
         bindings[owner.session_id] = session_bindings
         self._write_document({"version": _STORE_FORMAT_VERSION, "bindings": bindings})
+
+    def persisted_owners(self) -> tuple[GraphBindingOwnerKey, ...]:
+        """枚举该文档中已持久化的全部 owner，用于显式迁移前盘点。"""
+        owners: list[GraphBindingOwnerKey] = []
+        for session_id, session_bindings in self._read_bindings().items():
+            if not isinstance(session_bindings, dict):
+                # _read_bindings 已做过结构校验，这里只是给静态类型收窄。
+                raise TypeError(
+                    f"graph-binding-store session 条目必须是对象: "
+                    f"path={self._path}, session_id={session_id!r}"
+                )
+            for thread_id in session_bindings:
+                owners.append(
+                    GraphBindingOwnerKey(
+                        session_id=session_id,
+                        thread_id=thread_id,
+                    )
+                )
+        return tuple(sorted(owners, key=lambda o: (o.session_id, o.thread_id)))
+
+    def rebind_graph_binding(
+        self,
+        owner: GraphBindingOwnerKey,
+        *,
+        expected: GraphBinding,
+        new: GraphBinding,
+    ) -> bool:
+        """显式重绑：仅当磁盘上的既有 selector 逐字段等于 ``expected`` 才改写。
+
+        返回是否发生了写入（磁盘已是 ``new`` 时为幂等 no-op）。这是唯一允许
+        改写既有 selector 的入口：调用方必须声明它读到的既有值，磁盘与声明
+        不一致即显式失败，绝不按"当前最新图"盲目覆盖。正常构建/reload 路径
+        不会调用本方法。
+        """
+        if not isinstance(owner, GraphBindingOwnerKey):
+            raise TypeError(
+                f"rebind_graph_binding 需要 GraphBindingOwnerKey: {type(owner).__name__}"
+            )
+        if not isinstance(expected, GraphBinding) or not isinstance(new, GraphBinding):
+            raise TypeError(
+                "rebind_graph_binding 需要 GraphBinding 作为 expected/new: "
+                f"expected={type(expected).__name__}, new={type(new).__name__}"
+            )
+        bindings = self._read_bindings()
+        session_bindings = bindings.get(owner.session_id)
+        entry = (
+            session_bindings.get(owner.thread_id)
+            if isinstance(session_bindings, dict)
+            else None
+        )
+        if entry is None:
+            raise RuntimeError(
+                "graph-binding-rebind-no-persistence: 该 SessionThread 没有已持久化 "
+                f"的 GraphBinding，无法重绑: owner=({owner.session_id!r}, "
+                f"{owner.thread_id!r})；never-persisted owner 由正常构建路径首次落盘"
+            )
+        stored = self._binding_from_entry(owner, entry)
+        if stored == new:
+            return False
+        if stored != expected:
+            raise RuntimeError(
+                "graph-binding-rebind-stale-expected: 磁盘上的既有 selector 与调用方 "
+                f"声明的 expected 不一致，拒绝重绑: owner=({owner.session_id!r}, "
+                f"{owner.thread_id!r}), 磁盘=[{_binding_summary(stored)}], "
+                f"expected=[{_binding_summary(expected)}], new=[{_binding_summary(new)}]"
+            )
+        session_bindings_mutated = dict(session_bindings)
+        session_bindings_mutated[owner.thread_id] = {
+            "graph_id": new.graph_id,
+            "graph_revision": new.graph_revision,
+            "graph_schema_hash": new.graph_schema_hash,
+            "capability_profile_hash": new.capability_profile_hash,
+        }
+        replaced = dict(bindings)
+        replaced[owner.session_id] = session_bindings_mutated
+        self._write_document({"version": _STORE_FORMAT_VERSION, "bindings": replaced})
+        return True
 
     def _read_bindings(self) -> dict[str, object]:
         """读取并严格校验存储文档；文件不存在等于没有任何持久化 binding。"""

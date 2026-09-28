@@ -542,6 +542,86 @@ def test_json_store_rejects_invalid_persisted_digest(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 显式重绑（remove-agent-memory 7.3.2 一次性迁移入口）
+# ---------------------------------------------------------------------------
+
+
+def test_store_persisted_owners_enumerates_document_owners(tmp_path: Path) -> None:
+    store = JsonFileGraphBindingStore(tmp_path)
+    assert store.persisted_owners() == ()
+    store.save_graph_binding(_owner(thread_id="main"), _binding())
+    store.save_graph_binding(
+        _owner(thread_id="child"),
+        _binding(graph_revision=2),
+    )
+    store.save_graph_binding(_owner(session_id="ses_other"), _binding())
+    assert store.persisted_owners() == (
+        GraphBindingOwnerKey(session_id="ses_graph", thread_id="child"),
+        GraphBindingOwnerKey(session_id="ses_graph", thread_id="main"),
+        GraphBindingOwnerKey(session_id="ses_other", thread_id="main"),
+    )
+
+
+def test_rebind_replaces_expected_selector_and_is_idempotent(tmp_path: Path) -> None:
+    store = JsonFileGraphBindingStore(tmp_path)
+    store.save_graph_binding(_owner(), _binding())
+
+    assert store.rebind_graph_binding(
+        _owner(),
+        expected=_binding(),
+        new=_binding(graph_revision=2),
+    )
+    assert store.load_graph_binding(_owner()) == _binding(graph_revision=2)
+    # 幂等：磁盘已是 new 时不再改写。
+    assert not store.rebind_graph_binding(
+        _owner(),
+        expected=_binding(),
+        new=_binding(graph_revision=2),
+    )
+    assert store.load_graph_binding(_owner()) == _binding(graph_revision=2)
+
+
+def test_rebind_rejects_stale_expected_without_writing(tmp_path: Path) -> None:
+    """红线：调用方声明的 expected 与磁盘不一致时拒绝重绑，绝不盲目覆盖。"""
+    store = JsonFileGraphBindingStore(tmp_path)
+    store.save_graph_binding(_owner(), _binding())
+
+    with pytest.raises(RuntimeError, match="graph-binding-rebind-stale-expected"):
+        store.rebind_graph_binding(
+            _owner(),
+            expected=_binding(graph_revision=3),
+            new=_binding(graph_revision=2),
+        )
+    assert store.load_graph_binding(_owner()) == _binding()
+
+
+def test_rebind_rejects_never_persisted_owner(tmp_path: Path) -> None:
+    store = JsonFileGraphBindingStore(tmp_path)
+    with pytest.raises(RuntimeError, match="graph-binding-rebind-no-persistence"):
+        store.rebind_graph_binding(
+            _owner(),
+            expected=_binding(),
+            new=_binding(graph_revision=2),
+        )
+
+
+def test_rebind_leaves_sibling_owners_untouched(tmp_path: Path) -> None:
+    store = JsonFileGraphBindingStore(tmp_path)
+    store.save_graph_binding(_owner(thread_id="main"), _binding())
+    store.save_graph_binding(_owner(thread_id="child"), _binding())
+
+    store.rebind_graph_binding(
+        _owner(thread_id="main"),
+        expected=_binding(),
+        new=_binding(graph_revision=2),
+    )
+    assert store.load_graph_binding(_owner(thread_id="main")) == _binding(
+        graph_revision=2
+    )
+    assert store.load_graph_binding(_owner(thread_id="child")) == _binding()
+
+
+# ---------------------------------------------------------------------------
 # 重启重建
 # ---------------------------------------------------------------------------
 
