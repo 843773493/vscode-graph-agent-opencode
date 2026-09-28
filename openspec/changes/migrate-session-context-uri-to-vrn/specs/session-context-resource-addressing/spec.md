@@ -22,29 +22,42 @@ real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST
 - **WHEN** 同一资源在切换激活工作区前后被引用
 - **THEN** 其资源身份保持逐字节相同，且不因当前激活工作区改变而改变
 
-### Requirement: 统一 scope 为闭合三值
+### Requirement: scope 必须取自闭合集且每个 scope 的 scope_id 一律必填
 
-系统 MUST 只承认 `workspace`、`user`、`gateway` 三个 scope，且 MUST 拒绝任何其它 scope 取值。
+系统 MUST 只承认闭合集内的 scope，MUST 拒绝任何其它 scope 取值。scope 闭集与每个 scope 的 scope_id 取值来源 MUST 由「统一虚拟资源寻址」change 的**唯一权威表**规定；本 capability MUST NOT 自行发明 scope 名或 scope_id 语义。
 
-`workspace` scope 的 VRN MUST 显式携带 `workspace_id`；「当前工作区」MUST NOT 作为寻址概念的隐含前提，也 MUST NOT 作为持久化数据的隐含前提。
+**每个 scope 的 `scope_id` 段一律必填**，MUST NOT 只对某个 scope 必填而对其它 scope 可选。这条把「workspace_id 必须显式」的原则扩展到所有 scope：任何 scope 的寻址都不得依赖隐含上下文。
 
-「其它工作区」MUST 表达为同一 gateway 下的另一个 `workspace_id`；「其它 gateway」MUST 表达为可选的**网关授权段 / gateway authority**，其缺省值为本机。
+「当前工作区」MUST NOT 作为寻址概念的隐含前提，也 MUST NOT 作为持久化数据的隐含前提。
+
+「其它工作区」MUST 表达为同一 scope 加另一个 scope_id 取值，MUST NOT 引入新 scope；「其它 gateway」MUST 表达为可选的**网关授权段 / gateway authority**，其缺省值为本机。
+
+本 capability MUST NOT 依赖未经本次重新定义的 scope（例如既有 `memory`）作设计，MUST NOT 把其当作文件 locator，也 MUST NOT 为它规定 scope_id。
 
 #### Scenario: 拒绝未登记的 scope
-- **WHEN** 调用方提交 scope 不属于 `workspace`/`user`/`gateway` 的 VRN
+- **WHEN** 调用方提交 scope 不属于闭合集的 VRN
 - **THEN** 解析在访问任何 provider 之前以结构化拒绝码显式失败，不读取文件、网络或内存资源
 
-#### Scenario: workspace scope 必须显式带 workspace_id
-- **WHEN** 调用方提交 workspace scope 但未携带 `workspace_id` 的 VRN
-- **THEN** 解析显式失败，且不得回退到「当前工作区」隐式补全
+#### Scenario: 任何 scope 缺少 scope_id 都必须失败
+- **WHEN** 调用方提交的 VRN 在 scope 段之后缺少 scope_id 段（对任意 scope，而非仅某一种）
+- **THEN** 解析显式失败，且不得回退到隐含上下文补全
 
 ### Requirement: VRN 语法形态统一且由单一 owner 规范化
 
-会话上下文资源 MUST 使用统一 VRN 形态：`boxteam://[{gateway_authority}]/{scope}/[{workspace_id}/]{kind}/{...canonical path segments}`。
+会话上下文资源 MUST 使用统一 VRN 形态（保留既有段序，MUST NOT 简化）：
 
-VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码与 `#fragment`；`kind` MUST 取自闭合集合；规范化 MUST 由**单一实现**完成。
+`boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}`
 
-本 capability MUST NOT 定义 VRN 语法本体，也 MUST NOT 新增拒绝码；VRN grammar 与**拒绝码 / rejection code** 登记由「统一虚拟资源寻址」change 独占，本 capability 只引用。
+- `{gateway_authority?}`：可选、**单段**，承载稳定 gateway_id；缺省 = 本机 gateway。
+- `{scope}`：必填，取自闭合集。
+- `{scope_id}`：必填，**对所有 scope 都必填**。
+- `resources`：固定段，MUST 保留。
+- `{kind}`：必填，取自闭合集。
+- `{...canonical path segments}`：canonical 尾段。
+
+VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码与 `#fragment`；规范化 MUST 由**单一实现**完成。
+
+本 capability MUST NOT 定义 VRN 语法本体，MUST NOT 自行变更固定段序，MUST NOT 把 `scope_id` 改为可选，也 MUST NOT 新增拒绝码；VRN grammar、固定段序与**拒绝码 / rejection code** 登记由「统一虚拟资源寻址」change 独占，本 capability 只引用。
 
 #### Scenario: 拒绝百分号编码与 fragment
 - **WHEN** 调用方提交含 `%` 编码或 `#fragment` 的 VRN
@@ -53,6 +66,10 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 #### Scenario: 规范化只走单一实现
 - **WHEN** 同一逻辑资源经不同调用入口被寻址
 - **THEN** 规范化结果逐字节一致，且由同一份实现产出
+
+#### Scenario: 固定段序不得被简化
+- **WHEN** 系统构造任何会话上下文资源的 VRN
+- **THEN** VRN 保留 `resources` 固定段且 `scope_id` 段必填，不得省略二者或调换段序
 
 ### Requirement: 会话上下文以 VRN 表达位置并用结构化兄弟字段承载修订
 
@@ -88,15 +105,32 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 
 ### Requirement: 解析必须遵循唯一星型顺序且 fail-closed
 
-解析 MUST 按唯一顺序执行：本地 parse（fail-closed）→ 本进程解析 → 若 **网关授权段 / gateway authority** 指向对端，则交由 gateway 层转发，由对端按同一份 VRN 在本地解析并只回**内容**。
+解析 MUST 按唯一顺序执行：本地 parse（fail-closed）→ 本进程解析 → 跨边界时按**星型解析 / star-topology resolution** 交给 gateway 层，由对端按同一份 VRN 在本地解析。
 
-对端不可达、资源未共享或资源未找到时，系统 MUST fail-closed 返回结构化**拒绝码 / rejection code**，MUST NOT 回退到猜测路径，MUST NOT 返回虚假默认值。
+- **网关授权段 / gateway authority** 承载稳定 gateway_id。
+- 本地 gateway **是自身联邦的 hub** 时，MUST 可直接解析其**直接 spoke** 的资源。
+- 本地 gateway **是 spoke** 时，MUST 通过其**唯一 hub** 做**一次有界 transit 解析**，并 MUST 携带 `visited set`、`max_transit_gateways=1`、`max_gateway_hops=2` 与**总 deadline**。
+- 上述上界 MUST 表达为**显式策略常量**，MUST NOT 硬编码为散落的魔法数字；拓扑变化时改策略而非重写解析器。
+- **解析命中只返回稳定身份与内容**，MUST NOT 返回或携带 locator。这是可机械检查的不变量：**locator 是输入，不是输出**。
+- 不可解析（不可达、未共享、未找到）时 MUST fail-closed 返回结构化**拒绝码 / rejection code**，MUST NOT 回退到猜测路径，MUST NOT 返回虚假默认值。
 
 跨边界传输 MUST 只包含资源身份、VRN、revision 与内容，MUST NOT 传输 real path。
 
 #### Scenario: 跨 gateway 只回内容
 - **WHEN** VRN 的 gateway authority 指向对端且对端可达
-- **THEN** 对端在本地解析该 VRN，响应中只包含身份、VRN、revision 与内容，不含任何真实路径或 provider locator
+- **THEN** 对端在本地解析该 VRN，响应中只包含稳定身份、VRN、revision 与内容，不含任何真实路径、provider locator 或解析 locator
+
+#### Scenario: spoke 只经唯一 hub 做一次有界 transit
+- **WHEN** 本地 gateway 是 spoke，请求的目标位于另一个 spoke
+- **THEN** 解析经其唯一 hub 做一次有界 transit，携带 visited set、`max_transit_gateways=1`、`max_gateway_hops=2` 与总 deadline，不得继续递归到第四个 gateway
+
+#### Scenario: hub 可直接解析直接 spoke
+- **WHEN** 本地 gateway 是自身联邦的 hub，请求目标为其直接 spoke 的资源
+- **THEN** 本地 gateway 直接解析，不额外经过第二个 transit
+
+#### Scenario: 命中不返回 locator
+- **WHEN** 任意跨边界解析命中
+- **THEN** 响应只含稳定身份与内容，既不含 real path 也不含任何 locator 形式
 
 #### Scenario: 不可达时 fail-closed
 - **WHEN** VRN 的 gateway authority 指向的对端不可达、未共享该资源或目标资源不存在
@@ -135,3 +169,31 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 #### Scenario: 迁移可回滚
 - **WHEN** 迁移在整体确认成功之前被判定失败并回滚
 - **THEN** 原始旧记录仍完整可用，系统行为与迁移前等价
+
+### Requirement: 配置来源的真实路径持久化必须迁移到 VRN
+
+已确证存在一处真实违约：配置来源的真实路径已写入 SQLite（`app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord` 含 `source_path: str` 与 `backup_path: str | None`），且该真实路径还会经 API 响应体对外（`ConfigSourceDTO.path`）。按三层分离，真实路径 MUST NOT 被持久化，也 MUST NOT 进入 API 响应体。
+
+迁移 MUST **直接复用 config 侧已跑通的形态**：`app/core/config_sources.py` 的 `ConfigSource` 已是 `path` + `layer` + `precedence` 平级属性，且 `layer_revision` / `layer_digest` / `source_generation` 已是**兄弟字段**。因此改造等价于「把 `path: Path` 换成 `vrn: VRN`，其余兄弟字段原样保留」，MUST NOT 另发明一套结构。
+
+迁移后：来源层身份 MUST 由 VRN 表达，API 响应体 MUST NOT 输出真实路径；真实路径只允许存在于最后访问点。
+
+#### Scenario: 配置来源记录不含真实路径
+- **WHEN** 配置来源层被持久化到 SQLite
+- **THEN** 记录中用 VRN 表达来源，不含 `source_path`/`backup_path` 一类真实路径字段
+
+#### Scenario: API 不输出配置来源真实路径
+- **WHEN** 客户端请求配置来源列表
+- **THEN** 响应体只含 VRN 与兄弟字段（layer/precedence/layer_revision/layer_digest/source_generation 等），不含真实路径
+
+#### Scenario: 复用既有 sibling 字段形态
+- **WHEN** 实施把配置来源改造成 VRN 表达
+- **THEN** 直接以 `ConfigSource` 既有的平级 `layer`/`precedence`/`layer_revision`/`layer_digest`/`source_generation` 兄弟字段承载，不新增第二套结构
+
+### Requirement: 迁移义务与未验证项必须显式区分
+
+本 capability MUST 把**已确证**的迁移义务（配置来源真实路径持久化）写为可执行任务，并将**尚未验证**的假设（VRN 是否已落进持久化的 session/catalog/checkpoint 数据、`ConfigSource.path` 的间接泄漏路径、`inline`/`sqlite` 两层是否有可解析载体、`memory` 的真实形态与归属）标记为待验证，MUST NOT 在 spec 中断言其结论。
+
+#### Scenario: 未验证项不被断言
+- **WHEN** 存在尚未验证的归属或形态假设
+- **THEN** 该假设以待验证项出现，不得写为 normative 断言或据此设计
