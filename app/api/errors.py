@@ -23,12 +23,14 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
+from app.abstractions.state_conflict import ClientStateConflictError
 from app.core.exceptions import BaseAPIException, NotFoundError
 
 __all__ = [
     "client_error_message",
     "forbidden_http_error",
     "not_found_http_error",
+    "state_conflict_error",
     "state_conflict_http_error",
     "unimplemented_http_error",
 ]
@@ -60,20 +62,37 @@ def unimplemented_http_error(error: RuntimeError) -> HTTPException:
     return HTTPException(status_code=501, detail=str(error))
 
 
-def state_conflict_http_error(error: Exception) -> HTTPException:
-    """把「客户端可触发的服务端状态冲突」统一落成 409。
+def state_conflict_error(error: ClientStateConflictError) -> HTTPException:
+    """把「客户端可触发的状态冲突」按**类型**落成 409（唯一实现）。
 
-    业务服务用 ``RuntimeError``/``ValueError``/``TypeError`` 表达「当前状态
-    不允许该动作」「与在途操作冲突」等可恢复状态冲突。这类异常若漏接，会被
-    ``TraceMiddleware`` 统一转成无上下文的 500，并把 ``RuntimeError:`` 之类
-    的内部类名前缀写进响应体。适配层必须显式落成 409，让客户端据此重试或修正
-    时序，而不是收到 5xx。
+    参数类型即契约：只接受 :class:`ClientStateConflictError`（及其子类）。服务端
+    完整性故障是裸 ``RuntimeError``，不满足该注解，路由应当**不捕获**它，由
+    ``TraceMiddleware`` 统一落 5xx 并保留完整服务端日志——而不是伪装成 409。
 
-    这是本目录所有「状态冲突 → 409」入口的唯一实现：sessions、session_navigation、
-    messages、tools、node_debug、workspace、config、agents 与 runtime 共用它，
-    不再逐路由手写同一份 ``HTTPException(status_code=409, detail=...)``。
+    这是本目录所有「状态冲突 → 409」入口的唯一实现：状态码与文本抽取都收敛在这里，
+    各路由只负责把已类型化的异常交给它，不再逐路由手写
+    ``HTTPException(status_code=409, detail=...)``，也不做任何消息字符串匹配。
     """
+    return _state_conflict_http_exception(error)
+
+
+def _state_conflict_http_exception(error: Exception) -> HTTPException:
+    """状态冲突响应的唯一构造实现（两个公开入口共用，零重复）。"""
     return HTTPException(status_code=409, detail=client_error_message(error))
+
+
+def state_conflict_http_error(error: Exception) -> HTTPException:
+    """[过渡期] 尚未类型化的垂直链路按裸 ``RuntimeError`` 契约落 409。
+
+    存在原因：仍有服务端未把「客户端可触发的状态冲突」换成
+    :class:`ClientStateConflictError`。迁移目标是把这些 raiser 换成该类型、路由改调
+    :func:`state_conflict_error`（按类型判定）并删除本函数；在那之前保留本函数以维持
+    既有 409 契约（零回归）。
+
+    它与 :func:`state_conflict_error` 共用 ``_state_conflict_http_exception`` 这一份
+    状态码与文本抽取实现，不是双轨；区别只在声明的参数契约（宽 vs 精确）。
+    """
+    return _state_conflict_http_exception(error)
 
 
 def forbidden_http_error(error: BaseAPIException) -> HTTPException:

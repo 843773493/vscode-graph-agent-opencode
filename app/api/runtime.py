@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_log_service,
@@ -12,7 +13,7 @@ from app.api.deps import (
     get_runtime_service,
     verify_local_token,
 )
-from app.api.errors import state_conflict_http_error
+from app.api.errors import state_conflict_error
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.runtime import (
     RuntimeDrainResultDTO,
@@ -57,9 +58,9 @@ async def begin_runtime_drain(
 ):
     try:
         result = await runtime_service.begin_drain()
-    except RuntimeError as error:
+    except ClientStateConflictError as error:
         # 生命周期状态冲突（如 stopping 下再次 drain）是客户端时序错误，落 409。
-        raise state_conflict_http_error(error) from error
+        raise state_conflict_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -75,9 +76,9 @@ async def cancel_runtime_drain(
 ):
     try:
         result = await runtime_service.cancel_drain()
-    except RuntimeError as error:
+    except ClientStateConflictError as error:
         # 非 draining 状态下取消排空属于状态冲突，落 409。
-        raise state_conflict_http_error(error) from error
+        raise state_conflict_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -93,9 +94,9 @@ async def force_runtime_drain(
 ):
     try:
         result = await runtime_service.force_interrupt()
-    except RuntimeError as error:
+    except ClientStateConflictError as error:
         # 非 draining 状态下强制中断属于状态冲突，落 409。
-        raise state_conflict_http_error(error) from error
+        raise state_conflict_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

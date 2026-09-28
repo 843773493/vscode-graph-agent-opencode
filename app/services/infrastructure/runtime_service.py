@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
+from app.abstractions.state_conflict import ClientStateConflictError
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.workspace_identity import validate_workspace_id
@@ -101,14 +102,16 @@ class RuntimeService:
 
     async def begin_drain(self) -> RuntimeDrainResultDTO:
         if self._lifecycle_state == "stopping":
-            raise RuntimeError("Workspace API 已进入 stopping，不能重新开始 drain")
+            raise ClientStateConflictError(
+                "Workspace API 已进入 stopping，不能重新开始 drain"
+            )
         self._job_service.close_admission()
         self._lifecycle_state = "draining"
         return await self._drain_result()
 
     async def cancel_drain(self) -> RuntimeDrainResultDTO:
         if self._lifecycle_state != "draining":
-            raise RuntimeError(
+            raise ClientStateConflictError(
                 f"只有 draining 状态可以取消排空，当前状态: {self._lifecycle_state}"
             )
         self._job_service.open_admission()
@@ -117,7 +120,7 @@ class RuntimeService:
 
     async def force_interrupt(self) -> RuntimeDrainResultDTO:
         if self._lifecycle_state != "draining":
-            raise RuntimeError(
+            raise ClientStateConflictError(
                 f"强制中断前必须先进入 draining，当前状态: {self._lifecycle_state}"
             )
         reason = "Gateway 显式强制重启 Workspace API"
