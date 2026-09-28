@@ -30,6 +30,30 @@
 - **WHEN** 用户明确要求持久化，或 Agent 工具调用显式指定 `retention_scope=workspace`
 - **THEN** owner 创建 `workspace` 范围资源并关联来源 Thread；后续 Thread unload 不会删除该资源
 
+### Requirement: 工作区持久记录必须用「资源身份 / ResourceIdentity + 虚拟资源地址 / VRN」引用资源，禁止持久化 real path
+
+本 capability 的所有工作区持久记录（含资源记录、对账记录引用、Thread 关联记录与迁移中间记录）在引用资源时 MUST 使用 `资源身份 / ResourceIdentity` 与 `虚拟资源地址 / VRN`（必要时加与 VRN 并列的独立 revision 字段）；MUST NOT 持久化 `真实路径 / real path`。凡记录需要表达「资源所在位置」，该位置 MUST 以 `虚拟资源地址 / VRN` 表达，而非文件系统路径。同一 prohibition 亦覆盖 API 响应体与模型可见载荷：它们 MUST NOT 出现 `真实路径 / real path`，MUST NOT 以日志脱敏、截断或 `display_uri` 静默掩盖。本 capability 的稳定 `resource_id` 与该身份/寻址政策不冲突，继续作为资源身份使用。`作用域 / scope` 闭集与 `scope_id` 取值语义、VRN 语法、kind 闭集与 `拒绝码 / rejection code` 登记 MUST 由 `add-unified-virtual-resource-addressing` change 唯一 owner 定义，本 capability 只引用、MUST NOT 复述或自造第二套语法与取值。
+
+#### Scenario: 持久记录只承载身份与 VRN
+
+- **WHEN** owner 写入一条引用外部资源的工作区持久记录
+- **THEN** 该记录以 `资源身份 / ResourceIdentity` 与 `虚拟资源地址 / VRN` 指向资源；`真实路径 / real path` 只作为 owner 在本次 fs/进程调用栈内的局部变量出现，不进入任何持久化记录
+
+#### Scenario: 需要位置时必须用 VRN 而非文件系统路径
+
+- **WHEN** 一条持久记录需要表达资源或资源产物的所在位置
+- **THEN** 该位置 MUST 编码为 `虚拟资源地址 / VRN`；MUST NOT 写入绝对路径、工作区根路径、checkpoint 文件路径、下载/截图文件路径或等价的文件系统路径
+
+#### Scenario: 检出 real path 持久化即 fail-closed
+
+- **WHEN** 一条持久化记录、一个 API 响应体或一份模型可见载荷中出现 `真实路径 / real path`
+- **THEN** 系统 MUST 显式失败并判定为缺陷，MUST NOT 以脱敏、截断、`display_uri` 或默认值静默掩盖，MUST NOT 回退到「按路径查找」的旧语义
+
+#### Scenario: 不新增第二套寻址语法
+
+- **WHEN** 实现本 capability 的持久记录引用
+- **THEN** 它 MUST 复用 `add-unified-virtual-resource-addressing` 的 VRN 语法与 `作用域 / scope` 定义，MUST NOT 定义第二套 URI 语法、scope 名或 `scope_id` 取值
+
 ### Requirement: Thread unload 和删除按资源保留范围释放资源
 
 Thread runtime unload 或 Thread 删除 MUST 向领域 owner 发出带精确 `session_id`、`thread_id` 和 runtime generation 的幂等释放通知。领域 owner MUST 释放该 Thread 的运行期句柄和已完成操作的 operation lease，再解除该 Thread 的资源关联。对来源为该 Thread 的每项 `thread` 范围资源，owner MUST 在 unload/删除路径立即停止外部实例、核实结果并删除资源记录；这适用于当前仍关联的资源，也适用于先前被显式 detach 的资源。Thread unload 不得只卸载 Agent graph/runtime 而让临时 Browser、Terminal 或 shell 进程继续运行。`workspace` 范围资源 MUST 在来源 Thread unload、Thread 删除或来源 Session 删除后继续存在；owner 只移除对应 Thread 关联。`LifetimeScope.close()` MUST NOT 直接停止或删除外部业务资源。Thread idle 阈值仍由既有 Thread residency 能力定义；本能力另行定义的 30 分钟期限只用于回收无 Thread 关联的 `thread` 范围资源，不能代替或修改 Thread idle 阈值。

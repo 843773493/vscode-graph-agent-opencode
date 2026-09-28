@@ -30,3 +30,9 @@
 - [ ] 5.1 为默认 Thread scope 与显式 Workspace scope 创建、Thread unload 即时 detach/delete、有效 lease、promotion/unload 并发、detach 冲突、Session 删除和 owner 重启增加 owner/API 验证；覆盖孤儿资源在 29:59 重新 attach 取消回收、满 30:00 自动回收、lease 阻止回收、attach/回收竞态和 Workspace scope 永不按期限回收。
 - [ ] 5.2 在 `tests/e2e/clients/web/test_basic_chat_tool_loop.py` 这一既有唯一 Web E2E owner 中增加用户持久化 Browser/Terminal 资源、unload 后保留、另一个 Thread attach/detach、Session 删除后仍可从 Workspace UI 访问及明确失败反馈的完整场景。
 - [ ] 5.3 用外置 process control 验证 owner 在外部操作结果未知时崩溃和重启；恢复孤儿期限时不得重置计时、重放未知副作用、伪报删除成功或遗留无权威记录的外部资源。
+
+## 6. 持久化引用收紧为规范层义务（只新增约束与引用）
+
+- [ ] 6.1 落成规范层禁止项：工作区持久记录、API 响应体与模型可见载荷只承载 `资源身份 / ResourceIdentity` + `虚拟资源地址 / VRN`（必要时并列 revision 字段），MUST NOT 承载 `真实路径 / real path`；检出即 fail-closed。`作用域 / scope` 闭集、`scope_id` 取值语义、VRN 语法、kind 闭集与 `拒绝码 / rejection code` 一律具名引用 `add-unified-virtual-resource-addressing`，本 change MUST NOT 复述或自造。
+- [ ] 6.2 消除已确证的 real path 持久化：终端记录去掉 `cwd` 与顶层 `workspace_root`（`terminalSession.js:665`、`terminalManager.js:152-157`）；浏览器记录去掉 checkpoint 真实文件路径（`browserSession.js:567-572`、`browserStateStore.js:128-131`）与下载真实文件路径（`browserStateStore.js:253-267`）；位置一律改以 VRN 表达。
+- [ ] 6.3 消除 real path 上浮：`session_resource_mapper.py:49/136` 的 `cwd`/`checkpoint` metadata 与 `browserSession.js:2343-2346` 的截图 `image_path` 不得进入 API 响应体或模型可见载荷；新增负向断言「持久记录与 API 响应体不含 real path」。

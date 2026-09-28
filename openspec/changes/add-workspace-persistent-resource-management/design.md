@@ -71,6 +71,22 @@ Thread unload 是独立的、立即执行的清理路径：对临时资源，own
 
 切换完成后，生产读写只使用工作区级管理方记录，不保留双读、双写或 Session 范围回退逻辑。若回滚到不认识新数据格式的程序版本，必须在修改这些记录前停止；不能为了恢复旧的 Session 范围行为而删除工作区资源。
 
+### 7. 持久记录只承载身份与 VRN，逐条消除已确证的 real path 持久化
+
+本 change 的工作区持久记录、API 响应体与模型可见载荷 MUST 只承载 `资源身份 / ResourceIdentity` 与 `虚拟资源地址 / VRN`（必要时加并列 revision 字段），MUST NOT 承载 `真实路径 / real path`。该 prohibition 与 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」同源；{scope} 闭集、`scope_id` 取值、VRN 语法、kind 与 `拒绝码 / rejection code` 均引该 change，本 change 不复述、不自造。
+
+**已确证与「real path 不持久化」冲突的字段与行为（逐条给出修正方向）**：
+
+1. 终端 owner 的持久状态文件把 `cwd`（真实绝对路径）写进每条终端记录：`src/workspace-services/terminal/server/terminalSession.js:665` 的 `toRecord()` 返回 `cwd: this.cwd`，经 `terminalManager.js:152-157` 的 `stateStore.write({ workspace_id, workspace_root, terminals })` 落到 `.boxteam/terminal-manager/terminals.json`。**修正方向**：持久记录以 identity + VRN 表达终端资源与其工作目录；`cwd` 只作为 PTY 启动调用栈内的局部变量，落盘前替换为 VRN 或删除。
+2. 同一 owner 的持久状态文件顶层还写 `workspace_root`（工作区真实根路径，`terminalManager.js:154`）。**修正方向**：工作区身份改用 `add-multi-workspace-backend-mounting` 的显式 `workspace_id` 与 `add-unified-virtual-resource-addressing` 的 VRN 表达；`workspace_root` 不得落盘。
+3. 浏览器 owner 的持久状态文件把 checkpoint 真实文件路径写进资源记录：`browserSession.js:567-572` 的 `this.record.checkpoint = { path: checkpointWrite.path, ... }`，而 `checkpointWrite.path` 来自 `browserStateStore.js:128-131` 的 `filePath = path.join(this.checkpointDir, ...)`，经 `browserManager.js:222-224` 的 `session.snapshot()`（`browserSession.js:1313` 摊开 `...this.record`）落到 `.boxteam/browser-manager/browsers.json`。**修正方向**：checkpoint 以资源身份 + VRN 引用；文件路径只在同一次读取/写入调用栈内使用。
+4. 浏览器 owner 的下载记录把真实文件绝对路径写进资源记录：`browserStateStore.js:253-267` 的 `writeDownload` 返回 `path: filePath`，由 `browserSession.js:1279-1280` 追加到 `this.record.downloads`（上限 50 条）并持久化；读取侧 `browserManager.js:205-209` 与 `browserStateStore.js:271-286` 的 `assertDownloadPath` 又把它当可解析路径消费。**修正方向**：下载产物以 identity + VRN 引用；越界校验改为在调用栈内由 VRN 解析出的 real path 上完成，不得把 real path 当作持久字段。
+5. 上述真实路径经投影上浮到 API 与模型可见载荷：`app/services/mapping/session_resource_mapper.py:49` 把 `cwd` 塞进 `SessionResourceDTO.metadata`、`:136` 把 `checkpoint`（含 `path`）透传，`app/schemas/internal_v2/session_resource.py` 的 `metadata: dict[str, object]` 与 `app/api/sessions.py:420` 的 `/{session_id}/resources` 响应体因此携带 real path；`browserSession.js:2343-2346` 的截图工具返回 `image_path`（`writeScreenshot` 产出的真实路径）。**修正方向**：投影层一律以 VRN 表达位置，删除 `metadata` 中的 real path 键；截图产物改用 VRN 引用。本 change 的 `/api/v1/resources` 投影 MUST NOT 承载 real path。
+
+**经核实的正面结论（避免为收严而收严）**：本 change 的稳定 `resource_id` **不是** real path（`session_resource_mapper.py:21/80/156` 分别取 `handle.task_id`、`terminal_id`、`browser_id`，即 owner 生成的不透明 ID），故 proposal 层「`resource_id` 与身份/寻址政策不冲突」成立；收严不是纠正 `resource_id`，而是把这些**既存真实路径字段**纳入规范层 prohibition，使其从「proposal 意图」升格为可验证义务。
+
+**边界**：本 change 只新增约束与引用，不扩大既有能力边界；具体字段改名、VRN 化与投影清理的实现归属见 tasks 第 6 节，取值来源一律引 `add-unified-virtual-resource-addressing`。
+
 ## 风险与权衡
 
 - [列表、卸载或删除期间领域管理方不可用] → 返回明确的管理方错误；需要清理时保持卸载/删除处于 `pending` 状态，不得把资源显示为不存在或已成功停止。
