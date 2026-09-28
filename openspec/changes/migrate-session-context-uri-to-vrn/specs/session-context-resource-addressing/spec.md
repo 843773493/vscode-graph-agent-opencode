@@ -28,10 +28,10 @@ real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST
 
 **`memory` 已确证不是 VRN scope，MUST NOT 出现在闭合集内**：它零生产构造方、resolver 连 scope_id 都不比对、container 未装配、configs 自述未接入。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段）MUST 被显式标注为**非 VRN 示意**，MUST NOT 被当作合法 VRN 接受或产出。
 
-**每个 scope 的 `scope_id` 段一律必填**，MUST NOT 只对某个 scope 必填而对其它 scope 可选。`scope_id` MUST 由真实身份推导，MUST NOT 依赖隐含上下文：
+**每个 scope 的 `scope_id` 段一律必填**，MUST NOT 只对某个 scope 必填而对其它 scope 可选。`scope_id` MUST 由**真实身份推导**，MUST NOT 硬编码字面量，MUST NOT 依赖隐含上下文：
 
 - `workspace` → 真实 workspace_id；
-- `gateway` → 真实 gateway_id（现状在 skill 目录生成链路上硬编码字面量 `"local"`，落地时改为可推导）；
+- `gateway` → 真实 gateway_id（现状在 skill 目录生成链路上硬编码字面量 `"local"`，落地时改为真实身份推导，MUST NOT 继续硬编码字面量）；
 - `inline` → 真实 distribution_id（现状与 `gateway` 共用字面量 `"local"`，且 `distribution_id` 全仓零赋值，属既有不一致，以此表为准落地）；
 - `user` → `local`，并 MUST 显式声明为单用户本地程序的约定。
 
@@ -210,9 +210,9 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 - **WHEN** 实施把配置来源改造成 VRN 表达
 - **THEN** 直接以 `ConfigSource` 既有的平级 `layer`/`precedence`/`layer_revision`/`layer_digest`/`source_generation` 兄弟字段承载，不新增第二套结构
 
-### Requirement: 已确证义务与待登记项必须显式区分
+### Requirement: 已确证义务、owner 已定稿项与唯一待裁定项必须显式区分
 
-本 capability MUST 把**已确证**的结论写成可执行任务或 normative 断言，并 MUST 区分**已确证**与**待「统一虚拟资源寻址」change 登记**的两类内容，MUST NOT 把待登记项当作已定稿事实。
+本 capability MUST 把**已确证**的结论写成可执行任务或 normative 断言，MUST 把**已由「统一虚拟资源寻址」change 定稿**的内容写为具名引用，并 MUST 把**唯一仍待该 owner 裁定**的内容显式单列；MUST NOT 把已定稿项写成本地待定，也 MUST NOT 把待裁定项当作已定稿事实。
 
 已确证（本轮实测取证）：
 
@@ -220,11 +220,17 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 - 配置来源真实路径**已持久化且已外泄**（`ConfigSourceLayerRecord.source_path`/`backup_path` 与 `app/api/config.py:102` 的 `ConfigSourceDTO.path`）；
 - `inline` 层有稳定 disk 载体、`sqlite` 层是共享载体不可寻址，`memory` 不是 VRN scope。
 
-待「统一虚拟资源寻址」change 登记（本 capability 只引用、不定稿）：scope 闭集的最终取值、每个 scope 的 scope_id 语义、kind 闭集内**会话上下文资源自身 kind 的具体取值**、以及全部拒绝码取值。
+由「统一虚拟资源寻址」change 定稿并引用（本 capability 只引用、不得自行发明）：scope 闭集（`workspace` | `user` | `gateway` | `inline`，见其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」）、每个 scope 的 scope_id 语义（同前 requirement）、`kind` 闭集（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」）、以及全部拒绝码取值（见其拒绝码登记 requirement）。
 
-#### Scenario: 待登记项不被当作已定稿
-- **WHEN** 某内容属于 scope 闭集/scope_id 语义/kind 取值/拒绝码
-- **THEN** 它以待登记项出现，引用「统一虚拟资源寻址」change，不得写为本地定稿结论
+**仍待 owner 裁定的唯一一项**：会话上下文资源**自身**使用的 `kind` 取值——`kind` 闭集是「统一虚拟资源寻址」change 的所有权，已有闭集为 `agent-spec` | `skills` | `config`，其中并无会话上下文专用取值。本 capability MUST NOT 自行发明 `kind` 名；在该 owner 裁定（复用既有取值或新登记一个取值）下发前，本 change 的姿态是：引用该裁定、接口 fail-closed，不得先行实现。
+
+#### Scenario: owner 已定稿项写为具名引用
+- **WHEN** 某内容属于 scope 闭集、scope_id 语义、`kind` 闭集或拒绝码取值
+- **THEN** 它具名引用「统一虚拟资源寻址」change 对应 requirement，MUST NOT 写成本地待定或另行发明
+
+#### Scenario: 唯一待裁定项不被当作已定稿
+- **WHEN** 内容为会话上下文资源自身的 `kind` 取值
+- **THEN** 它显式标注为待该 owner 裁定，本 change 不自行发明取值、接口 fail-closed
 
 #### Scenario: 已确证结论可直接执行
 - **WHEN** 某内容已由本轮实测取证确证

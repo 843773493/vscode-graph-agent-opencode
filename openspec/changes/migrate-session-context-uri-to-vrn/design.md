@@ -23,7 +23,7 @@
 - VRN **禁止编码 revision/hash**；identity 独立于 VRN；`real path` 永不持久化 / 永不进模型可见载荷 / 永不跨 gateway。
 - 权威 VRN 形态（保留既有段序，**不得简化**）：`boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}`。`resources` 固定段保留；`scope_id` 对**所有** scope 都必填。
 - scope 闭合集定稿为 `workspace` / `user` / `gateway` / `inline`：`builtin` 正名为 `inline`，`user` 为本次新增；`memory` **已确证不是 VRN scope，移出闭合集**（零生产构造方、resolver 不比对 scope_id、container 未装配、configs 自述未接入）。
-- `scope_id` 必须由真实身份推导：`workspace`→真实 workspace_id、`gateway`→真实 gateway_id、`inline`→真实 distribution_id、`user`→`local`（单用户本地约定）。
+- `scope_id` 必须由真实身份推导、MUST NOT 硬编码字面量：`workspace`→真实 workspace_id、`gateway`→真实 gateway_id、`inline`→真实 distribution_id、`user`→`local`（单用户本地约定，已由 owner 定为终值）。
 - 星型解析唯一顺序，上界为显式策略常量；不可达/未共享/未找到 fail-closed 结构化拒绝码；**locator 是输入不是输出**。
 - 拒绝码有**两套不可混用的独立闭集**——`grammar.py` 的 17 个与 `resolver.py` 的 6 个——由「统一虚拟资源寻址」change 集中登记；本 change **只能引用不能自造**。VRN 语法本体、固定段序与 `kind` 闭集同样不由本 change 拥有。
 - `memory` 不是 VRN scope：不基于它做设计、不为它规定 scope_id；既有两点式 `boxteam://memory/{scope}/{name}` 只作**非 VRN 示意**（它无 `resources` 段、无 kind、恰好两段，走的是独立特例分支）。
@@ -148,7 +148,7 @@ SessionContextResourceRef {
 
 改造形态：`app/core/config_sources.py` 的 `ConfigSource` 已是 `path: Path` + `layer` + `precedence` 平级属性，且 `layer_revision` / `layer_digest` / `source_generation` 已是**兄弟字段**。因此改造等价于**把 `path: Path` 换成 `vrn: VRN`，其余兄弟字段原样保留**。MUST NOT 另发明一套结构。
 
-**config 寻址形态**：config 资源用**独立 kind** 标识来源文件本身（kind 具体取名归「统一虚拟资源寻址」change 的 kind 闭集登记）；`layer` 作为**兄弟字段**保留，**不塞进 VRN**。`inline` 层有稳定 disk 载体（发行包内 `configs/*_inline.jsonc`，经 `resolve_config_resource_source` 校验 `is_file()`），故有 VRN。`sqlite` 层 MUST NOT 编 VRN：`user` / `user_local` / `workspace` 三层共享同一个 `workspace.sqlite`（`app/services/infrastructure/config_service.py` 的 `_config_source` 在 `_workspace_state_store` 存在时统一返回 `self._workspace_state_store.path`），单一 VRN 会立刻对应多个逻辑来源。
+**config 寻址形态**：config 资源用「统一虚拟资源寻址」change 已定稿的 `config` kind 标识来源文件本身（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」与「配置来源寻址必须使用 config kind 且 sqlite 层不可寻址」）；`layer` 作为**兄弟字段**保留，**不塞进 VRN**。`inline` 层有稳定 disk 载体（发行包内 `configs/*_inline.jsonc`，经 `resolve_config_resource_source` 校验 `is_file()`），故有 VRN。`sqlite` 层 MUST NOT 编 VRN：`user` / `user_local` / `workspace` 三层共享同一个 `workspace.sqlite`（`app/services/infrastructure/config_service.py` 的 `_config_source` 在 `_workspace_state_store` 存在时统一返回 `self._workspace_state_store.path`），单一 VRN 会立刻对应多个逻辑来源。
 
 **理由**：这是明示的迁移义务，属「已确证」而非假设。复用既有 sibling 字段形态可以同时达成两点——真实路径不再持久化、不再进 API 响应体；且不引入第三套来源层结构（避免双轨）。
 
@@ -179,7 +179,7 @@ SessionContextResourceRef {
 
 ## Open Questions
 
-- **接入 `kind` 与 `scope_id` 表的方式**：`kind` 闭集当前只有 `{agent-spec, skills}`，会话上下文资源与 config 来源都需要新增 kind；具体取名与登记由「统一虚拟资源寻址」change 独占，本 change 只声明需要它并为接口 fail-closed 兜底。
+- **会话上下文资源自身的 `kind`（唯一仍待 owner 裁定项）**：`kind` 闭集由「统一虚拟资源寻址」change 定稿为 `agent-spec` | `skills` | `config`（其 requirement「kind 闭集定稿且描述符闭集独立不可混用」），其中并无会话上下文专用取值。会话上下文资源用哪个 `kind`（复用既有取值或新登记一个）由该 owner 裁定；本 change MUST NOT 自行发明 `kind` 名，裁定下发前接口 fail-closed，不得先行实现。`scope_id` 语义已由该 owner 定稿（其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」），本 change 直接引用，不再待定。
 - **拒绝码的具体归属**：会话上下文新增拒绝场景（如「旧式 fragment 形态」「view 与资源不兼容」「memory 两点式」）落到 `grammar.py` 的 17 个码还是 `resolver.py` 的 6 个码，由寻址 change 集中登记后引用；本 change 不新增码、不混用两套闭集。
 - **`assembly_ref` 的表示**：D2 中 `assembly={id}` 迁为 `assembly_ref`，其具体采用资源身份还是专用 ref 类型，待与 itemized rollout context 的 assembly 身份模型对齐后确定（不改变本 change 的结构化方向）。
-- **`user` scope 的引用来源**：`user` 为本次新增且 scope_id 约定为 `local`（单用户本地程序）；是否有需要等到多用户场景再扩展语义，待 owner 后续判定；当前按 `local` 单值定稿。
+- **`user` scope 的未来扩展（不影响当前终值）**：`user` → `local` 已由「统一虚拟资源寻址」change 定为**终值**（其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」规定 `user` → `local` 并 MUST 显式声明为单用户本地程序约定）。本 change 直接引用该终值，不存在后续判定。若将来出现多用户场景如何扩展语义（例如是否引入用户名细分），属**未来可能**，须由 owner 另行发起变更，不得据此改动当前终值。

@@ -1,9 +1,10 @@
 ## 1. 依赖与前置对齐
 
 - [ ] 1.1 确认「统一虚拟资源寻址」change 已登记 scope 闭集（`workspace`/`user`/`gateway`/`inline`；`memory` 已移出）、VRN grammar、`kind` 闭集与拒绝码命名空间；未登记前不得进入第 3 组实施。
-- [ ] 1.2 采用已下发的**权威表**：scope 闭集 = `workspace`/`user`/`gateway`/`inline`；`scope_id` 由真实身份推导（`workspace`→真实 workspace_id、`gateway`→真实 gateway_id、`inline`→真实 distribution_id、`user`→`local`）。`memory` MUST NOT 作为 scope 出现。
+- [ ] 1.2 采用已下发的**权威表**：scope 闭集 = `workspace`/`user`/`gateway`/`inline`；`scope_id` 由真实身份推导、MUST NOT 硬编码字面量（`workspace`→真实 workspace_id、`gateway`→真实 gateway_id、`inline`→真实 distribution_id、`user`→`local`）。`memory` MUST NOT 作为 scope 出现。
 - [ ] 1.2-A 与其对齐段序与闭集落地：保留 `resources` 固定段、`scope_id` 对**所有** scope 必填；`builtin` 正名为 `inline`（含 layer `bundled`→`inline`，由 change 1 owner 负责，带持久化影响评估）；本 change 不自行改动 grammar。
 - [ ] 1.2-B 落地 `memory` 非 VRN 声明：入口对 `boxteam://memory/{scope}/{name}` 两点式以「未登记 scope」拒绝，并把该形态标注为**非 VRN 示意**。
+- [ ] 1.2-C 等「统一虚拟资源寻址」change 裁定**会话上下文资源自身**的 `kind`（其闭集为 `agent-spec`|`skills`|`config`，无会话上下文专用取值）；本 change MUST NOT 自行发明 `kind` 名，裁定下发前接口 fail-closed。config 来源已确证用 `config`。
 - [ ] 1.3 与 itemized rollout context 对齐 `assembly_ref` 的表示（资源身份或专用 ref 类型），确认不改变本 change 的结构化方向。
 
 ## 2. 会话上下文资源引用的结构化模型
