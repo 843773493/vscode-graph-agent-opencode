@@ -125,4 +125,15 @@
   - 7.3-L 同一E2E模块在不重启开发服务的情况下修改AGENTS和tracked Skill：验证ResourceRegistry先发布revision、默认turn的当前tool-loop保持旧snapshot且下一Turn生效、显式model_call配置在下一安全call生效、请求链路零文件I/O；工具结果/history只显示安全`boxteam://.../resources/...` URI，通用read提交URI或旧`.boxteam` Skill路径明确失败，刷新后resource provenance不重复、不泄露物理locator。
   - 7.3-M 与itemized 8.13-Q复用唯一Web E2E模块：在目录pending move/rename及202已接受但worker未提交期间，让同一Session main/child继续model tool-loop、history冷读与checkpoint恢复，断言owner binding、CSM/ToolSet revision、sealed prefix bytes、catalog locator均不随乐观树改变；排队删除前已提交active仍允许有lease的业务，整树deleting commit后即使Web事件延迟或部分local fence仍active也零新业务副作用。纯导航成功/失败/回退只影响UI父链，不产生source diff、epoch或重复assembly。
 - [ ] 7.4 对真实 Provider request log、封存 frames/tools、stable-prefix epoch/reason/manifest、desired/applied ToolSet revision、checkpoint state、assembly selection和 history projection做端到端 provenance audit。
-- [ ] 7.5 运行OpenSpec strict validation、54项未完成任务计数、git diff/status和架构/import audit；确认本change与`add-itemized-rollout-context`的ResourceActivationSnapshot/ResourceProvenance、SessionThread/GraphBinding、main/child capability、runtime residency、Session内部状态和跨Session无状态协作边界清晰后才进入apply/implementation。
+- [ ] 7.5 运行OpenSpec strict validation、本台账未勾选项逐条计数（不写死数字，按当时实测）、git diff/status和架构/import audit；确认本change与`add-itemized-rollout-context`的ResourceActivationSnapshot/ResourceProvenance、SessionThread/GraphBinding、main/child capability、runtime residency、Session内部状态和跨Session无状态协作边界清晰后才进入apply/implementation。
+
+## Verification ledger
+
+### 2026-09-28 1.5/3.11/4.8/5.5 完成度复核（部分达标，按缺口保留未勾选）
+
+- 基线：`git rev-parse HEAD` = `14fbf4df57a9c98995425b879c1be0007689e0b3`。
+- 1.5（保留未勾选）：typed `ContextContribution.selection_role`/`replacement_policy`/`source_binding` 尚未作为领域字段存在；`app/domain/itemized/request_plan.py` 的 `ContextContribution` 无这三个字段，`app/agents/instruction_producers.py` 只把它们列入 `_FORBIDDEN_METADATA_KEYS`（即仍是「禁止写入自由 metadata」的负向约束，而非 typed 正向合同）。故 1.5 未达标。
+- 3.11（保留未勾选，组件达标、生产接线未达）：`app/services/orchestration/resource_activation/` 的 `ResourceActivationCoordinator`、`ResourceActivationPolicySnapshot`、Turn/ModelCall snapshot 构造与唯一 Saver port 均已实现；`uv run pytest -q -p no:randomly tests/unit/services/orchestration/resource_activation/test_resource_activation.py` 退出码 0（含 `test_seal_path_creates_no_source_io`）。但全仓 `rg ResourceActivationCoordinator|freeze_turn|prepare_model_call` 在生产代码无调用方：coordinator 从未在 active slot 被调用，seal 路径也只在调用方显式传 activation snapshot 时绑定（`seal/preparation.py` 不传），即「active slot 冻结 policy + 随 assembly 持久化」的端到端路径在生产不存在。该接线归 `add-itemized-rollout-context` 8.3-A（未勾选）。故按整项验收保留未勾选，记为跨 change 分工待接线。
+- 4.8（保留未勾选，删除面达标、新增断言缺失）：`PromptReplayCaptureMiddleware`、捕获标签/instrument 链与 itemized 反向捕获在生产代码已物理下线（`rg PromptReplayCaptureMiddleware|ItemizedContextProjectionMiddleware` 生产零命中，仅存 spec/design 文本与 `docs/` 对照页）；但本项还要求「增加 AST/import、source-registry completeness 与 sealed manifest/dispatch hash 正向对账断言」，全仓未找到对应测试。故未达标。
+- 5.5（保留未勾选，改名达标、职责未废止）：旧 `ItemizedContextProjectionMiddleware` 已被无状态 `SealedAssemblyDispatchBridge` 取代并在 `app/agents/agent_factory.py` 装配；但其 `_prompt_contributions`、`_prepare`（prepare/seal + `prepare_context_for_provider`）仍在，未见「置于最后一个 request-mutating 位置」的断言，与「废弃 prepare/seal、状态与 fallback 职责」的要求不符。故未达标。
+- 台账改写：7.5 原写死「54项未完成任务计数」已随勾选漂移（当前本 change 顶层未勾选 36 项），改为不写死数字的表述，避免再次过期。
