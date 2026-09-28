@@ -43,12 +43,12 @@
 
 VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `inline`（依据权威表：`builtin` 正名为 `inline`；`user` 为本次新增；`memory` 已移出）。该闭集与每个 scope 的 scope_id 取值来源 MUST 由本 capability 的**唯一一张表**规定，其它模块与 change MUST NOT 自行发明 scope 名或 scope_id 语义。
 
-**`memory` 已确证不是 VRN scope，MUST NOT 出现在闭集内**：它零生产构造方、resolver 连 scope_id 都不比对、`kind="memory"` 全仓零构造、container 未装配、`configs/workspace_inline.jsonc:427-434` 自述未接入。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段，`grammar.py:157-171` 走独立特例分支）MUST 被显式标注为**非 VRN 示意**，MUST NOT 被当作合法 VRN 接受或产出。
+**`memory` 已确证不是 VRN scope，MUST NOT 出现在闭集内**：它零生产构造方、resolver 连 scope_id 都不比对、`kind="memory"` 全仓零构造、container 未装配、`configs/workspace_inline.jsonc:427-434` 自述未接入；**`memory` 的 domain owner 与状态本体从未接入，故无 VRN 替代 owner 的需求**。解析器侧 MUST 物理移除既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段，`grammar.py:157-171` 走独立特例分支）的特例分支，并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（同期由独立代码切片落地）；MUST NOT 把该形态当作合法 VRN 接受或产出。
 
 `scope_id` 段 **MUST 对所有 scope 都出现且必填**，MUST NOT 只对某个 scope 必填。`scope_id` MUST 由**真实身份推导**，MUST NOT 硬编码字面量，MUST NOT 依赖隐含上下文（依据权威表）：
 
 - `workspace` → 真实 workspace_id（现状即为真实 id）；
-- `gateway` → **真实 gateway_id**（现状在 skill 目录生成链路上硬编码字面量 `local`，`skill_runtime.py:539` 的 `else "local"`，落地时改为真实身份推导）；
+- `gateway` → **真实 gateway_id**（取值来源与注入 owner MUST 按本 capability 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿落地）；
 - `inline` → **真实 distribution_id**（现状与 `gateway` 逐字共用字面量 `local`，且 `distribution_id` 全仓零生产赋值，属既有不一致）；来源与编码 MUST 按本 capability 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」定稿落地；
 - `user` → `local`，并 MUST 显式声明为**单用户本地程序的约定**（AGENTS.md 明确无云服务、无多租户），MUST NOT 虚构用户名。
 
@@ -84,10 +84,10 @@ VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 - **WHEN** 解析遇到闭集以外的 scope 段（含 `memory`、`session`、`sqlite`）
 - **THEN** 系统返回 scope 未登记的结构化拒绝码，且不尝试任何猜测映射
 
-#### Scenario: memory 两点式形态不是合法 VRN
+#### Scenario: memory 特例分支必须被物理移除并以 unknown_scope 拒绝
 
 - **WHEN** 调用方提交 `boxteam://memory/{scope}/{name}` 一类两点式字符串
-- **THEN** 系统以「未登记 scope」显式拒绝，MUST NOT 按 VRN 解释该字符串，MUST NOT 为其定义 scope_id
+- **THEN** 解析器侧 MUST 已物理移除该两点式特例分支，并以 `unknown_scope` 类拒绝码 fail-closed 拒绝；MUST NOT 按 VRN 解释该字符串，MUST NOT 为其定义 scope_id
 
 ### Requirement: inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导
 
@@ -137,6 +137,37 @@ VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 
 - **WHEN** manifest 的 `distribution` 或 `version` 缺失或为空
 - **THEN** 系统显式失败并报出缺失字段，MUST NOT 使用 `local` 或任何默认值代替
+
+### Requirement: gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导
+
+`gateway` scope 的 `scope_id` MUST 为**真实 gateway_id**，取值来源定稿为 `${BOXTEAM_HOME}/gateway/identity.json` 中由 `app/gateway/credentials.py:138` 的 `load_or_create_gateway_id` 生成的随机不透明 id（形如 `gateway_<32hex>`）。MUST NOT 取自 host:port、监听端口或任何瞬时通道标识（channel instance/epoch/route）。
+
+`scope_id` MUST 由**真实身份推导**，MUST NOT 硬编码字面量（现状 `skill_runtime.py:539` 的 `else "local"` 让 `gateway` 与 `inline` 逐字共用字面量 `local`，落地时物理移除）。
+
+**注入 owner MUST 为 Gateway 侧**：Gateway 代理 `/api/v1/*` 时 MUST 附加 Gateway 身份头，workspace 后端 MUST 从请求上下文读入。头名 MUST 按既有 `X-BoxTeam-*` 约定命名，定稿为 `X-BoxTeam-Gateway-Id`（既有头为 `X-BoxTeam-Federation-Token`/`X-BoxTeam-Workspace-Id`，见 `app/gateway/auxiliary_proxy.py:91-92`、`app/gateway/registry.py:1837-1838`；仓库此前无 gateway 身份头）。MUST NOT 改写或复用 `X-Request-ID` 的语义与职责（AGENTS.md：任何一层不得补造第二个请求 ID）。
+
+**架构性约束**：同一 workspace 后端可被不同 Gateway 挂载，故 gateway 身份 MUST **按请求注入并读取**，MUST NOT 用进程级单例或「当前激活」态。
+
+**缺失或非法时 MUST fail-closed**：请求未携带 Gateway 身份头、或头值非法时，系统 MUST fail-closed 显式拒绝，MUST NOT 回退 `local` 或任何虚假默认值（AGENTS.md「永不返回虚假的默认值」）。
+
+**消费（只登记，不实现）**：`skill_runtime.py:539` 的 `else "local"` MUST 拆为 `gateway`→真实 gateway_id、`inline`→distribution_id；`ResolutionContext` MUST 建立第一条生产构造链路。
+
+**前端口径冲突（已登记影响项）**：`src/clients/web/src/state/session/sessionCatalogOutbox.ts:32` 的 `CatalogOutboxPartition.gatewayId` 注释逐字为「稳定 Gateway 身份：本地 Gateway 用其监听端口，远程 Gateway 用其 gateway_id。」，与本 requirement「MUST NOT 用监听端口」冲突。统一口径归 Gateway 侧：网关身份由 Gateway 按请求注入、取值由本 requirement 推导；该旧口径注释 MUST 在本 change 实施期清理。
+
+#### Scenario: gateway scope_id 按请求注入推导
+
+- **WHEN** Gateway 代理一个 `/api/v1/*` 请求给 workspace 后端，且 workspace 后端为 `gateway` scope 构造 VRN
+- **THEN** Gateway MUST 附加 `X-BoxTeam-Gateway-Id`；后端 MUST 从请求上下文读入该值并作为 `scope_id`（即 `identity.json` 里的真实 gateway_id），MUST NOT 取 host:port、监听端口或字面量 `local`
+
+#### Scenario: gateway 身份缺失或非法时 fail-closed
+
+- **WHEN** 请求未携带 Gateway 身份头，或头值不是合法 gateway_id
+- **THEN** 系统 MUST fail-closed 显式拒绝，MUST NOT 回退 `local`、MUST NOT 用进程级单例或「当前激活」态补齐
+
+#### Scenario: gateway 身份按请求注入而非进程级单例
+
+- **WHEN** 同一 workspace 后端进程被两个不同 Gateway 挂载并分别收到请求
+- **THEN** 两次请求各自读入**自己** Gateway 注入的身份并得到各自的 `gateway_id`，MUST NOT 命中任何进程级「当前 gateway」单例
 
 ### Requirement: VRN 语法必须保留固定段序并单一实现
 

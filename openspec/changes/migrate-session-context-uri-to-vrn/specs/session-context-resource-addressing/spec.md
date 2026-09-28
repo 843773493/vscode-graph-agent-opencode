@@ -31,7 +31,7 @@ real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST
 **每个 scope 的 `scope_id` 段一律必填**，MUST NOT 只对某个 scope 必填而对其它 scope 可选。`scope_id` MUST 由**真实身份推导**，MUST NOT 硬编码字面量，MUST NOT 依赖隐含上下文：
 
 - `workspace` → 真实 workspace_id；
-- `gateway` → 真实 gateway_id（现状在 skill 目录生成链路上硬编码字面量 `"local"`，落地时改为真实身份推导，MUST NOT 继续硬编码字面量）；
+- `gateway` → 真实 gateway_id（现状在 skill 目录生成链路上硬编码字面量 `"local"`，落地时改为真实身份推导，MUST NOT 继续硬编码字面量）；取值来源与注入 owner MUST 按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿落地，本 capability 只引用、不复述取值规则；
 - `inline` → 真实 distribution_id（现状与 `gateway` 共用字面量 `"local"`，且 `distribution_id` 全仓零赋值，属既有不一致）；来源与编码 MUST 按「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从其发行包 runtime manifest 的 `distribution` + `version` 推导，本 capability 只引用、不复述取值规则；
 - `user` → `local`，并 MUST 显式声明为单用户本地程序的约定。
 

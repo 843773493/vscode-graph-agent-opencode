@@ -26,7 +26,7 @@
 - 不在本 change 内写生产代码；实施由 tasks 驱动。
 - 不设计会话上下文 URI 的统一改造（由并行 change 承载），本 change 只承认其归属与 scope/kind 复用。
 - 不设计 HTTP API 的多工作区路由细节（由「单后端多工作区挂载」change 承载），本 change 只要求 scope_id 身份在寻址层显式。
-- **不为 `memory` 做任何设计**：它已确证不是 VRN scope；既有两点式形态只作非 VRN 示意。
+- **不为 `memory` 做任何设计**：它已确证不是 VRN scope，且其 domain owner 与状态本体从未接入，故无 VRN 替代 owner 的需求；解析器侧 MUST 物理移除既有两点式特例分支，并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（同期由独立代码切片落地）。
 - 不引入资源插件宿主、动态 provider 装配或可安装资源 API。
 
 ## Decisions
@@ -51,7 +51,7 @@
 
 ### D3：scope 闭集定稿为 workspace/user/gateway/inline，memory 移出
 
-**理由**：权威表实测既有闭集只有 `workspace`/`gateway`/`builtin`/`memory`；`user` 是用户要求新增。`memory` 零生产构造方、resolver 不比对 scope_id、`kind="memory"` 零构造、container 未装配，且两点式形态（无 `resources`、无 kind）会绕过固定段与 kind 校验——把它当 scope 等于在统一语法上开后门。故移出并显式标注「`memory` 不是 VRN scope」。
+**理由**：权威表实测既有闭集只有 `workspace`/`gateway`/`builtin`/`memory`；`user` 是用户要求新增。`memory` 零生产构造方、resolver 不比对 scope_id、`kind="memory"` 零构造、container 未装配，且两点式形态（无 `resources`、无 kind）会绕过固定段与 kind 校验——把它当 scope 等于在统一语法上开后门。故移出并显式标注「`memory` 不是 VRN scope」，且因其 domain owner 与状态本体从未接入（无 VRN 替代 owner 的需求），解析器侧 MUST 物理移除该两点式特例分支并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（同期由独立代码切片落地）。
 
 **备选**：保留 `memory` 于闭集并为其定义 scope_id（被否：无任何事实支撑，会固化一个空洞）；把 `memory` 两点式当合法特例（被否：破坏「单一语法」，即本次要根除的双轨）。
 
@@ -80,6 +80,16 @@
 **缺失 fail-closed**：`distribution`/`version` 缺失即显式失败，不设 `local` 默认（AGENTS.md「永不返回虚假的默认值」）；开发态 `source-development` 亦走同一 manifest，不单开分支。
 
 **备选**：放宽 charset 允许 `.`（被否，见上）；用目录名或环境变量（被否：不稳定）；缺字段时回退 `local`（被否：虚假默认值）。
+
+### D4c：gateway 的 gateway_id 来源与注入 owner 定稿（用户裁定）
+
+**决定**：`gateway` scope 的 `scope_id` 取值来源为 `${BOXTEAM_HOME}/gateway/identity.json` 中由 `app/gateway/credentials.py:138` 的 `load_or_create_gateway_id` 生成的随机不透明 id（形如 `gateway_<32hex>`）；MUST NOT 用 host:port 或监听端口。注入 owner 为 **Gateway 侧**：Gateway 代理 `/api/v1/*` 时附加 Gateway 身份头（按既有 `X-BoxTeam-*` 约定命名为 `X-BoxTeam-Gateway-Id`），workspace 后端从请求上下文读入。因同一 workspace 后端可被不同 Gateway 挂载，gateway 身份 MUST 按请求注入并读取，MUST NOT 用进程级单例或「当前激活」态；缺失或非法时 fail-closed。MUST NOT 改写或复用 `X-Request-ID` 的语义与职责。
+
+**实测依据**：`load_or_create_gateway_id` 生成 `f"gateway_{secrets.token_hex(16)}"` 并写入 `identity.json`；`app/gateway/main.py:356/366/1027/2646/2706` 与 `app/gateway/remote_gateway.py:192/496` 已在该路径读写。仓库既有 `X-BoxTeam-*` 头为 `X-BoxTeam-Federation-Token`/`X-BoxTeam-Workspace-Id`（`app/gateway/auxiliary_proxy.py:91-92`、`app/gateway/registry.py:1837-1838`），此前无 gateway 身份头。
+
+**前端口径冲突（登记影响项）**：`src/clients/web/src/state/session/sessionCatalogOutbox.ts:32` 的 `CatalogOutboxPartition.gatewayId` 注释逐字为「稳定 Gateway 身份：本地 Gateway 用其监听端口，远程 Gateway 用其 gateway_id。」，与本决定「MUST NOT 用监听端口」冲突；统一口径归 Gateway 侧（网关身份由 Gateway 按请求注入、取值按 spec requirement 推导），该注释 MUST 在实施期清理。
+
+**备选**：用 host:port 或监听端口（被否：不稳定且跨机不可比）；复用 `X-Request-ID` 承载（被否：违反「任何一层不得补造第二个请求 ID」）。
 
 ### D5：authority 缺省 == 本机 gateway == 显式本机 gateway_id
 
@@ -159,25 +169,25 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 - **[破坏性语法改动打断在途实现]** → 迁移计划显式列出旧形态（含 `skill_runtime.py:52/:619` 裸拼接、`:538` 的 shim、layer 名）一并收敛，不留别名或双读；tasks 把「删旧解析实现」与「修消费方」合并为单一步骤，避免悬挂中间态。
 - **[跨 gateway 解析引入新失败模式]** → 拒绝码分两套闭合且 fail-closed；对「未授权存在」与「不存在」返回同一结果，避免 locator 泄露；上界为 policy 常量，便于审计。
 - **[distribution_id 曾是空洞]** → 权威表证明其全仓零生产赋值；来源已由本 change 定稿为发行 manifest 的 `distribution` + `version`（编码规则见 spec 对应 requirement），空洞从「来源未定」降为「尚未实现装配」，实施期按 D4b 接线。
-- **[memory 语义不明可能诱使猜测]** → 已确证它不是 VRN scope，列入 Non-Goals 并明确「移出闭集 + 两点式只作非 VRN 示意」。
+- **[memory 语义不明可能诱使猜测]** → 已确证它不是 VRN scope，列入 Non-Goals；因其 domain owner 与状态本体从未接入（无 VRN 替代 owner 的需求），解析器侧 MUST 物理移除两点式特例分支并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（同期由独立代码切片落地）。
 
 ## Migration Plan
 
 1. 本 change 落地寻址 capability：术语表、scope 闭集与 scope_id 表、kind 闭集、**分两套**拒绝码集中登记处（spec 层）。
 2. 实现统一语法与规范化单一实现，替换 `virtual_resources/grammar.py` 的旧形态；同一步内修正 `skill_runtime.py:52` 与 `:619` 的裸拼接、删除 `:538` 的 `bundled`→`builtin` shim、并把 layer 名同步正名为 `inline`（不暴露中间态）。
-3. 把 `distribution_id` 接到已定稿来源（发行 manifest 的 `distribution` + `version`，编码规则见 D4b；当前零装配），落实 `gateway`/`inline` 的 scope_id 由真实身份推导。
+3. 把 `distribution_id` 接到已定稿来源（发行 manifest 的 `distribution` + `version`，编码规则见 D4b；当前零装配），并把 `gateway` 的 `gateway_id` 接到已定稿来源（`identity.json` 的 `load_or_create_gateway_id`，由 Gateway 侧按请求经 `X-BoxTeam-Gateway-Id` 注入，见 D4c）；落实 `gateway`/`inline` 的 scope_id 由真实身份推导。
 4. 接入解析链（本机分支），使 Skill/配置/状态链路改用 VRN 解析，而非仅打印。
 5. 按 D10 把配置来源 real path 迁移为 VRN 兄弟字段（`config/state.py` + `config_sources.py` + `api/config.py` 对齐）；`sqlite` 层显式不编 VRN。
 6. 接入 gateway 层星型解析、policy 常量上界与集中登记的拒绝码。
 7. **迁移面**：全部为「加列 + 写路径 + 切读路径」（VRN 零落盘，已确证）；MUST NOT 构造存量扫描或数据改写。
-8. 与其它 change 对表：会话上下文 URI 与多工作区复用本 change 的 scope/scope_id/kind 归属；`memory` 在各方均按「非 VRN scope」处理。
+8. 与其它 change 对表：会话上下文 URI 与多工作区复用本 change 的 scope/scope_id/kind 归属；`memory` 在各方均按「非 VRN scope」处理，解析器侧特例分支物理移除后以 `unknown_scope` 类拒绝码 fail-closed 拒绝。
 9. **回滚策略**：本 change 为规划产物；实施若需回滚，回滚到「旧语法 + 单一打印用途」状态，但必须在同一原子步骤内恢复所有消费方，不得停留半接入态。
 
 ## Open Questions
 
 以下是契约层仍需 owner 拍板的点，**不自行放宽**：
 
-1. **gateway authority 与既有 connection_id/gateway_id 的对应**：v2 要求承载**稳定 gateway_id**；需确认稳定 id 的确切来源字段（避免与持久 `connection_id` 或瞬时 channel 标识混淆）。
+1. **gateway authority 与既有 connection_id/gateway_id 的对应（已定稿，不再是 open question）**：v2 要求承载**稳定 gateway_id**；用户已裁定来源为 `${BOXTEAM_HOME}/gateway/identity.json` 的 `load_or_create_gateway_id`（`gateway_<32hex>`），注入 owner 为 Gateway 侧按请求注入，见 D4c 与 spec 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」。剩余仅为实施期装配，不影响契约定稿。
 2. **distribution_id 的真实来源（已定稿，不再是 open question）**：用户裁定采用发行 manifest（`packages/launcher/runtime-manifest.schema.json`）的 `distribution` + `version`；编码规则与缺失 fail-closed 见 D4b 与 spec 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」。剩余仅为实施期装配（当前零生产赋值），不影响契约定稿。
 3. **悬空 VRN 的保留期与 GC 归属**：spec 只要求「悬空是合法值」，未定义留存策略；可能与 Session 删除 tombstone 的恢复窗口相关。
 4. **ResourceIdentity 的编码形态**：只要求「不透明、稳定、revision-free」，未限 length/charset 上界；是否由本 change 一并闭合需确认。
@@ -186,7 +196,7 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 
 契约的**逐字权威文本**存在于本 change 的规划产物，二者互为唯一来源：
 
-- `openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md`：定义三层分离、scope 闭集与必填 scope_id、VRN 语法、kind 闭集、gateway authority、星型解析与 policy 常量、**分两套**拒绝码、identity 独立、默认寻址政策与「新写字段」迁移面、配置来源 VRN 迁移与 `sqlite` 不可寻址、多工作区显式 scope_id、`builtin`→`inline` 正名（含 layer）。
+- `openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md`：定义三层分离、scope 闭集与必填 scope_id（含 `gateway` scope 的 scope_id 由 Gateway 身份文件按请求注入推导、`inline` scope 由 manifest 推导）、VRN 语法、kind 闭集、gateway authority、星型解析与 policy 常量、**分两套**拒绝码、identity 独立、默认寻址政策与「新写字段」迁移面、配置来源 VRN 迁移与 `sqlite` 不可寻址、多工作区显式 scope_id、`builtin`→`inline` 正名（含 layer）。
 - `openspec/changes/add-unified-virtual-resource-addressing/tasks.md` 任务 `1.1`：术语表登记处；任务 `1.2`：scope 闭集与 scope_id 唯一表落点；任务 `1.3`：**分两套拒绝码集中登记处**（新增/更新拒绝码闭合集的唯一落点）。
 
 实施阶段的机械约束（写入任务，不在本 change 执行）：

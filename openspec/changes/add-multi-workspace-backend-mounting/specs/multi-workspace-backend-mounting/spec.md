@@ -77,17 +77,17 @@
 
 ### Requirement: gateway 身份与 workspace 身份同属寻址层身份，且 gateway_id 必须真实
 
-**网关授权段 / gateway authority** 承载稳定 gateway_id；gateway 身份与 workspace 身份 MUST 同属**寻址层身份**、遵循同一显式化原则：两者 MUST 都能由请求或持久化记录显式表达，MUST NOT 依赖进程级单例或「当前激活」态。作为本 capability 的**接口前提**：跨 gateway 的**星型解析 / star-topology resolution** 要求 gateway_id 真实可用；而权威表实测 `gateway` scope 的 `scope_id` 为硬编码字面量（与 `inline`/原 `builtin` 逐字相同），且 `distribution_id` 全仓**无生产赋值方**（仅在字段定义、resolver 读取与测试中出现）。`distribution_id` 的**来源已裁定**为发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），剩装配；`gateway_id` 的真实来源仍 MUST 由该 change 或 Gateway 侧建立，之后才能支撑跨 gateway 寻址。本 capability 只登记该前提与影响面，不实现其取值来源。
+**网关授权段 / gateway authority** 承载稳定 gateway_id；gateway 身份与 workspace 身份 MUST 同属**寻址层身份**、遵循同一显式化原则：两者 MUST 都能由请求或持久化记录显式表达，MUST NOT 依赖进程级单例或「当前激活」态。作为本 capability 的**接口前提**：跨 gateway 的**星型解析 / star-topology resolution** 要求 gateway_id 真实可用；而权威表实测 `gateway` scope 的 `scope_id` 为硬编码字面量（与 `inline`/原 `builtin` 逐字相同），且 `distribution_id` 全仓**无生产赋值方**（仅在字段定义、resolver 读取与测试中出现）。`distribution_id` 的**来源已裁定**为发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），剩装配；**`gateway_id` 的来源与注入 owner 亦已裁定**：owner = Gateway 侧按请求注入，取值按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」推导（本 capability 只引用、不复述取值规则），剩通道与装配。两者就绪后可支撑跨 gateway 寻址。本 capability 只登记该前提与影响面，不实现其取值来源。
 
 #### Scenario: gateway 身份与 workspace 身份同属寻址层身份
 
 - **WHEN** 系统表达一次跨 gateway 的目标工作区引用
 - **THEN** gateway 身份 MUST 与 workspace 身份一样显式可表达，MUST NOT 由任何进程级「当前 gateway」状态补齐
 
-#### Scenario: gateway_id 硬编码不得被当作可用的跨 gateway 前提
+#### Scenario: gateway_id 来源已裁定，剩通道与装配
 
 - **WHEN** 跨 gateway 寻址依赖 `gateway` scope 的 `scope_id`
-- **THEN** 该值 MUST 是真实 gateway_id；当前硬编码字面量的形态 MUST 被视为**未满足的接口前提**，MUST NOT 被当作跨 gateway 寻址已成立
+- **THEN** 该值 MUST 是真实 gateway_id，取值与注入必须按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」建立（owner = Gateway 侧按请求注入）；在此之前当前硬编码字面量的形态 MUST 被视为**未满足的接口前提**，MUST NOT 被当作跨 gateway 寻址已成立
 
 #### Scenario: distribution_id 来源已裁定，剩装配
 
@@ -179,4 +179,3 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 
 - **WHEN** 迁移执行到任一步骤
 - **THEN** 必须能明确说明该步是否可回滚及回滚后的状态，不可回滚点 MUST 显式标注
-

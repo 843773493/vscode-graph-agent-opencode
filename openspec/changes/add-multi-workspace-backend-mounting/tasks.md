@@ -19,7 +19,7 @@
 - [ ] 3.1 按设计 D1 引入路径段载体 `/api/v1/workspaces/{workspace_id}/...`；保留 `X-BoxTeam-Workspace-Id` 作为 Gateway 代理层等价载体，并实现「两载体不一致即显式失败」。
 - [ ] 3.2 实现「缺失 workspace 身份即显式拒绝」：不复用激活态、不使用默认工作区补齐。
 - [ ] 3.3 更新 Gateway：仍负责选目标，但 MUST 显式把目标传给后端；移除「每个工作区一个后端进程」的默认假设，使一个后端进程可服务多个工作区。跨 gateway 时**网关授权段 / gateway authority**承载稳定 gateway_id，拓扑为**星型解析 / star-topology resolution**（hub-spoke）；解析命中只返回稳定**资源身份 / ResourceIdentity**与内容、不返回 locator，不可解析 fail-closed；上界（visited set / max_transit_gateways=1 / max_gateway_hops=2 / 总 deadline）作为显式策略常量。解析链本体引用「统一虚拟资源寻址」change。
-- [ ] 3.4 校验 gateway 身份的接口前提：`gateway` scope 的 `scope_id` MUST 是**真实 gateway_id**；当前硬编码字面量形态 MUST 视为**未满足的接口前提**，MUST NOT 被当作跨 gateway 寻址已成立；`gateway` 身份与 workspace 身份同属寻址层身份、都必须显式可表达。
+- [ ] 3.4 校验 gateway 身份的接口前提：`gateway` scope 的 `scope_id` MUST 是**真实 gateway_id**；**来源与注入 owner 已裁定**——owner = Gateway 侧按请求注入，取值按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」推导（本 change 只引用、不复述取值规则），剩通道与装配；在装配完成前当前硬编码字面量形态 MUST 仍视为**未满足的接口前提**，MUST NOT 被当作跨 gateway 寻址已成立；`gateway` 身份与 workspace 身份同属寻址层身份、都必须显式可表达。
 - [ ] 3.5 明确破坏边界并更新对外说明：不带工作区前缀或依赖激活态的既有客户端调用失效。
 
 ## 4. 持久化与迁移
