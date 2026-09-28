@@ -105,11 +105,11 @@ VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 **MUST 同时满足的编码性质**：
 
 - **在 charset 内**：结果只含 `[A-Za-z0-9_-]`；`distribution` 实测为闭合枚举 `source-development` / `source-installed` / `npm` / `standalone`（均在 charset 内、无点号）；
-- **可逆**：由 `scope_id` 能无歧义还原出唯一的 `(distribution, version)`（方案 1 的 `_` 转义是标准转义、无碰撞）；
+- **可逆**：由 `scope_id` 能无歧义还原出唯一的 `(distribution, version)`（方案 1 的 `_` 转义是标准转义、无碰撞）；拆分点 MUST 用闭集 `distribution` 枚举做**最长前缀匹配**决定，MUST NOT 用「首个 `-`」裸切（`distribution` 自身含 `-`，如 `source-development`）；枚举内任一取值都不是「另一取值 + `-`」的前缀，故拆分唯一。
 - **稳定**：同一发行包在任意机器、任意安装路径下算出逐字相同的 `scope_id`（只依赖 manifest 两字段）；
 - **唯一**：不同 `(distribution, version)` 组合必得不同 `scope_id`（方案 1 由转义保证无碰撞）。
 
-**`version` 合法形态**：MUST 只含 `[A-Za-z0-9._-]`（可选 `+` 构建元数据）；若含 `_`，MUST 使用方案 1（下划线转义）以保证可逆。
+**`version` 合法形态**：MUST 只含 `[A-Za-z0-9._-]`；含其它字符（如 `+` 构建元数据、空格、`/`）时 MUST fail-closed 显式拒绝，MUST NOT 静默丢弃或替换。若版本含 `_`，MUST 使用方案 1（下划线转义）以保证可逆。
 
 **缺失时 MUST fail-closed**：`distribution` 或 `version` 缺失（含空串）时，系统 MUST fail-closed 拒绝构造 `inline` 的 `scope_id` 并显式报错，MUST NOT 回退为 `local`、「当前发行版」或任何虚假默认值（AGENTS.md「永不返回虚假的默认值」）。开发态（`source-development`）也 MUST 走同一 manifest 路径，MUST NOT 为其单开默认分支。
 

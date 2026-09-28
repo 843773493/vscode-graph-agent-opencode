@@ -71,6 +71,8 @@
 
 **为什么不用「去点法」**：`version.replace(".", "")` 会把 `0.0.2`/`0.02`/`00.2` 全部压成 `002`（实测碰撞），不可逆；且若 `version` 含 `_` 会与点号映射歧义，故列为备选而非首选。
 
+**拆分唯一性**：`distribution` 枚举自身含 `-`（如 `source-development`），故还原 MUST 用枚举最长前缀匹配，MUST NOT 用「首个 `-`」裸切；枚举内无一取值是「另一取值 + `-`」的前缀，故 `(distribution, version)` 拆分唯一。`version` 含 `[A-Za-z0-9._-]` 之外的字符（含 `+`）时 fail-closed，MUST NOT 静默丢弃。
+
 **为什么 MUST NOT 放宽 charset**：charset 与拒绝码是已登记 grammar 的一部分；为解决一个编码问题而放宽 `.`，会引入 `.`/`..` 段混淆与规范化歧义，并与「不新增转义后门」冲突。故选编码、不放宽语法。
 
 **为什么 MUST NOT 用目录名/安装路径**：同一发行包在不同机器、不同路径安装时路径必不同；用它会让跨 gateway 寻址从根上不成立。manifest 的 `distribution`+`version` 是发行包自带的稳定身份。
