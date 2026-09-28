@@ -319,18 +319,24 @@ class SessionCatalogService:
         self,
         payload: SessionFolderCreateRequest,
     ) -> SessionCatalogBreadcrumbDTO:
-        record = await self._submit(
-            NavigationMutationIntentDTO(
-                client_operation_id=create_prefixed_id("op"),
-                client_sequence=1,
-                kind="create_folder",
-                base_catalog_revision=self._catalog_revision(),
-                name=payload.name,
-                parent_node_id=payload.parent_folder_id,
-            )
+        # 与 delete_folder/assign_session/move_node 走**同一条** _submit_batch 归口：
+        # 被拒记录由 _raise_for_rejected 按既有分类重抛（未知节点 KeyError→404、
+        # 形态/语义冲突 ValueError/RuntimeError→400/409）。不得再走只返回原始
+        # record 的单条入口，否则被拒 operation 会以裸 RuntimeError 冒泡成 500。
+        records = await self._submit_batch(
+            [
+                NavigationMutationIntentDTO(
+                    client_operation_id=create_prefixed_id("op"),
+                    client_sequence=1,
+                    kind="create_folder",
+                    base_catalog_revision=self._catalog_revision(),
+                    name=payload.name,
+                    parent_node_id=payload.parent_folder_id,
+                )
+            ]
         )
         self.invalidate()
-        return await self.breadcrumb(_committed_node_id(record))
+        return await self.breadcrumb(_committed_node_id(records[-1]))
 
     async def update_folder(
         self,
@@ -481,12 +487,6 @@ class SessionCatalogService:
 
     def _catalog_revision(self) -> int:
         return self.operations.snapshot().catalog_revision
-
-    async def _submit(
-        self,
-        intent: NavigationMutationIntentDTO,
-    ) -> NavigationMutationRecord:
-        return await self.operations.submit_single(intent, self._scope())
 
     async def _submit_batch(
         self,

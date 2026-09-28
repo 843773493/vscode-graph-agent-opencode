@@ -31,7 +31,6 @@ from app.schemas.internal_v2.session_navigation.operations import (
     NavigationEventsPageDTO,
     NavigationMutationEnqueueRequest,
     NavigationMutationEnqueueResultDTO,
-    NavigationMutationIntentDTO,
     NavigationMutationReceiptDTO,
     NavigationMutationStatusPageDTO,
     NavigationSnapshotDTO,
@@ -165,21 +164,6 @@ class SessionCatalogOperationsService:
             receipts=[self._to_receipt(record) for record in records],
             created_node_ids=created_node_ids,
         )
-
-    async def submit_single(
-        self,
-        intent: NavigationMutationIntentDTO,
-        scope: NavigationAuthScope,
-    ) -> NavigationMutationRecord:
-        """提交单条 intent 并驱动 worker 执行到终态后返回其 durable record。
-
-        这是保留的同步目录 API 的唯一入口：它复用与异步 enqueue **完全相同**的
-        durable 接受与 FIFO 执行链路，只是额外把本次 operation 推进到终态后返回，
-        因此不构成第二套写入实现。
-        """
-        request = NavigationMutationEnqueueRequest(intents=[intent])
-        await self.enqueue(request, scope)
-        return await self.await_terminal(intent.client_operation_id, scope)
 
     async def await_terminal(
         self,

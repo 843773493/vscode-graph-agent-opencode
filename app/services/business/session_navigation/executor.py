@@ -366,7 +366,7 @@ class NavigationMutationExecutor:
                 result_node_id=None,
                 affected=_affected_on_reject(claimed),
                 error_code=_error_code(error),
-                error_detail=str(error),
+                error_detail=_rejection_detail(error),
             )
             successors = self._queue.mark_dependency_failed_successors(
                 connection,
@@ -616,6 +616,20 @@ def _error_code(error: Exception) -> str:
     if isinstance(error, ValueError):
         return "invalid_operation"
     return "conflict"
+
+
+def _rejection_detail(error: Exception) -> str:
+    """rejected record 的对外错误文本，不泄漏 Python repr。
+
+    ``KeyError`` 的 ``str()`` 会给消息补一对引号；该文本既会经
+    ``_raise_for_rejected`` 重新抛回同步 API，也会直接作为 durable 回执/事件的
+    ``error_detail`` 下发。带引号的字面量一旦落库，适配层的 ``client_error_message``
+    就无法再还原为原始消息，因此必须在唯一生产点取未加引号的消息本体；其余异常
+    仍是 ``str(error)``。
+    """
+    if isinstance(error, KeyError) and error.args and isinstance(error.args[0], str):
+        return error.args[0]
+    return str(error)
 
 
 def _affected_on_reject(record: NavigationMutationRecord) -> list[str]:

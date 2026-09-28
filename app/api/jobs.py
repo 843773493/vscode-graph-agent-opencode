@@ -23,6 +23,7 @@ from app.schemas.internal_v2.job import (
 )
 from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
 from app.schemas.internal_v2.sse import sse_responses
+from app.services.business.job.control_service import JobControlRuntimeError
 from app.services.event_service import EventService, JobEventCursorGoneError
 from app.services.infrastructure.artifact_service import ArtifactService
 
@@ -38,7 +39,7 @@ UNIMPLEMENTED_CONTROL_ACTIONS = frozenset(
 def _job_control_http_error(
     job_id: str,
     payload: JobControlRequest,
-    error: ValueError,
+    error: Exception,
 ) -> HTTPException:
     """把 Job 控制被拒落成对客户端有意义的响应，而不是无上下文 500。
 
@@ -46,14 +47,23 @@ def _job_control_http_error(
     「Job {id} not found」表达未知 Job；本适配层对 ``get_job``/``list_job_steps``
     也按同一句文本落 404，这里保持一致。
 
+    本 helper 是 Job 控制被拒的唯一归口：``JobControlValueError``（未知 Job /
+    动作未实现 / 状态不允许）与 ``JobControlRuntimeError``（``no_task`` /
+    ``queue_mismatch``）都经此翻译。后者是客户端可触发的状态冲突（暂停一个已无
+    执行任务的 running Job、或队列与 Job 状态不一致），必须落 409 而非冒泡 500 并
+    泄漏 ``JobControlRuntimeError:`` 内部类名。只按精确类型判定，不捕获宽泛
+    ``RuntimeError``，避免把服务端故障一并吞成 409。
+
     TODO: ``JobControlValueError`` 目前把「未知 Job」「动作未实现」「状态不允许」
     压在同一类型上，只能靠文本区分；业务层暴露独立错误身份后应改为按类型判定。
     """
-    if error.args == (f"Job {job_id} not found",):
-        return HTTPException(status_code=404, detail=str(error))
-    if payload.action in UNIMPLEMENTED_CONTROL_ACTIONS:
-        return unimplemented_http_error(error)
-    # 状态不允许该动作，或会话已有其他 active Job：状态冲突而非服务端故障。
+    if isinstance(error, ValueError):
+        if error.args == (f"Job {job_id} not found",):
+            return HTTPException(status_code=404, detail=str(error))
+        if payload.action in UNIMPLEMENTED_CONTROL_ACTIONS:
+            return unimplemented_http_error(error)
+    # 状态不允许该动作、会话已有其他 active Job，或 Job 执行任务已消失/队列不一致：
+    # 都是状态冲突而非服务端故障。
     return state_conflict_http_error(error)
 
 
@@ -169,7 +179,7 @@ async def control_job(
 ):
     try:
         result = await job_service.control(job_id, payload)
-    except ValueError as error:
+    except (ValueError, JobControlRuntimeError) as error:
         raise _job_control_http_error(job_id, payload, error) from error
     return APIResponse(data=result, request_id=request_id)
 

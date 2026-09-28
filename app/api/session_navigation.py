@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
+from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_request_id,
@@ -12,6 +13,7 @@ from app.api.deps import (
 from app.api.errors import (
     client_error_message,
     not_found_http_error,
+    state_conflict_error,
     state_conflict_http_error,
 )
 from app.schemas.internal_v2.common import APIResponse
@@ -163,9 +165,15 @@ async def get_session_generation_status(
         )
     except KeyError as error:
         raise not_found_http_error(error) from error
+    except ClientStateConflictError as error:
+        # 类型化后：失败运行缺 result 是客户端可查询/可恢复的状态冲突。
+        raise state_conflict_error(error) from error
     except RuntimeError as error:
-        # 账本处于 failed 终态但缺 result（执行期失败只落状态、不落输出）：
-        # 记录存在、但当前状态无法给出可读结果，属于可恢复的状态冲突而非 500。
+        # [过渡期] 受保护文件 session_generation/service.py 仍抛裸 RuntimeError，
+        # 且其中 :369 同一行同时承载「failed 运行缺 result」（客户端可触发、必须 409）
+        # 与「损坏的 completed 记录」（服务端完整性故障、应为 5xx），**类型上不可区分**。
+        # 在受保护文件授权改动前，只能整体维持 409 以守住类A 的零回归红线。
+        # TODO(授权后): 删除本分支，让完整性故障冒泡成 5xx。
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -294,8 +302,12 @@ async def create_session_folder(
 ):
     try:
         result = await service.create_folder(payload)
-    except (KeyError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=client_error_message(error)) from error
+    except KeyError as error:
+        # 未知父节点：与 delete_folder/assign_session/move_node 同一分类（404）。
+        raise not_found_http_error(error) from error
+    except (ValueError, RuntimeError) as error:
+        # 形态/语义冲突与在途导航冲突：与上述三入口同一分类（409）。
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -389,8 +401,14 @@ async def execute_session_generation(
         result = await service.execute(payload)
     except (KeyError, ValueError) as error:
         raise HTTPException(status_code=400, detail=client_error_message(error)) from error
+    except ClientStateConflictError as error:
+        # 类型化后：同幂等键撞上既有未完成/失败运行是客户端可恢复的状态冲突。
+        raise state_conflict_error(error) from error
     except RuntimeError as error:
-        # 同一幂等键撞上未完成/失败的既有运行：拒绝重复创建是状态冲突，
-        # 客户端可查询该运行终态后再决定重试，不能伪装成服务端故障。
+        # [过渡期] 受保护文件 session_generation/service.py 仍抛裸 RuntimeError：
+        # :207-212 幂等键冲突（客户端可触发、必须 409）与 :201-206/:213-215/:642
+        # 完整性故障（generator_id 不匹配、缺 result、账本非对象）**类型上不可区分**。
+        # 在受保护文件授权改动前，只能整体维持 409 以守住类A 的零回归红线。
+        # TODO(授权后): 删除本分支，让完整性故障冒泡成 5xx。
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
