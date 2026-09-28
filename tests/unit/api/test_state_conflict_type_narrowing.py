@@ -1,6 +1,6 @@
 """冻结「类型化状态冲突」按**类型**分流：类A 落 409，裸异常放行为 5xx。
 
-背景：API 适配层原先用 `BTexcept RuntimeError`BT 全捕获，把两种语义完全不同的失败
+背景：API 适配层原先用 `except RuntimeError` 全捕获，把两种语义完全不同的失败
 都落成 409：
 
 - 类A「客户端可触发的状态冲突」（生命周期状态不允许该动作、幂等键撞上既有运行等）：
@@ -125,4 +125,3 @@ def test_server_integrity_runtime_error_is_not_masqueraded_as_409() -> None:
     assert response.headers["X-Request-ID"] == "req_integrity_failure"
     # 5xx 响应体是 TraceMiddleware 的通用封套，携带服务端诊断信息。
     assert "内部不变量被破坏: drain 账本损坏" in response.text
-
