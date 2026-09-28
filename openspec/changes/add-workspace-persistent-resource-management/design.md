@@ -26,6 +26,9 @@
 
 每个现有浏览器、终端或其它资源领域管理方都在对应工作区 `${workspace_abs_path}/.boxteam/` 下的持久存储中保存自己的资源记录。记录负责维护 `resource_id`、资源类型、`retention_scope`、不可变的来源 `(session_id, thread_id)`、当前 Thread 关联集合、经核实的生命周期状态，以及操作租约和对账记录的引用。来源 Thread 用于释放和对账，不等于当前关联；资源解除关联后仍能被来源 Thread 的卸载和 Session 删除流程找到。Session 显示名和 Session 物理路径都不能作为资源身份。`SessionResourceProviderRegistry` 汇总各管理方提供的查询结果并路由命令；它不得缓存另一份生命周期状态，也不得建立第二份关联账本。
 
+
+`${workspace_abs_path}` 与来源 `(session_id, thread_id)` 所属工作区 MUST 由显式 `workspace_id` 解析，其身份定义与解析规则以 `add-multi-workspace-backend-mounting` change 的**已挂载工作区注册表**为准（一个后端进程 MAY 挂载多个工作区）；MUST NOT 依赖「当前激活工作区」，MUST NOT 用进程级单根推断。跨工作区资源共享时，MUST 使用寻址层的显式 `workspace_id` 而非任何进程激活态。
+
 考虑过把记录留在来源 Session、需要时再复制到另一个目录，或让注册表成为中央管理方。前者无法可靠跨越递归 Session 删除，还会形成两个状态源；后者会把不同领域的外部状态和停止规则重复写入注册表。由实际领域管理方持有工作区范围记录，能保留单一权威，同时允许上层组合带类型的查询结果。
 
 ### 2. 分别记录资源保留范围与 Thread 关联

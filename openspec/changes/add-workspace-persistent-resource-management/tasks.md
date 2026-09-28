@@ -1,7 +1,7 @@
 ## 1. Domain owner 与工作区级持久记录
 
 - [ ] 1.1 为 Browser、Terminal 等 Agent 资源创建工具显式提供 `retention_scope` 参数并默认设为 `thread`；支持用户或显式工具参数选择 `workspace` 创建，或将已有资源提升为工作区范围，提升前后 `resource_id` 不变。
-- [ ] 1.2 将工作区资源权威记录存入当前工作区 `.boxteam/` 下的领域 owner 存储，并持久化不可变来源 Thread、当前关联、`unattached_since` 和回收状态；实现关联去重、资源版本和 operation lease 冲突校验。
+- [ ] 1.2 将工作区资源权威记录存入该工作区 `.boxteam/` 下的领域 owner 存储，并持久化不可变来源 Thread、当前关联、`unattached_since` 和回收状态；实现关联去重、资源版本和 operation lease 冲突校验。目标工作区 MUST 由显式 `workspace_id` 经 `add-multi-workspace-backend-mounting` 的已挂载工作区注册表解析，MUST NOT 依赖「当前激活工作区」。
 - [ ] 1.3 为现有 Session 归属资源增加有界、可恢复的一次性迁移：保留 resource_id、来源 Thread 与外部 identity，按 owner 记录重建关联；无可靠 detach 时间的临时孤儿从迁移提交时开始计时；未知状态显式阻断，不扫盘、不双读写。
 - [ ] 1.4 实现 backend 重启后的 owner 核实/恢复；外部资源或结果不可确认时持久暴露 unknown/reconcile_required 状态，不重复创建或盲目重放。
 

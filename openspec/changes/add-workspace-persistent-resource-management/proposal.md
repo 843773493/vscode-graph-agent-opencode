@@ -23,6 +23,6 @@
 ## Impact
 
 - 影响 Browser、Terminal 及其它跨 Turn 资源领域 owner、`SessionResourceProviderRegistry`、工作区 API 与各资源所属的前端展示区域。
-- 持久资源记录必须位于工作区 `${workspace_abs_path}/.boxteam/` 下的 owner 存储，不能依赖来源 Session 目录；Session/Thread 只保留可清理的关联。
+- 持久资源记录必须位于工作区 `${workspace_abs_path}/.boxteam/` 下的 owner 存储，不能依赖来源 Session 目录；Session/Thread 只保留可清理的关联。该工作区身份以 `add-multi-workspace-backend-mounting` change 的显式 `workspace_id` 寻址为准，不依赖「当前激活工作区」。
 - `add-itemized-rollout-context` 唯一拥有 Thread 身份、GraphBinding、runtime generation、准入和 Thread runtime 的 30 分钟 residency policy；本 change 的另一个 30 分钟计时只回收零 Thread 关联的临时资源。`add-context-injection-lifecycle` 定义 `LifetimeScope` 的进程内释放和 context state 保留，资源 change 只消费两者合同。
 - 本 change 不实现后台任务/mailbox 的 checkpoint 恢复；该合同由 `add-itemized-rollout-context` 中的 Thread durable task/mailbox requirement 定义。资源 change 只消费该 Thread identity、lease 和恢复边界，不自行重放外部副作用。

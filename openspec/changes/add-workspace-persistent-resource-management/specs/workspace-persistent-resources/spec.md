@@ -6,7 +6,9 @@
 
 ### Requirement: 领域 owner 是跨 Turn 资源的唯一权威
 
-每项跨 Turn 资源 MUST 具有稳定的 `resource_id`，并由对应领域 owner 权威维护资源状态、保留范围、不可变来源 `(session_id, thread_id)`、当前 Thread 关联、operation lease 和外部副作用。保留范围 MUST 是 `thread` 或 `workspace`。Browser、Terminal 等 Agent 资源创建工具 MUST 暴露 `retention_scope` 参数且默认值 MUST 为 `thread`；省略该参数不得隐式创建持久资源。用户或工具参数明确选择 `workspace` 时，资源才可在创建时持久化；用户或明确的工具操作也可将已有 `thread` 资源提升为 `workspace`。Thread 范围资源只关联其来源 Thread；即使解除关联，owner 仍 MUST 保留来源身份以便 Thread unload 或 Session 删除时清理。`workspace` 资源可以关联同工作区内零个或多个 Thread。工作区持久记录 MUST 存在于当前工作区 `${workspace_abs_path}/.boxteam/` 下的 owner 存储，并独立于 Session 物理目录；Session/Thread 只保存可解析的资源引用，不复制资源详情或运行句柄。通用 Registry MUST 只向 owner 查询、路由命令并投影结果，不得另存生命周期事实、推断资源是否停止或绕过 owner 修改外部资源。
+每项跨 Turn 资源 MUST 具有稳定的 `resource_id`，并由对应领域 owner 权威维护资源状态、保留范围、不可变来源 `(session_id, thread_id)`、当前 Thread 关联、operation lease 和外部副作用。保留范围 MUST 是 `thread` 或 `workspace`。Browser、Terminal 等 Agent 资源创建工具 MUST 暴露 `retention_scope` 参数且默认值 MUST 为 `thread`；省略该参数不得隐式创建持久资源。用户或工具参数明确选择 `workspace` 时，资源才可在创建时持久化；用户或明确的工具操作也可将已有 `thread` 资源提升为 `workspace`。Thread 范围资源只关联其来源 Thread；即使解除关联，owner 仍 MUST 保留来源身份以便 Thread unload 或 Session 删除时清理。`workspace` 资源可以关联同工作区内零个或多个 Thread。工作区持久记录 MUST 存在于 `${workspace_abs_path}/.boxteam/` 下的 owner 存储，并独立于 Session 物理目录；Session/Thread 只保存可解析的资源引用，不复制资源详情或运行句柄。通用 Registry MUST 只向 owner 查询、路由命令并投影结果，不得另存生命周期事实、推断资源是否停止或绕过 owner 修改外部资源。
+
+本 requirement 中的 `workspace_id` 身份与「哪个工作区」的确定方式 MUST 以 `add-multi-workspace-backend-mounting` change 的**已挂载工作区注册表**与显式寻址载体为准：一个后端进程 MAY 挂载多个工作区，`${workspace_abs_path}` MUST 由显式 `workspace_id` 解析得到，MUST NOT 依赖「当前激活工作区」；来源 `(session_id, thread_id)` 所属工作区 MUST 一并作为显式身份保留，跨工作区引用 MUST 使用寻址层身份而非进程激活态。
 
 #### Scenario: 聚合查询返回 owner 当前权威投影
 
