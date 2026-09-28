@@ -328,6 +328,8 @@ Node调试的`debug process identity` MUST是每次启动唯一`process_instance
 
 ### Requirement: Virtual Resource Namespace 必须隐藏locator并固定资源来源
 
+**归属声明（消除两套定义并存）**：本 requirement 涉及的【虚拟资源地址 / VRN】语法、【作用域 / scope】闭合集（`workspace`/`user`/`gateway`）、【网关授权段 / gateway authority】、【星型解析 / star-topology resolution】顺序与【拒绝码 / rejection code】命名空间，一律以 `add-unified-virtual-resource-addressing` 为唯一 owner 与唯一实现；此处不得维护第二份语法，只声明本 requirement 自身的行为契约（隐藏 locator、四个标识分离、activation snapshot 恢复、`skill_load` name-only、模型可见仅安全 display URI）。
+
 系统 SHALL为可向模型或客户端展示的管理资源提供规范`boxteam://`虚拟资源URI。workspace AGENTS、workspace/Gateway/builtin Skill和memory资源 MUST分别使用可区分的逻辑scope/kind/name；URI中不得出现绝对路径、真实网络endpoint、credential、provider私有handle或正文。每个资源 MUST区分模型可见`display_uri`、内部稳定`source_id`、语义`resource_id`和provider私有`provider_locator`：URI只是locator/provenance，不是任一资源身份、授权凭据、dedupe key或业务幂等键，revision/hash/snapshot reference不得编码进URI。
 
 URI resolver MUST在当前principal、workspace/gateway binding、resource activation snapshot和requested operation下返回typed resource handle，并重新校验resource capability；来源的`source_id`和provider私有locator只能从Registry-owned绑定解析，不能由URI、资源名或模型输入推导；不得把URI percent-decode后直接拼接为文件路径。parser MUST只接受已登记grammar，decode恰好一次，并拒绝userinfo、credential、未知query/fragment、控制字符、反斜杠、空segment、`.`/`..`、编码歧义和越界scope。旧context item、history或sealed assembly MUST使用当时封存的resource id/revision/hash/snapshot ref恢复，不能根据display URI重新读取当前资源。
