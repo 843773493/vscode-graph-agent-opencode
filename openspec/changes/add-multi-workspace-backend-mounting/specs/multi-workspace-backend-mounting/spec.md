@@ -44,17 +44,17 @@
 
 ### Requirement: workspace_id 必须与 VRN workspace scope 使用同一份身份
 
-`workspace_id` MUST 是**寻址层身份**。HTTP API 中显式携带的 `workspace_id` 与 VRN `workspace` scope 中显式携带的 `workspace_id` MUST 是同一规格、同一取值的身份；两处 MUST NOT 各自为政或存在换算层。本 capability MUST NOT 定义 VRN 语法、scope 闭合集或拒绝码，只引用其 owner change。
+`workspace_id` MUST 是**寻址层身份**。HTTP API 中显式携带的 `workspace_id` 与 VRN `workspace` scope **必填**的 `scope_id` MUST 是同一个稳定 `workspace_id`（`workspace` scope 的 `scope_id` 必填且等于 workspace_id；语法本体与取值来源表属「统一虚拟资源寻址」change）；两处 MUST NOT 各自为政或存在换算层。跨 gateway 引用另一工作区时，MUST 使用同一台机器上那个稳定 `workspace_id`，否则跨 gateway 寻址从根上不成立。本 capability MUST NOT 定义 VRN 语法、scope 闭合集、`scope_id` 语义或拒绝码，只引用其 owner change。
 
 #### Scenario: 同一工作区在两处取值一致
 
 - **WHEN** 一个工作区同时被 HTTP 请求显式寻址与 VRN 显式寻址
-- **THEN** 两处使用的 `workspace_id` MUST 相等，且 MUST 能被同一注册表解析到同一根
+- **THEN** 两处使用的 `workspace_id` MUST 相等（VRN 侧即 `workspace` scope 的必填 `scope_id`），且 MUST 能被同一注册表解析到同一根
 
 #### Scenario: 不定义第二套身份
 
 - **WHEN** 需要表达「另一个工作区」
-- **THEN** 系统 MUST 复用同一 `workspace_id` 身份与 VRN `workspace` scope，MUST NOT 引入第二套工作区标识、别名或映射表
+- **THEN** 系统 MUST 复用同一 `workspace_id` 身份与 VRN `workspace` scope 的 `scope_id`，MUST NOT 引入第二套工作区标识、别名或映射表
 
 ### Requirement: 进程级资源必须按 workspace_id 分区
 
@@ -77,7 +77,7 @@
 
 ### Requirement: Gateway 必须显式传目标工作区且后端不得猜
 
-Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传递给后端（经本 capability 规定的显式载体）。后端 MUST NOT 猜测、推断或回退目标工作区。Gateway 的生命周期所有权 MUST NOT 再以「一个工作区一个后端进程」为隐含前提。
+Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传递给后端（经本 capability 规定的显式载体）。后端 MUST NOT 猜测、推断或回退目标工作区。Gateway 的生命周期所有权 MUST NOT 再以「一个工作区一个后端进程」为隐含前提。跨 gateway 时 `gateway authority` 承载**稳定 gateway_id**，拓扑是 **hub-spoke**；解析命中 MUST 只返回稳定身份与内容，MUST NOT 返回或携带 locator（locator 是输入不是输出）；不可解析 MUST fail-closed。解析链本体属「统一虚拟资源寻址」change，本 capability 只要求 Gateway 的目标传递与其一致。
 
 #### Scenario: Gateway 显式传目标
 
@@ -93,6 +93,16 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 
 - **WHEN** 同一后端进程挂载多个工作区
 - **THEN** Gateway MUST 能对其中任一工作区发请求，且 MUST NOT 要求为每个工作区各拉起一个后端进程
+
+#### Scenario: 跨 gateway 解析不返回 locator
+
+- **WHEN** Gateway 经 hub-spoke 有界 transit 解析另一个 gateway 上的工作区资源
+- **THEN** 命中结果 MUST 只包含稳定身份与内容，MUST NOT 返回或携带 locator（含本机真实路径 / real path）
+
+#### Scenario: 跨 gateway 不可解析时 fail-closed
+
+- **WHEN** 目标 gateway 未登记、不可达或未共享目标资源
+- **THEN** 系统 MUST fail-closed 返回「统一虚拟资源寻址」change 登记的结构化拒绝码，MUST NOT 用本机同名资源、空结果或缓存猜值替代
 
 ### Requirement: 持久化数据不得以「当前激活工作区」为前提
 
