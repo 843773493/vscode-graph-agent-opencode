@@ -1,8 +1,8 @@
 ## Purpose
 
-为软件内部与模型可见载荷中的资源引用建立**唯一**的寻址抽象与词汇：严格区分资源身份（ResourceIdentity）、虚拟资源地址（VRN）与真实路径（real path），把 `workspace`、`user`、`gateway`、`inline` 等作用域与其它工作区、其它 gateway 收敛到同一套寻址，并以顶层 gateway 之间的**星型解析**完成跨边界定位。本 capability 是这套抽象、scope 闭合集、VRN 语法与拒绝码登记处的唯一 owner。
+为软件内部与模型可见载荷中的资源引用建立**唯一**的寻址抽象与词汇：严格区分资源身份（ResourceIdentity）、虚拟资源地址（VRN）与真实路径（real path），把 `workspace`、`user`、`gateway`、`inline` 等作用域与其它工作区、其它 gateway 收敛到同一套寻址，并以顶层 gateway 之间的**星型解析**完成跨边界定位。本 capability 是这套抽象、scope 闭集、scope_id 语义表、VRN 语法、kind 闭集与拒绝码登记处的唯一 owner。
 
-**契约版本**：本 capability 采用**契约修正 v2**（取代 v1 的简化段序模板）。v2 明确：`resources` 是保留固定段，`scope_id` 对**所有** scope 都必填。**scope 名、scope_id 语义与拒绝码的最终权威以 owner 随后下发的权威表为准**；本 spec 中这三类内容为**初审状态**，权威表下发前不得据此实现。`memory` 作用域**未经本次重新定义**，本 capability 不对其做设计、不定其 scope_id。
+**契约版本**：本 capability 采用**契约修正 v2**（保留既有段序，`resources` 为保留固定段，`scope_id` 对**所有** scope 都必填），并已依据**已下发的权威表**（`out/tests/temp/p1_fixer_identity/artifacts/report-vrn-authority.md`，全部实测）**定稿** scope 闭集、scope_id 语义、kind 闭集与拒绝码登记。`memory` 已确证**不是 VRN scope**，MUST NOT 出现在闭集内。
 
 ## ADDED Requirements
 
@@ -39,51 +39,70 @@
 - **WHEN** 调用方持有 ResourceIdentity 但需要访问资源
 - **THEN** 它仍然通过 VRN（或 VRN 解析链）定位资源，不得把 identity 当作可解析地址；反之 VRN 也不得被当作资源身份用于去重
 
-### Requirement: scope 必须显式且 scope_id 对所有 scope 必填
+### Requirement: scope 必须取自定稿闭集且 scope_id 对所有 scope 必填
 
-VRN 的 scope MUST 取自闭合集（初审：`workspace` | `user` | `gateway` | `inline` | `memory`，最终以权威表为准）。`scope_id` 段 **MUST 对所有 scope 都出现且必填**，其取值来源由 owner 的**唯一一张 scope_id 表**规定（初审：`workspace`→workspace_id、`gateway`→`local`、`user`→`local`、`inline`→distribution_id；`memory` 待定）。「当前工作区」不是寻址概念，MUST NOT 作为持久化数据的隐含前提。其它工作区 MUST 复用 `workspace` scope 加另一个 `workspace_id` 表达，MUST NOT 引入新 scope。
+VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `inline`（依据权威表：`builtin` 正名为 `inline`；`user` 为本次新增；`memory` 已移出）。该闭集与每个 scope 的 scope_id 取值来源 MUST 由本 capability 的**唯一一张表**规定，其它模块与 change MUST NOT 自行发明 scope 名或 scope_id 语义。
 
-**正名与收敛**：`builtin` MUST 更名为 `inline`，向 config 域既有词汇（`inline`/`user`/`user_local`/`workspace`/`sqlite`）收敛；`user` 为新增，命名依据同一 config 域前缀。`memory` 既有存在但**未经本次重新定义**，MUST NOT 基于它做设计、MUST NOT 把它当作文件 locator、MUST NOT 为它定义 scope_id。
+**`memory` 已确证不是 VRN scope，MUST NOT 出现在闭集内**：它零生产构造方、resolver 连 scope_id 都不比对、`kind="memory"` 全仓零构造、container 未装配、`configs/workspace_inline.jsonc:427-434` 自述未接入。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段，`grammar.py:157-171` 走独立特例分支）MUST 被显式标注为**非 VRN 示意**，MUST NOT 被当作合法 VRN 接受或产出。
+
+`scope_id` 段 **MUST 对所有 scope 都出现且必填**，MUST NOT 只对某个 scope 必填。`scope_id` MUST 由**真实身份推导**，MUST NOT 硬编码字面量，MUST NOT 依赖隐含上下文（依据权威表）：
+
+- `workspace` → 真实 workspace_id（现状即为真实 id）；
+- `gateway` → **真实 gateway_id**（现状在 skill 目录生成链路上硬编码字面量 `local`，`skill_runtime.py:539` 的 `else "local"`，落地时改为真实身份推导）；
+- `inline` → **真实 distribution_id**（现状与 `gateway` 逐字共用字面量 `local`，且 `distribution_id` 全仓零生产赋值，属既有不一致；MUST 建立真实来源）；
+- `user` → `local`，并 MUST 显式声明为**单用户本地程序的约定**（AGENTS.md 明确无云服务、无多租户），MUST NOT 虚构用户名。
+
+「当前工作区」不是寻址概念，MUST NOT 作为持久化数据的隐含前提。其它工作区 MUST 复用 `workspace` scope 加另一个 `workspace_id` 表达，MUST NOT 引入新 scope。
 
 #### Scenario: scope_id 对所有 scope 必填
 
 - **WHEN** 系统构造或解析任意 scope 的 VRN
 - **THEN** 路径中 MUST 出现显式 `scope_id` 段；任何省略 `scope_id`、或依赖「当前激活工作区 / 当前 gateway / 当前发行版」补齐缺省 scope_id 的解析一律被拒绝
 
-#### Scenario: workspace scope 的 scope_id 是 workspace_id
+#### Scenario: workspace scope 的 scope_id 是真实 workspace_id
 
 - **WHEN** 解析一个 `workspace` scope 的 VRN
-- **THEN** `scope_id` 段被解释为 workspace_id；同 gateway 下的其它工作区就是另一个 `workspace_id`，不新增 scope
+- **THEN** `scope_id` 段被解释为真实 workspace_id；同 gateway 下的其它工作区就是另一个 `workspace_id`，不新增 scope
+
+#### Scenario: gateway 与 inline 的 scope_id 由真实身份推导而非硬编码
+
+- **WHEN** 系统为一个 `gateway` 或 `inline` scope 构造 VRN
+- **THEN** `gateway` 的 `scope_id` 取真实 gateway_id（而非字面量 `local`）、`inline` 的 `scope_id` 取真实 distribution_id（而非与 gateway 共用的 `local`）
+
+#### Scenario: user scope 的 scope_id 是单用户约定值 local
+
+- **WHEN** 系统为一个 `user` scope 构造 VRN
+- **THEN** `scope_id` 为 `local`，并显式以「单用户本地程序」解释该值，不虚构用户名或细分身份
 
 #### Scenario: inline 取代 builtin
 
 - **WHEN** 系统需要表达发行包内置层的资源
-- **THEN** 它使用 `inline` scope（scope_id 为 distribution_id），并 MUST NOT 继续产出或接受 `builtin` 作为 scope 名，也不保留 `builtin`→`inline` 的运行时别名
+- **THEN** 它使用 `inline` scope，并 MUST NOT 继续产出或接受 `builtin` 作为 scope 名，也不保留 `builtin`→`inline` 的运行时别名
 
 #### Scenario: 未知 scope 被拒绝
 
-- **WHEN** 解析遇到闭合集以外的 scope 段
+- **WHEN** 解析遇到闭集以外的 scope 段（含 `memory`、`session`、`sqlite`）
 - **THEN** 系统返回 scope 未登记的结构化拒绝码，且不尝试任何猜测映射
 
-#### Scenario: memory 未被本次重新定义
+#### Scenario: memory 两点式形态不是合法 VRN
 
-- **WHEN** 本次寻址改造涉及 `memory` 作用域
-- **THEN** 系统 MUST NOT 基于它做设计、MUST NOT 把它作为文件 locator、MUST NOT 为它指派 scope_id；其归属等待 owner 的统一规定
+- **WHEN** 调用方提交 `boxteam://memory/{scope}/{name}` 一类两点式字符串
+- **THEN** 系统以「未登记 scope」显式拒绝，MUST NOT 按 VRN 解释该字符串，MUST NOT 为其定义 scope_id
 
 ### Requirement: VRN 语法必须保留固定段序并单一实现
 
 统一 VRN 语法 MUST 为：
 
-```text
+``````text
 boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}
-```
+``````
 
-其中 `{gateway_authority?}` 为**可选单段**，承载**稳定 gateway_id**，缺省即本机 gateway；`resources` 是**固定保留段**（MUST NOT 省略、MUST NOT 被简化掉）；`{kind}` 取自闭合集（初审在既有基础上新增 `config`，最终以权威表为准）。系统 MUST 使用闭合 charset；MUST 拒绝百分号编码与 `#fragment`；大小写、分隔符与相对段的规范化 MUST 只有单一实现。现有 skill 形态 `boxteam://workspace/{workspace_id}/resources/skills/{name}/SKILL.md` MUST 是本语法的特例（authority 缺省），MUST NOT 存在第二套并列语法。
+其中 `{gateway_authority?}` 为**可选单段**，承载**稳定 gateway_id**，缺省即本机 gateway；`resources` 是**固定保留段**（MUST NOT 省略、MUST NOT 被简化掉）；`{kind}` 取自**定稿闭集**（见下一条 requirement）。系统 MUST 使用闭合 charset（动段 `[A-Za-z0-9_-]`，`grammar.py:20`）；MUST 拒绝百分号编码与 `#fragment`（均在分段之前整体拒绝，`grammar.py:126-130`/`:133-134`，故不存在二次解码歧义）；大小写**不折叠**（变体一律结构化拒绝），分隔符唯一为 `/`（`\` 整体拒绝），相对段 `.`/`..` 显式拒绝；规范化 MUST 只有单一实现。现有 skill 形态 `boxteam://workspace/{workspace_id}/resources/skills/{name}/SKILL.md` MUST 是本语法的特例（authority 缺省），MUST NOT 存在第二套并列语法。
 
 #### Scenario: resources 固定段不可省略
 
 - **WHEN** 解析一个 VRN
-- **THEN** `resources` 段按固定位置参与解析；缺少该段的字符串被判定为格式非法并结构化拒绝，而不是回退到更宽松的旧形态
+- **THEN** `resources` 段按固定位置参与解析；缺少该段的字符串（如 `boxteam://workspace/ws-1/agent-spec/root/AGENTS.md`）被判定为格式非法并结构化拒绝，而不是回退到更宽松的旧形态
 
 #### Scenario: 既有 skill 形态是特例
 
@@ -93,22 +112,33 @@ boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical
 #### Scenario: 拒绝百分号编码与 fragment
 
 - **WHEN** VRN 字符串包含 `%` 或 `#`
-- **THEN** 系统在访问任何资源前显式拒绝，分别返回百分号编码拒绝与 fragment 拒绝的结构化拒绝码
+- **THEN** 系统在分段与访问任何资源之前显式拒绝，分别返回百分号编码拒绝与 fragment 拒绝的结构化拒绝码
 
 #### Scenario: 规范化只有单一实现
 
 - **WHEN** 同一逻辑地址以不同大小写或冗余分隔符表达
-- **THEN** 所有调用方得到由同一实现产出的同一规范化结果；MUST NOT 存在第二处独立的大小写或分隔符处理
-
-#### Scenario: 新增 config kind
-
-- **WHEN** 系统表达一条配置来源资源的地址
-- **THEN** 其 kind 使用闭合集内的 `config`，与既有 kind 共享同一套语法与拒绝码
+- **THEN** 所有调用方得到由同一实现产出的同一规范化结果（大小写变体被显式拒绝而非静默归一）；MUST NOT 存在第二处独立的大小写或分隔符处理
 
 #### Scenario: 未登记 kind 被拒绝
 
 - **WHEN** VRN 的 kind 段不在已登记闭集内
 - **THEN** 系统返回 kind 未登记的结构化拒绝码，不回退到通用资源读写
+
+### Requirement: kind 闭集定稿且描述符闭集独立不可混用
+
+VRN 的 kind 闭集 MUST 为 `agent-spec` | `skills` | `config`（依据权威表：既有真实闭集为 `agent-spec`/`skills`，`config` 为本次新增，用于承载配置来源文件本身）。
+
+系统 MUST 区分**两个独立的 kind 闭集**，MUST NOT 混用：`parse_vrn` 的 kind 闭集（`grammar.py:18` 的 `_RESOURCE_KINDS`，解析期取值只能是 `agent-spec`/`skills`，`memory` 时 `kind` 为 `None`）与描述符 kind 闭集（`values.py:24` 的 `_DESCRIPTOR_KINDS`）。机制说明：`memory` 仅出现在描述符闭集，不出现在语法 kind 闭集。
+
+#### Scenario: config kind 承载配置来源
+
+- **WHEN** 系统表达一条配置来源资源的地址
+- **THEN** 其 kind 使用闭集内的 `config`，与既有 kind 共享同一套语法与拒绝码
+
+#### Scenario: 两个 kind 闭集不可混用
+
+- **WHEN** 实现或测试使用 kind 取值
+- **THEN** 语法解析期只接受 `_RESOURCE_KINDS`，描述符构造期只接受 `_DESCRIPTOR_KINDS`，MUST NOT 用其中一个闭集去校验另一个的输入
 
 ### Requirement: gateway authority 承载稳定 gateway_id 且缺省等价本机
 
@@ -177,24 +207,29 @@ VRN 解析 MUST 按唯一顺序执行：本地 parse（fail-closed）→ 无 aut
 - **WHEN** authority 段指向本机未登记的 gateway_id
 - **THEN** 系统返回未知 gateway 的结构化拒绝码，且不尝试按名称猜测路由
 
-### Requirement: 拒绝码必须集中登记且命名不得自造
+### Requirement: 拒绝码必须分两套集中登记且命名不得自造
 
-系统 MUST 复用既有 grammar 拒绝码的命名空间与风格，并 MUST 在**唯一一处集中登记处**登记全部拒绝码（含跨 gateway 拒绝码）。**拒绝码的具体名称与最少数量以 owner 随后下发的权威表为准**；在权威表下发前，任何模块与 change MUST NOT 自行发明或定稿新的拒绝码名。其它 change MUST 只引用集中登记处，MUST NOT 自造同义拒绝码。
+系统 MUST 复用既有拒绝码命名空间与风格，并 MUST 在**唯一一处集中登记处**登记全部拒绝码，且 MUST **分两套独立列出、标明各自适用范围与「不可混用」**：
 
-#### Scenario: 拒绝码集中在唯一处登记
+- **grammar 拒绝码（17 个）**：`VrnGrammarError.reason_code`，闭集定义于 `grammar.py:22-42`（`empty_uri`、`unknown_scheme`、`scheme_case_error`、`userinfo_rejected`、`query_rejected`、`fragment_rejected`、`backslash_rejected`、`control_char_rejected`、`percent_encoding_rejected`、`non_ascii_rejected`、`empty_segment`、`dot_segment`、`invalid_character`、`case_error`、`unknown_scope`、`unknown_resource_kind`、`malformed_path`）。构造函数对未登记 code 直接 `raise ValueError`（`grammar.py:48-52`），故该闭集**不可扩展**，适用于字符串→`ParsedVrn` 的语法解析期。
+- **resolve 拒绝码（6 个）**：`VrnResolveError.reason_code`，闭集定义于 `resolver.py:29-38`（`scope_mismatch`、`unknown_resource`、`unknown_operation`、`capability_denied`、`snapshot_unavailable`、`historical_snapshot_missing`），适用于已解析出 VRN 之后的解析/授权期。
 
-- **WHEN** 需要新增一个拒绝码
-- **THEN** 它只在集中登记处出现一次，其它模块与其它 change 通过引用使用
+两套闭集 MUST NOT 混用：语法期 MUST NOT 抛 resolve 码，解析/授权期 MUST NOT 抛 grammar 码。新增码 MUST 只出现在集中登记处一次，其它模块与其它 change MUST 只引用、MUST NOT 自造同义码。
 
-#### Scenario: 权威表下发前不得自造拒绝码
+#### Scenario: 两套拒绝码分别登记且不混用
 
-- **WHEN** 某个调用方在权威表下发前需要表达一种新的拒绝
-- **THEN** 它 MUST 引用集中登记处、等待权威表补齐，MUST NOT 自行发明名称或定义同义码
+- **WHEN** 需要引用一个拒绝码
+- **THEN** 调用方按所处阶段（语法解析 / 解析授权）选择对应闭集，MUST NOT 跨集使用，且 MUST 从集中登记处引用
 
-#### Scenario: 拒绝码闭合
+#### Scenario: 未登记拒绝码被视为缺陷
 
-- **WHEN** 系统抛出一个寻址拒绝
-- **THEN** 其拒绝码 MUST 属于已登记闭合集，未登记的码 MUST 被视为实现缺陷而显式失败
+- **WHEN** 某实现抛出一个不在对应闭集内的拒绝码
+- **THEN** 构造该错误时即显式失败（现有构造函数已对未登记 code 抛 `ValueError`），不允许闭集被静默扩展
+
+#### Scenario: 其它 change 不得自造拒绝码
+
+- **WHEN** 另一个 change 需要表达一种新的拒绝
+- **THEN** 它 MUST 引用集中登记处并说明归属哪一套闭集，MUST NOT 自行发明名称或定义同义码
 
 ### Requirement: identity 必须独立于 VRN 且不跨 scope 混同
 
@@ -214,6 +249,8 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 软件内部的配置、skill、状态与资源引用 MUST 默认以 VRN 传递；real path MUST 只在最后访问点出现。任何新增持久化字段若需定位资源，MUST 使用 `identity + VRN(+ 独立 revision 字段)` 组合，MUST NOT 存储 real path。
 
+**迁移面 MUST 表达为「新写字段」而非「存量数据迁移」**：VRN 已确证**零落盘**（157 live 库 + 44 dev/temp 库 0 命中），既有持久化挂点为 `context_source_control_states`（已存来源事实但无 URI 列）与 `resource_activation_bindings.display_uri`（已建表但生产从不写入）。因此实现 MUST 以「加列 + 写路径 + 切换读路径」落地，MUST NOT 写「扫描/规范化/失效既有 VRN 实例」这类空转任务。
+
 #### Scenario: 新增持久化字段不得存 real path
 
 - **WHEN** 一个 change 或实现需要新增一个用于定位资源的持久化字段
@@ -224,14 +261,44 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 - **WHEN** 资源引用进入模型可见的 prompt、工具结果或历史投影
 - **THEN** 它们携带 VRN 与独立 revision 标识，MUST NOT 携带 real path 或 credential
 
+#### Scenario: 迁移是新写字段
+
+- **WHEN** 某个既有持久化字段需要承载资源引用
+- **THEN** 它以 identity + VRN 的新格式新写入并切换读路径，旧写入形态物理下线，且不构造任何存量扫描或数据改写
+
+### Requirement: 配置来源寻址必须使用 config kind 且 sqlite 层不可寻址
+
+配置来源资源的 VRN MUST 标识**来源文件本身**，kind 取自闭集 `config`；`layer` MUST 作为**兄弟字段**保留，MUST NOT 塞进 VRN。
+
+**`inline` 层有 VRN**：它是发行包内真实存在的 JSONC 文件（`configs/workspace_inline.jsonc` / `configs/gateway_inline.jsonc`，经 `resolve_config_resource_source` 的 `is_file()` 校验），有稳定 disk 载体。
+
+**`sqlite` 层 MUST NOT 被赋予 VRN**：它是**边界变量**而非固定资源——`user`/`user_local`/`workspace` 三层共享同一个 `workspace.sqlite`（`app/services/infrastructure/config_service.py` 的 `_config_source` 在 state store 存在时统一返回同一个 `path`，同层再按 `layer_names` 映射回三种层名）。把它映射成单一 VRN 会立刻产生「同一 URI 对应四个逻辑来源」的冲突，故 MUST 显式说明其**共享载体导致的不可寻址性**。
+
+#### Scenario: config 资源有 VRN
+
+- **WHEN** 系统为一条 `inline` 层配置来源构造地址
+- **THEN** 它使用 `config` kind 的 VRN，`layer` 作为兄弟字段随行，VRN 字符串本身不含 layer 取值
+
+#### Scenario: sqlite 层不编 VRN
+
+- **WHEN** 系统处理 `user`/`user_local`/`workspace` 这些共享同一 `workspace.sqlite` 的来源
+- **THEN** 不为该 sqlite 文件编造 VRN，并显式说明其共享载体导致的不可寻址性
+
 ### Requirement: 既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段
 
-系统 MUST 消除已存在的 real path 持久化违约：配置来源层记录中把 real path 换成 VRN，并**直接复用 config 侧既有的平级属性模式**（`path` + `layer` + `precedence` 平级，`layer_revision` / `layer_digest` / `source_generation` 已是兄弟字段），即「把 `path` 换成 `vrn`，其余 sibling 字段原样保留」。MUST NOT 另发明第二套表示。
+系统 MUST 消除已确证的 real path 持久化违约：`app/services/infrastructure/config/state.py:475` 的 `ConfigSourceLayerRecord.source_path: str`、`:485` 的 `backup_path: str | None` 与 `:632` 的 `ConfigSourceJournalRecord.source_path: str` 把真实路径落进 SQLite；且 `app/api/config.py:102` 的 `path=str(source.path)`（经 `ConfigSourceDTO.path`）把真实路径写进 API 响应体。
+
+迁移 MUST **直接复用 config 侧既有的平级属性模式**（`app/core/config_sources.py:16` 的 `ConfigSource` 已是 `path` + `layer` + `precedence` 平级，且 `layer_revision`/`layer_digest`/`source_generation` 已是兄弟字段），即「把 `path` 换成 `vrn`，其余 sibling 字段原样保留」。MUST NOT 另发明第二套表示。
 
 #### Scenario: 配置来源不再持久化 real path
 
 - **WHEN** 一条配置来源被写入持久化记录
 - **THEN** 记录中承载 VRN 而非 real path；real path 只在读取该来源内容时于调用栈内出现
+
+#### Scenario: API 不输出配置来源真实路径
+
+- **WHEN** 客户端请求配置来源列表（`GET /api/v1/config/sources`）
+- **THEN** 响应体只含 VRN 与兄弟字段（layer/precedence/layer_revision/layer_digest/source_generation 等），不含真实路径
 
 #### Scenario: 复用既有平级属性模式
 
@@ -239,6 +306,8 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 - **THEN** 它沿用既有 `path`→`vrn` 的平级属性替换，其余 sibling 字段（layer、precedence、revision、digest、generation）原样保留，不新增第二套结构
 
 ### Requirement: 多工作区场景下寻址层必须显式承载 scope_id 身份
+
+**归属与引用**：本 requirement 的多工作区前置条件由 `add-multi-workspace-backend-mounting` 承载；其 requirement `进程内必须维护权威的已挂载工作区注册表`、`workspace 身份必须由显式寻址载体承载`、`workspace_id 必须与 VRN workspace scope 使用同一份身份`、`持久化数据不得以「当前激活工作区」为前提` 是本 change 多工作区部分的引用来源。本 change 只声明寻址层要求，不复制其实现要求。
 
 在一个后端进程可挂载多个工作区的前提下，scope_id 身份 MUST 在寻址层显式表达（HTTP API 与 VRN 皆然）。系统 MUST NOT 依赖「当前激活工作区」作为持久化数据的前提。
 
@@ -251,3 +320,26 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 - **WHEN** 一条持久化记录引用工作区资源
 - **THEN** 其含义只由记录内显式的 scope/scope_id 与 VRN 决定，与记录写入时或读取时的「当前激活工作区」无关
+
+### Requirement: 正名 builtin 到 inline 与 layer 改名必须同步且不得误改无关同名
+
+系统 MUST 把 VRN scope 由 `builtin` 正名为 `inline`，并 MUST 把 skill catalog 的 `layer` 名同步由 `bundled` 正名为 `inline`（理由：同一概念三个名字——layer `bundled`、scope `builtin`、config layer `inline`——正是本仓库要求根除的）。两处都改名后，`app/agents/skill_runtime.py:538` 的映射 shim 退化为恒等映射**可删**。
+
+改名 MUST 带影响评估结论并据此定级：`layer` 进入 `entry_identity`（`skill_runtime.py:558`）与 catalog payload（`:605`），但二者只进**内存** `ResourceRegistry`（`semantic_registry.py:20-23` 三个 dict 无持久化写入），全仓唯一持久化 `display_uri` 列的写入方生产从不被调用，故本改名属**契约级调整而非数据迁移**，MUST NOT 构造存量迁移任务。
+
+**真依赖 VRN scope `builtin` 的位置只有** `resolver.py:205`、`grammar.py:17/19/224`；其余 `builtin` 命中（工具 `origin="builtin"`、主题来源、`builtin_tool_registry` 等）是无关同名，MUST NOT 误改。
+
+#### Scenario: scope 与 layer 同步正名
+
+- **WHEN** 系统产出 Skill 来源标识
+- **THEN** scope 使用 `inline`、layer 使用 `inline`，MUST NOT 继续产出 `builtin` scope 或 `bundled` layer，且不保留运行时别名
+
+#### Scenario: 改名不构造存量迁移
+
+- **WHEN** 实施 scope/layer 正名
+- **THEN** 因相关字符串只进内存 registry 与响应、不落盘，MUST NOT 扫描或改写任何既有持久化记录
+
+#### Scenario: 无关同名不被误改
+
+- **WHEN** 实施改名时检索 `builtin`
+- **THEN** 只改 `resolver.py:205` 与 `grammar.py:17/19/224` 等真依赖 VRN scope 的位置，工具 origin、主题来源与 `builtin_tool_registry` 等无关同名保持不变

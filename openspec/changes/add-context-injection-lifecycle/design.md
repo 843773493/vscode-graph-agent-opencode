@@ -238,12 +238,14 @@ SourceReconciler经代码内装配的来源适配稳定读取候选并按来源�
 VRN是模型与工具可见的逻辑地址层，不是provider文件系统。规范URI复用现有`boxteam://` scheme：
 
 ```text
+# 段序、scope 名、scope_id 与 kind 取值以 add-unified-virtual-resource-addressing 的契约（及其已下发权威表）为唯一定义；以下仅为示意
 boxteam://workspace/{workspace_id}/resources/agent-spec/root/AGENTS.md
 boxteam://workspace/{workspace_id}/resources/skills/{skill_name}/SKILL.md
 boxteam://gateway/{gateway_id}/resources/skills/{skill_name}/SKILL.md
-boxteam://builtin/{distribution_id}/resources/skills/{skill_name}/SKILL.md
-boxteam://memory/{scope}/{logical_resource_name}
+boxteam://inline/{distribution_id}/resources/skills/{skill_name}/SKILL.md
 ```
+
+**注意**：`memory` 已确证**不是 VRN scope**（零生产构造方、resolver 不比对 scope_id、container 未装配）。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段）MUST 只作**非 VRN 示意**，MUST NOT 被当合法 VRN；本 capability 不给出 memory 的 VRN 示意，也不为其定义 scope_id。
 
 同一资源同时具有四种不能混用的标识/定位：模型可见且可安全展示的`display_uri`；来源registry内稳定的`source_id`；语义Registry内稳定、跨rename/locator变化保持不变的`resource_id`；实际owner私有的`provider_locator`（绝对路径、Gateway内部snapshot引用、credential ref、memory key等）。`display_uri`表达逻辑scope/kind/name，但不是任一内部identity、授权凭据、dedupe key或业务幂等键。URI不携带revision；精确revision/hash/snapshot_ref由activation/assembly provenance另存。解析必须通过`VirtualResourceResolver.resolve(uri, operation, ResolutionContext)`得到绑定`resource_id/source_id/provider/语义revision/snapshot_ref/capabilities`的typed handle，不能percent-decode后直接join到文件系统。
 

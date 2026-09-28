@@ -131,7 +131,7 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 
 #### Scenario: 历史详情隐藏物理来源
 
-- **WHEN** 授权用户展开来自 workspace、Gateway、builtin 或 memory 来源的 resource provenance
+- **WHEN** 授权用户展开来自 workspace、Gateway 或 inline 来源的 resource provenance（`memory` 已确证不是 VRN scope，不作为来源命名空间出现）
 - **THEN** 响应只返回对应命名空间的 `boxteam://` display URI 和策略允许的 manifest；绝对路径、provider locator、credential、memory key 及旧 `/.boxteam/...` 路径均不出现在 API、SSE 或 DOM
 
 #### Scenario: 旧 path-based 投影不能恢复
