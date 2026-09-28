@@ -330,7 +330,6 @@
         "mode": "production",
         "region": "cn-east-1",
         "feature_flags": {
-          "enable_workspace_memory": true,
           "enable_kb": true,
           "enable_code_tools": true
         }
