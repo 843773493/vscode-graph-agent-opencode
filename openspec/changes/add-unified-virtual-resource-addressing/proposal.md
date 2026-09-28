@@ -4,7 +4,7 @@
 
 修订前下发的**契约 v1 语法模板与仓库真实 grammar 不一致**（v1 把 `scope_id` 改成可选、漏掉 `resources` 固定段），本 change 已改用**契约修正 v2**：保留既有段序，并让 `scope_id` 对**所有** scope 都必填——把「workspace_id 必须显式」的原则扩展到所有 scope。
 
-**权威表已下发**（`out/tests/temp/p1_fixer_identity/artifacts/report-vrn-authority.md`，全部实测），本 change 据此**定稿**词汇、scope 闭集、scope_id 语义、kind 闭集与拒绝码登记，并推翻 v2 的两处初审：① 既有真实 scope 闭集为 `workspace`/`gateway`/`builtin`/`memory`，`user` 与 `inline` 均为**本次新增**；② 既有真实 kind 闭集为 `agent-spec`/`skills`，`config` 为本次新增。
+**权威表已下发**（`out/tests/temp/p1_fixer_identity/artifacts/report-vrn-authority.md`，全部实测），本 change 据此**定稿**词汇、scope 闭集、scope_id 语义、kind 闭集与拒绝码登记，并推翻 v2 的两处初审：① 既有真实 scope 闭集为 `workspace`/`gateway`/`builtin`/`memory`，`user` 与 `inline` 均为**本次新增**；② 既有真实 kind 闭集为 `agent-spec`/`skills`，`config` 与 `session` 为本次新增。
 
 用户已拍板统一寻址方向：`workspace` / `user` / `gateway` / `inline` / 其它工作区 / 其它 gateway 收敛到同一套寻址；VRN 解析是顶层 gateway 之间的星型网络；identity 独立于 VRN；配置/skill/状态默认用虚拟地址传递，真实路径只在最后访问点出现。本 change 是这套寻址抽象、词汇、语法、kind 闭集与拒绝码的**唯一 owner**，其余 change 只引用本 change 的定义。
 
@@ -16,7 +16,7 @@
   - **`memory` 已确证不是 VRN scope**：零生产构造方、resolver 连 scope_id 都不比对、`kind="memory"` 全仓零构造、container 未装配、`configs/workspace_inline.jsonc:427-434` 自述未接入。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources`、无 kind、恰好两段）MUST 被显式标注为**非 VRN 示意**，MUST NOT 留成看似合法的 VRN。
   - **`user` 为本次新增**（权威表证明其尚不存在于 VRN 闭集）。
 - **scope_id MUST 由真实身份推导、禁止硬编码**（同时修掉既有不一致；MUST 由唯一一张表规定）：`workspace`→真实 workspace_id；`gateway`→**真实 gateway_id**（现硬编码字面量 `local`）；`inline`→**真实 distribution_id**（现与 `gateway` 逐字共用 `local`，且 `distribution_id` 全仓零生产赋值 = 空洞，MUST 建立真实来源）；`user`→`local`（显式声明为**单用户本地程序约定**，依据 AGENTS.md 无云服务/无多租户）。**不得自行发明 scope 名或 scope_id 语义。**
-- **kind 闭集（定稿）**：`agent-spec` | `skills` | `config`。`config` 为本次新增（承载配置来源文件本身）。另注：`_DESCRIPTOR_KINDS`（`values.py:24`，含 `memory`）与 `_RESOURCE_KINDS`（`grammar.py:18`）是**两个独立闭集，不可混用**；`memory` 时 `ParsedVrn.kind is None`。
+- **kind 闭集（定稿）**：`agent-spec` | `skills` | `config` | `session`。`config`（承载配置来源文件本身）与 `session`（承载会话上下文资源/会话定位，由并行 change `migrate-session-context-uri-to-vrn` 消费）为本次新增，均在 kind 闭集登记处定稿。另注：`_DESCRIPTOR_KINDS`（`values.py:24`，含 `memory`）与 `_RESOURCE_KINDS`（`grammar.py:18`）是**两个独立闭集，不可混用**；`memory` 时 `ParsedVrn.kind is None`。
 - **正名影响评估结论（已独立核验：安全改名，无需存量迁移）**：`layer` 闭集 `(bundled, gateway, workspace)`（`skill_runtime.py:503`，标签表 `:427`）同步正名为 `inline`。`layer` 虽进入 `entry_identity`（`:558`）与 catalog payload（`:605`），但二者只进**内存** `ResourceRegistry`（`semantic_registry.py:20-23` 三个 dict，无任何持久化写入）；全仓唯一持久化 `display_uri` 列（`resource_activation_bindings.display_uri`，`resource_activation_schema.py:85`）的写入方 `ResourceActivationStore.persist_snapshot` 生产从不被调用（磁盘取证唯一命中是测试夹具 `out/tests/unit/core/test_session_control_store/` 下的 `boxteam://memory/session/notes`）。故改名属**契约级调整而非数据迁移**。**真依赖 VRN scope `builtin` 的位置只有** `resolver.py:205`、`grammar.py:17/19/224`；其余 `builtin` 命中是无关同名（工具 `origin=builtin`、主题来源、`builtin_tool_registry`），MUST NOT 误改。
 - 建立**三层职责分离**并作为核心不变量：`ResourceIdentity`（不透明、稳定、无 revision、不依赖激活工作区、持久化）／`VRN`（可解析、持久化、允许悬空、禁编码 revision/hash）／`real path`（机器本地、临时、永不持久化、永不进模型可见载荷、永不跨 gateway 边界）。
 - 细化**星型解析**：`gateway_authority` 承载稳定 gateway_id；本地是 hub 可直接解析直接 spoke；是 spoke 经唯一 hub 做一次有界 transit，携带 `visited set`、`max_transit_gateways=1`、`max_gateway_hops=2` 与总 deadline；上界 MUST 是**显式策略常量**而非散落魔法数字。**解析命中只返回稳定身份与内容，不返回 locator**（`locator 是输入，不是输出`）。不可解析一律 fail-closed。
@@ -34,7 +34,7 @@
 
 ### New Capabilities
 
-- `virtual-resource-addressing`：统一虚拟资源寻址的三层职责分离（ResourceIdentity / VRN / real path）、scope 闭集与必填 scope_id、统一 VRN 语法（保留 `resources` 固定段序）与规范化、kind 闭集（含 `config`）、可选 gateway authority、星型 gateway 解析链与 policy 常量上界、**分两套集中登记的拒绝码**、「locator 不是输出」不变量、身份与寻址的职责边界、real path 永不外泄的可检查不变量、`builtin`→`inline` 正名（含 layer），以及配置来源持久化的 VRN 兄弟字段迁移与 `sqlite` 层不可寻址说明。
+- `virtual-resource-addressing`：统一虚拟资源寻址的三层职责分离（ResourceIdentity / VRN / real path）、scope 闭集与必填 scope_id、统一 VRN 语法（保留 `resources` 固定段序）与规范化、kind 闭集（含 `config`/`session`）、可选 gateway authority、星型 gateway 解析链与 policy 常量上界、**分两套集中登记的拒绝码**、「locator 不是输出」不变量、身份与寻址的职责边界、real path 永不外泄的可检查不变量、`builtin`→`inline` 正名（含 layer），以及配置来源持久化的 VRN 兄弟字段迁移与 `sqlite` 层不可寻址说明。
 
 ### Modified Capabilities
 

@@ -210,9 +210,9 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 - **WHEN** 实施把配置来源改造成 VRN 表达
 - **THEN** 直接以 `ConfigSource` 既有的平级 `layer`/`precedence`/`layer_revision`/`layer_digest`/`source_generation` 兄弟字段承载，不新增第二套结构
 
-### Requirement: 已确证义务、owner 已定稿项与唯一待裁定项必须显式区分
+### Requirement: 已确证义务与 owner 已定稿项必须显式区分
 
-本 capability MUST 把**已确证**的结论写成可执行任务或 normative 断言，MUST 把**已由「统一虚拟资源寻址」change 定稿**的内容写为具名引用，并 MUST 把**唯一仍待该 owner 裁定**的内容显式单列；MUST NOT 把已定稿项写成本地待定，也 MUST NOT 把待裁定项当作已定稿事实。
+本 capability MUST 把**已确证**的结论写成可执行任务或 normative 断言，MUST 把**已由「统一虚拟资源寻址」change 定稿**的内容（scope 闭集、scope_id 语义、kind 闭集、拒绝码）写为具名引用；MUST NOT 把已定稿项写成本地待定。**本 capability 无待该 owner 裁定的项。** 会话上下文资源**自身**的 kind 已由「统一虚拟资源寻址」change 在 kind 闭集内定稿为 `session`（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」），本 capability 直接引用、无需新登记。
 
 已确证（本轮实测取证）：
 
@@ -222,15 +222,15 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 
 由「统一虚拟资源寻址」change 定稿并引用（本 capability 只引用、不得自行发明）：scope 闭集（`workspace` | `user` | `gateway` | `inline`，见其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」）、每个 scope 的 scope_id 语义（同前 requirement）、`kind` 闭集（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」）、以及全部拒绝码取值（见其拒绝码登记 requirement）。
 
-**仍待 owner 裁定的唯一一项**：会话上下文资源**自身**使用的 `kind` 取值——`kind` 闭集是「统一虚拟资源寻址」change 的所有权，已有闭集为 `agent-spec` | `skills` | `config`，其中并无会话上下文专用取值。本 capability MUST NOT 自行发明 `kind` 名；在该 owner 裁定（复用既有取值或新登记一个取值）下发前，本 change 的姿态是：引用该裁定、接口 fail-closed，不得先行实现。
+会话上下文资源**自身**使用的 `kind` 取值已由「统一虚拟资源寻址」change 在 kind 闭集内**定稿为 `session`**（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」，闭集为 `agent-spec` | `skills` | `config` | `session`）。本 capability **直接引用该已登记取值，无需新登记、无待裁定项**；规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`。
 
 #### Scenario: owner 已定稿项写为具名引用
 - **WHEN** 某内容属于 scope 闭集、scope_id 语义、`kind` 闭集或拒绝码取值
 - **THEN** 它具名引用「统一虚拟资源寻址」change 对应 requirement，MUST NOT 写成本地待定或另行发明
 
-#### Scenario: 唯一待裁定项不被当作已定稿
-- **WHEN** 内容为会话上下文资源自身的 `kind` 取值
-- **THEN** 它显式标注为待该 owner 裁定，本 change 不自行发明取值、接口 fail-closed
+#### Scenario: 会话上下文 kind 引用已登记取值
+- **WHEN** 会话上下文资源自身的 `kind` 取值被引用
+- **THEN** 它具名引用「统一虚拟资源寻址」change 已定稿的 `session`，本 change 不自行发明取值、不再列作待裁定
 
 #### Scenario: 已确证结论可直接执行
 - **WHEN** 某内容已由本轮实测取证确证

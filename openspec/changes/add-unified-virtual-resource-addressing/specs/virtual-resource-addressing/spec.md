@@ -93,9 +93,9 @@ VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 
 统一 VRN 语法 MUST 为：
 
-``````text
+```text
 boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}
-``````
+```
 
 其中 `{gateway_authority?}` 为**可选单段**，承载**稳定 gateway_id**，缺省即本机 gateway；`resources` 是**固定保留段**（MUST NOT 省略、MUST NOT 被简化掉）；`{kind}` 取自**定稿闭集**（见下一条 requirement）。系统 MUST 使用闭合 charset（动段 `[A-Za-z0-9_-]`，`grammar.py:20`）；MUST 拒绝百分号编码与 `#fragment`（均在分段之前整体拒绝，`grammar.py:126-130`/`:133-134`，故不存在二次解码歧义）；大小写**不折叠**（变体一律结构化拒绝），分隔符唯一为 `/`（`\` 整体拒绝），相对段 `.`/`..` 显式拒绝；规范化 MUST 只有单一实现。现有 skill 形态 `boxteam://workspace/{workspace_id}/resources/skills/{name}/SKILL.md` MUST 是本语法的特例（authority 缺省），MUST NOT 存在第二套并列语法。
 
@@ -126,7 +126,7 @@ boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical
 
 ### Requirement: kind 闭集定稿且描述符闭集独立不可混用
 
-VRN 的 kind 闭集 MUST 为 `agent-spec` | `skills` | `config`（依据权威表：既有真实闭集为 `agent-spec`/`skills`，`config` 为本次新增，用于承载配置来源文件本身）。
+VRN 的 kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session`（依据权威表：既有真实闭集为 `agent-spec`/`skills`，`config` 与 `session` 为本次新增）。`config` 承载配置来源文件本身；`session` 承载会话上下文资源（会话定位，由并行 change `migrate-session-context-uri-to-vrn` 消费其 VRN 表达）。两者均在**本 requirement 登记，无需再由其它 change 新登记**。
 
 系统 MUST 区分**两个独立的 kind 闭集**，MUST NOT 混用：`parse_vrn` 的 kind 闭集（`grammar.py:18` 的 `_RESOURCE_KINDS`，解析期取值只能是 `agent-spec`/`skills`，`memory` 时 `kind` 为 `None`）与描述符 kind 闭集（`values.py:24` 的 `_DESCRIPTOR_KINDS`）。机制说明：`memory` 仅出现在描述符闭集，不出现在语法 kind 闭集。
 
@@ -134,6 +134,11 @@ VRN 的 kind 闭集 MUST 为 `agent-spec` | `skills` | `config`（依据权威�
 
 - **WHEN** 系统表达一条配置来源资源的地址
 - **THEN** 其 kind 使用闭集内的 `config`，与既有 kind 共享同一套语法与拒绝码
+
+#### Scenario: session kind 承载会话上下文资源
+
+- **WHEN** 系统表达一个会话上下文资源（会话定位）的地址
+- **THEN** 其 kind 使用闭集内的 `session`，与既有 kind 共享同一套语法与拒绝码；该取值已在本登记处定稿，并行 change 直接引用、无需新登记
 
 #### Scenario: 两个 kind 闭集不可混用
 

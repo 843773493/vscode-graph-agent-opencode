@@ -175,11 +175,11 @@ SessionContextResourceRef {
 4. **配置来源真实路径迁移（已确证义务，见 D6）**：把 `ConfigSource.path: Path` 换成 `vrn: VRN`，兄弟字段（`layer`/`precedence`/`layer_revision`/`layer_digest`/`source_generation`）原样保留；同步移除 `ConfigSourceLayerRecord.source_path`/`backup_path` 与 `ConfigSourceDTO.path` 对真实路径的持久化/输出。
 5. **删除 bundled 到 builtin 的改名 shim**：落地时移除 `app/agents/skill_runtime.py:538` 的 `bundled`→`builtin` 映射并同步 `inline` 正名；注意 `layer` 名（`bundled`）进入 `entry_identity` 与 catalog payload，属契约级变更，需评估同步面而非纯改名。
 
-**部署顺序约束**：本 change 的 spec/design/tasks 先于「统一虚拟资源寻址」的 VRN grammar、`kind` 闭集与拒绝码登记落地之前**不得**进入实施，因为会话上下文解析直接依赖其 grammar 与拒绝码。
+**部署顺序约束**：本 change 的 spec/design/tasks 先于「统一虚拟资源寻址」的 VRN grammar 与拒绝码登记落地之前**不得**进入实施，因为会话上下文解析直接依赖其 grammar 与拒绝码；`kind` 取值（`session`）已由该 change 定稿，不再是前置阻塞项。
 
 ## Open Questions
 
-- **会话上下文资源自身的 `kind`（唯一仍待 owner 裁定项）**：`kind` 闭集由「统一虚拟资源寻址」change 定稿为 `agent-spec` | `skills` | `config`（其 requirement「kind 闭集定稿且描述符闭集独立不可混用」），其中并无会话上下文专用取值。会话上下文资源用哪个 `kind`（复用既有取值或新登记一个）由该 owner 裁定；本 change MUST NOT 自行发明 `kind` 名，裁定下发前接口 fail-closed，不得先行实现。`scope_id` 语义已由该 owner 定稿（其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」），本 change 直接引用，不再待定。
+- **会话上下文资源自身的 `kind`（已定稿，不再是 open question）**：由「统一虚拟资源寻址」change 在 kind 闭集内定稿为 `session`（其 requirement「kind 闭集定稿且描述符闭集独立不可混用」，闭集为 `agent-spec` | `skills` | `config` | `session`）。本 change 直接引用该已登记取值，无需新登记、无待裁定项；规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`。`scope_id` 语义同样已由该 owner 定稿，本 change 直接引用。
 - **拒绝码的具体归属**：会话上下文新增拒绝场景（如「旧式 fragment 形态」「view 与资源不兼容」「memory 两点式」）落到 `grammar.py` 的 17 个码还是 `resolver.py` 的 6 个码，由寻址 change 集中登记后引用；本 change 不新增码、不混用两套闭集。
 - **`assembly_ref` 的表示**：D2 中 `assembly={id}` 迁为 `assembly_ref`，其具体采用资源身份还是专用 ref 类型，待与 itemized rollout context 的 assembly 身份模型对齐后确定（不改变本 change 的结构化方向）。
 - **`user` scope 的未来扩展（不影响当前终值）**：`user` → `local` 已由「统一虚拟资源寻址」change 定为**终值**（其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」规定 `user` → `local` 并 MUST 显式声明为单用户本地程序约定）。本 change 直接引用该终值，不存在后续判定。若将来出现多用户场景如何扩展语义（例如是否引入用户名细分），属**未来可能**，须由 owner 另行发起变更，不得据此改动当前终值。

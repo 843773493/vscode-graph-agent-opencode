@@ -4,7 +4,7 @@
 - [ ] 1.2 建立**scope 闭集与 scope_id 唯一表**（唯一处，定稿）：scope 闭集 = `workspace` | `user` | `gateway` | `inline`；scope_id 语义 = `workspace`→真实 workspace_id、`gateway`→**真实 gateway_id**、`inline`→**真实 distribution_id**、`user`→`local`（显式声明为单用户本地程序约定）。写明「scope_id 对所有 scope 都必填、MUST 由真实身份推导、MUST NOT 硬编码字面量」与「`memory` 不是 VRN scope」。**已定稿，不再是初审。**
 - [ ] 1.3 建立**拒绝码集中登记处（唯一处，分两套）**：分别登记 grammar 拒绝码（`grammar.py:22-42` 的 17 个，构造期对未登记 code 抛 `ValueError`，闭集不可扩展）与 resolve 拒绝码（`resolver.py:29-38` 的 6 个），标明各自适用范围与「MUST NOT 混用」；写明「新增码只在此出现一次，其它 change/模块只能引用、不得自造同义码」及拒绝码闭合的可机械检查方式。
 - [ ] 1.4 固定**统一 VRN 语法**与规范化契约：`boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}`——`{gateway_authority?}` 为可选单段且承载稳定 gateway_id；`{scope_id}` 对所有 scope 必填；`resources` 为固定保留段；闭合 charset、唯一 `/` 分隔符、拒绝 `%`/`#`/`\`/`.`/`..`/空段/控制字符/非 ASCII/大小写变体；声明现有 skill 形态是本语法特例，且不存在第二套并列语法。
-- [ ] 1.5 固定**kind 闭集**：`agent-spec` | `skills` | `config`（`config` 为新增）。明确 `_RESOURCE_KINDS`（语法 kind，`grammar.py:18`）与 `_DESCRIPTOR_KINDS`（描述符 kind，`values.py:24`，含 `memory`）是**两个独立闭集，不可混用**。
+- [ ] 1.5 固定**kind 闭集**：`agent-spec` | `skills` | `config` | `session`（`config` 承载配置来源文件本身、`session` 承载会话上下文资源/会话定位，二者均为新增且在此定稿）。明确 `_RESOURCE_KINDS`（语法 kind，`grammar.py:18`）与 `_DESCRIPTOR_KINDS`（描述符 kind，`values.py:24`，含 `memory`）是**两个独立闭集，不可混用**。
 
 ## 2. 三层分离与不变量
 
@@ -42,7 +42,7 @@
 - [ ] 6.1 更新未归档的 `openspec/changes/add-context-injection-lifecycle/tasks.md`：把 `3.14`（解析器本体）标注为「由本 change 的语法/scope/scope_id/kind/拒绝码定义取代」，把未完成的接线任务 `6.6` 与 `7.1` **指向本 change**（引用而非复制定义）。
 - [ ] 6.2 更新该 change 的 `specs/context-injection-lifecycle/spec.md` 中 VRN resolver requirement 的归属声明：写明 scope 闭集定稿为 `workspace`/`user`/`gateway`/`inline`、`memory` 已确证不是 VRN scope，语法、scope_id 语义、kind 与拒绝码以本 change 为准；保留其自身行为要求（隐藏 locator、activation snapshot 恢复、`skill_load` name-only 等）。
 - [ ] 6.3 与其余三个 change 对表：`migrate-session-context-uri-to-vrn` 复用本 change 的 scope/语法/kind 归属；`add-multi-workspace-backend-mounting` 复用显式 scope_id 身份要求；`add-workspace-persistent-resource-management` 复用持久化引用政策；四方术语、scope 名、scope_id 语义、kind 与拒绝码写法一致，无同义异名。
-- [ ] 6.4 收口在途 change 的残留旧词汇与 `memory` 形态（本轮已就地修正，登记为完成基线，实施期不得回退）：`add-context-injection-lifecycle/design.md:244`（`builtin`→`inline`）、同文件 `:245-246`（`memory` 两点式标注为非 VRN 示意）、`add-context-injection-lifecycle/specs/context-injection-lifecycle/spec.md:333`（正文 `builtin`→`inline`、`memory` 注明非 VRN scope）、`add-itemized-rollout-context/specs/session-turn-history/spec.md:134`（`builtin`→`inline`、`memory` 注明非 VRN scope）。
+- [ ] 6.4 收口在途 change 的残留旧词汇与 `memory` 形态（本轮已就地修正，登记为完成基线，实施期不得回退）：`add-context-injection-lifecycle/design.md:240-245` 示意块（`builtin`→`inline`，memory 行已移出）；同文件 `:248`（`memory` 两点式标注为非 VRN 示意）、`add-context-injection-lifecycle/specs/context-injection-lifecycle/spec.md:333`（正文 `builtin`→`inline`、`memory` 注明非 VRN scope）、`add-itemized-rollout-context/specs/session-turn-history/spec.md:134`（`builtin`→`inline`、`memory` 注明非 VRN scope）。
 - [ ] 6.5 收口第四个并行 change `add-workspace-persistent-resource-management`：其持久化工作区资源记录只保存稳定 `resource_id`（不保存 real path），与「持久化引用 = identity + VRN」政策不冲突；已在其 `proposal.md` 添加引用本 change 的持久化引用政策声明。实施期须复核其 `resource_id` 到 VRN 的绑定方式。
 
 ## 7. 验证与收口

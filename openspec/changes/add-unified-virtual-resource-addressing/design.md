@@ -8,7 +8,7 @@
 - `app/services/business/session_context_resource.py` 是**第二套并行**的 `boxteam://` 正则解析器（会话定位，支持 `#fragment`），与 VRN grammar 互不可解析。
 - 在途未归档 change `add-context-injection-lifecycle` 的 `tasks.md:47`（3.14）解析器本体已完成，`tasks.md:95`（6.6）与 `:111`（7.1）接线任务未做；其 `specs/context-injection-lifecycle/spec.md:331/333` 有 VRN resolver requirement。
 
-**契约版本与权威表状态**：本设计采用**契约修正 v2**（保留既有段序，`resources` 为固定保留段，`scope_id` 对所有 scope 必填），并已依据**已下发的权威表**定稿三类内容：scope 闭集、scope_id 语义、kind 闭集与拒绝码登记。权威表推翻 v2 两处初审：既有 scope 闭集其实只有 `workspace`/`gateway`/`builtin`/`memory`，`user`/`inline` 为新增；kind 既有只有 `agent-spec`/`skills`，`config` 为新增。
+**契约版本与权威表状态**：本设计采用**契约修正 v2**（保留既有段序，`resources` 为固定保留段，`scope_id` 对所有 scope 必填），并已依据**已下发的权威表**定稿三类内容：scope 闭集、scope_id 语义、kind 闭集与拒绝码登记。权威表推翻 v2 两处初审：既有 scope 闭集其实只有 `workspace`/`gateway`/`builtin`/`memory`，`user`/`inline` 为新增；kind 既有只有 `agent-spec`/`skills`，`config` 与 `session` 为新增。
 
 ## Goals / Non-Goals
 
@@ -90,6 +90,16 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 **理由**：审计里 `SemanticResourceDescriptor` 双类同名与 `contracts.py` 的 TODO 表明，之前把「身份」与「地址/owner scope」耦合，导致字段语义漂移。以「可解析性」切分最清晰。
 
 **备选**：让 VRN 兼任 identity 用于去重（被否：VRN 允许悬空，悬空后无法去重）。
+
+### D8b：kind 闭集为 config 与 session 各登记一次（owner 裁定，消除待登记）
+
+**决定**：kind 闭集定稿为 `agent-spec` | `skills` | `config` | `session`。会话上下文资源（会话定位）**自身**的 kind 取 `session`，由本 change 在此登记；`config` 承载配置来源文件本身。两者都不再由别的 change 新登记。
+
+**理由**：闭集一旦闭合，未登记 kind 会被拒绝；若把「会话上下文资源的 kind」留成待登记，并行 change `migrate-session-context-uri-to-vrn` 的设计就无法落地。所有权在本 change，故必须现在登记而非挂成 open question。会话上下文资源的语义本体是「定位一个 Session」，既有 kind 无一覆盖，故取其语义名 `session`。
+
+**含义**：会话上下文资源的规范形态回到标准资源形态 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`（如 `.../resources/session/{session_id}`），与 `boxteam://session/{session_id}#...` 旧自有语法彻底分道。
+
+**备选**：让会话上下文资源复用 `agent-spec` 或 `skills`（被否：语义完全不匹配，等于用错误词汇掩盖新资源种类）；把该 kind 留成待登记（被否：会阻塞并行 change 落地，且违背本 change 的 kind 所有权）。
 
 ### D9：配置来源寻址用 config kind，sqlite 层不编 VRN
 
