@@ -162,13 +162,13 @@ def test_token_source_uses_version_token_without_file_double_read() -> None:
 
 
 def test_token_source_error_retains_previous_revision(tmp_path: Path) -> None:
-    state = {"token": "mem-rev-1", "content": "memory v1", "fail": False}
+    state = {"token": "gateway-gen-1:rev-a", "content": "gateway snapshot v1", "fail": False}
     handle = ObservedSourceHandle(
         descriptor=ObservedSourceDescriptor(
-            source_id="mem-team",
-            source_kind="memory_state",
-            display_uri="boxteam://memory/team",
-            entry_identity="entry-mem-team",
+            source_id="gw-agents",
+            source_kind="gateway_snapshot",
+            display_uri="boxteam://gateway/agents",
+            entry_identity="entry-gw-agents",
         ),
         version_token_reader=lambda: (
             (_ for _ in ()).throw(StableSourceReadError("missing", "snapshot disconnected"))
@@ -176,15 +176,15 @@ def test_token_source_error_retains_previous_revision(tmp_path: Path) -> None:
             else (state["token"], state["content"])
         ),
     )
-    reconciler = SourceReconciler(handles={"mem-team": handle})
-    first = reconciler.reconcile("mem-team")
+    reconciler = SourceReconciler(handles={"gw-agents": handle})
+    first = reconciler.reconcile("gw-agents")
     assert first.available is True
     state["fail"] = True
-    unavailable = reconciler.reconcile("mem-team")
+    unavailable = reconciler.reconcile("gw-agents")
     assert unavailable.available is False
     assert unavailable.error_code == "missing"
-    assert unavailable.retained_revision == "mem-rev-1"
-    assert unavailable.content == "memory v1"
+    assert unavailable.retained_revision == "gateway-gen-1:rev-a"
+    assert unavailable.content == "gateway snapshot v1"
 
 
 def test_revision_states_merge_uncommitted_changes(tmp_path: Path) -> None:

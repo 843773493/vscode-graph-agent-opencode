@@ -84,20 +84,20 @@ def test_conditional_producer_requires_exact_toolset_policy() -> None:
 
 
 def test_unwired_producer_cannot_pose_as_enabled() -> None:
-    memory = _spec(
-        producer_id="R09",
-        source_id="instruction:agent-memory",
-        source_kind="agent_memory",
-        name="agent-memory",
-        content="memory body",
-        policy_key="agent_memory",
+    unwired = _spec(
+        producer_id="R07",
+        source_id="instruction:compact-tool-usage",
+        source_kind="compact_tool_usage",
+        name="compact-tool-usage",
+        content="compact tool usage body",
+        policy_key="compact_conversation",
         wired=False,
     )
     with pytest.raises(InstructionProducerError) as excinfo:
-        assert_producer_registrable(memory)
+        assert_producer_registrable(unwired)
     assert excinfo.value.code == "instruction-producer-not-wired"
     with pytest.raises(InstructionProducerError) as register_error:
-        register_instruction_producer(ContextSourceManager(), memory)
+        register_instruction_producer(ContextSourceManager(), unwired)
     assert register_error.value.code == "instruction-producer-not-wired"
 
 

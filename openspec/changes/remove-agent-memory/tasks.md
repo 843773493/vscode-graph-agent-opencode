@@ -34,7 +34,7 @@
 
 - [x] 5.1 `app/agents/instruction_producers.py`：删除 `ConditionalPolicyKey` 的 `"agent_memory"` 成员（`:43`）与 `_POLICY_KEYS` 的 `"agent_memory"`（`:319`）；同步清理 `:4`/`:140` 的「显式 memory」「R09 memory」措辞。
 - [x] 5.2 验证：`rg -n "agent_memory" app/agents` 零命中；`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/test_instruction_producers.py -q`。
-- [x] 5.3 **登记代码侧 R09 残留为待删除项（M2，本 change 不动代码）**：`app/agents/instruction_producers.py:35` 的 `InstructionProducerId = Literal[... "R07", "R09"]` 与 `:311` 的 `_KNOWN_PRODUCER_IDS = frozenset({"R01".."R07", "R09"})` 仍含 `"R09"`，且 `:3`（模块 docstring「R01–R07/R09」）与 `:140`（`assert_producer_registrable` docstring「R09 memory」）仍以 R09 指代 memory。R09 就是本 change 删除的 `agent_memory` 能力在 producer 身份层的编号；它与 policy key `agent_memory`（`:43` 的 `ConditionalPolicyKey` 成员、`:319` 的 `_POLICY_KEYS` 成员，见 5.1）是同一能力的两处登记。**待删除项**：`:35` 的 `"R09"`、`:311` 的 `"R09"`、`:3`/`:140` 的 R09 措辞，由实施轮次随 5.1 一并物理下线；本次只作路径行号与符号名登记，MUST NOT 在规划轮改动 `app/**`。
+- [x] 5.3 **代码侧 R09 残留已在实施轮随 5.1 一并物理下线**：`app/agents/instruction_producers.py` 的 `InstructionProducerId`（原 `:35`）与 `_KNOWN_PRODUCER_IDS`（原 `:311`）中的 `"R09"`，以及模块 docstring（原 `:3` 的「R01–R07/R09」）与 `assert_producer_registrable` docstring（原 `:140` 的「R09 memory」）措辞均已删除。R09 是被移除 `agent_memory` 能力在 producer 身份层的编号，与 policy key `agent_memory`（原 `:43`/`:319`）同属同一能力的两处登记，二者现均已下线。验证：`rg -n "R09" app` 零命中。跨 change 文档同步项见 10.4/10.4.1/10.4.2。
 
 ## 6. 删除 prompt tag 并处置 untrusted_reference 死值
 
@@ -54,11 +54,11 @@
 
 ## 8. 删除配置键与 schema 定义（fail-closed 收紧）
 
-- [ ] 8.1 `configs/workspace_inline.jsonc`：删除 `agent.memory` 块（`:427-433`，6 键）。
-- [ ] 8.2 `configs/workspace_schema.jsonc`：删除 `agentConfig.properties.memory`（`:1052-1054`）与 `$defs.agentMemory`（`:1430-1495`）。
-- [ ] 8.3 `configs/tests/workspace/default.jsonc`：删除四处 memory 测试块（`:317-325`、`:397-399`、`:482-484`、`:572-574`）。**`:342` 的 `enable_workspace_memory` 按 D3/D7 不动**。
-- [ ] 8.4 确认 schema 逐层 `additionalProperties:false` 下旧用户残留 `agent.memory.*` 键会在 `configs/runtime.py:53` 显式报「配置验证失败」；登记该 fail-closed 收紧为 BREAKING 迁移义务。
-- [ ] 8.5 验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/configs -q`；`uv run python -m configs.boxteam` 相关校验路径确认 schema 自洽。
+- [x] 8.1 `configs/workspace_inline.jsonc`：删除 `agent.memory` 块（`:427-433`，6 键）。
+- [x] 8.2 `configs/workspace_schema.jsonc`：删除 `agentConfig.properties.memory`（`:1052-1054`）与 `$defs.agentMemory`（`:1430-1495`）。
+- [x] 8.3 `configs/tests/workspace/default.jsonc`：删除四处 memory 测试块（`:317-325`、`:397-399`、`:482-484`、`:572-574`）。**`:342` 的 `enable_workspace_memory` 按 D3/D7 不动**。
+- [x] 8.4 确认 schema 逐层 `additionalProperties:false` 下旧用户残留 `agent.memory.*` 键会在 `configs/runtime.py:53` 显式报「配置验证失败」；登记该 fail-closed 收紧为 BREAKING 迁移义务。
+- [x] 8.5 验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/configs -q`；`uv run python -m configs.boxteam` 相关校验路径确认 schema 自洽。
 
 ## 9. 精确到用例名的测试删改收口
 
@@ -79,7 +79,7 @@
 - [ ] 10.4.1 **补齐 R09 集合收窄三处（M1）**：`add-context-injection-lifecycle` 的 `tasks.md:96`（`R01–R09`）、`design.md:514`（`R01–R07 以及显式启用的 R09`）、`design.md:668`（`按R01–R09、E01–E07`）三处 R09 集合口径与 memory 移除后的新结论冲突，必须一并收窄为 `R01–R07`（:514 去掉「以及显式启用的 R09」）：
 - [ ] 10.4.2 **跨 change 同步项实际执行（本 change 直接改 `add-context-injection-lifecycle`，属被允许的跨 change 同步）**：已在 `openspec/changes/add-context-injection-lifecycle/tasks.md:96`、`design.md:514`、`design.md:668` 三处最小改动（只加约束与具名引用，不重写整体设计），行号以改动后实测为准，登记如下——`tasks.md:96`（6.7 覆盖矩阵 `R01–R09` → `R01–R07`，并加注 R09 已随 `remove-agent-memory` 移除）、`design.md:514`（`R01–R07 以及显式启用的 R09` → `R01–R07`，并加注 R09 已移除）、`design.md:668`（`按R01–R09、E01–E07` → `按R01–R07、E01–E07`，并加注 R09 已移除）。**如实登记：本 change 内不得改其它 change 的正文主线，只做这类最小同步。**
 - [ ] 10.5 登记 `add-itemized-rollout-context` 的 memory 枚举清理：`design.md:195/:475`、`specs/itemized-rollout-context/spec.md:811/:821/:1118/:1132/:1246`、`specs/checkpoint-history-loading/spec.md:203`、`tasks.md:37/:167`。**行号修正（M3）**：`checkpoint-history-loading/spec.md` 的 memory-provider lookup 场景当前在 `:203`（`spec.md:260` 行号已因提交 `b65f15b1` 移位失效）；本 change 内所有行号引用已逐条复核，`:260` 是唯一失准处。
-- [ ] 10.5.1 **登记代码侧 R09 残留（M2，见 5.3）**：`app/agents/instruction_producers.py:35`（`InstructionProducerId`）、`:311`（`_KNOWN_PRODUCER_IDS`）含 `"R09"`，与 policy key `agent_memory`（`:43`/`:319`）同属被移除能力的两处登记；本 change 只登记待删除项与精确路径行号，MUST NOT 改代码。
+- [x] 10.5.1 **代码侧 R09 已随 5.1 物理下线（实施轮）**：`app/agents/instruction_producers.py` 的 `InstructionProducerId`（原 `:35`）与 `_KNOWN_PRODUCER_IDS`（原 `:311`）含 `"R09"`，与 policy key `agent_memory`（原 `:43`/`:319`）同属被移除能力的两处登记，现已一并删除；`rg -n "R09" app` 零命中。
 - [ ] 10.6 登记待裁定项（design.md D7）：`docs/middleware-prompt-vscode-comparison.html:173-181` 的 `MemoryMiddleware` 整卡、`agent.knowledge.retrieval` 4 键、`gateway_snapshot` source kind、`enable_workspace_memory` flag、`PromptTrustLevel.untrusted_reference` 回收。**历史 workspace 重绑流程已按 owner 裁定升级为本 change 的必做迁移任务（见 7.3.1–7.3.3），不再列为待裁定项。**
 
 ## 11. OpenSpec 校验与交付

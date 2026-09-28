@@ -5,7 +5,7 @@ ObservedSourceRevision、内置文件 StableSourceReader 与有界 SourceReconci
 OpenSpec add-context-injection-lifecycle 3.2/3.3:来源观察、稳定快照与语义
 发布的统一底层。文件来源使用允许根/no-follow/普通文件、前后 signature、
 双读同 hash、最多三次 attempt、固定 byte 上限、严格 UTF-8 与完整原始
-byte hash;Gateway 内部快照与权威内存状态使用各自可验证版本 token,
+byte hash;Gateway 内部快照使用各自可验证版本 token,
 不套用文件双读。失败保留上一份 valid revision 并显式 unavailable。
 
 本模块是 sources 域 owner:CSM、middleware、skill_load 与 model-call
@@ -25,7 +25,7 @@ from pathlib import Path
 MAX_STABLE_READ_BYTES = 512 * 1024
 STABLE_READ_ATTEMPTS = 3
 
-_SOURCE_KINDS = frozenset({"file", "gateway_snapshot", "memory_state"})
+_SOURCE_KINDS = frozenset({"file", "gateway_snapshot"})
 _REVISION_KINDS = frozenset({"file_byte_hash", "version_token"})
 _REASON_CODES = frozenset(
     {
@@ -84,7 +84,7 @@ class ObservedSourceHandle:
     """实际 owner 私有的可重建读取句柄;不进入 CSM/middleware/工具结果。
 
     文件来源携带 file_path 与 allowed_root(均为绝对路径字符串);
-    gateway_snapshot/memory_state 携带 version_token_reader,返回
+    gateway_snapshot 携带 version_token_reader,返回
     "(version_token, content)" 二元组。entry_identity 是持久 catalog entry
     identity,进程重启后由 owner 据此重建同一 handle。
     """
@@ -119,7 +119,7 @@ class ObservedSourceHandle:
         if self.file_path is not None or self.allowed_root is not None:
             raise ValueError("非文件来源 handle 不得携带文件 locator")
         if self.version_token_reader is None or not callable(self.version_token_reader):
-            raise ValueError("gateway/memory 来源 handle 必须携带 version_token_reader")
+            raise ValueError("gateway 来源 handle 必须携带 version_token_reader")
 
 
 @dataclass(frozen=True, slots=True)

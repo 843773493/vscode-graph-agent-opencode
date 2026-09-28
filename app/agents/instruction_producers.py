@@ -1,7 +1,7 @@
 """OpenSpec 4.6：初始 instruction producer 的 typed 注册合同。
 
-设计表 R01–R07/R09 的说明性上下文（Agent 基础说明、runtime identity、条件化
-团队规则、Todo、Skill metadata、Filesystem、compact tool 说明和显式 memory）
+设计表 R01–R07 的说明性上下文（Agent 基础说明、runtime identity、条件化
+团队规则、Todo、Skill metadata、Filesystem、compact tool 说明）
 在这里取得统一的 producer identity、root 资格声明与 ToolSet policy 绑定；
 producer 只通过 typed spec/observation 提交 provenance 给唯一
 ``ContextSourceManager``，不再直接拼 HumanMessage/system 作为隐式来源。
@@ -32,7 +32,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.source_
     build_source_lifecycle_decision,
 )
 
-InstructionProducerId = Literal["R01", "R02", "R03", "R04", "R05", "R06", "R07", "R09"]
+InstructionProducerId = Literal["R01", "R02", "R03", "R04", "R05", "R06", "R07"]
 """设计表 4.6 列出的初始 instruction producer 身份。"""
 
 ConditionalPolicyKey = Literal[
@@ -40,7 +40,6 @@ ConditionalPolicyKey = Literal[
     "todo_list",
     "compact_conversation",
     "filesystem_rules",
-    "agent_memory",
 ]
 """条件化 instruction producer 绑定的精确 ToolSet policy key。
 
@@ -137,8 +136,8 @@ class InstructionProducerSpec:
 def assert_producer_registrable(spec: InstructionProducerSpec) -> None:
     """注册门禁：未接线的 producer 不得伪装启用。
 
-    默认未接线的能力（例如生产 runtime 未传入 sources 的 R09 memory）在注册点
-    直接失败，而不是登记一个永远不生效的 source 冒充已启用。
+    默认未接线的能力（例如生产 runtime 未传入 sources 的条件化 producer）在
+    注册点直接失败，而不是登记一个永远不生效的 source 冒充已启用。
     """
     if not isinstance(spec, InstructionProducerSpec):
         raise TypeError("assert_producer_registrable 需要 InstructionProducerSpec")
@@ -308,7 +307,7 @@ def register_instruction_producer(
 
 
 _KNOWN_PRODUCER_IDS: frozenset[str] = frozenset(
-    {"R01", "R02", "R03", "R04", "R05", "R06", "R07", "R09"}
+    {"R01", "R02", "R03", "R04", "R05", "R06", "R07"}
 )
 _POLICY_KEYS: frozenset[str] = frozenset(
     {
@@ -316,7 +315,6 @@ _POLICY_KEYS: frozenset[str] = frozenset(
         "todo_list",
         "compact_conversation",
         "filesystem_rules",
-        "agent_memory",
     }
 )
 _FORBIDDEN_METADATA_KEYS: frozenset[str] = frozenset(
