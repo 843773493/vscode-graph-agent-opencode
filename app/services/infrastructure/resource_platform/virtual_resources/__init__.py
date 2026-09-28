@@ -8,7 +8,6 @@ from app.services.infrastructure.resource_platform.sources.observed_source impor
 from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
     ParsedVrn,
     VrnGrammarError,
-    memory_display_uri,
     parse_vrn,
     skill_display_uri,
     workspace_agent_spec_display_uri,
@@ -46,7 +45,6 @@ __all__ = [
     "VirtualResourceResolver",
     "VrnGrammarError",
     "VrnResolveError",
-    "memory_display_uri",
     "parse_vrn",
     "skill_display_uri",
     "workspace_agent_spec_display_uri",

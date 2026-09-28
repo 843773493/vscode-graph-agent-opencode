@@ -116,7 +116,6 @@ def test_grammar_and_scope_reject_before_catalog_access() -> None:
 def test_scope_mismatch_per_scope() -> None:
     gateway_uri = skill_display_uri(scope="gateway", scope_id="gw-1", skill_name="code-review")
     builtin_uri = skill_display_uri(scope="builtin", scope_id="dist-1", skill_name="code-review")
-    memory_uri = "boxteam://memory/session/preference"
     resolver = VirtualResourceResolver(
         _catalog(
             {
@@ -129,11 +128,6 @@ def test_scope_mismatch_per_scope() -> None:
                     descriptor=_descriptor("res-b-1", builtin_uri),
                     capabilities=_CAPS,
                     snapshot_ref="cas:2",
-                ),
-                memory_uri: CatalogBinding(
-                    descriptor=_descriptor("res-m-1", memory_uri, kind="memory"),
-                    capabilities=_CAPS,
-                    snapshot_ref="cas:3",
                 ),
             }
         )
@@ -152,9 +146,6 @@ def test_scope_mismatch_per_scope() -> None:
                 workspace_id="ws-1", gateway_id="gw-1", distribution_id="dist-OTHER"
             ),
         )
-    assert excinfo.value.reason_code == "scope_mismatch"
-    with pytest.raises(VrnResolveError) as excinfo:
-        resolver.resolve(memory_uri, operation=OPERATION_READ_CONTENT, context=ResolutionContext())
     assert excinfo.value.reason_code == "scope_mismatch"
 
 

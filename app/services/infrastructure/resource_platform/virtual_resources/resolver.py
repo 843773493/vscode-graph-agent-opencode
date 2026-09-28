@@ -204,13 +204,6 @@ class VirtualResourceResolver:
             "gateway": context.gateway_id,
             "builtin": context.distribution_id,
         }.get(scope)
-        if scope == "memory":
-            # memory 是 workspace 业务数据，必须存在 workspace principal 绑定。
-            if context.workspace_id is None:
-                raise VrnResolveError(
-                    "scope_mismatch", "memory VRN 需要 workspace principal 绑定"
-                )
-            return
         if bound != scope_id:
             raise VrnResolveError(
                 "scope_mismatch",

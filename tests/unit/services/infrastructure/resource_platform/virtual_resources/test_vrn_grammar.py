@@ -6,7 +6,6 @@ import pytest
 
 from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
     VrnGrammarError,
-    memory_display_uri,
     parse_vrn,
     skill_display_uri,
     workspace_agent_spec_display_uri,
@@ -36,12 +35,11 @@ def test_parse_skill_three_scopes() -> None:
         assert parsed.logical_name == "code-review"
 
 
-def test_parse_memory() -> None:
-    parsed = parse_vrn("boxteam://memory/session/preference")
-    assert parsed.scope == "memory"
-    assert parsed.scope_id == "session"
-    assert parsed.kind is None
-    assert parsed.logical_name == "preference"
+def test_memory_scope_is_rejected_fail_closed() -> None:
+    # memory 不是 VRN scope；任何 boxteam://memory/ URI 必须在解析层 fail-closed。
+    with pytest.raises(VrnGrammarError) as excinfo:
+        parse_vrn("boxteam://memory/session/preference")
+    assert excinfo.value.reason_code == "unknown_scope"
 
 
 @pytest.mark.parametrize(
@@ -128,8 +126,6 @@ def test_parse_memory() -> None:
             "boxteam://workspace/ws-1/resources/skills/s/SKILL.md/extra",
             "malformed_path",
         ),
-        ("boxteam://memory/only-one-segment", "malformed_path"),
-        ("boxteam://memory/a/b/c", "malformed_path"),
     ],
 )
 def test_grammar_rejects(uri: str, reason_code: str) -> None:
@@ -143,8 +139,6 @@ def test_display_builders_round_trip() -> None:
     assert parse_vrn(uri).display_uri == uri
     uri = skill_display_uri(scope="gateway", scope_id="gw-1", skill_name="review")
     assert parse_vrn(uri).display_uri == uri
-    uri = memory_display_uri(memory_scope="session", resource_name="pref")
-    assert parse_vrn(uri).display_uri == uri
 
 
 def test_display_builders_reject_bad_names() -> None:
@@ -153,7 +147,4 @@ def test_display_builders_reject_bad_names() -> None:
     assert excinfo.value.reason_code == "invalid_character"
     with pytest.raises(VrnGrammarError) as excinfo:
         workspace_agent_spec_display_uri("ws/1")
-    assert excinfo.value.reason_code == "invalid_character"
-    with pytest.raises(VrnGrammarError) as excinfo:
-        memory_display_uri(memory_scope="session", resource_name="a b")
     assert excinfo.value.reason_code == "invalid_character"

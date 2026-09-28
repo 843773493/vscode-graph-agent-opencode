@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Final
 
 _SCHEME: Final = "boxteam://"
-_SCOPE_KEYWORDS: Final = frozenset({"workspace", "gateway", "builtin", "memory"})
+_SCOPE_KEYWORDS: Final = frozenset({"workspace", "gateway", "builtin"})
 _RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills"})
 _SKILL_SCOPES: Final = frozenset({"workspace", "gateway", "builtin"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
@@ -56,9 +56,8 @@ class VrnGrammarError(ValueError):
 class ParsedVrn:
     """一次严格解析后的逻辑地址；不含任何 locator/credential 语义。
 
-    `scope_id` 对 workspace/gateway/builtin 是对应 identity，对 memory 是
-    memory 逻辑 scope；`logical_name` 对 skills 是 skill name，对
-    agent-spec 是固定 `root/AGENTS.md`，对 memory 是逻辑资源名。
+    `scope_id` 对 workspace/gateway/builtin 是对应 identity；`logical_name` 对
+    skills 是 skill name，对 agent-spec 是固定 `root/AGENTS.md`。
     """
 
     scope: str
@@ -154,22 +153,6 @@ def parse_vrn(uri: str) -> ParsedVrn:
     scope = _parse_scope(segments[0])
     body = segments[1:]
 
-    if scope == "memory":
-        if len(body) != 2:
-            raise VrnGrammarError(
-                "malformed_path",
-                f"memory VRN 必须是 boxteam://memory/{{scope}}/{{name}}: {uri!r}",
-            )
-        _validate_dynamic_segment(body[0], field="memory scope")
-        _validate_dynamic_segment(body[1], field="memory resource name")
-        return ParsedVrn(
-            scope="memory",
-            scope_id=body[0],
-            kind=None,
-            logical_name=body[1],
-            display_uri=uri,
-        )
-
     if len(body) < 3:
         raise VrnGrammarError(
             "malformed_path",
@@ -227,10 +210,3 @@ def skill_display_uri(*, scope: str, scope_id: str, skill_name: str) -> str:
     _validate_dynamic_segment(scope_id, field="scope id")
     _validate_dynamic_segment(skill_name, field="skill name")
     return f"boxteam://{scope}/{scope_id}/resources/skills/{skill_name}/SKILL.md"
-
-
-def memory_display_uri(*, memory_scope: str, resource_name: str) -> str:
-    """构造并校验 memory 规范 display URI。"""
-    _validate_dynamic_segment(memory_scope, field="memory scope")
-    _validate_dynamic_segment(resource_name, field="memory resource name")
-    return f"boxteam://memory/{memory_scope}/{resource_name}"

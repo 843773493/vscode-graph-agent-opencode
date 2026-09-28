@@ -21,7 +21,7 @@ ALL_OPERATIONS: Final = frozenset(
     {OPERATION_READ_CONTENT, OPERATION_ACTIVATE, OPERATION_OBSERVE}
 )
 
-_DESCRIPTOR_KINDS: Final = frozenset({"agent-spec", "skills", "memory"})
+_DESCRIPTOR_KINDS: Final = frozenset({"agent-spec", "skills"})
 _IDENTITY_FORBIDDEN: Final = ("/", "\\", "@", "%")
 
 
@@ -73,12 +73,7 @@ class SemanticResourceDescriptor:
         if self.kind not in _DESCRIPTOR_KINDS:
             raise ValueError(f"未知 SemanticResourceDescriptor.kind: {self.kind!r}")
         parsed = parse_vrn(self.display_uri)
-        if self.kind == "memory":
-            if parsed.scope != "memory":
-                raise ValueError(
-                    "kind=memory 的 display_uri 必须是 boxteam://memory/ URI"
-                )
-        elif parsed.scope == "memory" or parsed.kind != self.kind:
+        if parsed.kind != self.kind:
             raise ValueError(
                 f"display_uri 与 kind 不一致: kind={self.kind!r} uri={self.display_uri!r}"
             )
