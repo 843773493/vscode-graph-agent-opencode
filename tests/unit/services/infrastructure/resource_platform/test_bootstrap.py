@@ -14,9 +14,6 @@ from app.services.infrastructure.events.event_channel_service import (
 from app.services.infrastructure.resource_platform.adapters.gateway_snapshot import (
     AuthenticatedGatewaySnapshot,
 )
-from app.services.infrastructure.resource_platform.adapters.memory_state import (
-    AuthoritativeMemorySnapshot,
-)
 from app.services.infrastructure.resource_platform.bootstrap import (
     bootstrap_resource_platform,
 )
@@ -37,38 +34,21 @@ class _FakeGatewayReader:
         )
 
 
-class _FakeMemoryReader:
-    """按 key 返回固定权威内存状态的替身 owner。"""
-
-    async def read_state(self, key: str) -> AuthoritativeMemorySnapshot:
-        return AuthoritativeMemorySnapshot(
-            key=key,
-            version_token=f"token:{key}",
-            payload={"state": key},
-        )
-
-
 def test_bootstrap_assembles_platform_with_fixed_adapters(tmp_path) -> None:
     """bootstrap 固定装配：scope、事件通道、file 能力与可选适配。"""
     gateway_reader = _FakeGatewayReader()
-    memory_reader = _FakeMemoryReader()
     platform = bootstrap_resource_platform(
         workspace_root=tmp_path,
         gateway_snapshot_reader=gateway_reader,
         gateway_snapshot_locators=("boxteam://gateway/skills",),
-        memory_state_reader=memory_reader,
-        memory_state_keys=("team_state",),
     )
     assert platform.observation_channel is platform.file_registry.observation_channel
     assert platform.gateway_snapshots is not None
-    assert platform.memory_states is not None
     # 事件通道与 file registry 共用同一实例，不建第二套事件面。
     snapshot = asyncio.run(
         platform.gateway_snapshots.snapshot("boxteam://gateway/skills")
     )
     assert snapshot.content == b"snapshot-bytes"
-    state = asyncio.run(platform.memory_states.state("team_state"))
-    assert state.payload == {"state": "team_state"}
 
 
 @pytest.mark.asyncio
@@ -174,17 +154,3 @@ async def test_gateway_snapshot_adapter_rejects_unregistered_locator() -> None:
     )
     with pytest.raises(RuntimeError, match="version token"):
         await strict_adapter.snapshot("boxteam://gateway/skills")
-
-
-@pytest.mark.asyncio
-async def test_memory_state_adapter_rejects_unregistered_key() -> None:
-    """未登记的 memory key 显式失败，不返回伪造默认状态。"""
-    platform = bootstrap_resource_platform(
-        workspace_root=Path("/tmp"),
-        memory_state_reader=_FakeMemoryReader(),
-        memory_state_keys=("team_state",),
-    )
-    adapter = platform.memory_states
-    assert adapter is not None
-    with pytest.raises(KeyError, match="未在固定装配中登记"):
-        await adapter.state("unknown_key")

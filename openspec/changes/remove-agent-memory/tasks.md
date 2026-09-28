@@ -4,7 +4,7 @@
 
 - [ ] 1.1 `tests/unit/agents/test_middleware_prompts.py`：删除模块级 memory 相关 import（`MemoryMiddleware`、`MEMORY_SYSTEM_PROMPT`、`StructuredMemoryMiddleware`，约 `:8/:27/:36`）、`_build_middleware` 的 `memory` 形参（`:69/:87`）；`test_middleware_uses_project_prompts_without_upstream_demo_agents`（`:98`）删去 `memory=["/memory.md"]` 实参与 `agent_memory` 断言（`:121-122`），保留其余断言；整条删除纯 memory 用例 `test_memory_content_uses_registered_system_prompt_section`（`:134-144`）；`test_project_middleware_prompt_budget_stays_small`（`:179`）删去 `memory=["/memory.md"]`（`:180`），保留预算断言。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/test_middleware_prompts.py -q`。
 - [ ] 1.2 `tests/unit/agents/policy/test_tool_policy.py`：删除调用 `build_deep_agent_middleware` 处的 `memory=None,`（`:187`）。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/policy/test_tool_policy.py -q`。
-- [ ] 1.3 `tests/unit/services/infrastructure/resource_platform/test_bootstrap.py`：删除 `_FakeMemoryReader`（`:40-48`）、memory 相关 import（`:17-19`）、`test_bootstrap_assembles_platform_with_fixed_adapters` 中的 `memory_state_reader=`/`memory_state_keys=`（`:59-60`）与 `platform.memory_states` 断言（`:64/:70`）；整条删除 `test_memory_state_adapter_rejects_unregistered_key`（`:180-188`）。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/services/infrastructure/resource_platform/test_bootstrap.py -q`。
+- [x] 1.3 `tests/unit/services/infrastructure/resource_platform/test_bootstrap.py`：删除 `_FakeMemoryReader`（`:40-48`）、memory 相关 import（`:17-19`）、`test_bootstrap_assembles_platform_with_fixed_adapters` 中的 `memory_state_reader=`/`memory_state_keys=`（`:59-60`）与 `platform.memory_states` 断言（`:64/:70`）；整条删除 `test_memory_state_adapter_rejects_unregistered_key`（`:180-188`）。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/services/infrastructure/resource_platform/test_bootstrap.py -q`。
 - [ ] 1.4 `tests/unit/services/infrastructure/test_source_reconciler.py`：`test_token_source_error_retains_previous_revision`（`:165-187`）把 `source_kind="memory_state"` 与 `display_uri="boxteam://memory/team"` **改为 `gateway_snapshot` 同类构造**（参照同文件 `:142`），保留「token 来源失败保留上一 revision」分支覆盖，MUST NOT 直接删用例。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/services/infrastructure/test_source_reconciler.py -q`。
 - [ ] 1.5 `tests/unit/agents/test_instruction_producers.py`：`test_unwired_producer_cannot_pose_as_enabled` 附近以 `source_kind="agent_memory"`、`policy_key="agent_memory"`（`:88-100`）举例；随 D4 裁定删除 `agent_memory` policy key 后，改用其它未接线 producer 举例，保留「未接线 producer 不得伪装启用」断言。验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/agents/test_instruction_producers.py -q`。
 
@@ -19,11 +19,11 @@
 
 ## 3. 删除 memory state 适配链（resource_platform 层）
 
-- [ ] 3.1 删除整文件 `app/services/infrastructure/resource_platform/adapters/memory_state.py`（`AuthoritativeMemorySnapshot`/`MemoryStateReader`/`MemoryStateAdapter`）。
-- [ ] 3.2 `app/services/infrastructure/resource_platform/adapters/__init__.py`：删除三个符号的 re-export 与 `__all__` 项（`:17-20/:25/:33-34`）。
-- [ ] 3.3 `app/services/infrastructure/resource_platform/bootstrap.py`：删除 import（`:31-33`）、`ResourcePlatform.memory_states` 字段（`:62`）、`memory_state_reader`/`memory_state_keys` 形参（`:104-105`）、`memory_states = MemoryStateAdapter(...)` 装配（`:152-156`）与结果字段 `memory_states=memory_states`（`:166`）。
-- [ ] 3.4 复核 `app/container.py:476` 无需改动（本就没传 `memory_state_reader`）。验证：`rg -n "memory_state|memory_states|MemoryState" app` 零命中。
-- [ ] 3.5 验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/services/infrastructure/resource_platform -q`。
+- [x] 3.1 删除整文件 `app/services/infrastructure/resource_platform/adapters/memory_state.py`（`AuthoritativeMemorySnapshot`/`MemoryStateReader`/`MemoryStateAdapter`）。
+- [x] 3.2 `app/services/infrastructure/resource_platform/adapters/__init__.py`：删除三个符号的 re-export 与 `__all__` 项（`:17-20/:25/:33-34`）。
+- [x] 3.3 `app/services/infrastructure/resource_platform/bootstrap.py`：删除 import（`:31-33`）、`ResourcePlatform.memory_states` 字段（`:62`）、`memory_state_reader`/`memory_state_keys` 形参（`:104-105`）、`memory_states = MemoryStateAdapter(...)` 装配（`:152-156`）与结果字段 `memory_states=memory_states`（`:166`）。
+- [x] 3.4 复核 `app/container.py:476` 无需改动（本就没传 `memory_state_reader`）。验证：`rg -n "memory_state|memory_states|MemoryState" app` 零命中。
+- [x] 3.5 验证：`timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest tests/unit/services/infrastructure/resource_platform -q`。
 
 ## 4. 删除 memory_state source kind
 
@@ -63,7 +63,7 @@
 ## 9. 精确到用例名的测试删改收口
 
 - [ ] 9.1 复核 `tests/unit/agents/test_middleware_prompts.py` 已无 memory import/用例（第 1.1 步）。
-- [ ] 9.2 复核 `tests/unit/services/infrastructure/resource_platform/test_bootstrap.py` 已无 `_FakeMemoryReader`/`memory_states`/`test_memory_state_adapter_rejects_unregistered_key`（第 1.3 步）。
+- [x] 9.2 复核 `tests/unit/services/infrastructure/resource_platform/test_bootstrap.py` 已无 `_FakeMemoryReader`/`memory_states`/`test_memory_state_adapter_rejects_unregistered_key`（第 1.3 步）。
 - [ ] 9.3 `tests/unit/services/infrastructure/resource_platform/virtual_resources/test_vrn_grammar.py:38-41` 的 `test_memory_scope_is_rejected_fail_closed` **MUST 保留**（memory 非 VRN scope 的反向守卫），MUST NOT 误删。
 - [ ] 9.4 按 AGENTS.md 纪律，跑测试一律带进程外保护：`timeout <秒> bash -c 'ulimit -d 4194304; exec "$@"' bash <命令>`，或 `bun run test:matrix -- --suite=<id>`。**Python 测试一律走 `uv run pytest`（unit-python suite 为 `uv run pytest tests/unit`），MUST NOT 出现对 `.py` 的 `bun test`（`bun test` 对 `.py` 不匹配任何测试文件）；`bun test` 只用于 TS/TSX（如 unit-web suite 的 `bun test src/clients/web/src`）。**
 - [ ] 9.5 全量回归：`bun run test:matrix`（或等价受保护全量命令）全绿。

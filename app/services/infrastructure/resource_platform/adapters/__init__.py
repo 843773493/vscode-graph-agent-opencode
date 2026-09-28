@@ -14,15 +14,8 @@ from app.services.infrastructure.resource_platform.adapters.gateway_snapshot imp
     GatewaySnapshotAdapter,
     GatewaySnapshotReader,
 )
-from app.services.infrastructure.resource_platform.adapters.memory_state import (
-    AuthoritativeMemorySnapshot,
-    MemoryStateAdapter,
-    MemoryStateReader,
-)
-
 __all__ = [
     "AuthenticatedGatewaySnapshot",
-    "AuthoritativeMemorySnapshot",
     "FileMonitorBatch",
     "FileMonitorChange",
     "FileMonitorHandle",
@@ -30,8 +23,6 @@ __all__ = [
     "FileWatchPort",
     "GatewaySnapshotAdapter",
     "GatewaySnapshotReader",
-    "MemoryStateAdapter",
-    "MemoryStateReader",
     "SharedFileMonitor",
     "WorkspaceFileWatchPort",
 ]

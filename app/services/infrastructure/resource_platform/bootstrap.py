@@ -2,7 +2,7 @@
 
 每个 owner 进程只在本模块按代码装配一次：process-root LifetimeScope、
 资源观察事件通道、内置文件快照能力（共享监视 + 稳定读取 registry），
-以及按 owner 需要显式传入的 Gateway 受认证快照与权威内存状态适配。
+以及按 owner 需要显式传入的 Gateway 受认证快照。
 没有动态 provider 注册：一切适配在构造参数里固定，测试通过注入替身
 端口替换实际 owner。
 """
@@ -27,10 +27,6 @@ from app.services.infrastructure.resource_platform.adapters.file_monitor import 
 from app.services.infrastructure.resource_platform.adapters.gateway_snapshot import (
     GatewaySnapshotAdapter,
     GatewaySnapshotReader,
-)
-from app.services.infrastructure.resource_platform.adapters.memory_state import (
-    MemoryStateAdapter,
-    MemoryStateReader,
 )
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservationChannel,
@@ -59,7 +55,6 @@ class ResourcePlatform:
     shared_file_monitor: SharedFileMonitor
     state_events: ResourceStateEventPublisher
     gateway_snapshots: GatewaySnapshotAdapter | None = None
-    memory_states: MemoryStateAdapter | None = None
 
     async def close(self) -> None:
         """释放实际持有的进程资源并发布 owner 已确认的轻量状态。"""
@@ -101,8 +96,6 @@ def bootstrap_resource_platform(
     process_scope_name: str = "resource-platform-root",
     gateway_snapshot_reader: GatewaySnapshotReader | None = None,
     gateway_snapshot_locators: tuple[str, ...] = (),
-    memory_state_reader: MemoryStateReader | None = None,
-    memory_state_keys: tuple[str, ...] = (),
     event_service: EventChannelService | None = None,
 ) -> ResourcePlatform:
     """按固定顺序装配进程级资源平台。
@@ -149,12 +142,6 @@ def bootstrap_resource_platform(
             reader=gateway_snapshot_reader,
             locators=gateway_snapshot_locators,
         )
-    memory_states: MemoryStateAdapter | None = None
-    if memory_state_reader is not None:
-        memory_states = MemoryStateAdapter(
-            reader=memory_state_reader,
-            keys=memory_state_keys,
-        )
     return ResourcePlatform(
         process_root_scope=scope,
         observation_channel=observation_channel,
@@ -163,7 +150,6 @@ def bootstrap_resource_platform(
         shared_file_monitor=shared_file_monitor,
         state_events=state_events,
         gateway_snapshots=gateway_snapshots,
-        memory_states=memory_states,
     )
 
 
