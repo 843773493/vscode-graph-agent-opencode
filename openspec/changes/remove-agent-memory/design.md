@@ -35,7 +35,16 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 
 理由：该 slot 本身是**虚假声明**——生产链从不传 `memory`，`StructuredMemoryMiddleware` 从未真实出现在任何图里，而 slot 让 `graph_schema_hash`（`compute_graph_schema_hash`）声称图族含它。删除使声明与实现一致。bump revision 是本仓库设计对「图定义变更」规定的正确处置。
 
-**迁移义务（MUST 如实登记，不得写成「无影响」）**：删除 slot 会改变 `graph_schema_hash`；`resolve_or_persist_graph_binding`（`graph_binding.py:667-693`）在每次构建时比对持久化 selector 的 `graph_schema_hash`（`:239`），不一致即抛 `GraphBindingUnavailableError` **fail-closed 且不回退到最新图**。因此**历史 workspace 的 persisted binding 将一次性失效**。这是本仓库「graph 定义变更即 fail-closed」设计下的**预期行为**，但必须在 tasks 与实施说明中显式登记为迁移义务（历史 workspace 需重新建立 binding，不得静默回退或自动重绑）。
+**迁移义务（H2，MUST 如实登记，不得写成「无影响」或「预期行为待裁定」）**：删除 slot 会改变 `graph_schema_hash`；`resolve_or_persist_graph_binding`（`app/agents/graph_binding.py:666-693`）在每次构建时比对持久化 selector 的 `graph_schema_hash`（`:239`），不一致即抛 `GraphBindingUnavailableError`（`graph_binding_unavailable`）**fail-closed 且不回退到最新图、不重建**。因此**历史 workspace 的 persisted binding 将一次性失效**。这是本仓库「graph 定义变更即 fail-closed」设计下的**预期行为**，但只讲到这一步是**登记不完整**。
+
+**真实缺口（MUST 如实登记）**：当前仓库**不存在任何自动重绑入口**——
+
+- `JsonFileGraphBindingStore.save_graph_binding`（`app/agents/graph_binding.py:494-529`，冲突抛点 `:520`）对**同一 owner 写入不同 selector** 时抛 `RuntimeError("graph-binding-store-conflict: ... 重绑必须走显式流程，不允许静默覆盖")`；类 docstring（`:469`）自述「重绑流程属于 OpenSpec 后续轮次，本类不静默覆盖」。
+- `resolve_or_persist_graph_binding`（`:666`）在解析不到精确 revision/hash 时只 fail-closed，**既不回退也不重建**。
+
+两条相加的后果：删 slot + bump revision 后，历史 owner（**含 live 用户会话**）在无显式迁移时**永久无法继续**，`save` 也不会自动修复。这是功能性阻断，不是可含糊为「是否需工具待裁定」的预期行为。
+
+**裁定（D-3，owner 已定）**：该一次性重绑/清理能力**必须在本 change 内登记为可实施任务**（tasks 7.3.1–7.3.3），不得留作待裁定。迁移 MUST 为一次性、幂等、显式、可审计，MUST NOT 静默覆盖（AGENTS.md「永不静默失败」、「快速失败而非优雅降级」）。存量数据范围为 live `1` 处 + `out/` 下 `19` 处（合计 `20` 处 `graph-bindings.json`），逐处处置见 tasks 7.3.2/7.3.3。
 
 > 备注：stable prefix / 解析本身不受 slot 名影响，只受 hash 影响；slot 只是声明层，不与 invocation 实际出现的 middleware 做集合比对（`graph_binding.py:350-352` 的既有 TODO 已声明此限制）。
 
@@ -59,7 +68,8 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 
 **裁定：一并删除 `agent_memory` policy key 与 prompt tag；同时删除因此成为死值的 `PromptTrustLevel.untrusted_reference`。**
 
-- `app/agents/instruction_producers.py:43`（`ConditionalPolicyKey` 成员）、`:319`（`_POLICY_KEYS` 成员）、注释 `:4`/`:140` 的「显式 memory」「R09 memory」措辞 → 删除。该 key 从不被 `build_toolset_policy_keys`（`:186-206`）产出，删除不改变运行时行为。
+- `app/agents/instruction_producers.py:43`（`ConditionalPolicyKey` 成员）、`:319`（`_POLICY_KEYS` 成员）、注释 `:3`/`:140` 的「R01–R07/R09」「R09 memory」措辞 → 删除。该 key 从不被 `build_toolset_policy_keys`（`:178` 定义，体在 `:187-197`；原登记 `:186-206` 区间不准，已修正）产出，删除不改变运行时行为。
+- **代码侧 R09 残留（M2，登记为待删除项，本 change MUST NOT 改代码）**：`app/agents/instruction_producers.py:35` 的 `InstructionProducerId = Literal[... "R07", "R09"]` 与 `:311` 的 `_KNOWN_PRODUCER_IDS = frozenset({..., "R09"})` 仍含 `"R09"`。R09 即被移除的 memory 能力在 producer 身份层的编号，与 policy key `agent_memory`（`:43`/`:319`）是同一能力的两处登记；二者须随 5.1 一并物理下线。本 change 只登记精确路径行号与符号名，实施轮次再删。
 - `app/prompting/registry.py:227-233` 的 `PromptTagSpec("agent_memory", ...)` → 删除。其唯一消费者是被删的 `StructuredMemoryMiddleware`。
 - **`PromptTrustLevel.untrusted_reference`（`registry.py:17`）**：全仓仅 `registry.py:17`（定义）与 `:229`（`agent_memory` tag 使用）两处引用（已 `rg` 确证）。删除 `agent_memory` tag 后该枚举值**再无引用**，成为死值。
 
@@ -88,7 +98,18 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 3. **`gateway_snapshot` source kind 是否一并回收**（D5）：本次保留。
 4. **`configs/tests/workspace/default.jsonc:342` 的 `enable_workspace_memory`**（D3）：本次不动，需 owner 确证其归属。
 5. **`docs/middleware-prompt-vscode-comparison.html:173-181`** 的 `MemoryMiddleware` 整卡：代码删除后该设计对照文档将与实现不符。是否随本 change 一并收口**待 owner 裁定**（`docs/` 不在本 change 的 `openspec/**` 写入范围，若需收口应由独立轮次或本 change 扩展范围）。
-6. **历史 workspace graph binding 的重绑流程**：本 change 只登记 fail-closed 迁移义务，不定义自动重绑；实际重绑是否需专门工具/说明**待 owner 裁定**。
+
+> **原第 6 项「历史 workspace graph binding 的重绑流程」已按 owner 裁定（D-3）移出待裁定列表**：重绑能力**必须在本 change 内登记为可实施任务**（tasks 7.3.1–7.3.3），见 D2 的真实缺口登记。
+
+### D7b. 跨 change 同步项的实际执行（M1 例外）
+
+本 change 的既定范围是只写 `openspec/changes/remove-agent-memory/**`。经 owner 裁定，R09 集合收窄属**跨 change 同步项**，允许在本 change 内对 `add-context-injection-lifecycle` 做**最小改动**（只加约束与具名引用、不重写整体设计）：
+
+- `add-context-injection-lifecycle/tasks.md:96`：`R01–R09` → `R01–R07`（加注 R09 已随本 change 移除）。
+- `add-context-injection-lifecycle/design.md:514`：`R01–R07 以及显式启用的 R09` → `R01–R07`（加注 R09 已移除）。
+- `add-context-injection-lifecycle/design.md:668`：`按R01–R09、E01–E07` → `按R01–R07、E01–E07`（加注 R09 已移除）。
+
+改动后的精确路径与行号登记在 tasks 10.4.2；`add-context-injection-lifecycle` 的其余 R09 引用（`design.md:469/:484`、`spec.md:594`、`tasks.md:59`）仍按 10.4 的跨 change 同步项登记，交由该 change 后续处理。
 
 ### D8. 跨 change 文档同步项的范围判定
 
@@ -96,13 +117,21 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 
 - `add-unified-virtual-resource-addressing` 的 `spec.md:211`/`proposal.md:19`/`tasks.md:7` 称描述符闭集「含 memory」与代码 `32bc6256` 不符——**不在本 change 内直接改这些文件**，而是在本 change 的 `tasks.md` 中登记为**跨 change 同步项**（含精确路径与行号），交由该 change 或后续同步轮次处理。
 - **保留性约束**：`add-unified-virtual-resource-addressing` 中「memory 不是 VRN scope」类否定性登记 MUST **保留**，仅把「同期由独立代码切片落地」改为已落地口径（「已由 32bc6256 落地」）；其中「domain owner 与状态本体从未接入，故无 VRN 替代 owner 的需求」这一**结论句 MUST 原样保住**——`add-multi-workspace-backend-mounting/design.md:139` 逐字引用了它，改写会使其失准，只改其后的落地时态。
-- 同类待同步项（均由文档清点报告 §2 给出精确改法）：`migrate-session-context-uri-to-vrn` 的 `design.md:15/:29/:108`（scope 闭集仍写含 memory）、`add-context-injection-lifecycle` 的 R09 整行与 `design.md:5/:178/:248/:328/:355/:469/:484`、`proposal.md:37/:58`、`spec.md:594`、`tasks.md:32/:43/:59`、`add-itemized-rollout-context` 的 `design.md:195/:475`、`spec.md:811/:821/:1118/:1132/:1246`、`checkpoint-history-loading/spec.md:260`、`tasks.md:37/:167`。全部登记为跨 change 同步项。
+- 同类待同步项（均由文档清点报告 §2 给出精确改法）：`migrate-session-context-uri-to-vrn` 的 `design.md:15/:29/:108`（scope 闭集仍写含 memory）、`add-context-injection-lifecycle` 的 R09 整行与 `design.md:5/:178/:248/:328/:355/:469/:484`、`proposal.md:37/:58`、`spec.md:594`、`tasks.md:32/:43/:59`、`add-itemized-rollout-context` 的 `design.md:195/:475`、`spec.md:811/:821/:1118/:1132/:1246`、`checkpoint-history-loading/spec.md:203`（原登记 `:260` 已因提交 `b65f15b1` 移位失效，M3 已修正为精确行号）、`tasks.md:37/:167`。
+
+  **R09 集合收窄三处已按 owner 裁定在本 change 内直接执行**（原登记遗漏，M1）：`add-context-injection-lifecycle` 的 `tasks.md:96`、`design.md:514`、`design.md:668`，见 D7b 与 tasks 10.4.1/10.4.2。
 
 ### D9. spec delta 落点与编码
 
 经检索，`openspec/specs/` 32 份 main spec **零 memory requirement**；被移除的 memory 能力从未进入任何 main spec，只存在于未接线代码与未归档 change 的 delta 描述中。经隔离复制实测（`/tmp` workbench）：对**尚不存在于 main specs 的 capability** 使用 `## REMOVED Requirements` 是**warned no-op**（`"N REMOVED requirement(s) ignored for new spec (nothing to remove)"`），且 REMOVED-only 会让重建后的 spec 零 requirement 而在 archive 时 **`archive_spec_validation_failed`**。
 
-因此本 change 的 delta 采用**新 capability `agent-memory` + `## REMOVED Requirements`（记录被移除能力的具名 requirement）+ `## ADDED Requirements`（负向边界 requirement，保证重建后的 spec 有有效 requirement 且能通过 strict 校验）**的混合形式。REMOVED 清单用于**具名登记被移除的能力**（满足委托「以 REMOVED 语义表达移除」的要求），ADDED 的负向 requirement 用于**防止重新引入**并让 delta 在归档时可落地为有效 spec。
+**裁定（D-1，owner 已定）：改用 ADDED-only 形式。** 原混合形式（新 capability + `## REMOVED Requirements` 具名登记 + ADDED 负向边界）理由成立但属**取巧**：`## REMOVED Requirements` 在 openspec 中本义是「从**已存在**的 spec 删除 requirement」，而本 change 把它当作「被移除能力的具名登记」，归档时 REMOVED 段被全部丢弃（warned no-op），与语义不符，也留不下记录。
+
+因此本 change 的 delta **只保留 `## ADDED Requirements`**：在 `specs/agent-memory/spec.md` 里以负向边界 requirement（含可验证 scenario）承载「agent memory 必须不存在」。归档后 main spec 会**持久保留**这条有效边界（ADDED 会写入主 spec），而 REMOVED 会在归档时丢弃。
+
+**「移除了哪 7 条能力」的完整记录留在 `proposal.md` 与 `design.md`**（设计文档本就是记录决策的地方），不在 delta 中重复：`proposal.md` 的 What Changes/Impact 逐条列出被移除的 memory 链路与配置；本 design 的 D2–D6 记录每一条移除的理由与真实符号对应。
+
+> 实测：新形式通过 `openspec validate remove-agent-memory --strict` 与 `--strict --all`（0 failed），并已实测可归档（见本 change 交付报告 `out/tests/temp/memory_change_fixer/artifacts/report.md` 的归档验证输出）。
 
 ## Risks / Trade-offs
 

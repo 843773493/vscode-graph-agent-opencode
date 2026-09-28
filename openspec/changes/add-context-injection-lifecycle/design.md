@@ -511,7 +511,7 @@ bridge必须是最后一个可影响 model request的 framework hook；其后只
 
 ### 11. 所有 producer 使用统一 mutation 边界和各自 domain owner
 
-- **初始 root producer**：R01–R07 以及显式启用的 R09 在首次组装时提供独立 provenance，由 compiler 只在该合法边界编译成唯一 root system item。
+- **初始 root producer**：R01–R07 在首次组装时提供独立 provenance（R09 memory 已随 `remove-agent-memory` 移除），由 compiler 只在该合法边界编译成唯一 root system item。
 - **文件 producer**：R08 与 Skill activation 使用 CSM tracked/snapshot 规则；activation 只能由 `skill_load` 建立，通用 read 工具不承担 Skill 激活语义。
 - **事件 producer**：E01–E07 先提交 ambient/pending source item，再通过独立 execution wakeup intent消费；不得调用普通 user acceptance 创建 Turn root。
 - **canonical append producer**：C01/C03 保持 acceptance/Turn、model stream和 tool execution的 domain owner，通过 `AppendCanonicalItemIntent`进入同一 ContextStore transaction，不建立 CSM tracking。
@@ -665,7 +665,7 @@ rehydrate只发生在execution admission或确实需要可写runtime的operation
 4. 建立VRN grammar/resolver、三层SkillCatalog及metadata/activation facet；实现默认turn、可选model_call的ResourceActivationCoordinator和持久activation provenance，验证URI/path/credential不泄露、旧assembly不按当前URI重解。
 5. 实现`skill_load`的snapshot/tracked/untrack及checkpoint-versioned control state，删除通用read激活、模型可见`/.boxteam/...`Skill路径/挂载、旧Skills/AGENTS request-time middleware和任何即时移除规划/入口。
 6. 接入 `add-itemized-rollout-context` 的 Thread generation/lease/idle-unload/lazy-rehydrate 边界；在其唯一生命周期验收中证明 main 与 child unload/rebuild 不改变 CSM state、ToolSet binding、stable prefix 或历史。
-7. 先把Goal限定到main thread，并以migration-only `materialize_thread_copy`读取source checkpoint/view、写不可见staging，再由coordinator单一可见性事务将旧team board迁为Session内部child-thread ledger，或freeze/detach；不调用公开`full_rollout_copy`创建新Session，不复制active runtime、不假设跨库事务。再按R01–R09、E01–E07迁移初始instruction、文件和事件producer，删除直接内部`HumanMessage`、checkpoint message mutation和模型工具伪造user Turn的入口。
+7. 先把Goal限定到main thread，并以migration-only `materialize_thread_copy`读取source checkpoint/view、写不可见staging，再由coordinator单一可见性事务将旧team board迁为Session内部child-thread ledger，或freeze/detach；不调用公开`full_rollout_copy`创建新Session，不复制active runtime、不假设跨库事务。再按R01–R07、E01–E07迁移初始instruction、文件和事件producer（R09 memory 已随 `remove-agent-memory` 移除），删除直接内部`HumanMessage`、checkpoint message mutation和模型工具伪造user Turn的入口。
 8. 建立中心Gateway经SSH `-L`到spoke的长期全双工WebSocket对等RPC channel，以稳定`gateway_id`路由显式URI，并让裸ID只经local+唯一hub的有界fan-out解析target main。拆分持久connection config ID与瞬时channel/route lease；实现origin-preserving、最多一次`B → A → C`的transit grant、默认允许核心操作且可原子热发布的最新policy检查，以及source outbox/target inbox恢复。接入跨workspace/server send/read/wait，以默认60秒、最大300秒且可恢复selector的`wait_for_session`替换旧monitor；hub不保存业务通信状态，权限变化不修改ToolSet、上下文或stable prefix。
 9. 让ToolSelectionStore/ToolService、execution step、ToolSet registry与assembly compiler在每次model call safe boundary执行C02 hard rebase，覆盖outstanding call convergence、同Turn多epoch和Provider历史兼容性失败。
 10. 分离D01/C01/C03 owner，删除PromptReplay与P01的所有来源反推、ToolSet反向快照和merged system fallback；框架确需hook时把`ItemizedContextProjectionMiddleware`替换为无状态sealed-assembly dispatch bridge，否则直接删除，并接入rewind、compaction、restart和retry。
