@@ -1,4 +1,8 @@
-"""v2 checkpoint/view pruning owner。"""
+"""v2 checkpoint/view pruning owner（由 RolloutStorage 组合）。
+
+pruning 只通过 host 的锁、连接与事务薄壳工作，不持有第二套连接、提交
+路径或锁；规划与执行都沿用 host 已冻结的 offset/lineage 不变量。
+"""
 
 from __future__ import annotations
 
@@ -13,10 +17,16 @@ if TYPE_CHECKING:
         RolloutPruningCandidate,
         RolloutPruningPlan,
     )
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+)
 
 
-class RolloutPruningMixin:
+class RolloutPruningOwner:
     """按 active checkpoint/view lineage 规划并执行逻辑裁剪。"""
+
+    def __init__(self, host: RolloutStorage) -> None:
+        self._host = host
 
     def plan_pruning(
         self,
@@ -31,16 +41,16 @@ class RolloutPruningMixin:
             RolloutPruningPlan,
         )
 
-        self.initialize(thread_id, checkpoint_ns)
+        self._host.initialize(thread_id, checkpoint_ns)
         retained = tuple(dict.fromkeys(retain_checkpoint_ids))
-        with self._connect(thread_id, checkpoint_ns) as connection:
-            self._require_v2_runtime(connection)
+        with self._host._connect(thread_id, checkpoint_ns) as connection:
+            self._host._require_v2_runtime(connection)
             meta = connection.execute(
                 "SELECT active_branch_id, projection_epoch, last_message_sequence FROM database_meta WHERE singleton_id = 1"
             ).fetchone()
             if meta is None:
                 raise RuntimeError("rollout database_meta 缺失")
-            active_branch_id, _projection_epoch = self._namespace_state(
+            active_branch_id, _projection_epoch = self._host._namespace_state(
                 connection, checkpoint_ns
             )
             query = """
@@ -88,15 +98,15 @@ class RolloutPruningMixin:
                     )
                 )
         return RolloutPruningPlan(
-            self.rollout_id(thread_id, checkpoint_ns),
-            self.initialize(thread_id, checkpoint_ns).committed_sequence,
+            self._host.rollout_id(thread_id, checkpoint_ns),
+            self._host.initialize(thread_id, checkpoint_ns).committed_sequence,
             tuple(candidates),
         )
 
     def execute_pruning(
         self, thread_id: str, plan: RolloutPruningPlan, checkpoint_ns: str = ""
     ) -> tuple[str, ...]:
-        current = self.initialize(thread_id, checkpoint_ns)
+        current = self._host.initialize(thread_id, checkpoint_ns)
         if (
             current.rollout_id != plan.rollout_id
             or current.committed_sequence != plan.committed_sequence
@@ -105,10 +115,10 @@ class RolloutPruningMixin:
         if not plan.candidates:
             return ()
         with (
-            self._lock(thread_id, checkpoint_ns),
-            self._connect(thread_id, checkpoint_ns) as connection,
+            self._host._lock(thread_id, checkpoint_ns),
+            self._host._connect(thread_id, checkpoint_ns) as connection,
         ):
-            self._require_v2_runtime(connection)
+            self._host._require_v2_runtime(connection)
             transaction_id = uuid4().hex
             timestamp = _now()
             connection.execute("BEGIN IMMEDIATE")
@@ -129,7 +139,7 @@ class RolloutPruningMixin:
                     "UPDATE checkpoints SET status = 'pruned' WHERE checkpoint_id = ? AND checkpoint_ns = ?",
                     (candidate.checkpoint_id, checkpoint_ns),
                 )
-                self._insert_control(
+                self._host._insert_control(
                     connection,
                     "prune_marked",
                     "checkpoint",
@@ -151,3 +161,6 @@ class RolloutPruningMixin:
             )
             connection.commit()
         return tuple(candidate.checkpoint_id for candidate in plan.candidates)
+
+
+__all__ = ["RolloutPruningOwner"]

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
@@ -79,8 +80,8 @@ from app.services.infrastructure.rollout_context.fork.materialization import (
 )
 from app.services.infrastructure.rollout_context.fork.metadata import ForkMetadataMixin
 from app.services.infrastructure.rollout_context.fork.remap import ForkRemapMixin
-from app.services.infrastructure.rollout_context.operations.pruning import (
-    RolloutPruningMixin,
+from app.services.infrastructure.rollout_context.operations.pruning_owner import (
+    RolloutPruningOwner,
 )
 from app.services.infrastructure.rollout_context.storage.backups import (
     RolloutStorageBackupMixin,
@@ -186,7 +187,6 @@ class RolloutStorage(
     ForkMaterializationMixin,
     ForkCompletionMixin,
     ForkItemCopyMixin,
-    RolloutPruningMixin,
     RolloutItemsMixin,
     RolloutViewMembershipMixin,
     RolloutPartsMixin,
@@ -218,6 +218,7 @@ class RolloutStorage(
         self._locks: dict[tuple[str, str], _RolloutOperationLock] = {}
         self._locks_guard = threading.Lock()
         self._active_fork_materializations: set[tuple[str, str]] = set()
+        self._pruning_owner = RolloutPruningOwner(self)
 
     def _codec(self) -> MessageCodec:
         """返回由 checkpoint 组装层注入的消息适配器。"""
@@ -346,3 +347,25 @@ class RolloutStorage(
         if snapshot.closed:
             raise RuntimeError("rollout read snapshot 已关闭")
         return snapshot.connection
+
+    def plan_pruning(
+        self,
+        thread_id: str,
+        checkpoint_ns: str = "",
+        *,
+        retain_checkpoint_ids: Iterable[str] = (),
+        audit_before_sequence: int | None = None,
+    ) -> RolloutPruningPlan:
+        """委托 pruning owner 规划逻辑裁剪。"""
+        return self._pruning_owner.plan_pruning(
+            thread_id,
+            checkpoint_ns,
+            retain_checkpoint_ids=retain_checkpoint_ids,
+            audit_before_sequence=audit_before_sequence,
+        )
+
+    def execute_pruning(
+        self, thread_id: str, plan: RolloutPruningPlan, checkpoint_ns: str = ""
+    ) -> tuple[str, ...]:
+        """委托 pruning owner 执行已规划的逻辑裁剪。"""
+        return self._pruning_owner.execute_pruning(thread_id, plan, checkpoint_ns)
