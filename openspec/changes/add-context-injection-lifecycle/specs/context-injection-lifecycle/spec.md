@@ -328,7 +328,7 @@ Node调试的`debug process identity` MUST是每次启动唯一`process_instance
 
 ### Requirement: Virtual Resource Namespace 必须隐藏locator并固定资源来源
 
-**归属声明（消除两套定义并存）**：本 requirement 涉及的【虚拟资源地址 / VRN】语法、【作用域 / scope】闭合集（`workspace`/`user`/`gateway`）、【网关授权段 / gateway authority】、【星型解析 / star-topology resolution】顺序与【拒绝码 / rejection code】命名空间，一律以 `add-unified-virtual-resource-addressing` 为唯一 owner 与唯一实现；此处不得维护第二份语法，只声明本 requirement 自身的行为契约（隐藏 locator、四个标识分离、activation snapshot 恢复、`skill_load` name-only、模型可见仅安全 display URI）。
+**归属声明（消除两套定义并存）**：本 requirement 涉及的【虚拟资源地址 / VRN】语法、【作用域 / scope】、【作用域标识 / scope_id】、【网关授权段 / gateway authority】、【星型解析 / star-topology resolution】顺序与【拒绝码 / rejection code】命名空间，一律以 `add-unified-virtual-resource-addressing` 为唯一 owner 与唯一实现；该 change 采用**契约修正 v2**（语法为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，`resources` 为固定保留段，`scope_id` 对所有 scope 必填）。**scope 名、scope_id 语义与拒绝码的最终权威以 owner 随后下发的权威表为准**；此处不得维护第二份语法，也不得自行发明 scope 名、scope_id 语义或拒绝码，只声明本 requirement 自身的行为契约（隐藏 locator、四个标识分离、activation snapshot 恢复、`skill_load` name-only、模型可见仅安全 display URI）。
 
 系统 SHALL为可向模型或客户端展示的管理资源提供规范`boxteam://`虚拟资源URI。workspace AGENTS、workspace/Gateway/builtin Skill和memory资源 MUST分别使用可区分的逻辑scope/kind/name；URI中不得出现绝对路径、真实网络endpoint、credential、provider私有handle或正文。每个资源 MUST区分模型可见`display_uri`、内部稳定`source_id`、语义`resource_id`和provider私有`provider_locator`：URI只是locator/provenance，不是任一资源身份、授权凭据、dedupe key或业务幂等键，revision/hash/snapshot reference不得编码进URI。
 
