@@ -179,6 +179,8 @@ child thread MUST 拥有独立 Turn、item、history、active view和执行状�
 
 同一thread任意时刻至多一个active root execution，其余保持runnable/pending并严格按ordinal FIFO准入，workspace容量调度只能延迟、不能越序。前一execution终态后，owner MUST 在同一事务激活下一entry、推进其visibility并冻结新fence，完成后才允许before-model和seal；不得让queued root提前进入旧execution。取消/失败保留ordinal及terminal queue/Turn record，不得删除后重排；未admit取消的真实用户Turn保持可审计cancelled且不调用Provider。属于现有execution的tool result、provider callback或resume signal必须绑定原execution并由generation fence提交，不能伪装成新queue entry；显式interrupt/cancel是控制操作，不是高优先级插队。不同thread拥有独立active slot，sibling child和其它Session可以并行。
 
+delegated child 的初始 execution 绑定 MUST 由生产提供真实 thread binder：worker MUST 只消费 `session-control.sqlite` 的持久状态索引，经 claim + `pending -> bound` CAS 幂等推进，并在 backend 重启后按同一 admission/claim identity 补齐全部未绑定 intent。缺少 binder 或 binder 无法绑定 identity 时，intent MUST NOT 永久停留 `pending`：系统 MUST 可观测地 fail-closed 报告 `unavailable`（含具体 admission identity 与原因），MUST NOT 静默停留、MUST NOT 把 intent 标成 `bound`、MUST NOT 以任何占位或伪造 execution 掩盖缺口。
+
 #### Scenario: 多个 Session main thread 承担不同长期任务
 
 - **WHEN** 用户分别在 Git 管理、代码分析和实施 Session中持续对话
@@ -208,6 +210,11 @@ child thread MUST 拥有独立 Turn、item、history、active view和执行状�
 
 - **WHEN**进程在queue entry提交后、active slot claim后或execution启动后退出
 - **THEN**恢复按同一admission幂等identity和ordinal找回pending/active execution，至多启动一次且不越过更早entry；历史callback只能回到原execution
+
+#### Scenario: 缺 binder 时初始 execution 不得静默滞留 pending
+
+- **WHEN**已发布的 durable child 拥有初始 execution intent，但生产未提供可用的真实 thread binder
+- **THEN**worker 可观测地 fail-closed 报告 `unavailable` 并保留 intent 为可恢复的 `pending`，MUST NOT 将 intent 标成 `bound`、MUST NOT 启动占位/伪造 execution、MUST NOT 静默停留在 pending；后端重启后以同一 identity 重试，补齐 binder 时同一 intent 至多绑定一次
 
 ### Requirement: durable Thread 与 resident runtime 必须分离
 
