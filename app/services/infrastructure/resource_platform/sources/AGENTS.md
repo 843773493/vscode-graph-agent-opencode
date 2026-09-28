@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-- 可以增加文件、Gateway snapshot 或权威内存状态的来源 owner。
+- 可以增加文件或 Gateway snapshot 的来源 owner。
 - 可以定义来源的虚拟 URI、revision、可用性和错误状态。
 
 # 不可修改内容

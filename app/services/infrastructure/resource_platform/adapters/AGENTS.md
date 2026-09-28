@@ -1,6 +1,6 @@
 # 目录用途
 
-`adapters/` 提供 resource platform 的内置资源适配器：共享文件监视、Gateway 受认证快照与权威内存状态。适配器只做固定装配与类型化端口转发，不解释业务语义。
+`adapters/` 提供 resource platform 的内置资源适配器：共享文件监视与 Gateway 受认证快照。适配器只做固定装配与类型化端口转发，不解释业务语义。
 
 # 可修改内容
 
@@ -16,5 +16,5 @@
 # 规范
 
 - 共享文件监视必须按完整 watch key（monitor instance + locator + recursive/filter/exclude/correlation/options）共享并引用计数，返回可释放 consumer handle；SessionThread 只持有 handle，不独占 watcher。
-- 快照与内存状态必须携带可验证 version token；读取失败显式报错，不得伪造默认值。
+- 快照必须携带可验证 version token；读取失败显式报错，不得伪造默认值。
 - 长任务与订阅释放统一交给 LifetimeScope 或显式 owner，禁止第二套 dispose 抽象。
