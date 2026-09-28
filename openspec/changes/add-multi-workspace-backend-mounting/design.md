@@ -75,7 +75,7 @@
 - `workspace` → 真实 workspace_id（本 change 的核心，保持）。
 - `gateway` → 真实 gateway_id。
 - `inline`（原 `builtin`，正名由「统一虚拟资源寻址」change 的 owner 执行，本 change 只引用新名）→ 真实 distribution_id。
-- `user` → `local`，显式声明单用户本地约定（该 scope 为本次新增；终值以权威表为准）。
+- `user` → `local`，显式声明单用户本地程序约定（该 scope 为本次新增）。此为**已定稿终值**，见 `add-unified-virtual-resource-addressing` 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」中 normative 的 `user` → `local` 与「MUST 显式声明为单用户本地程序的约定，MUST NOT 虚构用户名」；本 change 只引用该定稿结论，不再标注为待定。
 
 **为什么完整化**：只要求 `workspace` 一处显式，等于允许其它 scope 继续靠硬编码隐含上下文——而「当前激活工作区」这条要根除的原则，其本质是「不得有隐含上下文」。因此把同一原则同构地施加到全部 scope，才是与 change 1 一致的做法（与 D2 同源）。
 
@@ -136,6 +136,6 @@
 
 ## Open Questions
 
-- **权威表已下发，`作用域 / scope` 与 `scope_id` 取值语义已按 R1/R2/R3 定稿**：scope 闭集终值、kind 闭集、`builtin`→`inline` 正名与各 scope 的 `scope_id` 推导来源，均以「统一虚拟资源寻址」change 的权威表为准，本 change 只引用、不复述。仍待定的实现项：(1) `user` scope 的 `scope_id` 终值（现约定为 `local`）；(2) `memory` scope 移出 VRN 后的替代 owner；(3) `gateway_id` 与 `distribution_id` 的真实来源由谁实现。
+- **权威表已下发，`作用域 / scope` 与 `scope_id` 取值语义已按 R1/R2/R3 定稿**：scope 闭集终值、kind 闭集、`builtin`→`inline` 正名与各 scope 的 `scope_id` 推导来源（含 `user`→`local` 为**已定稿终值**，见 `add-unified-virtual-resource-addressing` 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」），均以「统一虚拟资源寻址」change 的权威表为准，本 change 只引用、不复述。**未决项中不含 `user`**；仍待定的实现项仅有：(1) `memory` scope 移出 VRN 后的替代 owner；(2) `gateway_id` 与 `distribution_id` 的真实来源由谁实现。多用户场景若将来出现、`user` 取值如何演进属**未来可能**，不属于当前待定项。
 - 后端身份命名空间（严格 UUID）与 Gateway `gw_` 工作区 ID 是**收敛为一个**还是保留「Gateway 控制面 ID + 后端寻址 UUID」两层映射？本 change 已规定**寻址层只用后端 UUID 命名空间**，此问仅影响 Gateway 控制面是否继续保留 `gw_` 别名，属可延后决定，不改变 spec 的工作区身份定义与任务分解。
 - 已挂载工作区的**发现方式**（静态配置 / Gateway 下发 / 启动参数）不影响寻址语义，可延后到实施细节。
