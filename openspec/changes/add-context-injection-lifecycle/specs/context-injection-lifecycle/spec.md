@@ -319,7 +319,7 @@ Node调试的`debug process identity` MUST是每次启动唯一`process_instance
 #### Scenario: 活动Node调试进程的lease阻止闲置卸载
 
 - **WHEN** debug owner有未结清的`launch_pending`进程claim、核实某thread进程处于`starting|running|paused|stopping`，或backend重启后无法确认旧进程是否已停止
-- **THEN** 唯一外部资源lease账本保留该thread的占用/`reconcile_required`恢复事实，residency owner保持该thread的脱敏idle blocker而不宣称cold；只有debug owner核实`idle|exited|failed`并结清lease后才可重新起算30分钟，通用账本与`LifetimeScope`都不决定停止策略
+- **THEN** 唯一外部资源lease账本保留该thread的占用/`reconcile_required`恢复事实，residency owner按 `add-itemized-rollout-context` 的唯一策略保留脱敏 blocker，不宣称cold；只有debug owner核实`idle|exited|failed`并结清lease后才可解除阻断，通用账本与`LifetimeScope`都不决定停止策略
 
 #### Scenario: Node启动窗口崩溃与PID复用
 
@@ -1015,41 +1015,19 @@ workspace attachment正文 MUST NOT进入copy staging。source snapshot只冻结
 
 ### Requirement: resident runtime 卸载不得改变 durable context lifecycle
 
-系统 SHALL 允许durable SessionThread的resident runtime被卸载和延迟重建，同时保持同一逻辑ContextStore/CSM owner identity。当前child thread默认在无active/runnable/pending execution、未收敛model/tool/mutation和runtime lease、debug owner已核实无`launch_pending`进程claim、`starting|running|paused|stopping`进程及`reconcile_required`阻断且连续30分钟无活动后进入cold状态。调试进程活动期间不累计idle时长；终态核实和lease结清后重新起算完整30分钟。residency manager决定关闭目标runtime generation的`LifetimeScope`，但不能自行推断debug状态；scope只释放可重建的进程内资源，不计算idle、不停止进程级共享watch或跨Turn外部业务资源；canonical history、checkpoint/view、source registration/revision、latest-visible-committed基准、tracking/untrack状态、prefix epoch、ToolSet applied binding和sealed assembly引用必须保持不变。backend重启若调试占用仍在恢复/状态不明，应先恢复/核实owner并维持loading或带阻断的resident状态，不得直接宣称cold。
+系统 SHALL 在 `add-itemized-rollout-context` 所定义的 Thread residency owner 获准卸载或重建 runtime generation 时，保持同一逻辑 ContextStore/CSM owner identity。该 owner 与 residency policy 唯一负责 idle 阈值、执行/lease/debug blocker、`ThreadResidencySnapshot`、cold read、GraphBinding 验证和 runtime generation；本 capability 不得重复定义这些行为。`LifetimeScope` 只释放可重建的进程内资源，不计算 idle、不停止进程级共享 watch 或跨 Turn 外部业务资源。canonical history、checkpoint/view、source registration/revision、latest-visible-committed 基准、tracking/untrack 状态、prefix epoch、ToolSet applied binding 和 sealed assembly 引用 MUST 在 unload/rebuild 前后逐字段保持不变。backend 重启时，context owner MUST 从该 Thread 的持久状态恢复；不得从当前源文件重写已提交上下文或让未核实的 owner 状态伪装成已恢复。
 
-系统 SHALL 提供只读`ThreadResidencySnapshot`，至少包含`session_id`、`thread_id`、`residency=cold|loading|resident|unloading`、execution状态、`last_activity_at`、`idle_deadline_at`和脱敏`blocking_reasons[]`。该snapshot只描述runtime residency，不得成为canonical item、CSM source、team state或模型上下文。residency manager MUST 通过可注入单调`Clock`计算deadline：生产使用真实时钟，测试使用fake clock验证真实30分钟阈值，不得实际等待30分钟或降低产品阈值。
+tracked source 变化 MUST 继续由 Resource Observation Platform 异步观察和 reconcile；runtime 只可在其配置的 resource activation boundary 消费 ResourceRegistry 内存 snapshot。unload/rehydrate 本身 MUST NOT 产生 source observation/item、主动读取源、重算 diff、推进 prefix epoch、改变 wire bytes，或使 snapshot/tracked/untracked 内容自动到期。
 
-list/history/detail读取 MUST 走cold path且不得创建可写runtime。下一次execution admission MUST 根据持久ThreadRuntimeBinding和GraphBinding获得唯一新runtime generation，逐字段验证原`graph_id、graph_revision、graph_schema_hash、capability_profile_hash`后再恢复ContextStore/CSM；进程缓存丢失或factory registry已有更新时也不得改用latest graph。tracked source变化始终由Resource Observation Platform异步监视和reconcile；runtime只在随后配置的resource activation boundary消费Registry内存snapshot。unload/rehydrate本身不得产生source observation/item、主动读源、重算diff、推进prefix epoch、改变wire bytes或让snapshot/tracked/untracked内容自动到期。
+#### Scenario: runtime unload 保持已提交上下文字节
 
-#### Scenario: idle unload 保持上下文字节稳定
-
-- **WHEN**符合条件的child thread在30分钟idle threshold后卸载resident runtime
-- **THEN**最后已提交assembly、stable-prefix hash/length、CSM revision、tracking state和ToolSet binding保持逐字段不变，且不追加runtime notice或source delta
-
-#### Scenario: fake clock 精确验证 idle 临界点
-
-- **WHEN**测试在无阻断lease的child thread上将可注入Clock推进到最后活动后的29分59秒，再推进到30分钟整
-- **THEN**`ThreadResidencySnapshot`先保持resident并给出deadline，随后转为cold；若存在active/pending execution、未收敛mutation或lease，则30分钟整仍不得卸载并在`blocking_reasons`中给出脱敏原因
-
-#### Scenario: 调试进程跨越30分钟不进入cold
-
-- **WHEN** child在无execution时保有`launch_pending`进程claim或保持`starting|running|paused|stopping`Node调试进程，fake clock跨过30分钟，随后debug owner核实终态并结清lease
-- **THEN** 活动期间residency保持resident且有脱敏debug blocker；终态后从零重新起算30分钟，停止失败或重启状态未知时保持`reconcile_required`阻断，不因旧scope消失误报cold
-
-#### Scenario: cold history 读取不创建 owner 实例
-
-- **WHEN**用户只查看cold child thread的历史或来源详情
-- **THEN**系统从持久投影返回结果，不创建model/tool client、compiled graph、writable ContextStore/CSM runtime、execution或assembly
+- **WHEN** Thread residency owner 按其唯一生命周期合同卸载某个 child 或 main thread 的 resident runtime
+- **THEN** 最后已提交 assembly、stable-prefix hash/length、CSM revision、tracking state 和 ToolSet binding 逐字段不变，且不追加 runtime notice 或 source delta
 
 #### Scenario: cold thread 在下一次 activation boundary 恢复 tracked source
 
 - **WHEN**cold thread收到新消息并在execution admission重建runtime
-- **THEN**系统先建立新runtime generation，逐字段恢复并验证原GraphBinding以及已提交registration、revision、active view和ToolSet binding；取得active slot后按配置从ResourceRegistry内存snapshot冻结Turn或model-call activation，并相对原latest-visible-committed基准决定是否追加delta，不主动检查tracked文件、不改用latest graph或从当前文件重写旧上下文
-
-#### Scenario: 迟到 callback 不写入旧 runtime
-
-- **WHEN**thread卸载后收到持久后台资源或终端的完成callback
-- **THEN**callback使用保存的精确`session_id + thread_id`取得当前runtime generation或触发精确wakeup，并经唯一owner提交；旧实例和Session main-thread fallback都不得接收该mutation
+- **THEN**系统在 itemized 定义的execution admission与generation建立后，按已提交registration、revision、active view和ToolSet binding恢复context owner；取得active slot后按配置从ResourceRegistry内存snapshot冻结Turn或model-call activation，并相对原latest-visible-committed基准决定是否追加delta，不主动检查tracked文件或从当前文件重写旧上下文
 
 ### Requirement: 生命周期场景必须进入统一 Web E2E 验收模块
 

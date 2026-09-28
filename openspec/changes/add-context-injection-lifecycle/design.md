@@ -55,7 +55,7 @@ optional stateless framework dispatch bridge -> Provider adapter
 - 不把用户消息、assistant/reasoning、tool call/result 纳入 CSM revision/tracking，也不把 ToolSet 变化编码成软上下文通知。
 - 不保留 PromptReplay 作为诊断、兼容或漏接 source 的 fallback，也不允许 dispatch bridge维护 Session/source/assembly 状态。
 - 不为跨Session协作建立共享team/member/task/role/Goal状态；跨Session只保留显式send/read/wait及其幂等、相关性和审计。
-- 不把30分钟runtime idle unload解释为context item、Skill/source过期或durable thread删除，也不要求history查看唤醒Agent runtime。
+- 复用 `add-itemized-rollout-context` 定义的 runtime idle unload 与 cold read；本 change 不重新规定阈值、ThreadResidencySnapshot 或唤醒规则，也不把 unload 解释为 context item、Skill/source 过期或 durable thread 删除。
 
 ## Decisions
 
@@ -533,7 +533,7 @@ CSM 的所有 source registration、tracked revision、latest-visible-committed 
 
 产品层未指定 thread 的普通 Session 聊天/历史/Goal API 只从权威 catalog 解析 `main_thread_id`，并把实际 ID 返回给调用方；跨Session send/read/wait的目标同样只解析目标main thread。当前Session右侧侧边栏对子thread的直接history/message、内部producer、subagent、retry、rewind、compaction和dispatch必须显式给定thread。delegated child thread 的结果如需进入 main thread，使用带 source-thread provenance 的 ambient/runtime item 由main-thread owner追加，不能共享source state、复制child item为user root，或将两条thread的stable prefix合并。
 
-GraphBinding 的持久化与 CSM owner 对齐：graph factory/blueprint 可以跨 thread 缓存，已编译 graph、工具和 middleware 不得捕获 SessionThread；每次 invocation 注入 binding。无法解析精确 graph revision 的恢复必须停止在 dispatch 前，不能通过创建新 context epoch 或改写旧 prefix 修复。
+GraphBinding 的持久化与 CSM owner 对齐：不可变factory/blueprint可以跨thread缓存；backend启动和cold read不编译Thread Agent graph。首次execution admission按持久GraphBinding构建thread独占的compiled graph，并由该ThreadRuntime generation的`LifetimeScope`持有，同一resident generation的后续Turn（包括同一durable child subagent的后续工作）复用该graph；不同Thread不共享graph实例。每次invocation仍注入独立`ThreadRuntimeBinding`，compiled graph不保留可变Turn/execution状态；unload或backend重启丢弃compiled graph并按完全相同的binding重建。无法解析精确graph revision的恢复必须停止在dispatch前，不能通过创建新context epoch或改写旧prefix修复。
 
 Session物理locator由workspace `.boxteam/navigation/session-catalog.sqlite`按不可变UTC创建日期精确解析为`sessions/YYYY/MM/DD/{session_id}`；导航Session/Folder父子关系只在该SQLite中，不再由物理`children/`或`session.json`保存。thread物理locator仍属于owner binding：main位于已解析Session节点的`threads/{main_thread_id}`，其它durable thread位于`threads/YYYY/MM/DD/{thread_id}`；两者都由Session thread catalog/resolver受检取得。workspace catalog拥有唯一不可变main pointer，session-control只有与之匹配的唯一main thread row、thread catalog与Session内部collaboration ledger，不建立第二main pointer/ContextStore writer。CSM、Saver和dispatch bridge不得按日期、父节点或`checkpoint_ns`自行拼路径；导航移动不改变源registrations、stable prefix或ThreadRuntimeBinding。
 
@@ -623,9 +623,7 @@ workspace attachment blob不得进入Session copy staging。source SQLite snapsh
 
 整块可见不依赖跨thread/workspace分布式事务。migration必须在创建任何child staging前，先于coordinator Session `session-control.sqlite` create-or-get不改变thread catalog/collaboration ledger的`BoardMigrationRecord(state=preparing)`，冻结operation/preimage、coordinator lifecycle、旧board/catalog revision，并为每个target内嵌唯一`MigrationChildCreationEntry`，包含child ID、最终/内部staging locator、GraphBinding/capability、source checkpoint/view、lineage/mapping与预期artifact manifest/hash；同operation不同preimage冲突。该entry是batch child唯一creation journal，普通ThreadCreationWorker不得枚举、发布或启动它，且不得为同一target建立独立`ThreadCreationRecord`。随后才按单source guard规则冻结source snapshot，把记录中的所有child artifact、mapping、权限和hash写入正常catalog不可见的staging区并durably flush，再把全部child原子rename到记录冻结且尚未被catalog引用的最终locator；每次恢复只枚举该record中的有限target。全部rename成功后，以同一`session-control.sqlite`事务CAS验证coordinator仍active、旧board/catalog revision及member/task preimage未漂移，再发布thread catalog、collaboration ledger全部locator/member/task mapping；无required attachment claim时record直接进入终态`published`，否则进入非终态`published_pending_attachment_commit`并在claim结算后转为`published`。该事务是唯一可见性提交点，后续结算不得改变board成员集合。CAS失败不得覆盖并发变更、重基或部分发布，只定点清理后标记`aborted`。rename失败同样不得发布；rename后/发布前崩溃时preparing record已经存在，故可定点继续或清理，禁止扫盘或吸收无record目录；发布后/terminal response前按catalog/ledger与record恢复原结果。发布前正常reader只见旧board，发布后只见完整新board；源Session保持只读和独立。不得只发布部分member/task、把一个member同时保留为跨Session与child，或在正常运行时解释staging/旧跨Sessionteam状态。
 
-resident ThreadRuntime是durable owner的可回收执行缓存。统一residency manager为每个thread维护当前generation、lease、last activity和profile；child默认idle threshold为30分钟。没有active/runnable/pending execution、未收敛model/tool/mutation或lease，且debug owner已核实该thread没有`starting|running|paused|stopping`进程/`reconcile_required`阻断时，residency manager才决定关闭该thread generation的`LifetimeScope`，由scope释放compiled invocation、model/tool clients、in-memory CSM/ContextStore cache和stream execution fanout；scope不得自行计算idle、修改持久state、停止共享monitor、判断Node进程业务状态或产生source item。活动调试期间不累计idle时长，核实终态/lease结清后重新起算30分钟；backend重启时必须先恢复调试owner持久占用并核实进程，无法确认不得宣称cold。durable callback/queue只保存精确thread address；迟到callback先获取当前generation owner再提交，不能继续写已关闭实例。
-
-产品提供只读`ThreadResidencySnapshot`观察面，至少包含`session_id`、`thread_id`、`residency=cold|loading|resident|unloading`、execution状态、`last_activity_at`、`idle_deadline_at`和脱敏`blocking_reasons[]`。它是runtime观测，不是canonical item、CSM source、team state或模型上下文；generation/lease细节只进入受保护trace和测试诊断。residency manager通过可注入单调`Clock`计算deadline：生产使用真实时钟，测试使用fake clock精确验证29:59仍resident、30:00转cold及lease阻断，不允许真实等待30分钟或为测试缩短产品阈值。
+resident ThreadRuntime 是 durable context owner 的可回收执行缓存。Thread residency manager、generation/lease、idle eligibility、`ThreadResidencySnapshot` 和单调Clock合同由 `add-itemized-rollout-context` 唯一规定。该 owner 获准卸载时，`LifetimeScope` 只释放该 Thread 独占的 compiled graph、model/tool clients、in-memory CSM/ContextStore cache 和 stream execution fanout；它不得计算 idle、修改持久状态、停止共享 monitor、判断 Node 进程业务状态或产生 source item。durable callback/queue只保存精确 thread address；迟到 callback 必须由当前 generation owner 校验后提交。
 
 rehydrate只发生在execution admission或确实需要可写runtime的operation入口：从thread catalog、GraphBinding、checkpoint、CSM registration/revision、ToolSet applied binding和active view重建同一owner。history/detail/list和右侧侧边栏浏览保持cold path。unload/rehydrate自身不产生`ApplySourceLifecycleDecision`、不建立新prefix epoch、不读取当前文件重写旧source；tracked source只在恢复后的resource activation boundary消费ResourceRegistry已发布snapshot。
 
@@ -650,12 +648,12 @@ rehydrate只发生在execution admission或确实需要可写runtime的operation
 - **[用户快速连续切换 ToolSet]** → safe boundary前只把最终 desired revision用于下一次 seal，但保留每次控制面revision及因果审计；已经 applied/sealed 的 ToolSet不可覆盖。
 - **[切换时存在 outstanding tool call]** → 先按旧 assembly和原 `tool_call_id`产生真实 completion/failure/policy-denied terminal outcome，再 hard rebase；绝不制造未配对取消或虚假成功。
 - **[Provider无法在新 ToolSet下投影旧工具历史]** → 阻止 rebase并返回具体兼容性错误；只有显式 compaction可建立另一 active view，不能由 adapter静默删除历史。
-- **[30分钟idle回收与迟到callback竞争]** → active execution/mutation和runtime lease阻止卸载；generation fence使callback只能重新取得当前owner，旧实例无写权限，idle起点在每次有效活动后重新计算。
+- **[Thread runtime unload 与迟到 callback 竞争]** → 复用 itemized 的 residency/lease/fence 合同；generation fence使callback只能重新取得当前owner，旧实例无写权限。
 - **[用户把跨Session通信误认为共享team状态]** → tool/API结果明确返回resolved target main和单次operation状态；跨Sessionschema拒绝member/task/role/Goal字段，team状态只能由Session内部ledger产生E04 source。
 - **[send后立即wait看到短暂无active Job]** → send返回持久`communication_id`和target acceptance ref，wait先跟踪该communication到execution binding再等待终态；禁止把accepted/queued误报为idle完成，target重启后从inbox恢复。
 - **[模型通过simulate_user伪造真实用户Turn]** → 从模型工具schema删除该参数，可信user ingress只由UI/API acceptance owner建立并带可验证来源。
 - **[旧跨Sessionteam只迁移部分成员]** → 从固定source checkpoint/view准备不可见target-local child staging，全部验证后由coordinator catalog/board单一可见性事务发布并保存journal；检测到active runtime、空child、部分board或混合成员时阻断运行。
-- **[E2E通过缩短阈值或只看DOM产生假阳性]** → 使用注入Clock保持30分钟产品值，并联合校验DOM、API/通信账本、thread history/SSE与runtime trace；单一观察面不能单独判PASS。
+- **[E2E将 context preservation 误判为 residency 验收]** → 在 itemized 唯一 Web E2E owner 中通过注入Clock验证真实30分钟合同，并联合校验DOM、API/通信账本、thread history/SSE与runtime trace；本 change 只增加 context state 不变的断言。
 
 ## Migration Plan
 
@@ -664,7 +662,7 @@ rehydrate只发生在execution admission或确实需要可写runtime的operation
 3. 先提取通用`EventChannelService`、进程内`LifetimeScope`，使既有TurnExecutionScope、watcher、MCP/client及runtime stop/close复用单一异步释放合同；内置file monitor按完整watch选项共享subscription并返回释放handle；Gateway内部snapshot和权威memory状态各按自身版本合同接入。再建立SourceReconciler、ResourceDerivationGraph、语义ResourceRegistry、initial reconcile/readiness；config owner而非scope负责候选配置与来源登记的shadow健康/原子发布，旧scope随后排空。把Job event bus迁为独立channel adapter，再迁移config、workspace file event、AGENTS和Skill consumer，迁完即删除各自旧watch loop与请求期reader/enumerator。旧ResourceManager在外部资源provider完成typed身份/状态核实后迁为只处理跨Turn持久operation lease的账本，删除工具参数猜测、cleanup policy及内存stopper控制。
 4. 建立VRN grammar/resolver、三层SkillCatalog及metadata/activation facet；实现默认turn、可选model_call的ResourceActivationCoordinator和持久activation provenance，验证URI/path/credential不泄露、旧assembly不按当前URI重解。
 5. 实现`skill_load`的snapshot/tracked/untrack及checkpoint-versioned control state，删除通用read激活、模型可见`/.boxteam/...`Skill路径/挂载、旧Skills/AGENTS request-time middleware和任何即时移除规划/入口。
-6. 建立logical thread owner与resident runtime的generation/lease/idle-unload/lazy-rehydrate边界；验证child默认30分钟cold切换不改变CSM state、ToolSet binding、stable prefix或历史，cold read不创建runtime。
+6. 接入 `add-itemized-rollout-context` 的 Thread generation/lease/idle-unload/lazy-rehydrate 边界；在其唯一生命周期验收中证明 main 与 child unload/rebuild 不改变 CSM state、ToolSet binding、stable prefix 或历史。
 7. 先把Goal限定到main thread，并以migration-only `materialize_thread_copy`读取source checkpoint/view、写不可见staging，再由coordinator单一可见性事务将旧team board迁为Session内部child-thread ledger，或freeze/detach；不调用公开`full_rollout_copy`创建新Session，不复制active runtime、不假设跨库事务。再按R01–R09、E01–E07迁移初始instruction、文件和事件producer，删除直接内部`HumanMessage`、checkpoint message mutation和模型工具伪造user Turn的入口。
 8. 建立中心Gateway经SSH `-L`到spoke的长期全双工WebSocket对等RPC channel，以稳定`gateway_id`路由显式URI，并让裸ID只经local+唯一hub的有界fan-out解析target main。拆分持久connection config ID与瞬时channel/route lease；实现origin-preserving、最多一次`B → A → C`的transit grant、默认允许核心操作且可原子热发布的最新policy检查，以及source outbox/target inbox恢复。接入跨workspace/server send/read/wait，以默认60秒、最大300秒且可恢复selector的`wait_for_session`替换旧monitor；hub不保存业务通信状态，权限变化不修改ToolSet、上下文或stable prefix。
 9. 让ToolSelectionStore/ToolService、execution step、ToolSet registry与assembly compiler在每次model call safe boundary执行C02 hard rebase，覆盖outstanding call convergence、同Turn多epoch和Provider历史兼容性失败。

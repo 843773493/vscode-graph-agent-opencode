@@ -211,7 +211,7 @@ child thread MUST 拥有独立 Turn、item、history、active view和执行状�
 
 ### Requirement: durable Thread 与 resident runtime 必须分离
 
-系统 SHALL 将 SessionThread 的 durable identity、catalog metadata、GraphBinding、canonical history、checkpoint/context view、CSM control state和 ToolSet applied binding与进程内 resident runtime分离。当前 durable child thread的默认 idle unload threshold MUST 为30分钟；当 thread没有 active、runnable或pending execution，没有未收敛 model/tool call或 mutation transaction，没有 runtime lease，且debug owner已核实没有`launch_pending`进程claim、`starting|running|paused|stopping`调试进程或`reconcile_required`阻断，并连续达到该阈值无 execution、消息准入或 runtime callback活动时，系统 MUST 只卸载可重建运行资源，不得删除、归档、重命名或改写该 thread的持久事实。活动调试期间不累计idle时长；调试owner核实终态并结清lease后重新起算30分钟，residency owner只消费该阻断状态而不决定业务进程停止。
+系统 SHALL 将 SessionThread 的 durable identity、catalog metadata、GraphBinding、canonical history、checkpoint/context view、CSM control state和 ToolSet applied binding与进程内 resident runtime分离。每个 durable SessionThread（包括 main 与 child thread）的默认 idle unload threshold MUST 为30分钟；当 thread没有 active、runnable或pending execution，没有未收敛 model/tool call或 mutation transaction，没有 runtime lease，且debug owner已核实没有`launch_pending`进程claim、`starting|running|paused|stopping`调试进程或`reconcile_required`阻断，并连续达到该阈值无 execution、消息准入或 runtime callback活动时，系统 MUST 只卸载可重建运行资源，不得删除、归档、重命名或改写该 thread的持久事实。活动调试期间不累计idle时长；调试owner核实终态并结清lease后重新起算30分钟，residency owner只消费该阻断状态而不决定业务进程停止。
 
 普通 thread列表、状态、历史和详情读取 MUST 使用 cold read路径，不得仅因用户查看 child历史就初始化模型、工具、graph或可写 ContextStore runtime。新的用户消息、内部 wakeup或其它需要执行的操作 MUST 在准入时以原 `(session_id, thread_id)` 和GraphBinding延迟重建唯一 runtime owner；新runtime generation必须重新解析并逐字段验证原`graph_id、graph_revision、graph_schema_hash、capability_profile_hash`，不得因为进程缓存已清空或registry已有更新而改用latest graph。卸载前后已经提交的上下文字节、prefix epoch、tracked registration、diff基准和ToolSet binding必须保持一致。idle unload不得被解释为Skill/上下文到期，也不得生成 context item。
 
@@ -222,12 +222,17 @@ child thread MUST 拥有独立 Turn、item、history、active view和执行状�
 - **WHEN** 一个durable child thread连续30分钟没有活动，且不存在执行、未收敛工具调用、mutation或runtime lease
 - **THEN** 系统释放其可重建的进程内Agent资源并把thread标记为cold；其历史、checkpoint、GraphBinding、CSM/ToolSet状态和用户可查看性保持不变
 
+#### Scenario: main thread 空闲30分钟后卸载资源
+
+- **WHEN** 一个 durable main thread 连续30分钟没有活动，且不存在执行、排队任务、未收敛工具调用、mutation或runtime lease
+- **THEN** 系统只释放该 main thread 的可重建进程内资源并标记为cold；其Session、历史、checkpoint、GraphBinding、CSM/ToolSet状态和Workspace资源不变
+
 #### Scenario: 活跃任务阻止空闲卸载
 
 - **WHEN** idle deadline到达时child thread仍有active/pending execution、未收敛model/tool call或持有runtime lease
 - **THEN** 系统不得卸载该runtime；必须等待这些条件真实收敛并重新计算空闲窗口，不得伪造取消或完成状态
 
-#### Scenario: 活动调试进程阻止child卸载
+#### Scenario: 活动调试进程阻止Thread卸载
 
 - **WHEN** child存在未结清的`launch_pending`进程claim或处于`starting|running|paused|stopping`，且fake clock越过30分钟，随后debug owner核实进程不存在/退出并结清lease
 - **THEN** 前一阶段thread仍resident且`blocking_reasons`含脱敏debug阻断；终态后重新起算完整30分钟，无其它阻断才可cold；停止失败或重启后进程状态无法确认时保留`reconcile_required`且不得靠`LifetimeScope`关闭虚报停止
@@ -241,6 +246,11 @@ child thread MUST 拥有独立 Turn、item、history、active view和执行状�
 
 - **WHEN** 用户或精确内部wakeup向cold child thread发送新的可执行消息
 - **THEN** 系统在execution admission阶段建立新runtime generation，按原thread identity和逐字段相同的GraphBinding恢复runtime，再提交或运行该消息；不得创建替代thread、改投main thread、静默选择latest graph或从当前文件覆盖旧上下文
+
+#### Scenario: 迟到 callback 只能写入当前 Thread generation
+
+- **WHEN** Thread unload 或 backend 重启后，旧 runtime generation 的后台任务、资源 owner 或 terminal callback 到达
+- **THEN** callback MUST 通过精确 `(session_id, thread_id)` 重新取得当前 owner 或持久化 wakeup，并校验 generation/lease；旧实例不得提交 mutation，结果不得回退到 Session main thread
 
 #### Scenario: fake clock 精确验证产品30分钟阈值
 
@@ -486,12 +496,68 @@ board migration MUST使用不可见staging和单一coordinator可见性提交点
 
 ### Requirement: durable GraphBinding 可验证重建，不持久化进程对象
 
-每个 `SessionThread` SHALL 持久化 `GraphBinding(graph_id, graph_revision, graph_schema_hash, capability_profile_hash)`。重启恢复 MUST 通过受注册的 graph factory 解析完全相同的 binding 并校验 revision/hash；系统不得序列化或恢复 Python `CompiledStateGraph`，也不得在 binding 缺失或不匹配时静默选用最新 graph。进程缓存若复用 graph topology，缓存对象不得捕获 Session、thread、工具实例、provider request 或可变 execution state；这些值 MUST 在每次 model invocation 通过显式 `ThreadRuntimeBinding` 注入。
+每个 `SessionThread` SHALL 持久化 `GraphBinding(graph_id, graph_revision, graph_schema_hash, capability_profile_hash)`；backend 启动和只读 history/detail 查询 MUST NOT 为 thread 创建 compiled Agent graph。该 thread 首次获得可执行 admission 时，runtime MUST 按其持久 binding 延迟解析并编译 graph，将该编译实例和 thread-scoped handles 保存在该 ThreadRuntime generation 内。同一 generation 中后续 Turn MUST 复用同一 graph 实例，包括复用同一个 durable child thread 的 subagent 工作；不同 `(session_id, thread_id)` MUST NOT 共用一个捕获 Thread 级依赖的 compiled graph 实例。每次 invocation 仍 MUST 显式注入当前 `ThreadRuntimeBinding`，graph/runtime 不得在 Turn 之间保留可变 execution state。Thread unload 或 backend 重启 MUST 丢弃进程内 compiled graph；下一次执行 admission MUST 从完全相同的 GraphBinding 重建并校验 revision/hash，不得序列化或恢复 Python `CompiledStateGraph`，也不得在 binding 缺失或不匹配时静默选用最新 graph。
 
 #### Scenario: 缺失精确 graph revision
 
 - **WHEN** checkpoint/SessionThread 引用的 `graph_id + graph_revision` 未注册或 schema hash 不匹配
 - **THEN** 恢复返回 `graph_binding_unavailable` 并保持已提交 rollout/context 不变，不创建替代 graph 或新的 checkpoint
+
+#### Scenario: backend 启动和只读访问不提前加载 Agent graph
+
+- **WHEN** Workspace backend 启动，或用户只读取某个 Thread 的列表、状态、历史或详情
+- **THEN** 系统不为该 Thread 编译或实例化 Agent graph；只有可执行 admission 才允许按持久 `GraphBinding` 加载
+
+#### Scenario: resident Thread 的后续 Turn 复用 graph
+
+- **WHEN** 同一个 main 或 child Thread 在 runtime generation 仍 resident 时依次接受后续 Turn，包括对同一 durable child thread 的 subagent 后续工作
+- **THEN** 每个 Turn 使用该 ThreadRuntime generation 已加载的同一 compiled graph 实例，同时以各自的 `ThreadRuntimeBinding` 注入 invocation 状态；另一个 Thread 不复用该实例
+
+#### Scenario: unload 后按原 binding 重建 graph
+
+- **WHEN** Thread 在 idle unload 后再次获得可执行 admission
+- **THEN** 系统建立新 runtime generation 并按原 GraphBinding 重新编译 graph；GraphBinding 四字段保持不变，旧 generation 的 graph 和 handles 不再被使用
+
+### Requirement: Thread 后台任务与邮箱按稳定身份持久恢复
+
+后台任务和邮箱 MUST 归属于精确的 `(session_id, thread_id)`，不得只用 Session、可复用的 Agent 名称或内存对象作为 owner。可由 Agent 工具启动的后台任务 MUST 具有版本化 typed 恢复描述和 checkpoint handler；缺少该恢复能力时，任务 MUST 在接受前明确失败。任务创建 MUST 先持久化稳定 `task_id`、handler 及版本、输入身份、状态和初始 checkpoint，再向调用方确认；checkpoint MUST 记录可恢复的 typed 进度与外部操作幂等身份，不得序列化 Python 协程、进程句柄或 compiled graph。backend 重启后 MUST 按最近已提交 checkpoint 恢复同一任务。活动任务的 Thread lease 在任务进入已核实终态或安全挂起状态前 MUST 阻止 Thread idle unload。恢复时若无法确认外部副作用是否已经发生，owner MUST 暴露 `reconcile_required` 并停止自动重放；已有数据缺少可用 handler 或 checkpoint 时 MUST 明确报告中断/待恢复状态，不得伪报成功或静默丢弃。
+
+每个 Thread 的 mailbox MUST 保存在该 Thread 的 durable storage owner 中，并由稳定 `message_id`、精确 Thread owner、来源身份、顺序、内容和消费状态组成；存储位置 MUST 通过权威 Session/Thread catalog 与统一 resolver 定位。发送只有在消息已持久接收后才可确认；相同 identity/相同内容的重试 MUST 返回同一消息，不同内容 MUST 明确冲突。目标 Thread 只有在其 checkpoint 或等价的原子消费记录已提交该 `message_id` 后才可确认消费；checkpoint 未提交时允许以同一 identity 重投，已提交时不得再次应用该消息。任务输出和 mailbox 写入之间的崩溃恢复 MUST 复用同一 message identity，不能产生重复逻辑消息。冷 Thread 的任务和 mailbox 读取 MUST 不加载 Agent graph；实际执行或消费消息 MUST 经该 Thread 的 execution admission 创建/恢复唯一 runtime generation，不得回退到 main thread 或向旧 generation 写入。
+
+#### Scenario: 任务创建在确认前已进入持久记录
+
+- **WHEN** Agent 工具请求在 Thread 中启动可恢复后台任务
+- **THEN** 系统先提交该 Thread 的 `task_id`、handler 版本、输入身份和初始 checkpoint，再返回任务 identity；同一创建请求重试返回同一任务，不同输入不得复用原 identity
+
+#### Scenario: 进程重启后从已提交 checkpoint 恢复任务
+
+- **WHEN** backend 在可恢复任务运行期间退出，随后使用同一工作区重新启动
+- **THEN** owner 按原 `(session_id, thread_id, task_id)` 和最后已提交 checkpoint 恢复任务，不重复创建任务，也不需要恢复旧协程或 compiled graph
+
+#### Scenario: 外部副作用结果未知时停止重放
+
+- **WHEN** backend 在外部操作已发出但结果尚未核实的窗口崩溃
+- **THEN** 任务进入可见的 `reconcile_required` 状态并保留原 operation identity；owner 在核实之前不得重发可能造成重复副作用的操作
+
+#### Scenario: mailbox 消息在 Thread runtime cold 时仍可读取
+
+- **WHEN** 用户或后台任务查询一个 cold Thread 的邮箱
+- **THEN** 系统按持久 Thread owner 返回已提交消息和消费状态，不创建模型 client、工具实例、compiled graph 或可写 runtime
+
+#### Scenario: 消息消费与 checkpoint 提交之间崩溃
+
+- **WHEN** Thread 收到一条消息后，在 checkpoint/消费记录提交前崩溃，并在恢复后重试同一消息
+- **THEN** 邮箱以同一 `message_id` 重新投递；checkpoint 提交后该消息被标记已消费，后续恢复不会将它作为新消息再次应用
+
+#### Scenario: 任务输出写入邮箱后、checkpoint 推进前崩溃
+
+- **WHEN** 后台任务已把一条输出消息持久写入目标 Thread 邮箱，但尚未提交包含该输出序号的新任务 checkpoint 时 backend 崩溃
+- **THEN** 恢复使用原 `message_id` 对账并继续推进 checkpoint；目标邮箱只保留一条逻辑消息
+
+#### Scenario: 旧 runtime callback 不得写入替代 Thread
+
+- **WHEN** Thread unload 或 backend 重启后收到旧 runtime generation 的任务完成回调
+- **THEN** owner 通过任务和 Thread generation fence 拒绝旧实例写入，并把完成结果提交给精确 Thread 的当前 owner 或保留为待核实事实；不得投递到 Session main thread
 
 ### Requirement: Canonical item 具有稳定身份和语义顺序
 

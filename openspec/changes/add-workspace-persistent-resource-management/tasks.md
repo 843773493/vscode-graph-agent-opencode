@@ -1,0 +1,32 @@
+## 1. Domain owner 与工作区级持久记录
+
+- [ ] 1.1 为 Browser、Terminal 等 Agent 资源创建工具显式提供 `retention_scope` 参数并默认设为 `thread`；支持用户或显式工具参数选择 `workspace` 创建，或将已有资源提升为工作区范围，提升前后 `resource_id` 不变。
+- [ ] 1.2 将工作区资源权威记录存入当前工作区 `.boxteam/` 下的领域 owner 存储，并持久化不可变来源 Thread、当前关联、`unattached_since` 和回收状态；实现关联去重、资源版本和 operation lease 冲突校验。
+- [ ] 1.3 为现有 Session 归属资源增加有界、可恢复的一次性迁移：保留 resource_id、来源 Thread 与外部 identity，按 owner 记录重建关联；无可靠 detach 时间的临时孤儿从迁移提交时开始计时；未知状态显式阻断，不扫盘、不双读写。
+- [ ] 1.4 实现 backend 重启后的 owner 核实/恢复；外部资源或结果不可确认时持久暴露 unknown/reconcile_required 状态，不重复创建或盲目重放。
+
+## 2. Thread unload、Session 删除和 owner 操作
+
+- [ ] 2.1 将 Thread runtime generation unload 和 Thread 删除接入 owner 的幂等释放事件；owner 按来源 Thread 找到全部 Thread scope 资源，释放句柄和 lease、自动 detach 并立即停止/核实/delete；Workspace scope 只移除本 Thread 关联。
+- [ ] 2.2 将 Session 删除接入各资源 owner：先关闭准入并收敛 Session 来源的全部 Thread scope 资源（含已 detach 的孤儿资源），再允许物理删除；保留 Workspace 记录并移除被删 Session/Thread 的引用。
+- [ ] 2.3 在每个 owner 实现独立的 promote、attach、detach、stop、delete 操作；Thread scope 只允许关联来源 Thread，Workspace scope 可关联同工作区有效 Thread；detach 不停止资源，带有效 lease/关联的冲突明确失败。
+- [ ] 2.4 删除通用 `ResourceManager` 的 `cleanup_policy`、参数猜测和进程内 stopper 决策；确保外部 stop/delete 的已完成状态只由实际领域 owner 核实。
+- [ ] 2.5 实现 Thread scope 零关联资源的 30 分钟孤儿回收：以最后一次 Thread detach 持久化计时，回收前复核 scope/关联/lease，并与 attach/promote 串行化；Workspace scope 无关联时不回收。
+
+## 3. Workspace API 与完整投影
+
+- [ ] 3.1 在工作区后端提供 `/api/v1/resources` 列表/详情及 type、scope、当前关联和来源 Thread 过滤，并支持查询无 Thread 关联的 Workspace 资源与宽限期内临时孤儿。
+- [ ] 3.2 提供 owner-routed promote、attach、detach、stop、delete 操作；成功返回完整 owner 投影，失败返回稳定错误/阻断事实，不产生部分状态。
+- [ ] 3.3 更新 `SessionResourceProviderRegistry` 为只聚合和路由的 projection；验证 Gateway 只透明代理且不读写工作区 `.boxteam/`。
+
+## 4. 前端工作区资源管理
+
+- [ ] 4.1 在资源类型所属的 UI 区域提供工作区范围列表，并在 30 分钟宽限期内展示无 Thread 关联的临时孤儿及计划回收时间，支持重新关联或持久化。
+- [ ] 4.2 在 Session 资源表面展示当前 Thread 关联和持久化快捷操作；区分资源关联 attach/detach 与浏览器/WebSocket/终端客户端传输连接。
+- [ ] 4.3 按后端完整结果整体替换成功对象；失败后重新读取 owner 状态并展示明确错误；Terminal 资源归主窗口底部面板。
+
+## 5. 生命周期与恢复验证
+
+- [ ] 5.1 为默认 Thread scope 与显式 Workspace scope 创建、Thread unload 即时 detach/delete、有效 lease、promotion/unload 并发、detach 冲突、Session 删除和 owner 重启增加 owner/API 验证；覆盖孤儿资源在 29:59 重新 attach 取消回收、满 30:00 自动回收、lease 阻止回收、attach/回收竞态和 Workspace scope 永不按期限回收。
+- [ ] 5.2 在 `tests/e2e/clients/web/test_basic_chat_tool_loop.py` 这一既有唯一 Web E2E owner 中增加用户持久化 Browser/Terminal 资源、unload 后保留、另一个 Thread attach/detach、Session 删除后仍可从 Workspace UI 访问及明确失败反馈的完整场景。
+- [ ] 5.3 用外置 process control 验证 owner 在外部操作结果未知时崩溃和重启；恢复孤儿期限时不得重置计时、重放未知副作用、伪报删除成功或遗留无权威记录的外部资源。
