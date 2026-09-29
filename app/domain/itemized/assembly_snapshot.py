@@ -28,7 +28,8 @@ from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serde.assembly import (
     context_assembly_snapshot_from_dict,
 )
-from app.domain.itemized.serialization import _non_empty_string, normalize_wire_request
+from app.domain.itemized.serialization import normalize_wire_request
+from app.domain.itemized.validation import _non_empty_string
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,18 +7,13 @@ from collections.abc import Mapping, Sequence
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.redaction import validate_hash_redaction
 from app.domain.itemized.identity.refs import selection_ref_identity
+from app.domain.itemized.validation import _non_empty_string
 
 # 凭据字段必须先由 producer 显式脱敏；token 数量、工具 schema 等不是凭据。
 _CREDENTIAL_KEYS = frozenset({
     "token", "access_token", "refresh_token", "api_key", "secret", "client_secret",
     "password", "credential", "credentials",
 })
-
-
-def _non_empty_string(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
-    return value
 
 
 def _hash_safe_value(value: object) -> object:
@@ -126,7 +121,6 @@ def ordered_selection(entries: Sequence[object]) -> tuple[object, ...]:
 __all__ = [
     "_contribution_order_key",
     "_hash_safe_value",
-    "_non_empty_string",
     "normalize_wire_request",
     "ordered_selection",
 ]

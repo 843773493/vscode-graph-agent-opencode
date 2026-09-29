@@ -5,6 +5,13 @@ from __future__ import annotations
 from app.domain.itemized.enums import TurnStatus
 from app.domain.itemized.errors import ItemSchemaError
 
+
+def _non_empty_string(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
+    return value
+
+
 TURN_TRANSITIONS: dict[str, frozenset[str]] = {
     TurnStatus.OPEN: frozenset(
         {TurnStatus.ACTIVE, TurnStatus.CANCELLED, TurnStatus.FAILED, TurnStatus.UNKNOWN}

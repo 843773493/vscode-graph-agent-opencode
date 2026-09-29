@@ -28,16 +28,11 @@ from app.domain.itemized.schema import (
     validate_item_compatibility,
     validate_producer_ref,
 )
+from app.domain.itemized.validation import _non_empty_string
 
 _OPTIONAL_FIELDS = frozenset(
     {"turn_id", "turn_scope", "message_group_id", "wire_role"}
 )
-
-
-def _non_empty_string(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
-    return value
 
 
 def _validate_producer(value: object) -> dict[str, object]:

@@ -33,6 +33,7 @@ from app.domain.itemized.hashing import (
     validate_hash_token,
 )
 from app.domain.itemized.identity.refs import ToolSetRef
+from app.domain.itemized.validation import _non_empty_string
 
 _SHA256_BYTES_PATTERN = re.compile(r"^sha256:bytes:v1:[0-9a-f]{64}$")
 _WIRE_ROLES = frozenset({"system", "user", "assistant", "tool"})
@@ -91,12 +92,6 @@ PENDING_TRANSITION_REASONS: frozenset[EpochReason] = frozenset(
 )
 
 
-def _non_empty_str(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
-    return value
-
-
 def _positive_int(value: object, field_name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ItemSchemaError(f"{field_name} 必须是正整数")
@@ -130,7 +125,7 @@ class PrefixEpoch:
         if self.reason == EpochReason.INITIAL and self.ordinal != 1:
             raise EpochContractError("initial epoch 的 ordinal 必须是 1")
         if self.turn_id is not None:
-            _non_empty_str(self.turn_id, "PrefixEpoch.turn_id")
+            _non_empty_string(self.turn_id, "PrefixEpoch.turn_id")
 
     @property
     def token(self) -> str:
@@ -147,7 +142,7 @@ class ParentAssemblyRef:
     prefix_hash: str
 
     def __post_init__(self) -> None:
-        _non_empty_str(self.assembly_id, "ParentAssemblyRef.assembly_id")
+        _non_empty_string(self.assembly_id, "ParentAssemblyRef.assembly_id")
         _positive_int(self.epoch_ordinal, "ParentAssemblyRef.epoch_ordinal")
         if (
             not isinstance(self.prefix_byte_length, int)
@@ -179,7 +174,7 @@ class PendingPrefixEpochTransition:
     consumed: bool = False
 
     def __post_init__(self) -> None:
-        _non_empty_str(self.transition_id, "PendingPrefixEpochTransition.transition_id")
+        _non_empty_string(self.transition_id, "PendingPrefixEpochTransition.transition_id")
         _validate_epoch_reason(self.reason, "PendingPrefixEpochTransition.reason")
         if self.reason not in PENDING_TRANSITION_REASONS:
             raise EpochContractError(
@@ -187,7 +182,7 @@ class PendingPrefixEpochTransition:
                 f"收到 {self.reason.value!r}"
             )
         if self.turn_id is not None:
-            _non_empty_str(self.turn_id, "PendingPrefixEpochTransition.turn_id")
+            _non_empty_string(self.turn_id, "PendingPrefixEpochTransition.turn_id")
         if not isinstance(self.consumed, bool):
             raise ItemSchemaError("PendingPrefixEpochTransition.consumed 必须是 boolean")
 
@@ -219,7 +214,7 @@ class AppendedItemRef:
     def __post_init__(self) -> None:
         if self.ref_type not in _APPEND_REF_TYPES:
             raise ItemSchemaError(f"未知 AppendedItemRef.ref_type: {self.ref_type}")
-        _non_empty_str(self.ref_id, "AppendedItemRef.ref_id")
+        _non_empty_string(self.ref_id, "AppendedItemRef.ref_id")
         if self.tracking_state not in _TRACKING_STATES:
             raise ItemSchemaError(
                 f"未知 AppendedItemRef.tracking_state: {self.tracking_state}"
@@ -230,9 +225,9 @@ class AppendedItemRef:
             if self.tracking_state != "not_tracked":
                 raise ItemSchemaError("canonical AppendedItemRef 不得声明 tracking 状态")
             return
-        _non_empty_str(self.source_identity, "AppendedItemRef.source_identity")
+        _non_empty_string(self.source_identity, "AppendedItemRef.source_identity")
         if self.tracking_state == "tracked":
-            _non_empty_str(self.source_revision, "AppendedItemRef.source_revision")
+            _non_empty_string(self.source_revision, "AppendedItemRef.source_revision")
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,7 +247,7 @@ class ProviderProfileItemFrame:
 
     def __post_init__(self) -> None:
         _positive_int(self.ordinal, "ProviderProfileItemFrame.ordinal")
-        _non_empty_str(self.provider_profile, "ProviderProfileItemFrame.provider_profile")
+        _non_empty_string(self.provider_profile, "ProviderProfileItemFrame.provider_profile")
         if self.role not in _WIRE_ROLES:
             raise ItemSchemaError(f"未知 wire role: {self.role}")
         if self.payload_kind not in {item.value for item in PayloadKind}:
@@ -306,7 +301,7 @@ class PrefixEpochState:
     def __post_init__(self) -> None:
         if not isinstance(self.epoch, PrefixEpoch):
             raise EpochContractError("PrefixEpochState.epoch 必须是 PrefixEpoch")
-        _non_empty_str(self.provider_profile, "PrefixEpochState.provider_profile")
+        _non_empty_string(self.provider_profile, "PrefixEpochState.provider_profile")
         validate_hash_token(
             self.tool_compatibility_key, "PrefixEpochState.tool_compatibility_key"
         )
@@ -531,7 +526,7 @@ def append_items(
     """
     if not isinstance(state, PrefixEpochState):
         raise EpochContractError("append_items 需要当前 PrefixEpochState")
-    _non_empty_str(desired_provider_profile, "desired_provider_profile")
+    _non_empty_string(desired_provider_profile, "desired_provider_profile")
     validate_hash_token(desired_tool_compatibility_key, "desired_tool_compatibility_key")
     if desired_provider_profile != state.provider_profile:
         raise ProviderProfileChangeRequiresRebuildError(
@@ -581,7 +576,7 @@ def seal_assembly(
     任何校验失败都不消费 pending transition、不应用 epoch,调用方保留
     已提交 view/transition 原样重试,不产生半成品 dispatch。
     """
-    _non_empty_str(assembly_id, "assembly_id")
+    _non_empty_string(assembly_id, "assembly_id")
     if not isinstance(state, PrefixEpochState):
         raise EpochContractError("seal_assembly 需要当前 PrefixEpochState")
     if state.epoch_applied:

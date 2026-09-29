@@ -13,12 +13,8 @@ from app.domain.itemized.schema import ITEM_STATUSES as _ITEM_STATUSES
 from app.domain.itemized.schema import PROTECTIONS as _PROTECTIONS
 from app.domain.itemized.schema import PROVENANCE_RELATIONS as _PROVENANCE_RELATIONS
 from app.domain.itemized.schema import VISIBILITIES as _VISIBILITIES
+from app.domain.itemized.validation import _non_empty_string
 
-
-def _non_empty_string(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
-    return value
 
 @dataclass(frozen=True, slots=True)
 class TurnRecord:

@@ -8,12 +8,7 @@ from dataclasses import dataclass
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import _ensure_json_value, sha256_jcs
 from app.domain.itemized.schema import SEMANTIC_KINDS
-
-
-def _non_empty_string(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
-    return value
+from app.domain.itemized.validation import _non_empty_string
 
 
 @dataclass(frozen=True, slots=True)

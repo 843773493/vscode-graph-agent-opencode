@@ -20,18 +20,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import (
-    contribution_content_hash,
-    sha256_jcs,
-    validate_hash_token,
-)
 from app.domain.itemized.epoch.prefix_epoch import (
     REBUILD_EPOCH_REASONS,
     EpochReason,
     PrefixEpoch,
     PrefixEpochState,
 )
+from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.hashing import (
+    contribution_content_hash,
+    sha256_jcs,
+    validate_hash_token,
+)
+from app.domain.itemized.validation import _non_empty_string
 
 RootPlacement = Literal["root_eligible", "tail_only"]
 """source owner 声明的根资格;默认外部内容与未受信指引恒为 tail_only。"""
@@ -71,12 +72,6 @@ class RootPlacementViolationError(ItemSchemaError):
     error_code = "root-placement-violation"
 
 
-def _non_empty_str(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
-    return value
-
-
 def _non_negative_int(value: object, field_name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ItemSchemaError(f"{field_name} 必须是非负整数")
@@ -103,11 +98,11 @@ class RootCandidateSource:
 
     def __post_init__(self) -> None:
         for field_name in ("source_identity", "source_kind", "name"):
-            _non_empty_str(
+            _non_empty_string(
                 getattr(self, field_name), f"RootCandidateSource.{field_name}"
             )
         validate_hash_token(self.revision, "RootCandidateSource.revision")
-        _non_empty_str(self.content, "RootCandidateSource.content")
+        _non_empty_string(self.content, "RootCandidateSource.content")
         _non_negative_int(self.source_ordinal, "RootCandidateSource.source_ordinal")
         if self.root_placement not in _ROOT_PLACEMENTS:
             raise RootPlacementViolationError(
@@ -139,7 +134,7 @@ class CompiledRootSourceProvenance:
 
     def __post_init__(self) -> None:
         for field_name in ("source_identity", "source_kind", "name"):
-            _non_empty_str(
+            _non_empty_string(
                 getattr(self, field_name),
                 f"CompiledRootSourceProvenance.{field_name}",
             )
@@ -175,11 +170,11 @@ class CompiledRootItem:
     def __post_init__(self) -> None:
         if not isinstance(self.epoch, PrefixEpoch):
             raise RootCompileBoundaryError("CompiledRootItem.epoch 必须是 PrefixEpoch")
-        _non_empty_str(self.provider_profile, "CompiledRootItem.provider_profile")
+        _non_empty_string(self.provider_profile, "CompiledRootItem.provider_profile")
         validate_hash_token(
             self.tool_compatibility_key, "CompiledRootItem.tool_compatibility_key"
         )
-        _non_empty_str(self.content, "CompiledRootItem.content")
+        _non_empty_string(self.content, "CompiledRootItem.content")
         if not self.sources:
             raise RootCompileBoundaryError("CompiledRootItem.sources 不能为空")
         for provenance in self.sources:

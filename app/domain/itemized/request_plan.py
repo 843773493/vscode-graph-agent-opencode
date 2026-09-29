@@ -26,10 +26,8 @@ from app.domain.itemized.identity.refs import (
 )
 from app.domain.itemized.epoch.root_compilation import RootPlacement
 from app.domain.itemized.selection import ContextSelectionEntry
-from app.domain.itemized.serialization import (
-    _non_empty_string,
-    ordered_selection,
-)
+from app.domain.itemized.serialization import ordered_selection
+from app.domain.itemized.validation import _non_empty_string
 
 
 @dataclass(frozen=True, slots=True)

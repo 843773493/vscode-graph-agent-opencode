@@ -24,12 +24,7 @@ from app.domain.itemized.hashing import (
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.schema import validate_item_compatibility
-
-
-def _non_empty_string(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
-    return value
+from app.domain.itemized.validation import _non_empty_string
 
 
 def ref_identity(ref: object) -> tuple[str, str, str]:

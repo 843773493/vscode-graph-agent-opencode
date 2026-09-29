@@ -15,7 +15,7 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import validate_hash_token
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.schema import validate_selection_compatibility
-from app.domain.itemized.serialization import _non_empty_string
+from app.domain.itemized.validation import _non_empty_string
 
 
 @dataclass(frozen=True, slots=True)
