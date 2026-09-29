@@ -264,6 +264,8 @@ Resource observation、domain desired state与thread applied context分离。pro
 
 ResourceActivationCoordinator只构造和校验typed snapshot，不直接写thread SQLite、JSONL或detail store；它把snapshot交给唯一Saver/ContextStore owner，具体schema、assembly binding、hash、恢复和history projection由`add-itemized-rollout-context`拥有。两份change之间不得各自建立snapshot writer或catalog。
 
+**归属与待裁定登记（owner 已定，路线 C：暂不合并）**：`app/services/infrastructure/mcp/` 的 MCP 专属 activation（`McpCatalogActivationBinder` 等）与本 §5.2 的通用 `ResourceActivationCoordinator` 不是并列双轨，而是「通用冻结容器」与「其内部一个 MCP 专属 payload」的分层：`ExtensionDispatchBindingRef` 自述为「一次 ModelCallResourceSnapshot 原子绑定的扩展 dispatch binding」（`extension_catalog.py:302`），且前者直接读后者的 `ResourceActivationPolicySnapshot`（`catalog_activation.py:214-215`）。**本 change 不承担该 MCP payload 的归位**：归位义务归 `add-itemized-rollout-context` 8.3-A 的生产接线，且 MUST NOT 在两条轨道均零生产调用时做先行合并。依据与三项待 owner 裁定项见本 change `tasks.md` 3.11 与其台账 `tasks.md:136`。
+
 配置只允许`turn|model_call`，不提供`immediate`、按请求次数、TTL或注入次数。默认值是`turn`，可按`agent_spec`、`skill_catalog`、`tracked_skill_activation`、`mcp_tool_catalog`等resource kind覆盖。MCP目录binding与其派生指引在同一边界冻结，不能只更新提示或只更新dispatcher。`model_call`也只读Registry内存snapshot/revision，不在请求路径执行stat/read/目录枚举或网络fetch。若对应resource仍dirty/gap/reconciling，required consumer等待有界reconcile或明确失败；不得绕过Registry自行读取。config自身的`immediate|next_job|restart`等runtime reload policy与“何时把上下文资源revision激活进模型”是两套不同维度，不能混成一个枚举；前者即使立即发布新的desired配置，activation policy仍只在下一Turn active-slot边界生效。
 
 该公共配置属于Workspace配置域，使用现有`workspace_inline.jsonc → 用户workspace.jsonc → workspace_local.jsonc → ${workspace}/.boxteam/workspace.jsonc`递归对象合并；`workspace_dev.jsonc`只作为完整开发模板，不自动参与运行时合并。新增结构固定为：
