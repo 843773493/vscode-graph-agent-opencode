@@ -15,5 +15,5 @@
 # 规范
 
 - 使用 ESM JavaScript，保持断点行号稳定并在必要时说明测试入口。
-- 由 `scripts/dev.mjs` 复制到隔离开发工作区后供 Web 调试面板使用。
+- 由 `scripts/launch/dev.mjs` 复制到隔离开发工作区后供 Web 调试面板使用。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

@@ -10,7 +10,7 @@
 
 - **新增 provider 行为**：优先扩展 `litellm_chat.py` 中的配置映射或 content block 规范化逻辑；只有 LiteLLM 无法覆盖时，才新增 `BaseChatModel` 包装类。
 - **新增 fixture / check 项**：在 `_format_check.py` 中追加 StreamFixture 子类或 `check_*` 纯函数；`ALL_CHECKS` 列表里登记新的检查项。
-- **修正 `_format_check.py` 的判定逻辑**：当发现新场景下现有规则误判时，可调整检查函数；调整时必须同时更新 `tests/unit/agents/test_provider_format_check.py` 的正反例。
+- **修正 `_format_check.py` 的判定逻辑**：当发现新场景下现有规则误判时，可调整检查函数；调整时必须同时更新 `tests/unit/agents/providers/test_provider_format_check.py` 的正反例。
 - **`__init__.py`**：可加入 provider 类的 re-export 方便外部 import。
 
 ## 不可修改内容
@@ -60,7 +60,7 @@ provider 历史消息从 LangGraph checkpoint 读出后，**必须**经过本方
 
 ### 6. 测试位置
 
-- provider 自身行为（reasoning 剥离、历史 content 归一化、role 映射）：`tests/unit/agents/test_<provider>.py`
-- 通用格式契约 / 跨 provider 共享的检查项：`tests/unit/agents/test_provider_format_check.py`
+- provider 自身行为（reasoning 剥离、历史 content 归一化、role 映射）：`tests/unit/agents/providers/test_<provider>.py`
+- 通用格式契约 / 跨 provider 共享的检查项：`tests/unit/agents/providers/test_provider_format_check.py`
 
 新增 provider 时两类测试都要写。
