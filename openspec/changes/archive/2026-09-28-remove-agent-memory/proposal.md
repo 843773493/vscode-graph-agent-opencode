@@ -6,7 +6,7 @@ memory 相关实现全部未接入生产，属"未接线占位 / 虚假声明"�
 
 - 生产链 `create_runtime_deep_agent_for_session` → `app/runtime/agent_runtime.py:120` 全程不传 `memory`；`app/container.py` 零 memory 装配，故 `app/agents/deep_agent_stack.py:202-208` 的 `if memory:` 分支恒不触发。
 - `app/services/infrastructure/resource_platform/adapters/memory_state.py` 的 `MemoryStateAdapter`/`MemoryStateReader` 无任何生产实现；`bootstrap.py:152` 判空、`container.py:476` 未传，`platform.memory_states` 生产恒 `None` 且全仓零消费方。
-- `configs/workspace_inline.jsonc:427-433` 的 `agent.memory` 6 键与 `agent.knowledge.retrieval` 4 键全仓零代码读取。**（归档后追补：owner 已裁定回收该 4 键并已落地，提交 `2032670b`；`agent.knowledge.enabled`/`sources` 与 `agent.safety.*` 保留，本 change「不实现 knowledge 接线」的边界不变。）**
+- `configs/workspace_inline.jsonc:427-433` 的 `agent.memory` 6 键与 `agent.knowledge.retrieval` 4 键全仓零代码读取。**（归档后追补：owner 已裁定回收该 4 键并已落地，提交 `2032670b`；`agent.knowledge.enabled`/`sources` 与 `agent.safety.*` 保留，本 change「不实现 knowledge 接线」的边界不变。）** **（归档后追补 2（提交 `2879d461`）：owner 已进一步裁定 `agent.knowledge` **整块**删除并已落地；故本条追补中「`agent.knowledge.enabled`/`sources` 与 `agent.safety.*` 保留」的口径已被取代——`enabled`/`sources` 及 `configs/workspace_schema.jsonc` 的 `$defs.agentKnowledge`（含 `allOf` 条件块）、`$defs.agentKnowledgeSource` 均已删除，只有 `agent.safety.*` 仍保留。）**
 - `app/agents/graph_binding.py:366` 的 `"StructuredMemoryMiddleware"` slot 是**虚假声明**：生产从不装配该 middleware，slot 却让 `graph_schema_hash` 声称图族含它。
 
 ## What Changes
