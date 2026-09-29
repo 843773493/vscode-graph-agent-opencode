@@ -235,8 +235,8 @@
         ] // AgentFactory 按顺序尝试 fallback Provider。
       },
       "tools": {
-        "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
-        "timeout_ms": 10000, // Agent tools 默认调用超时。
+        "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
+        "timeout_ms": 10000, // 当前未接入；值等于 schema 默认，生效超时来自 tooling.policy_defaults.limits.timeout_ms。
         "allowlist": [], // Tool policy 恢复工具集合。
         "denylist": [], // Tool policy 禁用工具集合。
         "confirmation_required": [], // Tool policy 需要确认的工具集合。
@@ -425,7 +425,7 @@
         "refuse_secrets_exfiltration": true // 当前未接入独立 safety middleware。
       },
       "execution": {
-        "stream": true, // AgentExecutionService 当前按流式事件执行。
+        "stream": true, // 当前未接入；值等于 schema 默认，执行路径恒为流式事件。
         "max_turns": 16, // 当前未接入该独立执行限制。
         "max_history_messages": 30, // 当前未接入该独立执行限制。
         "max_context_tokens": 32000, // 当前未接入该独立执行限制。
@@ -457,8 +457,8 @@
         ] // AgentFactory 按顺序选择 fallback Provider。
       },
       "tools": {
-        "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
-        "timeout_ms": 10000, // Agent tools 默认调用超时。
+        "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
+        "timeout_ms": 10000, // 当前未接入；值等于 schema 默认，生效超时来自 tooling.policy_defaults.limits.timeout_ms。
         "allowlist": [], // Tool policy 恢复工具集合。
         "denylist": [
           "edit_file"
@@ -467,7 +467,7 @@
         "custom": [] // 当前 Agent 默认不增加扩展工具。
       },
       "execution": {
-        "stream": true, // 当前按流式事件执行。
+        "stream": true, // 当前未接入；值等于 schema 默认，执行路径恒为流式事件。
         "max_turns": 16, // 当前未接入该独立执行限制。
         "max_history_messages": 30, // 当前未接入该独立执行限制。
         "max_context_tokens": 32000, // 当前未接入该独立执行限制。
@@ -494,15 +494,15 @@
         ] // AgentFactory 按顺序选择 fallback Provider。
       },
       "tools": {
-        "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
-        "timeout_ms": 10000, // Agent tools 默认调用超时。
+        "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
+        "timeout_ms": 10000, // 当前未接入；值等于 schema 默认，生效超时来自 tooling.policy_defaults.limits.timeout_ms。
         "allowlist": [], // Tool policy 恢复工具集合默认为空。
         "denylist": [], // Tool policy 禁用工具集合默认为空。
         "confirmation_required": [], // Tool policy 二次确认集合默认为空。
         "custom": [] // 当前 Agent 默认不增加扩展工具。
       },
       "execution": {
-        "stream": true, // 当前按流式事件执行。
+        "stream": true, // 当前未接入；值等于 schema 默认，执行路径恒为流式事件。
         "max_turns": 16, // 当前未接入该独立执行限制。
         "max_history_messages": 30, // 当前未接入该独立执行限制。
         "max_context_tokens": 32000, // 当前未接入该独立执行限制。
@@ -529,15 +529,15 @@
         ] // AgentFactory 按顺序选择 fallback Provider。
       },
       "tools": {
-        "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
-        "timeout_ms": 10000, // Agent tools 默认调用超时。
+        "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
+        "timeout_ms": 10000, // 当前未接入；值等于 schema 默认，生效超时来自 tooling.policy_defaults.limits.timeout_ms。
         "allowlist": [], // Tool policy 恢复工具集合默认为空。
         "denylist": [], // Tool policy 禁用工具集合默认为空。
         "confirmation_required": [], // Tool policy 二次确认集合默认为空。
         "custom": [] // 当前 Agent 默认不增加扩展工具。
       },
       "execution": {
-        "stream": true, // 当前按流式事件执行。
+        "stream": true, // 当前未接入；值等于 schema 默认，执行路径恒为流式事件。
         "max_turns": 16, // 当前未接入该独立执行限制。
         "max_history_messages": 30, // 当前未接入该独立执行限制。
         "max_context_tokens": 32000, // 当前未接入该独立执行限制。
