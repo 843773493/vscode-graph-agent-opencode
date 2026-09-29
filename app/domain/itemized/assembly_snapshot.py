@@ -17,7 +17,7 @@ from app.domain.itemized.refs import (
     ToolSetRef,
     selection_ref_identity,
 )
-from app.domain.itemized.request_hash import context_request_hash
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.request_plan import (
     ContextContribution,
     ContextRequestPlan,

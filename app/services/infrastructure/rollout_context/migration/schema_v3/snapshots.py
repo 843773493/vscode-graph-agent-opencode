@@ -8,7 +8,7 @@ from dataclasses import replace
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.domain.itemized.request_hash import context_request_hash
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.services.infrastructure.rollout_context.migration.schema_v3.legacy_hash import (
     legacy_hashes,
 )

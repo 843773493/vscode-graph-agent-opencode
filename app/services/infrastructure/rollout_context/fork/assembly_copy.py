@@ -8,7 +8,7 @@ from dataclasses import replace
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import payload_content_length
-from app.domain.itemized.request_hash import context_request_hash
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     read_registration,
 )

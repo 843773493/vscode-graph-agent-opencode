@@ -11,7 +11,7 @@ from pathlib import Path
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
-from app.domain.itemized.request_hash import context_request_hash
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.request_plan import ContextContribution
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,

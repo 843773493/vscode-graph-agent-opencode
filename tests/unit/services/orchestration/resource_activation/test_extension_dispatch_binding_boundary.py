@@ -111,8 +111,8 @@ def _dispatch(
 
 def _captured_preimages(monkeypatch: pytest.MonkeyPatch, plan: ContextRequestPlan):
     """捕获 plan hash 与 request hash 的真实 canonical preimage 与 digest。"""
-    from app.domain.itemized import plan_hash as plan_hash_module
-    from app.domain.itemized import request_hash as request_hash_module
+    from app.domain.itemized.hash import plan_hash as plan_hash_module
+    from app.domain.itemized.hash import request_hash as request_hash_module
 
     captured: dict[str, list[object]] = {"payloads": [], "digests": []}
 

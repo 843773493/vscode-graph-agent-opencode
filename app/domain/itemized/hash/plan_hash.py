@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hash_projection import hash_scope_for_plan
+from app.domain.itemized.hash.hash_projection import hash_scope_for_plan
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.serialization import _hash_safe_value

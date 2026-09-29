@@ -15,7 +15,7 @@ from app.domain.itemized.mutation_intents import (
     SwitchToolSetIntent,
     intent_kind,
 )
-from app.domain.itemized.plan_hash import context_plan_hash
+from app.domain.itemized.hash.plan_hash import context_plan_hash
 from app.domain.itemized.refs import ContextRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry

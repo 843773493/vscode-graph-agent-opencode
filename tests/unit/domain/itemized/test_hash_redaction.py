@@ -12,7 +12,7 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.redaction import SessionHashRedactor, validate_hash_redaction
 from app.domain.itemized.refs import ToolSetRef
-from app.domain.itemized.request_hash import context_request_hash
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.serialization import _hash_safe_value, normalize_wire_request
 
@@ -179,7 +179,7 @@ def test_real_plan_and_request_hash_bind_sensitive_markers(
         captured.append(value)
         return sha256_jcs(value)
 
-    monkeypatch.setattr("app.domain.itemized.request_hash.sha256_jcs", capture)
+    monkeypatch.setattr("app.domain.itemized.hash.request_hash.sha256_jcs", capture)
     requests: list[str] = []
     plans: list[str] = []
     for body in ("secret-a", "secret-b"):

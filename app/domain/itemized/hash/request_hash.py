@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.domain.itemized.hash_projection import hash_scope_for_plan
+from app.domain.itemized.hash.hash_projection import hash_scope_for_plan
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.refs import selection_ref_identity
 from app.domain.itemized.request_plan import ContextRequestPlan

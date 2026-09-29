@@ -13,7 +13,7 @@ from app.domain.itemized.detail_ref import DetailRef
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, content_hash, sha256_jcs
 from app.domain.itemized.refs import ContextRef
-from app.domain.itemized.request_hash import context_request_hash
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 

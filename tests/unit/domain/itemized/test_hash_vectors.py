@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.domain.itemized import plan_hash, request_hash
+from app.domain.itemized.hash import plan_hash, request_hash
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     canonical_json_bytes,

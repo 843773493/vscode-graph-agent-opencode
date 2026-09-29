@@ -20,7 +20,7 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     contribution_content_hash,
 )
-from app.domain.itemized.plan_hash import context_plan_hash
+from app.domain.itemized.hash.plan_hash import context_plan_hash
 from app.domain.itemized.prefix_epoch import (
     AppendedItemRef,
     EpochReason,
