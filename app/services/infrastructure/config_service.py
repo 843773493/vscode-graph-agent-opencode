@@ -447,10 +447,12 @@ class ConfigService:
         config_key: str,
     ) -> ConfigSource:
         """返回一条来源的 VRN 兄弟字段形态；inline 之外的层不可寻址。"""
-        # user/user_local/workspace 三层无可用的 VRN scope（VRN scope 闭集为
-        # workspace/gateway/inline，不含 user），且在有 state store 时它们共享同一个
-        # workspace.sqlite，故一律不可寻址（vrn=None）。real path 只在本调用栈内用于
-        # 判断 presence，MUST NOT 持久化或对外。
+        # 这些层不可寻址的真正依据是**共享边界载体**，不是 scope 闭集：`user`（真实
+        # 文件为 `workspace_mutable_override`）/`user_local`/`workspace` 三层在有 state
+        # store 时由本方法统一改写为 `sqlite` 层并指向同一个 `workspace.sqlite`，把一个
+        # 载体映射成单一 VRN 会立刻产生「同一 URI 对应多个逻辑来源」的冲突。故它们与
+        # `sqlite` 层一并 vrn=None（`user` scope 已在 VRN 闭集内，与本结论无关）。
+        # real path 只在本调用栈内用于判断 presence，MUST NOT 持久化或对外。
         if self._workspace_state_store is None:
             return ConfigSource(
                 vrn=None,
@@ -543,8 +545,8 @@ class ConfigService:
             verify_stable_config_file(file_snapshot)
             source_record = self._workspace_state_store.sync_config_source(
                 config_key=config_key,
-                # user/user_local/workspace 层均不可寻址（VRN scope 闭集不含 user，
-                # 且有 state store 时共享同一个 workspace.sqlite），故 vrn 恒为 None。
+                # user/user_local/workspace 层均不可寻址，依据是共享同一 workspace.sqlite
+                # 这一边界载体（非 scope 闭集），故 vrn 恒为 None。
                 vrn=None,
                 config_version=source_record.config_version,
                 presence="absent",
@@ -2267,8 +2269,9 @@ class ConfigService:
                 # 来源位置一律只以 VRN 表达：``source_details[].vrn`` 是唯一出处。
                 # 原先此处的 ``config_path``（真实 user 层路径）与 ``source_paths``
                 # （跨 user/user_local/workspace/sqlite 四层的真实路径列表）既无 VRN
-                # 替代（上述层均不可寻址，VRN scope 闭集不含 ``user``），又会外泄真实
-                # 路径，故 MUST 从对外响应体移除；不得以空串/省略号做替身。
+                # 替代（上述层共享同一 ``workspace.sqlite`` 边界载体，故不可寻址，与
+                # VRN scope 闭集无关），又会外泄真实路径，故 MUST 从对外响应体移除；
+                # 不得以空串/省略号做替身。
                 "source_details": [
                     {
                         "vrn": source.vrn,
