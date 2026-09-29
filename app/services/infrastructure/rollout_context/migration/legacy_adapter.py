@@ -17,6 +17,7 @@ from app.domain.itemized.enums import (
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
 from app.domain.itemized.hashing import _ensure_json_value, sha256_jcs
 from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.validation import _non_empty_string
 from app.services.infrastructure.rollout_context.migration.semantics import (
     final_marker,
     legacy_hashes,
@@ -24,13 +25,6 @@ from app.services.infrastructure.rollout_context.migration.semantics import (
     record_loss,
     tool_identity_conflict,
 )
-
-
-def _non_empty_string(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
-    return value
-
 
 def validate_envelope(value: Mapping[str, object], expected_format: int = 2) -> None:
     if (
