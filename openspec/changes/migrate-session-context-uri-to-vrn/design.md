@@ -132,7 +132,7 @@ SessionContextResourceRef {
 **已确证的零存量（本轮独立取证）**：旧式会话上下文 URI 没有任何持久化实例。
 
 - 旧形态字符串全部在请求/响应链路内构造并随响应返回调用方：`app/services/business/session_context_resource.py:12-16` 的自有正则只做解析、`ParsedSessionContextResource.canonical` 只是内存值、`session_context_query_service.py`/`session_context_projection.py` 的 `locator` 与 base64 `next_cursor` 只进 API DTO（`app/schemas/internal_v2/session_context.py:99,123`）。全仓不存在把 `SessionContextCursorCodec` 输出写入 session/catalog/checkpoint/rollout 存储的路径。
-- 全仓唯一承载 `boxteam://` 的持久化列是 `resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`）；其唯一写入方 `ResourceActivationStore.persist_snapshot` 的**调用方全在测试**，`app/container.py` 未装配，生产 seal 链路从未传入 `activation_snapshot`（恒为默认 `None`），故生产中该列从不被写入。
+- 全仓唯一承载 `boxteam://` 的持久化列是 `resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`）；其唯一写入方 `ResourceActivationStore.persist_snapshot` 的**调用方全在测试**（`tests/unit/services/infrastructure/rollout_context/test_resource_activation_storage.py`、`test_resource_activation_retention.py`、`test_resource_activation_fork_identity.py`），`app/container.py` 未装配（实测 `rg resource_activation app/container.py` 退出 1），生产 seal 链路从未传入 `activation_snapshot`（恒为默认 `None`），故生产中该列从不被写入。
 - 磁盘取证：157 个 live 库 + 44 个 dev/temp 库中 **0 个 activation 表、0 个 `boxteam://` 命中**；`out/development-runtime` 的真实 `rollout.jsonl`（含 2026/09/24、2026/09/27 会话）与 `tests/fixtures/` 亦 0 命中。
 - 唯一 `cursor` 持久化列 `workspace_event_cursors.cursor_value`（`app/services/infrastructure/workspace_state_store.py:71`）承载的是工作区活动 `event_seq`，与上下文游标无关。
 

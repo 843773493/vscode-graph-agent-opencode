@@ -164,7 +164,7 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 **已确证的存量事实（本轮实测取证）**：旧式会话上下文 URI **没有任何持久化实例**，因此本 capability MUST NOT 要求对历史记录做数据迁移。取证：
 
 - 旧形态字符串（自有正则 `app/services/business/session_context_resource.py:12-16`、`ParsedSessionContextResource.canonical`、`session_context_query_service.py` 的 `locator` 字段、`app/services/business/session_context_projection.py:317` 与 `session_context_query_service.py:481` 的 base64 `next_cursor`）**全部在请求/响应链路内构造并随响应返回调用方**，不存在把它写入 session/catalog/checkpoint/rollout 存储的代码路径；
-- 全仓唯一承载 `boxteam://` 的持久化列是 `resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`），其唯一写入方 `ResourceActivationStore.persist_snapshot` 的**调用方全在测试**，`app/container.py` 未装配，生产 seal 链路从未传入 `activation_snapshot`（恒为默认 `None`），故该列在生产中从不被写入；
+- 全仓唯一承载 `boxteam://` 的持久化列是 `resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`），其唯一写入方 `ResourceActivationStore.persist_snapshot` 的**调用方全在测试**（`tests/unit/services/infrastructure/rollout_context/test_resource_activation_storage.py`、`test_resource_activation_retention.py`、`test_resource_activation_fork_identity.py`三处调用 `attach_resource_activation_store` / `ResourceActivationStore(...)`），`app/container.py` 未装配（`rg resource_activation app/container.py` 退出 1），生产 seal 链路从未传入 `activation_snapshot`（恒为默认 `None`），故该列在生产中从不被写入；
 - 磁盘取证：157 个 live 库 + 44 个 dev/temp 库中 **0 个 activation 表、0 个 `boxteam://` 命中**，`out/development-runtime` 的真实 `rollout.jsonl` 与 `tests/fixtures/` 亦 0 命中；
 - 会话上下文分页游标从不落盘：全仓不存在承载 `SessionContextCursorCodec` 输出的持久化列（唯一 `cursor` 持久化列 `workspace_event_cursors.cursor_value` 是工作区活动 `event_seq`，与上下文游标无关）。
 
