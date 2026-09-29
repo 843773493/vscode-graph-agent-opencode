@@ -498,7 +498,8 @@ def create_list_terminal_sessions_tool(
                     "status": terminal.get("status"),
                     "command_status": terminal.get("last_command_status"),
                     "command": terminal.get("last_command"),
-                    "cwd": terminal.get("cwd"),
+                    # 持久记录只承载工作区内相对目录；真实决定路径在 PTY 创建调用栈内解析。
+                    "cwd_relative": terminal.get("cwd_relative"),
                     "created_at": terminal.get("created_at"),
                     "last_used_at": terminal.get("last_used_at"),
                     "release_reason": terminal.get("release_reason"),

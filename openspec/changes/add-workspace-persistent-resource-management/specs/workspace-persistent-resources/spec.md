@@ -32,17 +32,22 @@
 
 ### Requirement: 工作区持久记录必须用「资源身份 / ResourceIdentity + 虚拟资源地址 / VRN」引用资源，禁止持久化 real path
 
-本 capability 的所有工作区持久记录（含资源记录、对账记录引用、Thread 关联记录与迁移中间记录）在引用资源时 MUST 使用 `资源身份 / ResourceIdentity` 与 `虚拟资源地址 / VRN`（必要时加与 VRN 并列的独立 revision 字段）；MUST NOT 持久化 `真实路径 / real path`。凡记录需要表达「资源所在位置」，该位置 MUST 以 `虚拟资源地址 / VRN` 表达，而非文件系统路径。同一 prohibition 亦覆盖 API 响应体与模型可见载荷：它们 MUST NOT 出现 `真实路径 / real path`，MUST NOT 以日志脱敏、截断或 `display_uri` 静默掩盖。本 capability 的稳定 `resource_id` 与该身份/寻址政策不冲突，继续作为资源身份使用。`作用域 / scope` 闭集与 `scope_id` 取值语义、VRN 语法、kind 闭集与 `拒绝码 / rejection code` 登记 MUST 由 `add-unified-virtual-resource-addressing` change 唯一 owner 定义，本 capability 只引用、MUST NOT 复述或自造第二套语法与取值。
+本 capability 的所有工作区持久记录（含资源记录、对账记录引用、Thread 关联记录与迁移中间记录）在引用资源时 MUST 使用 `资源身份 / ResourceIdentity` 与 `虚拟资源地址 / VRN`（必要时加与 VRN 并列的独立 revision 字段）；MUST NOT 持久化 `真实路径 / real path`。凡记录需要表达「资源所在位置」，该位置的处理 MUST 按以下收窄规则执行（本 change 实施裁定 D-A2/D-A3：不新增 VRN kind，也不实施 `config`/`session` kind 的代码落地）：凡位置可由 owner 身份（资源 ID 与工作区身份）确定性推导者，MUST NOT 落盘该位置，改为在该次 fs/进程调用栈内由 owner 身份重推导（裁定 D-A2）；仅在位置确实无法由 owner 身份推导、且必须对外可寻址时，MUST 改用承载该能力的既有后端 API 端点引用（裁定 D-A3），而非文件系统路径；MUST NOT 为此自造 VRN kind、MUST NOT 裸拼接 VRN。同一 prohibition 亦覆盖 API 响应体与模型可见载荷：它们 MUST NOT 出现 `真实路径 / real path`，MUST NOT 以日志脱敏、截断或 `display_uri` 静默掩盖。本 capability 的稳定 `resource_id` 与该身份/寻址政策不冲突，继续作为资源身份使用。`作用域 / scope` 闭集与 `scope_id` 取值语义、VRN 语法、kind 闭集与 `拒绝码 / rejection code` 登记 MUST 由 `add-unified-virtual-resource-addressing` change 唯一 owner 定义，本 capability 只引用、MUST NOT 复述或自造第二套语法与取值。
 
 #### Scenario: 持久记录只承载身份与 VRN
 
 - **WHEN** owner 写入一条引用外部资源的工作区持久记录
 - **THEN** 该记录以 `资源身份 / ResourceIdentity` 与 `虚拟资源地址 / VRN` 指向资源；`真实路径 / real path` 只作为 owner 在本次 fs/进程调用栈内的局部变量出现，不进入任何持久化记录
 
-#### Scenario: 需要位置时必须用 VRN 而非文件系统路径
+#### Scenario: 位置可由 owner 身份推导时不落盘
 
-- **WHEN** 一条持久记录需要表达资源或资源产物的所在位置
-- **THEN** 该位置 MUST 编码为 `虚拟资源地址 / VRN`；MUST NOT 写入绝对路径、工作区根路径、checkpoint 文件路径、下载/截图文件路径或等价的文件系统路径
+- **WHEN** 一条持久记录原本需要表达可由 owner 身份确定性推导的资源或资源产物位置
+- **THEN** 该位置 MUST NOT 进入持久记录，改为在该次调用栈内由 owner 身份重推导；MUST NOT 写入绝对路径、工作区根路径、checkpoint 文件路径、下载/截图文件路径或等价的文件系统路径（裁定 D-A2）
+
+#### Scenario: 位置不可推导时用既有 API 端点承载可寻址性
+
+- **WHEN** 一条持久记录或模型可见载荷需要对外寻址一个无法由 owner 身份推导的资源产物
+- **THEN** 可寻址性 MUST 由承载该能力的既有后端 API 端点引用提供；MUST NOT 为此自造 VRN kind、MUST NOT 裸拼接 VRN、MUST NOT 暴露文件系统路径（裁定 D-A3）
 
 #### Scenario: 检出 real path 持久化即 fail-closed
 

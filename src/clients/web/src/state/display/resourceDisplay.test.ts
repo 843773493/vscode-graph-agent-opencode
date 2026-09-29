@@ -38,8 +38,8 @@ describe("资源展示投影", () => {
 
     // resourceTreeTitle 走同一实现：前缀裁掉后直接作为标题。
     expect(resourceTreeTitle(terminalResource("终端 / 主终端"))).toBe("主终端");
-    // 归一后为空或等于 resource_id 时，回退到 cwd / 默认文案。
-    expect(resourceTreeTitle(terminalResource("终端 /", { cwd: "/workspace/app" })))
+    // 归一后为空或等于 resource_id 时，回退到工作区内相对目录 / 默认文案。
+    expect(resourceTreeTitle(terminalResource("终端 /", { cwd_relative: "app" })))
       .toBe("终端 · app");
     expect(resourceTreeTitle(terminalResource("", {}))).toBe("用户终端");
   });

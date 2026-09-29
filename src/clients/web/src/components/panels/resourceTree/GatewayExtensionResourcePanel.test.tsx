@@ -56,7 +56,7 @@ function entry(): GatewayExtensionResourceEntry {
     started_at: null,
     ended_at: null,
     available_actions: ["delete"],
-    metadata: { cwd: "/workspace" },
+    metadata: { cwd_relative: "." },
   };
   return {
     key: "workspace_test:ses_gateway_extension",

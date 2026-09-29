@@ -76,7 +76,7 @@ describe("后台连接目录", () => {
             resource(2, {
               kind: "terminal",
               name: "终端 / 主终端",
-              metadata: { cwd: "/workspace" },
+              metadata: { cwd_relative: "." },
             }),
           ]}
           loading={false}
@@ -138,7 +138,7 @@ describe("后台连接目录", () => {
       available_actions: ["resume", "delete"],
       metadata: {
         resource_state: "discarded",
-        checkpoint: { version: 1 },
+        checkpoint_available: true,
       },
     });
     expect(resourceAttentionGroup(recoverable, null)).toBe("sleeping");

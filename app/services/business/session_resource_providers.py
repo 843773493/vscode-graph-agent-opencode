@@ -299,6 +299,6 @@ class BrowserResourceProvider:
             available_actions=browser_available_actions(
                 status,
                 resource_state=str(browser.get("resource_state") or ""),
-                has_checkpoint=isinstance(browser.get("checkpoint"), dict),
+                has_checkpoint=bool(browser.get("checkpoint")),
             ),
         )

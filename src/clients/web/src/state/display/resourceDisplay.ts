@@ -174,8 +174,7 @@ export function isRecoverableBrowser(resource: SessionResource): boolean {
   return resource.kind === "browser"
     && ["running", "lost"].includes(resource.status)
     && metadataString(resource, "resource_state") === "discarded"
-    && typeof resource.metadata.checkpoint === "object"
-    && resource.metadata.checkpoint !== null;
+    && resource.metadata.checkpoint_available === true;
 }
 
 export function resourceAttentionGroup(
@@ -296,8 +295,11 @@ export function resourceTreeTitle(resource: SessionResource): string {
     if (normalizedName && normalizedName !== resource.resource_id) {
       return normalizedName;
     }
-    const cwd = metadataString(resource, "cwd");
-    return cwd ? `终端 · ${pathBaseName(cwd)}` : "用户终端";
+    // 只消费工作区内相对目录；"." / "" 表示工作区根，回退默认文案（裁定 D-A2/D-A3）。
+    const cwdRelative = metadataString(resource, "cwd_relative");
+    return cwdRelative && cwdRelative !== "."
+      ? `终端 · ${pathBaseName(cwdRelative)}`
+      : "用户终端";
   }
   return resourceName(resource);
 }
@@ -308,7 +310,8 @@ export function resourceTreeDescription(resource: SessionResource): string {
   }
   if (resource.kind === "terminal") {
     const command = metadataString(resource, "command") ||
-      metadataString(resource, "last_input") || metadataString(resource, "cwd");
+      metadataString(resource, "last_input") ||
+      metadataString(resource, "cwd_relative");
     return command || "等待命令";
   }
   const error = metadataString(resource, "error_message");
@@ -399,7 +402,7 @@ function metadataValueLabel(
 export function metadataRows(resource: SessionResource): [string, string][] {
   const metadata = resource.metadata;
   const labels: Record<string, string> = {
-    cwd: "工作目录",
+    cwd_relative: "工作目录",
     command: "最近工具命令",
     shell_command: "启动命令",
     command_status: "命令状态",
@@ -439,7 +442,7 @@ export function metadataRows(resource: SessionResource): [string, string][] {
     last_wake_at: "最近唤醒",
     runtime_generation: "运行时代次",
     stream_metrics: "流性能",
-    checkpoint: "恢复检查点",
+    checkpoint_available: "恢复检查点",
     target_session_id: "目标会话",
     timeout_seconds: "超时秒数",
     poll_interval_seconds: "轮询间隔秒数",

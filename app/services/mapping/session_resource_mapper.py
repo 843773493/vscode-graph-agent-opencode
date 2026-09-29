@@ -46,7 +46,8 @@ class SessionResourceMapper:
         ended_at = parse_optional_datetime(terminal.get("ended_at"), "ended_at", terminal_id)
 
         metadata = {
-            "cwd": terminal.get("cwd"),
+            # 只投影工作区内相对目录；绝对真实路径 MUST NOT 进入 API 响应体（裁定 D-A2/D-A3）。
+            "cwd_relative": terminal.get("cwd_relative"),
             "command": terminal.get("last_command"),
             "shell_command": terminal.get("command"),
             "command_status": terminal.get("last_command_status"),
@@ -133,7 +134,8 @@ class SessionResourceMapper:
             "last_wake_at": browser.get("last_wake_at"),
             "runtime_generation": browser.get("runtime_generation"),
             "stream_metrics": browser.get("stream_metrics"),
-            "checkpoint": browser.get("checkpoint"),
+            # 只投影不含路径的显式布尔；检查点真实文件路径 MUST NOT 上浮（裁定 D-A5）。
+            "checkpoint_available": bool(browser.get("checkpoint")),
         }
         if (
             status == "lost"

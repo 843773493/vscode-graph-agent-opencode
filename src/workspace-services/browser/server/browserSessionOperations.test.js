@@ -325,7 +325,9 @@ describe("浏览器统一操作队列", () => {
       browser.record.url = url;
     };
     browser.syncAndEmitState = async () => browser.snapshot();
-    browser.manager.writeScreenshot = async () => "/tmp/browser-timeout-recovery.png";
+    browser.manager.writeScreenshot = async () => ({
+      screenshot_id: "screenshot_timeout_recovery",
+    });
 
     await expect(browser.runPlaywrightCode({
       code: "await new Promise(() => undefined);",
@@ -361,7 +363,8 @@ describe("浏览器统一操作队列", () => {
 
     const screenshot = await browser.screenshot({});
     expect(screenshot).toMatchObject({
-      image_path: "/tmp/browser-timeout-recovery.png",
+      screenshot_id: "screenshot_timeout_recovery",
+      screenshot_url: "/api/browsers/browser_operation_test/screenshots/screenshot_timeout_recovery",
       mime_type: "image/png",
     });
   });
@@ -491,7 +494,9 @@ describe("浏览器统一操作队列", () => {
     };
     browser.goto = async () => undefined;
     browser.syncAndEmitState = async () => browser.snapshot();
-    browser.manager.writeScreenshot = async () => "/tmp/browser-screenshot-recovery.png";
+    browser.manager.writeScreenshot = async () => ({
+      screenshot_id: "screenshot_recovery",
+    });
 
     await expect(browser.screenshot({}, { timeoutMs: 10 })).rejects.toMatchObject({
       code: "browser_tool_timeout",
@@ -503,7 +508,8 @@ describe("浏览器统一操作队列", () => {
 
     const screenshot = await browser.screenshot({});
     expect(screenshot).toMatchObject({
-      image_path: "/tmp/browser-screenshot-recovery.png",
+      screenshot_id: "screenshot_recovery",
+      screenshot_url: "/api/browsers/browser_operation_test/screenshots/screenshot_recovery",
       mime_type: "image/png",
     });
   });

@@ -566,7 +566,6 @@ export class BrowserSession extends EventEmitter {
       }
       this.record.checkpoint = {
         version: checkpoint.version,
-        path: checkpointWrite.path,
         size_bytes: checkpointWrite.size_bytes,
         created_at: checkpoint.created_at,
         capabilities: checkpoint.capabilities,
@@ -2338,10 +2337,11 @@ export class BrowserSession extends EventEmitter {
         onTimeout: (error) => this.recoverAfterPlaywrightTimeout(execution, error),
       },
     );
-    const imagePath = await this.manager.writeScreenshot(this.id, buffer);
+    const written = await this.manager.writeScreenshot(this.id, buffer);
     await this.syncAndEmitState();
     return {
-      image_path: imagePath,
+      screenshot_id: written.screenshot_id,
+      screenshot_url: `/api/browsers/${this.id}/screenshots/${written.screenshot_id}`,
       mime_type: "image/png",
       byte_length: buffer.byteLength,
     };

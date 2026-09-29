@@ -81,15 +81,19 @@ function notFound(response) {
   sendJson(response, 404, { error: "not_found" });
 }
 
-async function sendDownload(response, download) {
-  const fileStat = await stat(download.path);
-  response.writeHead(200, {
-    "content-type": "application/octet-stream",
+async function sendDownload(response, file, mediaType = "application/octet-stream") {
+  const fileStat = await stat(file.path);
+  const headers = {
+    "content-type": mediaType,
     "content-length": fileStat.size,
-    "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(download.filename)}`,
     "access-control-allow-origin": "*",
-  });
-  createReadStream(download.path).pipe(response);
+  };
+  if (typeof file.filename === "string" && file.filename) {
+    headers["content-disposition"] =
+      `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`;
+  }
+  response.writeHead(200, headers);
+  createReadStream(file.path).pipe(response);
 }
 
 function missingBrowserSnapshot(manager, browserId) {
@@ -265,6 +269,16 @@ async function main() {
       const downloadMatch = pathname.match(/^\/api\/browsers\/([^/]+)\/downloads\/([^/]+)$/);
       if (request.method === "GET" && downloadMatch) {
         await sendDownload(response, manager.download(downloadMatch[1], downloadMatch[2]));
+        return;
+      }
+
+      const screenshotMatch = pathname.match(/^\/api\/browsers\/([^/]+)\/screenshots\/([^/]+)$/);
+      if (request.method === "GET" && screenshotMatch) {
+        await sendDownload(
+          response,
+          manager.screenshot(screenshotMatch[1], screenshotMatch[2]),
+          "image/png",
+        );
         return;
       }
 

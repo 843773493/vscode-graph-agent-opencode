@@ -428,9 +428,21 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     screenshot = _json_tool_result(
         await screenshot_page.ainvoke({"pageId": page_id, "selector": "#result"})
     )
-    image_path = Path(str(screenshot["image_path"]))
-    assert image_path.exists()
-    assert image_path.is_relative_to(Path(integration_workspace_root_path).resolve())
+    # 负向断言（6.3）：模型可见载荷 MUST NOT 出现文件系统路径。
+    assert "image_path" not in screenshot
+    screenshot_id = str(screenshot["screenshot_id"])
+    assert screenshot_id.startswith("screenshot_")
+    screenshot_url = str(screenshot["screenshot_url"])
+    assert screenshot_url.endswith(f"/api/browsers/{page_id}/screenshots/{screenshot_id}")
+    assert str(integration_workspace_root_path) not in screenshot_url
+
+    # 截图的对外可寻址改由浏览器管理器只读端点承载（裁定修正 2）。
+    shot_status, shot_body = await asyncio.to_thread(
+        _read_http,
+        f"http://127.0.0.1:{backend_port}{screenshot_url}",
+    )
+    assert shot_status == 200
+    assert shot_body[:8] == b"\x89PNG\r\n\x1a\n"
 
     before_reload = _json_tool_result(await read_page.ainvoke({"pageId": page_id}))
     stale_apply_ref = next(

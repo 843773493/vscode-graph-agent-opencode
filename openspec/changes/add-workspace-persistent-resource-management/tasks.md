@@ -34,5 +34,5 @@
 ## 6. 持久化引用收紧为规范层义务（只新增约束与引用）
 
 - [ ] 6.1 落成规范层禁止项：工作区持久记录、API 响应体与模型可见载荷只承载 `资源身份 / ResourceIdentity` + `虚拟资源地址 / VRN`（必要时并列 revision 字段），MUST NOT 承载 `真实路径 / real path`；检出即 fail-closed。`作用域 / scope` 闭集、`scope_id` 取值语义、VRN 语法、kind 闭集与 `拒绝码 / rejection code` 一律具名引用 `add-unified-virtual-resource-addressing`，本 change MUST NOT 复述或自造。
-- [ ] 6.2 消除已确证的 real path 持久化：终端记录去掉 `cwd` 与顶层 `workspace_root`（`terminalSession.js:665`、`terminalManager.js:152-157`）；浏览器记录去掉 checkpoint 真实文件路径（`browserSession.js:567-572`、`browserStateStore.js:128-131`）与下载真实文件路径（`browserStateStore.js:253-267`）；位置一律改以 VRN 表达。
-- [ ] 6.3 消除 real path 上浮：`session_resource_mapper.py:49/136` 的 `cwd`/`checkpoint` metadata 与 `browserSession.js:2343-2346` 的截图 `image_path` 不得进入 API 响应体或模型可见载荷；新增负向断言「持久记录与 API 响应体不含 real path」。
+- [x] 6.2 消除已确证的 real path 持久化：终端记录去掉 `cwd` 与顶层 `workspace_root`，改存工作区内相对目录（`cwd_relative`）并在 PTY 启动调用栈内由工作区根重推导（`terminalSession.js`、`terminalManager.js`）；浏览器记录去掉 checkpoint 真实文件路径（`browserSession.js`、`browserStateStore.js`）与下载真实文件路径（`browserStateStore.js`），产物路径改由 `(browser_id, download_id, filename)` 在调用栈内重推导。位置处理按裁定 D-A2（可由 owner 身份确定性推导者 MUST NOT 落盘）与裁定 D-A3（截图等产物改用既有只读 API 端点引用）收窄执行，本切片不新增 VRN kind、不实施 `config`/`session` kind 代码落地。
+- [x] 6.3 消除 real path 上浮：`session_resource_mapper.py` 的 `cwd`/`checkpoint` metadata 分别收窄为不含路径的 `cwd_relative` 与显式布尔 `checkpoint_available`，`browserSession.js` 的截图 `image_path` 改为 `screenshot_id` + `screenshot_url`（既有浏览器管理器只读端点）不得进入 API 响应体或模型可见载荷；新增负向断言「持久记录与 API 响应体不含 real path」。

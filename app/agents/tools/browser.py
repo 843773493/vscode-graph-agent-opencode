@@ -535,7 +535,10 @@ def create_screenshot_page_tool(context: CustomToolFactoryContext) -> BaseTool:
     return StructuredTool.from_function(
         coroutine=screenshot_page,
         name="screenshotPage",
-        description="捕获浏览器页面或元素截图，返回保存在工作区 .boxteam 下的图片路径。",
+        description=(
+            "捕获浏览器页面或元素截图，返回截图身份与可寻址的 "
+            "screenshot_url（由浏览器管理器只读端点提供），不返回文件系统路径。"
+        ),
         args_schema=ScreenshotPageInput,
     )
 

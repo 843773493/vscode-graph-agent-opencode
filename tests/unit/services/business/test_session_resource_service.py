@@ -230,6 +230,55 @@ def test_running_browser_resource_maps_identity_and_actions():
     assert resource.available_actions == ["cancel", "delete"]
 
 
+def test_terminal_resource_projection_excludes_real_path():
+    """负向断言（6.3）：API 投影 MUST NOT 携带真实文件系统路径。"""
+    terminal = {
+        "terminal_id": "term_real_path",
+        "session_id": "ses_123",
+        "status": "running",
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+        "cwd": "/home/user/secret-workspace/app",
+        "cwd_relative": "app",
+    }
+    resource = _resource_mapper().terminal_to_resource(
+        terminal,
+        available_actions=terminal_available_actions(str(terminal["status"])),
+    )
+
+    assert resource.metadata["cwd_relative"] == "app"
+    assert "cwd" not in resource.metadata
+    assert "/home/user/secret-workspace" not in resource.model_dump_json()
+
+
+def test_browser_resource_projection_excludes_checkpoint_real_path():
+    """负向断言（6.3）：检查点真实路径不得上浮到 API 响应体。"""
+    browser = {
+        "browser_id": "browser_checkpoint_path",
+        "session_id": "ses_123",
+        "status": "lost",
+        "resource_state": "discarded",
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+        "checkpoint": {
+            "version": 1,
+            "path": "/home/user/secret-workspace/.boxteam/browser-manager/checkpoints/browser_checkpoint_path.json",
+        },
+    }
+    resource = _resource_mapper().browser_to_resource(
+        browser,
+        available_actions=browser_available_actions(
+            str(browser["status"]),
+            resource_state=str(browser["resource_state"]),
+            has_checkpoint=bool(browser.get("checkpoint")),
+        ),
+    )
+
+    assert resource.metadata["checkpoint_available"] is True
+    assert "checkpoint" not in resource.metadata
+    assert "/home/user/secret-workspace" not in resource.model_dump_json()
+
+
 @pytest.mark.asyncio
 async def test_cold_recycled_browser_exposes_resume_action():
     browser = {
