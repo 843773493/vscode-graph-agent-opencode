@@ -407,7 +407,14 @@ async def test_get_public_config_resolves_default_model_from_agent_provider(
     assert result.default_orchestration == "single_agent"
     assert result.max_concurrent_agents == 4
     assert result.metadata["default_agent_id"] == "default"
-    assert result.metadata["config_path"] == str(config_path)
+    # real path 不再对外：metadata 既无 config_path，也无 source_paths；
+    # 来源位置只以 source_details[].vrn 表达（非 inline 层为 None）。
+    assert "config_path" not in result.metadata
+    assert "source_paths" not in result.metadata
+    source_details = result.metadata["source_details"]
+    assert source_details[0]["vrn"].startswith("boxteam://inline/")
+    assert all(detail["vrn"] is None for detail in source_details[1:])
+    assert str(config_path) not in result.model_dump_json()
 
 
 @pytest.mark.asyncio

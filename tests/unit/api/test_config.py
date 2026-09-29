@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-from app.api.config import get_config_sources
+from app.api.config import get_config, get_config_sources
 from app.services.infrastructure.config_service import ConfigService
 
 
@@ -99,3 +100,56 @@ async def test_config_sources_endpoint_never_exposes_real_path(
     # user/user_local 不可寻址：值为空串。
     assert response.data.sources[1].path == ""
     assert response.data.sources[2].path == ""
+
+
+_REAL_PATH_PATTERN = re.compile(
+    r'(?:^|["\s])(?:[A-Za-z]:\\|/)[^"\s]*\.(?:jsonc|json|sqlite)(?:["\s]|$)'
+)
+
+
+@pytest.mark.asyncio
+async def test_config_endpoint_metadata_never_exposes_real_path(
+    tmp_path: Path,
+) -> None:
+    """缺陷1：``/api/v1/config`` 响应体与 metadata 不得含任何真实路径。"""
+
+    config_path = tmp_path / "workspace.jsonc"
+    config_path.write_text(json.dumps(_base_config()), encoding="utf-8")
+    local_path = tmp_path / "workspace_local.jsonc"
+    local_path.write_text(
+        json.dumps({"logger": {"level": "debug"}}), encoding="utf-8"
+    )
+    workspace_root = tmp_path / "workspace"
+    workspace_path = workspace_root / ".boxteam" / "workspace.jsonc"
+    workspace_path.parent.mkdir(parents=True)
+    workspace_path.write_text(
+        json.dumps({"agents": {"default": {"name": "Workspace Agent"}}}),
+        encoding="utf-8",
+    )
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=config_path,
+        workspace_root=workspace_root,
+    )
+
+    response = await get_config(
+        _="local-dev-token",
+        request_id="req-config-no-path",
+        config_service=service,
+    )
+
+    assert response.data is not None
+    metadata = response.data.metadata
+    # 真实路径位置字段 MUST 整体移除（不得用空串/省略号当替身）。
+    assert "config_path" not in metadata
+    assert "source_paths" not in metadata
+    # 响应体整体不得出现任何真实路径形态（含 tmpdir、仓库 configs 目录、sqlite）。
+    dumped = response.model_dump_json()
+    for leaked in (str(tmp_path), str(Path.cwd() / "configs"), ".sqlite"):
+        assert leaked not in dumped
+    assert _REAL_PATH_PATTERN.search(dumped) is None
+    # 来源位置仍以 VRN 兄弟字段对外，且只有可寻址层带值。
+    sources = metadata["source_details"]
+    assert sources[0]["vrn"].startswith("boxteam://inline/")
+    assert sources[0]["vrn"].endswith("/resources/config/workspace_inline")
+    assert all(source["vrn"] is None for source in sources[1:])

@@ -441,18 +441,6 @@ class ConfigService:
         """构造发行包内 inline 层配置来源的 VRN（唯一可寻址的 config 层）。"""
         return inline_config_source_vrn(logical_name=self._inline_logical_name)
 
-    @staticmethod
-    def _config_layer_vrn(*, config_key: str) -> str | None:
-        """按 config_key 判定该来源层的 VRN；不可寻址的层返回 ``None``。
-
-        ``workspace_mutable_override`` / ``workspace_local_mutable_override`` /
-        ``workspace_root_mutable_override`` / ``workspace_runtime_override`` 分别对应
-        ``user`` / ``user_local`` / ``workspace`` / ``sqlite`` 层，均**不可寻址**：VRN scope
-        闭集为 ``workspace``/``gateway``/``inline``（不含 ``user``），且前三层在有 state
-        store 时共享同一个 ``workspace.sqlite``。故这些来源一律不编 VRN。
-        """
-        return None
-
     def _config_source(
         self,
         *,
@@ -560,7 +548,9 @@ class ConfigService:
             verify_stable_config_file(file_snapshot)
             source_record = self._workspace_state_store.sync_config_source(
                 config_key=config_key,
-                vrn=self._config_layer_vrn(config_key=config_key),
+                # user/user_local/workspace 层均不可寻址（VRN scope 闭集不含 user，
+                # 且有 state store 时共享同一个 workspace.sqlite），故 vrn 恒为 None。
+                vrn=None,
                 config_version=(
                     source_record.config_version
                     if source_record is not None
@@ -591,7 +581,8 @@ class ConfigService:
             source_record is not None
             and source_record.presence == "present"
             and source_record.layer_digest == file_snapshot.digest
-            and source_record.vrn == self._config_layer_vrn(config_key=config_key)
+            # 该层不可寻址：持久化的 vrn 必为 None，与读取点的 None 一致才走复用分支。
+            and source_record.vrn is None
         ):
             payload = parse_stable_config_file(file_snapshot)
             if payload is None:
@@ -601,7 +592,7 @@ class ConfigService:
             verify_stable_config_file(file_snapshot)
             source_record = self._workspace_state_store.sync_config_source(
                 config_key=config_key,
-                vrn=self._config_layer_vrn(config_key=config_key),
+                vrn=None,
                 config_version=int(payload.get("config_version", 1)),
                 presence="present",
                 payload=payload,
@@ -639,7 +630,7 @@ class ConfigService:
             shutil.copy2(path, backup_path)
         source_record = self._workspace_state_store.sync_config_source(
             config_key=config_key,
-            vrn=self._config_layer_vrn(config_key=config_key),
+            vrn=None,
             config_version=int(payload.get("config_version", 1)),
             presence="present",
             payload=payload,
@@ -2275,11 +2266,14 @@ class ConfigService:
             auto_summarize=auto_summarize,
             metadata={
                 "default_agent_id": self.get_default_agent_id(),
-                "config_path": str(self._get_workspace_config_path()),
                 "source": "workspace",
                 "runtime_overrides": sorted(self._runtime_config_overrides.keys()),
                 "revision": snapshot.revision,
-                "source_paths": [str(path) for path in snapshot.source_paths],
+                # 来源位置一律只以 VRN 表达：``source_details[].vrn`` 是唯一出处。
+                # 原先此处的 ``config_path``（真实 user 层路径）与 ``source_paths``
+                # （跨 user/user_local/workspace/sqlite 四层的真实路径列表）既无 VRN
+                # 替代（上述层均不可寻址，VRN scope 闭集不含 ``user``），又会外泄真实
+                # 路径，故 MUST 从对外响应体移除；不得以空串/省略号做替身。
                 "source_details": [
                     {
                         "vrn": source.vrn,
