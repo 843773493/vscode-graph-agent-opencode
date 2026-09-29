@@ -48,8 +48,8 @@ from app.services.infrastructure.rollout_context.migration.schema_v3.sql import 
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     protected_detail_relative_path,
 )
-from app.services.infrastructure.rollout_context.storage.maintenance import (
-    RolloutStorageMaintenanceMixin,
+from app.services.infrastructure.rollout_context.storage.rollout_maintenance_owner import (
+    RolloutMaintenanceOwner,
 )
 from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
     execute_atomic_schema_sql,
@@ -84,18 +84,18 @@ def prepare_schema_v3_upgrade(
     state = connection.execute("SELECT database_state FROM database_meta WHERE singleton_id=1").fetchone()[0]
     if state == "recovery_required":
         # None 仅用于只读失败预检；发布前由主线复核最终 bound SQL checksum。
-        RolloutStorageMaintenanceMixin._validate_schema_state(
+        RolloutMaintenanceOwner._validate_schema_state(
             connection, allow_older_schema=True,
             pending_retry=(2, 3, "v3_typed_detail_identity", None),
         )
     else:
-        RolloutStorageMaintenanceMixin._validate_schema_state(connection, allow_older_schema=True)
+        RolloutMaintenanceOwner._validate_schema_state(connection, allow_older_schema=True)
     detail_rows = rows(connection, "context_plan_details")
     if any(row["protection"] == "protected" for row in detail_rows):
         if detail_capability is None:
             raise SchemaV3UpgradeError("schema-upgrade-protected-key-required: 必须显式注入既有 key")
         detail_capability.require_protected_key()
-    RolloutStorageMaintenanceMixin._validate_v2_commit_offsets(connection, rollout_root / "rollout.jsonl")
+    RolloutMaintenanceOwner._validate_v2_commit_offsets(connection, rollout_root / "rollout.jsonl")
     source_fingerprint = fingerprint(connection)
     assemblies = rows(connection, "context_assemblies")
     legacy = {row["assembly_id"]: load_snapshot(row, session_id) for row in assemblies}

@@ -1116,7 +1116,7 @@ def test_half_line_and_fsync_failure_never_become_committed_messages(
         raise OSError("fsync injected failure")
 
     monkeypatch.setattr(
-        "app.services.infrastructure.rollout_context.storage.maintenance.os.fsync",
+        "app.services.infrastructure.rollout_context.storage.rollout_maintenance_owner.os.fsync",
         fail_fsync,
     )
     with pytest.raises(OSError, match="fsync"):
@@ -1128,7 +1128,7 @@ def test_half_line_and_fsync_failure_never_become_committed_messages(
         )
     assert path.stat().st_size == 0
     monkeypatch.setattr(
-        "app.services.infrastructure.rollout_context.storage.maintenance.os.fsync",
+        "app.services.infrastructure.rollout_context.storage.rollout_maintenance_owner.os.fsync",
         lambda _stream: None,
     )
     _storage(sessions_dir).initialize(SESSION_ID)

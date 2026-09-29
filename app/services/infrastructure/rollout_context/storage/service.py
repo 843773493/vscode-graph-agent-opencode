@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
@@ -83,8 +84,8 @@ from app.services.infrastructure.rollout_context.fork.remap import ForkRemapMixi
 from app.services.infrastructure.rollout_context.operations.pruning_owner import (
     RolloutPruningOwner,
 )
-from app.services.infrastructure.rollout_context.storage.backups import (
-    RolloutStorageBackupMixin,
+from app.services.infrastructure.rollout_context.storage.rollout_maintenance_owner import (
+    RolloutMaintenanceOwner,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.indexed_records import (
     IndexedRecordQueryMixin,
@@ -107,12 +108,6 @@ from app.services.infrastructure.rollout_context.storage.catalog.turn_projection
 from app.services.infrastructure.rollout_context.storage.catalog.view_membership import (
     RolloutViewMembershipMixin,
 )
-from app.services.infrastructure.rollout_context.storage.maintenance import (
-    RolloutStorageMaintenanceMixin,
-)
-from app.services.infrastructure.rollout_context.storage.migrations import (
-    RolloutSchemaMigrationMixin,
-)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     MessageCodec,
     RolloutCheckpointIndex,
@@ -127,14 +122,8 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 from app.services.infrastructure.rollout_context.storage.queries import (
     RolloutCheckpointQueriesMixin,
 )
-from app.services.infrastructure.rollout_context.storage.recovery import (
-    RolloutRecoveryMixin,
-)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     RolloutSerializationMixin,
-)
-from app.services.infrastructure.rollout_context.storage.startup import (
-    RolloutStartupMixin,
 )
 from app.services.infrastructure.rollout_context.storage.transaction_projections import (
     RolloutTransactionProjectionMixin,
@@ -190,11 +179,6 @@ class RolloutStorage(
     RolloutItemsMixin,
     RolloutViewMembershipMixin,
     RolloutPartsMixin,
-    RolloutStorageBackupMixin,
-    RolloutRecoveryMixin,
-    RolloutSchemaMigrationMixin,
-    RolloutStorageMaintenanceMixin,
-    RolloutStartupMixin,
     ContextAssemblyStorageMixin,
     ContextSourceControlStorageMixin,
     RolloutSerializationMixin,
@@ -218,6 +202,7 @@ class RolloutStorage(
         self._locks: dict[tuple[str, str], _RolloutOperationLock] = {}
         self._locks_guard = threading.Lock()
         self._active_fork_materializations: set[tuple[str, str]] = set()
+        self._maintenance_owner = RolloutMaintenanceOwner(self)
         self._pruning_owner = RolloutPruningOwner(self)
 
     def _codec(self) -> MessageCodec:
@@ -369,3 +354,133 @@ class RolloutStorage(
     ) -> tuple[str, ...]:
         """委托 pruning owner 执行已规划的逻辑裁剪。"""
         return self._pruning_owner.execute_pruning(thread_id, plan, checkpoint_ns)
+
+    def _require_regular_file(self, path: Path, *, field: str) -> None:
+        return self._maintenance_owner._require_regular_file(path, field=field)
+
+    def _file_hash(self, path: Path) -> str:
+        return self._maintenance_owner._file_hash(path)
+
+    def _copy_file_fsync(self, source: Path, target: Path) -> None:
+        return self._maintenance_owner._copy_file_fsync(source, target)
+
+    def _fsync_directory(self, path: Path) -> None:
+        return self._maintenance_owner._fsync_directory(path)
+
+    def _require_plain_directory(self, path: Path, *, field: str) -> None:
+        return self._maintenance_owner._require_plain_directory(path, field=field)
+
+    def _validate_offline_restore_candidate(self, connection: sqlite3.Connection, *, thread_id: str, checkpoint_ns: str) -> None:
+        return self._maintenance_owner._validate_offline_restore_candidate(connection, thread_id=thread_id, checkpoint_ns=checkpoint_ns)
+
+    def _prepare_offline_restore_candidate(self, source_path: Path, candidate_path: Path, *, thread_id: str, checkpoint_ns: str) -> str:
+        return self._maintenance_owner._prepare_offline_restore_candidate(source_path, candidate_path, thread_id=thread_id, checkpoint_ns=checkpoint_ns)
+
+    def _require_standalone_offline_restore_source(self, source_path: Path) -> None:
+        return self._maintenance_owner._require_standalone_offline_restore_source(source_path)
+
+    def _require_offline_restore_target(self, target_path: Path) -> None:
+        return self._maintenance_owner._require_offline_restore_target(target_path)
+
+    def backup_index(self, thread_id: str, checkpoint_ns: str='', *, destination: str | Path | None=None) -> Path:
+        return self._maintenance_owner.backup_index(thread_id, checkpoint_ns, destination=destination)
+
+    def _backup_index_unlocked(self, thread_id: str, checkpoint_ns: str, *, destination: str | Path | None) -> Path:
+        return self._maintenance_owner._backup_index_unlocked(thread_id, checkpoint_ns, destination=destination)
+
+    def restore_index_backup(self, thread_id: str, backup_path: str | Path, checkpoint_ns: str='') -> RolloutReadSnapshot:
+        return self._maintenance_owner.restore_index_backup(thread_id, backup_path, checkpoint_ns)
+
+    def restore_index_backup_offline(self, thread_id: str, backup_path: str | Path, checkpoint_ns: str='') -> RolloutReadSnapshot:
+        return self._maintenance_owner.restore_index_backup_offline(thread_id, backup_path, checkpoint_ns)
+
+    def _restore_index_backup_unlocked(self, thread_id: str, checkpoint_ns: str, source_path: Path) -> None:
+        return self._maintenance_owner._restore_index_backup_unlocked(thread_id, checkpoint_ns, source_path)
+
+    def _recover_fork_materialization(self, thread_id: str, checkpoint_ns: str, connection: sqlite3.Connection, jsonl_path: Path) -> None:
+        return self._maintenance_owner._recover_fork_materialization(thread_id, checkpoint_ns, connection, jsonl_path)
+
+    def migrate_schema(self, thread_id: str, *, to_version: int, migration_name: str, migration_sql: str, checkpoint_ns: str='') -> RolloutReadSnapshot:
+        return self._maintenance_owner.migrate_schema(thread_id, to_version=to_version, migration_name=migration_name, migration_sql=migration_sql, checkpoint_ns=checkpoint_ns)
+
+    def _migrate_schema_locked(self, thread_id: str, *, checkpoint_ns: str, to_version: int, migration_name: str, migration_sql: str, validate_migrated: Callable[[sqlite3.Connection], None] | None=None, pending_artifact_audit: bool=False, allow_failed_retry: bool=False) -> None:
+        return self._maintenance_owner._migrate_schema_locked(thread_id, checkpoint_ns=checkpoint_ns, to_version=to_version, migration_name=migration_name, migration_sql=migration_sql, validate_migrated=validate_migrated, pending_artifact_audit=pending_artifact_audit, allow_failed_retry=allow_failed_retry)
+
+    def _manifest_from_connection(self, connection: sqlite3.Connection, checkpoint_ns: str, *, allow_migrating: bool=False) -> RolloutManifest:
+        return self._maintenance_owner._manifest_from_connection(connection, checkpoint_ns, allow_migrating=allow_migrating)
+
+    def _namespace_state(self, connection: sqlite3.Connection, checkpoint_ns: str) -> tuple[str, int]:
+        return self._maintenance_owner._namespace_state(connection, checkpoint_ns)
+
+    def _ensure_namespace_state(self, connection: sqlite3.Connection, checkpoint_ns: str, timestamp: str) -> None:
+        return self._maintenance_owner._ensure_namespace_state(connection, checkpoint_ns, timestamp)
+
+    def _initialize_schema(self, thread_id: str, checkpoint_ns: str) -> None:
+        return self._maintenance_owner._initialize_schema(thread_id, checkpoint_ns)
+
+    def _commit_connection(self, connection: sqlite3.Connection) -> None:
+        return self._maintenance_owner._commit_connection(connection)
+
+    def _is_removed_rollout_layout(self, root: Path) -> bool:
+        return self._maintenance_owner._is_removed_rollout_layout(root)
+
+    def _validate_schema_state(self, connection: sqlite3.Connection, *, allow_older_schema: bool=False, pending_retry: tuple[int, int, str, str | None] | None=None) -> None:
+        return self._maintenance_owner._validate_schema_state(connection, allow_older_schema=allow_older_schema, pending_retry=pending_retry)
+
+    def _validate_v2_commit_offsets(self, connection: sqlite3.Connection, jsonl_path: Path, *, validate_jsonl_items: bool=True) -> None:
+        return self._maintenance_owner._validate_v2_commit_offsets(connection, jsonl_path, validate_jsonl_items=validate_jsonl_items)
+
+    def open_read_snapshot(self, thread_id: str, checkpoint_ns: str='', *, validate_integrity: bool=False) -> RolloutReadSnapshot:
+        return self._maintenance_owner.open_read_snapshot(thread_id, checkpoint_ns, validate_integrity=validate_integrity)
+
+    def validate_index(self, thread_id: str, checkpoint_ns: str='') -> RolloutReadSnapshot:
+        return self._maintenance_owner.validate_index(thread_id, checkpoint_ns)
+
+    def repair_index(self, thread_id: str, checkpoint_ns: str='', *, manifest: RolloutManifest | None=None) -> None:
+        return self._maintenance_owner.repair_index(thread_id, checkpoint_ns, manifest=manifest)
+
+    def _append_v2_records_transaction(self, connection: sqlite3.Connection, thread_id: str, checkpoint_ns: str, items: Sequence[CanonicalItemRecord], *, commit_kind: str, commit_mode: str | None=None, outcome: str | None=None, metadata: Mapping[str, object] | None=None, subject_id: str | None=None, idempotency_key: str | None=None, begin_transaction: bool=True) -> tuple[int, int]:
+        return self._maintenance_owner._append_v2_records_transaction(connection, thread_id, checkpoint_ns, items, commit_kind=commit_kind, commit_mode=commit_mode, outcome=outcome, metadata=metadata, subject_id=subject_id, idempotency_key=idempotency_key, begin_transaction=begin_transaction)
+
+    def _checkpoint_index(self, row: Sequence[object]) -> RolloutCheckpointIndex:
+        return self._maintenance_owner._checkpoint_index(row)
+
+    def rollout_id(self, thread_id: str, checkpoint_ns: str='') -> str:
+        return self._maintenance_owner.rollout_id(thread_id, checkpoint_ns)
+
+    def _existing_index_connection(self, thread_id: str, checkpoint_ns: str) -> Iterator[sqlite3.Connection]:
+        return self._maintenance_owner._existing_index_connection(thread_id, checkpoint_ns)
+
+    def initialize(self, thread_id: str, checkpoint_ns: str='', *, validate_jsonl_items: bool=True, _allow_schema_upgrade: bool=False) -> RolloutManifest:
+        return self._maintenance_owner.initialize(thread_id, checkpoint_ns, validate_jsonl_items=validate_jsonl_items, _allow_schema_upgrade=_allow_schema_upgrade)
+
+    def _reject_unpublished_migration(self, thread_id: str, checkpoint_ns: str) -> None:
+        return self._maintenance_owner._reject_unpublished_migration(thread_id, checkpoint_ns)
+
+    def repair_active_context_view(self, thread_id: str, checkpoint_ns: str='') -> bool:
+        return self._maintenance_owner.repair_active_context_view(thread_id, checkpoint_ns)
+
+    def ensure_active_view_contains_turn_root(self, thread_id: str, *, turn_id: str, checkpoint_ns: str='') -> bool:
+        return self._maintenance_owner.ensure_active_view_contains_turn_root(thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns)
+
+    def upgrade_v2_schema(
+        self, thread_id: str, *, checkpoint_ns: str = "",
+        prepare_artifact_upgrade: Callable[[sqlite3.Connection], object] | None = None,
+        resume_artifact_upgrade: Callable[[sqlite3.Connection], bool] | None = None,
+        prepare_plan_upgrade: Callable[[sqlite3.Connection], object] | None = None,
+    ) -> RolloutReadSnapshot:
+        return self._maintenance_owner.upgrade_v2_schema(
+            thread_id,
+            checkpoint_ns=checkpoint_ns,
+            prepare_artifact_upgrade=prepare_artifact_upgrade,
+            resume_artifact_upgrade=resume_artifact_upgrade,
+            prepare_plan_upgrade=prepare_plan_upgrade,
+        )
+
+    def _upgrade_context_artifacts_locked(
+        self, thread_id: str, *, checkpoint_ns: str, prepare: Callable[[sqlite3.Connection], object],
+    ) -> None:
+        return self._maintenance_owner._upgrade_context_artifacts_locked(
+            thread_id, checkpoint_ns=checkpoint_ns, prepare=prepare
+        )
+

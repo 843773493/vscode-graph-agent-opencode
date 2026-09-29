@@ -174,7 +174,7 @@ def test_process_exit_rolls_back_schema_ddl_before_explicit_retry(old_schema: Ol
 import os
 import sys
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
-from app.services.infrastructure.rollout_context.storage import migrations
+from app.services.infrastructure.rollout_context.storage import rollout_maintenance_owner as migrations
 
 execute = migrations.execute_atomic_schema_sql
 def crash_after_ddl(connection, script):

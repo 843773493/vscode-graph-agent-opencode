@@ -382,7 +382,7 @@ import os
 import sys
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
 from app.services.infrastructure.rollout_context.migration.schema_v4 import PreparedSchemaV4Upgrade
-from app.services.infrastructure.rollout_context.storage.migrations import RolloutSchemaMigrationMixin
+from app.services.infrastructure.rollout_context.storage.rollout_maintenance_owner import RolloutMaintenanceOwner
 if sys.argv[3] == 'before_commit':
     original = PreparedSchemaV4Upgrade.verify_migrated
     def crash(self, connection):
@@ -391,11 +391,11 @@ if sys.argv[3] == 'before_commit':
         os._exit(94)
     PreparedSchemaV4Upgrade.verify_migrated = crash
 else:
-    original = RolloutSchemaMigrationMixin._migrate_schema_locked
+    original = RolloutMaintenanceOwner._migrate_schema_locked
     def crash(self, *args, **kwargs):
         original(self, *args, **kwargs)
         os._exit(94)
-    RolloutSchemaMigrationMixin._migrate_schema_locked = crash
+    RolloutMaintenanceOwner._migrate_schema_locked = crash
 with RolloutCheckpointSaver(sys.argv[1]) as saver:
     saver.upgrade_rollout_schema(sys.argv[2])
 """, str(source.saver._storage.sessions_dir), source.session_id, stage], check=False, capture_output=True, text=True, timeout=30)

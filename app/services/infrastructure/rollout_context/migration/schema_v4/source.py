@@ -22,8 +22,8 @@ from app.services.infrastructure.rollout_context.migration.schema_v4.model impor
     parse_snapshot,
     rows,
 )
-from app.services.infrastructure.rollout_context.storage.maintenance import (
-    RolloutStorageMaintenanceMixin,
+from app.services.infrastructure.rollout_context.storage.rollout_maintenance_owner import (
+    RolloutMaintenanceOwner,
 )
 
 
@@ -42,7 +42,7 @@ def inspect_source(
         raise SchemaV4UpgradeError("schema-upgrade-source-mismatch: 只接受同 owner 的 format2/schema3")
     if meta[3] not in {"active", "recovery_required"}:
         raise SchemaV4UpgradeError("schema-upgrade-state-conflict: 源不是可升级状态")
-    RolloutStorageMaintenanceMixin._validate_schema_state(
+    RolloutMaintenanceOwner._validate_schema_state(
         connection, allow_older_schema=True,
         pending_retry=(3, 4, MIGRATION_NAME, None) if meta[3] == "recovery_required" else None,
     )
