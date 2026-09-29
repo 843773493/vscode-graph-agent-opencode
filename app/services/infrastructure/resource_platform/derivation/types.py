@@ -17,7 +17,6 @@ _SNAPSHOT_ERROR_CODES = frozenset(
         "generation-mismatch",
         "source-unavailable",
         "loader-error",
-        "dependency-cycle",
     }
 )
 
