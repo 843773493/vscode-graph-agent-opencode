@@ -36,12 +36,14 @@
 - [ ] 5A.3 必须附「已验证**不**含 id」的**负向证据**，例如 `app/domain/itemized/hashing.py` 的 `content_hash` 输入仅 `{payload_kind, payload}`、`contribution_content_hash` 仅 `{contribution_kind, body}`，`app/core/session_creation.py` 的 `compute_session_creation_preimage_hash` 四元组 `{workspace_id, parent_node_id, title, session_metadata}` 不含 `session_id`。门槛：`rg -n 'def content_hash|def contribution_content_hash' app/domain/itemized/hashing.py` 退出码 0 且报告记录输入字段清单。
 - [ ] 5A.4 逐条给出处置：以 id 为输入的哈希/幂等键 MUST 明确为「随迁移一致重算」或「该 id 不参与迁移」，并配验证；MUST NOT 留成「迁移后哈希漂移但无人负责」。门槛：报告逐条标注处置；未落定条数 MUST 为 0。
 - [ ] 5A.5 审计未落定前，§6 的迁移任务 MUST NOT 执行任何重编号。门槛：执行记录证明 §6 在 §5A 全部勾选后才开工。
+> **（2026-09-29 复跑现状，暂不勾选）**：§5A 的权威交付物尚未满足：门槛命令 `rg -rn 'sha256_jcs|hashlib.sha256|idempotency_key' app --glob '*.py' -l` 实测命中 191 个文件，而现有 `out/tests/temp/uuidv7_openspec/artifacts/evidence_hash_inputs.txt` 仅覆盖 6 个文件（`app/domain/itemized/hashing.py`、`app/domain/itemized/hash/plan_hash.py`、`app/domain/itemized/hash/request_hash.py`、`app/domain/itemized/hash/hash_projection.py`、`app/domain/itemized/records.py`、`app/domain/itemized/identity/refs.py`），且报告自述其取证「不作为结论」，未给逐条处置表，故 5A.1–5A.4 的「报告覆盖全部命中文件 / 逐条标注处置 / 未落定条数 MUST 为 0」门槛不满足；5A.5 因 §5A 未全部勾选同样保持未勾。实施阶段须补齐全量命中清单与逐条处置（含负向证据）后再勾选。
 
 ## 5B. 阻断性前置：gateway 控制面库逐表分类（D10，MUST 在 §6 之前完成）
 
 - [ ] 5B.1 对控制面库（`app/gateway/control/gateway_state.py` 等）承载 session 身份的表逐表分类为 `migrate` / `explicitly_invalidated` / `not_affected`。已实测候选：`user_view_state`（键 `(user_id, workspace_id, session_id)`）、`user_access_lease`（`access_session_id`）。门槛：报告给出逐表分类与判定依据，且 `rg -n 'session_id|access_session_id' app/gateway/control/gateway_state.py` 退出码 0。
 - [ ] 5B.2 `user_access_lease` MUST NOT 归入 `explicitly_invalidated`，除非实测证明其为「可安全丢弃的租约」；否则归 `migrate`。门槛：报告给出该表的分类与安全依据。
 - [ ] 5B.3 归入 `explicitly_invalidated` 的表 MUST 有用户可见的显式报告（表名、行数、失效原因），MUST NOT 静默重建。门槛：对应显式报告路径与测试存在，退出码 0。
+> **（2026-09-29 复跑现状，暂不勾选）**：§5B 的权威交付物尚未满足：现有报告只给出 `user_view_state`（键 `(user_id, workspace_id, session_id)`）与 `user_access_lease`（`access_session_id`）两候选表的分类依据，未给「逐表分类 + 归入 `explicitly_invalidated` 表的用户可见显式报告（表名/行数/失效原因）与对应测试存在」的完整交付物，故 5B.1–5B.3 暂不勾选。
 
 ## 6. 存量 UUIDv4 一次性显式迁移（D3）
 
@@ -59,13 +61,13 @@
 
 ## 8. 边界与引用（D8）
 
-- [ ] 8.1 确认本 change 未定义/改写 VRN、scope、kind、拒绝码或 ResourceIdentity；引用处均为具名 change 名。门槛：`rg -n 'VRN|scope_id|拒绝码' openspec/changes/migrate-identifiers-to-uuidv7/specs` 仅出现引用语境。
-- [ ] 8.2 在 design D11 点名四处「仍含 v4 表述、需由各自 owner 收口」的位置（文件 + capability + requirement/任务）：`add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md`（capability `itemized-rollout-context`，requirement「产品 Session、durable Thread 与 LangGraph namespace 必须严格分层」）与 `specs/rollout-checkpoint-storage/spec.md`（capability `rollout-checkpoint-storage`，requirement「rollout storage 必须以 SessionThread 为物理与事务 owner」）；`add-context-injection-lifecycle` 的 `specs/context-injection-lifecycle/spec.md`（capability `context-injection-lifecycle`，requirements「Context lifecycle owner 必须精确为 SessionThread」「生命周期场景必须进入统一 Web E2E 验收模块」）与 `tasks.md`（任务 2.1）；声明本 change 是 id 生成位 profile 唯一 owner、上述文本兑现时 MUST 引用本 change、MUST NOT 复述取值；本 change MUST NOT 代改。门槛：报告列出具名路径与冲突文本。
-- [ ] 8.3 核验四方 owner 已自行在其产物中收口并引用本 change（本 change MUST NOT 代改这四处）。门槛：`rg -n 'migrate-identifiers-to-uuidv7' openspec/changes/add-itemized-rollout-context openspec/changes/add-context-injection-lifecycle` 退出码 0（由 owner 侧提交达成，本 change 只核验）。
-- [ ] 8.4 在四方收口完成后重跑 `openspec validate --strict --all`。门槛：输出 `0 failed` 且退出码 0。
+- [x] 8.1 确认本 change 未定义/改写 VRN、scope、kind、拒绝码或 ResourceIdentity；引用处均为具名 change 名。门槛：`rg -n 'VRN|scope_id|拒绝码' openspec/changes/migrate-identifiers-to-uuidv7/specs` 仅出现引用语境。 **（本次实测（提交 `f6fc990f`）现状：`rg -n 'VRN|scope_id|拒绝码' openspec/changes/migrate-identifiers-to-uuidv7/specs` 退出码 0，仅 3 处命中，全部为「本 capability 不定义 VRN/scope_id/拒绝码，只具名引用」的引用语境（`spec.md:3`、`:121` 的 requirement 标题、`:123`）；门槛满足。）**
+- [x] 8.2 在 design D11 点名四处「仍含 v4 表述、需由各自 owner 收口」的位置（文件 + capability + requirement/任务）：`add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md`（capability `itemized-rollout-context`，requirement「产品 Session、durable Thread 与 LangGraph namespace 必须严格分层」）与 `specs/rollout-checkpoint-storage/spec.md`（capability `rollout-checkpoint-storage`，requirement「rollout storage 必须以 SessionThread 为物理与事务 owner」）；`add-context-injection-lifecycle` 的 `specs/context-injection-lifecycle/spec.md`（capability `context-injection-lifecycle`，requirements「Context lifecycle owner 必须精确为 SessionThread」「生命周期场景必须进入统一 Web E2E 验收模块」）与 `tasks.md`（任务 2.1）；声明本 change 是 id 生成位 profile 唯一 owner、上述文本兑现时 MUST 引用本 change、MUST NOT 复述取值；本 change MUST NOT 代改。门槛：报告列出具名路径与冲突文本。 **（本次实测（提交 `f6fc990f`）现状：D11 已交付四处具名路径（`design.md:160-171`：itemized 的 `specs/itemized-rollout-context/spec.md`、`specs/rollout-checkpoint-storage/spec.md`；CIL 的 `specs/context-injection-lifecycle/spec.md`、`tasks.md` 任务 2.1）；复跑 `rg -n '第 13 个 hex|UUIDv4|v4 bit profile'` 对上述四处文件零命中，四处 v4 表述均已由各自 owner 收口引用本 change；门槛「报告列出具名路径与冲突文本」满足，本 change 未代改。）**
+- [x] 8.3 核验四方 owner 已自行在其产物中收口并引用本 change（本 change MUST NOT 代改这四处）。门槛：`rg -n 'migrate-identifiers-to-uuidv7' openspec/changes/add-itemized-rollout-context openspec/changes/add-context-injection-lifecycle` 退出码 0（由 owner 侧提交达成，本 change 只核验）。 **（本次实测（提交 `f6fc990f`）现状：`rg -n 'migrate-identifiers-to-uuidv7' openspec/changes/add-itemized-rollout-context openspec/changes/add-context-injection-lifecycle` 退出码 0，命中 14 行（itemized: `tasks.md:100/143`、`design.md:745/1000`、`proposal.md:34`、`specs/itemized-rollout-context/spec.md:15/76`、`specs/rollout-checkpoint-storage/spec.md:231`、`specs/session-turn-history/spec.md:139`；CIL: `tasks.md:13/116`、`design.md:636`、`specs/context-injection-lifecycle/spec.md:721/1038`）；门槛满足。）**
+- [x] 8.4 在四方收口完成后重跑 `openspec validate --strict --all`。门槛：输出 `0 failed` 且退出码 0。 **（本次实测（提交 `f6fc990f`）现状：`openspec validate --strict --all` 输出 `Totals: 40 passed, 0 failed (40 items)`，退出码 0；门槛满足。）**
 
 ## 9. 质量门
 
-- [ ] 9.1 `openspec validate migrate-identifiers-to-uuidv7 --strict` 输出 `Change 'migrate-identifiers-to-uuidv7' is valid`，退出码 0。
-- [ ] 9.2 `openspec validate --strict --all` 退出码 0 且 `0 failed`（本 change 加入后为 40 passed）。
+- [x] 9.1 `openspec validate migrate-identifiers-to-uuidv7 --strict` 输出 `Change 'migrate-identifiers-to-uuidv7' is valid`，退出码 0。 **（本次实测（提交 `f6fc990f`）现状：`openspec validate migrate-identifiers-to-uuidv7 --strict` 输出 `Change 'migrate-identifiers-to-uuidv7' is valid`，退出码 0；门槛满足。）**
+- [x] 9.2 `openspec validate --strict --all` 退出码 0 且 `0 failed`（本 change 加入后为 40 passed）。 **（本次实测（提交 `f6fc990f`）现状：`openspec validate --strict --all` 输出 `Totals: 40 passed, 0 failed (40 items)`，退出码 0；门槛满足。）**
 - [ ] 9.3 实施阶段的完整测试带进程外保护执行（按 AGENTS.md：`bun run test:matrix -- --suite=<id>` 或 `timeout <秒> bash -c 'ulimit -d 4194304; exec "$@"' bash <命令>`），退出码 0。
