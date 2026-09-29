@@ -187,7 +187,8 @@ function describeSnapshot(snapshot) {
     snapshot.last_command_status,
     snapshot.last_command_exit_code,
   )}`;
-  return `终端: ${statusLabel(snapshot.status)} · ${commandStatus} · cwd: ${snapshot.cwd}`;
+  // 快照只承载工作区内相对目录；绝对真实路径不再下发到客户端（裁定 D-A2/D-A3）。
+  return `终端: ${statusLabel(snapshot.status)} · ${commandStatus} · cwd: ${snapshot.cwd_relative}`;
 }
 
 function sanitizeTerminalDisplay(value) {

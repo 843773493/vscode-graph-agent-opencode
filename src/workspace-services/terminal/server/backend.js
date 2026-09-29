@@ -66,7 +66,7 @@ function missingTerminalSnapshot(manager, terminalId) {
     title: "Deleted Terminal",
     command: "",
     args: [],
-    cwd: "",
+    cwd_relative: "",
     cols: 100,
     rows: 30,
     status: "deleted",

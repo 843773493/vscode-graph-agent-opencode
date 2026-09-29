@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 from pathlib import Path
@@ -263,11 +264,13 @@ async def test_exec_command_creates_independent_terminals_and_applies_options() 
     assert client.terminals[first["terminal_id"]]["cwd"] == str(
         workspace_root / "parry_arena"
     )
-    assert first["cwd"] == str(workspace_root / "parry_arena")
+    # 模型可见载荷只承载工作区内相对目录，MUST NOT 出现绝对真实路径（6.3）。
+    assert first["cwd_relative"] == "parry_arena"
+    assert workspace_root.as_posix() not in json.dumps(first, default=str)
     assert client.terminals[first["terminal_id"]]["status"] == "deleted"
     assert "/bin/sh -c pwd" in str(client.writes[0]["data"])
     assert "cd --" not in str(client.writes[0]["data"])
-    assert second["cwd"] == str(workspace_root)
+    assert second["cwd_relative"] == "."
     assert client.terminals[second["terminal_id"]]["cwd"] == str(workspace_root)
 
 

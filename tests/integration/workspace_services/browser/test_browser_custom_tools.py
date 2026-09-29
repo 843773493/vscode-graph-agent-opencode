@@ -9,6 +9,7 @@ import time
 from collections.abc import Generator
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -72,6 +73,14 @@ def _json_tool_result(raw: object) -> dict[str, object]:
 def _read_http(target: str | Request) -> tuple[int, bytes]:
     with urlopen(target, timeout=5) as response:
         return response.status, response.read()
+
+
+def _read_http_error_status_and_body(target: str | Request) -> tuple[int, bytes]:
+    try:
+        _read_http(target)
+    except HTTPError as error:
+        return error.code, error.read()
+    raise AssertionError(f"预期 HTTP 错误但请求成功: {target}")
 
 
 def _browser_test_data_url() -> str:
@@ -443,6 +452,30 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     )
     assert shot_status == 200
     assert shot_body[:8] == b"\x89PNG\r\n\x1a\n"
+
+    # 截图端点负向断言：id 不存在、browser 不存在、文件缺失都必须回稳定结构化
+    # 错误（明确 code），且响应体 MUST NOT 泄漏真实路径（6.3）。
+    missing_shot_status, missing_shot_body = await asyncio.to_thread(
+        _read_http_error_status_and_body,
+        f"http://127.0.0.1:{backend_port}"
+        f"/api/browsers/{page_id}/screenshots/screenshot_doesnotexist",
+    )
+    assert missing_shot_status == 404
+    missing_shot_payload = json.loads(missing_shot_body)
+    assert missing_shot_payload["code"] == "browser_artifact_not_found"
+    assert str(integration_workspace_root_path) not in missing_shot_body.decode("utf-8", "replace")
+    assert ".png" not in missing_shot_payload["error"]
+
+    missing_browser_status, missing_browser_body = await asyncio.to_thread(
+        _read_http_error_status_and_body,
+        f"http://127.0.0.1:{backend_port}"
+        "/api/browsers/browser_doesnotexist/screenshots/screenshot_x",
+    )
+    assert missing_browser_status == 404
+    missing_browser_payload = json.loads(missing_browser_body)
+    assert missing_browser_payload["code"] == "browser_page_not_found"
+    assert str(integration_workspace_root_path) not in missing_browser_body.decode("utf-8", "replace")
+
 
     before_reload = _json_tool_result(await read_page.ainvoke({"pageId": page_id}))
     stale_apply_ref = next(

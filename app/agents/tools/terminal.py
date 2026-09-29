@@ -192,6 +192,17 @@ def _resolve_terminal_workdir(
     return str(requested.resolve())
 
 
+def _visibility_workdir(workspace_root: Path | None, absolute_workdir: str) -> str:
+    """把调用栈内的绝对 cwd 收窄为对模型只读的工作区相对表达。
+
+    模型可见载荷 MUST NOT 出现绝对真实路径（裁定 D-A2/D-A3）；这里返回相对
+    workspace 根目录的路径，与持久记录 `cwd_relative` 语义一致（``"."`` 表示根）。
+    """
+    root = (workspace_root or get_workspace_root()).resolve()
+    relative = os.path.relpath(absolute_workdir, root)
+    return relative
+
+
 async def _get_owned_terminal(
     *,
     terminal_client: TerminalManagerClient,
@@ -342,7 +353,9 @@ def create_exec_command_tool(
                         exit_code,
                     ),
                 )
-                result["cwd"] = resolved_workdir
+                result["cwd_relative"] = _visibility_workdir(
+                    workspace_root, resolved_workdir
+                )
                 return result
             remaining_seconds = deadline - asyncio.get_running_loop().time()
             if remaining_seconds <= 0:
@@ -373,7 +386,7 @@ def create_exec_command_tool(
             max_output_tokens=max_output_tokens,
             running=True,
         )
-        result["cwd"] = resolved_workdir
+        result["cwd_relative"] = _visibility_workdir(workspace_root, resolved_workdir)
         return result
 
     return exec_command

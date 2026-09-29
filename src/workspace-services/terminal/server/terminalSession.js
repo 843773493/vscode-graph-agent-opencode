@@ -677,7 +677,9 @@ export class TerminalSession {
       title: this.title,
       command: this.command,
       args: this.args,
-      cwd: this.cwd,
+      // 对外快照只承载工作区内相对目录；绝对真实路径 MUST NOT 出现在 API 响应体、
+      // WebSocket 状态或模型可见载荷（裁定 D-A2/D-A3）。
+      cwd_relative: this.cwdRelative,
       cols: this.cols,
       rows: this.rows,
       status: this.status,
@@ -720,10 +722,7 @@ export class TerminalSession {
   }
 
   toRecord() {
-    const record = this.snapshot();
-    // 持久记录只承载工作区内相对路径；绝对路径仅在调用栈内解析（裁定 D-A2/D-A7）。
-    delete record.cwd;
-    record.cwd_relative = this.cwdRelative;
-    return record;
+    // 快照本身已只承载工作区内相对路径；绝对路径仅在调用栈内解析（裁定 D-A2/D-A7）。
+    return this.snapshot();
   }
 }

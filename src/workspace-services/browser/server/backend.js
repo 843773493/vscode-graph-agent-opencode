@@ -82,7 +82,19 @@ function notFound(response) {
 }
 
 async function sendDownload(response, file, mediaType = "application/octet-stream") {
-  const fileStat = await stat(file.path);
+  let fileStat;
+  try {
+    fileStat = await stat(file.path);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      // 产物文件缺失：定位信息只进服务端日志，响应体回稳定错误码，绝不回吐真实路径。
+      console.error(`[browser-backend] 浏览器产物文件缺失: file=${file.path}`);
+      const missing = new Error("浏览器产物文件不存在");
+      missing.code = "browser_artifact_not_found";
+      throw missing;
+    }
+    throw error;
+  }
   const headers = {
     "content-type": mediaType,
     "content-length": fileStat.size,
@@ -487,6 +499,8 @@ async function main() {
       const status = message.startsWith("浏览器页面不存在")
         ? 404
         : message.startsWith("浏览器下载不存在")
+          ? 404
+        : error?.code === "browser_artifact_not_found"
           ? 404
         : error?.code === "browser_stale_element_ref"
           ? 409

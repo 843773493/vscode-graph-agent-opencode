@@ -199,6 +199,8 @@ export class BrowserManager {
   }
 
   screenshot(id, screenshotId) {
+    // 先核实浏览器资源存在，避免对任意 id 生成产物路径（不存在则抛 404）。
+    this.get(id);
     return {
       path: this.stateStore.resolveScreenshotPath(id, screenshotId),
     };

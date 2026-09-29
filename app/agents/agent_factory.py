@@ -217,7 +217,7 @@ def _runtime_identity_system_prompt(
         "这些字段来自当前运行时配置，不是从 project.godot 或其他工作区文件推断的。\n"
         "回答 provider/model 身份时必须使用上述元数据；project.godot 的 `config/name` 只是项目显示名，绝不是模型名或 provider 名。\n"
         "文件工具优先使用相对于 workspace 根目录的相对路径；上面列出的绝对根目录只用于 exec_command 的 cwd，不要把它当作文件工具的 path。项目位于子目录时必须保留该前缀：例如 `parry_arena/project.godot` 和 `parry_arena/godot_export/parry_arena.html`。只有在 exec_command 的 cwd 明确为 `parry_arena` 时，`godot_export/parry_arena.html` 才是同一文件的项目相对路径；不能因为 workspace 根下没有不带前缀的路径就报告文件不存在。工作区内的绝对路径会被自动归一化为相对路径，但你应直接给出相对路径。\n"
-        "exec_command 的相对 workdir 只相对于上述 workspace 根目录解析一次；不要在命令中再次 cd 到同一个 workdir。工具结果中的 cwd 是实际执行目录，应以它解释相对路径。"
+        "exec_command 的相对 workdir 只相对于上述 workspace 根目录解析一次；不要在命令中再次 cd 到同一个 workdir。工具结果中的 cwd_relative 是实际执行目录相对 workspace 根目录的路径（`.` 表示根），应以它解释相对路径。"
     )
     base_message = (
         system_prompt
