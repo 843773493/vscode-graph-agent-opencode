@@ -25,7 +25,7 @@
 - 为 Anthropic 官方部分模型未来可能支持的中途 system item 仅保留 Provider capability TODO；当前运行时不得启用该分支，也不得因此改变通用 role 合同。
 - 将一个 `SKILL.md` 拆为相互独立的 Skill metadata 与 Skill activation source；metadata 当前只读取 `name` 和 `description`。
 - 新增仅按名称调用的 `skill_load(name, mode="snapshot" | "tracked" | "untrack")` 工具，默认 `snapshot`；模型不可读取或传入 Skill 路径。
-- `snapshot` 从当前ResourceActivationSnapshot取得ResourceRegistry已稳定发布的 `SKILL.md` revision并追加一个不可变 activation item，之后不检查文件变化，也不在 rewind 移除后自动恢复。`StableSourceReader`、provider-owned可重建handle、双读一致性、固定大小/UTF-8边界和原始字节hash只属于Resource Reconciler，不在工具或模型请求路径运行；Gateway global正文由Gateway以受认证内部snapshot提供，物理路径不跨边界。
+- `snapshot` 从当前ResourceActivationSnapshot取得ResourceRegistry已稳定发布的 `SKILL.md` revision并追加一个不可变 activation item，之后不检查文件变化，也不在 rewind 移除后自动恢复。`StableSourceReader`、provider-owned可重建handle、双读一致性、固定大小/UTF-8边界和原始字节hash只属于Resource Reconciler，不在工具或模型请求路径运行；Gateway global正文「由Gateway以受认证内部snapshot提供」当前**尚未实现且无实现载体**（原 `gateway_snapshot` source kind 与 version token 通路已随 `4837aadc` 回收；当前由 Workspace 进程读取本机路径），物理路径不跨边界这一约束不变。
 - `tracked` 由 CSM 只保存稳定 `resource_id`、source identity、catalog/provider binding revision、已应用revision/hash和追踪状态；私有provider handle/locator归ResourceRegistry与provider所有。Resource Reconciler异步发布变化，CSM只在配置的 `turn|model_call` 激活边界消费最新 `ResourceSnapshot`，把相对最新已提交且仍可见 revision 的 diff 追加到尾部，并在有效 registration 被 rewind 保留但最新注入移出 active view 时追加published完整revision。
 - `untrack` 仅停止该 CSM registration 后续消费Registry revision与自动恢复，不停止共享monitor为其它consumer观察资源，也不删除、改写或立即移除已经进入上下文的item；本change不提供Skill即时移除工具。
 - 多次尚未进入 sealed assembly 的 tracked 变化合并为一个从最新已提交可见 revision 到当前 revision 的 delta。
