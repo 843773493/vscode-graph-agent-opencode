@@ -1,7 +1,7 @@
 """resource platform 的进程级固定装配。
 
 每个 owner 进程只在本模块按代码装配一次：process-root LifetimeScope、
-资源观察事件通道、内置文件快照能力（共享监视 + 稳定读取 registry），
+资源观察事件通道、内置文件快照能力（共享 watcher + 稳定读取 registry），
 没有动态 provider 注册：一切适配在构造参数里固定，测试通过注入替身
 端口替换实际 owner。
 """
@@ -18,10 +18,6 @@ from app.services.infrastructure.events.channel_events import (
 )
 from app.services.infrastructure.events.event_channel_service import (
     EventChannelService,
-)
-from app.services.infrastructure.resource_platform.adapters.file_monitor import (
-    SharedFileMonitor,
-    WorkspaceFileWatchPort,
 )
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservationChannel,
@@ -47,7 +43,6 @@ class ResourcePlatform:
     observation_channel: ResourceObservationChannel
     file_watch_service: WorkspaceFileWatchService
     file_registry: WorkspaceFileResourceRegistry
-    shared_file_monitor: SharedFileMonitor
     state_events: ResourceStateEventPublisher
 
     async def close(self) -> None:
@@ -93,8 +88,8 @@ def bootstrap_resource_platform(
     """按固定顺序装配进程级资源平台。
 
     登记顺序即关闭逆序：file registry 先停（停止消费），随后共享
-    watcher 服务，最后是共享监视协调器。Gateway/Workspace 配置域互不
-    接管：本装配只启动本进程配置域的文件快照能力，不读取对方配置。
+    watcher 服务。Gateway/Workspace 配置域互不接管：本装配只启动本进程
+    配置域的文件快照能力，不读取对方配置。
     """
     scope = LifetimeScope(process_scope_name)
     watch_service = WorkspaceFileWatchService(workspace_root=workspace_root)
@@ -112,14 +107,6 @@ def bootstrap_resource_platform(
         project_root=project_root,
         observation_channel=observation_channel,
     )
-    shared_file_monitor = SharedFileMonitor(
-        port=WorkspaceFileWatchPort(watch_service),
-        instance_id=f"{process_scope_name}:file-monitor",
-    )
-    scope.register(
-        shared_file_monitor.close,
-        label="shared-file-monitor",
-    )
     scope.register(
         watch_service.shutdown,
         label="workspace-file-watch-service",
@@ -133,7 +120,6 @@ def bootstrap_resource_platform(
         observation_channel=observation_channel,
         file_watch_service=watch_service,
         file_registry=file_registry,
-        shared_file_monitor=shared_file_monitor,
         state_events=state_events,
     )
 

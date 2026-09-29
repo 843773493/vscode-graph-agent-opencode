@@ -124,3 +124,91 @@ async def test_live_watcher_ignores_workspace_internal_state(
     finally:
         await stream.aclose()
         await service.shutdown()
+
+
+def _watch_queue() -> asyncio.Queue[WorkspaceFileChangeBatch]:
+    return asyncio.Queue(maxsize=FILE_WATCH_QUEUE_SIZE)
+
+
+@pytest.mark.asyncio
+async def test_same_root_subscribers_share_single_watcher_task(
+    tmp_path: Path,
+) -> None:
+    """同一 root 的多个订阅者必须共享同一条底层 watcher 任务。"""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = WorkspaceFileWatchService(workspace_root=workspace)
+    roots = service.resolve_watch_roots([])
+    queue_a = _watch_queue()
+    queue_b = _watch_queue()
+    try:
+        await service._acquire(roots, queue_a, include_internal_paths=False)
+        await service.wait_until_ready(roots)
+        task_a = service._watchers[roots[0]].task
+
+        await service._acquire(roots, queue_b, include_internal_paths=False)
+
+        assert len(service._watchers) == 1
+        assert service._watchers[roots[0]].task is task_a
+        assert len(service._watchers[roots[0]].subscribers) == 2
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_last_subscriber_release_stops_underlying_watcher(
+    tmp_path: Path,
+) -> None:
+    """非末位释放保留底层 watcher；末位释放才停止并移除它。"""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = WorkspaceFileWatchService(workspace_root=workspace)
+    roots = service.resolve_watch_roots([])
+    queue_a = _watch_queue()
+    queue_b = _watch_queue()
+    try:
+        await service._acquire(roots, queue_a, include_internal_paths=False)
+        await service.wait_until_ready(roots)
+        await service._acquire(roots, queue_b, include_internal_paths=False)
+        task_a = service._watchers[roots[0]].task
+
+        await service._release(roots, queue_b)
+        # 仍有订阅者：底层 watcher 必须存活。
+        assert len(service._watchers) == 1
+        assert task_a.done() is False
+
+        await service._release(roots, queue_a)
+        # 末位释放：底层 watcher 停止并移除。
+        assert service._watchers == {}
+        assert task_a.done() is True
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_different_roots_do_not_share_watcher(tmp_path: Path) -> None:
+    """不同 root 各持有独立 watcher 任务，不互相共享。"""
+    workspace = tmp_path / "workspace"
+    external = tmp_path / "external"
+    workspace.mkdir()
+    external.mkdir()
+    service = WorkspaceFileWatchService(workspace_root=workspace)
+    workspace_roots = service.resolve_watch_roots([])
+    external_roots = service.resolve_watch_roots([str(external)])
+    try:
+        await service._acquire(
+            workspace_roots, _watch_queue(), include_internal_paths=False
+        )
+        await service.wait_until_ready(workspace_roots)
+        await service._acquire(
+            external_roots, _watch_queue(), include_internal_paths=False
+        )
+        await service.wait_until_ready(external_roots)
+
+        assert len(service._watchers) == 2
+        assert (
+            service._watchers[workspace_roots[0]].task
+            is not service._watchers[external_roots[0]].task
+        )
+    finally:
+        await service.shutdown()

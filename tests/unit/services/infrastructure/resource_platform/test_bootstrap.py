@@ -13,7 +13,7 @@ from app.services.infrastructure.resource_platform.bootstrap import (
 )
 
 
-def test_bootstrap_assembles_platform_with_fixed_adapters(tmp_path) -> None:
+def test_bootstrap_assembles_platform_with_fixed_capabilities(tmp_path) -> None:
     """bootstrap 固定装配：scope、事件通道与 file 能力。"""
     platform = bootstrap_resource_platform(workspace_root=tmp_path)
     # 事件通道与 file registry 共用同一实例，不建第二套事件面。
@@ -22,13 +22,12 @@ def test_bootstrap_assembles_platform_with_fixed_adapters(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_bootstrap_scope_close_releases_in_reverse_order(tmp_path) -> None:
-    """进程根 scope 关闭时按登记逆序释放：registry -> watch -> monitor。"""
+    """进程根 scope 关闭时按登记逆序释放：registry -> watch。"""
     service = EventChannelService()
     platform = bootstrap_resource_platform(
         workspace_root=tmp_path,
         event_service=service,
     )
-    monitor = platform.shared_file_monitor
     watch_service = platform.file_watch_service
     registry = platform.file_registry
     subscription = service.channel(
@@ -37,7 +36,6 @@ async def test_bootstrap_scope_close_releases_in_reverse_order(tmp_path) -> None
     await platform.close()
     # 重复 close 幂等。
     await platform.process_root_scope.close()
-    assert monitor.closed
     assert watch_service._watchers == {}
     assert registry._task is None
     # 关闭后拒绝新登记。
@@ -90,4 +88,3 @@ async def test_bootstrap_close_event_failure_is_explicit(
     with pytest.raises(RuntimeError, match="event unavailable"):
         await platform.close()
     assert platform.process_root_scope.snapshot().state == "closed"
-
