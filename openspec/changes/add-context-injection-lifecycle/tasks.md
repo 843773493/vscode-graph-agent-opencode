@@ -129,6 +129,13 @@
 
 ## Verification ledger
 
+### 2026-09-29 全仓越限项登记（判据式，含二级子目录）
+
+判据沿用仓库既有门槛：目标目录 MUST 满足「直接源码文件 ≤20」「单文件 ≤800 行」「不与两个以上领域职责混合」，任一越界即 MUST 附拆分方案或含文件清单、职责/owner 映射、import graph、行数统计与复核结论的架构审查证据；本 change 归口 Agent 运行时/instruction-produced source 与派生 signal 面，session/catalog/storage 权威面归 add-itemized-rollout-context 7.5-F。豁免：生成目录（app/protocol/generated/**、src/**/*protocol*_generated/**）由上层 generated/AGENTS.md 声明不可手改，不计越限。
+
+- 实测快照（提交 69cc08fb）：本 change 归口的单文件 >800 行：app/agents/agent_factory.py=995、app/agents/providers/litellm_chat.py=1007、app/agents/providers/openai_responses.py=820、app/agents/tools/debugging.py=1233、app/agents/cache_preserving_summarization.py=1335、app/services/orchestration/event_stream/processor.py=819、app/services/infrastructure/node_debug/service.py=920、app/services/business/session_service.py=815。这些模块承载 sealed-assembly dispatch 装配、Provider 投影、debug 工具组、压缩/派生 signal、事件通道与 Session 业务边界，须在实施期拆分（agent_factory/providers 已在 7.5-F A9/A11 审计范围，本 change 3.x/7.x 消费其投影）。
+- 本 change 归口的目录直接 .py >20：app/agents=34（建议拆 middleware/、skills/、graph/）、app/abstractions=23（typed port/纯值对象面，本 change 在 app/abstractions/ 建立 typed port，见 3.9）。
+
 ### 2026-09-28 1.5/3.11/4.8/5.5 完成度复核（部分达标，按缺口保留未勾选）
 
 - 基线：`git rev-parse HEAD` = `14fbf4df57a9c98995425b879c1be0007689e0b3`。
