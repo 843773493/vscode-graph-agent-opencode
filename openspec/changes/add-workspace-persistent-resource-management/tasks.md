@@ -36,3 +36,12 @@
 - [ ] 6.1 落成规范层禁止项：工作区持久记录、API 响应体与模型可见载荷只承载 `资源身份 / ResourceIdentity` + `虚拟资源地址 / VRN`（必要时并列 revision 字段），MUST NOT 承载 `真实路径 / real path`；检出即 fail-closed。`作用域 / scope` 闭集、`scope_id` 取值语义、VRN 语法、kind 闭集与 `拒绝码 / rejection code` 一律具名引用 `add-unified-virtual-resource-addressing`，本 change MUST NOT 复述或自造。
 - [x] 6.2 消除已确证的 real path 持久化：终端记录去掉真实绝对 `cwd` 与顶层 `workspace_root`；终端工作目录作为 owner 自身运行态字段按规范化边界改存工作区内相对目录（`cwd_relative`）并在 PTY 启动调用栈内由工作区根重推导（`terminalSession.js`、`terminalManager.js`），不为此自造 VRN kind；并对既有旧格式记录做有界、可恢复的一次性迁移（load 时推导相对路径并物理写回，推导失败 fail-closed）。浏览器记录去掉 checkpoint 真实文件路径（`browserSession.js`、`browserStateStore.js`）与下载真实文件路径（`browserStateStore.js`），位置可由 owner 身份确定性推导者 MUST NOT 落盘（裁定 D-A2），产物路径改由 `(browser_id, download_id, filename)` 在调用栈内重推导。除 owner 自身运行态字段外，「凡记录需要表达资源所在位置，该位置 MUST 以 VRN 表达」的义务不削弱。
 - [x] 6.3 消除 real path 上浮：`session_resource_mapper.py` 的 `cwd`/`checkpoint` metadata 分别收窄为不含路径的 `cwd_relative` 与显式布尔 `checkpoint_available`；`app/agents/tools/terminal.py` 的 `exec_command` 工具结果与 `/api/terminals` 快照的 `cwd` 改为工作区内相对表达 `cwd_relative`，不得出现绝对路径；截图 `image_path` 改为 `screenshot_id` + `screenshot_url`（既有浏览器管理器只读端点，裁定 D-A3），且该端点对 id 不存在、browser 不存在、文件缺失返回稳定结构化错误、不回吐真实路径；新增负向断言「持久记录、API 响应体与模型可见载荷不含 real path」。
+
+### 6.4 越限项登记（判据式，含二级子目录）
+
+判据沿用仓库既有门槛：目标目录 MUST 满足「直接源码文件 ≤20」「单文件 ≤800 行」「不与两个以上领域职责混合」，任一越界即 MUST 附拆分方案或含文件清单、职责/owner 映射、import graph、行数统计与复核结论的架构审查证据。豁免：生成目录（`src/workspace-services/protocol/generated/**`）由上层 `generated/AGENTS.md` 声明不可手改，不计越限。
+
+- 实测快照（提交 `7fe347dc`）：**本 change 归口的单文件 >800 行**：`src/workspace-services/browser/server/browserSession.js=2515`、`src/workspace-services/browser/client/main.js=1814`、`src/workspace-services/browser/server/backend.js=928`（本 change 6.2 已具名 `browserSession.js`/`browserStateStore.js` 并落地其 real path 收紧，三者均须在实施期按浏览器会话生命周期 / 客户端事件与传输装配 / server 协议与生命周期编排职责拆分）。
+- **本 change 归口的目录直接 `.js` >20**：`src/workspace-services/browser/server=23`（browser session 生命周期、frame/flow、input、device profile、resource governor 与各自 `*.test.js` 混居，本 change 的 browser 持久资源 owner 落点即在此目录，须按 session / runtime / resources / 测试下沉使直接源码文件数回到 ≤20）。同一范围内 `src/workspace-services/terminal/server=12`、`src/workspace-services/browser/client=11` 等其余目录均未越限。
+
+- 上述登记只补录越限事实与归口，**本 change 不拆这些文件**；拆分与相应架构审查证据属后续独立实施。
