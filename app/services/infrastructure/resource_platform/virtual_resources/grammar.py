@@ -14,9 +14,9 @@ from dataclasses import dataclass
 from typing import Final
 
 _SCHEME: Final = "boxteam://"
-_SCOPE_KEYWORDS: Final = frozenset({"workspace", "gateway", "builtin"})
+_SCOPE_KEYWORDS: Final = frozenset({"workspace", "gateway", "inline"})
 _RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills"})
-_SKILL_SCOPES: Final = frozenset({"workspace", "gateway", "builtin"})
+_SKILL_SCOPES: Final = frozenset({"workspace", "gateway", "inline"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
 
 _GRAMMAR_REASON_CODES: Final = frozenset(
@@ -56,7 +56,7 @@ class VrnGrammarError(ValueError):
 class ParsedVrn:
     """一次严格解析后的逻辑地址；不含任何 locator/credential 语义。
 
-    `scope_id` 对 workspace/gateway/builtin 是对应 identity；`logical_name` 对
+    `scope_id` 对 workspace/gateway/inline 是对应 identity；`logical_name` 对
     skills 是 skill name，对 agent-spec 是固定 `root/AGENTS.md`。
     """
 
@@ -204,7 +204,7 @@ def workspace_agent_spec_display_uri(workspace_id: str) -> str:
 
 
 def skill_display_uri(*, scope: str, scope_id: str, skill_name: str) -> str:
-    """构造并校验 workspace/Gateway/builtin Skill 规范 display URI。"""
+    """构造并校验 workspace/Gateway/inline Skill 规范 display URI。"""
     if scope not in _SKILL_SCOPES:
         raise VrnGrammarError("unknown_scope", f"Skill VRN scope 未登记: {scope!r}")
     _validate_dynamic_segment(scope_id, field="scope id")

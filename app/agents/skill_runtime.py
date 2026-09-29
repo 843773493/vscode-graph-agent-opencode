@@ -20,6 +20,7 @@ from langchain_core.messages import HumanMessage
 
 from app.agents.middleware_prompts import SKILLS_SYSTEM_PROMPT
 from app.agents.skill_frontmatter import parse_skill_frontmatter
+from app.core.distribution_identity import load_distribution_id
 from app.core.env import get_project_root
 from app.core.path_utils import get_boxteam_home, get_workspace_root
 from app.core.workspace_identity import load_or_create_workspace_id
@@ -38,7 +39,13 @@ from app.services.infrastructure.resource_platform.sources.workspace_file_resour
     WorkspaceFileResourceRegistry,
 )
 from app.services.infrastructure.resource_platform.virtual_resources import (
+    ResolutionContext,
+    parse_vrn,
     skill_display_uri,
+    workspace_agent_spec_display_uri,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    require_scope_binding,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDelta,
@@ -49,8 +56,14 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 
 WORKSPACE_AGENTS_FILE = "AGENTS.md"
-WORKSPACE_AGENTS_URI = "boxteam://workspace/agents"
 WORKSPACE_AGENTS_SOURCE_ID = "agents:workspace"
+
+
+def workspace_agents_uri(workspace_id: str) -> str:
+    """工作区 AGENTS.md 的规范 VRN（agent-spec kind）。"""
+    return workspace_agent_spec_display_uri(workspace_id)
+
+
 BUNDLED_SKILL_GROUP_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
 
 # 唯一 CSM 消费链只接受已知来源语义的 delta；未知 kind 直接失败，
@@ -221,8 +234,11 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         """
         if self._source_registry is None:
             return
+        agents_uri = workspace_agents_uri(
+            load_or_create_workspace_id(self._source_registry.workspace_root)
+        )
         self._source_registry.register_file(
-            uri=WORKSPACE_AGENTS_URI,
+            uri=agents_uri,
             path=self._source_registry.workspace_root / WORKSPACE_AGENTS_FILE,
         )
         self._context_source_manager.register(
@@ -231,8 +247,8 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
                 source_kind="workspace_agents",
                 name="AGENTS.md",
                 description="当前工作区根目录 AGENTS.md 指令来源",
-                internal_locator=WORKSPACE_AGENTS_URI,
-                resource_uri=WORKSPACE_AGENTS_URI,
+                internal_locator=agents_uri,
+                resource_uri=agents_uri,
             ),
             tracking_status="tracked",
         )
@@ -424,7 +440,7 @@ class PublishedSkillCatalog:
         return self.source_paths.get(name)
 
 
-_SKILL_LAYER_LABELS = {"workspace": "Workspace", "gateway": "Gateway", "bundled": "Built-in"}
+_SKILL_LAYER_LABELS = {"workspace": "Workspace", "gateway": "Gateway", "inline": "Built-in"}
 
 
 def _scan_layer_skill_files(
@@ -485,6 +501,50 @@ def _publish_skill_facet(
     return registry.publish(snapshot)
 
 
+def _layer_scope_identity(
+    layer: str, *, workspace_id: str
+) -> tuple[str, ResolutionContext | None]:
+    """按真实身份推导 layer（= VRN scope）的 scope_id 与可校验的 principal。
+
+    ``workspace``/``inline`` 的稳定身份在本进程内真实可用，返回可用于
+    ``require_scope_binding`` 的 ResolutionContext。
+
+    TODO: ``gateway`` scope 的 scope_id 必须是真实 gateway_id，其权威来源是
+    Gateway 按请求注入的 ``X-BoxTeam-Gateway-Id``；skill_runtime 的调用点拿不到
+    请求上下文，强行引入请求级注入需连锁改造全部 router，属后续切片。此处在真实
+    gateway_id 接入前沿用既有字面量，不伪造 principal（返回 None 跳过绑定校验），
+    绝不代表已真正显式化，跨 gateway 寻址在接入前不成立。
+    """
+    if layer == "workspace":
+        return workspace_id, ResolutionContext(workspace_id=workspace_id)
+    if layer == "inline":
+        distribution_id = load_distribution_id()
+        return distribution_id, ResolutionContext(
+            workspace_id=workspace_id, distribution_id=distribution_id
+        )
+    return "local", None
+
+
+def _layer_skill_display_uri(
+    *,
+    scope: str,
+    scope_id: str,
+    skill_name: str,
+    context: ResolutionContext | None,
+) -> str:
+    """构造 display URI 并走真实 parse_vrn（拒绝裸拼接）。
+
+    仅当该 scope 的 principal 真实可用时，才进一步做 scope 绑定校验；principal
+    不可用时必须由调用方显式跳过，MUST NOT 伪造绑定值通过校验。
+    """
+    parsed = parse_vrn(
+        skill_display_uri(scope=scope, scope_id=scope_id, skill_name=skill_name)
+    )
+    if context is not None:
+        require_scope_binding(parsed.scope, parsed.scope_id, context)
+    return parsed.display_uri
+
+
 def build_workspace_skill_catalog(
     workspace_root: Path | None = None,
     *,
@@ -494,31 +554,31 @@ def build_workspace_skill_catalog(
 ) -> PublishedSkillCatalog:
     """构建三层权威 SkillCatalog 并向 ResourceRegistry 发布 immutable revision。
 
-    按 workspace > gateway-global > bundled 解析唯一 entry;同名高优先级
+    按 workspace > gateway-global > inline 解析唯一 entry;同名高优先级
     层覆盖低优先级层,origin provenance 保留在 entry identity 中。
     """
     resolved_workspace_root = workspace_root or get_workspace_root()
     resolved_groups = resolve_bundled_skill_groups(bundled_skill_groups)
     workspace_id = load_or_create_workspace_id(resolved_workspace_root)
-    layer_order: tuple[str, ...] = ("bundled", "gateway", "workspace")
+    layer_order: tuple[str, ...] = ("inline", "gateway", "workspace")
     display_uri_by_layer: dict[str, dict[str, str]] = {}
     scanned: dict[str, dict[str, tuple[Path, str, object]]] = {}
     for layer in layer_order:
-        if layer == "bundled":
+        if layer == "inline":
             if not resolved_groups:
                 scanned[layer] = {}
                 continue
-            bundled_root = (project_root or get_project_root()) / "resources" / "skills"
-            if not bundled_root.is_dir():
-                raise FileNotFoundError(f"发行包内置 Skill 根目录不存在: {bundled_root}")
+            inline_root = (project_root or get_project_root()) / "resources" / "skills"
+            if not inline_root.is_dir():
+                raise FileNotFoundError(f"发行包内置 Skill 根目录不存在: {inline_root}")
             for group in resolved_groups:
-                skill_root = bundled_root / group
+                skill_root = inline_root / group
                 if not skill_root.is_dir():
                     raise FileNotFoundError(f"发行包内置 Skill 组目录不存在: {skill_root}")
                 if not (skill_root / "SKILL.md").is_file():
                     raise FileNotFoundError(f"发行包内置 Skill 组缺少 SKILL.md: {skill_root}")
-            layer_files = _scan_layer_skill_files(layer=layer, root=bundled_root)
-            # bundled 只发布 manifest(resolved groups)声明的 entry;组外
+            layer_files = _scan_layer_skill_files(layer=layer, root=inline_root)
+            # inline 层只发布 manifest(resolved groups)声明的 entry;组外
             # 目录不是发行包已发布资源。
             layer_files = {
                 name: item for name, item in layer_files.items()
@@ -535,10 +595,18 @@ def build_workspace_skill_catalog(
                 raise RuntimeError(f"工作区 skill 路径不是目录: {workspace_skills_root}")
             layer_files = _scan_layer_skill_files(layer=layer, root=workspace_skills_root)
         scanned[layer] = layer_files
-        scope = {"workspace": "workspace", "gateway": "gateway", "bundled": "builtin"}[layer]
-        scope_id = workspace_id if layer == "workspace" else "local"
+        # layer 名与 VRN scope 名自此逐字一致（inline/gateway/workspace）；
+        # 恒等映射直接使用 layer 名，不再保留改名 shim。
+        scope_id, context = _layer_scope_identity(
+            layer, workspace_id=workspace_id
+        )
         display_uri_by_layer[layer] = {
-            name: skill_display_uri(scope=scope, scope_id=scope_id, skill_name=name)
+            name: _layer_skill_display_uri(
+                scope=layer,
+                scope_id=scope_id,
+                skill_name=name,
+                context=context,
+            )
             for name in layer_files
         }
 
@@ -616,6 +684,8 @@ def build_workspace_skill_catalog(
         registry,
         layer="workspace",
         name="catalog",
+        # catalog facet 不是 skill 资源条目，其 display URI 只作内部标识，
+        # 不参与 VRN 寻址；保留既有形态以避免改动内部 registry key。
         display_uri=f"boxteam://workspace/{workspace_id}/resources/skills/catalog",
         facet="catalog",
         payload={"entries": catalog_payload_entries},

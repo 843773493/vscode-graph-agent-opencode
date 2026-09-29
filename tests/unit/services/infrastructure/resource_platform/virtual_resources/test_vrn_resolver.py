@@ -115,7 +115,7 @@ def test_grammar_and_scope_reject_before_catalog_access() -> None:
 
 def test_scope_mismatch_per_scope() -> None:
     gateway_uri = skill_display_uri(scope="gateway", scope_id="gw-1", skill_name="code-review")
-    builtin_uri = skill_display_uri(scope="builtin", scope_id="dist-1", skill_name="code-review")
+    inline_uri = skill_display_uri(scope="inline", scope_id="dist-1", skill_name="code-review")
     resolver = VirtualResourceResolver(
         _catalog(
             {
@@ -124,8 +124,8 @@ def test_scope_mismatch_per_scope() -> None:
                     capabilities=_CAPS,
                     snapshot_ref="cas:1",
                 ),
-                builtin_uri: CatalogBinding(
-                    descriptor=_descriptor("res-b-1", builtin_uri),
+                inline_uri: CatalogBinding(
+                    descriptor=_descriptor("res-b-1", inline_uri),
                     capabilities=_CAPS,
                     snapshot_ref="cas:2",
                 ),
@@ -140,7 +140,7 @@ def test_scope_mismatch_per_scope() -> None:
     assert excinfo.value.reason_code == "scope_mismatch"
     with pytest.raises(VrnResolveError) as excinfo:
         resolver.resolve(
-            builtin_uri,
+            inline_uri,
             operation=OPERATION_READ_CONTENT,
             context=ResolutionContext(
                 workspace_id="ws-1", gateway_id="gw-1", distribution_id="dist-OTHER"

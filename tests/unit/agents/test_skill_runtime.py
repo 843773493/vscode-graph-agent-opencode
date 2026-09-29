@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -9,10 +10,10 @@ from pydantic import ValidationError
 from app.agents.custom_tools import CustomToolFactoryContext
 from app.agents.policy.custom_tool_spec import parse_custom_tool_spec
 from app.agents.skill_runtime import (
-    WORKSPACE_AGENTS_URI,
     WorkspaceSkillsMiddleware,
     build_workspace_skill_catalog,
     resolve_bundled_skill_groups,
+    workspace_agents_uri,
 )
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import ToolInvocationContext
@@ -23,6 +24,7 @@ from app.agents.tools.custom_invocation import (
 from app.agents.tools.testing import create_test_tool_2
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.lifecycle import LifetimeScope
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
 )
@@ -58,6 +60,22 @@ def _custom_tool_context(tmp_path) -> CustomToolFactoryContext:
         browser_manager_client=MagicMock(),
         invocation_context=ToolInvocationContext(),
     )
+
+
+def _write_runtime_manifest(root: Path) -> Path:
+    manifest = root / "runtime-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "distribution": "source-development",
+                "version": "0.0.2",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return manifest
 
 
 def test_build_workspace_skill_catalog_empty_layers_publishes_empty_revision(
@@ -191,8 +209,11 @@ def test_gateway_layer_build_writes_nothing_into_workspace_storage(
     assert not (tmp_path / ".boxteam" / "sessions").exists()
 
 
-def test_build_workspace_skill_catalog_uses_bundled_manifest(tmp_path, monkeypatch):
+def test_build_workspace_skill_catalog_uses_inline_manifest(tmp_path, monkeypatch):
     monkeypatch.setenv("BOXTEAM_DEFAULT_SKILL_GROUPS", '["gateway-context"]')
+    monkeypatch.setenv(
+        "BOXTEAM_RUNTIME_MANIFEST", str(_write_runtime_manifest(tmp_path))
+    )
 
     assert resolve_bundled_skill_groups() == ("gateway-context",)
     catalog = build_workspace_skill_catalog(
@@ -201,11 +222,30 @@ def test_build_workspace_skill_catalog_uses_bundled_manifest(tmp_path, monkeypat
         project_root=Path.cwd(),
     )
     assert [entry.name for entry in catalog.entries] == ["gateway-context"]
-    bundled_entry = catalog.entries[0]
-    assert bundled_entry.layer == "bundled"
-    assert bundled_entry.display_uri.startswith("boxteam://builtin/")
-    activation = catalog.source_path(bundled_entry.name)
+    inline_entry = catalog.entries[0]
+    assert inline_entry.layer == "inline"
+    # scope_id 由 manifest 的 distribution + version 真实推导（非硬编码 local）。
+    assert inline_entry.display_uri == (
+        "boxteam://inline/source-development-0_0_2/resources/skills/"
+        "gateway-context/SKILL.md"
+    )
+    activation = catalog.source_path(inline_entry.name)
     assert activation is not None and activation.is_file()
+
+
+def test_build_workspace_skill_catalog_fails_closed_without_manifest(
+    tmp_path, monkeypatch
+):
+    # 缺失 runtime manifest 时 MUST fail-closed，绝不回退 local 虚假默认值。
+    monkeypatch.setenv("BOXTEAM_DEFAULT_SKILL_GROUPS", '["gateway-context"]')
+    monkeypatch.delenv("BOXTEAM_RUNTIME_MANIFEST", raising=False)
+
+    with pytest.raises(RuntimeError, match="BOXTEAM_RUNTIME_MANIFEST"):
+        build_workspace_skill_catalog(
+            tmp_path,
+            registry=ResourceRegistry(),
+            project_root=Path.cwd(),
+        )
 
 
 def test_build_workspace_skill_catalog_rejects_symlink_entry(tmp_path, monkeypatch):
@@ -603,7 +643,7 @@ def test_workspace_agents_change_is_typed_observation_not_direct_injection(
     assert middleware.before_model({}, MagicMock()) is not None
 
     agents_path.write_text("# 指令\n\n使用新规则。\n", encoding="utf-8")
-    registry.refresh(WORKSPACE_AGENTS_URI)
+    registry.refresh(workspace_agents_uri(load_or_create_workspace_id(tmp_path)))
 
     # 来源变化只形成 typed observation；正文经权威内存快照进入 CSM pending。
     observations = list(reactor.drain())
@@ -678,7 +718,7 @@ def test_workspace_agents_source_late_appearance_still_uses_csm_chain(
     assert middleware.before_model({}, MagicMock()) is None
 
     (tmp_path / "AGENTS.md").write_text("# 迟到指令\n", encoding="utf-8")
-    registry.refresh(WORKSPACE_AGENTS_URI)
+    registry.refresh(workspace_agents_uri(load_or_create_workspace_id(tmp_path)))
     update = middleware.before_model({}, MagicMock())
     assert update is not None
     message = update["messages"][0]

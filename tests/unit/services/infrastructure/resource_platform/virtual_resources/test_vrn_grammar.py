@@ -24,7 +24,7 @@ def test_parse_skill_three_scopes() -> None:
     for scope, scope_id in (
         ("workspace", "ws-1"),
         ("gateway", "gw-1"),
-        ("builtin", "dist-1"),
+        ("inline", "dist-1"),
     ):
         parsed = parse_vrn(
             f"boxteam://{scope}/{scope_id}/resources/skills/code-review/SKILL.md"

@@ -129,6 +129,23 @@ class TrackedResourceBinding:
         )
 
 
+def require_scope_binding(
+    scope: str, scope_id: str, context: ResolutionContext
+) -> None:
+    """校验 VRN scope 与该 principal 绑定一致；不一致显式结构化拒绝。"""
+    bound = {
+        "workspace": context.workspace_id,
+        "gateway": context.gateway_id,
+        "inline": context.distribution_id,
+    }.get(scope)
+    if bound != scope_id:
+        raise VrnResolveError(
+            "scope_mismatch",
+            f"VRN scope 与 principal 绑定不一致: scope={scope!r} "
+            f"uri_id={scope_id!r} bound={bound!r}",
+        )
+
+
 class VirtualResourceResolver:
     """按 grammar → scope → catalog → operation → capability 顺序拒绝的纯门卫。"""
 
@@ -199,14 +216,4 @@ class VirtualResourceResolver:
     def _check_scope(
         scope: str, scope_id: str, context: ResolutionContext
     ) -> None:
-        bound = {
-            "workspace": context.workspace_id,
-            "gateway": context.gateway_id,
-            "builtin": context.distribution_id,
-        }.get(scope)
-        if bound != scope_id:
-            raise VrnResolveError(
-                "scope_mismatch",
-                f"VRN scope 与 principal 绑定不一致: scope={scope!r} "
-                f"uri_id={scope_id!r} bound={bound!r}",
-            )
+        require_scope_binding(scope, scope_id, context)
