@@ -12,7 +12,7 @@ import pytest
 
 from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.prefix_epoch import (
+from app.domain.itemized.epoch.prefix_epoch import (
     PENDING_TRANSITION_REASONS,
     REBUILD_EPOCH_REASONS,
     AppendedItemRef,

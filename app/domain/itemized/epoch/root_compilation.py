@@ -26,7 +26,7 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
     validate_hash_token,
 )
-from app.domain.itemized.prefix_epoch import (
+from app.domain.itemized.epoch.prefix_epoch import (
     REBUILD_EPOCH_REASONS,
     EpochReason,
     PrefixEpoch,

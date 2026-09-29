@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.domain.itemized.hashing import sha256_jcs, validate_hash_token
-from app.domain.itemized.root_compilation import RootPlacement
+from app.domain.itemized.epoch.root_compilation import RootPlacement
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )

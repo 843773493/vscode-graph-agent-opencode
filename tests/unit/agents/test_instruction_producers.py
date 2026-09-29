@@ -206,10 +206,10 @@ def test_all_declared_instruction_producers_are_registerable(
 def test_root_placement_is_single_domain_definition() -> None:
     """root 资格类型唯一定义在 domain 层 root_compilation;agents 层只复用。"""
     from app.agents.instruction_producers import RootPlacement
-    from app.domain.itemized.root_compilation import (
+    from app.domain.itemized.epoch.root_compilation import (
         RootPlacement as _DomainRootPlacement,
     )
-    from app.domain.itemized.root_compilation import resolve_source_wire_role
+    from app.domain.itemized.epoch.root_compilation import resolve_source_wire_role
 
     assert RootPlacement == _DomainRootPlacement
     # tail_only 指引(如 MCP 工具指引)永远只能投影为独立 user-role item。

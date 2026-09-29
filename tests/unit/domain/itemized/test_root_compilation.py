@@ -10,7 +10,7 @@ import pytest
 
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import contribution_content_hash
-from app.domain.itemized.prefix_epoch import (
+from app.domain.itemized.epoch.prefix_epoch import (
     EpochReason,
     PendingPrefixEpochTransition,
     PrefixEpoch,
@@ -18,7 +18,7 @@ from app.domain.itemized.prefix_epoch import (
     initial_epoch_state,
     open_rebuild_epoch,
 )
-from app.domain.itemized.root_compilation import (
+from app.domain.itemized.epoch.root_compilation import (
     RootCandidateSource,
     RootCompileBoundaryError,
     RootCompileConflictError,

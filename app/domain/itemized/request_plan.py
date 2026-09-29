@@ -24,7 +24,7 @@ from app.domain.itemized.identity.refs import (
     selection_ref_identity,
     unique_ref_identities,
 )
-from app.domain.itemized.root_compilation import RootPlacement
+from app.domain.itemized.epoch.root_compilation import RootPlacement
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serialization import (
     _non_empty_string,

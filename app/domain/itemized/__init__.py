@@ -24,7 +24,7 @@ from app.domain.itemized.hashing import (
     validate_hash_token,
 )
 from app.domain.itemized.parts import ContentPart, ContentPartAnchor
-from app.domain.itemized.prefix_epoch import (
+from app.domain.itemized.epoch.prefix_epoch import (
     PENDING_TRANSITION_REASONS,
     REBUILD_EPOCH_REASONS,
     AppendedItemRef,
@@ -64,7 +64,7 @@ from app.domain.itemized.identity.refs import (
     unique_ref_identities,
 )
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
-from app.domain.itemized.root_compilation import (
+from app.domain.itemized.epoch.root_compilation import (
     CompiledRootItem,
     CompiledRootSourceProvenance,
     IncludedReason,
