@@ -131,6 +131,44 @@
 **理由**：VRN/ResourceIdentity 是「不可解析身份」，本 change 改的是「生成位 profile」；两者不可混为一谈，必须显式声明以避免制造第二套定义。
 
 **待 owner 处理的收口项（本 change 不代改）**：`add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md`（写死 `payload` 第 13 个 hex MUST 为 `4`、拒绝「非 v4 bit profile」）、`specs/rollout-checkpoint-storage/spec.md`（同款 v4 断言）与 `add-context-injection-lifecycle` 的 `specs/context-injection-lifecycle/spec.md`、`tasks.md`（同款 `4` 与「非 v4 bit profile」文本）与本 change 冲突，MUST 由其 owner 收口为 v7（列为待处理项，见「待确认问题」）。
+**待 owner 处理的收口项（本 change 不代改）**：四处在途文本仍写死 v4，需由各自 owner 收口为本 change 的 v7 定义，具名清单与 owner 声明见 D11。
+
+### D9：哈希/幂等键审计是迁移的阻断前置（owner 裁定）
+
+**决定**：`content_hash` / `plan_hash` / `request_hash` / itemized plan-hash / 幂等键 / 去重键的输入审计 MUST 作为**阻断性任务**排在迁移任务之前；审计结论未落定前迁移 MUST NOT 开工。任何以 id 为输入的哈希/幂等键 MUST 给出明确处置（随迁移一致重算，或该 id 不参与迁移）。
+
+**已实测的现状证据（缩小审计范围，不作为结论）**：
+
+- `app/domain/itemized/hashing.py`：`content_hash(payload_kind, payload)` 输入为 `{payload_kind, payload}`；`contribution_content_hash(contribution_kind, body)` 输入为 `{contribution_kind, body}`。二者**只吃 payload 内容**，不含 session/thread id。
+- `app/domain/itemized/hash/plan_hash.py` 的 `context_plan_hash`：hash 投影**显式包含** `session_id`、`plan_id`、`ref_id`、`contribution_id`，故**以 canonical id 为输入**，重编号会使 plan hash 漂移。
+- `app/domain/itemized/hash/request_hash.py` 的 `context_request_hash`：包含 `plan_hash()` 与 refs 的 `ref_id`，间接含 id。
+- `app/core/session_creation.py` 的 `compute_session_creation_preimage_hash`：四元组为 `{workspace_id, parent_node_id, title, session_metadata}`，**不含 session_id**（session_id 是分配结果，不进 preimage）。
+- `app/core/thread_creation.py` 的 `compute_thread_creation_preimage_hash`：含 `session_id`、`thread_id`（thread_id 为非 None 时），故**以 canonical id 为输入**。
+
+因此审计 MUST 覆盖的已知命中面至少包含：`context_plan_hash` / `context_request_hash` / `compute_thread_creation_preimage_hash`，以及全仓 `idempotency_key` 生成点（如 `app/services/infrastructure/rollout_context/storage/transaction.py` 的 `default_*`、`assembly/sealing.py`、`execution/recovery.py`、`reasoning_checkpoint_service.py` 的 `acceptance_*`）。
+
+**为什么裁定为阻断而非「先迁后补」**：迁移后哈希漂移若无人负责，会让 assembly/plan 校验假 mismatch 或静默重算，直接破坏「零回归」与「绝不默默失败」。
+
+### D10：gateway 控制面库逐表分类，失效必须显式报告（owner 裁定）
+
+**决定**：不预先决定控制面是否失效，而是要求**逐表分类**，三类处置语义写死在规范里：`migrate` / `explicitly_invalidated`（MUST 用户可见显式报告）/ `not_affected`（MUST 判定依据）。`user_access_lease` MUST NOT 归入 `explicitly_invalidated`（除非实测证明是「可安全丢弃的租约」），因为租约承担并发互斥，静默丢弃会造成双访问。
+
+**已实测的控制面候选面**：`app/gateway/control/gateway_state.py` 中 `user_view_state` 以 `(user_id, workspace_id, session_id)` 为 `PRIMARY KEY`、`user_access_lease.access_session_id TEXT NOT NULL UNIQUE`。二者承载 session 身份，MUST 进入逐表分类。
+
+**为什么**：对齐「绝不默默失败」/「永不返回虚假的默认值」；租约的安全前提必须由实测支撑。
+
+### D11：在途 change 的 v4 文本收口——本 change 只点名与声明 owner
+
+**决定**：本 change MUST NOT 复制或代改那些文本，只在本节点名四处「仍含 v4 表述、需由各自 owner 收口」的位置，并声明：本 change 是 id 生成位 profile 唯一 owner，上述文本兑现时 MUST 引用本 change，MUST NOT 复述取值。
+
+四处（文件 + capability）：
+
+1. `openspec/changes/add-itemized-rollout-context/specs/itemized-rollout-context/spec.md`，capability `itemized-rollout-context`，requirement「产品 Session、durable Thread 与 LangGraph namespace 必须严格分层」（写死「payload 由 UUIDv4 生成，其第 13 个 hex MUST 为 `4`」「拒绝…非 v4 bit profile」）。
+2. `openspec/changes/add-itemized-rollout-context/specs/rollout-checkpoint-storage/spec.md`，capability `rollout-checkpoint-storage`，requirement「rollout storage 必须以 SessionThread 为物理与事务 owner」（写死「payload 第 13 个 hex=`4`…的 UUIDv4 bit profile」「非 v4 bits」）。
+3. `openspec/changes/add-context-injection-lifecycle/specs/context-injection-lifecycle/spec.md`，capability `context-injection-lifecycle`，requirements「Context lifecycle owner 必须精确为 SessionThread」与「生命周期场景必须进入统一 Web E2E 验收模块」（写死「payload 第 13 个 hex 为 `4`」「非 UUIDv4 bit profile」「随机 UUIDv4 factory」）。
+4. `openspec/changes/add-context-injection-lifecycle/tasks.md`，任务 2.1（写死「payload 第 13 个 hex=`4`」「非 v4 bits」）。
+
+**为什么**：避免第二套定义或重复文本漂移；由 owner 收口可保持单一事实源。
 
 ## 风险与权衡
 
@@ -148,9 +186,9 @@
 4. **收敛**：迁移完成后把校验器收紧为只接受 v7；删除任何过渡读取路径；确认无 v4 生成点残留（除 D7 豁免的非 canonical id）。
 5. **验证**：`openspec validate --strict --all`、工厂/校验器单测、迁移中断恢复测试、分桶一致性负向测试。
 
+**阻断顺序（D9/D10 的落点）**：步骤 3 之前 MUST 先完成 D9 的哈希/幂等键阻断审计并落定处置，以及 D10 的控制面逐表分类；审计未落定前步骤 3 MUST NOT 开工。
+
 ## 待确认问题
 
-1. **content_hash / 幂等键是否以 id 为输入**：缺哪条信息才能定——需要审计 `app/domain/itemized/hashing.py`、`assembly_snapshot.py` 与各 `*_idempotency_key` 生成点，确认重编号是否改变任何已持久化 hash/幂等键；若改变，需决定是否随迁移一起重算。
-2. **存量迁移是否需要覆盖 gateway 控制面库**：`app/gateway/control/gateway_state.py` 的 `user_view_state` 以 `(user_id, workspace_id, session_id)` 为键、`user_access_lease.access_session_id` 单独存 id。缺哪条信息才能定——需要确认这些控制面记录是否必须与工作区 id 同批重编号，还是可显式失效重建（依赖 owner 对「控制面数据是否权威」的裁定）。
-3. **在途 change 的 v4 文本收口 owner 与时机**：缺哪条信息才能定——需要 `add-itemized-rollout-context` / `add-context-injection-lifecycle` 的 owner 确认是由其在归档前收口，还是等本 change 落地后统一同步；本 change 不代改。
-
+1. **审计任务的具体命中清单**：D9 已给出已实测部分（`context_plan_hash` / `context_request_hash` / `compute_thread_creation_preimage_hash` 命中；`content_hash` / `contribution_content_hash` / session_creation preimage 未命中），但全量 idempotency-key / 去重键清点与负向证据仍需在实施期落成；缺「审计执行结果」才能定最终处置清单。
+2. **控制面各表的最终分类**：D10 已定分类语义与 `user_access_lease` 的默认归 `migrate`，但每张表的实际归类（`migrate` / `explicitly_invalidated` / `not_affected`）需实测判定；缺「逐表实测结论」才能定。

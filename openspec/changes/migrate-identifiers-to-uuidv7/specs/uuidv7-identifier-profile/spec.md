@@ -126,3 +126,62 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 - **WHEN** 某处需要引用资源寻址或资源身份
 - **THEN** 它 MUST 具名引用 `add-unified-virtual-resource-addressing` / `migrate-session-context-uri-to-vrn` 等 owner，MUST NOT 借本 capability 的 id profile 条款表达寻址语义
 
+### Requirement: canonical 与豁免身份的边界必须显式且豁免不得扩张
+
+系统 MUST 显式枚举哪些 id 属于 **canonical 身份（受 UUIDv7 位 profile 约束）**、哪些属于**明确豁免（允许继续 UUIDv4）**，MUST NOT 只把该区分留在设计散文中。
+
+- **canonical 身份（MUST 满足 v7 位 profile）**：由唯一 id 工厂产出的 `session_id`（`ses_`）、`thread_id`（`thr_`），以及任何进入 canonical 校验器命名空间、被持久化为目录叶名 / SQLite 主键 / typed ref owner key 的 id。
+- **明确豁免（MAY 继续 UUIDv4，且 MUST 标注为非 canonical）**：`src/workspace-services/browser/server/` 与 `src/workspace-services/terminal/server/` 在 **Node** 运行时（`BOXTEAM_NODE_BIN`）生成的 `term_` / `browser_` / `screenshot_` / `download_` / `page_` / `preset_` 等本地 id；`src/clients/web` 在**浏览器**（无 `Bun.*`）生成的 `inline:` 附件 file id。
+
+豁免理由 MUST 是可验证的事实：Node 22 无 `crypto.randomUUIDv7`，浏览器无 `Bun.randomUUIDv7`；这些 id 非 session/thread 身份、不进入 canonical 校验器命名空间。
+
+豁免 MUST NOT 被扩张到 canonical id 面：任何 session/thread 身份（含新建的、含由 JS/TS 侧传递进来的）MUST NOT 借本豁免继续使用 v4。
+
+#### Scenario: 豁免枚举可机械核对
+- **WHEN** 审计豁免范围
+- **THEN** 每个豁免 id 都能对应到一个 Node 服务进程或浏览器生成点，且每个 canonical 身份都能对应到唯一 id 工厂或 canonical 校验器调用点
+
+#### Scenario: 豁免不得扩张到 canonical id
+- **WHEN** 某个 session_id 或 thread_id 由 JS/TS 侧（Node 服务进程或浏览器）生成或被提交到 canonical 校验器
+- **THEN** 它 MUST 被拒绝，MUST NOT 以「Node/浏览器拿不到 v7」为由复用本豁免
+
+### Requirement: 以 id 为输入的哈希与幂等键必须在迁移前完成阻断性审计并给出处置
+
+存量 v4→v7 重编号会改变任何以 id 为输入的哈希值与幂等键。因此系统 MUST 在**迁移任务开工之前**完成一次**阻断性审计**：逐一判定全仓 `content_hash` / `plan_hash` / `request_hash` / itemized plan-hash / 幂等键 / 去重键的输入是否**直接或间接**包含 `session_id` / `thread_id` / 资源 id（含 `create_prefixed_id` 产物、`display_uri`、`entry_identity`、catalog payload）。
+
+**审计结论未落定前，迁移任务 MUST NOT 开工。** 任何以 id 为输入的哈希或幂等键 MUST 在 change 内给出明确处置：**随迁移一致重算**，或**该 id 不参与迁移**；MUST NOT 留成「迁移后哈希漂移但无人负责」。
+
+审计交付物 MUST 包含：命中清单（文件 + 符号）、每条判定依据，以及「已验证哪些哈希**不**含 id」的**负向证据**（缺负向证据即视为审计不完整）。
+
+已实测的现状证据（不作为结论，仅缩小审计范围）：`app/domain/itemized/hashing.py` 的 `content_hash` 输入只有 `{payload_kind, payload}`、`contribution_content_hash` 只有 `{contribution_kind, body}`；而 `app/domain/itemized/hash/plan_hash.py` 的 `context_plan_hash` 显式含 `session_id` / `plan_id` / `ref_id`。
+
+#### Scenario: 审计未落定则迁移不得开工
+- **WHEN** 哈希/幂等键审计的结论尚未落定
+- **THEN** 迁移任务 MUST NOT 执行任何重编号，且 MUST NOT 以「先迁后补」推进
+
+#### Scenario: 以 id 为输入的哈希必须给出处置
+- **WHEN** 审计发现某哈希或幂等键直接或间接以 id 为输入
+- **THEN** change 内 MUST 明确其处置为「随迁移一致重算」或「该 id 不参与迁移」，且 MUST 有对应验证
+
+#### Scenario: 审计必须附负向证据
+- **WHEN** 审计报告声称某哈希不含 id
+- **THEN** MUST 给出该判定的依据（输入字段清单或可复现的输入注入实验），MUST NOT 只有结论
+
+### Requirement: gateway 控制面库必须逐表分类且失效必须显式报告
+
+gateway 控制面库（`app/gateway/control/gateway_state.py` 等）中承载 session 身份的表 MUST 被逐表分类，分类决定处置，MUST NOT 预先假定可静默失效：
+
+- `migrate`：需要迁移的表，按与工作区数据同一套一次性迁移语义（受维护窗口 + 一致性备份 + 可恢复账本 + lineage）处理。
+- `explicitly_invalidated`：允许失效重建的表，但 MUST 有**用户可见的显式报告**（哪张表、多少行、为何失效）；MUST NOT 静默重建（对齐「绝不默默失败」/「永不返回虚假的默认值」）。
+- `not_affected`：判定不受影响者，MUST 给出判定依据。
+
+`user_access_lease` MUST NOT 归入 `explicitly_invalidated`（除非有实测证明其语义是「可安全丢弃的租约」）：租约承担并发互斥，静默丢弃会造成双访问。若需要迁移 MUST 归入 `migrate`；若确需失效 MUST 显式报告并给出互斥安全依据。
+
+#### Scenario: 控制面表被分类为 explicitly_invalidated 时必须显式报告
+- **WHEN** 某控制面表被分类为 `explicitly_invalidated`
+- **THEN** 系统 MUST 输出用户可见的显式报告（表名、行数、失效原因），MUST NOT 静默重建或返回虚假的成功默认值
+
+#### Scenario: 租约表默认不得被静默丢弃
+- **WHEN** 分类处理 `user_access_lease`
+- **THEN** 除非有实测的「可安全丢弃」依据，它 MUST 归入 `migrate`，MUST NOT 被静默失效
+
