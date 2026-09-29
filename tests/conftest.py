@@ -89,9 +89,21 @@ def tmp_path(request: pytest.FixtureRequest) -> Path:
 
 
 @pytest.fixture(scope="session")
-def runtime_manifest_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """构造稳定的 runtime manifest，供 distribution_id 推导（inline scope_id）。"""
-    manifest = tmp_path_factory.mktemp("runtime-manifest") / "runtime-manifest.json"
+def runtime_manifest_path() -> Path:
+    """构造稳定的 runtime manifest，供 distribution_id 推导（inline scope_id）。
+
+    路径 MUST NOT 落在 pytest 的 basetemp（``/tmp/pytest-of-<$USER>/pytest-<N>``）：
+    本仓库 ``tmp_path_retention_policy = "none"``，任何一次会话退出都会以 ``keep=0``
+    注册的 atexit 清理调用 ``cleanup_candidates``，把**共享 basetemp 根目录下的每一个
+    ``pytest-<N>`` 都收进候选并 rmtree**——包括仍在运行的别的会话所用的那个。实测：
+    嵌套或并发的第二个 pytest 会话一退出，第一个会话的 basetemp（含此处 manifest）即被
+    删除，其后触达 config 来源构造的用例全部撞上 ``load_distribution_id`` 的 fail-closed。
+    故 manifest MUST 写入确定性、不属于任何 basetemp 的位置：本仓库 ``out/`` 已在
+    ``.gitignore`` 中，且没有任何测试清理 ``out/tests/`` 本身（各用例只清各自的
+    ``out/tests/<镜像路径>/`` 叶子目录）。
+    """
+    manifest = Path.cwd() / "out" / "tests" / "runtime-manifest" / "runtime-manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
         json.dumps(
             {
