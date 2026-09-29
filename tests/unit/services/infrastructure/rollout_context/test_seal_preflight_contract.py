@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     BaseDeltaRole,
     CanonicalItemStatus,
@@ -22,7 +22,7 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import ContextContribution
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.rollout_context.assembly.seal_preflight import (

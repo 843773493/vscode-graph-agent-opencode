@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     PayloadKind,
     SelectionKind,
@@ -14,7 +14,7 @@ from app.domain.itemized.hashing import (
     canonical_json_bytes,
 )
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import (
+from app.domain.itemized.identity.refs import (
     ContextRef,
     ToolSetRef,
     ref_identity,

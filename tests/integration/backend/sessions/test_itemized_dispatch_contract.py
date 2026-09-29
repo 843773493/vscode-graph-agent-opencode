@@ -20,7 +20,7 @@ from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.agents.sealed_assembly_dispatch import read_sealed_native_projection
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.job_context import reset_current_job_id, set_current_job_id
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,

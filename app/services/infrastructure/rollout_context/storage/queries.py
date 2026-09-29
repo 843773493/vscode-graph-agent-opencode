@@ -14,7 +14,7 @@ from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
 from app.core.hashing import sha256_hex as _hash_bytes
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_non_negative_int,

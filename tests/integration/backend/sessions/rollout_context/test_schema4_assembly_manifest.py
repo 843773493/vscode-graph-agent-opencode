@@ -22,7 +22,7 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     sha256_jcs,
 )
-from app.domain.itemized.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.manifest import (

@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Iterable
 from datetime import datetime
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,

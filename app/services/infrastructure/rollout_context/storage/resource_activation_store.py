@@ -14,7 +14,7 @@ import hashlib
 import sqlite3
 
 from app.core.sqlite_state import utc_now_text as _now
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
 )

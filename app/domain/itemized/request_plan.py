@@ -18,7 +18,7 @@ from app.domain.itemized.hashing import (
     validate_hash_token,
 )
 from app.domain.itemized.hash.plan_hash import context_plan_hash
-from app.domain.itemized.refs import (
+from app.domain.itemized.identity.refs import (
     ContextRef,
     ToolSetRef,
     selection_ref_identity,

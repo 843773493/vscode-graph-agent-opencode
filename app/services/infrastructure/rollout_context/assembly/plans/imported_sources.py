@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import (
     ContextContribution,
     resolve_contribution_for_ref,

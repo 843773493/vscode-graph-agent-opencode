@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping
 
-from app.domain.itemized.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ToolSetRef
 
 
 def project_tool_set_ref(

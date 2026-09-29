@@ -7,13 +7,13 @@ from collections.abc import Mapping
 from langchain_core.messages import BaseMessage
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import (
     contribution_content_hash,
     payload_content_length,
     sha256_jcs,
 )
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import (
     ContextRequestPlan,
     resolve_contribution_for_ref,

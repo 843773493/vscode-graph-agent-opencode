@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     BaseDeltaRole,
     DetailAvailability,
@@ -13,7 +13,7 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import validate_hash_token
-from app.domain.itemized.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.schema import validate_selection_compatibility
 from app.domain.itemized.serialization import _non_empty_string
 

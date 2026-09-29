@@ -12,7 +12,7 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     _ensure_json_value,
 )
-from app.domain.itemized.refs import (
+from app.domain.itemized.identity.refs import (
     ContextRef,
     ToolSetRef,
     selection_ref_identity,

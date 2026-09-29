@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_key,

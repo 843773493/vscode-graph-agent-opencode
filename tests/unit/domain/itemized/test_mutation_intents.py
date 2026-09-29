@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import PayloadKind, SelectionKind, SemanticKind
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
 from app.domain.itemized.mutation_intents import (
@@ -16,7 +16,7 @@ from app.domain.itemized.mutation_intents import (
     intent_kind,
 )
 from app.domain.itemized.hash.plan_hash import context_plan_hash
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict

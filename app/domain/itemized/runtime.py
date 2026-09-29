@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import ControlOutcome, TurnStatus
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.records import CanonicalItemRecord

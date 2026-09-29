@@ -10,7 +10,7 @@ from dataclasses import replace
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,

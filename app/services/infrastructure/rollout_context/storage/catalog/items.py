@@ -22,7 +22,7 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.tool_call_identity import provider_tool_call_id
+from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )

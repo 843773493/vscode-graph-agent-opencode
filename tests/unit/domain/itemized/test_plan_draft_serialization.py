@@ -7,10 +7,10 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
-from app.domain.itemized.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
 

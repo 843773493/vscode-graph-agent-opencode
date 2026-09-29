@@ -20,7 +20,7 @@ from app.domain.itemized.records import (
     CanonicalItemRecord,
     TurnScope,
 )
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )

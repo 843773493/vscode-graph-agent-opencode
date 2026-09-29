@@ -8,7 +8,7 @@ from app.domain.itemized.assembly_snapshot import (
     ContextAssemblySnapshot,
     context_request_hash,
 )
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     PayloadKind,
     SelectionKind,
@@ -19,7 +19,7 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
 )
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import (
     ContextContribution,
     ContextRequestPlan,

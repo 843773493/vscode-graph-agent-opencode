@@ -12,7 +12,7 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.schemas.internal_v2.session_context import SessionContextReadResultDTO
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,

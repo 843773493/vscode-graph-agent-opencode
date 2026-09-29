@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import sha256_jcs
-from app.domain.itemized.refs import require_manifest_token
+from app.domain.itemized.identity.refs import require_manifest_token
 
 from app.domain.itemized.resource_activation.common import (
     PROVENANCE_FIELD_ALIASES,

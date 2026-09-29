@@ -13,7 +13,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,

@@ -8,7 +8,7 @@ import stat
 from pathlib import Path
 
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
     detail_relative_path,

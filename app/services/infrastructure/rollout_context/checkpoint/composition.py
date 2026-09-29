@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from app.domain.itemized.enums import BaseDeltaRole, SemanticKind
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,

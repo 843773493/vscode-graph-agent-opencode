@@ -14,7 +14,7 @@ from typing import cast
 
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.tool_call_identity import provider_tool_call_id
+from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 
 _THREADING_KINDS = frozenset({SemanticKind.REASONING, SemanticKind.TOOL_CALL})
 _ASSISTANT_CONTENT_KINDS = frozenset(

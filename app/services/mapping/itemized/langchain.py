@@ -17,10 +17,10 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.mapping.itemized.carrier_dedup import (
     projection_message_group_id as _projection_message_group_id,

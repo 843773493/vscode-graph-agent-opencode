@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_key,

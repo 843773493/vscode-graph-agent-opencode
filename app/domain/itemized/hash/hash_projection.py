@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.domain.itemized.refs import ContextRef, selection_ref_identity
+from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 
 if TYPE_CHECKING:
     from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan

@@ -14,7 +14,7 @@ from langchain_core.messages import BaseMessage
 
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.composition import (
     ContextPlanCompositionMixin,

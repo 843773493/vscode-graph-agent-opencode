@@ -20,7 +20,7 @@ from dataclasses import replace
 import pytest
 
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.domain.itemized.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.mcp.extension_catalog import (

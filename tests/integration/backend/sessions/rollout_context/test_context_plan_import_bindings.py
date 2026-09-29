@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 from app.domain.itemized.hashing import sha256_jcs
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.plans.imported import (

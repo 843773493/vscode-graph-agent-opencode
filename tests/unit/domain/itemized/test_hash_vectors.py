@@ -17,7 +17,7 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 
 

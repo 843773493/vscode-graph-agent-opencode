@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.errors import ItemSchemaError
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,

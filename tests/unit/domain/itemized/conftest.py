@@ -17,7 +17,7 @@ from app.domain.itemized.enums import (
     SemanticKind,
 )
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 

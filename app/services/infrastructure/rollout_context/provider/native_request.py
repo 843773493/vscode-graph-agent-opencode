@@ -6,9 +6,9 @@ from collections.abc import Mapping, Sequence
 
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
-from app.domain.itemized.tool_call_identity import provider_tool_call_id
+from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.services.infrastructure.rollout_context.provider.toolset_request_bridge import (
     project_tool_set_ref,
 )

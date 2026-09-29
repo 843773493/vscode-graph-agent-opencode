@@ -55,7 +55,7 @@ from app.domain.itemized.records import (
     CanonicalItemRecord,
     ProducerRef,
 )
-from app.domain.itemized.refs import (
+from app.domain.itemized.identity.refs import (
     ContextRef,
     ToolSetRef,
     ref_identity,

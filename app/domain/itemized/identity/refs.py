@@ -6,7 +6,6 @@ import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from app.domain.itemized.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     BaseDeltaRole,
     CanonicalItemStatus,
@@ -22,6 +21,7 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
     validate_hash_token,
 )
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.schema import validate_item_compatibility
 

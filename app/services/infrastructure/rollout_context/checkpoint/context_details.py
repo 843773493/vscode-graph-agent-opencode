@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,

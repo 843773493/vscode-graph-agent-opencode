@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 
 from app.domain.itemized.hashing import sha256_jcs
-from app.domain.itemized.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,

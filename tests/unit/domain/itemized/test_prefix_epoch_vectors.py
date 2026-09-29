@@ -36,7 +36,7 @@ from app.domain.itemized.prefix_epoch import (
     toolset_compatibility_key,
     verify_stable_prefix,
 )
-from app.domain.itemized.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ToolSetRef
 
 PROFILE = "openai-responses:v1"
 PROFILE_NEW = "anthropic-messages:v2"

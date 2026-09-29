@@ -17,7 +17,7 @@ from langgraph.checkpoint.base import empty_checkpoint
 from app.core.checkpoint_config import build_checkpoint_config
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import ContextContribution
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_key,

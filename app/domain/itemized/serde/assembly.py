@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
-from app.domain.itemized.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serde.registry import (
     _optional_non_negative_int,

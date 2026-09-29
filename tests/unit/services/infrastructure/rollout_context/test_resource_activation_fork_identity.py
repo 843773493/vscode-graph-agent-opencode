@@ -12,7 +12,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.storage.resource_activation_lineage import (
     ActivationLineageBodyStore,
 )

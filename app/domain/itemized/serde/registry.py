@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
-from app.domain.itemized.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextContribution
 
 

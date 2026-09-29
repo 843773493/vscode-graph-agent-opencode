@@ -18,7 +18,7 @@ import pytest
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.refs import (
+from app.domain.itemized.identity.refs import (
     ContextRef,
     ToolSetRef,
     ref_identity,

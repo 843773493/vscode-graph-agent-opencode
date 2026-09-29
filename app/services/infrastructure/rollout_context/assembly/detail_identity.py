@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes
 
 

@@ -16,7 +16,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.services.infrastructure.rollout_context.runtime.detail_keys import (
     ContextDetailKeyStore,

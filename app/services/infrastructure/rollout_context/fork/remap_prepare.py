@@ -6,7 +6,7 @@ import json
 import sqlite3
 from collections.abc import Iterable, Mapping
 
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import content_hash as item_content_hash
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (

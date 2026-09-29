@@ -52,7 +52,7 @@ def test_public_upgrade_restores_nonempty_assembly_in_new_process(source):
         [sys.executable, "-c", """
 import json
 import sys
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
 with RolloutCheckpointSaver(sys.argv[1]) as saver:
     snapshot = saver.get_context_assembly(sys.argv[2], assembly_id=sys.argv[3])

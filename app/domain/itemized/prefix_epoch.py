@@ -32,7 +32,7 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
     validate_hash_token,
 )
-from app.domain.itemized.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ToolSetRef
 
 _SHA256_BYTES_PATTERN = re.compile(r"^sha256:bytes:v1:[0-9a-f]{64}$")
 _WIRE_ROLES = frozenset({"system", "user", "assistant", "tool"})

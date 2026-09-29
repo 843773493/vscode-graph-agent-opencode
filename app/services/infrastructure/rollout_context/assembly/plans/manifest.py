@@ -7,7 +7,7 @@ from dataclasses import fields, replace
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.domain.itemized.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import (
     ContextRequestPlan,
     resolve_contribution_for_ref,

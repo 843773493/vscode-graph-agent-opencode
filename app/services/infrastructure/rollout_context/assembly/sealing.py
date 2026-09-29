@@ -7,7 +7,7 @@ from collections.abc import Callable
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.detail_ref import DetailRef
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import CommitKind, CommitMode, TurnStatus
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
