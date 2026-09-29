@@ -2,7 +2,6 @@
 
 每个 owner 进程只在本模块按代码装配一次：process-root LifetimeScope、
 资源观察事件通道、内置文件快照能力（共享监视 + 稳定读取 registry），
-以及按 owner 需要显式传入的 Gateway 受认证快照。
 没有动态 provider 注册：一切适配在构造参数里固定，测试通过注入替身
 端口替换实际 owner。
 """
@@ -23,10 +22,6 @@ from app.services.infrastructure.events.event_channel_service import (
 from app.services.infrastructure.resource_platform.adapters.file_monitor import (
     SharedFileMonitor,
     WorkspaceFileWatchPort,
-)
-from app.services.infrastructure.resource_platform.adapters.gateway_snapshot import (
-    GatewaySnapshotAdapter,
-    GatewaySnapshotReader,
 )
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservationChannel,
@@ -54,7 +49,6 @@ class ResourcePlatform:
     file_registry: WorkspaceFileResourceRegistry
     shared_file_monitor: SharedFileMonitor
     state_events: ResourceStateEventPublisher
-    gateway_snapshots: GatewaySnapshotAdapter | None = None
 
     async def close(self) -> None:
         """释放实际持有的进程资源并发布 owner 已确认的轻量状态。"""
@@ -94,8 +88,6 @@ def bootstrap_resource_platform(
     workspace_root: Path,
     project_root: Path | None = None,
     process_scope_name: str = "resource-platform-root",
-    gateway_snapshot_reader: GatewaySnapshotReader | None = None,
-    gateway_snapshot_locators: tuple[str, ...] = (),
     event_service: EventChannelService | None = None,
 ) -> ResourcePlatform:
     """按固定顺序装配进程级资源平台。
@@ -136,12 +128,6 @@ def bootstrap_resource_platform(
         file_registry.stop,
         label="workspace-file-resource-registry",
     )
-    gateway_snapshots: GatewaySnapshotAdapter | None = None
-    if gateway_snapshot_reader is not None:
-        gateway_snapshots = GatewaySnapshotAdapter(
-            reader=gateway_snapshot_reader,
-            locators=gateway_snapshot_locators,
-        )
     return ResourcePlatform(
         process_root_scope=scope,
         observation_channel=observation_channel,
@@ -149,7 +135,6 @@ def bootstrap_resource_platform(
         file_registry=file_registry,
         shared_file_monitor=shared_file_monitor,
         state_events=state_events,
-        gateway_snapshots=gateway_snapshots,
     )
 
 

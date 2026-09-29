@@ -5,8 +5,7 @@ ObservedSourceRevision、内置文件 StableSourceReader 与有界 SourceReconci
 OpenSpec add-context-injection-lifecycle 3.2/3.3:来源观察、稳定快照与语义
 发布的统一底层。文件来源使用允许根/no-follow/普通文件、前后 signature、
 双读同 hash、最多三次 attempt、固定 byte 上限、严格 UTF-8 与完整原始
-byte hash;Gateway 内部快照使用各自可验证版本 token,
-不套用文件双读。失败保留上一份 valid revision 并显式 unavailable。
+byte hash。失败保留上一份 valid revision 并显式 unavailable。
 
 本模块是 sources 域 owner:CSM、middleware、skill_load 与 model-call
 preparation 不得直接调用 reader,只消费 Registry published revision。
@@ -25,8 +24,8 @@ from pathlib import Path
 MAX_STABLE_READ_BYTES = 512 * 1024
 STABLE_READ_ATTEMPTS = 3
 
-_SOURCE_KINDS = frozenset({"file", "gateway_snapshot"})
-_REVISION_KINDS = frozenset({"file_byte_hash", "version_token"})
+_SOURCE_KINDS = frozenset({"file"})
+_REVISION_KINDS = frozenset({"file_byte_hash"})
 _REASON_CODES = frozenset(
     {
         "outside_allowed_root",
@@ -36,7 +35,6 @@ _REASON_CODES = frozenset(
         "invalid_utf8",
         "missing",
         "unstable_read",
-        "invalid_version_token",
     }
 )
 
@@ -84,52 +82,41 @@ class ObservedSourceHandle:
     """实际 owner 私有的可重建读取句柄;不进入 CSM/middleware/工具结果。
 
     文件来源携带 file_path 与 allowed_root(均为绝对路径字符串);
-    gateway_snapshot 携带 version_token_reader,返回
-    "(version_token, content)" 二元组。entry_identity 是持久 catalog entry
-    identity,进程重启后由 owner 据此重建同一 handle。
+    entry_identity 是持久 catalog entry identity,进程重启后由 owner
+    据此重建同一 handle。
     """
 
     descriptor: ObservedSourceDescriptor
     file_path: str | None = None
     allowed_root: str | None = None
-    version_token_reader: Callable[[], tuple[str, str]] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.descriptor, ObservedSourceDescriptor):
             raise TypeError(
             "ObservedSourceHandle.descriptor 必须是 ObservedSourceDescriptor"
         )
-        if self.descriptor.source_kind == "file":
-            if self.version_token_reader is not None:
-                raise ValueError("文件来源 handle 不得携带 version_token_reader")
-            for field_name in ("file_path", "allowed_root"):
-                value = getattr(self, field_name)
-                if not isinstance(value, str) or not value:
-                    raise ValueError(
-                    f"文件来源 handle.{field_name} 必须是绝对路径字符串"
-                )
-            resolved_root = Path(self.allowed_root or "").resolve()
-            resolved_path = Path(self.file_path or "").resolve()
-            if not resolved_path.is_relative_to(resolved_root):
-                raise StableSourceReadError(
-                    "outside_allowed_root",
-                    f"来源路径越过允许根目录: {self.file_path}",
-                )
-            return
-        if self.file_path is not None or self.allowed_root is not None:
-            raise ValueError("非文件来源 handle 不得携带文件 locator")
-        if self.version_token_reader is None or not callable(self.version_token_reader):
-            raise ValueError("gateway 来源 handle 必须携带 version_token_reader")
+        for field_name in ("file_path", "allowed_root"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                f"文件来源 handle.{field_name} 必须是绝对路径字符串"
+            )
+        resolved_root = Path(self.allowed_root or "").resolve()
+        resolved_path = Path(self.file_path or "").resolve()
+        if not resolved_path.is_relative_to(resolved_root):
+            raise StableSourceReadError(
+                "outside_allowed_root",
+                f"来源路径越过允许根目录: {self.file_path}",
+            )
 
 
 @dataclass(frozen=True, slots=True)
 class ObservedSourceRevision:
     """一次稳定观察发布的不可变来源 revision。
 
-    文件来源 revision 是完整原始 byte 的 sha256;token 来源 revision 是
-    owner 提供的可验证版本 token。available=False 时保留上一份 valid
-    revision(retained_revision)并携带显式 reason_code 诊断,不得冒充
-    新版本。
+    文件来源 revision 是完整原始 byte 的 sha256。available=False 时保留
+    上一份 valid revision(retained_revision)并携带显式 reason_code
+    诊断,不得冒充新版本。
     """
 
     source_id: str
@@ -184,8 +171,6 @@ class StableSourceReader:
     """
 
     def read(self, handle: ObservedSourceHandle) -> ObservedSourceRevision:
-        if handle.descriptor.source_kind != "file":
-            raise ValueError("StableSourceReader 只接受文件来源 handle")
         file_path = Path(handle.file_path or "")
         if os.path.islink(file_path):
             raise StableSourceReadError(
@@ -284,8 +269,7 @@ class SourceReconciler:
     """已知来源的有界 reconcile:发布不可变 ObservedSourceRevision。
 
     - reconcile/reconcile_all 只处理已登记 handle,不扫描目录;
-    - 文件失败(token 来源 owner 也可抛 StableSourceReadError)时保留
-      上一份 valid revision 并标记 unavailable;
+    - 文件失败时保留上一份 valid revision 并标记 unavailable;
     - mark_committed 由消费方在 revision 进入已提交上下文后回执,
       revision_states 区分 observed/pending/committed;diff 基准是
       已提交(可见)revision。rewind 感知的 latest-visible-committed
@@ -317,9 +301,9 @@ class SourceReconciler:
         if handle is None:
             raise KeyError(f"来源尚未登记: source_id={source_id}")
         try:
-            revision = self._read_once(handle)
+            revision = self._reader.read(handle)
         except StableSourceReadError as error:
-            revision = self._retain_previous(source_id, handle, error)
+            revision = self._retain_previous(source_id, error)
         self._store_and_notify(revision)
         return revision
 
@@ -368,40 +352,18 @@ class SourceReconciler:
             pending = None
         return observed.revision, pending, committed
 
-    def _read_once(self, handle: ObservedSourceHandle) -> ObservedSourceRevision:
-        if handle.descriptor.source_kind == "file":
-            return self._reader.read(handle)
-        token, content = handle.version_token_reader()
-        if not isinstance(token, str) or not token:
-            raise StableSourceReadError(
-            "invalid_version_token",
-            f"来源版本 token 必须是非空字符串: {handle.descriptor.source_id}",
-            )
-        if not isinstance(content, str):
-            raise TypeError(f"来源版本内容必须是字符串: {handle.descriptor.source_id}")
-        return ObservedSourceRevision(
-        source_id=handle.descriptor.source_id,
-        revision=token,
-        revision_kind="version_token",
-        content=content,
-        byte_length=len(content.encode("utf-8")),
-        )
-
     def _retain_previous(
         self,
         source_id: str,
-        handle: ObservedSourceHandle,
         error: StableSourceReadError,
     ) -> ObservedSourceRevision:
         previous = self._revisions.get(source_id)
         previous_valid = previous is not None and previous.available
         retained = previous.revision if previous_valid else None
-        kind = handle.descriptor.source_kind
-        revision_kind = "file_byte_hash" if kind == "file" else "version_token"
         return ObservedSourceRevision(
         source_id=source_id,
         revision=retained or "",
-        revision_kind=revision_kind,
+        revision_kind="file_byte_hash",
         content=previous.content if previous_valid else "",
         byte_length=previous.byte_length if previous_valid else 0,
         available=False,

@@ -1,9 +1,9 @@
 """OpenSpec 3.2/3.3 observed source 链路的定向合同测试。
 
 覆盖 StableSourceReader 读取协议(允许根/no-follow/普通文件/双读/上限/
-严格 UTF-8/原始 byte hash)、失败保旧语义、版本 token 源、observed/
-pending/committed 状态合并,以及「CSM/middleware/skill_load 不得直接调用
-reader」的静态隔离审计。
+严格 UTF-8/原始 byte hash)、失败保旧语义、observed/pending/committed
+状态合并,以及「CSM/middleware/skill_load 不得直接调用 reader」的静态
+隔离审计。
 """
 
 from __future__ import annotations
@@ -134,57 +134,6 @@ def test_unstable_read_exhausts_attempts_and_reconciler_retains_previous(
     assert recovered.available is True
     assert recovered.revision == "sha256:" + hashlib.sha256(b"v4\n").hexdigest()
     assert recovered.retained_revision is None
-
-
-def test_token_source_uses_version_token_without_file_double_read() -> None:
-    state = {"token": "gateway-gen-1:rev-a", "content": "gateway snapshot v1"}
-    handle = ObservedSourceHandle(
-        descriptor=ObservedSourceDescriptor(
-            source_id="gw-agents",
-            source_kind="gateway_snapshot",
-            display_uri="boxteam://gateway/agents",
-            entry_identity="entry-gw-agents",
-        ),
-        version_token_reader=lambda: (state["token"], state["content"]),
-    )
-    reconciler = SourceReconciler(handles={"gw-agents": handle})
-    first = reconciler.reconcile("gw-agents")
-    assert first.revision == "gateway-gen-1:rev-a"
-    assert first.revision_kind == "version_token"
-    assert first.byte_length == len(state["content"].encode("utf-8"))
-    state["token"] = "gateway-gen-1:rev-b"
-    state["content"] = "gateway snapshot v2"
-    second = reconciler.reconcile("gw-agents")
-    assert second.revision == "gateway-gen-1:rev-b"
-    # 无变化的重复 reconcile 不产生新事实。
-    again = reconciler.reconcile("gw-agents")
-    assert again.revision == second.revision
-
-
-def test_token_source_error_retains_previous_revision(tmp_path: Path) -> None:
-    state = {"token": "gateway-gen-1:rev-a", "content": "gateway snapshot v1", "fail": False}
-    handle = ObservedSourceHandle(
-        descriptor=ObservedSourceDescriptor(
-            source_id="gw-agents",
-            source_kind="gateway_snapshot",
-            display_uri="boxteam://gateway/agents",
-            entry_identity="entry-gw-agents",
-        ),
-        version_token_reader=lambda: (
-            (_ for _ in ()).throw(StableSourceReadError("missing", "snapshot disconnected"))
-            if state["fail"]
-            else (state["token"], state["content"])
-        ),
-    )
-    reconciler = SourceReconciler(handles={"gw-agents": handle})
-    first = reconciler.reconcile("gw-agents")
-    assert first.available is True
-    state["fail"] = True
-    unavailable = reconciler.reconcile("gw-agents")
-    assert unavailable.available is False
-    assert unavailable.error_code == "missing"
-    assert unavailable.retained_revision == "gateway-gen-1:rev-a"
-    assert unavailable.content == "gateway snapshot v1"
 
 
 def test_revision_states_merge_uncommitted_changes(tmp_path: Path) -> None:

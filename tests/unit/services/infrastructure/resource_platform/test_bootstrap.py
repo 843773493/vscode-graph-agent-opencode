@@ -2,53 +2,22 @@
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-
 import pytest
 
 from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.events.event_channel_service import (
     EventChannelService,
 )
-from app.services.infrastructure.resource_platform.adapters.gateway_snapshot import (
-    AuthenticatedGatewaySnapshot,
-)
 from app.services.infrastructure.resource_platform.bootstrap import (
     bootstrap_resource_platform,
 )
 
 
-class _FakeGatewayReader:
-    """按 locator 返回固定受认证快照的替身 owner。"""
-
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    async def read_snapshot(self, locator: str) -> AuthenticatedGatewaySnapshot:
-        self.calls.append(locator)
-        return AuthenticatedGatewaySnapshot(
-            locator=locator,
-            version_token=f"token:{locator}",
-            content=b"snapshot-bytes",
-        )
-
-
 def test_bootstrap_assembles_platform_with_fixed_adapters(tmp_path) -> None:
-    """bootstrap 固定装配：scope、事件通道、file 能力与可选适配。"""
-    gateway_reader = _FakeGatewayReader()
-    platform = bootstrap_resource_platform(
-        workspace_root=tmp_path,
-        gateway_snapshot_reader=gateway_reader,
-        gateway_snapshot_locators=("boxteam://gateway/skills",),
-    )
-    assert platform.observation_channel is platform.file_registry.observation_channel
-    assert platform.gateway_snapshots is not None
+    """bootstrap 固定装配：scope、事件通道与 file 能力。"""
+    platform = bootstrap_resource_platform(workspace_root=tmp_path)
     # 事件通道与 file registry 共用同一实例，不建第二套事件面。
-    snapshot = asyncio.run(
-        platform.gateway_snapshots.snapshot("boxteam://gateway/skills")
-    )
-    assert snapshot.content == b"snapshot-bytes"
+    assert platform.observation_channel is platform.file_registry.observation_channel
 
 
 @pytest.mark.asyncio
@@ -122,35 +91,3 @@ async def test_bootstrap_close_event_failure_is_explicit(
         await platform.close()
     assert platform.process_root_scope.snapshot().state == "closed"
 
-
-@pytest.mark.asyncio
-async def test_gateway_snapshot_adapter_rejects_unregistered_locator() -> None:
-    """未在固定装配登记的 locator 显式失败；空 token 显式失败。"""
-    platform = bootstrap_resource_platform(
-        workspace_root=Path("/tmp"),
-        gateway_snapshot_reader=_FakeGatewayReader(),
-        gateway_snapshot_locators=("boxteam://gateway/skills",),
-    )
-    adapter = platform.gateway_snapshots
-    assert adapter is not None
-    with pytest.raises(KeyError, match="未在固定装配中登记"):
-        await adapter.snapshot("boxteam://gateway/other")
-
-    class _EmptyTokenReader(_FakeGatewayReader):
-        async def read_snapshot(self, locator: str) -> AuthenticatedGatewaySnapshot:
-            return AuthenticatedGatewaySnapshot(
-                locator=locator,
-                version_token="",
-                content=b"",
-            )
-
-    from app.services.infrastructure.resource_platform.adapters.gateway_snapshot import (
-        GatewaySnapshotAdapter,
-    )
-
-    strict_adapter = GatewaySnapshotAdapter(
-        reader=_EmptyTokenReader(),
-        locators=("boxteam://gateway/skills",),
-    )
-    with pytest.raises(RuntimeError, match="version token"):
-        await strict_adapter.snapshot("boxteam://gateway/skills")
