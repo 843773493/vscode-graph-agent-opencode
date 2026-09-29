@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { mkdirSync, symlinkSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 
@@ -9,7 +10,7 @@ import {
   MAX_RETAINED_TERMINAL_HISTORY,
   TerminalManager,
 } from "./terminalManager.js";
-import { resolveTerminalCwd } from "./terminalSession.js";
+import { deriveLegacyCwdRelative, resolveTerminalCwd } from "./terminalSession.js";
 
 function probeWorkspaceRoot(name) {
   const root = path.join(
@@ -58,6 +59,84 @@ test("终端的持久相对路径覆盖相对子目录、越界绝对路径、�
   assert.throws(
     () => resolveTerminalCwd(root, "sub/missing"),
     /终端工作目录不存在或不是目录/,
+  );
+});
+
+// 一次性迁移：旧记录只有绝对 cwd，须在 load 时由工作区根推导出 cwd_relative 后
+// 物理写回，旧记录不得让 init 崩溃；推导失败必须 fail-closed 且带 terminal_id。
+test("旧格式终端记录在 init 时迁移为相对路径并物理写回", async () => {
+  const root = probeWorkspaceRoot(randomUUID());
+  mkdirSync(path.join(root, "sub", "deep"), { recursive: true });
+  const outsideRoot = probeWorkspaceRoot(randomUUID());
+  const workspaceId = "gw_terminal_migration_test";
+  const writeState = async (terminals) => {
+    await writeFile(
+      path.join(root, ".boxteam", "terminal-manager", "terminals.json"),
+      `${JSON.stringify({ workspace_id: workspaceId, terminals }, null, 2)}\n`,
+      "utf8",
+    );
+  };
+  mkdirSync(path.join(root, ".boxteam", "terminal-manager"), { recursive: true });
+
+  await writeState([
+    {
+      terminal_id: "term_legacy_in",
+      workspace_id: workspaceId,
+      session_id: "ses_legacy",
+      cwd: path.join(root, "sub", "deep"),
+      status: "deleted",
+    },
+    {
+      terminal_id: "term_legacy_out",
+      workspace_id: workspaceId,
+      session_id: "ses_legacy",
+      cwd: outsideRoot,
+      status: "lost",
+    },
+  ]);
+
+  const manager = new TerminalManager({ workspaceRoot: root, workspaceId });
+  await manager.init();
+  assert.equal(manager.sessions.get("term_legacy_in").cwd, path.join(root, "sub", "deep"));
+  assert.equal(manager.sessions.get("term_legacy_out").cwd, outsideRoot);
+
+  const persisted = JSON.parse(
+    await readFile(path.join(root, ".boxteam", "terminal-manager", "terminals.json"), "utf8"),
+  );
+  assert.equal(persisted.terminals.every((record) => !("cwd" in record)), true);
+  assert.equal(
+    persisted.terminals.find((record) => record.terminal_id === "term_legacy_in").cwd_relative,
+    path.join("sub", "deep"),
+  );
+  assert.equal("workspace_root" in persisted, false);
+
+  // 幂等：二次 init 不改变相对路径，也不重新迁移。
+  const manager2 = new TerminalManager({ workspaceRoot: root, workspaceId });
+  await manager2.init();
+  await manager2.persist();
+  const persisted2 = JSON.parse(
+    await readFile(path.join(root, ".boxteam", "terminal-manager", "terminals.json"), "utf8"),
+  );
+  assert.deepEqual(
+    persisted2.terminals.map((record) => record.cwd_relative).sort(),
+    persisted.terminals.map((record) => record.cwd_relative).sort(),
+  );
+});
+
+test("旧格式终端记录迁移对不可推导 cwd 显式失败", async () => {
+  const root = probeWorkspaceRoot(randomUUID());
+
+  assert.throws(
+    () => deriveLegacyCwdRelative(root, "/nonexistent/absolute/path", "term_bad"),
+    /终端记录 cwd 不存在或不是目录.*terminal_id=term_bad/,
+  );
+  assert.throws(
+    () => deriveLegacyCwdRelative(root, undefined, "term_non_string"),
+    /终端记录 cwd 缺失或非字符串.*terminal_id=term_non_string/,
+  );
+  assert.throws(
+    () => deriveLegacyCwdRelative(root, "relative/path", "term_relative"),
+    /终端记录 cwd 不是绝对路径.*terminal_id=term_relative/,
   );
 });
 

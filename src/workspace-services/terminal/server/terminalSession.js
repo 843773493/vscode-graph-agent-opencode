@@ -29,6 +29,38 @@ export function resolveTerminalCwd(workspaceRoot, cwdRelative) {
   return resolved;
 }
 
+// 一次性迁移旧持久记录：把绝对 `cwd` 还原为工作区内相对路径 `cwd_relative`。
+// 迁移必须能失败：非字符串/空串、非绝对路径、目录不存在、以及无法表达为工作区
+// 内相对路径（跨设备）都 MUST fail-closed 并给出可定位错误，绝不静默丢弃终端，
+// 也绝不回退进程 cwd。工作区外但仍可逐字节还原的现存目录（例如 `/etc`）按
+// `path.relative` 的 `..` 表达保留原语义，不在此处做边界收窄。
+export function deriveLegacyCwdRelative(workspaceRoot, cwd, terminalId) {
+  if (typeof cwd !== "string" || cwd.trim() === "") {
+    throw new Error(
+      `终端记录 cwd 缺失或非字符串，无法迁移为相对路径: terminal_id=${terminalId}, cwd=${JSON.stringify(cwd)}`,
+    );
+  }
+  const rawCwd = cwd.trim();
+  if (!path.isAbsolute(rawCwd)) {
+    throw new Error(
+      `终端记录 cwd 不是绝对路径，无法迁移为相对路径: terminal_id=${terminalId}, cwd=${rawCwd}`,
+    );
+  }
+  const resolved = path.resolve(rawCwd);
+  if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+    throw new Error(
+      `终端记录 cwd 不存在或不是目录，迁移拒绝静默丢弃: terminal_id=${terminalId}, cwd=${resolved}`,
+    );
+  }
+  const relative = path.relative(path.resolve(workspaceRoot), resolved);
+  if (path.isAbsolute(relative)) {
+    throw new Error(
+      `终端记录 cwd 无法表达为工作区内相对路径: terminal_id=${terminalId}, cwd=${resolved}, workspace_root=${workspaceRoot}`,
+    );
+  }
+  return relative === "" ? "." : relative;
+}
+
 export function resolveShell() {
   if (process.platform === "win32") {
     return process.env.COMSPEC || "cmd.exe";

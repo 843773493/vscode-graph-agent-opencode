@@ -5,6 +5,7 @@ import {
   terminateTerminalProcessTree,
 } from "./terminalProcessUtils.js";
 import {
+  deriveLegacyCwdRelative,
   nowIso,
   resolveShell,
   resolveTerminalCwd,
@@ -70,12 +71,35 @@ export class TerminalManager {
         // TODO: 兼容上次后端在 steering claim 后异常退出的恢复场景。
         record.steering_dispatching = false;
       }
-      const restored = await this.restoreRecord(record);
+      const restored = await this.restoreRecord(this.migrateRecord(record));
       const session = new TerminalSession({ record: restored, manager: this });
       this.sessions.set(session.id, session);
     }
     await this.pruneTerminalHistory();
     await this.persist();
+  }
+
+  // 一次性迁移旧持久记录：旧记录只落盘绝对 `cwd`，新记录只承载工作区内相对路径
+  // `cwd_relative`。迁移在 load 时由工作区根在调用栈内推导相对路径，推导失败即
+  // fail-closed（含 terminal_id 与原因），绝不静默丢弃终端、绝不回退进程 cwd；
+  // 迁移结果随后由 persist() 物理写回，落盘不再含绝对路径，杜绝双读。
+  migrateRecord(record) {
+    if (typeof record.cwd_relative === "string") {
+      if (!("cwd" in record)) {
+        return record;
+      }
+      const normalized = { ...record };
+      delete normalized.cwd;
+      return normalized;
+    }
+    const migrated = { ...record };
+    migrated.cwd_relative = deriveLegacyCwdRelative(
+      this.workspaceRoot,
+      migrated.cwd,
+      migrated.terminal_id,
+    );
+    delete migrated.cwd;
+    return migrated;
   }
 
   async restoreRecord(record) {
