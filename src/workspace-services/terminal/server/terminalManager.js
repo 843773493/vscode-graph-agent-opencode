@@ -1,6 +1,5 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
 import {
   readProcessStat,
   terminateTerminalProcessTree,
@@ -8,6 +7,7 @@ import {
 import {
   nowIso,
   resolveShell,
+  resolveTerminalCwd,
   shellArgs,
   TerminalSession,
 } from "./terminalSession.js";
@@ -16,21 +16,6 @@ import { TerminalStateStore } from "./terminalStateStore.js";
 export const MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE = 64;
 export const MAX_RETAINED_TERMINAL_HISTORY = 256;
 const PROTECTED_RECENT_EXECUTIONS = 8;
-
-export function resolveTerminalCwd(workspaceRoot, cwd) {
-  const rawCwd = typeof cwd === "string" && cwd.trim() !== ""
-    ? cwd.trim()
-    : workspaceRoot;
-  const resolved = path.isAbsolute(rawCwd)
-    ? path.resolve(rawCwd)
-    : path.resolve(workspaceRoot, rawCwd);
-  if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
-    throw new Error(
-      `终端工作目录不存在或不是目录: cwd=${rawCwd}, resolved=${resolved}`,
-    );
-  }
-  return resolved;
-}
 
 function terminalId() {
   return `term_${randomUUID().replaceAll("-", "")}`;
@@ -151,7 +136,6 @@ export class TerminalManager {
         this.persistRequested = false;
         await this.stateStore.write({
           workspace_id: this.workspaceId,
-          workspace_root: this.workspaceRoot,
           updated_at: nowIso(),
           terminals: [...this.sessions.values()].map((session) => session.toRecord()),
         });
@@ -231,7 +215,9 @@ export class TerminalManager {
     }
     await this.pruneTerminalHistory();
     await this.ensureExecutionCapacity();
+    // 只把工作区内相对路径写入持久记录；绝对路径仅在本次调用栈内解析（裁定 D-A2）。
     const resolvedCwd = resolveTerminalCwd(this.workspaceRoot, cwd);
+    const cwdRelative = path.relative(this.workspaceRoot, resolvedCwd);
     const id = terminalId();
     const session = new TerminalSession({
       manager: this,
@@ -243,7 +229,7 @@ export class TerminalManager {
         title,
         command,
         args,
-        cwd: resolvedCwd,
+        cwd_relative: cwdRelative,
         cols,
         rows,
         status: "created",

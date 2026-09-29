@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import path from "node:path";
+import { mkdirSync, symlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -6,6 +9,57 @@ import {
   MAX_RETAINED_TERMINAL_HISTORY,
   TerminalManager,
 } from "./terminalManager.js";
+import { resolveTerminalCwd } from "./terminalSession.js";
+
+function probeWorkspaceRoot(name) {
+  const root = path.join(
+    process.cwd(),
+    "out",
+    "tests",
+    "src",
+    "workspace-services",
+    "terminal",
+    "server",
+    "terminalManager",
+    "workspace",
+    name,
+  );
+  mkdirSync(root, { recursive: true });
+  return root;
+}
+
+test("终端的持久相对路径覆盖相对子目录、越界绝对路径、工作区移动与符号链接四类场景", () => {
+  const root = probeWorkspaceRoot(randomUUID());
+  mkdirSync(path.join(root, "sub", "deep"), { recursive: true });
+  symlinkSync(path.join(root, "sub"), path.join(root, "link"));
+
+  // 用户传入相对子目录：落盘相对路径，restore 还原到同一绝对目录。
+  const relativeCwd = resolveTerminalCwd(root, "sub/deep");
+  assert.equal(relativeCwd, path.join(root, "sub", "deep"));
+  assert.equal(resolveTerminalCwd(root, path.relative(root, relativeCwd)), relativeCwd);
+
+  // 用户传入越界绝对路径：保留原语义（不施加 workspace 边界），且落盘为相对表达。
+  const outside = resolveTerminalCwd(root, "/etc");
+  assert.equal(outside, "/etc");
+  assert.equal(resolveTerminalCwd(root, path.relative(root, outside)), "/etc");
+
+  // 工作区被移动：相对路径按新根重新推导，不依赖旧绝对路径。
+  const movedRoot = probeWorkspaceRoot(randomUUID());
+  mkdirSync(path.join(movedRoot, "sub", "deep"), { recursive: true });
+  assert.equal(
+    resolveTerminalCwd(movedRoot, path.relative(root, relativeCwd)),
+    path.join(movedRoot, "sub", "deep"),
+  );
+
+  // 符号链接：与改造前一致，path.resolve 只做规范化、不 realpath，链接段原样保留。
+  assert.equal(resolveTerminalCwd(root, "link/deep"), path.join(root, "link", "deep"));
+
+  // 不存在的目录显式失败，绝不静默回退进程 cwd。
+  assert.throws(
+    () => resolveTerminalCwd(root, "sub/missing"),
+    /终端工作目录不存在或不是目录/,
+  );
+});
 
 test("工作区达到 64 个活动执行时淘汰最近 8 个之外最久未使用项", async () => {
   const manager = new TerminalManager({

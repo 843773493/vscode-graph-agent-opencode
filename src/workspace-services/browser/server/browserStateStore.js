@@ -244,10 +244,12 @@ export class BrowserStateStore {
 
   async writeScreenshot(browserId, buffer) {
     await mkdir(this.screenshotDir, { recursive: true });
-    const fileName = `${browserId}-${Date.now()}.png`;
+    const screenshotId = `screenshot_${randomUUID().replaceAll("-", "")}`;
+    const fileName = `${browserId}-${screenshotId}.png`;
     const filePath = path.join(this.screenshotDir, fileName);
     await writeFile(filePath, buffer);
-    return filePath;
+    // 只返回不含文件系统路径的可寻址身份；真实路径仅在本调用栈内使用（裁定 D-A2/D-A3）。
+    return { screenshot_id: screenshotId, byte_length: buffer.byteLength };
   }
 
   async writeDownload(browserId, download) {
@@ -261,18 +263,52 @@ export class BrowserStateStore {
     return {
       download_id: downloadId,
       filename: suggestedName,
-      path: filePath,
       url: download.url(),
       created_at: new Date().toISOString(),
       status: "completed",
     };
   }
 
-  assertDownloadPath(filePath) {
-    const resolved = path.resolve(filePath);
+  assertBrowserId(browserId) {
+    if (typeof browserId !== "string" || !/^browser_[a-zA-Z0-9]+$/.test(browserId)) {
+      throw new Error(`浏览器 ID 不能用于产物路径: ${browserId}`);
+    }
+    return browserId;
+  }
+
+  // 文件名必须来自 owner 生成的安全字符集，避免 `../` 逃出产物目录。
+  static assertSafeName(name) {
+    if (typeof name !== "string" || name === "" || name !== path.basename(name)) {
+      throw new Error(`产物文件名不能包含路径分隔符: ${name}`);
+    }
+    return name;
+  }
+
+  // 下载产物路径由 (browser_id, download_id, filename) 在调用栈内重推导，
+  // 持久记录 MUST NOT 承载真实路径；越界校验强度不降低（裁定 D-A2/D-A6）。
+  resolveDownloadPath(browserId, downloadId, filename) {
+    this.assertBrowserId(browserId);
+    if (typeof downloadId !== "string" || !/^download_[a-z0-9]+$/.test(downloadId)) {
+      throw new Error(`下载 ID 不能用于产物路径: ${downloadId}`);
+    }
+    const storedName = `${downloadId}-${BrowserStateStore.assertSafeName(filename)}`;
+    const resolved = path.resolve(this.downloadDir, browserId, storedName);
     const relative = path.relative(this.downloadDir, resolved);
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
       throw new Error(`下载文件越出 Browser Manager 目录: ${resolved}`);
+    }
+    return resolved;
+  }
+
+  resolveScreenshotPath(browserId, screenshotId) {
+    this.assertBrowserId(browserId);
+    if (typeof screenshotId !== "string" || !/^screenshot_[a-z0-9]+$/.test(screenshotId)) {
+      throw new Error(`截图 ID 不能用于产物路径: ${screenshotId}`);
+    }
+    const resolved = path.resolve(this.screenshotDir, `${browserId}-${screenshotId}.png`);
+    const relative = path.relative(this.screenshotDir, resolved);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error(`截图文件越出 Browser Manager 目录: ${resolved}`);
     }
     return resolved;
   }

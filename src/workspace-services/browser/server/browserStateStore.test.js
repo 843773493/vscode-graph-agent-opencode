@@ -113,3 +113,48 @@ describe("浏览器检查点配额", () => {
     }
   });
 });
+
+describe("浏览器产物不含真实路径", () => {
+  test("下载与截图的持久记录只承载身份，调用栈内才重推导真实路径", async () => {
+    const { store, cleanup } = await testStore();
+    try {
+      const download = await store.writeDownload("browser_artifact", {
+        suggestedFilename: () => "report.txt",
+        saveAs: async () => undefined,
+        url: () => "https://example.test/report.txt",
+      });
+      // 负向断言（6.3）：下载持久记录不得出现文件系统路径。
+      expect("path" in download).toBe(false);
+      expect(JSON.stringify(download).includes(store.downloadDir)).toBe(false);
+
+      const screenshot = await store.writeScreenshot(
+        "browser_artifact",
+        Buffer.from("png-bytes"),
+      );
+      expect("path" in screenshot).toBe(false);
+      expect(JSON.stringify(screenshot).includes(store.screenshotDir)).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("下载越界校验由调用栈内重推导完成且强度不降低", async () => {
+    const { store, cleanup } = await testStore();
+    try {
+      // 合法身份可解析到下载目录内。
+      expect(
+        store.resolveDownloadPath("browser_artifact", "download_abc123", "report.txt"),
+      ).toBe(path.join(store.downloadDir, "browser_artifact", "download_abc123-report.txt"));
+
+      // 非法身份（注入路径分隔符 / 越界 ID）必须显式失败。
+      expect(() => store.resolveDownloadPath("browser_artifact", "download_abc123", "../evil.txt"))
+        .toThrow(/产物文件名不能包含路径分隔符/);
+      expect(() => store.resolveDownloadPath("../../etc", "download_abc123", "report.txt"))
+        .toThrow(/浏览器 ID 不能用于产物路径/);
+      expect(() => store.resolveDownloadPath("browser_artifact", "../../etc/passwd", "report.txt"))
+        .toThrow(/下载 ID 不能用于产物路径/);
+    } finally {
+      await cleanup();
+    }
+  });
+});

@@ -198,6 +198,12 @@ export class BrowserManager {
     return await this.stateStore.writeScreenshot(id, buffer);
   }
 
+  screenshot(id, screenshotId) {
+    return {
+      path: this.stateStore.resolveScreenshotPath(id, screenshotId),
+    };
+  }
+
   async writeDownload(id, download) {
     return await this.stateStore.writeDownload(id, download);
   }
@@ -205,8 +211,12 @@ export class BrowserManager {
   download(id, downloadId) {
     const record = this.get(id).download(downloadId);
     return {
-      ...record,
-      path: this.stateStore.assertDownloadPath(record.path),
+      path: this.stateStore.resolveDownloadPath(
+        id,
+        record.download_id,
+        record.filename,
+      ),
+      filename: record.filename,
     };
   }
 
@@ -217,7 +227,6 @@ export class BrowserManager {
     }
     const execution = this.persistTail.then(async () => {
       await this.stateStore.write({
-        workspace_root: this.workspaceRoot,
         updated_at: nowIso(),
         browsers: [...this.sessions.values()].map((session) => session.snapshot()),
       });

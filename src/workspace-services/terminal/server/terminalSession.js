@@ -2,6 +2,8 @@ import {
   readProcessStat,
   terminateTerminalProcessTree,
 } from "./terminalProcessUtils.js";
+import { existsSync, statSync } from "node:fs";
+import path from "node:path";
 import { IsolatedPtyProcess } from "./isolatedPtyProcess.js";
 import { TerminalOutputMultiplexer } from "./terminalOutputMultiplexer.js";
 
@@ -10,6 +12,21 @@ const MAX_OUTPUT_EVENT_BYTES = 64 * 1024;
 
 export function nowIso() {
   return new Date().toISOString();
+}
+
+// 终端工作目录唯一解析入口：把持久记录里的工作区内相对路径（或调用方传入的
+// 相对/绝对路径）还原为本次调用栈内的绝对路径。绝对路径 MUST NOT 落盘。
+export function resolveTerminalCwd(workspaceRoot, cwdRelative) {
+  const rawCwd = typeof cwdRelative === "string" && cwdRelative.trim() !== ""
+    ? cwdRelative.trim()
+    : ".";
+  const resolved = path.resolve(workspaceRoot, rawCwd);
+  if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+    throw new Error(
+      `终端工作目录不存在或不是目录: cwd_relative=${rawCwd}, resolved=${resolved}`,
+    );
+  }
+  return resolved;
 }
 
 export function resolveShell() {
@@ -143,7 +160,13 @@ export class TerminalSession {
     this.title = record.title || "Persistent Terminal";
     this.command = record.command || resolveShell();
     this.args = Array.isArray(record.args) ? record.args : shellArgs();
-    this.cwd = record.cwd;
+    if (typeof record.cwd_relative !== "string") {
+      throw new Error(
+        `终端记录缺少工作目录相对路径: terminal_id=${record.terminal_id}`,
+      );
+    }
+    this.cwdRelative = record.cwd_relative;
+    this.cwd = path.resolve(manager.workspaceRoot, record.cwd_relative);
     this.cols = record.cols || 100;
     this.rows = record.rows || 30;
     this.createdAt = record.created_at || nowIso();
@@ -271,13 +294,15 @@ export class TerminalSession {
       });
     });
     let ready;
+    let resolvedCwd = null;
     try {
+      resolvedCwd = resolveTerminalCwd(this.manager.workspaceRoot, this.cwdRelative);
       ready = await isolatedPty.start({
         command: this.command,
         args: this.args,
         options: {
           name: "xterm-256color",
-          cwd: this.cwd,
+          cwd: resolvedCwd,
           cols: this.cols,
           rows: this.rows,
           env: {
@@ -289,7 +314,7 @@ export class TerminalSession {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `终端 PTY 启动失败: terminal_id=${this.id}, cwd=${this.cwd}, command=${this.command}; ${message}`,
+        `终端 PTY 启动失败: terminal_id=${this.id}, cwd=${resolvedCwd ?? this.cwd}, command=${this.command}; ${message}`,
         { cause: error },
       );
     }
@@ -663,6 +688,10 @@ export class TerminalSession {
   }
 
   toRecord() {
-    return this.snapshot();
+    const record = this.snapshot();
+    // 持久记录只承载工作区内相对路径；绝对路径仅在调用栈内解析（裁定 D-A2/D-A7）。
+    delete record.cwd;
+    record.cwd_relative = this.cwdRelative;
+    return record;
   }
 }
