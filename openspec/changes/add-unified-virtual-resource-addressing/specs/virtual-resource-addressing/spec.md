@@ -359,12 +359,19 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 **`inline` 层有 VRN**：它是发行包内真实存在的 JSONC 文件（`configs/workspace_inline.jsonc` / `configs/gateway_inline.jsonc`，经 `resolve_config_resource_source` 的 `is_file()` 校验），有稳定 disk 载体。
 
+**config VRN 的尾段形态（定稿）**：尾段 MUST 取该来源的**逻辑资源名**，MUST NOT 取原始文件名。尾段 MUST 是**单段**、MUST 落在动态段闭合 charset `[A-Za-z0-9_-]` 内、MUST NOT 含点号——真实文件名 `workspace_inline.jsonc` / `gateway_inline.jsonc` 的点号与扩展名不可原样入 VRN（`parse_vrn` 对含 `.` 的尾段以 `invalid_character` fail-closed 拒绝，该 charset MUST NOT 放宽、MUST NOT 新增转义后门）。尾段取值 MUST 与该来源的 `layer` 兄弟字段**一一对应**（`layer` 仍留在 VRN 之外，不进 VRN 字符串）。规范形态即 `boxteam://{scope}/{scope_id}/resources/config/{logical_source_name}`，其中 `scope`/`scope_id` 按本 capability 的 scope 闭集 requirement 取值（`inline` 层取 `scope=inline` 与真实 `distribution_id`），逻辑资源名取该层可寻址载体的逻辑名（如 `workspace_inline` / `gateway_inline`）。
+
 **`sqlite` 层 MUST NOT 被赋予 VRN**：它是**边界变量**而非固定资源——`user`/`user_local`/`workspace` 三层共享同一个 `workspace.sqlite`（`app/services/infrastructure/config_service.py` 的 `_config_source` 在 state store 存在时统一返回同一个 `path`，同层再按 `layer_names` 映射回三种层名）。把它映射成单一 VRN 会立刻产生「同一 URI 对应四个逻辑来源」的冲突，故 MUST 显式说明其**共享载体导致的不可寻址性**。
 
 #### Scenario: config 资源有 VRN
 
 - **WHEN** 系统为一条 `inline` 层配置来源构造地址
 - **THEN** 它使用 `config` kind 的 VRN，`layer` 作为兄弟字段随行，VRN 字符串本身不含 layer 取值
+
+#### Scenario: config VRN 尾段是逻辑资源名而非原始文件名
+
+- **WHEN** 系统为一条 `inline` 层配置来源构造 VRN，其底层真实文件名为 `workspace_inline.jsonc`
+- **THEN** 尾段取逻辑资源名（`workspace_inline`，单段、落在 `[A-Za-z0-9_-]` 内、无点号），MUST NOT 取含 `.jsonc` 的原始文件名；含点号的尾段被 grammar 以 `invalid_character` 拒绝，且 charset MUST NOT 被放宽
 
 #### Scenario: sqlite 层不编 VRN
 

@@ -42,7 +42,7 @@
 - [ ] 5A.2 移除 `app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord.source_path`/`backup_path` 持久化，改为 VRN 表达；`layer` 作为兄弟字段保留、不塞进 VRN。
 - [ ] 5A.3 移除 API 响应体对外输出真实路径（`app/api/config.py:102` 的 `path=str(source.path)` 与 `app/schemas/internal_v2/config.py` 的 `ConfigSourceDTO.path`），改为 VRN；同步更新前端消费点。
 - [ ] 5A.4 明确 `sqlite` 层不给 VRN（`user`/`user_local`/`workspace` 共享同一 `workspace.sqlite`），`inline` 层有稳定 disk 载体故有 VRN；在落地代码与注释中说明该不可寻址性。
-- [ ] 5A.5 落地时删除 `app/agents/skill_runtime.py:538` 的 bundled 到 builtin 改名映射，向 `inline` 收敛；评估 `layer` 名进入 `entry_identity`/catalog payload 的同步面。
+- [x] 5A.5 落地时删除 `app/agents/skill_runtime.py:538` 的 bundled 到 builtin 改名映射，向 `inline` 收敛；评估 `layer` 名进入 `entry_identity`/catalog payload 的同步面。 **（已由 `298ef599` 落地：`layer_order` 改为 `(inline,gateway,workspace)`，`scope = {...}[layer]` 改名 shim 物理删除，`layer` 名与 VRN scope 名自此逐字一致；`rg -n 'bundled' app/agents/skill_runtime.py` 仅剩合法命名的 `resolve_bundled_skill_groups`。该 shim 已不存在，无需再删。）**
 - [ ] 5A.6 断言配置来源的持久化记录与 API 响应体均不含真实路径。
 
 ## 6. 收口在途 change
