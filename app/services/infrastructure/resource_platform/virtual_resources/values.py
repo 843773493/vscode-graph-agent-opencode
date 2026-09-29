@@ -21,6 +21,10 @@ ALL_OPERATIONS: Final = frozenset(
     {OPERATION_READ_CONTENT, OPERATION_ACTIVATE, OPERATION_OBSERVE}
 )
 
+# 描述符 kind 闭集（SemanticResourceDescriptor 侧）；与 grammar.py 的语法闭集
+# _RESOURCE_KINDS 是两个独立闭集，不可用其一校验另一。本闭集只含实际被语义
+# ResourceRegistry 登记为已发布语义描述符的 kind（agent-spec/skills）；语法闭集
+# 内的 config/session 是纯寻址 kind（无 payload 描述符），不得登记进本闭集。
 _DESCRIPTOR_KINDS: Final = frozenset({"agent-spec", "skills"})
 _IDENTITY_FORBIDDEN: Final = ("/", "\\", "@", "%")
 

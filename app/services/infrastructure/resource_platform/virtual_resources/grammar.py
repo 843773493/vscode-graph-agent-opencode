@@ -10,13 +10,16 @@
 from __future__ import annotations
 
 import string
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
 _SCHEME: Final = "boxteam://"
 _SCOPE_KEYWORDS: Final = frozenset({"workspace", "gateway", "inline"})
-_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills"})
-_SKILL_SCOPES: Final = frozenset({"workspace", "gateway", "inline"})
+# 语法 kind 闭集（parse_vrn 侧）；与 values.py 的描述符闭集 _DESCRIPTOR_KINDS 是两个
+# 独立闭集，不可混用。「config」承载配置来源文件本身，「session」承载会话上下文资源
+# （会话定位，规范形态 .../resources/session/{...canonical path segments}）。
+_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
 
 _GRAMMAR_REASON_CODES: Final = frozenset(
@@ -65,6 +68,11 @@ class ParsedVrn:
     kind: str | None
     logical_name: str
     display_uri: str
+    # 规范化尾段（resources/{kind}/ 之后的全部 segment）。固定形态 kind（skills /
+    # agent-spec）的 logical_name 是规范化后的权威值，可能与尾段字面不同（大小写、
+    # skills 尾段丢弃文件名）；发现式 kind（config / session）的 logical_name 即尾段
+    # 逐段拼接。
+    tail_segments: tuple[str, ...]
 
 
 def _has_control_char(value: str) -> bool:
@@ -113,6 +121,24 @@ def _expect_fixed_segment(segment: str, expected: str) -> None:
         )
     raise VrnGrammarError(
         "malformed_path", f"VRN 固定 segment 不匹配，期望 {expected!r}: {segment!r}"
+    )
+
+
+def _parsed(
+    scope: str,
+    scope_id: str,
+    kind: str,
+    tail_segments: list[str],
+    logical_name: str,
+    display_uri: str,
+) -> ParsedVrn:
+    return ParsedVrn(
+        scope=scope,
+        scope_id=scope_id,
+        kind=kind,
+        logical_name=logical_name,
+        display_uri=display_uri,
+        tail_segments=tuple(tail_segments),
     )
 
 
@@ -172,41 +198,70 @@ def parse_vrn(uri: str) -> ParsedVrn:
             )
         _expect_fixed_segment(tails[1], "SKILL.md")
         _validate_dynamic_segment(tails[0], field="skill name")
-        return ParsedVrn(
-            scope=scope,
-            scope_id=body[0],
-            kind=kind,
-            logical_name=tails[0],
-            display_uri=uri,
-        )
+        return _parsed(scope, body[0], kind, tails, tails[0], uri)
 
-    if len(tails) != 2:
+    if kind == "agent-spec":
+        if len(tails) != 2:
+            raise VrnGrammarError(
+                "malformed_path",
+                f"agent-spec VRN 必须是 boxteam://{scope}/{{id}}/resources/agent-spec/"
+                f"root/AGENTS.md: {uri!r}",
+            )
+        _expect_fixed_segment(tails[0], "root")
+        _expect_fixed_segment(tails[1], "AGENTS.md")
+        return _parsed(scope, body[0], kind, tails, "root/AGENTS.md", uri)
+
+    # config / session 无固定尾段（规范形态 .../resources/{kind}/{...canonical path
+    # segments}）；logical_name 即尾段逐段拼接的规范化结果。
+    if not tails:
         raise VrnGrammarError(
             "malformed_path",
-            f"agent-spec VRN 必须是 boxteam://{scope}/{{id}}/resources/agent-spec/"
-            f"root/AGENTS.md: {uri!r}",
+            f"{kind} VRN 必须携带规范化尾段: boxteam://{scope}/{{id}}/resources/"
+            f"{kind}/{{...canonical path segments}}: {uri!r}",
         )
-    _expect_fixed_segment(tails[0], "root")
-    _expect_fixed_segment(tails[1], "AGENTS.md")
-    return ParsedVrn(
-        scope=scope,
-        scope_id=body[0],
-        kind=kind,
-        logical_name="root/AGENTS.md",
-        display_uri=uri,
-    )
+    for tail in tails:
+        _validate_dynamic_segment(tail, field=f"{kind} path")
+    return _parsed(scope, body[0], kind, tails, "/".join(tails), uri)
+
+
+def resource_display_uri(
+    *, scope: str, scope_id: str, kind: str, tail_segments: Sequence[str]
+) -> str:
+    """按 kind 构造规范 display URI；VRN 构造的唯一通用入口。
+
+    scope/scope_id/kind 取自同一套闭集，尾段按 kind 校验固定段：构造后立即走
+    `parse_vrn`（构造即校验），故禁止裸拼接，且闭集内任一 kind 都能解析回自身。
+    """
+    if scope not in _SCOPE_KEYWORDS:
+        raise VrnGrammarError("unknown_scope", f"VRN scope 未登记: {scope!r}")
+    if kind not in _RESOURCE_KINDS:
+        raise VrnGrammarError(
+            "unknown_resource_kind", f"VRN 资源 kind 未登记: {kind!r}"
+        )
+    _validate_dynamic_segment(scope_id, field="scope id")
+    # 固定尾段（skills 的 SKILL.md / agent-spec 的 AGENTS.md）合法含 '.'，不在
+    # charset 内，故不在此逐段校验；尾段的固定/动态约束与拒绝码统一由 parse_vrn
+    # 判定（kind 专属的动态段校验由各 kind 包装函数负责）。
+    uri = _SCHEME + "/".join((scope, scope_id, "resources", kind, *tail_segments))
+    return parse_vrn(uri).display_uri
 
 
 def workspace_agent_spec_display_uri(workspace_id: str) -> str:
     """构造并校验 workspace AGENTS 规范 display URI。"""
-    _validate_dynamic_segment(workspace_id, field="workspace id")
-    return f"boxteam://workspace/{workspace_id}/resources/agent-spec/root/AGENTS.md"
+    return resource_display_uri(
+        scope="workspace",
+        scope_id=workspace_id,
+        kind="agent-spec",
+        tail_segments=("root", "AGENTS.md"),
+    )
 
 
 def skill_display_uri(*, scope: str, scope_id: str, skill_name: str) -> str:
     """构造并校验 workspace/Gateway/inline Skill 规范 display URI。"""
-    if scope not in _SKILL_SCOPES:
-        raise VrnGrammarError("unknown_scope", f"Skill VRN scope 未登记: {scope!r}")
-    _validate_dynamic_segment(scope_id, field="scope id")
     _validate_dynamic_segment(skill_name, field="skill name")
-    return f"boxteam://{scope}/{scope_id}/resources/skills/{skill_name}/SKILL.md"
+    return resource_display_uri(
+        scope=scope,
+        scope_id=scope_id,
+        kind="skills",
+        tail_segments=(skill_name, "SKILL.md"),
+    )

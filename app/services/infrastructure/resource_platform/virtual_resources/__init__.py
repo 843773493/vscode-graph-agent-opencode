@@ -9,6 +9,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.grammar imp
     ParsedVrn,
     VrnGrammarError,
     parse_vrn,
+    resource_display_uri,
     skill_display_uri,
     workspace_agent_spec_display_uri,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "VrnGrammarError",
     "VrnResolveError",
     "parse_vrn",
+    "resource_display_uri",
     "skill_display_uri",
     "workspace_agent_spec_display_uri",
 ]

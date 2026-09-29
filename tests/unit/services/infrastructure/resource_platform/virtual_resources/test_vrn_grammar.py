@@ -7,8 +7,12 @@ import pytest
 from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
     VrnGrammarError,
     parse_vrn,
+    resource_display_uri,
     skill_display_uri,
     workspace_agent_spec_display_uri,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    SemanticResourceDescriptor,
 )
 
 
@@ -33,6 +37,85 @@ def test_parse_skill_three_scopes() -> None:
         assert parsed.scope_id == scope_id
         assert parsed.kind == "skills"
         assert parsed.logical_name == "code-review"
+
+
+def test_parse_config_and_session_kinds() -> None:
+    # config/session 为本次新增 kind：规范形态为 .../resources/{kind}/{...canonical
+    # path segments}，logical_name 即尾段逐段拼接结果，且解析回自身。
+    parsed = parse_vrn("boxteam://inline/source-development-0_0_2/resources/config/workspace_inline")
+    assert parsed.scope == "inline"
+    assert parsed.scope_id == "source-development-0_0_2"
+    assert parsed.kind == "config"
+    assert parsed.logical_name == "workspace_inline"
+    assert parsed.tail_segments == ("workspace_inline",)
+    assert parsed.display_uri == "boxteam://inline/source-development-0_0_2/resources/config/workspace_inline"
+
+    parsed = parse_vrn("boxteam://workspace/ws-1/resources/session/sess-1/child")
+    assert parsed.scope == "workspace"
+    assert parsed.scope_id == "ws-1"
+    assert parsed.kind == "session"
+    assert parsed.logical_name == "sess-1/child"
+    assert parsed.tail_segments == ("sess-1", "child")
+    assert parsed.display_uri == "boxteam://workspace/ws-1/resources/session/sess-1/child"
+
+
+def test_resource_display_uri_round_trip_all_kinds() -> None:
+    # 统一构造函数：闭集内任一 kind 都能构造并解析回自身。
+    cases = (
+        ("workspace", "ws-1", "agent-spec", ("root", "AGENTS.md")),
+        ("gateway", "gw-1", "skills", ("review", "SKILL.md")),
+        ("inline", "source-development-0_0_2", "config", ("workspace_inline",)),
+        ("workspace", "ws-1", "session", ("sess-1",)),
+    )
+    for scope, scope_id, kind, tail in cases:
+        uri = resource_display_uri(
+            scope=scope, scope_id=scope_id, kind=kind, tail_segments=tail
+        )
+        parsed = parse_vrn(uri)
+        assert parsed.display_uri == uri
+        assert parsed.kind == kind
+
+
+def test_resource_display_uri_rejects_unregistered_kind_and_scope() -> None:
+    with pytest.raises(VrnGrammarError) as excinfo:
+        resource_display_uri(
+            scope="workspace", scope_id="ws-1", kind="plugins", tail_segments=("x",)
+        )
+    assert excinfo.value.reason_code == "unknown_resource_kind"
+    with pytest.raises(VrnGrammarError) as excinfo:
+        resource_display_uri(
+            scope="memory", scope_id="local", kind="config", tail_segments=("a",)
+        )
+    assert excinfo.value.reason_code == "unknown_scope"
+
+
+def test_config_and_session_require_canonical_tail() -> None:
+    # 闭集内的新 kind 仍 fail-closed：缺少规范化尾段即 malformed_path。
+    for kind in ("config", "session"):
+        with pytest.raises(VrnGrammarError) as excinfo:
+            parse_vrn(f"boxteam://workspace/ws-1/resources/{kind}")
+        assert excinfo.value.reason_code == "malformed_path"
+
+
+def test_descriptor_closure_excludes_config_and_session() -> None:
+    # 语法闭集（_RESOURCE_KINDS）与描述符闭集（_DESCRIPTOR_KINDS）是两个独立闭集：
+    # config/session 是可寻址的语法 kind，但不在描述符闭集内，故不得用其中之一去
+    # 校验另一个的输入。
+    for kind, uri in (
+        ("config", "boxteam://inline/source-development-0_0_2/resources/config/workspace_inline"),
+        ("session", "boxteam://workspace/ws-1/resources/session/sess-1"),
+    ):
+        parse_vrn(uri)  # 语法闭集接受
+        with pytest.raises(ValueError) as excinfo:
+            SemanticResourceDescriptor(
+                resource_id="res-1",
+                source_id="src-1",
+                kind=kind,
+                display_uri=uri,
+                semantic_revision="rev-1",
+                semantic_hash="hash-1",
+            )
+        assert "未知 SemanticResourceDescriptor.kind" in str(excinfo.value)
 
 
 def test_memory_scope_is_rejected_fail_closed() -> None:

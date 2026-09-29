@@ -440,9 +440,6 @@ class PublishedSkillCatalog:
         return self.source_paths.get(name)
 
 
-_SKILL_LAYER_LABELS = {"workspace": "Workspace", "gateway": "Gateway", "inline": "Built-in"}
-
-
 def _scan_layer_skill_files(
     *,
     layer: str,

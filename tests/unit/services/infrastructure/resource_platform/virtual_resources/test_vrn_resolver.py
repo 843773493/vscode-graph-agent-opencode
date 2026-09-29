@@ -189,3 +189,37 @@ def test_resolve_name_uses_current_catalog_index() -> None:
             context=_workspace_context(),
         )
     assert excinfo.value.reason_code == "unknown_resource"
+
+
+def test_config_and_session_kinds_reach_catalog_lookup() -> None:
+    # config/session 已进语法闭集，必须在 parser 之后贯通 resolver 门卫链：scope
+    # 校验先行，随后落到 catalog 查询（当前无 owner 登记其描述符，故 unknown_resource
+    # 是正确 fail-closed 结果，而不是在 grammar 期被 unknown_resource_kind 拒绝）。
+    resolver = VirtualResourceResolver(_catalog({}))
+    with pytest.raises(VrnResolveError) as excinfo:
+        resolver.resolve(
+            "boxteam://workspace/ws-1/resources/session/sess-1",
+            operation=OPERATION_READ_CONTENT,
+            context=_workspace_context(),
+        )
+    assert excinfo.value.reason_code == "unknown_resource"
+    with pytest.raises(VrnResolveError) as excinfo:
+        resolver.resolve(
+            "boxteam://inline/source-development-0_0_2/resources/config/workspace_inline",
+            operation=OPERATION_READ_CONTENT,
+            context=ResolutionContext(
+                workspace_id="ws-1", distribution_id="source-development-0_0_2"
+            ),
+        )
+    assert excinfo.value.reason_code == "unknown_resource"
+
+
+def test_config_and_session_still_fail_scope_binding() -> None:
+    resolver = VirtualResourceResolver(_catalog({}))
+    with pytest.raises(VrnResolveError) as excinfo:
+        resolver.resolve(
+            "boxteam://workspace/ws-OTHER/resources/session/sess-1",
+            operation=OPERATION_READ_CONTENT,
+            context=_workspace_context(),
+        )
+    assert excinfo.value.reason_code == "scope_mismatch"
