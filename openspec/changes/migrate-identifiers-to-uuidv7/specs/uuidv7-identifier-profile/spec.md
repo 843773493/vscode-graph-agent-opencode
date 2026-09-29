@@ -38,6 +38,8 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 - **跨进程或跨重启**只保证 **48 bit 毫秒分辨率**的时间序；MUST NOT 声称跨进程在同一毫秒内有序；
 - 生成路径 MUST NOT 传入显式时间戳参数（实测传显式时间戳会破坏同毫秒内单调）；若允许注入时间源（如测试），该注入 MUST 保持与生产相同的单调合同。
 
+**排序保证的量化上界与对主键局部性的边界（按实测收紧，MUST NOT 弱化）**：同毫秒组实测可达 **3710** 个 id（500000 个样本中 `max ids per same-ms group`），故「同一进程内同毫秒数千个 id 仍保持顺序」是本 capability 承诺的量化上界。据此，`TEXT PRIMARY KEY` 的时间局部性 MUST 表述为「**按毫秒聚簇**的写入局部性」：同进程连续写入获得毫秒内相邻的页插入，而跨进程并发写入同一毫秒时，毫秒内顺序可能交错，局部性退化为毫秒粒度相邻。系统 MUST NOT 声称「主键严格按时间相邻」或「跨进程同毫秒有序」。
+
 #### Scenario: 同毫秒批量生成保持非递减且唯一
 - **WHEN** 同一进程在同一毫秒内连续生成 20000 个 id
 - **THEN** 按 32 位 hex 排序后与生成顺序逐字节一致，且集合去重后数量等于 20000
@@ -45,6 +47,10 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 #### Scenario: 跨毫秒自然单调
 - **WHEN** 同一进程跨越多个毫秒连续生成 200000 个 id
 - **THEN** 全局按 32 位 hex 排序后与生成顺序一致，且全部唯一
+
+#### Scenario: 不得声称跨进程同毫秒有序
+- **WHEN** 文档或实现描述 v7 的排序保证
+- **THEN** 它 MUST 只承诺「同进程内同毫秒非递减且唯一」与「跨进程共享 48 bit 毫秒分辨率」，MUST NOT 承诺跨进程同毫秒有序或主键严格按时间相邻
 
 ### Requirement: sessions/YYYY/MM/DD 日期桶必须可由 id 内嵌时间戳推导且一致
 
@@ -68,6 +74,14 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 - **WHEN** 系统时钟被回拨到早于上一次生成时刻
 - **THEN** 新生成的 id 按 hex 序 MUST 不小于上一次生成的 id
 
+#### Scenario: 回拨时分桶日期与 id 内嵌时间戳仍一致
+- **WHEN** 系统时钟被回拨后创建一个新 session
+- **THEN** 该 session 的 id 内嵌毫秒时间戳 MUST 取「创建时刻的已钳制值」（`max(monotonic_now_ms, last_issued_ms)`），且 `sessions/YYYY/MM/DD` 的 UTC 日期 MUST 由**同一个已钳制值**推出，故二者恒一致；一致性校验 MUST NOT 因回拨本身而报错
+
+#### Scenario: 不得把回拨变成用户可见故障
+- **WHEN** 发生 NTP 回拨
+- **THEN** 系统 MUST NOT 默认拒绝创建或报错；若某部署显式选择「拒绝并报告」语义，该选择 MUST 被显式配置，MUST NOT 与默认钳制语义同时生效
+
 ### Requirement: 校验层命名必须只反映当前 profile 且不得双轨
 
 把 `v4` 写进名字的标识、注释与 docstring（`_validate_uuid_v4_payload`、`_UUID_VERSION_HEX_INDEX`、「UUIDv4 位 profile」等）MUST 一并正名为与当前单一 profile 一致的名词（例如 `_validate_uuid_payload` / `_UUID_VERSION_HEX_INDEX` 语义变为「要求 version == 7」）。系统 MUST NOT 保留第二套并行校验函数或同概念异名；MUST NOT 长期同时接受 `v4|v7` 两种位 profile。
@@ -84,7 +98,21 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 
 存量 UUIDv4 身份（`.boxteam/sessions/` 下的 session/thread id、SQLite 主键与相关持久记录）MUST 通过**一次性显式迁移**重编号为 UUIDv7；迁移 MUST 在受维护窗口与一致性备份约束下进行，MUST 使用可恢复账本记录进度，MUST 为每个被重编号的身份保留 source→target 的 lineage。
 
-迁移 MUST NOT 双读、MUST NOT 扫盘重建、MUST NOT 提供旧 ID path alias；无法可靠归属或校验的形态 MUST fail-closed 或隔离到既有隔离惯例（`.boxteam/orphaned/`），MUST NOT 静默吸收。迁移窗口结束后，校验器 MUST 只接受 v7。
+迁移 MUST NOT 双读、MUST NOT 扫盘重建、MUST NOT 提供旧 ID path alias；无法可靠归属或校验的形态 MUST fail-closed 或隔离到既有隔离惯例（`.boxteam/orphaned/`），MUST NOT 静默吸收。
+
+**窗口期校验器的确切形态（判死，采用「消除窗口期」）**：window 内的双接受 MUST 由唯一的显式维护开关 `identity_profile_migration_active` 门控。开关开启时校验器接受 `v4|v7`（唯一允许的双接受时刻）；开关关闭（默认与迁移后常态）时校验器 MUST 只接受 `v7`。账本进入终态的那一笔事务提交后，MUST 在**同一次维护操作内**把开关置为关闭并切到「仅 v7」，MUST NOT 存在「只接受 v4」或「无终态长期双接受」的运行态。窗口期 MUST NOT 并行运行新旧代码版本，MUST 有启动期版本闸门保证单版本服务。
+
+#### Scenario: 窗口期双接受由显式开关门控
+- **WHEN** 迁移正在进行
+- **THEN** 校验器接受 `v4|v7`，且该状态 MUST 由 `identity_profile_migration_active = true` 这一可观察事实显式承认，MUST NOT 以「不双读」等口号掩盖
+
+#### Scenario: 开关关闭即只接受 v7
+- **WHEN** 迁移账本进入终态且开关被置为关闭
+- **THEN** 校验器 MUST 只接受 `v7`，`v4` 位 profile 的 canonical 身份 MUST 被拒绝
+
+#### Scenario: 窗口期不并行运行新旧代码
+- **WHEN** 某工作区处于迁移窗口（开关为 true）
+- **THEN** 旧代码版本 MUST 被启动期版本闸门拒绝服务该工作区，MUST NOT 出现新旧代码同时服务
 
 #### Scenario: 迁移保留 lineage 且不双读
 - **WHEN** 迁移把某个 session 的 v4 身份重编号为 v7
@@ -107,7 +135,7 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 系统 MUST 显式声明并区分各运行面的 v7 可用性，MUST NOT 伪造统一：
 
 - `src/workspace-services/browser/server/` 与 `src/workspace-services/terminal/server/` 的后端进程由 **Node** 启动（`BOXTEAM_NODE_BIN`，见 `app/gateway/runtime/process.py`）；实测 Node 22 无 `crypto.randomUUIDv7`。其另行生成的 id（`term_` / `browser_` / `screenshot_` / `download_` / `page_` / `preset_` 等）MUST 被声明为**非 canonical 身份**，允许继续使用 v4。
-- `src/clients/web` 是浏览器构建产物，**没有** `Bun.*`（实测 `src/clients/**` 无任何 `Bun.` 引用）；其生成的附件 file id（`inline:{uuid}:{name}`）MUST 被声明为**非 canonical 身份**，允许继续使用 v4。
+- `src/clients/web` 是浏览器构建产物，**其生产代码**没有任何 `Bun.*` 引用（实测 `rg -n '\bBun\.' src/clients` 的 8 个命中全部位于 `*.test.ts(x)` 测试文件，生产代码 0 命中；浏览器运行时并不提供 `Bun`）；其生成的附件 file id（`inline:{uuid}:{name}`）MUST 被声明为**非 canonical 身份**，允许继续使用 v4。
 - 上述非 canonical id MUST NOT 被当作 session/thread 身份，MUST NOT 进入 canonical 校验器所在的命名空间。
 
 #### Scenario: 非 canonical id 明确豁免
@@ -122,9 +150,15 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 
 本 capability 只拥有 id 的**生成位 profile**；MUST NOT 定义或改写 VRN 语法、scope 闭集、`scope_id` 语义、`kind` 闭集、拒绝码或 ResourceIdentity。上述内容 MUST 具名引用对应 change，本 capability MUST NOT 复制其定义。
 
+该边界 MUST 有可机械检查的载体（MUST NOT 只作声明）：本 capability 的生成/校验实现（`app/core/identifier.py`、`app/core/session_catalog_store.py` 的 id 校验路径）MUST NOT 导入或引用 VRN/寻址构造（`app/services/infrastructure/resource_platform/virtual_resources/`），且 VRN grammar/解析实现 MUST NOT 承载 UUID version/variant 位判定。
+
 #### Scenario: 生成位 profile 与寻址身份不可混用
 - **WHEN** 某处需要引用资源寻址或资源身份
 - **THEN** 它 MUST 具名引用 `add-unified-virtual-resource-addressing` / `migrate-session-context-uri-to-vrn` 等 owner，MUST NOT 借本 capability 的 id profile 条款表达寻址语义
+
+#### Scenario: 边界由导入方向机械核对
+- **WHEN** 检查 id 生成/校验实现与 VRN 实现的依赖方向
+- **THEN** id 侧 MUST NOT 依赖 `resource_platform/virtual_resources/`，且 VRN 侧 MUST NOT 出现 UUID version/variant 位判定；该断言 MUST 由一条静态检查测试承载
 
 ### Requirement: canonical 与豁免身份的边界必须显式且豁免不得扩张
 
@@ -185,3 +219,19 @@ gateway 控制面库（`app/gateway/control/gateway_state.py` 等）中承载 se
 - **WHEN** 分类处理 `user_access_lease`
 - **THEN** 除非有实测的「可安全丢弃」依据，它 MUST 归入 `migrate`，MUST NOT 被静默失效
 
+### Requirement: 迁移面必须按工厂前缀全集枚举且持久面与非持久面分别登记
+
+迁移面 MUST 按唯一 id 工厂（`app/core/identifier.py` 的 `IdentifierPrefix`，实测为 **33 个前缀**的闭合 `Literal`）× **是否进入持久面**的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 等字面后缀匹配。每个前缀 MUST 被判定并登记为持久面或非持久面：
+
+- **持久面**（目录叶名 / 文件名 / SQLite 主键或列 / JSONL 或 JSON 字段）：MUST 列入迁移任务。已实测持久面至少含 `ses`、`thr`、`op`、`strm`、`msg`、`evt`、`snapshot`、`part`、`goal`、`job`、`lease`、`gen`、`grun`、`gwn`、`team`、`ttask`、`tevt`、`comm`、`attempt`、`tooltest`、`patch`、`dbgcfg`、`node-bp`、`node-debug-action`、`node-debug-proc`、`intr`。
+- **非持久面**（仅进程内内存/事件总线）：MUST 显式登记为「不参与迁移」并给出负向证据。已实测非持久面为 `req`、`src`、`bgm`、`bgt`、`chan`、`sub`、`robs`。
+
+新增工厂前缀时 MUST 在矩阵补一行并判定持久面，MUST NOT 遗留未判定前缀。
+
+#### Scenario: 矩阵行数等于工厂前缀全集
+- **WHEN** 枚举迁移面
+- **THEN** 矩阵 MUST 覆盖 `IdentifierPrefix` 的全部前缀（当前 33 个），MUST NOT 只覆盖 `ses_`/`thr_`
+
+#### Scenario: 持久面漏项必须被机械检出
+- **WHEN** 某个进入持久面的前缀（例如 `op_` 进 `navigation_mutation_records` 主键、`strm_` 进 `message_streams/*.jsonl` 文件名）未被列入迁移任务
+- **THEN** 审计 MUST 报出该漏项，MUST NOT 放行

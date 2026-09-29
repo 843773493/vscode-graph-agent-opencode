@@ -3,19 +3,21 @@
 项目当前所有 canonical 标识符（`session_id`、`thread_id` 及其它由 id 工厂生成的持久身份）都是 **UUIDv4 位 profile**：`app/core/identifier.py` 的 `create_uuid_hex()` 返回 `uuid.uuid4().hex`，`app/core/session_catalog_store.py` 的校验器把 payload 第 13 个 hex 硬性要求为 `4`（注释与 docstring 逐字写「UUIDv4 位 profile」「非 v4 位 profile 一律直接拒绝」）。这使得：
 
 - **按时间分桶的目录无法由 id 自校验**：`sessions/YYYY/MM/DD/{session_id}` 的日期桶当前由创建时刻**独立记账**（`session_catalog_store.py` 以 `created_at.astimezone(UTC).date()` 生成 locator），id 本身不携带任何时间信息，因此「分桶与 id 是否一致」只能靠另存的 `created_at` 复核，无法从 id 直接推导或反查。
-- **SQLite 主键没有时间局部性**：`nodes.node_id`、`thread_catalog.thread_id` 等以 id 文本作 `TEXT PRIMARY KEY`，随机 v4 让 B-tree 插入散布在整个页空间，缺乏时间序带来的写入局部性。
+- **SQLite 主键没有时间局部性**：`nodes.node_id`、`thread_catalog.thread_id` 等以 id 文本作 `TEXT PRIMARY KEY`，随机 v4 让 B-tree 插入散布在整个页空间。改为 v7 后，**同一进程内**的 id 按 32 位 hex 有序，使同一进程连续写入的主键落在相邻 B-tree 页上，获得写入局部性；但该收益**只对同进程写入成立**，见下方量化边界。
 
-UUIDv7（RFC 9562）前 48 bit 承载 Unix 毫秒时间戳，正好让 id 自带时间序：分桶可由 id 内嵌时间戳推导并复核，主键获得时间局部性。本 change 把项目所有 UUIDv4 身份统一改为 UUIDv7，并把它作为 canonical id profile 的**唯一 owner**。
+UUIDv7（RFC 9562）前 48 bit 承载 Unix 毫秒时间戳，正好让 id 自带时间序：分桶可由 id 内嵌时间戳推导并复核；主键在同一进程内获得写入局部性。本 change 把项目所有 UUIDv4 身份统一改为 UUIDv7，并把它作为 canonical id profile 的**唯一 owner**。
+
+**价值主张的量化边界（按实测收紧）**：本 change 只承诺两件**已被实测支撑**的事——(1) **同进程内**同一毫秒内生成的 id 非递减且唯一（实测 500000 个自然生成的 id 中，同毫秒组最多 **3710** 个，全部唯一且组内有序）；(2) `sessions/YYYY/MM/DD` 的日期可由 id 内嵌时间戳按 UTC 复核。**MUST NOT** 声称跨进程/跨重启在同一毫秒内有序：跨进程只共享 48 bit 毫秒分辨率。因此「B-tree 时间局部性」的实际收益是**同进程连续写入**的局部性；跨进程并发写入同一毫秒时，其插入顺序仍可能在毫秒内交错，局部性退化为「毫秒粒度相邻」而非「严格相邻」。
 
 ## What Changes
 
 - **BREAKING**：canonical 标识符的位 profile 从 UUIDv4 改为 **UUIDv7**。`app/core/identifier.py` 的唯一 id 工厂产出 v7 hex；`app/core/session_catalog_store.py` 的校验器（现名 `_validate_uuid_v4_payload`，硬要求 `payload[12] == "4"`）**正名并改为只接受 v7 位 profile**，不再存在第二套 v4 分支。
-- **拒绝双轨**：**MUST NOT** 长期同时接受 v4|v7 两种位 profile。存量 v4 身份按「**一次性显式迁移**」方向处理：在受维护窗口与备份约束下，用可恢复账本把权威身份重编号为 v7 并保留 lineage；迁移窗口结束后校验器**只接受 v7**。**MUST NOT** 提供旧 ID path alias，**MUST NOT** 双读，**MUST NOT** 扫盘重建。
+- **拒绝双轨：采用「消除窗口期」方案**。**MUST NOT** 把「同时接受 v4|v7」当作运行期常态。存量 v4 身份在**同一次维护窗口内原子完成**「迁移 + 校验器收紧」：维护开关开启时校验器接受 v4|v7，迁移事务提交的**同一时刻**由同一次显式切换把校验器切到只接受 v7，MUST NOT 存在只接受 v4 或长期双接受的运行态。窗口期 MUST NOT 并行运行新旧代码版本。**MUST NOT** 提供旧 ID path alias，**MUST NOT** 双读，**MUST NOT** 扫盘重建。窗口期校验器的确切形态、维护开关的可验证断言与收敛断言见 design D3。
 - **生成来源定稿为显式直接依赖 `uuid-utils`**：本机 Python 3.12.3 无 `uuid.uuid7()`（实测），stdlib v7 需 Python 3.14，而发行包与 Docker 运行时固定为 3.12（`packaging/runtime/versions.mjs`、`tools/cross-platform-development-targets/docker/Dockerfile`），抬高到 3.14 代价过大，故否决 stdlib 方案。`uuid-utils` 已在 `uv.lock` 作**传递依赖**（langchain-core/langsmith）存在且已是锁定版本 `0.16.0`，本 change 必须把它提升为 `pyproject.toml` 的**显式直接依赖**，MUST NOT 依赖「某个第三方包偶然传递存在」。缺失或不可用时 **fail-closed**，绝不回退到 v4。
 - **单调性合同**：v7 的「时间有序」是本 change 的全部价值，故 MUST 明确：同一进程内、同一毫秒内的 id **MUST 非递减且唯一**（用 `rand_a` / 计数器方案）；跨进程/跨重启只保证 **48 bit 毫秒分辨率**的时间序。MUST NOT 传入显式时间戳破坏单调（实测 `uuid-utils` 传显式 `timestamp=` 时同毫秒内**不再单调**）。
 - **日期桶由 id 自推导且可校验**：`sessions/YYYY/MM/DD/{session_id}` 的日期 MUST 与 id 内嵌 48 bit 毫秒时间戳按 **UTC** 推导出的日期一致；不一致即 fail-closed 完整性错误。时钟回拨（NTP 校时）行为 MUST 显式规定为「进程内非递减钳制」。
 - **校验层正名**：`_validate_uuid_v4_payload` / `_UUID_VERSION_HEX_INDEX` 一类把 `v4` 写进名字的标识、注释与 docstring MUST 一并正名为与「当前 profile」一致的单一名词，**MUST NOT** 同概念异名或保留第二套校验函数。
-- **JS / 前端边界必须诚实声明**：`src/workspace-services/**` 的 browser/terminal 后端进程实际由 **Node** 启动（`BOXTEAM_NODE_BIN`，见 `app/gateway/runtime/process.py`），Node 22 **无** `randomUUIDv7`（实测）；`src/clients/web` 是浏览器构建产物，**没有** `Bun.*`。故：Node 服务进程与浏览器前端**拿不到原生 v7**，其生成的 id（`term_` / `browser_` / `screenshot_` / `page_` / `inline:` 附件 file id 等）MUST 被显式声明为**非 canonical 身份**并允许继续使用 v4；**MUST NOT** 假装两者已统一。
+- **JS / 前端边界必须诚实声明**：`src/workspace-services/**` 的 browser/terminal 后端进程实际由 **Node** 启动（`BOXTEAM_NODE_BIN`，见 `app/gateway/runtime/process.py`），Node 22 **无** `randomUUIDv7`（实测）；`src/clients/web` 是浏览器构建产物，**其生产代码**没有任何 `Bun.*` 引用（实测 `rg -n '\bBun\.' src/clients` 的 8 个命中**全部是 `*.test.ts(x)` 测试文件**，生产代码 0 命中；指向测试而非生产代码的表述才是准确的）。故：Node 服务进程与浏览器前端**拿不到原生 v7**，其生成的 id（`term_` / `browser_` / `screenshot_` / `page_` / `inline:` 附件 file id 等）MUST 被显式声明为**非 canonical 身份**并允许继续使用 v4；**MUST NOT** 假装两者已统一。
 - **显式边界**：本 change 是 **id 生成位 profile** 的唯一 owner，**不是** VRN / ResourceIdentity 的 owner。VRN/ResourceIdentity 是「不可解析身份」，本 change 改的是「生成位 profile」，两者 MUST NOT 混为一谈；具名引用在途 change。
 
 ## Capabilities
@@ -40,4 +42,3 @@ UUIDv7（RFC 9562）前 48 bit 承载 Unix 毫秒时间戳，正好让 id 自带
   - JS：`src/workspace-services/browser/server/*.js`、`src/workspace-services/terminal/server/*.js`（Node 运行时 `randomUUID`）、`src/clients/web/src/utils/media/mediaAttachments.ts`（浏览器 `crypto.randomUUID()`）。
 - **依赖与 owner**：`uuid-utils>=0.16` 必须成为显式直接依赖。VRN 语法、scope 闭集、kind 闭集与拒绝码归 `add-unified-virtual-resource-addressing`；会话上下文寻址归 `migrate-session-context-uri-to-vrn`；工作区身份与 `scope_id` 推导归 `add-multi-workspace-backend-mounting`；资源身份/VRN 持久化归 `add-workspace-persistent-resource-management`。本 change 只拥有 id **生成位 profile**，只具名引用，不复述、不自造。
 - **不做**：不引入第二套 id 语法；不把 revision/hash 编码进 id；不长期同时接受 v4|v7；不提供旧 ID path alias；不扫盘重建 catalog；不改动 VRN/ResourceIdentity 的定义；不伪造「浏览器与 Node 服务进程已经产出 v7」。
-

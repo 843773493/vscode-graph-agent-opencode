@@ -1,6 +1,6 @@
 ## 背景
 
-本 change 只改 id 的**生成位 profile**：让 canonical 标识符自带时间序，从而（a）`sessions/YYYY/MM/DD` 分桶可由 id 复核，（b）B-tree 主键获得时间局部性。塑造方案所需的现状与约束如下（均为本轮实测）。
+本 change 只改 id 的**生成位 profile**：让 canonical 标识符自带时间序，从而（a）`sessions/YYYY/MM/DD` 分桶可由 id 复核，（b）**同进程内**写入的 B-tree 主键获得时间局部性（量化边界见 D2b）。塑造方案所需的现状与约束如下（均为本轮实测）。
 
 **现状与事实源**
 
@@ -61,24 +61,60 @@
 - *(a) 使用纯随机 v7*：否决，同毫秒无法保证排序，退化到「仅毫秒分辨率」以下，失去本 change 的核心价值。
 - *(b) 传 `timestamp=` 以便对齐外部时钟*：否决，实测破坏单调。
 
-### D3：破坏性范围 = 一次性显式迁移，不保留长期双轨；不提供旧 ID path alias
+### D2b：价值主张的量化边界（按实测收紧，A3）
 
-**决定**：存量 v4 身份经一次性、带备份与可恢复账本、保留 lineage 的显式迁移重编号为 v7；迁移窗口结束后校验器只接受 v7。实现上 MUST NOT 长期 `v4|v7` 并存、MUST NOT 双读、MUST NOT 扫盘重建、MUST NOT 提供旧 ID path alias。
+**决定**：只承诺两件被实测支撑的事，MUST NOT 保留无法用实测支撑的强表述。
 
-**理由**：
+- **同进程内**同一毫秒内生成的 id 非递减且唯一：实测 500000 个自然生成 id，同毫秒组最多 **3710** 个（`top5 groups` 约 3699–3710），组内**全部有序、全部唯一**（`non-monotonic same-ms groups: 0`，`global sorted: True`）。这是本 change 提供的**排序保证的量化上界**：毫秒内可达数千个 id 仍保持顺序。
+- **跨进程/跨重启**只共享 48 bit 毫秒分辨率：MUST NOT 声称在同一毫秒内跨进程**无排序**。
 
-- 与本仓既有纪律一致（AGENTS.md「彻底根除双轨」；`migrate-session-context-uri-to-vrn` 的「入口破坏性拒绝 + 新写字段」「不双读、不留别名、不扫盘重建」；`add-multi-workspace-backend-mounting` D7「新写字段 + 读路径切换」；`add-workspace-persistent-resource-management` 第 6 条）。
-- `validate_session_id` 当前**直接拒绝非 v4 位 profile**，所以「只对新写入生效」在实现上等价于「必须同时放宽校验到 v4|v7」——这正是真实的双轨风险。裁定为一次性显式迁移，可在迁移完成后把校验器收敛回单一 v7，避免长期双轨。
-- 存量迁移可行性的判据以「代码是否声明了必须迁移的落盘形态」为准：代码明确声明 id 是 `.boxteam/sessions/YYYY/MM/DD/{session_id}` 的**目录叶名**（`session_catalog_store.py` 的 locator 校验）与 SQLite **主键**，且 id 会内嵌进 rollout/message_stream/trace/llm_request 等持久文件（实测同一 session 目录内 10+ 个文件命中该 `ses_` 值），因此存量数据**确实需要迁移**；迁移面广，必须在受维护窗口与一致性备份下用账本推进，而不是「只对新写入生效」糊过去。
+**对 B-tree 时间局部性的实际影响**（据此替换无法支撑的强表述）：
+
+- 单进程连续写入：同一毫秒内数千个主键落在**相邻页**，局部性最好。
+- 跨进程并发写入同一毫秒：插入顺序在毫秒内可能交错，局部性退化为「毫秒粒度相邻」——即按毫秒聚簇、毫秒内可能散开，而不是严格相邻。MUST NOT 把它表述为「主键严格按时间相邻」。
+- 因此「B-tree 主键时间局部性」的准确表述是：**按毫秒聚簇的写入局部性，毫秒内仅同进程有序**。
 
 **备选**：
 
-- *(a) 只对新写入生效（双版本可接受期）*：否决，等价于长期 `v4|v7` 双轨，违反本仓纪律。
-- *(b) 显式失效旧数据*：否决，会销毁用户会话/历史，代价不可接受。
+- *(跨进程也保证毫秒内有序)*：否决，需要跨进程共享计数器/锁，本地单机工具不值得引入该复杂度，且无法用本机实测支撑。
+
+### D3：破坏性范围 = 一次性显式迁移 + 同日原子收紧校验器（选方案 a：消除窗口期）
+
+**决定**：**采用「消除窗口期」**（审查给的方案 a）。存量 v4 身份在同一次维护窗口内原子完成「迁移 + 校验器收紧」，窗口期校验器的确切形态判死如下：
+
+- **维护开关**：迁移由唯一的显式开关 `identity_profile_migration_active`（实现期命名可调，语义固定）门控。
+  - 开关 **开启**（迁移窗口内）：canonical 校验器接受 `v4|v7`；这是**唯一**允许双接受的时刻。
+  - 开关 **关闭**（默认、迁移完成后的常态）：canonical 校验器**只接受 v7**。
+- **原子切换**：迁移账本进入终态的那一笔事务提交后，**同一次维护操作内**把开关置为关闭，并把校验器的接受集切到「仅 v7」。MUST NOT 存在「只接受 v4」「长期双接受」的运行态。
+- **窗口期不得并行新旧代码**：迁移期间对外服务停止（维护窗口），MUST NOT 让新旧代码版本同时服务同一工作区；实现 MUST 在启动时做版本闸门检查（旧版本进程在开关开启的工作区上 MUST 拒绝启动，或由维护门禁保证单版本）。
+- **收敛断言**：开关关闭后，MUST 有一条测试断言「开关为 false 时，`v4` 位 profile 的 canonical 身份被拒绝、`v7` 被接受」；并有一条断言「开关为 true 时，`v4|v7` 均被接受，且该状态 MUST 同时携带显式维护标记」。
+- **不要口号**：本决策承认「只要开关处于 true，运行期就存在受控的双接受」；这不是长期双轨，而是**由单一开关门控、有终态、可机械检查的有限窗口**。MUST NOT 用「不双读」这类口号掩盖窗口期——窗口期的双接受由 `identity_profile_migration_active = true` 这一可观察事实显式承认。
+
+**理由**：
+
+- 与本仓既有纪律一致（AGENTS.md「彻底根除双轨」；`migrate-session-context-uri-to-vrn` 的「入口破坏性拒绝 + 新写字段」；`add-multi-workspace-backend-mounting` D7；`add-workspace-persistent-resource-management` 第 6 条）。
+- `validate_session_id` 当前**直接拒绝非 v4 位 profile**，所以「只对新写入生效」在实现上等价于「必须放宽校验到 v4|v7」。选方案 a 使双接受成为**有门控、有终态、可断言**的状态，而不是口头承诺。
+- 存量迁移可行性的判据以「代码是否声明了必须迁移的落盘形态」为准：代码明确声明 id 是 `.boxteam/sessions/YYYY/MM/DD/{session_id}` 的**目录叶名**（`session_catalog_store.py` 的 locator 校验）与 SQLite **主键**，且 id 会内嵌进 rollout/message_stream/trace/llm_request 等持久文件（实测同一 session 目录内 10+ 个文件命中该 `ses_` 值），因此存量数据**确实需要迁移**。
+
+**备选**：
+
+- *(b) 承认窗口期即双轨并给收口期限*：审查允许，但需要「窗口期长度由什么决定」的额外裁定面，且仍要引入等价的门控开关；方案 a 把同一开关的终态判死为「原子关闭」，约束更强、更少自由度，故选 a。
+- *(c) 只对新写入生效（无终态的双接受期）*：否决，等价于长期 `v4|v7` 双轨。
+- *(d) 显式失效旧数据*：否决，会销毁用户会话/历史。
+
 
 ### D4：日期桶 = 必须与 id 内嵌时间戳（UTC）一致，且可校验
 
-**决定**：(a) `sessions/YYYY/MM/DD/{session_id}` 的日期 MUST 与 id 内嵌 48 bit 毫秒时间戳按 UTC 推导的日期一致，不一致即 fail-closed；(b) 时区取 **UTC**（与既有 `created_at.astimezone(UTC).date()` 一致，不改为本地时区）；(c) 时钟回拨时以进程内非递减钳制保证不产出更小 id。
+**决定**：(a) `sessions/YYYY/MM/DD/{session_id}` 的日期 MUST 与 id 内嵌 48 bit 毫秒时间戳按 UTC 推导的日期一致，不一致即 fail-closed；(b) 时区取 **UTC**（与既有 `created_at.astimezone(UTC).date()` 一致，不改为本地时区）；(c) 时钟回拨的确切语义见下方「回拨与分桶互不冲突的判死」。
+
+**回拨与分桶互不冲突的判死（消除审查指出的义务冲突）**：
+
+- 回拨钳制**只作用于新 id 的时间戳来源**：进程维护 `last_issued_ms`，新 id 的毫秒取 `max(monotonic_now_ms, last_issued_ms)`；钳制后的值才是该 id 的真实内嵌时间戳。
+- **分桶日期以「创建时刻的已钳制时间戳」为准**：创建流程先用同一个已钳制时间源取得 `effective_created_ms`，再由它同时推出 (i) id 的内嵌时间戳与 (ii) `sessions/YYYY/MM/DD` 的 UTC 日期。因为两者**源自同一个已钳制值**，`id 内嵌时间戳的 UTC 日期 == 分桶日期` 恒成立。
+- 因此分桶一致性校验在回拨场景下**不会误伤**：它能检出的是「分桶与 id 人为漂移」，而不是回拨本身。回拨只表现为「新 id 的时间戳停在旧值上」，其分桶仍与之自洽。
+- **MUST NOT** 采用「回拨时拒绝创建」作为默认（会把 NTP 校时变成用户可见故障）；若某部署需要更严语义，MAY 选择显式拒绝并报告，但该形态 MUST 与 `S-回拨` Scenario 的可验证断言二选一实现，MUST NOT 两者都写而都不判死。
+
+**原决定（保留）**：(a) 日期 MUST 与 id 内嵌时间戳按 UTC 一致、不一致 fail-closed；(b) 时区取 UTC。
 
 **理由**：
 
@@ -113,7 +149,7 @@
 
 **理由**：
 
-- 实测这些服务由 **Node** 启动（`BOXTEAM_NODE_BIN`，`app/gateway/runtime/process.py`），Node 22 无 `randomUUIDv7`；`src/clients/web` 是浏览器产物且 `src/clients/**` 无任何 `Bun.` 引用——`Bun.randomUUIDv7` 在浏览器不可用。
+- 实测这些服务由 **Node** 启动（`BOXTEAM_NODE_BIN`，`app/gateway/runtime/process.py`），Node 22 无 `randomUUIDv7`；`src/clients/web` 是浏览器产物，其**生产代码**没有任何 `Bun.*` 引用（实测 `rg -n '\bBun\.' src/clients` 的 8 个命中全部是 `*.test.ts(x)` 测试文件（`appErrorBoundary.test.tsx`、`Toolbar.test.tsx`、`themeSurfaces.test.ts` 等），生产代码 0 命中；测试文件因用 `Bun.file`/`Bun.Glob` 等测试 API 而命中，与浏览器运行时无关）——`Bun.randomUUIDv7` 在浏览器不可用。
 - 这些 id 并非 session/thread 身份，本就不进入 canonical 校验器命名空间，故继续 v4 不构成双轨。
 - MUST NOT 假装它们已统一；若未来 Node 或浏览器提供原生 v7，可作为独立后续变更再收敛。
 
@@ -145,7 +181,11 @@
 - `app/core/session_creation.py` 的 `compute_session_creation_preimage_hash`：四元组为 `{workspace_id, parent_node_id, title, session_metadata}`，**不含 session_id**（session_id 是分配结果，不进 preimage）。
 - `app/core/thread_creation.py` 的 `compute_thread_creation_preimage_hash`：含 `session_id`、`thread_id`（thread_id 为非 None 时），故**以 canonical id 为输入**。
 
-因此审计 MUST 覆盖的已知命中面至少包含：`context_plan_hash` / `context_request_hash` / `compute_thread_creation_preimage_hash`，以及全仓 `idempotency_key` 生成点（如 `app/services/infrastructure/rollout_context/storage/transaction.py` 的 `default_*`、`assembly/sealing.py`、`execution/recovery.py`、`reasoning_checkpoint_service.py` 的 `acceptance_*`）。
+- `app/services/infrastructure/rollout_context/storage/transaction.py` 的 `default_idempotency_key(commit_kind, subject_id, outcome, metadata)`：其签名**显式包含 `subject_id`**，而 `subject_id` 在生产调用点就是 canonical id（如 `assembly/sealing.py` 的 `n=f"assembly:{snapshot.assembly_id}"`、`execution/recovery.py` 的 `resume:{turn_id}:{execution_id}`）。因此该幂等键**直接以 canonical id 为输入**，重编号后必然漂移。
+
+因此审计 MUST 覆盖的已知命中面至少包含：`context_plan_hash` / `context_request_hash` / `compute_thread_creation_preimage_hash` / `default_idempotency_key(subject_id=...)`，以及全仓 `idempotency_key` 生成点（如 `app/services/infrastructure/rollout_context/storage/transaction.py` 的 `default_*`、`assembly/sealing.py`、`execution/recovery.py`、`reasoning_checkpoint_service.py` 的 `acceptance_*`）。
+
+**A5 的处置要求**：`default_idempotency_key` 已判定「会漂移」，故它 MUST 出现在 tasks §5A 的处置表里并给出「随迁移一致重算」或「该 id 不参与迁移」的明确处置，MUST NOT 只登记不处置。
 
 **为什么裁定为阻断而非「先迁后补」**：迁移后哈希漂移若无人负责，会让 assembly/plan 校验假 mismatch 或静默重算，直接破坏「零回归」与「绝不默默失败」。
 
@@ -169,6 +209,55 @@
 4. `openspec/changes/add-context-injection-lifecycle/tasks.md`，任务 2.1（写死「payload 第 13 个 hex=`4`」「非 v4 bits」）。
 
 **为什么**：避免第二套定义或重复文本漂移；由 owner 收口可保持单一事实源。
+
+### D12：迁移面 = 工厂产出前缀 × 持久面 的全集矩阵（A4）
+
+**决定**：迁移面 MUST 按「**唯一 id 工厂产出的全部前缀** × **是否进入持久面**」的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 字面后缀匹配。`IdentifierPrefix`（`app/core/identifier.py`）实测为 **33 个前缀**的闭合 `Literal`；逐前缀判定见下表。判定口径：进入**目录叶名 / 文件名 / SQLite 主键或列 / JSONL 或 JSON 字段**者记为持久面，只在进程内内存/事件总线中使用者记为非持久面。
+
+| 前缀 | 主要产出点（具名） | 持久面 | 载体证据 |
+|---|---|---|---|
+| `ses` | `session_catalog_store.py`、`session_catalog_resolver.py`（folder 预留）、`session_navigation/queue_store.py` | **是** | 目录叶名 `sessions/YYYY/MM/DD/{session_id}`（`_STORAGE_LOCATOR_PATTERN`）；`nodes.node_id TEXT PRIMARY KEY` |
+| `thr` | `session_catalog_store.py`、`session_control_store.py` | **是** | `thread_catalog.thread_id TEXT PRIMARY KEY`；`threads/YYYY/MM/DD/{thread_id}` 目录叶名 |
+| `op` | `session_navigation/service.py`（6 处） | **是** | `navigation_mutation_records` 的 `operation_id TEXT NOT NULL` 且 `PRIMARY KEY (gateway_id, workspace_id, actor, operation_id)`（`queue_store.py`） |
+| `strm` | `message_stream_store.py` | **是** | 文件名 `message_streams/{turn_stream_id}.jsonl`（`_stream_path`） |
+| `msg` | `message_service.py`、`execution_step/runner.py` | **是** | rollout `messages.message_id TEXT NOT NULL UNIQUE`、`turns.final_message_id`（`rollout_context/storage/schema.py`） |
+| `evt` | `job_event_bus.py`、`message_stream_store.py`、`runtime_service.py` | **是** | message_stream 记录字段 `event_id` 写入 `message_streams/*.jsonl` |
+| `snapshot` | `message_stream_store.py` | **是** | 作为 `event_id` 写入 message_stream JSONL |
+| `part` | `providers/litellm_stream_types.py` | **是** | rollout `item_parts.part_id TEXT NOT NULL`（`schema.py`） |
+| `goal` | `session_goal_service.py` | **是** | `SessionCatalogPathResolver` 下的 `goal.json`（`session_goal_store.py`） |
+| `job` | `job/service.py`、`session_generation/{reporting,message_dispatch}.py` | **是** | `session_control_store.py` 的 `job_id TEXT NOT NULL UNIQUE` |
+| `lease` | `session_control_operation_lease/operation_lease.py` | **是** | `lease_id TEXT PRIMARY KEY`（operation lease 表） |
+| `gen` | `gateway/control/generators.py` | **是** | 生成器定义文件路径 `generators/{generator_id}`（`_definition_path`） |
+| `grun` | `gateway/control/generators.py` | **是** | 运行记录文件 `generation-runs/{generator_id}/{run_id}`（`_run_path`） |
+| `gwn` | `gateway/control/navigation.py` | **是** | Gateway 工作区导航 JSON 持久节点 `node_id`（`atomic_write_json`） |
+| `team` | `team/board_manager.py` | **是** | `.boxteam/teams/{team_id}/team.json`（`team/store.py`，且有 `TEAM_ID_PATTERN = ^team_[0-9a-f]{32}$` 形态校验） |
+| `ttask` | `team/board_manager.py` | **是** | 团队任务写入 team 事件的 JSON 载荷 |
+| `tevt` | `team/board_manager.py` | **是** | 团队事件 JSONL `events.jsonl` 的 `event_id` |
+| `comm` | `session_messaging.py` | **是** | `communication_ledger.py` 的 `communication_id TEXT PRIMARY KEY` |
+| `attempt` | `tool_testing/service.py` | **是** | `gateway_state.py` 的 `attempt_id TEXT NOT NULL`（及 `last_attempt_id`） |
+| `tooltest` | `tool_testing/service.py` | **是** | `tool_testing/store.py` 的 `run.json`（`write_run`） |
+| `patch` | `agents/tools/apply_patch/journal.py` | **是** | 文件名 `{journal_id}.json`（`journal_path`） |
+| `dbgcfg` | `node_debug/configuration/configuration_registry.py` | **是** | 调试方案 manifest 的 `configuration_id` 写入会话 debug manifest |
+| `node-bp` | `node_debug/configuration/configuration_factory.py` | **是** | 断点 `breakpoint_id` 写入调试方案 manifest |
+| `node-debug-action` | `node_debug/session/snapshot.py` | **是** | 调试动作 `action_id` 写入 runtime debug 记录 |
+| `node-debug-proc` | `node_debug/process/launch_claim.py` | **是** | `process_instance_id` 写入 launch claim durable 记录 |
+| `intr` | `session_interrupt_service.py` | **是** | 以自身作 `idempotency_key` / `command_id` 写入受控 command 记录 |
+| `req` | `gateway/control/{catalog_search,scheduler,coordinator}.py` | 否（请求内） | 仅作请求/日志关联 id |
+| `src` | `background_message_bus.py` | 否（内存） | 仅进程内 bus 消息 `source_id` |
+| `bgm` | `background_message_bus.py` | 否（内存） | `self._messages` 内存队列，无落盘 |
+| `bgt` | `background_task_registry.py` | 否（内存） | `self._tasks` 内存注册表 |
+| `chan` | `events/event_channel_service.py` | 否（内存） | 事件订阅 id |
+| `sub` | `job_event_bus.py` | 否（内存） | 订阅句柄 id |
+| `robs` | `resource_platform/observation/resource_observation_channel.py` | 否（内存） | 观测订阅 id |
+
+**判定口径说明（防止再次漏项）**：上表以**工厂前缀**为行，而不是以 `ses_`/`thr_` 等字面为行；新增工厂前缀时 MUST 在此矩阵补一行并判定持久面。持久面命中者 MUST 列入迁移任务；非持久面者 MUST 明确登记为「不参与迁移」且在审计里给出「不落盘」的负向证据。
+
+**已实测的核心漏项**：原 tasks 6.1 只匹配裸 `ses_`/`thr_` 字面，会漏掉 `op_`（进 `navigation_mutation_records` 主键）、`strm_`（进 `message_streams/*.jsonl` 文件名）、`msg_`/`evt_`/`part_`/`snapshot_`/`goal_`/`gen_`/`grun_`/`gwn_`/`team_`/`ttask_`/`tevt_`/`comm_`/`attempt_`/`tooltest_`/`patch_`/`dbgcfg`/`node-*`/`intr` 等持久面。
+
+**备选**：
+
+- *只补审查点名的 3 个前缀*：否决，下次新增前缀仍会漏；必须全集枚举。
+
 
 ## 风险与权衡
 
