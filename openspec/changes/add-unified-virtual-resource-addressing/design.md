@@ -1,6 +1,6 @@
 ## Context
 
-现状（VRN 权威表实测取证，`out/tests/temp/p1_fixer_identity/artifacts/report-vrn-authority.md`；以及架构一致性审计 `out/tests/temp/shishan_refactor/artifacts/report-vrn-audit.md`）：
+现状（全部取自仓库内受版本控制的事实源；关键取值已内联在下方要点中，不引用任何 `out/tests/temp/**` 临时产物）：
 
 - `app/services/infrastructure/resource_platform/virtual_resources/` 定义了严格 VRN grammar 与 typed resolver，但**解析/授权侧零生产调用**：`parse_vrn`、`VirtualResourceResolver`、`ResolvedResourceHandle`、`ResolutionContext` 只被测试引用。
 - 唯一生产使用点是 `app/agents/skill_runtime.py:541` 的 `skill_display_uri`——即大体系只被用来**打印**地址。
@@ -149,7 +149,7 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 
 **理由**：同一概念三个名字（layer `bundled`、scope `builtin`、config layer `inline`）——正是本仓库要求根除的。两处都改名后 shim 退化为恒等映射可删。
 
-**影响评估（已独立核验）**：`layer` 进入 `entry_identity`（`skill_runtime.py:558`）与 catalog payload（`:605`），但二者只进内存 `ResourceRegistry`（`semantic_registry.py:20-23`），无持久化写入；全仓唯一持久化 `display_uri` 列（`resource_activation_schema.py:85`）的写入方 `ResourceActivationStore.persist_snapshot` 生产从不被调用（磁盘取证唯一命中是测试夹具）。故**安全改名，无需迁移任务**。真依赖 VRN scope `builtin` 的位置只有 `resolver.py:205`、`grammar.py:17/19/224`，其余为无关同名。
+**影响评估（已独立核验）**：`layer` 进入 `entry_identity`（`skill_runtime.py:558`）与 catalog payload（`:605`），但二者只进内存 `ResourceRegistry`（`semantic_registry.py:20-23`），无持久化写入；全仓唯一持久化 `display_uri` 列（`resource_activation_schema.py:85`）的写入方 `ResourceActivationStore.persist_snapshot` 生产从不被调用：`app/container.py` 无任何 `resource_activation`/`activation_store` 装配（`rg` 退出 1），`attach_resource_activation_store` 的全部调用方都在 `tests/unit/services/infrastructure/rollout_context/test_resource_activation_{storage,retention,fork_identity}.py`。故**安全改名，无需迁移任务**。真依赖 VRN scope `builtin` 的位置只有 `resolver.py:205`、`grammar.py:17/19/207`，其余为无关同名。
 
 **备选**：只改 scope 名不改 layer 名（被否：留下 layer `bundled` 与 config layer `inline` 的同概念异名，且 shim 无法退化为恒等）。
 

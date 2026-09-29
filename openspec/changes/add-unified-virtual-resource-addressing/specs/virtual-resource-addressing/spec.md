@@ -2,7 +2,7 @@
 
 为软件内部与模型可见载荷中的资源引用建立**唯一**的寻址抽象与词汇：严格区分资源身份（ResourceIdentity）、虚拟资源地址（VRN）与真实路径（real path），把 `workspace`、`user`、`gateway`、`inline` 等作用域与其它工作区、其它 gateway 收敛到同一套寻址，并以顶层 gateway 之间的**星型解析**完成跨边界定位。本 capability 是这套抽象、scope 闭集、scope_id 语义表、VRN 语法、kind 闭集与拒绝码登记处的唯一 owner。
 
-**契约版本**：本 capability 采用**契约修正 v2**（保留既有段序，`resources` 为保留固定段，`scope_id` 对**所有** scope 都必填），并已依据**已下发的权威表**（`out/tests/temp/p1_fixer_identity/artifacts/report-vrn-authority.md`，全部实测）**定稿** scope 闭集、scope_id 语义、kind 闭集与拒绝码登记。`memory` 已确证**不是 VRN scope**，MUST NOT 出现在闭集内。
+**契约版本**：本 capability 采用**契约修正 v2**（保留既有段序，`resources` 为保留固定段，`scope_id` 对**所有** scope 都必填），并已依据**仓库内受版本控制的事实源**（`app/services/infrastructure/resource_platform/virtual_resources/grammar.py`、`resolver.py`、`values.py` 三处逐字取值，关键取值已内联在本 spec 各处；不引用任何 `out/tests/temp/**` 临时产物）**定稿** scope 闭集、scope_id 语义、kind 闭集与拒绝码登记。`memory` 已确证**不是 VRN scope**，MUST NOT 出现在闭集内。
 
 ## ADDED Requirements
 
@@ -152,7 +152,7 @@ VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 
 **消费（只登记，不实现）**：`skill_runtime.py:539` 的 `else "local"` MUST 拆为 `gateway`→真实 gateway_id、`inline`→distribution_id；`ResolutionContext` MUST 建立第一条生产构造链路。
 
-**前端口径冲突（已登记影响项）**：`src/clients/web/src/state/session/sessionCatalogOutbox.ts:32` 的 `CatalogOutboxPartition.gatewayId` 注释逐字为「稳定 Gateway 身份：本地 Gateway 用其监听端口，远程 Gateway 用其 gateway_id。」，与本 requirement「MUST NOT 用监听端口」冲突。统一口径归 Gateway 侧：网关身份由 Gateway 按请求注入、取值由本 requirement 推导；该旧口径注释 MUST 在本 change 实施期清理。
+**前端口径冲突（已登记影响项）**：`src/clients/web/src/state/session/sessionCatalogOutbox.ts:32` 的 `CatalogOutboxPartition.gatewayId` 注释逐字为「稳定 Gateway 身份：本地 Gateway 用其监听端口，远程 Gateway 用其 gateway_id。」，与本 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」中「MUST NOT 取自 host:port、监听端口或任何瞬时通道标识」的要求冲突。统一口径归 Gateway 侧：网关身份由 Gateway 按请求注入、取值由本 requirement 推导；该旧口径注释 MUST 在本 change 实施期清理。
 
 #### Scenario: gateway scope_id 按请求注入推导
 
@@ -369,6 +369,15 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 - **WHEN** 系统处理 `user`/`user_local`/`workspace` 这些共享同一 `workspace.sqlite` 的来源
 - **THEN** 不为该 sqlite 文件编造 VRN，并显式说明其共享载体导致的不可寻址性
 
+### Requirement: config 的 layer 轴与 VRN 的 scope 轴相互独立且同名不蕴含同义
+
+系统的 config `layer` 轴与 VRN `scope` 轴 MUST 被当作**两个相互独立、不可互换的轴**：`layer` 是 config 来源层身份、由 `app/core/config_sources.py` 的 `ConfigSourceLayer` 与 `app/schemas/internal_v2/config.py:20` 定义；`scope` 是 VRN 寻址身份、由本 capability 的 scope 闭集 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」定义。两个轴都含 `inline`，且另有同名异义取值——**同名 MUST NOT 被解释为同义、MUST NOT 被当作等价或可互换的枚举**；本 requirement MUST NOT 复述任一轴的取值表（避免制造第二份定义）。
+
+#### Scenario: 同名不同轴不被混用
+
+- **WHEN** 实现或测试同时处理 config `layer` 与 VRN `scope`
+- **THEN** 两者各自按自己的轴校验与取值，MUST NOT 用其中一个轴的闭集去校验另一个轴的输入，也 MUST NOT 由 `layer` 取值直接推出 `scope` 取值
+
 ### Requirement: 既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段
 
 系统 MUST 消除已确证的 real path 持久化违约：`app/services/infrastructure/config/state.py:475` 的 `ConfigSourceLayerRecord.source_path: str`、`:485` 的 `backup_path: str | None` 与 `:632` 的 `ConfigSourceJournalRecord.source_path: str` 把真实路径落进 SQLite；且 `app/api/config.py:102` 的 `path=str(source.path)`（经 `ConfigSourceDTO.path`）把真实路径写进 API 响应体。
@@ -412,7 +421,7 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 改名 MUST 带影响评估结论并据此定级：`layer` 进入 `entry_identity`（`skill_runtime.py:558`）与 catalog payload（`:605`），但二者只进**内存** `ResourceRegistry`（`semantic_registry.py:20-23` 三个 dict 无持久化写入），全仓唯一持久化 `display_uri` 列的写入方生产从不被调用，故本改名属**契约级调整而非数据迁移**，MUST NOT 构造存量迁移任务。
 
-**真依赖 VRN scope `builtin` 的位置只有** `resolver.py:205`、`grammar.py:17/19/224`；其余 `builtin` 命中（工具 `origin="builtin"`、主题来源、`builtin_tool_registry` 等）是无关同名，MUST NOT 误改。
+**真依赖 VRN scope `builtin` 的位置只有** `resolver.py:205`、`grammar.py:17/19/207`；其余 `builtin` 命中（工具 `origin="builtin"`、主题来源、`builtin_tool_registry` 等）是无关同名，MUST NOT 误改。
 
 #### Scenario: scope 与 layer 同步正名
 
@@ -427,4 +436,4 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 #### Scenario: 无关同名不被误改
 
 - **WHEN** 实施改名时检索 `builtin`
-- **THEN** 只改 `resolver.py:205` 与 `grammar.py:17/19/224` 等真依赖 VRN scope 的位置，工具 origin、主题来源与 `builtin_tool_registry` 等无关同名保持不变
+- **THEN** 只改 `resolver.py:205` 与 `grammar.py:17/19/207` 等真依赖 VRN scope 的位置，工具 origin、主题来源与 `builtin_tool_registry` 等无关同名保持不变
