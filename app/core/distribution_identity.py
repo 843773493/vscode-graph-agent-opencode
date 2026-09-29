@@ -22,18 +22,23 @@ MANIFEST_ENV = "BOXTEAM_RUNTIME_MANIFEST"
 # VRN 动段的闭合 charset 是 ``[A-Za-z0-9_-]``（grammar 的 _NAME_CHARSET 单点
 # 定义）；点号不在内，故 version 必须编码。distribution 本身落在该 charset 内。
 _DISTRIBUTION_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
-_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+# version 只接受 semver 允许的形态：pre-release/build 标识的字符集是
+# ``[0-9A-Za-z-]``，故下划线 ``_`` 本就非法，在此显式排除。排除 ``_`` 是编码成为
+# 单射的前提（见 encode_version），含 ``_`` 的 manifest 一律 fail-closed 拒绝。
+_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9.-]+$")
 
 
 def encode_version(version: str) -> str:
-    """把 version 编码进 VRN charset（可逆、无碰撞）。
+    """把 version 编码进 VRN charset：``.`` → ``_``。
 
-    先把 ``_`` 翻倍、再把 ``.`` 换成 ``_``，顺序不可颠倒：这样「原有下划线」与
-    「原点号」编码后不歧义，解码能无歧义还原原 version。直接拼接带点号的
-    version（如 ``source-development-0.0.2``）会被 grammar 以 invalid_character
-    结构化拒绝，故必须走本编码。
+    因 version 字符集已排除 ``_``（见 _VERSION_PATTERN），``_`` 只可能来自原点号，
+    故本映射在合法输入上是单射：不同的 version 必得不同编码，且可由编码唯一还原
+    （单射性由 tests/unit/core/test_distribution_identity.py 的穷举断言证明）。
+
+    直接拼接带点号的 version（如 ``source-development-0.0.2``）会被 grammar 以
+    invalid_character 结构化拒绝，故必须走本编码。
     """
-    return version.replace("_", "__").replace(".", "_")
+    return version.replace(".", "_")
 
 
 def load_distribution_id(manifest_path: Path | str | None = None) -> str:
@@ -53,7 +58,7 @@ def load_distribution_id(manifest_path: Path | str | None = None) -> str:
         )
     if _VERSION_PATTERN.fullmatch(version) is None:
         raise ValueError(
-            "runtime manifest.version 只允许 [A-Za-z0-9._-]，实际为: "
+            "runtime manifest.version 只允许 [A-Za-z0-9.-]（semver 形态，不含下划线），实际为: "
             f"{version!r} ({resolved_path})"
         )
     return f"{distribution}-{encode_version(version)}"

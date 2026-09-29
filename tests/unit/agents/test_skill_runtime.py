@@ -25,11 +25,21 @@ from app.agents.tools.testing import create_test_tool_2
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.lifecycle import LifetimeScope
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.services.infrastructure.resource_platform.virtual_resources import (
+    ResolutionContext,
+    parse_vrn,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    require_scope_binding,
+)
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    VrnResolveError,
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
@@ -111,7 +121,9 @@ def test_build_workspace_skill_catalog_resolves_gateway_layer(tmp_path, monkeypa
     assert entry.name == "shared"
     assert entry.layer == "gateway"
     assert entry.description == "Gateway skill"
-    assert entry.display_uri.startswith("boxteam://gateway/")
+    # gateway 的 scope_id 目前仍是字面量 "local"（真实 gateway_id 需请求级注入，
+    # 见 _layer_scope_identity 的 TODO），故此处是精确断言而非弱 startswith。
+    assert entry.display_uri == "boxteam://gateway/local/resources/skills/shared/SKILL.md"
     assert "/.boxteam/" not in entry.display_uri
     # 模型可见 metadata 不含 path/locator。
     assert entry.metadata_view() == {
@@ -122,6 +134,36 @@ def test_build_workspace_skill_catalog_resolves_gateway_layer(tmp_path, monkeypa
     # 模型可见挂载已移除:backend 不再暴露 gateway skill 路由。
     backend = build_workspace_backend(tmp_path)
     assert backend.read("/.boxteam/gateway-skills/shared/SKILL.md").error is not None
+
+
+def test_gateway_uri_without_principal_is_rejected_by_resolver(tmp_path, monkeypatch):
+    """gateway 的 principal 本切片不可用（context=None），故其 URI 交由 resolver 拒绝。
+
+    精确断言：用真实的 parse_vrn + require_scope_binding，principal 缺 gateway_id 时
+    必然 scope_mismatch，绝不静默通过。
+    """
+    boxteam_home = tmp_path / "boxteam-home"
+    gateway_skill = boxteam_home / "skills" / "shared"
+    gateway_skill.mkdir(parents=True)
+    (gateway_skill / "SKILL.md").write_text(
+        "---\nname: shared\ndescription: Gateway skill\n---\n# shared\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+
+    catalog = build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+    entry = catalog.entries[0]
+    assert entry.display_uri == "boxteam://gateway/local/resources/skills/shared/SKILL.md"
+
+    parsed = parse_vrn(entry.display_uri)
+    assert parsed.scope == "gateway"
+    assert parsed.scope_id == "local"
+    # workspace principal 存在但不含 gateway_id → gateway 绑定不成立，必然拒绝。
+    with pytest.raises(VrnResolveError) as excinfo:
+        require_scope_binding(
+            parsed.scope, parsed.scope_id, ResolutionContext(workspace_id="ws-1")
+        )
+    assert excinfo.value.reason_code == "scope_mismatch"
 
 
 def test_build_workspace_skill_catalog_prefers_workspace_over_gateway(
