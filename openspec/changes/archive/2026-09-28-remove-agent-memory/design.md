@@ -60,7 +60,7 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 
 **旧用户残留键处置裁定**：接受 fail-closed 报错，**不在迁移脚本中主动剔除** memory 键。理由：本地代理「快速失败、永不静默」原则；且自动剔除属于对用户配置的隐式写入，与本仓库「不悄悄改用户数据」取向冲突。该行为等价于一次 BREAKING 配置变更，MUST 在 tasks 与变更说明中显式登记，让用户在启动报错时明确看到字段位置。（若 owner 后续判定需要平滑迁移，可作为独立议题另议，本 change 不预先实现。）
 
-**`agent.knowledge.retrieval` 边界**：该 4 键与 `agent.memory` 同为「零读取的未接入占位」，但按 D6（非目标）本次**只移除 memory**；`agent.knowledge` 的 `enabled`/`sources`/`retrieval` 是否一并清理**留待 owner 另行裁定**，本 change 记为显式待裁定项。
+**`agent.knowledge.retrieval` 边界**：该 4 键与 `agent.memory` 同为「零读取的未接入占位」，但按 D6（非目标）本次**只移除 memory**；`agent.knowledge` 的 `enabled`/`sources`/`retrieval` 是否一并清理**留待 owner 另行裁定**，本 change 记为显式待裁定项。**（归档后追补：owner 已裁定回收 `retrieval` 的 `strategy`/`top_k`/`score_threshold`/`rerank` 4 键并已落地（提交 `2032670b`）；`agent.knowledge.enabled`/`sources` 与 `agent.safety.*` 保留不动，本条待裁定项已关闭。）**
 
 **`enable_workspace_memory`（`default.jsonc:333`）**：`feature_flags` 是开放布尔 map 且 `app/` 零读取；它是 memory 命名的死 flag，与已删除的 `agent.memory` 属同一类死配置，不属于 B/E 类无关同名（非 `ZeroMemory`/in-memory/`docs/memory/` 等）。**裁定：owner 已裁定删除并落地（提交 1488b8f7 删除 `configs/tests/workspace/default.jsonc:333` 该行；同段 `enable_kb`/`enable_code_tools` 与其它 agent 的 `feature_flags` 段不动，`app/`/`src/` 对该键本为零读取，删除不改变运行时行为）。**
 
@@ -83,19 +83,19 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 
 生产只构造 `"file"`（`workspace_file_resources.py:107-109`）；`"gateway_snapshot"`/`"memory_state"` 仅测试构造。删除后 `_SOURCE_KINDS` 允许集合更严（fail-closed 更紧），符合「快速失败」。
 
-**相邻技术债**：`"gateway_snapshot"` 同属「未接线的 token 来源」实现。**裁定：本 change 保留 `gateway_snapshot`**（任务只要求清 memory）。是否连带回收 `gateway_snapshot` 登记为待裁定项（见 D7）。
+**相邻技术债**：`"gateway_snapshot"` 同属「未接线的 token 来源」实现。**裁定：本 change 保留 `gateway_snapshot`**（任务只要求清 memory）。是否连带回收 `gateway_snapshot` 登记为待裁定项（见 D7）。**（归档后追补：owner 已裁定回收 `gateway_snapshot` source kind 及整条 version token 通路并已落地（提交 `4837aadc`）；`adapters/gateway_snapshot.py` 与 `gateway_snapshot_reader`/`gateway_snapshot_locators` 装配点物理删除，`_SOURCE_KINDS`/`_REVISION_KINDS` 收严为只剩 `file`/`file_byte_hash`，本条待裁定项已关闭。）**
 
 **测试覆盖保护**：`tests/unit/services/infrastructure/test_source_reconciler.py:165-187` 的 `test_token_source_error_retains_previous_revision` 用 `memory_state` 验「token 来源失败保留上一 revision」。裁定：**改为 `gateway_snapshot`**（该文件 `:142` 已有同类构造），保留该 token 语义分支覆盖，不得直接删用例造成覆盖退化。
 
 ### D6. 不实现 `knowledge`/`safety` 的边界
 
-`add-context-injection-lifecycle` 已明确「当前未接线的 knowledge/safety 配置也不是生产上下文来源，不得为了完整预先实现」。本 change 严格只移除 memory，不触碰 `configs/workspace_inline.jsonc` 的 `agent.knowledge.*` 与 `agent.safety.*`，也不触碰 `app/prompting/registry.py` 中与 memory 无关的 tag。
+`add-context-injection-lifecycle` 已明确「当前未接线的 knowledge/safety 配置也不是生产上下文来源，不得为了完整预先实现」。本 change 严格只移除 memory，不触碰 `configs/workspace_inline.jsonc` 的 `agent.knowledge.*` 与 `agent.safety.*`，也不触碰 `app/prompting/registry.py` 中与 memory 无关的 tag。**（归档后追补：文件尾部的 knowledge.retrieval 4 键已于提交 `2032670b` 回收，`agent.knowledge.enabled`/`sources` 与 `agent.safety.*` 仍保留；`add-context-injection-lifecycle` 的 design D6（`design.md:484`）「不得为了完整预先实现 knowledge/safety」结论不因此改变——该句讲的是不为完整预先实现，与删死键不冲突，本 change 未接线的 knowledge 能力仍不是生产上下文来源。）**
 
 ### D7. 显式待裁定项（MUST NOT 在本 change 内擅自替 owner 决定）
 
 1. ~~`PromptTrustLevel.untrusted_reference` 是否回收~~（D4）：**已裁定删除并落地**（提交 e0c45e4f；全仓零引用），**不再是待裁定项**。
-2. **`agent.knowledge.retrieval` 等 4 键是否一并清理**（D3）：**保留待 owner 裁定**。它非 memory 能力（`add-context-injection-lifecycle` 的 D6 明确「不得为完整预先实现 knowledge」），本次留作未变。
-3. **`gateway_snapshot` source kind 是否一并回收**（D5）：本次保留。
+2. **`agent.knowledge.retrieval` 等 4 键是否一并清理**（D3）：**保留待 owner 裁定**。它非 memory 能力（`add-context-injection-lifecycle` 的 D6 明确「不得为完整预先实现 knowledge」），本次留作未变。**（归档后追补：owner 已裁定回收该 4 键并已落地（提交 `2032670b`），本条待裁定项已关闭；`agent.knowledge.enabled`/`sources` 保留，D6「不实现 knowledge 接线」的边界不变。）**
+3. **`gateway_snapshot` source kind 是否一并回收**（D5）：本次保留。**（归档后追补：owner 已裁定回收并已落地（提交 `4837aadc`），本条待裁定项已关闭；D5 第 4 步「把 `memory_state` 用例改为 `gateway_snapshot`」的改造随之失效，见 `tasks.md` 1.4 追补。）**
 4. ~~`configs/tests/workspace/default.jsonc` 的 `enable_workspace_memory`~~（D3）：**已裁定删除并落地**（提交 1488b8f7；`app/`/`src/` 对该键零读取），**不再是待裁定项**。
 5. ~~`docs/middleware-prompt-vscode-comparison.html` 的 `MemoryMiddleware` 整卡~~（D7 第 5 项）：**已裁定整卡删除并落地**（提交 1488b8f7；该卡描述的 `StructuredMemoryMiddleware`/`MEMORY_SYSTEM_PROMPT`/`untrusted_reference`/graph slot 均已物理删除，且徽章「仅配置启用时」暗示其仍可启用属失实；删除后 `grep -n -i 'memory' docs/middleware-prompt-vscode-comparison.html` 零命中，周围卡片与 HTML 结构完好），**不再是待裁定项**。
 
@@ -139,6 +139,6 @@ memory 移除横切 agents / resource_platform / config / 文档四层，与任�
 - **R2 调用期参数不匹配**：删 `build_deep_agent_middleware`/`create_my_deep_agent` 的 `memory` 形参而漏改 `agent_factory.py:813` 会 `TypeError: unexpected keyword argument 'memory'`。缓解：先删调用点再删定义。
 - **R3 配置 fail-closed**：删 schema 键后旧用户残留 memory 键会启动报错。属预期行为，但等价 BREAKING；已登记为迁移义务。
 - **R4 持久化契约**：graph revision bump 使历史 persisted binding fail-closed。属预期行为，已登记为迁移义务；代价是历史 workspace 需重绑。
-- **R5 测试覆盖退化**：`test_source_reconciler.py:165-187` 若直接删而非改用 `gateway_snapshot`，会丢失 token 来源保留分支覆盖。缓解：改造而非删除。
+- **R5 测试覆盖退化**：`test_source_reconciler.py:165-187` 若直接删而非改用 `gateway_snapshot`，会丢失 token 来源保留分支覆盖。缓解：改造而非删除。**（归档后追补：`gateway_snapshot` 已于提交 `4837aadc` 整体回收，该改造随之失效；用例改为 file 来源的同类 token 失败构造即可保留分支覆盖，不得因 `gateway_snapshot` 消失而删用例。）**
 - **R6 文档/在途 change 不一致**：`docs/middleware-prompt-vscode-comparison.html` 与多个在途 change 仍描述 memory。缓解：登记跨 change 同步项；`docs/middleware-prompt-vscode-comparison.html` 的 `MemoryMiddleware` 整卡已按 owner 裁定删除并落地（提交 1488b8f7）。
 - **R7 stable prefix**：`agent_memory` 作为 `PromptPlacement.system_prompt` root tag，其渲染顺序若进 stable prefix，删除可能影响前缀。缓解：落地时显式运行结构化提示契约测试验证。

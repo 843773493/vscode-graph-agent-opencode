@@ -175,7 +175,7 @@ bundled resources/skills
 ```text
 代码内composition root
   ├── 内置file monitor / stable reader
-  ├── Gateway受认证snapshot adapter（原「权威memory mutation adapter」已随 `remove-agent-memory` 移除 `MemoryStateAdapter`/`MemoryStateReader` 与 `memory_states` 装配点，不再存在）
+  ├── Gateway受认证snapshot adapter（原「权威memory mutation adapter」已随 `remove-agent-memory` 移除 `MemoryStateAdapter`/`MemoryStateReader` 与 `memory_states` 装配点；Gateway snapshot version token 适配亦被同一 change 回收：`adapters/gateway_snapshot.py`、`gateway_snapshot_reader`/`gateway_snapshot_locators` 装配点已删除，生产从未装配）
   └── AGENTS / Skill / config / team业务loader和owner reaction
           │
           └── dirty/gap事件 ──> EventChannelService
@@ -231,7 +231,7 @@ SemanticResourceDescriptor {       # 公开部分不含provider locator
 }
 ```
 
-SourceReconciler经代码内装配的来源适配稳定读取候选并按来源类型校验，发布不可变`ObservedSourceRevision(source_id, source_revision, raw_hash_or_version, snapshot_ref, availability, diagnostics)`；完整原始byte hash是file source的要求，Gateway内部snapshot与权威内存状态使用各自可验证的版本与一致性token，不能假装拥有文件的双读语义。`ResourceDerivationGraph`只消费已接受的来源revision及其它语义resource revision，执行版本化解析/facet extraction、依赖拓扑排序、typed semantic diff和CAS，发布不可变`ResourceSnapshot(resource_id, semantic_revision, semantic_hash, source_lineage, parsed_ref, availability, diagnostics)`。依赖图必须拒绝环与缺失required依赖；多输入快照必须在一致的generation/vector上导出，不能混合新旧来源。原始来源变化但目标facet payload不变时，不推进该语义resource revision，也不追加context item；多次未激活变化可由CSM相对最新可见已提交revision合并成一个delta。watch事件只标脏，不能直接增加任一revision。读取/解析失败保留上一份valid snapshot并显式发布unavailable/diagnostic状态；依赖required资源的新dispatch fail closed，不能用旧valid快照、空值或当前文件偷偷替代。
+SourceReconciler经代码内装配的来源适配稳定读取候选并按来源类型校验，发布不可变`ObservedSourceRevision(source_id, source_revision, raw_hash_or_version, snapshot_ref, availability, diagnostics)`；完整原始byte hash是file source的要求，Gateway内部snapshot与权威内存状态使用各自可验证的版本与一致性token，不能假装拥有文件的双读语义（**当前已回收**：`gateway_snapshot` version token 通路与 `memory_state` source kind 已随 `remove-agent-memory` 移除，生产 `_SOURCE_KINDS` 只剩 `file`；本条仅保留「缺少文件双读语义的来源 MUST 使用其自身版本 token」的通用义务，不要求当前存在该类来源）。`ResourceDerivationGraph`只消费已接受的来源revision及其它语义resource revision，执行版本化解析/facet extraction、依赖拓扑排序、typed semantic diff和CAS，发布不可变`ResourceSnapshot(resource_id, semantic_revision, semantic_hash, source_lineage, parsed_ref, availability, diagnostics)`。依赖图必须拒绝环与缺失required依赖；多输入快照必须在一致的generation/vector上导出，不能混合新旧来源。原始来源变化但目标facet payload不变时，不推进该语义resource revision，也不追加context item；多次未激活变化可由CSM相对最新可见已提交revision合并成一个delta。watch事件只标脏，不能直接增加任一revision。读取/解析失败保留上一份valid snapshot并显式发布unavailable/diagnostic状态；依赖required资源的新dispatch fail closed，不能用旧valid快照、空值或当前文件偷偷替代。
 
 #### 5.1 Virtual Resource Namespace
 
@@ -325,7 +325,7 @@ app/
 │   │   │   ├── derivation/                      # source→semantic依赖DAG、解析调度与CAS
 │   │   │   ├── registry/                        # 已发布语义ResourceSnapshot与只读索引
 │   │   │   ├── virtual_resources/               # boxteam://语法、身份绑定与typed resolver
-│   │   │   └── adapters/                        # 内置file、Gateway内部snapshot适配（权威memory适配已随 remove-agent-memory 移除）
+│   │   │   └── adapters/                        # 内置file适配（Gateway内部snapshot适配与权威memory适配均已随 remove-agent-memory 回收/移除，adapters/gateway_snapshot.py 已删除）
 │   │   ├── config/                              # 既有配置层合并、schema与reload owner
 │   │   └── rollout_context/                     # 既有SessionThread唯一I/O owner
 │   │       ├── runtime/context_sources/         # CSM registration、diff与恢复决策
@@ -352,11 +352,11 @@ app/
 | `app/services/infrastructure/resource_platform/` | 资源设施的composition root；在Gateway/Workspace各自代码中显式装配已知适配、loader和owner reaction，不成为巨型`ResourceManager`、插件宿主或第二ContextStore。 |
 | `.../bootstrap.py` | 固定启动本进程事件服务、process-root scope、内置file snapshot能力和已知配置locator，不受动态配置关闭。config owner可借独立`LifetimeScope`验证受影响的候选来源登记和有效配置，完成readiness/health后原子发布并关闭旧scope；没有可执行贡献注册表、plugin manifest或通用发布策略。 |
 | `.../observation/` | provider monitor订阅、规范化watch key、内部引用计数、防抖及dirty/gap/overflow事件；每个consumer取得可释放handle，最后一个释放才停止底层watch。同资源可供UI和多个业务consumer共享，但不同filter/correlation语义不得误共用。只标脏，不读正文或推进revision。 |
-| `.../sources/` | 实际owner私有source descriptor/read handle映射、`SourceReconciler`和不可变`ObservedSourceRevision`；file稳定双读及根边界在这里执行，Gateway内部snapshot用自身一致性token（原「权威memory状态」token 已随 `remove-agent-memory` 移除 `memory_state` source kind，`_SOURCE_KINDS` 现为 `{file, gateway_snapshot}`）。locator永不出现在模型、普通history或sealed context。 |
+| `.../sources/` | 实际owner私有source descriptor/read handle映射、`SourceReconciler`和不可变`ObservedSourceRevision`；file稳定双读及根边界在这里执行，Gateway内部snapshot用自身一致性token（原「权威memory状态」token 已随 `remove-agent-memory` 移除 `memory_state` source kind；未装配的 `gateway_snapshot` version token 通路亦已被同一 change 回收并物理下线（`adapters/gateway_snapshot.py` 删除、生产从未装配的 `platform.gateway_snapshots` 恒为 `None`），故 `_SOURCE_KINDS` 现为 `{file}`。此前本条目写入的 `{file, gateway_snapshot}` 属失实现状句；若 `tasks.md` 3.2/3.10 确需该来源，MUST 重新登记 `gateway_snapshot` source kind 与对应 revision kind，本 change 不预先实现）。locator永不出现在模型、普通history或sealed context。 |
 | `.../derivation/` | `ResourceDerivationGraph`解析依赖DAG、调度typed loader、校验多输入版本向量、执行语义diff/CAS；这里只放通用求值框架，AGENTS/Skill/config/team的领域规则由其owner在代码中实现。 |
 | `.../registry/` | `ResourceRegistry`发布/查询不可变语义revision、readiness和generation；不拥有provider读取、目录扫描、Session SQLite写入或tool结果。旧valid与当前unavailable必须可区分。 |
 | `.../virtual_resources/` | `boxteam://` parser、scope/operation/capability校验与typed resolver；URI仅作安全展示与解析入口，不是稳定identity、文件挂载、授权凭据或历史重读入口。 |
-| `.../adapters/` | 文件、Gateway全局Skill受认证内部snapshot和权威内存状态的内置适配；各owner只在本进程持有locator/credential，Workspace不能猜测Gateway物理路径。生产装配在代码中显式维护，测试可注入替身；新增外部服务能力优先走MCP，不借此目录动态安装资源插件。 |
+| `.../adapters/` | 文件与 Gateway 全局 Skill 受认证内部 snapshot 的内置适配（权威内存状态适配与未装配的 Gateway snapshot version token 适配均已随 `remove-agent-memory` 回收，不再存在）；各owner只在本进程持有locator/credential，Workspace不能猜测Gateway物理路径。生产装配在代码中显式维护，测试可注入替身；新增外部服务能力优先走MCP，不借此目录动态安装资源插件。 |
 | `app/services/infrastructure/config/` | 现有config owner仍负责JSONC schema、layer merge、candidate validation与runtime reload。Gateway与Workspace配置域分别合成有效配置资源；资源平台负责观察来源/调度派生，不复制配置merge或把`workspace_dev.jsonc`变成隐式运行层。 |
 | `app/services/business/resource_derivations/`、`app/agents/tools/` | 前者实现MCP工具指引等业务语义派生与source owner根资格声明，不持有MCP连接或CSM writer；后者以固定`invoke_extension_tool`工具适配封存的ExtensionCatalogBindingRef并执行权限校验，旧`invoke_custom_tool`/`custom_invocation`命名在实施时直接替换为`invoke_extension_tool`，不保留工具别名或双schema。 |
 | `app/services/business/session_resource_providers.py` | 会话资源列表/控制适配委托terminal/browser/后台任务等实际owner核实资源状态、决定业务关闭/删除及副作用；既有`SessionResourceProviderRegistry`只路由，不与外部lease账本并行维护第二套资源状态。工具端通过typed resource-use声明占用，不能在通用层解析`terminal_id`/`pageId`等参数名并自动伪造资源登记。 |
@@ -481,7 +481,7 @@ snapshot/untracked 内容不允许重新读取源文件。压缩器只能根据 
 | C03 | 模型与工具协议事实：assistant/reasoning、Provider tool call/result，以及 invalid args、timeout、confirmation、patch repair、compact tool生成的 synthetic `ToolMessage` | 模型流或 middleware在执行内追加 `AIMessage`/`ToolMessage`，随后进入 canonical item/checkpoint | 它们是会话事实或协议配对，不是 instruction source；误纳入 CSM 会破坏 tool_call_id 和 Provider role合同 | 不进入 CSM；由 canonical item、tool execution与terminal convergence owner构造 `AppendCanonicalItemIntent`并经统一 ContextStore owner提交，保持原生 role/配对、item identity和 plan ordinal；只能参与稳定前缀选择，不能按文本去重 |
 | P01 | 请求捕获与投影管线：`PromptReplayCaptureMiddleware`、`ItemizedContextProjectionMiddleware._prompt_contributions()`、`project_context_plan()` | 逐 middleware 比较 system blocks，推断 append/replace并全部记为 request-only contribution；LangChain projector把连续贡献合成 `request-only-system-prompt` | 这是从最终请求反推 provenance，不是 producer 权威；replace/合并会丢 item边界并破坏稳定前缀；无捕获时 synthetic fallback掩盖漏接来源 | 删除 PromptReplay、捕获标签和 instrument 链；废弃 `ItemizedContextProjectionMiddleware` 的 prompt/tool/context反向捕获。每个 R/E producer在 seal 前显式登记；若框架必须保留 middleware hook，只实现无状态 sealed-assembly dispatch bridge，按 Saver-issued reference转发精确 messages/tools/frames，缺失或不匹配即 fail closed |
 
-迁移闭包之外，`app/tool_testing` 的 `tool_test_retry` 只是模型测试 harness；当前未接线的 knowledge/safety 配置也不是生产上下文来源，不得为了“完整”预先实现。R09 memory 已随 change `remove-agent-memory` 整体移除（middleware、prompt tag 与配置键均物理删除），不再是迁移闭包成员，也 MUST NOT 被重新登记为 source。
+迁移闭包之外，`app/tool_testing` 的 `tool_test_retry` 只是模型测试 harness；当前未接线的 knowledge 配置（含已随 `remove-agent-memory` 回收的 `agent.knowledge.retrieval` 4 键）与 safety 配置也不是生产上下文来源，不得为了“完整”预先实现。R09 memory 已随 change `remove-agent-memory` 整体移除（middleware、prompt tag 与配置键均物理删除），不再是迁移闭包成员，也 MUST NOT 被重新登记为 source。
 
 ### 10. 删除反向捕获，middleware 最多只是无状态 dispatch bridge
 
@@ -661,7 +661,7 @@ rehydrate只发生在execution admission或确实需要可写runtime的operation
 
 1. 先按 itemized 新字段合同替换实验 v2 的自由 metadata 决策路径，并建立以 `(session_id, thread_id)` 为 key 的统一 `ContextMutationIntent` 端口、单一 thread owner transaction与后续受支持版本的显式schema migration，使 canonical append、source lifecycle、ToolSet switch和 epoch rebuild都不再旁路 ContextStore。旧实验 v2 字段形态不做就地升级或运行时兼容读取，遇到它保留原件并明确报schema-incompatible；对已经按新合同提交的 JSONL item，仍绝不原地改字节。独立 v1 一次性导入边界保持原规划。
 2. 增加 stable-prefix epoch/reason/manifest、ToolSet compatibility key、desired/applied revision和 CSM source/tracking contract。
-3. 先提取通用`EventChannelService`、进程内`LifetimeScope`，使既有TurnExecutionScope、watcher、MCP/client及runtime stop/close复用单一异步释放合同；内置file monitor按完整watch选项共享subscription并返回释放handle；Gateway内部snapshot按自身版本合同接入（原「权威memory状态」已随 `remove-agent-memory` 移除 `MemoryStateAdapter`/`MemoryStateReader` 与 `memory_state` source kind，不再存在）。再建立SourceReconciler、ResourceDerivationGraph、语义ResourceRegistry、initial reconcile/readiness；config owner而非scope负责候选配置与来源登记的shadow健康/原子发布，旧scope随后排空。把Job event bus迁为独立channel adapter，再迁移config、workspace file event、AGENTS和Skill consumer，迁完即删除各自旧watch loop与请求期reader/enumerator。旧ResourceManager在外部资源provider完成typed身份/状态核实后迁为只处理跨Turn持久operation lease的账本，删除工具参数猜测、cleanup policy及内存stopper控制。
+3. 先提取通用`EventChannelService`、进程内`LifetimeScope`，使既有TurnExecutionScope、watcher、MCP/client及runtime stop/close复用单一异步释放合同；内置file monitor按完整watch选项共享subscription并返回释放handle（原「权威memory状态」适配已随 `remove-agent-memory` 移除 `MemoryStateAdapter`/`MemoryStateReader` 与 `memory_state` source kind；`gateway_snapshot` version token 通路亦被同一 change 回收，不再存在 Gateway 内部 snapshot 来源接入步骤，若未来重新登记则按 `tasks.md` 3.2/3.10 的自身版本合同接入）。再建立SourceReconciler、ResourceDerivationGraph、语义ResourceRegistry、initial reconcile/readiness；config owner而非scope负责候选配置与来源登记的shadow健康/原子发布，旧scope随后排空。把Job event bus迁为独立channel adapter，再迁移config、workspace file event、AGENTS和Skill consumer，迁完即删除各自旧watch loop与请求期reader/enumerator。旧ResourceManager在外部资源provider完成typed身份/状态核实后迁为只处理跨Turn持久operation lease的账本，删除工具参数猜测、cleanup policy及内存stopper控制。
 4. 建立VRN grammar/resolver、三层SkillCatalog及metadata/activation facet；实现默认turn、可选model_call的ResourceActivationCoordinator和持久activation provenance，验证URI/path/credential不泄露、旧assembly不按当前URI重解。
 5. 实现`skill_load`的snapshot/tracked/untrack及checkpoint-versioned control state，删除通用read激活、模型可见`/.boxteam/...`Skill路径/挂载、旧Skills/AGENTS request-time middleware和任何即时移除规划/入口。
 6. 接入 `add-itemized-rollout-context` 的 Thread generation/lease/idle-unload/lazy-rehydrate 边界；在其唯一生命周期验收中证明 main 与 child unload/rebuild 不改变 CSM state、ToolSet binding、stable prefix 或历史。
