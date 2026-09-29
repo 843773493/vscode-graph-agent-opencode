@@ -414,10 +414,6 @@
           }
         ] // Agent tool policy 读取扩展工具列表。
       },
-      "knowledge": {
-        "enabled": false, // 当前未接入知识源运行时。
-        "sources": [] // 当前未接入知识源运行时。
-      },
       "safety": {
         "policy_mode": "standard", // 当前未接入独立 safety middleware。
         "prompt_injection_protection": true, // 当前未接入独立 safety middleware。

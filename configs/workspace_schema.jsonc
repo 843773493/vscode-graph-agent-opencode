@@ -1046,9 +1046,6 @@
         "tools": {
           "$ref": "#/$defs/agentTools"
         },
-        "knowledge": {
-          "$ref": "#/$defs/agentKnowledge"
-        },
         "safety": {
           "$ref": "#/$defs/agentSafety"
         },
@@ -1306,89 +1303,6 @@
         }
       }
     },
-    "agentKnowledge": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false
-        },
-        "sources": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/agentKnowledgeSource"
-          },
-          "maxItems": 20,
-          "default": []
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "enabled": {
-                "const": true
-              }
-            },
-            "required": [
-              "enabled"
-            ]
-          },
-          "then": {
-            "required": [
-              "sources"
-            ]
-          }
-        }
-      ]
-    },
-
-    "agentKnowledgeSource": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "type"
-      ],
-      "properties": {
-        "id": {
-          "type": "string",
-          "pattern": "^[a-zA-Z0-9._-]{2,64}$"
-        },
-        "type": {
-          "type": "string",
-          "enum": [
-            "web",
-            "file",
-            "directory",
-            "notion",
-            "s3",
-            "custom"
-          ]
-        },
-        "endpoint": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 2048
-        },
-        "auth_ref": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Reference to secret or environment variable",
-          "pattern": "^[A-Z0-9_./:-]+$"
-        },
-        "priority": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 100,
-          "default": 50
-        }
-      }
-    },
-
     "agentSafety": {
       "type": "object",
       "additionalProperties": false,

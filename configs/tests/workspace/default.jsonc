@@ -289,25 +289,6 @@
           }
         ]
       },
-      "knowledge": {
-        "enabled": true,
-        "sources": [
-          {
-            "id": "workspace-docs",
-            "type": "directory",
-            "endpoint": "./docs",
-            "auth_ref": null,
-            "priority": 10
-          },
-          {
-            "id": "workspace-readme",
-            "type": "file",
-            "endpoint": "./README.md",
-            "auth_ref": null,
-            "priority": 9
-          }
-        ],
-      },
       "safety": {
         "policy_mode": "standard",
         "prompt_injection_protection": true,
@@ -359,18 +340,6 @@
           "edit_file"
         ],
         "confirmation_required": []
-      },
-      "knowledge": {
-        "enabled": true,
-        "sources": [
-          {
-            "id": "workspace-docs",
-            "type": "directory",
-            "endpoint": "./docs",
-            "auth_ref": null,
-            "priority": 10
-          }
-        ],
       },
       "safety": {
         "policy_mode": "standard",
@@ -436,18 +405,6 @@
         ],
         "confirmation_required": []
       },
-      "knowledge": {
-        "enabled": true,
-        "sources": [
-          {
-            "id": "workspace-docs",
-            "type": "directory",
-            "endpoint": "./docs",
-            "auth_ref": null,
-            "priority": 10
-          }
-        ],
-      },
       "safety": {
         "policy_mode": "strict",
         "prompt_injection_protection": true,
@@ -509,25 +466,6 @@
           "all"
         ],
         "confirmation_required": []
-      },
-      "knowledge": {
-        "enabled": true,
-        "sources": [
-          {
-            "id": "workspace-docs",
-            "type": "directory",
-            "endpoint": "./docs",
-            "auth_ref": null,
-            "priority": 10
-          },
-          {
-            "id": "workspace-readme",
-            "type": "file",
-            "endpoint": "./README.md",
-            "auth_ref": null,
-            "priority": 9
-          }
-        ],
       },
       "safety": {
         "policy_mode": "standard",
