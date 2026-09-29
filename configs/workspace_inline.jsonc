@@ -416,13 +416,7 @@
       },
       "knowledge": {
         "enabled": false, // 当前未接入知识源运行时。
-        "sources": [], // 当前未接入知识源运行时。
-        "retrieval": {
-          "strategy": "hybrid", // 当前未接入知识检索运行时。
-          "top_k": 5, // 当前未接入知识检索运行时。
-          "score_threshold": 0.65, // 当前未接入知识检索运行时。
-          "rerank": false // 当前未接入知识检索运行时。
-        }
+        "sources": [] // 当前未接入知识源运行时。
       },
       "safety": {
         "policy_mode": "standard", // 当前未接入独立 safety middleware。

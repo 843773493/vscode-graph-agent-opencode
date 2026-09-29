@@ -1321,9 +1321,6 @@
           },
           "maxItems": 20,
           "default": []
-        },
-        "retrieval": {
-          "$ref": "#/$defs/agentRetrieval"
         }
       },
       "allOf": [
@@ -1388,38 +1385,6 @@
           "minimum": 1,
           "maximum": 100,
           "default": 50
-        }
-      }
-    },
-
-    "agentRetrieval": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "strategy": {
-          "type": "string",
-          "enum": [
-            "keyword",
-            "vector",
-            "hybrid"
-          ],
-          "default": "hybrid"
-        },
-        "top_k": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 50,
-          "default": 5
-        },
-        "score_threshold": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1,
-          "default": 0.65
-        },
-        "rerank": {
-          "type": "boolean",
-          "default": false
         }
       }
     },
