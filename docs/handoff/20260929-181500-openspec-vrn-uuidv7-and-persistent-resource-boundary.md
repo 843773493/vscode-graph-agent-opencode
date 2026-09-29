@@ -3,7 +3,7 @@
 - 交接时间：2026-09-29 18:15:00 UTC+8
 - 仓库：`/data/hyf/20260629_agent/vscode-graph-agent-opencode`
 - 分支：`main`
-- 当前 HEAD：`86b62102 修复(测试): runtime manifest 移出 pytest basetemp，避免被并发会话清理删除`
+- 当前 HEAD：`ac76554f 文档(openspec): 补登 add-workspace-persistent-resource-management browser 越限项`
 - 本会话起点：`3e99b9e0`（工作树对起点与 HEAD 均干净）
 
 ## 本阶段目标与约束
@@ -90,13 +90,37 @@
   包括并发会话正在用的那个；全量跑时有嵌套会话退出，删掉了 session 级 manifest，
   导致此后所有触达 config 来源构造的用例撞上 `load_distribution_id` 的 fail-closed。
 
+### 独立审查与屎山审计驱动出的修复
+
+- `24666ff5` `/api/v1/config` 的 `metadata.config_path`/`source_paths` 实测仍对外吐真实路径
+  （与 5A.x 收敛方向相反且无测试守护）——**物理删除**这两个键，未用空串/省略号替身；
+  新增真实路径形态的负向断言。同笔删除恒返回 `None` 的空壳 `_config_layer_vrn`。
+- `fec68743` `legacy_adapter.py` 的 `_non_empty_string` 经 `diff` 确认与
+  `validation.py` 的**逐字相同**（上一轮折叠的「显式排除」判断有误），折叠为单一定义。
+- `149ce9dc` 修正 5 处与现状不符的 AGENTS.md 登记。
+- `f0888be3` + `7fe347dc` 登记全仓未登记越限项（判据式 + 带提交 hash 的实测快照，
+  含二级子目录；33 个生产 >800 行文件逐一核对落位）。
+- `6ec6a6d7` **根除 `workspace_config` 表级双轨**：专项取证判定它是权威表
+  `config_source_layers` 的真子集镜像（列集真子集、内容可完全推导、写点在同事务重复 upsert、
+  `config_service.py` 的 legacy 兜底经探针证实生产可达），故整表物理删除 +
+  一次性显式迁移；`gateway_config` **不删表**——它还承载控制面独有的
+  `workspace_registry_meta` 与 `gateway_connection_ids`，只去掉其 config 来源层镜像角色。
+- `2ab3f980` 锁定「仅有 wc 行、无 layer 行」的旧库还原（保证 `get_runtime_override_keys()`
+  不丢 `('ui',)`），变异删掉补行逻辑即变红。
+- `ac76554f` 补登 `src/workspace-services/browser/` 的越限项（唯一因并发占用遗留的一批）。
+
 ## 最新验证结果（本会话实测）
 
 - `pytest tests/unit -q -p no:randomly`（带 `ulimit -d 4194304`）：
-  **4909 passed, 7 skipped, 0 failed**（1253s）。修复前为 79 failed / 4830 passed。
+  **4913 passed, 7 skipped, 0 failed**。修复前为 79 failed / 4830 passed。
 - `/home/hyf/.bun/bin/openspec validate --strict --all`：**40 passed, 0 failed**。
 - `import app.main, app.gateway.main`：EXIT=0。
 - 工作树对 HEAD 干净（`git diff HEAD` 为空）。
+- 独立审查（`round_final_review`）结论：VRN/config 迁移、持久资源三项修正、领域子包归位与
+  helper 折叠**均站得住，不需要修正**；`vrn=None → path=""` 经全仓核验**无任何消费点读取**，
+  不构成现实的虚假默认值（建议 5A.3 落地时改为可选字段或更名）。
+- 独立审查实测：截图端点三分支（id/browser/文件缺失）响应体与响应头均不含绝对路径；
+  四处负向断言（保留旧路径列、`path` 回真实路径、快照回 `cwd`、工具结果回 `cwd`）变异全部变红。
 
 ## 必须保护的工作树改动
 
