@@ -18,6 +18,7 @@ from app.services.infrastructure.resource_platform.sources.observed_source impor
     MAX_STABLE_READ_BYTES,
     ObservedSourceDescriptor,
     ObservedSourceHandle,
+    ObservedSourceRevision,
     SourceReconciler,
     StableSourceReader,
     StableSourceReadError,
@@ -126,6 +127,7 @@ def test_unstable_read_exhausts_attempts_and_reconciler_retains_previous(
     assert unavailable.error_code == "unstable_read"
     # 失败保旧:revision/content 保持上一份 valid 事实,并显式保留引用。
     assert unavailable.revision == first.revision
+    assert unavailable.revision_kind == "file_byte_hash"
     assert unavailable.content == first.content
     assert unavailable.retained_revision == first.revision
     monkeypatch.undo()
@@ -134,6 +136,27 @@ def test_unstable_read_exhausts_attempts_and_reconciler_retains_previous(
     assert recovered.available is True
     assert recovered.revision == "sha256:" + hashlib.sha256(b"v4\n").hexdigest()
     assert recovered.retained_revision is None
+
+
+def test_reclaimed_kinds_and_reason_codes_are_rejected() -> None:
+    """闭集校验必须显式拒绝 gateway_snapshot/version_token 等已回收取值。"""
+    with pytest.raises(ValueError, match="未知 ObservedSourceDescriptor.source_kind"):
+        ObservedSourceDescriptor(
+            source_id="gw-agents",
+            source_kind="gateway_snapshot",
+            display_uri="boxteam://gateway/agents",
+            entry_identity="entry-gw-agents",
+        )
+    with pytest.raises(ValueError, match="未知 ObservedSourceRevision.revision_kind"):
+        ObservedSourceRevision(
+            source_id="src-1",
+            revision="token",
+            revision_kind="version_token",
+            content="",
+            byte_length=0,
+        )
+    with pytest.raises(ValueError, match="未知 StableSourceReadError reason_code"):
+        StableSourceReadError("invalid_version_token", "已回收的 reason code")
 
 
 def test_revision_states_merge_uncommitted_changes(tmp_path: Path) -> None:
