@@ -119,6 +119,10 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     _RolloutOperationLock,
     _RolloutSQLiteConnection,
 )
+from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
+    SchemaUpgradeArtifacts,
+    SchemaUpgradePlan,
+)
 from app.services.infrastructure.rollout_context.storage.queries import (
     RolloutCheckpointQueriesMixin,
 )
@@ -465,9 +469,9 @@ class RolloutStorage(
 
     def upgrade_v2_schema(
         self, thread_id: str, *, checkpoint_ns: str = "",
-        prepare_artifact_upgrade: Callable[[sqlite3.Connection], object] | None = None,
+        prepare_artifact_upgrade: Callable[[sqlite3.Connection], SchemaUpgradeArtifacts] | None = None,
         resume_artifact_upgrade: Callable[[sqlite3.Connection], bool] | None = None,
-        prepare_plan_upgrade: Callable[[sqlite3.Connection], object] | None = None,
+        prepare_plan_upgrade: Callable[[sqlite3.Connection], SchemaUpgradePlan] | None = None,
     ) -> RolloutReadSnapshot:
         return self._maintenance_owner.upgrade_v2_schema(
             thread_id,
@@ -476,11 +480,3 @@ class RolloutStorage(
             resume_artifact_upgrade=resume_artifact_upgrade,
             prepare_plan_upgrade=prepare_plan_upgrade,
         )
-
-    def _upgrade_context_artifacts_locked(
-        self, thread_id: str, *, checkpoint_ns: str, prepare: Callable[[sqlite3.Connection], object],
-    ) -> None:
-        return self._maintenance_owner._upgrade_context_artifacts_locked(
-            thread_id, checkpoint_ns=checkpoint_ns, prepare=prepare
-        )
-
