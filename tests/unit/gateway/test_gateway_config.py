@@ -550,8 +550,12 @@ def test_gateway_config_migrates_mutable_json_layers_to_sqlite(tmp_path: Path) -
             state_store=state,
         )
         assert config.default_theme_id == "blue"
-        assert state.get_config("gateway_mutable_override") is not None
-        assert state.get_config("gateway_local_mutable_override") is not None
+        # config 来源层只以权威 config_source_layers 为唯一载体；gateway_config
+        # 不再镜像这些来源层 key。
+        assert state.get_source_layer("gateway_mutable_override") is not None
+        assert state.get_source_layer("gateway_local_mutable_override") is not None
+        assert state.get_config("gateway_mutable_override") is None
+        assert state.get_config("gateway_local_mutable_override") is None
         assert config_path.with_name("gateway.jsonc.migrated.bak").is_file()
         assert local_config_path.with_name("gateway_local.jsonc.migrated.bak").is_file()
     finally:

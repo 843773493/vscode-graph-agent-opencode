@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from app.core.sqlite_state import SQLiteStateDatabase
+from app.gateway.control import gateway_state as gateway_state_module
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import FEDERATION_PROTOCOL_VERSION
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -15,6 +17,55 @@ from app.services.infrastructure.config.state import (
     ConfigEventCursorGoneError,
     ConfigEventInput,
 )
+
+
+def test_gateway_config_source_mirror_migrates_but_keeps_control_plane_kv(
+    tmp_path,
+):
+    """legacy ``gateway_config`` 的 config 来源层镜像行并入权威 layer 表；
+    控制面独有 KV（``workspace_registry_meta``/``gateway_connection_ids``）必须留下。"""
+
+    path = tmp_path / "gateway.sqlite"
+    database = SQLiteStateDatabase(
+        path=path,
+        schema_version=15,
+        migrations=gateway_state_module._GATEWAY_MIGRATIONS[:15],
+    )
+    try:
+        connection = database.connection()
+        try:
+            connection.execute(
+                "INSERT INTO gateway_config(config_key, config_version, "
+                "payload_json, updated_at) VALUES "
+                "('gateway_mutable_override', 1, ?, '2026-01-01T00:00:00+00:00'), "
+                "('workspace_registry_meta', 1, ?, '2026-01-01T00:00:00+00:00'), "
+                "('gateway_connection_ids', 3, ?, '2026-01-01T00:00:00+00:00')",
+                (
+                    json.dumps({"ui": {"theme": "dark"}}),
+                    json.dumps({"registry_revision": 2}),
+                    json.dumps({"entries": []}),
+                ),
+            )
+            connection.execute(
+                "DELETE FROM config_source_layers "
+                "WHERE config_key = 'gateway_mutable_override'"
+            )
+        finally:
+            connection.close()
+    finally:
+        database.close()
+
+    state = GatewayStateStore(path=path)
+    try:
+        layer = state.get_source_layer("gateway_mutable_override")
+        assert layer is not None
+        assert layer.payload == {"ui": {"theme": "dark"}}
+        # 镜像行被下线，但控制面 KV 原样保留。
+        assert state.get_config("gateway_mutable_override") is None
+        assert state.get_config("workspace_registry_meta") is not None
+        assert state.get_config("gateway_connection_ids") is not None
+    finally:
+        state.close()
 
 
 def test_gateway_state_shared_processes_must_be_explicit(tmp_path):
