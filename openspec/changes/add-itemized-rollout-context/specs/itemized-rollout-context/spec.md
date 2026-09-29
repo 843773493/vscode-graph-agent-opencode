@@ -12,7 +12,7 @@ Session物理节点 MUST位于`${workspace_abs_path}/.boxteam/sessions/YYYY/MM/D
 
 系统 SHALL以`workspace_id → session_id → SessionThread`表达产品运行层级。Workspace `.boxteam/navigation/session-catalog.sqlite`是Session/Folder导航节点、父子关系、Session locator和不可变`main_thread_id`的唯一权威；Session节点的`session-control.sqlite`保存thread catalog、collaboration ledger/fanout及child/migration publication journal，其唯一kind=main row MUST与workspace catalog pointer一致，不得维护可独立变动的第二main pointer。`session.json`仅保存不可变创建metadata，不保存可变父节点/当前显示名。canonical item、Turn、execution、model call、context view、assembly、source registration及ToolSet applied binding以`(session_id, thread_id)`为owner；Session control不得成为跨thread canonical context或第二ContextStore writer。
 
-持久化 `session_id` 外形 MUST 匹配 `ses_[0-9a-f]{32}`，`thread_id` 外形 MUST 匹配 `thr_[0-9a-f]{32}`，并各自恰为36个ASCII byte；payload由UUIDv4生成，其第13个hex MUST为`4`、第17个hex MUST属于`8|9|a|b`。API、Proto、catalog、Session link/URI、typed ref、生产/测试IdentifierFactory和path resolver MUST 使用同一完整validator并拒绝斜杠、反斜杠、百分号编码、Unicode、`.`、`..`、非v4 bit profile及任何错误前缀、大小写或长度；不得清洗、截断、hash替代目录叶名或在正常runtime提供旧ID path alias。历史非规范ID只能经显式migration staging取得新的canonical target ID并保留source lineage/report。resolver在落盘前还 MUST 校验完整path预算。
+持久化 `session_id` 外形 MUST 匹配 `ses_[0-9a-f]{32}`，`thread_id` 外形 MUST 匹配 `thr_[0-9a-f]{32}`，并各自恰为36个ASCII byte；其32位hex payload的位 profile MUST 由 `migrate-identifiers-to-uuidv7` 的 `uuidv7-identifier-profile` 规定（本change不重复取值）。API、Proto、catalog、Session link/URI、typed ref、生产/测试IdentifierFactory和path resolver MUST 使用同一完整validator并拒绝斜杠、反斜杠、百分号编码、Unicode、`.`、`..`、不合该 profile 的 payload及任何错误前缀、大小写或长度；不得清洗、截断、hash替代目录叶名或在正常runtime提供旧ID path alias。历史非规范ID只能经显式migration staging取得新的canonical target ID并保留source lineage/report。resolver在落盘前还 MUST 校验完整path预算。
 
 LangGraph 的 `configurable.thread_id` MUST 等于 product `thread_id`。`checkpoint_ns` 仅用于该 product thread 内的 root graph/subgraph checkpoint namespace，MUST NOT 被当作、编码为或反向推断为 product thread identity。跨 owner 引用 MUST 使用 `(session_id, thread_id, entity_type, local_id)`，不得以裸 `session_id` 或 `checkpoint_ns` 访问其它 thread 的 item、checkpoint、source 或 active view。
 
@@ -73,7 +73,7 @@ catalog批量deleting commit之后，即使部分Session local fence尚active，
 
 #### Scenario: 非规范或超长 ID 在接触文件系统前被拒绝
 
-- **WHEN** API、Proto、Session link、catalog import或typed ref携带非36-byte canonical profile的Session/thread ID，ID含路径分隔、Unicode、百分号编码、`.`/`..`，或hex payload不满足UUIDv4 version/variant bit profile
+- **WHEN** API、Proto、Session link、catalog import或typed ref携带非36-byte canonical profile的Session/thread ID，ID含路径分隔、Unicode、百分号编码、`.`/`..`，或hex payload不满足 `migrate-identifiers-to-uuidv7` 的 `uuidv7-identifier-profile` 规定的位 profile
 - **THEN** 共享validator在catalog/path lookup和任何文件系统操作前返回明确的`invalid_session_id`或`invalid_thread_id`；不得清洗、截断、建立别名或创建部分目录
 
 #### Scenario: main 与非 main thread 使用不同物理分桶

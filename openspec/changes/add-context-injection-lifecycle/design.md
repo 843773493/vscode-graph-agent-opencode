@@ -633,7 +633,7 @@ rehydrate只发生在execution admission或确实需要可写runtime的operation
 
 跨change的统一Web验收由`add-itemized-rollout-context`的`session-turn-history`规格和`tests/e2e/clients/web/test_basic_chat_tool_loop.py`唯一拥有；本change只向同一Python测试模块贡献CSM/Skill、main/child capability、fake-clock residency、send/read/wait及stable-prefix断言，不建立第二套平行E2E。允许该模块调用共享helper，但pytest collection、场景编排和PASS/FAIL gate必须落在该Python文件，不能把唯一验收藏在未被pytest收集的Node脚本中。
 
-测试composition注入确定性但仍满足UUIDv4 bit/profile的`IdentifierFactory`，生产composition只使用随机UUIDv4 factory；Session/child仍经正常Gateway/Web API创建，禁止预写业务库。ModelStream fixture按这些已知SessionThread/model-call identity精确匹配并生成含裸ID/link的tool call，不得共享顺序cursor。该模块属于独占serial E2E组，以输出目录内带PID/start-time验证的`E2EProcessLease`租用避开8010–8016的整套loopback端口和进程owner manifest；有效lease不得抢占，stale lease只有确认owner消失后恢复，teardown只停止本次进程并验证端口释放，不能杀未知监听者或共享开发Gateway home。
+测试composition注入确定性但仍满足 `migrate-identifiers-to-uuidv7` 的 `uuidv7-identifier-profile` 的`IdentifierFactory`，生产composition只使用随机factory；Session/child仍经正常Gateway/Web API创建，禁止预写业务库。ModelStream fixture按这些已知SessionThread/model-call identity精确匹配并生成含裸ID/link的tool call，不得共享顺序cursor。该模块属于独占serial E2E组，以输出目录内带PID/start-time验证的`E2EProcessLease`租用避开8010–8016的整套loopback端口和进程owner manifest；有效lease不得抢占，stale lease只有确认owner消失后恢复，teardown只停止本次进程并验证端口释放，不能杀未知监听者或共享开发Gateway home。
 
 ## Risks / Trade-offs
 

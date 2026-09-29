@@ -228,7 +228,7 @@ v2 `content_part` 的 canonical 正文固定存于父 item JSONL envelope 的 pa
 
 系统 SHALL使用`(session_id, thread_id)`解析一个唯一的rollout JSONL、SQLite index、checkpoint control state、detail store和ContextStore transaction node。Session node的`session-control.sqlite`内thread catalog表是thread位置、main pointer与GraphBinding的权威索引，并与collaboration ledger/fanout及publication journal共享Session级事务；`session.json`不得保存可变main pointer/catalog。storage resolver MUST先验证catalog再定位thread node，不能扫描磁盘吸收目录，也不能把session root、其它thread node或`checkpoint_ns`当作回退路径。每个thread的`committed_jsonl_offset`、item sequence、Turn ordinal、source revision、active view和ToolSet applied revision都相互独立；Session control数据库不得保存这些thread-local canonical事实。
 
-storage resolver MUST 在读取catalog或构造路径前用共享canonical validator验证恰为36-byte ASCII的`ses_[0-9a-f]{32}`与`thr_[0-9a-f]{32}`外形，并校验payload第13个hex=`4`、第17个hex属于`8|9|a|b`的UUIDv4 bit profile；落盘前还须验证完整path预算。任何超长、Unicode、分隔符、`.`/`..`、百分号编码、非v4 bits、错误前缀或大小写必须显式失败且不产生目录；resolver不得清洗、截断或以hash leaf/旧ID alias绕开该约束。
+storage resolver MUST 在读取catalog或构造路径前用共享canonical validator验证恰为36-byte ASCII的`ses_[0-9a-f]{32}`与`thr_[0-9a-f]{32}`外形，并按 `migrate-identifiers-to-uuidv7` 的 `uuidv7-identifier-profile` 校验payload位 profile；落盘前还须验证完整path预算。任何超长、Unicode、分隔符、`.`/`..`、百分号编码、不符合该 profile 的 payload、错误前缀或大小写必须显式失败且不产生目录；resolver不得清洗、截断或以hash leaf/旧ID alias绕开该约束。
 
 本 Requirement SHALL 取代本 change 中此前所有 session-root `rollout/` 物理路径和不含 `thread_id` 的 operational detail/plan/assembly locator；旧字段只能作为一次性 migration lineage 读取，正常 runtime不得继续生成。
 
