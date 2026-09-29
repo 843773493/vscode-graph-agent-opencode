@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from app.core.config_sources import config_revision
 from app.core.sqlite_state import (
     SQLiteDiagnostics,
     SQLiteStateDatabase,
@@ -34,6 +36,93 @@ from app.services.infrastructure.config.state import (
     prepare_config_for_persistence,
     validate_state_transition,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _migrate_gateway_config_into_source_layers(
+    connection: sqlite3.Connection,
+) -> None:
+    """一次性显式迁移：把 legacy ``gateway_config`` 中的 config 来源层镜像行并入权威
+    ``config_source_layers`` 后物理删除这些镜像行；控制面独有 KV
+    （``workspace_registry_meta``/``gateway_connection_ids``）MUST NOT 被迁移或删除。
+
+    - 只有镜像 key（``gateway_*_mutable_override``）参与迁移；其余 key 一律保留。
+    - 只有当镜像 key 在 ``gateway_config`` 有行、``config_source_layers`` 无同 key 行
+      时才补一条等价 present layer 行；同 key 两处都在时必须逐字等价，冲突 fail-closed。
+    - 只删镜像 key 行，不 DROP 表、不迁移控制面 KV。
+    """
+
+    exists = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gateway_config'"
+    ).fetchone()
+    if exists is None:
+        return
+    mirror_keys = (
+        "gateway_mutable_override",
+        "gateway_local_mutable_override",
+    )
+    for config_key in mirror_keys:
+        row = connection.execute(
+            "SELECT config_version, payload_json, updated_at FROM gateway_config "
+            "WHERE config_key = ?",
+            (config_key,),
+        ).fetchone()
+        if row is None:
+            continue
+        config_version = int(row[0])
+        payload_json = str(row[1])
+        updated_at = str(row[2])
+        try:
+            payload = load_json_object(
+                payload_json, field=f"gateway_config payload (key={config_key})"
+            )
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                "legacy gateway_config 镜像行 payload 非法，无法并入权威 "
+                f"config_source_layers: key={config_key}: {error}"
+            ) from error
+        layer = connection.execute(
+            "SELECT presence, payload_json FROM config_source_layers "
+            "WHERE config_key = ?",
+            (config_key,),
+        ).fetchone()
+        if layer is not None:
+            layer_payload = (
+                load_json_object(str(layer[1]), field="Gateway source layer payload")
+                if layer[1] is not None
+                else None
+            )
+            if str(layer[0]) != "present" or layer_payload != payload:
+                raise RuntimeError(
+                    "legacy gateway_config 镜像行与权威 config_source_layers 同 key 但"
+                    f"语义不一致，拒绝静默择一: key={config_key}"
+                )
+        else:
+            connection.execute(
+                """
+                INSERT INTO config_source_layers(
+                    config_key, vrn, presence, config_version, payload_json,
+                    layer_revision, layer_digest, source_generation, previous_digest,
+                    updated_at, previous_payload_json
+                ) VALUES (?, NULL, 'present', ?, ?, 1, ?, 1, NULL, ?, NULL)
+                """,
+                (
+                    config_key,
+                    config_version,
+                    payload_json,
+                    config_revision(payload),
+                    updated_at,
+                ),
+            )
+            logger.warning(
+                "legacy gateway_config 镜像行已一次性并入 config_source_layers: key=%s",
+                config_key,
+            )
+        connection.execute(
+            "DELETE FROM gateway_config WHERE config_key = ?", (config_key,)
+        )
+
 
 _GATEWAY_MIGRATIONS = (
     """
@@ -342,6 +431,9 @@ _GATEWAY_MIGRATIONS = (
     ALTER TABLE config_source_journal DROP COLUMN source_path;
     ALTER TABLE config_source_journal ADD COLUMN vrn TEXT;
     """,
+    # 一次性显式迁移：把 legacy gateway_config 中的 config 来源层镜像行并入权威
+    # config_source_layers 后物理删除这些镜像行；控制面独有 KV 必须留在该表。
+    _migrate_gateway_config_into_source_layers,
 )
 
 

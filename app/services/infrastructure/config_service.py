@@ -139,12 +139,14 @@ class ConfigService:
                 config_domain=self._CONFIG_DOMAIN
             )
         runtime_override = (
-            workspace_state_store.get_config(self._RUNTIME_OVERRIDE_CONFIG_KEY)
+            workspace_state_store.get_source_layer(self._RUNTIME_OVERRIDE_CONFIG_KEY)
             if workspace_state_store is not None
             else None
         )
         self._runtime_config_overrides: dict[str, Any] = (
-            dict(runtime_override.payload) if runtime_override is not None else {}
+            dict(runtime_override.payload)
+            if runtime_override is not None and runtime_override.payload is not None
+            else {}
         )
         self._mcp_tool_names: frozenset[str] | None = None
         self._snapshot_store = ConfigSnapshotStore(
@@ -349,9 +351,6 @@ class ConfigService:
         source_record = self._workspace_state_store.get_source_layer(
             self._RUNTIME_OVERRIDE_CONFIG_KEY
         )
-        legacy_record = self._workspace_state_store.get_config(
-            self._RUNTIME_OVERRIDE_CONFIG_KEY
-        )
         return ConfigSource(
             vrn=None,
             layer="sqlite",
@@ -359,9 +358,7 @@ class ConfigService:
             loaded=bool(self._runtime_config_overrides),
             source_key=self._RUNTIME_OVERRIDE_CONFIG_KEY,
             presence=(
-                source_record.presence
-                if source_record is not None
-                else ("present" if legacy_record is not None else "absent")
+                source_record.presence if source_record is not None else "absent"
             ),
             layer_revision=(
                 source_record.layer_revision if source_record is not None else None
@@ -464,7 +461,6 @@ class ConfigService:
                 presence="present" if path.is_file() else "absent",
             )
         source_record = self._workspace_state_store.get_source_layer(config_key)
-        legacy_record = self._workspace_state_store.get_config(config_key)
         return ConfigSource(
             vrn=None,
             layer="sqlite",
@@ -472,12 +468,12 @@ class ConfigService:
             loaded=(
                 source_record.presence == "present"
                 if source_record is not None
-                else legacy_record is not None or path.is_file()
+                else path.is_file()
             ),
             presence=(
                 source_record.presence
                 if source_record is not None
-                else ("present" if legacy_record is not None or path.is_file() else "absent")
+                else ("present" if path.is_file() else "absent")
             ),
             source_key=config_key,
             layer_revision=(
@@ -506,7 +502,7 @@ class ConfigService:
         source_record = self._workspace_state_store.get_source_layer(config_key)
         if source_record is not None:
             return source_record.presence == "present"
-        return self._workspace_state_store.get_config(config_key) is not None or path.is_file()
+        return path.is_file()
 
     def _read_shared_override(
         self,
@@ -522,7 +518,6 @@ class ConfigService:
                 "旧 Workspace SQLite 含无法恢复的秘密摘要，必须重新导入: "
                 + ", ".join(blocked)
             )
-        record = self._workspace_state_store.get_config(config_key)
         source_record = self._workspace_state_store.get_source_layer(config_key)
         previous_source_generation = (
             source_record.source_generation if source_record is not None else 0
@@ -534,15 +529,15 @@ class ConfigService:
             else "file-watcher"
         )
         if file_snapshot.presence == "absent":
-            if source_record is None and record is None:
+            if source_record is None:
                 return None
             deleted_backup_path = path.with_name(f"{path.name}.deleted.bak")
             if (
                 not deleted_backup_path.exists()
-                and record is not None
+                and source_record.payload is not None
             ):
                 deleted_backup_path.write_text(
-                    dump_json(redact_config_payload(record.payload)),
+                    dump_json(redact_config_payload(source_record.payload)),
                     encoding="utf-8",
                 )
             verify_stable_config_file(file_snapshot)
@@ -551,11 +546,7 @@ class ConfigService:
                 # user/user_local/workspace 层均不可寻址（VRN scope 闭集不含 user，
                 # 且有 state store 时共享同一个 workspace.sqlite），故 vrn 恒为 None。
                 vrn=None,
-                config_version=(
-                    source_record.config_version
-                    if source_record is not None
-                    else record.config_version
-                ),
+                config_version=source_record.config_version,
                 presence="absent",
                 payload=None,
                 layer_digest=None,
@@ -612,8 +603,12 @@ class ConfigService:
         try:
             payload = parse_stable_config_file(file_snapshot)
         except Exception:
-            if record is not None and not self._snapshot_store.has_snapshot():
-                restored = restore_environment_secret_references(record.payload)
+            if (
+                source_record is not None
+                and source_record.payload is not None
+                and not self._snapshot_store.has_snapshot()
+            ):
+                restored = restore_environment_secret_references(source_record.payload)
                 if not isinstance(restored, dict):
                     raise TypeError("SQLite 兼容配置恢复结果必须是对象")
                 prepare_config_for_persistence(restored)

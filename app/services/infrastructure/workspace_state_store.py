@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from app.core.config_sources import config_revision
 from app.core.sqlite_state import (
     SQLiteDiagnostics,
     SQLiteStateDatabase,
@@ -25,7 +27,6 @@ from app.services.infrastructure.config.state import (
     load_json_object,
     migrate_legacy_secret_payload,
     new_config_id,
-    prepare_config_for_persistence,
     validate_state_transition,
 )
 from app.services.infrastructure.workspace_activity.workspace_activity import (
@@ -38,7 +39,6 @@ from app.services.infrastructure.workspace_config_events.workspace_config_events
     WorkspaceConfigEventMixin,
 )
 from app.services.infrastructure.workspace_config_source.workspace_config_source import (
-    WORKSPACE_CONFIG_UPSERT,
     WorkspaceConfigSourceMixin,
 )
 
@@ -46,18 +46,90 @@ __all__ = [
     "WorkspaceActivityCursorGoneError",
     "WorkspaceActivityRecord",
     "WorkspaceActivityService",
-    "WorkspaceConfigRecord",
     "WorkspaceStateStore",
 ]
 
+logger = logging.getLogger(__name__)
+
+
+def _migrate_workspace_config_into_source_layers(
+    connection: sqlite3.Connection,
+) -> None:
+    """一次性显式迁移：把 legacy ``workspace_config`` 残留行并入权威 layer 表后删表。
+
+    - 只有当 ``workspace_config`` 有行、``config_source_layers`` 无同 key 行时，
+      才补一条等价 present layer 行（``layer_revision``/``source_generation``/``vrn``
+      按下标初始化，digest 由 payload 计算）——这是运行时覆盖读从旧表迁到权威表的
+      唯一活兼容来源，必须还原语义。
+    - 同 key 两表都在时必须逐字等价，冲突即 fail-closed，绝不静默择一。
+    - 迁移后物理 DROP 该表；不双读、不留别名、不扫描重建。
+    """
+
+    exists = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_config'"
+    ).fetchone()
+    if exists is None:
+        return
+    rows = connection.execute(
+        "SELECT config_key, config_version, payload_json, updated_at "
+        "FROM workspace_config"
+    ).fetchall()
+    for row in rows:
+        config_key = str(row[0])
+        config_version = int(row[1])
+        payload_json = str(row[2])
+        updated_at = str(row[3])
+        try:
+            payload = load_json_object(
+                payload_json, field=f"workspace_config payload (key={config_key})"
+            )
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                "legacy workspace_config 迁移失败：payload 非法，无法并入 "
+                f"config_source_layers: key={config_key}: {error}"
+            ) from error
+        layer = connection.execute(
+            "SELECT presence, payload_json FROM config_source_layers "
+            "WHERE config_key = ?",
+            (config_key,),
+        ).fetchone()
+        if layer is not None:
+            layer_payload = (
+                load_json_object(str(layer[1]), field="source layer payload")
+                if layer[1] is not None
+                else None
+            )
+            if str(layer[0]) != "present" or layer_payload != payload:
+                raise RuntimeError(
+                    "legacy workspace_config 与权威 config_source_layers 同 key 但"
+                    f"语义不一致，拒绝静默择一: key={config_key}"
+                )
+            continue
+        connection.execute(
+            """
+            INSERT INTO config_source_layers(
+                config_key, vrn, presence, config_version, payload_json,
+                layer_revision, layer_digest, source_generation, previous_digest,
+                updated_at, previous_payload_json
+            ) VALUES (?, NULL, 'present', ?, ?, 1, ?, 1, NULL, ?, NULL)
+            """,
+            (
+                config_key,
+                config_version,
+                payload_json,
+                config_revision(payload),
+                updated_at,
+            ),
+        )
+        logger.warning(
+            "legacy workspace_config 行已一次性并入 config_source_layers: key=%s",
+            config_key,
+        )
+    connection.execute("DROP TABLE workspace_config")
+
+
 _WORKSPACE_MIGRATIONS = (
     """
-    CREATE TABLE IF NOT EXISTS workspace_config (
-        config_key TEXT PRIMARY KEY,
-        config_version INTEGER NOT NULL,
-        payload_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
     CREATE TABLE IF NOT EXISTS workspace_activity (
         event_seq INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id TEXT NOT NULL UNIQUE,
@@ -280,6 +352,9 @@ _WORKSPACE_MIGRATIONS = (
     ALTER TABLE config_source_journal DROP COLUMN source_path;
     ALTER TABLE config_source_journal ADD COLUMN vrn TEXT;
     """,
+    # 一次性显式迁移：把 legacy workspace_config 残留行并入权威 config_source_layers
+    # 后物理 DROP 该镜像表（彻底根除表级双轨）。遇同 key 语义冲突 fail-closed。
+    _migrate_workspace_config_into_source_layers,
 )
 
 
@@ -326,13 +401,6 @@ ON CONFLICT(config_domain) DO UPDATE SET
 """
 
 
-@dataclass(frozen=True, slots=True)
-class WorkspaceConfigRecord:
-    config_key: str
-    config_version: int
-    payload: dict[str, object]
-
-
 class WorkspaceStateStore(
     WorkspaceActivityMixin, WorkspaceConfigEventMixin, WorkspaceConfigSourceMixin
 ):
@@ -354,29 +422,8 @@ class WorkspaceStateStore(
     def diagnostics(self) -> SQLiteDiagnostics:
         return self._database.diagnostics()
 
-    def set_config(
-        self,
-        *,
-        config_key: str,
-        config_version: int,
-        payload: dict[str, object],
-    ) -> None:
-        connection = self._database.connection()
-        try:
-            connection.execute(
-                WORKSPACE_CONFIG_UPSERT,
-                (
-                    config_key,
-                    config_version,
-                    dump_json(prepare_config_for_persistence(payload)),
-                    utc_now_text(),
-                ),
-            )
-        finally:
-            connection.close()
-
     def migrate_legacy_config_secrets(self, config_key: str) -> tuple[str, ...]:
-        """升级旧表中的秘密引用。
+        """升级权威 layer 表中的秘密引用。
 
         字面量 key 保留原文（已受支持）；只有旧版本写入的不可逆
         ``literal-sha256:`` 摘要才会被记为阻断路径。
@@ -386,19 +433,6 @@ class WorkspaceStateStore(
         blocked: set[str] = set()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            legacy_row = connection.execute(
-                "SELECT payload_json FROM workspace_config WHERE config_key = ?",
-                (config_key,),
-            ).fetchone()
-            if legacy_row is not None:
-                migrated, paths = migrate_legacy_secret_payload(
-                    json.loads(str(legacy_row[0]))
-                )
-                blocked.update(paths)
-                connection.execute(
-                    "UPDATE workspace_config SET payload_json = ?, updated_at = ? WHERE config_key = ?",
-                    (dump_json(migrated), utc_now_text(), config_key),
-                )
             source_row = connection.execute(
                 """
                 SELECT payload_json, previous_payload_json
@@ -2330,39 +2364,6 @@ class WorkspaceStateStore(
         if result is None:
             raise RuntimeError("Workspace pending discard 提交后无法读取")
         return result
-
-    def get_config(self, config_key: str) -> WorkspaceConfigRecord | None:
-        connection = self._database.connection()
-        try:
-            row = connection.execute(
-                """
-                SELECT config_key, config_version, payload_json
-                FROM workspace_config
-                WHERE config_key = ?
-                """,
-                (config_key,),
-            ).fetchone()
-            if row is None:
-                return None
-            return WorkspaceConfigRecord(
-                config_key=str(row[0]),
-                config_version=int(row[1]),
-                payload=load_json_object(
-                    str(row[2]), field=f"workspace_config payload (key={config_key})"
-                ),
-            )
-        finally:
-            connection.close()
-
-    def delete_config(self, config_key: str) -> None:
-        connection = self._database.connection()
-        try:
-            connection.execute(
-                "DELETE FROM workspace_config WHERE config_key = ?",
-                (config_key,),
-            )
-        finally:
-            connection.close()
 
     def close(self) -> None:
         self._database.close()

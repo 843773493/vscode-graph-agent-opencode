@@ -21,7 +21,7 @@
 # 不可修改内容
 
 - 不得在本目录实现 active snapshot、pending candidate、config apply claim/journal、
-  config event outbox/relay 或 `workspace_config` 读写等其它族；这些族分别属
+  config event outbox/relay 等其它族；这些族分别属
   `workspace_config_events/` 与 `workspace_state_store.py`。
 - 不得保留 `workspace_state_store.py` 中的转发 shim、兼容别名或双套实现；
   `WorkspaceStateStore` 只通过多继承装配本 mixin，方法体必须只在本模块定义一处。

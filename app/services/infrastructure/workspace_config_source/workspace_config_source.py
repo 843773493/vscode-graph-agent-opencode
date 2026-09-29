@@ -35,7 +35,6 @@ from app.services.infrastructure.config.state import (
 )
 
 __all__ = [
-    "WORKSPACE_CONFIG_UPSERT",
     "WorkspaceConfigSourceMixin",
 ]
 
@@ -65,17 +64,6 @@ INSERT INTO config_source_journal(
     presence, layer_revision, layer_digest, previous_digest,
     origin, fanout_id, created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-"""
-
-# materialized layer 与 legacy 表保持同步时共用的唯一 upsert：
-# ``sync_config_source`` 两条分支与宿主 ``set_config`` 逐字相同。
-WORKSPACE_CONFIG_UPSERT = """
-INSERT INTO workspace_config(config_key, config_version, payload_json, updated_at)
-VALUES (?, ?, ?, ?)
-ON CONFLICT(config_key) DO UPDATE SET
-    config_version=excluded.config_version,
-    payload_json=excluded.payload_json,
-    updated_at=excluded.updated_at
 """
 
 class WorkspaceConfigSourceMixin:
@@ -251,16 +239,6 @@ class WorkspaceConfigSourceMixin:
                         """,
                         (config_version, sanitized_json, now, config_key),
                     )
-                    if presence == "present":
-                        connection.execute(
-                            WORKSPACE_CONFIG_UPSERT,
-                            (config_key, config_version, sanitized_json, now),
-                        )
-                    else:
-                        connection.execute(
-                            "DELETE FROM workspace_config WHERE config_key = ?",
-                            (config_key,),
-                        )
                     if journal_origin is not None:
                         self._append_config_source_journal_in_connection(
                             connection,
@@ -346,18 +324,6 @@ class WorkspaceConfigSourceMixin:
                         fanout_id
                         or f"fanout:{config_key}:event:{config_key}:layer:{layer_revision}"
                     ),
-                )
-            if presence == "present":
-                if payload is None:
-                    raise RuntimeError("present source layer payload 在事务中丢失")
-                connection.execute(
-                    WORKSPACE_CONFIG_UPSERT,
-                    (config_key, config_version, payload_json, now),
-                )
-            else:
-                connection.execute(
-                    "DELETE FROM workspace_config WHERE config_key = ?",
-                    (config_key,),
                 )
             connection.execute("COMMIT")
         except Exception:

@@ -23,7 +23,7 @@ claim / delivered / failed 投递状态。
 # 不可修改内容
 
 - 不得在本目录实现 config source journal、active snapshot、pending candidate、
-  config apply claim/journal、`workspace_config` 读写或 runtime generation 等其它族；
+  config apply claim/journal 或 runtime generation 等其它族；
   这些族仍属 `app/services/infrastructure/workspace_state_store.py` 与
   `app/services/infrastructure/config/`。
 - 不得保留 `workspace_state_store.py` 中的转发 shim、兼容别名或双套实现；

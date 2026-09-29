@@ -16,7 +16,7 @@
 # 不可修改内容
 
 - 不得在本目录实现配置来源层、配置 apply 账本、配置事件 outbox/relay 或
-  `workspace_config` 读写等其它族；这些族仍属
+  workspace 配置来源层的读写等其它族；这些族仍属
   `app/services/infrastructure/workspace_state_store.py` 与
   `app/services/infrastructure/config/`。
 - 不得保留 `workspace_state_store.py` 中的转发 shim、兼容别名或双套实现；

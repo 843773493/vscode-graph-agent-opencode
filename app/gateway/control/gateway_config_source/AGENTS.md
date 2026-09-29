@@ -12,7 +12,7 @@
 
 - 不得在本目录实现 active snapshot、pending candidate、config apply claim/journal、runtime generation、restart intent、config event 或 workspace registry 等其它控制面职责。
 - 不得保留 `app/gateway/control/gateway_state.py` 的转发 shim、兼容别名或双套实现；`GatewayStateStore` 只通过多继承装配本 mixin，方法体必须只在本模块定义一处。
-- 不得把 `gateway_config` 表本身的通用读写放在本目录：本族只在 `sync_config_source` 内联动 `gateway_config` 的同一 config_key 行，通用读写仍属宿主。
+- 不得把 `gateway_config` 表本身的通用读写放在本目录：`gateway_config` 只承载控制面独有 KV（`workspace_registry_meta`/`gateway_connection_ids`），config 来源层一律只以 `config_source_layers` 为唯一载体，本族 MUST NOT 再镜像写入 `gateway_config`。
 - 不得把 `schema_version`、重载策略或 workspace 侧 `WorkspaceStateStore` 的 fanout 账本搬入本模块。
 
 # 规范

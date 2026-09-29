@@ -168,24 +168,6 @@ class GatewayConfigSourceMixin:
                         """,
                         (config_version, sanitized_json, now, config_key),
                     )
-                    if presence == "present":
-                        connection.execute(
-                            """
-                            INSERT INTO gateway_config(
-                                config_key, config_version, payload_json, updated_at
-                            ) VALUES (?, ?, ?, ?)
-                            ON CONFLICT(config_key) DO UPDATE SET
-                                config_version=excluded.config_version,
-                                payload_json=excluded.payload_json,
-                                updated_at=excluded.updated_at
-                            """,
-                            (config_key, config_version, sanitized_json, now),
-                        )
-                    else:
-                        connection.execute(
-                            "DELETE FROM gateway_config WHERE config_key = ?",
-                            (config_key,),
-                        )
                     if journal_origin is not None:
                         self._append_config_source_journal_in_connection(
                             connection,
@@ -271,28 +253,6 @@ class GatewayConfigSourceMixin:
                         fanout_id
                         or f"fanout:{config_key}:event:{config_key}:layer:{revision}"
                     ),
-                )
-            if presence == "present":
-                connection.execute(
-                    """
-                    INSERT INTO gateway_config(config_key, config_version, payload_json, updated_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(config_key) DO UPDATE SET
-                        config_version=excluded.config_version,
-                        payload_json=excluded.payload_json,
-                        updated_at=excluded.updated_at
-                    """,
-                    (
-                        config_key,
-                        config_version,
-                        dump_json(prepare_config_for_persistence(payload)),
-                        now,
-                    ),
-                )
-            else:
-                connection.execute(
-                    "DELETE FROM gateway_config WHERE config_key = ?",
-                    (config_key,),
                 )
             connection.execute("COMMIT")
         except Exception:

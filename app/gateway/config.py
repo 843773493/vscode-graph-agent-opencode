@@ -638,7 +638,6 @@ def _gateway_source_detail(
     fallback_path: Path,
 ) -> ConfigSource:
     record = state_store.get_source_layer(config_key)
-    legacy = state_store.get_config(config_key)
     # sqlite 层不可寻址（共享 workspace.sqlite，且 real path 不持久化），vrn=None。
     return ConfigSource(
         vrn=None,
@@ -647,14 +646,14 @@ def _gateway_source_detail(
         loaded=(
             record.presence == "present"
             if record is not None
-            else legacy is not None or fallback_path.is_file()
+            else fallback_path.is_file()
         ),
         source_key=config_key,
         presence=(
             record.presence
             if record is not None
             else "present"
-            if legacy is not None or fallback_path.is_file()
+            if fallback_path.is_file()
             else "absent"
         ),
         layer_revision=record.layer_revision if record is not None else None,
@@ -2191,37 +2190,26 @@ def _load_or_migrate_gateway_override(
                 "旧 Gateway SQLite 含无法恢复的秘密摘要，必须重新导入: "
                 + ", ".join(blocked)
             )
-    record = state_store.get_config(config_key)
     source_record = state_store.get_source_layer(config_key)
     file_snapshot = read_stable_config_file(path)
     if file_snapshot.presence == "absent":
-        if persist_migrations and (source_record is not None or record is not None):
+        if persist_migrations and source_record is not None:
             deleted_backup_path = path.with_name(f"{path.name}.deleted.bak")
-            if not deleted_backup_path.exists() and record is not None:
+            if not deleted_backup_path.exists() and source_record.payload is not None:
                 deleted_backup_path.write_text(
-                    dump_json(redact_config_payload(record.payload)),
+                    dump_json(redact_config_payload(source_record.payload)),
                     encoding="utf-8",
                 )
             verify_stable_config_file(file_snapshot)
             source_record = state_store.sync_config_source(
                 config_key=config_key,
                 vrn=None,
-                config_version=(
-                    source_record.config_version
-                    if source_record is not None
-                    else record.config_version
-                    if record is not None
-                    else 1
-                ),
+                config_version=source_record.config_version,
                 presence="absent",
                 payload=None,
                 layer_digest=None,
-                expected_layer_revision=(
-                    source_record.layer_revision if source_record is not None else None
-                ),
-                expected_layer_digest=(
-                    source_record.layer_digest if source_record is not None else None
-                ),
+                expected_layer_revision=source_record.layer_revision,
+                expected_layer_digest=source_record.layer_digest,
                 journal_origin="file-watcher",
             )
             _record_gateway_source_journal(

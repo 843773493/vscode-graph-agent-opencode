@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,7 +24,7 @@ _DROP_TABLE_PATTERN: Final = re.compile(
 
 
 def _required_tables(
-    migrations: tuple[str, ...],
+    migrations: tuple[Migration, ...],
     current: int,
 ) -> tuple[str, ...]:
     """返回已登记应用的迁移理应留在库中的表。
@@ -34,6 +35,8 @@ def _required_tables(
     created: list[str] = []
     dropped: set[str] = set()
     for migration in migrations[:current]:
+        if not isinstance(migration, str):
+            continue
         created.extend(_CREATE_TABLE_PATTERN.findall(migration))
         dropped.update(_DROP_TABLE_PATTERN.findall(migration))
     required: list[str] = []
@@ -46,6 +49,12 @@ def _required_tables(
 
 def utc_now_text() -> str:
     return datetime.now(UTC).isoformat()
+
+
+# 一次迁移可以是一条 DDL/迁移 SQL 文本，也可以是需要过程化判定（读旧表、
+# 校验一致性、按行重建）的 Python 回调；二者都在同一事务内与 schema_migrations
+# 登记一起提交。回调只接收一个连接，不接收其它上下文。
+Migration = str | Callable[[sqlite3.Connection], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +109,7 @@ class SQLiteStateDatabase:
         *,
         path: Path,
         schema_version: int,
-        migrations: tuple[str, ...],
+        migrations: tuple[Migration, ...],
         allow_shared_processes: bool = False,
     ) -> None:
         if schema_version != len(migrations):
@@ -190,13 +199,23 @@ class SQLiteStateDatabase:
                 if version <= current:
                     continue
                 try:
-                    connection.executescript(
-                        "BEGIN IMMEDIATE;\n"
-                        f"{migration}\n"
-                        "INSERT INTO schema_migrations(version, applied_at) "
-                        f"VALUES ({version}, '{utc_now_text()}');\n"
-                        "COMMIT;"
-                    )
+                    if isinstance(migration, str):
+                        connection.executescript(
+                            "BEGIN IMMEDIATE;\n"
+                            f"{migration}\n"
+                            "INSERT INTO schema_migrations(version, applied_at) "
+                            f"VALUES ({version}, '{utc_now_text()}');\n"
+                            "COMMIT;"
+                        )
+                    else:
+                        connection.execute("BEGIN IMMEDIATE")
+                        migration(connection)
+                        connection.execute(
+                            "INSERT INTO schema_migrations(version, applied_at) "
+                            "VALUES (?, ?)",
+                            (version, utc_now_text()),
+                        )
+                        connection.execute("COMMIT")
                 except Exception:
                     connection.rollback()
                     raise
