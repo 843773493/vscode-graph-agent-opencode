@@ -471,7 +471,7 @@
         "max_turns": 16, // 当前未接入该独立执行限制。
         "max_history_messages": 30, // 当前未接入该独立执行限制。
         "max_context_tokens": 32000, // 当前未接入该独立执行限制。
-        "require_delegated_report": false // 当前未接入该执行策略。
+        "require_delegated_report": false // AgentExecutionService 已接入该执行策略。
       }
     },
     "reviewer": {
@@ -506,7 +506,7 @@
         "max_turns": 16, // 当前未接入该独立执行限制。
         "max_history_messages": 30, // 当前未接入该独立执行限制。
         "max_context_tokens": 32000, // 当前未接入该独立执行限制。
-        "require_delegated_report": false // 当前未接入该执行策略。
+        "require_delegated_report": false // AgentExecutionService 已接入该执行策略。
       }
     },
     "researcher": {
@@ -541,7 +541,7 @@
         "max_turns": 16, // 当前未接入该独立执行限制。
         "max_history_messages": 30, // 当前未接入该独立执行限制。
         "max_context_tokens": 32000, // 当前未接入该独立执行限制。
-        "require_delegated_report": false // 当前未接入该执行策略。
+        "require_delegated_report": false // AgentExecutionService 已接入该执行策略。
       }
     }
   },
