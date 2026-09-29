@@ -334,6 +334,14 @@ _GATEWAY_MIGRATIONS = (
     CREATE INDEX IF NOT EXISTS gateway_restart_intent_gateway_idx
         ON gateway_restart_intent(gateway_id, state, updated_at);
     """,
+    # 配置来源位置改以 VRN 表达（real path 不持久化）：丢弃旧真实路径列、新增 VRN 列。
+    """
+    ALTER TABLE config_source_layers DROP COLUMN source_path;
+    ALTER TABLE config_source_layers DROP COLUMN backup_path;
+    ALTER TABLE config_source_layers ADD COLUMN vrn TEXT;
+    ALTER TABLE config_source_journal DROP COLUMN source_path;
+    ALTER TABLE config_source_journal ADD COLUMN vrn TEXT;
+    """,
 )
 
 
@@ -1124,7 +1132,7 @@ class GatewayStateStore(
                 }
                 current_rows = connection.execute(
                     """
-                    SELECT config_key, source_path, presence, layer_revision,
+                    SELECT config_key, vrn, presence, layer_revision,
                            layer_digest, source_generation
                     FROM config_source_layers
                     """
@@ -1137,8 +1145,14 @@ class GatewayStateStore(
                     )
                 for row in current_rows:
                     detail = expected_sources[str(row[0])]
+                    actual_vrn = str(row[1]) if row[1] is not None else None
+                    expected_vrn = (
+                        str(detail.get("vrn"))
+                        if detail.get("vrn") is not None
+                        else None
+                    )
                     if (
-                        str(detail.get("path")) != str(row[1])
+                        expected_vrn != actual_vrn
                         or str(detail.get("presence")) != str(row[2])
                         or int(detail["layer_revision"]) != int(row[3])
                         or (
@@ -2543,7 +2557,7 @@ class GatewayStateStore(
             }
             current_rows = connection.execute(
                 """
-                SELECT config_key, source_path, presence, layer_revision,
+                SELECT config_key, vrn, presence, layer_revision,
                        layer_digest, source_generation
                 FROM config_source_layers
                 """
@@ -2554,8 +2568,12 @@ class GatewayStateStore(
                 )
             for row in current_rows:
                 detail = expected_sources[str(row[0])]
+                actual_vrn = str(row[1]) if row[1] is not None else None
+                expected_vrn = (
+                    str(detail.get("vrn")) if detail.get("vrn") is not None else None
+                )
                 if (
-                    str(detail.get("path")) != str(row[1])
+                    expected_vrn != actual_vrn
                     or str(detail.get("presence")) != str(row[2])
                     or int(detail["layer_revision"]) != int(row[3])
                     or (

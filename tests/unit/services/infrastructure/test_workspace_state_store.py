@@ -86,7 +86,7 @@ def test_workspace_state_uses_workspace_boundary_and_activity_cursor(tmp_path):
         assert [item.event_id for item in store.list_activity(after=first.event_seq)] == [
             second.event_id
         ]
-        assert store.diagnostics().schema_version == 12
+        assert store.diagnostics().schema_version == 13
     finally:
         store.close()
 
@@ -829,7 +829,7 @@ def test_source_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
         first = store.append_config_source_journal(
             source_key="user",
             source_event_id="source-event-1",
-            source_path=tmp_path / "workspace.jsonc",
+            vrn=None,
             presence="present",
             layer_revision=1,
             layer_digest="digest-a",
@@ -840,7 +840,7 @@ def test_source_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
         duplicate = store.append_config_source_journal(
             source_key="user",
             source_event_id="source-event-duplicate",
-            source_path=tmp_path / "workspace.jsonc",
+            vrn=None,
             presence="present",
             layer_revision=1,
             layer_digest="digest-a",
@@ -853,7 +853,7 @@ def test_source_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
         second = store.append_config_source_journal(
             source_key="user",
             source_event_id="source-event-2",
-            source_path=tmp_path / "workspace.jsonc",
+            vrn=None,
             presence="present",
             layer_revision=2,
             layer_digest="digest-b",
@@ -865,7 +865,7 @@ def test_source_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
         third = store.append_config_source_journal(
             source_key="user",
             source_event_id="source-event-3",
-            source_path=tmp_path / "workspace.jsonc",
+            vrn=None,
             presence="present",
             layer_revision=3,
             layer_digest="digest-a",
@@ -894,7 +894,7 @@ def test_source_journal_replays_stopped_workspace_and_reports_partial_fanout(tmp
         first = store.append_config_source_journal(
             source_key="shared-user-workspace",
             source_event_id="shared-1",
-            source_path=tmp_path / "workspace.jsonc",
+            vrn=None,
             presence="present",
             layer_revision=1,
             layer_digest="digest-a",
@@ -905,7 +905,7 @@ def test_source_journal_replays_stopped_workspace_and_reports_partial_fanout(tmp
         second = store.append_config_source_journal(
             source_key="shared-user-workspace",
             source_event_id="shared-2",
-            source_path=tmp_path / "workspace.jsonc",
+            vrn=None,
             presence="present",
             layer_revision=2,
             layer_digest="digest-b",

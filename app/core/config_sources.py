@@ -16,7 +16,10 @@ ConfigSourceLayer = Literal["inline", "user", "user_local", "workspace", "sqlite
 class ConfigSource:
     """描述一个配置层及其在最终配置中的优先级。"""
 
-    path: Path
+    # 来源位置以 VRN 表达（owner change「配置来源寻址必须使用 config kind 且 sqlite
+    # 层不可寻址」定稿形态）；不可寻址的来源（sqlite 层）为 None。真实路径永不在此
+    # 持久化或对外，只在读取该来源内容的调用栈内出现。
+    vrn: str | None
     layer: ConfigSourceLayer
     precedence: int
     loaded: bool

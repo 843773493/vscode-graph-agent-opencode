@@ -99,7 +99,10 @@ async def get_config_sources(
             schema_path=str(schema_path),
             sources=[
                 ConfigSourceDTO(
-                    path=str(source.path),
+                    # TODO(5A.3): 该字段名与 proto 中的 ConfigSourceDTO.path 属独立的破坏性
+                    # 协议切片（需同步 proto 与 4 个生成目录及契约基线），本切片不改其名，
+                    # 仅把值由 real path 改为来源 VRN，避免真实路径外泄。
+                    path=source.vrn or "",
                     layer=source.layer,
                     precedence=source.precedence,
                     loaded=source.loaded,

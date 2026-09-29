@@ -46,7 +46,7 @@ class WorkspaceSourceOwner:
         source_key TEXT NOT NULL,
         source_generation INTEGER NOT NULL,
         source_event_id TEXT NOT NULL UNIQUE,
-        source_path TEXT NOT NULL,
+        vrn TEXT,
         presence TEXT NOT NULL CHECK (presence IN ('present', 'absent')),
         layer_revision INTEGER NOT NULL,
         layer_digest TEXT,
@@ -69,10 +69,8 @@ class WorkspaceSourceOwner:
         PRIMARY KEY (source_key, source_generation, workspace_id),
         FOREIGN KEY (source_key, source_generation)
             REFERENCES config_source_journal(source_key, source_generation)
-            ON DELETE CASCADE
+        ON DELETE CASCADE
     );
-    CREATE INDEX IF NOT EXISTS config_source_journal_path_idx
-        ON config_source_journal(source_key, source_path, source_generation);
     CREATE INDEX IF NOT EXISTS config_source_fanout_workspace_idx
         ON config_source_fanout(source_key, workspace_id, source_generation);
     """
@@ -112,13 +110,65 @@ class WorkspaceSourceOwner:
         connection = self._connect()
         try:
             connection.executescript(self._SCHEMA)
+            self._migrate_legacy_source_path(connection)
         finally:
             connection.close()
+
+    @staticmethod
+    def _migrate_legacy_source_path(connection: sqlite3.Connection) -> None:
+        """把旧库的 ``config_source_journal.source_path`` 重建为 ``vrn``。
+
+        真实路径 MUST NOT 持久化（三层分离）：本 owner 只承载用户级 workspace.jsonc，
+        其 VRN 由调用方在访问点构造；旧列一律丢弃、不迁移其值，重建后写 ``NULL``。
+        该 owner 的库不自带迁移账本，故用列存在性做幂等判定（旧库只迁移一次）。
+        """
+        columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(config_source_journal)"
+            ).fetchall()
+        }
+        if "source_path" not in columns or "vrn" in columns:
+            return
+        connection.executescript(
+            """
+            PRAGMA foreign_keys = OFF;
+            BEGIN IMMEDIATE;
+            DROP INDEX IF EXISTS config_source_journal_path_idx;
+            CREATE TABLE config_source_journal__new (
+                source_key TEXT NOT NULL,
+                source_generation INTEGER NOT NULL,
+                source_event_id TEXT NOT NULL UNIQUE,
+                vrn TEXT,
+                presence TEXT NOT NULL CHECK (presence IN ('present', 'absent')),
+                layer_revision INTEGER NOT NULL,
+                layer_digest TEXT,
+                previous_digest TEXT,
+                origin TEXT NOT NULL,
+                fanout_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (source_key, source_generation)
+            );
+            INSERT INTO config_source_journal__new(
+                source_key, source_generation, source_event_id, vrn, presence,
+                layer_revision, layer_digest, previous_digest, origin, fanout_id,
+                created_at
+            )
+            SELECT source_key, source_generation, source_event_id, NULL, presence,
+                   layer_revision, layer_digest, previous_digest, origin, fanout_id,
+                   created_at
+            FROM config_source_journal;
+            DROP TABLE config_source_journal;
+            ALTER TABLE config_source_journal__new RENAME TO config_source_journal;
+            COMMIT;
+            PRAGMA foreign_keys = ON;
+            """
+        )
 
     def observe(
         self,
         *,
-        source_path: Path,
+        vrn: str | None,
         presence: str,
         layer_digest: str | None,
         origin: str,
@@ -127,20 +177,21 @@ class WorkspaceSourceOwner:
         """记录一次稳定 source 观察；相邻同 digest 观察只返回旧事件。
 
         只对相邻事件按 digest 去重，因此 ``A -> B -> A`` 必然得到三个
-        generation 和三个不同的 fanout 身份。
+        generation 和三个不同的 fanout 身份。去重只看 ``(presence, digest)``：
+        ``source_key`` 已固定该来源身份，其载体（本 owner 承载的用户级 workspace.jsonc）
+        不随观察变化，故不再按真实路径去重——真实路径 MUST NOT 持久化。
         """
 
         if presence not in {"present", "absent"}:
             raise ValueError(f"source owner presence 无效: {presence}")
         if presence == "present" and layer_digest is None:
             raise ValueError("present source owner 观察必须有 layer_digest")
-        resolved_path = str(source_path.expanduser().resolve())
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
             latest = connection.execute(
                 """
-                SELECT source_key, source_generation, source_event_id, source_path,
+                SELECT source_key, source_generation, source_event_id, vrn,
                        presence, layer_revision, layer_digest, previous_digest,
                        origin, fanout_id, created_at
                 FROM config_source_journal
@@ -155,7 +206,6 @@ class WorkspaceSourceOwner:
             )
             if (
                 latest is not None
-                and str(latest[3]) == resolved_path
                 and str(latest[4]) == presence
                 and latest_digest == layer_digest
             ):
@@ -182,7 +232,7 @@ class WorkspaceSourceOwner:
             connection.execute(
                 """
                 INSERT INTO config_source_journal(
-                    source_key, source_generation, source_event_id, source_path,
+                    source_key, source_generation, source_event_id, vrn,
                     presence, layer_revision, layer_digest, previous_digest,
                     origin, fanout_id, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -191,7 +241,7 @@ class WorkspaceSourceOwner:
                     source_key,
                     generation,
                     event_id,
-                    resolved_path,
+                    vrn,
                     presence,
                     next_layer_revision,
                     layer_digest,
@@ -230,7 +280,7 @@ class WorkspaceSourceOwner:
         try:
             row = connection.execute(
                 """
-                SELECT source_key, source_generation, source_event_id, source_path,
+                SELECT source_key, source_generation, source_event_id, vrn,
                        presence, layer_revision, layer_digest, previous_digest,
                        origin, fanout_id, created_at
                 FROM config_source_journal
@@ -260,7 +310,7 @@ class WorkspaceSourceOwner:
         try:
             rows = connection.execute(
                 """
-                SELECT source_key, source_generation, source_event_id, source_path,
+                SELECT source_key, source_generation, source_event_id, vrn,
                        presence, layer_revision, layer_digest, previous_digest,
                        origin, fanout_id, created_at
                 FROM config_source_journal
@@ -527,7 +577,7 @@ class WorkspaceSourceOwner:
             source_key=str(row[0]),
             source_generation=int(row[1]),
             source_event_id=str(row[2]),
-            source_path=str(row[3]),
+            vrn=str(row[3]) if row[3] is not None else None,
             presence=str(row[4]),  # type: ignore[arg-type]
             layer_revision=int(row[5]),
             layer_digest=str(row[6]) if row[6] is not None else None,

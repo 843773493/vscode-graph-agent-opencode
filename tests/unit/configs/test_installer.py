@@ -259,7 +259,8 @@ def test_cli_diagnose_is_read_only_and_reports_source_and_sqlite_state(
     gateway_digest = hashlib.sha256(gateway_config.read_bytes()).hexdigest()
     state.sync_config_source(
         config_key="gateway_mutable_override",
-        source_path=gateway_config,
+        # gateway_mutable_override 属 user 层，不可寻址：只写 VRN 兄弟字段（None）。
+        vrn=None,
         config_version=1,
         presence="present",
         payload={"config_version": 1, "workspaces": []},

@@ -56,28 +56,28 @@ def test_shared_source_owner_distinguishes_a_b_a_and_deduplicates_adjacent_obser
 ) -> None:
     first_owner = WorkspaceSourceOwner(path=tmp_path / "source-owner.sqlite")
     second_owner = WorkspaceSourceOwner(path=tmp_path / "source-owner.sqlite")
-    source_path = tmp_path / "workspace.jsonc"
+    vrn = "boxteam://workspace/ws-1/resources/config/workspace_mutable_override"
 
     first = first_owner.observe(
-        source_path=source_path,
+        vrn=vrn,
         presence="present",
         layer_digest="digest-a",
         origin="file-watcher",
     )
     duplicate = second_owner.observe(
-        source_path=source_path,
+        vrn=vrn,
         presence="present",
         layer_digest="digest-a",
         origin="file-watcher",
     )
     second = first_owner.observe(
-        source_path=source_path,
+        vrn=vrn,
         presence="present",
         layer_digest="digest-b",
         origin="file-watcher",
     )
     third = second_owner.observe(
-        source_path=source_path,
+        vrn=vrn,
         presence="present",
         layer_digest="digest-a",
         origin="file-watcher",
@@ -98,15 +98,15 @@ def test_shared_source_owner_prepares_stopped_workspace_and_preserves_failed_res
     tmp_path: Path,
 ) -> None:
     owner = WorkspaceSourceOwner(path=tmp_path / "source-owner.sqlite")
-    source_path = tmp_path / "workspace.jsonc"
+    vrn = "boxteam://workspace/ws-1/resources/config/workspace_mutable_override"
     first = owner.observe(
-        source_path=source_path,
+        vrn=vrn,
         presence="present",
         layer_digest="digest-a",
         origin="file-watcher",
     )
     second = owner.observe(
-        source_path=source_path,
+        vrn=vrn,
         presence="present",
         layer_digest="digest-b",
         origin="file-watcher",
@@ -128,7 +128,7 @@ def test_shared_source_owner_prepares_stopped_workspace_and_preserves_failed_res
         error="本地 Workspace layer 已变化",
     )
     third = owner.observe(
-        source_path=source_path,
+        vrn=vrn,
         presence="present",
         layer_digest="digest-c",
         origin="file-watcher",
@@ -227,7 +227,7 @@ def test_config_service_catches_up_stopped_workspace_from_source_high_water(
         warning_digest = read_stable_config_file(config_path).digest
         assert warning_digest is not None
         owner.observe(
-            source_path=config_path,
+            vrn="boxteam://workspace/stopped-workspace/resources/config/workspace_mutable_override",
             presence="present",
             layer_digest=warning_digest,
             origin="file-watcher",
@@ -236,7 +236,7 @@ def test_config_service_catches_up_stopped_workspace_from_source_high_water(
         restored_digest = read_stable_config_file(config_path).digest
         assert restored_digest is not None
         owner.observe(
-            source_path=config_path,
+            vrn="boxteam://workspace/stopped-workspace/resources/config/workspace_mutable_override",
             presence="present",
             layer_digest=restored_digest,
             origin="file-watcher",

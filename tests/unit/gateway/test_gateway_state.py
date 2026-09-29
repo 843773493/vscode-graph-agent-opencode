@@ -48,28 +48,34 @@ def test_gateway_state_keeps_config_in_control_database(tmp_path):
         store.close()
 
 
-def test_gateway_source_backup_path_records_caller_artifact(tmp_path):
-    """backup_path 是调用方在事务外写好的确定性文件，层行只记录其路径。"""
+def test_gateway_source_layer_records_vrn_and_drops_real_path(tmp_path):
+    """层行只记录来源 VRN 兄弟字段，真实路径与备份路径列被物理移除。"""
 
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
-        source_path = tmp_path / "workspace.jsonc"
-        source_path.write_text("{}", encoding="utf-8")
-        backup_path = source_path.with_name(f"{source_path.name}.migrated.bak")
-        backup_path.write_text("OLD", encoding="utf-8")
         record = state.sync_config_source(
-            config_key="workspace_mutable_override",
-            source_path=source_path,
+            config_key="gateway_inline",
+            vrn=(
+                "boxteam://inline/source-development-0_0_2/resources/config/"
+                "gateway_inline"
+            ),
             config_version=1,
             presence="present",
             payload={"ui": {"a": 1}},
             layer_digest="digest-1",
-            backup_path=backup_path,
         )
-        assert record.backup_path == str(backup_path.resolve())
-        # 备份内容保持原样，回收由确定性命名 + 写入端 not exists 守卫承载
-        assert backup_path.read_text(encoding="utf-8") == "OLD"
-        assert [item.name for item in tmp_path.glob("*.bak")] == [backup_path.name]
+        assert record.vrn == (
+            "boxteam://inline/source-development-0_0_2/resources/config/gateway_inline"
+        )
+        columns = {
+            str(row[1])
+            for row in state.connection()
+            .execute("PRAGMA table_info(config_source_layers)")
+            .fetchall()
+        }
+        assert "vrn" in columns
+        assert "source_path" not in columns
+        assert "backup_path" not in columns
     finally:
         state.close()
 
@@ -77,10 +83,9 @@ def test_gateway_source_backup_path_records_caller_artifact(tmp_path):
 def test_gateway_source_layer_cas_and_owner_generation_guard(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
-        source_path = tmp_path / "workspace.jsonc"
         state.sync_config_source(
             config_key="workspace_mutable_override",
-            source_path=source_path,
+            vrn=None,
             config_version=1,
             presence="present",
             payload={"ui": {"a": 1}},
@@ -94,7 +99,7 @@ def test_gateway_source_layer_cas_and_owner_generation_guard(tmp_path):
             with pytest.raises(ConfigConflictError, match="source layer CAS"):
                 state.sync_config_source(
                     config_key="workspace_mutable_override",
-                    source_path=source_path,
+                    vrn=None,
                     config_version=2,
                     presence="present",
                     payload={"ui": {"a": 2}},
@@ -105,7 +110,7 @@ def test_gateway_source_layer_cas_and_owner_generation_guard(tmp_path):
         with pytest.raises(ConfigConflictError, match="初始 CAS"):
             state.sync_config_source(
                 config_key="brand_new_key",
-                source_path=source_path,
+                vrn=None,
                 config_version=1,
                 presence="present",
                 payload={"ui": {}},
@@ -119,11 +124,10 @@ def test_gateway_source_layer_cas_and_owner_generation_guard(tmp_path):
 def test_gateway_source_journal_owner_generation_guard_is_enforced(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
-        source_path = tmp_path / "workspace.jsonc"
         state.append_config_source_journal(
             source_key="user",
             source_event_id="event-1",
-            source_path=source_path,
+            vrn=None,
             presence="present",
             layer_revision=1,
             layer_digest="a",
@@ -145,7 +149,7 @@ def test_gateway_source_journal_owner_generation_guard_is_enforced(tmp_path):
             state.append_config_source_journal(
                 source_key="user",
                 source_event_id="event-2",
-                source_path=source_path,
+                vrn=None,
                 presence="absent",
                 layer_revision=2,
                 layer_digest="b",
@@ -166,7 +170,7 @@ def test_gateway_source_high_water_mark_rejects_missing_owner_with_journal(tmp_p
         state.append_config_source_journal(
             source_key="user",
             source_event_id="event-1",
-            source_path=tmp_path / "workspace.jsonc",
+            vrn=None,
             presence="present",
             layer_revision=1,
             layer_digest="a",
@@ -210,12 +214,11 @@ def test_gateway_source_high_water_mark_rejects_corrupt_next_generation(tmp_path
 def test_gateway_source_owner_guard_applies_inside_sync_transaction(tmp_path):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
-        source_path = tmp_path / "workspace.jsonc"
         # sync_config_source 在同一事务内经 _append_config_source_journal_in_connection
         # 追加 journal，owner 水位不一致时必须在事务内 fail closed 并回滚整个 sync。
         state.sync_config_source(
             config_key="workspace_mutable_override",
-            source_path=source_path,
+            vrn=None,
             config_version=1,
             presence="present",
             payload={"ui": {"a": 1}},
@@ -235,7 +238,7 @@ def test_gateway_source_owner_guard_applies_inside_sync_transaction(tmp_path):
         with pytest.raises(ConfigConflictError, match="source owner generation CAS"):
             state.sync_config_source(
                 config_key="workspace_mutable_override",
-                source_path=tmp_path / "next.jsonc",
+                vrn=None,
                 config_version=2,
                 presence="present",
                 payload={"ui": {"a": 2}},

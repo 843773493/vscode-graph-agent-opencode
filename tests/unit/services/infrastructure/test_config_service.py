@@ -571,6 +571,13 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
             "sqlite",
             "sqlite",
         ]
+        # 5A.6：只有 inline 层可寻址；sqlite 层（user/user_local/workspace 共享同一
+        # workspace.sqlite）一律不可寻址，vrn MUST be None，且不含任何真实路径。
+        details = service.get_source_details()
+        assert details[0].vrn is not None
+        assert details[0].vrn.startswith("boxteam://inline/")
+        for source in details[1:]:
+            assert source.vrn is None
         assert config_path.with_name("workspace.jsonc.migrated.bak").is_file()
         assert local_path.with_name("workspace_local.jsonc.migrated.bak").is_file()
         assert workspace_path.with_name("workspace.jsonc.migrated.bak").is_file()
@@ -1558,7 +1565,7 @@ async def test_source_change_during_apply_fails_final_cas_without_active_promoti
             assert source is not None
             store.sync_config_source(
                 config_key="workspace_mutable_override",
-                source_path=config_path,
+                vrn=None,
                 config_version=1,
                 presence="present",
                 payload={"ui": {"default_orchestration": "single_agent"}},
@@ -1949,7 +1956,7 @@ async def test_source_change_during_apply_without_side_effect_fails_before_promo
             assert source is not None
             store.sync_config_source(
                 config_key="workspace_mutable_override",
-                source_path=config_path,
+                vrn=None,
                 config_version=1,
                 presence="present",
                 payload={"ui": {"default_orchestration": "single_agent"}},

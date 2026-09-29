@@ -86,12 +86,12 @@ def build_config_snapshot(
         source_details=source_details
         or tuple(
             ConfigSource(
-                path=path,
+                vrn=None,
                 layer="user",
                 precedence=index,
                 loaded=True,
             )
-            for index, path in enumerate(source_paths)
+            for index, _path in enumerate(source_paths)
         ),
         schema_path=schema_path,
     )

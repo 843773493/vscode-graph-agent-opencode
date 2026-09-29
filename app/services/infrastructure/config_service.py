@@ -79,6 +79,7 @@ from app.services.infrastructure.config.state import (
     redact_config_payload,
     restore_environment_secret_references,
 )
+from app.services.infrastructure.config.source_vrn import inline_config_source_vrn
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.installer import resolve_config_resource_source
@@ -120,6 +121,8 @@ class ConfigService:
             if inline_config_path
             else resolve_config_resource_source("workspace_inline.jsonc")
         )
+        # inline 来源的逻辑资源名（VRN 尾段，去扩展名；如 workspace_inline）。
+        self._inline_logical_name = self._inline_config_path.stem or "workspace_inline"
         self._schema: dict[str, Any] | None = None
         self._workspace_root = (
             Path(workspace_root).expanduser().resolve() if workspace_root else None
@@ -252,7 +255,7 @@ class ConfigService:
         source_paths: list[Path] = [self._inline_config_path]
         source_details: list[ConfigSource] = [
             ConfigSource(
-                path=self._inline_config_path,
+                vrn=self._inline_source_vrn(),
                 layer="inline",
                 precedence=0,
                 loaded=True,
@@ -332,9 +335,11 @@ class ConfigService:
         return config, tuple(source_paths), tuple(source_details)
 
     def _runtime_override_source(self) -> ConfigSource:
+        # runtime override 由 SQLite 承载：sqlite 层不可寻址（real path 永不持久化，
+        # 且 user/user_local/workspace 三层共享同一个 workspace.sqlite），故 vrn=None。
         if self._workspace_state_store is None:
             return ConfigSource(
-                path=self._config_dir / "workspace_runtime_override",
+                vrn=None,
                 layer="sqlite",
                 precedence=4,
                 loaded=bool(self._runtime_config_overrides),
@@ -348,7 +353,7 @@ class ConfigService:
             self._RUNTIME_OVERRIDE_CONFIG_KEY
         )
         return ConfigSource(
-            path=self._workspace_state_store.path,
+            vrn=None,
             layer="sqlite",
             precedence=4,
             loaded=bool(self._runtime_config_overrides),
@@ -402,7 +407,7 @@ class ConfigService:
         payload = next_overrides or None
         record = self._workspace_state_store.sync_config_source(
             config_key=source_key,
-            source_path=self._workspace_state_store.path,
+            vrn=None,
             config_version=1,
             presence="present" if payload is not None else "absent",
             payload=payload,
@@ -420,7 +425,7 @@ class ConfigService:
         self._workspace_state_store.append_config_source_journal(
             source_key=source_key,
             source_event_id=f"{source_key}:layer:{record.layer_revision}",
-            source_path=Path(record.source_path),
+            vrn=record.vrn,
             presence=record.presence,
             layer_revision=record.layer_revision,
             layer_digest=record.layer_digest,
@@ -432,6 +437,22 @@ class ConfigService:
             ),
         )
 
+    def _inline_source_vrn(self) -> str:
+        """构造发行包内 inline 层配置来源的 VRN（唯一可寻址的 config 层）。"""
+        return inline_config_source_vrn(logical_name=self._inline_logical_name)
+
+    @staticmethod
+    def _config_layer_vrn(*, config_key: str) -> str | None:
+        """按 config_key 判定该来源层的 VRN；不可寻址的层返回 ``None``。
+
+        ``workspace_mutable_override`` / ``workspace_local_mutable_override`` /
+        ``workspace_root_mutable_override`` / ``workspace_runtime_override`` 分别对应
+        ``user`` / ``user_local`` / ``workspace`` / ``sqlite`` 层，均**不可寻址**：VRN scope
+        闭集为 ``workspace``/``gateway``/``inline``（不含 ``user``），且前三层在有 state
+        store 时共享同一个 ``workspace.sqlite``。故这些来源一律不编 VRN。
+        """
+        return None
+
     def _config_source(
         self,
         *,
@@ -440,9 +461,14 @@ class ConfigService:
         precedence: int,
         config_key: str,
     ) -> ConfigSource:
+        """返回一条来源的 VRN 兄弟字段形态；inline 之外的层不可寻址。"""
+        # user/user_local/workspace 三层无可用的 VRN scope（VRN scope 闭集为
+        # workspace/gateway/inline，不含 user），且在有 state store 时它们共享同一个
+        # workspace.sqlite，故一律不可寻址（vrn=None）。real path 只在本调用栈内用于
+        # 判断 presence，MUST NOT 持久化或对外。
         if self._workspace_state_store is None:
             return ConfigSource(
-                path=path,
+                vrn=None,
                 layer=layer,  # type: ignore[arg-type]
                 precedence=precedence,
                 loaded=path.is_file(),
@@ -452,7 +478,7 @@ class ConfigService:
         source_record = self._workspace_state_store.get_source_layer(config_key)
         legacy_record = self._workspace_state_store.get_config(config_key)
         return ConfigSource(
-            path=self._workspace_state_store.path,
+            vrn=None,
             layer="sqlite",
             precedence=precedence,
             loaded=(
@@ -534,7 +560,7 @@ class ConfigService:
             verify_stable_config_file(file_snapshot)
             source_record = self._workspace_state_store.sync_config_source(
                 config_key=config_key,
-                source_path=path,
+                vrn=self._config_layer_vrn(config_key=config_key),
                 config_version=(
                     source_record.config_version
                     if source_record is not None
@@ -549,11 +575,11 @@ class ConfigService:
                 expected_layer_digest=(
                     source_record.layer_digest if source_record is not None else None
                 ),
-                backup_path=deleted_backup_path if record is not None else None,
                 journal_origin=journal_origin,
             )
             self._record_source_journal(
                 source_record,
+                source_path=path,
                 origin="file-watcher",
                 previous_source_generation=previous_source_generation,
             )
@@ -565,7 +591,7 @@ class ConfigService:
             source_record is not None
             and source_record.presence == "present"
             and source_record.layer_digest == file_snapshot.digest
-            and source_record.source_path == str(path.expanduser().resolve())
+            and source_record.vrn == self._config_layer_vrn(config_key=config_key)
         ):
             payload = parse_stable_config_file(file_snapshot)
             if payload is None:
@@ -575,7 +601,7 @@ class ConfigService:
             verify_stable_config_file(file_snapshot)
             source_record = self._workspace_state_store.sync_config_source(
                 config_key=config_key,
-                source_path=path,
+                vrn=self._config_layer_vrn(config_key=config_key),
                 config_version=int(payload.get("config_version", 1)),
                 presence="present",
                 payload=payload,
@@ -586,6 +612,7 @@ class ConfigService:
             )
             self._record_source_journal(
                 source_record,
+                source_path=path,
                 origin="loader",
                 previous_source_generation=previous_source_generation,
             )
@@ -612,7 +639,7 @@ class ConfigService:
             shutil.copy2(path, backup_path)
         source_record = self._workspace_state_store.sync_config_source(
             config_key=config_key,
-            source_path=path,
+            vrn=self._config_layer_vrn(config_key=config_key),
             config_version=int(payload.get("config_version", 1)),
             presence="present",
             payload=payload,
@@ -623,11 +650,11 @@ class ConfigService:
             expected_layer_digest=(
                 source_record.layer_digest if source_record is not None else None
             ),
-            backup_path=backup_path,
             journal_origin=journal_origin,
         )
         self._record_source_journal(
             source_record,
+            source_path=path,
             origin="file-watcher",
             previous_source_generation=previous_source_generation,
         )
@@ -637,22 +664,25 @@ class ConfigService:
         self,
         source_record,
         *,
+        source_path: Path,
         origin: str,
         previous_source_generation: int = 0,
     ) -> None:
+        # ``source_path`` 是最后访问点的真实路径，只在本调用栈内用于判定共享来源，
+        # MUST NOT 持久化（journal 只写 VRN 兄弟字段）。
         if self._workspace_state_store is None:
             return
         source_key = source_record.config_key
         if self._is_shared_user_source(
             config_key=source_key,
-            path=Path(source_record.source_path),
+            path=source_path,
         ):
             source_owner = self._source_owner
             workspace_id = self._source_owner_workspace_id
             if source_owner is None or workspace_id is None:
                 raise RuntimeError("共享 Workspace source 缺少 source owner 身份")
             owner_record = source_owner.observe(
-                source_path=Path(source_record.source_path),
+                vrn=source_record.vrn,
                 presence=source_record.presence,
                 layer_digest=source_record.layer_digest,
                 origin=origin,
@@ -697,7 +727,7 @@ class ConfigService:
         self._workspace_state_store.append_config_source_journal(
             source_key=source_key,
             source_event_id=f"{source_key}:layer:{source_record.layer_revision}",
-            source_path=Path(source_record.source_path),
+            vrn=source_record.vrn,
             presence=source_record.presence,
             layer_revision=source_record.layer_revision,
             layer_digest=source_record.layer_digest,
@@ -910,27 +940,27 @@ class ConfigService:
             "workspace_runtime_override": ("sqlite", 4),
         }
         details: list[ConfigSource] = []
-        paths: list[Path] = []
         for fallback_precedence, (source_key, raw_value) in enumerate(
             sorted(baseline.items()),
             start=1,
         ):
             if not isinstance(raw_value, dict):
                 raise TypeError(f"source baseline 必须是对象: key={source_key}")
-            raw_path = raw_value.get("path")
+            raw_vrn = raw_value.get("vrn")
             raw_presence = raw_value.get("presence")
-            if not isinstance(raw_path, str) or not raw_path:
-                raise ValueError(f"source baseline 缺少 path: key={source_key}")
+            if raw_vrn is not None and (
+                not isinstance(raw_vrn, str) or not raw_vrn
+            ):
+                raise ValueError(f"source baseline vrn 必须是非空字符串或 None: key={source_key}")
             if raw_presence not in {"present", "absent"}:
                 raise ValueError(f"source baseline presence 无效: key={source_key}")
             layer, precedence = layer_names.get(
                 source_key,
                 ("sqlite", fallback_precedence),
             )
-            source_path = Path(raw_path)
             details.append(
                 ConfigSource(
-                    path=source_path,
+                    vrn=raw_vrn,
                     layer=layer,
                     precedence=precedence,
                     loaded=raw_presence == "present",
@@ -953,9 +983,9 @@ class ConfigService:
                     ),
                 )
             )
-            if source_path not in paths:
-                paths.append(source_path)
-        return tuple(details), tuple(paths)
+        # real path 不再持久化，故恢复路径时无 source_paths 可作为监听候选；
+        # 监听候选取自显式配置路径（见 start_watching）。
+        return tuple(details), ()
 
     def get_loaded_config_proof(self) -> dict[str, object]:
         """返回可供 Gateway 校验的加载证明，不包含秘密或候选完整 payload。"""
@@ -1162,7 +1192,7 @@ class ConfigService:
 
         source_details: list[ConfigSource] = [
             ConfigSource(
-                path=self._inline_config_path,
+                vrn=self._inline_source_vrn(),
                 layer="inline",
                 precedence=0,
                 loaded=True,
@@ -1971,15 +2001,9 @@ class ConfigService:
         source_generation = 0
         for source in snapshot.source_details:
             layer_key = source.source_key or f"{source.layer}:{source.precedence}"
-            source_path = source.path
-            if self._workspace_state_store is not None and source.source_key is not None:
-                stored_source = self._workspace_state_store.get_source_layer(
-                    source.source_key
-                )
-                if stored_source is not None:
-                    source_path = Path(stored_source.source_path)
+            # 只持久化 VRN（可为 None），绝不持久化 real path。
             baseline[layer_key] = {
-                "path": str(source_path),
+                "vrn": source.vrn,
                 "presence": source.presence,
                 "layer_revision": source.layer_revision,
                 "layer_digest": source.layer_digest,
@@ -2211,7 +2235,7 @@ class ConfigService:
         if not isinstance(baseline, dict) or source is None:
             return False
         if (
-            baseline.get("path") != source.source_path
+            baseline.get("vrn") != source.vrn
             or baseline.get("presence") != source.presence
             or baseline.get("layer_revision") != source.layer_revision
             or baseline.get("layer_digest") != source.layer_digest
@@ -2258,7 +2282,7 @@ class ConfigService:
                 "source_paths": [str(path) for path in snapshot.source_paths],
                 "source_details": [
                     {
-                        "path": str(source.path),
+                        "vrn": source.vrn,
                         "layer": source.layer,
                         "precedence": source.precedence,
                         "loaded": source.loaded,

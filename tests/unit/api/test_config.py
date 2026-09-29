@@ -66,3 +66,36 @@ async def test_config_sources_endpoint_exposes_layers_and_schema(
         "user_local",
     ]
     assert response.data.sources[2].loaded is True
+
+
+@pytest.mark.asyncio
+async def test_config_sources_endpoint_never_exposes_real_path(
+    tmp_path: Path,
+) -> None:
+    """5A.6：响应体只含来源 VRN，不泄漏任何真实路径（字段名 5A.3 后续切片再改）。"""
+
+    config_path = tmp_path / "workspace.jsonc"
+    config_path.write_text(json.dumps(_base_config()), encoding="utf-8")
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=config_path,
+    )
+
+    response = await get_config_sources(
+        _="local-dev-token",
+        request_id="req-config-no-path",
+        config_service=service,
+    )
+
+    assert response.data is not None
+    dumped = json.dumps(
+        [source.path for source in response.data.sources], ensure_ascii=False
+    )
+    assert str(tmp_path) not in dumped
+    assert str(Path.cwd() / "configs") not in dumped
+    # inline 层是唯一可寻址的 config 来源，其 path 值为 VRN。
+    assert response.data.sources[0].path.startswith("boxteam://inline/")
+    assert response.data.sources[0].path.endswith("/resources/config/workspace_inline")
+    # user/user_local 不可寻址：值为空串。
+    assert response.data.sources[1].path == ""
+    assert response.data.sources[2].path == ""

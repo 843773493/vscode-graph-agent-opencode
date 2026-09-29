@@ -472,7 +472,10 @@ def build_secret_binding_summary(
 @dataclass(frozen=True, slots=True)
 class ConfigSourceLayerRecord:
     config_key: str
-    source_path: str
+    # 来源位置以 VRN 表达（owner change「配置来源寻址必须使用 config kind 且 sqlite
+    # 层不可寻址」定稿形态）；``sqlite`` 层不可寻址，故为 None。真实路径只在读取该
+    # 来源内容的调用栈内出现，MUST NOT 持久化。
+    vrn: str | None
     presence: Literal["present", "absent"]
     config_version: int
     payload: dict[str, object] | None
@@ -482,7 +485,6 @@ class ConfigSourceLayerRecord:
     previous_digest: str | None
     updated_at: datetime
     previous_payload: dict[str, object] | None = None
-    backup_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -629,7 +631,8 @@ class ConfigSourceJournalRecord:
     source_key: str
     source_generation: int
     source_event_id: str
-    source_path: str
+    # 同 ConfigSourceLayerRecord：以 VRN 表达来源位置，sqlite 层为 None。
+    vrn: str | None
     presence: Literal["present", "absent"]
     layer_revision: int
     layer_digest: str | None

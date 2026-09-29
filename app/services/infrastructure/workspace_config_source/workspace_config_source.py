@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
-from pathlib import Path
 from typing import cast
 
 from app.core.sqlite_state import utc_now_text
@@ -44,7 +43,7 @@ __all__ = [
 # config_source_journal 的完整行投影：单事件回读（按 event_id / 按 generation）
 # 与按域分页读取三处共用同一列清单，新增列时只需改这里。
 _JOURNAL_SELECT = """
-SELECT source_key, source_generation, source_event_id, source_path,
+SELECT source_key, source_generation, source_event_id, vrn,
        presence, layer_revision, layer_digest, previous_digest,
        origin, fanout_id, created_at
 FROM config_source_journal
@@ -62,7 +61,7 @@ LIMIT 1
 
 _JOURNAL_INSERT = """
 INSERT INTO config_source_journal(
-    source_key, source_generation, source_event_id, source_path,
+    source_key, source_generation, source_event_id, vrn,
     presence, layer_revision, layer_digest, previous_digest,
     origin, fanout_id, created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -90,7 +89,7 @@ class WorkspaceConfigSourceMixin:
             source_key=str(row[0]),
             source_generation=int(row[1]),
             source_event_id=str(row[2]),
-            source_path=str(row[3]),
+            vrn=str(row[3]) if row[3] is not None else None,
             presence=cast(str, row[4]),
             layer_revision=int(row[5]),
             layer_digest=str(row[6]) if row[6] is not None else None,
@@ -105,10 +104,10 @@ class WorkspaceConfigSourceMixin:
         try:
             row = connection.execute(
                 """
-                SELECT config_key, source_path, presence, config_version,
+                SELECT config_key, vrn, presence, config_version,
                        payload_json, layer_revision, layer_digest,
                        source_generation, previous_digest, updated_at,
-                       previous_payload_json, backup_path
+                       previous_payload_json
                 FROM config_source_layers
                 WHERE config_key = ?
                 """,
@@ -123,7 +122,7 @@ class WorkspaceConfigSourceMixin:
             )
             return ConfigSourceLayerRecord(
                 config_key=str(row[0]),
-                source_path=str(row[1]),
+                vrn=str(row[1]) if row[1] is not None else None,
                 presence=str(row[2]),  # type: ignore[arg-type]
                 config_version=int(row[3]),
                 payload=payload,
@@ -139,7 +138,6 @@ class WorkspaceConfigSourceMixin:
                     if row[10] is not None
                     else None
                 ),
-                backup_path=str(row[11]) if row[11] is not None else None,
             )
         finally:
             connection.close()
@@ -148,14 +146,13 @@ class WorkspaceConfigSourceMixin:
         self,
         *,
         config_key: str,
-        source_path: Path,
+        vrn: str | None,
         config_version: int,
         presence: str,
         payload: dict[str, object] | None,
         layer_digest: str | None,
         expected_layer_revision: int | None = None,
         expected_layer_digest: str | None = None,
-        backup_path: Path | None = None,
         journal_origin: str | None = None,
         source_event_id: str | None = None,
         fanout_id: str | None = None,
@@ -202,7 +199,7 @@ class WorkspaceConfigSourceMixin:
                     )
             row = connection.execute(
                 """
-                SELECT source_path, presence, layer_revision, layer_digest,
+                SELECT vrn, presence, layer_revision, layer_digest,
                        source_generation, payload_json
                 FROM config_source_layers
                 WHERE config_key = ?
@@ -219,7 +216,7 @@ class WorkspaceConfigSourceMixin:
                 previous_digest = None
                 previous_payload_json = None
             else:
-                current_path = str(row[0])
+                current_vrn = str(row[0]) if row[0] is not None else None
                 current_presence = str(row[1])
                 current_revision = int(row[2])
                 current_digest = str(row[3]) if row[3] is not None else None
@@ -236,7 +233,7 @@ class WorkspaceConfigSourceMixin:
                         f"current_digest={current_digest}"
                     )
                 if (
-                    current_path == str(source_path.expanduser().resolve())
+                    current_vrn == vrn
                     and current_presence == presence
                     and current_digest == layer_digest
                 ):
@@ -272,7 +269,7 @@ class WorkspaceConfigSourceMixin:
                                 source_event_id
                                 or f"{config_key}:layer:{current_revision}"
                             ),
-                            source_path=source_path,
+                            vrn=vrn,
                             presence=presence,
                             layer_revision=current_revision,
                             layer_digest=layer_digest,
@@ -302,12 +299,12 @@ class WorkspaceConfigSourceMixin:
             connection.execute(
                 """
                 INSERT INTO config_source_layers(
-                    config_key, source_path, presence, config_version, payload_json,
+                    config_key, vrn, presence, config_version, payload_json,
                     layer_revision, layer_digest, source_generation, previous_digest,
-                    updated_at, previous_payload_json, backup_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    updated_at, previous_payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(config_key) DO UPDATE SET
-                    source_path=excluded.source_path,
+                    vrn=excluded.vrn,
                     presence=excluded.presence,
                     config_version=excluded.config_version,
                     payload_json=excluded.payload_json,
@@ -316,12 +313,11 @@ class WorkspaceConfigSourceMixin:
                     source_generation=excluded.source_generation,
                     previous_digest=excluded.previous_digest,
                     updated_at=excluded.updated_at,
-                    previous_payload_json=excluded.previous_payload_json,
-                    backup_path=excluded.backup_path
+                    previous_payload_json=excluded.previous_payload_json
                 """,
                 (
                     config_key,
-                    str(source_path.expanduser().resolve()),
+                    vrn,
                     presence,
                     config_version,
                     payload_json,
@@ -331,9 +327,6 @@ class WorkspaceConfigSourceMixin:
                     previous_digest,
                     now,
                     previous_payload_json,
-                    str(backup_path.expanduser().resolve())
-                    if backup_path is not None
-                    else None,
                 ),
             )
             if journal_origin is not None:
@@ -343,7 +336,7 @@ class WorkspaceConfigSourceMixin:
                     source_event_id=(
                         source_event_id or f"{config_key}:layer:{layer_revision}"
                     ),
-                    source_path=source_path,
+                    vrn=vrn,
                     presence=presence,
                     layer_revision=layer_revision,
                     layer_digest=layer_digest,
@@ -395,9 +388,9 @@ class WorkspaceConfigSourceMixin:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT source_path, presence, config_version, payload_json,
+                SELECT vrn, presence, config_version, payload_json,
                        layer_revision, layer_digest, source_generation,
-                       previous_digest, updated_at, previous_payload_json, backup_path
+                       previous_digest, updated_at, previous_payload_json
                 FROM config_source_layers
                 WHERE config_key = ?
                 """,
@@ -447,7 +440,7 @@ class WorkspaceConfigSourceMixin:
         *,
         source_key: str,
         source_event_id: str,
-        source_path: Path,
+        vrn: str | None,
         presence: str,
         layer_revision: int,
         layer_digest: str | None,
@@ -516,7 +509,7 @@ class WorkspaceConfigSourceMixin:
                 source_key,
                 generation,
                 source_event_id,
-                str(source_path.expanduser().resolve()),
+                vrn,
                 presence,
                 layer_revision,
                 layer_digest,
@@ -533,7 +526,7 @@ class WorkspaceConfigSourceMixin:
         *,
         source_key: str,
         source_event_id: str,
-        source_path: Path,
+        vrn: str | None,
         presence: str,
         layer_revision: int,
         layer_digest: str | None,
@@ -618,7 +611,7 @@ class WorkspaceConfigSourceMixin:
                     source_key,
                     generation,
                     source_event_id,
-                    str(source_path.expanduser().resolve()),
+                    vrn,
                     presence,
                     layer_revision,
                     layer_digest,

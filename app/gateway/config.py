@@ -37,6 +37,7 @@ from app.core.path_utils import (
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.services.infrastructure.config import ConfigFileWatcher, ConfigReloadStatus
 from app.services.infrastructure.config.policy import gateway_config_policy
+from app.services.infrastructure.config.source_vrn import inline_config_source_vrn
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventInput,
@@ -638,8 +639,9 @@ def _gateway_source_detail(
 ) -> ConfigSource:
     record = state_store.get_source_layer(config_key)
     legacy = state_store.get_config(config_key)
+    # sqlite 层不可寻址（共享 workspace.sqlite，且 real path 不持久化），vrn=None。
     return ConfigSource(
-        path=state_store.path,
+        vrn=None,
         layer="sqlite",
         precedence=precedence,
         loaded=(
@@ -689,7 +691,7 @@ def load_gateway_config(
     local_override: dict[str, object] | None = None
     source_details: list[ConfigSource] = [
         ConfigSource(
-            path=resolved_inline_config_path,
+            vrn=inline_config_source_vrn(logical_name="gateway_inline"),
             layer="inline",
             precedence=0,
             loaded=True,
@@ -750,7 +752,7 @@ def load_gateway_config(
             source_details = [
                 source_details[0],
                 ConfigSource(
-                    path=state_store.path,
+                    vrn=None,
                     layer="sqlite",
                     precedence=1,
                     loaded=True,
@@ -768,7 +770,7 @@ def load_gateway_config(
         source_details.extend(
             [
                 ConfigSource(
-                    path=resolved_config_path,
+                    vrn=None,
                     layer="user",
                     precedence=1,
                     loaded=resolved_config_path.is_file(),
@@ -778,7 +780,7 @@ def load_gateway_config(
                     ),
                 ),
                 ConfigSource(
-                    path=resolved_local_config_path,
+                    vrn=None,
                     layer="user_local",
                     precedence=2,
                     loaded=resolved_local_config_path.is_file(),
@@ -2160,12 +2162,8 @@ class GatewayConfigReloadService:
         source_generation = 0
         for source in config.source_details:
             key = source.source_key or f"{source.layer}:{source.precedence}"
-            source_path = source.path
-            stored_source = self._state_store.get_source_layer(key)
-            if stored_source is not None:
-                source_path = Path(stored_source.source_path)
             baseline[key] = {
-                "path": str(source_path),
+                "vrn": source.vrn,
                 "presence": source.presence,
                 "layer_revision": source.layer_revision,
                 "layer_digest": source.layer_digest,
@@ -2207,7 +2205,7 @@ def _load_or_migrate_gateway_override(
             verify_stable_config_file(file_snapshot)
             source_record = state_store.sync_config_source(
                 config_key=config_key,
-                source_path=path,
+                vrn=None,
                 config_version=(
                     source_record.config_version
                     if source_record is not None
@@ -2224,7 +2222,6 @@ def _load_or_migrate_gateway_override(
                 expected_layer_digest=(
                     source_record.layer_digest if source_record is not None else None
                 ),
-                backup_path=deleted_backup_path if record is not None else None,
                 journal_origin="file-watcher",
             )
             _record_gateway_source_journal(
@@ -2245,7 +2242,7 @@ def _load_or_migrate_gateway_override(
         verify_stable_config_file(file_snapshot)
         source_record = state_store.sync_config_source(
             config_key=config_key,
-            source_path=path,
+            vrn=None,
             config_version=int(payload.get("config_version", 1)),
             presence="present",
             payload=payload,
@@ -2271,7 +2268,7 @@ def _load_or_migrate_gateway_override(
     source_record = state_store.sync_config_source(
         config_key=config_key,
         config_version=int(payload.get("config_version", 1)),
-        source_path=path,
+        vrn=None,
         presence="present",
         payload=payload,
         layer_digest=file_snapshot.digest,
@@ -2281,7 +2278,6 @@ def _load_or_migrate_gateway_override(
         expected_layer_digest=(
             source_record.layer_digest if source_record is not None else None
         ),
-        backup_path=backup_path,
         journal_origin="file-watcher",
     )
     if source_record.payload is None:
@@ -2301,7 +2297,7 @@ def _record_gateway_source_journal(
         source_event_id=(
             f"{source_record.config_key}:layer:{source_record.layer_revision}"
         ),
-        source_path=Path(source_record.source_path),
+        vrn=source_record.vrn,
         presence=source_record.presence,
         layer_revision=source_record.layer_revision,
         layer_digest=source_record.layer_digest,

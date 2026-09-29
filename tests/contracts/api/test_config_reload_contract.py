@@ -174,7 +174,7 @@ def test_configuration_diagnostics_redact_pending_payload_and_keep_secret_refere
         source_event = store.append_config_source_journal(
             source_key="shared-user-workspace",
             source_event_id="diagnostic-source-event",
-            source_path=tmp_path / "workspace.jsonc",
+            vrn=None,
             presence="present",
             layer_revision=1,
             layer_digest="source-digest",

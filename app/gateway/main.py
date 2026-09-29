@@ -1972,7 +1972,9 @@ async def gateway_config_sources(
             schema_path=str(config.schema_path),
             sources=[
                 GatewayConfigSourceDTO(
-                    path=str(source.path),
+                    # TODO(5A.3): 同 app/api/config.py，字段名属独立破坏性协议切片，
+                    # 本切片只把值由 real path 改为来源 VRN（可为空）。
+                    path=source.vrn or "",
                     layer=source.layer,
                     precedence=source.precedence,
                     loaded=source.loaded,

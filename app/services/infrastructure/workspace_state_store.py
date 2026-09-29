@@ -271,6 +271,15 @@ _WORKSPACE_MIGRATIONS = (
     ALTER TABLE config_pending_candidate ADD COLUMN secret_bindings_json TEXT
         NOT NULL DEFAULT '{}';
     """,
+    # 配置来源位置改以 VRN 表达（real path 不持久化）：丢弃旧真实路径列、新增 VRN 列。
+    # 旧值一律不迁移（列本身即被删除）；新列可空，sqlite 层不可寻址即写 NULL。
+    """
+    ALTER TABLE config_source_layers DROP COLUMN source_path;
+    ALTER TABLE config_source_layers DROP COLUMN backup_path;
+    ALTER TABLE config_source_layers ADD COLUMN vrn TEXT;
+    ALTER TABLE config_source_journal DROP COLUMN source_path;
+    ALTER TABLE config_source_journal ADD COLUMN vrn TEXT;
+    """,
 )
 
 
@@ -284,7 +293,7 @@ WHERE config_domain = ? AND candidate_id = ?
 """
 
 _SOURCE_LAYER_BASELINE_SELECT = """
-SELECT config_key, source_path, presence, layer_revision,
+SELECT config_key, vrn, presence, layer_revision,
        layer_digest, source_generation
 FROM config_source_layers
 """
@@ -749,8 +758,12 @@ class WorkspaceStateStore(
                     )
                 for row in current_rows:
                     detail = expected_sources[str(row[0])]
+                    actual_vrn = str(row[1]) if row[1] is not None else None
+                    expected_vrn = (
+                        str(detail.get("vrn")) if detail.get("vrn") is not None else None
+                    )
                     if (
-                        str(detail.get("path")) != str(row[1])
+                        expected_vrn != actual_vrn
                         or str(detail.get("presence")) != str(row[2])
                         or int(detail["layer_revision"]) != int(row[3])
                         or (
@@ -2218,8 +2231,12 @@ class WorkspaceStateStore(
                 )
             for row in current_rows:
                 detail = expected_sources[str(row[0])]
+                actual_vrn = str(row[1]) if row[1] is not None else None
+                expected_vrn = (
+                    str(detail.get("vrn")) if detail.get("vrn") is not None else None
+                )
                 if (
-                    str(detail.get("path")) != str(row[1])
+                    expected_vrn != actual_vrn
                     or str(detail.get("presence")) != str(row[2])
                     or int(detail["layer_revision"]) != int(row[3])
                     or (

@@ -86,3 +86,33 @@ def tmp_path(request: pytest.FixtureRequest) -> Path:
         shutil.rmtree(temp_root)
     temp_root.mkdir(parents=True)
     return temp_root
+
+
+@pytest.fixture(scope="session")
+def runtime_manifest_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """构造稳定的 runtime manifest，供 distribution_id 推导（inline scope_id）。"""
+    manifest = tmp_path_factory.mktemp("runtime-manifest") / "runtime-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "distribution": "source-development",
+                "version": "0.0.2",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return manifest
+
+
+@pytest.fixture(autouse=True)
+def setup_runtime_manifest(
+    runtime_manifest_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """默认注入 runtime manifest，使 inline 层 config 来源可编出 VRN。
+
+    个别用例显式 delenv 以验证缺失 manifest 时的 fail-closed 行为。
+    """
+    monkeypatch.setenv("BOXTEAM_RUNTIME_MANIFEST", str(runtime_manifest_path))
