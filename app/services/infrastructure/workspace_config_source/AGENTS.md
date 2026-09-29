@@ -2,7 +2,7 @@
 
 `app/services/infrastructure/workspace_config_source/` 承载工作区状态库
 `workspace.sqlite` 中 config source 一条垂直链路的唯一实现：`config_source_layers`
-权威 layer 行（去重同步、revision/digest CAS、上一版 payload 与备份路径）、
+权威 layer 行（去重同步、revision/digest CAS、上一版 payload）、
 `config_source_journal` 事件账本与 `config_source_owner` generation 水位，以及
 `config_source_fanout` 逐 generation/逐 workspace 的导入结果账本。
 

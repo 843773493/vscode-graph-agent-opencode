@@ -15,7 +15,7 @@
 
 ## 规范
 
-- `store.py` 只暴露协议实现并组合聚焦组件；文件格式、operation 应用和分页分别下沉。
+- 本目录按聚焦组件拆分（`trace_index.py`/`trace_index_storage.py`/`trace_page.py`/`trace_stream.py`/`trace_writer.py`/`trace_cursor.py`），不设统一门面；协议实现由 `app/services/infrastructure/trace_event_store.py` 的 `TraceEventStore` 承载，文件格式、operation 应用和分页分别下沉。
 - manifest 是 active operation generation 和 projection epoch 的权威来源。
 - 损坏、越界或不一致必须快速失败，禁止扫描磁盘后猜测修复。
 - 单个实现文件尽量控制在 400 行以内。

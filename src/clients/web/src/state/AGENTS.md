@@ -1,6 +1,6 @@
 # 目录用途
 
-`src/clients/web/src/state/` 放浏览器前端的状态派生、聚合和纯数据转换逻辑，服务于 `hooks.tsx` 中的 AppProvider。
+`src/clients/web/src/state/` 放浏览器前端的状态派生、聚合和纯数据转换逻辑，服务于 `../hooks.tsx` 中的 AppProvider。
 
 ## 可修改内容
 
@@ -18,5 +18,5 @@
 
 - 保持函数纯净、输入输出显式。
 - 代码注释使用中文，专业术语除外。
-- 需要副作用时优先留在 `hooks.tsx` 或 `api.ts`。
+- 需要副作用时优先留在 `../hooks.tsx` 或 `../api.ts`。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。

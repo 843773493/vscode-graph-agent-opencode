@@ -7,7 +7,7 @@
 - `deps.py`：所有路由共享的 FastAPI 依赖提供者（从 `request.app.state.container` 取服务实例）与 `verify_local_token`；`get_request_id` 从 `app.core.trace_middleware` 重导出。
 - `canonical_params.py`：`Annotated` 形式的 canonical `session_id` / `thread_id` 校验类型，复用 `app.core.session_catalog_store` 的唯一校验器。
 - `sse_heartbeat.py`：把异步事件源包装成带空闲心跳的 SSE 流的统一实现。
-- 其余 `*.py`：按业务域（`sessions`、`messages`、`workspace`、`jobs`、`tools`、`mcp`、`node_debug`、`runtime` 等）拆分的路由实现。
+- 其余 `*.py`：按业务域（`sessions`、`messages`、`workspace`、`jobs`、`tools`、`mcp`、`node_debug`、`runtime` 等）拆分的路由实现。同层不再有前端 TS 文件；浏览器前端的 gateway API 客户端位于 `src/clients/web/src/gatewayApi.ts`，pending request 客户端位于 `src/clients/web/src/pendingRequestsApi.ts`，二者不属于本目录。
 
 # 可修改内容
 
