@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Final
 
 _SCHEME: Final = "boxteam://"
-_SCOPE_KEYWORDS: Final = frozenset({"workspace", "gateway", "inline"})
+_SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
 # 语法 kind 闭集（parse_vrn 侧）；与 values.py 的描述符闭集 _DESCRIPTOR_KINDS 是两个
 # 独立闭集，不可混用。「config」承载配置来源文件本身，「session」承载会话上下文资源
 # （会话定位，规范形态 .../resources/session/{...canonical path segments}）。
@@ -59,8 +59,9 @@ class VrnGrammarError(ValueError):
 class ParsedVrn:
     """一次严格解析后的逻辑地址；不含任何 locator/credential 语义。
 
-    `scope_id` 对 workspace/gateway/inline 是对应 identity；`logical_name` 对
-    skills 是 skill name，对 agent-spec 是固定 `root/AGENTS.md`。
+    `scope_id` 对 workspace/gateway/inline/user 分别是对应 identity（user 为单用户
+    本地程序约定值 `local`）；`logical_name` 对 skills 是 skill name，对 agent-spec
+    是固定 `root/AGENTS.md`。
     """
 
     scope: str

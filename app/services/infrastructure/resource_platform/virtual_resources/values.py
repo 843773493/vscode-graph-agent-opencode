@@ -152,11 +152,21 @@ class ResolutionContext:
     """resolve 时的 principal 绑定；字段为 None 表示该 scope 未绑定。"""
 
     workspace_id: str | None = None
+    # ``user`` scope 的 principal：单用户本地程序的约定值（见
+    # ``app/core/user_identity.py``）。它是固定契约值而非部署相关量，但仍在 resolve 时
+    # 由调用方显式携带并参与绑定校验（与 workspace/gateway/inline 同纪律），
+    # MUST NOT 让 `user` 成为「parse 成功而 resolve 无绑定」的悬空 scope。
+    user_scope_id: str | None = None
     gateway_id: str | None = None
     distribution_id: str | None = None
 
     def __post_init__(self) -> None:
-        for field_name in ("workspace_id", "gateway_id", "distribution_id"):
+        for field_name in (
+            "workspace_id",
+            "user_scope_id",
+            "gateway_id",
+            "distribution_id",
+        ):
             value = getattr(self, field_name)
             if value is not None and (not isinstance(value, str) or not value):
                 raise ValueError(

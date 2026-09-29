@@ -27,6 +27,7 @@ def test_parse_workspace_agent_spec() -> None:
 def test_parse_skill_three_scopes() -> None:
     for scope, scope_id in (
         ("workspace", "ws-1"),
+        ("user", "local"),
         ("gateway", "gw-1"),
         ("inline", "dist-1"),
     ):
@@ -63,6 +64,7 @@ def test_resource_display_uri_round_trip_all_kinds() -> None:
     # 统一构造函数：闭集内任一 kind 都能构造并解析回自身。
     cases = (
         ("workspace", "ws-1", "agent-spec", ("root", "AGENTS.md")),
+        ("user", "local", "config", ("workspace_mutable_override",)),
         ("gateway", "gw-1", "skills", ("review", "SKILL.md")),
         ("inline", "source-development-0_0_2", "config", ("workspace_inline",)),
         ("workspace", "ws-1", "session", ("sess-1",)),
@@ -74,6 +76,25 @@ def test_resource_display_uri_round_trip_all_kinds() -> None:
         parsed = parse_vrn(uri)
         assert parsed.display_uri == uri
         assert parsed.kind == kind
+
+
+def test_user_scope_is_in_closed_set() -> None:
+    # ``user`` 是定稿 scope 闭集成员（workspace | user | gateway | inline）；其
+    # scope_id 是单用户本地程序约定值 ``local``（app/core/user_identity.py），且
+    # 该 scope 的 VRN 能构造并解析回自身。
+    uri = resource_display_uri(
+        scope="user",
+        scope_id="local",
+        kind="config",
+        tail_segments=("workspace_mutable_override",),
+    )
+    assert uri == "boxteam://user/local/resources/config/workspace_mutable_override"
+    parsed = parse_vrn(uri)
+    assert parsed.scope == "user"
+    assert parsed.scope_id == "local"
+    assert parsed.kind == "config"
+    assert parsed.logical_name == "workspace_mutable_override"
+    assert parsed.display_uri == uri
 
 
 def test_resource_display_uri_rejects_unregistered_kind_and_scope() -> None:

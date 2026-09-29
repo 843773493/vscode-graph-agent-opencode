@@ -135,6 +135,7 @@ def require_scope_binding(
     """校验 VRN scope 与该 principal 绑定一致；不一致显式结构化拒绝。"""
     bound = {
         "workspace": context.workspace_id,
+        "user": context.user_scope_id,
         "gateway": context.gateway_id,
         "inline": context.distribution_id,
     }.get(scope)

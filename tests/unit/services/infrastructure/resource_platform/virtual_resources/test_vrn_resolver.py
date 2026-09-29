@@ -14,6 +14,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
     VirtualResourceCatalog,
     VirtualResourceResolver,
     VrnResolveError,
+    require_scope_binding,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     OPERATION_ACTIVATE,
@@ -221,5 +222,51 @@ def test_config_and_session_still_fail_scope_binding() -> None:
             "boxteam://workspace/ws-OTHER/resources/session/sess-1",
             operation=OPERATION_READ_CONTENT,
             context=_workspace_context(),
+        )
+    assert excinfo.value.reason_code == "scope_mismatch"
+
+
+def test_user_scope_binding_accepts_local_and_rejects_other() -> None:
+    # ``user`` scope 的 principal 是单用户本地程序约定值 ``local``（见
+    # app/core/user_identity.py）：与 workspace/gateway/inline 同纪律，显式携带并
+    # 参与绑定校验，既非硬编码跳过、也非悬空 scope。
+    require_scope_binding(
+        "user", "local", ResolutionContext(user_scope_id="local")
+    )
+    with pytest.raises(VrnResolveError) as excinfo:
+        require_scope_binding(
+            "user", "local", ResolutionContext(user_scope_id="someone")
+        )
+    assert excinfo.value.reason_code == "scope_mismatch"
+    # 未绑定（None）同样拒绝，MUST NOT 回退到隐含上下文补全。
+    with pytest.raises(VrnResolveError) as excinfo:
+        require_scope_binding("user", "local", ResolutionContext())
+    assert excinfo.value.reason_code == "scope_mismatch"
+
+
+def test_user_scope_resolves_through_catalog() -> None:
+    uri = skill_display_uri(scope="user", scope_id="local", skill_name="code-review")
+    resolver = VirtualResourceResolver(
+        _catalog(
+            {
+                uri: CatalogBinding(
+                    descriptor=_descriptor("res-user-1", uri),
+                    capabilities=frozenset({OPERATION_READ_CONTENT}),
+                    snapshot_ref="cas:sha256:user",
+                )
+            }
+        )
+    )
+    handle = resolver.resolve(
+        uri,
+        operation=OPERATION_READ_CONTENT,
+        context=ResolutionContext(user_scope_id="local"),
+    )
+    assert handle.descriptor.resource_id == "res-user-1"
+    with pytest.raises(VrnResolveError) as excinfo:
+        resolver.resolve(
+            uri,
+            operation=OPERATION_READ_CONTENT,
+            context=ResolutionContext(user_scope_id="someone"),
         )
     assert excinfo.value.reason_code == "scope_mismatch"
