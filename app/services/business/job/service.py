@@ -6,11 +6,12 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol, TypeVar
+from typing import TypeVar
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobExecutorProtocol
 from app.abstractions.pending_request_store import PendingRequestStoreProtocol
+from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
@@ -59,18 +60,6 @@ class JobExecutionTimeoutError(TimeoutError):
 
 class JobStartupTimeoutError(TimeoutError):
     """Job 已进入 running 但在启动预算内没有进入 AgentLoop。"""
-
-
-class TurnTerminalStatusWriter(Protocol):
-    """把 Job 终态同步到持久化 Turn，供历史回放使用。"""
-
-    def mark_turn_terminal_status(
-        self,
-        *,
-        session_id: str,
-        turn_id: str,
-        status: str,
-    ) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
