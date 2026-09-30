@@ -16,7 +16,7 @@
 
 - 把「身份 / 地址 / 真实路径」三层分离落成**唯一 owner 与唯一实现**，并给出可机械检查的不变量。
 - 给出一套统一 VRN 语法（保留 `resources` 固定段序）与规范化单一实现、**定稿**的 scope 闭集、scope_id 语义表与 kind 闭集。
-- 给出**分两套**集中登记的拒绝码（grammar 17 + resolve 6）与其不混用约束。
+- 给出**分三套**集中登记的拒绝码（grammar 17 + resolve 6 + 联邦解析期）与其不混用约束。
 - 给出顶层 gateway 之间**星型解析**的边界契约，并把上界做成显式 policy 常量。
 - 登记配置来源 real path 持久化这一**已存在违约**的迁移形态，并说明 `sqlite` 层为何无 VRN。
 - 明确与另外三个 change 的接口面，避免多份定义并存。
@@ -67,7 +67,7 @@
 
 **实测依据**：manifest 实测路径 `out/development-runtime/runtime-manifest.json`（由 `scripts/launch/dev.mjs:177-207` 写、`packages/launcher/src/gateway-supervisor.mjs:90` 以 `BOXTEAM_RUNTIME_MANIFEST` 传给 Python 侧），真实字段 `distribution: "source-development"`、`version: "0.0.2"`；`version` 取自根 `package.json`（`packaging/runtime/versions.mjs` 的 `BOXTEAM_VERSION`）。`distribution` 是 schema 枚举 `source-development`/`source-installed`/`npm`/`standalone`，全部落在 VRN charset `[A-Za-z0-9_-]` 内。
 
-**风险与真实反驳**：`version` 实测含点号（`0.0.2`），而 `_NAME_CHARSET`（`grammar.py:20`）不含 `.`。用真实 `parse_vrn` 实测，`boxteam://workspace/source-development-0.0.2/resources/skills/x/SKILL.md` 被 `invalid_character` 拒绝 —— 直接拼接不可行。改用 `.`→`_` 编码后 `source-development-0_0_2` 解析通过。该映射是**单射**（`_VERSION_PATTERN` 已排除 `_`，`_` 只可能来自原点号），但**不是可逆/解码**关系：生产 resolver 只做 `scope_id` 字符串比对（`resolver.py:139`），不提供解码函数。早先「先 `_`→`__`、再 `.`→`_`」的双步转义**不是单射**：`_` 本身就在其旧 charset `[A-Za-z0-9._-]` 内，与原点号同码，单符 `_` 与 `..` 会得到同一个编码 `__`。该双步转义已由 `f3bd8213` 删除，MUST NOT 恢复。
+**风险与真实反驳**：`version` 实测含点号（`0.0.2`），而 `_NAME_CHARSET`（`grammar.py:23`）不含 `.`。用真实 `parse_vrn` 实测，`boxteam://workspace/source-development-0.0.2/resources/skills/x/SKILL.md` 被 `invalid_character` 拒绝 —— 直接拼接不可行。改用 `.`→`_` 编码后 `source-development-0_0_2` 解析通过。该映射是**单射**（`_VERSION_PATTERN` 已排除 `_`，`_` 只可能来自原点号），但**不是可逆/解码**关系：生产 resolver 只做 `scope_id` 字符串比对（`resolver.py:139`），不提供解码函数。早先「先 `_`→`__`、再 `.`→`_`」的双步转义**不是单射**：`_` 本身就在其旧 charset `[A-Za-z0-9._-]` 内，与原点号同码，单符 `_` 与 `..` 会得到同一个编码 `__`。该双步转义已由 `f3bd8213` 删除，MUST NOT 恢复。
 
 **为什么不用「去点法」**：`version.replace(".", "")` 会把 `0.0.2`/`0.02`/`00.2` 全部压成 `002`（实测碰撞、非单射），故否决。
 
@@ -107,9 +107,9 @@
 
 **备选**：转发方缓存并本地解析对端资源（被否：第二份事实源）；对端返回 real path 由本机访问（被否：跨边界传路径，且远端路径在本机无意义）；把上界写死在解析器里（被否：拓扑变化即改代码）。
 
-### D7：拒绝码分两套集中登记，不可混用
+### D7：拒绝码分三套集中登记，不可混用
 
-**理由**：权威表实测存在**两个独立闭集**——`VrnGrammarError.reason_code` 17 个（`grammar.py:22-42`，构造函数拒绝未登记 code）与 `_RESOLVE_REASON_CODES` 6 个（`resolver.py:29-38`）。它们分别对应「字符串→ParsedVrn 的语法期」与「已解析后的解析/授权期」，混用会让阶段职责错位。集中登记可机械检查「无自造同义码」。
+**理由**：权威表实测存在**三个独立闭集**——`VrnGrammarError.reason_code` 17 个（`grammar.py:25-44`，构造函数拒绝未登记 code）、`_RESOLVE_REASON_CODES` 6 个（`resolver.py:29-38`）与**联邦解析期第三套**（`app/gateway/federation/errors.py` 的 `FederationError.code`，归属 `app/gateway/federation/`）。它们分别对应「字符串→ParsedVrn 的语法期」「已解析后的解析/授权期」与「跨 gateway 联邦解析期」，混用会让阶段职责错位。集中登记可机械检查「无自造同义码」。
 
 **备选**：合并为一套码（被否：语义阶段不同，合并会丢掉「哪一期拒绝」的信息）；每个模块自带枚举（被否：正是要消除的多份定义）。
 
@@ -149,7 +149,7 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 
 **理由**：同一概念三个名字（layer `bundled`、scope `builtin`、config layer `inline`）——正是本仓库要求根除的。两处都改名后 shim 退化为恒等映射可删。
 
-**影响评估（已独立核验）**：`layer` 进入 `entry_identity`（`skill_runtime.py:558`）与 catalog payload（`:605`），但二者只进内存 `ResourceRegistry`（`semantic_registry.py:20-23`），无持久化写入；全仓唯一持久化 `display_uri` 列（`resource_activation_schema.py:85`）的写入方 `ResourceActivationStore.persist_snapshot` 生产从不被调用：`app/container.py` 无任何 `resource_activation`/`activation_store` 装配（`rg` 退出 1），`attach_resource_activation_store` 的全部调用方都在 `tests/unit/services/infrastructure/rollout_context/test_resource_activation_{storage,retention,fork_identity}.py`。故**安全改名，无需迁移任务**。真依赖 VRN scope `builtin` 的位置只有 `resolver.py:205`、`grammar.py:17/19/207`，其余为无关同名。
+**影响评估（已独立核验）**：`layer` 进入 `entry_identity`（`skill_runtime.py:558`）与 catalog payload（`:605`），但二者只进内存 `ResourceRegistry`（`semantic_registry.py:20-23`），无持久化写入；全仓唯一持久化 `display_uri` 列（`resource_activation_schema.py:85`）的写入方 `ResourceActivationStore.persist_snapshot` 生产从不被调用：`app/container.py` 无任何 `resource_activation`/`activation_store` 装配（`rg` 退出 1），`attach_resource_activation_store` 的全部调用方都在 `tests/unit/services/infrastructure/rollout_context/test_resource_activation_{storage,retention,fork_identity}.py`。故**安全改名，无需迁移任务**。真依赖 VRN scope `builtin` 的位置现落在 `grammar.py:18` 的 scope 闭集 `_SCOPE_KEYWORDS` 与 `resolver.py` 的 scope 构造校验（grammar.py 已无 `builtin` 字面量、`_SKILL_SCOPES` 已不存在），其余为无关同名。
 
 **备选**：只改 scope 名不改 layer 名（被否：留下 layer `bundled` 与 config layer `inline` 的同概念异名，且 shim 无法退化为恒等）。
 
@@ -167,13 +167,13 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 - **[权威表推翻 v2 两处初审]** → 已在 proposal/spec/design 逐处改正（`user`/`inline` 为新增、kind `config` 为新增），避免把初审当定稿。
 - **[scope_id 由字面量 local 改为真实身份推导会改变既有字符串]** → `gateway`/`inline` 现共用 `local`，改动产生不同 VRN 字符串；因这些字符串只进内存 registry 与响应、不落盘，属契约级调整而非数据迁移（见 D11）。
 - **[破坏性语法改动打断在途实现]** → 迁移计划显式列出旧形态（含 `skill_runtime.py:52/:619` 裸拼接、`:538` 的 shim、layer 名）一并收敛，不留别名或双读；tasks 把「删旧解析实现」与「修消费方」合并为单一步骤，避免悬挂中间态。
-- **[跨 gateway 解析引入新失败模式]** → 拒绝码分两套闭合且 fail-closed；对「未授权存在」与「不存在」返回同一结果，避免 locator 泄露；上界为 policy 常量，便于审计。
+- **[跨 gateway 解析引入新失败模式]** → 拒绝码分三套闭合且 fail-closed；对「未授权存在」与「不存在」返回同一结果，避免 locator 泄露；上界为 policy 常量，便于审计。
 - **[distribution_id 曾是空洞]** → 权威表证明其全仓零生产赋值；来源已由本 change 定稿为发行 manifest 的 `distribution` + `version`（编码规则见 spec 对应 requirement），空洞从「来源未定」降为「尚未实现装配」，实施期按 D4b 接线。 **（修订注，`298ef599`+`f3bd8213` 落地）**：`load_distribution_id` 已接入 `skill_runtime._layer_scope_identity`，本项由「尚未实现装配」变为已装配。
 - **[memory 语义不明可能诱使猜测]** → 已确证它不是 VRN scope，列入 Non-Goals；因其 domain owner 与状态本体从未接入（无 VRN 替代 owner 的需求），解析器侧 MUST 物理移除两点式特例分支并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（**已由提交 32bc6256 落地**）。
 
 ## Migration Plan
 
-1. 本 change 落地寻址 capability：术语表、scope 闭集与 scope_id 表、kind 闭集、**分两套**拒绝码集中登记处（spec 层）。
+1. 本 change 落地寻址 capability：术语表、scope 闭集与 scope_id 表、kind 闭集、**分三套**拒绝码集中登记处（spec 层）。
 2. 实现统一语法与规范化单一实现，替换 `virtual_resources/grammar.py` 的旧形态；同一步内修正 `skill_runtime.py:52` 与 `:619` 的裸拼接、删除 `:538` 的 `bundled`→`builtin` shim、并把 layer 名同步正名为 `inline`（不暴露中间态）。
 3. 把 `distribution_id` 接到已定稿来源（发行 manifest 的 `distribution` + `version`，编码规则见 D4b；当前零装配），并把 `gateway` 的 `gateway_id` 接到已定稿来源（`identity.json` 的 `load_or_create_gateway_id`，由 Gateway 侧按请求经 `X-BoxTeam-Gateway-Id` 注入，见 D4c）；落实 `gateway`/`inline` 的 scope_id 由真实身份推导。 **（修订注：`distribution_id` 部分已由 `298ef599`+`f3bd8213` 落地；`gateway_id` 请求级注入仍为后续切片）**
 4. 接入解析链（本机分支），使 Skill/配置/状态链路改用 VRN 解析，而非仅打印。
@@ -196,8 +196,8 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 
 契约的**逐字权威文本**存在于本 change 的规划产物，二者互为唯一来源：
 
-- `openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md`：定义三层分离、scope 闭集与必填 scope_id（含 `gateway` scope 的 scope_id 由 Gateway 身份文件按请求注入推导、`inline` scope 由 manifest 推导）、VRN 语法、kind 闭集、gateway authority、星型解析与 policy 常量、**分两套**拒绝码、identity 独立、默认寻址政策与「新写字段」迁移面、配置来源 VRN 迁移与 `sqlite` 不可寻址、多工作区显式 scope_id、`builtin`→`inline` 正名（含 layer）。
-- `openspec/changes/add-unified-virtual-resource-addressing/tasks.md` 任务 `1.1`：术语表登记处；任务 `1.2`：scope 闭集与 scope_id 唯一表落点；任务 `1.3`：**分两套拒绝码集中登记处**（新增/更新拒绝码闭合集的唯一落点）。
+- `openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md`：定义三层分离、scope 闭集与必填 scope_id（含 `gateway` scope 的 scope_id 由 Gateway 身份文件按请求注入推导、`inline` scope 由 manifest 推导）、VRN 语法、kind 闭集、gateway authority、星型解析与 policy 常量、**分三套**拒绝码、identity 独立、默认寻址政策与「新写字段」迁移面、配置来源 VRN 迁移与 `sqlite` 不可寻址、多工作区显式 scope_id、`builtin`→`inline` 正名（含 layer）。
+- `openspec/changes/add-unified-virtual-resource-addressing/tasks.md` 任务 `1.1`：术语表登记处；任务 `1.2`：scope 闭集与 scope_id 唯一表落点；任务 `1.3`：**分三套拒绝码集中登记处**（新增/更新拒绝码闭合集的唯一落点）。
 
 实施阶段的机械约束（写入任务，不在本 change 执行）：
 
