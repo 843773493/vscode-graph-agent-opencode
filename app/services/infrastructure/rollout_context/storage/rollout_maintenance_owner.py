@@ -137,17 +137,26 @@ class RolloutMaintenanceOwner(RolloutSchemaUpgradeMixin):
 
     # 继承的 RolloutSchemaUpgradeMixin 通过 self 调用 host 的锁/连接/格式薄壳；
     # owner 只转发到唯一 host，不复制第二套连接、锁或提交路径。
-    def _lock(self, thread_id: str, checkpoint_ns: str) -> _RolloutOperationLock:
-        return self._host._lock(thread_id, checkpoint_ns)
+    def _lock(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        *,
+        session_id: str | None = None,
+    ) -> _RolloutOperationLock:
+        return self._host._lock(thread_id, checkpoint_ns, session_id=session_id)
 
     def _connect(
         self,
         thread_id: str,
         checkpoint_ns: str = "",
         *,
+        session_id: str | None = None,
         read_only: bool = False,
     ) -> sqlite3.Connection:
-        return self._host._connect(thread_id, checkpoint_ns, read_only=read_only)
+        return self._host._connect(
+            thread_id, checkpoint_ns, session_id=session_id, read_only=read_only
+        )
 
     def _require_v2_runtime(self, connection: sqlite3.Connection) -> None:
         self._host._require_v2_runtime(connection)
