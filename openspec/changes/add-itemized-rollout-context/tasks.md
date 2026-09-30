@@ -209,6 +209,17 @@
 v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migration/import 命令调用，用于读取原始 artifact、生成 staging/report/quarantine 和 rollback audit。它不提供长期兼容 API，不参与正常 history/provider/checkpoint/runtime/context compiler，不与 v2 dual write、dual projector、双 schema 或双事实源并存。提取期间若确需保留旧路径，只能是仅转发 v2、禁止读取 v1 且带删除门槛的临时 import shim；当目标模块、调用方迁移、v2-only import/runtime 审计和一次性 migration 命令均闭合时立即删除，最迟在 7.5、主 spec 同步和 change 完成前删除。v1 原始 artifact 可以继续作为不可变迁移/回滚审计材料保存，但不构成保留旧运行代码的理由。
 
 ## Verification ledger
+### 2026-09-30 activation 冻结点切片实测阻断（未实施，不勾选 9.3）
+
+按 owner 裁定「放开 storage 权限、把 activation 从 Turn 冻结点打通到 assembly seal」派出的实现切片，在动代码前按纪律复核后**诚实停线**，未产生任何代码改动。三条独立硬阻断（均以 `git archive HEAD` 隔离副本实测为据，见 `out/tests/temp/impl_activation_seal/artifacts/`）：
+
+1. **生产 `ResourceRegistry` 不是可复用单例**：全仓唯一生产构造是 `app/agents/agent_factory.py:502` 的 `ResourceRegistry()`，每次 invocation 新建、仅用于向 `SkillCatalog` 发布；`bootstrap_resource_platform` 的 `file_registry` 是另一个 registry。满足「容器唯一实例」需改动各客户端/runtime 的 skill-catalog 所有权，属跨切片改造。
+2. **冻结在当前生产 Registry 上必然 fail-closed**：隔离副本实跑生产默认 policy（`context.resource_activation.overrides.mcp_tool_catalog=turn`）加生产形态 registry（只登记 `skill`）得到 `unknown-resource-kind ... activation override 指向未登记 resource kind: [mcp_tool_catalog]`；换空 registry 得到 `resource-registry-empty`。即当下接上冻结点 100% 崩，属**前置资源生产缺失**而非接线问题。
+3. **protected body store 生产未装配**：`ResourceActivationBodyStore.write_resource_body` 唯一实现 `resource_activation_lineage.py` 在 `supports_protected_details` 为 False 时直接抛错，而 `app/container.py:416` 构造 `RolloutCheckpointRuntime` 未传 `protected_detail_key`，全仓无生产密钥来源；挂上即崩。
+
+**附带**：本切片原计划的「MCP target 级子 binding」形态在代码里**不存在**——`McpCatalogActivationSnapshot` 只持有单个 `binding_ref: ExtensionCatalogBindingRef`，target 集合是该 ref 内部的映射；owner 裁定 (a) 要求的「每个 target 一个子 binding」结构无从推出，属**需 owner 新定稿的数据形态**（新增多 binding 展开，或给 `ResourceProvenanceRef` 增子 binding 列表字段）。
+
+**裁定**：本切片推迟，与 8.3-A 一笔纵向切片同时闭合（其「真实 turn/model_call 边界」正是 8.3-A 未落地的 active slot 契约，owner 此前裁定 (b) 已明写「先接 8.3-A 的真实边界、再收口」）。9.3 保持未勾，理由已由上述实测取代原先的「生产链路不存在」笼统表述。
 
 ### 2026-09-30 集合型 mutation 横切合同、文件树接入与目录列表读放大（本节新增，未实施）
 
