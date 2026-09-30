@@ -45,15 +45,22 @@
 
 ## 5B. 阻断性前置：gateway 控制面库逐表分类（D10，MUST 在 §6 之前完成）
 
-- [ ] 5B.1 对控制面库（`app/gateway/control/gateway_state.py` 等）承载 session 身份的表逐表分类为 `migrate` / `explicitly_invalidated` / `not_affected`。已实测候选：`user_view_state`（键 `(user_id, workspace_id, session_id)`）、`user_access_lease`（`access_session_id`）。门槛：报告给出逐表分类与判定依据，且 `rg -n 'session_id|access_session_id' app/gateway/control/gateway_state.py` 退出码 0。
+- [ ] 5B.1 对控制面库（`app/gateway/control/gateway_state.py` 等）承载 session 身份的表逐表分类为 `migrate` / `explicitly_invalidated` / `not_affected`。**已实测控制面只有两个 SQLite 库**：库 A `gateway.sqlite`（`app/gateway/main.py` 实例化，建表权威在 `gateway_state.py` 的 `_GATEWAY_MIGRATIONS`，21 张表 + 框架表 `schema_migrations`）、库 B `federation/control.sqlite`（`app/gateway/federation/store.py`，4 张表）。门槛：报告给出逐表分类与判定依据，且 `rg -n 'session_id|access_session_id' app/gateway/control/gateway_state.py` 退出码 0。
 - [ ] 5B.2 `user_access_lease` MUST NOT 归入 `explicitly_invalidated`，除非实测证明其为「可安全丢弃的租约」；否则归 `migrate`。门槛：报告给出该表的分类与安全依据。
 - [ ] 5B.3 归入 `explicitly_invalidated` 的表 MUST 有用户可见的显式报告（表名、行数、失效原因），MUST NOT 静默重建。门槛：对应显式报告路径与测试存在，退出码 0。
-> **（2026-09-29 复跑现状，暂不勾选）**：§5B 的权威交付物尚未满足：现有报告只给出 `user_view_state`（键 `(user_id, workspace_id, session_id)`）与 `user_access_lease`（`access_session_id`）两候选表的分类依据，未给「逐表分类 + 归入 `explicitly_invalidated` 表的用户可见显式报告（表名/行数/失效原因）与对应测试存在」的完整交付物，故 5B.1–5B.3 暂不勾选。
+> **（2026-09-30 owner 裁定，落定分类；取证见 `out/tests/temp/uuidv7_control_db_audit/artifacts/report.md`）**：
+>
+> - 库 A：`user_view_state` = **migrate**（`session_id` 是 canonical `ses_`，Gateway 不校验直接透传，承载用户阅读位置；静默失效即默默失败）；`user_access_lease`、`guest_tracking` 及其余 18 张 = **not_affected**（id 列为 `access-<token_urlsafe>` / `guest-<token_urlsafe>` / `new_config_id()` / `uuid4` / `runtime_lease_<uuid4>`，均非工厂前缀；已对含 JSON 的列做全列工厂形态扫描，0 命中）。
+> - 库 B：`federation_route_hint` = **migrate**（同时承载 canonical `session_id` 与 `resolved_main_thread_id`）；其余 3 张 = **not_affected**。
+> - **未分类表数 = 0；归 `explicitly_invalidated` 的表数 = 0**，故 5B.3 在空集上满足。**若实施期改判任一表为 `explicitly_invalidated`，5B.3 立即不满足**：实测 `rg -rn 'explicitly_invalidated' app tests scripts tools src` 退出码 1（0 命中），该报告机制与测试**尚不存在、需新实现**。
+> - 5B.2 依据：`user_access_lease.access_session_id` 由 `user_access.py` 的 `_new_session_id()` 生成，非 canonical；TTL 45s + `heartbeat` 续期 + `acquire_user(takeover=False)` 抛 `UserLeaseOccupiedError` + 写入侧 `_assert_active_lease` 做四元组守卫，且行落 SQLite 断电重启后仍在用——**不是可安全丢弃的租约**，删除会造成双访问。
+> - **控制面库之外另有 4 处含 canonical id 的持久面已转登 §6.1b**（会话索引缓存 JSON、profile 的 `collapsed_session_ids`、generators 的 `placement.session_id`/`message_id`/`job_id`、工作区后端持久面）。
+> - `runtime_lease_<uuid4>` / `target_generation_<uuid4>` 属非工厂前缀，已明文纳入 §7 豁免。
 
 ## 6. 存量 UUIDv4 一次性显式迁移（D3）
 
 - [ ] 6.1 按 design D12 的「工厂前缀 × 持久面」全集矩阵（`IdentifierPrefix` 的 33 个前缀）枚举迁移面，MUST NOT 只匹配 `ses_`/`thr_` 字面。门槛：矩阵落盘到 `out/tests/temp/uuidv7_openspec/artifacts/`；命令 `rg -n 'IdentifierPrefix = Literal' -A40 app/core/identifier.py` 退出码 0 且矩阵行数 MUST 等于该 `Literal` 的前缀数（33）；每个持久面前缀 MUST 给出具名载体证据，每个非持久面前缀 MUST 给出「不落盘」的负向证据。
-- [ ] 6.1b 复核已实测的持久面漏项至少覆盖 `op_`（`navigation_mutation_records` 主键）、`strm_`（`message_streams/*.jsonl` 文件名）、`msg_`（rollout `messages.message_id`）、`evt_`/`snapshot_`（message_stream JSONL）、`part_`（`item_parts.part_id`）、`goal_`（`goal.json`）、`gen_`/`grun_`（generators 文件）、`team_`/`ttask_`/`tevt_`（team JSON/JSONL）。门槛：报告逐项列出具名路径与调用点。
+- [ ] 6.1b 复核已实测的持久面漏项至少覆盖 `op_`（`navigation_mutation_records` 主键）、`strm_`（`message_streams/*.jsonl` 文件名）、`msg_`（rollout `messages.message_id`）、`evt_`/`snapshot_`（message_stream JSONL）、`part_`（`item_parts.part_id`）、`goal_`（`goal.json`）、`gen_`/`grun_`（generators 文件）、`team_`/`ttask_`/`tevt_`（team JSON/JSONL），**外加 2026-09-30 控制面审计新点的四处非 SQLite 持久面**：控制面会话索引缓存 `state/gateway/indexes/session-catalogs/*.json`（含真实 `ses_`/`thr_`）、用户档案 `state/gateway/users/<id>/profile.jsonc` 的 `session_sidebar.collapsed_session_ids`（含 canonical `ses_`）、Gateway generators 产出的 `state/gateway/generators/*.json` 与 `generation-runs/**`（含 `placement.session_id`/`message_id`/`job_id`）、工作区后端持久面（`workspace_activity.session_id`、`attachment_*.owner_session_id`）。门槛：报告逐项列出具名路径与调用点。**注意：迁移 generators 的产出数据文件不等于修改 `app/gateway/control/generators.py` 源码，后者为受保护路径，全程禁改。**
 - [ ] 6.2 复用 `app/core/session_catalog_migration.py` 的 staging + journal + 隔离区形态，实现一次性、可恢复、带 source→target lineage 账本的 v4→v7 重编号迁移。门槛：`uv run pytest -q tests/unit/core/test_session_catalog_migration.py` 退出码 0。
 - [ ] 6.3 补迁移中断恢复测试与「无法归属即 fail-closed/隔离、不扫盘吸收」测试。门槛：对应迁移测试退出码 0。
 - [ ] 6.4 迁移完成后把校验器收紧为只接受 v7，并断言运行路径无 v4 双读、无旧 ID path alias。门槛：`rg -n 'v4|uuid4' app/core/session_catalog_store.py` 退出码 1；迁移收敛测试退出码 0。
@@ -64,7 +71,7 @@
 ## 7. JS 服务进程与浏览器前端边界（D7）
 
 - [ ] 7.1 在 `src/workspace-services/{browser,terminal}/server/` 与 `src/clients/web/src/utils/media/mediaAttachments.ts` 的 id 生成点上方加中文注释，显式声明这些是非 canonical 身份、允许使用 v4，并说明原因（Node 无 `randomUUIDv7`；浏览器无 `Bun.*`）。门槛：`rg -n '非 canonical' src/workspace-services src/clients/web/src/utils/media/mediaAttachments.ts` 退出码 0。
-- [ ] 7.1b 落成 spec 的豁免枚举条款：断言豁免集（`term_`/`browser_`/`screenshot_`/`download_`/`page_`/`preset_`/`inline:`）可逐一对应到 Node 服务进程或浏览器生成点，且豁免 MUST NOT 扩张到 canonical id 面。门槛：新增测试断言「以 Node/浏览器为由提交的 session_id/thread_id 仍被 canonical 校验器拒绝」，`uv run pytest -q <该测试>` 退出码 0。
+- [ ] 7.1c 把运行时非工厂前缀豁免纳入正名后的枚举：`runtime_lease_<uuid4>`（`app/gateway/control/gateway_state.py`）与 `target_generation_<uuid4>`（Gateway 目标生成标识）经 2026-09-30 实测确认**不是 `IdentifierPrefix` 工厂前缀**，与 §7.1b 的豁免集同属「非 canonical 身份」，MUST 在豁免枚举中显式登记，MUST NOT 被当作 v4 残留误列入迁移面。门槛：报告给出具名载体与生成点，且豁免枚举测试覆盖这两者。
 - [ ] 7.2 补断言：canonical 校验器 MUST 拒绝这些非 canonical id 作为 session/thread 身份。门槛：对应单测退出码 0。
 - [ ] 7.3 若前端 UI 改动，执行 `bun run --cwd src/clients/web build`。门槛：退出码 0。
 
