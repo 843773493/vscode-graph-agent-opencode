@@ -33,6 +33,7 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
+    strict_non_negative_int,
     validate_item_storage_metadata,
 )
 
@@ -40,12 +41,6 @@ if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.storage.primitives import (
         RolloutReadSnapshot,
     )
-
-
-def _strict_non_negative_int(value: object, *, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise RuntimeError(f"{field} 必须是非负整数")
-    return value
 
 
 def _strict_db_text(value: object, *, field: str) -> str:
@@ -353,15 +348,15 @@ class RolloutItemsMixin:
                                     existing_result[0],
                                     field="item_catalog.item_id",
                                 )
-                                result_offset = _strict_non_negative_int(
+                                result_offset = strict_non_negative_int(
                                     existing_result[3],
                                     field="item_catalog.jsonl_offset",
                                 )
-                                result_length = _strict_non_negative_int(
+                                result_length = strict_non_negative_int(
                                     existing_result[4],
                                     field="item_catalog.jsonl_length",
                                 )
-                                result_commit_id = _strict_non_negative_int(
+                                result_commit_id = strict_non_negative_int(
                                     existing_result[2],
                                     field="item_catalog.commit_id",
                                 )
@@ -495,7 +490,7 @@ class RolloutItemsMixin:
                             f"canonical item 缺少所属 commit: {item.item_id}"
                         )
                     existing_commit_ids.append(
-                        _strict_non_negative_int(
+                        strict_non_negative_int(
                             existing[11], field="item_catalog.commit_id"
                         )
                     )
@@ -513,7 +508,7 @@ class RolloutItemsMixin:
                 ).fetchone()
                 if last_sequence_row is None:
                     raise RuntimeError("rollout database_meta 缺少 last_item_sequence")
-                last_sequence = _strict_non_negative_int(
+                last_sequence = strict_non_negative_int(
                     last_sequence_row[0], field="database_meta.last_item_sequence"
                 )
                 pending = [
@@ -788,7 +783,7 @@ class RolloutItemsMixin:
             ).fetchone()
             if committed_row is None:
                 raise RuntimeError("database_meta 缺少 committed_jsonl_offset")
-            committed = _strict_non_negative_int(
+            committed = strict_non_negative_int(
                 committed_row[0], field="database_meta.committed_jsonl_offset"
             )
         finally:
@@ -805,7 +800,7 @@ class RolloutItemsMixin:
                 offset_value,
                 length_value,
             ) in rows:
-                sequence = _strict_non_negative_int(
+                sequence = strict_non_negative_int(
                     sequence_value,
                     field=f"item_catalog.item_sequence: {item_id}",
                 )
@@ -815,7 +810,7 @@ class RolloutItemsMixin:
                     raise RuntimeError(
                         f"item_catalog.content_hash 必须是非空字符串: {item_id}"
                     )
-                payload_length_value = _strict_non_negative_int(
+                payload_length_value = strict_non_negative_int(
                     expected_payload_length,
                     field=f"item_catalog.payload_length: {item_id}",
                 )
@@ -823,11 +818,11 @@ class RolloutItemsMixin:
                     raise TypeError(
                         f"item_catalog.source_revision 必须是字符串: {item_id}"
                     )
-                offset = _strict_non_negative_int(
+                offset = strict_non_negative_int(
                     offset_value,
                     field=f"item_catalog.jsonl_offset: {item_id}",
                 )
-                length = _strict_non_negative_int(
+                length = strict_non_negative_int(
                     length_value,
                     field=f"item_catalog.jsonl_length: {item_id}",
                 )
