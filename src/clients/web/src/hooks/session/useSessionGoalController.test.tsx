@@ -3,7 +3,6 @@ import React from "react";
 import { act } from "react-test-renderer";
 import type { AppState } from "../../types/frontend";
 import type { Session } from "../../types/backend";
-import { useSessionGoalController } from "./useSessionGoalController";
 import {
   apiResponse,
   installGatewayFetch,
@@ -12,9 +11,12 @@ import {
   mountHarness,
   mountSessionGoalController,
   restoreSessionHookGlobals,
+  useGoalControllerHarness,
 } from "./sessionHookTestFixtures";
 
 afterEach(restoreSessionHookGlobals);
+
+const GOAL_PORT = 49_406;
 
 function state(): AppState {
   return {
@@ -36,8 +38,37 @@ function state(): AppState {
 
 /** 会话目标控制器的 GB 级装配由 mountSessionGoalController 统一提供。 */
 function installBrowserGlobals(): void {
-  installTestWindow(49_406);
+  installTestWindow(GOAL_PORT);
   installTestDocument();
+}
+
+/** 标准 Goal 响应体，用例只覆盖自己关心的字段。 */
+function goalResponse(overrides: Record<string, unknown> = {}): Response {
+  return apiResponse({
+    goal_id: "goal-test",
+    session_id: "session-test",
+    objective: "验证请求合并",
+    status: "active",
+    token_budget: null,
+    tokens_used: 0,
+    time_used_seconds: 0,
+    created_at: "2026-09-02T00:00:00Z",
+    updated_at: "2026-09-02T00:00:00Z",
+    ...overrides,
+  });
+}
+
+/** 挂载自持状态机的 Goal Harness，收敛「Harness + 闭包读写器」样板。 */
+async function mountGoalHarness(options: {
+  initial: AppState;
+  flushes?: number;
+}) {
+  const harness = useGoalControllerHarness({
+    apiPort: GOAL_PORT,
+    initial: options.initial,
+  });
+  const unmount = await mountHarness(harness.Harness, options.flushes ?? 2);
+  return { ...harness, unmount };
 }
 
 describe("useSessionGoalController 请求合并", () => {
@@ -69,17 +100,7 @@ describe("useSessionGoalController 请求合并", () => {
     expect(goalRequests).toBe(1);
 
     await act(async () => {
-      releaseGoal(apiResponse({
-        goal_id: "goal-test",
-        session_id: "session-test",
-        objective: "验证请求合并",
-        status: "active",
-        token_budget: null,
-        tokens_used: 0,
-        time_used_seconds: 0,
-        created_at: "2026-09-02T00:00:00Z",
-        updated_at: "2026-09-02T00:00:00Z",
-      }));
+      releaseGoal(goalResponse());
       await Promise.all([firstRequest!, secondRequest!]);
     });
     unmount();
@@ -148,8 +169,7 @@ describe("useSessionGoalController 跨会话守卫", () => {
   const sessionB = { ...sessionA, session_id: "ses_b", title: "会话 B" };
 
   test("在途读取回包前切走会话时不得把旧 Goal 写进新会话", async () => {
-    installTestWindow(49_406);
-    installTestDocument();
+    installBrowserGlobals();
     let releaseGoal!: (response: Response) => void;
     installGatewayFetch(({ path }) => {
       if (path.includes("/api/v1/sessions/ses_a/goal")) {
@@ -160,76 +180,51 @@ describe("useSessionGoalController 跨会话守卫", () => {
       return undefined;
     }, { token: "gc-race-token" });
 
-    // 本用例必须在请求在途期间切换 currentSession，因此保留自持状态机的
-    // Harness，不复用闭包镜像装配器。
-    let latestState = {
-      currentSession: sessionA,
-      currentSessionWorkspaceId: "workspace-test",
-      currentGoal: null,
-      currentGoalSessionId: "ses_a",
-      goalLoading: false,
-      goalError: null,
-    } as unknown as AppState;
-    let controller: ReturnType<typeof useSessionGoalController> | null = null;
-    let switchToB: (() => void) | null = null;
-    function Harness(): React.ReactNode {
-      const [state, setState] = React.useState<AppState>(() => latestState);
-      latestState = state;
-      controller = useSessionGoalController({
-        apiPort: 49_406,
-        currentSessionId: state.currentSession?.session_id ?? null,
-        currentWorkspaceId: state.currentSessionWorkspaceId,
-        setState,
-      });
-      switchToB = () => setState((prev) => ({
-        ...prev,
-        currentSession: sessionB,
+    // 本用例必须在请求在途期间切换 currentSession，因此保留自持状态机的装配器。
+    const mounted = await mountGoalHarness({
+      initial: {
+        currentSession: sessionA,
+        currentSessionWorkspaceId: "workspace-test",
         currentGoal: null,
-        currentGoalSessionId: "ses_b",
-      }));
-      return null;
-    }
-    const unmount = await mountHarness(Harness, 2);
+        currentGoalSessionId: "ses_a",
+        goalLoading: false,
+        goalError: null,
+      } as unknown as AppState,
+    });
 
     let pending: Promise<unknown>;
     await act(async () => {
-      pending = controller!.refreshGoal({
+      pending = mounted.controller().refreshGoal({
         sessionId: "ses_a",
         workspaceId: "workspace-test",
       });
       await Promise.resolve();
     });
     await act(async () => {
-      switchToB!();
+      mounted.setState((prev) => ({
+        ...prev,
+        currentSession: sessionB,
+        currentGoal: null,
+        currentGoalSessionId: "ses_b",
+      }));
       await Promise.resolve();
     });
-    expect(latestState.currentSession?.session_id).toBe("ses_b");
+    expect(mounted.state().currentSession?.session_id).toBe("ses_b");
 
-    releaseGoal(apiResponse({
-      goal_id: "goal_a",
-      session_id: "ses_a",
-      objective: "A 的目标",
-      status: "active",
-      token_budget: null,
-      tokens_used: 0,
-      time_used_seconds: 0,
-      created_at: "2026-09-02T00:00:00Z",
-      updated_at: "2026-09-02T00:00:00Z",
-    }));
+    releaseGoal(goalResponse({ goal_id: "goal_a", objective: "A 的目标" }));
     await act(async () => {
       await pending!.catch(() => undefined);
     });
 
     // 迟到的 A 会话响应属于旧会话事实，绝不能污染已经切到的 B 会话。
-    expect(latestState.currentSession?.session_id).toBe("ses_b");
-    expect(latestState.currentGoal).toBeNull();
-    expect(latestState.currentGoalSessionId).toBe("ses_b");
-    unmount();
+    expect(mounted.state().currentSession?.session_id).toBe("ses_b");
+    expect(mounted.state().currentGoal).toBeNull();
+    expect(mounted.state().currentGoalSessionId).toBe("ses_b");
+    mounted.unmount();
   });
 
   test("先设置后清除 Goal 时，迟到的设置回包不得复活已清除的 Goal", async () => {
-    installTestWindow(49_406);
-    installTestDocument();
+    installBrowserGlobals();
     let releaseUpdate!: () => void;
     installGatewayFetch(({ path, method }) => {
       if (path.includes("/api/v1/sessions/session-test/goal")) {
@@ -238,17 +233,9 @@ describe("useSessionGoalController 跨会话守卫", () => {
         }
         if (method === "POST" || method === "PATCH" || method === "PUT") {
           return new Promise<Response>((resolve) => {
-            releaseUpdate = () => resolve(apiResponse({
-              goal_id: "goal_late",
-              session_id: "session-test",
-              objective: "迟到的设置",
-              status: "active",
-              token_budget: null,
-              tokens_used: 0,
-              time_used_seconds: 0,
-              created_at: "2026-09-02T00:00:00Z",
-              updated_at: "2026-09-02T00:00:00Z",
-            }));
+            releaseUpdate = () => resolve(
+              goalResponse({ goal_id: "goal_late", objective: "迟到的设置" }),
+            );
           });
         }
       }
@@ -281,8 +268,7 @@ describe("useSessionGoalController 跨会话守卫", () => {
 
 describe("useSessionGoalController 会话身份守卫", () => {
   test("目标会话为空时 refreshGoal 清空残留 Goal 状态并短路，绝不发请求", async () => {
-    installTestWindow(49_406);
-    installTestDocument();
+    installBrowserGlobals();
     let goalRequests = 0;
     installGatewayFetch(({ path }) => {
       if (path.includes("/api/v1/sessions/")) {
@@ -293,29 +279,21 @@ describe("useSessionGoalController 会话身份守卫", () => {
     }, { token: "gc-empty-target-token" });
 
     // 切到空会话时 AppState 里可能仍残留上一个会话的 Goal；refreshGoal 收到
-    // sessionless 目标必须把它清干净。这里保留自持状态机的 Harness，才能把残留
-    // 状态显式注入到调用前。
-    const initial = {
-      currentSession: null,
-      currentSessionWorkspaceId: null,
-      currentGoal: null,
-      currentGoalSessionId: null,
-      goalLoading: false,
-      goalError: null,
-    } as unknown as AppState;
-    let latestState = initial;
-    let controller: ReturnType<typeof useSessionGoalController> | null = null;
-    let injectStaleGoal: (() => void) | null = null;
-    function Harness(): React.ReactNode {
-      const [state, setState] = React.useState<AppState>(() => initial);
-      latestState = state;
-      controller = useSessionGoalController({
-        apiPort: 49_406,
-        currentSessionId: state.currentSession?.session_id ?? null,
-        currentWorkspaceId: state.currentSessionWorkspaceId,
-        setState,
-      });
-      injectStaleGoal = () => setState((prev) => ({
+    // sessionless 目标必须把它清干净，装配器保留注入残留状态的能力。
+    const mounted = await mountGoalHarness({
+      initial: {
+        currentSession: null,
+        currentSessionWorkspaceId: null,
+        currentGoal: null,
+        currentGoalSessionId: null,
+        goalLoading: false,
+        goalError: null,
+      } as unknown as AppState,
+      flushes: 1,
+    });
+
+    await act(async () => {
+      mounted.setState((prev) => ({
         ...prev,
         // 模拟上一个会话残留的 Goal 与错误文本。
         currentGoal: {
@@ -332,29 +310,24 @@ describe("useSessionGoalController 会话身份守卫", () => {
         currentGoalSessionId: "ses_stale",
         goalError: "上一个会话的错误",
       }));
-      return null;
-    }
-    const unmount = await mountHarness(Harness, 1);
-
-    await act(async () => {
-      injectStaleGoal!();
       await Promise.resolve();
     });
-    expect(latestState.currentGoal?.objective).toBe("上一个会话的目标");
+    expect(mounted.state().currentGoal?.objective).toBe("上一个会话的目标");
 
     let result: unknown = "unset";
     await act(async () => {
-      result = await controller!.refreshGoal({ sessionId: "", workspaceId: null });
+      result = await mounted.controller().refreshGoal({ sessionId: "", workspaceId: null });
     });
 
     // sessionless 目标必须清空 Goal 状态并短路返回 null，绝不能残留上一个会话。
     expect(result).toBeNull();
-    expect(latestState.currentGoal).toBeNull();
-    expect(latestState.currentGoalSessionId).toBeNull();
-    expect(latestState.goalLoading).toBe(false);
-    expect(latestState.goalError).toBeNull();
+    expect(mounted.state().currentGoal).toBeNull();
+    expect(mounted.state().currentGoalSessionId).toBeNull();
+    expect(mounted.state().goalLoading).toBe(false);
+    expect(mounted.state().goalError).toBeNull();
     // 短路必须在任何网络请求之前发生。
     expect(goalRequests).toBe(0);
-    unmount();
+    mounted.unmount();
   });
 });
+

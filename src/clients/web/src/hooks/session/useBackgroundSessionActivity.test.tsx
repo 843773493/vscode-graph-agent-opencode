@@ -3,64 +3,24 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { AppState } from "../../types/frontend";
 import { useBackgroundSessionActivity } from "./useBackgroundSessionActivity";
-import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+import {
+  apiResponse,
+  buildSessionHookState,
+  installGatewayFetch,
+  installTestWindow,
+  restoreSessionHookGlobals,
+} from "./sessionHookTestFixtures";
 
-const originalFetch = globalThis.fetch;
-const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
-
-function installWindow(port: number): void {
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: {
-      location: { port: String(port) },
-      setTimeout: globalThis.setTimeout.bind(globalThis),
-      clearTimeout: globalThis.clearTimeout.bind(globalThis),
-      setInterval: globalThis.setInterval.bind(globalThis),
-      clearInterval: globalThis.clearInterval.bind(globalThis),
-    },
-  });
-}
-
-function apiResponse(data: unknown): Response {
-  return Response.json({
-    code: 0,
-    message: "ok",
-    request_id: "request-background-activity-test",
-    data,
-  });
-}
-
-function emptyState(): AppState {
-  return {
-    activeJobIdsBySession: new Map(),
-    pendingConversations: new Map(),
-    unreadSessionKeys: new Set(),
-    currentSession: null,
-    currentSessionWorkspaceId: null,
-  } as AppState;
-}
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  restoreGlobalDescriptor("window", originalWindowDescriptor);
-});
+afterEach(restoreSessionHookGlobals);
 
 describe("useBackgroundSessionActivity", () => {
   test("前台状态产生新的 Map 引用时不重复对账后台 Job", async () => {
     const port = 49_506;
-    installWindow(port);
+    // window 桩只提供 location.port，getApiBaseUrl() 因此返回同源相对路径；
+    // installGatewayFetch 内部用显式 base 解析，保证被测 hook 能看到响应。
+    installTestWindow(port);
     let jobRequests = 0;
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = input instanceof Request ? input.url : String(input);
-      // window 桩只提供 location.port，getApiBaseUrl() 因此返回同源相对路径；
-      // 必须显式给出 base，否则 new URL(相对路径) 会抛错并让被测 hook 看不到响应。
-      const path = new URL(url, `http://127.0.0.1:${port}`).pathname;
-      if (path === "/api/gateway/auth/local-credential") {
-        return apiResponse({ token: "local-background-activity-test-token" });
-      }
-      if (path === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
+    installGatewayFetch(({ path }) => {
       if (path === "/api/v1/jobs/job-background") {
         jobRequests += 1;
         return apiResponse({
@@ -69,17 +29,21 @@ describe("useBackgroundSessionActivity", () => {
           status: "running",
         });
       }
-      throw new Error(`测试收到未声明请求: ${url}`);
-    }, { preconnect: originalFetch.preconnect });
+      return undefined;
+    });
 
-    function Harness({ revision }: { revision: number }): React.ReactNode {
-      const [, setState] = React.useState<AppState>(() => emptyState());
-      void revision;
+    let trackedJobs = new Map([
+      ["workspace-a::session-background", "job-background"],
+    ]);
+    function Harness(): React.ReactNode {
+      const [, setState] = React.useState<AppState>(() => buildSessionHookState({
+        workspaceId: "workspace-a",
+        current: null,
+        sessions: [],
+      }));
       useBackgroundSessionActivity({
         apiPort: port,
-        activeJobIdsBySession: new Map([
-          ["workspace-a::session-background", "job-background"],
-        ]),
+        activeJobIdsBySession: trackedJobs,
         currentSessionCacheKey: "workspace-a::session-current",
         setState,
       });
@@ -88,15 +52,17 @@ describe("useBackgroundSessionActivity", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<Harness revision={0} />);
+      renderer = create(<Harness />);
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
       await Promise.resolve();
       await Promise.resolve();
     });
     expect(jobRequests).toBe(1);
 
+    // 前台状态产生新的 Map 引用但内容不变：签名相等，不得重复对账。
+    trackedJobs = new Map(trackedJobs);
     await act(async () => {
-      renderer!.update(<Harness revision={1} />);
+      renderer!.update(<Harness />);
       await Promise.resolve();
     });
     expect(jobRequests).toBe(1);
@@ -105,3 +71,4 @@ describe("useBackgroundSessionActivity", () => {
     });
   });
 });
+

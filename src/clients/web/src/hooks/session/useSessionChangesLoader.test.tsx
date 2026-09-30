@@ -4,24 +4,14 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { AppState } from "../../types/frontend";
 import type { Session } from "../../types/backend";
 import { useSessionChangesLoader } from "./useSessionChangesLoader";
+import {
+  apiResponse,
+  errorResponse,
+  installGatewayFetch,
+  restoreSessionHookGlobals,
+} from "./sessionHookTestFixtures";
 
-const originalFetch = globalThis.fetch;
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
-function apiResponse(data: unknown): Response {
-  return new Response(JSON.stringify({
-    code: 0,
-    message: "ok",
-    data,
-    request_id: "request-test",
-  }), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
+afterEach(restoreSessionHookGlobals);
 
 function session(): Session {
   return {
@@ -48,175 +38,117 @@ function state(currentSession: Session): AppState {
   } as unknown as AppState;
 }
 
+/** 挂载变更加载器并把最新 state 镜像到闭包，收敛三处逐字相同的 Harness 样板。 */
+async function mountChangesLoader(currentSession: Session, apiPort: number) {
+  let currentState = state(currentSession);
+  let loader: ReturnType<typeof useSessionChangesLoader> | null = null;
+  function Harness(): React.ReactNode {
+    loader = useSessionChangesLoader({
+      apiPort,
+      currentSession,
+      workspaceId: currentSession.workspace_id,
+      setState: (update) => {
+        currentState = typeof update === "function" ? update(currentState) : update;
+      },
+    });
+    return null;
+  }
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  return {
+    loader: () => loader!,
+    state: () => currentState,
+    unmount: () => act(() => renderer!.unmount()),
+  };
+}
+
 describe("会话文件变更请求协调", () => {
   test("标记已审查失败时必须给出带原因的可见诊断", async () => {
     const currentSession = session();
-    let currentState = state(currentSession);
-    let reviewSessionChangeFile!: ReturnType<
-      typeof useSessionChangesLoader
-    >["reviewSessionChangeFile"];
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = input instanceof Request ? input.url : String(input);
-      const parsed = new URL(url);
-      if (parsed.pathname === "/api/gateway/auth/local-credential") {
-        return apiResponse({ token: "local-test-token" });
+    installGatewayFetch(({ path }) => {
+      if (path.endsWith("/review")) {
+        return errorResponse(500, "审查后端崩溃");
       }
-      if (parsed.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
-      if (parsed.pathname.endsWith("/review")) {
-        return Response.json({ detail: "审查后端崩溃" }, { status: 500 });
-      }
-      throw new Error("测试收到未声明请求: " + url);
-    }, { preconnect: originalFetch.preconnect });
-
-    function Harness(): React.ReactNode {
-      const loader = useSessionChangesLoader({
-        apiPort: 49_403,
-        currentSession,
-        workspaceId: "ws_changes_loader",
-        setState: (update) => {
-          currentState = typeof update === "function" ? update(currentState) : update;
-        },
-      });
-      reviewSessionChangeFile = loader.reviewSessionChangeFile;
-      return null;
-    }
-
-    let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<Harness />);
+      return undefined;
     });
 
-    await reviewSessionChangeFile(
+    const mounted = await mountChangesLoader(currentSession, 49_403);
+    await mounted.loader().reviewSessionChangeFile(
       { file_path: "src/a.ts", reviewed: false } as never,
       true,
     ).catch(() => undefined);
 
     // 失败后状态栏必须点明失败原因，绝不能停在「正在标记」的假进行态。
-    expect(currentState.status).toContain("审查");
-    expect(currentState.status).toContain("审查后端崩溃");
-    act(() => renderer!.unmount());
+    expect(mounted.state().status).toContain("审查");
+    expect(mounted.state().status).toContain("审查后端崩溃");
+    mounted.unmount();
   });
 
   test("并发和已缓存的变更列表只读取一次，显式刷新才重新读取列表", async () => {
     const currentSession = session();
-    let currentState = state(currentSession);
-    let loadSessionChangesets:
-      | ReturnType<typeof useSessionChangesLoader>["loadSessionChangesets"];
-    let refreshSessionChanges:
-      | ReturnType<typeof useSessionChangesLoader>["refreshSessionChanges"];
-    let invalidateSessionChanges:
-      | ReturnType<typeof useSessionChangesLoader>["invalidateSessionChanges"];
     let changesetListRequestCount = 0;
     let changesetDetailRequestCount = 0;
-
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = input instanceof Request ? input.url : String(input);
-      const parsed = new URL(url);
-      if (parsed.pathname === "/api/gateway/auth/local-credential") {
-        return apiResponse({ token: "local-test-token" });
-      }
-      if (parsed.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
-      if (
-        /^\/api\/v1\/sessions\/[^/]+\/changesets$/.test(parsed.pathname)
-      ) {
+    installGatewayFetch(({ path }) => {
+      if (/^\/api\/v1\/sessions\/[^/]+\/changesets$/.test(path)) {
         changesetListRequestCount += 1;
-        const requestedSessionId = parsed.pathname.split("/")[4];
         return apiResponse({
           items: [{
             changeset_id: "cs_default",
-            session_id: requestedSessionId,
+            session_id: path.split("/")[4],
             title: "默认变更",
             is_default: true,
             summary: { files: 1, additions: 2, deletions: 0 },
           }],
         });
       }
-      if (
-        /^\/api\/v1\/sessions\/[^/]+\/changesets\/cs_default$/.test(parsed.pathname)
-      ) {
+      if (/^\/api\/v1\/sessions\/[^/]+\/changesets\/cs_default$/.test(path)) {
         changesetDetailRequestCount += 1;
-        const requestedSessionId = parsed.pathname.split("/")[4];
         return apiResponse({
           changeset_id: "cs_default",
-          session_id: requestedSessionId,
+          session_id: path.split("/")[4],
           title: "默认变更",
           status: "ready",
           summary: { files: 1, additions: 2, deletions: 0 },
           files: [],
         });
       }
-      throw new Error(`测试收到未声明请求: ${url}`);
-    }, { preconnect: originalFetch.preconnect });
-
-    function Harness(): React.ReactNode {
-      const loader = useSessionChangesLoader({
-        apiPort: 49_403,
-        currentSession,
-        workspaceId: "ws_changes_loader",
-        setState: (update) => {
-          currentState = typeof update === "function"
-            ? update(currentState)
-            : update;
-        },
-      });
-      loadSessionChangesets = loader.loadSessionChangesets;
-      invalidateSessionChanges = loader.invalidateSessionChanges;
-      refreshSessionChanges = loader.refreshSessionChanges;
-      return null;
-    }
-
-    let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<Harness />);
+      return undefined;
     });
 
-    const first = loadSessionChangesets!(currentSession.session_id);
-    const second = loadSessionChangesets!(currentSession.session_id);
+    const mounted = await mountChangesLoader(currentSession, 49_403);
+    const first = mounted.loader().loadSessionChangesets(currentSession.session_id);
+    const second = mounted.loader().loadSessionChangesets(currentSession.session_id);
     await Promise.all([first, second]);
-    await refreshSessionChanges!(currentSession.session_id, "cs_default");
-    await refreshSessionChanges!(
+    await mounted.loader().refreshSessionChanges(currentSession.session_id, "cs_default");
+    await mounted.loader().refreshSessionChanges(
       currentSession.session_id,
       "cs_default",
       { refreshList: true },
     );
-    await loadSessionChangesets!("ses_other_changes_loader");
-    invalidateSessionChanges!();
-    await loadSessionChangesets!(currentSession.session_id);
+    await mounted.loader().loadSessionChangesets("ses_other_changes_loader");
+    mounted.loader().invalidateSessionChanges();
+    await mounted.loader().loadSessionChangesets(currentSession.session_id);
 
     expect(changesetListRequestCount).toBe(3);
     expect(changesetDetailRequestCount).toBe(2);
-    expect(currentState.activeChangeset?.changeset_id).toBe("cs_default");
-    act(() => renderer!.unmount());
+    expect(mounted.state().activeChangeset?.changeset_id).toBe("cs_default");
+    mounted.unmount();
   });
 
   test("显式刷新列表时不能被在途的普通列表读取吞掉", async () => {
     const currentSession = session();
-    let currentState = state(currentSession);
-    let loadSessionChangesets:
-      | ReturnType<typeof useSessionChangesLoader>["loadSessionChangesets"];
     let listRequestCount = 0;
     let resolveFirstList: (response: Response) => void = () => undefined;
     const firstListResponse = new Promise<Response>((resolve) => {
       resolveFirstList = resolve;
     });
-
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = input instanceof Request ? input.url : String(input);
-      const parsed = new URL(url);
-      if (parsed.pathname === "/api/gateway/auth/local-credential") {
-        return apiResponse({ token: "local-test-token" });
-      }
-      if (parsed.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
-      if (/^\/api\/v1\/sessions\/[^/]+\/changesets$/.test(parsed.pathname)) {
+    installGatewayFetch(({ path }) => {
+      if (/^\/api\/v1\/sessions\/[^/]+\/changesets$/.test(path)) {
         listRequestCount += 1;
         if (listRequestCount === 1) {
-          return await firstListResponse;
+          return firstListResponse;
         }
         return apiResponse({
           items: [{
@@ -228,30 +160,13 @@ describe("会话文件变更请求协调", () => {
           }],
         });
       }
-      throw new Error("测试收到未声明请求: " + url);
-    }, { preconnect: originalFetch.preconnect });
-
-    function Harness(): React.ReactNode {
-      const loader = useSessionChangesLoader({
-        apiPort: 49_404,
-        currentSession,
-        workspaceId: "ws_changes_loader",
-        setState: (update) => {
-          currentState = typeof update === "function" ? update(currentState) : update;
-        },
-      });
-      loadSessionChangesets = loader.loadSessionChangesets;
-      return null;
-    }
-
-    let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<Harness />);
+      return undefined;
     });
 
-    const inFlight = loadSessionChangesets!(currentSession.session_id);
+    const mounted = await mountChangesLoader(currentSession, 49_404);
+    const inFlight = mounted.loader().loadSessionChangesets(currentSession.session_id);
     await Promise.resolve();
-    const refreshed = loadSessionChangesets!(currentSession.session_id, true);
+    const refreshed = mounted.loader().loadSessionChangesets(currentSession.session_id, true);
     await Promise.resolve();
     resolveFirstList(apiResponse({
       items: [{
@@ -267,6 +182,6 @@ describe("会话文件变更请求协调", () => {
     expect(listRequestCount).toBe(2);
     expect(staleList.items.map((item) => item.changeset_id)).toEqual(["cs_stale"]);
     expect(refreshedList.items.map((item) => item.changeset_id)).toEqual(["cs_refreshed"]);
-    act(() => renderer!.unmount());
+    mounted.unmount();
   });
 });

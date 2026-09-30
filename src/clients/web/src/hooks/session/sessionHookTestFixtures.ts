@@ -12,6 +12,11 @@ import { useSessionMessageStream } from "./useSessionMessageStream";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
 import { useSessionRunActions } from "./useSessionRunActions";
 import { useSessionGoalController } from "./useSessionGoalController";
+import {
+  useSessionViewState,
+  type SessionViewStateController,
+  type SessionViewStateHost,
+} from "./useSessionViewState";
 import { invalidateGatewayToken } from "../../api/http";
 
 /**
@@ -110,6 +115,8 @@ export function installTestWindow(port: number): void {
       location: { port: String(port) },
       setTimeout: globalThis.setTimeout.bind(globalThis),
       clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      setInterval: globalThis.setInterval.bind(globalThis),
+      clearInterval: globalThis.clearInterval.bind(globalThis),
       addEventListener: () => undefined,
       removeEventListener: () => undefined,
     },
@@ -546,5 +553,96 @@ export function liveExplorerHarness(options: {
     });
     options.onExplorer(explorer);
     return null;
+  };
+}
+
+// —— 第三批（视图状态 / Goal 控制器）共享装配 ——
+
+/**
+ * 视图状态控制器 Harness：真实 React 状态机把最新 AppState 镜像到闭包，并向
+ * 控制器提供与 hooks.tsx 相同的 setStatus 写法。hostGetter 用函数在每次渲染时
+ * 更新 host，便于用例在挂载后切换 lease 代际 / 镜像。
+ */
+export async function mountViewStateController(options: {
+  host: SessionViewStateHost | ((state: AppState) => SessionViewStateHost);
+  initial: AppState;
+}): Promise<{
+  controller: () => SessionViewStateController;
+  state: () => AppState;
+  renderer: ReactTestRenderer;
+  update: () => Promise<void>;
+  unmount: () => void;
+}> {
+  const { initial } = options;
+  let controller: SessionViewStateController | null = null;
+  let latestState = initial;
+  function Probe(): React.ReactNode {
+    const [current, setState] = React.useState(() => initial);
+    latestState = current;
+    controller = useSessionViewState({
+      host: typeof options.host === "function" ? options.host(current) : options.host,
+      setState,
+      setStatus: (message) => {
+        setState((previous) => ({ ...previous, status: message }));
+      },
+    });
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(React.createElement(Probe));
+  });
+  if (!controller) throw new Error("useSessionViewState Harness 未完成渲染");
+  return {
+    controller: () => controller!,
+    state: () => latestState,
+    renderer,
+    update: async () => {
+      await act(async () => {
+        renderer.update(React.createElement(Probe));
+      });
+    },
+    unmount: () => act(() => renderer.unmount()),
+  };
+}
+
+/**
+ * Goal 控制器 Harness 工厂：保留自持状态机，用例可切换 currentSession 并注入
+ * 残留 Goal 状态，句柄通过控制器集合与状态读写器回传。
+ */
+export function useGoalControllerHarness(options: {
+  apiPort: number;
+  initial: AppState;
+}): {
+  Harness: () => React.ReactNode;
+  controller: () => ReturnType<typeof useSessionGoalController>;
+  state: () => AppState;
+  setState: (update: (previous: AppState) => AppState) => void;
+} {
+  let controller: ReturnType<typeof useSessionGoalController> | null = null;
+  let latestState = options.initial;
+  let applyUpdate: (update: (previous: AppState) => AppState) => void = () => {
+    throw new Error("useSessionGoalController Harness 尚未挂载");
+  };
+  function Harness(): React.ReactNode {
+    const [current, setState] = React.useState<AppState>(() => options.initial);
+    latestState = current;
+    applyUpdate = setState;
+    controller = useSessionGoalController({
+      apiPort: options.apiPort,
+      currentSessionId: current.currentSession?.session_id ?? null,
+      currentWorkspaceId: current.currentSessionWorkspaceId,
+      setState,
+    });
+    return null;
+  }
+  return {
+    Harness,
+    controller: () => {
+      if (!controller) throw new Error("useSessionGoalController Harness 未完成渲染");
+      return controller;
+    },
+    state: () => latestState,
+    setState: (update) => applyUpdate(update),
   };
 }
