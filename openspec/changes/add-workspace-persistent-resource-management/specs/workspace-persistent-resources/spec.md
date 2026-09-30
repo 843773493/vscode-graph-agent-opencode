@@ -32,9 +32,7 @@
 
 ### Requirement: 工作区持久记录必须用「资源身份 / ResourceIdentity + 虚拟资源地址 / VRN」引用资源，禁止持久化 real path
 
-本 capability 的所有工作区持久记录（含资源记录、对账记录引用、Thread 关联记录与迁移中间记录）在引用资源时 MUST 使用 `资源身份 / ResourceIdentity` 与 `虚拟资源地址 / VRN`（必要时加与 VRN 并列的独立 revision 字段）；MUST NOT 持久化 `真实路径 / real path`。凡记录需要表达「资源所在位置」，该位置 MUST 以 `虚拟资源地址 / VRN` 表达，而非文件系统路径。同一 prohibition 亦覆盖 API 响应体与模型可见载荷：它们 MUST NOT 出现 `真实路径 / real path`，MUST NOT 以日志脱敏、截断或 `display_uri` 静默掩盖。本 capability 的稳定 `resource_id` 与该身份/寻址政策不冲突，继续作为资源身份使用。`作用域 / scope` 闭集与 `scope_id` 取值语义、VRN 语法、kind 闭集与 `拒绝码 / rejection code` 登记 MUST 由 `add-unified-virtual-resource-addressing` change 唯一 owner 定义，本 capability 只引用、MUST NOT 复述或自造第二套语法与取值。
-
-在不削弱上述义务的前提下，本 change 追加以下平行约束与一处规范化边界（本 change 实施裁定 D-A2/D-A3：不新增 VRN kind，也不实施 `config`/`session` kind 的代码落地）：凡位置可由 owner 身份（资源 ID 与工作区身份）确定性推导者，MUST NOT 落盘该位置，改为在该次 fs/进程调用栈内由 owner 身份重推导（裁定 D-A2）；仅在位置确实无法由 owner 身份推导、且必须对外可寻址时，MUST 改用承载该能力的既有后端 API 端点引用（裁定 D-A3），而非文件系统路径；MUST NOT 为此自造 VRN kind、MUST NOT 裸拼接 VRN。以上两条 MUST NOT 被解释为对「位置一律以 VRN 表达」的豁免，而是对「不落盘」与「可寻址性」的追加义务。唯一的规范化边界是 owner 自身的运行态字段（典型为终端 shell 的当前工作目录）：该字段表达的是 owner 自己的运行状态，不是「资源所在位置」，MUST NOT 被当作位置引用或位置表达，也不受「位置一律以 VRN 表达」约束；此类字段 MUST 以工作区内相对路径持久化，MUST NOT 落盘绝对路径或工作区根路径。此边界只覆盖 owner 自身的运行态字段，MUST NOT 被扩张解释为「任何位置都可以改用文件系统路径代替 VRN」。
+**归属与引用**：本 capability 的持久记录引用政策（含「位置一律以 `资源身份 / ResourceIdentity` + `虚拟资源地址 / VRN` 表达、禁持久化 `真实路径 / real path`、覆盖 API 响应体与模型可见载荷」）的正名 normative 出处为 `add-unified-virtual-resource-addressing` 的 requirement「默认寻址政策必须以 VRN 为默认形式」；「位置 vs 非位置」的判定（D-A2 可由 owner 身份推导者不落盘、D-A3 不可推导者用既有 API 端点、owner 自身运行态字段以工作区内相对路径持久化这一唯一例外）的正名出处为该 change 的 requirement「「位置」必须有可机械判定的统一判据」。本 capability 只**具名引用**上述两条 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套判据。`作用域 / scope` 闭集与 `scope_id` 取值语义、VRN 语法、kind 闭集与 `拒绝码 / rejection code` 登记同样由 `add-unified-virtual-resource-addressing` change 唯一 owner 定义，本 capability 只引用。本 capability 的稳定 `resource_id` 与该身份/寻址政策不冲突，继续作为资源身份使用。
 
 #### Scenario: 持久记录只承载身份与 VRN
 

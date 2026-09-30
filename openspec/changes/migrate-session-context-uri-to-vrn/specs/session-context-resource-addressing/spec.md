@@ -6,13 +6,7 @@
 
 ### Requirement: 资源引用必须遵循三层分离
 
-系统 MUST 将每个资源引用拆分为三层唯一 owner，任一层 MUST NOT 承担另一层的职责：
-
-- **资源身份 / ResourceIdentity**：不透明、稳定、**不含 revision**、**不依赖当前激活工作区**；MUST 持久化；用于去重与 lineage。
-- **虚拟资源地址 / VRN**：可解析地址；MUST 持久化且**允许悬空**（登记地址后资源可暂不可达）；**MUST NOT 编码 revision、hash、快照引用或 provider locator**；是软件内部与模型可见载荷传递资源的**默认**形式。
-- **真实路径 / real path**：机器本地、**临时**；MUST NOT 被持久化，MUST NOT 进入模型可见载荷，MUST NOT 跨越 gateway 边界。
-
-real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST 视为缺陷。
+**归属与引用**：三层分离（`资源身份 / ResourceIdentity` / `虚拟资源地址 / VRN` / `真实路径 / real path`）的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套三层分离规范；以下 scenario 只保留会话上下文侧的验收视角。
 
 #### Scenario: 持久化记录不得含 real path
 - **WHEN** 任意会话上下文资源被写入持久化记录或返回给模型
@@ -32,7 +26,7 @@ real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST
 
 - `workspace` → 真实 workspace_id；
 - `gateway` → 真实 gateway_id（现状在 skill 目录生成链路上硬编码字面量 `"local"`，落地时改为真实身份推导，MUST NOT 继续硬编码字面量）；取值来源与注入 owner MUST 按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿落地，本 capability 只引用、不复述取值规则；
-- `inline` → 真实 distribution_id（现状与 `gateway` 共用字面量 `"local"`，且 `distribution_id` 全仓零赋值，属既有不一致）；来源与编码 MUST 按「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从其发行包 runtime manifest 的 `distribution` + `version` 推导，本 capability 只引用、不复述取值规则；
+- `inline` → 真实 distribution_id（`distribution_id` 现已按 `app/core/distribution_identity.py::load_distribution_id()` 从发行包 runtime manifest 推导，不再是全仓零赋值；`gateway` 的 `local` 字面量仍待请求级注入切片，属既有不一致的剩余部分）；来源与编码 MUST 按「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从其发行包 runtime manifest 的 `distribution` + `version` 推导，本 capability 只引用、不复述取值规则；
 - `user` → `local`，并 MUST 显式声明为单用户本地程序的约定。
 
 「当前工作区」MUST NOT 作为寻址概念的隐含前提，也 MUST NOT 作为持久化数据的隐含前提。
@@ -57,7 +51,7 @@ real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST
 
 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}`
 
-- `{gateway_authority?}`：可选、**单段**，承载稳定 gateway_id；缺省 = 本机 gateway。
+- `{gateway_authority?}`：可选、**单段**，承载稳定 gateway_id；缺省 = 本机 gateway。**owner 待实施项（关联 `add-unified-virtual-resource-addressing` task 3.4）**：该段在 `grammar.py` 的 `parse_vrn` 中当前无解析分支（authority 首段会被当作 scope 并以 `unknown_scope` 拒绝），本 capability 对 authority 的使用依赖 `add-unified-virtual-resource-addressing` 的 authority 实现。
 - `{scope}`：必填，取自闭合集。
 - `{scope_id}`：必填，**对所有 scope 都必填**。
 - `resources`：固定段，MUST 保留。
@@ -151,7 +145,7 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 
 ### Requirement: 持久化资源引用必须使用身份加 VRN
 
-持久化的资源引用字段 MUST 使用资源身份加 VRN 的组合表达，并 MUST 在需要修订绑定时另设**独立的 revision 字段**；MUST NOT 持久化 real path。
+**归属与引用**：持久化资源引用政策的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「默认寻址政策必须以 VRN 为默认形式」。本 capability 只**具名引用**该 requirement，MUST NOT 复述正文、MUST NOT 另立第二套持久化引用政策；会话上下文侧的落点由以下 scenario 验收。
 
 #### Scenario: 字段不含 real path
 - **WHEN** 会话上下文资源引用被写入持久化记录
@@ -184,15 +178,7 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 
 ### Requirement: 配置来源的真实路径持久化必须迁移到 VRN
 
-已确证存在真实违约：配置来源的真实路径已写入 SQLite（`app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord` 含 `source_path: str` 与 `backup_path: str | None`），且该真实路径还会经 API 响应体对外（`app/api/config.py:102` 的 `path=str(source.path)`，经 `ConfigSourceDTO.path` 输出，实测 `GET /api/v1/config/sources` 回真实绝对路径）。按三层分离，真实路径 MUST NOT 被持久化，也 MUST NOT 进入 API 响应体。
-
-迁移 MUST **直接复用 config 侧已跑通的形态**：`app/core/config_sources.py` 的 `ConfigSource` 已是 `path` + `layer` + `precedence` 平级属性，且 `layer_revision` / `layer_digest` / `source_generation` 已是**兄弟字段**。因此改造等价于「把 `path: Path` 换成 `vrn: VRN`，其余兄弟字段原样保留」，MUST NOT 另发明一套结构。
-
-配置来源资源的 VRN MUST 标识来源文件本身，并使用属于「统一虚拟资源寻址」change 登记的 kind 闭集内的取值；`layer` MUST 作为**兄弟字段**保留、MUST NOT 塞进 VRN。
-
-**`sqlite` 层 MUST NOT 被赋予 VRN**：`user` / `user_local` / `workspace` 三层共享同一个 `workspace.sqlite` 文件（`app/services/infrastructure/config_service.py` 的 `_config_source` 在 state store 存在时统一返回 `self._workspace_state_store.path`），把它映射成单一 VRN 会立刻产生「同一 URI 对应多个逻辑来源」的冲突。`inline` 层有稳定 disk 载体（发行包内 `configs/*_inline.jsonc`），故有 VRN。
-
-迁移后：来源层身份 MUST 由 VRN 表达，API 响应体 MUST NOT 输出真实路径；真实路径只允许存在于最后访问点。
+**归属与引用**：本义务的正名 normative 出处为 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段」（含 config kind、尾段形态、`sqlite` 层不可寻址与 real path 不持久化的全部正文）。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套 config 迁移规范；以下 scenario 只保留会话上下文侧的验收视角。
 
 #### Scenario: 配置来源记录不含真实路径
 - **WHEN** 配置来源层被持久化到 SQLite

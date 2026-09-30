@@ -1,10 +1,7 @@
 ## 1. 依赖与前置对齐
 
 - [ ] 1.1 确认「统一虚拟资源寻址」change 已登记 scope 闭集（`workspace`/`user`/`gateway`/`inline`；`memory` 已移出）、VRN grammar、`kind` 闭集与拒绝码命名空间；未登记前不得进入第 3 组实施。
-- [ ] 1.2 采用已下发的**权威表**：scope 闭集 = `workspace`/`user`/`gateway`/`inline`；`scope_id` 由真实身份推导、MUST NOT 硬编码字面量（`workspace`→真实 workspace_id、`gateway`→真实 gateway_id（来源与注入 owner 按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿，本 change 只引用、不复述取值规则）、`inline`→真实 distribution_id（来源与编码按「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从其发行包 runtime manifest 的 `distribution` + `version` 推导，本 change 只引用）、`user`→`local`）。`memory` MUST NOT 作为 scope 出现。
-- [ ] 1.2-A 与其对齐段序与闭集落地：保留 `resources` 固定段、`scope_id` 对**所有** scope 必填；`builtin` 正名为 `inline`（含 layer `bundled`→`inline`，由 change 1 owner 负责，带持久化影响评估）；本 change 不自行改动 grammar。
-- [ ] 1.2-B 落地 `memory` 非 VRN 声明：入口对 `boxteam://memory/{scope}/{name}` 两点式以「未登记 scope」拒绝，并把该形态标注为**非 VRN 示意**。
-- [ ] 1.2-C 采用「统一虚拟资源寻址」change 已定稿的**会话上下文资源自身 `kind` = `session`**（闭集 `agent-spec`|`skills`|`config`|`session`）；本 change 直接引用、无需新登记、无待裁定。config 来源用 `config`。
+- [ ] 1.2 按 `add-unified-virtual-resource-addressing` 的 scope 闭集/`scope_id` 唯一表与 kind 闭集**具名引用**落地：scope 闭集 `workspace`/`user`/`gateway`/`inline`、`scope_id` 由真实身份推导（取值规则一律引用该 change，本 change 不复述）、保留 `resources` 固定段、`scope_id` 对所有 scope 必填、`memory` 非 VRN 且入口拒绝、会话上下文 kind=`session` / config 来源 kind=`config`；`builtin`→`inline`（含 layer `bundled`→`inline`）改名归该 owner change。**段序、scope 名、scope_id 语义、kind 与拒绝码定义均归该 owner change，本 change 只引用、MUST NOT 复述或另立。**
 - [ ] 1.3 与 itemized rollout context 对齐 `assembly_ref` 的表示（资源身份或专用 ref 类型），确认不改变本 change 的结构化方向。
 
 ## 2. 会话上下文资源引用的结构化模型
@@ -36,13 +33,15 @@
 - [ ] 5.3 新写字段切换：让既有持久化挂点按 identity + VRN 的新格式**新写入**并在读路径切换——`resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`）与 `context_source_control_states`（来源追踪事实），不得保留旧写入形态或兼容读写双轨。
 - [ ] 5.4 移除旧的会话上下文自有正则与 `#selector` 解析实现，物理下线，不留兼容层或别名。
 
-## 5A. 配置来源真实路径持久化的迁移（已确证义务）
+## 5A. 配置来源真实路径持久化的迁移（正名出处：`add-unified-virtual-resource-addressing`）
 
-- [x] 5A.1 把 `app/core/config_sources.py` 的 `ConfigSource.path: Path` 换成 `vrn: VRN`，兄弟字段（`layer`/`precedence`/`loaded`/`source_key`/`presence`/`layer_revision`/`layer_digest`/`source_generation`）原样保留；不得另发明一套结构。 **（已落地：`ConfigSource.vrn: str | None`，兄弟字段逐字保留；构造点统一经 `config/source_vrn.py::inline_config_source_vrn`。）**
-- [x] 5A.2 移除 `app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord.source_path`/`backup_path` 持久化，改为 VRN 表达；`layer` 作为兄弟字段保留、不塞进 VRN。 **（已落地：`ConfigSourceLayerRecord.vrn`/`ConfigSourceJournalRecord.vrn` 取代 `source_path`，`backup_path` 物理删除；workspace 与 gateway 两侧 `config_source_layers`/`config_source_journal` 均以迁移 `DROP COLUMN source_path/backup_path` + `ADD COLUMN vrn` 收敛，旧值不迁移。）**
+本义务的 normative 正文（config 侧平级属性模式、config kind、尾段形态、`sqlite` 层不可寻址、real path 不持久化）MUST 取自 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段」；本 change 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套 config 迁移规范。以下任务只记录该义务的落地与验收证据。
+
+- [x] 5A.1 按 owner 上述 requirement 落地 `app/core/config_sources.py` 的 `ConfigSource.path: Path` → VRN，兄弟字段（`layer`/`precedence`/`loaded`/`source_key`/`presence`/`layer_revision`/`layer_digest`/`source_generation`）原样保留。 **（已落地：`ConfigSource.vrn: str | None`，兄弟字段逐字保留；构造点统一经 `config/source_vrn.py::inline_config_source_vrn`。）**
+- [x] 5A.2 按 owner 上述 requirement 移除 `app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord.source_path`/`backup_path` 持久化，改为 VRN 表达。 **（已落地：`ConfigSourceLayerRecord.vrn`/`ConfigSourceJournalRecord.vrn` 取代 `source_path`，`backup_path` 物理删除；workspace 与 gateway 两侧 `config_source_layers`/`config_source_journal` 均以迁移 `DROP COLUMN source_path/backup_path` + `ADD COLUMN vrn` 收敛，旧值不迁移。）**
 - [ ] 5A.3 移除 API 响应体对外输出真实路径（`app/api/config.py:102` 的 `path=str(source.path)` 与 `app/schemas/internal_v2/config.py` 的 `ConfigSourceDTO.path`），改为 VRN；同步更新前端消费点。
-- [x] 5A.4 明确 `sqlite` 层不给 VRN（`user`/`user_local`/`workspace` 共享同一 `workspace.sqlite`），`inline` 层有稳定 disk 载体故有 VRN；在落地代码与注释中说明该不可寻址性。 **（已落地：`ConfigService._config_source`/`_read_shared_override` 与 `source_vrn.py` 文档改以「共享同一 `workspace.sqlite` 这一边界载体」为不可寻址依据——`user`/`user_local`/`workspace`/`sqlite` 一律 `vrn=None`；`user` scope 本身已由 `f6fc990f` 落地进 VRN 闭集，故该结论与 scope 闭集无关，仅由共享载体决定。）**
-- [x] 5A.5 落地时删除 `app/agents/skill_runtime.py:538` 的 bundled 到 builtin 改名映射，向 `inline` 收敛；评估 `layer` 名进入 `entry_identity`/catalog payload 的同步面。 **（已由 `298ef599` 落地：`layer_order` 改为 `(inline,gateway,workspace)`，`scope = {...}[layer]` 改名 shim 物理删除，`layer` 名与 VRN scope 名自此逐字一致；`rg -n 'bundled' app/agents/skill_runtime.py` 仅剩合法命名的 `resolve_bundled_skill_groups`。该 shim 已不存在，无需再删。）**
+- [x] 5A.4 按 owner 上述 requirement 落实 `sqlite` 层不给 VRN（`user`/`user_local`/`workspace` 共享同一 `workspace.sqlite`），`inline` 层有稳定 disk 载体故有 VRN。 **（已落地：`ConfigService._config_source`/`_read_shared_override` 与 `source_vrn.py` 文档改以「共享同一 `workspace.sqlite` 这一边界载体」为不可寻址依据——`user`/`user_local`/`workspace`/`sqlite` 一律 `vrn=None`；`user` scope 本身已由 `f6fc990f` 落地进 VRN 闭集，故该结论与 scope 闭集无关，仅由共享载体决定。）**
+- [x] 5A.5 删除 `app/agents/skill_runtime.py` 的 bundled 到 builtin 改名映射，向 `inline` 收敛（scope 正名由 `add-unified-virtual-resource-addressing` 归口）。 **（已由 `298ef599` 落地：`layer_order` 改为 `(inline,gateway,workspace)`，`scope = {...}[layer]` 改名 shim 物理删除，`layer` 名与 VRN scope 名自此逐字一致；`rg -n 'bundled' app/agents/skill_runtime.py` 仅剩合法命名的 `resolve_bundled_skill_groups`。该 shim 已不存在，无需再删。）**
 - [x] 5A.6 断言配置来源的持久化记录与 API 响应体均不含真实路径。 **（已落地：`test_workspace_config_source.py::test_persisted_source_records_never_hold_real_path`、`test_source_layer_vrn_round_trips_and_sqlite_layer_is_unaddressable`、`test_config_service.py::test_workspace_config_migrates_mutable_json_layers_to_sqlite` 与 `test_config.py::test_config_sources_endpoint_never_exposes_real_path`。）**
 
 ## 6. 收口在途 change

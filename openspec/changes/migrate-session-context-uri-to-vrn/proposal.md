@@ -26,6 +26,6 @@
 ## Impact
 
 - **规划产物**：新增本 change 的 `proposal.md` / `specs/session-context-resource-addressing/spec.md` / `design.md` / `tasks.md`；更新 `openspec/changes/add-itemized-rollout-context/` 的 URI 相关 requirement/task 指向。
-- **受影响系统（实施阶段，不在本 change 落地）**：会话上下文查询服务与其资源解析器、`read_context` / `search_context` 工具 schema、跨 Session 目标（`send_message_to_session` / `wait_for_session`）的地址入参、既有持久化挂点（`display_uri` 列、来源事实）的新写入与读路径切换、Gateway 星型路由的会话资源分支、配置来源的 SQLite 记录与 `ConfigSourceDTO` 响应体（真实路径迁移为 VRN）、以及 `app/agents/skill_runtime.py:538` 的 `bundled`→`builtin` 改名 shim（落地时删除，向 `inline` 收敛）。
+- **受影响系统（实施阶段，不在本 change 落地）**：会话上下文查询服务与其资源解析器、`read_context` / `search_context` 工具 schema、跨 Session 目标（`send_message_to_session` / `wait_for_session`）的地址入参、既有持久化挂点（`display_uri` 列、来源事实）的新写入与读路径切换、Gateway 星型路由的会话资源分支、配置来源的 SQLite 记录与 `ConfigSourceDTO` 响应体（真实路径迁移为 VRN）、以及 `app/agents/skill_runtime.py` 的 `bundled`→`builtin` 改名 shim（已由 `298ef599` 物理删除并向 `inline` 收敛）。
 - **依赖**：本 change **不拥有** VRN 语法本体、`kind` 闭集与拒绝码登记——由「统一虚拟资源寻址」change 独占；本 change 只引用其 grammar 与拒绝码命名空间。
 - **不做**：不引入 `virtual url` / `VURI` 等同义异名；不把 revision/hash 编码进 VRN；不以「当前工作区」作为持久化数据的隐含前提；不自行发明 scope 名、scope_id 语义、`kind` 取值或拒绝码；不把 `memory` 当 VRN scope 做设计；不改动 VRN 语法本体与固定段序；不构造不存在的存量数据迁移。
