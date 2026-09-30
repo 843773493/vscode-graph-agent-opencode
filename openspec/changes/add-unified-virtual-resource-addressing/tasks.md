@@ -58,6 +58,6 @@
 - [ ] 7.2 增加三层分离与不变量测试：real path 外泄即缺陷（响应体/持久化/模型载荷三处检查点）、VRN 悬空合法、revision 不进 VRN、identity 不承担寻址、同名跨 scope 是两个 identity、locator 不在解析输出中。
 - [ ] 7.3 增加 scope_id 推导测试：`gateway`/`inline` 的 scope_id 不再是字面量 `local` 且两者不再相同；`inline` 使用真实 `distribution_id` 并按 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」的编码规则单射（不同 (distribution, version) 必得不同 scope_id，由 version charset 不含下划线保证）、跨安装路径稳定、manifest 缺字段时 fail-closed；`gateway` 按 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」验证「按请求注入而非进程级单例」「缺失/非法时 fail-closed」「MUST NOT 用 host:port/监听端口」；`user` 恒为 `local`。
 - [ ] 7.4 增加星型解析与失败语义测试：authority 缺省与本机 gateway_id 同解、hub 直连直接 spoke、spoke 经唯一 hub 一次有界 transit、上界与 deadline 为 policy 常量且超限显式失败、不可达/未共享/未知 gateway 分别返回集中登记的**联邦解析期**拒绝码（`federation-channel-closed`/`target_not_resolvable`/`federation-unknown-peer`）、「未授权存在」与「不存在」不可区分、不递归转发。
-- [ ] 7.5 增加拒绝码登记测试：grammar、resolve 与联邦解析期三套闭集各自独立、未登记码构造即失败、两套不混用、其它模块无自造同义码。
+- [ ] 7.5 增加拒绝码登记测试：grammar、resolve 与联邦解析期三套闭集各自独立、未登记码构造即失败、三套不混用、其它模块无自造同义码。
 - [ ] 7.6 增加配置来源迁移测试：`ConfigSourceLayerRecord`/`ConfigSourceJournalRecord` 不再持久化 real path、改为 VRN 兄弟字段；`path`→`vrn` 替换后 sibling 字段（layer/precedence/revision/digest/generation）语义与值不变；`GET /api/v1/config/sources` 响应体不含真实路径；`sqlite` 层不编 VRN。
 - [ ] 7.7 运行仓库既有校验并记录证据：`openspec validate --strict --all` 必须 0 failed，且本 change 与其它四个 change 之间均无残留的第二套 VRN 语法、自造 kind 或自造拒绝码。

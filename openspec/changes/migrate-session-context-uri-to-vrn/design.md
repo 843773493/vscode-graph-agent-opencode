@@ -25,7 +25,7 @@
 - scope 闭合集定稿为 `workspace` / `user` / `gateway` / `inline`：`builtin` 正名为 `inline`，`user` 为本次新增；`memory` **已确证不是 VRN scope，移出闭合集**（零生产构造方、resolver 不比对 scope_id、container 未装配、configs 自述未接入）。
 - `scope_id` 必须由真实身份推导、MUST NOT 硬编码字面量：`workspace`→真实 workspace_id、`gateway`→真实 gateway_id（取值来源与注入 owner 按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿，本 change 只具名引用、不复述取值规则）、`inline`→真实 distribution_id、`user`→`local`（单用户本地约定，已由 owner 定为终值）。
 - 星型解析唯一顺序，上界为显式策略常量；不可达/未共享/未找到 fail-closed 结构化拒绝码；**locator 是输入不是输出**。
-- 拒绝码有**两套不可混用的独立闭集**——`grammar.py` 的 17 个与 `resolver.py` 的 6 个——由「统一虚拟资源寻址」change 集中登记；本 change **只能引用不能自造**。VRN 语法本体、固定段序与 `kind` 闭集同样不由本 change 拥有。
+- 拒绝码**本 change 只引用其中两套**——`grammar.py` 的 17 个与 `resolver.py` 的 6 个——由「统一虚拟资源寻址」change 集中登记（该 owner 另登记**第三套：联邦解析期** `FederationError.code`，归属 `app/gateway/federation/`，见其 requirement「拒绝码必须分三套集中登记且命名不得自造」，本 change 不引用该套、也不实现跨 gateway 解析）；本 change **只能引用不能自造**，且 MUST NOT 混用任何两套闭集。VRN 语法本体、固定段序与 `kind` 闭集同样不由本 change 拥有。
 - `memory` 不是 VRN scope：不基于它做设计、不为它规定 scope_id；既有两点式 `boxteam://memory/{scope}/{name}` 只作**非 VRN 示意**（它无 `resources` 段、无 kind、恰好两段，曾走独立特例分支；**该特例分支已由提交 32bc6256 物理删除，现以 `unknown_scope` 类拒绝码 fail-closed 拒绝**）。
 - 命名必须逐字使用：`资源身份 / ResourceIdentity`、`虚拟资源地址 / VRN`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`。
 
@@ -180,6 +180,6 @@ SessionContextResourceRef {
 ## Open Questions
 
 - **会话上下文资源自身的 `kind`（已定稿，不再是 open question）**：由「统一虚拟资源寻址」change 在 kind 闭集内定稿为 `session`（其 requirement「kind 闭集定稿且描述符闭集独立不可混用」，闭集为 `agent-spec` | `skills` | `config` | `session`）。本 change 直接引用该已登记取值，无需新登记、无待裁定项；规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`。`scope_id` 语义同样已由该 owner 定稿，本 change 直接引用。
-- **拒绝码的具体归属**：会话上下文新增拒绝场景（如「旧式 fragment 形态」「view 与资源不兼容」「memory 两点式」）落到 `grammar.py` 的 17 个码还是 `resolver.py` 的 6 个码，由寻址 change 集中登记后引用；本 change 不新增码、不混用两套闭集。
+- **拒绝码的具体归属**：会话上下文新增拒绝场景（如「旧式 fragment 形态」「view 与资源不兼容」「memory 两点式」）落到 `grammar.py` 的 17 个码还是 `resolver.py` 的 6 个码，由寻址 change 集中登记后引用；本 change 只引用 grammar/resolve 这两套、不新增码、不混用闭集，第三套（联邦解析期）归属见 `add-unified-virtual-resource-addressing` 的拒绝码登记 requirement「拒绝码必须分三套集中登记且命名不得自造」。
 - **`assembly_ref` 的表示**：D2 中 `assembly={id}` 迁为 `assembly_ref`，其具体采用资源身份还是专用 ref 类型，待与 itemized rollout context 的 assembly 身份模型对齐后确定（不改变本 change 的结构化方向）。
 - **`user` scope 的未来扩展（不影响当前终值）**：`user` → `local` 已由「统一虚拟资源寻址」change 定为**终值**（其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」规定 `user` → `local` 并 MUST 显式声明为单用户本地程序约定）。本 change 直接引用该终值，不存在后续判定。若将来出现多用户场景如何扩展语义（例如是否引入用户名细分），属**未来可能**，须由 owner 另行发起变更，不得据此改动当前终值。
