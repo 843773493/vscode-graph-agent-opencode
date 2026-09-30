@@ -116,6 +116,52 @@ _REAL_PATH_PATTERN = re.compile(
 )
 
 
+_CUSTOM_SCHEMA = {
+    "type": "object",
+    "properties": {"config_version": {"type": "integer"}},
+    "required": ["config_version"],
+}
+
+
+@pytest.mark.asyncio
+async def test_config_sources_schema_vrn_only_for_release_inline_schema(
+    tmp_path: Path,
+) -> None:
+    """非发行包 schema MUST NOT 编 inline VRN：返回空串且端点不崩。
+
+    点号 stem（`my.company.schema`，非法 VRN 字符）与普通自定义 schema 都走此判据；
+    改前实现直接以 `schema_path.stem` 编 inline VRN，点号 stem 会抛 `VrnGrammarError`
+    令端点 500。本用例锁定「不可寻址返回空串、任何输入不 500」。
+    """
+
+    for schema_name in ("my.company.schema.jsonc", "custom_schema.jsonc"):
+        schema_file = tmp_path / schema_name
+        schema_file.write_text(json.dumps(_CUSTOM_SCHEMA), encoding="utf-8")
+        workspace_dir = tmp_path / schema_name.replace(".", "_")
+        workspace_dir.mkdir()
+        config_path = workspace_dir / "workspace.jsonc"
+        payload = dict(_base_config())
+        payload["$schema"] = f"../{schema_name}"
+        config_path.write_text(json.dumps(payload), encoding="utf-8")
+        service = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+        )
+
+        response = await get_config_sources(
+            _="local-dev-token",
+            request_id="req-config-custom-schema",
+            config_service=service,
+        )
+
+        assert response.data is not None
+        # 非 inline schema 不可寻址：空串，MUST NOT 谎报 inline 来源、MUST NOT 抛错。
+        assert response.data.schema_path == ""
+        assert str(tmp_path) not in response.model_dump_json()
+
+
+
+
 @pytest.mark.asyncio
 async def test_config_endpoint_metadata_never_exposes_real_path(
     tmp_path: Path,

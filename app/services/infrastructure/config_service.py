@@ -107,6 +107,34 @@ _SOURCE_LAYER_AUTHORITY: dict[str, tuple[ConfigSourceLayer, int]] = {
 }
 
 
+def release_inline_config_vrn_for_file(
+    effective_path: Path | None,
+    *,
+    release_config_name: str,
+) -> str | None:
+    """生效文件若与发行包同名配置内容一致，返回其 inline VRN，否则 None。
+
+    安装链路把发行包内配置与 schema **原字节拷贝**到用户配置目录（`configs/installer.py`
+    的 `atomic_write(target, source.read_bytes())`），故「真属发行包 inline 层」的正确
+    判据是**与发行包资源内容一致**，而非路径相等——路径相等会把正常安装的拷贝误判为非
+    inline。判据失败（路径缺失、不可读、内容不同）一律返回 None，MUST NOT 抛错：调用方
+    以空字符串对外表达不可寻址，故含点号或非法字符的用户自定义文件名永不进入 VRN 构造。
+    VRN 尾段取发行包资源的逻辑名（`release_config_name` 去扩展名），MUST NOT 取生效文件 stem。
+    """
+    if effective_path is None:
+        return None
+    try:
+        release_path = resolve_config_resource_source(release_config_name)
+    except FileNotFoundError:
+        return None
+    try:
+        if effective_path.read_bytes() != release_path.read_bytes():
+            return None
+    except OSError:
+        return None
+    return inline_config_source_vrn(logical_name=Path(release_config_name).stem)
+
+
 class ConfigService:
     _RUNTIME_OVERRIDE_CONFIG_KEY = "workspace_runtime_override"
     _CONFIG_DOMAIN = "workspace"
@@ -448,6 +476,29 @@ class ConfigService:
     def _inline_source_vrn(self) -> str:
         """构造发行包内 inline 层配置来源的 VRN（唯一可寻址的 config 层）。"""
         return inline_config_source_vrn(logical_name=self._inline_logical_name)
+
+    def get_schema_source_vrn(self) -> str | None:
+        """仅当生效 schema 就是发行包 inline schema 时返回其 VRN，否则返回 None。
+
+        `_resolve_schema_path()` 有四个返回分支：工作区 `$schema` 相对引用解析出的
+        文件、发行包内 `*_inline.jsonc` 的 `$schema` 引用、`config_dir` 下的 schema、
+        用户级安装 schema。安装链路把发行包 schema **原字节拷贝**到用户配置目录（
+        `configs/installer.py` 的 `atomic_write(schema_target, schema_source.read_bytes())`），
+        故「真属发行包 inline 层」的正确判据是**与发行包 schema 内容一致**，而非路径相等
+        ——路径相等会把正常安装（用户级拷贝）误判成非 inline。
+
+        用户自定义 `$schema`（内容与发行包不同）即判为不可寻址，返回 None。返回 None 由
+        调用方以空字符串对外表达；MUST NOT 在此抛错，故含点号或非法字符的自定义 stem
+        永不进入 VRN 构造。VRN 尾段取发行包 schema 的逻辑资源名，MUST NOT 取用户文件 stem。
+        """
+        try:
+            effective_schema = self._resolve_schema_path()
+        except FileNotFoundError:
+            return None
+        return release_inline_config_vrn_for_file(
+            effective_schema,
+            release_config_name="workspace_schema.jsonc",
+        )
 
     def _config_source(
         self,

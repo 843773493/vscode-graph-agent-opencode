@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -506,6 +507,47 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
     ]
     assert response.data.sources[1].loaded is True
     assert response.data.policy_manifest
+
+
+@pytest.mark.asyncio
+async def test_gateway_config_sources_schema_vrn_only_for_release_inline_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非发行包 gateway schema MUST NOT 编 inline VRN：返回空串且端点不崩。
+
+    改前实现直接以 `config.schema_path.stem` 编 inline VRN，点号 stem 会抛
+    `VrnGrammarError` 令端点 500，普通自定义 schema 会被谎报成 inline 来源。
+    """
+
+    config_path, schema_path = _write_gateway_config(tmp_path, [])
+    config = load_gateway_config(config_path=config_path, schema_path=schema_path)
+
+    for custom_name in ("my.company.schema.jsonc", "custom_gateway_schema.jsonc"):
+        custom_schema = tmp_path / custom_name
+        custom_schema.write_text(
+            json.dumps(
+                {
+                    "type": "object",
+                    "properties": {"config_version": {"type": "integer"}},
+                    "required": ["config_version"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        non_inline = replace(config, schema_path=custom_schema)
+        monkeypatch.setattr(
+            "app.gateway.main.load_gateway_config", lambda cfg=non_inline: cfg
+        )
+
+        response = await gateway_config_sources(
+            _="gateway-token",
+            request_id="req-gateway-custom-schema",
+        )
+
+        assert response.data is not None
+        assert response.data.schema_path == ""
+        assert str(tmp_path) not in response.model_dump_json()
 
 
 def test_gateway_loader_does_not_read_workspace_configuration(tmp_path: Path) -> None:

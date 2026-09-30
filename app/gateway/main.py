@@ -201,11 +201,13 @@ from app.schemas.gateway import (
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.config.policy import gateway_config_policy
-from app.services.infrastructure.config.source_vrn import inline_config_source_vrn
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventCursorGoneError,
     build_secret_binding_summary,
+)
+from app.services.infrastructure.config_service import (
+    release_inline_config_vrn_for_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -1971,9 +1973,14 @@ async def gateway_config_sources(
         data=GatewayConfigSourcesDTO(
             revision=config.revision,
             # TODO(5A.3): 字段名与 proto 的 GatewayConfigSourcesDTO.schema_path 属独立
-            # 破坏性协议切片，本切片不改其名；gateway schema 与 gateway_inline.jsonc
-            # 同属发行包内资源，只把值由 real path 改为 config kind 的来源 VRN。
-            schema_path=inline_config_source_vrn(logical_name=config.schema_path.stem),
+            # 破坏性协议切片，本切片不改其名；值改为 config kind 的来源 VRN（可为空）。
+            # 仅当生效 schema 与发行包 gateway_schema.jsonc 内容一致时才编 inline VRN，
+            # 否则返回空串（非 inline schema 不得编造来源身份）。
+            schema_path=release_inline_config_vrn_for_file(
+                config.schema_path,
+                release_config_name="gateway_schema.jsonc",
+            )
+            or "",
             sources=[
                 GatewayConfigSourceDTO(
                     # TODO(5A.3): 同 app/api/config.py，字段名属独立破坏性协议切片，
