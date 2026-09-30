@@ -198,6 +198,52 @@
 
 ### 环境教训（本轮卡死根因）
 
+## 第二轮增量（HEAD 推进到 `51250b24`）
+
+### 已交付并独立审查
+
+- `1ac461eb` + `f5a207ed` **`ContextContribution` typed 选择/替换策略落地**：
+  `selection_role=direct|backing_only`、`replacement_policy=immutable|replaceable`，闭集必填、
+  无第二别名，贯通构造/序列化/SQLite 读写/恢复/composer 过滤；两处 inert `selection_only`
+  物理下线；`schema_upgrade.py` 的守卫收紧为「既有列是目标列的具名子集且差集恰等于新增列集合」，
+  未知列/缺非扩展列/新增列缺可回填默认值三路 fail closed。两字段**不进任何哈希**，迁移不重算。
+  **独立审查（作者≠审查者）结论：接受**——自跑 3 条变异全红，哈希 preimage 清单与实测一致，
+  断言无削弱，台账不勾选 1.5/1.6 诚实。
+- `2c47e077` **集合型 mutation 横切乐观合同并入 `add-itemized-rollout-context`**（新增 §10）：
+  操作性质决定收敛策略的判据、集合成员变化禁止成功路径全量重取、文件树与 Gateway 工作区导航
+  接入同一 202 意图协议、目录列表读取工作量必须有界、先量后改硬门控。用户裁定三项：并入
+  既有 change（不新开）、本轮只落规范（后改为做 P0+P1）、文件树也接同一 202 协议。
+- `33da3c48` **消除会话列表读放大**：`list()` 此前先取全部节点、再对**每个**会话读 `session.json`
+  （`limit` 只截断返回条数）。改后排序与 `total` 走索引、manifest **只读当前页**。实测（200 会话
+  隔离工作区）改前 `limit=5/20/50` 恒读 200 次，改后 = 页大小。**独立审查：有条件接受**。
+- `a4158a59` 收敛 `serde/registry.py` 与 `validation.py` 逐字重复的非空字符串校验（行为不变，变异验证齐）。
+
+### uuidv7 迁移已解锁
+
+- `5d6e1460` + `4390784b` + `08f9caae` **§5B 与 §5A 两条阻断性前置全部收口**：
+  §5B 控制面逐表分类落定（只有两个库；`user_view_state` 与 `federation_route_hint` 归 `migrate`，
+  归 `explicitly_invalidated` 的为 0 张 → 5B.3 空集满足）；§5A 补齐 **191 个命中文件全覆盖**、
+  F 类 68 文件逐符号处置、未落定 0 条。**§6 迁移实施已解锁**。
+
+### 诚实停线与被推翻的结论
+
+- `d8d8f926` **activation 冻结点切片推迟**（未产生任何代码改动）。三条实测阻断：生产
+  `ResourceRegistry` 不是可复用单例（`agent_factory.py` 每次 invocation 新建）；冻结在当前生产
+  Registry 上**必然 fail-closed**（`unknown-resource-kind` / `resource-registry-empty`）；
+  protected body store 未装配（`container.py` 构造 `RolloutCheckpointRuntime` 未传 `protected_detail_key`，
+  全仓无生产密钥来源）。且「MCP target 级子 binding」形态在代码里不存在，属需 owner 新定稿的数据结构。
+  裁定：与 §8.3-A 一笔纵向切片同时闭合。
+- `51250b24` 更正 §10.2 的一处事实错误：`title_source` **既不在 manifest 也不在索引**，
+  `get()` 返回的 `default` 是 `SessionDTO` 字段默认值。连带发现两个既有缺陷：`create/update` 传入的
+  `title_source` 不持久化；`node.updated_at` 恒等于 `created_at`。
+
+### 本轮最终验收
+
+- `pytest tests/unit -q -p no:randomly`（带 `ulimit -d 4194304` 进程外保护）：
+  **4938 passed, 7 skipped, 0 failed，EXIT=0**（20:36）。
+- `openspec validate --strict --all`：**40 passed, 0 failed**。
+- 机器卫生：清理了 5 天前的僵尸探针进程（`probe_bound.py`、`audit_refs.py`），load 由 36 降到 13。
+
 - 三条链路曾同时卡在**并发跑全量 `pytest tests/unit`**（单次约 20 分钟，机器 load 峰值 38）。
   修复办法：subagent 一律禁跑全量，只跑聚焦目录并用
   `timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest -q -p no:randomly <路径>`
