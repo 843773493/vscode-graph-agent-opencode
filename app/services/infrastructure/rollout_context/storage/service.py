@@ -16,6 +16,7 @@ from typing import Protocol
 from urllib.parse import quote
 
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_store import validate_session_id
 from app.services.infrastructure.rollout_context.assembly.store import (
     ContextAssemblyStorageMixin,
 )
@@ -233,17 +234,37 @@ class RolloutStorage(
                 ),
             )
 
-    def root(self, thread_id: str, checkpoint_ns: str = "") -> Path:
+    def root(self, session_id: str, checkpoint_ns: str = "") -> Path:
+        """返回该 Session main thread 的 rollout 目录。
+
+        rollout 物理节点、index.sqlite、rollout.jsonl 以及单行 database_meta
+        （committed_jsonl_offset / source_overlay_epoch / last_control_sequence）
+        目前是 Session 级 singleton，只由 main thread 独占。OpenSpec 8.3 的
+        (session_id, thread_id) thread-qualified 定位尚未落地，因此这里只接受 main
+        语义的 session_id 并显式解析会话节点；任何真实（canonical thr_）thread id
+        都 fail closed，绝不能把 thread_id 当作 session_id 静默解析。
+        """
         del checkpoint_ns
+        if not isinstance(session_id, str) or not session_id:
+            raise TypeError("rollout 定位必须是 Session main thread 的非空 session_id")
+        try:
+            validate_session_id(session_id)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                "rollout 定位按 (session_id, thread_id) 分离尚未落地（OpenSpec 8.3），"
+                "当前只支持 Session main thread 的 session_id；"
+                "拒绝把 thread_id 当作 session_id 静默解析: "
+                f"session_id={session_id!r}"
+            ) from error
         return (
-            self._path_resolver.resolve_session_node_for_runtime(thread_id) / "rollout"
+            self._path_resolver.resolve_session_node_for_runtime(session_id) / "rollout"
         )
 
-    def index_path(self, thread_id: str, checkpoint_ns: str = "") -> Path:
-        return self.root(thread_id, checkpoint_ns) / "index.sqlite"
+    def index_path(self, session_id: str, checkpoint_ns: str = "") -> Path:
+        return self.root(session_id, checkpoint_ns) / "index.sqlite"
 
-    def jsonl_path(self, thread_id: str, checkpoint_ns: str = "") -> Path:
-        return self.root(thread_id, checkpoint_ns) / "rollout.jsonl"
+    def jsonl_path(self, session_id: str, checkpoint_ns: str = "") -> Path:
+        return self.root(session_id, checkpoint_ns) / "rollout.jsonl"
 
     @staticmethod
     def _safe_session_relative_path(

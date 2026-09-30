@@ -44,8 +44,9 @@ class _StagingStorage(RolloutStorage, LegacyImportBuilder):
         self._target = target
         self._root = root
 
-    def root(self, thread_id: str, checkpoint_ns: str = "") -> Path:
-        if thread_id != self._target:
+    def root(self, session_id: str, checkpoint_ns: str = "") -> Path:
+        """migration staging owner 的 rollout 定位：只接受绑定的 target session。"""
+        if session_id != self._target:
             raise ValueError("migration staging 只能访问绑定的 target")
         return self._root
 

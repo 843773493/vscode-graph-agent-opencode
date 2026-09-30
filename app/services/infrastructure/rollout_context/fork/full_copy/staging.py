@@ -31,11 +31,12 @@ class FullCopyStagingStorage(RolloutStorage):
         self._capability = capability
         self._target_session_key = target_session_key
 
-    def root(self, thread_id: str, checkpoint_ns: str = "") -> Path:
-        if thread_id == self._target:
+    def root(self, session_id: str, checkpoint_ns: str = "") -> Path:
+        """staging owner 的 rollout 定位：只接受显式 source/target session。"""
+        if session_id == self._target:
             return self._stage_root
-        if thread_id == self._source:
-            return self._owner.root(thread_id, checkpoint_ns)
+        if session_id == self._source:
+            return self._owner.root(session_id, checkpoint_ns)
         raise ValueError("fork staging 只能访问显式 source/target")
 
     def _require_private_detail_staging(self) -> None:
