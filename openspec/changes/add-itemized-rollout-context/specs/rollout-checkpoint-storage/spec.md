@@ -239,6 +239,30 @@ storage resolver MUST 在读取catalog或构造路径前用共享canonical valid
 - **WHEN** 同一 Session 的 main thread 与 delegated child thread 都提交 item 或 checkpoint
 - **THEN** 各自只推进自己的 JSONL/SQLite transaction；任何一方失败、rewind、compaction 或 ToolSet rebase 均不得改变另一方的 offset、active view、source state 或 sealed assembly
 
+### Requirement: rollout 定位必须收敛为 thread-qualified 的单一落点
+
+系统 SHALL 把上一条「(session_id, thread_id) 为物理 owner」落到唯一一组可机械核对的落点上，禁止 session 级 `rollout/` 与 thread 级落点双轨并存：
+
+- rollout 物理节点、`index.sqlite`、`rollout.jsonl` 与 thread 级 control state MUST 位于 `(session_id, thread_id)` 解析出的 thread node 下，相对 session node 的 locator 对 main thread 恰为 `threads/{main_thread_id}`、对非 main durable thread 恰为 `threads/YYYY/MM/DD/{thread_id}`；`RolloutStorage` 的 `root()`/`index_path()`/`jsonl_path()` MUST 接受 `(session_id, thread_id)` 并解析到 `<thread_node>/rollout`，MUST NOT 继续解析到 `<session_node>/rollout`，也 MUST NOT 把裸 `session_id` 或 `checkpoint_ns` 当作 thread identity 使用。
+- 每个 thread MUST 拥有各自的 `index.sqlite` 与 `rollout.jsonl`；`database_meta` 的单行 `singleton_id=1` 语义只在该 thread 自己的 DB 内成立。不同 thread MUST NOT 共享同一 rollout DB、`committed_jsonl_offset`、`last_item_sequence`、`source_overlay_epoch` 或 `last_control_sequence`；线程级隔离 MUST 由「每 thread 独立数据库文件」实现，MUST NOT 退化为在单一 Session 级 DB 内用 `thread_id` 列区分同一份 control 状态的第二套形态。
+- detail store 与 redaction key MUST 以 thread node 为根：`detail_relative_path`/`protected_detail_relative_path` 的解析根、`ContextDetailKeyStore` 与 context source control 的 rollout 根 MUST 来自 thread node，MUST NOT 来自 session node。
+- 与 thread 无关的 Session 级存储（message stream、trace、LLM request log、pending request）MUST 继续按 session 定位，MUST NOT 被 thread 化；thread 化范围以本条落点清单为界。
+
+#### Scenario: main 与 child thread 的 rollout 落点互不重叠
+
+- **WHEN** 同一 Session 的 main thread 与一个 delegated child thread 各自首次写入 rollout
+- **THEN** 两者分别解析到 `threads/{main_thread_id}/rollout` 与 `threads/YYYY/MM/DD/{thread_id}/rollout`，持有各自的 `index.sqlite`/`rollout.jsonl` 与单行 `database_meta`；任一方推进 offset 或 reset 均不改变另一方的 `committed_jsonl_offset`、item sequence 或 control sequence
+
+#### Scenario: session-only 定位不得冒充 thread 定位
+
+- **WHEN** 调用方只提供 session_id 而要求 rollout/index/JSONL 落点，或提供 canonical `thr_` thread id / 裸 `main` 别名充当 session_id
+- **THEN** resolver 显式失败并指明缺少或错误的 owner 维度，不得回退到 session 级 `rollout/`、不得以 session node 冒充 main thread node、也不得把 `checkpoint_ns` 升级为 owner
+
+#### Scenario: detail 与 redaction key 归入 thread node
+
+- **WHEN** 为某个 assembly 写入或读取 request-only detail，或首次创建 SessionThread 的 redaction key
+- **THEN** 目标路径根为该 thread 的 thread node 下的 `rollout/context-plan-details/...` 或 `rollout/context-plan-details-protected/...`，同一 Session 的另一 thread 不能经 session node 读取或写入这些 detail
+
 ### Requirement: 附件正文必须使用 workspace 级内容寻址 blob store
 
 系统 SHALL将附件正文直接保存到`${workspace_abs_path}/.boxteam/attachments/YYYY/MM/DD/{blob-id}`，不得在日期与blob叶名之间增加Session、thread或digest shard。`blob-id` MUST匹配68-byte ASCII `blb_[0-9a-f]{64}`，payload MUST等于精确正文bytes的SHA-256小写hex，并与`digest=sha256:<同一payload>`及length逐字节一致；不得使用原始文件名、扩展名、MIME、Session或thread参与身份或路径。日期 MUST是该digest首次成功取得catalog唯一claim的UTC日期。`${workspace_abs_path}/.boxteam/attachments/catalog.sqlite` MUST是attachment identity、digest、受校验相对locator、length、MIME/protection、variant lineage、session/thread/item refs、retention、tombstone与GC的唯一权威；reader不得扫描日期目录定位blob或把调用方字符串拼成路径。
@@ -466,3 +490,5 @@ source `accepted_ingress_id` 与 `acceptance_idempotency_key` 同样不能直接
 - **WHEN** 调用方明确选择 `replay_as_new_turn`，其 source 可以是普通 `cancelled` Turn 或 `full_rollout_copy` 的 cancelled historical Turn
 - **THEN** active view 可以复制或引用 source history 作为上下文前缀，但系统必须另创建并登记新的 target-local Turn、新的 `user_input` root、accepted ingress、acceptance、initial execution 和新的 view-local `logical_turn_ordinal`，并以 `replay_of_turn_id` 保存 source lineage；原 Turn 保持 `cancelled` 且不创建或修改其 execution，source Turn/root 不成为新 Turn 的 root
 - **AND** 该操作不是原 Turn 的 `dispatch_replay` 或 `resume_turn`，不能在同一 API 语义中同时返回 `turn_not_resumable` 并创建新 Turn
+- 每个 thread MUST 拥有各自的 `index.sqlite` 与 `rollout.jsonl`；`database_meta` 的单行 `singleton_id=1` 语义只在该 thread 自己的 DB 内成立。不同 thread MUST NOT 共享同一 rollout DB、`committed_jsonl_offset`、`last_item_sequence`、`source_overlay_epoch` 或 `last_control_sequence`；线程级隔离 MUST 由「每 thread 独立数据库文件」实现，MUST NOT 退化为在单一 Session 级 DB 内用 `thread_id` 列区分同一份 control 状态的第二套形态。
+- 每个 thread MUST 拥有各自的 rollout 存储与 `database_meta` 单行 `singleton_id=1` 语义。不同 thread MUST NOT 共享任何 `committed_jsonl_offset`、`last_item_sequence`、`source_overlay_epoch` 或 `last_control_sequence`；同一 Session 的 main/child 之间任一 control 状态的变化都不得被另一方观察到。
