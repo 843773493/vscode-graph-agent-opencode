@@ -5,9 +5,9 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from pydantic import ValidationError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.agents.custom_tools import CustomToolFactoryContext
 from app.agents.policy.custom_tool_spec import parse_custom_tool_spec
@@ -34,24 +34,22 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.services.infrastructure.resource_platform.virtual_resources import (
-    ResolutionContext,
-    parse_vrn,
-)
-from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
-    require_scope_binding,
-)
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
-from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
-    VrnResolveError,
-)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
+)
+from app.services.infrastructure.resource_platform.virtual_resources import (
+    ResolutionContext,
+    parse_vrn,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    VrnResolveError,
+    require_scope_binding,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,

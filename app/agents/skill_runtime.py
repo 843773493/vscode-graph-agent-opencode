@@ -21,9 +21,9 @@ from langchain_core.messages import HumanMessage
 from app.agents.middleware_prompts import SKILLS_SYSTEM_PROMPT
 from app.agents.skill_frontmatter import parse_skill_frontmatter
 from app.core.distribution_identity import load_distribution_id
-from app.core.trace_middleware import require_current_gateway_id
 from app.core.env import get_project_root
 from app.core.path_utils import get_boxteam_home, get_workspace_root
+from app.core.trace_middleware import require_current_gateway_id
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.resource_platform.derivation.types import (
