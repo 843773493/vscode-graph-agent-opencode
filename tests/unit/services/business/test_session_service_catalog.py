@@ -304,6 +304,43 @@ async def test_get_parent_derivation_none_without_session_ancestor(
 
 
 @pytest.mark.asyncio
+async def test_get_derives_parent_without_full_catalog_bfs(
+    catalog_service,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """单会话读取的工作量与目录规模无关，不得触发全 catalog BFS。
+
+    §10.3：会话目录 tree 的成功路径退出全量重算。``get()`` 原先经
+    ``_authoritative_navigation_projection`` 对每个会话做一次全表
+    ``list_nodes()`` BFS，``_snapshot`` 的 N 次 ``get()`` 因此退化成
+    N×N 次全表扫描。改后 ``get()`` 只用按 ID 的单节点查询与父链上溯。
+    把 ``list_nodes`` 换成致命报错即可锁定该契约：任何退回全量投影的
+    实现都会立刻变红。
+    """
+    service, workspace = catalog_service
+
+    anchor_id = await workspace.create_session("锚点会话")
+    folder_a_id = workspace.create_folder("目录A", parent=anchor_id)
+    folder_b_id = workspace.create_folder("目录B", parent=folder_a_id)
+    deep_id = await workspace.create_session("深层会话", parent=folder_b_id)
+
+    def _forbidden_list_nodes() -> object:
+        raise AssertionError(
+            "单会话读取不得触发全 catalog BFS（list_nodes）"
+        )
+
+    monkeypatch.setattr(
+        workspace.resolver, "list_nodes", _forbidden_list_nodes
+    )
+
+    got = await service.get(deep_id)
+
+    assert got.session_id == deep_id
+    assert got.title == "深层会话"
+    assert got.parent_session_id == anchor_id
+
+
+@pytest.mark.asyncio
 async def test_resolve_main_thread_reads_catalog_frozen_pointer(
     catalog_service,
 ) -> None:

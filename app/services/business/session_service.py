@@ -161,60 +161,18 @@ class SessionService:
                 f"backend_workspace_id={self._workspace_id}"
             )
 
-    def _authoritative_navigation_projection(
-        self,
-        session_id: str,
-    ) -> tuple[SessionCatalogNodeProjection, dict[str, SessionCatalogNodeProjection]]:
-        """返回会话节点在 SQLite catalog 权威索引上的投影与全量节点表。
-
-        title 取 catalog display_name，parent_session_id 沿 catalog 父链派生。
-        使用 SQLite catalog 的唯一节点投影，避免把 manifest 中已剥离的
-        导航字段重新当作业务状态。
-        """
-        nodes = self._path_resolver.list_nodes()
-        nodes_by_id = {node.node_id: node for node in nodes}
-        node = nodes_by_id.get(session_id)
-        if node is None:
-            raise KeyError(f"权威会话目录索引不存在: session_id={session_id}")
-        return node, nodes_by_id
-
-    @staticmethod
-    def _nearest_session_ancestor_in_projection(
-        parent_node_id: str | None,
-        nodes_by_id: dict[str, SessionCatalogNodeProjection],
-    ) -> str | None:
-        """在 catalog 权威投影上派生最近 session 祖先（含传入节点本身）。
-
-        传入 session 直接返回它，folder 沿父链向上找第一个 session，None
-        返回 None。
-        """
-        current_id = parent_node_id
-        visited: set[str] = set()
-        while current_id is not None:
-            if current_id in visited:
-                raise RuntimeError(f"权威会话目录索引包含循环: {current_id}")
-            visited.add(current_id)
-            node = nodes_by_id.get(current_id)
-            if node is None:
-                raise RuntimeError(f"物理会话节点父节点不存在: {current_id}")
-            if node.kind == "session":
-                return node.node_id
-            current_id = node.parent_node_id
-        return None
-
     async def get(self, session_id: str) -> SessionDTO:
-        # _read_session_dto 负责物理定位与读取（未登记会话/缺目录/缺 manifest
-        # 都呈现 NotFound）；此处只需把权威导航投影缺失同样归为 NotFound。
+        # 按 ID 的单节点查询（不触发全 catalog BFS）：单会话读取的工作量
+        # 与目录规模无关。未登记会话的 KeyError 与其余缺失同样归为 NotFound。
         try:
-            node, nodes_by_id = self._authoritative_navigation_projection(session_id)
+            node = self._path_resolver.get_node(session_id)
         except KeyError as error:
             raise NotFoundError(f"Session {session_id} not found") from error
-        return await self._read_session_dto(node, nodes_by_id)
+        return await self._read_session_dto(node)
 
     async def _read_session_dto(
         self,
         node: SessionCatalogNodeProjection,
-        nodes_by_id: dict[str, SessionCatalogNodeProjection],
     ) -> SessionDTO:
         """读取单个会话的 session.json 并按权威索引回填导航字段。
 
@@ -239,9 +197,9 @@ class SessionService:
             await asyncio.to_thread(session_file.read_text, encoding="utf-8")
         )
         data["title"] = node.name
-        data["parent_session_id"] = self._nearest_session_ancestor_in_projection(
-            node.parent_node_id,
-            nodes_by_id,
+        # parent_session_id 沿 catalog 父链派生最近 session 祖先（不含 folder）。
+        data["parent_session_id"] = self._path_resolver.nearest_session_ancestor(
+            node.parent_node_id
         )
         # 普通 Session 入口只定位 main thread；身份取自 catalog 冻结指针，
         # 不接受 session_id 冒充 thread_id。
@@ -281,14 +239,11 @@ class SessionService:
         总数；``total`` 与全量顺序仍由索引给出。
         """
         nodes = self._path_resolver.list_nodes()
-        nodes_by_id = {node.node_id: node for node in nodes}
         session_nodes = [node for node in nodes if node.kind == "session"]
         session_nodes.sort(key=lambda node: node.created_at, reverse=True)
         page_nodes = session_nodes[skip : skip + limit]
 
-        sessions = [
-            await self._read_session_dto(node, nodes_by_id) for node in page_nodes
-        ]
+        sessions = [await self._read_session_dto(node) for node in page_nodes]
 
         return SessionListResultDTO(
             items=sessions,
