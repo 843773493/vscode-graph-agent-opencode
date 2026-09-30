@@ -114,7 +114,12 @@ function applySessionListConvergence(
   const next = cloneMaps(state);
   const previousSessions =
     state.sessionsByWorkspace.get(workspaceId) ?? state.sessions;
-  next.sessions = remainingSessions;
+  // 全局 sessions 镜像只描述当前活动工作区（selectWorkspaceSession /
+  // forkSessionContext 都先切 activeGatewayWorkspaceId 再写它）。收敛一个非
+  // 活动工作区的会话列表时若整表覆盖全局镜像，会把该工作区的会话灌进来。
+  if (state.activeGatewayWorkspaceId === workspaceId) {
+    next.sessions = remainingSessions;
+  }
   next.sessionsByWorkspace.set(workspaceId, remainingSessions);
   const remainingIds = new Set(
     remainingSessions.map((session) => session.session_id),

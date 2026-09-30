@@ -472,3 +472,76 @@ describe("会话生命周期失败后的后端重取校准", () => {
     expect(readState().workspaceRoot).toBe("/prev/root");
   });
 });
+
+// —— 跨工作区边界：活动工作区之外的工作区列表收敛不得污染全局镜像 ——
+
+const OTHER_WORKSPACE = "gw_other" as const;
+
+/** 全局 sessions 镜像归属活动工作区，sessionsByWorkspace 同时持有另一工作区。 */
+function crossWorkspaceState(current: Session): AppState {
+  const otherInOther = raceSession("ses_other", "default");
+  return {
+    gatewayWorkspaces: [
+      { workspace_id: RACE_WORKSPACE, root_path: "/tmp/ws", name: "ws" },
+      { workspace_id: OTHER_WORKSPACE, root_path: "/tmp/other", name: "other" },
+    ],
+    sessions: [current],
+    sessionsByWorkspace: new Map([
+      [RACE_WORKSPACE, [current]],
+      [OTHER_WORKSPACE, [otherInOther]],
+    ]),
+    sessionGatewayWorkspaceById: new Map(),
+    sessionAttachmentSummaries: new Map(),
+    eventQueuesBySession: new Map(),
+    pendingConversations: new Map(),
+    activeJobIdsBySession: new Map(),
+    unreadSessionKeys: new Set(),
+    activeGatewayWorkspaceId: RACE_WORKSPACE,
+    currentSession: current,
+    currentSessionWorkspaceId: RACE_WORKSPACE,
+    contentView: "default",
+    sessionHistoryReloadNonce: 0,
+    status: "",
+  } as unknown as AppState;
+}
+
+describe("会话列表收敛的活动工作区边界", () => {
+  test("P2-3 删除非活动工作区会话时收敛该工作区镜像且不改动全局 sessions", async () => {
+    const active = raceSession("ses_active");
+    const otherInOther = raceSession("ses_other");
+    const otherRemaining = raceSession("ses_other_keep");
+    installGatewayFetch(({ path, method }) => {
+      if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
+        return apiResponse({ session_id: otherInOther.session_id });
+      }
+      if (path === "/api/v1/sessions") {
+        return apiResponse({
+          items: [otherRemaining],
+          has_more: false,
+          next_cursor: null,
+        });
+      }
+      return undefined;
+    });
+
+    const { state: readState, actions } = mountSessionLifecycleActions({
+      apiPort: 8014,
+      currentSession: active,
+      workspaceId: RACE_WORKSPACE,
+      state: crossWorkspaceState(active),
+    });
+    await actions.deleteSession(otherInOther.session_id, OTHER_WORKSPACE);
+
+    // 非活动工作区的收敛只更新它自己的镜像。
+    expect(
+      readState().sessionsByWorkspace.get(OTHER_WORKSPACE)?.map(
+        (item) => item.session_id,
+      ),
+    ).toEqual([otherRemaining.session_id]);
+    // 全局镜像仍严格等于活动工作区的会话列表，绝不被其它工作区灌入。
+    expect(readState().sessions.map((item) => item.session_id)).toEqual([
+      active.session_id,
+    ]);
+    expect(readState().activeGatewayWorkspaceId).toBe(RACE_WORKSPACE);
+  });
+});
