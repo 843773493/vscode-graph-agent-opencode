@@ -572,12 +572,14 @@ class SessionCatalogPathResolver:
 
     @property
     def revision(self) -> int:
-        """变更敏感计数：``sum(所有节点 revision)``。
+        """变更敏感计数：``catalog_metadata.generation``（单调 generation）。
 
-        该值由 catalog 行 revision 聚合得到，用于目录服务缓存失效判定。
-        每次读取执行一次 BFS 分页聚合。
+        每个写入 ``nodes`` 的 catalog 写事务提交前恰好自增一次 generation
+        （见 ``SessionCatalogStore.write_transaction``），因此该计数与旧口径
+        ``sum(所有节点 revision)`` 一样对任何节点增删改敏感，但由单行查询
+        O(1) 取得，不再做全表 BFS 聚合。用于目录服务缓存失效判定。
         """
-        return sum(node.revision for node in self._list_all_catalog_nodes())
+        return self._store.current_generation()
 
     # ------------------------------------------------------------------
     # 导航写方法（SQLite-only，不动物理）

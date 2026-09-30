@@ -623,7 +623,8 @@ class SessionCatalogService:
         ):
             return self._cached_nodes, self._cached_revision
         physical_nodes = self._path_resolver.list_nodes()
-        physical_revision = self._path_resolver.revision
+        # list_nodes() 读同一 catalog；其间若有并发写提交，其 generation 变化
+        # 由下一次 _snapshot 的缓存判据（非 force）重读 revision 捕获。
         child_parent_ids = {
             node.parent_node_id
             for node in physical_nodes
