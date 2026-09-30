@@ -210,6 +210,19 @@ v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migrat
 
 ## Verification ledger
 
+### 2026-09-30 集合型 mutation 横切合同、文件树接入与目录列表读放大（本节新增，未实施）
+
+本节随 design 9.2 新增。§9.0 已把会话目录树的乐观投影与 202 入队写成义务；本节只补三件它未覆盖的面：横切判据、文件树与 Gateway 导航接同一协议、目录列表读放大。**先量后改是硬门控**：§10.1 未取得数字前 MUST NOT 开工 §10.2/§10.3/§10.4。
+
+- [ ] 10.1 量化实测（硬门控）：在 `out/tests/temp/itemized_collection_mutation/workspace/` 造至少 200 会话 + 200 目录的隔离工作区（MUST NOT 注册项目根、MUST NOT 复用共享 `/tmp` 固定路径），实测并记录**端到端耗时 / HTTP 请求数 / 后端文件系统读次数**：删除一个会话（重点是无条件会话列表重拉那次）、移动一个会话、新建会话目录、新建工作区目录、移动一个工作区；另单独实测默认分页的会话列表在 200 会话下的耗时并与「只查 SQLite 目录索引」对比给出读放大倍数；再记录 SSE 连接数、全量目录重拉次数、文件树全量重载目录数。门槛：原始输出落盘，每项三项数字齐全；产出「哪一项是真实瓶颈」的明确判定。**若判定瓶颈不存在，§10.2–§10.4 对应改造 MUST NOT 开工并如实登记。**
+- [ ] 10.2 消除目录列表读放大（前置 §10.1 判定成立）：先取证 `SessionDTO` 是否存在只能从 manifest 取得、无法由目录索引提供的字段；若有，先扩展索引再改读路径。实现后读取次数 MUST 与页大小相关、MUST NOT 随会话总数线性增长。门槛：新增测试断言「服务一页所读 manifest 次数与页大小相关」，且恢复逐会话读后该测试变红（贴变异原始输出）；`SessionDTO` 外部契约逐字段不变；`uv run python -c 'import app.main'` 退出码 0。
+- [ ] 10.3 会话目录 tree 成功路径退出全量重拉（前置 §10.1 判定成立）：`invalidateSessionCatalog` 从成功路径移除，删除会话成功后 MUST NOT 无条件重拉会话列表；失败收敛符合 §9.0 已定稿的「重读权威 + 重放独立命令 + 依赖失败项一并终结」。门槛：新增测试断言「删除成功后零次全量列表请求」，且恢复无条件重拉后变红（贴变异原始输出）；生产侧对同步写通道引用零命中（贴 `rg` 原始输出）。
+- [ ] 10.4 右侧文件树接同一协议（前置 §10.1 判定成立）：把 `useSessionCatalogOutboxDriver` 所在的**同一意图协议**用于文件树集合成员 mutation（唯一 `client_operation_id`、同分区有序 `client_sequence`、durable acceptance 不等于完成、按 ID 查询、迟到重放返回原终态、同 key 异 preimage 冲突），接线完成后原同步写路径物理下线；文件树影响面 MUST 用精确子树失效表达、MUST NOT 以全部已展开目录标 stale 逐个重载为成功路径；`streamWorkspaceFileEvents` 接成权威增量修正通道。**文件树的 `base_revision`/`expected_revision` MUST 绑定目录行 revision，MUST NOT 借用 workspace catalog revision。** 门槛：新增测试覆盖「新增/删除一个文件只重载受影响目录」「acceptance 不等于成功」「外部变更经增量收敛」三条，且各自在对应变异后变红（贴原始输出）。
+- [ ] 10.5 Gateway 工作区导航接同一协议（前置 §10.1 判定成立）：其集合成员 mutation MUST 接入同一意图协议，Gateway 仍只透明代理、不保管命令、不代替 worker，`gateway_id`/actor 只能取自认证路由。门槛：对应测试原始输出；原同步写路径零命中。
+- [ ] 10.6 文档判据落盘：在 `docs/design-decisions/frontend-state-management-backend-first.md` 补「对象级替换 vs 集合级重取」判据（design 9.2.1 的四类操作性质表），纠正「成功时重取」的误读。门槛：文档含判据表；不重述取值、只具名引用本 change 的 requirement。
+- [ ] 10.7 未开工项如实登记：若 §10.1 判定某条瓶颈不存在而跳过 §10.2–§10.5，MUST 逐条登记原因并注明不实施，MUST NOT 为凑勾选而开工或删项。门槛：登记落地；`openspec validate --strict --all` 全绿。
+- [ ] 10.8 收口纪律：本节每笔改动保持「一个改动 + 一个独立审查」，审查方 MUST 是作者以外的人，且 MUST 独立复跑量化数字与变异红绿；改 `src/clients/web` 后执行 `bun run --cwd src/clients/web build` 与 `bun x tsc --noEmit -p src/clients/web/tsconfig.json` 均退出码 0。门槛：审查报告与原始输出落盘。
+
 ### 2026-09-28 Section 9.1–9.3 补证勾选与规模台账判据化
 
 - 基线：`git rev-parse HEAD` = `14fbf4df57a9c98995425b879c1be0007689e0b3`（本轮修复前的 9.1–9.3 实现在 `03f8ecd2`/`bb02c155`/`8e63f4e9`/`0fc4d6c9`，均为 HEAD 祖先）。

@@ -169,6 +169,66 @@ worker MUST在实际执行时按最新已提交SQLite和`NavigationTopologyGate`
 - **WHEN** 202已返回但worker尚未执行时Backend退出，或者事务已提交但terminal SSE尚未送达时退出
 - **THEN** 新owner按持久queue_seq/operation record继续或返回原terminal，目录事实、事件和幂等记录各一次，客户端状态查询可补齐丢失事件而不重复应用
 
+### Requirement: 集合型 mutation 遵循统一的乐观收敛判据
+
+前端 SHALL 按操作性质选择唯一收敛策略：改对象字段用后端返回值整体替换该对象；改集合成员且破坏性（删除会话、删除文件夹）用本地收敛投影加异步确认加权威校验兜底；改集合成员且可逆（新建、移动、重命名）用本地收敛投影加异步确认；只读观察才重取且必须能按目标精确重取。任何集合成员变化在其成功路径 MUST NOT 触发全量重取整个集合或整棵目录树；全量重取只允许在基线 revision 冲突、跨端并发写入或本地投影不可信时作为显式可观测的校验兜底。
+
+乐观投影 SHALL 只由已提交权威快照加本地有序命令重放计算得到，MUST NOT 修改后端权威镜像、MUST NOT 被当作业务事实提交给模型或持久化链路；仅 pending 或仅 accepted 的意图 MUST NOT 进入 canonical history、MUST NOT 触发 owner rehydrate 或重新 seal。
+
+#### Scenario: 删除集合成员不重取全集合
+- **WHEN** 用户删除一个会话且该 operation 进入 committed
+- **THEN** 前端从本地投影移除该成员并保持其它成员与展开状态不变，MUST NOT 因该成功结果再次请求整个会话列表或重拉整棵目录树
+
+#### Scenario: 改对象字段用返回值整体替换
+- **WHEN** 用户修改一个对象的字段且后端返回更新后的完整对象
+- **THEN** 前端用该返回对象整体替换本地对应对象，集合其余成员与顺序不变
+
+#### Scenario: 冲突时才走全量校验兜底
+- **WHEN** 本地投影的基线 revision 与后端权威 revision 不一致，或检测到另一客户端的并发写入
+- **THEN** 前端显式重读权威状态并重放仍独立的本地命令，且该重读在界面上可观测，不做静默重拉
+
+### Requirement: 右侧文件树与 Gateway 工作区导航必须接入同一乐观意图协议
+
+右侧文件树与 Gateway 工作区导航的集合成员 mutation MUST 接入本 change 已冻结的同一意图协议（唯一 `client_operation_id`、同分区有序 `client_sequence`、durable acceptance 不等于完成、按 ID 查询操作状态、迟到重放返回原终态、同 key 异 preimage 冲突），MUST NOT 另立第二套写通道；接线完成后原同步写路径 MUST 物理下线。
+
+文件树的影响面 MUST 用精确子树失效（丢弃该路径及其后代缓存并中止在途请求）表达，MUST NOT 以把全部已展开目录标记为过期再逐个重载的方式作为成功路径。文件变更事件流 MUST 接成权威增量修正通道，使外部变更（Agent、终端）驱动树增量更新，与本地乐观投影形成收敛闭环。
+
+#### Scenario: 新增文件只失效受影响子树
+- **WHEN** 用户在已展开的目录树中新建一个文件
+- **THEN** 只有包含该文件的目录行被失效并重载，其它已展开目录的缓存与凭证不变，MUST NOT 重载全部已展开目录
+
+#### Scenario: 文件树写操作收到 durable acceptance 不等于成功
+- **WHEN** 文件树的一个集合成员 mutation 收到 durable acceptance
+- **THEN** 前端继续显示该意图为 pending，直到收到该 operation 的终态或权威增量确认，MUST NOT 在 acceptance 时刻显示为已完成
+
+#### Scenario: 外部变更经权威增量收敛
+- **WHEN** Agent 或终端在树外部修改了文件，事件通道送达批量变更
+- **THEN** 前端按该增量修正对应目录的投影，MUST NOT 依赖全量重载来体现该变更
+
+#### Scenario: 集合型 mutation 不得绕开协议
+- **WHEN** 为会话目录树、文件树或 Gateway 工作区导航新增一个会改变集合成员的写操作
+- **THEN** 该操作 MUST 接入同一意图协议，MUST NOT 保留一条同步直接写入的第二通道
+
+### Requirement: 目录列表读取工作量必须与页大小相关
+
+会话目录的列表读取 MUST NOT 为每个会话逐一读取并解析其 manifest 文件；其读取工作量 MUST 与返回页大小相关，MUST NOT 与工作区内的会话总数相关。工作区目录索引是成员与顺序的唯一来源，不得为补齐列表字段而退回逐会话文件读。
+
+#### Scenario: 大工作区列表读取工作量有界
+- **WHEN** 一个工作区包含上千个会话而调用方只请求一页
+- **THEN** 后端为该页服务的 manifest 文件读取次数 MUST 与页大小相关，MUST NOT 随工作区会话总数线性增长
+
+### Requirement: 集合型 mutation 改造必须先量化后开工
+
+集合型 mutation 的读放大修复与乐观接线 SHALL 以隔离工作区的量化实测为开工前置：未取得端到端耗时、HTTP 请求数与后端文件系统读次数的数字前 MUST NOT 开工；实测 MUST 在隔离工作区进行，MUST NOT 只给推断值。若实测证明某条改造对应的瓶颈不存在，该改造 MUST NOT 开工，MUST NOT 以架构改动换取未证实的性能收益。
+
+#### Scenario: 未量化不开工
+- **WHEN** 一条集合型 mutation 改造尚未取得隔离工作区的量化数字
+- **THEN** 该改造 MUST NOT 开工，且 MUST NOT 以「预期会更快」为由先行实现
+
+#### Scenario: 瓶颈不存在则不开工
+- **WHEN** 实测数字证明读放大或重拉在该规模下不构成可观测瓶颈
+- **THEN** 对应改造 MUST NOT 开工，并如实登记为不实施，MUST NOT 为凑任务勾选而实现
+
 ### Requirement: main thread 与 durable child thread 必须支持真实的多任务协作模型
 
 系统 SHALL 将每个 Session 的 main thread 作为默认用户任务和长期用户上下文入口，并允许用户使用不同 Session 的 main thread分别承担 Git 管理、代码分析、实施或报告汇总等独立任务。大型任务需要分工时，main thread MUST 在同一 Session内创建 durable child thread；child thread MUST 复用与 main thread相同的消息、执行、checkpoint、历史和恢复合同，但使用显式、可审计的能力配置。当前 child thread MUST 禁用 Goal，Goal 的 Session 默认入口 MUST 只定位 main thread。

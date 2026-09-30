@@ -1008,6 +1008,43 @@ board migration先在coordinator gate内准入并建立`BoardMigrationRecord`承
 
 E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、thread-qualified history/SSE cursor 和只读 runtime/trace 证据交叉断言，不得仅查数据库或仅看 DOM。除基础两轮的固定golden外，每个新增可见Turn也必须从其权威history projection取得预期item identity/order、`item_count`和`elapsed_ms`，逐项与live DOM及刷新后的DOM对账；同正文不同identity不得去重，同identity不得重影，无可展开item时count必须为0且标题只显示时长/计数而非首条思考。pytest模块可以调用共享Python/Node helper，但场景fixture、collection和PASS/FAIL gate必须由`test_basic_chat_tool_loop.py`拥有，不能把唯一断言藏在未被pytest收集的脚本里。正式workspace根和产物分别使用`out/tests/e2e/clients/web/test_basic_chat_tool_loop/workspace/`与同级`artifacts/`；多workspace分别落在`workspace/primary/`、`workspace/remote/`等确定性子目录并使用隔离端口。两个Gateway的`BOXTEAM_HOME`分别固定到同名输出根的`runtime/gateways/primary/boxteam-home/`和`runtime/gateways/remote/boxteam-home/`，其identity、测试peer credential、registry和日志不得读取或写入用户正常`${BOXTEAM_HOME}`/`~/.boxteams`。`E2ETestControlHarness`的socket/日志也只能位于同名`runtime/test-control/`与`artifacts/`，fixture teardown必须关闭全部子进程和监听端口；禁止注册项目根目录。所有模型调用使用该E2E拥有的确定性ModelStream replay/recording fixture，按SessionThread/model-call identity校验请求并为多Session与child路径提供独立帧；不得访问真实Provider或让多个并发thread误消费同一个顺序fixture。全程收集console/page error、failed request、resolved target、item/time/order、residency transition和operation receipt，任一未预期错误使测试失败。
 
+### 9.2 集合型 mutation 的统一乐观合同、文件树接入与目录列表读放大
+
+§9.0 已经把**会话目录树**的乐观投影、202 持久入队、终态对账写成了可验证义务。本节只补三件它没覆盖的事，不重写 §9.0：把该合同上升为**所有集合型 mutation 的横切判据**、把**右侧文件树**与**Gateway 工作区导航**接进同一协议、以及消除**会话目录列表的逐会话文件读放大**。
+
+#### 归因：缺的是一条判据，不是一套机制
+
+前端已实现的乐观机制（`sessionCatalogOutbox` 五态状态机、IndexedDB 持久层、`sessionCatalogProjection` 的「已提交基线 + 本地有序命令重放」、`sessionCatalogOutboxDriver` 六步编排、`sessionCatalogOperations` 协议客户端）在生产侧**零调用**；会话目录树仍在走「同步阻塞 mutation + 成功后全量重拉整棵树」，删除会话甚至成功后无条件再调一次会话列表。文件树有目录缓存与 `stale` 全量重载，会话列表有本地收敛，三者对「哪些操作该乐观、失败怎么回滚、并发同目标怎么排队」各答一套。
+
+根因是 `docs/design-decisions/frontend-state-management-backend-first.md` 只写了「成功时用后端返回的完整对象完全替换本地状态」与「失败时主动重新获取」，**未区分「对象级替换」与「集合级重取」**，于是集合成员变化（增删移动）全退化成重取整棵树。因此本节的判据必须写进文档层，且该文档的补全属本 change 的可验证义务。
+
+#### 9.2.1 操作性质决定收敛策略（判据）
+
+| 操作性质 | 唯一收敛策略 | 例子 |
+| --- | --- | --- |
+| 改对象字段 | 用后端返回值整体替换该对象 | 改标题、切 Agent、改 provider |
+| 改集合成员 + 破坏性 | 本地收敛投影 + 异步确认 + 权威校验兜底 | 删除会话、删除文件夹 |
+| 改集合成员 + 可逆 | 本地收敛投影 + 异步确认 | 新建、移动、重命名 |
+| 只读观察 | 重取，且必须能按目标精确重取 | 打开列表、展开目录 |
+
+任何集合成员变化在其**成功路径** MUST NOT 触发全量重取整个集合或整棵目录树；全量重取只允许在基线 revision 冲突、跨端并发写入或本地投影不可信时作为**显式可观测**的校验兜底。文件树的细化判据：影响子树时 MUST 用 `invalidateDirectoriesUnder(treePath)`（丢弃该路径及其后代缓存并中止在途请求），MUST NOT 用把全部已展开目录标 stale 再逐个重载的 `refreshExpandedDirectories`。
+
+#### 9.2.2 文件树与 Gateway 工作区导航接同一 202 协议
+
+§9.0 冻结的 `client_operation_id` 唯一性、`client_sequence` 同分区有序、`created_by_operation_id` 跨批依赖、状态闭集 `queued|running|committed|rejected|cancelled|dependency_failed`、terminal 后 compact tombstone、`dependency_failed` 不执行等条款，**是集合型 mutation 的唯一协议**。右侧文件树与 Gateway 工作区导航 MUST 接入同一协议，MUST NOT 另立第二套写通道；接线完成后原同步写路径 MUST 物理下线，不得双轨并存。
+
+两处与 §9.0 的差异点必须显式处理：① 文件树的权威集合是**目录行的直接子节点**而非整棵 Session 导航树，其 `base_revision` 与 `expected_revision` 必须绑定该目录行的 revision，不得借用 workspace catalog revision；② Gateway 工作区导航的权威 owner 是控制面而非工作区后端，故其 `gateway_id` 与 actor 同样只能取自认证路由，且 Gateway 仍只透明代理、不保管命令、不代替 worker——与 §9.0 对 Gateway 的约束一致。
+
+文件变更 SSE（`streamWorkspaceFileEvents`，支持按 `paths` 订阅与 `onBatch`）MUST 接成权威增量修正通道：外部变更（Agent、终端）经该通道驱动树增量更新，与本地乐观投影形成闭环；「乐观」不是「猜」，而是「先看意图、再用权威增量校正」。
+
+#### 9.2.3 目录列表读取工作量必须有界
+
+当前会话列表的 `limit` 只截断返回条数、**不减少工作量**：实现先取全部节点，再对**每个**会话读取并解析 `session.json`，故读取次数随工作区会话总数线性增长，与页大小无关。本 change 收紧为：会话目录列表读取 MUST NOT 为每个会话逐一读取其 manifest；读取工作量 MUST 与返回页大小相关，MUST NOT 与工作区内会话总数相关；工作区目录索引是成员与顺序的唯一来源，不得为补齐列表字段而退回逐会话文件读。若确有字段只能从 manifest 取得，MUST 先扩展目录索引再改读路径，不得边改边补（见 Open Questions）。
+
+#### 9.2.4 先量后改（硬门控）
+
+若工作区通常只有 5–20 个会话，逐文件读可能只有几十毫秒，此时上「异步协议 + outbox 接线」即为过度设计（AGENTS.md 明确禁止过度抽象）。因此本节的**第一项可交付物是隔离工作区的量化实测**，且它是后续改造的开工前置：未取得「端到端耗时 / HTTP 请求数 / 后端文件系统读次数」的数字前，MUST NOT 开工读放大修复与 outbox 接线；若数字证明读放大不是瓶颈，对应改造 MUST NOT 开工（不靠改架构换性能）；实测 MUST 在隔离工作区进行，MUST NOT 只给推断值。
+
 ## Risks / Trade-offs
 
 - [LangChain grouping 丢失 item 顺序或 source identity] → canonical `item_sequence` 永远是权威；projector 记录 `message_group_id` 和 loss report，并用混合 text/reasoning/tool fixture 验证恢复。
@@ -1052,6 +1089,11 @@ E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、threa
 14. 完成真实/确定性 mock/provider 分层验证、v2-only import/runtime 审计、旧聚合职责与临时 import shim 删除、主 spec 同步和 OpenSpec verify；删除旧运行代码、dual writer、dual projector、双 schema/双事实源是 change 完成和 7.5 的必要门槛，不得留到“再讨论”。
 
 ## Open Questions
+
+- 集合型 mutation 的横切合同（design 9.2）需要在何时补进 `docs/design-decisions/frontend-state-management-backend-first.md`：随本节实施同笔，还是先落规范再补文档，未定。
+- 消除会话目录列表读放大前，需要先确认 `SessionDTO` 是否存在只能从 `session.json` 取得、无法由目录索引提供的字段；若存在，必须先扩展索引再改读路径，不得边改边补。该字段清单尚未取证。
+- 右侧文件树接同一 202 协议后，其「目录行 revision」是否需要成为持久化对象（当前只有缓存与 stale 标记，未见 revision 概念），未定；若需要，属本 change 的 schema 增量而非临时字段。
+- 量化实测（design 9.2.4）的规模基线、观测口径（是否含首次冷缓存、是否含浏览器渲染耗时）尚未冻结，实施前需裁定。
 
 - SQLite item projection 的名称和 Python 类型归属已经冻结：canonical item 的最小事实索引是 `item_catalog`，关系/来源是 `item_relations`，content-part locator 是 `item_parts`，按需历史/消息投影是 `item_projections`；不得复用 `messages` 作为 canonical item 表，也不得新增未在本设计中登记的并行 item 事实表。当前聚合文件若因 import 迁移暂留，只能是有删除门槛的临时 import shim；目标类型位置以 1.1 的 `app/domain/itemized/` 和 infrastructure/mapping 目录为准，shim 最迟在 7.5/change 完成前删除。
 - `content_part` 的 domain 类型固定进入 `app/domain/itemized/parts.py`，其 `item_parts` locator 由 `app/services/infrastructure/rollout_context/storage/catalog.py` 维护，JSON Pointer/part resolver 属于同一 storage catalog 边界；这些物理模块位置不改变 payload 作为唯一 canonical 正文来源、`content_hash` 输入、part locator 校验、anchor identity/hash/recovery contract 或 detail-store 敏感边界。
