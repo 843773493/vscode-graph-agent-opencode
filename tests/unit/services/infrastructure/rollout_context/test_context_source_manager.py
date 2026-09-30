@@ -403,6 +403,61 @@ def test_load_tracked_same_effective_entry_is_idempotent_already_active():
     assert manager.prepare_pending() is None
 
 
+def test_load_tracked_rebind_with_entry_already_visible_reports_both_dimensions():
+    """6.2-B 组合边界：rebind 成功、但新 entry 已在可见台账。
+
+    两个正交事实维度必须同时如实承载：``status`` 只描述"本次是否追加了
+    context item"（新 entry 已可见时无第二个 item 追加，返回 ``already_active``），
+    ``source_rebound`` 只描述"是否发生了 rebind"（已发生，为 True）。此时 rebind
+    仍须完成：旧 registration 冻结、新 registration 建立。
+    """
+    manager = _manager()
+    _install_snapshot(manager, "debugging", "v1\n")
+    manager.load_skill("debugging", mode="tracked")
+    _commit_model_call_pending(manager)
+
+    # 新 effective entry 出现。
+    manager.register(
+        ContextSourceDescriptor(
+            source_id="skill:debugging-next",
+            source_kind="skill",
+            name="debugging",
+            description="新优先级 entry",
+            internal_locator="/.boxteam/skills/debugging-next/SKILL.md",
+            resource_uri="boxteam://workspace/skill/debugging-next",
+        )
+    )
+    binding = _install_snapshot(
+        manager,
+        "debugging",
+        "v2\n",
+        display_uri="boxteam://workspace/skill/debugging-next",
+    )
+    # 新 entry 的当前 revision 已在可见台账：source owner 已交付并提交其正文，
+    # 但此时该 entry 仍未建立 tracked registration。
+    manager.activate_skill_content("debugging", "v2\n")
+    _commit_model_call_pending(manager)
+    # rebind 前：新 entry 已注册但尚未 tracked。
+    assert manager._sources["skill:debugging-next"].tracked is False
+
+    receipt = manager.load_skill("debugging", mode="tracked")
+
+    # 维度一：本次未追加第二个 item。
+    assert receipt.status == "already_active"
+    assert receipt.append_status == "already_active"
+    assert receipt.queued is False
+    # 维度二：rebind 确已发生。
+    assert receipt.source_rebound is True
+    assert receipt.tracked is True
+    assert receipt.display_uri == binding.display_uri
+    # 旧 registration 冻结为 untracked：不再消费 revision。
+    assert manager.observe("skill:debugging", "v3\n") is False
+    # 新 registration 由本次 rebind 建立且为 tracked（此前为 untracked）。
+    assert manager._sources["skill:debugging-next"].tracked is True
+    # 无第二个 item 追加。
+    assert manager.prepare_pending() is None
+
+
 def test_load_tracked_duplicate_same_effective_entry_fails_closed():
     """反例守卫：同名同 effective entry 的重复 registration 不得被误判为 rebind。
 
