@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.gateway import GatewayConnectionKind
 from app.schemas.internal_v2.session_resource import SessionResourceDTO
 
 WorkspaceNavigationNodeKind = Literal["workspace_folder", "workspace_ref"]
@@ -99,7 +100,7 @@ class GatewayResourceDTO(BaseModel):
     gateway_name: str
     workspace_id: str
     workspace_name: str
-    connection_kind: Literal["local", "remote_gateway"]
+    connection_kind: GatewayConnectionKind
     session_id: str
     session_title: str
     resource: SessionResourceDTO

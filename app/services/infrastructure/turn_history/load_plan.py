@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from app.core.history_loading import HistoryInclude
+from app.schemas.internal_v2.turn import TurnInclude
 
 LoadDirection = Literal["head", "tail", "before", "after", "around"]
 
@@ -64,7 +64,7 @@ class LoadPlan:
     direction: LoadDirection
     cursor: str | None = None
     turns: int = 1
-    include: tuple[HistoryInclude, ...] = (
+    include: tuple[TurnInclude, ...] = (
         "user",
         "thinking",
         "tool_summary",
