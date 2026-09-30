@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import (
     SessionControlStore,
     ThreadCreationRecord,
@@ -26,18 +25,20 @@ from app.core.session_control_store import (
     validate_thread_relative_locator,
 )
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from tests.support.canonical_id_at import session_id_at, thread_id_at
 
 DEFAULT_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+JUNE_2 = datetime(2026, 6, 2, 12, 0, tzinfo=UTC)
 
 
 def make_thread_id() -> str:
-    """canonical 工厂天然满足 v7 位 profile(version 位 7 / variant 位 89ab)。"""
-    return f"thr_{create_uuid_hex()}"
+    """canonical thread_id，内嵌时间与 DEFAULT_CREATED_AT 同日(§4.3 分桶一致性)。"""
+    return thread_id_at(DEFAULT_CREATED_AT)
 
 
 def make_session_id() -> str:
-    """canonical 工厂天然满足 v7 位 profile(version 位 7 / variant 位 89ab)。"""
-    return f"ses_{create_uuid_hex()}"
+    """canonical session_id，内嵌时间与 DEFAULT_CREATED_AT 同日。"""
+    return session_id_at(DEFAULT_CREATED_AT)
 
 
 @pytest.fixture
@@ -2238,7 +2239,11 @@ def test_owner_binding_ensure_get_roundtrip(tmp_path: Path) -> None:
         with pytest.raises(RuntimeError, match="locator 不一致"):
             store.ensure_thread_owner_binding(
                 thread_id=thread_id,
-                final_relative_locator="threads/2026/06/02/" + make_thread_id(),
+                # 漂移桶用同日 id，使失败归因于「record 冻结 locator 不一致」
+                # 而非 §4.3 的日期一致性断言。
+                final_relative_locator=(
+                    "threads/2026/06/02/" + thread_id_at(JUNE_2)
+                ),
             )
         # 非法 thread_id 拒绝
         with pytest.raises(ValueError):

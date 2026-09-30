@@ -52,7 +52,7 @@ import os
 import shutil
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from app.core.atomic_fs import (
@@ -64,6 +64,7 @@ from app.core.atomic_fs import (
 from app.core.atomic_fs import (
     fsync_file as _fsync_file,
 )
+from app.core.identifier import effective_now
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -313,7 +314,9 @@ class SessionCreationService:
                     workspace_id=self._workspace_id,
                     parent_node_id=parent_node_id,
                     display_name=title,
-                    created_at=datetime.now(UTC),
+                    # 创建时刻取自 D4 唯一时间源 effective_now()：分桶日期与 id
+                    # 内嵌 48 bit 毫秒时间戳同源（intro：MUST NOT 独立取时）。
+                    created_at=effective_now(),
                     preimage_hash=preimage_hash,
                 )
             if record.state == "published":

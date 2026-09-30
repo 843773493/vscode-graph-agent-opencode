@@ -35,14 +35,24 @@ from app.core.session_catalog_store import (
     validate_thread_id,
 )
 from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
+from tests.support.canonical_id_at import session_id_at
 
 WORKSPACE_ID = "ws-primary"
 OTHER_WORKSPACE_ID = "ws-other"
+
+# 固定日期桶测试统一时刻：canonical id 的内嵌 48 bit 毫秒 MUST 与分桶同日
+# （§4.1 一致性断言），故按该时刻生成 id。
+JUNE_1 = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
 
 def make_session_id() -> str:
     """生成满足 UUIDv7 位 profile 的 canonical session_id。"""
     return f"ses_{create_uuid_hex()}"
+
+
+def make_session_id_at(moment: datetime) -> str:
+    """按给定时刻生成 canonical session_id（内嵌时间与该时刻同日）。"""
+    return session_id_at(moment)
 
 
 def make_thread_id() -> str:
@@ -65,8 +75,8 @@ def create_session(
     created_at: datetime | None = None,
 ) -> SessionCatalogNode:
     """测试辅助：创建一个合法 session 节点并返回投影。"""
-    session_id = make_session_id()
-    moment = created_at or datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    moment = created_at or JUNE_1
+    session_id = make_session_id_at(moment)
     return store.create_session_node(
         session_id,
         workspace_id,
@@ -232,17 +242,22 @@ def test_validate_thread_id_rejects_non_string() -> None:
 
 
 def test_validate_storage_relative_locator_accepts_valid() -> None:
-    validate_storage_relative_locator(f"sessions/2026/06/01/{make_session_id()}")
+    validate_storage_relative_locator(f"sessions/2026/06/01/{make_session_id_at(JUNE_1)}")
 
 
 def test_validate_storage_relative_locator_accepts_leap_day() -> None:
     # 2024 是闰年，2 月 29 日合法
-    validate_storage_relative_locator(f"sessions/2024/02/29/{make_session_id()}")
+    leap_day = datetime(2024, 2, 29, 12, 0, tzinfo=UTC)
+    validate_storage_relative_locator(
+        f"sessions/2024/02/29/{make_session_id_at(leap_day)}"
+    )
 
 
 def _invalid_locators() -> list[str]:
     """构造逐类非法 locator；session_id 部分用真实合法 ID，确保失败归因于被测形态。"""
-    sid = make_session_id()
+    # sid 内嵌时间与 2026/06/01 同日，避免被 §4.1 日期一致性断言先行拦下，
+    # 从而确保失败归因于本函数构造的具体形态错误。
+    sid = make_session_id_at(JUNE_1)
     return [
         f"session/2026/06/01/{sid}",  # 坏前缀
         f"2026/06/01/{sid}",  # 缺前缀
@@ -279,6 +294,21 @@ def test_validate_storage_relative_locator_rejects_invalid(locator: str) -> None
 def test_validate_storage_relative_locator_rejects_non_string() -> None:
     with pytest.raises(TypeError):
         validate_storage_relative_locator(None)  # type: ignore[arg-type]
+
+
+def test_validate_storage_relative_locator_rejects_bucket_id_drift() -> None:
+    """§4.2 负向：分桶日期与 id 内嵌 48 bit 毫秒 UTC 日期漂移 MUST
+    fail-closed；断言只凭 locator 字符串自足判定，不依赖另存 created_at。"""
+    sid = make_session_id_at(JUNE_1)
+    # 同日桶通过（基线）。
+    validate_storage_relative_locator(f"sessions/2026/06/01/{sid}")
+    # 漂移到相邻日、异年同日、以及跨月，一律 fail-closed。
+    with pytest.raises(ValueError, match="分桶与 id 漂移"):
+        validate_storage_relative_locator(f"sessions/2026/06/02/{sid}")
+    with pytest.raises(ValueError, match="分桶与 id 漂移"):
+        validate_storage_relative_locator(f"sessions/2026/05/01/{sid}")
+    with pytest.raises(ValueError, match="分桶与 id 漂移"):
+        validate_storage_relative_locator(f"sessions/2025/06/01/{sid}")
 
 
 # ----------------------------------------------------------------------
@@ -572,7 +602,7 @@ def test_invalid_state_rejected_by_check(store: SessionCatalogStore) -> None:
 
 
 def test_duplicate_node_id_rejected(store: SessionCatalogStore) -> None:
-    folder_id = make_session_id()
+    folder_id = make_session_id_at(JUNE_1)
     store.create_folder(folder_id, WORKSPACE_ID, None, "第一个")
     with pytest.raises(RuntimeError, match="已存在"):
         store.create_folder(folder_id, WORKSPACE_ID, None, "第二个")
@@ -591,7 +621,7 @@ def test_duplicate_node_id_rejected(store: SessionCatalogStore) -> None:
 
 def test_duplicate_main_thread_rejected(store: SessionCatalogStore) -> None:
     thread_id = make_thread_id()
-    first_id = make_session_id()
+    first_id = make_session_id_at(JUNE_1)
     store.create_session_node(
         first_id,
         WORKSPACE_ID,
@@ -601,7 +631,7 @@ def test_duplicate_main_thread_rejected(store: SessionCatalogStore) -> None:
         f"sessions/2026/06/01/{first_id}",
         thread_id,
     )
-    second_id = make_session_id()
+    second_id = make_session_id_at(JUNE_1)
     with pytest.raises(RuntimeError, match="main_thread_id"):
         store.create_session_node(
             second_id,
@@ -618,7 +648,7 @@ def test_same_main_thread_across_workspaces_allowed(
     store: SessionCatalogStore,
 ) -> None:
     thread_id = make_thread_id()
-    first_id = make_session_id()
+    first_id = make_session_id_at(JUNE_1)
     store.create_session_node(
         first_id,
         WORKSPACE_ID,
@@ -628,7 +658,7 @@ def test_same_main_thread_across_workspaces_allowed(
         f"sessions/2026/06/01/{first_id}",
         thread_id,
     )
-    second_id = make_session_id()
+    second_id = make_session_id_at(JUNE_1)
     node = store.create_session_node(
         second_id,
         OTHER_WORKSPACE_ID,
@@ -771,7 +801,7 @@ def test_nearest_session_ancestor_missing_node_raises_keyerror(
 
 
 def test_get_session_by_main_thread(store: SessionCatalogStore) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     thread_id = make_thread_id()
     store.create_session_node(
         session_id,
@@ -1151,26 +1181,27 @@ def test_create_session_locator_utc_date_semantics(
 ) -> None:
     # +08:00 时区的 20:00 是 UTC 12:00，locator 必须用 UTC 日期
     plus8 = timezone(timedelta(hours=8))
-    session_id = make_session_id()
+    moment = datetime(2026, 6, 1, 20, 0, tzinfo=plus8)
+    session_id = make_session_id_at(moment)
     node = store.create_session_node(
         session_id,
         WORKSPACE_ID,
         None,
         "时区会话",
-        datetime(2026, 6, 1, 20, 0, tzinfo=plus8),
+        moment,
         f"sessions/2026/06/01/{session_id}",
         make_thread_id(),
     )
     assert node.storage_relative_locator == f"sessions/2026/06/01/{session_id}"
     # UTC 日期是 06-01，用 06-02 的 locator 被拒
-    other_id = make_session_id()
+    other_id = make_session_id_at(moment)
     with pytest.raises(ValueError, match="UTC 日期"):
         store.create_session_node(
             other_id,
             WORKSPACE_ID,
             None,
             "时区会话2",
-            datetime(2026, 6, 1, 20, 0, tzinfo=plus8),
+            moment,
             f"sessions/2026/06/02/{other_id}",
             make_thread_id(),
         )
@@ -1179,7 +1210,7 @@ def test_create_session_locator_utc_date_semantics(
 def test_create_session_naive_created_at_rejected(
     store: SessionCatalogStore,
 ) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     with pytest.raises(ValueError, match="时区"):
         store.create_session_node(
             session_id,
@@ -1195,7 +1226,7 @@ def test_create_session_naive_created_at_rejected(
 def test_create_session_non_datetime_created_at_rejected(
     store: SessionCatalogStore,
 ) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     with pytest.raises(TypeError, match="created_at"):
         store.create_session_node(
             session_id,
@@ -1211,7 +1242,7 @@ def test_create_session_non_datetime_created_at_rejected(
 def test_create_session_none_created_at_rejected(
     store: SessionCatalogStore,
 ) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     with pytest.raises(TypeError, match="created_at"):
         store.create_session_node(
             session_id,
@@ -1257,7 +1288,7 @@ def test_create_session_none_locator_rejected(store: SessionCatalogStore) -> Non
 def test_create_session_locator_leaf_mismatch_rejected(
     store: SessionCatalogStore,
 ) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     with pytest.raises(ValueError, match="叶名"):
         store.create_session_node(
             session_id,
@@ -1265,7 +1296,7 @@ def test_create_session_locator_leaf_mismatch_rejected(
             None,
             "叶名不一致会话",
             datetime(2026, 6, 1, tzinfo=UTC),
-            f"sessions/2026/06/01/{make_session_id()}",
+            f"sessions/2026/06/01/{make_session_id_at(JUNE_1)}",
             make_thread_id(),
         )
 
@@ -1280,7 +1311,7 @@ def test_create_session_path_budget_component_rejected(
         sessions_root,
     )
     try:
-        session_id = make_session_id()
+        session_id = make_session_id_at(JUNE_1)
         with pytest.raises(ValueError, match="组件"):
             catalog.create_session_node(
                 session_id,
@@ -1303,7 +1334,7 @@ def test_create_session_path_budget_total_rejected(tmp_path: Path) -> None:
         sessions_root,
     )
     try:
-        session_id = make_session_id()
+        session_id = make_session_id_at(JUNE_1)
         with pytest.raises(ValueError, match="总长"):
             catalog.create_session_node(
                 session_id,
@@ -1319,7 +1350,7 @@ def test_create_session_path_budget_total_rejected(tmp_path: Path) -> None:
 
 
 def test_resolve_session_locator(store: SessionCatalogStore) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     locator = f"sessions/2026/06/01/{session_id}"
     resolved = store.resolve_session_locator(locator)
     assert resolved == store.sessions_root / "2026" / "06" / "01" / session_id

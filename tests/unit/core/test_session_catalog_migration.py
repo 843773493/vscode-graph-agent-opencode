@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
+from app.core.identifier import create_uuid_hex, create_uuid_hex_at, to_epoch_ms
 from app.core.session_catalog_legacy_layout import (
     FOLDER_MANIFEST_NAME,
     SESSION_CHILDREN_DIR_NAME,
@@ -90,11 +90,13 @@ def make_migrator(workspace: MigrationWorkspace) -> SessionCatalogMigrator:
 
 
 def make_session_id() -> str:
-    return f"ses_{create_uuid_hex()}"
+    """内嵌时间与 DEFAULT_CREATED_AT 同日(§4 分桶一致性)。"""
+    return f"ses_{create_uuid_hex_at(to_epoch_ms(DEFAULT_CREATED_AT))}"
 
 
 def make_thread_id() -> str:
-    return f"thr_{create_uuid_hex()}"
+    """内嵌时间与 DEFAULT_CREATED_AT 同日(§4 分桶一致性)。"""
+    return f"thr_{create_uuid_hex_at(to_epoch_ms(DEFAULT_CREATED_AT))}"
 
 
 def _hex_payload_with(index: int, char: str) -> str:
@@ -1404,7 +1406,8 @@ async def test_migrate_timezone_aware_created_at_uses_utc_date_bucket(
 ) -> None:
     plus8 = timezone(timedelta(hours=8))
     moment = datetime(2026, 6, 2, 2, 0, tzinfo=plus8)  # UTC 2026-06-01T18:00,跨日
-    session_id = make_session_id()
+    # id 内嵌时间必须与迁移后所在 UTC 桶(2026-06-01)同日，故按 moment 生成。
+    session_id = f"ses_{create_uuid_hex_at(to_epoch_ms(moment))}"
     _write_session_dir(
         workspace.sessions_root,
         session_id,

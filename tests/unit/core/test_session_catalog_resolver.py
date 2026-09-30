@@ -32,8 +32,12 @@ from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
+from tests.support.canonical_id_at import thread_id_at
 
 WORKSPACE_ID = "ws-resolver"
+
+# thread 分桶日期 MUST 与 thread_id 内嵌时间同日（§4.3），固定桶测试共用此时刻。
+JUNE_1 = datetime(2026, 6, 1, tzinfo=UTC)
 
 
 # ----------------------------------------------------------------------
@@ -419,11 +423,11 @@ class TestReadMethods:
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         session_id, session_dir = await allocated_session(resolver)
-        thread_id = make_thread_id()
+        thread_id = thread_id_at(JUNE_1)
         thread_dir = publish_child_thread(
             session_dir,
             thread_id=thread_id,
-            created_at=datetime(2026, 6, 1, tzinfo=UTC),
+            created_at=JUNE_1,
         )
         assert resolver.resolve_thread_node(session_id, thread_id) == thread_dir
 
@@ -464,11 +468,11 @@ class TestReadMethods:
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         session_id, session_dir = await allocated_session(resolver)
-        thread_id = make_thread_id()
+        thread_id = thread_id_at(JUNE_1)
         publish_child_thread(
             session_dir,
             thread_id=thread_id,
-            created_at=datetime(2026, 6, 1, tzinfo=UTC),
+            created_at=JUNE_1,
         )
         thread_dir = session_dir / "threads" / "2026" / "06" / "01" / thread_id
         shutil.rmtree(thread_dir)

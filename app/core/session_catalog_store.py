@@ -29,10 +29,10 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from app.core.identifier import create_prefixed_id
+from app.core.identifier import create_prefixed_id_at, to_epoch_ms
 from app.core.sqlite_state import SQLITE_BUSY_TIMEOUT_MS
 
 __all__ = [
@@ -48,6 +48,7 @@ __all__ = [
     "SourceRetentionOperationPendingError",
     "SubtreeDeleteRecord",
     "SubtreeFrozenNode",
+    "uuid7_embedded_utc_date",
     "validate_path_budget",
     "validate_session_id",
     "validate_storage_relative_locator",
@@ -283,6 +284,11 @@ def validate_storage_relative_locator(value: str) -> None:
 
     YYYY 为 4 位数字，MM 必须在 01-12，DD 按 ``calendar.monthrange`` 对应
     月份合法（含闰年）；叶名 session_id 必须过完整 session 验证器。
+
+    日期段还必须与 session_id 内嵌的 48 bit Unix 毫秒时间戳按 UTC 推导出的
+    日期逐段一致（design D4/§4.1）：本断言只凭 locator 字符串自身（id 内嵌
+    时间 + 日期段）推出，MUST NOT 依赖另存的 ``created_at`` 或两次独立取时；
+    不一致即 fail-closed，绝不扫盘修正或悄悄改桶。
     """
     if not isinstance(value, str):
         raise TypeError(f"storage_relative_locator 必须是字符串: {value!r}")
@@ -298,6 +304,25 @@ def validate_storage_relative_locator(value: str) -> None:
     _, last_day = calendar.monthrange(int(year_text), month)
     if not 1 <= day <= last_day:
         raise ValueError(f"storage_relative_locator 日期非法: {value!r}")
+    locator_date = date(int(year_text), month, day)
+    embedded_date = uuid7_embedded_utc_date(session_id[4:])
+    if locator_date != embedded_date:
+        raise ValueError(
+            "storage_relative_locator 日期段必须等于 session_id 内嵌 48 bit "
+            "毫秒时间戳的 UTC 日期（分桶与 id 漂移，fail-closed）: "
+            f"locator={value!r}, locator_date={locator_date.isoformat()}, "
+            f"embedded_date={embedded_date.isoformat()}"
+        )
+
+
+def uuid7_embedded_utc_date(payload: str) -> date:
+    """从 32 位 v7 hex payload 的前 48 bit 解出内嵌 Unix 毫秒并按 UTC 求日期。
+
+    RFC 9562 v7 的前 48 bit 即 big-endian Unix 毫秒时间戳，等于 payload
+    前 12 个 hex；本函数是分桶日期与 id 内嵌时间的唯一解码口径。
+    """
+    embedded_ms = int(payload[:12], 16)
+    return (datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=embedded_ms)).date()
 
 
 def validate_path_budget(base: Path, locator: str) -> None:
@@ -1812,13 +1837,16 @@ class SessionCatalogStore:
                     raise KeyError(f"会话目录节点不存在: {parent_node_id}")
                 parent_revision = int(parent_row["revision"])
             # "thr" 已在 IdentifierPrefix Literal 中声明；
-            # create_prefixed_id 基于 uuid_utils.uuid7().hex，天然满足 v7 位 profile。
+            # 分配身份按冻结 created_at 的 Unix 毫秒生成，使 id 内嵌 48 bit 时间戳
+            # 与 sessions/YYYY/MM/DD 分桶同源同日（§4.1/§4.7）；create_prefixed_id_at
+            # 基于 uuid_utils.uuid7()，天然满足 v7 位 profile。
+            create_ms = to_epoch_ms(created_at)
             allocated_session_id = (
                 session_id
                 if session_id is not None
-                else create_prefixed_id("ses")
+                else create_prefixed_id_at("ses", create_ms)
             )
-            main_thread_id = create_prefixed_id("thr")
+            main_thread_id = create_prefixed_id_at("thr", create_ms)
             validate_session_id(allocated_session_id)
             validate_thread_id(main_thread_id)
             utc_date = created_at.astimezone(UTC).date()

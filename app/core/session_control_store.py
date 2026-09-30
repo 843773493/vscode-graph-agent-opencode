@@ -59,7 +59,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.core.identifier import create_prefixed_id
+from app.core.identifier import create_prefixed_id_at, to_epoch_ms
 from app.core.session_catalog_store import (
     validate_session_id,
     validate_thread_id,
@@ -1181,11 +1181,14 @@ class SessionControlStore(
                 f"main_rows={[str(row['thread_id']) for row in main_rows]}"
             )
         main_thread_id = str(main_rows[0]["thread_id"])
-        # child ID：调用方传入（已验证 canonical）或软件分配（"thr" 已在
-        # IdentifierPrefix Literal 中声明；create_prefixed_id 基于显式直接依赖
-        # uuid-utils 的 uuid7().hex，天然满足 v7 位 profile）。
+        # child ID：调用方传入（已验证 canonical）或按冻结 created_at 的 Unix
+        # 毫秒软件分配（"thr" 已在 IdentifierPrefix Literal 中声明；
+        # create_prefixed_id_at 基于显式直接依赖 uuid-utils 的 uuid7()，天然满足
+        # v7 位 profile，且内嵌时间与 threads/YYYY/MM/DD 分桶同源同日 §4.3/§4.7）。
         child_thread_id = (
-            thread_id if thread_id is not None else create_prefixed_id("thr")
+            thread_id
+            if thread_id is not None
+            else create_prefixed_id_at("thr", to_epoch_ms(created_at))
         )
         validate_thread_id(child_thread_id)
         if child_thread_id == main_thread_id:

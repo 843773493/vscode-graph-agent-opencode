@@ -79,7 +79,6 @@ import os
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.atomic_fs import (
@@ -88,6 +87,7 @@ from app.core.atomic_fs import (
 from app.core.atomic_fs import (
     fsync_directory as _fsync_directory,
 )
+from app.core.identifier import effective_now
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -692,7 +692,9 @@ class ThreadCreationService:
                     capability_profile=canonical_json_text(
                         session_metadata["capability_profile"]
                     ),
-                    created_at=datetime.now(UTC),
+                    # 创建时刻取自 D4 唯一时间源 effective_now()：thread 分桶日期
+                    # 与 id 内嵌 48 bit 毫秒时间戳同源（MUST NOT 独立取时）。
+                    created_at=effective_now(),
                     thread_id=thread_id,
                     delegation_id=delegation_id,
                     collaboration_precondition_revision=collaboration_revision,

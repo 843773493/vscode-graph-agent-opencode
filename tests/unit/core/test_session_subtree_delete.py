@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
+from app.core.identifier import create_prefixed_id_at, to_epoch_ms
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -42,11 +42,12 @@ _DELETING_DIR_NAME = ".deleting"
 
 def make_node_id() -> str:
     """生成满足 UUIDv7 位 profile 的节点 ID（folder 与 session 同形）。"""
-    return f"ses_{create_uuid_hex()}"
+    # id 内嵌时间 MUST 与 sessions/2026/06/01 分桶同日（§4.1）。
+    return create_prefixed_id_at("ses", to_epoch_ms(_MOMENT))
 
 
 def make_thread_id() -> str:
-    return f"thr_{create_uuid_hex()}"
+    return create_prefixed_id_at("thr", to_epoch_ms(_MOMENT))
 
 
 def build_session_directory(

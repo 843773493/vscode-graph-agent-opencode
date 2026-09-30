@@ -30,6 +30,7 @@ from app.protocol.canonical import (
     CANONICAL_SESSION_ID_PREFIX,
     CANONICAL_THREAD_ID_PREFIX,
 )
+from tests.support.canonical_id_at import session_id_at, thread_id_at
 
 
 def make_session_id() -> str:
@@ -38,6 +39,11 @@ def make_session_id() -> str:
 
 def make_thread_id() -> str:
     return f"thr_{create_uuid_hex()}"
+
+
+# 固定日期桶 locator 的测试时刻：id 内嵌时间 MUST 与桶同日（§4.1/§4.3）。
+JUNE_1 = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+LEAP_DAY = datetime(2024, 2, 29, 12, 0, tzinfo=UTC)
 
 
 def _v7_hex_with(index: int, char: str) -> str:
@@ -188,7 +194,7 @@ def test_invalid_thread_id_rejected_before_persistence(tmp_path: Path) -> None:
 
 
 def test_path_budget_accepts_canonical_locator(tmp_path: Path) -> None:
-    locator = "sessions/2026/06/01/" + make_session_id()
+    locator = "sessions/2026/06/01/" + session_id_at(JUNE_1)
     validate_storage_relative_locator(locator)
     validate_path_budget(tmp_path, locator)
 
@@ -241,17 +247,41 @@ def test_storage_locator_matrix_rejected(bad_locator: str) -> None:
 
 
 def test_storage_locator_leap_day_accepted() -> None:
-    validate_storage_relative_locator("sessions/2024/02/29/" + make_session_id())
+    validate_storage_relative_locator("sessions/2024/02/29/" + session_id_at(LEAP_DAY))
 
 
 def test_thread_relative_locator_matrix() -> None:
-    validate_thread_relative_locator("threads/2026/06/01/" + make_thread_id())
+    validate_thread_relative_locator("threads/2026/06/01/" + thread_id_at(JUNE_1))
     with pytest.raises(ValueError):
         validate_thread_relative_locator(
-            "sessions/2026/06/01/" + make_thread_id()
+            "sessions/2026/06/01/" + thread_id_at(JUNE_1)
         )
     with pytest.raises(ValueError):
-        validate_thread_relative_locator("threads/2026/13/01/" + make_thread_id())
+        validate_thread_relative_locator("threads/2026/13/01/" + thread_id_at(JUNE_1))
+
+
+def test_storage_locator_date_drift_from_embedded_time_rejected() -> None:
+    """§4.2 负向：分桶日期与 session_id 内嵌 48 bit 毫秒 UTC 日期漂移 MUST
+    fail-closed，且只凭 locator 字符串判定（不依赖另存 created_at）。"""
+    session_id = session_id_at(JUNE_1)
+    # 同日桶通过。
+    validate_storage_relative_locator(f"sessions/2026/06/01/{session_id}")
+    # 相邻日桶、异年同月日桶均为漂移，一律 fail-closed。
+    with pytest.raises(ValueError, match="分桶与 id 漂移"):
+        validate_storage_relative_locator(f"sessions/2026/06/02/{session_id}")
+    with pytest.raises(ValueError, match="分桶与 id 漂移"):
+        validate_storage_relative_locator(f"sessions/2025/06/01/{session_id}")
+
+
+def test_thread_locator_date_drift_from_embedded_time_rejected() -> None:
+    """§4.3 负向：thread 分桶日期与 thread_id 内嵌 48 bit 毫秒 UTC 日期漂移
+    MUST fail-closed。"""
+    thread_id = thread_id_at(JUNE_1)
+    validate_thread_relative_locator(f"threads/2026/06/01/{thread_id}")
+    with pytest.raises(ValueError, match="分桶与 id 漂移"):
+        validate_thread_relative_locator(f"threads/2026/06/02/{thread_id}")
+    with pytest.raises(ValueError, match="分桶与 id 漂移"):
+        validate_thread_relative_locator(f"threads/2025/06/01/{thread_id}")
 
 
 # ----------------------------------------------------------------------
