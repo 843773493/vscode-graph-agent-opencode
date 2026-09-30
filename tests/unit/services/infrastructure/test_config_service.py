@@ -8,7 +8,7 @@ import jsonschema
 import pytest
 from watchfiles import Change
 
-import app.services.infrastructure.config_service as config_service_module
+import app.services.infrastructure.config_service.config_source_layers as config_source_layers_module
 from app.agents.policy import ToolMetadata
 from app.schemas.internal_v2.config import ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
@@ -934,7 +934,7 @@ def test_extension_selector_can_restore_one_custom_tool(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
-        "app.services.infrastructure.config_service.load_custom_tool_factory",
+        "app.services.infrastructure.config_service.config_agent_tools.load_custom_tool_factory",
         lambda _factory_path: object(),
     )
     config = _base_config()
@@ -959,7 +959,7 @@ def test_config_service_normalizes_custom_tool_specs(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
-        "app.services.infrastructure.config_service.load_custom_tool_factory",
+        "app.services.infrastructure.config_service.config_agent_tools.load_custom_tool_factory",
         lambda _factory_path: object(),
     )
     config = _base_config()
@@ -1686,7 +1686,7 @@ async def test_file_change_after_parse_is_rejected_before_source_layer_commit(
         source_before = store.get_source_layer("workspace_mutable_override")
         assert source_before is not None
 
-        original_parse = config_service_module.parse_stable_config_file
+        original_parse = config_source_layers_module.parse_stable_config_file
         mutated = False
 
         def parse_then_mutate(snapshot):
@@ -1700,7 +1700,7 @@ async def test_file_change_after_parse_is_rejected_before_source_layer_commit(
             return payload
 
         monkeypatch.setattr(
-            config_service_module,
+            config_source_layers_module,
             "parse_stable_config_file",
             parse_then_mutate,
         )

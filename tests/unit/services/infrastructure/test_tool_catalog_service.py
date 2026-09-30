@@ -41,7 +41,7 @@ def test_catalog_exposes_declared_extensions_with_static_policy_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "app.services.infrastructure.config_service.load_custom_tool_factory",
+        "app.services.infrastructure.config_service.config_agent_tools.load_custom_tool_factory",
         lambda _factory_path: object(),
     )
     config_path = tmp_path / "workspace.jsonc"
