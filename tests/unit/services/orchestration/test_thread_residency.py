@@ -369,6 +369,84 @@ async def test_new_generation_enables_unload_again_and_old_one_stays_unloaded() 
     assert [request.generation for request in fired] == [1, 2]
 
 
+@pytest.mark.asyncio
+async def test_sweep_marks_snapshot_generation_and_never_colds_new_generation() -> None:
+    """sweep 按回调前快照代 CAS 标记卸载：await 窗口内登记的新一代不被错标 cold。"""
+    clock = _FakeMonotonicClock()
+    fired: list[ThreadUnloadRequest] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+    tracker_box: dict[str, ThreadResidencyTracker] = {}
+    second_box: dict[str, int] = {}
+
+    async def unload(request: ThreadUnloadRequest) -> None:
+        fired.append(request)
+        started.set()
+        await release.wait()
+        # 回调 await 窗口内 owner 登记新一代（模拟 backend 重启后为同 thread
+        # 重建 runtime）；这必须不影响本次卸载对快照代的收敛。
+        second_box["id"] = tracker_box["tracker"].register_generation(*_OWNER).generation
+
+    tracker = _make_tracker(clock, unload_callback=unload)
+    tracker_box["tracker"] = tracker
+    tracker.register_generation(*_OWNER)
+    tracker.record_activity(*_OWNER)
+    clock.advance(1800)
+
+    sweep_task = asyncio.create_task(tracker.sweep())
+    await asyncio.wait_for(started.wait(), timeout=5)
+    release.set()
+    unloaded = await asyncio.wait_for(sweep_task, timeout=5)
+
+    assert [request.generation for request in fired] == [1]  # 卸载的是快照代 1
+    assert second_box["id"] == 2
+    snapshot = tracker.snapshot(*_OWNER)
+    assert snapshot.generation == 2  # 新一代是当前代
+    # 关键：新一代绝不被错标为 cold；snapshot 始终如实反映当前代（不撒谎）。
+    assert snapshot.residency == "resident"
+    assert snapshot.cold_eligible is True  # 新一代已 idle 越阈、可再次卸载
+    assert tracker.is_current_generation(*_OWNER, 2) is True
+    assert len(unloaded) == 1
+    # fired 快照是回调返回时刻的当前态：此时当前代已是新一代，故如实报 resident，
+    # 绝不虚报新一代为 cold。卸载的是快照代 1（回调入参已断言）。
+    assert unloaded[0].generation == 2
+    assert unloaded[0].residency == "resident"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_sweeps_fire_inflight_generation_callback_at_most_once() -> None:
+    """并发 sweep：同一代的 unload 回调至多触发一次（在飞去重）。"""
+    clock = _FakeMonotonicClock()
+    calls: list[ThreadUnloadRequest] = []
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def unload(request: ThreadUnloadRequest) -> None:
+        calls.append(request)
+        entered.set()
+        await release.wait()
+
+    tracker = _make_tracker(clock, unload_callback=unload)
+    tracker.register_generation(*_OWNER)
+    tracker.record_activity(*_OWNER)
+    clock.advance(1800)
+
+    first = asyncio.create_task(tracker.sweep())
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    # 第一个 sweep 已进入回调 await；此时第二个 sweep 必须跳过同一代。
+    second = asyncio.create_task(tracker.sweep())
+    release.set()
+    first_result, second_result = await asyncio.wait_for(
+        asyncio.gather(first, second), timeout=5
+    )
+
+    assert len(calls) == 1
+    assert calls[0].generation == 1
+    assert len(first_result) == 1
+    assert second_result == ()  # 后来者跳过，不重复触发
+    assert tracker.snapshot(*_OWNER).residency == "cold"
+
+
 def test_tracker_configuration_fails_loud() -> None:
     """非法配置显式失败：阈值必须为正、blocker 源必须有查询方法。"""
     clock = _FakeMonotonicClock()
