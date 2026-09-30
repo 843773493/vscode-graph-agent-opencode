@@ -15,20 +15,12 @@ from app.abstractions.session_context import (
 from app.abstractions.session_target import SessionTarget
 from app.agents.custom_tools import CustomToolFactoryContext
 from app.schemas.internal_v2.session_context import (
+    SessionContextInclude,
     SessionContextReadRequest,
     SessionContextSearchRequest,
 )
 
 ResultModel = TypeVar("ResultModel", bound=BaseModel)
-ContextInclude = Literal[
-    "visible_text",
-    "reasoning",
-    "tool_summary",
-    "tool_calls",
-    "tool_results",
-    "system",
-    "raw_record",
-]
 
 
 class ReadContextInput(BaseModel):
@@ -48,7 +40,7 @@ class ReadContextInput(BaseModel):
     view: Literal["overview", "messages", "records", "information", "inventory"] = (
         Field(default="overview", description="读取视图；默认返回低成本概览。")
     )
-    include: list[ContextInclude] = Field(
+    include: list[SessionContextInclude] = Field(
         default_factory=lambda: ["visible_text", "tool_summary"],
         description="显式展开的内容类型。reasoning 和工具载荷默认不返回。",
     )
@@ -188,7 +180,7 @@ def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         view: Literal[
             "overview", "messages", "records", "information", "inventory"
         ] = "overview",
-        include: list[ContextInclude] | None = None,
+        include: list[SessionContextInclude] | None = None,
         recent_rounds: int = 3,
         include_initial_goal: bool = True,
         cursor: str | None = None,

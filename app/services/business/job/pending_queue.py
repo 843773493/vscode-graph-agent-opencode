@@ -2,19 +2,11 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Literal
 
 from app.schemas.internal_v2.pending_request import (
     DeliveryBoundary,
     DeliveryPolicy,
 )
-
-QueueBoundary = Literal[
-    "idle",
-    "after_turn",
-    "after_tool_result",
-    "after_interrupt",
-]
 
 
 @dataclass
@@ -107,7 +99,7 @@ class JobPendingQueue:
     def take_head(
         self,
         session_id: str,
-        boundary: QueueBoundary,
+        boundary: DeliveryBoundary,
         *,
         tool_result_available: bool = True,
     ) -> QueueEntry | None:
@@ -184,7 +176,7 @@ class JobPendingQueue:
     @staticmethod
     def _policy_allows(
         policy: DeliveryPolicy,
-        boundary: QueueBoundary,
+        boundary: DeliveryBoundary,
         *,
         tool_result_available: bool,
     ) -> bool:
@@ -204,7 +196,7 @@ class JobPendingQueue:
         return False
 
     @staticmethod
-    def _waiting_reason(policy: DeliveryPolicy, boundary: QueueBoundary) -> str:
+    def _waiting_reason(policy: DeliveryPolicy, boundary: DeliveryBoundary) -> str:
         if policy == "after_interrupt":
             return "等待已提交的 interrupt 边界"
         if boundary == "after_tool_result":
