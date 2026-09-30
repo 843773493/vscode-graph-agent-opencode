@@ -70,6 +70,11 @@
 - **WHEN** 审查一个字段是否属「位置」
 - **THEN** 判定只依赖「能否经确定性推导直接用于文件系统 / sqlite 访问」与「是否属于 owner 自身运行态字段」两项可机械检查的事实，MUST NOT 依赖调用方解释或领域术语
 
+#### Scenario: 配置应用事件的路径字段不是「位置」
+
+- **WHEN** 配置应用事件与配置来源响应报告 `changed_paths` / `applied_paths` / `deferred_paths`
+- **THEN** 这些值的口径 MUST 是配置 JSON 的 **JSON Pointer**（以 `/` 起的分段键路径，由 `app/services/infrastructure/config/state.py` 的 `changed_json_paths` 单点产出），表达「哪一项配置键变了」，MUST NOT 是文件系统路径或工作区 real path；故它们按本 requirement 判据**不属「位置」**，不适用 VRN 表达与「不得落盘」义务，也 MUST NOT 被新增用途扩大解释为可承载 real path
+
 ### Requirement: scope 必须取自定稿闭集且 scope_id 对所有 scope 必填
 
 VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `inline`（依据权威表：`builtin` 正名为 `inline`；`user` 为本次新增；`memory` 已移出）。该闭集与每个 scope 的 scope_id 取值来源 MUST 由本 capability 的**唯一一张表**规定，其它模块与 change MUST NOT 自行发明 scope 名或 scope_id 语义。该表 MUST 与 `add-multi-workspace-backend-mounting` 的挂载模型保持一致（其 `workspace` scope 的 scope_id 与显式 HTTP 寻址的 workspace_id 同源）；本 capability 与该 change MUST NOT 各自定义 scope_id 取值语义，取值规则一律以本表为唯一出处。
@@ -431,7 +436,7 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 ### Requirement: 既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段
 
-系统 MUST 消除已确证的 real path 持久化违约：`app/services/infrastructure/config/state.py:475` 的 `ConfigSourceLayerRecord.source_path: str`、`:485` 的 `backup_path: str | None` 与 `:632` 的 `ConfigSourceJournalRecord.source_path: str` 把真实路径落进 SQLite；且 `app/api/config.py:102` 的 `path=str(source.path)`（经 `ConfigSourceDTO.path`）把真实路径写进 API 响应体。
+系统 MUST 消除 real path 持久化违约：配置来源层记录（`app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord`/`ConfigSourceJournalRecord`）MUST NOT 携带 `source_path`/`backup_path` 一类真实路径字段；配置来源列表 API 响应体（`GET /api/v1/config/sources`，经 `app/api/config.py` 的 `ConfigSourceDTO.path` 与 `ConfigSourcesDTO.schema_path`）MUST NOT 输出真实路径。**该违约已由 `50bffa45`（持久化侧：`source_path`/`backup_path` 物理删除、改 `vrn: str | None`）与 `76ed0089`（响应体侧：`path` 与 `schema_path` 均改配置来源 VRN）消除**；本节保留为可机械复核的不变量，实施期若回退即缺陷。
 
 迁移 MUST **直接复用 config 侧既有的平级属性模式**（`app/core/config_sources.py:16` 的 `ConfigSource` 已是 `path` + `layer` + `precedence` 平级，且 `layer_revision`/`layer_digest`/`source_generation` 已是兄弟字段），即「把 `path` 换成 `vrn`，其余 sibling 字段原样保留」。MUST NOT 另发明第二套表示。
 
@@ -443,7 +448,7 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 #### Scenario: API 不输出配置来源真实路径
 
 - **WHEN** 客户端请求配置来源列表（`GET /api/v1/config/sources`）
-- **THEN** 响应体只含 VRN 与兄弟字段（layer/precedence/layer_revision/layer_digest/source_generation 等），不含真实路径
+- **THEN** 响应体只含 VRN 与兄弟字段（layer/precedence/layer_revision/layer_digest/source_generation 等），不含真实路径；响应体的 **每一个** 承载来源位置的字段（含 `ConfigSourceDTO.path` 与 `ConfigSourcesDTO.schema_path`）都 MUST 是 VRN，MUST NOT 存在承载 real path 的字段
 
 #### Scenario: 复用既有平级属性模式
 

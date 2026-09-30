@@ -24,6 +24,7 @@
 - [ ] 4.1 在 `validate_storage_relative_locator()` 中加入「`sessions/YYYY/MM/DD` 的 UTC 日期 == id 内嵌 48 bit 毫秒时间戳的 UTC 日期」断言；不一致抛显式完整性错误。门槛：`uv run pytest -q tests/unit/core/test_session_catalog_store.py` 退出码 0。
 - [ ] 4.2 补负向测试：构造「分桶日期与 id 内嵌时间戳不一致」的 locator，断言 fail-closed 且不扫盘、不改桶。门槛：同一测试文件退出码 0。
 - [ ] 4.3 确认 child thread 的 `threads/YYYY/MM/DD/{thread_id}`（`app/core/session_control_store.py`）同样按 UTC 且与 id 内嵌时间戳一致。门槛：`uv run pytest -q tests/unit/core/test_thread_creation.py` 退出码 0。
+- [ ] 4.7（规范层可机械复核项，**本轮 2026-09-30 定稿**）日期桶与 id 内嵌时间的**同一时间源**：系统 MUST 以唯一时间源 `app/core/identifier.py::effective_now_ms()`（= `max(墙钟毫秒, 上次已发放毫秒)`）同时推出 id 内嵌 48 bit 毫秒时间戳与 `sessions/YYYY/MM/DD` 分桶 UTC 日期，MUST NOT 从两处独立取时。门槛（可机械复核）：全仓 `effective_now_ms` 的**生产消费点** MUST 至少含创建路径对分桶日期的推导（现仅 `app/core/identifier.py:78` 定义处，**生产消费点尚未接线**，故本项保持未勾）；接线后 `4.1` 的「分桶日期 == id 内嵌时间戳 UTC 日期」断言 MUST 由该同源关系直接推出、MUST NOT 依赖两次独立取时的偶然一致。**（注：id 生成侧已由 `c0096f11` 提供 `effective_now_ms` 与 `_last_issued_ms` 钳制，`uuid_utils.uuid7()` 亦自带进程内单调时钟，二者同源不回退；缺的是创建路径显式消费该函数来推分桶日期这一步。）**
 - [ ] 4.4（A3）实现「回拨与分桶互不冲突」语义：创建流程用同一已钳制时间源 `effective_created_ms = max(monotonic_now_ms, last_issued_ms)` 同时推出 id 内嵌时间戳与分桶 UTC 日期。门槛：新增测试断言「注入回拨后创建 session，其分桶日期与 id 内嵌时间戳一致且不报错」，退出码 0。
 - [ ] 4.5（A3）断言默认语义下回拨 MUST NOT 变成用户可见故障（不拒绝创建）；若实现选择「拒绝并报告」的显式配置语义，MUST 有对应测试并在文档判死二选一。门槛：`uv run pytest -q <该测试>` 退出码 0。
 - [ ] 4.6（A3）量化断言的负向测试：断言文档/实现不声称跨进程同毫秒有序或主键严格按时间相邻。门槛：对应断言测试退出码 0。

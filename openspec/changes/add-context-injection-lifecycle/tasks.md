@@ -97,7 +97,7 @@
 
 **同批登记的两条非 P1 落差（登记粒度不足，非本 change 的新义务）**：
 
-- **F3（P2）gateway scope_id 注入通道**：`add-multi-workspace-backend-mounting/tasks.md` 3.4 与 `add-unified-virtual-resource-addressing/tasks.md` 3.3 已登记来源裁定与「剩装配」，但**没有一条任务写「Gateway 侧按请求注入 `X-BoxTeam-Gateway-Id` 并接进 `ResolutionContext`」**；载体未闭合处是 `app/agents/skill_runtime.py:522` 的 `return "local", None`（该文件 `:507-513` 的 TODO 自述该改造需连锁 15 个 router）。裁定：补登记「注入通道」本身为可托付任务，归 `add-multi-workspace-backend-mounting`（另一切片）。
+- **F3（P2）gateway scope_id 注入通道（已闭合）**：`add-multi-workspace-backend-mounting/tasks.md` 3.4 的注入通道任务已补齐并落地——3.4-A（提交 `64ba30c8`，Gateway 侧按请求注入 `X-BoxTeam-Gateway-Id` 并接进工作区后端 `ResolutionContext` / `require_scope_binding`）、3.4-B（`53befbfc`，重启恢复的 pending job 携带持久 `gateway_id`）、3.4-C（`9881a3b2`，三条代理通道补齐注入）。原载体未闭合处 `app/agents/skill_runtime.py` 的 `return "local", None` 已由 `64ba30c8` 物理删除（`rg -n 'return "local"' app/agents/skill_runtime.py` 零命中）。本落差登记保持以留痕；MUST NOT 据本条目再补第二个注入通道任务。
 - **F2（P2）validator 拒绝码形态**：`invalid_session_id` / `invalid_thread_id` 是 `add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md:77` 唯一写死的结构化拒绝码，全仓零实现（现载体是 `app/core/session_catalog_store.py:251/264` 直接抛 `ValueError`）。裁定：该 Scenario 的「形态」要求改成「形态化错误」表述、或在实现里补 reason_code，二者择一，归 `add-itemized-rollout-context`（另一切片），不在本 change 实施。
 
 - [ ] 6.1 增加跨多次正常 model request的 stable-prefix byte golden test，覆盖 root system、用户/assistant/tool canonical append、full source、delta、tool loop、重复 dispatch和 adapter禁止合并；验证普通 append保持 epoch，而 ToolSet变化必须 hard rebase并更新 compatibility key。
