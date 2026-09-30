@@ -250,3 +250,71 @@
   包住；全量由 owner 最后统一跑一次。
 - 机器上曾残留 5 天前的僵尸探针进程（`/tmp/openspec_domain_sink/probe_bound.py`、
   `/tmp/bug_hunt_agents_tools/audit_refs.py`），已清理。
+
+## 第三轮增量（2026-09-30，HEAD `10d07f29`）
+
+### 本段新增提交（自 `33da3c48` 起，新→旧）
+
+- `10d07f29` 清理(死代码): 删除 `app/agents/tools/skill_loading.py` 的零引用 `_RESULT_KEYS` 常量
+  （1 文件 −15，0 新增）。A 段 5 条现已全部做完。
+- `f04fb787` 整理: 修 `64ba30c8` 触及 4 文件的 I001 导入排序，并把 3.4-A owner 裁定与
+  3.4-C 未注入通道补登进 `tasks.md`（5 文件）。
+- `15c2b8d0` 文档(openspec): 勾选 3.4-A 并补登实测，登记 3.4-B 重启恢复缺口。
+- `64ba30c8` 实现(gateway scope): 请求级注入 `X-BoxTeam-Gateway-Id` 贯通 skill catalog（3.4-A，15 文件）。
+- `ccec61a0` 测试(skill_load): 锁定 rebind 与 already_active 两维度组合边界并校正台账（6.2-B 收口）。
+- `357728b7` 去重: `fork/validation.py` 复用 `assembly/validation.py` 的 5 个 manifest 校验 helper（−23）。
+- `2ed1d2e1` 清理(死代码): 删除 `turn_history` v1 模型与 8 处零引用符号，折叠两 worker 重复校验（+7/−197）。
+- `a49bb0b0` 实现(skill_load): tracked 显式 rebind 与闭集取值 `rebound`（6.2-B）。
+- `f670d36c` 规范: migrate 拒绝码口径与 owner 侧三套登记一致（只引用 grammar/resolve 两套）。
+- `d649d418` 修复(会话目录): `_snapshot` 收敛为单次全 catalog 聚合。
+- `8dbbbce4` / `5c36fad2` 规范: VRN 8 项规范收口（引用侧具名化 / owner 侧闭集与行号）。
+- `16ff71af` 规范: 更正 §10.3a 的 `resolver.revision` 记账错误，登记 S8 与 §10.3b。
+- `532e25c6` 修复: §10.3a 消除会话目录快照 O(N^2)（`get` 改单节点查询与父链上溯）。
+
+### 已通过独立审查（作者≠审查者）
+
+| 提交 | 审查结论 | 报告 |
+| --- | --- | --- |
+| `d649d418`（§10.3b 方案 A） | 接受 | `out/tests/temp/review_10_3b/artifacts/REVIEW.md` |
+| `5c36fad2`+`8dbbbce4`（VRN 8 项） | 接受 | `out/tests/temp/review_vrn_spec/artifacts/REVIEW.md` |
+| `2ed1d2e1`（死代码清扫） | 接受 | `out/tests/temp/review_redundancy_cleanup/artifacts/REVIEW.md` |
+| `a49bb0b0`+`ccec61a0`（6.2-B rebind） | 有条件接受→两条件已在 `ccec61a0` 收口 | `out/tests/temp/review_skill_rebind/artifacts/REVIEW.md` |
+| `357728b7`（B1 去重） | 接受 | `out/tests/temp/review_dedup_b1/artifacts/REVIEW.md` |
+| `64ba30c8`+`15c2b8d0`+`f04fb787`（3.4-A） | 有条件接受→四条件由作者在 `f04fb787` 收口，owner 已复验 | `out/tests/temp/review_gateway_scope/artifacts/REVIEW.md` |
+
+### owner 裁定（本轮新增）
+
+- **3.4-A fail-closed 触发条件收窄获书面确认**：触发条件为「gateway 层有条目」；无条目时不
+  物化任何 gateway-scope URI、不产生虚假身份，故不强制 fail-closed。已登记进 `tasks.md` 3.4-A 子项。
+- **B1 权威定 `assembly/validation.py`**：依赖方向单向 `fork → assembly`；统一后消息**必须仍含
+  `manifest` 字样**（否则打穿 `test_turn_execution_recovery.py:1988` 的 `match="assembly manifest|manifest"`）。
+- **B2 不合并**：Gateway 控制面库与工作区库是两个独立持久化 owner，`config_pending_candidate` 的
+  `last_attempt_id/last_apply_id` 在两库迁移序列已实际分叉，各有独有表/方法。**否决**侦察报告的「−200 行」。
+- **B3 不抽**：asyncio stop 模板属合理分层代价。
+- **工作树无在途改动（重要）**：本会话末用全新索引
+  `GIT_INDEX_FILE=/tmp/root_fresh_probe.idx git read-tree HEAD` 复验，`git diff HEAD` 为 **0 文件**。
+  此前 `git status` 的 ~42 个 `MM` 与那条 `D tests/unit/services/mapping/itemized/test_selection_role_projection.py`
+  （blob `d94ce0bc` 与 HEAD 逐字相同）**均为共享 `.git/index` 停在 09:45 造成的陈旧假象**，无丢失的工作。
+  教训：判工作树一律 `git diff HEAD`；要彻底排除索引假象就用独立索引 `read-tree HEAD` 后比对。
+
+### 复用的 subagent（均在显式 `model=newapi-local/deepseek-v4.1-flash` + 显式 effort 下）
+
+实施类：`impl_10_3b_b`、`impl_skill_rebind_b`、`impl_gateway_scope`、`redundancy_cleanup`、`dedup_b1`、`vrn_spec_fix2`。
+侦察/裁定类：`redundancy_scout_v3`、`arch_owner_dedup`。
+审查类：`review_10_3b`、`review_vrn_spec`、`review_skill_rebind`、`review_redundancy_cleanup`、`review_dedup_b1`、`review_gateway_scope`。
+
+### 未实现缺口（如实登记，不得写成已修）
+
+- **3.4-B**：重启恢复的 pending job 无 request-scoped `gateway_id`（`PendingRequestDTO` 无该字段），
+  重启后队首 job 在 gateway 层 fail-closed。TODO 在 `app/services/business/job/service.py:1422`。
+- **3.4-C**：三条代理通道未注入该头——`app/gateway/auxiliary_proxy.py:310`（WebSocket 中继）、
+  `app/gateway/runtime/controller.py:539`（lifecycle/config 控制面）、`app/gateway/federation/workspace_port.py:64`（联邦冷目录 port）。
+- **6.2-B 后续**：同名层覆盖的同名层生产者侧端到端链路未接（已登记 `add-context-injection-lifecycle/tasks.md:95`）。
+- 更早遗留：uuidv7 §6 迁移未开工；§8.3 thread-qualified 主体；8.3-A/9.3 真实 turn/model_call 边界 +
+  activation 冻结点（三条实测阻断）；5A.3 移除 API 响应体 config 真实路径；§10.3 剩余 manifest O(N) 读。
+
+### 本轮验收
+
+- `openspec validate --strict --all` = **40 passed / 0 failed**（`/home/hyf/.bun/bin/openspec`）。
+- `python -c 'import app.main; import app.gateway.main'` 退出 0。
+- `f04fb787` / `10d07f29` 祖先链已核（`merge-base --is-ancestor` 均 0）。
