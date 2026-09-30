@@ -228,7 +228,7 @@ class _FakeCommunicationBindingLookup(CommunicationWaitBindingLookupPort):
 
         return CommunicationWaitBinding(
             target_session_id=self._target_session_id,
-            target_main_thread_id="thr_4f9d3a1e8b2c4d5f8a7b6c5d4e3f2a1b",
+            target_main_thread_id="thr_019c029a1afe79ff8c39e3ee33c2871b",
             job_id=self._job_id,
             turn_id=self._turn_id,
         )
@@ -417,7 +417,7 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
     job_service = _FakeJobService()
 
     tools = build_default_tools(
-        session_id="ses_6b0aece551ec486f8ccdb4c861329748",
+        session_id="ses_019bca51019973818b63e9d44c0e94f5",
         agent_id="deep_agent",
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
@@ -590,7 +590,7 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
 ):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     sessions_dir = tmp_path / ".boxteam" / "sessions"
-    session_bundle_factory(sessions_dir, "ses_6b0aece551ec486f8ccdb4c861329748")
+    session_bundle_factory(sessions_dir, "ses_019bca51019973818b63e9d44c0e94f5")
     background_message_bus = _FakeBackgroundMessageBus()
     background_task_registry = BackgroundTaskRegistry(
         history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
@@ -602,7 +602,7 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
     monkeypatch.setattr("app.agents.tools.background.asyncio.sleep", fake_sleep)
 
     tool = create_system_time_emitter_tool(
-        "ses_6b0aece551ec486f8ccdb4c861329748",
+        "ses_019bca51019973818b63e9d44c0e94f5",
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
     )
@@ -610,11 +610,11 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
     result = await tool.ainvoke({"interval_seconds": 0.01, "message_count": 3, "source_id": "clock-stream"})
 
     assert result["task_name"] == "emit_system_time_messages"
-    task = background_task_registry.get_task("ses_6b0aece551ec486f8ccdb4c861329748", result["task_id"])
+    task = background_task_registry.get_task("ses_019bca51019973818b63e9d44c0e94f5", result["task_id"])
     assert task is not None
     await task
 
-    handle = background_task_registry.get_handle("ses_6b0aece551ec486f8ccdb4c861329748", result["task_id"])
+    handle = background_task_registry.get_handle("ses_019bca51019973818b63e9d44c0e94f5", result["task_id"])
     assert handle is not None
     assert handle.status == "completed"
     assert handle.metadata["message_count"] == 3
@@ -629,22 +629,22 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
 @pytest.mark.asyncio
 async def test_wait_for_session_waits_job_to_terminal_state():
     job_service = _FakeWaitJobService(
-        session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+        session_id="ses_019c390d6a707c858709afddc785bf93",
         job_id="job_wait_1",
         states=["running", "running", "completed"],
     )
     tool = create_wait_for_session_tool(
-        "ses_f069fa2e62504cbd8364d7244de5d138",
+        "ses_019c390d6a707c858709afddc785bf93",
         job_service=job_service,
         binding_lookup=_FakeCommunicationBindingLookup(
-            target_session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+            target_session_id="ses_019c390d6a707c858709afddc785bf93",
             job_id="job_wait_1",
         ),
     )
 
     result = await tool.ainvoke(
         {
-            "target_session_id": "ses_f069fa2e62504cbd8364d7244de5d138",
+            "target_session_id": "ses_019c390d6a707c858709afddc785bf93",
             "job_id": "job_wait_1",
             "until": "terminal",
             "timeout_seconds": 10,
@@ -659,22 +659,22 @@ async def test_wait_for_session_waits_job_to_terminal_state():
 @pytest.mark.asyncio
 async def test_wait_for_session_times_out_with_real_observed_states():
     job_service = _FakeWaitJobService(
-        session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+        session_id="ses_019c390d6a707c858709afddc785bf93",
         job_id="job_wait_2",
         states=["running"],
     )
     tool = create_wait_for_session_tool(
-        "ses_f069fa2e62504cbd8364d7244de5d138",
+        "ses_019c390d6a707c858709afddc785bf93",
         job_service=job_service,
         binding_lookup=_FakeCommunicationBindingLookup(
-            target_session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+            target_session_id="ses_019c390d6a707c858709afddc785bf93",
             job_id="job_wait_2",
         ),
     )
 
     result = await tool.ainvoke(
         {
-            "target_session_id": "ses_f069fa2e62504cbd8364d7244de5d138",
+            "target_session_id": "ses_019c390d6a707c858709afddc785bf93",
             "job_id": "job_wait_2",
             "until": "terminal",
             "timeout_seconds": 1,
@@ -688,14 +688,14 @@ async def test_wait_for_session_times_out_with_real_observed_states():
 @pytest.mark.asyncio
 async def test_wait_for_session_rejects_multiple_selectors():
     tool = create_wait_for_session_tool(
-        "ses_f069fa2e62504cbd8364d7244de5d138",
+        "ses_019c390d6a707c858709afddc785bf93",
         job_service=_FakeWaitJobService(
-            session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+            session_id="ses_019c390d6a707c858709afddc785bf93",
             job_id="job_wait_3",
             states=["running"],
         ),
         binding_lookup=_FakeCommunicationBindingLookup(
-            target_session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+            target_session_id="ses_019c390d6a707c858709afddc785bf93",
             job_id="job_wait_3",
         ),
     )
@@ -703,7 +703,7 @@ async def test_wait_for_session_rejects_multiple_selectors():
     with pytest.raises(ValueError, match="至多传一个"):
         await tool.ainvoke(
             {
-                "target_session_id": "ses_f069fa2e62504cbd8364d7244de5d138",
+                "target_session_id": "ses_019c390d6a707c858709afddc785bf93",
                 "job_id": "job_wait_3",
                 "communication_id": "comm_extra",
                 "timeout_seconds": 10,
@@ -714,23 +714,23 @@ async def test_wait_for_session_rejects_multiple_selectors():
 @pytest.mark.asyncio
 async def test_wait_for_session_communication_selector_waits_binding():
     lookup = _FakeCommunicationBindingLookup(
-        target_session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+        target_session_id="ses_019c390d6a707c858709afddc785bf93",
         job_id=None,
     )
     job_service = _FakeWaitJobService(
-        session_id="ses_f069fa2e62504cbd8364d7244de5d138",
+        session_id="ses_019c390d6a707c858709afddc785bf93",
         job_id="job_bound_late",
         states=["completed"],
     )
     tool = create_wait_for_session_tool(
-        "ses_f069fa2e62504cbd8364d7244de5d138",
+        "ses_019c390d6a707c858709afddc785bf93",
         job_service=job_service,
         binding_lookup=lookup,
     )
 
     result = await tool.ainvoke(
         {
-            "target_session_id": "ses_f069fa2e62504cbd8364d7244de5d138",
+            "target_session_id": "ses_019c390d6a707c858709afddc785bf93",
             "communication_id": "comm_pending",
             "until": "terminal",
             "timeout_seconds": 1,

@@ -41,7 +41,7 @@ from app.gateway.runtime.process import allocate_local_port_in_range
 pytestmark = pytest.mark.contract
 
 PORT_RANGE = (8810, 8819)
-MAIN_C = "thr_44444444444444444444444444444444"
+MAIN_C = "thr_019bb545cb1f7ddc999cc895fa6285bc"
 
 
 class _Catalog:

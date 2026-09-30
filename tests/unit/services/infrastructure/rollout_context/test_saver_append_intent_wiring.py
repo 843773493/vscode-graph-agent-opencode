@@ -21,7 +21,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 
-SESSION_ID = "ses_5f8c31a29d4b47e6b3d2a1c8e9f00417"
+SESSION_ID = "ses_019be3a6514379e7a28a7ad83396e698"
 
 
 @pytest.fixture

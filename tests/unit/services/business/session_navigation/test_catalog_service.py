@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -17,14 +16,14 @@ from app.schemas.internal_v2.session_navigation import (
     SessionFolderUpdateRequest,
 )
 from app.services.business.session_navigation import SessionCatalogService
+from tests.support.canonical_id_at import uuid7_hex_from_name
 
 T = TypeVar("T")
 
 
 def canonical(name: str) -> str:
-    """R17 任务书 §2.2 的确定性 canonical session ID 映射（测试用）。"""
-    digest = hashlib.md5(name.encode("utf-8")).hexdigest()
-    return f"ses_{digest[:12]}4{digest[13:16]}8{digest[17:]}"
+    """R17 任务书 §2.2 的确定性 canonical session ID 映射（v7 位 profile）。"""
+    return f"ses_{uuid7_hex_from_name(name)}"
 
 
 def _relocate(
@@ -100,7 +99,7 @@ async def test_catalog_cache_detects_manual_physical_move(
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
     source_folder = resolver.create_folder(name="原目录", parent_node_id=None)
-    session_id = "ses_c5e66e7374644cf18313e592100ccfad"
+    session_id = "ses_019c3db33a627857869df585e7b8a084"
     session_dir = session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, source_folder.node_id)
     catalog = SessionCatalogService(session_service=session_service)
@@ -108,22 +107,22 @@ async def test_catalog_cache_detects_manual_physical_move(
     first_node = next(
         node
         for node in first.items
-        if node.node_id == "ses_c5e66e7374644cf18313e592100ccfad"
+        if node.node_id == "ses_019c3db33a627857869df585e7b8a084"
     )
     # 手工挪动日期桶目录后按 ID 解析必须 fail closed。
     moved_path = tmp_path / "手工挪走" / session_dir.name
     moved_path.parent.mkdir(parents=True, exist_ok=True)
     resolver.resolve_session_node(
-        "ses_c5e66e7374644cf18313e592100ccfad"
+        "ses_019c3db33a627857869df585e7b8a084"
     ).replace(moved_path)
     with pytest.raises(RuntimeError, match="会话物理目录缺失"):
         session_service.path_resolver.resolve_session_node(
-            "ses_c5e66e7374644cf18313e592100ccfad"
+            "ses_019c3db33a627857869df585e7b8a084"
         )
 
     assert first_node.parent_node_id == source_folder.node_id
     assert first_node.session is not None
-    assert first_node.session.session_id == "ses_c5e66e7374644cf18313e592100ccfad"
+    assert first_node.session.session_id == "ses_019c3db33a627857869df585e7b8a084"
     assert first_node.session.title == first_node.name
     assert first_node.session.parent_session_id is None
 
@@ -137,7 +136,7 @@ async def test_catalog_snapshot_enriches_session_nodes_and_reuses_cached_metadat
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
     folder = resolver.create_folder(name="目录元数据", parent_node_id=None)
-    session_id = "ses_e15deaf2c9814eb98a80eb270589c96e"
+    session_id = "ses_019bfa471b36790187e1d914607718e5"
     session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, folder.node_id)
     catalog = SessionCatalogService(session_service=session_service)
@@ -174,7 +173,7 @@ async def test_catalog_read_keeps_authoritative_nodes_when_physical_tree_has_orp
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
     folder = resolver.create_folder(name="归档", parent_node_id=None)
-    session_id = "ses_ad68159b274149068514905d0d25cfe3"
+    session_id = "ses_019c1d3a6c9b7150818dc58e43efafb1"
     session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, folder.node_id)
 

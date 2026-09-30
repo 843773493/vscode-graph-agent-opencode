@@ -79,19 +79,19 @@ async def test_job_service_restores_only_messages_still_in_queue(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "ses_b76b381fb39f462c8ba0bf653ddd1f81")
+    session_bundle_factory(sessions_dir, "ses_019c018e721e70b38f769ca61010e13a")
     store = PendingRequestStore(sessions_dir=sessions_dir)
     await store.save(
-        "ses_b76b381fb39f462c8ba0bf653ddd1f81",
+        "ses_019c018e721e70b38f769ca61010e13a",
         [
             _request(
-                "ses_b76b381fb39f462c8ba0bf653ddd1f81",
+                "ses_019c018e721e70b38f769ca61010e13a",
                 job_id="job_first",
                 message_id="msg_first",
                 sequence=1,
             ),
             _request(
-                "ses_b76b381fb39f462c8ba0bf653ddd1f81",
+                "ses_019c018e721e70b38f769ca61010e13a",
                 job_id="job_second",
                 message_id="msg_second",
                 sequence=2,
@@ -103,7 +103,7 @@ async def test_job_service_restores_only_messages_still_in_queue(
     started_jobs: list[str] = []
     _prevent_background_execution(service, monkeypatch, started_jobs)
 
-    restored = await service.list_pending("ses_b76b381fb39f462c8ba0bf653ddd1f81")
+    restored = await service.list_pending("ses_019c018e721e70b38f769ca61010e13a")
 
     assert restored.active_job_id == "job_first"
     assert [item.message_id for item in restored.requests] == ["msg_second"]
@@ -118,12 +118,12 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, "ses_9997e691555f4f8b8f26d8b6f14be16c")
+    session_bundle_factory(sessions_dir, "ses_019b8605a35b7fd6829e9dfec660d38c")
     store = PendingRequestStore(sessions_dir=sessions_dir)
     await store.save(
-        "ses_9997e691555f4f8b8f26d8b6f14be16c",
+        "ses_019b8605a35b7fd6829e9dfec660d38c",
         [_request(
-            "ses_9997e691555f4f8b8f26d8b6f14be16c",
+            "ses_019b8605a35b7fd6829e9dfec660d38c",
             job_id="job_restored_first",
             message_id="msg_restored_first",
             sequence=1,
@@ -134,9 +134,9 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
     _prevent_background_execution(service, monkeypatch, started_jobs)
 
     _snapshot, new_dispatch = await asyncio.gather(
-        service.list_pending("ses_9997e691555f4f8b8f26d8b6f14be16c"),
+        service.list_pending("ses_019b8605a35b7fd6829e9dfec660d38c"),
         service.start_job(
-            "ses_9997e691555f4f8b8f26d8b6f14be16c",
+            "ses_019b8605a35b7fd6829e9dfec660d38c",
             "后发送",
             message_id="msg_new",
             message_created_at=datetime.now(UTC).isoformat(),
@@ -145,8 +145,8 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
 
     assert started_jobs == ["job_restored_first"]
     assert new_dispatch.job_status == "queued"
-    assert service._session_current_job["ses_9997e691555f4f8b8f26d8b6f14be16c"] == "job_restored_first"
-    assert service._pending_queue.ids("ses_9997e691555f4f8b8f26d8b6f14be16c") == (new_dispatch.job_id,)
+    assert service._session_current_job["ses_019b8605a35b7fd6829e9dfec660d38c"] == "job_restored_first"
+    assert service._pending_queue.ids("ses_019b8605a35b7fd6829e9dfec660d38c") == (new_dispatch.job_id,)
 
 
 @pytest.mark.asyncio
@@ -156,7 +156,7 @@ async def test_dispatch_removes_started_head_from_persistent_queue(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_4e7f9d1f94164ede8f4e7f15fbec36bb"
+    session_id = "ses_019c5edf70037e1791483733a8865f97"
     session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
     await store.save(
@@ -191,7 +191,7 @@ async def test_restored_pending_job_carries_persisted_gateway_id(
 ) -> None:
     """磁盘恢复的待处理 Job 必须沿用创建时持久化的真实 gateway_id。"""
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_5f2c8a1b9d3e4c6f8a0b1c2d3e4f5a6b"
+    session_id = "ses_019b990a9cce734bbccc60ec5321f320"
     session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
     await store.save(

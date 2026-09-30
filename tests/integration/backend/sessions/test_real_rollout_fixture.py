@@ -41,8 +41,8 @@ from tests.integration.backend.sessions.deterministic_rollout_fixture_helpers im
 from tests.support.paths import output_root_for_test
 from tests.support.workspaces import prepare_default_test_workspace
 
-REAL_SESSION_ID = "ses_8128d7f0a4b64aa0b3f1c9e7d2a65018"
-STATIC_MOCK_SESSION_ID = "ses_a1b2c3d4e5f6478899aabbccddeeff00"
+REAL_SESSION_ID = "ses_019c27f816b17ee394a67f9312bb669e"
+STATIC_MOCK_SESSION_ID = "ses_019c642bc2ec78718d0a296b3319d6df"
 
 
 @pytest.fixture
@@ -159,7 +159,7 @@ def test_custom_tool_fixture_asset_contract(
         assert not (session_node / "payloads").exists()
 
     compact_index = (
-        resolver.resolve_session_node("ses_4c0a1d6e7f8b49a2b5c6d7e8f9012345")
+        resolver.resolve_session_node("ses_019c3afc2c2674a58a36a8a7b1ad0f8b")
         / "rollout"
         / "index.sqlite"
     )
@@ -193,7 +193,7 @@ def test_custom_tool_fixture_asset_contract(
         assert hashlib.sha256(blob).hexdigest() == digest
         # 仅审核可信 fixture 的原始 BLOB，不通过 runtime 的 v1 checkpoint reader。
         compact_event = JsonPlusSerializer().loads_typed((serializer, blob))
-    assert_fixture_import_rejected("ses_4c0a1d6e7f8b49a2b5c6d7e8f9012345")
+    assert_fixture_import_rejected("ses_019c3afc2c2674a58a36a8a7b1ad0f8b")
     assert compact_event["strategy"] == "cache_preserving"
     assert compact_event["cutoff_index"] == 64
     assert compact_event["cache_prefix_messages"] == []

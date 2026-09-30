@@ -20,7 +20,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 
-SESSION_ID = "ses_6a1b47e2c05d4f8fa3b7d92c5e041762"
+SESSION_ID = "ses_019c38b8b88476a58ce3735618d44bc8"
 
 TOOLS_A = (
     {"type": "function", "function": {"name": "get_goal", "parameters": {}}},

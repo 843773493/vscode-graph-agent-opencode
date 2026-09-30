@@ -21,7 +21,7 @@ from app.services.mapping.itemized.resource_activation import (
     resource_projection_order_key,
 )
 
-SESSION_ID = "ses_2d9b8c7a6f5e4d3c2b1a098765432100"
+SESSION_ID = "ses_019c2b8707cf79388ef1648fa32ee819"
 
 
 def _binding(

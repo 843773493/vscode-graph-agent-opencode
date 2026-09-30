@@ -374,4 +374,4 @@ async def test_resolve_main_thread_missing_session_is_not_found(
     service, _ = catalog_service
 
     with pytest.raises(NotFoundError):
-        await service.resolve_main_thread("ses_00000000000040008000000000000000")
+        await service.resolve_main_thread("ses_00000000000070008000000000000000")

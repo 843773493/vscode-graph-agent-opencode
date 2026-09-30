@@ -25,7 +25,7 @@ def message_stream_api() -> tuple[FastAPI, MessageStreamStore, str, str]:
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     # API 路径参数强制 canonical session_id（OpenSpec 2.1）。
-    session_id = "ses_12345678123446788234567812345678"
+    session_id = "ses_019bef80066f7038ae8e88ccb2e5e2ea"
     turn_id = "job_message_stream_api"
     seed_catalog_session_bundle(sessions_root, session_id)
 

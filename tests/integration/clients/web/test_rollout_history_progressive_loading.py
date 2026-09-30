@@ -44,7 +44,7 @@ from tests.support.web_boundary_seeding import (
 )
 from tests.support.workspaces import prepare_default_test_workspace
 
-STATIC_LONG_SESSION_ID = "ses_9f4e2c7a1b6d4830a5e8f2c1d7b90436"
+STATIC_LONG_SESSION_ID = "ses_019be55bdf8d715d8efbb8419fbc7cd7"
 LONG_SESSION_TOOL_CALL_ID = "call_chat_reasoning_tool"
 LONG_SESSION_TOOL_NAME = "invoke_extension_tool"
 LONG_SESSION_FINAL_TEXT = "工具调用完成"

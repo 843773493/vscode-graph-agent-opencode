@@ -27,8 +27,8 @@ from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_bounda
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 
-SOURCE_SESSION_ID = "ses_700882fcaad94e7caa0555eca9273d35"
-TARGET_SESSION_ID = "ses_0b3f5c2d9a1e4f6087aa2b7c3d5e6f80"
+SOURCE_SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
+TARGET_SESSION_ID = "ses_019c40c2b8e9796588b3e3c86dee2e44"
 
 
 def _checkpoint(

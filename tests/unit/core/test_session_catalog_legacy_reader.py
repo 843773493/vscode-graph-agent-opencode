@@ -21,8 +21,8 @@ from app.core.session_catalog_legacy_reader import (
 CREATED_AT = datetime(2026, 6, 1, 12, tzinfo=UTC).isoformat()
 UPDATED_AT = datetime(2026, 6, 2, 12, tzinfo=UTC).isoformat()
 FOLDER_ID = "fld_1234567890abcdef1234567890abcdef"
-ROOT_SESSION_ID = "ses_1234567890abcdef1234567890abcdef"
-CHILD_SESSION_ID = "ses_abcdef1234567890abcdef1234567890"
+ROOT_SESSION_ID = "ses_019c72de7e427a7e8983d6368ab3b8e7"
+CHILD_SESSION_ID = "ses_019bf2ac49377d088b2b634f59a9e0cd"
 
 
 def _write_json(path: Path, value: object) -> None:

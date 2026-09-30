@@ -23,7 +23,7 @@ from app.services.orchestration.resource_activation import (
     ResourceActivationPolicySnapshot,
 )
 
-SESSION_ID = "ses_9d2f0e5a1c3b4a6f8e7d6c5b4a392817"
+SESSION_ID = "ses_019c5facabc37e5c89a5c9584ed39862"
 
 
 class _FakeSaver:

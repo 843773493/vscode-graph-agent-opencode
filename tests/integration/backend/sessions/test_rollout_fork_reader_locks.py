@@ -24,8 +24,8 @@ from tests.integration.backend.sessions.test_rollout_fork_protected import (
     protected_source as protected_source,  # noqa: PLC0414 - 不运行其它正式文件
 )
 
-SOURCE_SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
-TARGET_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
+SOURCE_SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
+TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
 
 
 def _locks(index: Path) -> list[str]:

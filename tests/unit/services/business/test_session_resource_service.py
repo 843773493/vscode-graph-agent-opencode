@@ -55,7 +55,7 @@ class FakeTerminalManagerClient:
         return {
             "terminal": {
                 "terminal_id": terminal_id,
-                "session_id": "ses_6c641126a1ce422983d711db6662e72a",
+                "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
                 "status": "cancelled",
             }
         }
@@ -80,7 +80,7 @@ class FakeBrowserManagerClient:
     async def close_browser(self, browser_id: str) -> dict[str, object]:
         return {
             "browser_id": browser_id,
-            "session_id": "ses_6c641126a1ce422983d711db6662e72a",
+            "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
             "status": "closed",
             "created_at": "2026-07-05T01:02:03+00:00",
             "updated_at": "2026-07-05T01:02:04+00:00",
@@ -93,7 +93,7 @@ class FakeBrowserManagerClient:
             "browser_id": browser_id,
             "browser": {
                 "browser_id": browser_id,
-                "session_id": "ses_6c641126a1ce422983d711db6662e72a",
+                "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
                 "status": "deleted",
                 "created_at": "2026-07-05T01:02:03+00:00",
                 "updated_at": "2026-07-05T01:02:04+00:00",
@@ -104,7 +104,7 @@ class FakeBrowserManagerClient:
         self.woken_browser_ids.append(browser_id)
         return {
             "browser_id": browser_id,
-            "session_id": "ses_6c641126a1ce422983d711db6662e72a",
+            "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
             "status": "running",
             "resource_state": "active",
             "created_at": "2026-07-05T01:02:03+00:00",
@@ -283,7 +283,7 @@ def test_browser_resource_projection_excludes_checkpoint_real_path():
 async def test_cold_recycled_browser_exposes_resume_action():
     browser = {
         "browser_id": "browser_cold",
-        "session_id": "ses_6c641126a1ce422983d711db6662e72a",
+        "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
         "status": "lost",
         "resource_state": "discarded",
         "checkpoint": {"version": 1, "browser_id": "browser_cold"},
@@ -295,7 +295,7 @@ async def test_cold_recycled_browser_exposes_resume_action():
         resource_mapper=_resource_mapper(),
     )
 
-    resources = await provider.list_resources("ses_6c641126a1ce422983d711db6662e72a")
+    resources = await provider.list_resources("ses_019b94653e71714b8d406f83ab3d2b3b")
     resource = resources[0]
 
     assert resource.available_actions == ["resume", "delete"]
@@ -306,7 +306,7 @@ async def test_cold_recycled_browser_exposes_resume_action():
 async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
     terminal = {
         "terminal_id": "term_live",
-        "session_id": "ses_6c641126a1ce422983d711db6662e72a",
+        "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
         "status": "running",
         "created_at": "2026-07-05T01:02:03+00:00",
         "updated_at": "2026-07-05T01:02:04+00:00",
@@ -325,7 +325,7 @@ async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
         resource_mapper=_resource_mapper(),
     )
 
-    resources = await provider.list_resources("ses_6c641126a1ce422983d711db6662e72a", include_history=False)
+    resources = await provider.list_resources("ses_019b94653e71714b8d406f83ab3d2b3b", include_history=False)
 
     assert [resource.resource_id for resource in resources] == ["term_live"]
     assert resources[0].status == "running"
@@ -335,7 +335,7 @@ async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
 async def test_browser_fast_listing_excludes_closed_state_records() -> None:
     browser = {
         "browser_id": "browser_live",
-        "session_id": "ses_6c641126a1ce422983d711db6662e72a",
+        "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
         "status": "running",
         "created_at": "2026-07-05T01:02:03+00:00",
         "updated_at": "2026-07-05T01:02:04+00:00",
@@ -354,7 +354,7 @@ async def test_browser_fast_listing_excludes_closed_state_records() -> None:
         resource_mapper=_resource_mapper(),
     )
 
-    resources = await provider.list_resources("ses_6c641126a1ce422983d711db6662e72a", include_history=False)
+    resources = await provider.list_resources("ses_019b94653e71714b8d406f83ab3d2b3b", include_history=False)
 
     assert [resource.resource_id for resource in resources] == ["browser_live"]
 
@@ -363,7 +363,7 @@ async def test_browser_fast_listing_excludes_closed_state_records() -> None:
 async def test_browser_provider_resumes_cold_recycled_browser():
     browser = {
         "browser_id": "browser_cold",
-        "session_id": "ses_6c641126a1ce422983d711db6662e72a",
+        "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
         "status": "lost",
         "resource_state": "discarded",
         "checkpoint": {"version": 1, "browser_id": "browser_cold"},
@@ -377,7 +377,7 @@ async def test_browser_provider_resumes_cold_recycled_browser():
     )
 
     result = await provider.control(
-        session_id="ses_6c641126a1ce422983d711db6662e72a",
+        session_id="ses_019b94653e71714b8d406f83ab3d2b3b",
         resource_id="browser_cold",
         action="resume",
     )
@@ -393,7 +393,7 @@ async def test_browser_provider_excludes_deleted_records(
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "ses_567b4e6d138241cf8e4437ccd3ea8574"
+    session_id = "ses_019bb7ec49017d8cac52d5b674fa1b7e"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
     registry = BackgroundTaskRegistry(
@@ -431,7 +431,7 @@ async def test_list_includes_closed_background_task_history(
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "ses_0877fe691f674aeb87ceee8aa1bac98d"
+    session_id = "ses_019c7618ac207a1e89d845aa0622881f"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
     registry = BackgroundTaskRegistry(
@@ -471,7 +471,7 @@ async def test_list_excludes_deleted_background_task_history(
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "ses_4f81dbfef7aa4af28a7179ad43f9c324"
+    session_id = "ses_019beb2ad93f78668af7471f0ac9538c"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
     registry = BackgroundTaskRegistry(
@@ -508,7 +508,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "ses_0b43c3352fcf4a3282cba225c589d043"
+    session_id = "ses_019b7fe1fe727dcf8650ad9c92cb293e"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
     registry = BackgroundTaskRegistry(
@@ -567,7 +567,7 @@ async def test_cancel_background_task_does_not_inject_monitor_reminder(
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "ses_fdf5e84b787346a487840d4348decbd4"
+    session_id = "ses_019c74e9583b7f338610345dcba9c87a"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=sessions_dir)
@@ -600,8 +600,8 @@ async def test_cancel_background_task_does_not_inject_monitor_reminder(
         task_name="emit_system_time_messages",
         runner=long_running_task,
         metadata={
-            "target_session_id": "ses_46a586acaf1a4fa5865c0b98fc8da879",
-            "source_id": "monitor:ses_46a586acaf1a4fa5865c0b98fc8da879:test",
+            "target_session_id": "ses_019c5c7f1b45719b82d809baecd377f0",
+            "source_id": "monitor:ses_019c5c7f1b45719b82d809baecd377f0:test",
         },
     )
     message_service = build_message_service(sessions_dir, checkpointer=saver)

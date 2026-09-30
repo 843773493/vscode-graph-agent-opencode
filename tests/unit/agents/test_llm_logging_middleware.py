@@ -22,7 +22,7 @@ def test_llm_log_persists_request_and_tool_stats_without_prompt_replay(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_e6d2707870e54cab8c135193c0802532"
+    session_id = "ses_019c205391bb7a4b81b6728df70f63e6"
     session_dir = session_bundle_factory(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
@@ -88,7 +88,7 @@ def test_llm_log_merges_redacted_upstream_request_and_response(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_a03b3d8d67eb46e483f7e0c5fc296fae"
+    session_id = "ses_019bfd6198be7272a4dfb986435f5ce9"
     session_dir = session_bundle_factory(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
@@ -155,7 +155,7 @@ def test_llm_log_bounds_large_payload_and_keeps_valid_json(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_63b1e65e253d4e348ef2255613c8c915"
+    session_id = "ses_019c3e9e888d763686f44635367d4dd9"
     session_dir = session_bundle_factory(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
@@ -209,7 +209,7 @@ def test_llm_log_persists_failed_upstream_attempt(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_3785202dfada418b8c2fe1925714d0d7"
+    session_id = "ses_019c47af8f1a75e08243db221ad02820"
     session_dir = session_bundle_factory(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(

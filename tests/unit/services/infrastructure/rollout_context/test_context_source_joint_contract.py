@@ -64,9 +64,9 @@ from tests.unit.services.infrastructure.test_context_source_reactor import (
     _write_skill,
 )
 
-MAIN_SESSION_ID = "ses_1cb2d44643ae45818a69dc2c654c06c7"
-CHILD_SESSION_ID = "ses_29399ea68ac24d0d8dfbb63d746c985e"
-ALT_SESSION_ID = "ses_47a1c2e9b0d34f5a8c6e7d2b1f0a9e83"
+MAIN_SESSION_ID = "ses_019c3dbcb2f6749b85bed7b51dfe889d"
+CHILD_SESSION_ID = "ses_019c52c6b01c7733850a1aaf64ac579e"
+ALT_SESSION_ID = "ses_019c58bdb8c670748915904c8d96a75f"
 
 
 TOOL_KEY_TOKEN = "sha256:jcs:v1:" + "a" * 64

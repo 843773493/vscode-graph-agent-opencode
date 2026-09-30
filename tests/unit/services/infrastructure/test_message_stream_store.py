@@ -39,7 +39,7 @@ def message_stream_store() -> tuple[MessageStreamStore, object, str]:
     _cached_session_catalog_components.cache_clear()
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
-    session_id = "ses_00000000400040008000000000000011"
+    session_id = "ses_00000000400070008000000000000011"
     seed_catalog_session_bundle(sessions_root, session_id)
     return MessageStreamStore(path_resolver=resolver), resolver, session_id
 

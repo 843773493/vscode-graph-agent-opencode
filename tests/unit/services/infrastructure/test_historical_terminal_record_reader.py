@@ -14,7 +14,7 @@ def test_reader_ignores_terminal_results_copied_from_parent_context(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_bundle_factory(tmp_path, "ses_3f6bd5ea76cd451389bb1f0b3fa2127a")
+    session_bundle_factory(tmp_path, "ses_019bb70d48ae73aa8f4c1ab8b2c6678b")
     reader = HistoricalTerminalRecordReader(
         sessions_dir=tmp_path,
     )
@@ -33,7 +33,7 @@ def test_reader_ignores_terminal_results_copied_from_parent_context(
     }
 
     records = reader.read_records(
-        session_id="ses_3f6bd5ea76cd451389bb1f0b3fa2127a",
+        session_id="ses_019bb70d48ae73aa8f4c1ab8b2c6678b",
         active_terminals=[],
         agent_state_records=[copied_record],
     )
@@ -45,7 +45,7 @@ def test_reader_keeps_terminal_results_created_in_current_context(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_bundle_factory(tmp_path, "ses_3f6bd5ea76cd451389bb1f0b3fa2127a")
+    session_bundle_factory(tmp_path, "ses_019bb70d48ae73aa8f4c1ab8b2c6678b")
     reader = HistoricalTerminalRecordReader(
         sessions_dir=tmp_path,
     )
@@ -61,7 +61,7 @@ def test_reader_keeps_terminal_results_created_in_current_context(
     }
 
     records = reader.read_records(
-        session_id="ses_3f6bd5ea76cd451389bb1f0b3fa2127a",
+        session_id="ses_019bb70d48ae73aa8f4c1ab8b2c6678b",
         active_terminals=[],
         agent_state_records=[native_record],
     )
@@ -73,7 +73,7 @@ def test_reader_recovers_legacy_truncated_json_with_raw_newlines(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_bundle_factory(tmp_path, "ses_022688effb79462d886cfd4edec831e4")
+    session_bundle_factory(tmp_path, "ses_022688effb79762d886cfd4edec831e4")
     reader = HistoricalTerminalRecordReader(sessions_dir=tmp_path)
     legacy_content = (
         '{"chunk_id": "term_legacy", "output": "head\n\n'
@@ -81,7 +81,7 @@ def test_reader_recovers_legacy_truncated_json_with_raw_newlines(
     )
 
     records = reader.read_records(
-        session_id="ses_022688effb79462d886cfd4edec831e4",
+        session_id="ses_022688effb79762d886cfd4edec831e4",
         active_terminals=[],
         agent_state_records=[
             {
@@ -99,12 +99,12 @@ def test_reader_still_reports_irrecoverable_exec_command_json(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_bundle_factory(tmp_path, "ses_425515d88940460d87e63f57334ff320")
+    session_bundle_factory(tmp_path, "ses_019bd9dc00387d888c7c3142b5e8b65c")
     reader = HistoricalTerminalRecordReader(sessions_dir=tmp_path)
 
     with pytest.raises(json.JSONDecodeError, match="Expecting property name"):
         reader.read_records(
-            session_id="ses_425515d88940460d87e63f57334ff320",
+            session_id="ses_019bd9dc00387d888c7c3142b5e8b65c",
             active_terminals=[],
             agent_state_records=[
                 {
@@ -167,7 +167,7 @@ def test_reader_takes_historical_terminal_times_from_trace_tool_call_end(
     session_bundle_factory,
 ) -> None:
     """历史终端三个时间字段必须来自 Trace 的 tool_call_end 事件时间。"""
-    session_id = "ses_3f6bd5ea76cd451389bb1f0b3fa2127a"
+    session_id = "ses_019bb70d48ae73aa8f4c1ab8b2c6678b"
     bundle = session_bundle_factory(tmp_path, session_id)
     trace_time = "2026-09-13T06:18:47.823837Z"
     _write_tool_call_end_trace(
@@ -196,7 +196,7 @@ def test_reader_uses_epoch_when_historical_terminal_trace_is_missing(
     session_bundle_factory,
 ) -> None:
     """Trace 缺失时三个时间字段统一退回 epoch 兜底，不得产生虚假时间。"""
-    session_id = "ses_022688effb79462d886cfd4edec831e4"
+    session_id = "ses_022688effb79762d886cfd4edec831e4"
     session_bundle_factory(tmp_path, session_id)
     reader = HistoricalTerminalRecordReader(sessions_dir=tmp_path)
 

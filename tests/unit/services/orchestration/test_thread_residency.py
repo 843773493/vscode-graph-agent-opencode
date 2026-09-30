@@ -73,7 +73,7 @@ from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )
 
-_PARENT_SESSION_ID = "ses_00000000400040008000000000000001"
+_PARENT_SESSION_ID = "ses_00000000400070008000000000000001"
 _THREAD_ID = "main"
 _OWNER = (_PARENT_SESSION_ID, _THREAD_ID)
 _CONFIGURATION_ID = "dbgcfg_33333333333333333333333333333333"
@@ -921,7 +921,7 @@ async def test_snapshot_fields_complete_and_blocker_reasons_sanitized(
 
     # 未阻断 thread 的展示字段：deadline 与 idle 正常展示。
     # pull 源按权威目录索引解析 thread，第二个 thread 用真实会话节点。
-    other_session = "ses_00000000400040008000000000000007"
+    other_session = "ses_00000000400070008000000000000007"
     _create_session(session_tree.sessions_root, other_session)
     tracker.record_activity(other_session, "main")
     unblocked = tracker.snapshot(other_session, "main")

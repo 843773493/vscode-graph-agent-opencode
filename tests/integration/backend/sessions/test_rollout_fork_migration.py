@@ -19,9 +19,9 @@ from tests.integration.backend.sessions.itemized_migration_helpers import (
     prepare_migration_workspace,
 )
 
-SOURCE_SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
-TARGET_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
-GRANDCHILD_SESSION_ID = "ses_5ce2590d35c74fd9a71e8d7526be328c"
+SOURCE_SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
+TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
+GRANDCHILD_SESSION_ID = "ses_019bf2257d7e7fd38db6585cdd161690"
 
 
 @pytest.fixture

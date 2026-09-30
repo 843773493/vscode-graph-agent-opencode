@@ -128,7 +128,7 @@ def test_real_builder_save_load_resolve_rebuild(tmp_path: Path) -> None:
 
     store = _make_store(tmp_path)
     owner = GraphBindingOwnerKey(
-        session_id="ses_00000000000000000000000000000000",
+        session_id="ses_019c58e6e9f5713785f99a3f3e5768d8",
         thread_id=MAIN_THREAD_ID,
     )
 
@@ -157,7 +157,7 @@ def test_tampered_binding_fails_resolve_without_fallback(
 
     store = _make_store(tmp_path)
     owner = GraphBindingOwnerKey(
-        session_id="ses_00000000000000000000000000000000",
+        session_id="ses_019c58e6e9f5713785f99a3f3e5768d8",
         thread_id=MAIN_THREAD_ID,
     )
     store.save_graph_binding(owner, DEEP_AGENT_GRAPH_BINDING)
@@ -205,7 +205,7 @@ def test_store_directory_is_created_on_first_save(tmp_path: Path) -> None:
         directory=tmp_path / ".boxteam" / "graph-bindings"
     )
     owner = GraphBindingOwnerKey(
-        session_id="ses_00000000000000000000000000000000",
+        session_id="ses_019c58e6e9f5713785f99a3f3e5768d8",
         thread_id=MAIN_THREAD_ID,
     )
     store.save_graph_binding(owner, DEEP_AGENT_GRAPH_BINDING)
@@ -220,7 +220,7 @@ def test_store_directory_is_created_on_first_save(tmp_path: Path) -> None:
 
 def _owner() -> GraphBindingOwnerKey:
     return GraphBindingOwnerKey(
-        session_id="ses_00000000000000000000000000000000",
+        session_id="ses_019c58e6e9f5713785f99a3f3e5768d8",
         thread_id=MAIN_THREAD_ID,
     )
 
