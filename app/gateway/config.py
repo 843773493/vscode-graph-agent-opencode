@@ -15,6 +15,7 @@ from typing import Literal, cast
 
 from app.core.config_sources import (
     ConfigSource,
+    ConfigSourceLayer,
     config_revision,
     parse_stable_config_file,
     read_stable_config_file,
@@ -51,6 +52,18 @@ from app.services.infrastructure.config.state import (
 )
 from configs.installer import resolve_config_resource_source
 from configs.runtime import merge_json_objects, read_jsonc_object, validate_config
+
+# Gateway 来源权威表：每个 source_key 的逻辑来源层与 precedence 只在本文件登记一次。
+# `_gateway_source_detail`（有 state store）与无 store 分支都只查它。Gateway 控制面库
+# 与工作区库是两个独立持久化 owner（owner 裁定 B2「不合并」），故本表是 Gateway 侧
+# 自有权威表，MUST NOT 从 workspace 侧 import 共享；但取值语义与 workspace 侧一致。
+# `gateway_mutable_override`→`user`、`gateway_local_mutable_override`→`user_local` 与
+# 无 store 分支逐字一致——有 store 时共享 `gateway.sqlite` 只是**承载事实**，MUST NOT
+# 有损改写成 `sqlite` 对外暴露；不可寻址性一律以 `vrn=None` 表达。
+_GATEWAY_SOURCE_LAYER_AUTHORITY: dict[str, tuple[ConfigSourceLayer, int]] = {
+    "gateway_mutable_override": ("user", 1),
+    "gateway_local_mutable_override": ("user_local", 2),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -634,14 +647,20 @@ def _gateway_source_detail(
     state_store: GatewayStateStore,
     config_key: str,
     *,
-    precedence: int,
     fallback_path: Path,
 ) -> ConfigSource:
+    """返回一条 Gateway 来源的 VRN 兄弟字段形态（有 state store 路径）。
+
+    逻辑来源层与 precedence 一律取自 `_GATEWAY_SOURCE_LAYER_AUTHORITY`，本函数 MUST NOT
+    硬编码 `sqlite`：有 store 时 `gateway_mutable_override`/`gateway_local_mutable_override`
+    虽共享同一 `gateway.sqlite`，但共享只是承载事实，MUST NOT 有损改写层名。
+    """
     record = state_store.get_source_layer(config_key)
-    # sqlite 层不可寻址（共享 workspace.sqlite，且 real path 不持久化），vrn=None。
+    layer, precedence = _GATEWAY_SOURCE_LAYER_AUTHORITY[config_key]
+    # 不可寻址（共享 gateway.sqlite，且 real path 不持久化），vrn=None。
     return ConfigSource(
         vrn=None,
-        layer="sqlite",
+        layer=layer,
         precedence=precedence,
         loaded=(
             record.presence == "present"
@@ -766,30 +785,22 @@ def load_gateway_config(
             ]
             loaded_persisted_snapshot = True
     if state_store is None:
-        source_details.extend(
-            [
+        # 无 state store 分支同样只查权威表，保证与 `_gateway_source_detail` 逐字一致。
+        for config_key, fallback_path in (
+            ("gateway_mutable_override", resolved_config_path),
+            ("gateway_local_mutable_override", resolved_local_config_path),
+        ):
+            layer, precedence = _GATEWAY_SOURCE_LAYER_AUTHORITY[config_key]
+            source_details.append(
                 ConfigSource(
                     vrn=None,
-                    layer="user",
-                    precedence=1,
-                    loaded=resolved_config_path.is_file(),
-                    source_key="gateway_mutable_override",
-                    presence=(
-                        "present" if resolved_config_path.is_file() else "absent"
-                    ),
-                ),
-                ConfigSource(
-                    vrn=None,
-                    layer="user_local",
-                    precedence=2,
-                    loaded=resolved_local_config_path.is_file(),
-                    source_key="gateway_local_mutable_override",
-                    presence=(
-                        "present" if resolved_local_config_path.is_file() else "absent"
-                    ),
-                ),
-            ]
-        )
+                    layer=layer,
+                    precedence=precedence,
+                    loaded=fallback_path.is_file(),
+                    source_key=config_key,
+                    presence="present" if fallback_path.is_file() else "absent",
+                )
+            )
         if resolved_config_path.is_file():
             raw_gateway_config = merge_json_objects(
                 raw_gateway_config,
@@ -820,13 +831,11 @@ def load_gateway_config(
                 _gateway_source_detail(
                     state_store,
                     "gateway_mutable_override",
-                    precedence=1,
                     fallback_path=resolved_config_path,
                 ),
                 _gateway_source_detail(
                     state_store,
                     "gateway_local_mutable_override",
-                    precedence=2,
                     fallback_path=resolved_local_config_path,
                 ),
             ]

@@ -562,6 +562,55 @@ def test_gateway_config_migrates_mutable_json_layers_to_sqlite(tmp_path: Path) -
         state.close()
 
 
+def test_gateway_source_layer_consistent_across_read_paths(tmp_path: Path) -> None:
+    """D-A2：gateway 可变 override 层在有/无 state store 两条路径 MUST 报同一 layer。
+
+    `_gateway_source_detail`（有 store）此前硬编码 `layer="sqlite"`，而无 store 分支报
+    `user`/`user_local`，同一 source_key 两条路径给出两套层名。本用例锁定两路一致。
+    """
+
+    config_path, schema_path = _write_gateway_config(tmp_path, [])
+    local_config_path = tmp_path / "gateway_local.jsonc"
+    local_config_path.write_text(
+        json.dumps({"ui": {"theme": {"default_theme_id": "blue"}}}),
+        encoding="utf-8",
+    )
+
+    expected = {
+        "inline": 0,
+        "user": 1,
+        "user_local": 2,
+    }
+
+    # 无 state store 路径。
+    without_store = load_gateway_config(
+        config_path=config_path,
+        schema_path=schema_path,
+        local_config_path=local_config_path,
+    )
+    without_map = {
+        source.layer: source.precedence for source in without_store.source_details
+    }
+    assert without_map == expected
+    assert "sqlite" not in without_map
+
+    # 有 state store 路径（命中 `_gateway_source_detail`）。
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        with_store = load_gateway_config(
+            config_path=config_path,
+            schema_path=schema_path,
+            local_config_path=local_config_path,
+            state_store=state,
+        )
+    finally:
+        state.close()
+    with_map = {source.layer: source.precedence for source in with_store.source_details}
+    assert with_map == expected
+    # D-A2 定点：可变 override 层 MUST NOT 被有损改写成 `sqlite`。
+    assert "sqlite" not in with_map
+
+
 def test_gateway_connection_id_migration_is_comment_preserving_and_idempotent(
     tmp_path: Path,
 ) -> None:
