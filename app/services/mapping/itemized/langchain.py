@@ -64,14 +64,6 @@ def _tool_calls(item: CanonicalItemRecord) -> list[dict[str, object]]:
     return result
 
 
-def _tool_call_ids(item: CanonicalItemRecord) -> set[str]:
-    return {
-        str(call["id"])
-        for call in _tool_calls(item)
-        if isinstance(call.get("id"), str) and call["id"]
-    }
-
-
 def _item_content(item: CanonicalItemRecord) -> object:
     if item.semantic_kind != SemanticKind.REASONING:
         return item.payload

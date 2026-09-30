@@ -9,7 +9,6 @@ from .common import JobStatus
 from .session import SessionDTO
 from .trace import TraceEventDTO
 
-TurnItemsView = Literal["summary", "full"]
 MAX_TURN_INCLUDE_FIELDS = 14
 TurnInclude = Literal[
     "user",

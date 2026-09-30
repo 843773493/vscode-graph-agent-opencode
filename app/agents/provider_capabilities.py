@@ -13,16 +13,6 @@ VIDEO_INPUT = "video_input"
 AUDIO_INPUT = "audio_input"
 PROMPT_CACHE_KEY = "prompt_cache_key"
 
-SUPPORTED_PROVIDER_CAPABILITIES: frozenset[ProviderCapability] = frozenset(
-    {
-        TEXT_INPUT,
-        IMAGE_INPUT,
-        VIDEO_INPUT,
-        AUDIO_INPUT,
-        PROMPT_CACHE_KEY,
-    }
-)
-
 CONTENT_BLOCK_CAPABILITY_REQUIREMENTS: dict[str, set[ProviderCapability]] = {
     "image": {IMAGE_INPUT},
     "image_url": {IMAGE_INPUT},

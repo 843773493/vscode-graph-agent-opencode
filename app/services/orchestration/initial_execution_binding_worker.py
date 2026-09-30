@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.core.session_control_primitives import validate_claim_fields
 from app.core.session_control_store import (
     SessionControlStore,
     ThreadExecutionIntent,
@@ -129,19 +130,8 @@ class InitialExecutionBindingWorker:
         binder: InitialExecutionBinder | None = None,
     ) -> None:
         if not isinstance(store, SessionControlStore):
-            raise TypeError(
-                f"store 必须是 SessionControlStore: {store!r}"
-            )
-        if not isinstance(claim_owner, str) or not claim_owner:
-            raise ValueError(f"claim_owner 不能为空: {claim_owner!r}")
-        if (
-            isinstance(claim_generation, bool)
-            or not isinstance(claim_generation, int)
-            or claim_generation < 1
-        ):
-            raise ValueError(
-                f"claim_generation 必须是 >= 1 的整数: {claim_generation!r}"
-            )
+            raise TypeError(f"store 必须是 SessionControlStore: {store!r}")
+        validate_claim_fields(claim_owner, claim_generation)
         self._store = store
         self._claim_owner = claim_owner
         self._claim_generation = claim_generation

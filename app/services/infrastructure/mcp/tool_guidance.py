@@ -21,8 +21,6 @@ MAX_GUIDANCE_DESCRIPTION_LENGTH = 200
 MAX_GUIDANCE_ARGS_FIELDS = 8
 MAX_GUIDANCE_ARGS_SUMMARY_LENGTH = 120
 
-_GUIDANCE_HASH_DOMAIN = "mcp-tool-guidance:v1"
-
 
 class McpToolGuidanceError(RuntimeError):
     """MCP 工具指引派生的显式错误；dirty 输入必须 fail closed。"""
