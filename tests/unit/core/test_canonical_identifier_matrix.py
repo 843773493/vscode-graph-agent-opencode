@@ -160,6 +160,28 @@ def test_v4_bit_profile_session_id_rejected() -> None:
         validate_thread_id("thr_" + _v7_hex_with(12, "4"))
 
 
+def test_identifier_profile_converged_to_v7_only() -> None:
+    """§6.7 收敛断言：迁移窗口结束后校验器只接受 v7。canonical 校验器无
+    v4/v7 分支（O-1 分支 A：不引入维护开关），v4 位 profile 的 session/
+    thread 身份 MUST 被拒绝，v7 身份 MUST 被接受。"""
+    import inspect
+
+    from app.core import session_catalog_store
+
+    source = inspect.getsource(session_catalog_store)
+    # 无维护开关、无 v4 接受分支（双轨已根除）。
+    assert "identity_profile_migration_active" not in source
+    assert "_validate_uuid_v4_payload" not in source
+    # 行为断言：v4 位 profile 一律拒绝。
+    with pytest.raises(ValueError):
+        validate_session_id("ses_" + _v7_hex_with(12, "4"))
+    with pytest.raises(ValueError):
+        validate_thread_id("thr_" + _v7_hex_with(12, "4"))
+    # v7 位 profile 一律接受。
+    validate_session_id(make_session_id())
+    validate_thread_id(make_thread_id())
+
+
 @pytest.mark.parametrize("bad_value", [None, 123, b"ses_abc", ["ses_abc"]])
 def test_non_string_input_rejected_with_type_error(bad_value: object) -> None:
     with pytest.raises(TypeError):
