@@ -5,19 +5,12 @@ import json
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from pydantic import RootModel
-
-from app.schemas.event import Event
-
 from .trace_cursor import (
     TraceCursorGoneError,
     TraceStreamRecord,
     encode_trace_cursor,
 )
-
-
-class _AnyEvent(RootModel[Event]):
-    pass
+from .trace_index_compaction import _AnyEvent
 
 
 async def stream_trace_records(
