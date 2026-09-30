@@ -819,3 +819,80 @@ class TestSessionService:
     async def test_control_nonexistent_session(self):
         with pytest.raises(NotFoundError):
             await self.service.control("nonexistent", "pause")
+
+
+class TestSessionListReadAmplification:
+    """§10.2：会话列表读取工作量必须与页大小相关，不随会话总数增长。"""
+
+    workspace_id = "00000000-0000-4000-8000-000000000001"
+
+    @pytest.mark.asyncio
+    async def test_list_reads_only_current_page_manifests(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
+
+        workspace = build_catalog_workspace(tmp_path, workspace_id=self.workspace_id)
+        try:
+            sessions_dir = workspace.sessions_root
+            service = SessionService(
+                config_service=ConfigService(),
+                trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
+                workspace_id=self.workspace_id,
+                path_resolver=workspace.resolver,
+                creation_service=workspace.creation_service,
+            )
+            # 显式冻结 provider，使读取计数只反映 manifest 读取，不触发
+            # provider 解析（与外部环境变量无关）。
+            session_ids = [
+                await workspace.create_session(
+                    f"读放大-{index:02d}", current_provider_id="primary"
+                )
+                for index in range(30)
+            ]
+
+            # 统计 session.json 读次数（生产读路径唯一入口是 Path.read_text）。
+            original_read_text = Path.read_text
+            reads: list[str] = []
+
+            def counting_read_text(self, *args, **kwargs):
+                reads.append(str(self))
+                return original_read_text(self, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+            reads.clear()
+            small = await service.list(limit=5)
+            small_manifest_reads = sum(
+                1 for path in reads if path.endswith("session.json")
+            )
+            reads.clear()
+            large = await service.list(limit=30)
+            large_manifest_reads = sum(
+                1 for path in reads if path.endswith("session.json")
+            )
+
+            # 读取次数与页大小相关（=limit），而非工作区会话总数（30）。
+            assert small_manifest_reads == 5
+            assert large_manifest_reads == 30
+            assert small_manifest_reads != len(session_ids)
+            assert small.total == len(session_ids)
+            assert large.total == len(session_ids)
+
+            # 外部契约逐字段不变：list 页与逐会话 get() 完全一致。
+            got_by_id = {
+                session_id: await service.get(session_id)
+                for session_id in session_ids
+            }
+            expected_order = sorted(
+                got_by_id.values(),
+                key=lambda item: item.created_at,
+                reverse=True,
+            )
+            assert [item.session_id for item in large.items] == [
+                item.session_id for item in expected_order
+            ]
+            for listed, expected in zip(large.items, expected_order, strict=True):
+                assert listed.model_dump() == expected.model_dump()
+        finally:
+            workspace.close()

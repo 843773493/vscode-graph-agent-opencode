@@ -203,6 +203,28 @@ class SessionService:
         return None
 
     async def get(self, session_id: str) -> SessionDTO:
+        # _read_session_dto 负责物理定位与读取（未登记会话/缺目录/缺 manifest
+        # 都呈现 NotFound）；此处只需把权威导航投影缺失同样归为 NotFound。
+        try:
+            node, nodes_by_id = self._authoritative_navigation_projection(session_id)
+        except KeyError as error:
+            raise NotFoundError(f"Session {session_id} not found") from error
+        return await self._read_session_dto(node, nodes_by_id)
+
+    async def _read_session_dto(
+        self,
+        node: SessionCatalogNodeProjection,
+        nodes_by_id: dict[str, SessionCatalogNodeProjection],
+    ) -> SessionDTO:
+        """读取单个会话的 session.json 并按权威索引回填导航字段。
+
+        唯一从 manifest 取得、无法由目录索引提供的字段是 ``title_source``
+        与 ``updated_at``；其余字段（title/parent_session_id/thread_id）以
+        resolver 权威投影为准回填，manifest 仍提供 kind/delegation/
+        created_at 等。该读路径只服务**当前页**的会话，不得对全工作区逐会话
+        调用（否则读取次数会随会话总数线性增长）。
+        """
+        session_id = node.node_id
         try:
             session_file = (
                 self._path_resolver.resolve_session_node_for_runtime(session_id)
@@ -213,12 +235,9 @@ class SessionService:
         if not session_file.is_file():
             raise NotFoundError(f"Session {session_id} not found")
 
-        node, nodes_by_id = self._authoritative_navigation_projection(session_id)
         data = json.loads(
             await asyncio.to_thread(session_file.read_text, encoding="utf-8")
         )
-        # 换源：title/parent_session_id 以 resolver 权威投影为准回填，
-        # manifest 仍提供其余字段（kind/delegation/created_at 等）。
         data["title"] = node.name
         data["parent_session_id"] = self._nearest_session_ancestor_in_projection(
             node.parent_node_id,
@@ -254,41 +273,28 @@ class SessionService:
         limit: int = 100,
         cursor: str | None = None,
     ) -> SessionListResultDTO:
-        sessions = []
+        """返回会话列表；读取工作量与返回页大小相关，不随会话总数增长。
+
+        目录索引是成员与顺序的唯一来源：先用索引节点（``kind`` 与权威
+        ``created_at``）排序并**只对当前页**调用 ``resolve_session_node`` /
+        逐个读取 session.json。读取次数因此与页大小相关，而非全工作区会话
+        总数；``total`` 与全量顺序仍由索引给出。
+        """
         nodes = self._path_resolver.list_nodes()
         nodes_by_id = {node.node_id: node for node in nodes}
-        for node in nodes:
-            if node.kind != "session":
-                continue
-            session_file = (
-                self._path_resolver.resolve_session_node(node.node_id)
-                / "session.json"
-            )
-            data = json.loads(
-                await asyncio.to_thread(session_file.read_text, encoding="utf-8")
-            )
-            # 换源：与 get() 同口径，title 取权威索引节点显示名，
-            # parent_session_id 由父链派生，不读 manifest 中这两键。
-            data["title"] = node.name
-            data["parent_session_id"] = self._nearest_session_ancestor_in_projection(
-                node.parent_node_id,
-                nodes_by_id,
-            )
-            data["thread_id"] = self._path_resolver.main_thread_id(node.node_id)
-            session = SessionDTO.model_validate(data)
-            self._assert_workspace_binding(session)
-            if session.current_provider_id is None:
-                session.current_provider_id = (
-                    self._config_service.resolve_agent_provider_id(
-                        session.current_agent_id
-                    )
-                )
-            sessions.append(session)
+        session_nodes = [node for node in nodes if node.kind == "session"]
+        session_nodes.sort(key=lambda node: node.created_at, reverse=True)
+        page_nodes = session_nodes[skip : skip + limit]
 
-        sessions.sort(key=lambda s: s.created_at, reverse=True)
-        paginated = sessions[skip : skip + limit]
+        sessions = [
+            await self._read_session_dto(node, nodes_by_id) for node in page_nodes
+        ]
 
-        return SessionListResultDTO(items=paginated, total=len(sessions), cursor=None)
+        return SessionListResultDTO(
+            items=sessions,
+            total=len(session_nodes),
+            cursor=None,
+        )
 
     async def child_session_summary(
         self,
