@@ -122,18 +122,6 @@ def reconcile_jsonl_tail(path: Path, committed_offset: int) -> None:
         os.fsync(stream.fileno())
 
 
-def _strict_non_negative_int(value: object, *, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise RuntimeError(f"{field} 必须是非负整数")
-    return value
-
-
-def _strict_optional_non_negative_int(value: object, *, field: str) -> int | None:
-    if value is None:
-        return None
-    return _strict_non_negative_int(value, field=field)
-
-
 def _turn_root_json(value: object) -> str:
     import rfc8785
 
@@ -1282,10 +1270,10 @@ class RolloutMaintenanceOwner(RolloutSchemaUpgradeMixin):
         ).fetchone()
         if row is None:
             raise RuntimeError("rollout database_meta 缺失")
-        schema_version = _strict_non_negative_int(
+        schema_version = strict_non_negative_int(
             row[0], field="database_meta.schema_version"
         )
-        message_format_version = _strict_non_negative_int(
+        message_format_version = strict_non_negative_int(
             row[1], field="database_meta.message_format_version"
         )
         if schema_version > storage_version.ROLLOUT_SCHEMA_VERSION:
@@ -1324,14 +1312,14 @@ class RolloutMaintenanceOwner(RolloutSchemaUpgradeMixin):
             "SELECT rollout_format_version, committed_jsonl_offset, last_commit_id "
             "FROM database_meta WHERE singleton_id = 1"
         ).fetchone()
-        if row is None or _strict_non_negative_int(
+        if row is None or strict_non_negative_int(
             row[0], field="database_meta.rollout_format_version"
         ) != storage_version.ROLLOUT_FORMAT_VERSION:
             return
-        database_offset = _strict_non_negative_int(
+        database_offset = strict_non_negative_int(
             row[1], field="database_meta.committed_jsonl_offset"
         )
-        database_last_commit_id = _strict_optional_non_negative_int(
+        database_last_commit_id = strict_optional_non_negative_int(
             row[2], field="database_meta.last_commit_id"
         )
         jsonl_size = jsonl_path.stat().st_size
@@ -1345,22 +1333,22 @@ class RolloutMaintenanceOwner(RolloutSchemaUpgradeMixin):
         commit_kinds = {value.value for value in CommitKind}
         commit_modes = {value.value for value in CommitMode}
         for commit in commits:
-            commit_id = _strict_non_negative_int(
+            commit_id = strict_non_negative_int(
                 commit[0], field="storage_commits.commit_id"
             )
-            start = _strict_non_negative_int(
+            start = strict_non_negative_int(
                 commit[1], field=f"storage commit jsonl_start_offset: {commit_id}"
             )
-            end = _strict_non_negative_int(
+            end = strict_non_negative_int(
                 commit[2], field=f"storage commit jsonl_end_offset: {commit_id}"
             )
-            before = _strict_non_negative_int(
+            before = strict_non_negative_int(
                 commit[3], field=f"storage commit jsonl_start_offset: {commit_id}"
             )
-            end_offset = _strict_non_negative_int(
+            end_offset = strict_non_negative_int(
                 commit[4], field=f"storage commit jsonl_offset_after: {commit_id}"
             )
-            record_count = _strict_non_negative_int(
+            record_count = strict_non_negative_int(
                 commit[5], field=f"storage commit jsonl_record_count: {commit_id}"
             )
             status = strict_text(commit[6], field=f"storage commit status: {commit_id}")
@@ -1380,7 +1368,7 @@ class RolloutMaintenanceOwner(RolloutSchemaUpgradeMixin):
                 raise RuntimeError(
                     f"v2 storage commit mode 非法: commit_id={commit_id}, mode={commit_mode}"
                 )
-            after = _strict_non_negative_int(
+            after = strict_non_negative_int(
                 commit[4], field=f"storage commit jsonl_offset_after: {commit_id}"
             )
             if end_offset != after:
@@ -1463,7 +1451,7 @@ class RolloutMaintenanceOwner(RolloutSchemaUpgradeMixin):
                 "SELECT COUNT(*) FROM item_catalog WHERE commit_id = ?",
                 (commit_id,),
             ).fetchone()
-            catalog_count = _strict_non_negative_int(
+            catalog_count = strict_non_negative_int(
                 catalog_row[0], field=f"item catalog count: {commit_id}"
             )
             if catalog_count != record_count:
@@ -1473,7 +1461,7 @@ class RolloutMaintenanceOwner(RolloutSchemaUpgradeMixin):
                     f"record_count={record_count}"
                 )
             previous = after
-        if commits and database_last_commit_id != _strict_non_negative_int(
+        if commits and database_last_commit_id != strict_non_negative_int(
             commits[-1][0], field="storage_commits.last_commit_id"
         ):
             raise RuntimeError(
@@ -1503,10 +1491,10 @@ class RolloutMaintenanceOwner(RolloutSchemaUpgradeMixin):
         ).fetchall()
         expected_item_offset = 0
         commit_ranges = {
-            _strict_non_negative_int(commit[0], field="storage commit id"): (
-                _strict_non_negative_int(commit[1], field="storage commit start offset"),
-                _strict_non_negative_int(commit[2], field="storage commit end offset"),
-                _strict_non_negative_int(commit[5], field="storage commit record count"),
+            strict_non_negative_int(commit[0], field="storage commit id"): (
+                strict_non_negative_int(commit[1], field="storage commit start offset"),
+                strict_non_negative_int(commit[2], field="storage commit end offset"),
+                strict_non_negative_int(commit[5], field="storage commit record count"),
             )
             for commit in commits
         }
@@ -1522,19 +1510,19 @@ class RolloutMaintenanceOwner(RolloutSchemaUpgradeMixin):
             source_revision,
         ) in item_rows:
             item_id = strict_text(item_id, field="item_catalog.item_id")
-            logical_length = _strict_non_negative_int(
+            logical_length = strict_non_negative_int(
                 logical_length, field=f"item_catalog.payload_length: {item_id}"
             )
             source_revision = strict_text(
                 source_revision, field=f"item_catalog.source_revision: {item_id}"
             )
-            sequence = _strict_non_negative_int(
+            sequence = strict_non_negative_int(
                 item_sequence, field=f"item_catalog.item_sequence: {item_id}"
             )
-            offset = _strict_non_negative_int(
+            offset = strict_non_negative_int(
                 item_offset, field=f"item_catalog.jsonl_offset: {item_id}"
             )
-            length = _strict_non_negative_int(
+            length = strict_non_negative_int(
                 item_length, field=f"item_catalog.jsonl_length: {item_id}"
             )
             catalog_hash = strict_text(
@@ -1571,7 +1559,7 @@ class RolloutMaintenanceOwner(RolloutSchemaUpgradeMixin):
                     payload_length=logical_length,
                     source_revision=source_revision,
                 )
-            item_commit_id_value = _strict_non_negative_int(
+            item_commit_id_value = strict_non_negative_int(
                 item_commit_id, field=f"item_catalog.commit_id: {item_id}"
             )
             commit_range = commit_ranges.get(item_commit_id_value)
@@ -1640,7 +1628,7 @@ class RolloutMaintenanceOwner(RolloutSchemaUpgradeMixin):
             ).fetchone()
             if committed_row is None:
                 raise RuntimeError("database_meta 缺少 committed_jsonl_offset")
-            committed_offset = _strict_non_negative_int(
+            committed_offset = strict_non_negative_int(
                 committed_row[0],
                 field="database_meta.committed_jsonl_offset",
             )
