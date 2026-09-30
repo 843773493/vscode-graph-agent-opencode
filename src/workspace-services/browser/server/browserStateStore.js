@@ -244,6 +244,8 @@ export class BrowserStateStore {
 
   async writeScreenshot(browserId, buffer) {
     await mkdir(this.screenshotDir, { recursive: true });
+    // 非 canonical 身份：Node 进程（无 crypto.randomUUIDv7）生成的 screenshot_/*
+    // 本地 id 允许继续使用 v4，不进入 canonical 校验器命名空间。
     const screenshotId = `screenshot_${randomUUID().replaceAll("-", "")}`;
     const fileName = `${browserId}-${screenshotId}.png`;
     const filePath = path.join(this.screenshotDir, fileName);
@@ -255,6 +257,7 @@ export class BrowserStateStore {
   async writeDownload(browserId, download) {
     const browserDownloadDir = path.join(this.downloadDir, browserId);
     await mkdir(browserDownloadDir, { recursive: true });
+    // 非 canonical 身份：Node 进程生成的 download_/* 本地 id 允许继续使用 v4。
     const downloadId = `download_${randomUUID().replaceAll("-", "")}`;
     const suggestedName = path.basename(download.suggestedFilename() || "download");
     const storedName = `${downloadId}-${suggestedName}`;
