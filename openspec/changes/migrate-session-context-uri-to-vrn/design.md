@@ -154,7 +154,7 @@ SessionContextResourceRef {
 
 ### D7：命名与 owner 收口
 
-**决定**：本 change 严格使用契约的逐字命名（见 Context）。在途 change `add-itemized-rollout-context` 的会话上下文 URI requirement（`specs/itemized-rollout-context/spec.md:262/278/288` 及 `design.md:890-967`、`tasks.md:126`）MUST 改为**引用本 change**，不再自行定义会话上下文 URI 语法，从而消除两套定义并存。
+**决定**：本 change 严格使用契约的逐字命名（见 Context）。在途 change `add-itemized-rollout-context` 的会话上下文 URI requirement「跨 Session 协作必须只面向目标 main thread 且不共享协作状态」（连同其 `design.md` 小节「跨 Session 地址与无共享状态协作」与 `tasks.md` 任务 8.10）MUST 改为**引用本 change**，不再自行定义会话上下文 URI 语法，从而消除两套定义并存；一律按 requirement 名 / 小节名 / 任务号定位，不使用裸行号（该收敛已由 `e8e65b97` 落地，本 change 只登记该口径）。
 
 **理由**：一个语法只能有一个定义源；在途 change 尚未归档，可安全改指向。
 
@@ -165,7 +165,7 @@ SessionContextResourceRef {
 - **[配置来源真实路径迁移影响既有 API 响应体字段]** → `ConfigSourceDTO.path` 是既有对外字段，改为 VRN 属**破坏性**变更；按允许破坏性迁移处理，落地时同步改 schema 与前端消费点，并在迁移计划中保留回滚边界。注意这是单用户本地程序，实际安全影响低，主要属契约卫生，故按常规迁移任务处理，不单独开紧急修复。
 - **[结构化字段被写成持久化事实的第三份拷贝]** → requirement 明确三层的唯一 owner（D1），持久化字段一律 identity + VRN + 独立 revision，禁止存 real path。
 - **[star-topology 引入对端信任边界]** → 沿用既有「对端本地解析并只回内容」的强制约定：本机不代对端解析 locator，对端不泄露 real path。
-- **[`scope_id` 从硬编码字面量转为真实身份推导会改变既有字符串]** → `gateway`/`inline` 现共用字面量 `"local"`，改动会产生不同的 VRN 字符串；因这些字符串当前只进内存 registry 与响应、不落盘（见 D5），属契约级调整而非数据迁移。
+- **[`scope_id` 从硬编码字面量转为真实身份推导会改变既有字符串]** → `gateway` 现仍为字面量 `local`（`inline` 已按 `load_distribution_id()` 推导、不再与 `gateway` 共用），`gateway` 转真实 gateway_id 会产生不同的 VRN 字符串；因这些字符串当前只进内存 registry 与响应、不落盘（见 D5），属契约级调整而非数据迁移。
 
 ## Migration Plan
 
@@ -173,13 +173,15 @@ SessionContextResourceRef {
 2. **确认无存量**：按 D5 的取证确认不存在内嵌旧式上下文 URI 的持久化记录，**不构造**扫描/规范化/失效的存量迁移脚本。
 3. **新写字段切换**：让既有持久化挂点（`display_uri` 列、`context_source_control_states` 的来源事实）按 identity + VRN 的新格式写入，并在读路径切换到新格式，旧写入形态物理下线。
 4. **配置来源真实路径迁移（已确证义务，见 D6）**：把 `ConfigSource.path: Path` 换成 `vrn: VRN`，兄弟字段（`layer`/`precedence`/`layer_revision`/`layer_digest`/`source_generation`）原样保留；同步移除 `ConfigSourceLayerRecord.source_path`/`backup_path` 与 `ConfigSourceDTO.path` 对真实路径的持久化/输出。
-5. **删除 bundled 到 builtin 的改名 shim**：落地时移除 `app/agents/skill_runtime.py:538` 的 `bundled`→`builtin` 映射并同步 `inline` 正名；注意 `layer` 名（`bundled`）进入 `entry_identity` 与 catalog payload，属契约级变更，需评估同步面而非纯改名。
+5. **（已落地，登记为完成基线）删除 bundled 到 builtin 的改名 shim**：`app/agents/skill_runtime.py` 的 `bundled`→`builtin` 映射已由 `298ef599` 物理删除（`layer_order` 现为 `(inline, gateway, workspace)`），`layer` 名与 VRN scope 名自此逐字一致；该 shim 已不存在，实施期无需再删。
 
 **部署顺序约束**：本 change 的 spec/design/tasks 先于「统一虚拟资源寻址」的 VRN grammar 与拒绝码登记落地之前**不得**进入实施，因为会话上下文解析直接依赖其 grammar 与拒绝码；`kind` 取值（`session`）已由该 change 定稿，不再是前置阻塞项。
 
 ## Open Questions
 
-- **会话上下文资源自身的 `kind`（已定稿，不再是 open question）**：由「统一虚拟资源寻址」change 在 kind 闭集内定稿为 `session`（其 requirement「kind 闭集定稿且描述符闭集独立不可混用」，闭集为 `agent-spec` | `skills` | `config` | `session`）。本 change 直接引用该已登记取值，无需新登记、无待裁定项；规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`。`scope_id` 语义同样已由该 owner 定稿，本 change 直接引用。
-- **拒绝码的具体归属**：会话上下文新增拒绝场景（如「旧式 fragment 形态」「view 与资源不兼容」「memory 两点式」）落到 `grammar.py` 的 17 个码还是 `resolver.py` 的 6 个码，由寻址 change 集中登记后引用；本 change 只引用 grammar/resolve 这两套、不新增码、不混用闭集，第三套（联邦解析期）归属见 `add-unified-virtual-resource-addressing` 的拒绝码登记 requirement「拒绝码必须分三套集中登记且命名不得自造」。
-- **`assembly_ref` 的表示**：D2 中 `assembly={id}` 迁为 `assembly_ref`，其具体采用资源身份还是专用 ref 类型，待与 itemized rollout context 的 assembly 身份模型对齐后确定（不改变本 change 的结构化方向）。
-- **`user` scope 的未来扩展（不影响当前终值）**：`user` → `local` 已由「统一虚拟资源寻址」change 定为**终值**（其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」规定 `user` → `local` 并 MUST 显式声明为单用户本地程序约定）。本 change 直接引用该终值，不存在后续判定。若将来出现多用户场景如何扩展语义（例如是否引入用户名细分），属**未来可能**，须由 owner 另行发起变更，不得据此改动当前终值。
+**下列各项分两类**——标「需 owner 裁定」者为**必须由 owner 拍板二选一/多选一**才能定稿的规范层缺口；其余为**下游对齐**项，方向已定、只需与对应 change 的模型对齐取值，不阻塞本 change 的规范层。
+
+- **（下游对齐）会话上下文资源自身的 `kind`（已定稿，不再是 open question）**：由「统一虚拟资源寻址」change 在 kind 闭集内定稿为 `session`（其 requirement「kind 闭集定稿且描述符闭集独立不可混用」，闭集为 `agent-spec` | `skills` | `config` | `session`）。本 change 直接引用该已登记取值，无需新登记、无待裁定项；规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`。`scope_id` 语义同样已由该 owner 定稿，本 change 直接引用。
+- **（需 owner 裁定）拒绝码的具体归属**：会话上下文新增拒绝场景（如「旧式 fragment 形态」「view 与资源不兼容」「memory 两点式」）落到 `grammar.py` 的 17 个码还是 `resolver.py` 的 6 个码，由寻址 change 集中登记后引用；本 change 只引用 grammar/resolve 这两套、不新增码、不混用闭集，第三套（联邦解析期）归属见 `add-unified-virtual-resource-addressing` 的拒绝码登记 requirement「拒绝码必须分三套集中登记且命名不得自造」。
+- **（需 owner 裁定）`assembly_ref` 的表示**：D2 中 `assembly={id}` 迁为 `assembly_ref`，其具体采用资源身份还是专用 ref 类型，待与 itemized rollout context 的 assembly 身份模型对齐后确定（不改变本 change 的结构化方向）。
+- **（下游对齐 / 未来可能）`user` scope 的未来扩展（不影响当前终值）**：`user` → `local` 已由「统一虚拟资源寻址」change 定为**终值**（其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」规定 `user` → `local` 并 MUST 显式声明为单用户本地程序约定）。本 change 直接引用该终值，不存在后续判定。若将来出现多用户场景如何扩展语义（例如是否引入用户名细分），属**未来可能**，须由 owner 另行发起变更，不得据此改动当前终值。

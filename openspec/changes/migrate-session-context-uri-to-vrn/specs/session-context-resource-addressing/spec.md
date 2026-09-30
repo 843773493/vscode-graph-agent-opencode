@@ -18,20 +18,9 @@
 
 ### Requirement: scope 必须取自闭合集且每个 scope 的 scope_id 一律必填
 
-系统 MUST 只承认闭合集内的 scope，MUST 拒绝任何其它 scope 取值。scope 闭集为 **`workspace` | `user` | `gateway` | `inline`**（依据权威表：`builtin` 正名为 `inline`；`user` 为本次新增）。scope 闭集与每个 scope 的 scope_id 取值来源 MUST 由「统一虚拟资源寻址」change 的**唯一权威表**规定；本 capability MUST NOT 自行发明 scope 名或 scope_id 语义。
+**归属与引用**：scope 闭集与每个 scope 的 `scope_id` 取值语义的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」（含 `workspace`/`user`/`gateway`/`inline` 闭集、`builtin` 正名 `inline`、`memory` 移出、`scope_id` 由真实身份推导而非硬编码字面量，以及各 scope 的取值规则）。本 capability 只**具名引用**该 requirement，MUST NOT 复述其取值表、MUST NOT 另立第二份 scope/scope_id 定义。
 
-**`memory` 已确证不是 VRN scope，MUST NOT 出现在闭合集内**：它零生产构造方、resolver 连 scope_id 都不比对、container 未装配、configs 自述未接入。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段）MUST 被显式标注为**非 VRN 示意**，MUST NOT 被当作合法 VRN 接受或产出（其解析期特例分支已由提交 32bc6256 物理删除，现以 `unknown_scope` 类拒绝码 fail-closed 拒绝）。
-
-**每个 scope 的 `scope_id` 段一律必填**，MUST NOT 只对某个 scope 必填而对其它 scope 可选。`scope_id` MUST 由**真实身份推导**，MUST NOT 硬编码字面量，MUST NOT 依赖隐含上下文：
-
-- `workspace` → 真实 workspace_id；
-- `gateway` → 真实 gateway_id（现状在 skill 目录生成链路上硬编码字面量 `"local"`，落地时改为真实身份推导，MUST NOT 继续硬编码字面量）；取值来源与注入 owner MUST 按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿落地，本 capability 只引用、不复述取值规则；
-- `inline` → 真实 distribution_id（`distribution_id` 现已按 `app/core/distribution_identity.py::load_distribution_id()` 从发行包 runtime manifest 推导，不再是全仓零赋值；`gateway` 的 `local` 字面量仍待请求级注入切片，属既有不一致的剩余部分）；来源与编码 MUST 按「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从其发行包 runtime manifest 的 `distribution` + `version` 推导，本 capability 只引用、不复述取值规则；
-- `user` → `local`，并 MUST 显式声明为单用户本地程序的约定。
-
-「当前工作区」MUST NOT 作为寻址概念的隐含前提，也 MUST NOT 作为持久化数据的隐含前提。
-
-「其它工作区」MUST 表达为同一 scope 加另一个 scope_id 取值，MUST NOT 引入新 scope；「其它 gateway」MUST 表达为可选的**网关授权段 / gateway authority**，其缺省值为本机。
+会话上下文资源使用的 VRN MUST 遵守该闭集与「`scope_id` 对所有 scope 必填」规则，MUST NOT 自行发明 scope 名或 `scope_id` 语义。「当前工作区」MUST NOT 作为会话上下文寻址或持久化数据的隐含前提；「其它工作区」MUST 表达为同一 scope 加另一个 scope_id 取值，MUST NOT 引入新 scope；「其它 gateway」MUST 表达为 owner 定义的可选**网关授权段 / gateway authority**（缺省为本机）。`memory` MUST NOT 作为 scope 出现（其非 VRN 判定与入口拒绝见以下 scenario）。
 
 #### Scenario: 拒绝未登记的 scope
 - **WHEN** 调用方提交 scope 不属于闭合集的 VRN（例如 `memory`、`session`）
@@ -47,20 +36,11 @@
 
 ### Requirement: VRN 语法形态统一且由单一 owner 规范化
 
-会话上下文资源 MUST 使用统一 VRN 形态（保留既有段序，MUST NOT 简化）：
+**归属与引用**：VRN 语法本体、固定段序、`resources` 固定段、闭合 charset 与规范化单一实现的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「VRN 语法必须保留固定段序并单一实现」；可选网关授权段的语义（缺省 = 本机、等于本机 gateway_id = 等价缺省、等于对端 = 跨 gateway）见其 requirement「gateway authority 承载稳定 gateway_id 且缺省等价本机」。本 capability 只**具名引用**上述 requirement，MUST NOT 定义 VRN 语法本体、MUST NOT 复述其模板与取值、MUST NOT 另立第二套语法，也 MUST NOT 新增拒绝码。
 
-`boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}`
+会话上下文资源 MUST 使用该统一形态（保留既有段序，MUST NOT 简化）；会话上下文侧的规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`（`session` 为 owner 定稿的 kind 取值）。本 capability MUST NOT 自行变更固定段序、MUST NOT 把 `scope_id` 改为可选、MUST NOT 省略 `resources` 固定段。
 
-- `{gateway_authority?}`：可选、**单段**，承载稳定 gateway_id；缺省 = 本机 gateway。**owner 待实施项（关联 `add-unified-virtual-resource-addressing` task 3.4）**：该段在 `grammar.py` 的 `parse_vrn` 中当前无解析分支（authority 首段会被当作 scope 并以 `unknown_scope` 拒绝），本 capability 对 authority 的使用依赖 `add-unified-virtual-resource-addressing` 的 authority 实现。
-- `{scope}`：必填，取自闭合集。
-- `{scope_id}`：必填，**对所有 scope 都必填**。
-- `resources`：固定段，MUST 保留。
-- `{kind}`：必填，取自闭合集。
-- `{...canonical path segments}`：canonical 尾段。
-
-VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码与 `#fragment`；规范化 MUST 由**单一实现**完成。
-
-本 capability MUST NOT 定义 VRN 语法本体，MUST NOT 自行变更固定段序，MUST NOT 把 `scope_id` 改为可选，也 MUST NOT 新增拒绝码；VRN grammar、固定段序、kind 闭集与**拒绝码 / rejection code** 登记由「统一虚拟资源寻址」change 独占，本 capability 只引用。
+**owner 待实施项（关联 `add-unified-virtual-resource-addressing` task 3.4）**：`{gateway_authority?}` 段当前在 owner 的 `grammar.py` 的 `parse_vrn` 中无解析分支（authority 首段会被当作 scope 并以 `unknown_scope` 拒绝），本 capability 对 authority 的使用依赖 owner 的 authority 实现。
 
 #### Scenario: 拒绝百分号编码与 fragment
 - **WHEN** 调用方提交含 `%` 编码或 `#fragment` 的 VRN
@@ -108,16 +88,9 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 
 ### Requirement: 解析必须遵循唯一星型顺序且 fail-closed
 
-解析 MUST 按唯一顺序执行：本地 parse（fail-closed）→ 本进程解析 → 跨边界时按**星型解析 / star-topology resolution** 交给 gateway 层，由对端按同一份 VRN 在本地解析。
+**归属与引用**：星型解析 / star-topology resolution 的唯一顺序、hub/spoke 关系、policy 常量上界（`visited set`、`max_transit_gateways=1`、`max_gateway_hops=2`、总 deadline）与「locator 是输入，不是输出」不变量的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「VRN 解析必须是星型且以 policy 常量界定上界」。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 为会话上下文另立第二套解析顺序，也 MUST NOT 新增拒绝码。
 
-- **网关授权段 / gateway authority** 承载稳定 gateway_id。
-- 本地 gateway **是自身联邦的 hub** 时，MUST 可直接解析其**直接 spoke** 的资源。
-- 本地 gateway **是 spoke** 时，MUST 通过其**唯一 hub** 做**一次有界 transit 解析**，并 MUST 携带 `visited set`、`max_transit_gateways=1`、`max_gateway_hops=2` 与**总 deadline**。
-- 上述上界 MUST 表达为**显式策略常量**，MUST NOT 硬编码为散落的魔法数字；拓扑变化时改策略而非重写解析器。
-- **解析命中只返回稳定身份与内容**，MUST NOT 返回或携带 locator。这是可机械检查的不变量：**locator 是输入，不是输出**。
-- 不可解析（不可达、未共享、未找到）时 MUST fail-closed 返回结构化**拒绝码 / rejection code**，MUST NOT 回退到猜测路径，MUST NOT 返回虚假默认值。
-
-跨边界传输 MUST 只包含资源身份、VRN、revision 与内容，MUST NOT 传输 real path。
+会话上下文资源的解析 MUST 复用该唯一星型顺序，MUST NOT 为会话上下文单开第二条解析路径；跨边界传输 MUST 只包含资源身份、VRN、revision 与内容，MUST NOT 传输 real path。
 
 #### Scenario: 跨 gateway 只回内容
 - **WHEN** VRN 的 gateway authority 指向对端且对端可达
