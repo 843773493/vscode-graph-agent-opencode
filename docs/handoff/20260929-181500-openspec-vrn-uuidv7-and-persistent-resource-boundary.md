@@ -360,3 +360,32 @@ layer **值集**的破坏性两轴分离：`sqlite` 一名承载 runtime overrid
 - 聚焦：workspace 侧改前 140 / 改后 141 passed；gateway 侧改前 97 / 改后 98 passed，失败集合两版均空。
 - `openspec validate --strict --all` = 40 passed / 0 failed；`import app.main`/`app.gateway.main` 退出 0。
 - `10d07f29`、`523e3cd8`、`91f81079`、`c9eae769` 祖先链均已核。
+
+## 第五轮增量（2026-09-30）：并发协作约定与台账集中裁决
+
+本节由台账唯一 writer 追加（append-only，既有内容一字未改）。以下四条是本轮 owner 已定的并发协作约定，后续 agent 一律适用。
+
+### 约定 1：openspec 台账与 handoff 文档写权集中到单一 writer
+
+openspec 台账（`openspec/changes/**/tasks.md`、spec、design）与本 `docs/handoff/` 文档的**写权集中到单一 writer agent**；其他 agent 对这些面**只读**，需要落账时**向 writer 报告**，由 writer 转交落盘。设计意图：把「多 agent 并发写 tasks.md」的冲突集中到一个 writer 上，避免并发覆盖。
+
+### 约定 2：共享 `.git/index` 已损坏不可信
+
+共享 `.git/index` 已损坏、不可信（曾出现 5 条 `D` 假象 + 大量 `MM` 陈旧条目）。据此：
+
+- 判改动一律用 `git diff HEAD`，不用 `git status` / 暂存区推断。
+- 提交一律用独立临时索引：`GIT_INDEX_FILE=/tmp/<任务>.idx git read-tree HEAD` → `git add <精确路径>` → `git commit -m "中文" -- <精确路径>`。
+- 5 条 `D` 假象路径**绝不 add / patch / 删**：`app/abstractions/turn_terminal_status.py`、`tests/unit/core/test_identifier_uuidv7_monotonic.py`、`tests/unit/gateway/server/test_workspace_proxy_route_reference.py`、`tests/unit/gateway/test_gateway_identity_proxy_channels.py`、`tests/unit/services/mapping/itemized/test_selection_role_projection.py`。
+- 严禁 `git commit --amend`（多 agent 共用工作树）与直接操作共享 `.git/index`（`git add` / `reset` / `rm --cached` / `update-index`）。
+
+### 约定 3：受保护路径三对象全程禁碰
+
+以下三对象在任何切片中**全程禁碰**（只读，不得修改、移动、删除）：
+
+- `app/gateway/control/generators.py`
+- `app/services/business/session_generation/service.py`
+- `examples/demos/Itemized_context_storage/`
+
+### 约定 4：测试必须带进程外保护
+
+跑任何测试都必须带**进程外保护**，禁裸 `pytest` / `bun test`：`timeout <秒> bash -c 'ulimit -d 4194304; exec "$@"' bash <命令>`。历史事故：工作树测试与生产代码错配时，`useSessionMessageStream.test.tsx` 的 410 重连用例进入永不收敛紧循环，内存无界增长（t=66s 已 6.9GB），曾把整机 16GB 吃到 OOM。优先走 `bun run test:matrix -- --suite=<id>`。

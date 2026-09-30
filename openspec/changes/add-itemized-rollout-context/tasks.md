@@ -409,3 +409,12 @@ v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migrat
 本change当前未完成且不得归档：Section 8尚无一项整体完成，Section 9为3/7，整体为49/70。上一版台账把Section 8–9记为“0/20”属失真结论，已按上述审计证据纠正；现有部分实现不等于整项验收。另需注意两条同源失真的文档声明：`app/core/session_catalog_migration.py:27` 模块docstring声称“8.2-A 调试域步骤已作为同一journal phase接入”，但该文件中debug域命中为0，属虚假声明，须随8.2-A实现一并修正或删除。保留工作树中其它既有dirty改动；本次台账修订未同步主spec、未归档；后续历史失败/PARTIAL条目仅记录当时快照。
 
 轮次编号来源说明：本 change 早期草稿曾以 R23/R25/R26/R28 等轮次编号及 `rounds/R23-task-brief.md` 路径标注任务来源，但仓库内既无 `rounds/` 目录、也无对应持久文档（实测 `ls rounds` 报 no such file、`rg --files -g 'rounds/**'` 为空、tasks.md/spec.md/design.md 均无该编号）。这套编号属会话内临时语境、未落持久文档，MUST NOT 在新写的 spec/tasks/design 中继续引用；若要引用既有代码里已出现的编号，统一改为引用本 change 的任务编号（如 8.5-A/8.5-B），不得新增不可追溯的轮次引用。
+
+### 2026-09-30 补登记：OpenAPI 离线快照落后于后端路由 = 独立待办切片（P2-1）
+
+本条由 owner 裁定为**独立切片**，在本轮并发期**不生成**。来源：`out/tests/temp/frontend_edge_audit/artifacts/report.md` 第 86 行起（P2-1）。
+
+- **实测事实（2026-09-30 主 agent 复跑核对）**：后端路由真值 `app/schemas/internal_v2/session.py:272-278` 的 `SessionSkillUntrackResultDTO.status` 闭集为 `loaded|already_active|not_tracked|rebound|error`（新增字段 `rebound` 由提交 `a49bb0b0`「实现(skill_load): tracked 显式 rebind 与闭集取值 rebound (6.2-B)」引入，已确认是 HEAD 的祖先）。两份离线快照 `src/clients/web/openapi.json` 与 `src/clients/web/src/types/openapi/index.json` 在 `HEAD`（`9febefce`）上**已随路由重生成并包含** `rebound`（两份 md5 均等于 `git show HEAD:` 版本，比对无漂移）；上一版落后快照由 `d56b0704` 收口。因此「快照落后」是**曾被审计到、现已由并发 agent 在 HEAD 收口**的历史落差，本条只登记其**执行纪律**与残留风险，不再主张当前存在红。
+- **owner 裁定（2026-09-30）**：**不在并发期生成**。理由：`bun run gen:openapi`（`uv run python -m scripts.export_openapi_snapshot`）会写入**全部**当前路由，把其它 agent 进行中的 schema 改动一并固化进快照。故本项登记为**独立切片**，需在无并发未提交 schema 改动时执行，避免固化他人进行中的改动。
+
+- [ ] OpenAPI 离线快照与后端路由收口（独立切片，未勾选）：在**无并发未提交 schema 改动**时执行 `bun run gen:openapi`，确认 `src/clients/web/openapi.json`、`src/clients/web/src/types/openapi/index.json` 与当前后端路由逐键一致，并复跑 `tests/contracts/api` 为绿。门槛：执行前先确认工作树无其它 agent 的进行中 schema 改动；若存在，MUST 等其收口后再执行，MUST NOT 在并发期固化他人改动。证据：`out/tests/temp/frontend_edge_audit/artifacts/report.md`（第 86 行起）。

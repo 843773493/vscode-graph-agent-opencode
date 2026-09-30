@@ -84,3 +84,23 @@
 - [x] 3.4-D 前端会话列表收敛必须按活动工作区守卫（**新发现，已修复**）：`src/clients/web/src/hooks/session/useSessionLifecycleActions.ts` 的 `applySessionListConvergence` 原先**无条件** `next.sessions = remainingSessions` 覆盖全局 `state.sessions`，而 `remainingSessions` 来自 `apiListSessions(apiPort, workspaceIdForRequest)`，其 `workspaceIdForRequest` 可由上游传入**非活动工作区 B**（`AgentSessionsContextMenus.tsx` 传 `target.workspaceId`）。后果：在活动工作区 A 时从资源树删除属于 B 的会话，会污染全局会话列表（时间分组视图错显 B 的会话、`selectSession` 报「不存在会话」）。修复：按同文件已有先例（`forkSessionContext`/`setSessionParent`）加 `if (state.activeGatewayWorkspaceId === workspaceId)` 守卫，仅在该会话属于活动工作区时同步全局列表；未发明新机制、未新增抽象。落地提交 `b28ad9a4`。
   - 门槛：新增跨工作区聚焦用例，精确断言（`toEqual`，非 `toBeTruthy`/`toContain`）「非活动工作区镜像收敛、全局 `sessions` 不变、活动工作区不变」；去掉守卫后该用例变红（贴原始输出）。focused `bun test` 17 pass、`tsc --noEmit` EXIT=0、`bun run --cwd src/clients/web build` EXIT=0。证据：`out/tests/temp/fix_session_convergence/artifacts/report.md`。
   - 审查提示：同源嫌疑路径 `src/clients/web/src/state/session/sessionRefresh.ts:99` 未在本切片核实，**列入后续复核**（不得声称已全覆盖）。
+
+### 2026-09-30 补登记：Gateway 上下文只读端点免凭据为既有契约，非缺陷（F4）
+
+本条登记 **owner 已裁定的既有契约**，MUST NOT 被读作「待修缺陷」，亦 MUST NOT 登记为「已修复」。来源：`out/tests/temp/gateway_edge_audit/artifacts/report.md` 第 79 行起（F4）。
+
+- **实测位置（2026-09-30 主 agent 复跑 `rg`/读文件核对）**：`app/gateway/server/workspace_proxy.py:549-561` 的 `proxy_context_read`（路由 `POST /api/v1/context/read`）与 `:564-576` 的 `proxy_context_search`（路由 `POST /api/v1/context/search`）**均已显式书写** `auth=None`、`user_access=None`、`include_credentials=False`（逐行见 `:558-560` 与 `:573-575`），两函数 docstring 逐字写明「不要求 Gateway 凭据」。对照 `:579-594` 的兜底路由 `/api/v1/{path:path}`，其依赖为 `auth: GatewayAuthContext = Depends(verify_gateway_access)`（`:586`）与 `user_access = Depends(verify_user_access_for_proxy)`（`:587`）、`include_credentials=True`（`:594`）。
+- **免鉴权行为已被集成测试固化为既有契约**：`tests/integration/gateway/test_gateway_workspace_routing.py:417`（`test_session_context_tools_query_another_workspace_through_gateway`）在 `:498-504` 断言未鉴权 `POST /api/v1/context/read` 返回 200。
+- **owner 裁定（2026-09-30，书面）：不修。** 依据：本项目为单用户本地程序（AGENTS.md「没有云服务功能」「没有多租户」），且用户既定立场为「当前项目暂且不设权限」；代码把 `auth=None, user_access=None` 显式写出，属**刻意的显式设计**而非遗漏。故本项登记为**既有契约的显式登记**，不是待修缺陷。
+- **重新裁定触发条件（MUST 保留）**：若将来引入权限模型，本项是必须**重新裁定的入口清单之一**；在重新裁定前，任何单方面给这两个端点加 `verify_gateway_access` 的改动都必须同步调整上述集成测试，不得以本登记为依据声称该行为「已修复」或「已收紧」。
+- MUST NOT 把本项登记为「已修复」；本 change 在本条不实施任何生产改动。
+
+### 2026-09-30 补登记：`buf.gen.yaml` 生成器版本漂移 = 独立待办切片（3.4-B 遗留）
+
+本条把 3.4-B 的 owner 裁定（见上文 `### 2026-09-30 补登记：gateway scope_id...` 内 3.4-B 的「① 生成器版本漂移不锁定为临时手段」）**落为可机械复核的独立待办切片**。
+
+- **实测事实（2026-09-30 主 agent 复跑）**：`buf.gen.yaml` 的 ts-proto 插件声明为 `- remote: buf.build/community/stephenh-ts-proto`（`buf.gen.yaml:16`），**未锁定版本**（无 `:vX.Y.Z` 段）。已提交生成物 `src/clients/web/src/types/protocol_generated/**` 的版本头逐字为 `protoc-gen-ts_proto  v2.12.1`（实测 23 个 ts-proto 文件版本头一致）。解析侧当前为该插件的最新发布 `v2.12.4`（`npm view ts-proto version` = 2.12.4；仓库无 `buf.lock`）。
+- **漂移后果**：任何一次 `buf generate`（经 `bun run gen:protocol` / `scripts/generate_protocol.mjs` 调 `buf generate`）或 `bun run gen:openapi`，都会把全部 ts-proto 产物的版本头从 `2.12.1` 改成 `2.12.4`，形成与本次语义无关的**非预期生成物漂移**。
+- **owner 裁定（2026-09-30，书面）**：锁版本或整体升级作为**独立切片**，MUST NOT 夹带进任何功能提交；在独立切片完成前，任何 `buf generate` / `bun run gen:openapi` 都会引入上述非预期生成物漂移。
+
+- [ ] 生成器版本漂移收口（独立切片，未勾选）：把 `buf.gen.yaml` 的 `stephenh-ts-proto` 锁定到与已提交产物一致的版本（`v2.12.1`）或整体升级到 `v2.12.4` 并接受一次性全量重生成；二者择一，作为独立切片提交，MUST NOT 与任何功能改动混提。完成前 MUST NOT 在并发期执行 `buf generate` / `bun run gen:openapi`。证据：`out/tests/temp/impl_job_gateway_id/artifacts/report.md`（第 85-94、201-202、227 行）。
