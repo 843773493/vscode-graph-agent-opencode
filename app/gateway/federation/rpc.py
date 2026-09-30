@@ -225,6 +225,7 @@ class FederationRpcService:
                     origin=self.gateway_id,
                     path=visited,
                     remaining=remaining,
+                    deadline_at=deadline_at,
                 )
             )
         elif self._hub_channel is not None and not self._hub_channel.closed:
@@ -239,6 +240,7 @@ class FederationRpcService:
                     "max_gateway_hops": MAX_GATEWAY_HOPS,
                 },
                 timeout=remaining,
+                deadline_at=deadline_at,
             )
             raw_matches = result.get("matches")
             if not isinstance(raw_matches, list):
@@ -303,6 +305,7 @@ class FederationRpcService:
                     "max_gateway_hops": MAX_GATEWAY_HOPS,
                 },
                 timeout=remaining,
+                deadline_at=deadline_at,
             )
         hub_channel = self._hub_channel
         if hub_channel is None or hub_channel.closed:
@@ -321,6 +324,7 @@ class FederationRpcService:
                 "max_gateway_hops": MAX_GATEWAY_HOPS,
             },
             timeout=remaining,
+            deadline_at=deadline_at,
         )
 
     async def _serve_discovery_as_hub(
@@ -352,6 +356,7 @@ class FederationRpcService:
                 origin=origin,
                 path=path,
                 remaining=remaining,
+                deadline_at=deadline_at,
             )
         )
         return discovery_response(self.gateway_id, matches)
@@ -406,6 +411,7 @@ class FederationRpcService:
                 "max_gateway_hops": MAX_GATEWAY_HOPS,
             },
             timeout=remaining,
+            deadline_at=deadline_at,
         )
         return {
             "relayed_by": self.gateway_id,
@@ -423,6 +429,7 @@ class FederationRpcService:
         origin: str,
         path: tuple[str, ...],
         remaining: float,
+        deadline_at: float | None,
     ) -> list[dict[str, object]]:
         directory = self.spoke_directory
         if directory is None:
@@ -460,6 +467,7 @@ class FederationRpcService:
                     "max_gateway_hops": MAX_GATEWAY_HOPS,
                 },
                 timeout=remaining,
+                deadline_at=deadline_at,
             )
             raw_matches = result.get("matches")
             if not isinstance(raw_matches, list):
