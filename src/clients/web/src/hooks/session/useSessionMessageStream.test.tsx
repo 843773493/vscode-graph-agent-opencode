@@ -828,4 +828,101 @@ describe("useSessionMessageStream 连接与终态语义", () => {
     act(() => renderer!.unmount());
     expect(signal.aborted).toBe(true);
   });
+
+  test("gap 态主动读取一次权威快照补齐，同一缺口不重试也不轮询", async () => {
+    const port = 49_724;
+    installTestWindow(port);
+    const encoder = new TextEncoder();
+    // 连接保持打开：1、2 连续，随后直接跳到 5，制造一个本连接内的事件序号缺口。
+    // 这条路径没有任何错误分支可命中（连接没断），旧实现只能被动等 service 补发
+    // stream.snapshot，页面会永久停在缺口态。
+    installGatewayFetch(({ path }) => {
+      if (!path.includes("/message-stream")) return undefined;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode([
+            "id: 1\n",
+            "event: stream.opened\n",
+            'data: {"event_id":"evt_open","session_id":"ses_gap_rescue","turn_id":"turn_gap_rescue","turn_stream_id":"strm_gap_rescue","event_seq":1,"type":"stream.opened","payload":{"status":"open"}}\n\n',
+            "id: 2\n",
+            "event: model.started\n",
+            'data: {"event_id":"evt_model","session_id":"ses_gap_rescue","turn_id":"turn_gap_rescue","turn_stream_id":"strm_gap_rescue","event_seq":2,"type":"model.started","payload":{"model_call_id":"call_gap","attempt":1}}\n\n',
+            "id: 5\n",
+            "event: block.delta\n",
+            'data: {"event_id":"evt_gap","session_id":"ses_gap_rescue","turn_id":"turn_gap_rescue","turn_stream_id":"strm_gap_rescue","event_seq":5,"type":"block.delta","payload":{"block_id":"block_gap","operation":"append","text":"缺口后"}}\n\n',
+          ].join("")));
+          // 该乱序帧在兜底快照（seq 5）落地、兜底锁存之后才到达：同一缺口内的
+          // 第二次乱序不得再次触发兜底请求。
+          globalThis.setTimeout(() => {
+            controller.enqueue(encoder.encode([
+              "id: 8\n",
+              "event: block.delta\n",
+              'data: {"event_id":"evt_gap2","session_id":"ses_gap_rescue","turn_id":"turn_gap_rescue","turn_stream_id":"strm_gap_rescue","event_seq":8,"type":"block.delta","payload":{"block_id":"block_gap","operation":"append","text":"仍在缺口"}}\n\n',
+            ].join("")));
+          }, 150);
+          // 之后保持连接不关闭。
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } });
+    }, { token: "ms-gap-rescue-token" });
+
+    let snapshotRequests = 0;
+    const snapshotSpy = spyOn(messageStreamApi, "getSessionMessageStreamSnapshot")
+      .mockImplementation(async () => {
+        snapshotRequests += 1;
+        return {
+          session_id: "ses_gap_rescue",
+          turn_id: "turn_gap_rescue",
+          turn_stream_id: "strm_gap_rescue",
+          snapshot_seq: 5,
+          stream_status: "open",
+          agent_loop_status: "running",
+          current_attempt: 1,
+          blocks: [],
+          tool_executions: [],
+          tool_calls: [],
+          model_calls: [],
+          activities: [],
+          resource_refs: [],
+          resumable: true,
+        };
+      });
+
+    const mirror = createStateMirror(minimalState());
+    const Harness = useSessionMessageStreamHarness({
+      apiPort: port,
+      sessionId: "ses_gap_rescue",
+      turnId: "turn_gap_rescue",
+      workspaceId: "ws_gap_rescue",
+      sessionCacheKey: "ws_gap_rescue::ses_gap_rescue",
+    }, mirror.setState);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    });
+
+    const stream = streamState(mirror);
+    // 缺口必须被主动补齐，而不是无限停在缺口态。这份快照只到 seq 5，未覆盖后续
+    // 的乱序事件，因此缺口在兜底之后仍然存在——正是「服务端不补发」的真实场景。
+    expect(snapshotRequests).toBe(1);
+    expect(stream?.pendingEvents.map((item: { event_seq: number }) => item.event_seq))
+      .toEqual([8]);
+    expect(stream?.lastEventSeq).toBe(5);
+    expect(stream?.connectionStatus).toBe("gap");
+
+    // 再冲刷若干轮：缺口始终未被恢复，同一缺口内不得再次请求快照，证明兜底是
+    // 一次性的、绝不重试或轮询。
+    for (let round = 0; round < 5; round += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+    }
+    expect(snapshotRequests).toBe(1);
+
+    snapshotSpy.mockRestore();
+    act(() => renderer!.unmount());
+  });
 });
