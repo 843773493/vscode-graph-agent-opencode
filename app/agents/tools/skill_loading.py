@@ -37,21 +37,6 @@ class SkillLoadInput(BaseModel):
     )
 
 
-_RESULT_KEYS = (
-    "status",
-    "name",
-    "mode",
-    "display_uri",
-    "revision",
-    "content_hash",
-    "append_status",
-    "tracked",
-    "queued",
-    "source_rebound",
-    "error",
-)
-
-
 def _error_result(name: str, mode: str, code: str, message: str) -> str:
     """固定的显式错误结果;不伪造成功,也不泄露 locator/正文。"""
     return json.dumps(
