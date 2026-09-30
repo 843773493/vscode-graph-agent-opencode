@@ -77,7 +77,7 @@ class ContextSourceDelta:
     kind: Literal["activation", "delta", "rebuild"] = "activation"
 
 
-SkillLoadStatus = Literal["loaded", "already_active", "not_tracked"]
+SkillLoadStatus = Literal["loaded", "already_active", "not_tracked", "rebound"]
 SkillLoadAppendStatus = Literal["appended", "already_active", "none"]
 
 
@@ -133,6 +133,7 @@ class SkillLoadReceipt:
     content_hash: str | None = None
     status: SkillLoadStatus = "loaded"
     append_status: SkillLoadAppendStatus = "none"
+    source_rebound: bool = False
 
 
 @dataclass(frozen=True, slots=True)

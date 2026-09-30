@@ -666,6 +666,135 @@ class TestComposerThreadIdentity:
 
 
 class TestSealedTypedFieldConsumption:
+    def test_explicit_tracked_rebind_freezes_old_item_bytes(
+        self, saver: RolloutCheckpointSaver, sessions_root: Path,
+    ) -> None:
+        """6.2-B：显式 tracked rebind 在同一 owner 事务冻结旧 registration、
+        追加当前 effective entry 的完整 activation；旧 source item 逐字节不变。"""
+        owner = ContextSourceOwnerKey(
+            session_id=MAIN_SESSION_ID, thread_id=MAIN_THREAD_ID,
+        )
+        manager = ContextSourceManager(
+            owner=owner,
+            control_state_port=saver,
+            mutation_intent_port=saver,
+        )
+        manager.register(
+            ContextSourceDescriptor(
+                source_id="skill:gateway:demo",
+                source_kind="skill",
+                name="demo",
+                description="Gateway 全局 Skill",
+                internal_locator="/.boxteam/skills/demo/SKILL.md",
+                resource_uri="boxteam://gateway/local/resources/skills/demo/SKILL.md",
+            )
+        )
+
+        def _install(
+            entry_layer: str, body: str, display_uri: str,
+        ) -> SkillCatalogBinding:
+            binding = SkillCatalogBinding(
+                name="demo",
+                resource_id=f"skill-entry:{entry_layer}:demo:activation",
+                entry_identity=f"skill-entry:{entry_layer}:demo",
+                display_uri=display_uri,
+                activation_revision=_revision(body),
+                body=body,
+            )
+            manager.install_skill_activation_snapshot(
+                SkillCatalogActivationSnapshot(
+                    catalog_revision=f"sha256:catalog-{entry_layer}",
+                    entries={"demo": binding},
+                )
+            )
+            return binding
+
+        _install(
+            "gateway",
+            "gateway body\n",
+            "boxteam://gateway/local/resources/skills/demo/SKILL.md",
+        )
+        first = manager.load_skill("demo", mode="tracked")
+        assert first.status == "loaded"
+        batch = manager.prepare_pending()
+        assert batch is not None
+        manager.commit_model_call_pending(batch)
+
+        with saver._storage._connect(MAIN_SESSION_ID, "") as probe:
+            database_path = probe.execute("PRAGMA database_list").fetchone()[2]
+        conn = sqlite3.connect(database_path)
+        try:
+            old_rows = conn.execute(
+                "SELECT item_id, content_hash, payload_length FROM item_catalog "
+                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
+            ).fetchall()
+            old_projection = conn.execute(
+                "SELECT item_id, content_hash, content FROM item_projections "
+                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
+            ).fetchall()
+        finally:
+            conn.close()
+        assert len(old_rows) == 1
+        # 真断言：旧 item 的正文与 hash 逐字节冻结。
+        assert old_projection == [
+            (old_rows[0][0], old_rows[0][1], "gateway body\n")
+        ]
+
+        # 同名 workspace 高优先级 effective entry 出现（不同 source identity）。
+        manager.register(
+            ContextSourceDescriptor(
+                source_id="skill:workspace:demo",
+                source_kind="skill",
+                name="demo",
+                description="Workspace Skill",
+                internal_locator="/ws/.boxteam/skills/demo/SKILL.md",
+                resource_uri="boxteam://workspace/ws/resources/skills/demo/SKILL.md",
+            )
+        )
+        new_binding = _install(
+            "workspace",
+            "workspace body\n",
+            "boxteam://workspace/ws/resources/skills/demo/SKILL.md",
+        )
+
+        rebound = manager.load_skill("demo", mode="tracked")
+        assert rebound.status == "rebound"
+        assert rebound.source_rebound is True
+        assert rebound.tracked is True
+        assert rebound.display_uri == new_binding.display_uri
+        rebound_batch = manager.prepare_pending()
+        assert rebound_batch is not None
+        manager.commit_model_call_pending(rebound_batch)
+
+        conn = sqlite3.connect(database_path)
+        try:
+            after_old_rows = conn.execute(
+                "SELECT item_id, content_hash, payload_length FROM item_catalog "
+                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
+            ).fetchall()
+            after_old_projection = conn.execute(
+                "SELECT item_id, content_hash, content FROM item_projections "
+                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
+            ).fetchall()
+            new_rows = conn.execute(
+                "SELECT item_id, content_hash, payload_length FROM item_catalog "
+                "WHERE item_id LIKE 'item-context-source:skill:workspace:demo:%'"
+            ).fetchall()
+        finally:
+            conn.close()
+        # 旧 item 逐字节不变，且未被删除。
+        assert after_old_rows == old_rows
+        assert after_old_projection == old_projection
+        # 新 effective entry 追加完整 activation item。
+        assert len(new_rows) == 1
+        # 旧 registration 冻结为 untracked；新 registration tracked。
+        states = {
+            item.source_id: item
+            for item in saver.load_context_source_control_states(owner)
+        }
+        assert states["skill:gateway:demo"].tracking_status == "untracked"
+        assert states["skill:workspace:demo"].tracking_status == "tracked"
+
     def test_rewind_reconciles_only_from_frozen_control_state(
         self, saver: RolloutCheckpointSaver,
     ) -> None:

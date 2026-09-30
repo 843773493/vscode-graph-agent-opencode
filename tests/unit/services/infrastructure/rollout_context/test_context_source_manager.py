@@ -26,6 +26,7 @@ def _manager():
             name="debugging",
             description="调试工作流",
             internal_locator="/.boxteam/skills/debugging/SKILL.md",
+            resource_uri="boxteam://workspace/skill/debugging",
         )
     )
     return manager
@@ -143,6 +144,7 @@ _SKILL_LOAD_RESULT_KEYS = {
     "append_status",
     "tracked",
     "queued",
+    "source_rebound",
     "error",
 }
 
@@ -333,11 +335,20 @@ def test_same_normalized_name_register_overrides_index_and_untrack_stops_old():
     assert again.status == "not_tracked"
 
 
-def test_load_tracked_with_existing_active_registration_fails_closed():
+def test_load_tracked_with_changed_effective_entry_rebinds_and_freezes_old():
+    """6.2-B：effective entry identity 已变时显式 tracked 触发 rebind。
+
+    冻结旧 registration、为当前 effective entry 追加完整 activation、建立新
+    tracking，并返回独立成功态 rebound + source_rebound=true；旧 item 不变。
+    """
     manager = _manager()
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
-    _commit_model_call_pending(manager)
+    (old_activation,) = _commit_model_call_pending(manager)
+    assert old_activation.content == "v1\n"
+    assert manager._source_ids_by_name["debugging"] == "skill:debugging"
+
+    # 同名高优先级 effective entry 出现：不同 source identity / display URI。
     manager.register(
         ContextSourceDescriptor(
             source_id="skill:debugging-next",
@@ -345,8 +356,114 @@ def test_load_tracked_with_existing_active_registration_fails_closed():
             name="debugging",
             description="新优先级 entry",
             internal_locator="/.boxteam/skills/debugging-next/SKILL.md",
+            resource_uri="boxteam://workspace/skill/debugging-next",
         )
     )
+    binding = _install_snapshot(
+        manager,
+        "debugging",
+        "v2\n",
+        display_uri="boxteam://workspace/skill/debugging-next",
+    )
+    assert manager._source_ids_by_name["debugging"] == "skill:debugging-next"
+
+    receipt = manager.load_skill("debugging", mode="tracked")
+
+    assert receipt.status == "rebound"
+    assert receipt.source_rebound is True
+    assert receipt.append_status == "appended"
+    assert receipt.tracked is True
+    assert receipt.display_uri == binding.display_uri
+    # 旧 registration 冻结为 untracked：不再消费 revision。
+    assert manager.observe("skill:debugging", "v3\n") is False
+    # 新 effective entry 追加完整 activation（非 delta），正文逐字为 v2。
+    batch = manager.prepare_pending()
+    assert batch is not None
+    (rebound_delta,) = batch.deltas
+    assert rebound_delta.source_id == "skill:debugging-next"
+    assert rebound_delta.kind == "activation"
+    assert rebound_delta.content == "v2\n"
+    # 旧 context item 逐字节保持不变。
+    assert old_activation.content == "v1\n"
+    assert old_activation.revision != rebound_delta.revision
+
+
+def test_load_tracked_same_effective_entry_is_idempotent_already_active():
+    """6.2-B：effective entry 未变时幂等复用，不追加第二个 item。"""
+    manager = _manager()
+    _install_snapshot(manager, "debugging", "v1\n")
+    manager.load_skill("debugging", mode="tracked")
+    _commit_model_call_pending(manager)
+
+    again = manager.load_skill("debugging", mode="tracked")
+
+    assert again.status == "already_active"
+    assert again.source_rebound is False
+    assert again.append_status == "already_active"
+    assert manager.prepare_pending() is None
+
+
+def test_load_tracked_duplicate_same_effective_entry_fails_closed():
+    """反例守卫：同名同 effective entry 的重复 registration 不得被误判为 rebind。
+
+    两个 source_id 解析到同一 resolved source identity（同一 display URI）时，
+    effective entry 并未改变；必须 fail closed，绝不冻结旧 registration 或重复
+    追加 context item。
+    """
+    manager = _manager()
+    _install_snapshot(manager, "debugging", "v1\n")
+    manager.load_skill("debugging", mode="tracked")
+    _commit_model_call_pending(manager)
+
+    # 同一 effective entry 的别名 registration（同 display URI，不同 source_id）。
+    manager.register(
+        ContextSourceDescriptor(
+            source_id="skill:debugging-alias",
+            source_kind="skill",
+            name="debugging",
+            description="同 entry 别名",
+            internal_locator="/.boxteam/skills/debugging/SKILL.md",
+            resource_uri="boxteam://workspace/skill/debugging",
+        )
+    )
+    assert manager._source_ids_by_name["debugging"] == "skill:debugging-alias"
+
+    with pytest.raises(ContextSourceTrackingStateConflict):
+        manager.load_skill("debugging", mode="tracked")
+    # 原 registration 仍 tracked：未冻结、未静默改绑。
+    assert manager._sources["skill:debugging"].tracked is True
+    # 未产生第二个 item 的 rebind activation（pending 只可能是别名自身的首帧）。
+    pending = manager.prepare_pending()
+    if pending is not None:
+        assert [delta.source_id for delta in pending.deltas] == [
+            "skill:debugging-alias"
+        ]
+
+
+def test_load_tracked_with_multiple_active_registrations_fails_closed():
+    """多个 active registration 无法裁决唯一 effective entry，仍 fail closed。"""
+    manager = ContextSourceManager()
+    for source_id in ("skill:debugging", "skill:debugging-dup"):
+        manager.register(
+            ContextSourceDescriptor(
+                source_id=source_id,
+                source_kind="skill",
+                name="debugging",
+                description="重复 registration",
+                internal_locator=f"/.boxteam/skills/{source_id}/SKILL.md",
+            ),
+            tracking_status="tracked",
+        )
+    manager.register(
+        ContextSourceDescriptor(
+            source_id="skill:debugging-next",
+            source_kind="skill",
+            name="debugging",
+            description="当前 effective entry",
+            internal_locator="/.boxteam/skills/debugging-next/SKILL.md",
+        )
+    )
+    _install_snapshot(manager, "debugging", "v1\n")
 
     with pytest.raises(ContextSourceTrackingStateConflict) as exc_info:
         manager.load_skill("debugging", mode="tracked")
