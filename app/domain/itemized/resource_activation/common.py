@@ -23,19 +23,36 @@ _AVAILABILITIES: Final[frozenset[str]] = frozenset(
 )
 _TOKEN_PATTERN_ERROR: Final = "必须匹配 ^[a-z][a-z0-9_-]{0,63}$"
 _DISPLAY_URI_SCHEME: Final = "boxteam://"
+
+# 每个 code 只在此定义一次；闭集与 snapshot/provenance 的 raise 点统一引用这些
+# 符号，杜绝同一 code 在多处裸写导致的漂移。
+_CODE_SCHEMA_INVALID: Final = "resource-activation-schema-invalid"
+_CODE_BOUNDARY_SINGULARITY_REJECTED: Final = (
+    "resource-activation-boundary-singularity-rejected"
+)
+_CODE_PROVIDER_LOCATOR_REJECTED: Final = "resource-activation-provider-locator-rejected"
+_CODE_CREDENTIAL_REJECTED: Final = "resource-activation-credential-rejected"
+_CODE_ABSOLUTE_PATH_REJECTED: Final = "resource-activation-absolute-path-rejected"
+_CODE_LEGACY_FIELD_REJECTED: Final = "resource-activation-legacy-field-rejected"
+_CODE_FIELD_ALIAS_REJECTED: Final = "resource-activation-field-alias-rejected"
+_CODE_LINEAGE_INVALID: Final = "resource-activation-lineage-invalid"
+_CODE_PARENT_INVALID: Final = "resource-activation-parent-invalid"
+_CODE_ORDINAL_CONFLICT: Final = "resource-activation-ordinal-conflict"
+_CODE_HASH_MISMATCH: Final = "resource-activation-hash-mismatch"
+
 RESOURCE_ACTIVATION_ERROR_CODES: Final[frozenset[str]] = frozenset(
     {
-        "resource-activation-schema-invalid",
-        "resource-activation-boundary-singularity-rejected",
-        "resource-activation-provider-locator-rejected",
-        "resource-activation-credential-rejected",
-        "resource-activation-absolute-path-rejected",
-        "resource-activation-legacy-field-rejected",
-        "resource-activation-field-alias-rejected",
-        "resource-activation-lineage-invalid",
-        "resource-activation-parent-invalid",
-        "resource-activation-ordinal-conflict",
-        "resource-activation-hash-mismatch",
+        _CODE_SCHEMA_INVALID,
+        _CODE_BOUNDARY_SINGULARITY_REJECTED,
+        _CODE_PROVIDER_LOCATOR_REJECTED,
+        _CODE_CREDENTIAL_REJECTED,
+        _CODE_ABSOLUTE_PATH_REJECTED,
+        _CODE_LEGACY_FIELD_REJECTED,
+        _CODE_FIELD_ALIAS_REJECTED,
+        _CODE_LINEAGE_INVALID,
+        _CODE_PARENT_INVALID,
+        _CODE_ORDINAL_CONFLICT,
+        _CODE_HASH_MISMATCH,
     }
 )
 
@@ -213,9 +230,7 @@ LEGACY_FIELDS: Final[frozenset[str]] = frozenset(
 
 
 def _schema_error(message: str) -> ResourceActivationContractError:
-    return ResourceActivationContractError(
-        "resource-activation-schema-invalid", message
-    )
+    return ResourceActivationContractError(_CODE_SCHEMA_INVALID, message)
 
 
 def _non_empty_string(value: object, field_name: str) -> str:
@@ -253,29 +268,29 @@ def _reject_path_or_credential_shape(value: str, field_name: str) -> None:
 
     if "read_file_path" in value or ".boxteam" in value:
         raise ResourceActivationContractError(
-            "resource-activation-legacy-field-rejected",
+            _CODE_LEGACY_FIELD_REJECTED,
             f"{field_name} 是旧路径形态，正常 runtime 不得读取: {value!r}",
         )
     if value.startswith(("/", "\\")) or (
         len(value) >= 3 and value[1] == ":" and value[2] in "\\/"
     ):
         raise ResourceActivationContractError(
-            "resource-activation-absolute-path-rejected",
+            _CODE_ABSOLUTE_PATH_REJECTED,
             f"{field_name} 不得是绝对路径: {value!r}",
         )
     if "\\" in value:
         raise ResourceActivationContractError(
-            "resource-activation-absolute-path-rejected",
+            _CODE_ABSOLUTE_PATH_REJECTED,
             f"{field_name} 不得携带路径分隔符: {value!r}",
         )
     if value.find("://") > 0 and not value.startswith(_DISPLAY_URI_SCHEME):
         raise ResourceActivationContractError(
-            "resource-activation-provider-locator-rejected",
+            _CODE_PROVIDER_LOCATOR_REJECTED,
             f"{field_name} 不得是 provider locator/endpoint: {value!r}",
         )
     if "@" in value:
         raise ResourceActivationContractError(
-            "resource-activation-credential-rejected",
+            _CODE_CREDENTIAL_REJECTED,
             f"{field_name} 不得携带 userinfo/credential 形态: {value!r}",
         )
     if "%" in value:
@@ -287,7 +302,7 @@ def _safe_identity(value: object, field_name: str) -> str:
     _reject_path_or_credential_shape(text, field_name)
     if any(marker in text for marker in ("/", "\\", "?", "#", " ")):
         raise ResourceActivationContractError(
-            "resource-activation-provider-locator-rejected",
+            _CODE_PROVIDER_LOCATOR_REJECTED,
             f"{field_name} 是内部稳定 identity，不得携带路径/URI 形态: {text!r}",
         )
     if not text.isascii():
@@ -308,7 +323,7 @@ def _display_uri(value: object, field_name: str) -> str:
         raise _schema_error(f"{field_name} 必须是纯 ASCII")
     if not text.startswith(_DISPLAY_URI_SCHEME):
         raise ResourceActivationContractError(
-            "resource-activation-provider-locator-rejected",
+            _CODE_PROVIDER_LOCATOR_REJECTED,
             f"{field_name} 必须是 {_DISPLAY_URI_SCHEME} 逻辑地址: {text!r}",
         )
     for marker in ("?", "#"):
@@ -336,32 +351,32 @@ def _reject_forbidden_fields(
             continue
         if key in BOUNDARY_SINGULARITY_FIELDS:
             raise ResourceActivationContractError(
-                "resource-activation-boundary-singularity-rejected",
+                _CODE_BOUNDARY_SINGULARITY_REJECTED,
                 f"{where} 不得有 assembly 单值 boundary 字段: {key!r}",
             )
         if key in CREDENTIAL_FIELDS:
             raise ResourceActivationContractError(
-                "resource-activation-credential-rejected",
+                _CODE_CREDENTIAL_REJECTED,
                 f"{where} 不得携带 credential 字段: {key!r}",
             )
         if key in PROVIDER_LOCATOR_FIELDS:
             raise ResourceActivationContractError(
-                "resource-activation-provider-locator-rejected",
+                _CODE_PROVIDER_LOCATOR_REJECTED,
                 f"{where} 不得携带 provider locator/handle 字段: {key!r}",
             )
         if key in ABSOLUTE_PATH_FIELDS:
             raise ResourceActivationContractError(
-                "resource-activation-absolute-path-rejected",
+                _CODE_ABSOLUTE_PATH_REJECTED,
                 f"{where} 不得携带绝对路径/locator 字段: {key!r}",
             )
         if key in LEGACY_FIELDS:
             raise ResourceActivationContractError(
-                "resource-activation-legacy-field-rejected",
+                _CODE_LEGACY_FIELD_REJECTED,
                 f"{where} 不得携带旧字段: {key!r}",
             )
         if key in aliases:
             raise ResourceActivationContractError(
-                "resource-activation-field-alias-rejected",
+                _CODE_FIELD_ALIAS_REJECTED,
                 f"{where} 不得使用别名字段 {key!r}，规范字段是 {aliases[key]!r}",
             )
         raise _schema_error(f"{where} 含未登记字段: {key!r}")
@@ -370,12 +385,12 @@ def _reject_forbidden_fields(
 def _require_pair(value: object) -> tuple[object, object]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise ResourceActivationContractError(
-            "resource-activation-lineage-invalid",
+            _CODE_LINEAGE_INVALID,
             "source_lineage_ref.sources 每条必须是 [source_id, revision]",
         )
     if len(value) != 2:
         raise ResourceActivationContractError(
-            "resource-activation-lineage-invalid",
+            _CODE_LINEAGE_INVALID,
             "source_lineage_ref.sources 每条必须恰有两个元素",
         )
     return value[0], value[1]
@@ -402,21 +417,21 @@ class SourceLineageRef:
         )
         if not isinstance(self.sources, tuple):
             raise ResourceActivationContractError(
-                "resource-activation-lineage-invalid",
+                _CODE_LINEAGE_INVALID,
                 "SourceLineageRef.sources 必须是元组",
             )
         seen: set[str] = set()
         for entry in self.sources:
             if not isinstance(entry, tuple) or len(entry) != 2:
                 raise ResourceActivationContractError(
-                    "resource-activation-lineage-invalid",
+                    _CODE_LINEAGE_INVALID,
                     "SourceLineageRef.sources 必须是 (source_id, revision) 元组",
                 )
             source_id = _safe_identity(entry[0], "SourceLineageRef.source_id")
             _non_empty_string(entry[1], "SourceLineageRef.revision")
             if source_id in seen:
                 raise ResourceActivationContractError(
-                    "resource-activation-lineage-invalid",
+                    _CODE_LINEAGE_INVALID,
                     f"SourceLineageRef 重复 source_id: {source_id!r}",
                 )
             seen.add(source_id)
@@ -475,9 +490,7 @@ class SourceLineageRef:
         )
         if value["digest"] != lineage.digest:
             raise ResourceActivationContractError(
-                "resource-activation-hash-mismatch",
+                _CODE_HASH_MISMATCH,
                 "source_lineage_ref.digest 与来源向量/派生版本不一致",
             )
         return lineage
-
-
