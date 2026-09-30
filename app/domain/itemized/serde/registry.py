@@ -4,16 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextContribution
 
-
-def _required_string(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
-    return value
+# 非空字符串校验只有 validation.py 一份定义；此处沿用既有单一 owner，不再复制实现。
+from app.domain.itemized.validation import _non_empty_string as _required_string
 
 
 def _optional_string(value: object, field_name: str) -> str | None:
