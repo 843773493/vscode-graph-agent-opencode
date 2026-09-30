@@ -36,7 +36,6 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from enum import Enum
 from typing import Protocol, TypeAlias
 
 #: 产品阈值：连续 30 分钟无活动且无 blocker 才允许 idle unload（1800 秒）。
@@ -92,17 +91,6 @@ class ThreadUnloadRequest:
 
 #: owner 注册的卸载回调：同步或异步；抛错原样向上传播，绝不被吞。
 UnloadCallback: TypeAlias = Callable[[ThreadUnloadRequest], object]
-
-
-class _UnloadFlightOutcome(Enum):
-    """在飞卸载登记的调用方归属（用于并发 sweep 的在飞去重）。"""
-
-    #: 本调用方拥有该代卸载：负责执行回调并收敛 CAS。
-    OWNER = "owner"
-    #: 同一代的卸载已由另一个 sweep 在飞：本调用方不重复触发回调。
-    SKIPPED = "skipped"
-    #: 在飞登记在 await 窗口内被 owner 推进新一代而失效：本调用方重试当前代。
-    SUPERSEDED = "superseded"
 
 
 class ResidencyBlockerSource(Protocol):
@@ -321,62 +309,59 @@ class ThreadResidencyTracker:
     async def _sweep_thread(
         self, state: _ThreadResidencyState
     ) -> ThreadResidencySnapshot | None:
-        """评估单个 thread 并在 cold-eligible 时触发一次在飞去重的 unload。"""
-        while True:
-            blockers = self._observe(state)
-            if not self._is_cold_eligible(state):
-                return None
-            idle_seconds = self._idle_seconds(state)
-            if idle_seconds is None:  # 理论不可达（cold-eligible 必然未被阻断）
-                raise RuntimeError(
-                    "cold-eligible thread 缺少 idle 时长，记账状态异常: "
-                    f"session_id={state.session_id}, thread_id={state.thread_id}"
-                )
-            callback = self._unload_callback
-            if callback is None:
-                # 没有 owner 回调就没有可释放的 LifetimeScope：保持 resident，
-                # 不虚报卸载。
-                return None
-            # 回调前快照要卸载的代；后续一律按该快照代 CAS，绝不在回调后重读当前代。
-            target_generation = state.generation
-            outcome = self._begin_unload_flight(state, target_generation)
-            if outcome is _UnloadFlightOutcome.SKIPPED:
-                # 同一代已由并发 sweep 在飞卸载：不重复触发回调。
-                return None
-            if outcome is _UnloadFlightOutcome.SUPERSEDED:
-                # 在飞登记窗口内 owner 已推进新一代：重试当前代（不凭过期代触发）。
-                continue
-            request = ThreadUnloadRequest(
-                session_id=state.session_id,
-                thread_id=state.thread_id,
-                generation=target_generation,
-                idle_seconds=idle_seconds,
+        """评估单个 thread 并在 cold-eligible 时触发一次去重的 unload。"""
+        blockers = self._observe(state)
+        if not self._is_cold_eligible(state):
+            return None
+        idle_seconds = self._idle_seconds(state)
+        if idle_seconds is None:  # 理论不可达（cold-eligible 必然未被阻断）
+            raise RuntimeError(
+                "cold-eligible thread 缺少 idle 时长，记账状态异常: "
+                f"session_id={state.session_id}, thread_id={state.thread_id}"
             )
-            try:
-                result = callback(request)
-                if inspect.isawaitable(result):
-                    await result
-            finally:
-                # 无论回调成功或抛错都清位；抛错原样向上传播，不标记卸载。
-                if state.unloading_generation == target_generation:
-                    state.unloading_generation = None
-            # 按回调前快照的代 CAS 写卸载标记（绝不重读 state.generation，故绝不把
-            # await 窗口内登记的新一代错标为已卸载）；若期间 owner 已登记新一代，
-            # 新一代的记账（generation/unloaded_generation）由 register_generation 负责。
+        callback = self._unload_callback
+        if callback is None:
+            # 没有 owner 回调就没有可释放的 LifetimeScope：保持 resident，
+            # 不虚报卸载。
+            return None
+        # 回调前快照要卸载的代；提交时一律按该快照代 CAS，绝不在回调后重读当前代。
+        target_generation = state.generation
+        if not self._begin_unload_flight(state, target_generation):
+            # 同一代已由并发 sweep 在飞卸载：不重复触发回调。
+            return None
+        request = ThreadUnloadRequest(
+            session_id=state.session_id,
+            thread_id=state.thread_id,
+            generation=target_generation,
+            idle_seconds=idle_seconds,
+        )
+        try:
+            result = callback(request)
+            if inspect.isawaitable(result):
+                await result
+        finally:
+            # 无论回调成功或抛错都清位；抛错原样向上传播，不标记卸载。
+            if state.unloading_generation == target_generation:
+                state.unloading_generation = None
+        # 跨代守卫：仅当该 thread 仍是发起本次 sweep 的同一代时才提交卸载标记。
+        # 若 await 窗口内 owner 已登记新一代（甚至已被另一 sweep 完整卸载），迟到的
+        # 旧代回调 MUST NOT 覆盖/清掉新一代的 unloaded_generation（绝不写旧代）。
+        if state.generation == target_generation:
             state.unloaded_generation = target_generation
-            return self._build_snapshot(state, blockers)
+        return self._build_snapshot(state, blockers)
 
     @staticmethod
     def _begin_unload_flight(
         state: _ThreadResidencyState, target_generation: int
-    ) -> _UnloadFlightOutcome:
-        """原子登记 target_generation 的在飞卸载（同步段无 ``await``，单事件循环下不可打断）。"""
-        if state.generation != target_generation:
-            return _UnloadFlightOutcome.SUPERSEDED
+    ) -> bool:
+        """原子登记 target_generation 的在飞卸载；同一代已在飞时返回 False。
+
+        同步段无 ``await``，单事件循环下同一代至多一个调用方登记成功。
+        """
         if state.unloading_generation == target_generation:
-            return _UnloadFlightOutcome.SKIPPED
+            return False
         state.unloading_generation = target_generation
-        return _UnloadFlightOutcome.OWNER
+        return True
 
     # ---- 内部记账 ----
 

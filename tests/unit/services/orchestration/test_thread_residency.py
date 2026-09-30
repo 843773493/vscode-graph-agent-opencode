@@ -447,6 +447,59 @@ async def test_concurrent_sweeps_fire_inflight_generation_callback_at_most_once(
     assert tracker.snapshot(*_OWNER).residency == "cold"
 
 
+@pytest.mark.asyncio
+async def test_late_old_generation_callback_does_not_clobber_new_mark() -> None:
+    """迟到的旧代回调 MUST NOT 清掉新一代的卸载标记（跨代提交守卫）。
+
+    复刻复核方 `case_cross_generation_clobber` 的时序：sweep A 卸载 gen1 已进入回调
+    await；owner 登记 gen2，且并发 sweep B 完整卸载 gen2；此后 A 的 gen1 回调才返回。
+    若无守卫，A 会用快照代 1 无条件覆盖 `unloaded_generation`（2 -> 1），清掉 gen2
+    的已卸载标记，导致 gen2 被二次卸载。
+    """
+    clock = _FakeMonotonicClock()
+    fired: list[ThreadUnloadRequest] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def unload(request: ThreadUnloadRequest) -> None:
+        fired.append(request)
+        if request.generation == 1:
+            started.set()
+            await release.wait()
+
+    tracker = _make_tracker(clock, unload_callback=unload)
+    tracker.register_generation(*_OWNER)  # gen1
+    tracker.record_activity(*_OWNER)
+    clock.advance(1800)
+
+    sweep_a = asyncio.create_task(tracker.sweep())
+    await asyncio.wait_for(started.wait(), timeout=5)  # A 已进入 gen1 回调 await
+
+    # owner 登记 gen2，并由并发 sweep B 完整卸载 gen2。
+    tracker.register_generation(*_OWNER)  # gen2
+    tracker.record_activity(*_OWNER)
+    clock.advance(1800)
+    sweep_b_result = await asyncio.wait_for(tracker.sweep(), timeout=5)
+    assert [request.generation for request in fired] == [1, 2]
+    assert [item.generation for item in sweep_b_result] == [2]
+    snapshot_b = tracker.snapshot(*_OWNER)
+    assert snapshot_b.generation == 2 and snapshot_b.residency == "cold"
+
+    # 放行 A 的迟到 gen1 回调。
+    release.set()
+    await asyncio.wait_for(sweep_a, timeout=5)
+
+    # 关键断言：旧代回调 MUST NOT 覆盖新一代的已卸载标记（gen2 仍 cold、不可再卸载）。
+    snapshot_after = tracker.snapshot(*_OWNER)
+    assert snapshot_after.generation == 2
+    assert snapshot_after.residency == "cold"
+    assert snapshot_after.cold_eligible is False
+
+    # 再次 sweep MUST NOT 重复卸载 gen2。
+    assert await tracker.sweep() == ()
+    assert [request.generation for request in fired] == [1, 2]
+
+
 def test_tracker_configuration_fails_loud() -> None:
     """非法配置显式失败：阈值必须为正、blocker 源必须有查询方法。"""
     clock = _FakeMonotonicClock()
