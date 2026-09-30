@@ -60,7 +60,9 @@ async def test_config_sources_endpoint_exposes_layers_and_schema(
 
     assert response.request_id == "req-config-sources"
     assert response.data is not None
-    assert response.data.schema_path.endswith("workspace_schema.jsonc")
+    # 5A.3：schema 属发行包内资源，值为 config kind 的 VRN，不再泄漏真实路径。
+    assert response.data.schema_path.startswith("boxteam://inline/")
+    assert response.data.schema_path.endswith("/resources/config/workspace_schema")
     assert [source.layer for source in response.data.sources] == [
         "inline",
         "user",
@@ -100,6 +102,13 @@ async def test_config_sources_endpoint_never_exposes_real_path(
     # user/user_local 不可寻址：值为空串。
     assert response.data.sources[1].path == ""
     assert response.data.sources[2].path == ""
+    # schema 属发行包内资源，只以 VRN 表达，响应体整体不含真实路径。
+    assert response.data.schema_path.startswith("boxteam://inline/")
+    assert response.data.schema_path.endswith("/resources/config/workspace_schema")
+    body = response.model_dump_json()
+    assert str(tmp_path) not in body
+    assert str(Path.cwd() / "configs") not in body
+    assert _REAL_PATH_PATTERN.search(body) is None
 
 
 _REAL_PATH_PATTERN = re.compile(

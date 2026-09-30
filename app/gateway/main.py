@@ -201,6 +201,7 @@ from app.schemas.gateway import (
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.config.policy import gateway_config_policy
+from app.services.infrastructure.config.source_vrn import inline_config_source_vrn
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventCursorGoneError,
@@ -1969,7 +1970,10 @@ async def gateway_config_sources(
     return APIResponse(
         data=GatewayConfigSourcesDTO(
             revision=config.revision,
-            schema_path=str(config.schema_path),
+            # TODO(5A.3): 字段名与 proto 的 GatewayConfigSourcesDTO.schema_path 属独立
+            # 破坏性协议切片，本切片不改其名；gateway schema 与 gateway_inline.jsonc
+            # 同属发行包内资源，只把值由 real path 改为 config kind 的来源 VRN。
+            schema_path=inline_config_source_vrn(logical_name=config.schema_path.stem),
             sources=[
                 GatewayConfigSourceDTO(
                     # TODO(5A.3): 同 app/api/config.py，字段名属独立破坏性协议切片，

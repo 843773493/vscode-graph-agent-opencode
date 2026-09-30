@@ -494,7 +494,11 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
 
     assert response.request_id == "req-gateway-config-sources"
     assert response.data is not None
-    assert response.data.schema_path == str(schema_path)
+    # 5A.3：gateway schema 属发行包内资源，值为 config kind 的 VRN，不再泄漏真实路径。
+    assert response.data.schema_path.startswith("boxteam://inline/")
+    assert response.data.schema_path.endswith("/resources/config/gateway_schema")
+    body = response.model_dump_json()
+    assert str(tmp_path) not in body
     assert [source.layer for source in response.data.sources] == [
         "inline",
         "user",
