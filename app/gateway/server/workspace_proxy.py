@@ -353,14 +353,21 @@ async def _proxy_workspace_request(
         if retry_availability
         else ()
     )
+    # 路由引用从获取到释放必须构成配对作用域：header 构造、运行时等待、重试解析
+    # 中任何一步抛错，以及客户端在等待响应头时断连触发的取消，都必须归还这一份
+    # 引用。整个处理流程包在一个 try 里，由 finally 兜底释放；同步闭包无需 shield
+    # （finally 内的同步调用不可被取消打断），流式响应则把租约移交给响应体生成器
+    # 的单释放点，移交前先重绑定标志，避免在这里被二次释放。
     response: httpx.Response | None = None
     target_url = ""
-    route_lease = registry.acquire_route_reference(
-        target.workspace_id,
-        streaming=False,
-    )
     reference_streaming = False
     route_reference_released = False
+    route_reference_handed_off = False
+    route_workspace_id = target.workspace_id
+    route_lease = registry.acquire_route_reference(
+        route_workspace_id,
+        streaming=False,
+    )
 
     def release_route_reference() -> None:
         nonlocal route_reference_released
@@ -368,171 +375,175 @@ async def _proxy_workspace_request(
             return
         route_reference_released = True
         registry.release_route_reference(
-            target.workspace_id,
+            route_workspace_id,
             streaming=reference_streaming,
         )
 
-    for attempt in range(len(retry_delays) + 1):
-        if attempt > 0:
-            await asyncio.sleep(retry_delays[attempt - 1])
-            target = registry.resolve(target.workspace_id)
-            release_route_reference()
-            route_lease = registry.acquire_route_reference(
-                target.workspace_id,
-                streaming=False,
-            )
-            reference_streaming = False
-            route_reference_released = False
-        if (
-            target.connection_kind == "remote_gateway"
-            and target.remote_gateway_connection_id is not None
-        ):
-            try:
-                target_url = build_upstream_url(
-                    registry.remote_gateway_url(
-                        target.remote_gateway_connection_id
-                    ),
-                    ("api", "v1"),
-                    path,
+    try:
+        for attempt in range(len(retry_delays) + 1):
+            if attempt > 0:
+                await asyncio.sleep(retry_delays[attempt - 1])
+                target = registry.resolve(route_workspace_id)
+                route_workspace_id = target.workspace_id
+                release_route_reference()
+                route_lease = registry.acquire_route_reference(
+                    route_workspace_id,
+                    streaming=False,
                 )
-            except ValueError as error:
-                release_route_reference()
-                raise HTTPException(status_code=400, detail=str(error)) from error
-            except LookupError:
-                release_route_reference()
-                raise
-        else:
-            try:
+                reference_streaming = False
+                route_reference_released = False
+            if (
+                target.connection_kind == "remote_gateway"
+                and target.remote_gateway_connection_id is not None
+            ):
+                try:
+                    target_url = build_upstream_url(
+                        registry.remote_gateway_url(
+                            target.remote_gateway_connection_id
+                        ),
+                        ("api", "v1"),
+                        path,
+                    )
+                except ValueError as error:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=str(error),
+                    ) from error
+            else:
                 await _wait_for_workspace_runtime(request, target)
-            except HTTPException:
-                release_route_reference()
-                raise
+                try:
+                    backend_url = registry.resolve_service_url(
+                        target.workspace_id,
+                        "workspace_api",
+                    )
+                except LookupError as error:
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            "工作区后端正在启动或尚未连接，请稍后重试: "
+                            f"workspace_id={target.workspace_id}"
+                        ),
+                    ) from error
+                try:
+                    target_url = build_upstream_url(
+                        backend_url,
+                        ("api", "v1"),
+                        path,
+                    )
+                except ValueError as error:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=str(error),
+                    ) from error
+            # 联邦凭据缺失/过期在这里响亮失败；此处抛错也必须归还上面持有的引用。
+            forwarded = client.build_request(
+                request.method,
+                target_url,
+                params=request.query_params,
+                content=request_content,
+                headers=_proxy_headers(
+                    request,
+                    target,
+                    include_credentials=include_credentials,
+                ),
+            )
             try:
-                backend_url = registry.resolve_service_url(
-                    target.workspace_id,
-                    "workspace_api",
-                )
-            except LookupError as error:
-                release_route_reference()
+                response = await send_upstream_request(client, forwarded)
+                if retry_availability:
+                    # availability 是小型 JSON。提前消费响应体，才能在连接于响应头
+                    # 之后断开时仍在 Gateway 内重试，而不是把网络错误暴露给浏览器。
+                    await response.aread()
+                if (
+                    retry_message_stream
+                    and response.status_code == 404
+                    and attempt < len(retry_delays)
+                ):
+                    # 首次订阅可能早于 AgentExecutionService 的 store.open()。
+                    # 关闭并在 Gateway 内重试，避免把可恢复的创建窗口作为浏览器
+                    # 控制台 404 暴露出来。
+                    await response.aclose()
+                    response = None
+                    continue
+                break
+            except httpx.RequestError as error:
+                if response is not None:
+                    await response.aclose()
+                    response = None
+                if retry_upstream and attempt < len(retry_delays):
+                    continue
                 raise HTTPException(
-                    status_code=503,
+                    status_code=502,
+                    detail=f"无法连接工作区后端 {target_url}: {error}",
+                ) from error
+            except TimeoutError as error:
+                if retry_upstream and attempt < len(retry_delays):
+                    continue
+                raise HTTPException(
+                    status_code=504,
                     detail=(
-                        "工作区后端正在启动或尚未连接，请稍后重试: "
-                        f"workspace_id={target.workspace_id}"
+                        "工作区后端在有限等待时间内未返回响应头: "
+                        f"{target_url}, "
+                        f"timeout_seconds={UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS:g}"
                     ),
                 ) from error
-            try:
-                target_url = build_upstream_url(
-                    backend_url,
-                    ("api", "v1"),
-                    path,
-                )
-            except ValueError as error:
-                release_route_reference()
-                raise HTTPException(status_code=400, detail=str(error)) from error
-        forwarded = client.build_request(
-            request.method,
-            target_url,
-            params=request.query_params,
-            content=request_content,
-            headers=_proxy_headers(
-                request,
-                target,
-                include_credentials=include_credentials,
-            ),
-        )
-        try:
-            response = await send_upstream_request(client, forwarded)
-            if retry_availability:
-                # availability 是小型 JSON。提前消费响应体，才能在连接于响应头
-                # 之后断开时仍在 Gateway 内重试，而不是把网络错误暴露给浏览器。
-                await response.aread()
-            if (
-                retry_message_stream
-                and response.status_code == 404
-                and attempt < len(retry_delays)
-            ):
-                # 首次订阅可能早于 AgentExecutionService 的 store.open()。
-                # 关闭并在 Gateway 内重试，避免把可恢复的创建窗口作为浏览器
-                # 控制台 404 暴露出来。
-                await response.aclose()
-                response = None
-                continue
-            break
-        except httpx.RequestError as error:
-            if response is not None:
-                await response.aclose()
-                response = None
-            if retry_upstream and attempt < len(retry_delays):
-                continue
-            release_route_reference()
+        if response is None:
             raise HTTPException(
                 status_code=502,
-                detail=f"无法连接工作区后端 {target_url}: {error}",
-            ) from error
-        except TimeoutError as error:
-            if retry_upstream and attempt < len(retry_delays):
-                continue
+                detail=f"工作区 availability 请求未获得响应: {target_url}",
+            )
+        media_type = response.headers.get("content-type")
+        if media_type and "text/event-stream" in media_type:
+            headers = _response_headers(response)
+            # 路由 revision 是本机权威信息，上游的同名头部一律被这里覆盖。
+            _set_authoritative_header(
+                headers,
+                "X-BoxTeam-Route-Revision",
+                route_lease.token,
+            )
             release_route_reference()
-            raise HTTPException(
-                status_code=504,
-                detail=(
-                    "工作区后端在有限等待时间内未返回响应头: "
-                    f"{target_url}, "
-                    f"timeout_seconds={UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS:g}"
+            route_lease = registry.acquire_route_reference(
+                route_workspace_id,
+                streaming=True,
+            )
+            reference_streaming = True
+            route_reference_released = False
+            route_reference_handed_off = True
+            return StreamingResponse(
+                _stream_proxy_response(
+                    response,
+                    route_lease,
+                    user_access,
+                    release_route_reference,
                 ),
-            ) from error
-    if response is None:
-        release_route_reference()
-        raise HTTPException(
-            status_code=502,
-            detail=f"工作区 availability 请求未获得响应: {target_url}",
-        )
-    media_type = response.headers.get("content-type")
-    if media_type and "text/event-stream" in media_type:
+                status_code=response.status_code,
+                media_type=media_type,
+                headers=headers,
+            )
+        if retry_availability:
+            body = response.content
+            headers = _response_headers(response)
+            await response.aclose()
+            return Response(
+                content=body,
+                status_code=response.status_code,
+                headers=headers,
+                media_type=media_type,
+            )
         headers = _response_headers(response)
-        # 路由 revision 是本机权威信息，上游的同名头部一律被这里覆盖。
-        _set_authoritative_header(
-            headers,
-            "X-BoxTeam-Route-Revision",
-            route_lease.token,
-        )
-        release_route_reference()
-        route_lease = registry.acquire_route_reference(
-            target.workspace_id,
-            streaming=True,
-        )
-        reference_streaming = True
-        route_reference_released = False
+        # 非 SSE 的流式响应体仍持有这份引用，直到 body 真正结束才由 on_close 归还。
+        route_reference_handed_off = True
         return StreamingResponse(
-            _stream_proxy_response(
-                response,
-                route_lease,
-                user_access,
-                release_route_reference,
-            ),
-            status_code=response.status_code,
-            media_type=media_type,
-            headers=headers,
-        )
-    if retry_availability:
-        body = response.content
-        headers = _response_headers(response)
-        await response.aclose()
-        release_route_reference()
-        return Response(
-            content=body,
+            _stream_proxy_body(response, release_route_reference),
             status_code=response.status_code,
             headers=headers,
             media_type=media_type,
         )
-    headers = _response_headers(response)
-    return StreamingResponse(
-        _stream_proxy_body(response, release_route_reference),
-        status_code=response.status_code,
-        headers=headers,
-        media_type=media_type,
-    )
+    finally:
+        # 客户端断连会在任意 await 点抛出 CancelledError；引用释放是同步闭环，
+        # 放在 finally 里即可保证归还，且取消仍会继续向上传播。已移交给响应体
+        # 生成器的引用不在这里释放，由生成器的 on_close 单点归还。
+        if not route_reference_handed_off:
+            release_route_reference()
 
 
 @router.api_route(
