@@ -436,6 +436,51 @@ describe("发送消息状态更新", () => {
     expect(mounted.state().status).toBe("轮次操作失败: 请求失败 409 : 上下文窗口已失效");
   });
 
+  test("P3-1 replay 失败不改动本地运行态，不覆盖后端真值也不做多余队列重取", async () => {
+    const currentSession = session();
+    let pendingRequestsFetches = 0;
+    installGatewayFetch(({ path }) => {
+      if (path === "/api/v1/sessions/ses_send_regression/messages/msg_original/replay") {
+        return Response.json({ detail: "上下文窗口已失效" }, { status: 409 });
+      }
+      if (path === "/api/v1/sessions/ses_send_regression/pending-requests") {
+        pendingRequestsFetches += 1;
+        return apiResponse({
+          session_id: currentSession.session_id,
+          active_job_id: null,
+          requests: [],
+        });
+      }
+      return undefined;
+    }, { token: "test-replay-no-overreach-token" });
+
+    const initialState = state(currentSession);
+    // replay 没有写入任何乐观 pending 回合/运行态，本 hook 守卫的是「不得在
+    // 探测到失败时凭一次多余重取覆盖后端真值」。种一个后端仍在运行的 job：
+    // 失败处理若误用空快照收敛，会把运行态静默抹掉。
+    initialState.activeJobIdsBySession.set(CACHE_KEY, "job_still_running");
+    const mounted = mountSessionRunActions({
+      currentSession,
+      state: initialState,
+      cacheKey: CACHE_KEY,
+    });
+
+    await expect(
+      mounted.actions.replayTurn("msg_original", "regenerate", "原始回复"),
+    ).rejects.toThrow("上下文窗口已失效");
+
+    // 后端真值（仍在运行的 job）绝不被 replay 失败路径覆盖或抹掉。
+    expect(mounted.state().activeJobIdsBySession.get(CACHE_KEY)).toBe(
+      "job_still_running",
+    );
+    // 失败侧显式可见：状态串带原始原因，且触发一次历史 bootstrap 承接权威收敛。
+    expect(mounted.state().status).toBe("轮次操作失败: 请求失败 409 : 上下文窗口已失效");
+    expect(mounted.state().sessionHistoryReloadNonce).toBe(1);
+    // replay 失败不在此 hook 内做本地待处理队列重取（无乐观态可失配）；
+    // 若将来引入，必须是「后端权威快照校准」而非此处的一次多余探测。
+    expect(pendingRequestsFetches).toBe(0);
+  });
+
   test("未选中会话时发送消息会先创建会话再发送", async () => {
     // 空工作区首次发消息：currentSession 为空，必须显式创建会话后继续发送。
     let createCalls = 0;

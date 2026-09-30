@@ -236,7 +236,7 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
     return (
       <div className="chat-inline-error" role="alert">
         <span className="codicon codicon-warning" aria-hidden="true" />
-        <span>实时消息流出现缺口，正在请求 snapshot 恢复</span>
+        <span>实时消息流出现缺口，等待服务端快照补齐</span>
         <ProtocolErrorDetail message={stream.protocolError} />
       </div>
     );
