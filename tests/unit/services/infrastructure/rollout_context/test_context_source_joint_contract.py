@@ -75,7 +75,9 @@ TOOL_KEY_TOKEN = "sha256:jcs:v1:" + "a" * 64
 ADVERSARIAL_CONTROL_KEYS = {
     "source_ordinal": 999,
     "replaceable_source": True,
+    "replacement_policy": "replaceable",
     "selection_only": True,
+    "selection_role": "backing_only",
     "tracking_state": "untracked",
     "tracking_status": "untracked",
     "role": "delta",
@@ -141,7 +143,8 @@ def _contribution(
     source_ordinal: int | None = None,
     contribution_kind: str = "prompt",
     source_kind: str = "workspace_instructions",
-    replaceable_source: bool = False,
+    selection_role: str = "direct",
+    replacement_policy: str = "immutable",
 ) -> ContextContribution:
     return ContextContribution(
         contribution_id=contribution_id,
@@ -153,7 +156,8 @@ def _contribution(
         contribution_kind=contribution_kind,
         body=body,
         source_ordinal=source_ordinal,
-        replaceable_source=replaceable_source,
+        selection_role=selection_role,
+        replacement_policy=replacement_policy,
     )
 
 
@@ -228,18 +232,19 @@ class TestAdversarialControlKeys:
     def test_selection_only_flag_has_no_role_power(
         self, saver: RolloutCheckpointSaver,
     ) -> None:
-        # typed contribution_kind 说它是 full selection：metadata 的
-        # selection_only 键不能把它降级为 manifest backing。
+        # typed selection_role=direct 说它可独立候选：metadata 的 selection_only
+        # 键不能把它降级为 manifest backing。
         full_with_flag = _contribution(
             "full-with-flag",
             metadata={"selection_only": True},
         )
         _register(saver, MAIN_SESSION_ID, full_with_flag)
-        # typed contribution_kind 是 overlay backing：没有 selection_only
-        # 键也必须跳过，不能凭缺 key 变成第二个 request-only ref。
+        # typed selection_role=backing_only 是 manifest backing：即使没有
+        # selection_only 键也必须跳过，不能凭缺 key 变成第二个 request-only ref。
         overlay_without_flag = _contribution(
             "overlay:ov-1:base",
             contribution_kind="overlay_base",
+            selection_role="backing_only",
             metadata={"overlay_ref": "ov-1"},
         )
         _register(saver, MAIN_SESSION_ID, overlay_without_flag)
@@ -478,7 +483,7 @@ class TestRegistryStabilityAcrossRestart:
             request_only=True,
             # replaceable slot 只能由 typed core 字段声明；metadata 中的
             # 同名历史 key 不再拥有解释权（旧路径已物理下线）。
-            replaceable_source=True,
+            replacement_policy="replaceable",
             contribution_kind="prompt",
             body="v1",
             source_ordinal=0,
@@ -499,9 +504,9 @@ class TestRegistryStabilityAcrossRestart:
     def test_typed_replaceable_source_enables_in_place_revision_update(
         self, saver: RolloutCheckpointSaver,
     ) -> None:
-        # (a) typed replaceable_source=True 时替换链路生效：同一 owner slot
-        # 原位更新 revision，不产生第二行、不漂移 registry slot。
-        original = _contribution("typed-replaceable", replaceable_source=True)
+        # (a) typed replacement_policy=replaceable 时替换链路生效：同一 owner
+        # slot 原位更新 revision，不产生第二行、不漂移 registry slot。
+        original = _contribution("typed-replaceable", replacement_policy="replaceable")
         first = _register(saver, MAIN_SESSION_ID, original)
         updated = replace(
             original,
@@ -740,7 +745,12 @@ class TestSealedTypedFieldConsumption:
             MAIN_SESSION_ID,
             _contribution(
                 "typed-1",
-                metadata={"source_ordinal": 123, "selection_only": True},
+                metadata={
+                    "source_ordinal": 123,
+                    "selection_only": True,
+                    "selection_role": "backing_only",
+                    "replacement_policy": "replaceable",
+                },
             ),
         )
         before = saver.compose_committed_context_plan(
@@ -752,13 +762,16 @@ class TestSealedTypedFieldConsumption:
         after = restarted.compose_committed_context_plan(
             MAIN_SESSION_ID, plan_id="plan-6",
         )
-        # 恢复只消费 registry 封存 typed 字段：metadata 中的旧 ordinal
-        # 键与对抗 selection_only 键均为 inert，前后 hash 一致。
+        # 恢复只消费 registry 封存 typed 字段：metadata 中的旧 ordinal 键与
+        # 对抗 selection_only/selection_role/replacement_policy 键均为 inert，
+        # 前后 hash 一致。
         assert context_plan_hash(after) == before_hash
         (row,) = _rows(restarted, MAIN_SESSION_ID)
         contribution = after.contributions[0]
         assert contribution.source_ordinal == row["source_ordinal"]
         assert contribution.source_ordinal != 123
+        assert contribution.selection_role == "direct"
+        assert contribution.replacement_policy == "immutable"
 
     @pytest.mark.asyncio
     async def test_out_of_order_watch_consumes_authoritative_revision(

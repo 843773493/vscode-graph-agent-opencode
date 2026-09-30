@@ -113,10 +113,10 @@ class ContextPlanCompositionMixin:
     ) -> None:
         """登记 middleware/source provenance；贡献正文仍由 request-only source 持有。"""
         composer = self._composer_for(session_id, checkpoint_ns)
-        # replaceable 是 producer 声明的 typed core 字段，决定是否允许在
-        # 同一 owner slot 内原位更新 revision；自由 metadata/extensions 的
-        # 同名 key 不再拥有任何解释权（旧路径已物理下线）。
-        replaceable = contribution.replaceable_source
+        # replacement_policy 是 producer 声明的 typed core 字段，决定是否
+        # 允许在同一 owner slot 内原位更新 revision；自由 metadata/extensions
+        # 的同名 key 不再拥有任何解释权（旧路径已物理下线）。
+        replaceable = contribution.replacement_policy == "replaceable"
         with self._lock:
             existing = composer.ledger.contributions.get(contribution.contribution_id)
             if (
@@ -434,7 +434,6 @@ class ContextPlanCompositionMixin:
                         "overlay_ref": source_ref,
                         "overlay_role": role,
                         "source_overlay_epoch": overlay_epoch,
-                        "selection_only": True,
                     }
                 # source_ordinal 是 registry 列的稳定持久化顺序，不能在重启后
                 # 退回 created_at 排序；assembly 内的 contribution_ordinal
@@ -490,6 +489,15 @@ class ContextPlanCompositionMixin:
                         ),
                         protection=_manifest_string(
                             raw.get("protection"), field="protection"
+                        ),
+                        # selection_role/replacement_policy 是 registry 权威列，
+                        # 必须逐字段从 SQLite 恢复；不从 metadata 同名键补造。
+                        selection_role=_manifest_string(
+                            raw.get("selection_role"), field="selection_role"
+                        ),
+                        replacement_policy=_manifest_string(
+                            raw.get("replacement_policy"),
+                            field="replacement_policy",
                         ),
                         source_ordinal=restored_source_ordinal,
                     )

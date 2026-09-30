@@ -136,13 +136,16 @@ class ContextSourceOverlayMixin:
                     "overlay_id": overlay_id,
                     "overlay_role": role,
                     "source_overlay_epoch": source_overlay_epoch,
-                    "selection_only": True,
                 },
                 contribution_kind=f"overlay_{role}",
                 body=content,
                 content_length=content_length,
                 visibility="internal",
                 protection="public",
+                # overlay base/delta 是其它显式 overlay selection ref 的 source
+                # backing，不得自行成为独立 request-only candidate；role 由
+                # typed selection_role 承载，不再写自由 selection_only flag。
+                selection_role="backing_only",
                 # source base/delta 是 post-user source 内容，恒为独立
                 # user-role 数据，不得进入 system root。
                 root_placement="tail_only",

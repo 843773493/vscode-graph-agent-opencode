@@ -42,7 +42,7 @@ def test_session_source_revision_cannot_rewrite_frozen_plan_after_restart(regist
         body=old_body,
         # 可替换 source slot 由 typed core 字段声明；metadata 同名 key
         # 不再参与替换判定（旧路径已物理下线）。
-        replaceable_source=True,
+        replacement_policy="replaceable",
     )
     saver.register_context_contribution(session, original, request_content=old_body)
     plan = register_projection_draft(

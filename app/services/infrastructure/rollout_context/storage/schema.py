@@ -488,6 +488,8 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             assembly_id TEXT,
             contribution_ordinal INTEGER,
             source_ordinal INTEGER,
+            selection_role TEXT NOT NULL DEFAULT 'direct' CHECK(selection_role IN ('direct','backing_only')),
+            replacement_policy TEXT NOT NULL DEFAULT 'immutable' CHECK(replacement_policy IN ('immutable','replaceable')),
             metadata_json TEXT NOT NULL,
             created_at TEXT NOT NULL,
             CHECK ((content_hash IS NOT NULL) != (redacted_stable_digest IS NOT NULL))

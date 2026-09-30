@@ -195,13 +195,15 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
     # 往返；sealed manifest 不携带），只加入允许集，不进入必需集。
     # root_placement 是 E1 typed 控制字段；旧 envelope 不携带时应用规范
     # 文档化默认 tail_only（默认外部内容恒为 tail_only），不是旧别名兼容。
-    # replaceable_source 是 1.5 typed core 替换策略字段；它随 unsealed
-    # registry/source manifest 往返，旧 envelope 不携带时应用规范默认
-    # False（只有 middleware 显式声明的 slot 为 True），不是旧别名兼容。
+    # selection_role/replacement_policy 是规范定稿的 typed core 字段（替代
+    # 自由 selection_only/replaceable_source flag）。它们随 unsealed registry/
+    # source manifest 与 sealed manifest 往返；旧 envelope 不携带时应用规范
+    # 默认 direct/immutable，不是旧别名兼容。
     allowed_contribution_fields = required_contribution_fields | {
         "source_ordinal",
         "root_placement",
-        "replaceable_source",
+        "selection_role",
+        "replacement_policy",
     }
     if set(raw) - allowed_contribution_fields:
         raise ItemSchemaError("ContextContribution 含未知或不属于 registry 的字段")
@@ -229,10 +231,15 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         raise ItemSchemaError(
             f"未知 ContextContribution.root_placement: {raw_root_placement!r}"
         )
-    raw_replaceable_source = raw.get("replaceable_source", False)
-    if not isinstance(raw_replaceable_source, bool):
+    raw_selection_role = raw.get("selection_role", "direct")
+    if raw_selection_role not in ("direct", "backing_only"):
         raise ItemSchemaError(
-            "ContextContribution.replaceable_source 必须是 boolean"
+            f"未知 ContextContribution.selection_role: {raw_selection_role!r}"
+        )
+    raw_replacement_policy = raw.get("replacement_policy", "immutable")
+    if raw_replacement_policy not in ("immutable", "replaceable"):
+        raise ItemSchemaError(
+            f"未知 ContextContribution.replacement_policy: {raw_replacement_policy!r}"
         )
     return ContextContribution(
         contribution_id=_required_string(
@@ -275,7 +282,8 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         ),
         source_ordinal=raw_source_ordinal,
         root_placement=raw_root_placement,
-        replaceable_source=raw_replaceable_source,
+        selection_role=raw_selection_role,
+        replacement_policy=raw_replacement_policy,
     )
 
 

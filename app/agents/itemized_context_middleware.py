@@ -154,9 +154,9 @@ def _prompt_contributions(
             body=blocks,
             content_length=len(canonical_json_bytes(blocks)),
             # 这是唯一可原位更新 revision 的 replaceable source slot；
-            # 替换/安全判定由 typed core 字段承载，metadata 中的同名 key
-            # 已物理下线，不再拥有任何解释权。
-            replaceable_source=True,
+            # 替换/安全判定由 typed replacement_policy 承载，metadata 中的
+            # 同名 key 已物理下线，不再拥有任何解释权。
+            replacement_policy="replaceable",
             # assembled system prompt 是唯一 root producer slot；显式声明
             # root_eligible，projector 按它编译唯一 system root。
             root_placement="root_eligible",
