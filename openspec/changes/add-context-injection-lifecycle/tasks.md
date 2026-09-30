@@ -84,6 +84,19 @@
 
 ## 6. Rewind、compaction、restart 与边界测试
 
+### 2026-09-30 跨 change 落差审计裁定：skill_load 显式 rebind 是实现义务（原只写成测试点）
+
+跨全部 7 个活跃 change 的正交审计（`out/tests/temp/cross_change_gap_audit/artifacts/`）发现唯一 P1 落差：`specs/context-injection-lifecycle/spec.md:417` 与 `design.md:302` 均定稿「模型显式再次 `skill_load(name, tracked)` 时，若 effective entry identity 已变，则**在一个 owner 事务中把旧 registration 冻结为 untracked、为当前 effective entry 追加完整 activation 并建立新 tracked registration**，旧 context item 保持不变，结果返回不含路径的 `source_rebound=true`」，但全仓实现层零载体：`source_rebound` 在 `app/` 零命中；`SkillLoadStatus` 闭集只有 `loaded` / `already_active` / `not_tracked`（`app/services/infrastructure/rollout_context/runtime/context_sources/models.py:80`），**没有 rebind 成功态**；`skill_catalog.py` 只处理这三种，无「effective entry 已变则冻结旧加建新」分支。而 6.2-A 只把该语义写成**测试点**，**没有任何任务要求实现它**，属「测试义务已登记、实现义务未登记」的缝隙。
+
+**裁定：该义务是实现义务，不是纯测试义务**（它决定 tracked Skill 是否被静默改绑到另一个文件，属安全与一致性边界，依 AGENTS.md「程序绝不能默默失败」不得降级为仅测试）。据此新增：
+
+- [ ] 6.2-B 实现 `skill_load(name, tracked)` 的显式 rebind：当同一 `(session_id, thread_id, normalized_skill_name)` 已有 active tracked registration 且本次 effective entry identity 已变时，MUST 在**一个 owner 事务**内把旧 registration 冻结为 untracked、为当前 effective entry 追加完整 activation、建立新 tracked registration，旧 context item MUST 保持不变，并返回不含路径的 `source_rebound=true`；effective entry 未变时 MUST 幂等复用（`already_active` 语义不变）。实现 MUST 扩展 `SkillLoadStatus` 闭集以承载 rebind 成功态（不得复用 `loaded` 冒充），MUST NOT 删除旧 item、MUST NOT 静默改绑。门槛：新增测试覆盖「effective entry 已变则旧 registration 冻结加新 activation 追加加返回 `source_rebound=true` 加旧 item 不变」与「effective entry 未变则幂等复用」，且移除 rebind 分支后对应用例变红（贴原始输出）；`SkillLoadStatus` 闭集与实现分支一致（无未承接取值）；对应 skill catalog 测试退出码 0。
+
+**同批登记的两条非 P1 落差（登记粒度不足，非本 change 的新义务）**：
+
+- **F3（P2）gateway scope_id 注入通道**：`add-multi-workspace-backend-mounting/tasks.md` 3.4 与 `add-unified-virtual-resource-addressing/tasks.md` 3.3 已登记来源裁定与「剩装配」，但**没有一条任务写「Gateway 侧按请求注入 `X-BoxTeam-Gateway-Id` 并接进 `ResolutionContext`」**；载体未闭合处是 `app/agents/skill_runtime.py:522` 的 `return "local", None`（该文件 `:507-513` 的 TODO 自述该改造需连锁 15 个 router）。裁定：补登记「注入通道」本身为可托付任务，归 `add-multi-workspace-backend-mounting`（另一切片）。
+- **F2（P2）validator 拒绝码形态**：`invalid_session_id` / `invalid_thread_id` 是 `add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md:77` 唯一写死的结构化拒绝码，全仓零实现（现载体是 `app/core/session_catalog_store.py:251/264` 直接抛 `ValueError`）。裁定：该 Scenario 的「形态」要求改成「形态化错误」表述、或在实现里补 reason_code，二者择一，归 `add-itemized-rollout-context`（另一切片），不在本 change 实施。
+
 - [ ] 6.1 增加跨多次正常 model request的 stable-prefix byte golden test，覆盖 root system、用户/assistant/tool canonical append、full source、delta、tool loop、重复 dispatch和 adapter禁止合并；验证普通 append保持 epoch，而 ToolSet变化必须 hard rebase并更新 compatibility key。
 - [ ] 6.2 增加Skill snapshot/tracked/untrack状态机测试，覆盖默认snapshot、无变化零追加、A→B→C未提交合并、`not_tracked`、同名catalog覆盖后untrack旧registration、active registration唯一约束/`tracking-state-conflict`、重新tracked及路径不泄露；另覆盖tracked source不可读导致model dispatch fail closed后，受信Session控制API仍可在不读取source/路径、不删除旧item的情况下调用同一untrack mutation，未授权或错误thread零状态变化，Web以后端结果替换状态。
   - 6.2-A 覆盖同revision snapshot already_active、显式新revision snapshot、tracked source同名高优先级覆盖不自动改绑、显式tracked rebind的旧registration freeze/新完整activation及原source unavailable fail closed；file provider只监视/枚举固定一层且无递归rg/越界symlink，请求路径零stat/read/list。使用可控替换/原位写入覆盖双读TOCTOU、三次失败保留旧valid snapshot且不推进revision/dispatch、Gateway global跨双进程重启handle重建、catalog/activation snapshot冲突、byte上限/严格UTF-8/BOM/换行/Unicode source snapshot与facet hash、安全frontmatter拒绝custom tag/alias/重复或非scalar字段、忽略字段单独变化不生成item、skill name不拼路径和物理locator/正文不泄露；另覆盖同assembly混合turn/model_call binding、Turn内policy热更新不生效、下个Turn生效及skill_load固定使用发起tool call snapshot。
@@ -213,4 +226,3 @@
 
 
 **待裁定状态解除**：此前登记的「MCP target 级子 binding 形态在代码里不存在，属需 owner 新定稿的数据形态」**已由本文字定稿**（同批更正 `add-itemized-rollout-context/tasks.md` 的 §9 台账）。
-
