@@ -278,7 +278,7 @@ class GatewayManagedWorkspaceListDTO(BaseModel):
     gateway_connection_id: str | None = None
     gateway_id: str
     gateway_name: str
-    connection_kind: Literal["local", "remote_gateway"]
+    connection_kind: GatewayConnectionKind
     items: list[GatewayManagedWorkspaceDTO] = Field(default_factory=list)
 
 
@@ -537,7 +537,7 @@ class GatewayDiagnosticWorkspaceDTO(BaseModel):
     workspace_id: str
     name: str
     root_path: str
-    connection_kind: Literal["local", "remote_gateway"]
+    connection_kind: GatewayConnectionKind
     status: GatewayWorkspaceStatus
     managed: bool
     system_default: bool
@@ -548,7 +548,7 @@ class GatewayDiagnosticsDTO(BaseModel):
     gateway_id: str
     gateway_name: str
     gateway_connection_id: str | None = None
-    connection_kind: Literal["local", "remote_gateway"]
+    connection_kind: GatewayConnectionKind
     status: GatewayDiagnosticStatus
     checked_at: str
     selected_workspace_id: str | None = None
