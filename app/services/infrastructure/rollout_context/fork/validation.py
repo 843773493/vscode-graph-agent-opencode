@@ -9,36 +9,13 @@ from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
 )
-
-
-def required_text(value: object, *, field: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise RuntimeError(f"fork manifest {field} 必须是非空字符串")
-    return value
-
-
-def optional_text(value: object, *, field: str) -> str | None:
-    if value is not None and (not isinstance(value, str) or not value):
-        raise RuntimeError(f"fork manifest {field} 必须是非空字符串或 NULL")
-    return value
-
-
-def non_negative_int(value: object, *, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise RuntimeError(f"fork manifest {field} 必须是非负整数")
-    return value
-
-
-def sqlite_bool(value: object, *, field: str) -> bool:
-    if not isinstance(value, int) or isinstance(value, bool) or value not in {0, 1}:
-        raise RuntimeError(f"fork manifest {field} 必须是 SQLite 0/1")
-    return value == 1
-
-
-def one_of_text(value: object, allowed: set[str], *, field: str) -> str:
-    if not isinstance(value, str) or value not in allowed:
-        raise RuntimeError(f"fork manifest {field} 值非法: {value!r}")
-    return value
+from app.services.infrastructure.rollout_context.assembly.validation import (
+    non_negative_int,
+    one_of_text,
+    optional_text,
+    required_text,
+    sqlite_bool,
+)
 
 
 def json_mapping(value: object, *, field: str) -> Mapping[str, object]:
