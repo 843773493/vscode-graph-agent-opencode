@@ -308,6 +308,9 @@ async def _proxy_auxiliary_websocket(
         await websocket.accept()
         target_url = _websocket_target(service_url, socket_path)
         upstream_headers: dict[str, str] = {}
+        # 按请求注入 Gateway 自身稳定身份，与两条 HTTP 代理同一来源；WebSocket 握手
+        # 只转发这里显式写入的头部，客户端无法自带同名头，故无需额外剥离。
+        upstream_headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
         if target.connection_kind == "remote_gateway":
             connection_id = target.remote_gateway_connection_id
             if connection_id is None:

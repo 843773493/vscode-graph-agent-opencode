@@ -23,6 +23,7 @@ from app.gateway.federation.errors import (
     FederationError,
 )
 from app.gateway.federation.rpc import FederationSpoke
+from app.gateway.proxy_upstream import load_proxy_gateway_id
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,12 @@ class WorkspaceCatalogPort:
         async with httpx.AsyncClient(timeout=self._request_timeout) as client:
             response = await client.get(
                 f"{backend_url}/api/v1/session-catalog/export",
-                headers={"X-Local-Token": LOCAL_TOKEN, "X-Request-ID": request_id},
+                headers={
+                    "X-Local-Token": LOCAL_TOKEN,
+                    "X-Request-ID": request_id,
+                    # 按请求注入 Gateway 自身稳定身份，取值与两条 HTTP 代理同源。
+                    "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
+                },
             )
         if response.status_code >= 400:
             raise FederationError(

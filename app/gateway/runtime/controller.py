@@ -10,6 +10,7 @@ import httpx
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.proxy_upstream import load_proxy_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.remote_gateway import (
     reconnect_remote_gateway,
@@ -540,6 +541,8 @@ class GatewayWorkspaceRuntimeController:
         return {
             "X-Local-Token": LOCAL_TOKEN,
             "X-Request-ID": request_id,
+            # 按请求注入 Gateway 自身稳定身份，取值与两条 HTTP 代理同源。
+            "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
         }
 
     @staticmethod
