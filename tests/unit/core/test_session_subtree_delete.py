@@ -14,13 +14,13 @@ import asyncio
 import os
 import shutil
 import sqlite3
-import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -41,12 +41,12 @@ _DELETING_DIR_NAME = ".deleting"
 
 
 def make_node_id() -> str:
-    """生成满足 UUIDv4 位 profile 的节点 ID（folder 与 session 同形）。"""
-    return f"ses_{uuid.uuid4().hex}"
+    """生成满足 UUIDv7 位 profile 的节点 ID（folder 与 session 同形）。"""
+    return f"ses_{create_uuid_hex()}"
 
 
 def make_thread_id() -> str:
-    return f"thr_{uuid.uuid4().hex}"
+    return f"thr_{create_uuid_hex()}"
 
 
 def build_session_directory(

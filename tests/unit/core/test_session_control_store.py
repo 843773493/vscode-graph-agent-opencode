@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import (
     SessionControlStore,
     ThreadCreationRecord,
@@ -30,13 +31,13 @@ DEFAULT_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
 
 def make_thread_id() -> str:
-    """uuid4 hex 天然满足 v4 位 profile(version 位 4 / variant 位 89ab)。"""
-    return f"thr_{uuid.uuid4().hex}"
+    """canonical 工厂天然满足 v7 位 profile(version 位 7 / variant 位 89ab)。"""
+    return f"thr_{create_uuid_hex()}"
 
 
 def make_session_id() -> str:
-    """uuid4 hex 天然满足 v4 位 profile(version 位 4 / variant 位 89ab)。"""
-    return f"ses_{uuid.uuid4().hex}"
+    """canonical 工厂天然满足 v7 位 profile(version 位 7 / variant 位 89ab)。"""
+    return f"ses_{create_uuid_hex()}"
 
 
 @pytest.fixture

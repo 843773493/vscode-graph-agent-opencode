@@ -9,10 +9,10 @@ from collections.abc import Callable, Iterator
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.domain.itemized.hashing import contribution_content_hash
 from app.domain.itemized.request_plan import ContextContribution
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -49,7 +49,7 @@ def old_schema(
 ) -> OldSchema:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"ses_{uuid4().hex}"
+    session_id = f"ses_{create_uuid_hex()}"
     node = session_bundle_factory(sessions, session_id)
     fixture = OldSchema(sessions, session_id, node / "rollout")
     with RolloutCheckpointSaver(sessions) as saver:

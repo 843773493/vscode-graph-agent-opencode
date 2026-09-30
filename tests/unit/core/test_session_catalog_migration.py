@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_legacy_layout import (
     FOLDER_MANIFEST_NAME,
     SESSION_CHILDREN_DIR_NAME,
@@ -89,16 +90,16 @@ def make_migrator(workspace: MigrationWorkspace) -> SessionCatalogMigrator:
 
 
 def make_session_id() -> str:
-    return f"ses_{uuid.uuid4().hex}"
+    return f"ses_{create_uuid_hex()}"
 
 
 def make_thread_id() -> str:
-    return f"thr_{uuid.uuid4().hex}"
+    return f"thr_{create_uuid_hex()}"
 
 
 def _hex_payload_with(index: int, char: str) -> str:
-    """把合法 UUIDv4 payload 的指定 hex 位替换成给定字符。"""
-    payload = list(uuid.uuid4().hex)
+    """把合法 UUIDv7 payload 的指定 hex 位替换成给定字符。"""
+    payload = list(create_uuid_hex())
     payload[index] = char
     return "".join(payload)
 

@@ -10,12 +10,12 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     SessionCatalogStore,
     SessionCreationRecord,
@@ -62,8 +62,8 @@ def make_metadata(**overrides: object) -> dict[str, object]:
 
 
 def make_node_id() -> str:
-    """生成满足 UUIDv4 位 profile 的节点 ID（folder 与 session 同形）。"""
-    return f"ses_{uuid.uuid4().hex}"
+    """生成满足 UUIDv7 位 profile 的节点 ID（folder 与 session 同形）。"""
+    return f"ses_{create_uuid_hex()}"
 
 
 async def do_create(
@@ -667,7 +667,7 @@ async def test_cas_failure_locator_occupied_quarantines_and_aborts(
             WORKSPACE_ID,
             record.created_at,
             record.storage_relative_locator,
-            f"thr_{uuid.uuid4().hex}",
+            f"thr_{create_uuid_hex()}",
         ),
     )
     with pytest.raises(RuntimeError, match="CAS 失败"):

@@ -10,7 +10,6 @@ import asyncio
 import hashlib
 import sqlite3
 import threading
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
@@ -18,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     CatalogBackupManifest,
     CatalogMaintenanceRequiredError,
@@ -41,13 +41,13 @@ OTHER_WORKSPACE_ID = "ws-other"
 
 
 def make_session_id() -> str:
-    """生成满足 UUIDv4 位 profile 的 session_id。"""
-    return f"ses_{uuid.uuid4().hex}"
+    """生成满足 UUIDv7 位 profile 的 canonical session_id。"""
+    return f"ses_{create_uuid_hex()}"
 
 
 def make_thread_id() -> str:
-    """生成满足 UUIDv4 位 profile 的 thread_id。"""
-    return f"thr_{uuid.uuid4().hex}"
+    """生成满足 UUIDv7 位 profile 的 canonical thread_id。"""
+    return f"thr_{create_uuid_hex()}"
 
 
 def make_locator(session_id: str, moment: datetime) -> str:
@@ -79,8 +79,8 @@ def create_session(
 
 
 def _hex_payload_with(index: int, char: str) -> str:
-    """把合法 UUIDv4 payload 的指定 hex 位替换成给定字符。"""
-    payload = list(uuid.uuid4().hex)
+    """把合法 UUIDv7 payload 的指定 hex 位替换成给定字符。"""
+    payload = list(create_uuid_hex())
     payload[index] = char
     return "".join(payload)
 
@@ -161,36 +161,36 @@ def tree(store: SessionCatalogStore) -> CatalogTree:
 # ----------------------------------------------------------------------
 
 
-def test_validate_session_id_accepts_uuid_v4_profile() -> None:
+def test_validate_session_id_accepts_uuid_v7_profile() -> None:
     validate_session_id(make_session_id())
 
 
-def test_validate_thread_id_accepts_uuid_v4_profile() -> None:
+def test_validate_thread_id_accepts_uuid_v7_profile() -> None:
     validate_thread_id(make_thread_id())
 
 
 @pytest.mark.parametrize(
     "value",
     [
-        "thr_" + uuid.uuid4().hex,  # 错误前缀
-        "job_" + uuid.uuid4().hex,  # 错误前缀
-        uuid.uuid4().hex,  # 缺前缀
+        "thr_" + create_uuid_hex(),  # 错误前缀
+        "job_" + create_uuid_hex(),  # 错误前缀
+        create_uuid_hex(),  # 缺前缀
         "ses_" + "0" * 31,  # 长度 31
         "ses_" + "0" * 33,  # 长度 33
-        "SES_" + uuid.uuid4().hex,  # 大写前缀
-        "ses_" + uuid.uuid4().hex.upper(),  # 大写 hex
-        "ses_" + "g" + uuid.uuid4().hex[1:],  # 非 hex
-        "ses_" + _hex_payload_with(12, "3"),  # 坏 v4 version 位
-        "ses_" + _hex_payload_with(12, "5"),  # 坏 v4 version 位
+        "SES_" + create_uuid_hex(),  # 大写前缀
+        "ses_" + create_uuid_hex().upper(),  # 大写 hex
+        "ses_" + "g" + create_uuid_hex()[1:],  # 非 hex
+        "ses_" + _hex_payload_with(12, "4"),  # 坏 version 位（v4）
+        "ses_" + _hex_payload_with(12, "6"),  # 坏 version 位（v6）
         "ses_" + _hex_payload_with(16, "c"),  # 坏 variant 位
         "ses_" + _hex_payload_with(16, "7"),  # 坏 variant 位
-        "ses_/" + uuid.uuid4().hex[:31],  # 斜杠
+        "ses_/" + create_uuid_hex()[:31],  # 斜杠
         "ses_\\",  # 反斜杠
         "ses_..",
         "ses_.",
         "ses_" + "测" * 32,  # Unicode
-        "ses_" + uuid.uuid4().hex + "/",  # 尾部斜杠
-        " ses_" + uuid.uuid4().hex,  # 前导空白
+        "ses_" + create_uuid_hex() + "/",  # 尾部斜杠
+        " ses_" + create_uuid_hex(),  # 前导空白
         "",
     ],
 )
@@ -208,10 +208,10 @@ def test_validate_session_id_rejects_non_string(value: object) -> None:
 @pytest.mark.parametrize(
     "value",
     [
-        "ses_" + uuid.uuid4().hex,  # 错误前缀
+        "ses_" + create_uuid_hex(),  # 错误前缀
         "thr_" + "0" * 31,  # 长度 31
-        "THR_" + uuid.uuid4().hex,  # 大写前缀
-        "thr_" + _hex_payload_with(12, "3"),  # 坏 v4 version 位
+        "THR_" + create_uuid_hex(),  # 大写前缀
+        "thr_" + _hex_payload_with(12, "4"),  # 坏 version 位（v4）
         "thr_" + _hex_payload_with(16, "c"),  # 坏 variant 位
         "thr_..",
     ],
@@ -258,8 +258,8 @@ def _invalid_locators() -> list[str]:
         f"sessions/2026/04/31/{sid}",  # 4 月 31 日
         f"sessions/2026/06/01/{sid}/",  # 尾部斜杠
         f"sessions/2026/06/01/{sid}/extra",  # 多余组件
-        f"sessions/2026/06/01/thr_{uuid.uuid4().hex}",  # 叶名是 thread 前缀
-        f"sessions/2026/06/01/ses_{_hex_payload_with(12, '3')}",  # session_id 非法
+        f"sessions/2026/06/01/thr_{create_uuid_hex()}",  # 叶名是 thread 前缀
+        f"sessions/2026/06/01/ses_{_hex_payload_with(12, '4')}",  # session_id 非法（v4）
         f"sessions/2026/06/01/ses_{_hex_payload_with(16, 'c')}",  # session_id 非法
         f"sessions/2026/06/01/ses_{'0' * 31}",  # session_id 长度非法
         f"sessions\\2026\\06\\01\\{sid}",  # 反斜杠

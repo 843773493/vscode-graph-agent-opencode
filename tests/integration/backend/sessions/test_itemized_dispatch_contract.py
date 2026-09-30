@@ -19,9 +19,10 @@ from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.agents.sealed_assembly_dispatch import read_sealed_native_projection
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.identifier import create_uuid_hex
 from app.core.job_context import reset_current_job_id, set_current_job_id
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -123,7 +124,7 @@ async def test_concurrent_native_dispatch_does_not_share_context(
     dispatch_saver, native_http_server, session_bundle_factory
 ) -> None:
     saver, first_session, turn_id, sessions = dispatch_saver
-    second_session = f"ses_{uuid4().hex}"
+    second_session = f"ses_{create_uuid_hex()}"
     session_bundle_factory(sessions, second_session)
     seed_dispatch_history(saver, second_session)
     seed_dispatch_overlay(saver, second_session)
@@ -298,7 +299,7 @@ def test_foreign_session_plan_is_rejected_without_io(
     dispatch_saver, session_bundle_factory, monkeypatch, empty, port
 ) -> None:
     saver, source_id, turn_id, sessions = dispatch_saver
-    target_id = f"ses_{uuid4().hex}"
+    target_id = f"ses_{create_uuid_hex()}"
     target = session_bundle_factory(sessions, target_id)
     draft = saver.compose_committed_context_plan(
         source_id, plan_id=f"guard-{uuid4().hex}"

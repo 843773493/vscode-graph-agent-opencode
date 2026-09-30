@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import (
     SessionControlStore,
     derive_communication_admission_identity,
@@ -31,8 +32,8 @@ class SessionHarness:
     """单 session 测试装具：store + gate + facade 绑定同一 session。"""
 
     def __init__(self, tmp_path: Path, name: str) -> None:
-        self.session_id = f"ses_{uuid.uuid4().hex}"
-        self.main_thread_id = f"thr_{uuid.uuid4().hex}"
+        self.session_id = f"ses_{create_uuid_hex()}"
+        self.main_thread_id = f"thr_{create_uuid_hex()}"
         self.store = SessionControlStore(tmp_path / name / "session-control.sqlite")
         self.store.initialize_main_thread(self.main_thread_id, DEFAULT_CREATED_AT)
         self.store.initialize_fence("active", 1)

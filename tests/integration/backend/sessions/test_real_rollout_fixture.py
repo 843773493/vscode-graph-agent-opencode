@@ -9,11 +9,11 @@ from itertools import pairwise
 from pathlib import Path
 from statistics import median
 from time import perf_counter
-from uuid import uuid4
 
 import pytest
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_migration import migrate_workspace_session_catalog
 from app.domain.itemized.errors import FormatDispatchError
@@ -54,7 +54,7 @@ def assert_fixture_import_rejected(
     storage = LegacyMigrationStorage(sessions)
 
     def import_source(source_id: str) -> None:
-        target_id = f"ses_{uuid4().hex}"
+        target_id = f"ses_{create_uuid_hex()}"
         source = storage.root(source_id)
         template = (
             Path.cwd()

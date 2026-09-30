@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import (
@@ -25,9 +26,7 @@ WORKSPACE_ID = "0197d9a3-7d2a-7c29-8d76-58b3cf3f8a21"
 
 
 def make_session_id() -> str:
-    import uuid
-
-    return f"ses_{uuid.uuid4().hex}"
+    return f"ses_{create_uuid_hex()}"
 
 
 class _ParentReader:

@@ -12,8 +12,8 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -79,7 +79,7 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
     created_at = spec.created_at or _default_created_at()
     if created_at.tzinfo is None:
         raise ValueError("created_at 必须带时区")
-    main_thread_id = f"thr_{uuid4().hex}"
+    main_thread_id = f"thr_{create_uuid_hex()}"
     locator = (
         f"sessions/{created_at.astimezone(UTC):%Y/%m/%d}/{spec.session_id}"
     )

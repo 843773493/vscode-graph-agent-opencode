@@ -6,10 +6,10 @@ import json
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
@@ -40,7 +40,7 @@ from tests.harness.python.run_context import TestRunContext
 def registry_db(request, session_bundle_factory):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"ses_{uuid4().hex}"
+    session_id = f"ses_{create_uuid_hex()}"
     session_bundle_factory(sessions, session_id)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(

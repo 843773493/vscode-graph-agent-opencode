@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.path_utils import (
     get_session_file,
     get_session_path,
@@ -137,7 +138,7 @@ def test_convenience_functions_route_through_catalog_factory(tmp_path, monkeypat
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
     initialize_directories()
     get_session_path_resolver()
-    session_id = "ses_7c9c9b4ad4c54c0eb9dcd4dabb96e67d"
+    session_id = f"ses_{create_uuid_hex()}"
     session_dir = seed_catalog_session_bundle(
         workspace_root / ".boxteam" / "sessions",
         session_id,

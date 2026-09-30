@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_resolver import (
     SessionCatalogFolderProjection,
     SessionCatalogPathResolver,
@@ -55,13 +56,13 @@ def make_metadata(**overrides: object) -> dict[str, object]:
 
 
 def make_node_id() -> str:
-    """生成满足 UUIDv4 位 profile 的节点 ID（folder 与 session 同形）。"""
-    return f"ses_{uuid.uuid4().hex}"
+    """生成满足 UUIDv7 位 profile 的节点 ID（folder 与 session 同形）。"""
+    return f"ses_{create_uuid_hex()}"
 
 
 def make_thread_id() -> str:
-    """生成满足 UUIDv4 位 profile 的 thread ID。"""
-    return f"thr_{uuid.uuid4().hex}"
+    """生成满足 UUIDv7 位 profile 的 thread ID。"""
+    return f"thr_{create_uuid_hex()}"
 
 
 def read_manifest(directory: Path) -> dict[str, object]:

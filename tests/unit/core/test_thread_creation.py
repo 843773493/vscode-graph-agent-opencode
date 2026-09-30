@@ -15,7 +15,6 @@ import asyncio
 import json
 import os
 import shutil
-import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -28,6 +27,7 @@ from app.agents.graph_binding import (
     DEEP_AGENT_GRAPH_BINDING,
     compute_capability_profile_hash,
 )
+from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     SessionCatalogStore,
 )
@@ -61,11 +61,11 @@ OWNER_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
 
 def make_thread_id() -> str:
-    return f"thr_{uuid.uuid4().hex}"
+    return f"thr_{create_uuid_hex()}"
 
 
 def make_session_id() -> str:
-    return f"ses_{uuid.uuid4().hex}"
+    return f"ses_{create_uuid_hex()}"
 
 
 CAPABILITY_PROFILE: dict[str, object] = {

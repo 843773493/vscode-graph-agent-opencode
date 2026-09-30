@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import (
     CommunicationInboxRecord,
     SessionControlStore,
@@ -54,9 +55,9 @@ class StoreHarness:
 
 @pytest.fixture
 def harness(tmp_path: Path) -> StoreHarness:
-    session_id = f"ses_{uuid.uuid4().hex}"
+    session_id = f"ses_{create_uuid_hex()}"
     created = SessionControlStore(tmp_path / "session-control.sqlite")
-    created.initialize_main_thread(f"thr_{uuid.uuid4().hex}", DEFAULT_CREATED_AT)
+    created.initialize_main_thread(f"thr_{create_uuid_hex()}", DEFAULT_CREATED_AT)
     created.initialize_fence("active", 1)
     yield StoreHarness(store=created, session_id=session_id)
     created.close()
@@ -72,8 +73,8 @@ def seed_inbox(
         communication_id=communication_id or f"comm_{uuid.uuid4().hex}",
         source_gateway_id="gw_a",
         source_workspace_id="ws_shared",
-        source_session_id=f"ses_{uuid.uuid4().hex}",
-        source_thread_id=f"thr_{uuid.uuid4().hex}",
+        source_session_id=f"ses_{create_uuid_hex()}",
+        source_thread_id=f"thr_{create_uuid_hex()}",
         target_thread_id=str(harness.store.get_main_thread()["thread_id"]),
         kind="result",
         reply_to_communication_id=None,
@@ -93,8 +94,8 @@ def seed_inbox_with_hash(
         communication_id=communication_id,
         source_gateway_id="gw_a",
         source_workspace_id="ws_shared",
-        source_session_id=f"ses_{uuid.uuid4().hex}",
-        source_thread_id=f"thr_{uuid.uuid4().hex}",
+        source_session_id=f"ses_{create_uuid_hex()}",
+        source_thread_id=f"thr_{create_uuid_hex()}",
         target_thread_id=str(harness.store.get_main_thread()["thread_id"]),
         kind="result",
         reply_to_communication_id=None,
