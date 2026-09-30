@@ -26,6 +26,7 @@ from app.agents.policy import (
 )
 from app.core.config_sources import (
     ConfigSource,
+    ConfigSourceLayer,
     config_revision,
     parse_stable_config_file,
     read_stable_config_file,
@@ -89,6 +90,21 @@ from configs.runtime import merge_json_objects, read_jsonc_object
 logger = logging.getLogger(__name__)
 
 ConfigCandidateApplier = Callable[[ConfigSnapshot, ConfigSnapshot], Awaitable[None]]
+
+# 来源权威表：每个 source_key 的逻辑来源层与 precedence 只在这里登记一次。
+# `_config_source`（从源 JSONC 构建）、`_runtime_override_source`、
+# `_persisted_source_details`（从 active snapshot 基线恢复）都只查这一张表，MUST NOT
+# 任何一条读路径再自行推导——那正是双轨，会让同一 source_key 报出不同 layer。
+# inline 用固定权威键 `_INLINE_SOURCE_KEY`：发行包内文件，其 `source_key` 对外为 None，
+# 绝不参与分层兜底（否则会被错标成 `sqlite` 且 precedence 由 0 翻成 1）。
+_INLINE_SOURCE_KEY = "inline"
+_SOURCE_LAYER_AUTHORITY: dict[str, tuple[ConfigSourceLayer, int]] = {
+    _INLINE_SOURCE_KEY: ("inline", 0),
+    "workspace_mutable_override": ("user", 1),
+    "workspace_local_mutable_override": ("user_local", 2),
+    "workspace_root_mutable_override": ("workspace", 3),
+    "workspace_runtime_override": ("sqlite", 4),
+}
 
 
 class ConfigService:
@@ -271,8 +287,6 @@ class ConfigService:
         source_details.append(
             self._config_source(
                 path=config_path,
-                layer="user",
-                precedence=1,
                 config_key="workspace_mutable_override",
             )
         )
@@ -291,8 +305,6 @@ class ConfigService:
         source_details.append(
             self._config_source(
                 path=local_config_path,
-                layer="user_local",
-                precedence=2,
                 config_key="workspace_local_mutable_override",
             )
         )
@@ -316,8 +328,6 @@ class ConfigService:
             source_details.append(
                 self._config_source(
                     path=workspace_path,
-                    layer="workspace",
-                    precedence=3,
                     config_key="workspace_root_mutable_override",
                 )
             )
@@ -339,11 +349,12 @@ class ConfigService:
     def _runtime_override_source(self) -> ConfigSource:
         # runtime override 由 SQLite 承载：sqlite 层不可寻址（real path 永不持久化，
         # 且 user/user_local/workspace 三层共享同一个 workspace.sqlite），故 vrn=None。
+        layer, precedence = _SOURCE_LAYER_AUTHORITY[self._RUNTIME_OVERRIDE_CONFIG_KEY]
         if self._workspace_state_store is None:
             return ConfigSource(
                 vrn=None,
-                layer="sqlite",
-                precedence=4,
+                layer=layer,
+                precedence=precedence,
                 loaded=bool(self._runtime_config_overrides),
                 source_key=self._RUNTIME_OVERRIDE_CONFIG_KEY,
                 presence=("present" if self._runtime_config_overrides else "absent"),
@@ -353,8 +364,8 @@ class ConfigService:
         )
         return ConfigSource(
             vrn=None,
-            layer="sqlite",
-            precedence=4,
+            layer=layer,
+            precedence=precedence,
             loaded=bool(self._runtime_config_overrides),
             source_key=self._RUNTIME_OVERRIDE_CONFIG_KEY,
             presence=(
@@ -442,22 +453,23 @@ class ConfigService:
         self,
         *,
         path: Path,
-        layer: str,
-        precedence: int,
         config_key: str,
     ) -> ConfigSource:
-        """返回一条来源的 VRN 兄弟字段形态；inline 之外的层不可寻址。"""
-        # 这些层不可寻址的真正依据是**共享边界载体**，不是 scope 闭集：`user`（真实
-        # 文件为 `workspace_mutable_override`）/`user_local`/`workspace` 三层在有 state
-        # store 时由本方法统一改写为 `sqlite` 层并指向同一个 `workspace.sqlite`，把一个
-        # 载体映射成单一 VRN 会立刻产生「同一 URI 对应多个逻辑来源」的冲突。故它们与
-        # `sqlite` 层一并 vrn=None（`user` scope 已在 VRN 闭集内，与本结论无关）。
-        # real path 只在本调用栈内用于判断 presence，MUST NOT 持久化或对外。
+        """返回一条来源的 VRN 兄弟字段形态；inline 之外的层不可寻址。
+
+        逻辑来源层与 precedence 一律取自 `_SOURCE_LAYER_AUTHORITY`，本方法 MUST NOT
+        再接收调用方传入的层名：从源 JSONC 构建只影响 `loaded`/`presence`（读 `path`），
+        绝不改变对外 `layer`。有 state store 时 user/user_local/workspace 三层共享同一
+        个 `workspace.sqlite`，但共享只是**承载事实**，MUST NOT 有损改写成 `sqlite`
+        对外暴露——它们在权威轴上本就是三个不同层。不可寻址性以 `vrn=None` 表达。
+        real path 只在本调用栈内用于判断 presence，MUST NOT 持久化或对外。
+        """
+        layer, resolved_precedence = _SOURCE_LAYER_AUTHORITY[config_key]
         if self._workspace_state_store is None:
             return ConfigSource(
                 vrn=None,
-                layer=layer,  # type: ignore[arg-type]
-                precedence=precedence,
+                layer=layer,
+                precedence=resolved_precedence,
                 loaded=path.is_file(),
                 source_key=config_key,
                 presence="present" if path.is_file() else "absent",
@@ -465,8 +477,8 @@ class ConfigService:
         source_record = self._workspace_state_store.get_source_layer(config_key)
         return ConfigSource(
             vrn=None,
-            layer="sqlite",
-            precedence=precedence,
+            layer=layer,
+            precedence=resolved_precedence,
             loaded=(
                 source_record.presence == "present"
                 if source_record is not None
@@ -921,17 +933,8 @@ class ConfigService:
     def _persisted_source_details(
         baseline: dict[str, object],
     ) -> tuple[tuple[ConfigSource, ...], tuple[Path, ...]]:
-        layer_names = {
-            "workspace_mutable_override": ("user", 1),
-            "workspace_local_mutable_override": ("user_local", 2),
-            "workspace_root_mutable_override": ("workspace", 3),
-            "workspace_runtime_override": ("sqlite", 4),
-        }
         details: list[ConfigSource] = []
-        for fallback_precedence, (source_key, raw_value) in enumerate(
-            sorted(baseline.items()),
-            start=1,
-        ):
+        for source_key, raw_value in sorted(baseline.items()):
             if not isinstance(raw_value, dict):
                 raise TypeError(f"source baseline 必须是对象: key={source_key}")
             raw_vrn = raw_value.get("vrn")
@@ -942,10 +945,11 @@ class ConfigService:
                 raise ValueError(f"source baseline vrn 必须是非空字符串或 None: key={source_key}")
             if raw_presence not in {"present", "absent"}:
                 raise ValueError(f"source baseline presence 无效: key={source_key}")
-            layer, precedence = layer_names.get(
-                source_key,
-                ("sqlite", fallback_precedence),
-            )
+            # source_key=None 的层（inline）在 `_source_baseline` 里退化成
+            # `f"{layer}:{precedence}"`，故这里把权威表反查成 `"{layer}:{precedence}"`
+            # 一并匹配，保证同一份权威表能逐字还原真层。**禁止兜底**：未登记的持久化键
+            # 一律 fail-closed（见 `_source_baseline`），绝不静默映射成 `sqlite` 一类。
+            layer, precedence = ConfigService._resolve_persisted_layer(source_key)
             details.append(
                 ConfigSource(
                     vrn=raw_vrn,
@@ -974,6 +978,23 @@ class ConfigService:
         # real path 不再持久化，故恢复路径时无 source_paths 可作为监听候选；
         # 监听候选取自显式配置路径（见 start_watching）。
         return tuple(details), ()
+
+    @staticmethod
+    def _resolve_persisted_layer(source_key: str) -> tuple[ConfigSourceLayer, int]:
+        """把持久化基线键还原为权威层的逻辑来源层与 precedence。
+
+        先按 source_key 直查；再按 `"{layer}:{precedence}"` 退化形态反查（inline）。
+        两者都未命中即抛错，不做有损兜底。
+        """
+        if source_key in _SOURCE_LAYER_AUTHORITY:
+            return _SOURCE_LAYER_AUTHORITY[source_key]
+        for authority_layer, authority_precedence in _SOURCE_LAYER_AUTHORITY.values():
+            if source_key == f"{authority_layer}:{authority_precedence}":
+                return authority_layer, authority_precedence
+        raise ValueError(
+            "source baseline 含未登记的持久化键，无法还原逻辑来源层: "
+            f"key={source_key!r}"
+        )
 
     def get_loaded_config_proof(self) -> dict[str, object]:
         """返回可供 Gateway 校验的加载证明，不包含秘密或候选完整 payload。"""
@@ -1187,14 +1208,10 @@ class ConfigService:
             ),
             self._config_source(
                 path=self._get_workspace_config_path(),
-                layer="user",
-                precedence=1,
                 config_key="workspace_mutable_override",
             ),
             self._config_source(
                 path=self._get_workspace_local_config_path(),
-                layer="user_local",
-                precedence=2,
                 config_key="workspace_local_mutable_override",
             ),
         ]
@@ -1202,8 +1219,6 @@ class ConfigService:
             source_details.append(
                 self._config_source(
                     path=get_workspace_config_path(self._workspace_root),
-                    layer="workspace",
-                    precedence=3,
                     config_key="workspace_root_mutable_override",
                 )
             )
@@ -1989,6 +2004,9 @@ class ConfigService:
         source_generation = 0
         for source in snapshot.source_details:
             layer_key = source.source_key or f"{source.layer}:{source.precedence}"
+            # 持久化键 MUST 可由权威表逐字还原（见 `_resolve_persisted_layer`）：
+            # 否则恢复路径会退化成有损兜底。这里 fail-closed，绝不写入无法还原的键。
+            ConfigService._resolve_persisted_layer(layer_key)
             # 只持久化 VRN（可为 None），绝不持久化 real path。
             baseline[layer_key] = {
                 "vrn": source.vrn,

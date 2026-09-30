@@ -424,6 +424,11 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 - **WHEN** 实现或测试同时处理 config `layer` 与 VRN `scope`
 - **THEN** 两者各自按自己的轴校验与取值，MUST NOT 用其中一个轴的闭集去校验另一个轴的输入，也 MUST NOT 由 `layer` 取值直接推出 `scope` 取值
 
+#### Scenario: 同一 source_key 在所有读路径报同一逻辑来源层
+
+- **WHEN** 系统分别从源 JSONC 构建与从 active snapshot 基线恢复同一条配置来源，并分别通过 `_config_source`/`_runtime_override_source` 与 `_persisted_source_details` 取得其 `layer`
+- **THEN** 两条读路径对同一 `source_key` MUST 报同一个逻辑来源层与同一个 `precedence`；`layer` MUST 是逻辑来源层，MUST NOT 因该来源被同一 `workspace.sqlite` 承载而被改写成 `sqlite`（该共享载体的不可寻址性只以 VRN 缺失表达，MUST NOT 作为有损层名）；`inline` 层的 `precedence` MUST 保持其权威值，MUST NOT 落入任何兜底取值
+
 ### Requirement: 既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段
 
 系统 MUST 消除已确证的 real path 持久化违约：`app/services/infrastructure/config/state.py:475` 的 `ConfigSourceLayerRecord.source_path: str`、`:485` 的 `backup_path: str | None` 与 `:632` 的 `ConfigSourceJournalRecord.source_path: str` 把真实路径落进 SQLite；且 `app/api/config.py:102` 的 `path=str(source.path)`（经 `ConfigSourceDTO.path`）把真实路径写进 API 响应体。
