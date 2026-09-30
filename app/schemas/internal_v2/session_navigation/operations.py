@@ -32,7 +32,7 @@ __all__ = [
     "NavigationSnapshotDTO",
 ]
 
-# operation_id 形态：软件生成的 ``op_`` + 32 位小写 hex（UUIDv4 位数保留）。
+# operation_id 形态：软件生成的 ``op_`` + 32 位小写 hex（UUIDv7 形态）。
 _OPERATION_ID_PATTERN = re.compile(r"op_[0-9a-f]{32}")
 
 

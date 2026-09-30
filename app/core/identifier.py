@@ -83,8 +83,9 @@ def effective_now_ms() -> int:
     抬高，故钳制值恒不小于最近一次发放的 id 内嵌时间戳。
 
     ``sessions/YYYY/MM/DD`` 分桶日期 MUST 由本函数返回值推出，而 id 内嵌
-    时间戳由 uuid_utils 的同一进程内单调时钟提供；两者同源且均不回退，故
-    分桶与 id 内嵌时间戳的 UTC 日期恒一致。
+    时间戳由 uuid_utils 提供、与本函数的墙钟钳制是两个独立时钟；二者均不
+    回退（uuid_utils 在系统时钟回拨时保持时间戳不后退），故分桶与 id 内嵌
+    时间戳的 UTC 日期恒一致。
     """
     global _last_issued_ms
     now_ms = _wall_clock_ms()

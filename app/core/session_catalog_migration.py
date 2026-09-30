@@ -1225,7 +1225,7 @@ class SessionCatalogMigrator:
             f"sessions/{created_at.astimezone(UTC).date():%Y/%m/%d}/{node.node_id}"
         )
         # "thr" 已在 IdentifierPrefix Literal 中声明；create_prefixed_id
-        # 基于 uuid4().hex，天然满足 v4 位 profile。
+        # 基于 uuid_utils.uuid7()，天然满足 v7 位 profile。
         main_thread_id = create_prefixed_id("thr")
         return _FrozenNode(
             node_id=node.node_id,
