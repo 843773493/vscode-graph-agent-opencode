@@ -318,3 +318,45 @@
 - `openspec validate --strict --all` = **40 passed / 0 failed**（`/home/hyf/.bun/bin/openspec`）。
 - `python -c 'import app.main; import app.gateway.main'` 退出 0。
 - `f04fb787` / `10d07f29` 祖先链已核（`merge-base --is-ancestor` 均 0）。
+
+## 第四轮增量（2026-09-30，HEAD `c9eae769`）：config layer 读路径缺陷
+
+### 缺陷（只读取证发现，非命名洁癖）
+
+`layer` 在 config 来源读取上**同一 source_key 两条读路径给出矛盾值**，且**可寻址层被错标**：
+
+- `_config_source` 把 `user`/`user_local`/`workspace` 有损改写成 `sqlite` 后对外暴露，而
+  `_persisted_source_details`/`get_source_diagnostics` 报回逻辑层 —— 同一 source_key 报两套 `layer`。
+- 更严重：重启后 `inline`（唯一**有 VRN 可寻址**的层）被落进兜底 `("sqlite", …)`，`precedence` 由 0 变 1，
+  直接违反既有规范 D9「`sqlite` 层 MUST NOT 编 VRN」。
+- Gateway 侧同构残留：`_gateway_source_detail` 硬编码 `layer="sqlite"`，而无 store 路径报 `user`/`user_local`。
+
+### 修复提交
+
+- `523e3cd8` 修复(config): 统一 workspace config 来源 layer 读路径并消除 inline 误标 sqlite。
+  引入唯一权威表 `_SOURCE_LAYER_AUTHORITY`（`config_service.py` 约 :95-107），`_config_source`/
+  `_runtime_override_source`/`_persisted_source_details`→`_resolve_persisted_layer`/`_source_baseline` 全部查同一张表。
+- `91f81079` 台账补登（5.7 勾选 + spec 新 Scenario + 5.8 D-C 登记）。
+- `c9eae769` 修复(gateway config): 统一 gateway 可变 override 层的 layer 读路径。
+  引入 Gateway 本文件自有权威表 `_GATEWAY_SOURCE_LAYER_AUTHORITY`（`app/gateway/config.py:63`），
+  **未** import workspace 的表（遵守 B2「两个独立持久化 owner 不合并」），但取值语义一致。
+
+### 独立复核（作者≠审查者）
+
+| 提交 | 审查结论 | 报告 |
+| --- | --- | --- |
+| `523e3cd8`+`91f81079` | 有条件接受（workspace 侧忠实；点名 Gateway 侧残留） | `out/tests/temp/review_config_layer/artifacts/REVIEW.md` |
+| `c9eae769` | 接受（无虚报，缺陷消除、单一权威、变异红、台账诚实） | 同上「Gateway 侧收口复核」节 |
+
+### 登记未实施（D-C，不在本切片）
+
+layer **值集**的破坏性两轴分离：`sqlite` 一名承载 runtime override 与物化快照两义、
+`active_snapshot`/`pending_snapshot` 用 `layer="sqlite"`/`precedence=1` 与可编辑层 precedence 重叠、
+`ConfigUpdateRequest.config_layer` 读写异名。涉及 proto + `buf generate` + `bun run gen:openapi` + 前端类型，
+已登记为 change 1 的 5.8「已裁定、待实施」。
+
+### 本轮验收
+
+- 聚焦：workspace 侧改前 140 / 改后 141 passed；gateway 侧改前 97 / 改后 98 passed，失败集合两版均空。
+- `openspec validate --strict --all` = 40 passed / 0 failed；`import app.main`/`app.gateway.main` 退出 0。
+- `10d07f29`、`523e3cd8`、`91f81079`、`c9eae769` 祖先链均已核。
