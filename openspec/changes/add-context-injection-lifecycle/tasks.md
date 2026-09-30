@@ -140,7 +140,77 @@
 
 - 基线：`git rev-parse HEAD` = `14fbf4df57a9c98995425b879c1be0007689e0b3`。
 - 1.5（保留未勾选）：typed `ContextContribution.selection_role`/`replacement_policy`/`source_binding` 尚未作为领域字段存在；`app/domain/itemized/request_plan.py` 的 `ContextContribution` 无这三个字段，`app/agents/instruction_producers.py` 只把它们列入 `_FORBIDDEN_METADATA_KEYS`（即仍是「禁止写入自由 metadata」的负向约束，而非 typed 正向合同）。故 1.5 未达标。
-- 3.11（保留未勾选，组件达标、生产接线未达）：`app/services/orchestration/resource_activation/` 的 `ResourceActivationCoordinator`、`ResourceActivationPolicySnapshot`、Turn/ModelCall snapshot 构造与唯一 Saver port 均已实现；`uv run pytest -q -p no:randomly tests/unit/services/orchestration/resource_activation/test_resource_activation.py` 退出码 0（含 `test_seal_path_creates_no_source_io`）。但全仓 `rg ResourceActivationCoordinator|freeze_turn|prepare_model_call` 在生产代码无调用方：coordinator 从未在 active slot 被调用，seal 路径也只在调用方显式传 activation snapshot 时绑定（`seal/preparation.py` 不传），即「active slot 冻结 policy + 随 assembly 持久化」的端到端路径在生产不存在。该接线归 `add-itemized-rollout-context` 8.3-A（未勾选）。故按整项验收保留未勾选，记为跨 change 分工待接线。 **归位裁定（owner 已定，路线 C：暂不合并）**：MCP catalog activation（`app/services/infrastructure/mcp/` 的 `McpCatalogActivationBinder`、`McpCatalogActivationSnapshot`、`DurableMcpCatalogActivationSaver`、`McpCatalogActivationBodyStore`、`ExtensionCatalogBindingRef`、`ExtensionDispatchBindingRef`、`McpToolGuidanceProducer`、`McpToolGuidanceSourcePort`）与本 change 3.11 实现的通用容器（简报称 Track B）不是并列双轨，而是「通用冻结容器」与「其内部一个 MCP 专属 payload」的分层；归位义务归 `add-itemized-rollout-context` 8.3-A 的生产接线，本 change MUST NOT 先行合并（依据见 `tasks.md:44` 与 `out/tests/temp/activation_tracks_brief/artifacts/report.md`）。**以下三项均已裁定（原为待裁定，现改为已裁定并注明裁定来源）**：(a) **MCP catalog 需要 target 级子 binding**——即不是一个 `resource_kind=mcp_tool_catalog` 的单体 binding，而是每个 MCP target 一个子 binding（**裁定来源：owner 裁定**；依据：Track A 的 `McpCatalogActivationSnapshot` 自述为「一次 ModelCallResourceSnapshot 原子绑定的扩展 dispatch binding」（`extension_catalog.py:302`），且 `_effective_boundary` 按 target 维度读 policy（`catalog_activation.py:214-215` + `:38`））；(b) **收口顺序：先接 8.3-A 的真实 turn/model_call 边界，再在同一笔纵向切片内完成 target 级子 binding 归位**（**裁定来源：owner 授权主 agent 裁定**；理由：归位需真实边界才能端到端验证，先归位等于把未验证的绑定挂到未验证的边界上）；(c) **`register_tail_only_guidance`（`app/services/infrastructure/mcp/catalog_activation.py:277`）随该 target 级子 binding 归 Track B 的 payload**，不独立归 CSM 的 source 注册（**裁定来源：owner 授权主 agent 裁定**；理由：Track A 既收敛为 Track B 内的 target 级子 binding，其 MCP 专属 payload 应随绑定归属；若留在 CSM source 注册会重新制造两套 owner，与「彻底根除双轨」相违）。三项均已定稿，实施时不得回退为待裁定。
+- 3.11（保留未勾选，组件达标、生产接线未达）：`app/services/orchestration/resource_activation/` 的 `ResourceActivationCoordinator`、`ResourceActivationPolicySnapshot`、Turn/ModelCall snapshot 构造与唯一 Saver port 均已实现；`uv run pytest -q -p no:randomly tests/unit/services/orchestration/resource_activation/test_resource_activation.py` 退出码 0（含 `test_seal_path_creates_no_source_io`）。但全仓 `rg ResourceActivationCoordinator|freeze_turn|prepare_model_call` 在生产代码无调用方：coordinator 从未在 active slot 被调用，seal 路径也只在调用方显式传 activation snapshot 时绑定（`seal/preparation.py` 不传），即「active slot 冻结 policy + 随 assembly 持久化」的端到端路径在生产不存在。该接线归 `add-itemized-rollout-context` 8.3-A（未勾选）。故按整项验收保留未勾选，记为跨 change 分工待接线。 **归位裁定（owner 已定，路线 C：暂不合并）**：MCP catalog activation（`app/services/infrastructure/mcp/` 的 `McpCatalogActivationBinder`、`McpCatalogActivationSnapshot`、`DurableMcpCatalogActivationSaver`、`McpCatalogActivationBodyStore`、`ExtensionCatalogBindingRef`、`ExtensionDispatchBindingRef`、`McpToolGuidanceProducer`、`McpToolGuidanceSourcePort`）与本 change 3.11 实现的通用容器（简报称 Track B）不是并列双轨，而是「通用冻结容器」与「其内部一个 MCP 专属 payload」的分层；归位义务归 `add-itemized-rollout-context` 8.3-A 的生产接线，本 change MUST NOT 先行合并（依据见 `tasks.md:44` 与 `out/tests/temp/activation_tracks_brief/artifacts/report.md`）。**以下三项均已裁定（原为待裁定，现改为已裁定并注明裁定来源）**：(a) **MCP catalog 需要 target 级子 binding**——即不是一个 `resource_kind=mcp_tool_catalog` 的单体 binding，而是每个 MCP target 一个子 binding（**裁定来源：owner 裁定**；依据：Track A 的 `McpCatalogActivationSnapshot` 自述为「一次 ModelCallResourceSnapshot 原子绑定的扩展 dispatch binding」（`extension_catalog.py:302`），**（2026-09-30 理由更正，MUST NOT 再引旧表述）** 此前写的依据「`_effective_boundary` 按 target 维度读 policy」**不成立**——实测 `catalog_activation.py` 的 `_effective_boundary()` 返回 `self._policy.effective_boundary(_MCP_TOOL_CATALOG_RESOURCE_KIND)`，而 `ResourceActivationPolicySnapshot.effective_boundary(resource_kind)` 按 **`resource_kind`** 查表、策略键为单一 `mcp_tool_catalog`（`contracts.py:99`、`configs/workspace_inline.jsonc:172`），**不按 target 查表**。target 级粒度的真实价值是「**按 target 精确寻址与恢复**」（可单独校验/失效某个 tool 的 binding），MUST NOT 被解释为「不同 target 可有不同 boundary」；若确需 per-server 策略差异化，属**改动策略轴**（从 kind 轴拆出 server 轴）的独立变更，本裁定范围内 MUST NOT 实施）；(b) **收口顺序：先接 8.3-A 的真实 turn/model_call 边界，再在同一笔纵向切片内完成 target 级子 binding 归位**（**裁定来源：owner 授权主 agent 裁定**；理由：归位需真实边界才能端到端验证，先归位等于把未验证的绑定挂到未验证的边界上）；(c) **`register_tail_only_guidance`（`app/services/infrastructure/mcp/catalog_activation.py:277`）随该 target 级子 binding 归 Track B 的 payload**，不独立归 CSM 的 source 注册（**裁定来源：owner 授权主 agent 裁定**；理由：Track A 既收敛为 Track B 内的 target 级子 binding，其 MCP 专属 payload 应随绑定归属；若留在 CSM source 注册会重新制造两套 owner，与「彻底根除双轨」相违）。三项均已定稿，实施时不得回退为待裁定。
 - 4.8（保留未勾选，删除面达标、新增断言缺失）：`PromptReplayCaptureMiddleware`、捕获标签/instrument 链与 itemized 反向捕获在生产代码已物理下线（`rg PromptReplayCaptureMiddleware|ItemizedContextProjectionMiddleware` 生产零命中，仅存 spec/design 文本与 `docs/` 对照页）；但本项还要求「增加 AST/import、source-registry completeness 与 sealed manifest/dispatch hash 正向对账断言」，全仓未找到对应测试。故未达标。
 - 5.5（保留未勾选，改名达标、职责未废止）：旧 `ItemizedContextProjectionMiddleware` 已被无状态 `SealedAssemblyDispatchBridge` 取代并在 `app/agents/agent_factory.py` 装配；但其 `_prompt_contributions`、`_prepare`（prepare/seal + `prepare_context_for_provider`）仍在，未见「置于最后一个 request-mutating 位置」的断言，与「废弃 prepare/seal、状态与 fallback 职责」的要求不符。故未达标。
 - 台账改写：7.5 原写死「54项未完成任务计数」已随勾选漂移（当前本 change 顶层未勾选 36 项），改为不写死数字的表述，避免再次过期。
+### 2026-09-30 MCP catalog activation 归位形状定稿（禁止回退为待裁定）
+
+
+
+本节按用户转述的外部 agent 裁定落地，只定义「Track A 的 MCP 激活结果如何落进 Track B 容器」的**数据形状**，不定义接线时机（接线顺序仍为 3.11/8.3-A 已定稿的顺序）。实施前 MUST 复跑确认下列代码事实的行号。
+
+
+
+**已核实的代码事实（2026-09-30 主 agent 复跑）**：
+
+
+
+- `ResourceProvenanceRef`（`app/domain/itemized/resource_activation/provenance.py`）是一行一个已激活语义资源的扁平结构；17 个字段冻结在 `RESOURCE_PROVENANCE_FIELDS`（`.../resource_activation/common.py:72`），`from_dict` 要求字段全齐（`provenance.py:145`）。
+
+- 该结构已含容器语义：`snapshot_ref`/`detail_ref` **必须恰好有一个**（`provenance.py:92-94`）。
+
+- `ResourceActivationSnapshotRef`（`.../resource_activation/snapshot.py:75`）持有 `bindings: tuple[ResourceProvenanceRef, ...]`，并派生 `bindings_hash`（`resource_bindings_hash`）与 `activation_provenance_hash`。
+
+- `McpCatalogActivationSnapshot` 只持有**单个** `binding_ref: ExtensionCatalogBindingRef`；target 集合是该 ref 内部的 `targets: Mapping[str, ExtensionTargetBinding]`（`extension_catalog.py:195`）。
+
+- `ExtensionTargetBinding` 字段为 `target_id / origin / schema_hash / server_id`，`origin` 取 `mcp` 或 `custom`（`extension_catalog.py:173-179`），`_encode_targets` 已按 `target_id` 确定性排序（`extension_catalog.py:127-139`）。
+
+- `McpToolGuidanceSnapshot`（`tool_guidance.py:71`）是 **catalog 级**粒度（一个 `guidance_revision` 加 `entries`），**不是** target 级。
+
+- 策略轴是**单一 kind 键**：`context.resource_activation.overrides.mcp_tool_catalog`（`configs/workspace_inline.jsonc:172`）；`effective_boundary(resource_kind)`（`contracts.py:99`）按 kind 查表、**不按 target 查表**（见上文理由更正）。
+
+- `ExtensionDispatchBindingRef`（`extension_catalog.py:301`）docstring 明确：其 `dispatch_binding_hash` **刻意不进入** `context-plan-hash:v2`、Provider `ToolSetRef`、`request_hash`，理由是「内层目录/指引变化不会制造 `toolset_changed` epoch」。该约束对本设计有强制力。
+
+- `register_tail_only_guidance` 当前调用点：`app/services/infrastructure/mcp/catalog_activation.py:277`。
+
+- Track B 对 MCP 形状**零字段引用**（在 `app/domain/itemized/resource_activation/` 与 `app/services/orchestration/resource_activation/` 检索 `guidance`/`dispatch_binding`/`extension` 实测零命中），该性质 MUST 保持。
+
+- **事实更正**：`test_extension_dispatch_binding_boundary.py` 的真实路径是 `tests/unit/services/orchestration/resource_activation/test_extension_dispatch_binding_boundary.py`（不在 `app/services/infrastructure/mcp/` 下；该目录下是 `test_catalog_activation.py` 等）。
+
+
+
+**定稿形状**：
+
+
+
+1. **新增 domain-neutral 成员类型**，置于 `app/domain/itemized/resource_activation/`：
+
+   - `ResourceMemberBinding` 字段：`member_id`（MCP 场景即 `ExtensionTargetBinding.target_id`）、`member_kind`（中性轴，取 `mcp` 或 `custom`，即 `origin`）、`schema_hash`（稳定 schema 指纹）、`server_id`（MCP 必填；custom 必须为空）、`revision`（成员级语义 revision）。
+
+   - **MUST NOT** 在 itemized 领域层复用或 import `ExtensionTargetBinding`；归位通过同形字段的纯映射完成。
+
+2. **父行即「该 owner scope 的 MCP catalog」这一条语义资源**：`resource_kind` 取既有的 `mcp_tool_catalog`（**MUST NOT 新造键**）；`detail_ref` 指向受保护 catalog snapshot body；`ResourceProvenanceRef` 新增可选字段 `members`（默认空元组），空元组表示非容器型资源，**既有行行为 MUST 逐字段不变**；`to_dict` 恒发空的 `members`，`from_dict` 必须接收，**MUST NOT** 为「缺字段」设置特例分支；`RESOURCE_PROVENANCE_FIELDS` 同步纳入 `members`。
+
+3. **guidance 归属：挂父行，不拆到成员**：`guidance_revision` 落父行 `revision` 侧（catalog 级粒度对齐），guidance 正文进父行 `detail_ref`；成员只携带 per-target 身份与 schema；`register_tail_only_guidance`（`catalog_activation.py:277`）随该父行归入 Track B payload，**不独立归 CSM source 注册**。
+
+
+
+**哈希归属（强制）**：成员细节（`member_id`/`member_kind`/`schema_hash`/`server_id`）**MUST NOT** 进入 `bindings_hash` / `activation_provenance_hash` 的现有 v1 preimage——若上溯并决定 epoch，单个 MCP server 改一个 tool schema 会制造 `toolset_changed`，直接违反 `ExtensionDispatchBindingRef` 的既有约束。成员的逐字段校验能力放 dispatch binding（已是 epoch-neutral 的既定通道）。若实施中证明「真·逐字节恢复」必须将 members 纳入 `bindings_hash`，则**先给出 epoch-neutrality 证明再改**，并将 schema token `resource-activation-bindings:v1` **升版为 v2**；**MUST NOT 静默改变 v1 语义**。`extensions_dispatch_binding_hash` 既有边界 MUST 保持，且由 `tests/unit/services/orchestration/resource_activation/test_extension_dispatch_binding_boundary.py` 锁定。
+
+
+
+**排序与唯一性**：`members` 按 `member_id` 确定性排序（镜像 `_encode_targets`）；**MUST NOT** 为成员引入 ordinal 或第二套唯一性维护，父行保留原有 `activation_ordinal` 语义；`member_id` 在同一父行内 MUST 唯一，冲突在构造期显式拒绝（不得静默择一）。
+
+
+
+**单一权威**：`members` 是该结构的**唯一定义**；Track A 的 `ExtensionCatalogBindingRef.targets` 要么改为从 `members` 重建的视图，要么物理下线；**MUST NOT** 保留两份并行拷贝或双向同步；禁止兼容层、别名、双读。
+
+
+
+**验收门槛**：父行加成员的冻结、seal、restore、fork、retention 全链路**逐字段相等**；成员级 schema 变化**不产生** `toolset_changed` epoch（有对应负向测试）；`bindings_hash` 在仅成员细节变化时**不变**（明确断言）；Track A 的 target 集合无双份权威拷贝（全仓 `rg` 复核）；`test_extension_dispatch_binding_boundary.py`、`tests/unit/services/orchestration/resource_activation/test_resource_activation.py`、`tests/unit/services/infrastructure/mcp/test_catalog_activation.py` 全绿；`openspec validate --strict --all` 为 0 failed。
+
+
+
+**待裁定状态解除**：此前登记的「MCP target 级子 binding 形态在代码里不存在，属需 owner 新定稿的数据形态」**已由本文字定稿**（同批更正 `add-itemized-rollout-context/tasks.md` 的 §9 台账）。
+
