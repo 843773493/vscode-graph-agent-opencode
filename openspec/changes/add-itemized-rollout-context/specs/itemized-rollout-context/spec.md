@@ -187,9 +187,11 @@ worker MUST在实际执行时按最新已提交SQLite和`NavigationTopologyGate`
 - **WHEN** 本地投影的基线 revision 与后端权威 revision 不一致，或检测到另一客户端的并发写入
 - **THEN** 前端显式重读权威状态并重放仍独立的本地命令，且该重读在界面上可观测，不做静默重拉
 
-### Requirement: 右侧文件树与 Gateway 工作区导航必须接入同一乐观意图协议
+### Requirement: 文件树必须精确失效与权威收敛，Gateway 导航必须接入同一意图协议
 
-右侧文件树与 Gateway 工作区导航的集合成员 mutation MUST 接入本 change 已冻结的同一意图协议（唯一 `client_operation_id`、同分区有序 `client_sequence`、durable acceptance 不等于完成、按 ID 查询操作状态、迟到重放返回原终态、同 key 异 preimage 冲突），MUST NOT 另立第二套写通道；接线完成后原同步写路径 MUST 物理下线。
+右侧文件树 MUST 保持对象级替换与精确子树失效，MUST NOT 退回全量重载；Gateway 工作区导航的集合成员 mutation MUST 接入本 change 已冻结的同一意图协议核心（唯一 `client_operation_id`、同分区有序 `client_sequence`、durable acceptance 不等于完成、按 ID 查询操作状态、迟到重放返回原终态、同 key 异 preimage 冲突），MUST NOT 另立第二套协议语义。
+
+协议核心是共享语义，**operation 记录、执行 worker、事件通道与唯一键空间由该集合的权威 owner 各自实例化**：工作区目录的 owner 是工作区后端（`NavigationMutationRecord`）；Gateway 工作区导航的 owner 是 Gateway 控制面自身（MUST NOT 被读成「Gateway 不许接管自有导航」）。文件树是否引入异步受理，**由量化前置决定**（见 tasks §10.4b）：量化证明无瓶颈时 MUST NOT 引入，MUST NOT 以「一致性更好」为由先行实现。
 
 文件树的影响面 MUST 用精确子树失效（丢弃该路径及其后代缓存并中止在途请求）表达，MUST NOT 以把全部已展开目录标记为过期再逐个重载的方式作为成功路径。文件变更事件流 MUST 接成权威增量修正通道，使外部变更（Agent、终端）驱动树增量更新，与本地乐观投影形成收敛闭环。
 
@@ -197,17 +199,17 @@ worker MUST在实际执行时按最新已提交SQLite和`NavigationTopologyGate`
 - **WHEN** 用户在已展开的目录树中新建一个文件
 - **THEN** 只有包含该文件的目录行被失效并重载，其它已展开目录的缓存与凭证不变，MUST NOT 重载全部已展开目录
 
-#### Scenario: 文件树写操作收到 durable acceptance 不等于成功
-- **WHEN** 文件树的一个集合成员 mutation 收到 durable acceptance
-- **THEN** 前端继续显示该意图为 pending，直到收到该 operation 的终态或权威增量确认，MUST NOT 在 acceptance 时刻显示为已完成
+#### Scenario: 文件树无瓶颈时不引入异步受理
+- **WHEN** 文件树的量化实测证明单次 mutation 的 p95 低于阈值且不出现丢失更新
+- **THEN** 文件树 MUST NOT 引入异步受理，只保留对象级替换、精确子树失效与事件增量收敛，MUST NOT 为「统一协议」而增加未证实的复杂度
 
 #### Scenario: 外部变更经权威增量收敛
 - **WHEN** Agent 或终端在树外部修改了文件，事件通道送达批量变更
 - **THEN** 前端按该增量修正对应目录的投影，MUST NOT 依赖全量重载来体现该变更
 
-#### Scenario: 集合型 mutation 不得绕开协议
+#### Scenario: 集合型 mutation 不得绕开协议核心
 - **WHEN** 为会话目录树、文件树或 Gateway 工作区导航新增一个会改变集合成员的写操作
-- **THEN** 该操作 MUST 接入同一意图协议，MUST NOT 保留一条同步直接写入的第二通道
+- **THEN** 该操作 MUST 接入同一协议核心，MUST NOT 定义一套与之冲突的语义；其 operation 记录与 worker 由该集合的权威 owner 实例化，MUST NOT 保留一条绕开幂等与终态语法的同步直接写入通道
 
 ### Requirement: 目录列表读取工作量必须与页大小相关
 

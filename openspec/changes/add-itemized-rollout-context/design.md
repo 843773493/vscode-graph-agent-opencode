@@ -1012,6 +1012,19 @@ E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、threa
 
 §9.0 已经把**会话目录树**的乐观投影、202 持久入队、终态对账写成了可验证义务。本节只补三件它没覆盖的事，不重写 §9.0：把该合同上升为**所有集合型 mutation 的横切判据**、把**右侧文件树**与**Gateway 工作区导航**接进同一协议、以及消除**会话目录列表的逐会话文件读放大**。
 
+#### 9.2.0 协议核心与按 owner 实例的切分（消解 §9.0 与本节的两处措辞冲突）
+
+本节与 §9.0 表面上互相矛盾（§9.0 首段明文「只覆盖workspace Session/Folder导航，**不覆盖Gateway的workspace导航控制面**」，而 9.2.2 要求 Gateway 接入），必须按下面这条切分读，而不是两套协议：
+
+- **协议核心**（意图语义、`client_operation_id` 幂等规则、`client_sequence` 同分区有序、状态闭集、durable acceptance 语义、迟到重放返回原终态、`dependency_failed` 不执行）是**全前端共享的唯一语义**，MUST NOT 被任何 owner 重新定义。
+- **按 owner 实例**（operation 持久化表、执行 worker、事件通道、唯一键空间）由**该集合的权威 owner** 各自实例化。工作区目录的权威 owner 是工作区后端，故用 `NavigationMutationRecord` 与工作区 `NavigationTopologyGate`；Gateway 工作区导航的权威 owner 是 Gateway 自己（`workspace-tree.json` 是 Gateway 的控制面数据），故 Gateway MUST 自己是该面上 operation record 的 owner 与执行 worker。
+- 因此 §9.0 的「不覆盖」应读作**协议核心不因 Gateway 导航而改写**，而非「Gateway 导航不许接入」；§9.0 的「Gateway 仍只透明代理、不保管命令、不代替 worker」**只适用于它代理工作区业务接口时**，MUST NOT 被套用到 Gateway 自有导航面上。
+- 唯一键空间不同：工作区后端用 `(gateway_id, workspace_id, actor, client_operation_id)`，Gateway 自有导航用 `(owner_scope, actor, client_operation_id)`；两者 MUST 被写成同族实例、MUST NOT 混用同一键空间。
+
+#### 9.2.0b 文件树不预设必须接 202（先量化）
+
+本节的「文件树接入」曾被写成「必须接同一 202 协议」。2026-09-30 审查实测后收紧：文件树的成功路径**已经是**对象级替换与精确失效（单目录写成功后只替换该目录、delete 走 `invalidateDirectoriesUnder`、SSE 已按受影响父目录收敛），**且文件树从未被量化**（§10.1 自述「文件树全量重载目录数本轮未经真实浏览器测量」）。因此文件树现在只承担三条既成义务（精确子树失效、单目录替换、SSE 权威增量），**是否引入 202 由 tasks §10.4b 的量化前置决定**；判据与阈值见该处，MUST NOT 在未量化前按「用户希望」开工（AGENTS.md 禁止过度抽象）。
+
 #### 归因：缺的是一条判据，不是一套机制
 
 前端已实现的乐观机制（`sessionCatalogOutbox` 五态状态机、IndexedDB 持久层、`sessionCatalogProjection` 的「已提交基线 + 本地有序命令重放」、`sessionCatalogOutboxDriver` 六步编排、`sessionCatalogOperations` 协议客户端）在生产侧**零调用**；会话目录树仍在走「同步阻塞 mutation + 成功后全量重拉整棵树」，删除会话甚至成功后无条件再调一次会话列表。文件树有目录缓存与 `stale` 全量重载，会话列表有本地收敛，三者对「哪些操作该乐观、失败怎么回滚、并发同目标怎么排队」各答一套。
@@ -1033,7 +1046,9 @@ E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、threa
 
 §9.0 冻结的 `client_operation_id` 唯一性、`client_sequence` 同分区有序、`created_by_operation_id` 跨批依赖、状态闭集 `queued|running|committed|rejected|cancelled|dependency_failed`、terminal 后 compact tombstone、`dependency_failed` 不执行等条款，**是集合型 mutation 的唯一协议**。右侧文件树与 Gateway 工作区导航 MUST 接入同一协议，MUST NOT 另立第二套写通道；接线完成后原同步写路径 MUST 物理下线，不得双轨并存。
 
-两处与 §9.0 的差异点必须显式处理：① 文件树的权威集合是**目录行的直接子节点**而非整棵 Session 导航树，其 `base_revision` 与 `expected_revision` 必须绑定该目录行的 revision，不得借用 workspace catalog revision；② Gateway 工作区导航的权威 owner 是控制面而非工作区后端，故其 `gateway_id` 与 actor 同样只能取自认证路由，且 Gateway 仍只透明代理、不保管命令、不代替 worker——与 §9.0 对 Gateway 的约束一致。
+两处与 §9.0 的差异点必须显式处理：① 文件树的权威集合是**目录行的直接子节点**而非整棵 Session 导航树，其 revision 必须绑定**目录行 revision**，不得借用 workspace catalog revision —— 但**当前全仓文件面无目录级 revision**（前端 `DirectoryCacheEntry` 只有布尔 `stale`，后端 `WorkspaceFileListDTO` 只有 `next_cursor`，SSE `WorkspaceFileChangeDTO` 只有 `kind/path`；`revision` 仅描述文件正文），故该 revision 属**需先定稿的新增结构**（归属见 9.2.0b 与 tasks §10.4c），MUST NOT 在前端自证。② Gateway 工作区导航的权威 owner 是 Gateway 控制面而非工作区后端（见 9.2.0），故其 `gateway_id` 与 actor 只能取自认证路由，且 Gateway **在该面上自己是 owner 与 worker**。
+
+③ 文件树的成员身份是 **`path`** 而非稳定 node id，故「同一目标」判定与重命名/移动后的因果依赖 MUST 另行定义，MUST NOT 照搬 §9.0 的 node id 假设；④ 后端 `app/api/workspace.py` 当前只有 create/paste/copy，**没有 delete/rename/move**，而 spec 的 Scenario 覆盖删除——端点存在性 MUST 在实施前判死（补端点或收窄 Scenario 范围）。
 
 文件变更 SSE（`streamWorkspaceFileEvents`，支持按 `paths` 订阅与 `onBatch`）MUST 接成权威增量修正通道：外部变更（Agent、终端）经该通道驱动树增量更新，与本地乐观投影形成闭环；「乐观」不是「猜」，而是「先看意图、再用权威增量校正」。
 
