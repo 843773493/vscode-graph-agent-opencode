@@ -74,7 +74,7 @@ catalog批量deleting commit之后，即使部分Session local fence尚active，
 #### Scenario: 非规范或超长 ID 在接触文件系统前被拒绝
 
 - **WHEN** API、Proto、Session link、catalog import或typed ref携带非36-byte canonical profile的Session/thread ID，ID含路径分隔、Unicode、百分号编码、`.`/`..`，或hex payload不满足 `migrate-identifiers-to-uuidv7` 的 `uuidv7-identifier-profile` 规定的位 profile
-- **THEN** 共享validator在catalog/path lookup和任何文件系统操作前返回明确的`invalid_session_id`或`invalid_thread_id`；不得清洗、截断、建立别名或创建部分目录
+- **THEN** 共享validator在catalog/path lookup和任何文件系统操作前返回明确的形态化错误（中文`ValueError`，含非法形态说明，例如`session_id 形态非法: ...`或`ID payload 的 UUID version 位非法: ...`；MUST NOT 引入结构化`reason_code`、MUST NOT 新增异常子类，避免与既有`ValueError`通道形成双轨）；不得清洗、截断、建立别名或创建部分目录
 
 #### Scenario: main 与非 main thread 使用不同物理分桶
 
