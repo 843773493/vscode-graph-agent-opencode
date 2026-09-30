@@ -3134,3 +3134,89 @@ def test_create_folder_in_caller_transaction(
             connection=connection,
         )
     assert store.get_node(created.node_id).display_name == "事务内 folder"
+
+
+# ----------------------------------------------------------------------
+# §5.1 DDL 未被 v7 变更：nodes 主键/索引形态冻结
+# ----------------------------------------------------------------------
+
+# nodes 表 DDL 对照基线（R10 冻结形态）；v7 只改值分布，MUST NOT 改本 DDL。
+_EXPECTED_NODES_DDL = """
+CREATE TABLE nodes (
+    node_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('folder', 'session')),
+    parent_node_id TEXT REFERENCES nodes(node_id),
+    display_name TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('active', 'deleting')),
+    revision INTEGER NOT NULL DEFAULT 1,
+    workspace_id TEXT NOT NULL,
+    created_at TEXT,
+    storage_relative_locator TEXT,
+    main_thread_id TEXT,
+    CHECK (
+        (kind = 'session'
+            AND created_at IS NOT NULL
+            AND storage_relative_locator IS NOT NULL
+            AND main_thread_id IS NOT NULL)
+        OR (kind = 'folder'
+            AND created_at IS NULL
+            AND storage_relative_locator IS NULL
+            AND main_thread_id IS NULL)
+    ),
+    UNIQUE (workspace_id, main_thread_id),
+    UNIQUE (workspace_id, storage_relative_locator)
+)"""
+
+
+def test_nodes_ddl_frozen_for_uuidv7(store: SessionCatalogStore) -> None:
+    """§5.1：nodes.node_id 仍为 TEXT PRIMARY KEY，DDL 未因 v7 变更。"""
+    row = store.connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'nodes'"
+    ).fetchone()
+    assert row is not None
+    assert " ".join(str(row[0]).split()) == " ".join(_EXPECTED_NODES_DDL.split())
+
+
+def test_nodes_primary_key_columns_unchanged(store: SessionCatalogStore) -> None:
+    """§5.1：nodes 主键仍是单列 node_id（TEXT），未加列/未加索引。"""
+    columns = store.connection.execute("PRAGMA table_info(nodes)").fetchall()
+    pk_columns = [str(c[1]) for c in columns if int(c[5]) > 0]
+    assert pk_columns == ["node_id"]
+    index_names = {
+        str(r[0])
+        for r in store.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND tbl_name = 'nodes' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+    assert index_names == {"idx_nodes_parent", "idx_nodes_workspace"}
+
+
+# ----------------------------------------------------------------------
+# §5.2 v7 主键按 id 排序 ≈ 按时间顺序
+# ----------------------------------------------------------------------
+
+
+def test_uuidv7_primary_key_ordering_matches_time_order(
+    store: SessionCatalogStore,
+) -> None:
+    """§5.2：v7 id 插入 nodes 后，按 node_id 文本排序 == 按创建时刻顺序。"""
+    moments = [
+        datetime(2026, 6, 1, 12, 0, 0, ms * 1000, tzinfo=UTC)
+        for ms in range(6)
+    ]
+    created = [create_session(store, created_at=moment) for moment in moments]
+    # 生成顺序（=创建时刻顺序）的 id 列表。
+    chronological = [node.node_id for node in created]
+    # SQLite 主键文本排序结果。
+    sorted_ids = [
+        str(row[0])
+        for row in store.connection.execute(
+            "SELECT node_id FROM nodes WHERE kind = 'session' ORDER BY node_id"
+        )
+    ]
+    assert sorted_ids == chronological
+    # 按内嵌时间戳解码的排序亦与文本排序一致（同毫秒分辨率）。
+    assert sorted_ids == sorted(
+        sorted_ids, key=lambda value: int(value[4:16], 16)
+    )

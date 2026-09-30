@@ -3439,3 +3439,63 @@ def test_begin_immediate_lock_contention_raises_domain_error(
     finally:
         holder.close()
         store.close()
+
+
+# ----------------------------------------------------------------------
+# §5.1 thread_catalog 主键/DDL 未被 v7 变更
+# ----------------------------------------------------------------------
+
+
+def test_thread_catalog_primary_key_frozen_for_uuidv7(
+    tmp_path: Path,
+) -> None:
+    """§5.1：thread_catalog.thread_id 仍是单列 TEXT PRIMARY KEY，DDL 未因 v7 变更。"""
+    store = SessionControlStore(tmp_path / "c.sqlite")
+    try:
+        columns = store.connection.execute(
+            "PRAGMA table_info(thread_catalog)"
+        ).fetchall()
+        pk_columns = [str(c[1]) for c in columns if int(c[5]) > 0]
+        assert pk_columns == ["thread_id"]
+        index_names = {
+            str(r[0])
+            for r in store.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' "
+                "AND tbl_name = 'thread_catalog' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+        # 主键自带唯一索引；无额外索引。
+        assert index_names == set()
+    finally:
+        store.close()
+
+
+def test_thread_catalog_uuidv7_ordering_matches_time_order(
+    tmp_path: Path,
+) -> None:
+    """§5.2：v7 thread_id 插入 thread_catalog 后，按 thread_id 文本排序 ==
+    按内嵌时间顺序。"""
+    store = SessionControlStore(tmp_path / "c.sqlite")
+    try:
+        ids = [thread_id_at(moment) for moment in (
+            datetime(2026, 6, 1, 12, 0, 0, ms * 1000, tzinfo=UTC)
+            for ms in range(6)
+        )]
+        for thread_id in ids:
+            store.connection.execute(
+                "INSERT INTO thread_catalog (thread_id, kind, created_at) "
+                "VALUES (?, 'child', ?)",
+                (thread_id, DEFAULT_CREATED_AT.isoformat()),
+            )
+        sorted_ids = [
+            str(row[0])
+            for row in store.connection.execute(
+                "SELECT thread_id FROM thread_catalog ORDER BY thread_id"
+            )
+        ]
+        assert sorted_ids == ids
+        assert sorted_ids == sorted(
+            sorted_ids, key=lambda value: int(value[4:16], 16)
+        )
+    finally:
+        store.close()
