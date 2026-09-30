@@ -151,6 +151,118 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     expect(driver.current().operations).toEqual([]);
   });
 
+  test("本地写入先落盘后抛错：已落盘条目必须一并回滚，刷新恢复不复活", async () => {
+    const disk = new Map<number, CatalogOutboxOperation>();
+    let failNextWrite = false;
+    const persistence: CatalogOutboxPersistencePort = {
+      load: async () => [...disk.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([clientSequence, operation]) => ({
+          partition_key: "local:8014\u0000workspace-1\u0000guest",
+          client_sequence: clientSequence,
+          operation,
+        })),
+      write: async (records) => {
+        for (const record of records) disk.set(record.client_sequence, record.operation);
+        if (failNextWrite) {
+          failNextWrite = false;
+          // 模拟真实 IndexedDB：记录已写入底层存储，事务随后才失败。
+          throw new Error("QuotaExceededError: 本地存储已满");
+        }
+      },
+      delete: async (_partitionKey, clientSequences) => {
+        for (const clientSequence of clientSequences) disk.delete(clientSequence);
+      },
+    };
+    const enqueued: string[] = [];
+    const adapter: SessionCatalogOperationsAdapter = {
+      async enqueue(_port, _workspaceId, intents) {
+        for (const intent of intents) enqueued.push(intent.client_operation_id);
+        return {
+          workspace_id: "workspace-1",
+          accepted_count: intents.length,
+          receipts: intents.map((intent) => receipt(intent.client_operation_id)),
+          created_node_ids: {},
+        };
+      },
+      async queryStatus() {
+        throw new Error("本用例不应查询状态");
+      },
+    };
+    const driver = createSessionCatalogOutboxDriver({
+      port: PORT,
+      partition: PARTITION,
+      persistence,
+      adapter,
+    });
+    await driver.restore();
+    await driver.applyIntent(opId("a"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    });
+
+    failNextWrite = true;
+    await expect(driver.applyIntent(opId("b"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    })).rejects.toThrow("已撤销该操作及依赖");
+
+    // 磁盘上不得留下失败命令，刷新恢复后也不能被重新派发。
+    expect([...disk.values()].map((operation) => operation.client_operation_id))
+      .not.toContain(opId("b"));
+    const resumed = createSessionCatalogOutboxDriver({
+      port: PORT,
+      partition: PARTITION,
+      persistence,
+      adapter,
+    });
+    const restored = await resumed.restore();
+    expect(restored.operations.map((operation) => operation.client_operation_id))
+      .not.toContain(opId("b"));
+    const before = enqueued.length;
+    await resumed.applyIntent(opId("c"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    });
+    expect(enqueued.slice(before)).not.toContain(opId("b"));
+  });
+
+  test("落盘失败且回滚也失败时，错误必须同时含写入与回滚两条原因", async () => {
+    let failNextWrite = false;
+    const persistence: CatalogOutboxPersistencePort = {
+      load: async () => [],
+      write: async () => {
+        if (failNextWrite) {
+          failNextWrite = false;
+          throw new Error("QuotaExceededError: 本地存储已满");
+        }
+      },
+      delete: async () => {
+        throw new Error("删除已落盘条目也失败");
+      },
+    };
+    const driver = createSessionCatalogOutboxDriver({
+      port: PORT,
+      partition: PARTITION,
+      persistence,
+      adapter: {
+        async enqueue() { throw new Error("持久化失败时不得派发入队"); },
+        async queryStatus() { throw new Error("本用例不应查询状态"); },
+      },
+    });
+    await driver.restore();
+    failNextWrite = true;
+
+    const failure = await driver.applyIntent(opId("a"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    }).then(() => null, (error: Error) => error);
+
+    expect(failure?.message).toContain("回滚也失败");
+    expect(failure?.message).toContain("QuotaExceededError");
+    expect(failure?.message).toContain("删除已落盘条目也失败");
+  });
+
   test("刷新恢复 outbox 后未对账命令仍保留并可继续入队", async () => {
     const persistence = recordingPort();
     const enqueued: string[][] = [];
