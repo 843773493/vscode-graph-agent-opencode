@@ -115,3 +115,30 @@ def test_unpublished_thread_id_fails_closed(
 def test_unknown_session_fails_closed() -> None:
     with pytest.raises(TypeError, match="非空字符串"):
         RolloutStorage(Path("/tmp/does-not-exist")).root("")
+
+
+def test_main_and_child_rollout_stores_are_physically_isolated(
+    storage: RolloutStorage,
+) -> None:
+    """OpenSpec 8.3 Scenario：main 与 child 的 rollout 落点互不重叠。
+
+    线程级隔离由「每 thread 独立数据库文件」实现：main 与 child 各自的
+    `index.sqlite` 与 `rollout.jsonl` 落在不同物理目录，故两库各自的单行
+    `database_meta` 与 `committed_jsonl_offset` 不会互相串扰。
+    """
+    session_node = storage._path_resolver.resolve_session_node(SESSION_ID)
+    _publish_child_thread(
+        session_node,
+        thread_id=CHILD_THREAD_ID,
+        created_at=datetime.now(UTC),
+    )
+    main_root = storage.root(SESSION_ID)
+    child_root = storage.root(SESSION_ID, thread_id=CHILD_THREAD_ID)
+    assert main_root != child_root
+    assert main_root.parent != child_root.parent
+    assert storage.index_path(SESSION_ID) != storage.index_path(
+        SESSION_ID, thread_id=CHILD_THREAD_ID
+    )
+    assert storage.jsonl_path(SESSION_ID) != storage.jsonl_path(
+        SESSION_ID, thread_id=CHILD_THREAD_ID
+    )
