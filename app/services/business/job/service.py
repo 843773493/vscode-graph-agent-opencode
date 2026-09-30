@@ -15,10 +15,7 @@ from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
-from app.core.trace_middleware import (
-    get_current_gateway_id,
-    get_current_request_id,
-)
+from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.internal_v2.common import JobStatus, RunMode
 from app.schemas.internal_v2.job import (
     JobControlRequest,
@@ -86,9 +83,6 @@ class JobState:
     attachments: list[AttachmentRef] = field(default_factory=list)
     # 请求级注入的真实 gateway_id；job 是独立执行根，MUST 显式携带。
     gateway_id: str | None = None
-    # 请求级注入的权威 request_id（X-Request-ID）；job 是独立执行根，
-    # MUST 显式携带创建请求的 request_id，MUST NOT 在 job 内部补造第二个。
-    request_id: str | None = None
     progress: int = 0
     current_step: str | None = None
     error_message: str | None = None
@@ -720,9 +714,6 @@ class JobService:
             # gateway_id；job 是独立执行根，必须显式随 job 携带，不能依赖
             # ContextVar 自动传播。
             gateway_id=get_current_gateway_id(),
-            # 同一请求作用域内读取 TraceMiddleware 注入的权威 request_id；
-            # job 是独立执行根，必须显式随 job 携带，MUST NOT 在 job 内部补造。
-            request_id=get_current_request_id(),
         )
 
         self._jobs[resolved_job_id] = job
@@ -1089,7 +1080,6 @@ class JobService:
                 message_created_at=job.message_created_at,
                 message_metadata=dict(job.message_metadata),
                 gateway_id=job.gateway_id,
-                request_id=job.request_id,
                 status=job.status,
                 progress=job.progress,
                 current_step=job.current_step,
@@ -1428,9 +1418,6 @@ class JobService:
                         # MUST 显式携带），使重启后队首 Job 在 gateway 层可解析；
                         # 缺该字段的老数据由 PendingRequestDTO 校验直接拒绝，不静默补齐。
                         gateway_id=record.gateway_id,
-                        # 恢复的 Job 沿用创建时持久化的权威 request_id（独立执行根，
-                        # MUST 显式携带），使重启后 job 下游能沿用同一请求 ID。
-                        request_id=record.request_id,
                         status=JobStatus.queued,
                         message_metadata=dict(record.message_metadata),
                         attachments=list(record.attachments),
