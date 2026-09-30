@@ -45,9 +45,9 @@
 
 ## 5B. 阻断性前置：gateway 控制面库逐表分类（D10，MUST 在 §6 之前完成）
 
-- [ ] 5B.1 对控制面库（`app/gateway/control/gateway_state.py` 等）承载 session 身份的表逐表分类为 `migrate` / `explicitly_invalidated` / `not_affected`。**已实测控制面只有两个 SQLite 库**：库 A `gateway.sqlite`（`app/gateway/main.py` 实例化，建表权威在 `gateway_state.py` 的 `_GATEWAY_MIGRATIONS`，21 张表 + 框架表 `schema_migrations`）、库 B `federation/control.sqlite`（`app/gateway/federation/store.py`，4 张表）。门槛：报告给出逐表分类与判定依据，且 `rg -n 'session_id|access_session_id' app/gateway/control/gateway_state.py` 退出码 0。
-- [ ] 5B.2 `user_access_lease` MUST NOT 归入 `explicitly_invalidated`，除非实测证明其为「可安全丢弃的租约」；否则归 `migrate`。门槛：报告给出该表的分类与安全依据。
-- [ ] 5B.3 归入 `explicitly_invalidated` 的表 MUST 有用户可见的显式报告（表名、行数、失效原因），MUST NOT 静默重建。门槛：对应显式报告路径与测试存在，退出码 0。
+- [x] 5B.1 对控制面库（`app/gateway/control/gateway_state.py` 等）承载 session 身份的表逐表分类为 `migrate` / `explicitly_invalidated` / `not_affected`。**已实测控制面只有两个 SQLite 库**：库 A `gateway.sqlite`（`app/gateway/main.py` 实例化，建表权威在 `gateway_state.py` 的 `_GATEWAY_MIGRATIONS`，21 张表 + 框架表 `schema_migrations`）、库 B `federation/control.sqlite`（`app/gateway/federation/store.py`，4 张表）。门槛：报告给出逐表分类与判定依据，且 `rg -n 'session_id|access_session_id' app/gateway/control/gateway_state.py` 退出码 0。
+- [x] 5B.2 `user_access_lease` MUST NOT 归入 `explicitly_invalidated`，除非实测证明其为「可安全丢弃的租约」；否则归 `migrate`。门槛：报告给出该表的分类与安全依据。
+- [x] 5B.3 归入 `explicitly_invalidated` 的表 MUST 有用户可见的显式报告（表名、行数、失效原因），MUST NOT 静默重建。门槛：对应显式报告路径与测试存在，退出码 0。
 > **（2026-09-30 owner 裁定，落定分类；取证见 `out/tests/temp/uuidv7_control_db_audit/artifacts/report.md`）**：
 >
 > - 库 A：`user_view_state` = **migrate**（`session_id` 是 canonical `ses_`，Gateway 不校验直接透传，承载用户阅读位置；静默失效即默默失败）；`user_access_lease`、`guest_tracking` 及其余 18 张 = **not_affected**（id 列为 `access-<token_urlsafe>` / `guest-<token_urlsafe>` / `new_config_id()` / `uuid4` / `runtime_lease_<uuid4>`，均非工厂前缀；已对含 JSON 的列做全列工厂形态扫描，0 命中）。
