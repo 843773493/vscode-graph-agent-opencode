@@ -1182,8 +1182,8 @@ class SessionControlStore(
             )
         main_thread_id = str(main_rows[0]["thread_id"])
         # child ID：调用方传入（已验证 canonical）或软件分配（"thr" 已在
-        # IdentifierPrefix Literal 中声明；create_prefixed_id 基于
-        # uuid4().hex，天然满足 v4 位 profile）。
+        # IdentifierPrefix Literal 中声明；create_prefixed_id 基于显式直接依赖
+        # uuid-utils 的 uuid7().hex，天然满足 v7 位 profile）。
         child_thread_id = (
             thread_id if thread_id is not None else create_prefixed_id("thr")
         )

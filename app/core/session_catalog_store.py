@@ -62,7 +62,7 @@ _STORAGE_LOCATOR_PATTERN = re.compile(
     r"sessions/([0-9]{4})/([0-9]{2})/([0-9]{2})/(ses_[0-9a-f]{32})"
 )
 
-# UUIDv4 位 profile：payload 第 13 个 hex（0 基 index 12）固定为 '4'，
+# UUIDv7 位 profile：payload 第 13 个 hex（0 基 index 12）固定为 '7'，
 # 第 17 个 hex（index 16）必须属于 variant 一组 '8'|'9'|'a'|'b'。
 _UUID_VERSION_HEX_INDEX = 12
 _UUID_VARIANT_HEX_INDEX = 16
@@ -249,30 +249,30 @@ _SUBTREE_DELETE_RECORD_COLUMNS = (
 
 
 def validate_session_id(value: str) -> None:
-    """校验 canonical session_id：``ses_`` 前缀 + 32 位小写 hex + UUIDv4 位 profile。
+    """校验 canonical session_id：``ses_`` 前缀 + 32 位小写 hex + UUIDv7 位 profile。
 
     斜杠、反斜杠、Unicode、``.``/``..``、大小写错误、前缀错误、长度错误及
-    非 v4 位 profile 一律直接拒绝，不得清洗或截断。
+    非 v7 位 profile 一律直接拒绝，不得清洗或截断。
     """
     if not isinstance(value, str):
         raise TypeError(f"session_id 必须是字符串: {value!r}")
     if _SESSION_ID_PATTERN.fullmatch(value) is None:
         raise ValueError(f"session_id 形态非法: {value!r}")
-    _validate_uuid_v4_payload(value[4:])
+    _validate_uuid_payload(value[4:])
 
 
 def validate_thread_id(value: str) -> None:
-    """校验 canonical thread_id：``thr_`` 前缀 + 32 位小写 hex + UUIDv4 位 profile。"""
+    """校验 canonical thread_id：``thr_`` 前缀 + 32 位小写 hex + UUIDv7 位 profile。"""
     if not isinstance(value, str):
         raise TypeError(f"thread_id 必须是字符串: {value!r}")
     if _THREAD_ID_PATTERN.fullmatch(value) is None:
         raise ValueError(f"thread_id 形态非法: {value!r}")
-    _validate_uuid_v4_payload(value[4:])
+    _validate_uuid_payload(value[4:])
 
 
-def _validate_uuid_v4_payload(payload: str) -> None:
-    """校验 32 位 hex payload 的 UUIDv4 version/variant 位。"""
-    if payload[_UUID_VERSION_HEX_INDEX] != "4":
+def _validate_uuid_payload(payload: str) -> None:
+    """校验 32 位 hex payload 的 UUIDv7 version/variant 位。"""
+    if payload[_UUID_VERSION_HEX_INDEX] != "7":
         raise ValueError(f"ID payload 的 UUID version 位非法: {payload!r}")
     if payload[_UUID_VARIANT_HEX_INDEX] not in _UUID_VARIANT_HEX_CHARS:
         raise ValueError(f"ID payload 的 UUID variant 位非法: {payload!r}")
@@ -1812,7 +1812,7 @@ class SessionCatalogStore:
                     raise KeyError(f"会话目录节点不存在: {parent_node_id}")
                 parent_revision = int(parent_row["revision"])
             # "thr" 已在 IdentifierPrefix Literal 中声明；
-            # create_prefixed_id 基于 uuid4().hex，天然满足 v4 位 profile。
+            # create_prefixed_id 基于 uuid_utils.uuid7().hex，天然满足 v7 位 profile。
             allocated_session_id = (
                 session_id
                 if session_id is not None
