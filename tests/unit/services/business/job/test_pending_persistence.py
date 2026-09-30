@@ -51,6 +51,7 @@ def _request(
     message_id: str,
     sequence: int,
     gateway_id: str | None = "gateway_test",
+    request_id: str | None = "request_test",
 ) -> PendingRequestDTO:
     now = datetime.now(UTC)
     return PendingRequestDTO(
@@ -67,6 +68,7 @@ def _request(
         updated_at=now,
         snapshot_version=1,
         gateway_id=gateway_id,
+        request_id=request_id,
     )
 
 
@@ -220,3 +222,36 @@ async def test_restored_pending_job_carries_persisted_gateway_id(
     assert restored.active_job_id == "job_head"
     assert service._jobs["job_head"].gateway_id == "gateway_restored1234"
     assert service._jobs["job_tail"].gateway_id == "gateway_restored1234"
+
+
+@pytest.mark.asyncio
+async def test_restored_pending_job_carries_persisted_request_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    session_bundle_factory,
+) -> None:
+    """磁盘恢复的待处理 Job 必须沿用创建请求的权威 request_id，不补造第二个。"""
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_00000000f00070008000000000a1b2c3"
+    session_bundle_factory(sessions_dir, session_id)
+    store = PendingRequestStore(sessions_dir=sessions_dir)
+    await store.save(
+        session_id,
+        [
+            _request(
+                session_id,
+                job_id="job_head",
+                message_id="msg_head",
+                sequence=1,
+                request_id="request_restored1234",
+            ),
+        ],
+    )
+
+    service = _service(sessions_dir)
+    _prevent_background_execution(service, monkeypatch)
+
+    restored = await service.list_pending(session_id)
+
+    assert restored.active_job_id == "job_head"
+    assert service._jobs["job_head"].request_id == "request_restored1234"

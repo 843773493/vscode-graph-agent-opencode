@@ -208,6 +208,9 @@ def _make_service(deps):
         tool_selection_store=deps["tool_selection_store"],
         message_stream_store=deps["message_stream_store"],
         workspace_root=deps["workspace_root"],
+        control_inbox_state_path=lambda _session_id, turn_stream_id: (
+            deps["workspace_root"] / "control" / f"{turn_stream_id}.json"
+        ),
     )
 
 

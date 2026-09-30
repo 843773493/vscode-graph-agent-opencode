@@ -6,7 +6,9 @@ from app.abstractions.job_step_executor import JobStepExecutor
 from app.core.job_event_bus import EventType
 from app.core.trace_middleware import (
     reset_current_gateway_id,
+    reset_current_request_id,
     set_current_gateway_id,
+    set_current_request_id,
 )
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.lifecycle import transition_job_status
@@ -52,6 +54,9 @@ class JobExecutionService:
         # 上下文；这里显式把注入的真实 gateway_id 绑定到本执行根，供 gateway scope
         # 的 skill catalog 推导 scope_id。缺失时保持未绑定，由消费方 fail-closed。
         gateway_token = set_current_gateway_id(getattr(job, "gateway_id", None))
+        # 同一执行根显式绑定创建请求的权威 request_id；job 由空 Context 启动，
+        # 不继承请求级上下文，因此必须随 job 携带，MUST NOT 在此补造第二个 ID。
+        request_id_token = set_current_request_id(getattr(job, "request_id", None))
 
         try:
             title_message = session_title_message(job.message, job.message_metadata)
@@ -86,6 +91,7 @@ class JobExecutionService:
             )
         finally:
             reset_current_gateway_id(gateway_token)
+            reset_current_request_id(request_id_token)
 
         result_text = result if isinstance(result, str) else str(result)
 

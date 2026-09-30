@@ -11,6 +11,7 @@ from app.core.trace_middleware import (
     GATEWAY_ID_HEADER,
     TraceMiddleware,
     get_current_gateway_id,
+    get_current_request_id,
     require_current_gateway_id,
 )
 from app.schemas.internal_v2.common import APIResponse
@@ -29,6 +30,12 @@ def _build_client(*, raise_server_exceptions: bool = True) -> TestClient:
     @app.get("/failure")
     async def failure_endpoint() -> None:
         raise RuntimeError("测试请求失败")
+
+    @app.get("/current-request-id")
+    async def current_request_id_endpoint() -> APIResponse[dict[str, str]]:
+        # 模拟 start_job 在请求作用域内读取权威 request_id 并随 job 携带。
+        observed = get_current_request_id()
+        return APIResponse(data={"observed": observed or ""}, request_id=observed or "")
 
     return TestClient(app, raise_server_exceptions=raise_server_exceptions)
 
@@ -52,6 +59,24 @@ def test_incoming_request_id_is_used_as_the_single_authority() -> None:
     assert response.status_code == 200
     assert response.headers["X-Request-ID"] == "req_from_client"
     assert response.json()["request_id"] == "req_from_client"
+
+
+def test_request_id_is_bound_to_request_scope_contextvar() -> None:
+    """job 创建点从请求级 ContextVar 读取权威 request_id，不补造第二个。"""
+    response = _build_client().get(
+        "/current-request-id",
+        headers={"X-Request-ID": "req_carried_into_job"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["observed"] == "req_carried_into_job"
+
+
+def test_request_scope_contextvar_is_reset_after_dispatch() -> None:
+    """请求结束后执行根不再残留 request_id，独立执行根必须显式携带。"""
+    _build_client().get("/current-request-id", headers={"X-Request-ID": "req_reset"})
+
+    assert get_current_request_id() is None
 
 
 def test_successful_request_trace_is_emitted_at_debug_level(

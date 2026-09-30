@@ -15,8 +15,10 @@
   记录后在本轮结束时显式抛出，绝不静默吞掉。
 - 并发 worker 对同一 intent 只能产生一次有效 binding：claim 由 store
   的单事务闸门保证（不同 claim 冲突 fail closed）。
-- 生产装配只建立 worker 生命周期（显式 start/stop 入口）；缺 binder
-  时启动明确报告 unavailable，不把任何 intent 标成 bound。
+- 生产容器当前尚未构造本 worker（零装配）；OpenSpec 8.5-B 要求的
+  接线为「生产装配只建立 worker 生命周期（显式 start/stop 入口），
+  缺 binder 时启动明确报告 unavailable」，但该装配与 start/stop 入口
+  尚未落地，故当前生产运行期不会消费任何 initial execution intent。
 """
 
 from __future__ import annotations

@@ -20,6 +20,7 @@ from app.agents.tools.custom_invocation import (
 )
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
+from app.core.path_utils import get_session_path_resolver
 from app.core.turn_execution_scope import (
     TurnExecutionScopeRegistry,
 )
@@ -78,6 +79,8 @@ class AgentExecutionService(JobStepExecutor):
         tool_timeout_seconds: float | None = None,
         # OpenSpec 2.8：ThreadResidency tracker；None 时不做 residency 记账。
         residency_tracker: ThreadResidencyTracker | None = None,
+        # Turn 控制 inbox 状态路径解析器；None 时用 SQLite catalog 解析到会话节点。
+        control_inbox_state_path: Callable[[str, str], Path] | None = None,
     ):
         # OpenSpec 8.4：进程内复用的只有不含 Session/Thread 的 graph
         # blueprint/topology 投影——这里缓存的是 Provider 工具面定义（纯 DTO）
@@ -95,6 +98,11 @@ class AgentExecutionService(JobStepExecutor):
         self._tool_selection_store = tool_selection_store
         self._message_stream_store = message_stream_store
         self._workspace_root = workspace_root
+        self._control_inbox_state_path = (
+            control_inbox_state_path
+            if control_inbox_state_path is not None
+            else self._resolve_control_inbox_state_path
+        )
         self._external_resource_leases = external_resource_leases
         self._workspace_file_resource_registry = workspace_file_resource_registry
         self._graph_binding_store = graph_binding_store
@@ -126,6 +134,7 @@ class AgentExecutionService(JobStepExecutor):
                 session_changes_service=session_changes_service,
                 message_stream_store=message_stream_store,
                 workspace_root=workspace_root,
+                control_inbox_state_path=self._control_inbox_state_path,
                 agent_factory=self._build_step_agent,
                 checkpointer_provider=dependency_provider.get_checkpointer,
                 session_service_provider=dependency_provider.get_session_service,
@@ -133,6 +142,22 @@ class AgentExecutionService(JobStepExecutor):
                 model_timeout_seconds=model_timeout_seconds,
             ),
             self.execution_scope_registry,
+        )
+
+    def _resolve_control_inbox_state_path(
+        self, session_id: str, turn_stream_id: str
+    ) -> Path:
+        """把 Turn 控制 inbox 状态落到该会话节点内。
+
+        Turn 控制事实按 session 归属，MUST 与其它会话数据聚合在同一
+        ``.boxteam/sessions/{...}/{session_id}/`` 节点下；随会话物理目录删除
+        被一并回收，不散落到工作区级 ``.boxteam/control/``。
+        """
+        return (
+            get_session_path_resolver()
+            .resolve_session_node_for_runtime(session_id)
+            / "control"
+            / f"{turn_stream_id}.json"
         )
 
     def _build_agent(

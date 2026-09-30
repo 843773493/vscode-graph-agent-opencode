@@ -14,6 +14,7 @@ def _request(
     sequence: int,
     content: str = "内容",
     gateway_id: str | None = "gateway_test",
+    request_id: str | None = "request_test",
 ) -> PendingRequestDTO:
     now = datetime.now(UTC)
     return PendingRequestDTO(
@@ -30,6 +31,7 @@ def _request(
         updated_at=now,
         snapshot_version=sequence,
         gateway_id=gateway_id,
+        request_id=request_id,
     )
 
 
@@ -67,6 +69,24 @@ async def test_pending_request_store_round_trip_preserves_gateway_id(
 
 
 @pytest.mark.asyncio
+async def test_pending_request_store_round_trip_preserves_request_id(
+    tmp_path,
+    session_bundle_factory,
+):
+    """request_id 是 Job 作为独立执行根的身份，落盘再读回必须逐字一致。"""
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_00000000f00070008000000000c4a1d2"
+    session_bundle_factory(sessions_dir, session_id)
+    store = PendingRequestStore(sessions_dir=sessions_dir)
+    request = _request(session_id, sequence=1, request_id="request_abcd1234")
+
+    await store.save(session_id, [request])
+    restored = await store.load(session_id)
+
+    assert [item.request_id for item in restored] == ["request_abcd1234"]
+
+
+@pytest.mark.asyncio
 async def test_pending_request_store_rejects_record_missing_gateway_id(
     tmp_path,
     session_bundle_factory,
@@ -81,6 +101,30 @@ async def test_pending_request_store_rejects_record_missing_gateway_id(
     header, detail = path.read_text(encoding="utf-8").split("\n", 1)
     records = json.loads(detail)
     records[0].pop("gateway_id")
+    path.write_text(
+        header + "\n" + json.dumps(records, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="待处理队列恢复失败"):
+        await store.load(session_id)
+
+
+@pytest.mark.asyncio
+async def test_pending_request_store_rejects_record_missing_request_id(
+    tmp_path,
+    session_bundle_factory,
+):
+    """老数据缺 request_id 时必须诚实失败，绝不静默补字面量或默认值。"""
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_00000000f00070008000000000c4a1d2"
+    session_dir = session_bundle_factory(sessions_dir, session_id)
+    store = PendingRequestStore(sessions_dir=sessions_dir)
+    await store.save(session_id, [_request(session_id, sequence=1)])
+    path = session_dir / "pending_requests.json"
+    header, detail = path.read_text(encoding="utf-8").split("\n", 1)
+    records = json.loads(detail)
+    records[0].pop("request_id")
     path.write_text(
         header + "\n" + json.dumps(records, ensure_ascii=False) + "\n",
         encoding="utf-8",
