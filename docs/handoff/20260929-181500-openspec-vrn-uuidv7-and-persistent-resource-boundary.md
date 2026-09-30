@@ -137,9 +137,7 @@
 
 ## 已识别但未开始的后续切片
 
-1. **VRN `user` scope 未落地**：`add-unified-virtual-resource-addressing` 声称 scope 闭集含
-   `user`，而 `grammar.py` 的 `_SCOPE_KEYWORDS` 实测只有 `{workspace, gateway, inline}`。
-   `user` 与 `user_local` 的 config 来源在 `50bffa45` 中取 `vrn=None`，依据正是该闭集不含 `user`。
+1. ~~VRN `user` scope 未落地~~ **已由 `f6fc990f` 消除**（见上节「本轮增量」）。
 2. **UUIDv7 迁移实施**：`migrate-identifiers-to-uuidv7` 已有完整规划产物，实施前必须先完成
    其 §5A（哈希与幂等键审计）与 §5B（gateway 控制面库逐表分类）两项阻断性前置。
 3. **`5A.3` 未做**：移除 API 响应体的 config 真实路径会连带改
@@ -153,6 +151,56 @@
 
 1. `git status --short` + `git diff HEAD` 确认工作树与受保护改动。
 2. 先做 `migrate-identifiers-to-uuidv7` 的 §5A/§5B 两个阻断性前置审计，再动迁移实现。
-3. 处置 `user` scope 的规范与代码落差（归 `add-unified-virtual-resource-addressing` 的 owner）。
+3. （已消除，见上）原 `user` scope 落差。
 4. 再做 `5A.3` 协议破坏性切片（单独一笔，含 4 个生成目录同步）。
 5. 每个切片保持「一个改动 + 一个独立审查」的分离，审查方必须是作者以外的人。
+
+## 本轮增量（HEAD 推进到 `cbf81075`）
+
+- `f6fc990f` **落地 VRN `user` scope**：`_SCOPE_KEYWORDS` 扩为
+  `{workspace, user, gateway, inline}`，新增 `app/core/user_identity.py::user_scope_id()`
+  恒为 `local`，resolver 的 scope 绑定校验贯通。上节「VRN `user` scope 未落地」一项已消除。
+- `8283b076` `user`/`user_local` 的 config 来源仍取 `vrn=None`，但依据改写为真正的
+  不可寻址事实（共享 `workspace.sqlite` 载体），删掉了已失效的「scope 闭集不含 `user`」借口。
+- `96619538` + `69af9b8b` 台账真实性审计后的补勾与精确化：`migrate-identifiers-to-uuidv7`
+  8.1–8.4/9.1–9.2 补勾；`add-itemized-rollout-context` 8.3 由「笼统未实施」精确化为
+  **持久化层未 thread 化**的具名落差描述。**§5A（哈希/幂等键审计）与 §5B（控制面库逐表分类）
+  仍未勾**，为迁移的前置门控。
+- `10f5ae3d` 收口 uuidv7 规划审查 A1–A7 六项必办（虚假证据限定生产代码、窗口期改为原子消除、
+  价值主张按实测收紧、迁移面改为 33 前缀 × 持久面矩阵、补 `default_idempotency_key` 漂移、
+  补四处空洞义务载体、收口第 15 处 v4 残留）。
+- `cbf81075` **thread-qualified 定位走路线 B**：`storage/service.py` 的
+  `root()`/`index_path()`/`jsonl_path()` 参数由 `thread_id` 正名为 `session_id`，命中
+  canonical `thr_*` thread id 或裸 `main` 别名时显式 `RuntimeError` fail-closed；
+  `resolve_session_node_for_runtime` 保持 session-only，无兼容分支、无双读。
+  8.3 **主体义务仍未落地**（thread-qualified rollout/index、`database_meta` 单行隔离与
+  存量迁移），量化依据见 `out/tests/temp/thread_qualified_persistence/artifacts/report.md` §2。
+
+### 本轮审查推翻的用户主张（勿再转述）
+
+- 「`replaceable_source` 仍暂存在 metadata 且有 TODO」**不成立**：`request_plan.py:65`
+  早已是 typed core 字段，metadata 路径已由 `2a3e2863` 物理下线。
+- 「`ResourceActivation` 三个 Ref 符号零命中」**不成立**：三个符号均有定义与生产调用点；
+  真缺口是 `ResourceActivationCoordinator` 生产零调用、seal 链路未接 activation（归 8.3-A）。
+- SessionThread 统一 owner 主张**成立但需修正定性**：领域层（`ContextRef`/`TurnRecord`）
+  **已 thread 化**，未收敛的是持久化层（`database_meta` 单行 singleton、`turns.turn_ordinal`
+  全局唯一、canonical 表普遍无 `thread_id`）。危害是 child 与 main 会写同一个
+  `rollout/index.sqlite` 并串扰 ordinal/active view；代码在 `queries.py:207-215` 自述承认。
+
+### 在途切片
+
+- `selection_role`/`replacement_policy` typed core（规范已定稿于
+  `itemized-rollout-context/spec.md:856`/`design.md:620`，代码缺失）：领域实现已完成并验证
+  （`tests/unit/domain/itemized/` 1221 passed），卡点是 `schema_upgrade.py:133-146` 要求
+  v1 列集合等于当前 owner 列集合。owner 已裁定放开 `storage/schema_upgrade.py` + v1 fixture +
+  `schema_version` 步进，由原切片完成后补独立审查。补丁备份于
+  `out/tests/temp/selection_role_typed/artifacts/selection_role_typed.patch`。
+
+### 环境教训（本轮卡死根因）
+
+- 三条链路曾同时卡在**并发跑全量 `pytest tests/unit`**（单次约 20 分钟，机器 load 峰值 38）。
+  修复办法：subagent 一律禁跑全量，只跑聚焦目录并用
+  `timeout 600 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run pytest -q -p no:randomly <路径>`
+  包住；全量由 owner 最后统一跑一次。
+- 机器上曾残留 5 天前的僵尸探针进程（`/tmp/openspec_domain_sink/probe_bound.py`、
+  `/tmp/bug_hunt_agents_tools/audit_refs.py`），已清理。
