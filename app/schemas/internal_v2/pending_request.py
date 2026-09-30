@@ -37,6 +37,10 @@ class PendingRequestDTO(BaseModel):
     created_at: datetime
     updated_at: datetime
     snapshot_version: int = Field(ge=0)
+    # 队列持久化时随 job 携带的请求级真实 gateway_id；缺失 gateway 身份时显式为 None。
+    # 无默认值即必填：老数据缺该键会在 model_validate 处 ValidationError（诚实失败），
+    # 绝不与「合法但为空」的 None 混淆，也不用字面量或进程级单例补齐。
+    gateway_id: str | None
 
 
 class PendingRequestUpdateRequest(BaseModel):

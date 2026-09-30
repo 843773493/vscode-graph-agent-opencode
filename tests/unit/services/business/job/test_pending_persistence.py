@@ -50,6 +50,7 @@ def _request(
     job_id: str,
     message_id: str,
     sequence: int,
+    gateway_id: str | None = "gateway_test",
 ) -> PendingRequestDTO:
     now = datetime.now(UTC)
     return PendingRequestDTO(
@@ -65,6 +66,7 @@ def _request(
         created_at=now,
         updated_at=now,
         snapshot_version=1,
+        gateway_id=gateway_id,
     )
 
 
@@ -177,3 +179,44 @@ async def test_dispatch_removes_started_head_from_persistent_queue(
     assert pending.requests == []
     assert started_jobs == ["job_started"]
     assert await store.load(session_id) == []
+
+
+@pytest.mark.asyncio
+async def test_restored_pending_job_carries_persisted_gateway_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    session_bundle_factory,
+) -> None:
+    """磁盘恢复的待处理 Job 必须沿用创建时持久化的真实 gateway_id。"""
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_5f2c8a1b9d3e4c6f8a0b1c2d3e4f5a6b"
+    session_bundle_factory(sessions_dir, session_id)
+    store = PendingRequestStore(sessions_dir=sessions_dir)
+    await store.save(
+        session_id,
+        [
+            _request(
+                session_id,
+                job_id="job_head",
+                message_id="msg_head",
+                sequence=1,
+                gateway_id="gateway_restored1234",
+            ),
+            _request(
+                session_id,
+                job_id="job_tail",
+                message_id="msg_tail",
+                sequence=2,
+                gateway_id="gateway_restored1234",
+            ),
+        ],
+    )
+
+    service = _service(sessions_dir)
+    _prevent_background_execution(service, monkeypatch)
+
+    restored = await service.list_pending(session_id)
+
+    assert restored.active_job_id == "job_head"
+    assert service._jobs["job_head"].gateway_id == "gateway_restored1234"
+    assert service._jobs["job_tail"].gateway_id == "gateway_restored1234"

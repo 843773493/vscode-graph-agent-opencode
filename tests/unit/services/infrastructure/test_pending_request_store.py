@@ -13,6 +13,7 @@ def _request(
     *,
     sequence: int,
     content: str = "内容",
+    gateway_id: str | None = "gateway_test",
 ) -> PendingRequestDTO:
     now = datetime.now(UTC)
     return PendingRequestDTO(
@@ -28,6 +29,7 @@ def _request(
         created_at=now,
         updated_at=now,
         snapshot_version=sequence,
+        gateway_id=gateway_id,
     )
 
 
@@ -44,6 +46,48 @@ async def test_pending_request_store_round_trip(tmp_path, session_bundle_factory
 
     assert restored == [request]
     assert (session_dir / "pending_requests.json").is_file()
+
+
+@pytest.mark.asyncio
+async def test_pending_request_store_round_trip_preserves_gateway_id(
+    tmp_path,
+    session_bundle_factory,
+):
+    """gateway_id 是 Job 作为独立执行根的身份，落盘再读回必须逐字一致。"""
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_f2c04fddbd9446ab8bb83e681b9cb905"
+    session_bundle_factory(sessions_dir, session_id)
+    store = PendingRequestStore(sessions_dir=sessions_dir)
+    request = _request(session_id, sequence=1, gateway_id="gateway_abcd1234")
+
+    await store.save(session_id, [request])
+    restored = await store.load(session_id)
+
+    assert [item.gateway_id for item in restored] == ["gateway_abcd1234"]
+
+
+@pytest.mark.asyncio
+async def test_pending_request_store_rejects_record_missing_gateway_id(
+    tmp_path,
+    session_bundle_factory,
+):
+    """老数据缺 gateway_id 时必须诚实失败，绝不静默补字面量或默认值。"""
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_57f78fe6c75a4abb89931b84bf9bd413"
+    session_dir = session_bundle_factory(sessions_dir, session_id)
+    store = PendingRequestStore(sessions_dir=sessions_dir)
+    await store.save(session_id, [_request(session_id, sequence=1)])
+    path = session_dir / "pending_requests.json"
+    header, detail = path.read_text(encoding="utf-8").split("\n", 1)
+    records = json.loads(detail)
+    records[0].pop("gateway_id")
+    path.write_text(
+        header + "\n" + json.dumps(records, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="待处理队列恢复失败"):
+        await store.load(session_id)
 
 
 @pytest.mark.asyncio

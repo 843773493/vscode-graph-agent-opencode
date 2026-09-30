@@ -102,6 +102,7 @@ function snapshot(
       position: 0,
       status: "queued",
       agent_id: "default",
+      gateway_id: "gateway_test",
       message_created_at: "2026-09-22T00:00:00Z",
       created_at: "2026-09-22T00:00:00Z",
       updated_at: "2026-09-22T00:00:00Z",

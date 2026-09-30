@@ -1408,10 +1408,6 @@ class JobService:
                     )
                 restored: list[QueueEntry] = []
                 for record in sorted(records, key=lambda item: item.enqueue_sequence):
-                    # TODO: 从磁盘恢复的待处理 Job 不携带请求级 gateway_id（PendingRequestDTO
-                    # 无此字段），故重启后重回队首的 Job 在 gateway 层 skill 解析时会
-                    # fail-closed 显式拒绝；这是刻意的诚实失败，待持久化协议承载
-                    # gateway 身份后补齐，绝不用进程级单例或字面量补齐。
                     self._jobs[record.job_id] = JobState(
                         job_id=record.job_id,
                         session_id=record.session_id,
@@ -1419,6 +1415,10 @@ class JobService:
                         message_id=record.message_id,
                         message_created_at=record.message_created_at,
                         agent_id=record.agent_id,
+                        # 恢复的 Job 沿用创建时持久化的真实 gateway_id（独立执行根，
+                        # MUST 显式携带），使重启后队首 Job 在 gateway 层可解析；
+                        # 缺该字段的老数据由 PendingRequestDTO 校验直接拒绝，不静默补齐。
+                        gateway_id=record.gateway_id,
                         status=JobStatus.queued,
                         message_metadata=dict(record.message_metadata),
                         attachments=list(record.attachments),
