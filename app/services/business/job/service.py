@@ -14,6 +14,7 @@ from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
+from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.internal_v2.common import JobStatus, RunMode
 from app.schemas.internal_v2.job import (
     JobControlRequest,
@@ -92,6 +93,8 @@ class JobState:
     status: JobStatus
     message_metadata: dict[str, object] = field(default_factory=dict)
     attachments: list[AttachmentRef] = field(default_factory=list)
+    # 请求级注入的真实 gateway_id；job 是独立执行根，MUST 显式携带。
+    gateway_id: str | None = None
     progress: int = 0
     current_step: str | None = None
     error_message: str | None = None
@@ -719,6 +722,10 @@ class JobService:
             agent_id=agent_id,
             status=JobStatus.queued,
             message_metadata=dict(message_metadata or {}),
+            # job 创建发生在请求作用域内，此时读取 Gateway 按请求注入的真实
+            # gateway_id；job 是独立执行根，必须显式随 job 携带，不能依赖
+            # ContextVar 自动传播。
+            gateway_id=get_current_gateway_id(),
         )
 
         self._jobs[resolved_job_id] = job
@@ -1084,6 +1091,7 @@ class JobService:
                 attachments=list(job.attachments),
                 message_created_at=job.message_created_at,
                 message_metadata=dict(job.message_metadata),
+                gateway_id=job.gateway_id,
                 status=job.status,
                 progress=job.progress,
                 current_step=job.current_step,
@@ -1411,6 +1419,10 @@ class JobService:
                     )
                 restored: list[QueueEntry] = []
                 for record in sorted(records, key=lambda item: item.enqueue_sequence):
+                    # TODO: 从磁盘恢复的待处理 Job 不携带请求级 gateway_id（PendingRequestDTO
+                    # 无此字段），故重启后重回队首的 Job 在 gateway 层 skill 解析时会
+                    # fail-closed 显式拒绝；这是刻意的诚实失败，待持久化协议承载
+                    # gateway 身份后补齐，绝不用进程级单例或字面量补齐。
                     self._jobs[record.job_id] = JobState(
                         job_id=record.job_id,
                         session_id=record.session_id,

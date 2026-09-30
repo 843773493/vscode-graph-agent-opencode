@@ -55,6 +55,12 @@ HOP_BY_HOP_HEADERS = frozenset(
 # 工作区 API 代理与辅助服务代理都要剥离的 Gateway 凭据与目标选择头部。它们绝不
 # 能透传给上游，否则客户端可以伪造工作区选择或把本地凭据漂到被代理服务。集合与
 # 逐跳头部一样只此一份，避免两条代理各写一份而漏掉其中一个。
+#
+# ``x-boxteam-gateway-id`` 也在此列：它是 Gateway 自己的稳定身份（``identity.json``
+# 的 ``load_or_create_gateway_id``），由 Gateway 按请求注入并经
+# :func:`load_proxy_gateway_id` 重新写入权威值。若不先剥离客户端的同名头部，
+# 客户端就能冒充任意 gateway_id 到达工作区后端；与 ``x-request-id`` 一样，断言的是
+# 「上游看不到客户端伪造值」，而不是该键彻底不存在。
 GATEWAY_PROXY_DROPPED_HEADERS = frozenset(
     {
         "host",
@@ -62,8 +68,22 @@ GATEWAY_PROXY_DROPPED_HEADERS = frozenset(
         "x-local-token",
         "x-boxteam-federation-token",
         "x-boxteam-workspace-id",
+        "x-boxteam-gateway-id",
     }
 )
+
+
+def load_proxy_gateway_id() -> str:
+    """读取本机 Gateway 的稳定身份，作为按请求注入的权威 gateway_id。
+
+    取值来源是 ``${BOXTEAM_HOME}/gateway/identity.json`` 的
+    ``load_or_create_gateway_id``（``gateway_<32hex>``），MUST NOT 用 host:port、
+    监听端口或任何瞬时通道标识（channel instance/epoch/route）。
+    """
+    from app.core.path_utils import get_gateway_root
+    from app.gateway.credentials import load_or_create_gateway_id
+
+    return load_or_create_gateway_id(get_gateway_root() / "identity.json")
 
 
 def filter_hop_by_hop_headers(

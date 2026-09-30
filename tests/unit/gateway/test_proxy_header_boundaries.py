@@ -31,6 +31,7 @@ _EXPECTED_GATEWAY_DROPPED_HEADERS = frozenset(
         "x-local-token",
         "x-boxteam-federation-token",
         "x-boxteam-workspace-id",
+        "x-boxteam-gateway-id",
     }
 )
 

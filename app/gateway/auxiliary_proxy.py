@@ -27,6 +27,7 @@ from app.gateway.proxy_upstream import (
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
     build_upstream_url,
     filter_hop_by_hop_headers,
+    load_proxy_gateway_id,
     run_cleanup_shielded,
     send_upstream_request,
 )
@@ -80,6 +81,8 @@ def _proxy_request_headers(
         if key.lower() not in GATEWAY_PROXY_DROPPED_HEADERS
     )
     headers["X-Request-ID"] = get_request_id(request)
+    # 按请求注入 Gateway 自身稳定身份；客户端同名头部已在剥离集合里剔除。
+    headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
     if target is not None and target.connection_kind == "remote_gateway":
         connection_id = target.remote_gateway_connection_id
         remote_workspace_id = target.remote_workspace_id

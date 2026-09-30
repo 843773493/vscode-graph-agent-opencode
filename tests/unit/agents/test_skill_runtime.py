@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from app.agents.custom_tools import CustomToolFactoryContext
 from app.agents.policy.custom_tool_spec import parse_custom_tool_spec
@@ -24,6 +26,13 @@ from app.agents.tools.custom_invocation import (
 from app.agents.tools.testing import create_test_tool_2
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.lifecycle import LifetimeScope
+from app.core.trace_middleware import (
+    GATEWAY_ID_HEADER,
+    TraceMiddleware,
+    get_current_gateway_id,
+    reset_current_gateway_id,
+    set_current_gateway_id,
+)
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.resource_platform.virtual_resources import (
     ResolutionContext,
@@ -88,6 +97,21 @@ def _write_runtime_manifest(root: Path) -> Path:
     return manifest
 
 
+# 请求级注入的真实 gateway_id 替身；gateway scope 的 scope_id 必须等于它，
+# MUST NOT 是字面量 ``local``。
+FAKE_GATEWAY_ID = "gateway_0123456789abcdef0123456789abcdef"
+
+
+@pytest.fixture()
+def gateway_identity():
+    """在测试作用域内绑定真实 gateway_id，模拟 Gateway 按请求注入。"""
+    token = set_current_gateway_id(FAKE_GATEWAY_ID)
+    try:
+        yield FAKE_GATEWAY_ID
+    finally:
+        reset_current_gateway_id(token)
+
+
 def test_build_workspace_skill_catalog_empty_layers_publishes_empty_revision(
     tmp_path,
     monkeypatch,
@@ -104,7 +128,11 @@ def test_build_workspace_skill_catalog_empty_layers_publishes_empty_revision(
     assert catalog.catalog_snapshot.revision.startswith("sha256:")
 
 
-def test_build_workspace_skill_catalog_resolves_gateway_layer(tmp_path, monkeypatch):
+def test_build_workspace_skill_catalog_resolves_gateway_layer(
+    tmp_path,
+    monkeypatch,
+    gateway_identity,
+):
     boxteam_home = tmp_path / "boxteam-home"
     gateway_skill = boxteam_home / "skills" / "shared"
     gateway_skill.mkdir(parents=True)
@@ -121,9 +149,11 @@ def test_build_workspace_skill_catalog_resolves_gateway_layer(tmp_path, monkeypa
     assert entry.name == "shared"
     assert entry.layer == "gateway"
     assert entry.description == "Gateway skill"
-    # gateway 的 scope_id 目前仍是字面量 "local"（真实 gateway_id 需请求级注入，
-    # 见 _layer_scope_identity 的 TODO），故此处是精确断言而非弱 startswith。
-    assert entry.display_uri == "boxteam://gateway/local/resources/skills/shared/SKILL.md"
+    # gateway 的 scope_id 是请求级注入的真实 gateway_id（X-BoxTeam-Gateway-Id），
+    # 不再是字面量 "local"，故此处是精确断言而非弱 startswith。
+    assert entry.display_uri == (
+        f"boxteam://gateway/{FAKE_GATEWAY_ID}/resources/skills/shared/SKILL.md"
+    )
     assert "/.boxteam/" not in entry.display_uri
     # 模型可见 metadata 不含 path/locator。
     assert entry.metadata_view() == {
@@ -136,11 +166,16 @@ def test_build_workspace_skill_catalog_resolves_gateway_layer(tmp_path, monkeypa
     assert backend.read("/.boxteam/gateway-skills/shared/SKILL.md").error is not None
 
 
-def test_gateway_uri_without_principal_is_rejected_by_resolver(tmp_path, monkeypatch):
-    """gateway 的 principal 本切片不可用（context=None），故其 URI 交由 resolver 拒绝。
+def test_gateway_scope_uri_passes_binding_with_injected_identity(
+    tmp_path,
+    monkeypatch,
+    gateway_identity,
+):
+    """带 X-BoxTeam-Gateway-Id 的请求在 gateway scope 解析出真实 gateway_id 并通过绑定校验。
 
-    精确断言：用真实的 parse_vrn + require_scope_binding，principal 缺 gateway_id 时
-    必然 scope_mismatch，绝不静默通过。
+    硬门槛：注入存在时，`_layer_scope_identity` 推出的 scope_id 必须等于注入值
+    （而非 `local`），且 `ResolutionContext(gateway_id=...)` 能通过真实的
+    ``require_scope_binding``。注入缺失时同一 URI 必然 scope_mismatch。
     """
     boxteam_home = tmp_path / "boxteam-home"
     gateway_skill = boxteam_home / "skills" / "shared"
@@ -153,12 +188,18 @@ def test_gateway_uri_without_principal_is_rejected_by_resolver(tmp_path, monkeyp
 
     catalog = build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
     entry = catalog.entries[0]
-    assert entry.display_uri == "boxteam://gateway/local/resources/skills/shared/SKILL.md"
-
     parsed = parse_vrn(entry.display_uri)
     assert parsed.scope == "gateway"
-    assert parsed.scope_id == "local"
-    # workspace principal 存在但不含 gateway_id → gateway 绑定不成立，必然拒绝。
+    assert parsed.scope_id == FAKE_GATEWAY_ID
+    assert parsed.scope_id != "local"
+
+    # 注入的 principal 与 URI scope_id 一致 → 绑定成立，显式通过校验。
+    require_scope_binding(
+        parsed.scope,
+        parsed.scope_id,
+        ResolutionContext(workspace_id="ws-1", gateway_id=FAKE_GATEWAY_ID),
+    )
+    # 仅有 workspace principal（无 gateway_id）→ 绑定不成立，必然拒绝。
     with pytest.raises(VrnResolveError) as excinfo:
         require_scope_binding(
             parsed.scope, parsed.scope_id, ResolutionContext(workspace_id="ws-1")
@@ -166,9 +207,84 @@ def test_gateway_uri_without_principal_is_rejected_by_resolver(tmp_path, monkeyp
     assert excinfo.value.reason_code == "scope_mismatch"
 
 
+def test_build_workspace_skill_catalog_fails_closed_without_gateway_identity(
+    tmp_path,
+    monkeypatch,
+):
+    """缺失 X-BoxTeam-Gateway-Id 的请求在 gateway 层有条目时 fail-closed。
+
+    硬门槛：MUST NOT 回退字面量 `local`，MUST NOT 用进程级单例补齐。
+    """
+    boxteam_home = tmp_path / "boxteam-home"
+    gateway_skill = boxteam_home / "skills" / "shared"
+    gateway_skill.mkdir(parents=True)
+    (gateway_skill / "SKILL.md").write_text(
+        "---\nname: shared\ndescription: Gateway skill\n---\n# shared\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+
+    assert get_current_gateway_id() is None
+    with pytest.raises(RuntimeError, match="gateway scope 的 scope_id 需要真实的 gateway_id"):
+        build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+
+
+def test_gateway_identity_flows_from_request_header_into_catalog(
+    tmp_path,
+    monkeypatch,
+):
+    """硬门槛：Gateway 注入的 X-BoxTeam-Gateway-Id 经 TraceMiddleware 进入请求上下文。
+
+    端到端断言请求级注入通道真实连通（而非测试内手工 set_current_gateway_id）：
+    未带头 → 端点读到未绑定身份、gateway 层 fail-closed；带真头 → 端点读到该真实
+    gateway_id，gateway 层条目解析出同一 scope_id 并通过 require_scope_binding。
+    """
+    boxteam_home = tmp_path / "boxteam-home"
+    gateway_skill = boxteam_home / "skills" / "shared"
+    gateway_skill.mkdir(parents=True)
+    (gateway_skill / "SKILL.md").write_text(
+        "---\nname: shared\ndescription: Gateway skill\n---\n# shared\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+
+    @app.get("/build")
+    def _build() -> dict[str, object]:
+        bound = get_current_gateway_id()
+        try:
+            catalog = build_workspace_skill_catalog(
+                tmp_path, registry=ResourceRegistry()
+            )
+        except RuntimeError as error:
+            return {"bound": bound, "error": str(error)}
+        parsed = parse_vrn(catalog.entries[0].display_uri)
+        require_scope_binding(
+            parsed.scope,
+            parsed.scope_id,
+            ResolutionContext(workspace_id="ws-1", gateway_id=bound),
+        )
+        return {"bound": bound, "scope_id": parsed.scope_id}
+
+    client = TestClient(app)
+
+    missing = client.get("/build")
+    assert missing.status_code == 200
+    assert missing.json()["bound"] is None
+    assert "gateway scope 的 scope_id 需要真实的 gateway_id" in missing.json()["error"]
+
+    ok = client.get("/build", headers={GATEWAY_ID_HEADER: FAKE_GATEWAY_ID})
+    assert ok.status_code == 200
+    assert ok.json() == {"bound": FAKE_GATEWAY_ID, "scope_id": FAKE_GATEWAY_ID}
+    assert ok.headers["X-Request-ID"]
+
+
 def test_build_workspace_skill_catalog_prefers_workspace_over_gateway(
     tmp_path,
     monkeypatch,
+    gateway_identity,
 ):
     boxteam_home = tmp_path / "boxteam-home"
     for layer_root, description in (
@@ -194,6 +310,7 @@ def test_build_workspace_skill_catalog_prefers_workspace_over_gateway(
 def test_gateway_layer_build_writes_nothing_into_workspace_storage(
     tmp_path,
     monkeypatch,
+    gateway_identity,
 ):
     """Gateway 全局 Skill catalog 解析不写工作区 Session 存储。
 

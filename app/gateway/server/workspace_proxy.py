@@ -24,6 +24,7 @@ from app.gateway.proxy_upstream import (
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
     build_upstream_url,
     filter_hop_by_hop_headers,
+    load_proxy_gateway_id,
     run_cleanup_shielded,
     send_upstream_request,
 )
@@ -126,6 +127,9 @@ def _proxy_headers(
         if key.lower() not in PROXY_ONLY_DROPPED_HEADERS
     )
     headers["X-Request-ID"] = get_request_id(request)
+    # 按请求注入 Gateway 自身稳定身份；客户端同名头部已在上面的剥离集合里剔除，
+    # 故这里写入的永远是本机 Gateway 的权威 gateway_id。
+    headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
     application = request.scope.get("app")
     gateway_config = getattr(getattr(application, "state", None), "gateway_config", None)
     history_loading = getattr(gateway_config, "history_loading", None)

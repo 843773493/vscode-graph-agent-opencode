@@ -22,6 +22,7 @@ from app.schemas.gateway_control import (
     GeneratorPlacementPreviewRequest,
 )
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.proxy_upstream import load_proxy_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.core.path_utils import get_gateway_root
 
@@ -663,10 +664,15 @@ class SessionGeneratorCoordinator:
                 {
                     "X-BoxTeam-Workspace-Id": target.remote_workspace_id,
                     "X-BoxTeam-Federation-Token": credential.token,
+                    "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
                     "X-Request-ID": request_id,
                 },
             )
         return (
             f"{target.backend_url.rstrip('/')}{path}",
-            {"X-Local-Token": LOCAL_TOKEN, "X-Request-ID": request_id},
+            {
+                "X-Local-Token": LOCAL_TOKEN,
+                "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
+                "X-Request-ID": request_id,
+            },
         )

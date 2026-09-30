@@ -15,6 +15,7 @@ from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.proxy_upstream import load_proxy_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.schemas.gateway_control import (
@@ -521,6 +522,7 @@ class GatewaySessionCatalogSearchService:
                 {
                     "X-BoxTeam-Workspace-Id": target.remote_workspace_id,
                     "X-BoxTeam-Federation-Token": credential.token,
+                    "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
                     "X-Request-ID": request_id,
                 },
             )
@@ -528,5 +530,9 @@ class GatewaySessionCatalogSearchService:
             raise RuntimeError(f"工作区后端尚未连接: {target.workspace_id}")
         return (
             f"{target.backend_url.rstrip('/')}/api/v1/session-catalog/export",
-            {"X-Local-Token": LOCAL_TOKEN, "X-Request-ID": request_id},
+            {
+                "X-Local-Token": LOCAL_TOKEN,
+                "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
+                "X-Request-ID": request_id,
+            },
         )
