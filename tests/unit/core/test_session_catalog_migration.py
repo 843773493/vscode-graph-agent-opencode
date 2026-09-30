@@ -647,11 +647,11 @@ async def test_migrate_empty_index_builds_empty_tree(
 
 
 def _illegal_session_ids() -> list[str]:
-    """非法旧 ID 参数集:非 ses_ 前缀/大写/非 v4 version 位/非 variant 位/长度错。"""
+    """非法旧 ID 参数集:非 ses_ 前缀/大写/非 v7 version 位/非 variant 位/长度错。"""
     return [
         "job_" + uuid.uuid4().hex,  # 非 ses_ 前缀
         "SES_" + uuid.uuid4().hex,  # 大写前缀
-        "ses_" + _hex_payload_with(12, "3"),  # 非 v4 version 位
+        "ses_" + _hex_payload_with(12, "3"),  # 非 v7 version 位
         "ses_" + _hex_payload_with(16, "c"),  # 非 variant 位
         "ses_" + "a" * 31,  # 长度 31
         "ses_" + "a" * 33,  # 长度 33
