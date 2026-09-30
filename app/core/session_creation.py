@@ -70,7 +70,10 @@ from app.core.session_catalog_store import (
     SessionCreationRecord,
     validate_path_budget,
 )
-from app.core.session_control_primitives import validate_thread_creation_key
+from app.core.session_control_primitives import (
+    CONTROL_DATABASE_NAME,
+    validate_thread_creation_key,
+)
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 
@@ -85,9 +88,6 @@ __all__ = [
 
 # session.json 文件名（创建流自用常量）。
 _SESSION_MANIFEST_NAME = "session.json"
-
-# 控制库文件名（与 R12 迁移机器一致）。
-_CONTROL_DATABASE_NAME = "session-control.sqlite"
 
 # staging 区：sessions_root / ".staging" / <idempotency_key>。
 _STAGING_DIR_NAME = ".staging"
@@ -481,7 +481,7 @@ class SessionCreationService:
         Session」的物理侧保证：main row 与 fence 在目录可见（rename 到
         日期桶）之前初始化并校验完毕。
         """
-        control_path = staging / _CONTROL_DATABASE_NAME
+        control_path = staging / CONTROL_DATABASE_NAME
         store = SessionControlStore(control_path)
         try:
             store.initialize_main_thread(
@@ -515,7 +515,7 @@ class SessionCreationService:
             )
         entries = sorted(entry.name for entry in directory.iterdir())
         expected_entries = sorted(
-            [_SESSION_MANIFEST_NAME, _CONTROL_DATABASE_NAME]
+            [_SESSION_MANIFEST_NAME, CONTROL_DATABASE_NAME]
         )
         if entries != expected_entries:
             raise RuntimeError(
@@ -550,7 +550,7 @@ class SessionCreationService:
     ) -> None:
         """只读复验 session-control：唯一 main row == record.main_thread_id
         且 fence == (active, 1)（对齐 R12 迁移机器的只读校验模式）。"""
-        control_path = session_dir / _CONTROL_DATABASE_NAME
+        control_path = session_dir / CONTROL_DATABASE_NAME
         if not control_path.is_file():
             raise RuntimeError(
                 f"{stage}: session-control.sqlite 缺失: {control_path}"

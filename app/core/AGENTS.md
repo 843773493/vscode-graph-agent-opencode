@@ -7,7 +7,7 @@
 - `atomic_fs.py`：文件级 durability 原语（`fsync_directory`/`fsync_file`/
   `atomic_write_bytes`）。会话创建、child thread 创建、catalog 迁移与子树删除
   四条链路共用同一套 tempfile + fsync + os.replace + 目录 fsync 语义，单点承载。
-- `session_control_primitives.py`：per-session `session-control.sqlite` 各垂直链路共享的形态原语（`SHA256_HEX_PATTERN`、`EXECUTION_BINDING_ID_PATTERN`、`EXECUTION_JOB_ID_PATTERN` 与 `validate_claim_fields`）。只放跨子包共用的形态约束与校验器，不放任何表的 DDL、行投影或读写方法。
+- `session_control_primitives.py`：per-session `session-control.sqlite` 各垂直链路共享的形态原语（`CONTROL_DATABASE_NAME`、`SHA256_HEX_PATTERN`、`EXECUTION_BINDING_ID_PATTERN`、`EXECUTION_JOB_ID_PATTERN` 与 `validate_claim_fields`）。只放跨子包共用的形态约束与校验器，不放任何表的 DDL、行投影或读写方法。
 - `session_control_thread_catalog/`：thread catalog 与 lifecycle fence 一条垂直链路（main/child 权威指针、生命周期闸门 CAS、已发布 child 的冻结 locator 解析、`thread_catalog` v1→v2 加法升级）。只放这两张表的职责；creation record、execution intent、operation lease、owner binding 与通信账本不放这里。
 - `session_control_thread_owner_binding/`：thread owner binding 字段槽一条垂直链路（`thread_owner_bindings` 行投影、canonical JSON 列表槽解析、2.1 负面合同校验、ensure/get/update，以及该表行插入的唯一 SQL 实现）。只放 owner 侧记录槽；prefix epoch 与 ToolSet revision 的权威解释仍属对应 domain owner，不构成第二 writer。
 - `session_control_operation_lease/`：通用 operation lease 一条垂直链路（`session_operation_leases` DDL 与非终态索引、行投影、create-or-get 幂等准入、fencing token CAS 链与读取）。只放持久准入/操作 lease；`SessionOperationLease` 的 typed 字段集与状态闭集仍由 `session_lifecycle_gate.py` 单点定义。

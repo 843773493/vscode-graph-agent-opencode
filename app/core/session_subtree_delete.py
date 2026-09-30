@@ -76,6 +76,7 @@ from app.core.session_catalog_store import (
     SubtreeDeleteRecord,
     validate_session_id,
 )
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
     NavigationTopologyGate,
@@ -86,9 +87,6 @@ __all__ = ["SessionSubtreeDeleteService", "SubtreeDeleteResult"]
 
 # 物理隔离区：sessions_root / ".deleting" / <idempotency_key> / <session_id>。
 _DELETING_DIR_NAME = ".deleting"
-
-# 控制库文件名（与 R12 迁移机器、R13 创建流一致）。
-_CONTROL_DATABASE_NAME = "session-control.sqlite"
 
 # fence 初始 generation（R12/R13 初始化值）；CAS 成功后推进为 2。
 _FENCE_INITIAL_GENERATION = 1
@@ -379,10 +377,10 @@ class SessionSubtreeDeleteService:
         - 控制库文件缺失 → fail closed（``SessionControlStore`` 构造会
           新建空库，必须先判存在性，绝不在源位置制造假库）。
         """
-        control_path = source / _CONTROL_DATABASE_NAME
+        control_path = source / CONTROL_DATABASE_NAME
         if not control_path.is_file():
             raise RuntimeError(
-                f"{stage}: session 日期桶目录缺少 {_CONTROL_DATABASE_NAME}"
+                f"{stage}: session 日期桶目录缺少 {CONTROL_DATABASE_NAME}"
                 f"（无法执行 fence CAS，fail closed）: "
                 f"session_id={session_id}, path={control_path}"
             )
@@ -442,10 +440,10 @@ class SessionSubtreeDeleteService:
                 f"{stage}: 隔离目标不是目录（外部改动，fail closed）: "
                 f"session_id={session_id}, target={target}"
             )
-        control_path = target / _CONTROL_DATABASE_NAME
+        control_path = target / CONTROL_DATABASE_NAME
         if not control_path.is_file():
             raise RuntimeError(
-                f"{stage}: 隔离目标缺少 {_CONTROL_DATABASE_NAME}"
+                f"{stage}: 隔离目标缺少 {CONTROL_DATABASE_NAME}"
                 f"（内容不一致，fail closed）: "
                 f"session_id={session_id}, target={target}"
             )

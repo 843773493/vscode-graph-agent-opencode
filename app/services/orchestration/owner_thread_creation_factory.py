@@ -21,13 +21,12 @@ from pathlib import Path
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.thread_creation import ThreadCreationService
 
 __all__ = ["OwnerThreadCreationFactory"]
-
-_CONTROL_DATABASE_NAME = "session-control.sqlite"
 
 
 class OwnerThreadCreationFactory:
@@ -68,7 +67,7 @@ class OwnerThreadCreationFactory:
         if service is None:
             session_dir = self._session_dir_for(session_id)
             control_store = SessionControlStore(
-                session_dir / _CONTROL_DATABASE_NAME
+                session_dir / CONTROL_DATABASE_NAME
             )
             service = ThreadCreationService(
                 store=resolver.catalog_store,

@@ -38,6 +38,7 @@ from app.core.session_catalog_store import (
     SessionCatalogStore,
     validate_thread_id,
 )
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_subtree_delete import (
     SessionSubtreeDeleteService,
@@ -54,7 +55,6 @@ __all__ = [
 
 # store.list_children 单页上限（BFS 全量投影的分页粒度）。
 _LIST_CHILDREN_PAGE_LIMIT = 512
-_CONTROL_DATABASE_NAME = "session-control.sqlite"
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,7 +385,7 @@ class SessionCatalogPathResolver:
                 )
             return self.resolve_session_node(thread_id)
         validate_thread_id(thread_id)
-        control_path = session_dir / _CONTROL_DATABASE_NAME
+        control_path = session_dir / CONTROL_DATABASE_NAME
         if not control_path.is_file() or control_path.is_symlink():
             raise RuntimeError(
                 "Session control 数据库缺失或不是普通文件，拒绝解析 child "

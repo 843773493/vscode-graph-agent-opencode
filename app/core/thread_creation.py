@@ -94,6 +94,7 @@ from app.core.session_catalog_store import (
     validate_path_budget,
 )
 from app.core.session_control_primitives import (
+    CONTROL_DATABASE_NAME,
     validate_thread_creation_key,
 )
 from app.core.session_control_store import (
@@ -126,9 +127,6 @@ __all__ = [
 # sessions/.staging、R13 同名约定无冲突——本流的 staging 只存在于 owner
 # session 目录内部，且只触碰 record 冻结的 <key> 子目录。
 _STAGING_DIR_NAME = ".staging"
-
-# 控制库文件名（与 R12/R13/R14 一致）。
-_CONTROL_DATABASE_NAME = "session-control.sqlite"
 
 # child node 结构文件（确定性内容；清单只覆盖文件，目录集单独断言）。
 _THREAD_MANIFEST_NAME = "thread.json"
@@ -934,7 +932,7 @@ class ThreadCreationService:
 
     def _validate_control_store_binding(self, session_dir: Path) -> None:
         """control store 必须绑定 owner session 目录（误绑 fail fast）。"""
-        expected_path = (session_dir / _CONTROL_DATABASE_NAME).resolve()
+        expected_path = (session_dir / CONTROL_DATABASE_NAME).resolve()
         if self._control_store.database_path != expected_path:
             raise ValueError(
                 "control_store 与 owner session 目录不一致（误绑其它 "
