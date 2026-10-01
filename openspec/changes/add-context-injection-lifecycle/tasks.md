@@ -71,6 +71,19 @@
 
 本节 4.6 的producer迁移必须让每个source owner声明typed`root_placement=root_eligible|tail_only`并持久化/验证；未声明不得由CSM猜测。默认外部MCP指引为`tail_only`，不把不可信server文本放进system；Skill、AGENTS及其它来源由各实际owner明确分类。初次组装以外的同epoch变化全部是独立user-role item，只有真实新epoch可将`root_eligible`的完整有效状态合并新root，旧item/detail/assembly不改写。
 
+### 2026-10-01 联邦 hub 装配缺口登记（F7/F8/F9，未接线/实施中）
+
+来源：`out/tests/temp/hunt_gateway_federation_edges/artifacts/report.md`（F7 §1 / F8 §2 / F9 §3 / 无界等待 §4.1）。以下属 4.7-B 联邦路由面；写成**登记项 + 实施中**，MUST NOT 写成已修。
+
+- **F7 联邦装配缺失（feature gap，非回归；本轮不接线）**：`app/gateway/lifespan.py:180` 硬编码 `spoke_directory=None`，`app/gateway/federation/rpc.py:112` 的 `local_role = "hub" if self.spoke_directory is not None else "spoke"` ⇒ 生产恒为 `spoke`。hub 侧支柱 `FederationSpokeDirectory`（`federation/workspace_port.py:34`）、`dial_spoke_channel`（`federation/dialer.py:66`）、`adopt_outbound_channel`（`federation/rpc.py:136`）、`resolve_session_target`/`relay_operation` 均**零生产调用方**（经真实双 gateway loopback 探针确证：不调 dialer 时 `outbound_channels={}`、`local_role=spoke`）。裁定：**保持未启用，启用时必须一次性接线全部上述入口**（MUST NOT 只接一半成新双轨）。
+- **F8 冷 catalog 只在启动时刷新一次（实施中）**：`_refresh_federation_workspace_ports`（`app/gateway/runtime_proof.py:74`）只被 `app/gateway/lifespan.py:182` 调用一次；运行中新增本地工作区后，联邦 `WorkspaceCatalogPort` 永久看不到它（registry 已含、federated catalog 不含）。须补读时最新或事件驱动刷新；**落地提交留空待补**。
+- **F9 `auxiliary_proxy` 引用归位（实施中）**：`app/gateway/auxiliary_proxy.py` 的 HTTP 路径在 `resolve_service_url` 抛 `RuntimeError` 时**未走** `:169` 的 `(LookupError, ValueError)` 显式释放，仅靠 `:204` 的 `except BaseException` 兜底；同族泄漏路径须归位到显式释放并收紧宽泛 `except BaseException`。**落地提交留空待补**。
+- **无界等待（实施中）**：`app/gateway/federation/__init__.py` 的 `obtain_pairing_credential_over_ssh` 的 `subprocess.run` **无 `timeout=`**，经 `app/gateway/remote_gateway.py` 的 `asyncio.to_thread` 调用、位于启动/重连主链路；对端 TCP 吞包时可无限挂起且 `to_thread` 无法被 `wait_for` 取消。须补进程外上界；**落地提交留空待补**。
+
+**报告更正（如实登记）**：`hunt_gateway_federation_edges` 报告落盘 **早于**提交 `fa0c6b19`「修复(job): 任务体未启动即被取消时收敛到 cancelled」，故其 §P1-A（Job 取消卡 cancelling）与 §P1-B（委派缺 binder 永久 pending）条目**相对当前 HEAD 已陈旧**；本 change 台账只登记 F7/F8/F9/无界等待四项，Job/委派两节按前述 §8 后小节在 `add-itemized-rollout-context` 登记。功能缺失（binder 未装配）本身仍成立（本报告不作已修结论）。
+
+**owner 要求核验**：委托书中「已存在该 requirement、无需新增」的委派缺 binder 条目，已独立核实**确凿存在**于 `add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md:244` 与 `:276-279`；本 change 只具名引用，不重复定义。
+
 ## 5. ToolSet hard rebase、Provider、history 与 display projection
 
 - [ ] 5.1 修改plan compiler，使首次组装及fork目标首次assembly时只把owner声明`root_eligible`且有效的初始贡献编译成一个不可变root system item，并保存source identity/revision/ordinal/hash/included reason/ToolSet binding/visibility/loss；仅实际compaction、rewind或Provider可见ToolSet hard rebase的新epoch可重编译root并吸收合格post-user source的完整有效状态，记录base/delta lineage且不重复选择。`tail_only`始终不入root，旧item/assembly不改写。
