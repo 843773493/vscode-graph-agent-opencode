@@ -1,14 +1,16 @@
-import { afterEach, spyOn } from "bun:test";
+import { afterEach } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import SessionResourceOverlays from "./SessionResourceOverlays";
-import * as clipboard from "../../utils/clipboard";
 import type { SessionResourceExplorerController } from "../../hooks/session/useSessionResourceExplorer";
 
 /**
  * 「复制 → 粘贴移动」真实链路的共享装配：驱动 SessionResourceOverlays 与
- * AgentSessionsContextMenus 的真实菜单按钮，经应用内剪贴板桩与假 explorer 观察
- * 提交结果。只服务 agentSessions 下两个链路测试文件。
+ * AgentSessionsContextMenus 的真实菜单按钮，经 navigator.clipboard 桩与假
+ * explorer 观察提交结果。只服务 agentSessions 下两个链路测试文件。
+ *
+ * 剪贴板桩走真实 utils/clipboard 的 Clipboard API 路径（不 mock 模块函数），
+ * 避免跨文件的模块级 mock 泄漏影响同批次其它剪贴板测试。
  */
 
 // 后端 canonical：folder 与 session 同表、id 一律 ses_ + 32 位小写 hex +
@@ -19,12 +21,16 @@ export const SESSION_ID = "ses_0190f2a3b4c570008000000000000001";
 export const PARENT_SESSION_ID = "ses_0190f2a3b4c570008000000000000002";
 
 let clipboardText = "";
-let restoreClipboard: (() => void) | null = null;
+let previousNavigatorDescriptor: PropertyDescriptor | undefined;
 
 afterEach(() => {
   clipboardText = "";
-  restoreClipboard?.();
-  restoreClipboard = null;
+  if (previousNavigatorDescriptor) {
+    Object.defineProperty(globalThis, "navigator", previousNavigatorDescriptor);
+  } else {
+    Reflect.deleteProperty(globalThis, "navigator");
+  }
+  previousNavigatorDescriptor = undefined;
 });
 
 /** 当前剪贴板内容；链路测试用它模拟「先复制、后粘贴」。 */
@@ -37,18 +43,23 @@ export function getClipboardText(): string {
   return clipboardText;
 }
 
-/** 安装应用内剪贴板桩：复制写入、读取返回，模拟「复制 → 粘贴」的真实链路。 */
+/**
+ * 安装 navigator.clipboard 桩：复制写入、读取返回，模拟真实的「复制 → 粘贴」。
+ * utils/clipboard 的 Clipboard API 分支会直接命中该桩；用 restore 还原 navigator。
+ */
 export function installClipboard(): void {
-  const readSpy = spyOn(clipboard, "readTextFromClipboard")
-    .mockImplementation(async () => clipboardText);
-  const copySpy = spyOn(clipboard, "copyTextToClipboard")
-    .mockImplementation(async (text: string) => {
-      clipboardText = text;
-    });
-  restoreClipboard = () => {
-    readSpy.mockRestore();
-    copySpy.mockRestore();
-  };
+  previousNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      clipboard: {
+        writeText: async (text: string) => {
+          clipboardText = text;
+        },
+        readText: async () => clipboardText,
+      },
+    },
+  });
 }
 
 /** 假 explorer：只记录本链路真正触发的动作，其余动作无副作用。 */

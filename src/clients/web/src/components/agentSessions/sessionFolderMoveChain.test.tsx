@@ -4,6 +4,7 @@ import {
   SESSION_ID,
   TARGET_FOLDER_ID,
   clickMenuButton,
+  getClipboardText,
   installClipboard,
   renderFolderMenu,
 } from "./sessionFolderClipboardHarness";
@@ -20,7 +21,7 @@ describe("会话文件夹「复制文件夹 ID → 移动到剪贴板文件夹�
       name: "源文件夹",
     });
     await clickMenuButton(source.tree, "复制文件夹 ID");
-    expect(source.statuses).toEqual(["已复制会话文件夹 ID: " + FOLDER_ID]);
+    expect(getClipboardText()).toBe(FOLDER_ID);
 
     // 第二步：右键目标文件夹 →「移动到剪贴板文件夹」，必须把剪贴板里的
     // ses_ folder id 作为目标父目录提交，而不是报「没有有效的会话文件夹 ID」。
