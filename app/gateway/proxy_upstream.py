@@ -11,10 +11,22 @@ Gateway 的两个 httpx 客户端都不设读取超时：SSE 必须能长期占�
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Iterable
 from urllib.parse import unquote
 
 import httpx
+
+from app.core.shielded_cleanup import run_cleanup_shielded
+
+__all__ = [
+    "GATEWAY_PROXY_DROPPED_HEADERS",
+    "UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS",
+    "build_upstream_url",
+    "filter_hop_by_hop_headers",
+    "load_proxy_gateway_id",
+    "run_cleanup_shielded",
+    "send_upstream_request",
+]
 
 UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS = 60.0
 
@@ -187,24 +199,3 @@ def build_upstream_url(
         )
     return url
 
-
-async def run_cleanup_shielded(cleanup: Callable[[], Awaitable[None]]) -> None:
-    """在取消已经发生的情况下把清理跑完，再由调用方继续传播取消。
-
-    uvicorn 声明 ASGI spec 2.3，starlette 的 StreamingResponse 用 anyio task
-    group 驱动响应体迭代；客户端断开时 cancel scope 取消流任务，此后流生成器
-    finally 中每个 await 都会立刻重新抛出 CancelledError。把
-    await response.aclose() 直接写在 finally 里会被这第二次取消打断：上游连接
-    不关闭、路由引用计数不归零，工作区重启或删除随后会被「仍有代理引用」永久挡住。
-
-    这里把清理放进独立 task 并反复 shield 它直到真正完成。每次取消只能打断
-    await，打不断那个独立 task；清理自身失败会在此响亮抛出，不静默吞掉。
-    """
-
-    cleanup_task = asyncio.ensure_future(cleanup())
-    while not cleanup_task.done():
-        try:
-            await asyncio.shield(cleanup_task)
-        except asyncio.CancelledError:
-            continue
-    cleanup_task.result()
