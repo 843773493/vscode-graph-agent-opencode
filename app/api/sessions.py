@@ -216,7 +216,7 @@ async def create_session(
     "", response_model=APIResponse[CursorPage[SessionDTO]], summary="获取会话列表"
 )
 async def list_sessions(
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=200),
     cursor: str | None = None,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
