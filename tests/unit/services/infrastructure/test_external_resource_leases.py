@@ -358,3 +358,56 @@ def test_provider_unreachable_is_not_reported_as_stopped(tmp_path: Path) -> None
     assert lease.status == "reconcile_required"
     with pytest.raises(KeyError, match="资源 lease 不存在"):
         ledger.settle("mcp_1:missing")
+
+
+def test_load_rejects_non_array_records_or_leases(tmp_path: Path) -> None:
+    """损坏的状态文件（records/leases 不是数组）必须 fail-closed，绝不当空账本。"""
+    state_path = tmp_path / "resources.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "resource_id": "terminal_1",
+                        "kind": "terminal",
+                        "lifetime_scope": "turn",
+                        "created_by_turn_id": None,
+                        "status": "running",
+                        "updated_at": "2026-10-01T00:00:00Z",
+                    }
+                ],
+                "leases": "tampered",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TypeError, match="leases 必须是数组"):
+        ExternalResourceLeaseLedger(state_path=state_path)
+
+
+def test_load_rejects_non_object_entries(tmp_path: Path) -> None:
+    """损坏的状态文件（数组内混入非对象项）必须 fail-closed，绝不静默跳过。"""
+    state_path = tmp_path / "resources.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "resource_id": "terminal_1",
+                        "kind": "terminal",
+                        "lifetime_scope": "turn",
+                        "created_by_turn_id": None,
+                        "status": "running",
+                        "updated_at": "2026-10-01T00:00:00Z",
+                    },
+                    "garbage",
+                ],
+                "leases": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TypeError, match="records\\[1\\] 必须是对象"):
+        ExternalResourceLeaseLedger(state_path=state_path)

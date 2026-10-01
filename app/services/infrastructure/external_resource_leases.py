@@ -299,14 +299,35 @@ class ExternalResourceLeaseLedger:
         raw = json.loads(self._state_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise TypeError(f"资源状态文件必须是对象: path={self._state_path}")
-        for value in raw.get("records", []):
-            if isinstance(value, dict):
-                record = ResourceRecord(**value)
-                self._records[record.resource_id] = record
-        for value in raw.get("leases", []):
-            if isinstance(value, dict):
-                lease = ResourceLease(**value)
-                self._leases[lease.lease_id] = lease
+        for value in self._load_rows(raw, "records"):
+            record = ResourceRecord(**value)
+            self._records[record.resource_id] = record
+        for value in self._load_rows(raw, "leases"):
+            lease = ResourceLease(**value)
+            self._leases[lease.lease_id] = lease
+
+    def _load_rows(
+        self,
+        raw: Mapping[str, object],
+        name: str,
+    ) -> list[dict[str, object]]:
+        """逐项校验持久状态数组；缺省按空数组，损坏一律 fail-closed。
+
+        绝不用 isinstance 静默跳过非对象项，否则被外部改写的状态文件会被当成
+        空账本吸收，重启后 owner 无法对账到真实占用与恢复引用。
+        """
+        rows = raw.get(name, [])
+        if not isinstance(rows, list):
+            raise TypeError(
+                f"资源状态文件 {name} 必须是数组: path={self._state_path}"
+            )
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise TypeError(
+                    f"资源状态文件 {name}[{index}] 必须是对象: "
+                    f"path={self._state_path}"
+                )
+        return rows
 
     def _persist(self) -> None:
         if self._state_path is None:
