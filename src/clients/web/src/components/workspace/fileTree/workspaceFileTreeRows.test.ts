@@ -41,7 +41,6 @@ function directory(items: WorkspaceFileNode[]): DirectoryCacheEntry {
     error: null,
     truncated: false,
     nextCursor: null,
-    stale: false,
     lastAccessedAt: 1,
   };
 }

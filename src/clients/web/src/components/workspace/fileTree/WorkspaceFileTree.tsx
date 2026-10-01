@@ -26,7 +26,6 @@ import { errorDisplayMessage } from "../../../utils/errorMessage";
 import { formatByteSize } from "../../../utils/format";
 import {
   loadedDirectoryEntry,
-  markDirectoryStale,
   restoreDirectoriesInOrder,
 } from "./workspaceFileTreeCache";
 import { useWorkspaceFileTreeDirectories } from "./useWorkspaceFileTreeDirectories";
@@ -137,7 +136,7 @@ export default function WorkspaceFileTree({
     directoriesRef,
     updateDirectories,
     loadDirectory,
-    refreshExpandedDirectories,
+    reloadExpandedDirectories,
     invalidateDirectoriesUnder,
     abortAllDirectoryRequests,
     resetDirectories,
@@ -225,7 +224,7 @@ export default function WorkspaceFileTree({
     port,
     workspaceId,
     paths: watchedShortcutPaths,
-    onOverflow: refreshExpandedDirectories,
+    onOverflow: reloadExpandedDirectories,
     onStatusChange,
   });
 
@@ -240,62 +239,50 @@ export default function WorkspaceFileTree({
 
       // 删除必须先让对应子树整体失效：丢弃缓存并中止在途请求，
       // 否则迟到的响应会把已删除目录重新写回缓存。
-      const deletedTreePaths: string[] = [];
       for (const change of changes) {
-        if (change.kind !== "delete") {
-          continue;
-        }
         const treePath = changedPathToTreePath(change.path, workspaceRoot);
         if (treePath === null) {
+          onStatusChange(`忽略无法定位的文件变更路径: ${change.path}`);
           continue;
         }
-        deletedTreePaths.push(treePath);
-        for (const expandedPath of nextExpanded) {
-          if (isTreePathInside(expandedPath, treePath)) {
-            nextExpanded.delete(expandedPath);
-            expandedChanged = true;
+        if (change.kind === "delete") {
+          invalidateDirectoriesUnder(treePath);
+          for (const expandedPath of nextExpanded) {
+            if (isTreePathInside(expandedPath, treePath)) {
+              nextExpanded.delete(expandedPath);
+              expandedChanged = true;
+            }
           }
         }
+        changedParents.add(parentFileTreePath(treePath));
       }
-      for (const treePath of deletedTreePaths) {
-        invalidateDirectoriesUnder(treePath);
-      }
-
-      updateDirectories((current) => {
-        const next = { ...current };
-        for (const change of changes) {
-          const treePath = changedPathToTreePath(change.path, workspaceRoot);
-          if (treePath === null) {
-            onStatusChange(`忽略无法定位的文件变更路径: ${change.path}`);
-            continue;
-          }
-          changedParents.add(parentFileTreePath(treePath));
-        }
-        for (const parentPath of changedParents) {
-          const entry = next[parentPath];
-          if (
-            entry
-            && (!activeRef.current || !expandedPathsRef.current.has(parentPath))
-          ) {
-            next[parentPath] = markDirectoryStale(entry);
-          }
-        }
-        return next;
-      });
 
       if (expandedChanged) {
         commitExpandedPaths(nextExpanded);
         scheduleExpandedPathsPersistenceRef.current([...nextExpanded].sort());
       }
+
+      // 权威增量只按受影响父目录收敛：丢弃受影响子树缓存，再重取其中仍然可见的
+      // 展开目录（自父到子）。已折叠或被删除的缓存只丢弃、不补发请求，等下次
+      // 展开再取，避免把已删除目录重新拉回。
+      const reloadPaths = new Set<string>();
       for (const parentPath of changedParents) {
-        if (
-          activeRef.current
-          &&
-          expandedPathsRef.current.has(parentPath)
-          && directoriesRef.current[parentPath]
-        ) {
-          void loadDirectory(parentPath, true);
+        invalidateDirectoriesUnder(parentPath);
+        if (!activeRef.current) {
+          continue;
         }
+        for (const expandedPath of nextExpanded) {
+          if (isTreePathInside(expandedPath, parentPath)) {
+            reloadPaths.add(expandedPath);
+          }
+        }
+      }
+      if (reloadPaths.size > 0) {
+        void restoreDirectoriesInOrder(
+          [...reloadPaths],
+          (path) => loadDirectory(path, true),
+          parentFileTreePath,
+        );
       }
     };
 
@@ -325,7 +312,6 @@ export default function WorkspaceFileTree({
   }, [
     loadDirectory,
     onStatusChange,
-    updateDirectories,
     invalidateDirectoriesUnder,
     workspaceId,
     workspaceRoot,
@@ -420,14 +406,11 @@ export default function WorkspaceFileTree({
     }
     const pathsToRestore = [...expandedPathsRef.current].filter((path) => {
       const entry = directoriesRef.current[path];
-      return resumedAfterPause || !entry || entry.stale;
+      return resumedAfterPause || !entry;
     });
     void restoreDirectoriesInOrder(
       pathsToRestore,
-      (path) => loadDirectory(
-        path,
-        resumedAfterPause || Boolean(directoriesRef.current[path]?.stale),
-      ),
+      (path) => loadDirectory(path, resumedAfterPause),
       parentFileTreePath,
     );
   }, [abortAllDirectoryRequests, active, loadDirectory, updateDirectories]);
@@ -470,8 +453,8 @@ export default function WorkspaceFileTree({
           },
         }));
       }
-      if (!cached || cached.stale) {
-        void loadDirectory(path, Boolean(cached?.stale));
+      if (!cached) {
+        void loadDirectory(path);
       }
     }
     onStatusChange(status);

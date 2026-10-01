@@ -10,7 +10,6 @@ export interface DirectoryCacheEntry {
   error: string | null;
   truncated: boolean;
   nextCursor: string | null;
-  stale: boolean;
   lastAccessedAt: number;
 }
 
@@ -29,7 +28,6 @@ export function loadedDirectoryEntry(
     error: null,
     truncated: result.truncated ?? false,
     nextCursor: result.next_cursor ?? null,
-    stale: false,
     lastAccessedAt,
   };
 }
@@ -44,7 +42,6 @@ export function loadingDirectoryEntry(
     error: null,
     truncated: previous?.truncated ?? false,
     nextCursor: previous?.nextCursor ?? null,
-    stale: previous?.stale ?? false,
     lastAccessedAt,
   };
 }
@@ -60,13 +57,8 @@ export function failedDirectoryEntry(
     error,
     truncated: previous?.truncated ?? false,
     nextCursor: previous?.nextCursor ?? null,
-    stale: previous?.stale ?? false,
     lastAccessedAt,
   };
-}
-
-export function markDirectoryStale(entry: DirectoryCacheEntry): DirectoryCacheEntry {
-  return { ...entry, stale: true };
 }
 
 export function pruneDirectoryCache(
