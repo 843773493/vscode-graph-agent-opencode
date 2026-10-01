@@ -8,6 +8,24 @@ from typing import Literal
 
 from app.schemas.internal_v2.turn import TurnResponsePartDTO, TurnResponseSourceDTO
 
+#: 文本部件正文上限；canonical 投影按此截断，超限只置 truncated 供前端补拉。
+_TEXT_LIMIT = 65536
+
+#: 最终回答不属于 activity item，用超大 part_ordinal 排在所有 activity 部件之后。
+_FINAL_PART_ORDINAL = 1_000_000_000
+
+#: activity item kind → 使该部件正文可见的 include 闭集；未登记的 kind 必须显式失败。
+_INCLUDE_BY_KIND: dict[str, frozenset[str]] = {
+    "text": frozenset({"text", "assistant_text", "assistant", "final_response"}),
+    "reasoning": frozenset({"thinking", "reasoning_detail"}),
+    "reasoning_summary": frozenset(
+        {"thinking", "reasoning_summary", "reasoning_detail"}
+    ),
+    "reasoning_encrypted": frozenset({"encrypted_reasoning_meta"}),
+    "tool_call": frozenset({"tool_summary", "tool_call"}),
+    "tool_result": frozenset({"tool_summary", "tool_result"}),
+}
+
 Projection = Literal["summary", "detail", "streaming"]
 
 _TERMINAL_TURN_STATUSES = {
@@ -68,9 +86,15 @@ def _completion_metadata_for_sequence(
     return None, False
 
 
-def _bounded(value: object, limit: int = 65536) -> tuple[str, bool]:
+def _bounded(value: object, limit: int = _TEXT_LIMIT) -> tuple[str, bool]:
     text = _text(value)
     return text[:limit], len(text) > limit
+
+
+def _int_or_none(raw: Mapping[str, object], key: str) -> int | None:
+    """读取可选 canonical 坐标；缺失或非 int（含 bool）都返回 None。"""
+    value = raw.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _raw_tool_call_id(tool_call_id: str | None) -> str | None:
@@ -133,35 +157,10 @@ def _activity_parts_from_projection(
             if raw_kind == "compaction_summary"
             else raw_kind
         )
-        if kind not in {
-            "reasoning",
-            "reasoning_summary",
-            "reasoning_encrypted",
-            "tool_call",
-            "tool_result",
-            "text",
-        }:
+        include_fields = _INCLUDE_BY_KIND.get(kind) if isinstance(kind, str) else None
+        if include_fields is None:
             raise ValueError(f"未知 Turn activity item kind: {raw_kind!r}")
-        if kind == "text" and not include & {
-            "text",
-            "assistant_text",
-            "assistant",
-            "final_response",
-        }:
-            continue
-        if kind == "reasoning" and not include & {"thinking", "reasoning_detail"}:
-            continue
-        if kind == "reasoning_summary" and not include & {
-            "thinking",
-            "reasoning_summary",
-            "reasoning_detail",
-        }:
-            continue
-        if kind == "reasoning_encrypted" and "encrypted_reasoning_meta" not in include:
-            continue
-        if kind == "tool_call" and not include & {"tool_summary", "tool_call"}:
-            continue
-        if kind == "tool_result" and not include & {"tool_summary", "tool_result"}:
+        if not include & include_fields:
             continue
         item_id = raw.get("item_id")
         item_sequence = raw.get("item_sequence")
@@ -204,40 +203,20 @@ def _activity_parts_from_projection(
                 status=_response_status(raw.get("status")),
                 source=TurnResponseSourceDTO(
                     message_sequence=message_sequence,
-                    assistant_message_sequence=(
-                        raw.get("assistant_message_sequence")
-                        if isinstance(raw.get("assistant_message_sequence"), int)
-                        else None
+                    assistant_message_sequence=_int_or_none(
+                        raw, "assistant_message_sequence"
                     ),
-                    content_block_index=(
-                        raw.get("content_block_index")
-                        if isinstance(raw.get("content_block_index"), int)
-                        else None
-                    ),
-                    item_index=(
-                        raw.get("item_index")
-                        if isinstance(raw.get("item_index"), int)
-                        else None
-                    ),
-                    call_index=(
-                        raw.get("call_index")
-                        if isinstance(raw.get("call_index"), int)
-                        else None
-                    ),
-                    result_message_sequence=(
-                        raw.get("result_message_sequence")
-                        if isinstance(raw.get("result_message_sequence"), int)
-                        else None
+                    content_block_index=_int_or_none(raw, "content_block_index"),
+                    item_index=_int_or_none(raw, "item_index"),
+                    call_index=_int_or_none(raw, "call_index"),
+                    result_message_sequence=_int_or_none(
+                        raw, "result_message_sequence"
                     ),
                     item_id=item_id,
                     item_sequence=item_sequence,
                     part_ordinal=part_ordinal,
                     created_at=created_at,
-                    elapsed_ms=(
-                        raw.get("elapsed_ms")
-                        if isinstance(raw.get("elapsed_ms"), int)
-                        else None
-                    ),
+                    elapsed_ms=_int_or_none(raw, "elapsed_ms"),
                 ),
                 text=part_text,
                 carrier_type=(
@@ -441,11 +420,11 @@ def _final_response_part(
             message_sequence=final_sequence,
             item_id=final_item_id,
             item_sequence=final_item_sequence,
-            part_ordinal=1_000_000_000,
+            part_ordinal=_FINAL_PART_ORDINAL,
             created_at=final_item_created_at,
             elapsed_ms=0,
         ),
-        text=final_text[:65536],
+        text=final_text[:_TEXT_LIMIT],
         truncated=bool(projection.get("final_response_text_truncated")),
         final=not partial,
         completion_reason=completion_reason,
