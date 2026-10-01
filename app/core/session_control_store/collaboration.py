@@ -49,11 +49,6 @@ CREATE TABLE IF NOT EXISTS collaboration_members (
 )
 """
 
-# collaboration member 状态闭集（8.5-B ledger）：registering（登记未发布）、
-# published（随 thread catalog publish 原子转正）、cancelled（record abort
-# 定点取消；同 delegation 不换绑，重试必须换新 delegation）。
-_COLLABORATION_MEMBER_STATES = ("registering", "published", "cancelled")
-
 _COLLABORATION_MEMBER_COLUMNS = (
     "delegation_id, coordinator_session_id, coordinator_thread_id, "
     "child_thread_id, role, subagent_type, title, task_seed, state, "

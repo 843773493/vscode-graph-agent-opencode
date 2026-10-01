@@ -137,7 +137,6 @@ class TurnExecutionScope:
     _lifetime_scope: LifetimeScope = field(init=False)
     _abort_hooks: dict[int, CancellationHook] = field(default_factory=dict, init=False)
     _next_abort_hook_id: int = field(default=0, init=False)
-    _lease_ids: set[str] = field(default_factory=set, init=False)
     _active_operation: TurnExecutionScope | None = field(default=None, init=False)
     _deadline_handle: asyncio.TimerHandle | None = field(default=None, init=False)
 
@@ -167,10 +166,6 @@ class TurnExecutionScope:
     def lifetime_scope(self) -> LifetimeScope:
         """暴露唯一通用释放 owner；不携带 Turn 业务状态。"""
         return self._lifetime_scope
-
-    @property
-    def lease_ids(self) -> frozenset[str]:
-        return frozenset(self._lease_ids)
 
     def child(
         self,
@@ -235,16 +230,6 @@ class TurnExecutionScope:
         :class:`LifetimeHandle`；需要提前撤销时调用 ``handle.revoke()``。
         """
         return self._lifetime_scope.register(hook, label="turn-cleanup")
-
-    def add_lease(self, lease_id: str) -> None:
-        if not lease_id:
-            raise ValueError("TurnExecutionScope.add_lease 缺少 lease_id")
-        if self._lifetime_scope.state != "open":
-            raise RuntimeError("已关闭的 TurnExecutionScope 不能持有 lease")
-        self._lease_ids.add(lease_id)
-
-    def remove_lease(self, lease_id: str) -> None:
-        self._lease_ids.discard(lease_id)
 
     async def cancel(self, reason: str) -> bool:
         return await self.cancellation_signal.cancel(reason)
