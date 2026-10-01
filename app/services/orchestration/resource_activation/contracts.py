@@ -17,10 +17,13 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
 )
+from app.domain.itemized.resource_activation.common import (
+    _BOUNDARIES,
+    _TOKEN_PATTERN,
+)
 
 ResourceActivationBoundary = Literal["turn", "model_call"]
-_BOUNDARIES: frozenset[str] = frozenset({"turn", "model_call"})
-_KIND_PATTERN_ERROR = "resource kind 必须匹配 ^[a-z][a-z0-9_-]{0,63}$"
+_KIND_PATTERN_ERROR = f"resource kind 必须匹配 {_TOKEN_PATTERN}"
 
 # binding 的 owner scope 由资源平台声明；derivation 契约当前未携带该字段
 # （见 derivation/types.SemanticResourceDescriptor）。在资源平台补全前，

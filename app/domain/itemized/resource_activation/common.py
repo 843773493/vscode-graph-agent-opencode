@@ -21,7 +21,8 @@ _SNAPSHOT_KINDS: Final[frozenset[str]] = _BOUNDARIES
 _AVAILABILITIES: Final[frozenset[str]] = frozenset(
     item.value for item in DetailAvailability
 )
-_TOKEN_PATTERN_ERROR: Final = "必须匹配 ^[a-z][a-z0-9_-]{0,63}$"
+_TOKEN_PATTERN: Final = "^[a-z][a-z0-9_-]{0,63}$"
+_TOKEN_PATTERN_ERROR: Final = f"必须匹配 {_TOKEN_PATTERN}"
 _DISPLAY_URI_SCHEME: Final = "boxteam://"
 
 # 每个 code 只在此定义一次；闭集与 snapshot/provenance 的 raise 点统一引用这些
