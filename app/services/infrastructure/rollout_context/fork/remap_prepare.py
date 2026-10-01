@@ -296,29 +296,6 @@ def prepare_full_copy_remap(
             )
         return maps.get(entity_type, {}).get(text, text)
 
-    def replace_text(value: object, *, include_acceptance: bool = False) -> object:
-        if not isinstance(value, str):
-            return value
-        result = value
-        all_maps = (
-            maps.values()
-            if include_acceptance
-            else (
-                mapping
-                for entity_type, mapping in maps.items()
-                if entity_type not in {"message", "control"}
-            )
-        )
-        pairs = [
-            (source_id, target_id)
-            for mapping in all_maps
-            for source_id, target_id in mapping.items()
-            if source_id != target_id
-        ]
-        for source_id, target_id in sorted(pairs, key=lambda pair: -len(pair[0])):
-            result = result.replace(source_id, target_id)
-        return result
-
     def remap_json(
         value: object,
         *,
