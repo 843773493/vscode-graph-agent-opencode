@@ -10,6 +10,7 @@ from fastapi import (
 )
 
 from app.core.trace_middleware import get_request_id
+from app.gateway.auth import verify_gateway_token
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import (
     _wait_for_managed_runtime_restore_tasks,
@@ -34,6 +35,7 @@ async def _wait_for_managed_runtime_restores(request: Request) -> None:
 @router.get("/api/gateway/workspaces", response_model=APIResponse[GatewayWorkspaceListDTO])
 async def list_workspaces(
     request: Request,
+    _: str = Depends(verify_gateway_token),
     check_health: bool = Query(
         default=True,
         description="是否探测所有工作区及其附属服务的健康状态",
