@@ -60,6 +60,8 @@ _QUARANTINE_SUGGESTED_ACTIONS = {
 
 def _quarantine_report_entries(
     result: SessionCatalogMigrationResult,
+    *,
+    workspace_root: Path,
 ) -> list[dict[str, str]]:
     """为隔离节点派生「物理路径 + 建议动作」（报告层，不改 journal 契约）。
 
@@ -68,7 +70,7 @@ def _quarantine_report_entries(
     相对旧 ``sessions`` 根定位。取不到时显式标注「路径不可定位」，绝不静默省略。
     """
     journal_path = result.journal_path
-    sessions_root = journal_path.parents[2] / "sessions"
+    sessions_root = workspace_root / ".boxteam" / "sessions"
     physical_sessions: dict[str, object] = {}
     physical_folders: dict[str, object] = {}
     journal_error: str | None = None
@@ -207,7 +209,9 @@ def main(argv: list[str] | None = None) -> int:
         "workspace_root": str(workspace_root),
         "migrated_session_nodes": result.migrated_session_nodes,
         "migrated_folder_nodes": result.migrated_folder_nodes,
-        "quarantined_nodes": _quarantine_report_entries(result),
+        "quarantined_nodes": _quarantine_report_entries(
+            result, workspace_root=workspace_root
+        ),
         "journal_path": str(result.journal_path),
     }
     if args.json:
