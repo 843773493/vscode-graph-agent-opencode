@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime
-from typing import Annotated, Literal, Protocol
+from typing import Annotated, Protocol
 
 from langchain_core.tools import BaseTool, tool
 from pydantic import Field
@@ -29,6 +29,7 @@ from app.services.business.communication.wait import (
     WaitSelector,
     WaitSelectorKind,
     WaitState,
+    WaitUntil,
     freeze_wait_deadline,
     remaining_wait_budget_seconds,
     resolve_wait_status,
@@ -163,7 +164,7 @@ def create_wait_for_session_tool(
             str | None,
             Field(default=None, description="等待指定 Turn 绑定的执行完成"),
         ] = None,
-        until: Literal["terminal", "state_change"] = "terminal",
+        until: WaitUntil = "terminal",
         timeout_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
     ) -> dict[str, object]:
         """有界等待目标 Session 的执行状态；selector 至多传一个。
