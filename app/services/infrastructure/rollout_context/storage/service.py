@@ -439,9 +439,6 @@ class RolloutStorage(
     def _file_hash(self, path: Path) -> str:
         return self._maintenance_owner._file_hash(path)
 
-    def _copy_file_fsync(self, source: Path, target: Path) -> None:
-        return self._maintenance_owner._copy_file_fsync(source, target)
-
     def _fsync_directory(self, path: Path) -> None:
         return self._maintenance_owner._fsync_directory(path)
 

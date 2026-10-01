@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -27,13 +26,6 @@ class RolloutMaintenanceFsSafetyMixin:
             for block in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(block)
         return digest.hexdigest()
-
-    @staticmethod
-    def _copy_file_fsync(source: Path, target: Path) -> None:
-        with source.open("rb") as source_stream, target.open("wb") as target_stream:
-            shutil.copyfileobj(source_stream, target_stream)
-            target_stream.flush()
-            os.fsync(target_stream.fileno())
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:
