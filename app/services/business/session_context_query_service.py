@@ -35,6 +35,7 @@ from app.services.business.session_context_resource import (
     ParsedSessionContextResource,
     SessionContextCursorCodec,
     parse_session_context_resource,
+    require_cursor_offset_in_range,
     require_session_context_revision,
     set_exact_returned_chars,
     validate_session_context_read_view,
@@ -368,6 +369,7 @@ class SessionContextQueryService:
             if match is not None:
                 found.append((candidate, match))
 
+        require_cursor_offset_in_range(offset, len(found), resource=resource.canonical)
         selected = found[offset : offset + request.max_results]
         matches: list[SessionContextSearchMatchDTO] = []
         budget_truncated = False

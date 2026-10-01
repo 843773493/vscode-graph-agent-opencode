@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from datetime import UTC, datetime
 from unittest.mock import create_autospec
 
@@ -25,6 +27,20 @@ from app.schemas.internal_v2.session_context import (
 from app.services.business.session_context_query_service import (
     SessionContextQueryService,
 )
+from app.services.business.session_context_resource import SessionContextCursorCodec
+
+
+def _resign_cursor_offset(cursor: str, offset: int) -> str:
+    """保留原 cursor 的签名身份，只改写 offset，用于伪造越界游标。"""
+    padded = cursor + "=" * (-len(cursor) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    return SessionContextCursorCodec.encode(
+        resource=payload["resource"],
+        revision=payload["revision"],
+        operation=payload["operation"],
+        offset=offset,
+        char_offset=payload.get("char_offset", 0),
+    )
 
 
 class _FakeSessionLookup:
@@ -412,3 +428,66 @@ async def test_oversized_single_record_can_be_reassembled_through_cursor(_servic
     reassembled = "".join(chunks)
     assert oversized_text in reassembled
     assert reassembled.endswith("}")
+
+
+@pytest.mark.asyncio
+async def test_read_cursor_offset_beyond_items_is_rejected(_service) -> None:
+    """游标 offset 越过真实 item 数时必须 fail-closed，不能静默返回空页。
+
+    回归：cursor offset 是客户端可伪造的分页输入，越界时 ``items[offset:...]``
+    只返回空列表且 ``has_more=False``。调用方按契约继续翻页会永远拿到空页，
+    与同族已修的「limit<=0 返回永不前进空页」是同一类静默失败。
+    """
+    service = _service(_FakeMessageSource())
+    request = SessionContextReadRequest(
+        resource="boxteam://session/ses_target",
+        view="messages",
+    )
+    first = await service.read_context(request)
+    assert len(first.items) == 9
+    assert first.next_cursor is None
+
+    beyond = SessionContextCursorCodec.encode(
+        resource="boxteam://session/ses_target",
+        revision=first.revision,
+        operation="read:messages",
+        offset=len(first.items) + 1,
+    )
+    with pytest.raises(ValueError, match="offset 越界"):
+        await service.read_context(request.model_copy(update={"cursor": beyond}))
+
+    # 恰好等于 item 数是合法的「已读完」边界，仍返回空页且不报错。
+    tail = await service.read_context(
+        request.model_copy(
+            update={
+                "cursor": SessionContextCursorCodec.encode(
+                    resource="boxteam://session/ses_target",
+                    revision=first.revision,
+                    operation="read:messages",
+                    offset=len(first.items),
+                )
+            }
+        )
+    )
+    assert tail.items == []
+    assert tail.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_search_cursor_offset_beyond_matches_is_rejected(_service) -> None:
+    """search 的 cursor offset 越过总匹配数时同样必须 fail-closed。"""
+    service = _service(_FakeMessageSource())
+    request = SessionContextSearchRequest(
+        resource="boxteam://session/ses_target",
+        query="回答",
+        sources=["effective_context"],
+        match_mode="literal",
+        max_results=1,
+    )
+    first = await service.search_context(request)
+    assert first.total_matches > 0
+    assert first.next_cursor is not None
+
+    beyond = _resign_cursor_offset(first.next_cursor, first.total_matches + 1)
+    with pytest.raises(ValueError, match="offset 越界"):
+        await service.search_context(request.model_copy(update={"cursor": beyond}))

@@ -13,6 +13,7 @@ from app.schemas.internal_v2.session_context import (
 )
 from app.services.business.session_context_resource import (
     SessionContextCursorCodec,
+    require_cursor_offset_in_range,
     set_exact_returned_chars,
 )
 from app.services.mapping.itemized.provider_history import reasoning_projection_rows
@@ -151,6 +152,7 @@ def paginate_read_items(
     raw_message_count: int = 0,
     effective_record_count: int = 0,
 ) -> SessionContextReadResultDTO:
+    require_cursor_offset_in_range(offset, len(items), resource=resource)
     selected = items[offset:offset + request.limit]
     returned: list[SessionContextItemDTO] = []
     budget_truncated = False

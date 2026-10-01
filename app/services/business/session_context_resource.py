@@ -112,6 +112,19 @@ def require_session_context_revision(expected: str | None, actual: str) -> None:
         )
 
 
+def require_cursor_offset_in_range(offset: int, total: int, *, resource: str) -> None:
+    """游标 offset 越过真实条目数时 fail-closed。
+
+    offset 是客户端可伪造的分页输入；越界时上层按 offset 切片只会得到空页，
+    调用方却仍会按契约继续翻页——表现为永远停在空页而拿不到终态。恰好等于
+    total 是合法的「已读完」边界，只有严格越过才报错。
+    """
+    if offset > total:
+        raise ValueError(
+            f"cursor offset 越界: resource={resource} offset={offset} total={total}"
+        )
+
+
 class _SerializedResult(Protocol):
     returned_chars: int
 
