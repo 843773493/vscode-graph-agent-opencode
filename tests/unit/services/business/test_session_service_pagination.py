@@ -165,3 +165,51 @@ def test_list_sessions_http_envelope_exposes_real_pagination(tmp_path: Path) -> 
     finally:
         app.dependency_overrides.clear()
         context.close()
+
+
+@pytest.mark.asyncio
+async def test_list_rejects_non_positive_limit(workspace) -> None:
+    """非正 limit 必须 fail-closed，不能返回永不前进的空页。
+
+    缺陷背景：``list(limit=0)`` 返回空页却仍带 ``has_more=True`` 与和请求同
+    offset 的 cursor；调用方按契约继续翻页时永远拿到空页且 ``next_cursor`` 不
+    前进（死循环）。公开查询参数必须显式拒绝。
+    """
+    service = _build_service(workspace)
+    for index in range(3):
+        await service.create(SessionCreateRequest(title=f"页-{index:02d}"))
+
+    with pytest.raises(ValueError, match="limit 必须大于 0"):
+        await service.list(limit=0)
+    with pytest.raises(ValueError, match="limit 必须大于 0"):
+        await service.list(limit=-1)
+
+
+def test_list_sessions_http_rejects_zero_limit(tmp_path: Path) -> None:
+    """HTTP 入口对 limit=0/负数 fail-closed 落 409，而不是 200 + 不可收敛的空页。"""
+
+    async def build():
+        context = build_catalog_workspace(tmp_path, workspace_id=WORKSPACE_ID)
+        service = _build_service(context)
+        await service.create(SessionCreateRequest(title="唯一"))
+        return service, context
+
+    service, context = asyncio.run(build())
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_session_service] = lambda: service
+    try:
+        with TestClient(app) as client:
+            for bad in ("0", "-1"):
+                response = client.get(
+                    f"/api/v1/sessions?limit={bad}",
+                    headers={"X-Local-Token": "local-dev-token"},
+                )
+                # 路由沿用既有 409 状态冲突映射（不新增 422 契约），detail 为
+                # 纯文本消息本体。改前这里是 200 + 空 items + 重复 cursor。
+                assert response.status_code == 409, response.text
+                assert "limit 必须大于 0" in response.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+        context.close()

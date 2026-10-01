@@ -245,6 +245,11 @@ class SessionService:
         session_nodes = [node for node in nodes if node.kind == "session"]
         session_nodes.sort(key=lambda node: node.created_at, reverse=True)
         total = len(session_nodes)
+        if limit < 1:
+            # 非正 limit 会返回空页却仍带 ``has_more=True`` 与相同 offset 的 cursor，
+            # 调用方按契约继续翻页时永远拿到空页且 next_cursor 不前进（死循环）。
+            # 公开查询参数必须 fail-closed，不能静默返回不可收敛的页。
+            raise ValueError(f"会话列表 limit 必须大于 0: limit={limit}")
         revision = self._session_list_revision(session_nodes)
         offset = (
             _decode_session_list_cursor(cursor, revision=revision)

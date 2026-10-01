@@ -198,6 +198,7 @@ class SessionCatalogService:
             offset=0,
             limit=None,
             revision=revision,
+            cursor_scope=None,
         )
 
     async def list_children(
@@ -212,14 +213,18 @@ class SessionCatalogService:
             node.node_id == parent_node_id for node in nodes
         ):
             raise KeyError(f"会话目录节点不存在: {parent_node_id}")
-        offset = self._decode_cursor(cursor, revision)
         children = self._sorted_children(nodes, parent_node_id)
+        # cursor 绑定发牌时的分页作用域（父节点）：同一个 revision 下把某个父节点的
+        # cursor 拿去翻另一个父节点的页，会让 offset 落到错误切片的中间，静默跳项。
+        scope = parent_node_id
+        offset = self._decode_cursor(cursor, revision, scope)
         return self._build_page(
             children,
             parent_node_id=parent_node_id,
             offset=offset,
             limit=limit,
             revision=revision,
+            cursor_scope=scope,
         )
 
     def _build_page(
@@ -230,6 +235,7 @@ class SessionCatalogService:
         offset: int,
         limit: int | None,
         revision: str,
+        cursor_scope: str | None,
     ) -> SessionCatalogPageDTO:
         """构造目录分页页；limit 为 None 表示返回 offset 之后的全部节点。"""
         page = children[offset:] if limit is None else children[offset : offset + limit]
@@ -239,7 +245,7 @@ class SessionCatalogService:
             parent_node_id=parent_node_id,
             items=page,
             cursor=(
-                self._encode_cursor(next_offset, revision)
+                self._encode_cursor(next_offset, revision, cursor_scope)
                 if next_offset < len(children)
                 else None
             ),
@@ -282,7 +288,10 @@ class SessionCatalogService:
         if not normalized_query:
             raise ValueError("会话目录搜索词不能为空")
         nodes, revision = await self._snapshot()
-        offset = self._decode_cursor(cursor, revision)
+        # 搜索的 cursor 作用域是查询词：把目录分页或其它查询词的 cursor 拿来翻本
+        # 次搜索，会让 offset 落到错误匹配集的中间，静默跳项。
+        scope = f"search\n{normalized_query}"
+        offset = self._decode_cursor(cursor, revision, scope)
         nodes_by_id = {node.node_id: node for node in nodes}
         matches: list[SessionCatalogNodeDTO] = []
         for node in nodes:
@@ -318,7 +327,7 @@ class SessionCatalogService:
             revision=revision,
             items=results,
             cursor=(
-                self._encode_cursor(next_offset, revision)
+                self._encode_cursor(next_offset, revision, scope)
                 if next_offset < len(matches)
                 else None
             ),
@@ -854,12 +863,20 @@ class SessionCatalogService:
         return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
-    def _encode_cursor(offset: int, revision: str) -> str:
-        payload = json.dumps({"offset": offset, "revision": revision}).encode("utf-8")
+    def _encode_cursor(offset: int, revision: str, scope: str | None) -> str:
+        """签发分页 cursor：绑定 revision 与分页作用域，拒绝跨列表复用。
+
+        ``scope`` 是发牌时的分页上下文（list_children 为 ``parent_node_id``、
+        search 为查询词）：同一 revision 下把 A 列表的 cursor 交给 B 列表，offset
+        会落在 B 自身切片的中间，静默跳项且不报错。绑定后跨列表复用显式报错。
+        """
+        payload = json.dumps(
+            {"offset": offset, "revision": revision, "scope": scope}
+        ).encode("utf-8")
         return base64.urlsafe_b64encode(payload).decode("ascii")
 
     @staticmethod
-    def _decode_cursor(cursor: str | None, revision: str) -> int:
+    def _decode_cursor(cursor: str | None, revision: str, scope: str | None) -> int:
         if cursor is None:
             return 0
         try:
@@ -872,6 +889,8 @@ class SessionCatalogService:
             raise TypeError("会话目录 cursor 格式无效")
         if payload.get("revision") != revision:
             raise ValueError("会话目录已更新，请从第一页重新加载")
+        if payload.get("scope") != scope:
+            raise ValueError("会话目录 cursor 与当前列表不匹配，请从第一页重新加载")
         offset = payload.get("offset")
         if not isinstance(offset, int) or offset < 0:
             raise ValueError("会话目录 cursor offset 无效")

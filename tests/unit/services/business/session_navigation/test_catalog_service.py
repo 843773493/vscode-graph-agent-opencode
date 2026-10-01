@@ -483,3 +483,66 @@ async def test_snapshot_cache_invalidates_on_direct_catalog_writes(
         parent_node_id=None, limit=50, cursor=None
     )
     assert created.node_id not in {node.node_id for node in after_delete.items}
+
+
+@pytest.mark.asyncio
+async def test_children_cursor_is_scoped_to_parent(tmp_path: Path) -> None:
+    """cursor 绑定发牌父节点：拿去翻另一个父节点的页必须显式报错。
+
+    缺陷背景：cursor 只绑定 ``revision``，同一 revision 下把 A 父节点的 cursor
+    交给 B 父节点的分页请求时，offset 会落在 B 自身切片的中间——B 的前几项被
+    静默跳过、不报错（实测 B 首项 b0 被跳过）。本用例钉死跨父节点复用必须
+    fail-closed。
+    """
+    sessions_root = tmp_path / "sessions"
+    session_service = _SessionService(sessions_root)
+    resolver = session_service.path_resolver
+    folder_a = resolver.create_folder(name="A", parent_node_id=None)
+    folder_b = resolver.create_folder(name="B", parent_node_id=None)
+    for index in range(3):
+        resolver.create_folder(name=f"a{index}", parent_node_id=folder_a.node_id)
+        resolver.create_folder(name=f"b{index}", parent_node_id=folder_b.node_id)
+    catalog = SessionCatalogService(session_service=session_service)
+
+    first_a = await catalog.list_children(
+        parent_node_id=folder_a.node_id,
+        limit=1,
+        cursor=None,
+    )
+    assert [node.name for node in first_a.items] == ["a0"]
+    assert first_a.cursor is not None
+
+    # 同一父节点内继续翻页仍然正常。
+    second_a = await catalog.list_children(
+        parent_node_id=folder_a.node_id,
+        limit=1,
+        cursor=first_a.cursor,
+    )
+    assert [node.name for node in second_a.items] == ["a1"]
+
+    # 跨父节点复用同一 cursor 必须显式报错，而不是返回被截断的错误页。
+    with pytest.raises(ValueError, match="cursor 与当前列表不匹配"):
+        await catalog.list_children(
+            parent_node_id=folder_b.node_id,
+            limit=1,
+            cursor=first_a.cursor,
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_cursor_is_scoped_to_query(tmp_path: Path) -> None:
+    """搜索 cursor 绑定查询词：换查询词复用旧 cursor 必须显式报错。"""
+    sessions_root = tmp_path / "sessions"
+    session_service = _SessionService(sessions_root)
+    resolver = session_service.path_resolver
+    for index in range(3):
+        resolver.create_folder(name=f"alpha-{index}", parent_node_id=None)
+        resolver.create_folder(name=f"beta-{index}", parent_node_id=None)
+    catalog = SessionCatalogService(session_service=session_service)
+
+    first = await catalog.search(query="alpha", limit=1, cursor=None)
+    assert len(first.items) == 1
+    assert first.cursor is not None
+
+    with pytest.raises(ValueError, match="cursor 与当前列表不匹配"):
+        await catalog.search(query="beta", limit=1, cursor=first.cursor)
