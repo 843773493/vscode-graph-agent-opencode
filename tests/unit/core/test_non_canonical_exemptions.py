@@ -53,8 +53,8 @@ _JS_EXEMPTIONS: tuple[Exemption, ...] = (
 
 # 运行时非工厂前缀（§7.1c）：实测不是 IdentifierPrefix 工厂前缀。
 _RUNTIME_EXEMPTIONS: tuple[Exemption, ...] = (
-    Exemption("runtime-non-factory", "runtime_lease_", "app/gateway/registry.py", "uuid4().hex"),
-    Exemption("runtime-non-factory", "target_generation_", "app/gateway/registry.py", "uuid4().hex"),
+    Exemption("runtime-non-factory", "runtime_lease_", "app/gateway/registry/crud.py", "uuid4().hex"),
+    Exemption("runtime-non-factory", "target_generation_", "app/gateway/registry/crud.py", "uuid4().hex"),
 )
 
 
