@@ -1034,3 +1034,28 @@ async def test_service_default_gate_creates_own_gate(
         idempotency_key="del-key-1", root_node_id=tree.root
     )
     assert result.record_state == "completed"
+
+async def test_key_lock_pool_is_bounded_and_stable_per_key(service) -> None:
+    """子树删除服务的 per-key 锁必须是固定上界且同 key 恒定命中。"""
+    for index in range(5000):
+        service._key_lock("del-" + str(index))
+    assert len(service._key_locks) <= 64
+    assert service._key_lock("del-shared") is service._key_lock("del-shared")
+
+
+async def test_key_lock_serializes_same_key(service) -> None:
+    """同 key 的临界区仍严格互斥（并发峰值恒为 1）。"""
+    lock = service._key_lock("del-shared")
+    concurrent = 0
+    peak = 0
+
+    async def worker() -> None:
+        nonlocal concurrent, peak
+        async with lock:
+            concurrent += 1
+            peak = max(peak, concurrent)
+            await asyncio.sleep(0.01)
+            concurrent -= 1
+
+    await asyncio.gather(*(worker() for _ in range(20)))
+    assert peak == 1

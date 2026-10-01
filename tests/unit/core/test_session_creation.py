@@ -821,3 +821,28 @@ def test_preimage_hash_deterministic_and_sensitive() -> None:
     assert compute_session_creation_preimage_hash(
         **{**kwargs, "session_metadata": make_metadata(kind="context_fork")}
     ) != compute_session_creation_preimage_hash(**kwargs)
+
+async def test_key_lock_pool_is_bounded_and_stable_per_key(service) -> None:
+    """session 创建服务的 per-key 锁必须是固定上界且同 key 恒定命中。"""
+    for index in range(5000):
+        service._key_lock("session-" + str(index))
+    assert len(service._key_locks) <= 64
+    assert service._key_lock("session-shared") is service._key_lock("session-shared")
+
+
+async def test_key_lock_serializes_same_key(service) -> None:
+    """同 key 的临界区仍严格互斥（并发峰值恒为 1）。"""
+    lock = service._key_lock("session-shared")
+    concurrent = 0
+    peak = 0
+
+    async def worker() -> None:
+        nonlocal concurrent, peak
+        async with lock:
+            concurrent += 1
+            peak = max(peak, concurrent)
+            await asyncio.sleep(0.01)
+            concurrent -= 1
+
+    await asyncio.gather(*(worker() for _ in range(20)))
+    assert peak == 1

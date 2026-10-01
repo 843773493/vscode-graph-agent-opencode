@@ -88,6 +88,7 @@ from app.core.atomic_fs import (
     fsync_directory as _fsync_directory,
 )
 from app.core.identifier import effective_now
+from app.core.key_lock_pool import KeyLockPool
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -596,7 +597,7 @@ class ThreadCreationService:
             if session_gate is not None
             else SessionLifecycleGate(self._sessions_root)
         )
-        self._key_locks: dict[str, asyncio.Lock] = {}
+        self._key_locks = KeyLockPool()
 
     # ------------------------------------------------------------------
     # 公开入口
@@ -884,12 +885,8 @@ class ThreadCreationService:
             )
 
     def _key_lock(self, idempotency_key: str) -> asyncio.Lock:
-        """按 key create-or-get 进程内串行锁（锁随进程生命周期保留）。"""
-        lock = self._key_locks.get(idempotency_key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._key_locks[idempotency_key] = lock
-        return lock
+        """按 key 取进程内串行锁（固定分片，同 key 恒命中同一把）。"""
+        return self._key_locks.lock_for(idempotency_key)
 
     # ------------------------------------------------------------------
     # owner session 定位与绑定校验
