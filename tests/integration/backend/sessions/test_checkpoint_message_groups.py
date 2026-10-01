@@ -24,7 +24,7 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 
 @pytest.fixture
 def group_case(tmp_path, session_bundle_factory):
-    session_id = "ses_019c205391bb7a4b81b6728df70f63e6"
+    session_id = "ses_e6d2707870e54cab8c135193c0802532"
     session_dir = session_bundle_factory(tmp_path, session_id)
     content = [
         {"type": "text", "text": "先检查", "id": "text-before"},

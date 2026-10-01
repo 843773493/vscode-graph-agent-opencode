@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import SessionControlStore
 from app.services.orchestration.communication.binding_lookup import (
     SessionControlStoreWaitBindingLookup,
@@ -25,8 +24,8 @@ class _FakePathResolver:
 
 @pytest.mark.asyncio
 async def test_resolves_bound_communication_from_target_store(tmp_path: Path) -> None:
-    session_id = f"ses_{create_uuid_hex()}"
-    main_thread_id = f"thr_{create_uuid_hex()}"
+    session_id = f"ses_{uuid.uuid4().hex}"
+    main_thread_id = f"thr_{uuid.uuid4().hex}"
     communication_id = f"comm_{uuid.uuid4().hex}"
     job_id = f"job_{uuid.uuid4().hex}"
     turn_id = f"turn_{uuid.uuid4().hex}"
@@ -41,8 +40,8 @@ async def test_resolves_bound_communication_from_target_store(tmp_path: Path) ->
             communication_id=communication_id,
             source_gateway_id="gw_a",
             source_workspace_id="ws_a",
-            source_session_id=f"ses_{create_uuid_hex()}",
-            source_thread_id=f"thr_{create_uuid_hex()}",
+            source_session_id=f"ses_{uuid.uuid4().hex}",
+            source_thread_id=f"thr_{uuid.uuid4().hex}",
             target_thread_id=main_thread_id,
             kind="question",
             reply_to_communication_id=None,
@@ -83,6 +82,6 @@ async def test_missing_communication_returns_none(tmp_path: Path) -> None:
         path_resolver=_FakePathResolver(tmp_path)
     )
     assert await lookup.resolve(
-        target_session_id=f"ses_{create_uuid_hex()}",
+        target_session_id=f"ses_{uuid.uuid4().hex}",
         communication_id=f"comm_{uuid.uuid4().hex}",
     ) is None

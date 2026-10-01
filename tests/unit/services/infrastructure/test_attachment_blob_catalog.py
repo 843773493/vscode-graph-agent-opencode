@@ -38,8 +38,8 @@ from app.services.infrastructure.attachment_blob_catalog.store import (
     parse_logical_file_id,
 )
 
-SESSION_A = "ses_019b781159d47374805bc4427d081a14"
-SESSION_B = "ses_019b9cdd1ad5758788a18bb227323523"
+SESSION_A = "ses_8044804392e9434e8f61961ec7604c3b"
+SESSION_B = "ses_aed5707da48947108df3da01acc1b1b0"
 
 
 def _data_url(content_type: str, data: bytes) -> str:

@@ -22,8 +22,6 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
     ASSEMBLY_BINDING_COLUMNS,
     BINDING_COLUMNS,
-    HASH_MISMATCH_CODE,
-    LINEAGE_BODY_UNAVAILABLE_CODE,
     SNAPSHOT_COLUMNS,
     ResourceActivationStoreError,
     _detail_ref_from_key,
@@ -36,6 +34,8 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
+
+LINEAGE_BODY_UNAVAILABLE_CODE = "resource-activation-lineage-unavailable"
 
 
 def activation_tables_ready(connection: sqlite3.Connection) -> bool:
@@ -187,7 +187,7 @@ class ResourceActivationReadMixin:
             "activation_provenance_hash"
         ] != snapshot.activation_provenance_hash:
             raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
+                "resource-activation-hash-mismatch",
                 f"assembly binding 与 snapshot hash 不一致: {assembly_id}",
             )
         return {**record, "snapshot": snapshot}
@@ -275,7 +275,7 @@ class ResourceActivationReadMixin:
             ) from error
         if record["lineage_manifest_digest"] != sha256_jcs(manifest):
             raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
+                "resource-activation-hash-mismatch",
                 "受保护 lineage manifest digest 与 catalog 不一致: "
                 f"{activation_snapshot_id}",
             )
@@ -290,7 +290,7 @@ class ResourceActivationReadMixin:
         )
         if declared_count != len(bindings):
             raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
+                "resource-activation-hash-mismatch",
                 "binding_count 与实际 binding 行数不一致: "
                 f"{activation_snapshot_id}",
             )
@@ -320,19 +320,19 @@ class ResourceActivationReadMixin:
             )
         except ResourceActivationContractError as error:
             raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
+                "resource-activation-hash-mismatch",
                 f"恢复 activation snapshot 失败: {error}",
             ) from error
         if record["bindings_hash"] != snapshot.bindings_hash:
             raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
+                "resource-activation-hash-mismatch",
                 f"bindings_hash 与重算结果不一致: {activation_snapshot_id}",
             )
         if record["activation_provenance_hash"] != (
             snapshot.activation_provenance_hash
         ):
             raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
+                "resource-activation-hash-mismatch",
                 "activation_provenance_hash 与重算结果不一致: "
                 f"{activation_snapshot_id}",
             )
@@ -393,6 +393,7 @@ class ResourceActivationReadMixin:
 
 
 __all__ = [
+    "LINEAGE_BODY_UNAVAILABLE_CODE",
     "ResourceActivationReadMixin",
     "activation_tables_ready",
     "read_activation_refs_for_turns",

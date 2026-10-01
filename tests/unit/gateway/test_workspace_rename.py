@@ -7,9 +7,8 @@ import pytest
 
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.config import GatewayConfig
-from app.gateway.main import app
+from app.gateway.main import app, get_registry
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.routes._shared import get_registry
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
 

@@ -21,13 +21,9 @@ from app.domain.itemized.resource_activation import (
 from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
     ASSEMBLY_BINDING_COLUMNS,
     BINDING_COLUMNS,
-    HASH_MISMATCH_CODE,
     LINEAGE_MANIFEST_SCHEMA,
-    SCHEMA_CONFLICT_CODE,
-    SCHEMA_INVALID_CODE,
     SCHEMA_UNAVAILABLE_CODE,
     SNAPSHOT_COLUMNS,
-    SNAPSHOT_CONFLICT_CODE,
     ResourceActivationLineageBodyStore,
     ResourceActivationStoreError,
     _detail_ref_from_key,
@@ -81,7 +77,7 @@ class ResourceActivationStore(ResourceActivationReadMixin):
         ).fetchone()
         if row is None:
             raise ResourceActivationStoreError(
-                SCHEMA_CONFLICT_CODE,
+                "resource-activation-schema-conflict",
                 "activation schema 缺少版本 marker row",
             )
         return strict_non_negative_int(
@@ -114,7 +110,7 @@ class ResourceActivationStore(ResourceActivationReadMixin):
 
         if self._read_schema_version(connection) is not None:
             raise ResourceActivationStoreError(
-                SCHEMA_CONFLICT_CODE,
+                "resource-activation-schema-conflict",
                 "activation schema 已存在，不能重复 bootstrap",
             )
         create_resource_activation_schema(connection)
@@ -161,7 +157,7 @@ class ResourceActivationStore(ResourceActivationReadMixin):
         )
         if body_ref.session_id != snapshot.owner_session_id:
             raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
+                "resource-activation-hash-mismatch",
                 "lineage detail ref 与 snapshot owner session 不一致",
             )
         return body_ref
@@ -182,12 +178,12 @@ class ResourceActivationStore(ResourceActivationReadMixin):
 
         if not connection.in_transaction:
             raise ResourceActivationStoreError(
-                SCHEMA_INVALID_CODE,
+                "resource-activation-schema-invalid",
                 "persist_snapshot 必须在既有事务内执行",
             )
         if not isinstance(lineage_detail_ref, DetailRef):
             raise ResourceActivationStoreError(
-                SCHEMA_INVALID_CODE,
+                "resource-activation-schema-invalid",
                 "lineage_detail_ref 必须是 typed DetailRef",
             )
         if snapshot.parent is not None:
@@ -343,13 +339,13 @@ class ResourceActivationStore(ResourceActivationReadMixin):
             snapshot.activation_provenance_hash,
         ):
             raise ResourceActivationStoreError(
-                SNAPSHOT_CONFLICT_CODE,
+                "resource-activation-snapshot-conflict",
                 "activation_snapshot_id 已存在但 hash 不一致: "
                 f"{snapshot.activation_snapshot_id}",
             )
         if existing[2] != digest:
             raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
+                "resource-activation-hash-mismatch",
                 "已提交 lineage digest 与重算结果不一致: "
                 f"{snapshot.activation_snapshot_id}",
             )
@@ -374,7 +370,7 @@ class ResourceActivationStore(ResourceActivationReadMixin):
 
         if not connection.in_transaction:
             raise ResourceActivationStoreError(
-                SCHEMA_INVALID_CODE,
+                "resource-activation-schema-invalid",
                 "bind_assembly 必须在既有 assembly 事务内执行",
             )
         for field, value in (
@@ -400,7 +396,7 @@ class ResourceActivationStore(ResourceActivationReadMixin):
             snapshot.activation_provenance_hash,
         ):
             raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
+                "resource-activation-hash-mismatch",
                 "assembly binding 的 activation snapshot 未提交或 hash 不一致: "
                 f"{snapshot.activation_snapshot_id}",
             )
@@ -425,7 +421,7 @@ class ResourceActivationStore(ResourceActivationReadMixin):
         if existing is not None:
             if tuple(existing) != values:
                 raise ResourceActivationStoreError(
-                    SNAPSHOT_CONFLICT_CODE,
+                    "resource-activation-snapshot-conflict",
                     f"assembly 已绑定其它 activation snapshot: {assembly_id}",
                 )
             return
@@ -440,13 +436,9 @@ class ResourceActivationStore(ResourceActivationReadMixin):
 __all__ = [
     "ASSEMBLY_BINDING_COLUMNS",
     "BINDING_COLUMNS",
-    "HASH_MISMATCH_CODE",
     "LINEAGE_MANIFEST_SCHEMA",
-    "SCHEMA_CONFLICT_CODE",
-    "SCHEMA_INVALID_CODE",
     "SCHEMA_UNAVAILABLE_CODE",
     "SNAPSHOT_COLUMNS",
-    "SNAPSHOT_CONFLICT_CODE",
     "ResourceActivationLineageBodyStore",
     "ResourceActivationStore",
     "ResourceActivationStoreError",

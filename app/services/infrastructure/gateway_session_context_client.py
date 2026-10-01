@@ -14,12 +14,12 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchResultDTO,
 )
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.gateway_client_common import (
-    MODEL_RECOVERABLE_HTTP_STATUSES,
-    GatewayTransportConnection,
-)
 
 ResponseDTO = TypeVar("ResponseDTO", bound=BaseModel)
+DEFAULT_GATEWAY_URL = "http://127.0.0.1:8014"
+_MODEL_RECOVERABLE_HTTP_STATUSES = frozenset(
+    {400, 401, 403, 404, 409, 422, 502, 503, 504}
+)
 
 
 class GatewaySessionContextClient:
@@ -32,11 +32,29 @@ class GatewaySessionContextClient:
         timeout_seconds: float | None = None,
         config_service: ConfigService | None = None,
     ) -> None:
-        self._connection = GatewayTransportConnection(
-            gateway_url=gateway_url,
-            timeout_seconds=timeout_seconds,
-            config_service=config_service,
+        self._config_service = config_service
+        self._gateway_url_from_config = gateway_url is None and config_service is not None
+        self._timeout_from_config = timeout_seconds is None and config_service is not None
+        resolved_gateway_url = (
+            gateway_url
+            if gateway_url is not None
+            else (
+                config_service.get_gateway_connection_url()
+                if config_service is not None
+                else DEFAULT_GATEWAY_URL
+            )
         )
+        resolved_timeout_seconds = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else (
+                config_service.get_gateway_connection_timeout_seconds()
+                if config_service is not None
+                else 30
+            )
+        )
+        self._gateway_url = resolved_gateway_url.rstrip("/")
+        self._timeout_seconds = resolved_timeout_seconds
 
     async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO:
         return await self._request(
@@ -90,8 +108,8 @@ class GatewaySessionContextClient:
             else None
         )
         async with httpx.AsyncClient(
-            base_url=self._connection.resolve_gateway_url(),
-            timeout=self._connection.resolve_timeout_seconds(),
+            base_url=self._resolve_gateway_url(),
+            timeout=self._resolve_timeout_seconds(),
             headers=headers,
         ) as client:
             try:
@@ -108,10 +126,20 @@ class GatewaySessionContextClient:
                 f"workspace_id={workspace_id}, method={method}, path={path}, "
                 f"status={response.status_code}, detail={response.text[:2000]}"
             )
-            if response.status_code in MODEL_RECOVERABLE_HTTP_STATUSES:
+            if response.status_code in _MODEL_RECOVERABLE_HTTP_STATUSES:
                 raise WorkspaceSessionContextAccessError(message)
             raise RuntimeError(message)
         payload = response.json()
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
             raise TypeError(f"Gateway 上下文查询响应缺少 data object: path={path}")
         return response_type.model_validate(payload["data"])
+
+    def _resolve_gateway_url(self) -> str:
+        if self._gateway_url_from_config and self._config_service is not None:
+            return self._config_service.get_gateway_connection_url().rstrip("/")
+        return self._gateway_url
+
+    def _resolve_timeout_seconds(self) -> float:
+        if self._timeout_from_config and self._config_service is not None:
+            return self._config_service.get_gateway_connection_timeout_seconds()
+        return self._timeout_seconds

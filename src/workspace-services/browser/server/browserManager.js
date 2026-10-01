@@ -13,9 +13,6 @@ import {
 } from "./browserDeviceProfiles.js";
 
 function browserId() {
-  // 非 canonical 身份：browser 后端由 Node 启动（BOXTEAM_NODE_BIN），实测
-  // Node 22 无 crypto.randomUUIDv7；本进程生成的 browser_/* 本地 id 允许继续
-  // 使用 v4，它们不是 session/thread 身份，不进入 canonical 校验器命名空间。
   return `browser_${randomUUID().replaceAll("-", "")}`;
 }
 

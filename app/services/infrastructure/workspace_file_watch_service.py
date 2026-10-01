@@ -11,8 +11,6 @@ from typing import Literal
 from watchfiles import Change, awatch
 from watchfiles.filters import DefaultFilter
 
-from app.core.shielded_cleanup import run_cleanup_shielded
-
 logger = logging.getLogger(__name__)
 
 FILE_WATCH_DEBOUNCE_MS = 200
@@ -107,12 +105,7 @@ class WorkspaceFileWatchService:
             while True:
                 yield await queue.get()
         finally:
-            # 订阅者通过 starlette StreamingResponse 驱动；客户端断开时后续 await
-            # 会被二次取消。释放必须屏蔽取消跑完，否则 watchfiles 任务与订阅队列
-            # 永久泄漏。
-            await run_cleanup_shielded(
-                lambda: self._release(roots, queue)
-            )
+            await self._release(roots, queue)
 
     async def wait_until_ready(self, roots: tuple[Path, ...]) -> None:
         """等待指定共享 watcher 已完成首次底层监听初始化。"""

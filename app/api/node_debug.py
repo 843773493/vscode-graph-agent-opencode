@@ -28,9 +28,6 @@ from app.services.infrastructure.node_debug.service import NodeDebugService
 # 映射为 404，不从 API 层重复读取 Session。
 router = APIRouter(prefix="/debug/node", tags=["node-debug"])
 
-# 各入口共用同一异常闭集，与 _configuration_error 的判定分支一一对应。
-_CONFIGURATION_ERRORS = (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError)
-
 
 def _configuration_error(error: Exception) -> HTTPException:
     if isinstance(error, FileNotFoundError):
@@ -116,7 +113,7 @@ async def get_node_debug_configuration(
         result = node_debug_service.get_configuration(
             session_id, configuration_id, thread_id
         )
-    except (*_CONFIGURATION_ERRORS, KeyError) as error:
+    except (FileNotFoundError, KeyError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -134,7 +131,7 @@ async def create_node_debug_configuration(
 ):
     try:
         result = await node_debug_service.create_configuration(payload)
-    except _CONFIGURATION_ERRORS as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -156,7 +153,7 @@ async def update_node_debug_configuration(
             configuration_id,
             payload,
         )
-    except _CONFIGURATION_ERRORS as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -179,7 +176,7 @@ async def activate_node_debug_configuration(
             configuration_id,
             thread_id=payload.thread_id,
         )
-    except _CONFIGURATION_ERRORS as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -203,7 +200,7 @@ async def delete_node_debug_configuration(
             configuration_id,
             thread_id=thread_id,
         )
-    except _CONFIGURATION_ERRORS as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -226,7 +223,7 @@ async def import_node_debug_configuration(
             thread_id=payload.thread_id,
             activate=payload.activate,
         )
-    except _CONFIGURATION_ERRORS as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -253,7 +250,7 @@ async def copy_node_debug_configuration(
             name=payload.name,
             activate=payload.activate,
         )
-    except _CONFIGURATION_ERRORS as error:
+    except (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -276,9 +273,14 @@ async def start_node_debug(
             launch_profile_name=payload.launch_profile_name,
             working_directory=payload.working_directory,
         )
-    except _CONFIGURATION_ERRORS as error:
-        # 与配置类入口共用同一映射：404/403/400/409 分支逐字一致。
-        raise _configuration_error(error) from error
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ForbiddenError as error:
+        raise forbidden_http_error(error) from error
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RuntimeError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

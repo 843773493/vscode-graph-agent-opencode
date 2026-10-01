@@ -63,15 +63,13 @@ class ContextPlanComposer:
             raise ValueError("ContextPlanComposer.compose 缺少非空 thread_id")
         contribution_refs: list[ContextRef] = []
         for contribution in self.ledger.snapshot_contributions():
-            # backing_only contribution 只作为其它显式 selection ref 的 source
-            # backing，不得自行产生一个 request-only candidate；overlay
-            # base/delta 是 overlay ref 的 manifest backing record，同样不能
-            # 变成第二个 request-only selection entry。角色只由 typed
-            # selection_role / contribution_kind 承载，metadata 中的
-            # selection_only 历史 flag 不再拥有解释权。
-            if contribution.selection_role == "backing_only" or (
-                contribution.contribution_kind in {"overlay_base", "overlay_delta"}
-            ):
+            # overlay base/delta contributions are manifest backing records for
+            # an explicit overlay ref. They must not also become a second
+            # request-only selection entry; the assembly selection carries the
+            # contribution_id binding exactly once. 角色由 typed
+            # contribution_kind 闭合集承载，metadata 中的 selection_only
+            # 历史 flag 不再拥有解释权。
+            if contribution.contribution_kind in {"overlay_base", "overlay_delta"}:
                 continue
             if contribution.content_length is None:
                 raise DetailUnavailableError(

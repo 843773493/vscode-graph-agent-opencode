@@ -10,29 +10,29 @@ from __future__ import annotations
 import sqlite3
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_store import validate_session_id
-from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.assembly.store import (
     ContextAssemblyStorageMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
+from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
     RolloutCompactionPreflightOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
+from app.services.infrastructure.rollout_context.checkpoint.context_source_control import (
     ContextSourceControlStorageMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.boundary.fork_boundary import (
+from app.services.infrastructure.rollout_context.checkpoint.fork_boundary import (
     RolloutForkBoundaryOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.boundary.operations import (
+from app.services.infrastructure.rollout_context.checkpoint.operations import (
     RolloutCheckpointOperationsMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.durable.persistence import (
+from app.services.infrastructure.rollout_context.checkpoint.persistence import (
     RolloutCheckpointPersistenceMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.projection.message_materializer import (
@@ -44,7 +44,7 @@ from app.services.infrastructure.rollout_context.checkpoint.projection.message_p
 from app.services.infrastructure.rollout_context.checkpoint.projection.message_view import (
     RolloutMessageViewMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.durable.view_anchor import (
+from app.services.infrastructure.rollout_context.checkpoint.view_anchor import (
     RolloutViewAnchorMixin,
 )
 from app.services.infrastructure.rollout_context.execution.executions import (
@@ -204,7 +204,7 @@ class RolloutStorage(
         self._path_resolver = get_session_path_resolver(self.sessions_dir)
         self._serde = serde
         self._message_codec = message_codec
-        self._locks: dict[tuple[str, str, str], _RolloutOperationLock] = {}
+        self._locks: dict[tuple[str, str], _RolloutOperationLock] = {}
         self._locks_guard = threading.Lock()
         self._active_fork_materializations: set[tuple[str, str]] = set()
         self._maintenance_owner = RolloutMaintenanceOwner(self)
@@ -223,96 +223,48 @@ class RolloutStorage(
         active = getattr(self, "_active_legacy_migrations", None)
         return isinstance(active, set) and key in active
 
-    def _lock(
-        self,
-        thread_id: str,
-        checkpoint_ns: str,
-        *,
-        session_id: str | None = None,
-    ) -> _RolloutOperationLock:
-        owner_session_id = thread_id if session_id is None else session_id
-        owner_thread_id = None if session_id is None else thread_id
+    def _lock(self, thread_id: str, checkpoint_ns: str) -> _RolloutOperationLock:
         with self._locks_guard:
-            key = (owner_session_id, owner_thread_id or "", checkpoint_ns)
+            key = (thread_id, checkpoint_ns)
             return self._locks.setdefault(
                 key,
                 _RolloutOperationLock(
-                    self.root(
-                        owner_session_id,
-                        checkpoint_ns,
-                        thread_id=owner_thread_id,
-                    ).parent
-                    / ".rollout.write.lock",
+                    self.root(thread_id, checkpoint_ns).parent / ".rollout.write.lock",
                     timeout_seconds=_ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS,
                 ),
             )
 
-    def _resolve_thread_identity(self, session_id: str, thread_id: str | None) -> str:
-        """解析 (session_id, thread_id) 的 thread 半。
+    def root(self, session_id: str, checkpoint_ns: str = "") -> Path:
+        """返回该 Session main thread 的 rollout 目录。
 
-        thread_id 未显式给出、或给成裸 main 别名 / 裸 session_id 时，必须经
-        thread catalog 显式解析该 Session 的唯一 main thread，绝不把 session_id
-        或裸 main 当作 thread identity 拼路径。
+        rollout 物理节点、index.sqlite、rollout.jsonl 以及单行 database_meta
+        （committed_jsonl_offset / source_overlay_epoch / last_control_sequence）
+        目前是 Session 级 singleton，只由 main thread 独占。OpenSpec 8.3 的
+        (session_id, thread_id) thread-qualified 定位尚未落地，因此这里只接受 main
+        语义的 session_id 并显式解析会话节点；任何真实（canonical thr_）thread id
+        都 fail closed，绝不能把 thread_id 当作 session_id 静默解析。
         """
+        del checkpoint_ns
         if not isinstance(session_id, str) or not session_id:
-            raise TypeError("rollout 定位的 session_id 必须是非空字符串")
+            raise TypeError("rollout 定位必须是 Session main thread 的非空 session_id")
         try:
             validate_session_id(session_id)
         except (TypeError, ValueError) as error:
             raise RuntimeError(
-                "rollout 定位的 session_id 不是 canonical Session 身份（OpenSpec "
-                f"8.3 要求 (session_id, thread_id)）：session_id={session_id!r}"
+                "rollout 定位按 (session_id, thread_id) 分离尚未落地（OpenSpec 8.3），"
+                "当前只支持 Session main thread 的 session_id；"
+                "拒绝把 thread_id 当作 session_id 静默解析: "
+                f"session_id={session_id!r}"
             ) from error
-        if thread_id is None or thread_id in ("", "main", session_id):
-            # 裸 main/session_id 不是 thread identity，必须经 thread catalog 取
-            # 该 Session 冻结的唯一 main thread。
-            return self._path_resolver.main_thread_id(session_id)
-        if not isinstance(thread_id, str):
-            raise TypeError("rollout 定位的 thread_id 必须是字符串")
-        return thread_id
-
-    def root(
-        self,
-        session_id: str,
-        checkpoint_ns: str = "",
-        *,
-        thread_id: str | None = None,
-    ) -> Path:
-        """返回该 SessionThread 的 rollout 目录（OpenSpec 8.3 thread-qualified）。
-
-        rollout 物理节点、index.sqlite、rollout.jsonl 与单行 database_meta 由精确
-        (session_id, thread_id) 的 thread node 独占；checkpoint_ns 不是 owner
-        维度，不参与定位。thread_id 缺省时经 thread catalog 显式解析 main thread。
-
-        TODO(8.3 main 落点)：设计冻结 main thread node 为 threads/{main_thread_id}，
-        但 SessionCatalogPathResolver.resolve_thread_node 目前仍把 main 折叠到
-        session node（R3a 过渡形态）。该解析属 app/core/session_catalog_resolver.py
-        （本切片禁改），主 thread 物理落点须待该 resolver 改造后收敛；非 main
-        durable thread 已按其自身 frozen locator 解析到独立节点。
-        """
-        resolved_thread_id = self._resolve_thread_identity(session_id, thread_id)
         return (
-            self._path_resolver.resolve_thread_node(session_id, resolved_thread_id)
-            / "rollout"
+            self._path_resolver.resolve_session_node_for_runtime(session_id) / "rollout"
         )
 
-    def index_path(
-        self,
-        session_id: str,
-        checkpoint_ns: str = "",
-        *,
-        thread_id: str | None = None,
-    ) -> Path:
-        return self.root(session_id, checkpoint_ns, thread_id=thread_id) / "index.sqlite"
+    def index_path(self, session_id: str, checkpoint_ns: str = "") -> Path:
+        return self.root(session_id, checkpoint_ns) / "index.sqlite"
 
-    def jsonl_path(
-        self,
-        session_id: str,
-        checkpoint_ns: str = "",
-        *,
-        thread_id: str | None = None,
-    ) -> Path:
-        return self.root(session_id, checkpoint_ns, thread_id=thread_id) / "rollout.jsonl"
+    def jsonl_path(self, session_id: str, checkpoint_ns: str = "") -> Path:
+        return self.root(session_id, checkpoint_ns) / "rollout.jsonl"
 
     @staticmethod
     def _safe_session_relative_path(
@@ -349,18 +301,13 @@ class RolloutStorage(
         thread_id: str,
         checkpoint_ns: str = "",
         *,
-        session_id: str | None = None,
         read_only: bool = False,
     ) -> sqlite3.Connection:
         if not isinstance(thread_id, str) or not thread_id:
             raise TypeError("rollout thread_id 必须是非空字符串")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("rollout checkpoint_ns 必须是字符串")
-        owner_session_id = thread_id if session_id is None else session_id
-        owner_thread_id = None if session_id is None else thread_id
-        index_path = self.index_path(
-            owner_session_id, checkpoint_ns, thread_id=owner_thread_id
-        )
+        index_path = self.index_path(thread_id, checkpoint_ns)
         rollout_root = index_path.parent
         if rollout_root.is_symlink():
             raise RuntimeError(f"rollout 目录不能是符号链接: {rollout_root}")
@@ -438,6 +385,9 @@ class RolloutStorage(
 
     def _file_hash(self, path: Path) -> str:
         return self._maintenance_owner._file_hash(path)
+
+    def _copy_file_fsync(self, source: Path, target: Path) -> None:
+        return self._maintenance_owner._copy_file_fsync(source, target)
 
     def _fsync_directory(self, path: Path) -> None:
         return self._maintenance_owner._fsync_directory(path)

@@ -71,13 +71,11 @@ from pathlib import Path
 from app.core.atomic_fs import (
     fsync_directory as _fsync_directory,
 )
-from app.core.key_lock_pool import KeyLockPool
 from app.core.session_catalog_store import (
     SessionCatalogStore,
     SubtreeDeleteRecord,
     validate_session_id,
 )
-from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
     NavigationTopologyGate,
@@ -88,6 +86,9 @@ __all__ = ["SessionSubtreeDeleteService", "SubtreeDeleteResult"]
 
 # 物理隔离区：sessions_root / ".deleting" / <idempotency_key> / <session_id>。
 _DELETING_DIR_NAME = ".deleting"
+
+# 控制库文件名（与 R12 迁移机器、R13 创建流一致）。
+_CONTROL_DATABASE_NAME = "session-control.sqlite"
 
 # fence 初始 generation（R12/R13 初始化值）；CAS 成功后推进为 2。
 _FENCE_INITIAL_GENERATION = 1
@@ -168,7 +169,7 @@ class SessionSubtreeDeleteService:
                 f"{session_drain_callback!r}"
             )
         self._session_drain_callback = session_drain_callback
-        self._key_locks = KeyLockPool()
+        self._key_locks: dict[str, asyncio.Lock] = {}
 
     def set_session_drain_callback(
         self,
@@ -269,8 +270,12 @@ class SessionSubtreeDeleteService:
         validate_session_id(root_node_id)
 
     def _key_lock(self, idempotency_key: str) -> asyncio.Lock:
-        """按 key 取进程内串行锁（固定分片，同 key 恒命中同一把）。"""
-        return self._key_locks.lock_for(idempotency_key)
+        """按 key create-or-get 进程内串行锁（锁随进程生命周期保留）。"""
+        lock = self._key_locks.get(idempotency_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._key_locks[idempotency_key] = lock
+        return lock
 
     # ------------------------------------------------------------------
     # 路径定位
@@ -301,27 +306,10 @@ class SessionSubtreeDeleteService:
         for session_id in sorted(record.frozen_session_locators):
             if session_id in record.drained_session_ids:
                 continue
-            target = self._deleting_dir(idempotency_key) / session_id
-            if target.exists() or target.is_symlink():
-                # 恢复窗口（上次运行已隔离、进度未记）：隔离目标存在即证
-                # 明上次的运行时/资源排空回调已成功返回（回调严格前于
-                # fence CAS，fence 前于 rename）——否则 rename 根本不会
-                # 发生。此时源目录已消失，重新回调只会对已隔离的 session
-                # 再次 resolve 而 fail closed，从而阻断崩溃恢复。跳回
-                # 调，交由 _drain_session 校验目标一致性并补记进度。
-                self._drain_session(
-                    idempotency_key=idempotency_key,
-                    session_id=session_id,
-                    storage_relative_locator=record.frozen_session_locators[
-                        session_id
-                    ],
-                )
-                self._store.record_drain_progress(idempotency_key, session_id)
-                continue
             async with self._session_gate.exclusive(session_id):
                 # 复合资源回调必须先于 fence CAS 与物理 rename。回调失败时
                 # 保留源目录与 catalog deleting 状态，供同一 record 定点
-                # 重试；不得制造"目录已删但进程/claim 未收敛"的伪成功。
+                # 重试；不得制造“目录已删但进程/claim 未收敛”的伪成功。
                 if self._session_drain_callback is not None:
                     await self._session_drain_callback(session_id)
                 self._drain_session(
@@ -391,10 +379,10 @@ class SessionSubtreeDeleteService:
         - 控制库文件缺失 → fail closed（``SessionControlStore`` 构造会
           新建空库，必须先判存在性，绝不在源位置制造假库）。
         """
-        control_path = source / CONTROL_DATABASE_NAME
+        control_path = source / _CONTROL_DATABASE_NAME
         if not control_path.is_file():
             raise RuntimeError(
-                f"{stage}: session 日期桶目录缺少 {CONTROL_DATABASE_NAME}"
+                f"{stage}: session 日期桶目录缺少 {_CONTROL_DATABASE_NAME}"
                 f"（无法执行 fence CAS，fail closed）: "
                 f"session_id={session_id}, path={control_path}"
             )
@@ -454,10 +442,10 @@ class SessionSubtreeDeleteService:
                 f"{stage}: 隔离目标不是目录（外部改动，fail closed）: "
                 f"session_id={session_id}, target={target}"
             )
-        control_path = target / CONTROL_DATABASE_NAME
+        control_path = target / _CONTROL_DATABASE_NAME
         if not control_path.is_file():
             raise RuntimeError(
-                f"{stage}: 隔离目标缺少 {CONTROL_DATABASE_NAME}"
+                f"{stage}: 隔离目标缺少 {_CONTROL_DATABASE_NAME}"
                 f"（内容不一致，fail closed）: "
                 f"session_id={session_id}, target={target}"
             )

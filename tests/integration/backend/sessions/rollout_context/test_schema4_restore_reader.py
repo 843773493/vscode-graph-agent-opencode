@@ -10,10 +10,10 @@ from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -38,7 +38,7 @@ def restore_case(
 ) -> RestoreCase:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session = f"ses_{create_uuid_hex()}"
+    session = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session)
     saver = RolloutCheckpointSaver(sessions)
     saver.accept_turn(

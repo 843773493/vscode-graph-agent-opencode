@@ -11,8 +11,6 @@ from app.domain.itemized.resource_activation.common import (
     RESOURCE_ACTIVATION_SNAPSHOT_FIELDS,
     SNAPSHOT_FIELD_ALIASES,
     ResourceActivationContractError,
-    _CODE_HASH_MISMATCH,
-    _CODE_PARENT_INVALID,
     _SNAPSHOT_KINDS,
     _non_empty_string,
     _non_negative_int,
@@ -110,23 +108,23 @@ class ResourceActivationSnapshotRef:
         if self.snapshot_kind == "turn":
             if self.parent is not None:
                 raise ResourceActivationContractError(
-                    _CODE_PARENT_INVALID,
+                    "resource-activation-parent-invalid",
                     "turn snapshot 不得携带 parent turn snapshot",
                 )
             if self.model_call_id is not None:
                 raise ResourceActivationContractError(
-                    _CODE_PARENT_INVALID,
+                    "resource-activation-parent-invalid",
                     "turn snapshot 不得携带 model_call_id",
                 )
         else:
             if not isinstance(self.parent, ResourceActivationSnapshotRef):
                 raise ResourceActivationContractError(
-                    _CODE_PARENT_INVALID,
+                    "resource-activation-parent-invalid",
                     "model_call snapshot 必须携带 typed parent turn snapshot",
                 )
             if self.parent.snapshot_kind != "turn":
                 raise ResourceActivationContractError(
-                    _CODE_PARENT_INVALID,
+                    "resource-activation-parent-invalid",
                     "model_call snapshot 的 parent 必须是 turn snapshot",
                 )
             if (
@@ -135,12 +133,12 @@ class ResourceActivationSnapshotRef:
                 or self.parent.turn_id != self.turn_id
             ):
                 raise ResourceActivationContractError(
-                    _CODE_PARENT_INVALID,
+                    "resource-activation-parent-invalid",
                     "model_call snapshot 的 owner/turn 必须与 parent 一致",
                 )
             if not isinstance(self.model_call_id, str) or not self.model_call_id:
                 raise ResourceActivationContractError(
-                    _CODE_PARENT_INVALID,
+                    "resource-activation-parent-invalid",
                     "model_call snapshot 必须携带非空 model_call_id",
                 )
         ordered = _ordered_bindings(self.bindings)
@@ -155,7 +153,7 @@ class ResourceActivationSnapshotRef:
             parent_bindings = self.parent.bindings
             if ordered[: len(parent_bindings)] != parent_bindings:
                 raise ResourceActivationContractError(
-                    _CODE_PARENT_INVALID,
+                    "resource-activation-parent-invalid",
                     "model_call snapshot 必须逐字节复用 parent turn-bound binding 前缀",
                 )
             if any(
@@ -242,17 +240,17 @@ class ResourceActivationSnapshotRef:
         if snapshot_kind == "model_call":
             if not isinstance(parent, ResourceActivationSnapshotRef):
                 raise ResourceActivationContractError(
-                    _CODE_PARENT_INVALID,
+                    "resource-activation-parent-invalid",
                     "恢复 model_call snapshot 必须提供 typed parent turn snapshot",
                 )
             if declared_parent_id != parent.activation_snapshot_id:
                 raise ResourceActivationContractError(
-                    _CODE_PARENT_INVALID,
+                    "resource-activation-parent-invalid",
                     "parent_turn_snapshot_id 与提供的 parent relation 不一致",
                 )
         elif declared_parent_id is not None:
             raise ResourceActivationContractError(
-                _CODE_PARENT_INVALID,
+                "resource-activation-parent-invalid",
                 "turn snapshot 的 parent_turn_snapshot_id 必须是 null",
             )
         restored = cls(
@@ -274,7 +272,8 @@ class ResourceActivationSnapshotRef:
         for name in ("bindings_hash", "activation_provenance_hash"):
             if value[name] != getattr(restored, name):
                 raise ResourceActivationContractError(
-                    _CODE_HASH_MISMATCH,
+                    "resource-activation-hash-mismatch",
                     f"恢复的 {name} 与重算结果不一致",
                 )
         return restored
+

@@ -32,16 +32,11 @@ export function readComposerDraft(scopeKey: string | null): string {
   return scopeKey ? readComposerDrafts()[scopeKey] ?? "" : "";
 }
 
-/** 该草稿是否超出持久化上限。超限时界面仍须持有内容，只是不写盘。 */
-export function composerDraftExceedsLimit(content: string): boolean {
-  return content.length > MAX_COMPOSER_DRAFT_LENGTH;
-}
-
 export function writeComposerDraft(scopeKey: string | null, content: string): void {
   if (typeof window === "undefined" || !scopeKey) {
     return;
   }
-  if (composerDraftExceedsLimit(content)) {
+  if (content.length > MAX_COMPOSER_DRAFT_LENGTH) {
     throw new Error(`Composer 草稿长度不能超过 ${MAX_COMPOSER_DRAFT_LENGTH} 个字符`);
   }
   const drafts = readComposerDrafts();

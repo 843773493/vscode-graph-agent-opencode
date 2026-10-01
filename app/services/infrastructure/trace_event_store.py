@@ -7,6 +7,8 @@ from collections import defaultdict
 from collections.abc import AsyncGenerator, Iterator
 from pathlib import Path
 
+from pydantic import RootModel
+
 from app.abstractions.trace_event_sink import TraceAppendReceipt
 from app.abstractions.turn_history import (
     TurnBootstrapBatch,
@@ -22,7 +24,6 @@ from app.services.infrastructure.turn_history.trace_cursor import (
     offset_after_event,
 )
 from app.services.infrastructure.turn_history.trace_index import TraceTurnIndex
-from app.services.infrastructure.turn_history.trace_index_compaction import _AnyEvent
 from app.services.infrastructure.turn_history.trace_index_rebuild import (
     rebuild_trace_turn_index,
 )
@@ -38,6 +39,10 @@ from app.services.infrastructure.turn_history.trace_writer import (
 )
 
 __all__ = ["TraceCursorGoneError", "TraceEventStore"]
+
+
+class _AnyEvent(RootModel[Event]):
+    pass
 
 
 class TraceEventStore:

@@ -25,7 +25,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 
-_OWNER = ContextSourceOwnerKey(session_id="ses_00000000000070008000000000000001", thread_id="main")
+_OWNER = ContextSourceOwnerKey(session_id="ses_00000000000040008000000000000001", thread_id="main")
 _REVISION = "sha256:jcs:v1:" + "a" * 64
 _REVISION_NEXT = "sha256:jcs:v1:" + "b" * 64
 

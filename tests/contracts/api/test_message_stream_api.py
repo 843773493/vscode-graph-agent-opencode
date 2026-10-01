@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import shutil
 from pathlib import Path
@@ -26,7 +25,7 @@ def message_stream_api() -> tuple[FastAPI, MessageStreamStore, str, str]:
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     # API 路径参数强制 canonical session_id（OpenSpec 2.1）。
-    session_id = "ses_019bef80066f7038ae8e88ccb2e5e2ea"
+    session_id = "ses_12345678123446788234567812345678"
     turn_id = "job_message_stream_api"
     seed_catalog_session_bundle(sessions_root, session_id)
 
@@ -351,59 +350,3 @@ async def test_message_stream_replay_after_cursor_and_unknown_stream_error(
     assert replay_body["data"][-1]["type"] == "stream.interrupted"
     assert unknown.status_code == 404
     assert missing_snapshot.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_message_stream_cursor_beyond_high_water_is_rejected_not_hung(
-    message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
-) -> None:
-    """越界游标必须在两条续播入口上都 fail-closed，且不能把连接永久挂住。
-
-    回归：``after_seq`` 越过服务端最高事件序号时，``list_events`` 静默返回空页，
-    SSE 生成器既无重放事件、流又非终态，于是永久阻塞在订阅队列上——HTTP 连接
-    既不返回也不结束。这里冻结修复后的契约：SSE 与 events 两条入口都返回 400，
-    并带 ``message_stream_cursor_ahead`` 诊断码。
-    """
-    api, store, session_id, turn_id = message_stream_api
-    writer = await store.open(session_id=session_id, turn_id=turn_id)
-    await writer.commit(
-        "block.started",
-        {"block_id": "block_1", "block_index": 0, "carrier_type": "text"},
-        block_id="block_1",
-    )
-    high_water_seq = int((await store.get_state(writer.turn_stream_id))["snapshot_seq"])
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=api),
-        base_url="http://testserver",
-    ) as client:
-        # 修复前该请求会挂死：加超时把「永久挂起」显式落成测试失败而不是卡住整套。
-        sse = await asyncio.wait_for(
-            client.get(
-                f"/api/v1/sessions/{session_id}/turns/{turn_id}/message-stream",
-                params={"after_seq": high_water_seq + 1},
-                headers=_headers("req_ahead_sse"),
-            ),
-            timeout=5.0,
-        )
-        replay = await client.get(
-            f"/api/v1/sessions/{session_id}/turns/{turn_id}/message-stream/events",
-            params={"after_seq": high_water_seq + 1},
-            headers=_headers("req_ahead_events"),
-        )
-
-    assert sse.status_code == 400
-    assert sse.headers["x-request-id"] == "req_ahead_sse"
-    assert sse.json()["detail"]["code"] == "message_stream_cursor_ahead"
-    assert sse.json()["detail"]["high_water_seq"] == high_water_seq
-    assert replay.status_code == 400
-    assert replay.json()["detail"]["code"] == "message_stream_cursor_ahead"
-    # 恰好追平的游标仍是合法空页。
-    assert (
-        await store.list_events(
-            session_id=session_id,
-            turn_stream_id=writer.turn_stream_id,
-            after_seq=high_water_seq,
-        )
-        == []
-    )

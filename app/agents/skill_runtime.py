@@ -23,7 +23,6 @@ from app.agents.skill_frontmatter import parse_skill_frontmatter
 from app.core.distribution_identity import load_distribution_id
 from app.core.env import get_project_root
 from app.core.path_utils import get_boxteam_home, get_workspace_root
-from app.core.trace_middleware import require_current_gateway_id
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.resource_platform.derivation.types import (
@@ -500,21 +499,18 @@ def _publish_skill_facet(
 
 
 def _layer_scope_identity(
-    layer: str,
-    *,
-    workspace_id: str,
+    layer: str, *, workspace_id: str
 ) -> tuple[str, ResolutionContext | None]:
     """按真实身份推导 layer（= VRN scope）的 scope_id 与可校验的 principal。
 
-    ``workspace``/``inline``/``gateway`` 的稳定身份都由真实来源推导，返回可用于
-    ``require_scope_binding`` 的 ResolutionContext：
+    ``workspace``/``inline`` 的稳定身份在本进程内真实可用，返回可用于
+    ``require_scope_binding`` 的 ResolutionContext。
 
-    - ``workspace`` → 真实 workspace_id；
-    - ``inline`` → manifest 推导的真实 distribution_id；
-    - ``gateway`` → 请求级注入的真实 gateway_id（``X-BoxTeam-Gateway-Id``）。
-
-    ``gateway`` 缺失或非法时一律 fail-closed 显式拒绝，MUST NOT 回退 ``local``
-    或任何虚假默认值。
+    TODO: ``gateway`` scope 的 scope_id 必须是真实 gateway_id，其权威来源是
+    Gateway 按请求注入的 ``X-BoxTeam-Gateway-Id``；skill_runtime 的调用点拿不到
+    请求上下文，强行引入请求级注入需连锁改造全部 router，属后续切片。此处在真实
+    gateway_id 接入前沿用既有字面量，不伪造 principal（返回 None 跳过绑定校验），
+    绝不代表已真正显式化，跨 gateway 寻址在接入前不成立。
     """
     if layer == "workspace":
         return workspace_id, ResolutionContext(workspace_id=workspace_id)
@@ -523,12 +519,7 @@ def _layer_scope_identity(
         return distribution_id, ResolutionContext(
             workspace_id=workspace_id, distribution_id=distribution_id
         )
-    if layer == "gateway":
-        gateway_id = require_current_gateway_id("gateway scope 的 scope_id")
-        return gateway_id, ResolutionContext(
-            workspace_id=workspace_id, gateway_id=gateway_id
-        )
-    raise RuntimeError(f"未知 Skill scope/layer: {layer!r}")
+    return "local", None
 
 
 def _layer_skill_display_uri(
@@ -601,11 +592,6 @@ def build_workspace_skill_catalog(
                 raise RuntimeError(f"工作区 skill 路径不是目录: {workspace_skills_root}")
             layer_files = _scan_layer_skill_files(layer=layer, root=workspace_skills_root)
         scanned[layer] = layer_files
-        # gateway 层条目必须绑定真实 gateway_id（请求级注入）才能推导 scope_id；
-        # 存在条目却无身份即 fail-closed，MUST NOT 回退字面量 ``local``。空层不需要
-        # 身份，也不物化任何 URI。
-        if layer == "gateway" and not layer_files:
-            continue
         # layer 名与 VRN scope 名自此逐字一致（inline/gateway/workspace）；
         # 恒等映射直接使用 layer 名，不再保留改名 shim。
         scope_id, context = _layer_scope_identity(

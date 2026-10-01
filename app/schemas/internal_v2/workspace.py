@@ -37,7 +37,6 @@ class WorkspaceIndexRebuildDTO(BaseModel):
 
 WorkspaceFileKind = Literal["file", "directory", "symlink", "other"]
 WorkspaceFileScope = Literal["workspace", "filesystem"]
-FileTreeShortcutSource = Literal["session", "workspace"]
 
 
 class WorkspaceFileNodeDTO(BaseModel):
@@ -118,7 +117,7 @@ class FileTreeShortcutRequest(BaseModel):
 class FileTreeShortcutDTO(BaseModel):
     path: str
     label: str
-    source: FileTreeShortcutSource
+    source: Literal["session", "workspace"]
 
 
 class SessionFileTreeSettingsDTO(BaseModel):

@@ -154,18 +154,16 @@ export function formatSessionInformationDump(
   return JSON.stringify(information, null, 2);
 }
 
-// 与后端唯一 canonical 验证器（app/core/session_catalog_store.py 的
-// validate_session_id）同口径：ses_ + 32 位小写 hex + UUIDv7 version/variant
-// 位。会话节点与文件夹节点在后端同表同形态（create_folder 亦调
-// validate_session_id），因此本函数同时是二者的单一口径校验器。
+// 与后端唯一 canonical 验证器同口径（OpenSpec 2.1：ses_ + 32 位小写
+// hex + UUIDv4 version/variant 位），不保留宽松旧形态。
 const SESSION_ID_PATTERN = /^ses_[0-9a-f]{32}$/;
 
-export function isSessionId(value: unknown): value is string {
+function isSessionId(value: unknown): value is string {
   if (typeof value !== "string" || !SESSION_ID_PATTERN.test(value)) {
     return false;
   }
   const payload = value.slice(4);
-  return payload[12] === "7" && "89ab".includes(payload[16] ?? "");
+  return payload[12] === "4" && "89ab".includes(payload[16] ?? "");
 }
 
 export function extractSessionIdFromClipboardText(text: string): string {

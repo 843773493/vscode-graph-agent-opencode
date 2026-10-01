@@ -82,7 +82,7 @@ def _observer(
 
 def _runtime(process: _FakeProcess | None = None) -> NodeDebugRuntime:
     return NodeDebugRuntime(
-        session_id="ses_019bf141964978208ce9100774167f90",
+        session_id="ses_00000000000000000000000000000001",
         thread_id="main",
         configuration_id="dbgcfg_" + "1" * 32,
         workspace_root=Path("/tmp"),

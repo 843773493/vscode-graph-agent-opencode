@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import ast
-import sys
-import types
+import uuid
 from pathlib import Path
 from typing import get_args
-
-import pytest
 
 from app.core.identifier import (
     IdentifierPrefix,
@@ -15,50 +12,27 @@ from app.core.identifier import (
 )
 
 
-def test_create_uuid_hex_has_uuidv7_profile():
+def test_create_uuid_hex_preserves_complete_uuid():
     value = create_uuid_hex()
 
     assert len(value) == 32
     assert value == value.lower()
-    # UUIDv7 位 profile：第 13 个 hex 为 7，第 17 个 hex 属于 variant 8|9|a|b。
-    assert value[12] == "7"
-    assert value[16] in "89ab"
+    assert uuid.UUID(hex=value).version == 4
 
 
-def test_create_prefixed_id_has_uuidv7_profile():
+def test_create_prefixed_id_preserves_complete_uuid():
     value = create_prefixed_id("evt")
     prefix, raw_uuid = value.split("_", maxsplit=1)
 
     assert prefix == "evt"
     assert len(raw_uuid) == 32
-    assert raw_uuid[12] == "7"
-    assert raw_uuid[16] in "89ab"
+    assert uuid.UUID(hex=raw_uuid).version == 4
 
 
 def test_generated_ids_are_unique():
     values = {create_prefixed_id("msg") for _ in range(10_000)}
 
     assert len(values) == 10_000
-
-
-def test_uuid_utils_missing_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """uuid_utils 导入失败时 MUST 抛错，MUST NOT 回退 uuid.uuid4()。"""
-    # sys.modules 中置 None 会让 ``import uuid_utils`` 抛 ImportError。
-    monkeypatch.setitem(sys.modules, "uuid_utils", None)
-
-    with pytest.raises(RuntimeError, match="uuid-utils"):
-        create_uuid_hex()
-    with pytest.raises(RuntimeError, match="uuid-utils"):
-        create_prefixed_id("ses")
-
-
-def test_uuid7_unavailable_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """uuid_utils 缺 uuid7 时 MUST 抛错，MUST NOT 回退 uuid.uuid4()。"""
-    fake = types.SimpleNamespace(__version__="9.9.9")
-    monkeypatch.setitem(sys.modules, "uuid_utils", fake)
-
-    with pytest.raises(RuntimeError, match="uuid7"):
-        create_uuid_hex()
 
 
 def _literal_prefixes_used_by_callers() -> set[str]:

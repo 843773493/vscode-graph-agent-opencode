@@ -6,7 +6,6 @@ import subprocess
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 
 import httpx
 import pytest
@@ -19,17 +18,15 @@ from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
 from app.gateway.federation import (
     FEDERATION_PROTOCOL_VERSION,
-    PAIRING_SSH_TIMEOUT_SECONDS,
     RemoteGatewayConnection,
     build_projected_workspace_id,
     discover_remote_gateway,
     obtain_pairing_credential_over_ssh,
     start_remote_gateway_tunnel,
 )
-from app.gateway.federation.errors import FederationError
+from app.gateway.main import _inbound_gateway_access_list
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.remote_gateway import reconcile_configured_remote_gateways
-from app.gateway.routes.workspaces_managed import _inbound_gateway_access_list
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import _proxy_headers
@@ -1149,32 +1146,3 @@ async def test_remote_restart_is_delegated_with_request_id(
         "X-BoxTeam-Federation-Token": credential.token,
         "X-Request-ID": "req_federation",
     }
-
-
-def test_pairing_ssh_has_bounded_timeout_and_stable_error_code(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """SSH 配对必须带有限超时，超时收敛到既有联邦稳定错误码。"""
-
-    captured: dict[str, object] = {}
-
-    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        captured["command"] = command
-        captured["timeout"] = kwargs.get("timeout")
-        raise subprocess.TimeoutExpired(command, cast(float, kwargs.get("timeout")))
-
-    monkeypatch.setattr("app.gateway.federation.subprocess.run", fake_run)
-
-    with pytest.raises(FederationError) as error:
-        obtain_pairing_credential_over_ssh(
-            connection_id="rgw_test",
-            local_gateway_id="gateway_local",
-            host="remote.example.com",
-            port=22,
-            username="developer",
-            private_key_path=None,
-            ssh_config_host="developer-server",
-        )
-
-    assert captured["timeout"] == PAIRING_SSH_TIMEOUT_SECONDS
-    assert error.value.code == "federation-deadline-exceeded"

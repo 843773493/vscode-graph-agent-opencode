@@ -7,6 +7,7 @@ from app.core.job_event_bus import EventType
 from app.schemas.internal_v2.session import SessionUpdateRequest
 from app.services.business.session_service import SessionService
 
+DEFAULT_SESSION_TITLES = {"", "新会话", "未命名"}
 TITLE_MAX_WORDS = 8
 TITLE_MAX_CHARS = 80
 TITLE_TOKEN_RE = re.compile(
@@ -59,7 +60,7 @@ class SessionTitleService:
         session = await self._session_service.get(session_id)
         if session.title_source != "default":
             return None
-        if session.title.strip() not in SessionService.DEFAULT_SESSION_TITLES:
+        if session.title.strip() not in DEFAULT_SESSION_TITLES:
             return None
 
         title = build_session_title_from_first_message(user_message)

@@ -5,7 +5,7 @@ import { chromium } from "playwright";
 const CASES = [
   {
     name: "text_tool",
-    sessionId: "ses_019bffb710847f1580274168f382017c",
+    sessionId: "ses_b1a2c3d4e5f6478899aabbccddeeff01",
     turnId: "boundary-turn-0001",
     apiStatus: "completed",
     finalText: "README 已读取；普通文本、tool_call 和工具结果按顺序展示。",
@@ -13,7 +13,7 @@ const CASES = [
   },
   {
     name: "partial_tool_call",
-    sessionId: "ses_019bedbff9437eb386a2865fa2efe969",
+    sessionId: "ses_b1a2c3d4e5f6478899aabbccddeeff02",
     turnId: "boundary-turn-0002",
     apiStatus: "cancelled",
     finalText: "我准备读取配置文件。",
@@ -23,7 +23,7 @@ const CASES = [
   },
   {
     name: "unknown_tool_outcome",
-    sessionId: "ses_019c03df59c07e478d27288d2fbfcb0c",
+    sessionId: "ses_b1a2c3d4e5f6478899aabbccddeeff03",
     turnId: "boundary-turn-0003",
     apiStatus: "failed",
     finalText: "我已经启动大输出工具，正在等待结果。",
@@ -32,7 +32,7 @@ const CASES = [
   },
   {
     name: "partial_text",
-    sessionId: "ses_019bc946015e7af186976d28ae4385b2",
+    sessionId: "ses_b1a2c3d4e5f6478899aabbccddeeff04",
     turnId: "boundary-turn-0004",
     apiStatus: "cancelled",
     finalText: "我已经开始分析这个问题，但回答在这里被用户中断……",
@@ -41,7 +41,7 @@ const CASES = [
   },
   {
     name: "tool_markup_text",
-    sessionId: "ses_019c45519e4f7bc2909a7ff7c62c6484",
+    sessionId: "ses_b1a2c3d4e5f6478899aabbccddeeff05",
     turnId: "boundary-turn-0005",
     apiStatus: "completed",
     finalText: "这是普通消息文本，不是实际工具调用。",
@@ -49,7 +49,7 @@ const CASES = [
   },
   {
     name: "parallel_tool_calls",
-    sessionId: "ses_019bf66c50c976818addc7e21550dcbe",
+    sessionId: "ses_b1a2c3d4e5f6478899aabbccddeeff06",
     turnId: "boundary-turn-0006",
     apiStatus: "completed",
     finalText: "两个工具都已返回，结果已合并到最终答复。",

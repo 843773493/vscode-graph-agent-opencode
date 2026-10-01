@@ -38,91 +38,6 @@ _PAYLOAD_FIELDS: dict[str, str] = {
 }
 
 
-# 公共信封身份字段闭集：encode 侧写入与 decode 侧还原共用同一来源。
-_IDENTITY_FIELDS = (
-    "model_call_id",
-    "block_id",
-    "tool_execution_id",
-    "workspace_id",
-    "tool_call_id",
-    "tool_invocation_id",
-    "tool_attempt_id",
-)
-
-# encode 边界：内部小写枚举 -> 公共 protobuf 枚举名。
-_ENUM_MAPS: dict[str, dict[str, str]] = {
-    "status": {
-        "open": "STREAM_STATUS_OPEN",
-        "interrupting": "STREAM_STATUS_INTERRUPTING",
-        "completed": "STREAM_STATUS_COMPLETED",
-        "interrupted": "STREAM_STATUS_INTERRUPTED",
-        "failed": "STREAM_STATUS_FAILED",
-    },
-    "outcome": {
-        "accepted": "MODEL_CALL_OUTCOME_ACCEPTED",
-        "validation_failed": "MODEL_CALL_OUTCOME_VALIDATION_FAILED",
-        "upstream_error": "MODEL_CALL_OUTCOME_UPSTREAM_ERROR",
-        "execution_lost": "MODEL_CALL_OUTCOME_EXECUTION_LOST",
-        "user_interrupt": "MODEL_CALL_OUTCOME_USER_INTERRUPT",
-    },
-    "status_tool": {
-        "running": "TOOL_EXECUTION_STATUS_RUNNING",
-        "completed": "TOOL_EXECUTION_STATUS_COMPLETED",
-        # TODO: 仅为已有事件日志提供读取兼容；新写入统一使用 completed。
-        "succeeded": "TOOL_EXECUTION_STATUS_COMPLETED",
-        "failed": "TOOL_EXECUTION_STATUS_FAILED",
-    },
-    "outcome_tool": {
-        "success": "TOOL_EXECUTION_OUTCOME_SUCCESS",
-        "provider_error": "TOOL_EXECUTION_OUTCOME_PROVIDER_ERROR",
-        "execution_lost": "TOOL_EXECUTION_OUTCOME_EXECUTION_LOST",
-        "outcome_unknown": "TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN",
-    },
-    "activity_status": {
-        "running": "ACTIVITY_STATUS_RUNNING",
-        "waiting": "ACTIVITY_STATUS_WAITING",
-        "stopping": "ACTIVITY_STATUS_STOPPING",
-        "completed": "ACTIVITY_STATUS_COMPLETED",
-        "failed": "ACTIVITY_STATUS_FAILED",
-        "unknown": "ACTIVITY_STATUS_UNKNOWN",
-    },
-    "activity_outcome": {
-        "success": "ACTIVITY_OUTCOME_SUCCESS",
-        "user_interrupt": "ACTIVITY_OUTCOME_USER_INTERRUPT",
-        "provider_error": "ACTIVITY_OUTCOME_PROVIDER_ERROR",
-        "execution_lost": "ACTIVITY_OUTCOME_EXECUTION_LOST",
-        "outcome_unknown": "ACTIVITY_OUTCOME_OUTCOME_UNKNOWN",
-    },
-    "operation": {
-        "append": "BLOCK_DELTA_OPERATION_APPEND",
-        "item_upsert": "BLOCK_DELTA_OPERATION_ITEM_UPSERT",
-        "item_patch": "BLOCK_DELTA_OPERATION_ITEM_PATCH",
-        "redacted": "BLOCK_DELTA_OPERATION_REDACTED",
-    },
-}
-
-# decode 边界：公共 protobuf 枚举名 -> 内部小写枚举。除 tool_status 外均为
-# _ENUM_MAPS 的反向投影，保持单一来源。
-_DENORM_MAPS: dict[str, dict[str, str]] = {
-    "status": {enum: name for name, enum in _ENUM_MAPS["status"].items()},
-    "outcome": {enum: name for name, enum in _ENUM_MAPS["outcome"].items()},
-    "operation": {enum: name for name, enum in _ENUM_MAPS["operation"].items()},
-    # succeeded 与 completed 在 encode 侧同值，反向投影不可逆，这里显式声明。
-    "tool_status": {
-        "TOOL_EXECUTION_STATUS_RUNNING": "running",
-        "TOOL_EXECUTION_STATUS_COMPLETED": "completed",
-        "TOOL_EXECUTION_STATUS_FAILED": "failed",
-    },
-    "tool_outcome": {enum: name for name, enum in _ENUM_MAPS["outcome_tool"].items()},
-    "activity_status": {
-        enum: name for name, enum in _ENUM_MAPS["activity_status"].items()
-    },
-    "activity_outcome": {
-        enum: name for name, enum in _ENUM_MAPS["activity_outcome"].items()
-    },
-}
-
-
 def message_stream_to_proto(
     value: Mapping[str, Any],
 ) -> message_stream_pb2.MessageStreamEvent:
@@ -148,7 +63,15 @@ def message_stream_to_proto(
 
         parsed = datetime.fromisoformat(emitted_at)
         event.emitted_at.CopyFrom(timestamp_from_datetime(parsed))
-    for field_name in (*_IDENTITY_FIELDS, "job_id"):
+    for field_name in (
+        "model_call_id",
+        "block_id",
+        "tool_execution_id",
+        "workspace_id",
+        "tool_call_id",
+        "tool_invocation_id",
+        "tool_attempt_id",
+    ):
         field_value = value.get(field_name)
         if field_value is not None:
             if not isinstance(field_value, str) or not field_value:
@@ -162,7 +85,15 @@ def message_stream_to_proto(
     payload = value.get("payload")
     if not isinstance(payload, Mapping):
         raise TypeError(f"消息流 payload 必须是对象: type={event.type}")
-    for field_name in _IDENTITY_FIELDS:
+    for field_name in (
+        "model_call_id",
+        "block_id",
+        "tool_execution_id",
+        "workspace_id",
+        "tool_call_id",
+        "tool_invocation_id",
+        "tool_attempt_id",
+    ):
         envelope_value = value.get(field_name)
         payload_value = payload.get(field_name)
         for field_value, source in (
@@ -222,7 +153,16 @@ def message_stream_to_json(
         result["emitted_at"] = value.emitted_at.ToDatetime().isoformat().replace(
             "+00:00", "Z"
         )
-    for field_name in (*_IDENTITY_FIELDS, "job_id"):
+    for field_name in (
+        "model_call_id",
+        "block_id",
+        "tool_execution_id",
+        "workspace_id",
+        "tool_call_id",
+        "tool_invocation_id",
+        "tool_attempt_id",
+        "job_id",
+    ):
         if value.HasField(field_name):
             result[field_name] = getattr(value, field_name)
     return result
@@ -244,7 +184,56 @@ def _required_int(value: Mapping[str, Any], key: str) -> int:
 
 def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     normalized = copy.deepcopy(dict(payload))
-    enum_maps = _ENUM_MAPS
+    enum_maps: dict[str, dict[str, str]] = {
+        "status": {
+            "open": "STREAM_STATUS_OPEN",
+            "interrupting": "STREAM_STATUS_INTERRUPTING",
+            "completed": "STREAM_STATUS_COMPLETED",
+            "interrupted": "STREAM_STATUS_INTERRUPTED",
+            "failed": "STREAM_STATUS_FAILED",
+        },
+        "outcome": {
+            "accepted": "MODEL_CALL_OUTCOME_ACCEPTED",
+            "validation_failed": "MODEL_CALL_OUTCOME_VALIDATION_FAILED",
+            "upstream_error": "MODEL_CALL_OUTCOME_UPSTREAM_ERROR",
+            "execution_lost": "MODEL_CALL_OUTCOME_EXECUTION_LOST",
+            "user_interrupt": "MODEL_CALL_OUTCOME_USER_INTERRUPT",
+        },
+        "status_tool": {
+            "running": "TOOL_EXECUTION_STATUS_RUNNING",
+            "completed": "TOOL_EXECUTION_STATUS_COMPLETED",
+            # TODO: 仅为已有事件日志提供读取兼容；新写入统一使用 completed。
+            "succeeded": "TOOL_EXECUTION_STATUS_COMPLETED",
+            "failed": "TOOL_EXECUTION_STATUS_FAILED",
+        },
+        "outcome_tool": {
+            "success": "TOOL_EXECUTION_OUTCOME_SUCCESS",
+            "provider_error": "TOOL_EXECUTION_OUTCOME_PROVIDER_ERROR",
+            "execution_lost": "TOOL_EXECUTION_OUTCOME_EXECUTION_LOST",
+            "outcome_unknown": "TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN",
+        },
+        "activity_status": {
+            "running": "ACTIVITY_STATUS_RUNNING",
+            "waiting": "ACTIVITY_STATUS_WAITING",
+            "stopping": "ACTIVITY_STATUS_STOPPING",
+            "completed": "ACTIVITY_STATUS_COMPLETED",
+            "failed": "ACTIVITY_STATUS_FAILED",
+            "unknown": "ACTIVITY_STATUS_UNKNOWN",
+        },
+        "activity_outcome": {
+            "success": "ACTIVITY_OUTCOME_SUCCESS",
+            "user_interrupt": "ACTIVITY_OUTCOME_USER_INTERRUPT",
+            "provider_error": "ACTIVITY_OUTCOME_PROVIDER_ERROR",
+            "execution_lost": "ACTIVITY_OUTCOME_EXECUTION_LOST",
+            "outcome_unknown": "ACTIVITY_OUTCOME_OUTCOME_UNKNOWN",
+        },
+        "operation": {
+            "append": "BLOCK_DELTA_OPERATION_APPEND",
+            "item_upsert": "BLOCK_DELTA_OPERATION_ITEM_UPSERT",
+            "item_patch": "BLOCK_DELTA_OPERATION_ITEM_PATCH",
+            "redacted": "BLOCK_DELTA_OPERATION_REDACTED",
+        },
+    }
     if (
         event_type in {"stream.opened", "stream.completed", "stream.interrupted"}
         and isinstance(normalized.get("status"), str)
@@ -406,11 +395,37 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
 
 
 def _denormalize_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
-    status_map = _DENORM_MAPS["status"]
-    outcome_map = _DENORM_MAPS["outcome"]
-    operation_map = _DENORM_MAPS["operation"]
-    tool_status_map = _DENORM_MAPS["tool_status"]
-    tool_outcome_map = _DENORM_MAPS["tool_outcome"]
+    status_map = {
+        "STREAM_STATUS_OPEN": "open",
+        "STREAM_STATUS_INTERRUPTING": "interrupting",
+        "STREAM_STATUS_COMPLETED": "completed",
+        "STREAM_STATUS_INTERRUPTED": "interrupted",
+        "STREAM_STATUS_FAILED": "failed",
+    }
+    outcome_map = {
+        "MODEL_CALL_OUTCOME_ACCEPTED": "accepted",
+        "MODEL_CALL_OUTCOME_VALIDATION_FAILED": "validation_failed",
+        "MODEL_CALL_OUTCOME_UPSTREAM_ERROR": "upstream_error",
+        "MODEL_CALL_OUTCOME_EXECUTION_LOST": "execution_lost",
+        "MODEL_CALL_OUTCOME_USER_INTERRUPT": "user_interrupt",
+    }
+    operation_map = {
+        "BLOCK_DELTA_OPERATION_APPEND": "append",
+        "BLOCK_DELTA_OPERATION_ITEM_UPSERT": "item_upsert",
+        "BLOCK_DELTA_OPERATION_ITEM_PATCH": "item_patch",
+        "BLOCK_DELTA_OPERATION_REDACTED": "redacted",
+    }
+    tool_status_map = {
+        "TOOL_EXECUTION_STATUS_RUNNING": "running",
+        "TOOL_EXECUTION_STATUS_COMPLETED": "completed",
+        "TOOL_EXECUTION_STATUS_FAILED": "failed",
+    }
+    tool_outcome_map = {
+        "TOOL_EXECUTION_OUTCOME_SUCCESS": "success",
+        "TOOL_EXECUTION_OUTCOME_PROVIDER_ERROR": "provider_error",
+        "TOOL_EXECUTION_OUTCOME_EXECUTION_LOST": "execution_lost",
+        "TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN": "outcome_unknown",
+    }
     if (
         event_type in {"stream.opened", "stream.completed", "stream.interrupted"}
         and isinstance(payload.get("status"), str)
@@ -432,8 +447,21 @@ def _denormalize_payload(event_type: str, payload: dict[str, Any]) -> dict[str, 
     if event_type == "tool.completed" and isinstance(payload.get("outcome"), str):
         payload["outcome"] = tool_outcome_map.get(payload["outcome"], payload["outcome"])
     if event_type.startswith("activity."):
-        activity_status_map = _DENORM_MAPS["activity_status"]
-        activity_outcome_map = _DENORM_MAPS["activity_outcome"]
+        activity_status_map = {
+            "ACTIVITY_STATUS_RUNNING": "running",
+            "ACTIVITY_STATUS_WAITING": "waiting",
+            "ACTIVITY_STATUS_STOPPING": "stopping",
+            "ACTIVITY_STATUS_COMPLETED": "completed",
+            "ACTIVITY_STATUS_FAILED": "failed",
+            "ACTIVITY_STATUS_UNKNOWN": "unknown",
+        }
+        activity_outcome_map = {
+            "ACTIVITY_OUTCOME_SUCCESS": "success",
+            "ACTIVITY_OUTCOME_USER_INTERRUPT": "user_interrupt",
+            "ACTIVITY_OUTCOME_PROVIDER_ERROR": "provider_error",
+            "ACTIVITY_OUTCOME_EXECUTION_LOST": "execution_lost",
+            "ACTIVITY_OUTCOME_OUTCOME_UNKNOWN": "outcome_unknown",
+        }
         if isinstance(payload.get("status"), str):
             payload["status"] = activity_status_map.get(
                 payload["status"], payload["status"]
@@ -446,11 +474,39 @@ def _denormalize_payload(event_type: str, payload: dict[str, Any]) -> dict[str, 
 
 
 def _denormalize_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
-    status_map = _DENORM_MAPS["status"]
-    tool_status_map = _DENORM_MAPS["tool_status"]
-    activity_status_map = _DENORM_MAPS["activity_status"]
-    activity_outcome_map = _DENORM_MAPS["activity_outcome"]
-    tool_outcome_map = _DENORM_MAPS["tool_outcome"]
+    status_map = {
+        "STREAM_STATUS_OPEN": "open",
+        "STREAM_STATUS_INTERRUPTING": "interrupting",
+        "STREAM_STATUS_COMPLETED": "completed",
+        "STREAM_STATUS_INTERRUPTED": "interrupted",
+        "STREAM_STATUS_FAILED": "failed",
+    }
+    tool_status_map = {
+        "TOOL_EXECUTION_STATUS_RUNNING": "running",
+        "TOOL_EXECUTION_STATUS_COMPLETED": "completed",
+        "TOOL_EXECUTION_STATUS_FAILED": "failed",
+    }
+    activity_status_map = {
+        "ACTIVITY_STATUS_RUNNING": "running",
+        "ACTIVITY_STATUS_WAITING": "waiting",
+        "ACTIVITY_STATUS_STOPPING": "stopping",
+        "ACTIVITY_STATUS_COMPLETED": "completed",
+        "ACTIVITY_STATUS_FAILED": "failed",
+        "ACTIVITY_STATUS_UNKNOWN": "unknown",
+    }
+    activity_outcome_map = {
+        "ACTIVITY_OUTCOME_SUCCESS": "success",
+        "ACTIVITY_OUTCOME_USER_INTERRUPT": "user_interrupt",
+        "ACTIVITY_OUTCOME_PROVIDER_ERROR": "provider_error",
+        "ACTIVITY_OUTCOME_EXECUTION_LOST": "execution_lost",
+        "ACTIVITY_OUTCOME_OUTCOME_UNKNOWN": "outcome_unknown",
+    }
+    tool_outcome_map = {
+        "TOOL_EXECUTION_OUTCOME_SUCCESS": "success",
+        "TOOL_EXECUTION_OUTCOME_PROVIDER_ERROR": "provider_error",
+        "TOOL_EXECUTION_OUTCOME_EXECUTION_LOST": "execution_lost",
+        "TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN": "outcome_unknown",
+    }
     if isinstance(payload.get("stream_status"), str):
         payload["stream_status"] = status_map.get(
             payload["stream_status"], payload["stream_status"]

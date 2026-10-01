@@ -76,8 +76,7 @@ class SessionDTO(TimestampedDTO):
 class SessionListResultDTO(BaseModel):
     items: list[SessionDTO]
     total: int
-    next_cursor: Optional[str] = None
-    has_more: bool = False
+    cursor: Optional[str] = None
 
 
 class ChildThreadSummaryDTO(BaseModel):
@@ -273,9 +272,7 @@ class SessionSkillUntrackResultDTO(BaseModel):
     thread_id: str
     name: str
     mode: Literal["untrack"]
-    status: Literal[
-        "loaded", "already_active", "not_tracked", "rebound", "error"
-    ]
+    status: Literal["loaded", "already_active", "not_tracked", "error"]
     display_uri: str | None = None
     revision: str | None = None
     content_hash: str | None = None

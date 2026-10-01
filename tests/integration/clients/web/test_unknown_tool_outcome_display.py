@@ -26,7 +26,7 @@ from tests.support.processes import close_backend_process, start_backend_process
 from tests.support.web_boundary_seeding import seed_boundary_cases
 from tests.support.workspaces import prepare_default_test_workspace
 
-UNKNOWN_TOOL_SESSION_ID = "ses_019bc1148cec71b78b1aaa3b19b60363"
+UNKNOWN_TOOL_SESSION_ID = "ses_b1a2c3d4e5f6478899aabbccddeeff03"
 UNKNOWN_TOOL_TURN_ID = "boundary-turn-0003"
 
 

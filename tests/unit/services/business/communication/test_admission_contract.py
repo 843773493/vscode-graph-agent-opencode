@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.services.business.communication.addresses import (
     GlobalThreadAddress,
     ResolvedMainTargetBinding,
@@ -21,12 +22,12 @@ from app.services.business.communication.errors import CommunicationContractErro
 
 
 def make_address() -> GlobalThreadAddress:
-    """构造合法 canonical 地址；session/thread 使用 v7 唯一工厂。"""
+    """构造合法 canonical 地址；session/thread 使用真实 uuid4 hex。"""
     return GlobalThreadAddress(
         gateway_id="gw_local",
         workspace_id="ws_main",
-        session_id=f"ses_{create_uuid_hex()}",
-        thread_id=f"thr_{create_uuid_hex()}",
+        session_id=f"ses_{uuid.uuid4().hex}",
+        thread_id=f"thr_{uuid.uuid4().hex}",
     )
 
 
@@ -80,7 +81,7 @@ def test_global_thread_address_rejects_non_canonical_ids() -> None:
             gateway_id="gw_local",
             workspace_id="ws_main",
             session_id="ses_not-canonical",
-            thread_id=f"thr_{create_uuid_hex()}",
+            thread_id=f"thr_{uuid.uuid4().hex}",
         )
 
 
@@ -89,7 +90,7 @@ def test_target_binding_rejects_child_thread_as_target() -> None:
     with pytest.raises(CommunicationContractError, match="communication-target-not-main"):
         ResolvedMainTargetBinding(
             target_session_id=target.session_id,
-        target_main_thread_id=f"thr_{create_uuid_hex()}",
+            target_main_thread_id=f"thr_{uuid.uuid4().hex}",
             target=target,
         )
 

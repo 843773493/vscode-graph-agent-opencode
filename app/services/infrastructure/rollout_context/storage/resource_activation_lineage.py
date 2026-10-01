@@ -17,9 +17,6 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
 )
-from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
-    SCHEMA_UNAVAILABLE_CODE,
-)
 
 LINEAGE_DETAIL_KIND = "resource_activation_lineage"
 LINEAGE_RETENTION_CLASS = "resource_activation_provenance"
@@ -46,7 +43,7 @@ class ActivationLineageBodyStore:
             self._detail_store, "supports_protected_details", False
         ):
             raise RuntimeError(
-                SCHEMA_UNAVAILABLE_CODE + ": lineage manifest 需要 "
+                "resource-activation-schema-unavailable: lineage manifest 需要 "
                 "protected detail backend"
             )
         record = self._detail_store.write(

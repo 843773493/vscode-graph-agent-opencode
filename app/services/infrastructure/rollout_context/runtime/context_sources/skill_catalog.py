@@ -17,9 +17,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
         SkillLoadStatus,
         _normalize_skill_name,
 )
-from app.services.infrastructure.rollout_context.runtime.context_sources.state import (
-        SourceState,
-)
 
 
 class SkillCatalogMixin:
@@ -51,15 +48,7 @@ class SkillCatalogMixin:
             binding = snapshot.entries.get(name)
             if binding is None:
                 raise KeyError(f"Skill 不存在: name={name}")
-            # 按当前 effective entry 解析已登记 registration（与 load_skill 同一
-            # 名称索引），不假设固定 ``skill:{name}`` source identity：同名高优先级
-            # entry 覆盖后，对应 registration 的 display_uri 才是该 binding 的对照。
-            registered_source_id = self._source_ids_by_name.get(binding.name)
-            state = (
-                self._sources.get(registered_source_id)
-                if registered_source_id is not None
-                else None
-            )
+            state = self._sources.get(f"skill:{binding.name}")
             if (
                 state is not None
                 and state.descriptor is not None
@@ -142,7 +131,6 @@ class SkillCatalogMixin:
             # snapshot/tracked 只从冻结 Turn/ModelCall SkillCatalogSnapshot 的
             # exact binding 解析；同名 catalog 新 revision 不影响已冻结调用。
             binding = self._resolve_activation_binding(normalized)
-            source_rebound = False
             if state.latest_revision is None:
                 self.activate_skill_content(
                     normalized,
@@ -158,33 +146,23 @@ class SkillCatalogMixin:
                     f"live={state.latest_revision}"
                 )
             if mode == "tracked":
-                conflicting = [
-                    candidate
+                conflicts = sorted(
+                    candidate.source_id
                     for candidate in self._sources.values()
                     if candidate.source_id != source_id
                     and candidate.tracked
                     and _normalize_skill_name(candidate.name) == normalized
-                ]
-                if conflicting:
-                    # 判据是 resolved source identity（registration 绑定的
-                    # ``name + catalog_entry_identity + resolved_source_identity``
-                    # 的 model-visible 投影），不是时间戳或物理路径。
-                    rebound = self._rebound_registrations(
-                        conflicting, normalized, binding.display_uri
+                )
+                if conflicts:
+                    raise ContextSourceTrackingStateConflict(
+                        "tracking-state-conflict: 同 normalized name 已有 active "
+                        f"registration: name={normalized} source_ids={conflicts}"
                     )
-                    if rebound is not None:
-                        # effective entry identity 已变：在同一 CSM owner mutation
-                        # 内冻结旧 registration，并为当前 effective entry 建新 tracking。
-                        self._freeze_rebound_registration(rebound)
-                        source_rebound = True
                 self._set_tracking_status(state, "tracked")
                 self._persist_control_state(state)
-            status: SkillLoadStatus
-            append_status: SkillLoadAppendStatus
             if source_id in self._pending:
-                # rebind 成功态必须独立于 loaded，不得复用 loaded 冒充。
-                status = "rebound" if source_rebound else "loaded"
-                append_status = "appended"
+                status: SkillLoadStatus = "loaded"
+                append_status: SkillLoadAppendStatus = "appended"
             elif state.latest_visible_committed_revision == state.latest_revision:
                 # 同 source/revision 已在 active view 可见：不追加第二个 item。
                 status = "already_active"
@@ -205,62 +183,6 @@ class SkillCatalogMixin:
                 content_hash=binding.content_hash,
                 status=status,
                 append_status=append_status,
-                source_rebound=source_rebound,
-            )
-
-        def _rebound_registrations(
-            self,
-            conflicting: list[SourceState],
-            normalized: str,
-            effective_identity: str | None,
-        ) -> SourceState | None:
-            """机械判定显式 tracked 是否应触发 rebind。
-
-            判据只有 resolved source identity（registration 的 display/resource
-            URI），不使用时间戳或物理路径。返回需要冻结的旧 registration；
-            effective entry 未变（同名同 identity 的重复 active registration）时
-            按 3.14 合同 fail closed，绝不静默改绑或重复建 tracking。
-            """
-            if len(conflicting) > 1:
-                raise ContextSourceTrackingStateConflict(
-                    "tracking-state-conflict: 同 normalized name 存在多个 "
-                    f"active registration: name={normalized} "
-                    f"source_ids={sorted(item.source_id for item in conflicting)}"
-                )
-            existing = conflicting[0]
-            descriptor = existing.descriptor
-            existing_identity = (
-                descriptor.resource_uri if descriptor is not None else None
-            )
-            if existing_identity is None:
-                raise ContextSourceTrackingStateConflict(
-                    "tracking-state-conflict: 同名旧 registration 尚未绑定当前 "
-                    "catalog descriptor，无法机械判定 effective entry 是否已变，"
-                    f"拒绝静默改绑: name={normalized} source_id={existing.source_id}"
-                )
-            if existing_identity == effective_identity:
-                raise ContextSourceTrackingStateConflict(
-                    "tracking-state-conflict: 同名同 effective entry 存在重复 "
-                    f"active registration: name={normalized} "
-                    f"source_ids={[existing.source_id, self._source_ids_by_name.get(normalized)]}"
-                )
-            return existing
-
-        def _freeze_rebound_registration(self, state: SourceState) -> None:
-            """显式 rebind 时把旧 registration 冻结为 untracked 并持久化。
-
-            复用 3.5 的唯一 tracking 原语：只改 tracking 状态、不删除、不重写
-            已提交 item；旧 context item 逐字节保持不变。按当前 effective entry
-            的 source identity 唯一裁决，不做 name-only 猜测。
-            """
-            self._set_tracking_status(state, "untracked")
-            self._persist_control_state(state)
-            # OpenSpec 3.8-C：tracking 状态变化的成功边界发布轻量事件（内存通知）。
-            self._publish_lifecycle_event(
-                source_id=state.source_id,
-                source_kind=state.source_kind,
-                kind="untracked",
-                revision=state.latest_revision,
             )
 
         def descriptor_for_skill(self, name: str) -> ContextSourceDescriptor:

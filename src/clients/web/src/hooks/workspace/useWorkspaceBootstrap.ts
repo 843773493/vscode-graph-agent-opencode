@@ -4,10 +4,7 @@ import {
   getWorkspace,
   listAgents as apiListAgents,
 } from "../../api";
-import {
-  HttpRequestError,
-  isTransientNetworkError,
-} from "../../api/http";
+import { HttpRequestError } from "../../api/http";
 import {
   activateGatewayWorkspace,
   getGatewayUiSettings,
@@ -26,7 +23,6 @@ import {
   type WorkspaceSessionListSnapshot,
 } from "./workspaceSessionListRefresh";
 import { errorMessage } from "../../utils/errorMessage";
-import { isNavigationBackpressureStatus } from "../../api/session/sessionCatalogOperations";
 
 type WorkspaceBootstrapPayload = {
   userAccess: Awaited<ReturnType<typeof ensureGatewayUserAccess>>;
@@ -65,15 +61,10 @@ const BOOTSTRAP_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 3000, 5000, 5000];
 const INITIAL_BOOTSTRAP_DELAY_MS = 120;
 
 export function isRetryableWorkspaceBootstrapError(error: unknown): boolean {
-  // 只重试「明确可恢复」的错误：Gateway 代理上游尚未就绪的 502/503/504 背压，
-  // 以及 fetch 网络层瞬时故障（TypeError / AbortError / 连接被拒等）。
-  // 不能再用 error instanceof TypeError：它把 fetch 传输失败和业务/程序代码
-  // 抛出的 TypeError（例如读 undefined 属性）一并吞进有界重试，属按错误类型
-  // 的过宽匹配；统一收敛到 isTransientNetworkError 这一既有唯一判据。
   return (
     error instanceof HttpRequestError
-    && isNavigationBackpressureStatus(error.status)
-  ) || isTransientNetworkError(error);
+    && [502, 503, 504].includes(error.status)
+  ) || error instanceof TypeError;
 }
 
 export function selectHealthyGatewayWorkspace(

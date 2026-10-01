@@ -629,7 +629,6 @@ export interface PendingRequestDTO {
   created_at: string | undefined;
   updated_at: string | undefined;
   snapshot_version: number;
-  gateway_id?: string | undefined;
 }
 
 export interface PendingRequestListDTO {
@@ -5940,7 +5939,6 @@ function createBasePendingRequestDTO(): PendingRequestDTO {
     created_at: undefined,
     updated_at: undefined,
     snapshot_version: 0,
-    gateway_id: undefined,
   };
 }
 
@@ -5966,7 +5964,6 @@ export const PendingRequestDTO: MessageFns<PendingRequestDTO> = {
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       snapshot_version: isSet(object.snapshot_version) ? globalThis.Number(object.snapshot_version) : 0,
-      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : undefined,
     };
   },
 
@@ -6023,9 +6020,6 @@ export const PendingRequestDTO: MessageFns<PendingRequestDTO> = {
     if (message.snapshot_version !== 0) {
       obj.snapshot_version = Math.round(message.snapshot_version);
     }
-    if (message.gateway_id !== undefined) {
-      obj.gateway_id = message.gateway_id;
-    }
     return obj;
   },
 
@@ -6051,7 +6045,6 @@ export const PendingRequestDTO: MessageFns<PendingRequestDTO> = {
     message.created_at = object.created_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
     message.snapshot_version = object.snapshot_version ?? 0;
-    message.gateway_id = object.gateway_id ?? undefined;
     return message;
   },
 };

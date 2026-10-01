@@ -79,9 +79,6 @@ export default function GatewayLogPanel({
   // 工作区与输出通道可被连续切换，每次切换都会重发请求。先发后到的旧响应若不被
   // 丢弃，底部输出面板会显示上一次工作区的日志，与当前工作区不符。
   const requestRevisionRef = useRef(0);
-  // 上一次渲染的工作区：工作区切换必须在同一提交内作废旧快照，否则新 workspaceId
-  // 会继续渲染 diagnostics 里属于旧工作区的 tail。
-  const lastWorkspaceIdRef = useRef(workspaceId);
 
   const workspaceLogs = useMemo(
     () => getWorkspaceLogs(diagnostics, workspaceId).filter((log) => log.service !== "workspace_api"),
@@ -91,18 +88,6 @@ export default function GatewayLogPanel({
     () => workspaceLogs.find((log) => log.log_id === selectedLogId) ?? workspaceLogs[0] ?? null,
     [selectedLogId, workspaceLogs],
   );
-  // 工作区一变化就作废旧快照：先发后到的旧响应已经被 revision 丢弃，但「新
-  // workspaceId 过滤旧 diagnostics」仍会在新响应到达前渲染出旧工作区的 tail。
-  // 在同一提交内清空 diagnostics/selectedLogId 并推进 revision，形成空窗期而非假数据。
-  if (lastWorkspaceIdRef.current !== workspaceId) {
-    lastWorkspaceIdRef.current = workspaceId;
-    requestRevisionRef.current += 1;
-    inFlightRequestRef.current = null;
-    setDiagnostics(null);
-    setSelectedLogId(null);
-    setError(null);
-    setLoading(Boolean(workspaceId));
-  }
 
   const loadDiagnostics = useCallback(
     async (logId: string | null, silent = false) => {

@@ -4,11 +4,11 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.workspace import (
     FileTreeShortcutDTO,
-    FileTreeShortcutSource,
     SessionFileTreeSettingsDTO,
 )
 
@@ -213,7 +213,7 @@ class FileTreeSettingsService:
         path: str,
         label: str | None,
         *,
-        source: FileTreeShortcutSource,
+        source: Literal["session", "workspace"],
     ) -> list[FileTreeShortcutDTO]:
         normalized_label = (label or "").strip() or cls._default_label(path)
         updated = [item for item in shortcuts if item.path != path]
@@ -230,7 +230,7 @@ class FileTreeSettingsService:
     def _read_shortcuts(
         path: Path,
         *,
-        source: FileTreeShortcutSource,
+        source: Literal["session", "workspace"],
     ) -> list[FileTreeShortcutDTO]:
         if not path.exists():
             return []
@@ -268,7 +268,7 @@ class FileTreeSettingsService:
     def _parse_shortcuts(
         raw: object,
         *,
-        source: FileTreeShortcutSource,
+        source: Literal["session", "workspace"],
         path: Path,
     ) -> list[FileTreeShortcutDTO]:
         if not isinstance(raw, list):

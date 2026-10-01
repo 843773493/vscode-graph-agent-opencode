@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -40,7 +39,7 @@ def _job(message_id: str, status: JobStatus, *, job_id: str = "job_target") -> J
     return JobDTO(
         job_id=job_id,
         message_id=message_id,
-        session_id="ses_019c205391bb7a4b81b6728df70f63e6",
+        session_id="ses_e6d2707870e54cab8c135193c0802532",
         mode=RunMode.single_agent,
         status=status,
         entry_agent="default",
@@ -184,9 +183,9 @@ async def _build_service(
     jobs: list[JobDTO],
     trace_events: list[object] | None = None,
 ):
-    session_bundle_factory(tmp_path, "ses_019c205391bb7a4b81b6728df70f63e6")
+    session_bundle_factory(tmp_path, "ses_e6d2707870e54cab8c135193c0802532")
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    config = build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6")
+    config = build_checkpoint_config("ses_e6d2707870e54cab8c135193c0802532")
     first_messages = [
         HumanMessage(content="第一问", response_metadata=_metadata("msg_1")),
         AIMessage(content="第一答", response_metadata=_metadata("assistant_1")),
@@ -215,7 +214,7 @@ async def _build_service(
         summarization_event={
             "cutoff_index": 2,
             "summary_message": HumanMessage(content="第一轮摘要"),
-            "file_path": "/history/ses_019c205391bb7a4b81b6728df70f63e6.jsonl",
+            "file_path": "/history/ses_e6d2707870e54cab8c135193c0802532.jsonl",
         },
     )
     dispatcher = RecordingDispatcher(saver)
@@ -253,7 +252,7 @@ async def test_edit_first_turn_removes_all_following_turns(
     )
 
     result = await service.replay(
-        "ses_019c205391bb7a4b81b6728df70f63e6",
+        "ses_e6d2707870e54cab8c135193c0802532",
         "msg_1",
         MessageReplayRequest(
             action="edit_and_continue",
@@ -266,7 +265,7 @@ async def test_edit_first_turn_removes_all_following_turns(
     assert result.removed_message_count == 4
     assert dispatcher.pre_dispatch_message_ids == []
     assert dispatcher.dispatched_message_id not in dispatcher.pre_dispatch_message_ids
-    latest = await saver.aget_tuple(build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6"))
+    latest = await saver.aget_tuple(build_checkpoint_config("ses_e6d2707870e54cab8c135193c0802532"))
     assert latest is not None
     final_messages = latest.checkpoint["channel_values"]["messages"]
     replacement_count = sum(
@@ -290,7 +289,7 @@ async def test_replay_turn_uses_turn_anchor_resolver(
     )
 
     result = await service.replay_turn(
-        "ses_019c205391bb7a4b81b6728df70f63e6",
+        "ses_e6d2707870e54cab8c135193c0802532",
         "turn-1",
         MessageReplayRequest(
             action="edit_and_continue",
@@ -302,7 +301,7 @@ async def test_replay_turn_uses_turn_anchor_resolver(
     assert result.replaced_message_id == "msg_1"
     assert dispatcher.pre_dispatch_message_ids == []
     assert dispatcher.dispatched_message_id
-    latest = await saver.aget_tuple(build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6"))
+    latest = await saver.aget_tuple(build_checkpoint_config("ses_e6d2707870e54cab8c135193c0802532"))
     assert latest is not None
     messages = latest.checkpoint["channel_values"]["messages"]
     assert [message.content for message in messages] == ["按 Turn 重放第一问"]
@@ -320,7 +319,7 @@ async def test_regenerate_last_reply_reuses_original_prompt(
     )
 
     result = await service.replay(
-        "ses_019c205391bb7a4b81b6728df70f63e6",
+        "ses_e6d2707870e54cab8c135193c0802532",
         "msg_2",
         MessageReplayRequest(
             action="regenerate",
@@ -346,7 +345,7 @@ async def test_retry_failed_clears_partial_tool_messages(
     )
 
     result = await service.replay(
-        "ses_019c205391bb7a4b81b6728df70f63e6",
+        "ses_e6d2707870e54cab8c135193c0802532",
         "msg_2",
         MessageReplayRequest(
             action="retry_failed",
@@ -356,7 +355,7 @@ async def test_retry_failed_clears_partial_tool_messages(
 
     assert result.action == "retry_failed"
     assert dispatcher.pre_dispatch_message_ids == ["msg_1", "assistant_1"]
-    latest = await saver.aget_tuple(build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6"))
+    latest = await saver.aget_tuple(build_checkpoint_config("ses_e6d2707870e54cab8c135193c0802532"))
     assert latest is not None
     final_messages = latest.checkpoint["channel_values"]["messages"]
     assert not any(isinstance(message, ToolMessage) for message in final_messages)
@@ -397,7 +396,7 @@ async def test_retry_failed_uses_persisted_trace_after_job_service_restart(
         ],
     )
 
-    assert await service._turn_has_failed("ses_019c205391bb7a4b81b6728df70f63e6", "msg_2") is True
+    assert await service._turn_has_failed("ses_e6d2707870e54cab8c135193c0802532", "msg_2") is True
 
 
 @pytest.mark.asyncio
@@ -426,7 +425,7 @@ async def test_retry_failed_accepts_execution_lost_session_interrupted_trace(
         ],
     )
 
-    assert await service._turn_has_failed("ses_019c205391bb7a4b81b6728df70f63e6", "msg_2") is True
+    assert await service._turn_has_failed("ses_e6d2707870e54cab8c135193c0802532", "msg_2") is True
 
 
 @pytest.mark.asyncio
@@ -442,7 +441,7 @@ async def test_retry_requires_failed_or_timed_out_job(
 
     with pytest.raises(ValueError, match="不是失败轮次"):
         await service.replay(
-            "ses_019c205391bb7a4b81b6728df70f63e6",
+            "ses_e6d2707870e54cab8c135193c0802532",
             "msg_2",
             MessageReplayRequest(
                 action="retry_failed",
@@ -461,12 +460,12 @@ async def test_replay_rejects_running_job_before_mutating_checkpoint(
         session_bundle_factory,
         [_job("msg_2", JobStatus.running)],
     )
-    before = await saver.aget_tuple(build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6"))
+    before = await saver.aget_tuple(build_checkpoint_config("ses_e6d2707870e54cab8c135193c0802532"))
     assert before is not None
 
     with pytest.raises(ValueError, match="仍有运行中任务"):
         await service.replay(
-            "ses_019c205391bb7a4b81b6728df70f63e6",
+            "ses_e6d2707870e54cab8c135193c0802532",
             "msg_2",
             MessageReplayRequest(
                 action="edit_and_continue",
@@ -475,7 +474,7 @@ async def test_replay_rejects_running_job_before_mutating_checkpoint(
             ),
         )
 
-    after = await saver.aget_tuple(build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6"))
+    after = await saver.aget_tuple(build_checkpoint_config("ses_e6d2707870e54cab8c135193c0802532"))
     assert after is not None
     assert after.checkpoint["id"] == before.checkpoint["id"]
     assert dispatcher.dispatched_message_id == ""
@@ -494,60 +493,7 @@ async def test_replay_requires_explicit_context_only_acknowledgement(
 
     with pytest.raises(ValueError, match="不会撤销工作区文件修改"):
         await service.replay(
-            "ses_019c205391bb7a4b81b6728df70f63e6",
+            "ses_e6d2707870e54cab8c135193c0802532",
             "msg_2",
             MessageReplayRequest(action="regenerate"),
         )
-
-
-@pytest.mark.asyncio
-async def test_replay_lock_table_stays_bounded_across_many_sessions(
-    tmp_path,
-    session_bundle_factory,
-) -> None:
-    """Replay 锁池对 session 数量必须有固定上界。
-
-    旧实现为每个 session 新建一把锁，长驻进程会随历史会话数无界增长；且
-    ``setdefault`` 发生在入参校验之前，连被拒绝的非法请求也会永久留下一个锁。
-    """
-    service, _, _ = await _build_service(
-        tmp_path,
-        session_bundle_factory,
-        [_job("msg_2", JobStatus.completed)],
-    )
-
-    for index in range(5000):
-        service._session_lock(f"ses_replay_{index}")
-
-    # 固定上界（与分片数一致的量级），不依赖内部常量即可断言有界性。
-    assert len(service._session_locks) <= 64
-
-
-@pytest.mark.asyncio
-async def test_replay_lock_is_stable_and_serializes_same_session(
-    tmp_path,
-    session_bundle_factory,
-) -> None:
-    """分片锁池：同一 session 恒得同一把锁，同 session 临界区仍严格互斥。"""
-    service, _, _ = await _build_service(
-        tmp_path,
-        session_bundle_factory,
-        [_job("msg_2", JobStatus.completed)],
-    )
-
-    assert service._session_lock("sess_shared") is service._session_lock("sess_shared")
-
-    lock = service._session_lock("sess_shared")
-    concurrent = 0
-    peak = 0
-
-    async def worker() -> None:
-        nonlocal concurrent, peak
-        async with lock:
-            concurrent += 1
-            peak = max(peak, concurrent)
-            await asyncio.sleep(0.01)
-            concurrent -= 1
-
-    await asyncio.gather(*(worker() for _ in range(20)))
-    assert peak == 1

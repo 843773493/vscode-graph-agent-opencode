@@ -125,9 +125,6 @@ function generatedAttachmentName(
 }
 
 function inlineAttachmentFileId(name: string, index: number): string {
-  // 非 canonical 身份：本函数在浏览器（无 Bun.*，浏览器运行时无 Bun.randomUUIDv7）
-  // 中生成附件 file id，允许继续使用 v4；它不是 session/thread 身份，
-  // 不进入 canonical 校验器命名空间。
   const uniqueId =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()

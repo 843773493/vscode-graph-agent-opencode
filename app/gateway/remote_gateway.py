@@ -615,3 +615,18 @@ def _connection_with_manifest_state(
         remote_candidate_ref=_manifest_candidate_ref(manifest),
     )
 
+
+def _remove_stale_projections(
+    *,
+    registry: GatewayWorkspaceRegistry,
+    connection_id: str,
+    current_workspace_ids: set[str],
+) -> None:
+    stale_workspace_ids = [
+        target.workspace_id
+        for target in registry.targets()
+        if target.remote_gateway_connection_id == connection_id
+        and target.workspace_id not in current_workspace_ids
+    ]
+    for workspace_id in stale_workspace_ids:
+        registry.remove(workspace_id, owner="remote_projection")

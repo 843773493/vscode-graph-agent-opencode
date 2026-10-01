@@ -13,7 +13,6 @@ import pytest
 import app.services.infrastructure.message_stream_store as message_stream_store_module
 from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.message_stream_store import (
-    MessageStreamCursorAheadError,
     MessageStreamCursorGoneError,
     MessageStreamError,
     MessageStreamStore,
@@ -40,7 +39,7 @@ def message_stream_store() -> tuple[MessageStreamStore, object, str]:
     _cached_session_catalog_components.cache_clear()
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
-    session_id = "ses_00000000400070008000000000000011"
+    session_id = "ses_00000000400040008000000000000011"
     seed_catalog_session_bundle(sessions_root, session_id)
     return MessageStreamStore(path_resolver=resolver), resolver, session_id
 
@@ -1638,8 +1637,6 @@ async def test_evicted_terminal_streams_release_serial_locks(
     cache_limit = message_stream_store_module.MESSAGE_STREAM_TERMINAL_CACHE_MAX_ENTRIES
     assert len(store._locks) <= cache_limit
     assert len(store._snapshot_locks) <= cache_limit
-    # 会话级索引锁同样必须收敛：分片锁池长度恒为分片数，不随会话数量增长。
-    assert len(store._index_locks) == message_stream_store_module.MESSAGE_STREAM_INDEX_LOCK_SHARDS
 
 
 @pytest.mark.asyncio
@@ -1804,84 +1801,6 @@ async def test_stream_records_closes_when_cursor_is_at_terminal_event(
 
 
 @pytest.mark.asyncio
-async def test_stream_records_rejects_cursor_beyond_high_water_without_hanging(
-    message_stream_store: tuple[MessageStreamStore, object, str],
-) -> None:
-    """游标越过最高水位时必须 fail-closed，不能静默挂起 SSE 续播。
-
-    回归：``list_events`` 只在「游标早于保留窗口」时报 CursorGone，对「游标越过
-    最高水位」静默返回空页。于是 ``stream_records`` 既无重放事件、流又处于非终态，
-    生成器永久阻塞在订阅队列上：SSE 连接、订阅与心跳都不释放，客户端既不收帧也
-    收不到结束。这里断言越界立刻抛 ``MessageStreamCursorAheadError``（而非超时），
-    并保留「游标恰好等于最高水位」是合法追平态这一既有契约。
-    """
-    store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_sse_future_cursor")
-    await writer.commit(
-        "block.started",
-        {"block_id": "block_1", "block_index": 0, "carrier_type": "text"},
-        block_id="block_1",
-    )
-    high_water_seq = int((await store.get_state(writer.turn_stream_id))["snapshot_seq"])
-
-    with pytest.raises(MessageStreamCursorAheadError) as captured:
-        await store.list_events(
-            session_id=session_id,
-            turn_stream_id=writer.turn_stream_id,
-            after_seq=high_water_seq + 1,
-        )
-    assert captured.value.turn_stream_id == writer.turn_stream_id
-    assert captured.value.after_seq == high_water_seq + 1
-    assert captured.value.high_water_seq == high_water_seq
-    # 游标恰好等于最高水位是「已追平」，仍是合法的空页，不得误判为越界。
-    assert (
-        await store.list_events(
-            session_id=session_id,
-            turn_stream_id=writer.turn_stream_id,
-            after_seq=high_water_seq,
-        )
-        == []
-    )
-
-    # 续播入口同样必须立刻报错而不是阻塞在订阅队列上（``_collect_stream`` 带 3s
-    # 超时，一旦回归成挂起就会以 asyncio.TimeoutError 失败）。
-    with pytest.raises(MessageStreamCursorAheadError):
-        await _collect_stream(
-            store,
-            session_id,
-            writer.turn_stream_id,
-            after_seq=high_water_seq + 1,
-        )
-    assert not store._subscriptions.get(writer.turn_stream_id)
-
-
-@pytest.mark.asyncio
-async def test_require_cursor_reachable_rejects_cursor_beyond_high_water(
-    message_stream_store: tuple[MessageStreamStore, object, str],
-) -> None:
-    """SSE 建流前的游标校验必须与 ``list_events`` 共用同一越界判定。"""
-    store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_sse_cursor_gate")
-    await writer.commit(
-        "block.started",
-        {"block_id": "block_1", "block_index": 0, "carrier_type": "text"},
-        block_id="block_1",
-    )
-    high_water_seq = int((await store.get_state(writer.turn_stream_id))["snapshot_seq"])
-
-    await store.require_cursor_reachable(
-        turn_stream_id=writer.turn_stream_id,
-        after_seq=high_water_seq,
-    )
-    with pytest.raises(MessageStreamCursorAheadError) as captured:
-        await store.require_cursor_reachable(
-            turn_stream_id=writer.turn_stream_id,
-            after_seq=high_water_seq + 5,
-        )
-    assert captured.value.high_water_seq == high_water_seq
-
-
-@pytest.mark.asyncio
 async def test_explicit_event_id_idempotence_survives_retention_compaction(
     message_stream_store: tuple[MessageStreamStore, object, str],
     monkeypatch: pytest.MonkeyPatch,
@@ -1995,28 +1914,3 @@ async def test_fresh_explicit_event_id_is_accepted_after_compaction(
 
     assert fresh["type"] == "interrupt.requested"
     assert fresh["event_id"] == "intr_fresh"
-
-
-@pytest.mark.asyncio
-async def test_index_locks_are_bounded_and_stable_per_session(
-    message_stream_store: tuple[MessageStreamStore, object, str],
-) -> None:
-    """会话级索引锁按 session_id 哈希分片：数量有界，且同 session 恒同一把锁。
-
-    回归：``_index_locks`` 曾用 ``setdefault(session_id, asyncio.Lock())`` 且无任何
-    回收路径，每出现一个 session_id 就永久多留一把 Lock，进程内存随历史会话
-    总数无界增长。改为固定分片锁池后，锁对象数量恒为分片数；正确性红线是同一
-    session_id 必须始终映射到同一把锁，否则同会话并发会各自进入临界区。
-    """
-    store, _, _ = message_stream_store
-    shards = message_stream_store_module.MESSAGE_STREAM_INDEX_LOCK_SHARDS
-
-    # 红线：同一 session_id 多次取锁必须是同一对象（互斥不被破坏）。
-    pinned = store._index_lock_for("ses_index_lock_same")
-    assert store._index_lock_for("ses_index_lock_same") is pinned
-    assert store._index_lock_for("ses_index_lock_same") is pinned
-
-    # 有界：大量不同 session_id 去重后的锁对象数不得超过分片数。
-    distinct_locks = {store._index_lock_for(f"ses_index_bound_{index}") for index in range(1000)}
-    assert len(distinct_locks) <= shards
-    assert len(store._index_locks) == shards

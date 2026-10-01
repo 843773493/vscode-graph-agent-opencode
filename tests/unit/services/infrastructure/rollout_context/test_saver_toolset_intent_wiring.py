@@ -12,7 +12,7 @@ from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
     SwitchToolSetIntent,
 )
-from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
+from app.services.infrastructure.rollout_context.checkpoint.mutation_intents import (
     MutationIntentConsumptionRejected,
     MutationIntentOwnerMismatch,
 )
@@ -20,7 +20,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 
-SESSION_ID = "ses_019c38b8b88476a58ce3735618d44bc8"
+SESSION_ID = "ses_6a1b47e2c05d4f8fa3b7d92c5e041762"
 
 TOOLS_A = (
     {"type": "function", "function": {"name": "get_goal", "parameters": {}}},

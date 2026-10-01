@@ -266,7 +266,7 @@ def message_stream_context() -> tuple[
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     # canonical session_id 必须是 UUIDv4 位 profile（第 13 位为 4、第 17 位属 8/9/a/b）
-    session_id = "ses_019bc29b34e276e6870ef6d46174d4da"
+    session_id = "ses_f264b9a4525d44b6b9673f5190847023"
     seed_catalog_session_bundle(sessions_root, session_id)
     return MessageStreamStore(path_resolver=resolver), resolver, session_id
 

@@ -14,7 +14,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.identifier import create_uuid_hex
 from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
@@ -41,7 +40,7 @@ def projection_saver(
     session_bundle_factory: Callable[[Path, str], Path],
 ) -> Iterator[tuple[RolloutCheckpointSaver, str, Path]]:
     sessions = projection_workspace / ".boxteam/sessions"
-    session_id = f"ses_{create_uuid_hex()}"
+    session_id = f"ses_{uuid4().hex}"
     session = session_bundle_factory(sessions, session_id)
     with RolloutCheckpointSaver(sessions) as saver:
         checkpoint = empty_checkpoint()

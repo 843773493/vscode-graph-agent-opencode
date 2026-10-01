@@ -1,7 +1,6 @@
 import { HttpRequestError } from "../../api/http";
 import {
   enqueueSessionCatalogOperations,
-  isNavigationBackpressureStatus,
   querySessionCatalogOperationStatus,
   type SessionCatalogEnqueueResult,
   type SessionCatalogOperationStatusPage,
@@ -69,6 +68,9 @@ const defaultAdapter: SessionCatalogOperationsAdapter = {
   queryStatus: querySessionCatalogOperationStatus,
 };
 
+/** 后端明确背压（可重试）的 HTTP 状态：必须保留客户端 outbox，不静默丢命令。 */
+const BACKPRESSURE_STATUSES: readonly number[] = [408, 425, 429, 502, 503, 504];
+
 export type CatalogOutboxDispatchOutcome =
   /** 本轮全部入队并收到 202 durable acceptance。 */
   | "accepted"
@@ -123,13 +125,13 @@ function isDefinitiveRejection(error: unknown): boolean {
   return error instanceof HttpRequestError
     && error.status >= 400
     && error.status < 500
-    && !isNavigationBackpressureStatus(error.status);
+    && !BACKPRESSURE_STATUSES.includes(error.status);
 }
 
 /** 超时/断线/背压一律归 `unknown`：结果未知，保留 pending 原 ID 等重试。 */
 function isUnknownOutcome(error: unknown): boolean {
   if (error instanceof HttpRequestError) {
-    return isNavigationBackpressureStatus(error.status) || error.status >= 500;
+    return BACKPRESSURE_STATUSES.includes(error.status) || error.status >= 500;
   }
   // fetch 网络错误与请求超时都不是 HttpRequestError，同样属于结果未知。
   return true;
@@ -269,29 +271,8 @@ export function createSessionCatalogOutboxDriver(
           ),
         );
       } catch (error: unknown) {
-        const beforeRollback = requireOutbox();
-        const rollback = rollbackCatalogOutboxIntents(beforeRollback, [clientOperationId]);
-        const removedOperationIds = new Set(rollback.removed_operation_ids);
-        const removedSequences = beforeRollback.operations
-          .filter((operation) => removedOperationIds.has(operation.client_operation_id))
-          .map((operation) => operation.client_sequence);
+        const rollback = rollbackCatalogOutboxIntents(requireOutbox(), [clientOperationId]);
         publish(rollback.outbox, true);
-        // 本地写入可能在「记录已落盘、事务随后才失败」的窗口抛错。此时只撤销内存
-        // pending 会留下磁盘残留，刷新恢复后它会被后续 flush 当作可派发命令重新
-        // 入队（静默复活一个用户已看到失败的操作）。必须把已落盘条目一并清除。
-        try {
-          await deleteCatalogOutboxOperations(
-            input.persistence,
-            input.partition,
-            removedSequences,
-          );
-        } catch (cleanupError: unknown) {
-          throw new Error(
-            "会话目录 pending 变更未能本地持久化，且已落盘条目回滚也失败，请检查本地存储:"
-            + ` 写入错误=${errorMessage(error)}`
-            + `；回滚错误=${errorMessage(cleanupError)}`,
-          );
-        }
         throw new Error(
           "会话目录 pending 变更未能本地持久化，已撤销该操作及依赖: "
           + errorMessage(error),
@@ -299,11 +280,8 @@ export function createSessionCatalogOutboxDriver(
       }
       publish(markCatalogOutboxOperationPersisted(requireOutbox(), clientOperationId), false);
       // 3. 持久化成功后才允许后台有序批量入队。
-      // 返回值必须如实反映本条命令是否已入队：`flush` 可能因依赖未满足（前序
-      // 命令仍 unknown/persisted）或批量上限而在本轮**一条都没入队**，此时命令
-      // 的本地状态仍是 `persisted`，把它坍缩成 `accepted` 会与后端 durable
-      // acceptance 脱钩（F2）。直接透传 flush 的 outcome 区分这两种情形。
-      return await flush();
+      const outcome = await flush();
+      return outcome === "idle" ? "accepted" : outcome;
     },
     async reconcile() {
       const next = await reconcileInternal();

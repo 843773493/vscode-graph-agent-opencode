@@ -16,7 +16,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 
-SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
 
 
 def _checkpoint(

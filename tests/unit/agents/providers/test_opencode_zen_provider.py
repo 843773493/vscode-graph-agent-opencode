@@ -163,9 +163,9 @@ def test_normalize_history_content_returns_original_when_not_list(
     model: BoxteamLiteLLMChatModel,
 ):
     """非 list 类型的 content 应原样返回。"""
-    assert model.normalize_history_content("plain string") == "plain string"
-    assert model.normalize_history_content(None) is None
-    assert model.normalize_history_content(42) == 42
+    assert model._normalize_history_content("plain string") == "plain string"
+    assert model._normalize_history_content(None) is None
+    assert model._normalize_history_content(42) == 42
 
 
 def test_normalize_history_content_returns_original_for_standard_text_blocks(
@@ -175,7 +175,7 @@ def test_normalize_history_content_returns_original_for_standard_text_blocks(
     original = [
         {"type": "text", "text": "a"},
     ]
-    result = model.normalize_history_content(original)
+    result = model._normalize_history_content(original)
     assert result is original
 
 
@@ -187,7 +187,7 @@ def test_normalize_history_content_normalizes_output_text_without_reasoning(
         {"type": "text", "text": "a"},
         {"type": "output_text", "text": "b"},
     ]
-    result = model.normalize_history_content(original)
+    result = model._normalize_history_content(original)
     assert result == [
         {"type": "text", "text": "a"},
         {"type": "text", "text": "b"},
@@ -198,7 +198,7 @@ def test_normalize_history_content_drops_repeated_reasoning_block_type(
     model: BoxteamLiteLLMChatModel,
 ):
     """流式合并产生重复 type 时，内部 reasoning 仍不得发送给上游。"""
-    result = model.normalize_history_content(
+    result = model._normalize_history_content(
         [
             {"type": "reasoningreasoningreasoning", "summary": []},
             {"type": "text", "text": "最终回答"},

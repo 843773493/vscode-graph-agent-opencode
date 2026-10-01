@@ -1,15 +1,13 @@
 """模型可见的 name-only Skill 激活工具。
 
 结果 schema 固定为:status/name/mode/display_uri/revision/content_hash/
-append_status/tracked/queued/source_rebound/error。display_uri 只能是 boxteam:// 虚拟
+append_status/tracked/queued/error。display_uri 只能是 boxteam:// 虚拟
 资源 URI;结果永远不含物理路径、provider locator、credential 或正文。
 
 snapshot/tracked 从发起调用时已冻结的 Turn/ModelCall SkillCatalog
 activation snapshot 解析 exact binding;工具路径零 I/O,不读当前目录,
 也不读当前 catalog。untrack 按当前 thread 与受校验逻辑 name 定位唯一
 active tracked registration,不解析当前 effective entry,不读 source。
-tracked 命中同 normalized name 的旧 active registration 且 effective entry
-已变时,返回 status=rebound 且 source_rebound=true(不含路径)。
 """
 
 from __future__ import annotations
@@ -37,6 +35,20 @@ class SkillLoadInput(BaseModel):
     )
 
 
+_RESULT_KEYS = (
+    "status",
+    "name",
+    "mode",
+    "display_uri",
+    "revision",
+    "content_hash",
+    "append_status",
+    "tracked",
+    "queued",
+    "error",
+)
+
+
 def _error_result(name: str, mode: str, code: str, message: str) -> str:
     """固定的显式错误结果;不伪造成功,也不泄露 locator/正文。"""
     return json.dumps(
@@ -50,7 +62,6 @@ def _error_result(name: str, mode: str, code: str, message: str) -> str:
             "append_status": "none",
             "tracked": False,
             "queued": False,
-            "source_rebound": False,
             "error": {"code": code, "message": message},
         },
         ensure_ascii=False,
@@ -83,7 +94,6 @@ def create_skill_load_tool(manager: ContextSourceManager) -> BaseTool:
                 "append_status": receipt.append_status,
                 "tracked": receipt.tracked,
                 "queued": receipt.queued,
-                "source_rebound": receipt.source_rebound,
                 "error": None,
             },
             ensure_ascii=False,
@@ -94,3 +104,4 @@ def create_skill_load_tool(manager: ContextSourceManager) -> BaseTool:
 
 
 __all__ = ["SkillLoadInput", "create_skill_load_tool"]
+

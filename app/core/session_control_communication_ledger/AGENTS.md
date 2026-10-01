@@ -4,8 +4,7 @@
 
 # 可修改内容
 
-- 可以维护 `CommunicationLedgerMixin` 的方法族：`outbox_writes.py` 的 `OutboxWritesMixin`（`create_or_get_communication_outbox`、`advance_communication_outbox_state`）、`inbox_writes.py` 的 `InboxWritesMixin`（`create_or_get_communication_inbox`、`claim_communication_inbox_admission`、`mark_communication_inbox_execution_bound`、`record_communication_inbox_admission_failure`）、`reads.py` 的 `ReadsMixin`（`list_target_accepted_communication_inboxes`、`get_communication_inbox`）。
-- 可以维护 `communication_ledger.py` 这一 facade：它只保留模块 docstring、`__all__`、`CommunicationLedgerMixin` 的聚合类声明（多继承三个 mixin）与对子模块符号的再导出，不得承载实现逻辑。
+- 可以维护 `communication_ledger.py` 中 `CommunicationLedgerMixin` 的方法族（`create_or_get_communication_outbox`、`advance_communication_outbox_state`、`create_or_get_communication_inbox`、`claim_communication_inbox_admission`、`mark_communication_inbox_execution_bound`、`record_communication_inbox_admission_failure`、`list_target_accepted_communication_inboxes`、`get_communication_inbox`、`_ensure_outbox_reply_direction`、`_ensure_inbox_reply_direction`）。
 - 可以维护本模块自有的两张表 DDL、索引常量、列清单、`CommunicationOutboxRecord` / `CommunicationInboxRecord` 投影、`derive_communication_admission_identity` 派生器与取行 helper。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/core/test_session_control_store.py` 的 D5 节。
 

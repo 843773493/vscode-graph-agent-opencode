@@ -973,8 +973,6 @@ export class BrowserSession extends EventEmitter {
     if (context) await this.manager.runtimePool.releaseContext(context);
   }
 
-  // 非 canonical 身份：Node 进程（无 crypto.randomUUIDv7）生成的 page_/* 本地 id
-  // 允许继续使用 v4，不进入 canonical 校验器命名空间。
   async registerPage(page, { pageId = `page_${randomUUID().replaceAll("-", "")}`, activate = true } = {}) {
     const pendingRegistration = this.pageRegistrationPromises.get(page);
     if (pendingRegistration) {
@@ -2130,7 +2128,6 @@ export class BrowserSession extends EventEmitter {
       throw new Error("设备预设名称不能为空");
     }
     const preset = {
-      // 非 canonical 身份：Node 进程生成的 preset_/* 本地 id 允许继续使用 v4。
       id: `preset_${randomUUID().replaceAll("-", "")}`,
       name: name.trim().slice(0, 80),
       profile_id: this.record.device_profile,

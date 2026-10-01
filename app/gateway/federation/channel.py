@@ -25,7 +25,6 @@ from app.gateway.federation.errors import (
     FEDERATION_CHANNEL_CLOSED,
     FEDERATION_CHANNEL_EPOCH_STALE,
     FEDERATION_CHANNEL_HEARTBEAT_TIMEOUT,
-    FEDERATION_DEADLINE_EXCEEDED,
     FEDERATION_MALFORMED_FRAME,
     FEDERATION_UNKNOWN_METHOD,
     FederationError,
@@ -195,20 +194,7 @@ class FederationChannelSession:
                     deadline_at=deadline_at,
                 ).encode()
             )
-            try:
-                return await asyncio.wait_for(future, timeout=effective_timeout)
-            except TimeoutError as timeout_error:
-                # 超时统一为稳定的联邦错误码，与联邦其余拒绝路径同一种失败表达；
-                # 绝不把裸 asyncio.TimeoutError 与结构化错误并存成第二条路径。
-                raise FederationError(
-                    FEDERATION_DEADLINE_EXCEEDED,
-                    "联邦请求在有效 timeout 内未收到对端响应",
-                    detail={
-                        "method": method,
-                        "timeout_seconds": effective_timeout,
-                        "deadline_at": deadline_at,
-                    },
-                ) from timeout_error
+            return await asyncio.wait_for(future, timeout=effective_timeout)
         finally:
             self._pending.pop(correlation_id, None)
 

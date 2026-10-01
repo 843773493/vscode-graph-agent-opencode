@@ -1,16 +1,18 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { act } from "react-test-renderer";
+import React from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as userViewStateApi from "../../api/gateway/userViewState";
 import type {
   GatewayUserAccess,
   GatewayUserViewState,
 } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
-import type {
-  SessionViewStateHost,
-  SessionViewStateLoadOutcome,
+import {
+  useSessionViewState,
+  type SessionViewStateLoadOutcome,
+  type SessionViewStateController,
+  type SessionViewStateHost,
 } from "./useSessionViewState";
-import { mountViewStateController } from "./sessionHookTestFixtures";
 
 function viewState(overrides: Partial<GatewayUserViewState> = {}): GatewayUserViewState {
   return {
@@ -46,8 +48,8 @@ const host: SessionViewStateHost = {
   expandDetails: false,
 };
 
-const SCOPE_KEY = "workspace-view-state::session-view-state";
-
+const originalFetch = globalThis.fetch;
+let renderer: ReactTestRenderer | undefined;
 let restoreApi = () => {};
 
 /** 只覆盖本链路读写的状态字段，其余字段对本链路无意义。 */
@@ -62,23 +64,17 @@ function appState(overrides: Partial<AppState> = {}): AppState {
   } as unknown as AppState;
 }
 
-/** 挂载视图状态控制器并登记卸载；harness 通过 afterEach 统一回收。 */
-const liveHarnesses: Array<{ unmount: () => void }> = [];
-
-async function mount(options: {
-  host?: SessionViewStateHost | ((state: AppState) => SessionViewStateHost);
-  initial?: AppState;
-}) {
-  const mounted = await mountViewStateController({
-    host: options.host ?? host,
-    initial: options.initial ?? appState(),
-  });
-  liveHarnesses.push(mounted);
-  return mounted;
+/** 状态栏写入沿用 hooks.tsx 里 AppProvider 提供的同一个 setStatus。 */
+function statusWriter(setState: (update: (previous: AppState) => AppState) => void) {
+  return (message: string) => {
+    setState((previous) => ({ ...previous, status: message }));
+  };
 }
 
 afterEach(() => {
-  for (const mounted of liveHarnesses.splice(0)) mounted.unmount();
+  act(() => renderer?.unmount());
+  renderer = undefined;
+  globalThis.fetch = originalFetch;
   restoreApi();
 });
 
@@ -96,9 +92,22 @@ describe("useSessionViewState", () => {
     );
     restoreApi = () => reader.mockRestore();
 
-    const mounted = await mount({});
-    const first = mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
-    const second = mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
+    let controller!: SessionViewStateController;
+    let latestState = appState();
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      latestState = current;
+      controller = useSessionViewState({
+        host,
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
+
+    await act(async () => { renderer = create(<Probe />); });
+    const first = controller.loadSessionViewState("workspace-view-state", "session-view-state");
+    const second = controller.loadSessionViewState("workspace-view-state", "session-view-state");
     await Promise.resolve();
     expect(requests).toBe(1);
 
@@ -108,8 +117,9 @@ describe("useSessionViewState", () => {
       await Promise.all([first, second]);
     });
     // 后端对象整体落到会话 scope，并且当前会话命中时同步工具详情展开态。
-    expect(mounted.state().gatewayUserViewStates.get(SCOPE_KEY)).toEqual(loaded);
-    expect(mounted.state().expandDetails).toBe(true);
+    expect(latestState.gatewayUserViewStates.get("workspace-view-state::session-view-state"))
+      .toEqual(loaded);
+    expect(latestState.expandDetails).toBe(true);
   });
 
   test("保存响应在 lease generation 变化后不污染当前用户状态", async () => {
@@ -121,21 +131,33 @@ describe("useSessionViewState", () => {
     );
     restoreApi = () => writer.mockRestore();
 
+    let controller!: SessionViewStateController;
+    let latestState = appState();
     let currentHost = { ...host, gatewayUserAccess: access(7) };
-    const mounted = await mount({ host: () => currentHost });
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      latestState = current;
+      controller = useSessionViewState({
+        host: currentHost,
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
 
-    mounted.controller().saveSessionViewState({
+    await act(async () => { renderer = create(<Probe />); });
+    controller.saveSessionViewState({
       turn_anchor: "turn-1",
       scroll_offset: 10,
       follow_latest: true,
     });
     await Promise.resolve();
     currentHost = { ...currentHost, gatewayUserAccess: access(8) };
-    await mounted.update();
+    await act(async () => { renderer!.update(<Probe />); });
     resolveRequest(viewState({ scroll_offset: 10 }));
     await act(async () => { await Promise.resolve(); });
     // 迟到响应属于旧 lease：不得写进当前用户的视图状态。
-    expect(mounted.state().gatewayUserViewStates.size).toBe(0);
+    expect(latestState.gatewayUserViewStates.size).toBe(0);
   });
 
   test("toggleExpandDetails 写入展开态并触发保存", async () => {
@@ -144,11 +166,20 @@ describe("useSessionViewState", () => {
     );
     restoreApi = () => writer.mockRestore();
 
-    const mounted = await mount({});
-    act(() => mounted.controller().toggleExpandDetails(true));
+    let controller!: SessionViewStateController;
+    let latestState = appState();
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      latestState = current;
+      controller = useSessionViewState({ host, setState, setStatus: statusWriter(setState) });
+      return null;
+    }
+
+    await act(async () => { renderer = create(<Probe />); });
+    act(() => controller.toggleExpandDetails(true));
     await act(async () => { await Promise.resolve(); });
 
-    expect(mounted.state().expandDetails).toBe(true);
+    expect(latestState.expandDetails).toBe(true);
     expect(writer).toHaveBeenCalledTimes(1);
   });
 
@@ -160,12 +191,21 @@ describe("useSessionViewState", () => {
     );
     restoreApi = () => reader.mockRestore();
 
-    const mounted = await mount({});
+    let controller!: SessionViewStateController;
+    let latestState = appState();
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      latestState = current;
+      controller = useSessionViewState({ host, setState, setStatus: statusWriter(setState) });
+      return null;
+    }
+
+    await act(async () => { renderer = create(<Probe />); });
     await act(async () => {
-      await mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
+      await controller.loadSessionViewState("workspace-view-state", "session-view-state");
     });
 
-    expect(mounted.state().status).toBe("读取用户视图位置失败: 网关视图位置不可读");
+    expect(latestState.status).toBe("读取用户视图位置失败: 网关视图位置不可读");
   });
 
   test("后端权威返回 null 时删除该会话的陈旧视图状态", async () => {
@@ -174,90 +214,128 @@ describe("useSessionViewState", () => {
     );
     restoreApi = () => reader.mockRestore();
 
-    const mounted = await mount({
-      initial: appState({ gatewayUserViewStates: new Map([[SCOPE_KEY, viewState()]]) }),
-    });
+    const staleKey = "workspace-view-state::session-view-state";
+    let controller!: SessionViewStateController;
+    let latestState = appState();
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(() =>
+        appState({ gatewayUserViewStates: new Map([[staleKey, viewState()]]) }),
+      );
+      latestState = current;
+      controller = useSessionViewState({ host, setState, setStatus: statusWriter(setState) });
+      return null;
+    }
+
+    await act(async () => { renderer = create(<Probe />); });
     await act(async () => {
-      await mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
+      await controller.loadSessionViewState("workspace-view-state", "session-view-state");
     });
 
     // 后端权威地表示「该会话没有保存的视图位置」：陈旧的本地缓存必须被删除，
     // 而不是留成幽灵条目继续影响后续投影。
-    expect(mounted.state().gatewayUserViewStates.has(SCOPE_KEY)).toBe(false);
-    expect(mounted.state().gatewayUserViewStates.size).toBe(0);
+    expect(latestState.gatewayUserViewStates.has(staleKey)).toBe(false);
+    expect(latestState.gatewayUserViewStates.size).toBe(0);
   });
-
   test("接管换代后上一代 lease 的本地残留不再被应用", async () => {
+    const scopeKey = "workspace-view-state::session-view-state";
     // 第 7 代先正常读到一条视图状态，本地因此留有带代际登记的残留。
     const reader = spyOn(userViewStateApi, "getGatewayUserViewState")
       .mockResolvedValueOnce(viewState({ turn_anchor: "turn-stale" }))
       .mockResolvedValueOnce(viewState({ turn_anchor: "turn-new" }));
     restoreApi = () => reader.mockRestore();
 
+    let controller!: SessionViewStateController;
     // host 与 AppState 共用同一份镜像（生产里由 AppProvider 从 state 装配）。
-    let leaseGeneration = 7;
-    const mounted = await mount({
-      host: (state) => ({
-        ...host,
-        gatewayUserAccess: access(leaseGeneration),
-        gatewayUserViewStates: state.gatewayUserViewStates,
-      }),
-    });
+    const sharedMirror = { gatewayUserViewStates: new Map<string, GatewayUserViewState>() };
+    let currentHost: SessionViewStateHost = {
+      ...host,
+      gatewayUserAccess: access(7),
+      gatewayUserViewStates: sharedMirror.gatewayUserViewStates,
+    };
+    let latestState = appState();
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      latestState = current;
+      sharedMirror.gatewayUserViewStates = current.gatewayUserViewStates;
+      currentHost = { ...currentHost, gatewayUserViewStates: current.gatewayUserViewStates };
+      controller = useSessionViewState({
+        host: currentHost,
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
 
+    await act(async () => { renderer = create(<Probe />); });
     await act(async () => {
-      await mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
+      await controller.loadSessionViewState("workspace-view-state", "session-view-state");
     });
-    expect(mounted.state().gatewayUserViewStates.get(SCOPE_KEY)?.turn_anchor).toBe("turn-stale");
+    expect(latestState.gatewayUserViewStates.get(scopeKey)?.turn_anchor).toBe("turn-stale");
 
     // 用户被接管：user_id 不变，lease 升到第 8 代；后端此时权威地没有视图位置。
-    leaseGeneration = 8;
-    await mounted.update();
+    currentHost = { ...currentHost, gatewayUserAccess: access(8) };
+    await act(async () => { renderer!.update(<Probe />); });
     await act(async () => {
-      await mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
+      await controller.loadSessionViewState("workspace-view-state", "session-view-state");
     });
 
     // 上一代的残留不得被应用，也不能短路掉读取：必须走后端并接受权威结果。
     expect(reader).toHaveBeenCalledTimes(2);
-    expect(mounted.state().gatewayUserViewStates.get(SCOPE_KEY)?.turn_anchor).toBe("turn-new");
+    expect(latestState.gatewayUserViewStates.get(scopeKey)?.turn_anchor).toBe("turn-new");
   });
-
   test("权威空与读取失败对调用方可见地区分", async () => {
+    const scopeKey = "workspace-view-state::session-view-state";
     const emptyMirror = new Map<string, GatewayUserViewState>();
+    let outcome: SessionViewStateLoadOutcome | undefined;
 
     // 404：后端权威地没有保存视图位置，属于合法空，不是失败。
     const absentReader = spyOn(userViewStateApi, "getGatewayUserViewState")
       .mockResolvedValue(null);
     restoreApi = () => absentReader.mockRestore();
-    const absent = await mount({
-      host: { ...host, gatewayUserViewStates: emptyMirror },
-    });
-    let absentOutcome!: SessionViewStateLoadOutcome;
+    let controller!: SessionViewStateController;
+    function AbsentProbe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      void current;
+      controller = useSessionViewState({
+        host: { ...host, gatewayUserViewStates: emptyMirror },
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
+    await act(async () => { renderer = create(<AbsentProbe />); });
     await act(async () => {
-      absentOutcome = await absent.controller()
-        .loadSessionViewState("workspace-view-state", "session-view-state");
+      outcome = await controller.loadSessionViewState("workspace-view-state", "session-view-state");
     });
     // 权威空：loaded 且 viewState 为 null，不能与失败混淆。
-    expect(absentOutcome).toEqual({ kind: "loaded", viewState: null });
-    expect(emptyMirror.has(SCOPE_KEY)).toBe(false);
-    absent.unmount();
+    expect(outcome).toEqual({ kind: "loaded", viewState: null });
+    expect(emptyMirror.has(scopeKey)).toBe(false);
+    act(() => renderer?.unmount());
 
     // 500：读取失败必须显式表现为 failed，并带上原始错误。
     const failure = new Error("网关视图位置不可读");
     const failingReader = spyOn(userViewStateApi, "getGatewayUserViewState")
       .mockRejectedValue(failure);
     restoreApi = () => failingReader.mockRestore();
-    const failing = await mount({
-      host: { ...host, gatewayUserViewStates: new Map<string, GatewayUserViewState>() },
-    });
-    let failureOutcome!: SessionViewStateLoadOutcome;
+    function FailingProbe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      void current;
+      controller = useSessionViewState({
+        host: { ...host, gatewayUserViewStates: new Map<string, GatewayUserViewState>() },
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
+    await act(async () => { renderer = create(<FailingProbe />); });
     await act(async () => {
-      failureOutcome = await failing.controller()
-        .loadSessionViewState("workspace-view-state", "session-view-state");
+      outcome = await controller.loadSessionViewState("workspace-view-state", "session-view-state");
     });
-    expect(failureOutcome).toEqual({ kind: "failed", error: failure });
+    expect(outcome).toEqual({ kind: "failed", error: failure });
   });
 
   test("保存失败后重取校准，本地回到后端权威值并给出可见提示", async () => {
+    const scopeKey = "workspace-view-state::session-view-state";
     const writer = spyOn(userViewStateApi, "putGatewayUserViewState")
       .mockRejectedValue(new Error("保存接口不可用"));
     // 后端权威值：工具详情未展开（与本地乐观值相反），滚动位置为 5。
@@ -265,21 +343,29 @@ describe("useSessionViewState", () => {
       .mockResolvedValue(viewState({ tool_details_expanded: false, scroll_offset: 5 }));
     restoreApi = () => { reader.mockRestore(); writer.mockRestore(); };
 
-    const mounted = await mount({
-      host: (state) => ({ ...host, gatewayUserViewStates: state.gatewayUserViewStates }),
-    });
+    let latestState = appState();
+    let controller!: SessionViewStateController;
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      latestState = current;
+      controller = useSessionViewState({
+        host: { ...host, gatewayUserViewStates: current.gatewayUserViewStates },
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
 
+    await act(async () => { renderer = create(<Probe />); });
     // 乐观置位后保存失败：必须被重取校准纠正回后端真值。
-    await act(async () => {
-      mounted.controller().toggleExpandDetails(true);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    act(() => controller.toggleExpandDetails(true));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
 
     expect(reader).toHaveBeenCalledTimes(1);
-    expect(mounted.state().expandDetails).toBe(false);
-    expect(mounted.state().gatewayUserViewStates.get(SCOPE_KEY)?.scroll_offset).toBe(5);
-    expect(mounted.state().status).toBe("保存用户视图位置失败: 保存接口不可用");
+    expect(latestState.expandDetails).toBe(false);
+    expect(latestState.gatewayUserViewStates.get(scopeKey)?.scroll_offset).toBe(5);
+    expect(latestState.status).toBe("保存用户视图位置失败: 保存接口不可用");
   });
 
   test("保存失败且重取也失败时，提示同时包含两段失败原因", async () => {
@@ -289,18 +375,28 @@ describe("useSessionViewState", () => {
       .mockRejectedValue(new Error("读取接口不可用"));
     restoreApi = () => { writer.mockRestore(); reader.mockRestore(); };
 
-    const mounted = await mount({
-      host: (state) => ({ ...host, gatewayUserViewStates: state.gatewayUserViewStates }),
-    });
+    let latestState = appState();
+    let controller!: SessionViewStateController;
+    function Probe(): React.ReactNode {
+      const [current, setState] = React.useState(appState);
+      latestState = current;
+      controller = useSessionViewState({
+        host: { ...host, gatewayUserViewStates: current.gatewayUserViewStates },
+        setState,
+        setStatus: statusWriter(setState),
+      });
+      return null;
+    }
 
-    await act(async () => {
-      mounted.controller().toggleExpandDetails(true);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await act(async () => { renderer = create(<Probe />); });
+    act(() => controller.toggleExpandDetails(true));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
 
-    expect(mounted.state().status).toBe(
+    expect(latestState.status).toBe(
       "保存用户视图位置失败: 保存接口不可用；重新读取用户视图位置也失败: 读取接口不可用",
     );
   });
+
+
 });

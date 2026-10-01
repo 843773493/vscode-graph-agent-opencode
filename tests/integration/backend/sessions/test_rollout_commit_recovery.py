@@ -6,10 +6,10 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.domain.itemized.enums import PayloadKind
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -40,7 +40,7 @@ def committed_rollout(
 ) -> CommittedRollout:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"ses_{create_uuid_hex()}"
+    session_id = f"ses_{uuid4().hex}"
     session_node = session_bundle_factory(sessions, session_id)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(

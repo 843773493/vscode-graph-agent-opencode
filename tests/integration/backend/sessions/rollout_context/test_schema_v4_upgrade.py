@@ -10,10 +10,10 @@ import subprocess
 import sys
 from contextlib import closing
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -38,7 +38,7 @@ from tests.integration.backend.sessions.rollout_context.schema_v4_helpers import
 def source(request, session_bundle_factory):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"ses_{create_uuid_hex()}"
+    session_id = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session_id)
     with RolloutCheckpointSaver(sessions) as saver:
         yield create_schema3_artifact(saver, session_id, **getattr(request, "param", {}))

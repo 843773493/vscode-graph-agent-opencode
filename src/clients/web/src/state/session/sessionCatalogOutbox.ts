@@ -279,27 +279,6 @@ export function markCatalogOutboxOperationPersisted(
   );
 }
 
-/**
- * 恢复路径的唯一态归一：把磁盘上残留的 `pending_local` 归一为可重放的 `persisted`。
- *
- * `pending_local` 只表示「尚未确认本地持久化」的瞬时态，正常流程下不会离开内存。
- * 但 `applyIntent` 先按该态落盘、之后才在内存里标记 persisted；进程若在「落盘后、
- * 标记前」退出，磁盘上就会留下该中间态。恢复时若不归一，它既被 `planCatalogOutboxBatch`
- * 跳过（只收 `persisted`/可重试 `unknown`），又被对账集合排除，若服务端从未接受该命令
- * 便永久静默丢失。命令既然已成功写入持久层，就已满足「本地持久化成功」语义，故在此
- * 归一为 `persisted`，由 `applyIntent` 在失败时负责把已落盘条目一并回滚（F1）。
- */
-export function normalizeRestoredCatalogOutbox(outbox: CatalogOutbox): CatalogOutbox {
-  return {
-    ...outbox,
-    operations: outbox.operations.map((operation) =>
-      operation.state === "pending_local"
-        ? { ...operation, state: "persisted" }
-        : operation,
-    ),
-  };
-}
-
 /** 失败/撤销的传播方向：给定 operation 集合，向依赖它们的后继闭包扩散。 */
 function collectCatalogOutboxDependentClosure(
   outbox: CatalogOutbox,

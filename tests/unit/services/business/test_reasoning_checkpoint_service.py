@@ -72,7 +72,7 @@ async def test_persist_user_message_checkpoint_is_idempotent(
     session_bundle_factory,
     accept_previous_message,
 ):
-    session_id = "ses_019c0d94c86473198d801cbee5588f88"
+    session_id = "ses_69da9815c55649f082b182e532a22367"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     previous_message = accept_previous_message(saver, session_id)
@@ -119,7 +119,7 @@ def test_persist_user_message_checkpoint_preserves_internal_acceptance_metadata(
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "ses_019c21595f0c70388c187be23ef92b9b"
+    session_id = "ses_3754dc4e89eb4a668c294421ee2ae558"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     message = HumanMessage(
@@ -173,7 +173,7 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
     session_bundle_factory,
     accept_previous_message,
 ):
-    session_id = "ses_019bddf6d61b70acb52e1541440e0c6c"
+    session_id = "ses_7b2f2f84bc35456e8071c691db7f2ca8"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     previous_message = accept_previous_message(saver, session_id)
@@ -234,7 +234,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "ses_019c3e8835447c678e07a55a9cc127fc"
+    session_id = "ses_68b6d4ac434b450b8327ae2775447777"
     session_bundle_factory(tmp_path, session_id)
     reasoning_text = "用户只要求回复 OK。"
     final_text = "OK"
@@ -363,7 +363,7 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "ses_019bfa27d86b7e5e8bef9be8c2075691"
+    session_id = "ses_d19bb63df7864d998bb7993f182b7426"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     config = build_checkpoint_config(session_id)
@@ -416,7 +416,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
     tmp_path,
     session_bundle_factory,
 ):
-    session_id = "ses_019c22f837b87aaebcccebe44d920fb6"
+    session_id = "ses_718399a9bca34ffb8b970cc05f8bafca"
     session_bundle_factory(tmp_path, session_id)
     first_reasoning = "先调用工具。"
     final_reasoning = "只回复工具 stdout。"

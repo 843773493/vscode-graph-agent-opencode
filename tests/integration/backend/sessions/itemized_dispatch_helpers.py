@@ -19,7 +19,6 @@ from langgraph.checkpoint.base import empty_checkpoint
 from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.identifier import create_uuid_hex
 from app.core.job_context import reset_current_job_id, set_current_job_id
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -90,7 +89,7 @@ def native_dispatch_workspace(integration_workspace_root_path) -> Path:
 @pytest.fixture
 def dispatch_saver(native_dispatch_workspace, session_bundle_factory):
     sessions = native_dispatch_workspace / ".boxteam/sessions"
-    session_id = f"ses_{create_uuid_hex()}"
+    session_id = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session_id)
     with RolloutCheckpointSaver(sessions) as saver:
         turn_id = seed_dispatch_history(saver, session_id)

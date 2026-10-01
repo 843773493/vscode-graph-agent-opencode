@@ -63,7 +63,7 @@ from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )
 
-_PARENT_SESSION_ID = "ses_00000000400070008000000000000001"
+_PARENT_SESSION_ID = "ses_00000000400040008000000000000001"
 _CONFIGURATION_ID = "dbgcfg_22222222222222222222222222222222"
 
 

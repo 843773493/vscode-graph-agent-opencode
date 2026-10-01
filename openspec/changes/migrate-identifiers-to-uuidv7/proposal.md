@@ -12,7 +12,7 @@ UUIDv7（RFC 9562）前 48 bit 承载 Unix 毫秒时间戳，正好让 id 自带
 ## What Changes
 
 - **BREAKING**：canonical 标识符的位 profile 从 UUIDv4 改为 **UUIDv7**。`app/core/identifier.py` 的唯一 id 工厂产出 v7 hex；`app/core/session_catalog_store.py` 的校验器（现名 `_validate_uuid_v4_payload`，硬要求 `payload[12] == "4"`）**正名并改为只接受 v7 位 profile**，不再存在第二套 v4 分支。
-- **拒绝双轨：不引入运行时开关**。**MUST NOT** 把「同时接受 v4|v7」当作运行期常态，也 **MUST NOT** 以「维护窗口 + `identity_profile_migration_active` 门控」这类运行时开关形式恢复双接受（判死）。canonical 校验器**始终只接受 v7**。存量 v4 走**一次性显式处置**：启动/迁移遇到 v4 canonical id MUST fail-closed 隔离并产出可操作显式报告（被隔离 id、物理路径、原因、建议动作），**MUST NOT** 回退 v4、**MUST NOT** 双读、**MUST NOT** 扫盘重建、**MUST NOT** 提供旧 ID path alias。收敛断言见 design D3。
+- **拒绝双轨：采用「消除窗口期」方案**。**MUST NOT** 把「同时接受 v4|v7」当作运行期常态。存量 v4 身份在**同一次维护窗口内原子完成**「迁移 + 校验器收紧」：维护开关开启时校验器接受 v4|v7，迁移事务提交的**同一时刻**由同一次显式切换把校验器切到只接受 v7，MUST NOT 存在只接受 v4 或长期双接受的运行态。窗口期 MUST NOT 并行运行新旧代码版本。**MUST NOT** 提供旧 ID path alias，**MUST NOT** 双读，**MUST NOT** 扫盘重建。窗口期校验器的确切形态、维护开关的可验证断言与收敛断言见 design D3。
 - **生成来源定稿为显式直接依赖 `uuid-utils`**：本机 Python 3.12.3 无 `uuid.uuid7()`（实测），stdlib v7 需 Python 3.14，而发行包与 Docker 运行时固定为 3.12（`packaging/runtime/versions.mjs`、`tools/cross-platform-development-targets/docker/Dockerfile`），抬高到 3.14 代价过大，故否决 stdlib 方案。`uuid-utils` 已在 `uv.lock` 作**传递依赖**（langchain-core/langsmith）存在且已是锁定版本 `0.16.0`，本 change 必须把它提升为 `pyproject.toml` 的**显式直接依赖**，MUST NOT 依赖「某个第三方包偶然传递存在」。缺失或不可用时 **fail-closed**，绝不回退到 v4。
 - **单调性合同**：v7 的「时间有序」是本 change 的全部价值，故 MUST 明确：同一进程内、同一毫秒内的 id **MUST 非递减且唯一**（用 `rand_a` / 计数器方案）；跨进程/跨重启只保证 **48 bit 毫秒分辨率**的时间序。MUST NOT 传入显式时间戳破坏单调（实测 `uuid-utils` 传显式 `timestamp=` 时同毫秒内**不再单调**）。
 - **日期桶由 id 自推导且可校验**：`sessions/YYYY/MM/DD/{session_id}` 的日期 MUST 与 id 内嵌 48 bit 毫秒时间戳按 **UTC** 推导出的日期一致；不一致即 fail-closed 完整性错误。时钟回拨（NTP 校时）行为 MUST 显式规定为「进程内非递减钳制」。
@@ -41,4 +41,4 @@ UUIDv7（RFC 9562）前 48 bit 承载 Unix 毫秒时间戳，正好让 id 自带
   - 测试：`tests/unit/core/test_canonical_identifier_matrix.py`（docstring 写「非 v4 bits」、`make_session_id`/`make_thread_id` 用 `uuid.uuid4().hex`）等约 44 个测试文件含 v4 生成点。
   - JS：`src/workspace-services/browser/server/*.js`、`src/workspace-services/terminal/server/*.js`（Node 运行时 `randomUUID`）、`src/clients/web/src/utils/media/mediaAttachments.ts`（浏览器 `crypto.randomUUID()`）。
 - **依赖与 owner**：`uuid-utils>=0.16` 必须成为显式直接依赖。VRN 语法、scope 闭集、kind 闭集与拒绝码归 `add-unified-virtual-resource-addressing`；会话上下文寻址归 `migrate-session-context-uri-to-vrn`；工作区身份与 `scope_id` 推导归 `add-multi-workspace-backend-mounting`；资源身份/VRN 持久化归 `add-workspace-persistent-resource-management`。本 change 只拥有 id **生成位 profile**，只具名引用，不复述、不自造。
-- **不做**：不引入第二套 id 语法；不引入任何运行时维护开关（如 `identity_profile_migration_active`）；不把 revision/hash 编码进 id；不长期同时接受 v4|v7；不提供旧 ID path alias；不扫盘重建 catalog；不改动 VRN/ResourceIdentity 的定义；不伪造「浏览器与 Node 服务进程已经产出 v7」。
+- **不做**：不引入第二套 id 语法；不把 revision/hash 编码进 id；不长期同时接受 v4|v7；不提供旧 ID path alias；不扫盘重建 catalog；不改动 VRN/ResourceIdentity 的定义；不伪造「浏览器与 Node 服务进程已经产出 v7」。

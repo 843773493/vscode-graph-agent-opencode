@@ -188,26 +188,5 @@ class SourceRegistryMixin:
             state.persisted_state_revision = stored.state_revision
             state.persisted_fields = stored.durable_fields()
 
-        def _sync_persisted_control_states(self, source_ids: set[str]) -> None:
-            """按 owner durable truth 重新校准内存 CAS 基准。
-
-            model_call 提交经 mutation intent 端口落在唯一 owner 事务里，会推进
-            SQLite 的 ``state_revision``，但端口调用不返回确认值。若不在此同步，
-            同一 CSM 后续的 observe/untrack/rebind 会以陈旧 ``state_revision``
-            触发 CAS 冲突。只同步持久化基准字段，不覆盖内存 revision 真值。
-            """
-            port = self._control_state_port
-            owner = self._owner
-            if port is None or owner is None:
-                return
-            for stored in port.load_context_source_control_states(owner):
-                if stored.source_id not in source_ids:
-                    continue
-                state = self._sources.get(stored.source_id)
-                if state is None:
-                    continue
-                state.persisted_state_revision = stored.state_revision
-                state.persisted_fields = stored.durable_fields()
-
 
 __all__ = ["SourceRegistryMixin"]

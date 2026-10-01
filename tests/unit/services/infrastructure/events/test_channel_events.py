@@ -15,16 +15,13 @@ from app.services.infrastructure.events.channel_events import (
     ConfigLifecycleEvent,
     ContextSourceEvent,
     ContextSourceEventPublisher,
-    McpCatalogEvent,
     ResourceStateEvent,
     ResourceStateEventPublisher,
     assert_config_lifecycle_event_is_lightweight,
     assert_context_source_event_is_lightweight,
-    assert_mcp_catalog_event_is_lightweight,
     assert_resource_state_event_is_lightweight,
     config_lifecycle_channel_name,
     context_source_channel_name,
-    mcp_catalog_channel_name,
     resource_state_channel_name,
 )
 from app.services.infrastructure.events.event_channel_service import (
@@ -37,12 +34,6 @@ from app.services.infrastructure.events.event_channel_service import (
 def _digest(label: str) -> str:
     """构造合法 revision 样例：完整 sha256 摘要（sha256: + 64 位小写 hex）。"""
     return "sha256:" + hashlib.sha256(label.encode("utf-8")).hexdigest()
-
-
-def _tamper_revision(event: object, revision_value: object) -> object:
-    """构造合法实例后篡改 revision，用于只命中轻量断言路径的校验分支。"""
-    object.__setattr__(event, "revision", revision_value)
-    return event
 
 
 def test_resource_state_event_contract_accepts_lightweight_event() -> None:
@@ -330,109 +321,3 @@ def test_contracts_reject_smuggled_payloads_in_identity_and_revision() -> None:
             source_kind="../etc",
             kind="committed",
         )
-
-def test_mcp_catalog_revision_message_differs_between_construction_and_lightweight() -> None:
-    """零回归钉子：``McpCatalogEvent`` 两条链路的必填 revision 错误消息历史性地不同。
-
-    HEAD 原文里构造路径（``__post_init__`` -> ``_REVISION_DIGEST_WITH_TYPE``）在消息末尾
-    带 ``: str`` 值类型名后缀，轻量断言路径（``assert_checks`` -> ``_REVISION_DIGEST_PLAIN``）
-    不带该后缀。``9534ec4a`` 用独立 ``assert_checks`` 保住这一差异；本用例把两条精确消息
-    文本钉死，防止将来被「顺手统一」而静默改变历史行为。
-    """
-    invalid_revision = "not-a-digest"
-    prefix = "McpCatalogEvent.revision 必须是 sha256: 摘要（sha256: + 64 位小写 hex）"
-
-    # 构造路径：带 ``: str`` 后缀。
-    with pytest.raises(RuntimeError) as ctor_error:
-        McpCatalogEvent(kind="published", revision=invalid_revision)
-    assert str(ctor_error.value) == f"{prefix}: str"
-
-    # 轻量断言路径：不带后缀（构造合法值后篡改 revision，只命中 assert 路径）。
-    tampered = McpCatalogEvent(kind="published", revision=_digest("mcp_catalog"))
-    object.__setattr__(tampered, "revision", invalid_revision)
-    with pytest.raises(RuntimeError) as assert_error:
-        assert_mcp_catalog_event_is_lightweight(tampered)
-    assert str(assert_error.value) == prefix
-
-    # 两条消息必须仍然不同，且差异恰为 ``: str`` 后缀。
-    assert str(ctor_error.value) != str(assert_error.value)
-    assert str(ctor_error.value) == str(assert_error.value) + ": str"
-
-    assert mcp_catalog_channel_name() == "mcp.catalog/workspace"
-
-
-def test_typed_events_revision_message_matches_across_both_paths() -> None:
-    """反向核对：无 ``assert_checks`` 覆盖的 3 个 typed 事件两条链路消息完全一致。
-
-    证明 ``assert_checks`` 缺省即复用 ``checks``，两种路径等价；将来只有新增了独立
-    ``assert_checks`` 的事件才会出现消息差异。
-    """
-    invalid_revision = "not-a-digest"
-    length = len(invalid_revision)
-
-    cases = [
-        (
-            "ResourceStateEvent",
-            lambda: ResourceStateEvent(
-                owner_domain="node_debug",
-                resource_id="node_debug_process:proc_1",
-                state="released",
-                revision=invalid_revision,
-            ),
-            lambda: assert_resource_state_event_is_lightweight(_tamper_revision(
-                ResourceStateEvent(
-                    owner_domain="node_debug",
-                    resource_id="node_debug_process:proc_1",
-                    state="released",
-                    revision=_digest("resource_state"),
-                ),
-                invalid_revision,
-            )),
-        ),
-        (
-            "ConfigLifecycleEvent",
-            lambda: ConfigLifecycleEvent(
-                domain="workspace",
-                kind="published",
-                revision=invalid_revision,
-            ),
-            lambda: assert_config_lifecycle_event_is_lightweight(_tamper_revision(
-                ConfigLifecycleEvent(
-                    domain="workspace",
-                    kind="published",
-                    revision=_digest("config_lifecycle"),
-                ),
-                invalid_revision,
-            )),
-        ),
-        (
-            "ContextSourceEvent",
-            lambda: ContextSourceEvent(
-                source_id="src_1",
-                source_kind="skill",
-                kind="committed",
-                revision=invalid_revision,
-            ),
-            lambda: assert_context_source_event_is_lightweight(_tamper_revision(
-                ContextSourceEvent(
-                    source_id="src_1",
-                    source_kind="skill",
-                    kind="committed",
-                    revision=_digest("context_source"),
-                ),
-                invalid_revision,
-            )),
-        ),
-    ]
-
-    for label, construct, assert_lightweight in cases:
-        with pytest.raises(RuntimeError) as ctor_error:
-            construct()
-        with pytest.raises(RuntimeError) as assert_error:
-            assert_lightweight()
-        expected = (
-            f"{label}.revision 必须是 sha256: 摘要（sha256: + 64 位小写 hex）或 None: "
-            f"str 长度 {length}"
-        )
-        assert str(ctor_error.value) == expected
-        assert str(assert_error.value) == expected

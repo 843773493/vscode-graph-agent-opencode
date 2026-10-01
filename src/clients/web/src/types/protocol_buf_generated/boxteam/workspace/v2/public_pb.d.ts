@@ -2856,11 +2856,6 @@ export declare type PendingRequestDTO = Message<"boxteam.workspace.v2.PendingReq
    * @generated from field: int64 snapshot_version = 17;
    */
   snapshotVersion: bigint;
-
-  /**
-   * @generated from field: optional string gateway_id = 18;
-   */
-  gatewayId?: string | undefined;
 };
 
 /**

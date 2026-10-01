@@ -8,13 +8,13 @@ tmp_path 独立 store，不触碰项目根目录。
 from __future__ import annotations
 
 import json
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import SessionControlStore
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBindingError,
@@ -27,11 +27,11 @@ DEFAULT_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
 
 def make_thread_id() -> str:
-    return f"thr_{create_uuid_hex()}"
+    return f"thr_{uuid.uuid4().hex}"
 
 
 def make_session_id() -> str:
-    return f"ses_{create_uuid_hex()}"
+    return f"ses_{uuid.uuid4().hex}"
 
 
 @pytest.fixture

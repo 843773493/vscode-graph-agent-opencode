@@ -36,23 +36,6 @@ export const NAVIGATION_MUTATION_TERMINAL_STATES: readonly NavigationMutationSta
   "dependency_failed",
 ];
 
-/**
- * 后端明确背压、可安全重试的 HTTP 状态闭集。这是唯一的权威定义：目录写协议
- * （outbox 驱动判定「结果未知」）与目录读协议（分支读取判定「可重试」）都必须
- * 引用这里，不得各自维护一份同值集合。
- *
- * 只放明确表示「服务端未受理、稍后重试即可」的状态：请求超时/过早、限流，以及
- * Gateway 代理上游不可用。5xx 中其余状态（如 500）语义是服务端内部故障，不属于
- * 背压，重试不会改变结果。
- */
-export const NAVIGATION_BACKPRESSURE_STATUSES: readonly number[] = [
-  408, 425, 429, 502, 503, 504,
-];
-
-export function isNavigationBackpressureStatus(status: number): boolean {
-  return NAVIGATION_BACKPRESSURE_STATUSES.includes(status);
-}
-
 export function isNavigationMutationTerminalState(
   state: NavigationMutationState,
 ): boolean {

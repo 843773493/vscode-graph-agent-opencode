@@ -12,7 +12,7 @@ from app.domain.itemized.mutation_intents import (
     RebuildContextEpochIntent,
     SwitchToolSetIntent,
 )
-from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
+from app.services.infrastructure.rollout_context.checkpoint.mutation_intents import (
     MutationIntentConsumptionReceipt,
     MutationIntentConsumptionRejected,
     MutationIntentDuplicateConsumption,

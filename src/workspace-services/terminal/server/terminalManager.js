@@ -19,9 +19,6 @@ export const MAX_RETAINED_TERMINAL_HISTORY = 256;
 const PROTECTED_RECENT_EXECUTIONS = 8;
 
 function terminalId() {
-  // 非 canonical 身份：terminal 后端由 Node 启动（BOXTEAM_NODE_BIN），实测
-  // Node 22 无 crypto.randomUUIDv7；本进程生成的 term_/* 本地 id 允许继续
-  // 使用 v4，它们不是 session/thread 身份，不进入 canonical 校验器命名空间。
   return `term_${randomUUID().replaceAll("-", "")}`;
 }
 

@@ -9,10 +9,10 @@ from collections.abc import Callable, Iterator
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.domain.itemized.hashing import contribution_content_hash
 from app.domain.itemized.request_plan import ContextContribution
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -49,7 +49,7 @@ def old_schema(
 ) -> OldSchema:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"ses_{create_uuid_hex()}"
+    session_id = f"ses_{uuid4().hex}"
     node = session_bundle_factory(sessions, session_id)
     fixture = OldSchema(sessions, session_id, node / "rollout")
     with RolloutCheckpointSaver(sessions) as saver:
@@ -83,36 +83,13 @@ def test_explicit_upgrade_preserves_items_sources_and_allows_digest_only(old_sch
     before = old_schema.jsonl.read_bytes()
     with sqlite3.connect(old_schema.index) as connection:
         items = connection.execute("SELECT * FROM item_catalog").fetchall()
-        legacy_columns = [
-            row[1] for row in connection.execute("PRAGMA table_info(context_contributions)")
-        ]
-        contributions = [
-            dict(zip(legacy_columns, row, strict=True))
-            for row in connection.execute("SELECT * FROM context_contributions")
-        ]
+        contributions = connection.execute("SELECT * FROM context_contributions").fetchall()
     saver = RolloutCheckpointSaver(old_schema.sessions)
     saver.upgrade_rollout_schema(old_schema.session_id)
     assert old_schema.jsonl.read_bytes() == before
     with sqlite3.connect(old_schema.index) as connection:
         assert connection.execute("SELECT * FROM item_catalog").fetchall() == items
-        migrated_columns = [
-            row[1] for row in connection.execute("PRAGMA table_info(context_contributions)")
-        ]
-        # 既有列逐字移植；本 change 新增的 typed core 列恰好是这两个，且由
-        # NOT NULL DEFAULT 回填，不允许留 NULL 歧义。
-        assert [name for name in migrated_columns if name not in legacy_columns] == [
-            "selection_role",
-            "replacement_policy",
-        ]
-        migrated = [
-            dict(zip(migrated_columns, row, strict=True))
-            for row in connection.execute("SELECT * FROM context_contributions")
-        ]
-        assert len(migrated) == len(contributions)
-        for legacy_row, migrated_row in zip(contributions, migrated, strict=True):
-            assert {name: migrated_row[name] for name in legacy_columns} == legacy_row
-            assert migrated_row["selection_role"] == "direct"
-            assert migrated_row["replacement_policy"] == "immutable"
+        assert connection.execute("SELECT * FROM context_contributions").fetchall() == contributions
         assert connection.execute("SELECT schema_version FROM database_meta").fetchone() == (4,)
         assert connection.execute(
             "SELECT status FROM schema_migrations WHERE from_version = 1 AND to_version = 2"
@@ -134,25 +111,6 @@ def test_explicit_upgrade_preserves_items_sources_and_allows_digest_only(old_sch
     ))
     saver.upgrade_rollout_schema(old_schema.session_id)
     assert len(list(old_schema.root.glob("index.sqlite.migration-*.backup"))) == 3
-
-
-def test_contribution_upgrade_guard_rejects_arbitrary_column_subset(old_schema: OldSchema) -> None:
-    """v1→v2 守卫不得放宽成「任意子集即通过」：缺非新增列必须 fail closed。"""
-    with sqlite3.connect(old_schema.index) as connection, connection:
-        connection.execute(
-            "ALTER TABLE context_contributions DROP COLUMN protection"
-        )
-    with pytest.raises(RuntimeError, match="schema-upgrade-source-mismatch"):
-        RolloutCheckpointSaver(old_schema.sessions).upgrade_rollout_schema(
-            old_schema.session_id
-        )
-    with sqlite3.connect(old_schema.index) as connection:
-        assert connection.execute(
-            "SELECT schema_version, database_state FROM database_meta"
-        ).fetchone() == (1, "active")
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE name LIKE 'schema_upgrade_%'"
-        ).fetchall() == []
 
 
 def test_invalid_old_hash_pair_aborts_upgrade_and_preserves_originals(old_schema: OldSchema) -> None:

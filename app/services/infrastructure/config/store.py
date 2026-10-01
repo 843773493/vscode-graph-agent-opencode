@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
-from app.services.infrastructure.config.contracts import ConfigCandidateApplier
 from app.services.infrastructure.config.snapshot import (
     ConfigReloadFailureReason,
     ConfigReloadStatus,
@@ -16,6 +15,7 @@ from app.services.infrastructure.config.snapshot import (
 logger = logging.getLogger(__name__)
 
 ConfigCandidateBuilder = Callable[[], ConfigSnapshot]
+ConfigCandidateApplier = Callable[[ConfigSnapshot, ConfigSnapshot], Awaitable[None]]
 
 
 class ConfigSnapshotStore:

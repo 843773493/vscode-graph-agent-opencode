@@ -8,7 +8,6 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_config_service, get_request_id, verify_local_token
 from app.api.errors import state_conflict_http_error
-from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.config import (
     ConfigDTO,
@@ -93,15 +92,11 @@ async def get_config_sources(
     request_id: str = Depends(get_request_id),
     config_service: ConfigService = Depends(get_config_service),
 ):
-    revision, _schema_path, sources = config_service.get_source_diagnostics()
+    revision, schema_path, sources = config_service.get_source_diagnostics()
     return APIResponse(
         data=ConfigSourcesDTO(
             revision=revision,
-            # TODO(5A.3): 字段名与 proto 的 ConfigSourcesDTO.schema_path 属独立破坏性协议
-            # 切片，本切片不改其名；值改为配置来源 VRN（config kind，复用唯一定点构造），
-            # 避免真实路径外泄。仅发行包 inline 层 schema 有 VRN，非 inline schema（用户
-            # 自定义 `$schema`、用户级安装 schema）返回空串，不得编造 inline 来源身份。
-            schema_path=config_service.get_schema_source_vrn() or "",
+            schema_path=str(schema_path),
             sources=[
                 ConfigSourceDTO(
                     # TODO(5A.3): 该字段名与 proto 中的 ConfigSourceDTO.path 属独立的破坏性
@@ -364,23 +359,10 @@ async def stream_config_events(
         cursor = after
         consumer_id = f"workspace-config-sse:{uuid4().hex}"
         while not await request.is_disconnected():
-            # 空闲时不进 claim 写事务：先用只读探测确认确有待消费事件，再 claim。
-            # 否则无事的连接也会每秒 BEGIN IMMEDIATE + sweep，白白占用写事务。
-            # 若游标已被裁剪，探测会抛 CursorGone，此时按原有续读语义交给 claim 处理。
-            try:
-                has_pending = bool(
-                    config_service.list_config_events(after=cursor, limit=1)
-                )
-            except ConfigEventCursorGoneError:
-                has_pending = True
-            events = (
-                config_service.claim_config_events_for_consumer(
-                    after=cursor,
-                    consumer_id=consumer_id,
-                    limit=2000,
-                )
-                if has_pending
-                else ()
+            events = config_service.claim_config_events_for_consumer(
+                after=cursor,
+                consumer_id=consumer_id,
+                limit=2000,
             )
             if events:
                 for event in events:
@@ -414,8 +396,4 @@ async def stream_config_events(
                 yield ": config-heartbeat\n\n"
                 await asyncio.sleep(1)
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers=SSE_NO_CACHE_HEADERS,
-    )
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

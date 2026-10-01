@@ -17,8 +17,6 @@ from app.domain.itemized.resource_activation.common import (
     SourceLineageRef,
     _AVAILABILITIES,
     _BOUNDARIES,
-    _CODE_HASH_MISMATCH,
-    _CODE_ORDINAL_CONFLICT,
     _display_uri,
     _non_empty_string,
     _non_negative_int,
@@ -71,7 +69,7 @@ class ResourceProvenanceRef:
             )
         if self.source_lineage_digest != self.source_lineage_ref.digest:
             raise ResourceActivationContractError(
-                _CODE_HASH_MISMATCH,
+                "resource-activation-hash-mismatch",
                 "source_lineage_digest 与 source_lineage_ref 不一致",
             )
         _non_negative_int(
@@ -181,7 +179,7 @@ def _ordered_bindings(
     ordinals = [binding.activation_ordinal for binding in result]
     if len(set(ordinals)) != len(ordinals):
         raise ResourceActivationContractError(
-            _CODE_ORDINAL_CONFLICT,
+            "resource-activation-ordinal-conflict",
             "activation_ordinal 在同一 snapshot 内必须唯一",
         )
     return tuple(sorted(result, key=lambda binding: binding.activation_ordinal))
@@ -210,4 +208,5 @@ def resource_bindings_hash(bindings: Sequence[ResourceProvenanceRef]) -> str:
             ],
         }
     )
+
 

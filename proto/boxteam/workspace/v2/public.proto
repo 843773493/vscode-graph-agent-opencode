@@ -629,7 +629,6 @@ message PendingRequestDTO {
   google.protobuf.Timestamp created_at = 15;
   google.protobuf.Timestamp updated_at = 16;
   int64 snapshot_version = 17;
-  optional string gateway_id = 18;
 }
 
 message PendingRequestListDTO {

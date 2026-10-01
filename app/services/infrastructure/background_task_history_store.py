@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.core.background_task_registry import ACTIVE_TASK_STATUSES, BackgroundTaskHandle
+from app.core.background_task_registry import BackgroundTaskHandle
 from app.core.path_utils import get_session_path_resolver
 
 
@@ -52,7 +52,7 @@ class BackgroundTaskHistoryStore:
             records = self.list_session(session_id)
             changed = False
             for record in records:
-                if record.status not in ACTIVE_TASK_STATUSES:
+                if record.status not in {"pending", "running"}:
                     continue
                 record.status = "lost"
                 record.ended_at = datetime.now(UTC)

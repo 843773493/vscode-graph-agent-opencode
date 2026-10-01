@@ -3,8 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.gateway.routes._shared import _scan_local_directories
-from app.gateway.routes.workspaces_lifecycle import list_local_directories
+from app.gateway.main import _scan_local_directories, list_local_directories
 
 
 def test_scan_local_directories_only_returns_sorted_directories() -> None:
@@ -56,11 +55,11 @@ async def test_remote_gateway_directory_browser_delegates_to_federation_api(
         }
     )
     monkeypatch.setattr(
-        "app.gateway.routes.workspaces_lifecycle.request_remote_gateway_management",
+        "app.gateway.main.request_remote_gateway_management",
         request_remote,
     )
     monkeypatch.setattr(
-        "app.gateway.routes.workspaces_lifecycle._remote_gateway_credential",
+        "app.gateway.main._remote_gateway_credential",
         lambda connection_id: f"token-for-{connection_id}",
     )
 

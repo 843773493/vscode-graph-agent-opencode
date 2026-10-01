@@ -19,7 +19,7 @@ def test_tool_output_store_keeps_small_result_unchanged(tmp_path: Path) -> None:
     message = ToolMessage(content="small result", tool_call_id="call-small")
 
     result = store.bound(
-        session_id="ses_019bbea3e8b7744984826ff1d2840e03",
+        session_id="ses_6b7c22ae4b5c4d3f87841c3bb6a74102",
         tool_name="small_tool",
         tool_call_id="call-small",
         message=message,
@@ -38,7 +38,7 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019bd0aa8bb2784aaadbe51563ee17f0"
+    session_id = "ses_75e4d84bd24647908106cbb2ef144f6c"
     session_dir = session_bundle_factory(
         tmp_path / ".boxteam" / "sessions",
         session_id,
@@ -99,7 +99,7 @@ def test_tool_output_store_reuses_identical_tool_call_output(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019c268530e971098bb8da438d000f00"
+    session_id = "ses_2e07e8a2b56042cd865bdad76781ee91"
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     content = "x" * 2_000
     store = ToolOutputStore(
@@ -130,7 +130,7 @@ def test_tool_output_store_keeps_large_exec_command_result_valid_json(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019bea2f102b7f6c805a92b787288ac0"
+    session_id = "ses_e079294ad930487d818408b9933965a1"
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     full_payload = {
         "chunk_id": "term_large",
@@ -166,7 +166,7 @@ def test_tool_output_middleware_uses_custom_target_name(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019c49d551f17a0686eed4c785689d2a"
+    session_id = "ses_55fff82be1004e378d2bee34abc56d9f"
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     store = ToolOutputStore(
         workspace_root=tmp_path,

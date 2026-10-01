@@ -154,38 +154,19 @@ export function useSessionResourceLoader({
       }
 
       const sessionId = currentSession.session_id;
-      const actionLabel = actionLabelForKind(kind, action);
       setState((prev) => ({
         ...prev,
-        status: `正在${actionLabel}`,
+        status: `正在${actionLabelForKind(kind, action)}`,
       }));
 
-      let result: Awaited<ReturnType<typeof apiControlSessionResource>>;
-      try {
-        result = await apiControlSessionResource(
-          apiPort,
-          sessionId,
-          kind,
-          resourceId,
-          action,
-          workspaceId,
-        );
-      } catch (error) {
-        // 失败必须给出带原因的可见诊断：之前只把「正在取消/关闭…」留在状态栏，
-        // 用户既看不到失败也看不到原因，属于静默失败。
-        const message = errorMessage(error);
-        setState((prev) => {
-          // 与成功路径同一守卫：会话已切走时，旧会话的失败诊断不得污染新会话状态栏。
-          if (prev.currentSession?.session_id !== sessionId) {
-            return prev;
-          }
-          return {
-            ...prev,
-            status: `${actionLabel}失败: ${message}`,
-          };
-        });
-        throw error;
-      }
+      const result = await apiControlSessionResource(
+        apiPort,
+        sessionId,
+        kind,
+        resourceId,
+        action,
+        workspaceId,
+      );
 
       setState((prev) => {
         if (prev.currentSession?.session_id !== sessionId) {

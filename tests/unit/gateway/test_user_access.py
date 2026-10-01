@@ -121,32 +121,3 @@ async def test_concurrent_user_acquisition_has_one_winner(tmp_path):
         assert (first is None) != (second is None)
     finally:
         state.close()
-
-
-def test_repeated_takeover_does_not_grow_invalidations_unboundedly(tmp_path) -> None:
-    """反复 takeover 不得让失效事件表无界增长。
-
-    被顶替的 access_session_id 在数据库里的租约行会被删除，cleanup_expired 永远
-    看不到它；若不在 takeover 时就地回收，每次登录都会永久留下一个 asyncio.Event。
-    这里用「新增键数远小于 takeover 次数」作为有界判据（分片/回收两类修法都能满足，
-    仅保留旧行为会红）。
-    """
-
-    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-    service = UserAccessService(state=state)
-    try:
-        service.create_user(display_name="轮换用户", user_id="rotate")
-        service.acquire_user(user_id="rotate", client_label="第 1 次")
-        baseline = len(service._invalidations)
-        for index in range(2, 202):
-            service.acquire_user(
-                user_id="rotate",
-                client_label=f"第 {index} 次",
-                takeover=True,
-            )
-
-        # 200 次 takeover 若每次都留下失效事件，键数会增长约 200；有界修法下
-        # 每次顶替旧条目都会被弹出，键数相对基线只增不减 1（当前活跃会话）。
-        assert len(service._invalidations) - baseline <= 1
-    finally:
-        state.close()

@@ -11,6 +11,7 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugBreakpointRequest,
     NodeDebugConfigurationDTO,
+    NodeDebugLaunchClaimDTO,
 )
 from app.services.infrastructure.node_debug.breakpoint.breakpoint_mutations import (
     NodeDebugBreakpointMutations,
@@ -39,7 +40,6 @@ from app.services.infrastructure.node_debug.runtime_state import (
     ACTIVE_NODE_DEBUG_RUNTIME_STATUSES,
     MAX_NODE_DEBUG_LINE_BYTES,
     NodeDebugActionAppender,
-    NodeDebugLaunchClaimWriter,
     NodeDebugRuntime,
 )
 from app.services.infrastructure.node_debug.session.session_state import (
@@ -144,6 +144,10 @@ class NodeDebugLaunchSelectionWriter(Protocol):
     def __call__(
         self, owner: NodeDebugOwner, selection: NodeDebugLaunchSelection
     ) -> None: ...
+
+
+class NodeDebugLaunchClaimWriter(Protocol):
+    def __call__(self, claim: NodeDebugLaunchClaimDTO) -> None: ...
 
 
 class NodeDebugLaunchClaimMarker(Protocol):

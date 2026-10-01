@@ -17,7 +17,7 @@ from app.core.exceptions import NotFoundError
 from app.schemas.internal_v2.message import MessageReplayRequest
 from app.schemas.internal_v2.session_changes import SessionFileReviewRequest
 
-MISSING = "ses_019c1ef767ab76f28d14b4197977b6c3"
+MISSING = "ses_0d3e5c937a5f4c12becd97dd1390a51e"
 CATALOG_KEY_ERROR = KeyError(f"会话目录节点不存在: {MISSING}")
 NOT_FOUND = NotFoundError(f"Session {MISSING} not found")
 

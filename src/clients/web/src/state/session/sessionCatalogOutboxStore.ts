@@ -1,7 +1,6 @@
 import {
   catalogOutboxPartitionKey,
   createCatalogOutbox,
-  normalizeRestoredCatalogOutbox,
   orderedCatalogOutboxOperations,
   type CatalogOutbox,
   type CatalogOutboxOperation,
@@ -172,13 +171,7 @@ export async function persistCatalogOutboxPendingOperations(
   });
 }
 
-/**
- * 从持久层恢复该分区的 outbox；刷新/重开后调用，未对账命令原样回来。
- *
- * 恢复时统一做一次态归一（见 `normalizeRestoredCatalogOutbox`）：磁盘上残留的
- * `pending_local` 说明本地持久化已成功但进程在内存标记前退出，必须归一为可重放的
- * `persisted`，否则该命令既不重放也不对账，服务端未接受时会被永久静默丢失（F1）。
- */
+/** 从持久层恢复该分区的 outbox；刷新/重开后调用，未对账命令原样回来。 */
 export async function loadCatalogOutbox(
   port: CatalogOutboxPersistencePort,
   partition: CatalogOutboxPartition,
@@ -202,10 +195,7 @@ export async function loadCatalogOutbox(
     outbox = { ...outbox, operations: [...outbox.operations, record.operation] };
   }
   outbox = { ...outbox, operations: orderedCatalogOutboxOperations(outbox) };
-  return normalizeRestoredCatalogOutbox({
-    ...outbox,
-    next_client_sequence: maxSequence + 1,
-  });
+  return { ...outbox, next_client_sequence: maxSequence + 1 };
 }
 
 /** 只在 terminal 结果与 catalog revision 完成对账后清理对应持久条目。 */

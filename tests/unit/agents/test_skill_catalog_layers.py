@@ -7,10 +7,6 @@ from pathlib import Path
 import pytest
 
 from app.agents.skill_runtime import build_workspace_skill_catalog
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    set_current_gateway_id,
-)
 from app.services.infrastructure.resource_platform.derivation.types import (
     ResourceSnapshot,
 )
@@ -29,29 +25,8 @@ def _write_skill(root: Path, name: str, description: str, body: str) -> None:
     )
 
 
-FAKE_GATEWAY_ID = "gateway_0123456789abcdef0123456789abcdef"
-
-
 @pytest.fixture()
-def gateway_identity():
-    """在测试作用域内绑定真实 gateway_id，模拟 Gateway 按请求注入该身份。
-
-    gateway 层有条目时 MUST 绑定真实身份；缺失即 fail-closed，故所有触发 gateway
-    层的用例都要显式绑定，不得依赖字面量回退。
-    """
-    token = set_current_gateway_id(FAKE_GATEWAY_ID)
-    try:
-        yield FAKE_GATEWAY_ID
-    finally:
-        reset_current_gateway_id(token)
-
-
-@pytest.fixture()
-def layered_workspace(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    gateway_identity: str,
-) -> Path:
+def layered_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """构造 workspace 与 gateway 两层同名/异名 Skill 的隔离环境。"""
     monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
     monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)

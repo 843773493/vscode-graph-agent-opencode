@@ -89,6 +89,8 @@ def aggregate_records(
                     before_exists=before_content is not None,
                     after_exists=after_content is not None,
                 ),
+                additions=sum(record.additions for record in ordered),
+                deletions=sum(record.deletions for record in ordered),
                 latest_edit_id=last.edit_id,
                 tool_call_ids=tuple(
                     dict.fromkeys(record.tool_call_id for record in ordered)

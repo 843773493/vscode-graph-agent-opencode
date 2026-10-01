@@ -41,8 +41,8 @@ from app.services.infrastructure.rollout_context.runtime.protected_detail import
     ProtectedDetailError,
 )
 
-SOURCE_SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
-TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
+SOURCE_SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+TARGET_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
 
 
 @pytest.fixture

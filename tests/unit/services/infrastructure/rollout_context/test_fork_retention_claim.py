@@ -19,8 +19,8 @@ from app.core.session_catalog_store import (
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
-SOURCE_SESSION_ID = "ses_019c16981d377a1680b0a175104f5e29"
-TARGET_SESSION_ID = "ses_019c1a6427ff79728d8e22d312c5ece4"
+SOURCE_SESSION_ID = "ses_2f9d1e4c7a8b4f2d9c3e5a7b1d4f6081"
+TARGET_SESSION_ID = "ses_5b8e2f1a6c3d4e7f9a0b2c4d6e8f1357"
 CLAIM_ID = "forkclaim0001"
 
 

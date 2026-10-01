@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
+from uuid import uuid4
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -31,7 +31,7 @@ from tests.integration.backend.sessions.rollout_context.schema_v3_helpers import
 @pytest.fixture
 def schema2_artifact(request, session_bundle_factory):
     sessions = prepare_migration_workspace(request) / ".boxteam" / "sessions"
-    session_id = f"ses_{create_uuid_hex()}"
+    session_id = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session_id)
     with RolloutCheckpointSaver(sessions) as saver:
         artifact = create_schema2_artifact(saver, session_id)

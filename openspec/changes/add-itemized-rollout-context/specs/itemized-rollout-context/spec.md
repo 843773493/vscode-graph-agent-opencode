@@ -74,7 +74,7 @@ catalog批量deleting commit之后，即使部分Session local fence尚active，
 #### Scenario: 非规范或超长 ID 在接触文件系统前被拒绝
 
 - **WHEN** API、Proto、Session link、catalog import或typed ref携带非36-byte canonical profile的Session/thread ID，ID含路径分隔、Unicode、百分号编码、`.`/`..`，或hex payload不满足 `migrate-identifiers-to-uuidv7` 的 `uuidv7-identifier-profile` 规定的位 profile
-- **THEN** 共享validator在catalog/path lookup和任何文件系统操作前返回明确的形态化错误（中文`ValueError`，含非法形态说明，例如`session_id 形态非法: ...`或`ID payload 的 UUID version 位非法: ...`；MUST NOT 引入结构化`reason_code`、MUST NOT 新增异常子类，避免与既有`ValueError`通道形成双轨）；不得清洗、截断、建立别名或创建部分目录
+- **THEN** 共享validator在catalog/path lookup和任何文件系统操作前返回明确的`invalid_session_id`或`invalid_thread_id`；不得清洗、截断、建立别名或创建部分目录
 
 #### Scenario: main 与非 main thread 使用不同物理分桶
 
@@ -168,70 +168,6 @@ worker MUST在实际执行时按最新已提交SQLite和`NavigationTopologyGate`
 
 - **WHEN** 202已返回但worker尚未执行时Backend退出，或者事务已提交但terminal SSE尚未送达时退出
 - **THEN** 新owner按持久queue_seq/operation record继续或返回原terminal，目录事实、事件和幂等记录各一次，客户端状态查询可补齐丢失事件而不重复应用
-
-### Requirement: 集合型 mutation 遵循统一的乐观收敛判据
-
-前端 SHALL 按操作性质选择唯一收敛策略：改对象字段用后端返回值整体替换该对象；改集合成员且破坏性（删除会话、删除文件夹）用本地收敛投影加异步确认加权威校验兜底；改集合成员且可逆（新建、移动、重命名）用本地收敛投影加异步确认；只读观察才重取且必须能按目标精确重取。任何集合成员变化在其成功路径 MUST NOT 触发全量重取整个集合或整棵目录树；全量重取只允许在基线 revision 冲突、跨端并发写入或本地投影不可信时作为显式可观测的校验兜底。
-
-乐观投影 SHALL 只由已提交权威快照加本地有序命令重放计算得到，MUST NOT 修改后端权威镜像、MUST NOT 被当作业务事实提交给模型或持久化链路；仅 pending 或仅 accepted 的意图 MUST NOT 进入 canonical history、MUST NOT 触发 owner rehydrate 或重新 seal。
-
-本条与「会话目录编辑必须支持乐观投影、持久入队和失败回退」是集合型 mutation 统一乐观协议的**唯一规范载体**，四个必答问题分别由既有条款承载，MUST NOT 另立第二份协议 requirement：① 权威基线（已提交快照 + revision）由「会话目录编辑…」首段「只以 workspace `navigation/session-catalog.sqlite` 已提交 node 为业务事实」与「revision-pinned catalog snapshot/分页」承载，取证落点为该 requirement 的 Scenario「事件乱序、cursor gap 与 Gateway 旧快照」；② 本地意图排序（有序队列 + 依赖）由该 requirement 的 `client_sequence` 同分区有序与 `created_by_operation_id` 跨批依赖条款承载，取证落点为 Scenario「快速连续移动与独立操作」「新建文件夹后立即移动 Session 进去」；③ durable acceptance（202）不等于已改完由该 requirement「202 只表示 durable acceptance，不得显示为成功」承载，取证落点为 Scenario「网络未知结果与刷新恢复」「Backend 在入队和执行之间重启」；④ 失败收敛（重读权威 + 重放仍独立的命令 + 依赖失败项一并终结）由该 requirement 末段与本条 Scenario「冲突时才走全量校验兜底」承载，取证落点为 Scenario「并发客户端修改与局部回退」「递归删除预检失败与提交后排空失败」。
-
-#### Scenario: 删除集合成员不重取全集合
-- **WHEN** 用户删除一个会话且该 operation 进入 committed
-- **THEN** 前端从本地投影移除该成员并保持其它成员与展开状态不变，MUST NOT 因该成功结果再次请求整个会话列表或重拉整棵目录树
-
-#### Scenario: 改对象字段用返回值整体替换
-- **WHEN** 用户修改一个对象的字段且后端返回更新后的完整对象
-- **THEN** 前端用该返回对象整体替换本地对应对象，集合其余成员与顺序不变
-
-#### Scenario: 冲突时才走全量校验兜底
-- **WHEN** 本地投影的基线 revision 与后端权威 revision 不一致，或检测到另一客户端的并发写入
-- **THEN** 前端显式重读权威状态并重放仍独立的本地命令，且该重读在界面上可观测，不做静默重拉
-
-### Requirement: 文件树必须精确失效与权威收敛，Gateway 导航必须接入同一意图协议
-
-右侧文件树 MUST 保持对象级替换与精确子树失效，MUST NOT 退回全量重载；Gateway 工作区导航的集合成员 mutation MUST 接入本 change 已冻结的同一意图协议核心（唯一 `client_operation_id`、同分区有序 `client_sequence`、durable acceptance 不等于完成、按 ID 查询操作状态、迟到重放返回原终态、同 key 异 preimage 冲突），MUST NOT 另立第二套协议语义。
-
-协议核心是共享语义，**operation 记录、执行 worker、事件通道与唯一键空间由该集合的权威 owner 各自实例化**：工作区目录的 owner 是工作区后端（`NavigationMutationRecord`）；Gateway 工作区导航的 owner 是 Gateway 控制面自身（MUST NOT 被读成「Gateway 不许接管自有导航」）。文件树是否引入异步受理，**由量化前置决定**（见 tasks §10.4b）：量化证明无瓶颈时 MUST NOT 引入，MUST NOT 以「一致性更好」为由先行实现。
-
-文件树的影响面 MUST 用精确子树失效（丢弃该路径及其后代缓存并中止在途请求）表达，MUST NOT 以把全部已展开目录标记为过期再逐个重载的方式作为成功路径。文件变更事件流 MUST 接成权威增量修正通道，使外部变更（Agent、终端）驱动树增量更新，与本地乐观投影形成收敛闭环。
-
-#### Scenario: 新增文件只失效受影响子树
-- **WHEN** 用户在已展开的目录树中新建一个文件
-- **THEN** 只有包含该文件的目录行被失效并重载，其它已展开目录的缓存与凭证不变，MUST NOT 重载全部已展开目录
-
-#### Scenario: 文件树无瓶颈时不引入异步受理
-- **WHEN** 文件树的量化实测证明单次 mutation 的 p95 低于阈值且不出现丢失更新
-- **THEN** 文件树 MUST NOT 引入异步受理，只保留对象级替换、精确子树失效与事件增量收敛，MUST NOT 为「统一协议」而增加未证实的复杂度
-
-#### Scenario: 外部变更经权威增量收敛
-- **WHEN** Agent 或终端在树外部修改了文件，事件通道送达批量变更
-- **THEN** 前端按该增量修正对应目录的投影，MUST NOT 依赖全量重载来体现该变更
-
-#### Scenario: 集合型 mutation 不得绕开协议核心
-- **WHEN** 为会话目录树、文件树或 Gateway 工作区导航新增一个会改变集合成员的写操作
-- **THEN** 该操作 MUST 接入同一协议核心，MUST NOT 定义一套与之冲突的语义；其 operation 记录与 worker 由该集合的权威 owner 实例化，MUST NOT 保留一条绕开幂等与终态语法的同步直接写入通道
-
-### Requirement: 目录列表读取工作量必须与页大小相关
-
-会话目录的列表读取 MUST NOT 为每个会话逐一读取并解析其 manifest 文件；其读取工作量 MUST 与返回页大小相关，MUST NOT 与工作区内的会话总数相关。工作区目录索引是成员与顺序的唯一来源，不得为补齐列表字段而退回逐会话文件读。
-
-#### Scenario: 大工作区列表读取工作量有界
-- **WHEN** 一个工作区包含上千个会话而调用方只请求一页
-- **THEN** 后端为该页服务的 manifest 文件读取次数 MUST 与页大小相关，MUST NOT 随工作区会话总数线性增长
-
-### Requirement: 集合型 mutation 改造必须先量化后开工
-
-集合型 mutation 的读放大修复与乐观接线 SHALL 以隔离工作区的量化实测为开工前置：未取得端到端耗时、HTTP 请求数与后端文件系统读次数的数字前 MUST NOT 开工；实测 MUST 在隔离工作区进行，MUST NOT 只给推断值。若实测证明某条改造对应的瓶颈不存在，该改造 MUST NOT 开工，MUST NOT 以架构改动换取未证实的性能收益。
-
-#### Scenario: 未量化不开工
-- **WHEN** 一条集合型 mutation 改造尚未取得隔离工作区的量化数字
-- **THEN** 该改造 MUST NOT 开工，且 MUST NOT 以「预期会更快」为由先行实现
-
-#### Scenario: 瓶颈不存在则不开工
-- **WHEN** 实测数字证明读放大或重拉在该规模下不构成可观测瓶颈
-- **THEN** 对应改造 MUST NOT 开工，并如实登记为不实施，MUST NOT 为凑任务勾选而实现
 
 ### Requirement: main thread 与 durable child thread 必须支持真实的多任务协作模型
 
@@ -724,8 +660,6 @@ item `status` 只描述单个 canonical payload 的持久化/语义完成事实�
 
 `TurnRecord.final_item_id` MUST 只在 `turn_finalize` 与对应 canonical `assistant_output` item 的 terminal convergence 提交边界内写入。`Turn.status=completed` 时 `final_item_id` 必须非空，并指向同一 Turn 内 `status=completed` 的 `assistant_output` item；`completed_empty`、`open`、`active`、`interrupted`、`cancelled`、`failed` 和 `unknown` 时必须为空。Provider 空输出使用 `completed_empty`，不创建伪造 output item。`assistant_text` 和 `final_response` 是 projection；未完成 finalization 时，partial、failed、cancelled 或 unknown item 不得仅因其是最后一个 assistant item 就成为 final response。
 
-`ExecutionRecord` 与 `ModelCallRecord` MUST 与 `TurnRecord`、`ContextRef` 同口径携带 `thread_id`，其 typed relation（`TurnExecutionLink`、`ModelCallRecord(execution_id, model_call_id)`）与相应 SQLite 表/索引 MUST 以 `(session_id, thread_id)` 为 owner 并可按其机械定位；API 响应、SSE、cursor 与 cache key MUST 暴露并校验实际 thread identity，MUST NOT 以裸 `session_id` 或 `checkpoint_ns` 反推 thread。同一 Session 的 main thread 与 child thread 的 execution/model-call identity space 相互独立。
-
 #### Scenario: Provider retry 保留旧 item
 
 - **WHEN** 一次 model call 因超时或 provider 错误重新请求
@@ -740,11 +674,6 @@ item `status` 只描述单个 canonical payload 的持久化/语义完成事实�
 
 - **WHEN** assistant output 在中断时只有 partial item，且没有成功的 Turn finalization
 - **THEN** Turn 保留 partial/interrupted outcome，`final_item_id` 为空，历史 projection 不返回该 partial item 作为 `final_response`
-
-#### Scenario: execution 与 model-call 记录按 (session_id, thread_id) 定位
-
-- **WHEN** 同一 Session 的 main thread 与一个 child thread 各自产生 `ExecutionRecord`/`ModelCallRecord`，或调用方只提供裸 `session_id`/`checkpoint_ns` 要求解析某条 execution/model-call
-- **THEN** 每条记录 MUST 携带并按 `(session_id, thread_id)` 归属可机械定位，两个 thread 的 execution/model-call identity space 不重叠；仅给 `session_id` 或 `checkpoint_ns` 时 resolver 显式失败，MUST NOT 回退到 session 级或把 `checkpoint_ns` 升级为 thread identity
 
 ### Requirement: Turn、branch 和 view identity 必须避免隐式复制
 
@@ -1404,8 +1333,6 @@ Turn取得active execution slot时 MUST冻结整个Turn不可变的activation po
 模型可见或普通history projection只能返回策略允许的display URI、resource kind/scope/facet、revision安全标识、availability和typed provenance ref；绝对路径、provider locator、network endpoint、credential、内部handle和受保护正文 MUST NOT进入JSONL、普通history、模型请求日志或工具结果。Skill source URI属于resource/context envelope而不是Skill metadata。正常v2 runtime不得从旧`.boxteam/.../SKILL.md`、`read_file_path`、middleware location字符串或当前catalog反推resource provenance，也不得双写兼容字段。
 
 额外的`source_lineage_digest/ref` MUST只进入`activation_provenance_hash`和受保护manifest完整性校验，不得进入`bindings_hash`、`plan_hash`、wire bytes或普通history字段；raw来源变化但被选择的语义facet未变时，既有binding的语义revision、lineage ref与plan hash均保持不变。required lineage缺失、digest不符或derivation版本无法验证时 MUST fail closed，不得从当前来源或Registry回填。
-
-`ToolSetRef` 与普通 `ContextRef` MUST NOT 被当作 `ResourceActivationSnapshotRef`/`ResourceProvenanceRef` 的替代物或回退来源：`ToolSetRef` 只承载 Provider 可见 tools/tool-config 投影，普通 `ContextRef` 只承载 canonical/request-only/overlay selection，二者都不携带 registry generation、activation policy revision/hash、resource semantic revision、source lineage 或 target-local resource identity。当 plan/assembly 需要资源激活上下文而缺失 typed `ResourceActivationSnapshotRef`/`ResourceProvenanceRef` 时，系统 MUST fail closed，MUST NOT 以 tools 快照或 canonical ref 冒充资源激活事实、MUST NOT 从当前 Registry 或文件补造 provenance。
 
 #### Scenario: 默认Turn跨多个model call复用资源快照
 

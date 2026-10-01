@@ -59,6 +59,7 @@ PROVENANCE_RELATIONS = frozenset(
 )
 VISIBILITIES = frozenset({"public", "internal", "private"})
 PROTECTIONS = frozenset({"public", "redacted", "protected"})
+AVAILABILITIES = frozenset({"available", "unavailable", "forbidden", "expired"})
 
 SELECTION_COMPATIBILITY: dict[str, tuple[str, str]] = {
     SelectionKind.CANONICAL_HISTORY: ("canonical_item", BaseDeltaRole.NONE),

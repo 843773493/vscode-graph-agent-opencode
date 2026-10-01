@@ -12,11 +12,6 @@ import { useSessionMessageStream } from "./useSessionMessageStream";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
 import { useSessionRunActions } from "./useSessionRunActions";
 import { useSessionGoalController } from "./useSessionGoalController";
-import {
-  useSessionViewState,
-  type SessionViewStateController,
-  type SessionViewStateHost,
-} from "./useSessionViewState";
 import { invalidateGatewayToken } from "../../api/http";
 
 /**
@@ -43,14 +38,6 @@ export function apiResponse(data: unknown, status = 200): Response {
   return Response.json(
     { code: status === 200 ? 0 : status, message, request_id: "req_test", data },
     { status },
-  );
-}
-
-/** 用例逐字复用的错误响应（HTTP 状态 + detail），走真实 fetch 错误通路。 */
-export function errorResponse(status: number, message: string): Response {
-  return Response.json(
-    { detail: message },
-    { status, headers: { "content-type": "application/json" } },
   );
 }
 
@@ -115,8 +102,6 @@ export function installTestWindow(port: number): void {
       location: { port: String(port) },
       setTimeout: globalThis.setTimeout.bind(globalThis),
       clearTimeout: globalThis.clearTimeout.bind(globalThis),
-      setInterval: globalThis.setInterval.bind(globalThis),
-      clearInterval: globalThis.clearInterval.bind(globalThis),
       addEventListener: () => undefined,
       removeEventListener: () => undefined,
     },
@@ -378,7 +363,7 @@ export async function mountHarness(
  * 由真实 useSessionGeneratorResources 提供资源，否则使用空控制器；两者在
  * Harness 外分派，避免条件调用 hook。
  */
-function useSessionResourceExplorerHarness(options: {
+export function useSessionResourceExplorerHarness(options: {
   props: ResourceExplorerProps;
   liveGeneratorResources?: boolean;
   onExplorer?: (explorer: SessionResourceExplorerHandle) => void;
@@ -401,248 +386,5 @@ function useSessionResourceExplorerHarness(options: {
     });
     onExplorer?.(explorer);
     return null;
-  };
-}
-
-// —— 第二批（生命周期动作 / 资源探索器）共享装配 ——
-
-interface BuildSessionHookStateOverrides {
-  workspaceId: string;
-  current: Session | null;
-  sessions: Session[];
-  gatewayWorkspaces?: { workspace_id: string; root_path: string; name: string }[];
-  sessionsByWorkspace?: Map<string, Session[]>;
-  sessionGatewayWorkspaceById?: Map<string, string>;
-  eventQueuesBySession?: Map<string, unknown>;
-  pendingConversations?: Map<string, unknown>;
-  activeJobIdsBySession?: Map<string, string>;
-  unreadSessionKeys?: Set<string>;
-  sessionAttachmentSummaries?: Map<string, unknown>;
-}
-
-/**
- * 生命周期动作用例的 AppState 装配：会话列表与当前会话是最常覆盖的字段，
- * 其余会话级镜像统一给空值。只用于测试镜像，AppState 大部分字段与断言无关。
- */
-export function buildSessionHookState(
-  overrides: BuildSessionHookStateOverrides,
-): AppState {
-  const {
-    workspaceId,
-    current,
-    sessions,
-    gatewayWorkspaces = [],
-    sessionsByWorkspace = new Map([[workspaceId, sessions]]),
-    sessionGatewayWorkspaceById = new Map(),
-    eventQueuesBySession = new Map(),
-    pendingConversations = new Map(),
-    activeJobIdsBySession = new Map(),
-    unreadSessionKeys = new Set(),
-    sessionAttachmentSummaries = new Map(),
-  } = overrides;
-  return {
-    gatewayWorkspaces,
-    sessions,
-    sessionsByWorkspace,
-    sessionGatewayWorkspaceById,
-    sessionAttachmentSummaries,
-    eventQueuesBySession,
-    pendingConversations,
-    activeJobIdsBySession,
-    unreadSessionKeys,
-    activeGatewayWorkspaceId: workspaceId,
-    currentSession: current,
-    currentSessionWorkspaceId: workspaceId,
-    contentView: "default",
-    sessionHistoryReloadNonce: 0,
-    status: "",
-  } as unknown as AppState;
-}
-
-/** 会话目录子节点的标准成功响应。 */
-export function catalogChildrenResponse(
-  revision: string,
-  items: unknown[] = [],
-  parentNodeId: string | null = null,
-): Response {
-  return apiResponse({
-    revision,
-    parent_node_id: parentNodeId,
-    items,
-    cursor: null,
-    total: items.length,
-  });
-}
-
-/** 会话列表的整表响应（无分页）。 */
-export function sessionsListResponse(items: Session[]): Response {
-  return apiResponse({ items, has_more: false, next_cursor: null });
-}
-
-/** 删除会话成功的响应。 */
-export function deleteSessionResponse(sessionId: string): Response {
-  return apiResponse({ session_id: sessionId });
-}
-
-/**
- * 会话删除类用例的常用 fetch 桩：DELETE /api/v1/sessions/{id} 与列表重读。
- * 两个响应都可传静态 Response 或按调用次数生成的工厂。
- */
-export function installSessionDeleteFetch(options: {
-  deleteResponse: Response | (() => Response);
-  listResponse: Response | (() => Response);
-}): void {
-  const pick = (value: Response | (() => Response)): Response =>
-    typeof value === "function" ? (value as () => Response)() : value;
-  installGatewayFetch(({ path, method }) => {
-    if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
-      return pick(options.deleteResponse);
-    }
-    if (path === "/api/v1/sessions") return pick(options.listResponse);
-    return undefined;
-  });
-}
-
-/**
- * 挂载资源探索器并暴露句柄读取器，收敛「onExplorer 收集 + 空句柄检查」样板。
- * liveGeneratorResources 为真时由真实 useSessionGeneratorResources 供资源。
- */
-export async function mountResourceExplorer(options: {
-  props?: Partial<ResourceExplorerProps>;
-  liveGeneratorResources?: boolean;
-  flushes?: number;
-}): Promise<{
-  explorer: () => SessionResourceExplorerHandle;
-  unmount: () => void;
-}> {
-  let explorer: SessionResourceExplorerHandle | null = null;
-  const Harness = useSessionResourceExplorerHarness({
-    props: explorerProps(options.props),
-    liveGeneratorResources: options.liveGeneratorResources,
-    onExplorer: (value) => {
-      explorer = value;
-    },
-  });
-  const unmount = await mountHarness(Harness, options.flushes ?? 2);
-  if (!explorer) throw new Error("useSessionResourceExplorer Harness 未完成渲染");
-  return { explorer: () => explorer!, unmount };
-}
-
-/**
- * 直播生成器资源版本的探索器 Harness 工厂：用例用 syncKey/currentSessionId
- * 驱动 props 更新，句柄通过 onExplorer 回传。
- */
-export function liveExplorerHarness(options: {
-  apiPort: number;
-  activeWorkspaceId?: string | null;
-  workspaceNavigationSyncKey?: string;
-  onExplorer: (explorer: SessionResourceExplorerHandle) => void;
-}): (props: { syncKey?: string; currentSessionId?: string }) => React.ReactNode {
-  const activeWorkspaceId = options.activeWorkspaceId ?? "ws-test";
-  return function Explorer(props): React.ReactNode {
-    const generatorResources = useSessionGeneratorResources(options.apiPort);
-    const explorer = useSessionResourceExplorer({
-      ...explorerProps({
-        apiPort: options.apiPort,
-        activeWorkspaceId,
-        workspaceNavigationSyncKey:
-          props.syncKey ?? options.workspaceNavigationSyncKey ?? "ws-test",
-        currentSessionId: props.currentSessionId ?? "",
-      }),
-      generatorResources,
-    });
-    options.onExplorer(explorer);
-    return null;
-  };
-}
-
-// —— 第三批（视图状态 / Goal 控制器）共享装配 ——
-
-/**
- * 视图状态控制器 Harness：真实 React 状态机把最新 AppState 镜像到闭包，并向
- * 控制器提供与 hooks.tsx 相同的 setStatus 写法。hostGetter 用函数在每次渲染时
- * 更新 host，便于用例在挂载后切换 lease 代际 / 镜像。
- */
-export async function mountViewStateController(options: {
-  host: SessionViewStateHost | ((state: AppState) => SessionViewStateHost);
-  initial: AppState;
-}): Promise<{
-  controller: () => SessionViewStateController;
-  state: () => AppState;
-  renderer: ReactTestRenderer;
-  update: () => Promise<void>;
-  unmount: () => void;
-}> {
-  const { initial } = options;
-  let controller: SessionViewStateController | null = null;
-  let latestState = initial;
-  function Probe(): React.ReactNode {
-    const [current, setState] = React.useState(() => initial);
-    latestState = current;
-    controller = useSessionViewState({
-      host: typeof options.host === "function" ? options.host(current) : options.host,
-      setState,
-      setStatus: (message) => {
-        setState((previous) => ({ ...previous, status: message }));
-      },
-    });
-    return null;
-  }
-  let renderer!: ReactTestRenderer;
-  await act(async () => {
-    renderer = create(React.createElement(Probe));
-  });
-  if (!controller) throw new Error("useSessionViewState Harness 未完成渲染");
-  return {
-    controller: () => controller!,
-    state: () => latestState,
-    renderer,
-    update: async () => {
-      await act(async () => {
-        renderer.update(React.createElement(Probe));
-      });
-    },
-    unmount: () => act(() => renderer.unmount()),
-  };
-}
-
-/**
- * Goal 控制器 Harness 工厂：保留自持状态机，用例可切换 currentSession 并注入
- * 残留 Goal 状态，句柄通过控制器集合与状态读写器回传。
- */
-export function useGoalControllerHarness(options: {
-  apiPort: number;
-  initial: AppState;
-}): {
-  Harness: () => React.ReactNode;
-  controller: () => ReturnType<typeof useSessionGoalController>;
-  state: () => AppState;
-  setState: (update: (previous: AppState) => AppState) => void;
-} {
-  let controller: ReturnType<typeof useSessionGoalController> | null = null;
-  let latestState = options.initial;
-  let applyUpdate: (update: (previous: AppState) => AppState) => void = () => {
-    throw new Error("useSessionGoalController Harness 尚未挂载");
-  };
-  function Harness(): React.ReactNode {
-    const [current, setState] = React.useState<AppState>(() => options.initial);
-    latestState = current;
-    applyUpdate = setState;
-    controller = useSessionGoalController({
-      apiPort: options.apiPort,
-      currentSessionId: current.currentSession?.session_id ?? null,
-      currentWorkspaceId: current.currentSessionWorkspaceId,
-      setState,
-    });
-    return null;
-  }
-  return {
-    Harness,
-    controller: () => {
-      if (!controller) throw new Error("useSessionGoalController Harness 未完成渲染");
-      return controller;
-    },
-    state: () => latestState,
-    setState: (update) => applyUpdate(update),
   };
 }

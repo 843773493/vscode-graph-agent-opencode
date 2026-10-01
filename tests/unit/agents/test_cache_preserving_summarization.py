@@ -38,10 +38,10 @@ from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
-from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
+from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
     prefix_has_open_tool_group,
 )
-from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime

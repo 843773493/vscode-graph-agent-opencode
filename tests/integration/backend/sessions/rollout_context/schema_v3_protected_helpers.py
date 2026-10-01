@@ -22,7 +22,7 @@ from tests.integration.backend.sessions.rollout_context.test_protected_detail_up
     _OLD_BLOB,
 )
 
-SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
 
 
 def create_protected_schema2_artifact(saver: RolloutCheckpointSaver) -> Schema2Artifact:

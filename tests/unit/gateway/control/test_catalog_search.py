@@ -108,29 +108,3 @@ async def test_catalog_search_reports_unconnected_workspace_without_malformed_ur
     assert result.workspaces[0].error == (
         f"RuntimeError: 工作区后端尚未连接: {target.workspace_id}"
     )
-
-
-def test_catalog_sync_lock_pool_is_bounded_and_stable(tmp_path: Path) -> None:
-    """目录同步锁池必须恒定有界，且同一 workspace_id 恒得同一把锁。
-
-    若退回按 workspace_id 键的 dict，删除工作区后键永不回收，进程内存随历史
-    工作区无界增长；分片锁池则保证「同 id 同锁」的互斥红线且池大小恒定。
-    """
-
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "workspaces.json",
-        state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
-    )
-    service = GatewaySessionCatalogSearchService(
-        registry=registry,
-        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
-        cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
-    )
-
-    assert service._sync_lock_for("ws-a") is service._sync_lock_for("ws-a")
-    distinct = {id(service._sync_lock_for(f"ws-{index}")) for index in range(5000)}
-    assert len(distinct) <= 64
-    assert len(service._sync_locks) <= 64

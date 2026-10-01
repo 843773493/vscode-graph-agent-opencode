@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from app.core.exceptions import ForbiddenError
-from app.core.identifier import create_uuid_hex
 from app.core.path_segments import physical_segment
 from app.core.path_utils import (
     get_boxteam_home,
@@ -133,8 +132,10 @@ class TestPathUtils:
         folder_name = '项目/会话:*?"<>'
         session_title = '测试/会话:*?"<>'
         folder = resolver.create_folder(name=folder_name, parent_node_id=None)
-        # canonical ID 由 v7 唯一工厂生成（uuidv7 迁移后不再是 v4 形态常量）。
-        session_id = f"ses_{create_uuid_hex()}"
+        # R17：canonical ID（一次性 uuid4 形态常量，直接写入；非任务书
+        # md5 映射 ses_test_session_12345678 的产物——该函数反算不出此值，
+        # 生成脚本未留存，R17 审查 E3/处置必改 2 更正）
+        session_id = "ses_58a5607fd562454a932d851c95b73cc4"
         session_dir = seed_catalog_session_bundle(
             workspace_root / ".boxteam" / "sessions",
             session_id,
@@ -177,8 +178,9 @@ class TestPathUtils:
         resolver = get_session_path_resolver()
         source_folder = resolver.create_folder(name="移动前", parent_node_id=None)
         resolver.create_folder(name="移动后", parent_node_id=None)
-        # canonical ID 由 v7 唯一工厂生成（uuidv7 迁移后不再是 v4 形态常量）。
-        session_id = f"ses_{create_uuid_hex()}"
+        # R17：canonical ID（一次性 uuid4 形态常量，直接写入；非任务书
+        # md5 映射 ses_manual_move_12345678 的产物，R17 处置必改 2 更正）
+        session_id = "ses_5ce2590d35c74fd9a71e8d7526be328c"
         source = seed_catalog_session_bundle(
             workspace_root / ".boxteam" / "sessions",
             session_id,

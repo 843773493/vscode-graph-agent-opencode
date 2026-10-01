@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import zlib
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Literal
@@ -11,7 +10,6 @@ import httpx
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.credentials import FederationCredentialStore
-from app.gateway.proxy_upstream import load_proxy_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.remote_gateway import (
     reconnect_remote_gateway,
@@ -30,8 +28,6 @@ from app.schemas.gateway import (
     GatewayRuntimeStateResultDTO,
     GatewayWorkspaceListDTO,
 )
-
-_LOCK_SHARDS = 64
 
 
 class GatewayWorkspaceRuntimeController:
@@ -59,12 +55,7 @@ class GatewayWorkspaceRuntimeController:
         self._health_poll_interval_seconds = health_poll_interval_seconds
         self._connection_drain_timeout_seconds = connection_drain_timeout_seconds
         self._default_skill_groups = tuple(default_skill_groups)
-        # 固定分片锁池：workspace_id 来自路由路径参数，长驻单例若按 id 建锁会随
-        # 历史/探针 id 无界增长。同族缺陷（eade5389/bdd6ecd1）统一用固定分片池，
-        # crc32 而非 hash() 以保证跨进程确定；同 id 恒得同一把锁，互斥语义不变。
-        self._locks: tuple[asyncio.Lock, ...] = tuple(
-            asyncio.Lock() for _ in range(_LOCK_SHARDS)
-        )
+        self._locks: dict[str, asyncio.Lock] = {}
 
     async def start_managed_backend(
         self,
@@ -549,8 +540,6 @@ class GatewayWorkspaceRuntimeController:
         return {
             "X-Local-Token": LOCAL_TOKEN,
             "X-Request-ID": request_id,
-            # 按请求注入 Gateway 自身稳定身份，取值与两条 HTTP 代理同源。
-            "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
         }
 
     @staticmethod
@@ -671,8 +660,11 @@ class GatewayWorkspaceRuntimeController:
             self._registry.upsert(target, activate=False)
 
     def _lock(self, workspace_id: str) -> asyncio.Lock:
-        shard = zlib.crc32(workspace_id.encode("utf-8")) % _LOCK_SHARDS
-        return self._locks[shard]
+        lock = self._locks.get(workspace_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[workspace_id] = lock
+        return lock
 
     async def _delegated_probe(self, target: WorkspaceTarget) -> None:
         connection_id = target.remote_gateway_connection_id

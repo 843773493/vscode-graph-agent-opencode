@@ -12,19 +12,6 @@ from app.services.infrastructure.browser_manager_client import (
     BrowserManagerRequestError,
 )
 
-# 浏览器导航类型闭集：输入模型与工具内联签名共用同一事实来源。
-NavigatePageType = Literal[
-    "url",
-    "back",
-    "forward",
-    "reload",
-    "new_tab",
-    "activate_tab",
-    "close_tab",
-]
-# 鼠标按钮闭集：输入模型与工具内联签名共用同一事实来源。
-MouseButton = Literal["left", "right", "middle"]
-
 
 def _json_result(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -65,7 +52,15 @@ class PageIdInput(BaseModel):
 
 
 class NavigatePageInput(PageIdInput):
-    type: NavigatePageType = Field(
+    type: Literal[
+        "url",
+        "back",
+        "forward",
+        "reload",
+        "new_tab",
+        "activate_tab",
+        "close_tab",
+    ] = Field(
         default="url",
         description="导航类型；标签页 ID 可从 readPage 返回的 pages 获取。",
     )
@@ -81,7 +76,7 @@ class ElementInput(PageIdInput):
 
 class ClickElementInput(ElementInput):
     dblClick: bool = Field(default=False, description="是否双击。")
-    button: MouseButton = Field(default="left", description="鼠标按钮。")
+    button: Literal["left", "right", "middle"] = Field(default="left", description="鼠标按钮。")
 
 
 class TypeInPageInput(ElementInput):
@@ -322,7 +317,15 @@ def create_read_page_tool(context: CustomToolFactoryContext) -> BaseTool:
 def create_navigate_page_tool(context: CustomToolFactoryContext) -> BaseTool:
     async def navigate_page(
         pageId: str,
-        type: NavigatePageType = "url",
+        type: Literal[
+            "url",
+            "back",
+            "forward",
+            "reload",
+            "new_tab",
+            "activate_tab",
+            "close_tab",
+        ] = "url",
         url: str | None = None,
         tabId: str | None = None,
     ) -> str:
@@ -353,7 +356,7 @@ def create_click_element_tool(context: CustomToolFactoryContext) -> BaseTool:
         selector: str | None = None,
         element: str | None = None,
         dblClick: bool = False,
-        button: MouseButton = "left",
+        button: Literal["left", "right", "middle"] = "left",
     ) -> str:
         page = await _run_retryable_browser_operation(
             lambda: context.browser_manager_client.click_element(

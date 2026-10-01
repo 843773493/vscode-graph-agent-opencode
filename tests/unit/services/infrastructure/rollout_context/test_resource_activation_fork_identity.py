@@ -25,7 +25,7 @@ from tests.unit.services.infrastructure.rollout_context.test_resource_activation
     _sealed_with_activation,
 )
 
-TARGET_SESSION_ID = "ses_019c49da91667f7b842224c1bfc58b01"
+TARGET_SESSION_ID = "ses_8f2c5d1e4a3b46c09e7d5812ab34cd56"
 
 
 def test_full_copy_rebuilds_target_local_activation_identity(

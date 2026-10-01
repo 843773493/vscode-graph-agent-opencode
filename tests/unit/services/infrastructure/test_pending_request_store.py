@@ -13,8 +13,6 @@ def _request(
     *,
     sequence: int,
     content: str = "内容",
-    gateway_id: str | None = "gateway_test",
-    request_id: str | None = "request_test",
 ) -> PendingRequestDTO:
     now = datetime.now(UTC)
     return PendingRequestDTO(
@@ -30,15 +28,13 @@ def _request(
         created_at=now,
         updated_at=now,
         snapshot_version=sequence,
-        gateway_id=gateway_id,
-        request_id=request_id,
     )
 
 
 @pytest.mark.asyncio
 async def test_pending_request_store_round_trip(tmp_path, session_bundle_factory):
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_019c71c26c4f7859827c53d8b2f17d9b"
+    session_id = "ses_f2c04fddbd9446ab8bb83e681b9cb905"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
     request = _request(session_id, sequence=1)
@@ -51,97 +47,13 @@ async def test_pending_request_store_round_trip(tmp_path, session_bundle_factory
 
 
 @pytest.mark.asyncio
-async def test_pending_request_store_round_trip_preserves_gateway_id(
-    tmp_path,
-    session_bundle_factory,
-):
-    """gateway_id 是 Job 作为独立执行根的身份，落盘再读回必须逐字一致。"""
-    sessions_dir = tmp_path / "sessions"
-    session_id = "ses_019c71c26c4f7859827c53d8b2f17d9b"
-    session_bundle_factory(sessions_dir, session_id)
-    store = PendingRequestStore(sessions_dir=sessions_dir)
-    request = _request(session_id, sequence=1, gateway_id="gateway_abcd1234")
-
-    await store.save(session_id, [request])
-    restored = await store.load(session_id)
-
-    assert [item.gateway_id for item in restored] == ["gateway_abcd1234"]
-
-
-@pytest.mark.asyncio
-async def test_pending_request_store_round_trip_preserves_request_id(
-    tmp_path,
-    session_bundle_factory,
-):
-    """request_id 是 Job 作为独立执行根的身份，落盘再读回必须逐字一致。"""
-    sessions_dir = tmp_path / "sessions"
-    session_id = "ses_00000000f00070008000000000c4a1d2"
-    session_bundle_factory(sessions_dir, session_id)
-    store = PendingRequestStore(sessions_dir=sessions_dir)
-    request = _request(session_id, sequence=1, request_id="request_abcd1234")
-
-    await store.save(session_id, [request])
-    restored = await store.load(session_id)
-
-    assert [item.request_id for item in restored] == ["request_abcd1234"]
-
-
-@pytest.mark.asyncio
-async def test_pending_request_store_rejects_record_missing_gateway_id(
-    tmp_path,
-    session_bundle_factory,
-):
-    """老数据缺 gateway_id 时必须诚实失败，绝不静默补字面量或默认值。"""
-    sessions_dir = tmp_path / "sessions"
-    session_id = "ses_019b893703987b7faae8c21f93eddc34"
-    session_dir = session_bundle_factory(sessions_dir, session_id)
-    store = PendingRequestStore(sessions_dir=sessions_dir)
-    await store.save(session_id, [_request(session_id, sequence=1)])
-    path = session_dir / "pending_requests.json"
-    header, detail = path.read_text(encoding="utf-8").split("\n", 1)
-    records = json.loads(detail)
-    records[0].pop("gateway_id")
-    path.write_text(
-        header + "\n" + json.dumps(records, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(RuntimeError, match="待处理队列恢复失败"):
-        await store.load(session_id)
-
-
-@pytest.mark.asyncio
-async def test_pending_request_store_rejects_record_missing_request_id(
-    tmp_path,
-    session_bundle_factory,
-):
-    """老数据缺 request_id 时必须诚实失败，绝不静默补字面量或默认值。"""
-    sessions_dir = tmp_path / "sessions"
-    session_id = "ses_00000000f00070008000000000c4a1d2"
-    session_dir = session_bundle_factory(sessions_dir, session_id)
-    store = PendingRequestStore(sessions_dir=sessions_dir)
-    await store.save(session_id, [_request(session_id, sequence=1)])
-    path = session_dir / "pending_requests.json"
-    header, detail = path.read_text(encoding="utf-8").split("\n", 1)
-    records = json.loads(detail)
-    records[0].pop("request_id")
-    path.write_text(
-        header + "\n" + json.dumps(records, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(RuntimeError, match="待处理队列恢复失败"):
-        await store.load(session_id)
-
-
-@pytest.mark.asyncio
 async def test_pending_summary_read_is_bounded_and_skips_full_detail(
     tmp_path,
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_019b893703987b7faae8c21f93eddc34"
+    session_id = "ses_57f78fe6c75a4abb89931b84bf9bd413"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
     requests = [
@@ -201,7 +113,7 @@ async def test_legacy_pending_schema_is_rejected_without_compatibility_migration
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_019c68b3cc6b735b85733e284efa48c3"
+    session_id = "ses_44d0f0b4ce7c4c1880f83ecfe75b8c8d"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
     path = session_dir / "pending_requests.json"
@@ -222,7 +134,7 @@ async def test_store_rejects_duplicate_queue_sequences(
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_019c31e67b4172ddbaf02f165d52ef8f"
+    session_id = "ses_2f1661213e174de08ba2ab0651e315a6"
     session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
 

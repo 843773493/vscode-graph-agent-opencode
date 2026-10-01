@@ -320,7 +320,7 @@ def test_goal_prompts_treat_objective_as_escaped_user_data():
         time_used_seconds=0,
     )
 
-    continuation = GoalRuntimeService._continuation_message(goal).content
+    continuation = GoalRuntimeService._continuation_prompt(goal)
     updated = GoalRuntimeService._objective_updated_prompt(goal)
 
     assert continuation.count("</system_reminder>") == 1

@@ -395,6 +395,11 @@ class AttachmentBlobStore:
         self._resolve_published(session_id, file_id)
         return file_id
 
+    def resolve_read_path(self, session_id: str, file_id: str) -> Path:
+        """返回已验证的物理 blob 路径，仅供受控读取后端使用（不对外暴露）。"""
+        _ref, blob = self._resolve_published(session_id, file_id)
+        return self._verified_blob_path(blob.blob_id, blob.relative_locator)
+
     def _resolve_published(self, session_id: str, file_id: str):
         """按逻辑引用解析 owner reference 与 blob；越权/已 tombstone 一律失败。"""
         attachment_id = parse_logical_file_id(session_id, file_id)

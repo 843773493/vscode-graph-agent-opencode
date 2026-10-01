@@ -25,7 +25,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
 )
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
-_SESSION_ID = "ses_00000000400070008000000000000001"
+_SESSION_ID = "ses_00000000400040008000000000000001"
 _CONFIGURATION_ID = "dbgcfg_11111111111111111111111111111111"
 _CONFIGURATION_ID_2 = "dbgcfg_22222222222222222222222222222222"
 

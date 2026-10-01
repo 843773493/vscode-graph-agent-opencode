@@ -8,7 +8,7 @@ from app.core.job_event_bus import JOB_EVENT_HISTORY_SIZE, JobEventBus
 from app.services.event_service import EventService, JobEventCursorGoneError
 
 # SSE 编码边界强制 canonical session_id（OpenSpec 2.1），事件载荷必须自带。
-SESSION_ID = "ses_019bef80066f7038ae8e88ccb2e5e2ea"
+SESSION_ID = "ses_12345678123446788234567812345678"
 
 
 @pytest.fixture

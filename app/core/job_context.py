@@ -27,6 +27,11 @@ def reset_current_job_id(token: contextvars.Token[str | None]) -> None:
     _current_job_id.reset(token)
 
 
+def get_current_agent_id() -> str | None:
+    """获取当前正在执行的 agent_id，供 Agent Middleware 读取。"""
+    return _current_agent_id.get()
+
+
 def set_current_agent_id(agent_id: str | None) -> contextvars.Token[str | None]:
     """设置当前 agent_id，返回 token 用于恢复。"""
     return _current_agent_id.set(agent_id)

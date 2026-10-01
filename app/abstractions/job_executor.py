@@ -17,8 +17,6 @@ class JobRuntimeStateProtocol(Protocol):
     attachments: list[AttachmentRef]
     message_created_at: str
     message_metadata: dict[str, object]
-    # 创建该 Job 的权威 request_id（独立执行根身份）；缺失为 None。
-    request_id: str | None
     status: JobStatus
     progress: int
     current_step: str | None

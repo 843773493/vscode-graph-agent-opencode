@@ -21,14 +21,14 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
     CONFLICT_CODE,
     ToolProtocolBoundaryConflict,
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 
-SOURCE_SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
-TARGET_SESSION_ID = "ses_019c40c2b8e9796588b3e3c86dee2e44"
+SOURCE_SESSION_ID = "ses_700882fcaad94e7caa0555eca9273d35"
+TARGET_SESSION_ID = "ses_0b3f5c2d9a1e4f6087aa2b7c3d5e6f80"
 
 
 def _checkpoint(

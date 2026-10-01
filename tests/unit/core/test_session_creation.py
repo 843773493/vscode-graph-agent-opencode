@@ -10,16 +10,15 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_uuid_hex, to_epoch_ms
 from app.core.session_catalog_store import (
     SessionCatalogStore,
     SessionCreationRecord,
-    uuid7_embedded_utc_date,
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import (
@@ -63,8 +62,8 @@ def make_metadata(**overrides: object) -> dict[str, object]:
 
 
 def make_node_id() -> str:
-    """生成满足 UUIDv7 位 profile 的节点 ID（folder 与 session 同形）。"""
-    return f"ses_{create_uuid_hex()}"
+    """生成满足 UUIDv4 位 profile 的节点 ID（folder 与 session 同形）。"""
+    return f"ses_{uuid.uuid4().hex}"
 
 
 async def do_create(
@@ -278,43 +277,6 @@ async def test_create_under_folder_parent(
     result = await do_create(service, parent_node_id=folder.node_id)
     assert result.node.parent_node_id == folder.node_id
     assert result.node.kind == "session"
-
-
-async def test_create_clamps_clock_rollback_keeping_bucket_consistent(
-    service: SessionCreationService,
-    sessions_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """§4.4/§4.5：注入回拨后创建 MUST NOT 报错，且分桶日期与 id 内嵌
-    48 bit 毫秒 UTC 日期同源且一致（分桶被钳到回拨前值）。"""
-    from app.core import identifier
-
-    june1_ms = to_epoch_ms(datetime(2026, 6, 1, 12, 0, tzinfo=UTC))
-    may31_ms = to_epoch_ms(datetime(2026, 5, 31, 12, 0, tzinfo=UTC))
-    monkeypatch.setattr(identifier, "_last_issued_ms", None)
-    monkeypatch.setattr(identifier, "_wall_clock_ms", lambda: june1_ms)
-    # 先发放一次，把回拨钳制下界抬到 2026-06-01。
-    assert identifier.effective_now_ms() == june1_ms
-    # 注入回拨：墙钟退到 5 月 31 日。
-    monkeypatch.setattr(identifier, "_wall_clock_ms", lambda: may31_ms)
-
-    result = await do_create(service)
-
-    # 默认语义不把回拨变成可见故障。
-    assert result.record_state == "published"
-    # 分桶被钳到 06-01（不是回拨后的 05-31），且与 id 内嵌时间同日。
-    year, month, day = result.storage_relative_locator.split("/")[1:4]
-    assert (year, month, day) == ("2026", "06", "01")
-    assert (
-        uuid7_embedded_utc_date(result.session_id[4:]).isoformat()
-        == "2026-06-01"
-    )
-    assert uuid7_embedded_utc_date(result.main_thread_id[4:]).isoformat() == (
-        "2026-06-01"
-    )
-    # 物理目录落在钳制后的日期桶。
-    session_dir = date_bucket_dir(sessions_root, result.storage_relative_locator)
-    assert session_dir.is_dir()
 
 
 # ----------------------------------------------------------------------
@@ -705,7 +667,7 @@ async def test_cas_failure_locator_occupied_quarantines_and_aborts(
             WORKSPACE_ID,
             record.created_at,
             record.storage_relative_locator,
-            f"thr_{create_uuid_hex()}",
+            f"thr_{uuid.uuid4().hex}",
         ),
     )
     with pytest.raises(RuntimeError, match="CAS 失败"):
@@ -821,28 +783,3 @@ def test_preimage_hash_deterministic_and_sensitive() -> None:
     assert compute_session_creation_preimage_hash(
         **{**kwargs, "session_metadata": make_metadata(kind="context_fork")}
     ) != compute_session_creation_preimage_hash(**kwargs)
-
-async def test_key_lock_pool_is_bounded_and_stable_per_key(service) -> None:
-    """session 创建服务的 per-key 锁必须是固定上界且同 key 恒定命中。"""
-    for index in range(5000):
-        service._key_lock("session-" + str(index))
-    assert len(service._key_locks) <= 64
-    assert service._key_lock("session-shared") is service._key_lock("session-shared")
-
-
-async def test_key_lock_serializes_same_key(service) -> None:
-    """同 key 的临界区仍严格互斥（并发峰值恒为 1）。"""
-    lock = service._key_lock("session-shared")
-    concurrent = 0
-    peak = 0
-
-    async def worker() -> None:
-        nonlocal concurrent, peak
-        async with lock:
-            concurrent += 1
-            peak = max(peak, concurrent)
-            await asyncio.sleep(0.01)
-            concurrent -= 1
-
-    await asyncio.gather(*(worker() for _ in range(20)))
-    assert peak == 1

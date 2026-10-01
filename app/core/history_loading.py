@@ -3,9 +3,24 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import get_args
+from typing import Literal, get_args
 
-from app.schemas.internal_v2.turn import TurnInclude
+HistoryInclude = Literal[
+    "user",
+    "text",
+    "reasoning_summary",
+    "reasoning_detail",
+    "encrypted_reasoning_meta",
+    "assistant_text",
+    "assistant",
+    "tool_summary",
+    "tool_call",
+    "tool_result",
+    "thinking",
+    "internal",
+    "metadata",
+    "final_response",
+]
 
 DEFAULT_INITIAL_INCLUDE: tuple[str, ...] = (
     "user",
@@ -17,9 +32,9 @@ DEFAULT_ANCHOR_INCLUDE: tuple[str, ...] = ("user", "final_response")
 DEFAULT_INITIAL_TURNS = 5
 DEFAULT_ANCHOR_BEFORE_TURNS = 3
 DEFAULT_ANCHOR_AFTER_TURNS = 3
-# 合法投影字段集直接从 ``TurnInclude`` 派生，避免在同一模块内维护
+# 合法投影字段集直接从 ``HistoryInclude`` 派生，避免在同一模块内维护
 # 第二份逐字重复的字段清单（两份清单一旦漂移，校验口径就与类型声明分叉）。
-_VALID_INCLUDES = frozenset(get_args(TurnInclude))
+_VALID_INCLUDES = frozenset(get_args(HistoryInclude))
 
 
 @dataclass(frozen=True, slots=True)

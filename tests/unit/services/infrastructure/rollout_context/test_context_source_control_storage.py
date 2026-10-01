@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
+from app.services.infrastructure.rollout_context.checkpoint.context_source_control import (
     ContextSourceControlOwnerMixin,
     ContextSourceControlStorageMixin,
 )
@@ -37,8 +37,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
-SESSION_ID = "ses_019c3dbcb2f6749b85bed7b51dfe889d"
-CHILD_THREAD_ID = "ses_019c52c6b01c7733850a1aaf64ac579e"
+SESSION_ID = "ses_1cb2d44643ae45818a69dc2c654c06c7"
+CHILD_THREAD_ID = "ses_29399ea68ac24d0d8dfbb63d746c985e"
 
 
 def _create_session_node(
@@ -307,14 +307,14 @@ def test_read_short_circuits_for_owner_outside_authoritative_index(
     rollout_storage: RolloutStorage,
 ) -> None:
     assert rollout_storage.read_context_source_control_states(
-        "ses_019c1b918afd7857877ba5414bddf667"
+        "ses_ffffffffffffffffffffffffffffffff"
     ) == ()
     # 非 main thread 物理形态尚未落地（OpenSpec 8.5 前），解析 fail closed——
     # 这是新模型的显式合同，短路语义仅覆盖「节点不在权威目录」（上一条断言）。
     with pytest.raises(RuntimeError, match="非 main thread 物理形态未落地"):
         rollout_storage.read_context_source_control_states(
             SESSION_ID,
-            thread_id="thr_019bd65d75ea759187d180cdef62d7ec",
+            thread_id="thr_bfc75d66aebc4b7984711000b05bc503",
         )
 
 
@@ -367,7 +367,7 @@ def test_owner_rejects_non_canonical_thread_id_shape(
     with pytest.raises(RuntimeError, match="非 main thread 物理形态未落地"):
         rollout_storage.read_context_source_control_states(
             SESSION_ID,
-            thread_id="thr_019bd65d75ea759187d180cdef62d7ec",
+            thread_id="thr_bfc75d66aebc4b7984711000b05bc503",
         )
 
 

@@ -153,7 +153,7 @@ def seed_boundary_turn(
 def _seed_case_0001(sessions_dir: Path) -> None:
     seed_boundary_turn(
         sessions_dir,
-        session_id="ses_019bf985d867717182fe710be0f6adae",
+        session_id="ses_b1a2c3d4e5f6478899aabbccddeeff01",
         turn_id="boundary-turn-0001",
         user_content="验证同一 AI 消息中的 text 与 tool_call 展示边界。",
         items=(
@@ -224,7 +224,7 @@ def _seed_case_0001(sessions_dir: Path) -> None:
 def _seed_case_0002(sessions_dir: Path) -> None:
     seed_boundary_turn(
         sessions_dir,
-        session_id="ses_019bed0e9f8f7b27a213abe862c0b31a",
+        session_id="ses_b1a2c3d4e5f6478899aabbccddeeff02",
         turn_id="boundary-turn-0002",
         user_content="模拟用户在工具参数仍未完成时中断 Turn。",
         items=(
@@ -264,7 +264,7 @@ def _seed_case_0002(sessions_dir: Path) -> None:
 def _seed_case_0003(sessions_dir: Path) -> None:
     seed_boundary_turn(
         sessions_dir,
-        session_id="ses_019bc1148cec71b78b1aaa3b19b60363",
+        session_id="ses_b1a2c3d4e5f6478899aabbccddeeff03",
         turn_id="boundary-turn-0003",
         user_content="模拟工具已经启动但后端在 tool.completed 前退出。",
         items=(
@@ -302,7 +302,7 @@ def _seed_case_0003(sessions_dir: Path) -> None:
 def _seed_case_0004(sessions_dir: Path) -> None:
     seed_boundary_turn(
         sessions_dir,
-        session_id="ses_019c5123cafb789e8fdf8704f6464f74",
+        session_id="ses_b1a2c3d4e5f6478899aabbccddeeff04",
         turn_id="boundary-turn-0004",
         user_content="模拟文本 block 已产生内容后用户中断。",
         items=(
@@ -327,7 +327,7 @@ def _seed_case_0004(sessions_dir: Path) -> None:
 def _seed_case_0005(sessions_dir: Path) -> None:
     seed_boundary_turn(
         sessions_dir,
-        session_id="ses_019bdcfcb97f7dab8f30a959418a1658",
+        session_id="ses_b1a2c3d4e5f6478899aabbccddeeff05",
         turn_id="boundary-turn-0005",
         user_content="验证普通文本中的 function 标记不会被当成工作区文件引用。",
         items=(
@@ -352,7 +352,7 @@ def _seed_case_0005(sessions_dir: Path) -> None:
 def _seed_case_0006(sessions_dir: Path) -> None:
     seed_boundary_turn(
         sessions_dir,
-        session_id="ses_019b7a50d46c7e7f86c9148c7069cf97",
+        session_id="ses_b1a2c3d4e5f6478899aabbccddeeff06",
         turn_id="boundary-turn-0006",
         user_content="验证一条 AI 消息中包含普通文本和多个并行 tool_call。",
         items=(
@@ -448,12 +448,12 @@ def _seed_case_0006(sessions_dir: Path) -> None:
 
 
 SESSION_SEEDS = {
-    "ses_019bf985d867717182fe710be0f6adae": _seed_case_0001,
-    "ses_019bed0e9f8f7b27a213abe862c0b31a": _seed_case_0002,
-    "ses_019bc1148cec71b78b1aaa3b19b60363": _seed_case_0003,
-    "ses_019c5123cafb789e8fdf8704f6464f74": _seed_case_0004,
-    "ses_019bdcfcb97f7dab8f30a959418a1658": _seed_case_0005,
-    "ses_019b7a50d46c7e7f86c9148c7069cf97": _seed_case_0006,
+    "ses_b1a2c3d4e5f6478899aabbccddeeff01": _seed_case_0001,
+    "ses_b1a2c3d4e5f6478899aabbccddeeff02": _seed_case_0002,
+    "ses_b1a2c3d4e5f6478899aabbccddeeff03": _seed_case_0003,
+    "ses_b1a2c3d4e5f6478899aabbccddeeff04": _seed_case_0004,
+    "ses_b1a2c3d4e5f6478899aabbccddeeff05": _seed_case_0005,
+    "ses_b1a2c3d4e5f6478899aabbccddeeff06": _seed_case_0006,
 }
 
 

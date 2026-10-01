@@ -5,8 +5,8 @@ import {
   failedDirectoryEntry,
   loadedDirectoryEntry,
   loadingDirectoryEntry,
+  markDirectoryStale,
   pruneDirectoryCache,
-  restoreDirectoriesInOrder,
   type DirectoryCacheEntry,
 } from "./workspaceFileTreeCache";
 import {
@@ -39,7 +39,7 @@ interface WorkspaceFileTreeDirectories {
     ) => Record<string, DirectoryCacheEntry>,
   ) => void;
   loadDirectory: (path: string, force?: boolean, append?: boolean) => Promise<boolean>;
-  reloadExpandedDirectories: () => void;
+  refreshExpandedDirectories: () => void;
   invalidateDirectoriesUnder: (treePath: string) => void;
   abortAllDirectoryRequests: () => string[];
   resetDirectories: () => void;
@@ -159,6 +159,17 @@ export function useWorkspaceFileTreeDirectories({
     [onStatusChange, port, updateDirectories, workspaceId],
   );
 
+  const refreshExpandedDirectories = useCallback(() => {
+    updateDirectories((current) => Object.fromEntries(
+      Object.entries(current).map(([path, entry]) => [path, markDirectoryStale(entry)]),
+    ));
+    for (const path of expandedPathsRef.current) {
+      if (directoriesRef.current[path]) {
+        void loadDirectory(path, true);
+      }
+    }
+  }, [expandedPathsRef, loadDirectory, updateDirectories]);
+
   // 子树失效的唯一入口：丢弃该路径及其后代的缓存，并中止对应在途请求，
   // 使迟到的响应因请求身份不匹配而被丢弃，不能回填已被失效的目录。
   const invalidateDirectoriesUnder = useCallback((treePath: string) => {
@@ -179,21 +190,6 @@ export function useWorkspaceFileTreeDirectories({
     });
   }, [updateDirectories]);
 
-  // 全树重同步的唯一实现：SSE 溢出无法得知漏了哪些目录时，先按根失效整棵树
-  //（两个作用域各一次），再按展开态自父到子精确重取。不保留第二套 stale 标记。
-  const reloadExpandedDirectories = useCallback(() => {
-    const cachedExpanded = [...expandedPathsRef.current].filter(
-      (path) => directoriesRef.current[path],
-    );
-    invalidateDirectoriesUnder(ROOT_PATH);
-    invalidateDirectoriesUnder(FILESYSTEM_ROOT_PATH);
-    void restoreDirectoriesInOrder(
-      cachedExpanded,
-      (path) => loadDirectory(path),
-      parentFileTreePath,
-    );
-  }, [expandedPathsRef, directoriesRef, invalidateDirectoriesUnder, loadDirectory]);
-
   const abortAllDirectoryRequests = useCallback((): string[] => {
     const abortedPaths = [...directoryRequestsRef.current.keys()];
     for (const request of directoryRequestsRef.current.values()) {
@@ -213,7 +209,7 @@ export function useWorkspaceFileTreeDirectories({
     directoriesRef,
     updateDirectories,
     loadDirectory,
-    reloadExpandedDirectories,
+    refreshExpandedDirectories,
     invalidateDirectoriesUnder,
     abortAllDirectoryRequests,
     resetDirectories,

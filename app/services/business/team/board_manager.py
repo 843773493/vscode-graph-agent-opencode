@@ -19,7 +19,7 @@ from app.schemas.internal_v2.team import (
 )
 
 from .rules import (
-    RESOLUTION_STATUSES,
+    SUMMARY_REQUIRED_STATUSES,
     TASK_TRANSITIONS,
     find_member,
     find_task,
@@ -251,7 +251,7 @@ class TeamBoardManager:
         summary: str,
     ) -> tuple[TeamBoardDTO, TeamTaskDTO]:
         normalized_summary = summary.strip()
-        if status in RESOLUTION_STATUSES and not normalized_summary:
+        if status in SUMMARY_REQUIRED_STATUSES and not normalized_summary:
             raise ValueError(f"status={status} 时 summary 不能为空")
         async with self._lock(team_id):
             board = self.get_for_member(

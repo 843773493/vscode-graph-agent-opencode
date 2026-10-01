@@ -27,12 +27,12 @@ from tests.support.web_boundary_seeding import seed_boundary_cases
 from tests.support.workspaces import prepare_default_test_workspace
 
 BOUNDARY_CASES = (
-    ("ses_019bf985d867717182fe710be0f6adae", "boundary-turn-0001", "completed"),
-    ("ses_019bed0e9f8f7b27a213abe862c0b31a", "boundary-turn-0002", "cancelled"),
-    ("ses_019bc1148cec71b78b1aaa3b19b60363", "boundary-turn-0003", "failed"),
-    ("ses_019c5123cafb789e8fdf8704f6464f74", "boundary-turn-0004", "cancelled"),
-    ("ses_019bdcfcb97f7dab8f30a959418a1658", "boundary-turn-0005", "completed"),
-    ("ses_019b7a50d46c7e7f86c9148c7069cf97", "boundary-turn-0006", "completed"),
+    ("ses_b1a2c3d4e5f6478899aabbccddeeff01", "boundary-turn-0001", "completed"),
+    ("ses_b1a2c3d4e5f6478899aabbccddeeff02", "boundary-turn-0002", "cancelled"),
+    ("ses_b1a2c3d4e5f6478899aabbccddeeff03", "boundary-turn-0003", "failed"),
+    ("ses_b1a2c3d4e5f6478899aabbccddeeff04", "boundary-turn-0004", "cancelled"),
+    ("ses_b1a2c3d4e5f6478899aabbccddeeff05", "boundary-turn-0005", "completed"),
+    ("ses_b1a2c3d4e5f6478899aabbccddeeff06", "boundary-turn-0006", "completed"),
 )
 
 

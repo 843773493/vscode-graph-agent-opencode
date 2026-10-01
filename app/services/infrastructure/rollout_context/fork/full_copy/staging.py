@@ -31,24 +31,8 @@ class FullCopyStagingStorage(RolloutStorage):
         self._capability = capability
         self._target_session_key = target_session_key
 
-    def root(
-        self,
-        session_id: str,
-        checkpoint_ns: str = "",
-        *,
-        thread_id: str | None = None,
-    ) -> Path:
-        """staging owner 的 rollout 定位：只接受显式 source/target session。
-
-        私有 staging 根是按 target session 建立的单个 rollout 目录（fork 的
-        目标就是该 Session 的 main thread）；显式 non-main thread 在此没有
-        独立 staging 根，必须 fail closed 而不是把 thread 当 session 静默解析。
-        """
-        if thread_id is not None:
-            raise ValueError(
-                "fork staging 只承载 target session 的 main thread rollout，"
-                f"不接受显式 thread_id: {thread_id!r}"
-            )
+    def root(self, session_id: str, checkpoint_ns: str = "") -> Path:
+        """staging owner 的 rollout 定位：只接受显式 source/target session。"""
         if session_id == self._target:
             return self._stage_root
         if session_id == self._source:

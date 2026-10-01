@@ -263,12 +263,6 @@ class SourceLifecycleMixin:
                     )
                 for decision in decisions:
                     mutation_consume(decision)
-                # 端口消费在唯一 owner 事务里推进了持久化 state_revision；
-                # 重新对齐内存 CAS 基准，否则后续关键写（untrack/rebind）会以
-                # 陈旧 state_revision 触发 context-source-control-state-conflict。
-                self._sync_persisted_control_states(
-                    {delta.source_id for delta in batch.deltas}
-                )
             else:
                 # 已持久化的 source 在重试时按 durable fields 幂等跳过。
                 for delta in batch.deltas:

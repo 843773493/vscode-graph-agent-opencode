@@ -538,16 +538,6 @@ export function useSessionRunActions({
       const message = errorMessage(error);
       // 轮次回放失败只是当前会话的一次动作失败，不属于「工作区初始化失败」；
       // 只写 status，绝不能写 error —— 那是初始化失败出口的专属状态。
-      // 这里也不做待处理队列重取：与 sendMessage/interruptSession 不同，replay
-      // 没有任何乐观的本地 pending/运行态可失配——乐观回放态只在 apiReplayMessageTurn
-      // 成功后才写入，失败发生在请求阶段时前端从未改动队列或 activeJob。后端 replay
-      // 是「移除目标消息之后上下文 + 新建替换消息 + 创建新 Job」的多步非原子流程，
-      // 中途失败可能已留下半更新（例如替换消息 message_service.create 已提交、
-      // checkpoint 回退或相关 Job 因对账被标失败，详见 app/services/business/
-      // session_turn_replay_service.py），因此这里不做「一次性多余探测」，避免空快照
-      // 结果误覆盖后端真值；而是触发一次历史 bootstrap（sessionHistoryReloadNonce）
-      // 让权威历史接管收敛。若将来 replay 引入乐观态，必须改为后端权威校准而非此处
-      // 的一次探测。
       setState((prev) => ({
         ...prev,
         sessionHistoryReloadNonce: prev.sessionHistoryReloadNonce + 1,

@@ -5,9 +5,9 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol
 
 from app.abstractions.state_conflict import ClientStateConflictError
-from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.workspace_identity import validate_workspace_id
@@ -24,6 +24,18 @@ from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 
 logger = logging.getLogger(__name__)
+
+
+class TurnTerminalStatusWriter(Protocol):
+    """启动恢复时把仍处于 running 的持久化 Turn 收束为失败。"""
+
+    def mark_turn_terminal_status(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        status: str,
+    ) -> bool: ...
 
 
 def is_job_timeout_event(event: Event) -> bool:

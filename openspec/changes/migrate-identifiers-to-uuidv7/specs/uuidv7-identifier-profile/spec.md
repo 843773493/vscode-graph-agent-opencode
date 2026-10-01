@@ -94,26 +94,33 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 - **WHEN** 阅读校验层标识与 docstring
 - **THEN** 其中不出现会误导为「当前仍接受 v4」的名称或描述
 
-### Requirement: 存量 UUIDv4 身份必须一次性显式处置且不得双轨
+### Requirement: 存量 UUIDv4 身份必须一次性显式迁移且不得双轨
 
-存量 UUIDv4 身份（`.boxteam/sessions/` 下的 session/thread id、SQLite 主键与相关持久记录）MUST 走**一次性显式处置**：启动/迁移路径遇到 v4 canonical id MUST **fail-closed** 并**隔离**，同时产出**可操作的显式报告**（至少含被隔离 id、物理路径、原因、建议动作）；MUST NOT 回退 v4、MUST NOT 双读、MUST NOT 扫盘重建、MUST NOT 提供旧 ID path alias、MUST NOT 静默吸收。
+存量 UUIDv4 身份（`.boxteam/sessions/` 下的 session/thread id、SQLite 主键与相关持久记录）MUST 通过**一次性显式迁移**重编号为 UUIDv7；迁移 MUST 在受维护窗口与一致性备份约束下进行，MUST 使用可恢复账本记录进度，MUST 为每个被重编号的身份保留 source→target 的 lineage。
 
-系统 MUST NOT 提供运行时维护开关（例如 `identity_profile_migration_active`）或任何等价的「窗口期接受 `v4|v7`」运行时分叉；canonical 校验器 MUST **始终只接受 `v7`** 位 profile。
+迁移 MUST NOT 双读、MUST NOT 扫盘重建、MUST NOT 提供旧 ID path alias；无法可靠归属或校验的形态 MUST fail-closed 或隔离到既有隔离惯例（`.boxteam/orphaned/`），MUST NOT 静默吸收。
 
-#### Scenario: 遇到 v4 id 时 fail-closed 且报告可见
+**窗口期校验器的确切形态（判死，采用「消除窗口期」）**：window 内的双接受 MUST 由唯一的显式维护开关 `identity_profile_migration_active` 门控。开关开启时校验器接受 `v4|v7`（唯一允许的双接受时刻）；开关关闭（默认与迁移后常态）时校验器 MUST 只接受 `v7`。账本进入终态的那一笔事务提交后，MUST 在**同一次维护操作内**把开关置为关闭并切到「仅 v7」，MUST NOT 存在「只接受 v4」或「无终态长期双接受」的运行态。窗口期 MUST NOT 并行运行新旧代码版本，MUST 有启动期版本闸门保证单版本服务。
 
-- **WHEN** 启动/迁移路径遇到 v4 位 profile 的 canonical 身份
-- **THEN** 它 MUST fail-closed（隔离到既有隔离惯例，例如 `.boxteam/orphaned/`），并产出包含被隔离 id、物理路径、原因与建议动作的显式报告；MUST NOT 静默吸收、MUST NOT 回退 v4、MUST NOT 猜测目标、MUST NOT 扫盘补洞
+#### Scenario: 窗口期双接受由显式开关门控
+- **WHEN** 迁移正在进行
+- **THEN** 校验器接受 `v4|v7`，且该状态 MUST 由 `identity_profile_migration_active = true` 这一可观察事实显式承认，MUST NOT 以「不双读」等口号掩盖
 
-#### Scenario: MUST NOT 引入运行时开关
+#### Scenario: 开关关闭即只接受 v7
+- **WHEN** 迁移账本进入终态且开关被置为关闭
+- **THEN** 校验器 MUST 只接受 `v7`，`v4` 位 profile 的 canonical 身份 MUST 被拒绝
 
-- **WHEN** 检查 canonical 校验器与启动/迁移路径
-- **THEN** 其中 MUST NOT 存在 `identity_profile_migration_active` 或任何等价门控开关，MUST NOT 存在「窗口期接受 `v4|v7`」的分支；校验器 MUST 只接受 `v7`
+#### Scenario: 窗口期不并行运行新旧代码
+- **WHEN** 某工作区处于迁移窗口（开关为 true）
+- **THEN** 旧代码版本 MUST 被启动期版本闸门拒绝服务该工作区，MUST NOT 出现新旧代码同时服务
 
-#### Scenario: 处置不双读且不波及 v7 身份
+#### Scenario: 迁移保留 lineage 且不双读
+- **WHEN** 迁移把某个 session 的 v4 身份重编号为 v7
+- **THEN** 账本记录 source v4 → target v7 的映射，且运行路径只读取新身份，MUST NOT 同时按 v4 与 v7 双读
 
-- **WHEN** 存量 v4 身份被处置，或校验一个 v7 身份
-- **THEN** 运行路径 MUST NOT 同时按 v4 与 v7 双读同一身份，且 v4 存量处置 MUST NOT 波及合法的 v7 身份
+#### Scenario: 无法归属的形态 fail-closed
+- **WHEN** 迁移遇到无法可靠归属或校验的旧身份/目录
+- **THEN** 它 MUST 明确报错或隔离并保留原数据，MUST NOT 猜测目标、MUST NOT 扫盘补洞
 
 ### Requirement: SQLite 主键与索引不因 v7 重建
 
@@ -198,7 +205,7 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 
 gateway 控制面库（`app/gateway/control/gateway_state.py` 等）中承载 session 身份的表 MUST 被逐表分类，分类决定处置，MUST NOT 预先假定可静默失效：
 
-- `migrate`：需要迁移的表，按与工作区数据同一套一次性显式处置语义处理（无运行时开关；失败即 fail-closed 隔离 + 可操作显式报告，不静默吸收）。
+- `migrate`：需要迁移的表，按与工作区数据同一套一次性迁移语义（受维护窗口 + 一致性备份 + 可恢复账本 + lineage）处理。
 - `explicitly_invalidated`：允许失效重建的表，但 MUST 有**用户可见的显式报告**（哪张表、多少行、为何失效）；MUST NOT 静默重建（对齐「绝不默默失败」/「永不返回虚假的默认值」）。
 - `not_affected`：判定不受影响者，MUST 给出判定依据。
 

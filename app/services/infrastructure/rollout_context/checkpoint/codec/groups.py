@@ -64,12 +64,6 @@ def expand_tool_message(
             metadata.pop("projection_message_id", None)
             metadata.pop("token_usage", None)
             metadata.pop("content_part_refs", None)
-            # 非 anchor 伴随 item 失去消息级投影身份后，必须携带自身显式
-            # provider call id，才能让 turn projection 按真实工具身份解析；
-            # 仅有单个调用的 item 不存在歧义，禁止用 item_id 兜底猜测。
-            explicit_call_id = call.get("id") or call.get("tool_call_id")
-            if isinstance(explicit_call_id, str) and explicit_call_id:
-                metadata["tool_call_id"] = explicit_call_id
         item_id = (
             primary.item_id
             if ordinal == size - 1

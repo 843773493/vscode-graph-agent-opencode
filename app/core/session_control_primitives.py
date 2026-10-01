@@ -13,9 +13,6 @@
 - ``validate_thread_creation_key``：thread creation 幂等键形态校验
   （creation record / collaboration member / execution intent / service
   的 ``.staging/<key>/`` 目录名共用同一口径）。
-- ``CONTROL_DATABASE_NAME``：per-session 控制库文件名（creation、
-  thread creation、catalog resolver、subtree delete 与 owner thread
-  creation factory 共用，禁止各自复制文件名常量）。
 
 在 session-control 各子包之间只允许这一份实现；子包一律从此处导入，
 禁止各自复制正则（复制会让形态口径分叉）。
@@ -26,17 +23,12 @@ from __future__ import annotations
 import re
 
 __all__ = [
-    "CONTROL_DATABASE_NAME",
     "EXECUTION_BINDING_ID_PATTERN",
     "EXECUTION_JOB_ID_PATTERN",
     "SHA256_HEX_PATTERN",
     "validate_claim_fields",
     "validate_thread_creation_key",
 ]
-
-
-# per-session 控制库文件名（session-control 跨族共同口径）。
-CONTROL_DATABASE_NAME = "session-control.sqlite"
 
 
 # sha256 小写 hex 形态（session-control 跨族共同口径）。

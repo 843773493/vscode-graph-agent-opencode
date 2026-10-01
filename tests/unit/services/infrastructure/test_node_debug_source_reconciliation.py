@@ -29,7 +29,7 @@ from app.services.infrastructure.node_debug.session.session_state import (
     NodeDebugSessionState,
 )
 
-_SESSION_ID = 'ses_019b9eda5cc6769489eea0a333326f77'
+_SESSION_ID = 'ses_0000000000000000000000000000c0de'
 _THREAD_ID = 'main'
 _CONFIGURATION_ID = 'dbgcfg_' + '1' * 32
 

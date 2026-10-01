@@ -147,12 +147,12 @@ function actionErrorText(tree: ReactTestRenderer): string {
 describe("会话目录节点右键菜单的契约破坏", () => {
   test("文件夹节点缺 folder_id 时响亮报错，而不是右键静默无反应", async () => {
     const tree = await renderWithBranchItem([
-      { node_id: "ses_broken_folder", kind: "folder", name: "坏文件夹", has_children: true },
+      { node_id: "fld_broken", kind: "folder", name: "坏文件夹", has_children: true },
     ]);
     expect(actionErrorText(tree)).toBe("");
 
     act(() => {
-      catalogNodeRow(tree, "ses_broken_folder").props.onContextMenu({
+      catalogNodeRow(tree, "fld_broken").props.onContextMenu({
         preventDefault() {},
         stopPropagation() {},
         clientX: 10,

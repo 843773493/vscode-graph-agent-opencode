@@ -239,9 +239,11 @@ class StepRunner:
         )
         control_inbox = AgentControlInbox(
             message_stream_writer.turn_stream_id,
-            session_id=session_id,
-            state_path=self.ports.control_inbox_state_path(
-                session_id, message_stream_writer.turn_stream_id
+            state_path=(
+                self.ports.workspace_root
+                / ".boxteam"
+                / "control"
+                / f"{message_stream_writer.turn_stream_id}.json"
             ),
         )
         self.execution_scope_registry.register_inbox(

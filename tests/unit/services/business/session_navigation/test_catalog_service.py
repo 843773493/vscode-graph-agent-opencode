@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -11,19 +12,16 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionDTO
-from app.schemas.internal_v2.session_navigation import (
-    SessionFolderCreateRequest,
-    SessionFolderUpdateRequest,
-)
+from app.schemas.internal_v2.session_navigation import SessionFolderUpdateRequest
 from app.services.business.session_navigation import SessionCatalogService
-from tests.support.canonical_id_at import uuid7_hex_from_name
 
 T = TypeVar("T")
 
 
 def canonical(name: str) -> str:
-    """R17 任务书 §2.2 的确定性 canonical session ID 映射（v7 位 profile）。"""
-    return f"ses_{uuid7_hex_from_name(name)}"
+    """R17 任务书 §2.2 的确定性 canonical session ID 映射（测试用）。"""
+    digest = hashlib.md5(name.encode("utf-8")).hexdigest()
+    return f"ses_{digest[:12]}4{digest[13:16]}8{digest[17:]}"
 
 
 def _relocate(
@@ -99,7 +97,7 @@ async def test_catalog_cache_detects_manual_physical_move(
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
     source_folder = resolver.create_folder(name="原目录", parent_node_id=None)
-    session_id = "ses_019c3db33a627857869df585e7b8a084"
+    session_id = "ses_c5e66e7374644cf18313e592100ccfad"
     session_dir = session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, source_folder.node_id)
     catalog = SessionCatalogService(session_service=session_service)
@@ -107,22 +105,22 @@ async def test_catalog_cache_detects_manual_physical_move(
     first_node = next(
         node
         for node in first.items
-        if node.node_id == "ses_019c3db33a627857869df585e7b8a084"
+        if node.node_id == "ses_c5e66e7374644cf18313e592100ccfad"
     )
     # 手工挪动日期桶目录后按 ID 解析必须 fail closed。
     moved_path = tmp_path / "手工挪走" / session_dir.name
     moved_path.parent.mkdir(parents=True, exist_ok=True)
     resolver.resolve_session_node(
-        "ses_019c3db33a627857869df585e7b8a084"
+        "ses_c5e66e7374644cf18313e592100ccfad"
     ).replace(moved_path)
     with pytest.raises(RuntimeError, match="会话物理目录缺失"):
         session_service.path_resolver.resolve_session_node(
-            "ses_019c3db33a627857869df585e7b8a084"
+            "ses_c5e66e7374644cf18313e592100ccfad"
         )
 
     assert first_node.parent_node_id == source_folder.node_id
     assert first_node.session is not None
-    assert first_node.session.session_id == "ses_019c3db33a627857869df585e7b8a084"
+    assert first_node.session.session_id == "ses_c5e66e7374644cf18313e592100ccfad"
     assert first_node.session.title == first_node.name
     assert first_node.session.parent_session_id is None
 
@@ -136,7 +134,7 @@ async def test_catalog_snapshot_enriches_session_nodes_and_reuses_cached_metadat
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
     folder = resolver.create_folder(name="目录元数据", parent_node_id=None)
-    session_id = "ses_019bfa471b36790187e1d914607718e5"
+    session_id = "ses_e15deaf2c9814eb98a80eb270589c96e"
     session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, folder.node_id)
     catalog = SessionCatalogService(session_service=session_service)
@@ -173,7 +171,7 @@ async def test_catalog_read_keeps_authoritative_nodes_when_physical_tree_has_orp
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
     folder = resolver.create_folder(name="归档", parent_node_id=None)
-    session_id = "ses_019c1d3a6c9b7150818dc58e43efafb1"
+    session_id = "ses_ad68159b274149068514905d0d25cfe3"
     session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, folder.node_id)
 
@@ -351,198 +349,3 @@ async def test_recursive_delete_uses_catalog_subtree_protocol_without_folder_pat
     assert sorted(
         path.name for path in (deleting_root / deleting_keys[0]).iterdir()
     ) == sorted(session_ids)
-
-
-def _count_full_catalog_aggregations(
-    monkeypatch: pytest.MonkeyPatch,
-    resolver: SessionCatalogPathResolver,
-) -> list[int]:
-    """统计 resolver 全 catalog 聚合（``_list_all_catalog_nodes`` BFS）次数。
-
-    ``list_nodes()`` 与本切片前的 ``revision`` 实现都走这一聚合；打桩在聚合
-    入口即可同时锁定两条路径，任何复用同一次聚合之外的额外全表扫描都会被计数。
-    """
-    count = [0]
-    original = resolver._list_all_catalog_nodes
-
-    def counted():
-        count[0] += 1
-        return original()
-
-    monkeypatch.setattr(resolver, "_list_all_catalog_nodes", counted)
-    return count
-
-
-@pytest.mark.asyncio
-async def test_snapshot_aggregates_full_catalog_once(
-    tmp_path: Path,
-    session_bundle_factory,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """§10.3b：``refresh()`` 与一次目录 mutation 各只做一次全 catalog 聚合。
-
-    改前 ``_snapshot`` 在 ``revision``(×2) 与 ``list_nodes``(×1) 上共做 3 次
-    全表扫描；改后 ``revision`` 取 ``catalog_metadata.generation`` 单行查询，
-    只剩 ``list_nodes`` 一次。恢复重复聚合本用例立刻变红。
-    """
-    sessions_root = tmp_path / "sessions"
-    session_service = _SessionService(sessions_root)
-    resolver = session_service.path_resolver
-    folder = resolver.create_folder(name="目录", parent_node_id=None)
-    session_id = canonical("aggregate_once")
-    session_bundle_factory(sessions_root, session_id)
-    _relocate(resolver, session_id, folder.node_id)
-    catalog = SessionCatalogService(session_service=session_service)
-
-    count = _count_full_catalog_aggregations(monkeypatch, resolver)
-
-    # refresh() 走 force 路径，必须只聚合一次。
-    await catalog.refresh()
-    assert count[0] == 1
-
-    # 一次目录 mutation（新建 folder）后一次读：同样只聚合一次。
-    count[0] = 0
-    await catalog.create_folder(
-        SessionFolderCreateRequest(name="新建目录", parent_folder_id=None)
-    )
-    await catalog.list_children(parent_node_id=None, limit=50, cursor=None)
-    assert count[0] == 1
-
-
-@pytest.mark.asyncio
-async def test_revision_tracks_generation_without_full_scan(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """§10.3b：``resolver.revision`` 取 generation，不再触发全 catalog 聚合。"""
-    sessions_root = tmp_path / "sessions"
-    session_service = _SessionService(sessions_root)
-    resolver = session_service.path_resolver
-
-    count = _count_full_catalog_aggregations(monkeypatch, resolver)
-
-    folder = resolver.create_folder(name="目录", parent_node_id=None)
-    before = resolver.revision
-    assert count[0] == 0
-    resolver.update_node_name(folder.node_id, "新名")
-    assert resolver.revision == before + 1
-    assert count[0] == 0
-
-
-@pytest.mark.asyncio
-async def test_snapshot_cache_invalidates_on_direct_catalog_writes(
-    tmp_path: Path,
-    session_bundle_factory,
-) -> None:
-    """§10.3b：绕过 catalog 实例直接写 catalog 后，缓存判据必须察觉并重算。
-
-    这是方案 A 的核心前提：``generation`` 只覆盖 SQLite 写，因此凡改变
-    ``_snapshot`` 结果的写都必须推进 generation。改名/移动/新建/删除各一条，
-    写完不调用 ``catalog.invalidate()``，直接再读必须看到新结果。任一条写绕过
-    ``_bump_generation``，对应断言即变红（返回旧缓存）。
-    """
-    sessions_root = tmp_path / "sessions"
-    session_service = _SessionService(sessions_root)
-    resolver = session_service.path_resolver
-    folder = resolver.create_folder(name="原目录", parent_node_id=None)
-    session_id = canonical("cache_invalidate")
-    session_bundle_factory(sessions_root, session_id)
-    _relocate(resolver, session_id, folder.node_id)
-    catalog = SessionCatalogService(session_service=session_service)
-
-    first = await catalog.list_children(parent_node_id=None, limit=50, cursor=None)
-    assert [node.node_id for node in first.items] == [folder.node_id]
-    assert session_service.get_calls == [session_id]
-
-    # 改名：目录读模型对 folder 直接取目录显示名，命名变化必须可见。
-    resolver.update_node_name(folder.node_id, "改名后")
-    calls_before = len(session_service.get_calls)
-    renamed = await catalog.list_children(
-        parent_node_id=None, limit=50, cursor=None
-    )
-    assert [node.name for node in renamed.items] == ["改名后"]
-    assert len(session_service.get_calls) > calls_before  # 触发物理重算
-
-    # 移动：把会话移出目录回到根，根页必须出现该会话。
-    resolver.relocate_session(session_id=session_id, parent_node_id=None)
-    moved = await catalog.list_children(parent_node_id=None, limit=50, cursor=None)
-    assert sorted(node.node_id for node in moved.items) == sorted(
-        [folder.node_id, session_id]
-    )
-
-    # 新建：新增 folder 必须出现在根页。
-    created = resolver.create_folder(name="新目录", parent_node_id=None)
-    after_create = await catalog.list_children(
-        parent_node_id=None, limit=50, cursor=None
-    )
-    assert created.node_id in {node.node_id for node in after_create.items}
-
-    # 删除：删除空 folder 后必须从根页消失。
-    resolver.delete_folder(created.node_id)
-    after_delete = await catalog.list_children(
-        parent_node_id=None, limit=50, cursor=None
-    )
-    assert created.node_id not in {node.node_id for node in after_delete.items}
-
-
-@pytest.mark.asyncio
-async def test_children_cursor_is_scoped_to_parent(tmp_path: Path) -> None:
-    """cursor 绑定发牌父节点：拿去翻另一个父节点的页必须显式报错。
-
-    缺陷背景：cursor 只绑定 ``revision``，同一 revision 下把 A 父节点的 cursor
-    交给 B 父节点的分页请求时，offset 会落在 B 自身切片的中间——B 的前几项被
-    静默跳过、不报错（实测 B 首项 b0 被跳过）。本用例钉死跨父节点复用必须
-    fail-closed。
-    """
-    sessions_root = tmp_path / "sessions"
-    session_service = _SessionService(sessions_root)
-    resolver = session_service.path_resolver
-    folder_a = resolver.create_folder(name="A", parent_node_id=None)
-    folder_b = resolver.create_folder(name="B", parent_node_id=None)
-    for index in range(3):
-        resolver.create_folder(name=f"a{index}", parent_node_id=folder_a.node_id)
-        resolver.create_folder(name=f"b{index}", parent_node_id=folder_b.node_id)
-    catalog = SessionCatalogService(session_service=session_service)
-
-    first_a = await catalog.list_children(
-        parent_node_id=folder_a.node_id,
-        limit=1,
-        cursor=None,
-    )
-    assert [node.name for node in first_a.items] == ["a0"]
-    assert first_a.cursor is not None
-
-    # 同一父节点内继续翻页仍然正常。
-    second_a = await catalog.list_children(
-        parent_node_id=folder_a.node_id,
-        limit=1,
-        cursor=first_a.cursor,
-    )
-    assert [node.name for node in second_a.items] == ["a1"]
-
-    # 跨父节点复用同一 cursor 必须显式报错，而不是返回被截断的错误页。
-    with pytest.raises(ValueError, match="cursor 与当前列表不匹配"):
-        await catalog.list_children(
-            parent_node_id=folder_b.node_id,
-            limit=1,
-            cursor=first_a.cursor,
-        )
-
-
-@pytest.mark.asyncio
-async def test_search_cursor_is_scoped_to_query(tmp_path: Path) -> None:
-    """搜索 cursor 绑定查询词：换查询词复用旧 cursor 必须显式报错。"""
-    sessions_root = tmp_path / "sessions"
-    session_service = _SessionService(sessions_root)
-    resolver = session_service.path_resolver
-    for index in range(3):
-        resolver.create_folder(name=f"alpha-{index}", parent_node_id=None)
-        resolver.create_folder(name=f"beta-{index}", parent_node_id=None)
-    catalog = SessionCatalogService(session_service=session_service)
-
-    first = await catalog.search(query="alpha", limit=1, cursor=None)
-    assert len(first.items) == 1
-    assert first.cursor is not None
-
-    with pytest.raises(ValueError, match="cursor 与当前列表不匹配"):
-        await catalog.search(query="beta", limit=1, cursor=first.cursor)

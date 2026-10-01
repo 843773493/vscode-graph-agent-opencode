@@ -137,6 +137,9 @@ class LiteLLMHistoryProjectionMixin:
 
         return normalized or ""
 
+    def _normalize_history_content(self, content: Any) -> Any:
+        return self.normalize_history_content(content)
+
     @staticmethod
     def _history_reasoning_content(content: Any) -> str | None:
         """从直接 reasoning block 提取 Chat Completions 所需的思考文本。"""

@@ -11,7 +11,7 @@ from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
-SESSION_ID = "ses_019bef80066f7038ae8e88ccb2e5e2ea"
+SESSION_ID = "ses_12345678123446788234567812345678"
 
 
 class _Request:

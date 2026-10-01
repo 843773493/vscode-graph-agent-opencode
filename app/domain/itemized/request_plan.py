@@ -8,8 +8,6 @@ from dataclasses import dataclass, field
 from app.domain.itemized.enums import (
     BaseDeltaRole,
     DetailProtection,
-    ReplacementPolicy,
-    SelectionRole,
     SelectionKind,
 )
 from app.domain.itemized.errors import ItemSchemaError
@@ -57,18 +55,14 @@ class ContextContribution:
     # tail_only 对齐规范“默认外部内容与未受信指引恒为 tail_only”；只有
     # root producer（如 sealed system slot）显式声明 root_eligible。
     root_placement: RootPlacement = "tail_only"
-    # selection_role 决定该 contribution 是否允许作为独立候选进入 selection：
-    # direct 仍需 selection authority 显式选入，backing_only 只能作为其它显式
-    # selection ref 的 source backing，不得自行占一个 plan_ordinal。它参与
-    # 「选择」决策，因此必须是 typed core 字段，不能由自由 metadata/extensions
-    # 的同名 key（含旧 selection_only flag）承载。默认 direct 与迁移前语义一致。
-    selection_role: SelectionRole = SelectionRole.DIRECT
-    # replacement_policy 决定同一 owner slot 的未封存 registry 记录能否被新
-    # revision 原位覆盖：只有显式 replaceable 且 revision/CAS 匹配才可替换，
-    # 已提交 contribution/selection/JSONL 永远不原地更新。它参与「替换 / 安全
-    # 判定」，因此必须是 typed core 字段，不能由自由 metadata/extensions 的同名
-    # key（含旧 replaceable_source flag）承载。默认 immutable 与迁移前语义一致。
-    replacement_policy: ReplacementPolicy = ReplacementPolicy.IMMUTABLE
+    # replaceable_source 声明当前 contribution 占据一个由 producer 拥有、
+    # 可在同一 owner slot 内原位更新 revision 的可替换 source slot。它参与
+    # 「替换 / 安全判定」——决定同一 contribution_id 的未封存 registry 记录
+    # 是否允许被新 revision 覆盖，因此必须是 typed core 字段，不能由自由
+    # metadata/extensions 的同名 key 承载。默认 False 与迁移前语义一致：
+    # 只有 middleware 提供的 system slot 显式声明为 True，其余 provenance
+    # contribution 恒为 False，且不得被任何扩展值补造。
+    replaceable_source: bool = False
 
     def __post_init__(self) -> None:
         for name in ("contribution_id", "source_kind", "source_revision"):
@@ -107,15 +101,9 @@ class ContextContribution:
                 f"未知 ContextContribution.root_placement: {self.root_placement!r}；"
                 "root 资格只能由 owner 显式声明为 root_eligible|tail_only"
             )
-        if self.selection_role not in {item.value for item in SelectionRole}:
+        if not isinstance(self.replaceable_source, bool):
             raise ItemSchemaError(
-                f"未知 ContextContribution.selection_role: {self.selection_role!r}；"
-                "closed set 只有 direct|backing_only"
-            )
-        if self.replacement_policy not in {item.value for item in ReplacementPolicy}:
-            raise ItemSchemaError(
-                f"未知 ContextContribution.replacement_policy: {self.replacement_policy!r}；"
-                "closed set 只有 immutable|replaceable"
+                "ContextContribution.replaceable_source 必须是 boolean"
             )
         if not isinstance(self.metadata, Mapping):
             raise ItemSchemaError("ContextContribution.metadata 必须是 object")
@@ -613,13 +601,11 @@ class ContextRequestPlan:
                 visibility=contribution.visibility,
                 protection=contribution.protection,
                 root_placement=contribution.root_placement,
-                # selection_role/replacement_policy 是 registry 作用域的选择与
-                # 替换策略：它们只决定独立候选资格和同一 owner slot 的未封存
-                # registry 记录能否被新 revision 覆盖。已封存 contribution 永久
-                # 不可变，两个字段在 seal 后不再拥有任何决策权，因此与
-                # source_ordinal 同理不进入 sealed 形态。
-                selection_role=SelectionRole.DIRECT,
-                replacement_policy=ReplacementPolicy.IMMUTABLE,
+                # replaceable_source 是 registry 作用域的替换策略：它只决定
+                # 同一 owner slot 的未封存 registry 记录能否被新 revision 覆盖。
+                # 已封存 contribution 永久不可变，该 flag 在 seal 后不再拥有任何
+                # 决策权，因此与 source_ordinal 同理不进入 sealed 形态。
+                replaceable_source=False,
                 assembly_id=assembly_id,
                 contribution_ordinal=ordinal,
             )
@@ -677,8 +663,7 @@ class ContextRequestPlan:
                     "visibility": item.visibility,
                     "protection": item.protection,
                     "root_placement": item.root_placement,
-                    "selection_role": item.selection_role,
-                    "replacement_policy": item.replacement_policy,
+                    "replaceable_source": item.replaceable_source,
                     "body": (
                         item.body
                         if item.body is not None

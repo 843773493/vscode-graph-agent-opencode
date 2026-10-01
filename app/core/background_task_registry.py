@@ -7,9 +7,6 @@ from typing import Any, Awaitable, Callable, Optional, Protocol
 
 from app.core.identifier import create_prefixed_id
 
-# 后台任务仍未收敛的状态闭集：pending 尚未启动、running 正在执行。
-ACTIVE_TASK_STATUSES = frozenset({"pending", "running"})
-
 
 @dataclass(slots=True)
 class BackgroundTaskHandle:
@@ -138,14 +135,14 @@ class BackgroundTaskRegistry:
         return [
             record.handle
             for record in self._tasks.get(session_id, {}).values()
-            if record.handle.status in ACTIVE_TASK_STATUSES
+            if record.handle.status in {"pending", "running"}
         ]
 
     def list_closed_handles(self, session_id: str) -> list[BackgroundTaskHandle]:
         return [
             handle
             for handle in self._history_store.list_session(session_id)
-            if handle.status not in ACTIVE_TASK_STATUSES
+            if handle.status not in {"pending", "running"}
         ]
 
     def list_active_handles(self) -> list[BackgroundTaskHandle]:
@@ -153,7 +150,7 @@ class BackgroundTaskRegistry:
             record.handle
             for session_tasks in self._tasks.values()
             for record in session_tasks.values()
-            if record.handle.status in ACTIVE_TASK_STATUSES
+            if record.handle.status in {"pending", "running"}
         ]
 
     async def cancel_all_active(self, *, reason: str) -> int:
@@ -182,7 +179,7 @@ class BackgroundTaskRegistry:
             pass
         except Exception as exc:
             raise RuntimeError(f"取消后台任务失败: task_id={task_id}, error={exc}") from exc
-        if record.handle.status in ACTIVE_TASK_STATUSES:
+        if record.handle.status in {"pending", "running"}:
             record.handle.status = "cancelled"
             if record.handle.ended_at is None:
                 record.handle.ended_at = datetime.now(timezone.utc)

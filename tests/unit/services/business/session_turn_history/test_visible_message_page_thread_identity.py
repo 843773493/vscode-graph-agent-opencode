@@ -8,7 +8,7 @@ from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.session_turn_history.visible_page import visible_message_page
 
-SESSION_ID = "ses_019b99f62ca97699a68eacac2b7dda6e"
+SESSION_ID = "ses_2f5c1a8b0d7e44e2a91c3d5f6007b8a4"
 CHECKPOINT_ID = "ckpt_visible_page_thread_identity"
 MESSAGE_TIME = "2026-07-14T00:00:00+00:00"
 

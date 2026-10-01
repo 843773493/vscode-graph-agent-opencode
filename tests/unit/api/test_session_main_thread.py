@@ -75,7 +75,7 @@ async def test_main_thread_endpoint_maps_missing_session_to_404(
 ) -> None:
     with pytest.raises(HTTPException) as raised:
         await resolve_session_main_thread(
-            "ses_00000000000070008000000000000000",
+            "ses_00000000000040008000000000000000",
             _="local",
             request_id="req_missing",
             session_service=service,

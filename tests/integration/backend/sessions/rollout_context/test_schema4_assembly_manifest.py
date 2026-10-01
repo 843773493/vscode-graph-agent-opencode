@@ -11,19 +11,19 @@ import sqlite3
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import DetailProtection
-from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
     sha256_jcs,
 )
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     ContextAssemblyManifestMixin,
@@ -58,7 +58,7 @@ def assembly_case(
 ) -> Iterator[AssemblyCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"ses_{create_uuid_hex()}"
+    session_id = f"ses_{uuid4().hex}"
     session_bundle_factory(sessions, session_id)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(

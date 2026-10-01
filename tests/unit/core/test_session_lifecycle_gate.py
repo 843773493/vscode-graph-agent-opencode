@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
     SESSION_OPERATION_LEASE_KINDS,
@@ -31,11 +30,11 @@ from app.core.session_lifecycle_gate import (
 
 
 def make_session_id() -> str:
-    return f"ses_{create_uuid_hex()}"
+    return f"ses_{uuid.uuid4().hex}"
 
 
 def make_thread_id() -> str:
-    return f"thr_{create_uuid_hex()}"
+    return f"thr_{uuid.uuid4().hex}"
 
 
 def make_preimage(content: str = "operation") -> str:
@@ -152,7 +151,7 @@ def test_session_gate_rejects_non_canonical_session_id(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         gate.exclusive("非法ID")
     with pytest.raises(ValueError):
-        gate.shared("ses_" + create_uuid_hex().upper())
+        gate.shared("ses_" + uuid.uuid4().hex.upper())
 
 
 async def test_session_gate_lock_path_and_read_guard_type(

@@ -125,6 +125,25 @@ export function useSessionMessageStream({
       connectionStatus: "connecting",
     }));
 
+    const applyEvent = (event: MessageStreamEvent) => {
+      turnStreamId = event.turn_stream_id;
+      // React 的函数式 setState updater 可能在当前回调返回后才执行，不能
+      // 在 updater 内给这里的游标和终态变量赋值。否则真实浏览器会一直用旧
+      // 的 after_seq 重连，并在 SSE 结束时才一次性从历史看到完整响应。
+      lastEventSeq = Math.max(lastEventSeq, event.event_seq);
+      updateState((current) => applyMessageStreamEvent(current, event));
+
+      const eventTerminalStatus = terminalStatusFromEvent(event);
+      if (eventTerminalStatus) {
+        terminalSeen = true;
+        terminalStatus = eventTerminalStatus;
+        terminalFailure = failureFromEvent(event);
+        // 终态由事件本身确定，不应等待 SSE 连接自然关闭；服务端可能在
+        // 发送终态后继续保持连接，前端仍必须立即允许下一条消息。
+        notifyTerminal();
+      }
+    };
+
     const applySnapshot = async () => {
       const snapshot = await getSessionMessageStreamSnapshot(
         apiPort,
@@ -148,70 +167,6 @@ export function useSessionMessageStream({
       if (terminalSeen) {
         terminalStatus = snapshot.stream_status;
         terminalFailure = failureFromValue(snapshot.failure);
-        notifyTerminal();
-      }
-    };
-
-    // gap 态有界兜底：SSE 连接保持打开、但本连接内事件序号不连续时，reducer 会把
-    // 连接镜像置为 "gap" 并缓冲乱序事件，服务端通常会在下一次投递时补发
-    // stream.snapshot 收敛。但这条路径没有任何错误分支可命中（连接未断），若服务端
-    // 因保留窗口或丢帧不再补发，页面会永久停在缺口态。turn-message-stream 规范的
-    // 「Concurrent live events do not get lost around a snapshot」要求客户端在存在
-    // 中间缺口时继续 replay 或重新请求 snapshot，因此这里在进入 gap 时主动读一次
-    // 权威快照。兜底有界：同一个缺口最多补一次（读到能收敛缺口的连续帧或快照帧后
-    // 复位），绝不重试、绝不轮询；兜底失败只把真实原因写进诊断，让界面区分
-    // 「服务端补发前缺口的短暂态」与「确实恢复失败」。
-    let gapSnapshotRescueUsed = false;
-    let gapSnapshotRescueRunning = false;
-
-    const rescueGapWithSnapshot = async () => {
-      if (
-        gapSnapshotRescueUsed
-        || gapSnapshotRescueRunning
-        || terminalSeen
-        || controller.signal.aborted
-      ) {
-        return;
-      }
-      gapSnapshotRescueUsed = true;
-      gapSnapshotRescueRunning = true;
-      try {
-        await applySnapshot();
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        updateState((current) => ({
-          ...current,
-          protocolError: errorMessage(error),
-        }));
-      } finally {
-        gapSnapshotRescueRunning = false;
-      }
-    };
-
-    const applyEvent = (event: MessageStreamEvent) => {
-      turnStreamId = event.turn_stream_id;
-      // React 的函数式 setState updater 可能在当前回调返回后才执行，不能
-      // 在 updater 内给这里的游标和终态变量赋值。否则真实浏览器会一直用旧
-      // 的 after_seq 重连，并在 SSE 结束时才一次性从历史看到完整响应。
-      const previousSeq = lastEventSeq;
-      lastEventSeq = Math.max(lastEventSeq, event.event_seq);
-      updateState((current) => applyMessageStreamEvent(current, event));
-
-      if (event.type === "stream.snapshot" || event.event_seq === previousSeq + 1) {
-        // 能收敛缺口的帧（连续业务事件或权威快照）到达后复位，允许下一次真实缺口
-        // 再次兜底；否则同一个缺口最多补一次快照。
-        gapSnapshotRescueUsed = false;
-      } else if (event.event_seq > previousSeq) {
-        void rescueGapWithSnapshot();
-      }
-
-      const eventTerminalStatus = terminalStatusFromEvent(event);
-      if (eventTerminalStatus) {
-        terminalSeen = true;
-        terminalStatus = eventTerminalStatus;
-        terminalFailure = failureFromEvent(event);
-        // 终态由事件本身确定，不应等待 SSE 连接自然关闭；服务端可能在
-        // 发送终态后继续保持连接，前端仍必须立即允许下一条消息。
         notifyTerminal();
       }
     };

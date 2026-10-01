@@ -8,7 +8,7 @@ from app.agents.tools.session_wait import create_wait_for_session_tool
 from app.schemas.internal_v2.common import JobStatus, RunMode
 from app.schemas.internal_v2.job import JobDTO
 
-_SESSION_ID = "ses_019b9dffc29a779e8564d196f78bb0a6"
+_SESSION_ID = "ses_5a2c9d1f0e3b4a7c8d9e0f1a2b3c4d5e"
 
 
 class _FakeJob:
@@ -149,7 +149,7 @@ async def test_communication_unbound_selector_reports_communication_kind(until: 
 
             return CommunicationWaitBinding(
                 target_session_id=_SESSION_ID,
-                target_main_thread_id="thr_019c029a1afe79ff8c39e3ee33c2871b",
+                target_main_thread_id="thr_4f9d3a1e8b2c4d5f8a7b6c5d4e3f2a1b",
                 job_id=None,
                 turn_id=None,
             )

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import (
@@ -20,14 +19,15 @@ from app.services.orchestration.owner_thread_creation_factory import (
 )
 from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
-    SessionSubagentUnavailableError,
 )
 
 WORKSPACE_ID = "0197d9a3-7d2a-7c29-8d76-58b3cf3f8a21"
 
 
 def make_session_id() -> str:
-    return f"ses_{create_uuid_hex()}"
+    import uuid
+
+    return f"ses_{uuid.uuid4().hex}"
 
 
 class _ParentReader:
@@ -109,18 +109,6 @@ def factory(sessions_root: Path) -> OwnerThreadCreationFactory:
     )
 
 
-class _RecordingBinder:
-    """可用 binder 标记：delegate 只做可用性声明，绑定归 §8.5 worker。
-
-    SessionSubagentService 不在此同步调用 binder（claim/CAS 与重启恢复由
-    InitialExecutionBindingWorker 负责），故本测试替身一旦被调用即断言
-    失败，锁住「delegate 不越界绑定」这一边界。
-    """
-
-    def __call__(self, target):
-        raise AssertionError(f"delegate 不应直接调用 binder: {target!r}")
-
-
 def make_service(
     parent_session: SessionDTO,
     factory: OwnerThreadCreationFactory,
@@ -128,7 +116,6 @@ def make_service(
     return SessionSubagentService(
         parent_session_reader=_ParentReader(parent_session),
         thread_creation_factory=factory,
-        initial_execution_binder=_RecordingBinder(),
     )
 
 
@@ -261,7 +248,6 @@ async def test_delegate_before_start_failure_exposes_thread_id(
     service = SessionSubagentService(
         parent_session_reader=_ParentReader(parent_session),
         thread_creation_factory=factory,
-        initial_execution_binder=_RecordingBinder(),
     )
     with pytest.raises(RuntimeError, match="child_thread_id="):
         await service.delegate(
@@ -306,7 +292,6 @@ async def test_delegate_rejects_agent_mismatch(
     service = SessionSubagentService(
         parent_session_reader=_MismatchedReader(parent_session),
         thread_creation_factory=factory,
-        initial_execution_binder=_RecordingBinder(),
     )
     with pytest.raises(RuntimeError, match="不一致"):
         await service.delegate(
@@ -317,47 +302,3 @@ async def test_delegate_rejects_agent_mismatch(
             description="做事",
             subagent_type="general-purpose",
         )
-
-
-@pytest.mark.asyncio
-async def test_delegate_without_real_binder_fails_closed_before_side_effects(
-    parent_session: SessionDTO,
-    factory: OwnerThreadCreationFactory,
-    catalog: SessionCatalogStore,
-) -> None:
-    """生产未装配真实 binder 时必须在任何持久化副作用前 fail closed。
-
-    OpenSpec 主 spec 第 244 行：缺少 binder 时 MUST 可观测地 fail-closed
-    报告 ``unavailable``，MUST NOT 静默停留 pending、MUST NOT 返回虚假
-    accepted。此处断言：抛出的异常携带确定性 delegation identity，且没有
-    创建任何 thread_catalog child row / admission intent。
-    """
-    service = SessionSubagentService(
-        parent_session_reader=_ParentReader(parent_session),
-        thread_creation_factory=factory,
-        initial_execution_binder=None,
-    )
-
-    with pytest.raises(SessionSubagentUnavailableError) as raised:
-        await delegate_parent(service, parent_session)
-
-    error = raised.value
-    assert error.delegation_id.startswith("del_")
-    assert error.parent_session_id == parent_session.session_id
-    assert error.subagent_type == "general-purpose"
-    assert "unavailable" in str(error)
-
-    # 无持久化副作用：不创建 child row，也不写 admission intent。
-    node_count = int(
-        catalog.connection.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
-    )
-    assert node_count == 1
-    control = SessionControlStore(
-        factory._session_dir_for(parent_session.session_id)
-        / "session-control.sqlite"
-    )
-    try:
-        assert control.list_child_thread_rows() == ()
-        assert control.list_initial_execution_intents() == ()
-    finally:
-        control.close()

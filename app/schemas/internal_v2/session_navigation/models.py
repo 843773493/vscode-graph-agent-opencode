@@ -16,9 +16,6 @@ class SessionCatalogNodeDTO(BaseModel):
     session_id: str | None = None
     folder_id: str | None = None
     has_children: bool = False
-    # catalog 权威 state：active=已提交可见；deleting=逻辑删除中（pending）。
-    # 前端据此区分 confirmed 与 pending，不把 deleting 子树当正常节点渲染。
-    state: Literal["active", "deleting"] = "active"
     storage_relative_path: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

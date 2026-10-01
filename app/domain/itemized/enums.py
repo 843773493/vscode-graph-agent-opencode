@@ -100,17 +100,3 @@ class DetailAvailability(StrEnum):
     UNAVAILABLE = "unavailable"
     FORBIDDEN = "forbidden"
     EXPIRED = "expired"
-
-
-class SelectionRole(StrEnum):
-    """ContextContribution 是否允许独立进入 selection。"""
-
-    DIRECT = "direct"
-    BACKING_ONLY = "backing_only"
-
-
-class ReplacementPolicy(StrEnum):
-    """ContextContribution 在同一 source slot 的更新准入。"""
-
-    IMMUTABLE = "immutable"
-    REPLACEABLE = "replaceable"

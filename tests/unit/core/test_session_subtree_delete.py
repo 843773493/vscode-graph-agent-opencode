@@ -14,13 +14,13 @@ import asyncio
 import os
 import shutil
 import sqlite3
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_prefixed_id_at, to_epoch_ms
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -41,13 +41,12 @@ _DELETING_DIR_NAME = ".deleting"
 
 
 def make_node_id() -> str:
-    """生成满足 UUIDv7 位 profile 的节点 ID（folder 与 session 同形）。"""
-    # id 内嵌时间 MUST 与 sessions/2026/06/01 分桶同日（§4.1）。
-    return create_prefixed_id_at("ses", to_epoch_ms(_MOMENT))
+    """生成满足 UUIDv4 位 profile 的节点 ID（folder 与 session 同形）。"""
+    return f"ses_{uuid.uuid4().hex}"
 
 
 def make_thread_id() -> str:
-    return create_prefixed_id_at("thr", to_epoch_ms(_MOMENT))
+    return f"thr_{uuid.uuid4().hex}"
 
 
 def build_session_directory(
@@ -753,59 +752,6 @@ async def test_recovery_partial_drain_resumes_from_progress(
             store.get_node(node_id)
 
 
-async def test_recovery_crash_window_skips_drain_callback(
-    service: SessionSubtreeDeleteService,
-    store: SessionCatalogStore,
-    sessions_root: Path,
-    tree: DeleteTree,
-) -> None:
-    """真实崩溃窗口（目录已隔离、进度未记）重入时不得重跑资源回调。
-
-    隔离目标存在即证明上次的 drain 回调已成功返回（回调严格前于 fence
-    CAS，fence 前于 rename）；此时源目录已消失，若仍重跑回调，回调内的
-    目录解析会因缺失 fail closed，从而永久阻断崩溃恢复。
-    """
-    record = prepare_and_mark(store, key="del-key-1", root_node_id=tree.root)
-    ordered = sorted(record.frozen_session_locators)
-    isolated = ordered[0]
-    # 复现崩溃：第一个 session 已 fence+rename，但进度未记录。
-    source = date_bucket_dir(
-        sessions_root, record.frozen_session_locators[isolated]
-    )
-    control = SessionControlStore(source / "session-control.sqlite")
-    try:
-        assert control.cas_fence_transition(1, "deleting") is True
-    finally:
-        control.close()
-    target = sessions_root / _DELETING_DIR_NAME / "del-key-1" / isolated
-    target.parent.mkdir(parents=True, exist_ok=True)
-    os.rename(source, target)
-    assert store.get_subtree_delete_record("del-key-1").drained_session_ids == ()
-
-    callback_calls: list[str] = []
-
-    async def composite_drain(session_id: str) -> None:
-        callback_calls.append(session_id)
-        # 模拟生产回调读取源目录（已隔离则 fail closed）。
-        if not date_bucket_dir(
-            sessions_root, record.frozen_session_locators[session_id]
-        ).is_dir():
-            raise RuntimeError(f"会话物理目录缺失: {session_id}")
-
-    service.set_session_drain_callback(composite_drain)
-    result = await service.delete(
-        idempotency_key="del-key-1", root_node_id=tree.root
-    )
-
-    assert result.record_state == "completed"
-    # 已隔离的 session 未重跑回调；其余未隔离的 session 正常回调。
-    assert isolated not in callback_calls
-    assert sorted(callback_calls) == ordered[1:]
-    for node_id in tree.subtree_node_ids:
-        with pytest.raises(KeyError):
-            store.get_node(node_id)
-
-
 async def test_recovery_finish_crash_completes_on_reentry(
     service: SessionSubtreeDeleteService,
     store: SessionCatalogStore,
@@ -1034,28 +980,3 @@ async def test_service_default_gate_creates_own_gate(
         idempotency_key="del-key-1", root_node_id=tree.root
     )
     assert result.record_state == "completed"
-
-async def test_key_lock_pool_is_bounded_and_stable_per_key(service) -> None:
-    """子树删除服务的 per-key 锁必须是固定上界且同 key 恒定命中。"""
-    for index in range(5000):
-        service._key_lock("del-" + str(index))
-    assert len(service._key_locks) <= 64
-    assert service._key_lock("del-shared") is service._key_lock("del-shared")
-
-
-async def test_key_lock_serializes_same_key(service) -> None:
-    """同 key 的临界区仍严格互斥（并发峰值恒为 1）。"""
-    lock = service._key_lock("del-shared")
-    concurrent = 0
-    peak = 0
-
-    async def worker() -> None:
-        nonlocal concurrent, peak
-        async with lock:
-            concurrent += 1
-            peak = max(peak, concurrent)
-            await asyncio.sleep(0.01)
-            concurrent -= 1
-
-    await asyncio.gather(*(worker() for _ in range(20)))
-    assert peak == 1

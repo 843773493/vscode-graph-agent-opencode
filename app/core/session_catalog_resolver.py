@@ -10,10 +10,10 @@
 - **folder 无物理目录**：新模型 folder 是 SQLite-only 节点，使用独立的
   ``SessionCatalogFolderProjection``；``resolve_folder_dir`` 恒
   ``RuntimeError``。
-- **逻辑移动不搬磁盘**：``move_node``（folder）与 ``relocate_session``
-  （session）只改 SQLite ``parent_node_id``，不搬任何物理目录、不改写
-  ``session.json``、不改 fork/delegation lineage/Session kind 或已封存
-  context；执行中 Session 可移动（design.md §9）。
+- **逻辑移动不搬磁盘**：``move_node``/``relocate_session``/
+  ``relocate_folder_tree`` 只改 SQLite ``parent_node_id``，不搬任何物理
+  目录、不改写 ``session.json``、不改 fork/delegation lineage/Session kind
+  或已封存 context；执行中 Session 可移动（design.md §9）。
 语义基准：design.md §9（统一两级 resolver；逻辑导航移动不搬磁盘；
 folder 无物理目录；Gateway 只消费受控 catalog export）。
 
@@ -36,10 +36,8 @@ from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
-    SubtreeDeleteRecord,
     validate_thread_id,
 )
-from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_subtree_delete import (
     SessionSubtreeDeleteService,
@@ -56,6 +54,7 @@ __all__ = [
 
 # store.list_children 单页上限（BFS 全量投影的分页粒度）。
 _LIST_CHILDREN_PAGE_LIMIT = 512
+_CONTROL_DATABASE_NAME = "session-control.sqlite"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,9 +74,6 @@ class SessionCatalogFolderProjection:
     kind: Literal["folder"]
     parent_node_id: str | None
     name: str
-    # catalog 权威 state：active=已提交可见；deleting=逻辑删除中（读路径按语义
-    # 将其从目录树暂时隐藏，但保留 state 让前端区分 pending 与 committed）。
-    state: Literal["active", "deleting"] = "active"
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +87,6 @@ class SessionCatalogSessionProjection:
     created_at: datetime
     updated_at: datetime
     storage_relative_path: str
-    state: Literal["active", "deleting"] = "active"
 
 
 SessionCatalogNodeProjection: TypeAlias = (
@@ -195,7 +190,6 @@ class SessionCatalogPathResolver:
                 kind=node.kind,
                 parent_node_id=node.parent_node_id,
                 name=node.display_name,
-                state=node.state,
             )
         if node.storage_relative_locator is None:
             raise RuntimeError(
@@ -217,7 +211,6 @@ class SessionCatalogPathResolver:
             created_at=created_at,
             updated_at=created_at,
             storage_relative_path=node.storage_relative_locator[len("sessions/"):],
-            state=node.state,
         )
 
     # ------------------------------------------------------------------
@@ -231,17 +224,8 @@ class SessionCatalogPathResolver:
         self._store.verify_workspace_consistency()
         self._consistency_verified = True
 
-    def _list_all_catalog_nodes(
-        self,
-        *,
-        include_deleting: bool = False,
-    ) -> list[SessionCatalogNode]:
-        """按 node_id 稳定序返回 catalog 全量节点（list_children BFS 分页）。
-
-        ``include_deleting=False``（读路径默认）时按 design.md §9 语义把
-        ``deleting`` 子树暂时从目录树隐藏：单一节点进入 deleting 不再拖垮
-        整棵目录的读取。删除恢复链路如需完整视图显式传 ``True``。
-        """
+    def _list_all_catalog_nodes(self) -> list[SessionCatalogNode]:
+        """按 node_id 稳定序返回 catalog 全量节点（list_children BFS 分页）。"""
         self._ensure_consistency_verified()
         nodes: dict[str, SessionCatalogNode] = {}
         frontier: list[str | None] = [None]
@@ -255,14 +239,36 @@ class SessionCatalogPathResolver:
                     cursor=cursor,
                 )
                 for node in page:
-                    if not include_deleting and node.state != "active":
-                        continue
                     nodes[node.node_id] = node
                     frontier.append(node.node_id)
                 if not has_more:
                     break
                 cursor = next_cursor
         return [nodes[node_id] for node_id in sorted(nodes)]
+
+    def _subtree_catalog_node_ids(self, node_id: str) -> set[str]:
+        """递归返回子树全部节点 ID（含自身）。"""
+        self._ensure_consistency_verified()
+        result = {node_id}
+        frontier = [node_id]
+        while frontier:
+            current_id = frontier.pop()
+            cursor: str | None = None
+            while True:
+                page, next_cursor, has_more = self._store.list_children(
+                    current_id,
+                    limit=_LIST_CHILDREN_PAGE_LIMIT,
+                    cursor=cursor,
+                )
+                for node in page:
+                    if node.node_id in result:
+                        raise RuntimeError(f"会话目录包含循环: {node.node_id}")
+                    result.add(node.node_id)
+                    frontier.append(node.node_id)
+                if not has_more:
+                    break
+                cursor = next_cursor
+        return result
 
     @staticmethod
     def _nearest_session_ancestor_from_map(
@@ -379,7 +385,7 @@ class SessionCatalogPathResolver:
                 )
             return self.resolve_session_node(thread_id)
         validate_thread_id(thread_id)
-        control_path = session_dir / CONTROL_DATABASE_NAME
+        control_path = session_dir / _CONTROL_DATABASE_NAME
         if not control_path.is_file() or control_path.is_symlink():
             raise RuntimeError(
                 "Session control 数据库缺失或不是普通文件，拒绝解析 child "
@@ -465,8 +471,7 @@ class SessionCatalogPathResolver:
     def child_nodes(self, node_id: str) -> list[SessionCatalogNodeProjection]:
         """返回直接子节点投影（store.list_children 全量分页，稳定序）。
 
-        节点不存在抛 KeyError；目录结构异常直接 fail closed。``deleting``
-        子节点按 §9 语义暂时隐藏（与 :meth:`list_nodes` 一致）。
+        节点不存在抛 KeyError；目录结构异常直接 fail closed。
         """
         self._ensure_consistency_verified()
         items: list[SessionCatalogNodeProjection] = []
@@ -477,11 +482,7 @@ class SessionCatalogPathResolver:
                 limit=_LIST_CHILDREN_PAGE_LIMIT,
                 cursor=cursor,
             )
-            items.extend(
-                self._project_node(node)
-                for node in page
-                if node.state == "active"
-            )
+            items.extend(self._project_node(node) for node in page)
             if not has_more:
                 break
             cursor = next_cursor
@@ -505,14 +506,11 @@ class SessionCatalogPathResolver:
         node = self._store.get_node(session_id)
         if node.kind != "session":
             raise KeyError(f"物理会话节点不存在: {session_id}")
-        all_nodes = self._list_all_catalog_nodes(include_deleting=True)
+        all_nodes = self._list_all_catalog_nodes()
         nodes_by_id = {item.node_id: item for item in all_nodes}
         summaries: list[SessionChildSummary] = []
         for candidate in all_nodes:
             if candidate.kind != "session":
-                continue
-            # deleting 是已逻辑删除的 pending 状态，不能作为「可见子会话」计数。
-            if candidate.state != "active":
                 continue
             if (
                 self._nearest_session_ancestor_from_map(
@@ -562,12 +560,7 @@ class SessionCatalogPathResolver:
         return self._store.nearest_session_ancestor(node_id)
 
     def breadcrumb(self, node_id: str) -> list[SessionCatalogNodeProjection]:
-        """返回从根到该节点（含自身）的节点投影链。
-
-        每个投影带 catalog ``state``（active/deleting），调用方据此区分
-        confirmed 与 pending；本方法不做隐藏过滤，保持面包屑对目标节点的
-        可解析性，物理目录缺失（deleting 已隔离）不再 fail closed。
-        """
+        """返回从根到该节点（含自身）的节点投影链。"""
         self._ensure_consistency_verified()
         return [
             self._project_node(node) for node in self._store.breadcrumb(node_id)
@@ -579,14 +572,12 @@ class SessionCatalogPathResolver:
 
     @property
     def revision(self) -> int:
-        """变更敏感计数：``catalog_metadata.generation``（单调 generation）。
+        """变更敏感计数：``sum(所有节点 revision)``。
 
-        每个写入 ``nodes`` 的 catalog 写事务提交前恰好自增一次 generation
-        （见 ``SessionCatalogStore.write_transaction``），因此该计数与旧口径
-        ``sum(所有节点 revision)`` 一样对任何节点增删改敏感，但由单行查询
-        O(1) 取得，不再做全表 BFS 聚合。用于目录服务缓存失效判定。
+        该值由 catalog 行 revision 聚合得到，用于目录服务缓存失效判定。
+        每次读取执行一次 BFS 分页聚合。
         """
-        return self._store.current_generation()
+        return sum(node.revision for node in self._list_all_catalog_nodes())
 
     # ------------------------------------------------------------------
     # 导航写方法（SQLite-only，不动物理）
@@ -649,6 +640,71 @@ class SessionCatalogPathResolver:
             raise RuntimeError(f"节点不是会话: {session_id}")
         return self._project_node(self._store.move_node(session_id, parent_node_id))
 
+    def relocate_folder_tree(
+        self,
+        *,
+        folder_id: str,
+        parent_node_id: str | None,
+    ) -> SessionCatalogNodeProjection:
+        """逻辑移动 folder 子树（根节点改 parent，后代关系不变）。
+
+        folder 无物理目录（无 rename 语义）、session 父关系由 catalog
+        派生（无 manifest 改写）；显示名变更走 :meth:`update_node_name`。
+        """
+        folder = self._store.get_node(folder_id)
+        if folder.kind != "folder":
+            raise ValueError(f"节点不是会话文件夹: {folder_id}")
+        return self._project_node(self._store.move_node(folder_id, parent_node_id))
+
+    def expected_session_parents_after_folder_move(
+        self,
+        *,
+        folder_id: str,
+        parent_node_id: str | None,
+    ) -> dict[str, str | None]:
+        """计算 folder 子树移动后每个 session 应声明的最近 session 父会话。
+
+        新模型派生语义（保持调用方契约）：移动后各 session 的
+        ``parent_session_id`` = 新位置下最近 session 祖先——子树内部
+        （沿子树父链向上）优先，否则为目标位置的外部最近 session 祖先。
+        本方法只读 catalog，不产生任何写入。
+        """
+        folder = self._store.get_node(folder_id)
+        if folder.kind != "folder":
+            raise ValueError(f"节点不是会话文件夹: {folder_id}")
+        if parent_node_id == folder_id:
+            raise ValueError(f"节点不能移动到自身下: {folder_id}")
+        subtree_ids = self._subtree_catalog_node_ids(folder_id)
+        if parent_node_id is not None:
+            if parent_node_id in subtree_ids:
+                raise ValueError(
+                    f"移动会形成目录循环: node_id={folder_id}, "
+                    f"parent={parent_node_id}"
+                )
+            # 父节点必须存在。
+            self._store.get_node(parent_node_id)
+        external_parent_session_id = self.nearest_session_ancestor(parent_node_id)
+        nodes_by_id = {
+            node.node_id: node for node in self._list_all_catalog_nodes()
+        }
+        expected: dict[str, str | None] = {}
+        for node_id in sorted(subtree_ids):
+            node = nodes_by_id[node_id]
+            if node.kind != "session":
+                continue
+            ancestor_id = node.parent_node_id
+            nearest_internal_session_id: str | None = None
+            while ancestor_id is not None and ancestor_id in subtree_ids:
+                ancestor = nodes_by_id[ancestor_id]
+                if ancestor.kind == "session":
+                    nearest_internal_session_id = ancestor.node_id
+                    break
+                ancestor_id = ancestor.parent_node_id
+            expected[node.node_id] = (
+                nearest_internal_session_id or external_parent_session_id
+            )
+        return expected
+
     def delete_folder(self, folder_id: str) -> None:
         """删除空 folder（非递归）；非空/非 folder/非 active 均 RuntimeError。
 
@@ -656,29 +712,6 @@ class SessionCatalogPathResolver:
         :meth:`finish_subtree_delete`)。
         """
         self._store.delete_empty_folder(folder_id)
-
-    def pending_subtree_deletes(self) -> list[SubtreeDeleteRecord]:
-        """列出本 workspace 待恢复的子树删除 record（启动恢复的权威依据）。"""
-        return self._store.list_pending_subtree_delete_records(self._workspace_id)
-
-    async def recover_pending_subtree_deletes(self) -> list[SubtreeDeleteResult]:
-        """按 SQLite 权威 record 幂等恢复所有未终结的子树删除（崩溃恢复入口）。
-
-        对每条 ``preparing``/``deleting``/``draining`` record 以**原 idempotency
-        key** 重入共享删除流：drain 未完成则定点续跑，已 drain 未 finish 则补
-        tombstone，全部已完成则幂等返回。不扫描磁盘、不吸收外部改动、不假回滚
-        active；任一恢复失败即向上抛错并保留 record，由启动期日志如实暴露。
-        """
-        results: list[SubtreeDeleteResult] = []
-        for record in self.pending_subtree_deletes():
-            results.append(
-                await self._delete_service.delete(
-                    idempotency_key=record.subtree_delete_idempotency_key,
-                    root_node_id=record.root_node_id,
-                )
-            )
-        return results
-
     # 子树删除协议
     # ------------------------------------------------------------------
 

@@ -21,15 +21,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from app.domain.itemized.errors import CodeCarryingError
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
 )
-
-# 投影安全边界被多处拒绝点共用；只在此定义一次，杜绝同一 code 裸写漂移。
-_CODE_PROJECTION_INVALID: Final = "resource-activation-projection-invalid"
 
 #: 正向投影允许出现的字段闭集；任何额外字段（locator/body/credential）必须在
 #: 构造期被拒绝，而不是依赖调用方自觉。
@@ -49,11 +45,12 @@ SAFE_RESOURCE_PROJECTION_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 
-class ResourceActivationProjectionError(CodeCarryingError, RuntimeError):
+class ResourceActivationProjectionError(RuntimeError):
     """sealed refs 的历史投影违反安全边界；调用方必须显式失败。"""
 
     def __init__(self, code: str, message: str) -> None:
-        super().__init__(code, message)
+        super().__init__(f"[{code}] {message}")
+        self.code = code
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,7 +159,7 @@ def assert_resource_bindings_not_counted_as_items(
     item_count = activity_stats.get("item_count")
     if not isinstance(item_count, int) or isinstance(item_count, bool) or item_count < 0:
         raise ResourceActivationProjectionError(
-            _CODE_PROJECTION_INVALID,
+            "resource-activation-projection-invalid",
             f"activity_stats.item_count 非法: {item_count!r}",
         )
     # resource binding 不携带 canonical item sequence；beyond 的字段只允许
@@ -175,14 +172,14 @@ def assert_resource_bindings_not_counted_as_items(
     ):
         if forbidden in activity_stats:
             raise ResourceActivationProjectionError(
-                _CODE_PROJECTION_INVALID,
+                "resource-activation-projection-invalid",
                 f"resource binding 不得进入 Turn item 统计: {forbidden}",
             )
     first = activity_stats.get("first_item_sequence")
     last = activity_stats.get("last_item_sequence")
     if item_count == 0 and (first is not None or last is not None):
         raise ResourceActivationProjectionError(
-            _CODE_PROJECTION_INVALID,
+            "resource-activation-projection-invalid",
             "零 Item Turn 不得因 resource binding 携带 item sequence 范围",
         )
     if projections and item_count == 0 and first is None and last is None:

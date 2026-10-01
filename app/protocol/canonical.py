@@ -21,8 +21,8 @@ __all__ = [
 ]
 
 # 36-byte ASCII 形态：4 字节前缀（ses_/thr_）+ 32 位小写 hex；
-# payload 第 13 个 hex 位为 7（UUIDv7 version），第 17 个 hex 位属于
-# 8|9|a|b（UUIDv7 variant）。
+# payload 第 13 个 hex 位为 4（UUIDv4 version），第 17 个 hex 位属于
+# 8|9|a|b（UUIDv4 variant）。
 CANONICAL_ID_PREFIX_LENGTH = 4
 CANONICAL_ID_HEX_PAYLOAD_LENGTH = 32
 CANONICAL_ID_TOTAL_LENGTH = 36

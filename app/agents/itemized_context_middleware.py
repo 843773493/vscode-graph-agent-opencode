@@ -154,9 +154,9 @@ def _prompt_contributions(
             body=blocks,
             content_length=len(canonical_json_bytes(blocks)),
             # 这是唯一可原位更新 revision 的 replaceable source slot；
-            # 替换/安全判定由 typed replacement_policy 承载，metadata 中的
-            # 同名 key 已物理下线，不再拥有任何解释权。
-            replacement_policy="replaceable",
+            # 替换/安全判定由 typed core 字段承载，metadata 中的同名 key
+            # 已物理下线，不再拥有任何解释权。
+            replaceable_source=True,
             # assembled system prompt 是唯一 root producer slot；显式声明
             # root_eligible，projector 按它编译唯一 system root。
             root_placement="root_eligible",
@@ -246,11 +246,30 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         )
         return prepared
 
-    def _prepare_projection(
+    def _cleanup(
+        self, request: ModelRequest[Any], prepared: Mapping[str, object]
+    ) -> None:
+        assembly_id = prepared.get("assembly_id")
+        if not isinstance(assembly_id, str) or not assembly_id:
+            return
+        discard = getattr(
+            self._checkpointer,
+            "discard_prepared_context_for_dispatch",
+            None,
+        )
+        if callable(discard):
+            discard(
+                _runtime_session_id(request),
+                turn_id=_request_turn_id(request),
+                assembly_id=assembly_id,
+                checkpoint_ns=_runtime_checkpoint_ns(request),
+            )
+
+    def wrap_model_call(
         self,
         request: ModelRequest[Any],
-    ) -> tuple[dict[str, object], list[Any], list[Any]]:
-        """执行 provider projection，校验 messages/tools 结构并记录结果与能力损失。"""
+        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
+    ) -> ModelResponse[Any] | ExtendedModelResponse[Any]:
         prepared = self._prepare(request)
         messages = prepared.get("messages")
         tools = prepared.get("tools")
@@ -269,14 +288,6 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
                 _request_turn_id(request),
                 losses,
             )
-        return prepared, messages, tools
-
-    def wrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
-    ) -> ModelResponse[Any] | ExtendedModelResponse[Any]:
-        prepared, messages, tools = self._prepare_projection(request)
         # LangChain 的 provider handler 返回时，外层 astream_events 可能尚未
         # 消费 on_chat_model_start。prepared handle 必须保留到该事件由
         # RolloutCheckpointSaver 绑定真实 model_call_id 后再移除，不能在
@@ -300,7 +311,24 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         if callable(reconcile):
             for message in request.messages:
                 await reconcile(message)
-        prepared, messages, tools = self._prepare_projection(request)
+        prepared = self._prepare(request)
+        messages = prepared.get("messages")
+        tools = prepared.get("tools")
+        if not isinstance(messages, list) or not isinstance(tools, list):
+            raise TypeError("itemized provider projection 返回结构非法")
+        logger.warning(
+            "[itemized-context] provider projection result: message_types=%s message_ids=%s",
+            [type(message).__name__ for message in messages],
+            [getattr(message, "id", None) for message in messages],
+        )
+        losses = prepared.get("losses", ())
+        if losses:
+            logger.warning(
+                "itemized provider projection capability loss: session=%s turn=%s losses=%s",
+                _runtime_session_id(request),
+                _request_turn_id(request),
+                losses,
+            )
         # 同步包装器的相同生命周期约束：真实 model-start event 消费前不
         # 得删除 Saver-owned prepared handle。
         with sealed_native_projection_scope(prepared.get("native_projection")):

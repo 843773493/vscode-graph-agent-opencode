@@ -5,12 +5,7 @@ import type {
   SessionCatalogOperationReceipt,
   SessionCatalogOperationStatusPage,
 } from "../../api/session/sessionCatalogOperations";
-import {
-  addCatalogOutboxIntent,
-  createCatalogOutbox,
-  type CatalogOutbox,
-  type CatalogOutboxOperation,
-} from "../../state/session/sessionCatalogOutbox";
+import type { CatalogOutbox, CatalogOutboxOperation } from "../../state/session/sessionCatalogOutbox";
 import {
   createCatalogOutboxBroadcaster,
   createSessionCatalogOutboxDriver,
@@ -156,118 +151,6 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     expect(driver.current().operations).toEqual([]);
   });
 
-  test("本地写入先落盘后抛错：已落盘条目必须一并回滚，刷新恢复不复活", async () => {
-    const disk = new Map<number, CatalogOutboxOperation>();
-    let failNextWrite = false;
-    const persistence: CatalogOutboxPersistencePort = {
-      load: async () => [...disk.entries()]
-        .sort(([left], [right]) => left - right)
-        .map(([clientSequence, operation]) => ({
-          partition_key: "local:8014\u0000workspace-1\u0000guest",
-          client_sequence: clientSequence,
-          operation,
-        })),
-      write: async (records) => {
-        for (const record of records) disk.set(record.client_sequence, record.operation);
-        if (failNextWrite) {
-          failNextWrite = false;
-          // 模拟真实 IndexedDB：记录已写入底层存储，事务随后才失败。
-          throw new Error("QuotaExceededError: 本地存储已满");
-        }
-      },
-      delete: async (_partitionKey, clientSequences) => {
-        for (const clientSequence of clientSequences) disk.delete(clientSequence);
-      },
-    };
-    const enqueued: string[] = [];
-    const adapter: SessionCatalogOperationsAdapter = {
-      async enqueue(_port, _workspaceId, intents) {
-        for (const intent of intents) enqueued.push(intent.client_operation_id);
-        return {
-          workspace_id: "workspace-1",
-          accepted_count: intents.length,
-          receipts: intents.map((intent) => receipt(intent.client_operation_id)),
-          created_node_ids: {},
-        };
-      },
-      async queryStatus() {
-        throw new Error("本用例不应查询状态");
-      },
-    };
-    const driver = createSessionCatalogOutboxDriver({
-      port: PORT,
-      partition: PARTITION,
-      persistence,
-      adapter,
-    });
-    await driver.restore();
-    await driver.applyIntent(opId("a"), renameIntent(), {
-      baseCatalogRevision: 7,
-      expectedRevision: 3,
-    });
-
-    failNextWrite = true;
-    await expect(driver.applyIntent(opId("b"), renameIntent(), {
-      baseCatalogRevision: 7,
-      expectedRevision: 3,
-    })).rejects.toThrow("已撤销该操作及依赖");
-
-    // 磁盘上不得留下失败命令，刷新恢复后也不能被重新派发。
-    expect([...disk.values()].map((operation) => operation.client_operation_id))
-      .not.toContain(opId("b"));
-    const resumed = createSessionCatalogOutboxDriver({
-      port: PORT,
-      partition: PARTITION,
-      persistence,
-      adapter,
-    });
-    const restored = await resumed.restore();
-    expect(restored.operations.map((operation) => operation.client_operation_id))
-      .not.toContain(opId("b"));
-    const before = enqueued.length;
-    await resumed.applyIntent(opId("c"), renameIntent(), {
-      baseCatalogRevision: 7,
-      expectedRevision: 3,
-    });
-    expect(enqueued.slice(before)).not.toContain(opId("b"));
-  });
-
-  test("落盘失败且回滚也失败时，错误必须同时含写入与回滚两条原因", async () => {
-    let failNextWrite = false;
-    const persistence: CatalogOutboxPersistencePort = {
-      load: async () => [],
-      write: async () => {
-        if (failNextWrite) {
-          failNextWrite = false;
-          throw new Error("QuotaExceededError: 本地存储已满");
-        }
-      },
-      delete: async () => {
-        throw new Error("删除已落盘条目也失败");
-      },
-    };
-    const driver = createSessionCatalogOutboxDriver({
-      port: PORT,
-      partition: PARTITION,
-      persistence,
-      adapter: {
-        async enqueue() { throw new Error("持久化失败时不得派发入队"); },
-        async queryStatus() { throw new Error("本用例不应查询状态"); },
-      },
-    });
-    await driver.restore();
-    failNextWrite = true;
-
-    const failure = await driver.applyIntent(opId("a"), renameIntent(), {
-      baseCatalogRevision: 7,
-      expectedRevision: 3,
-    }).then(() => null, (error: Error) => error);
-
-    expect(failure?.message).toContain("回滚也失败");
-    expect(failure?.message).toContain("QuotaExceededError");
-    expect(failure?.message).toContain("删除已落盘条目也失败");
-  });
-
   test("刷新恢复 outbox 后未对账命令仍保留并可继续入队", async () => {
     const persistence = recordingPort();
     const enqueued: string[][] = [];
@@ -314,71 +197,6 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
       },
     });
     expect(() => driver.current()).toThrow("会话目录 outbox 尚未恢复");
-  });
-
-  test("F1：落盘后进程在标记前退出，恢复的 pending_local 必须重放而非静默丢失", async () => {
-    // 直接构造磁盘残留：driver.applyIntent 先按 pending_local 落盘、之后才在内存标记
-    // persisted；模拟程序在该窗口退出，磁盘上留下的就是 pending_local。
-    const seed = addCatalogOutboxIntent(
-      createCatalogOutbox(PARTITION),
-      opId("a"),
-      { kind: "rename_node", targetNodeId: "cnode_1", name: "新名字" },
-      { baseCatalogRevision: 7, expectedRevision: 3 },
-    );
-    const disk = new Map<number, CatalogOutboxOperation>([[1, seed.operations[0]]]);
-    const persistence: CatalogOutboxPersistencePort = {
-      async load() {
-        return [...disk.entries()]
-          .sort(([left], [right]) => left - right)
-          .map(([clientSequence, operation]) => ({
-            partition_key: "local:8014\u0000workspace-1\u0000guest",
-            client_sequence: clientSequence,
-            operation,
-          }));
-      },
-      async write(records) {
-        for (const record of records) disk.set(record.client_sequence, record.operation);
-      },
-      async delete(_partitionKey, clientSequences) {
-        for (const clientSequence of clientSequences) disk.delete(clientSequence);
-      },
-    };
-    const enqueued: string[][] = [];
-    const adapter: SessionCatalogOperationsAdapter = {
-      async enqueue(_port, _workspaceId, intents) {
-        enqueued.push(intents.map((intent) => intent.client_operation_id));
-        return {
-          workspace_id: "workspace-1",
-          accepted_count: intents.length,
-          receipts: intents.map((intent) => receipt(intent.client_operation_id)),
-          created_node_ids: {},
-        } satisfies SessionCatalogEnqueueResult;
-      },
-      // F1 修复前该命令停留在 `pending_local`，不会被 `reconcile` 收进对账集合；
-      // 归一为 persisted 后必须真的按 ID 查询：后端「不认识该 ID」即允许按同一 ID 重放。
-      async queryStatus(_port, _workspaceId, operationIds) {
-        return {
-          workspace_id: "workspace-1",
-          catalog_revision: 7,
-          items: [],
-          unknown_operation_ids: [...operationIds],
-        } satisfies SessionCatalogOperationStatusPage;
-      },
-    };
-    const driver = createSessionCatalogOutboxDriver({
-      port: PORT,
-      partition: PARTITION,
-      persistence,
-      adapter,
-    });
-    const restored = await driver.restore();
-    // 归一为可重放态：既不留在 pending_local，也不落在对账集合之外。
-    expect(restored.operations[0].state).toBe("persisted");
-
-    // 对账时命中该 ID 并确认后端不认识它，随后 flush 把该命令按同一 ID 重新入队。
-    await driver.reconcile();
-    expect(enqueued).toEqual([[opId("a")]]);
-    expect(driver.current().operations[0].state).toBe("accepted");
   });
 });
 
@@ -543,46 +361,6 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     const pruned = await driver.prune(12);
     expect(pruned.operations).toEqual([]);
     expect(deleted).toEqual([[1]]);
-  });
-
-  test("F2：依赖未满足时本轮零入队，必须返回 idle 而非谎报 accepted", async () => {
-    // op_2 依赖 op_1；op_1 入队结果未知（unknown），因此 op_2 本轮不可入队。
-    const enqueued: string[][] = [];
-    const driver = driverWithAdapter({
-      async enqueue(_port, _workspaceId, intents) {
-        enqueued.push(intents.map((intent) => intent.client_operation_id));
-        if (intents.some((intent) => intent.client_operation_id === opId("a"))) {
-          throw new Error("请求超时: enqueue");
-        }
-        return {
-          workspace_id: "workspace-1",
-          accepted_count: intents.length,
-          receipts: intents.map((intent) => receipt(intent.client_operation_id)),
-          created_node_ids: {},
-        } satisfies SessionCatalogEnqueueResult;
-      },
-      async queryStatus() {
-        throw new Error("本用例不应查询状态");
-      },
-    });
-    await driver.restore();
-    expect(await driver.applyIntent(opId("a"), renameIntent(), {
-      baseCatalogRevision: 7,
-      expectedRevision: 3,
-    })).toBe("unknown");
-
-    const outcome2 = await driver.applyIntent(
-      opId("b"),
-      { kind: "move_node", targetNodeId: "cnode_2", parentNodeId: null },
-      { baseCatalogRevision: 7, expectedRevision: 2, dependsOn: [opId("a")] },
-    );
-    // 本轮队列被依赖挡住，op_2 未入队：不得返回 accepted。
-    expect(outcome2).toBe("idle");
-    expect(enqueued).toEqual([[opId("a")]]);
-    const op2 = driver.current().operations.find(
-      (operation) => operation.client_operation_id === opId("b"),
-    );
-    expect(op2?.state).toBe("persisted");
   });
 });
 

@@ -140,41 +140,9 @@ describe("isRetryableWorkspaceBootstrapError", () => {
     )).toBe(true);
   });
 
-  test("Gateway 背压状态 502/504 可以重试", () => {
-    expect(isRetryableWorkspaceBootstrapError(
-      new HttpRequestError(502, "Bad Gateway", "upstream down", "/api/v1/workspace"),
-    )).toBe(true);
-    expect(isRetryableWorkspaceBootstrapError(
-      new HttpRequestError(504, "Gateway Timeout", "upstream slow", "/api/v1/workspace"),
-    )).toBe(true);
-  });
-
-  test("fetch 传输层的 TypeError 视为瞬时网络错误并重试", () => {
-    expect(isRetryableWorkspaceBootstrapError(
-      new TypeError("Failed to fetch"),
-    )).toBe(true);
-    expect(isRetryableWorkspaceBootstrapError(
-      Object.assign(new Error("connection reset"), { name: "AbortError" }),
-    )).toBe(true);
-  });
-
-  test("程序代码抛出的 TypeError 不得被初始化重试吞掉", () => {
-    // 例如业务代码读 undefined 属性：isTransientNetworkError 只认 fetch 传输层
-    // 的既有判据，绝不会把这类真实缺陷当成网络抖动重试 8 次。
-    expect(isRetryableWorkspaceBootstrapError(
-      new TypeError("Cannot read properties of undefined (reading 'root_path')"),
-    )).toBe(false);
-  });
-
   test("业务鉴权失败不应被初始化重试吞掉", () => {
     expect(isRetryableWorkspaceBootstrapError(
       new HttpRequestError(401, "Unauthorized", "expired", "/api/v1/sessions"),
-    )).toBe(false);
-  });
-
-  test("服务端内部故障 500 不重试", () => {
-    expect(isRetryableWorkspaceBootstrapError(
-      new HttpRequestError(500, "Internal Server Error", "boom", "/api/v1/workspace"),
     )).toBe(false);
   });
 });

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from contextlib import aclosing
-
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
@@ -14,11 +12,6 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.api.errors import state_conflict_http_error, unimplemented_http_error
-from app.api.sse_heartbeat import (
-    SSE_HEARTBEAT_INTERVAL_SECONDS,
-    SSE_NO_CACHE_HEADERS,
-    stream_sse_with_heartbeat,
-)
 from app.schemas.event import Event
 from app.schemas.internal_v2.artifact import ArtifactDTO
 from app.schemas.internal_v2.common import APIResponse, ControlAction
@@ -162,27 +155,14 @@ async def stream_job_events(
     }
 
     async def event_generator():
-        # 与 trace/workspace/message 三条流同口径：aclosing 包裹心跳包装，空闲发
-        # SSE 注释心跳，退出时一并 aclose 底层源以解除 job 事件订阅。
-        async with aclosing(
-            stream_sse_with_heartbeat(
-                event_service.stream_sse(
-                    job_id,
-                    after_event_id=cursor,
-                    subscriber_metadata=subscriber_metadata,
-                ),
-                heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
-                close_source_on_exit=True,
-            )
-        ) as stream:
-            async for chunk in stream:
-                yield chunk
+        async for chunk in event_service.stream_sse(
+            job_id,
+            after_event_id=cursor,
+            subscriber_metadata=subscriber_metadata,
+        ):
+            yield chunk
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers=SSE_NO_CACHE_HEADERS,
-    )
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post(

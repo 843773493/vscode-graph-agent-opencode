@@ -25,8 +25,6 @@ class PendingJob(Protocol):
     session_id: str
     message: str
     agent_id: str
-    gateway_id: str | None
-    request_id: str | None
     message_created_at: str
     message_metadata: dict[str, object]
     attachments: list[AttachmentRef]
@@ -83,8 +81,6 @@ class JobPendingRequestController:
             waiting_reason=entry.waiting_reason,
             last_boundary=entry.last_boundary,
             agent_id=job.agent_id,
-            gateway_id=job.gateway_id,
-            request_id=job.request_id,
             message_created_at=job.message_created_at,
             message_metadata=display_projection.metadata,
             created_at=job.created_at,

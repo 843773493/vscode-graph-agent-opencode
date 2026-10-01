@@ -31,7 +31,7 @@ from app.agents.upstream_request_trace import (
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
+from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
     prefix_has_open_tool_group,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (

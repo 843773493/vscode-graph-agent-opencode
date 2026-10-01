@@ -50,7 +50,7 @@ def _create_store(tmp_path: Path, session_bundle_factory, session_id: str):
 
 @pytest.mark.asyncio
 async def test_store_append_and_read(tmp_path: Path, session_bundle_factory):
-    session_id = "ses_019ba1bfed0773fc80049132b9745deb"
+    session_id = "ses_739ec3cc97674aaa8e48e6eb77fa520c"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
 
     event = AgentStartEvent(
@@ -70,7 +70,7 @@ async def test_store_append_and_read(tmp_path: Path, session_bundle_factory):
 
 @pytest.mark.asyncio
 async def test_store_stream_new_events(tmp_path: Path, session_bundle_factory):
-    session_id = "ses_019c6ab34d1574aa885c385ae9a2493e"
+    session_id = "ses_9d3b74812280434b8f7982eea309d419"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
 
     stream = store.stream_events(session_id)
@@ -93,7 +93,7 @@ async def test_store_reads_and_streams_after_event_cursor(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    session_id = "ses_019ba02133ac7bb5857703d08511f93f"
+    session_id = "ses_d488ac89b39e41b3833249a2eee2c9f7"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
 
@@ -126,11 +126,11 @@ async def test_store_reads_and_streams_after_event_cursor(
 
 @pytest.mark.asyncio
 async def test_store_reads_only_latest_trace_tail(tmp_path: Path, session_bundle_factory):
-    store, _ = _create_store(tmp_path, session_bundle_factory, "ses_011963ad10607f2b881c963a8e3cc48c")
+    store, _ = _create_store(tmp_path, session_bundle_factory, "ses_011963ad10604f2b881c963a8e3cc48c")
     now = datetime.now(UTC)
     for index in range(12):
         await store.append(
-            "ses_011963ad10607f2b881c963a8e3cc48c",
+            "ses_011963ad10604f2b881c963a8e3cc48c",
             AgentStartEvent(
                 event_id=f"evt_tail_{index}",
                 job_id="job_tail",
@@ -143,7 +143,7 @@ async def test_store_reads_only_latest_trace_tail(tmp_path: Path, session_bundle
             ),
         )
 
-    events = store.read_events("ses_011963ad10607f2b881c963a8e3cc48c", tail_limit=4)
+    events = store.read_events("ses_011963ad10604f2b881c963a8e3cc48c", tail_limit=4)
 
     assert [event.event_id for event in events] == [
         "evt_tail_8",
@@ -158,7 +158,7 @@ async def test_store_reads_latest_event_cursor_without_replaying_trace(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    session_id = "ses_019ba8c7e4b871bd818f02de4a5df326"
+    session_id = "ses_b185418e7e634220892a13be1b968d30"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
 
@@ -188,7 +188,7 @@ async def test_trace_diagnostic_page_reads_tail_then_older_with_opaque_cursor(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019c4b4c932472b1832ecb149a6239f6"
+    session_id = "ses_d19a5212d9e44aa486c10ad57371cc80"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     for index in range(8):
@@ -233,7 +233,7 @@ async def test_trace_diagnostic_page_obeys_fixed_read_budget_without_read_text(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_019c6e58153776708053408b26e38db7"
+    session_id = "ses_ae047e12b250405a8f1feeec97559afa"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     for index in range(20):
@@ -272,7 +272,7 @@ async def test_trace_diagnostic_page_stale_cursor_fails_fast(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019c035a206c74b98484fb851bbabb92"
+    session_id = "ses_5bffe5c28634453c83781cc639502cf0"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     for index in range(2):
@@ -299,7 +299,7 @@ async def test_trace_diagnostic_page_rejects_event_larger_than_byte_budget(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019c75b1efa67bbe8c1075098c94cc9f"
+    session_id = "ses_8e44a09c7e7d4a448986cfb4e6c389f2"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     await store.append(
         session_id,
@@ -325,7 +325,7 @@ async def test_turn_migration_snapshot_uses_immutable_message_boundary(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019b818b88cd72e4bd9346c3b7ec9780"
+    session_id = "ses_5b11b3e69a3f4e8d81ba66ffeb83c29f"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     first = JobCreatedEvent(
         event_id="evt_snapshot_1",
@@ -367,7 +367,7 @@ async def test_turn_migration_snapshot_uses_immutable_message_boundary(
 
 
 def test_store_rejects_missing_event_cursor(tmp_path: Path, session_bundle_factory):
-    session_id = "ses_019c560a7f7779a38dfdff7033fc2040"
+    session_id = "ses_a7a6693f19824eb6881310d8e02dcc88"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
 
     with pytest.raises(TraceCursorGoneError, match="evt_missing"):
@@ -382,7 +382,7 @@ async def test_store_appends_message_trace_for_key_events(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    session_id = "ses_019b7ac404a57fbc8553730565da5b9e"
+    session_id = "ses_0885f007e18d4c00806ac1d5caf47bf6"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
 
@@ -446,7 +446,7 @@ async def test_store_appends_message_trace_for_key_events(
 
 @pytest.mark.asyncio
 async def test_store_stream_message_events(tmp_path: Path, session_bundle_factory):
-    session_id = "ses_019c1c9fcd4479dd826a58516b537118"
+    session_id = "ses_820410eff1824c42820a4a25947db714"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
 
     stream = store.stream_message_events(session_id)
@@ -471,7 +471,7 @@ async def test_store_file_write_does_not_block_event_loop(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    store, _ = _create_store(tmp_path, session_bundle_factory, "ses_019be193ee33734eb2580cb970f434dc")
+    store, _ = _create_store(tmp_path, session_bundle_factory, "ses_844d06d6b2e8407281dd580ef906a58d")
     release_write = threading.Event()
     original_append = store._append_event_files
 
@@ -490,7 +490,7 @@ async def test_store_file_write_does_not_block_event_loop(
     timer = threading.Timer(0.2, release_write.set)
     timer.start()
     started_at = time.monotonic()
-    append_task = asyncio.create_task(store.append("ses_019be193ee33734eb2580cb970f434dc", event))
+    append_task = asyncio.create_task(store.append("ses_844d06d6b2e8407281dd580ef906a58d", event))
 
     await asyncio.sleep(0.02)
     assert time.monotonic() - started_at < 0.1
@@ -503,7 +503,7 @@ def test_read_events_rejects_legacy_events_without_part_identity(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    session_id = "ses_019c4ae91d6a71ec8407f65a47e2c841"
+    session_id = "ses_bd7ee81104db4ebf86491862330b7071"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     trace_file = session_dir / "logs" / "traces" / "events.jsonl"
     trace_file.parent.mkdir(parents=True)
@@ -535,7 +535,7 @@ async def test_store_rejects_manual_session_move_before_writing(
     tmp_path: Path,
     session_bundle_factory,
 ):
-    session_id = "ses_019c1b1ac4ab71c58cbf27325d839746"
+    session_id = "ses_937d497097414acb8bd4a086345a3de0"
     store, source = _create_store(tmp_path, session_bundle_factory, session_id)
     resolver = get_session_path_resolver(tmp_path)
 
@@ -567,7 +567,7 @@ async def test_turn_bootstrap_index_keeps_job_start_beyond_128_events(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019c32ce459a72058d2ee761765cd38b"
+    session_id = "ses_4d1dcff79274456581230e409a6eb168"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     created = JobCreatedEvent(
@@ -614,7 +614,7 @@ async def test_turn_bootstrap_uses_compact_index_without_parsing_huge_trace_line
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_019b9cc5cb0d71ce80686388728ad77e"
+    session_id = "ses_a6a98ee8ae5145988c4cf2e09a333a81"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     await store.append(
         session_id,
@@ -650,7 +650,7 @@ def test_turn_bootstrap_fails_closed_when_manifest_is_missing(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019bd176f3c57a58829b024478fe8773"
+    session_id = "ses_532420813a6340a2889a2e83dd8f9bde"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     traces = session_dir / "logs" / "traces"
     traces.mkdir(parents=True)
@@ -673,7 +673,7 @@ async def test_turn_index_recovers_commit_after_trace_files_were_flushed(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_019c4169dad7706c86613137c1972acb"
+    session_id = "ses_a5b3015d269346b8813fe5ecd3949325"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     original_commit = TraceTurnIndex.commit
 
@@ -736,9 +736,9 @@ async def test_next_append_recovers_incomplete_trace_transaction(
     # R18 catalog 模式适配：f-string 派生 ID 改显式映射（与 r18-replace.py
     # 同一 md5 canonical 函数，按逐参数完整字面量整串派生，确定性可复算）。
     cutpoint_session_ids = {
-        "after_index": "ses_019c4d058e517547860a0209d86f2d88",
-        "after_message": "ses_019b8ee6c05f7335852d29f0e1644730",
-        "partial_trace": "ses_019c58987d97711d8c2af89d18195938",
+        "after_index": "ses_ad2554620d4b44a88cce7b29528a819d",
+        "after_message": "ses_e8533845b3ea4b1f88dc6b93bc815740",
+        "partial_trace": "ses_eabc24d0d1d545c9836143fbab6cd079",
     }
     session_id = cutpoint_session_ids[cutpoint]
     store, session_dir = _create_store(
@@ -821,9 +821,9 @@ async def test_non_indexed_append_recovers_incomplete_trace_transaction(
     session_id = {
         # R18 catalog 模式适配：f-string 派生 ID 改显式映射（同一 md5
         # canonical 函数，按逐参数完整字面量整串派生）。
-        "after_index": "ses_019c6ecff472708a88bf3e1b106c320a",
-        "after_message": "ses_019b8f4b17bf757fab809623549166a2",
-        "partial_trace": "ses_019c445fd569703c83257812f26e7374",
+        "after_index": "ses_5333f2b4c40f41bc8d2afbd23180a7c8",
+        "after_message": "ses_0f8f942b48664a9b876faf9d220e3e4f",
+        "partial_trace": "ses_c3f4a3df00e64c428401434cedf1f24a",
     }[cutpoint]
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
@@ -915,7 +915,7 @@ async def test_partial_non_indexed_tail_is_repaired_before_restart_append_and_st
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_019bf0ef5dff77bd884cd91fe2c76a7e"
+    session_id = "ses_a00ec1bd384e48df891d83ac77fa3a25"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     await store.append(
@@ -985,7 +985,7 @@ async def test_partial_trace_tail_invading_committed_watermark_fails_fast(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019c7453ec467cb683e9176476e13f88"
+    session_id = "ses_d0de061593e84b71875c48301640b44a"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     await store.append(
@@ -1024,7 +1024,7 @@ async def test_next_append_succeeds_when_caller_crashes_after_index_manifest(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_019c0a48b1467c2fa003a36834b4ed29"
+    session_id = "ses_725e01e81ca94d618d73b8cd886e490a"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     original_commit = TraceTurnIndex.commit
     failed = False
@@ -1079,7 +1079,7 @@ async def test_partial_semantic_trace_recovery_preserves_prior_text_delta(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_019c0108d9ee7f1e828639a9763327a5"
+    session_id = "ses_4e208e8358b84df88e473ca81212ec3b"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     await store.append(
@@ -1152,7 +1152,7 @@ async def test_latest_semantic_cursor_uses_index_without_full_trace_scan(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019c30a276077c7589fb25e2fc24b2b9"
+    session_id = "ses_35254628bb66462987f96359467a7e5d"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     receipt = await store.append(
         session_id,
@@ -1185,7 +1185,7 @@ async def test_projected_cursor_streams_later_indexed_non_projected_event(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_019c5c7e3adc77a3b10ccaa504be3e74"
+    session_id = "ses_3682811cf3a4434f887ce4e13b8b74f1"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     await store.append(
@@ -1249,7 +1249,7 @@ async def test_text_delta_transport_cursor_resumes_without_trace_scan(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_019c300213fe72fb8a361a7a5302067d"
+    session_id = "ses_5f76065640b7464e8e8e39f39e38904c"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     await store.append(
@@ -1304,7 +1304,7 @@ async def test_unindexed_raw_event_id_is_rejected_without_full_trace_scan(
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "ses_019b973e84bf7e0f84978ddbb9456411"
+    session_id = "ses_0492c70c2c4b4446838027e41d41ca14"
     store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
     await store.append(
         session_id,
@@ -1334,7 +1334,7 @@ def test_legacy_index_rebuild_allows_unrecorded_interrupted_event(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019c439a40ab701d85e2d2cd3d6e4348"
+    session_id = "ses_2f2c42e33fcb4ce184271111c5f1b2bb"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     created = JobCreatedEvent(
@@ -1392,7 +1392,7 @@ async def test_legacy_prefix_is_rebuilt_after_non_semantic_append_for_resume(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_019c4b01f682759d8fadfa0c4fd27cac"
+    session_id = "ses_e3f28f8ce05b43b0891af9424cb83230"
     store, session_dir = _create_store(tmp_path, session_bundle_factory, session_id)
     now = datetime.now(UTC)
     legacy_created = JobCreatedEvent(

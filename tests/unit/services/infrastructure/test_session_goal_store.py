@@ -50,7 +50,7 @@ def test_goal_store_does_not_persist_derived_thread_identity(tmp_path):
         status=GoalStatus.active,
         created_at="2026-07-27T00:00:00Z",
         updated_at="2026-07-27T00:00:00Z",
-        thread_id="thr_019bf0c16c1c736783165d8b623efb7c",
+        thread_id="thr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
 
     store.write(goal)

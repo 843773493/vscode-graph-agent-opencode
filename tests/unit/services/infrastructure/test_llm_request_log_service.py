@@ -21,7 +21,7 @@ def test_list_session_logs_reads_request_and_response(
     session_bundle_factory,
 ):
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_019b9a5623b97db291238e0644b0b4ae"
+    session_id = "ses_56dd25ee0c7a40618621b7492d151691"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     second = write_log(
         session_dir,
@@ -60,7 +60,7 @@ def test_list_session_logs_returns_empty_without_log_files(
     session_bundle_factory,
 ):
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_019be2d298c276f18933ff78b7dcd8bb"
+    session_id = "ses_748ad3f52a2842748bf651d80f475960"
     session_bundle_factory(sessions_dir, session_id)
     records = LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(
         session_id
@@ -74,7 +74,7 @@ def test_list_session_logs_exposes_invalid_log_file(
     session_bundle_factory,
 ):
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_019c47ed3c2570fe8cfaaba65b26f15f"
+    session_id = "ses_64a3feef8e4d4177829260fdfc01db12"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     log_dir = session_dir / "logs" / "llm_requests"
     log_dir.mkdir(parents=True)
@@ -89,7 +89,7 @@ def test_list_session_logs_exposes_missing_response(
     session_bundle_factory,
 ):
     sessions_dir = tmp_path / "sessions"
-    session_id = "ses_019c257bff2c7c6989d1c38a6ae7fbf2"
+    session_id = "ses_d1080d1dc6864a638064642b7bf6aef3"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     write_log(
         session_dir,

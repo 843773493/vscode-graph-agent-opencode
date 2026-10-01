@@ -18,7 +18,7 @@ from app.services.infrastructure.rollout_context.migration.store import (
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
 
-TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
+TARGET_SESSION_ID = "ses_58a5607fd562454a932d851c95b73cc4"
 
 
 def prepare_migration_workspace(request: pytest.FixtureRequest) -> Path:

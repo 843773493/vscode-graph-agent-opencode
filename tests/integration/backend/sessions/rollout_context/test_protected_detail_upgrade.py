@@ -39,7 +39,7 @@ from app.services.infrastructure.rollout_context.runtime.protected_detail import
     ProtectedDetailError,
 )
 
-SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
+SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
 
 # 冻结旧 writer 的 wire 格式与独立密文向量，不调用当前实现生成 expected blob/AAD。
 # 来源：2026-09-07T19:49:03.790Z 源码读取，rollout continuation
@@ -49,7 +49,7 @@ SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 # writer 输入使用非生产测试 key p*32、session key s*32、nonce 000102...0b。
 # R21 离线用独立 AESGCM 认证原始向量后，仅将 AAD/明文 session_id 迁为 canonical，
 # 再用原 key/nonce 固定新密文；正文、摘要、旧 wire 格式不变。
-_OLD_AAD = b'{"assembly_id":"old-assembly","content_length":60,"detail_ref":"detail-old","format_version":1,"session_id":"ses_019c205391bb7a4b81b6728df70f63e6","source_revision":"producer-v1"}'
+_OLD_AAD = b'{"assembly_id":"old-assembly","content_length":60,"detail_ref":"detail-old","format_version":1,"session_id":"ses_e6d2707870e54cab8c135193c0802532","source_revision":"producer-v1"}'
 _OLD_BLOB = bytes.fromhex(
     "626f787465616d2d636f6e746578742d64657461696c2d763100000102030405060708090a0b393eba76"
     "0746af6e44b0d3a47064681fe088ca115bb7945a26faaa8a47cb545cf45c9d0a6d0985e985a54499265a"

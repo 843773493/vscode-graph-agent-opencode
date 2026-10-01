@@ -9,6 +9,13 @@ interface WorkspaceEditorHeaderProps {
   onReorderAuxiliaryTabs: (tabOrder: WorkspaceAuxiliaryTab[]) => void;
 }
 
+const DEFAULT_AUXILIARY_TAB_ORDER: ReadonlyArray<WorkspaceAuxiliaryTab> = [
+  "files",
+  "changes",
+  "debug",
+  "resources",
+];
+
 const WORKSPACE_COMPONENT_OPTIONS: ReadonlyArray<{
   tab: WorkspaceAuxiliaryTab;
   label: string;
@@ -96,10 +103,7 @@ export default function WorkspaceEditorHeader({
     setDropTargetTab(null);
   };
 
-  // tabOrder 是必填数组，调用方（AppShell）两种分支都传入明确的顺序；此处不得
-  // 再保留一份本地默认顺序兜底：那是永不执行的死分支，还会与布局偏好里的默认
-  // 顺序形成第二套口径。
-  const orderedOptions = tabOrder.flatMap((tab) => {
+  const orderedOptions = (tabOrder ?? DEFAULT_AUXILIARY_TAB_ORDER).flatMap((tab) => {
     const option = WORKSPACE_COMPONENT_OPTIONS.find((candidate) => candidate.tab === tab);
     return option ? [option] : [];
   });

@@ -16,9 +16,7 @@ TASK_TRANSITIONS: dict[TeamTaskStatus, frozenset[TeamTaskStatus]] = {
     "failed": frozenset(),
     "cancelled": frozenset(),
 }
-# 任务产生结论的状态：落到这些状态即要求填写 summary，并通知协调者。
-# 两处判定（结论必填、协调者通知）共用同一闭集，故只在此定义一次。
-RESOLUTION_STATUSES = frozenset({"blocked", "completed", "failed"})
+SUMMARY_REQUIRED_STATUSES = {"blocked", "completed", "failed"}
 
 
 def find_member(

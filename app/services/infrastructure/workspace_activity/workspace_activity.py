@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.sqlite_state import SQLiteDiagnostics, utc_now_text
 
 __all__ = [
@@ -248,17 +247,8 @@ class WorkspaceActivityService:
                 after = record.event_seq
                 yield record
         finally:
-            # 订阅者由 starlette StreamingResponse 驱动；客户端断开时后续 await
-            # 会被二次取消。注销必须屏蔽取消跑完，否则订阅者集合永久泄漏。
-            await run_cleanup_shielded(
-                lambda: self._discard_subscriber(subscriber)
-            )
-
-    async def _discard_subscriber(
-        self, subscriber: asyncio.Queue[WorkspaceActivityRecord]
-    ) -> None:
-        async with self._subscriber_lock:
-            self._subscribers.discard(subscriber)
+            async with self._subscriber_lock:
+                self._subscribers.discard(subscriber)
 
     def prune(self) -> int:
         return self.store.prune_activity(retention_days=self.retention_days)

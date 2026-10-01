@@ -12,16 +12,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
-    RESOURCE_ACTIVATION_BOUNDARIES,
-    RESOURCE_ACTIVATION_TOKEN_PATTERN,
     ResourceActivationSnapshotRef,
 )
 
 ResourceActivationBoundary = Literal["turn", "model_call"]
-_KIND_PATTERN_ERROR = f"resource kind 必须匹配 {RESOURCE_ACTIVATION_TOKEN_PATTERN}"
+_BOUNDARIES: frozenset[str] = frozenset({"turn", "model_call"})
+_KIND_PATTERN_ERROR = "resource kind 必须匹配 ^[a-z][a-z0-9_-]{0,63}$"
 
 # binding 的 owner scope 由资源平台声明；derivation 契约当前未携带该字段
 # （见 derivation/types.SemanticResourceDescriptor）。在资源平台补全前，
@@ -56,7 +55,7 @@ class ResourceActivationPolicySnapshot:
                 f"{sorted(unknown_section_keys)}"
             )
         default_boundary = section.get("default_boundary")
-        if default_boundary not in RESOURCE_ACTIVATION_BOUNDARIES:
+        if default_boundary not in _BOUNDARIES:
             raise ValueError("context.resource_activation.default_boundary 必须是 turn|model_call")
         raw_overrides = section.get("overrides")
         if not isinstance(raw_overrides, Mapping):
@@ -77,7 +76,7 @@ class ResourceActivationPolicySnapshot:
                 )
             ):
                 raise ValueError(_KIND_PATTERN_ERROR)
-            if value not in RESOURCE_ACTIVATION_BOUNDARIES:
+            if value not in _BOUNDARIES:
                 raise ValueError(
                     f"context.resource_activation.overrides.{key} 必须是 turn|model_call"
                 )
