@@ -768,14 +768,17 @@ def test_gateway_connection_id_migration_recovers_after_file_write_crash(
         ],
     )
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-    original_writer = gateway_config_module._atomic_write_gateway_jsonc
+    original_writer = gateway_config_module.connection_ids._atomic_write_gateway_jsonc
 
     def write_then_crash(path: Path, raw_bytes: bytes) -> None:
         original_writer(path, raw_bytes)
         raise OSError("模拟迁移写入后进程退出")
 
+    # 拆分后 _atomic_write_gateway_jsonc 的_具名定义处_在 config 包的 connection_ids
+    # 子模块；调用方 _migrate_gateway_connection_ids_in_source 也解析该子模块全局，
+    # 故注入点必须指向真正持有它的模块（注入 facade 不影响子模块查找）。
     monkeypatch.setattr(
-        gateway_config_module,
+        gateway_config_module.connection_ids,
         "_atomic_write_gateway_jsonc",
         write_then_crash,
     )
@@ -792,7 +795,7 @@ def test_gateway_connection_id_migration_recovers_after_file_write_crash(
         assert '"config_version": 2' in config_path.read_text(encoding="utf-8")
 
         monkeypatch.setattr(
-            gateway_config_module,
+            gateway_config_module.connection_ids,
             "_atomic_write_gateway_jsonc",
             original_writer,
         )
