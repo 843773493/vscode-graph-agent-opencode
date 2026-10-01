@@ -1637,6 +1637,8 @@ async def test_evicted_terminal_streams_release_serial_locks(
     cache_limit = message_stream_store_module.MESSAGE_STREAM_TERMINAL_CACHE_MAX_ENTRIES
     assert len(store._locks) <= cache_limit
     assert len(store._snapshot_locks) <= cache_limit
+    # 会话级索引锁同样必须收敛：分片锁池长度恒为分片数，不随会话数量增长。
+    assert len(store._index_locks) == message_stream_store_module.MESSAGE_STREAM_INDEX_LOCK_SHARDS
 
 
 @pytest.mark.asyncio
@@ -1914,3 +1916,28 @@ async def test_fresh_explicit_event_id_is_accepted_after_compaction(
 
     assert fresh["type"] == "interrupt.requested"
     assert fresh["event_id"] == "intr_fresh"
+
+
+@pytest.mark.asyncio
+async def test_index_locks_are_bounded_and_stable_per_session(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    """会话级索引锁按 session_id 哈希分片：数量有界，且同 session 恒同一把锁。
+
+    回归：``_index_locks`` 曾用 ``setdefault(session_id, asyncio.Lock())`` 且无任何
+    回收路径，每出现一个 session_id 就永久多留一把 Lock，进程内存随历史会话
+    总数无界增长。改为固定分片锁池后，锁对象数量恒为分片数；正确性红线是同一
+    session_id 必须始终映射到同一把锁，否则同会话并发会各自进入临界区。
+    """
+    store, _, _ = message_stream_store
+    shards = message_stream_store_module.MESSAGE_STREAM_INDEX_LOCK_SHARDS
+
+    # 红线：同一 session_id 多次取锁必须是同一对象（互斥不被破坏）。
+    pinned = store._index_lock_for("ses_index_lock_same")
+    assert store._index_lock_for("ses_index_lock_same") is pinned
+    assert store._index_lock_for("ses_index_lock_same") is pinned
+
+    # 有界：大量不同 session_id 去重后的锁对象数不得超过分片数。
+    distinct_locks = {store._index_lock_for(f"ses_index_bound_{index}") for index in range(1000)}
+    assert len(distinct_locks) <= shards
+    assert len(store._index_locks) == shards

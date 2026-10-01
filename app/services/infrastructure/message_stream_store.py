@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import threading
+import zlib
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,6 +25,9 @@ MESSAGE_STREAM_MAX_BYTES = 64 * 1024 * 1024
 MESSAGE_STREAM_RETAINED_BYTES = 8 * 1024 * 1024
 MESSAGE_STREAM_TERMINAL_CACHE_MAX_ENTRIES = 16
 MESSAGE_STREAM_TERMINAL_CACHE_MAX_BYTES = 16 * 1024 * 1024
+# 会话级索引锁按 session_id 哈希分片到固定数量的锁对象：锁数量有界（不随历史
+# 会话总数增长），且同一 session_id 恒映射到同一把锁，互斥语义不变。
+MESSAGE_STREAM_INDEX_LOCK_SHARDS = 64
 MESSAGE_STREAM_BLOCK_TEXT_MAX_CHARS = 256 * 1024
 MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS = 64 * 1024
 MESSAGE_STREAM_TEXT_TRUNCATION_MARKER = (
@@ -190,7 +194,9 @@ class MessageStreamStore:
         self._workspace_id = workspace_id
         self._subscriber_queue_size = subscriber_queue_size
         self._locks: dict[str, asyncio.Lock] = {}
-        self._index_locks: dict[str, asyncio.Lock] = {}
+        self._index_locks: tuple[asyncio.Lock, ...] = tuple(
+            asyncio.Lock() for _ in range(MESSAGE_STREAM_INDEX_LOCK_SHARDS)
+        )
         self._snapshot_locks: dict[str, asyncio.Lock] = {}
         self._snapshot_tasks: dict[str, asyncio.Task[None]] = {}
         self._snapshot_file_lock = threading.Lock()
@@ -274,7 +280,10 @@ class MessageStreamStore:
         return self._locks.setdefault(turn_stream_id, asyncio.Lock())
 
     def _index_lock_for(self, session_id: str) -> asyncio.Lock:
-        return self._index_locks.setdefault(session_id, asyncio.Lock())
+        # 分片锁池：同一 session_id 恒得同一把锁（保住互斥），数量恒为分片数
+        # （有界）。用 crc32 而非 hash() 是为了跨进程确定，不引入 hash 随机化。
+        shard = zlib.crc32(session_id.encode("utf-8")) % len(self._index_locks)
+        return self._index_locks[shard]
 
     def _snapshot_lock_for(self, turn_stream_id: str) -> asyncio.Lock:
         return self._snapshot_locks.setdefault(turn_stream_id, asyncio.Lock())
