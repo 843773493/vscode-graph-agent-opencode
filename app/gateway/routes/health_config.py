@@ -20,6 +20,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 
+from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
@@ -454,10 +455,21 @@ async def gateway_config_event_stream(
         cursor = after
         consumer_id = f"gateway-config-sse:{uuid4().hex}"
         while not await request.is_disconnected():
-            events = service.claim_events_for_consumer(
-                after=cursor,
-                consumer_id=consumer_id,
-                limit=2000,
+            # 空闲时不进 claim 写事务：先只读探测确有待消费事件，再 claim；
+            # 否则无事的连接也会每秒 BEGIN IMMEDIATE + sweep，白白占用写事务。
+            # 游标被裁剪时按原有续读语义交给 claim 处理。
+            try:
+                has_pending = bool(service.list_events(after=cursor, limit=1))
+            except ConfigEventCursorGoneError:
+                has_pending = True
+            events = (
+                service.claim_events_for_consumer(
+                    after=cursor,
+                    consumer_id=consumer_id,
+                    limit=2000,
+                )
+                if has_pending
+                else ()
             )
             if events:
                 for event in events:
@@ -472,4 +484,8 @@ async def gateway_config_event_stream(
                 yield ": config-heartbeat\n\n"
                 await asyncio.sleep(1)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers=SSE_NO_CACHE_HEADERS,
+    )
