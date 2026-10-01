@@ -190,7 +190,26 @@ export default function GatewayThemeSettings({
   };
 
   if (!catalog) {
-    return <div className="gateway-theme-loading">正在读取 Gateway 主题配置…</div>;
+    // 首读失败时 catalog 永远为空，若这里只渲染加载态，错误就被永久吞在状态里：
+    // 用户看到的是转不完的「正在读取」，没有失败原因也没有重试入口。失败必须在
+    // 这个分支里就可见，并给出与主分支同款的重试按钮。
+    return (
+      <div className="gateway-theme-loading">
+        {error ? (
+          <div className="gateway-console-alert" role="alert">
+            <span className="codicon codicon-error" aria-hidden="true" />
+            <div><strong>主题配置读取失败</strong><span>{error}</span></div>
+          </div>
+        ) : (
+          <span>正在读取 Gateway 主题配置…</span>
+        )}
+        {error ? (
+          <button type="button" disabled={busy} onClick={() => void handleReload()}>
+            重新读取配置
+          </button>
+        ) : null}
+      </div>
+    );
   }
 
   return (
