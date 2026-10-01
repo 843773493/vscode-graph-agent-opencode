@@ -378,7 +378,7 @@ export async function mountHarness(
  * 由真实 useSessionGeneratorResources 提供资源，否则使用空控制器；两者在
  * Harness 外分派，避免条件调用 hook。
  */
-export function useSessionResourceExplorerHarness(options: {
+function useSessionResourceExplorerHarness(options: {
   props: ResourceExplorerProps;
   liveGeneratorResources?: boolean;
   onExplorer?: (explorer: SessionResourceExplorerHandle) => void;
