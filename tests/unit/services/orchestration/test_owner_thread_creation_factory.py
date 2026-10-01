@@ -84,7 +84,8 @@ async def test_service_cache_and_open_control_stores_stay_bounded(
     OwnerThreadCreationFactory 是容器级长驻单例，其每个缓存值都持有一个
     打开 ``session-control.sqlite`` 的 ``SessionControlStore``。若缓存随历史
     owner session 数无界增长，长驻进程内存与文件描述符都会被逐会话永久吃掉，
-    最终撞 ``EMFILE``。上限内必须恒定，淘汰时须关闭被淘汰的 control store。
+    最终撞 ``EMFILE``。上限内必须恒定；被淘汰的服务一旦不再被在飞调用持有，
+    其 ``SessionControlStore`` 连接随之回收（缓存是唯一长活引用）。
     """
     sessions_root = _sessions_root(tmp_path, "bounded")
     session_ids = await _create_sessions(sessions_root, _BOUND + 40)
