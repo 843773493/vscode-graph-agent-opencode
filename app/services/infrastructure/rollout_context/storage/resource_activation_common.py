@@ -9,9 +9,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Final, Protocol
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.errors import CodeCarryingError
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     SourceLineageRef,
@@ -27,6 +27,15 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 SCHEMA_UNAVAILABLE_CODE: Final = "resource-activation-schema-unavailable"
 LINEAGE_MANIFEST_SCHEMA: Final = "resource-activation-lineage-manifest:v1"
+
+# activation storage 的错误码：只在此定义一次，store/reads/migration 统一引用，
+# 杜绝同一 code 在多个文件里裸写导致的漂移。
+SCHEMA_INVALID_CODE: Final = "resource-activation-schema-invalid"
+SCHEMA_CONFLICT_CODE: Final = "resource-activation-schema-conflict"
+SNAPSHOT_CONFLICT_CODE: Final = "resource-activation-snapshot-conflict"
+HASH_MISMATCH_CODE: Final = "resource-activation-hash-mismatch"
+LINEAGE_INVALID_CODE: Final = "resource-activation-lineage-invalid"
+LINEAGE_BODY_UNAVAILABLE_CODE: Final = "resource-activation-lineage-unavailable"
 
 SNAPSHOT_COLUMNS: Final = (
     "session_id",
@@ -121,7 +130,7 @@ def _detail_ref_key(ref: DetailRef, *, field: str) -> str:
 
     if not isinstance(ref, DetailRef):
         raise ResourceActivationStoreError(
-            "resource-activation-schema-invalid", f"{field} 必须是 typed DetailRef"
+            SCHEMA_INVALID_CODE, f"{field} 必须是 typed DetailRef"
         )
     return detail_ref_key(ref)
 
@@ -161,27 +170,27 @@ def _lineage_by_resource(
         LINEAGE_MANIFEST_SCHEMA
     ):
         raise ResourceActivationStoreError(
-            "resource-activation-lineage-invalid",
+            LINEAGE_INVALID_CODE,
             "受保护 lineage manifest schema 不匹配",
         )
     entries = manifest.get("lineages")
     if not isinstance(entries, list) or not entries:
         raise ResourceActivationStoreError(
-            "resource-activation-lineage-invalid",
+            LINEAGE_INVALID_CODE,
             "受保护 lineage manifest 缺少 lineages",
         )
     result: dict[str, Mapping[str, object]] = {}
     for entry in entries:
         if not isinstance(entry, Mapping):
             raise ResourceActivationStoreError(
-                "resource-activation-lineage-invalid", "lineage entry 必须是对象"
+                LINEAGE_INVALID_CODE, "lineage entry 必须是对象"
             )
         resource_id = strict_text(
             entry.get("resource_id"), field="lineage.resource_id"
         )
         if resource_id in result:
             raise ResourceActivationStoreError(
-                "resource-activation-lineage-invalid",
+                LINEAGE_INVALID_CODE,
                 f"lineage manifest 重复 resource_id: {resource_id}",
             )
         result[resource_id] = entry
@@ -198,7 +207,7 @@ def _source_lineage_ref_for_binding(
     entry = lineages.get(resource_id)
     if entry is None:
         raise ResourceActivationStoreError(
-            "resource-activation-lineage-invalid",
+            LINEAGE_INVALID_CODE,
             f"binding 缺失受保护 lineage manifest: {resource_id}",
         )
     ordinal = strict_non_negative_int(
@@ -206,18 +215,18 @@ def _source_lineage_ref_for_binding(
     )
     if ordinal != expected_ordinal:
         raise ResourceActivationStoreError(
-            "resource-activation-lineage-invalid",
+            LINEAGE_INVALID_CODE,
             f"lineage ordinal 与 binding 不一致: {resource_id}",
         )
     lineage = SourceLineageRef.from_dict(entry.get("source_lineage_ref"))
     if entry.get("source_lineage_digest") != lineage.digest:
         raise ResourceActivationStoreError(
-            "resource-activation-hash-mismatch",
+            HASH_MISMATCH_CODE,
             f"lineage digest 与 lineage ref 不一致: {resource_id}",
         )
     if lineage.digest != expected_digest:
         raise ResourceActivationStoreError(
-            "resource-activation-hash-mismatch",
+            HASH_MISMATCH_CODE,
             f"lineage digest 与 binding 列不一致: {resource_id}",
         )
     return lineage

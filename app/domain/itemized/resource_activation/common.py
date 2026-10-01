@@ -25,6 +25,11 @@ _TOKEN_PATTERN: Final = "^[a-z][a-z0-9_-]{0,63}$"
 _TOKEN_PATTERN_ERROR: Final = f"必须匹配 {_TOKEN_PATTERN}"
 _DISPLAY_URI_SCHEME: Final = "boxteam://"
 
+# 公开的单点事实：boundary 集合与 token 正则只在此定义一次，本包与 services
+# 的配置校验统一引用，杜绝同值多份定义漂移。
+RESOURCE_ACTIVATION_BOUNDARIES: Final[frozenset[str]] = _BOUNDARIES
+RESOURCE_ACTIVATION_TOKEN_PATTERN: Final = _TOKEN_PATTERN
+
 # 每个 code 只在此定义一次；闭集与 snapshot/provenance 的 raise 点统一引用这些
 # 符号，杜绝同一 code 在多处裸写导致的漂移。
 _CODE_SCHEMA_INVALID: Final = "resource-activation-schema-invalid"
