@@ -3,20 +3,12 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from app.schemas.internal_v2.node_debug import (
-    ExtensionCatalogBindingAuditDTO,
-    NodeDebugActionRequest,
-    NodeDebugBreakpointRequest,
-    NodeDebugClearBreakpointActionRequest,
-    NodeDebugControlActionRequest,
-    NodeDebugEvaluateActionRequest,
-    NodeDebugSetBreakpointActionRequest,
     NodeDebugStateDTO,
-    NodeDebugUpdateBreakpointActionRequest,
-    NodeDebugVariableDTO,
 )
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
@@ -48,11 +40,6 @@ from app.services.infrastructure.node_debug.process.evaluation import (
 from app.services.infrastructure.node_debug.process.inspector import (
     NodeDebugInspector,
 )
-from app.services.infrastructure.node_debug.process.launch_orchestrator import (
-    NodeDebugLaunchContext,
-    NodeDebugLaunchOrchestrator,
-    NodeDebugLaunchRequest,
-)
 from app.services.infrastructure.node_debug.process.observation import (
     NodeDebugRuntimeObserver,
 )
@@ -60,16 +47,31 @@ from app.services.infrastructure.node_debug.process.process_lifecycle import (
     NodeDebugProcessLifecycle,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+from app.services.infrastructure.node_debug.session.action_dispatch import (
+    NodeDebugActionDispatchMixin,
+)
+from app.services.infrastructure.node_debug.session.launch_entry import (
+    NodeDebugLaunchEntryMixin,
+)
+from app.services.infrastructure.node_debug.session.lifecycle_entry import (
+    NodeDebugLifecycleEntryMixin,
+)
 from app.services.infrastructure.node_debug.session.session_admission import (
     NodeDebugSessionAdmission,
 )
 from app.services.infrastructure.node_debug.session.session_state import (
     NodeDebugSessionState,
 )
+from app.services.infrastructure.node_debug.session.state_reads import (
+    NodeDebugStateReadMixin,
+)
 from app.services.infrastructure.node_debug.session.thread_owner import (
     NodeDebugOwner,
     normalize_node_debug_owner,
     resolve_node_debug_owner,
+)
+from app.services.infrastructure.node_debug.session.tool_actions import (
+    NodeDebugToolActionMixin,
 )
 from app.services.orchestration.thread_residency import (
     ResidencyBlocker,
@@ -87,28 +89,17 @@ from app.services.infrastructure.node_debug.session.session_store import (
 from app.services.infrastructure.node_debug.session.snapshot import (
     MAX_NODE_DEBUG_ACTIONS,
     append_runtime_debug_action,
-    build_node_debug_snapshot,
 )
 
-_TOOL_ACTION_SOURCES: dict[str, frozenset[str]] = {
-    "create_debug_configuration": frozenset({"create_configuration"}),
-    "activate_debug_configuration": frozenset({"activate_configuration"}),
-    "delete_debug_configuration": frozenset({"delete_configuration"}),
-    "start_debugging": frozenset({"start", "start_failed"}),
-    "stop_debugging": frozenset({"stop"}),
-    "restart_debugging": frozenset({"start", "start_failed"}),
-    "continue_execution": frozenset({"continue"}),
-    "pause_execution": frozenset({"pause"}),
-    "step_over": frozenset({"step_over"}),
-    "step_into": frozenset({"step_into"}),
-    "step_out": frozenset({"step_out"}),
-    "add_breakpoint": frozenset({"set_breakpoint"}),
-    "add_logpoint": frozenset({"set_breakpoint"}),
-    "remove_breakpoint": frozenset({"clear_breakpoint"}),
-    "clear_all_breakpoints": frozenset({"clear_all_breakpoints"}),
-    "evaluate_expression": frozenset({"evaluate"}),
-}
-class NodeDebugService(NodeDebugConfigurationControlMixin):
+
+class NodeDebugService(
+    NodeDebugActionDispatchMixin,
+    NodeDebugToolActionMixin,
+    NodeDebugLaunchEntryMixin,
+    NodeDebugStateReadMixin,
+    NodeDebugLifecycleEntryMixin,
+    NodeDebugConfigurationControlMixin,
+):
     """通过 Node Inspector 提供 SessionThread 级 JavaScript 源码调试。
 
     运行时、断点、活动方案和动作时间线全部以精确 ``(session_id, thread_id)``
@@ -142,6 +133,9 @@ class NodeDebugService(NodeDebugConfigurationControlMixin):
         #: 释放失败（进入 reconcile_required）时发布 release_failed；成功终态
         #: 由账本 settle 发布 released。通知失败不改变 durable claim 事实。
         self._state_events = state_events
+        self._append_action = partial(
+            append_runtime_debug_action, max_actions=MAX_NODE_DEBUG_ACTIONS
+        )
         self._runtimes: dict[NodeDebugOwner, NodeDebugRuntime] = {}
         #: per-owner 启动临界区：串行化“核实旧 claim → durable 登记 → spawn → 握手”。
         #: 条目数与 ``_runtimes`` 同量级（每个被触达过的 owner 一把锁）；不做回收，
@@ -214,140 +208,6 @@ class NodeDebugService(NodeDebugConfigurationControlMixin):
             append_action=self._append_action,
         )
 
-    def _create_launch_orchestrator(self) -> NodeDebugLaunchOrchestrator:
-        """为本次启动读取最新 service 回调，避免缓存旧的 monkeypatch/运行态。"""
-        return NodeDebugLaunchOrchestrator(
-            NodeDebugLaunchContext(
-                workspace_root=self._workspace_root,
-                node_bin=self._node_bin,
-                configuration_factory=self._configuration_factory,
-                breakpoint_mutations=self._breakpoint_mutations,
-                inspector=self._inspector,
-                lifecycle=self._lifecycle,
-                runtimes=self._runtimes,
-                session_state=self._session_state,
-                set_selection=self._configuration_registry.set_selection,
-                runtimes_lock=self._runtimes_lock,
-                max_actions=MAX_NODE_DEBUG_ACTIONS,
-                load_session=self._session_state.ensure_loaded,
-                reconcile_sources=self._reconcile_session_sources,
-                select_configuration=self._configuration_registry.select_for_start,
-                read_configuration=self._configuration_registry.get,
-                read_runtime_config=self._get_typed_debug_runtime_config,
-                read_source_digests=self._source_digests_for_runtime,
-                persist_state=self._session_state.persist_runtime_state,
-                write_claim=self._claim_runtime.write_launch_claim,
-                mark_claim_running=self._claim_runtime.mark_claim_running,
-                append_action=self._append_action,
-                is_paused_at_breakpoint=self._observer.paused_at_breakpoint,
-                read_stream=self._observer.read_stream,
-                monitor_process=self._observer.monitor_process,
-                terminal_error_message=self._observer.terminal_error_message,
-                handshake_timeout_message=self._observer.handshake_timeout_message,
-            )
-        )
-
-    async def get_state(
-        self, session_id: str, thread_id: str
-    ) -> NodeDebugStateDTO:
-        owner = self._resolve_owner(session_id, thread_id)
-        session_id, thread_id = owner
-        self._session_state.ensure_loaded(session_id, thread_id)
-        self._configuration_registry.refresh_new_files(session_id, thread_id)
-        runtime = self._runtimes.get(owner)
-        if runtime is None:
-            # 冷读取时必须先按持久 claim 核实旧实例，绝不虚报 idle/终态。
-            await self._lifecycle.reconcile_persisted_claim(owner)
-        await self._reconcile_session_sources(session_id, thread_id, runtime)
-        if runtime is None:
-            selection = self._configuration_registry.selection(session_id, thread_id)
-            claim = self._claim_runtime.active_claim(session_id, thread_id)
-            return NodeDebugStateDTO(
-                session_id=session_id,
-                thread_id=thread_id,
-                status=(
-                    "reconcile_required"
-                    if claim is not None and claim.phase == "reconcile_required"
-                    else "idle"
-                ),
-                error_message=(
-                    claim.reconcile_reason
-                    if claim is not None and claim.phase == "reconcile_required"
-                    else None
-                ),
-                active_configuration_id=self._configuration_registry.active_id(
-                    session_id, thread_id
-                ),
-                active_configuration_name=self._configuration_registry.active_name(
-                    session_id, thread_id
-                ),
-                configurations=self._configuration_registry.summaries(
-                    session_id, thread_id
-                ),
-                script_path=selection.script_path,
-                working_directory=selection.working_directory,
-                launch_profile_name=selection.launch_profile_name,
-                args=list(selection.args),
-                breakpoints=[
-                    breakpoint.model_copy(deep=True)
-                    for breakpoint in self._session_state.pending_breakpoints(owner)
-                ],
-                actions=[
-                    action.model_copy(deep=True)
-                    for action in self._session_state.pending_actions(owner)
-                ],
-                configuration_revision=(
-                    self._configuration_registry.active_revision(session_id, thread_id)
-                ),
-            )
-        async with runtime.state_lock:
-            return self._snapshot(runtime)
-
-
-    async def start(
-        self,
-        *,
-        session_id: str,
-        path: str,
-        args: list[str],
-        breakpoints: list[NodeDebugBreakpointRequest],
-        thread_id: str,
-        configuration_id: str | None = None,
-        launch_profile_name: str | None = None,
-        working_directory: str | None = None,
-        actor: Literal["human", "ai", "system"] = "human",
-        tool_name: str | None = None,
-        tool_call_id: str | None = None,
-    ) -> NodeDebugStateDTO:
-        """公开启动入口：Session 准入后，按 owner 串行执行整段启动序列。
-
-        per-owner 临界区覆盖"核实旧登记 → durable 登记 → spawn → 身份核对 → 握手 → running"。
-        并发 start（Web 与 Agent 同时按下）否则会各自登记一代 claim 并各自 spawn 进程：
-        后写的登记会覆盖先启动实例的登记，先启动的进程随之游离，Inspector 端口也被抢。
-        R5b 起同一临界区也覆盖 ``apply_action("stop")``、``restart()`` 与 ``close()`` 的
-        停止路径：stop 落在 spawn 窗口不会再产生"exited + 进程存活"的假终态。临界区内
-        的 await 全部有界（旧实例停止的 terminate/kill 核实各有 3s 超时、socket.close
-        与已 cancel 任务的 gather 均有界），不会与 ``_runtimes_lock`` 形成反向持锁
-        （``_owner_lock → _runtimes_lock → runtime.state_lock`` 单向）。
-        """
-        session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        owner = self._owner_key(session_id, thread_id)
-        async with self._owner_lock(owner):
-            result = await self._create_launch_orchestrator().launch(
-                NodeDebugLaunchRequest(
-                    owner=owner,
-                    path=path,
-                    args=args,
-                    breakpoints=breakpoints,
-                    configuration_id=configuration_id,
-                    launch_profile_name=launch_profile_name,
-                    working_directory=working_directory,
-                    actor=actor,
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                )
-            )
-            return await self.get_state(*result.owner)
 
     def _owner_lock(self, owner: NodeDebugOwner) -> asyncio.Lock:
         """取（或懒建）该 owner 的临界区：串行化 start/stop/restart/close 的整段序列。
@@ -363,189 +223,6 @@ class NodeDebugService(NodeDebugConfigurationControlMixin):
             self._owner_locks[owner] = lock
         return lock
 
-    async def apply_action(
-        self,
-        *,
-        command: NodeDebugActionRequest,
-        actor: Literal["human", "ai", "system"] = "human",
-        tool_name: str | None = None,
-        tool_call_id: str | None = None,
-    ) -> NodeDebugStateDTO:
-        session_id, thread_id = command.session_id, command.thread_id
-        session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        owner = self._owner_key(session_id, thread_id)
-        self._session_state.ensure_loaded(session_id, thread_id)
-        runtime = self._runtimes.get(owner)
-        await self._reconcile_session_sources(session_id, thread_id, runtime)
-        if runtime is None and not isinstance(
-            command,
-            (
-                NodeDebugSetBreakpointActionRequest,
-                NodeDebugUpdateBreakpointActionRequest,
-                NodeDebugClearBreakpointActionRequest,
-            ),
-        ):
-            self._assert_no_unsettled_claim(
-                owner,
-                operation=f"调试动作 {command.action}",
-            )
-            raise RuntimeError(
-                f"Node 调试会话不存在: session_id={session_id}, thread_id={thread_id}"
-            )
-        if isinstance(command, NodeDebugSetBreakpointActionRequest):
-            self._configuration_registry.ensure_configuration_for_breakpoint(
-                session_id,
-                thread_id,
-                path=command.params.path,
-            )
-            await self._breakpoint_mutations.set_breakpoint(
-                owner,
-                runtime,
-                command.params,
-                actor=actor,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-            )
-        elif isinstance(command, NodeDebugUpdateBreakpointActionRequest):
-            await self._breakpoint_mutations.update_breakpoint(
-                owner,
-                runtime,
-                command.params,
-                actor=actor,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-            )
-        elif isinstance(command, NodeDebugClearBreakpointActionRequest):
-            await self._breakpoint_mutations.clear_breakpoint(
-                owner,
-                runtime,
-                command.params,
-                actor=actor,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-            )
-        elif isinstance(command, NodeDebugEvaluateActionRequest):
-            await self._evaluation.evaluate(
-                runtime,
-                command.params,
-                actor=actor,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-            )
-        elif isinstance(command, NodeDebugControlActionRequest):
-            if command.action != "stop":
-                await self._inspector.debugger_command(
-                    runtime,
-                    command.action,
-                    actor=actor,
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                )
-                self._session_state.persist_runtime_state(
-                    session_id, thread_id, runtime
-                )
-                return await self.get_state(session_id, thread_id)
-            # stop 与 start 共用 per-owner 临界区（R3b 复核残留项）：否则 stop 落在
-            # "runtime 已登记、进程尚未 spawn"的窗口会以 process is None 判定
-            # "已停止/可证明不存在"，随后启动序列仍会 spawn，形成"exited + 进程
-            # 存活"的假终态。临界区内的 await 全部有界（见 _owner_lock 文档）。
-            async with self._owner_lock(owner):
-                outcome = await self._lifecycle.stop_runtime(runtime)
-                if outcome != "reconcile_required":
-                    async with runtime.state_lock:
-                        runtime.status = "exited"
-                        runtime.error_message = None
-                        self._append_action(
-                            runtime,
-                            "stop",
-                            "已停止 Node Inspector",
-                            actor=actor,
-                            tool_name=tool_name,
-                            tool_call_id=tool_call_id,
-                        )
-            if outcome == "reconcile_required":
-                # 无法核实终态：保持 reconcile_required，不报告 stopped。
-                self._session_state.persist_runtime_state(
-                    session_id, thread_id, runtime
-                )
-                return await self.get_state(session_id, thread_id)
-        self._session_state.persist_runtime_state(
-            session_id, thread_id, runtime
-        )
-        return await self.get_state(session_id, thread_id)
-
-    async def restart(
-        self,
-        session_id: str,
-        *,
-        thread_id: str,
-        actor: Literal["human", "ai", "system"] = "human",
-        tool_name: str | None = None,
-        tool_call_id: str | None = None,
-    ) -> NodeDebugStateDTO:
-        session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        owner = self._owner_key(session_id, thread_id)
-        # 重启 = 停止旧实例 + 启动新实例，必须整体处于 per-owner 临界区内（R3b 复核
-        # 残留项）：否则 stop 落在另一并发启动的 spawn 窗口时会得到假终态。临界区内
-        # 直接调用启动编排器，绝不能再经 `start()` 重入同一把 asyncio.Lock
-        # （不可重入，重入即自锁）。
-        async with self._owner_lock(owner):
-            self._session_state.ensure_loaded(session_id, thread_id)
-            runtime = self._runtimes.get(owner)
-            if runtime is None:
-                self._assert_no_unsettled_claim(owner, operation="重启调试")
-                raise RuntimeError(
-                    f"Node 调试会话不存在: session_id={session_id}, thread_id={thread_id}"
-                )
-            async with runtime.state_lock:
-                path = runtime.relative_script_path
-                args = list(runtime.args)
-                configuration_id = runtime.configuration_id
-                launch_profile_name = runtime.launch_profile_name
-                working_directory = (
-                    str(runtime.working_directory)
-                    if runtime.working_directory is not None
-                    else ""
-                )
-                breakpoints = [
-                    NodeDebugBreakpointRequest(
-                        path=breakpoint.path,
-                        line=breakpoint.line,
-                        column=breakpoint.column,
-                        condition=breakpoint.condition,
-                        hit_condition=breakpoint.hit_condition,
-                        log_message=breakpoint.log_message,
-                    )
-                    for breakpoint in runtime.breakpoints.values()
-                    if breakpoint.relocation_status == "current"
-                ]
-            outcome = await self._lifecycle.stop_runtime(runtime)
-            if outcome == "reconcile_required":
-                # 旧实例无法核实终态：保持 reconcile_required，绝不为同一 owner 启动新实例。
-                self._session_state.persist_runtime_state(
-                    session_id, thread_id, runtime
-                )
-                raise RuntimeError(
-                    "旧调试实例无法核实终态，保持 reconcile_required；拒绝重启: "
-                    f"session_id={session_id}, thread_id={thread_id}"
-                )
-            async with runtime.state_lock:
-                runtime.status = "exited"
-            result = await self._create_launch_orchestrator().launch(
-                NodeDebugLaunchRequest(
-                    owner=owner,
-                    path=path,
-                    args=args,
-                    breakpoints=breakpoints,
-                    configuration_id=configuration_id,
-                    launch_profile_name=launch_profile_name,
-                    working_directory=working_directory,
-                    actor=actor,
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                )
-            )
-            return await self.get_state(*result.owner)
 
     async def clear_all_breakpoints(
         self,
@@ -600,206 +277,6 @@ class NodeDebugService(NodeDebugConfigurationControlMixin):
         )
         return await self.get_state(session_id, thread_id)
 
-    async def record_tool_action(
-        self,
-        *,
-        session_id: str,
-        tool_name: str,
-        tool_call_id: str,
-        result: Literal["success", "error"],
-        message: str,
-        thread_id: str,
-        extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
-    ) -> NodeDebugStateDTO:
-        session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        owner = self._owner_key(session_id, thread_id)
-        self._session_state.ensure_loaded(session_id, thread_id)
-        runtime = self._runtimes.get(owner)
-        if runtime is None:
-            pending = self._session_state.pending_actions(owner)
-            existing_index = next(
-                (
-                    index
-                    for index in range(len(pending) - 1, -1, -1)
-                    if pending[index].tool_name == tool_name
-                    and pending[index].tool_call_id == tool_call_id
-                ),
-                None,
-            )
-            if existing_index is not None:
-                self._session_state.replace_pending_action(
-                    owner,
-                    existing_index,
-                    pending[existing_index].model_copy(
-                        update={
-                            "message": message,
-                            "result": result,
-                            "actor": "ai",
-                            "extension_catalog_binding": extension_catalog_binding,
-                        }
-                    ),
-                )
-            else:
-                self._session_state.append_pending_action(
-                    session_id,
-                    thread_id,
-                    tool_name,
-                    message,
-                    actor="ai",
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                    extension_catalog_binding=extension_catalog_binding,
-                    result=result,
-                )
-            self._session_state.persist_runtime_state(
-                session_id, thread_id, None
-            )
-            return await self.get_state(session_id, thread_id)
-        async with runtime.state_lock:
-            existing_index = next(
-                (
-                    index
-                    for index in range(len(runtime.actions) - 1, -1, -1)
-                    if runtime.actions[index].tool_name == tool_name
-                    and runtime.actions[index].tool_call_id == tool_call_id
-                ),
-                None,
-            )
-            if existing_index is not None:
-                existing = runtime.actions[existing_index]
-                runtime.actions[existing_index] = existing.model_copy(
-                    update={
-                        "message": message,
-                        "result": result,
-                        "actor": "ai",
-                        "extension_catalog_binding": extension_catalog_binding,
-                    }
-                )
-            else:
-                latest = runtime.actions[-1] if runtime.actions else None
-                source_actions = _TOOL_ACTION_SOURCES.get(tool_name, frozenset())
-                if (
-                    latest is not None
-                    and latest.tool_name is None
-                    and latest.action in source_actions
-                ):
-                    runtime.actions[-1] = latest.model_copy(
-                        update={
-                            "message": message,
-                            "actor": "ai",
-                            "tool_name": tool_name,
-                            "tool_call_id": tool_call_id,
-                            "extension_catalog_binding": extension_catalog_binding,
-                            "result": result,
-                        }
-                    )
-                else:
-                    self._append_action(
-                        runtime,
-                        tool_name,
-                        message,
-                        actor="ai",
-                        tool_name=tool_name,
-                        tool_call_id=tool_call_id,
-                        extension_catalog_binding=extension_catalog_binding,
-                        result=result,
-                    )
-        self._session_state.persist_runtime_state(
-            session_id, thread_id, runtime
-        )
-        return await self.get_state(session_id, thread_id)
-
-    async def get_variables(
-        self,
-        *,
-        session_id: str,
-        thread_id: str,
-        variable_names: list[str] | None = None,
-        scope: str = "all",
-    ) -> list[NodeDebugVariableDTO]:
-        session_id, thread_id = self._resolve_owner(session_id, thread_id)
-        state = await self.get_state(session_id, thread_id)
-        if state.status != "paused" or not state.call_stack:
-            raise RuntimeError("只有暂停在源码断点时才能检查变量")
-        if scope not in {"local", "global", "all"}:
-            raise ValueError(f"不支持的变量 scope: {scope}")
-        requested = set(variable_names or [])
-        result: list[NodeDebugVariableDTO] = []
-        for variable in state.call_stack[0].variables:
-            if scope != "all" and variable.scope != scope:
-                continue
-            if requested and variable.name not in requested:
-                continue
-            result.append(variable.model_copy(deep=True))
-        if variable_names:
-            found = {variable.name for variable in result}
-            missing = [name for name in variable_names if name not in found]
-            if missing:
-                raise ValueError("当前暂停上下文找不到指定变量: " + ", ".join(missing))
-        return result
-
-    async def close(self) -> None:
-        async with self._runtimes_lock:
-            runtimes = tuple(self._runtimes.values())
-        for runtime in runtimes:
-            # 关停也走 per-owner 临界区：与并发 start/stop 串行化，避免关闭期间
-            # 仍有启动序列在为同一 owner spawn 新进程。先释放 _runtimes_lock 再取
-            # owner 锁，保持"_owner_lock → _runtimes_lock"的单向锁序。
-            async with self._owner_lock((runtime.session_id, runtime.thread_id)):
-                await self._lifecycle.stop_runtime(runtime)
-
-    async def drain_session(self, session_id: str) -> None:
-        """删除物理隔离前排空该 Session 的精确 main 调试 owner。
-
-        SessionSubtreeDeleteService 已在对应 SessionLifecycleGate exclusive
-        临界区内调用本方法。这里不走普通 mutation admission（catalog 已经
-        原子进入 ``deleting``），而是直接按稳定 Session ID 取 main owner，
-        串行停止在册 runtime，再核实并结清同一 owner 的 durable launch
-        claim。任何 ``reconcile_required`` 或残留 active claim 都向上抛错，
-        让共享删除流保持源目录和 deleting record，禁止伪成功。
-
-        child Session 会以自己的 Session ID 作为冻结子树中的独立节点再次
-        回调，因此这里不扫描父 Session 的 thread 目录，也不凭 PID/端口猜
-        测其它 owner。
-        """
-        owner = self._owner_key(session_id, "main")
-        async with self._owner_lock(owner):
-            runtime = self._runtimes.get(owner)
-            if runtime is not None:
-                outcome = await self._lifecycle.stop_runtime(runtime, clear_error=False)
-                if outcome == "reconcile_required":
-                    raise RuntimeError(
-                        "删除 Session 前无法核实 Node 调试进程终态，"
-                        "保持 reconcile_required 并阻断删除: "
-                        f"session_id={owner[0]}, thread_id={owner[1]}"
-                    )
-                async with runtime.state_lock:
-                    runtime.status = "exited"
-                    runtime.error_message = None
-                # 与 Web/API stop 入口保持同一 authoritative manifest 语义；
-                # 物理 rename 发生在本回调返回之后。
-                self._session_state.persist_runtime_state(
-                    owner[0], owner[1], runtime
-                )
-
-            # runtime 缺失时按 durable claim 恢复合同定点核实旧实例；若
-            # claim 仍不可核实，必须阻断删除，而不能把内存缺项当成 stopped。
-            decision = await self._lifecycle.reconcile_persisted_claim(owner)
-            if decision is not None and decision.outcome == "reconcile_required":
-                raise RuntimeError(
-                    "删除 Session 前无法核实 Node 调试 claim，"
-                    "保持 reconcile_required 并阻断删除: "
-                    f"session_id={owner[0]}, thread_id={owner[1]}, "
-                    f"reason={decision.reason}"
-                )
-            claim = self._claim_runtime.active_claim(*owner)
-            if claim is not None:
-                raise RuntimeError(
-                    "删除 Session 前仍存在未结清的 Node 调试 claim，"
-                    "阻断物理隔离: "
-                    f"session_id={owner[0]}, thread_id={owner[1]}, "
-                    f"phase={claim.phase}"
-                )
 
     @staticmethod
     def _owner_key(session_id: str, thread_id: str) -> NodeDebugOwner:
@@ -889,32 +366,3 @@ class NodeDebugService(NodeDebugConfigurationControlMixin):
             for breakpoint_id, breakpoint in runtime.breakpoints.items()
         }
 
-    @staticmethod
-    def _append_action(
-        runtime: NodeDebugRuntime,
-        action: str,
-        message: str,
-        *,
-        actor: Literal["human", "ai", "system"] = "human",
-        tool_name: str | None = None,
-        tool_call_id: str | None = None,
-        extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
-        result: Literal["success", "error"] = "success",
-    ) -> None:
-        append_runtime_debug_action(
-            runtime,
-            action=action,
-            message=message,
-            actor=actor,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            extension_catalog_binding=extension_catalog_binding,
-            result=result,
-            max_actions=MAX_NODE_DEBUG_ACTIONS,
-        )
-
-    def _snapshot(self, runtime: NodeDebugRuntime) -> NodeDebugStateDTO:
-        return build_node_debug_snapshot(
-            runtime,
-            self._configuration_registry,
-        )
