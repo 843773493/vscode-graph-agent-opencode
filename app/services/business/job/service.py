@@ -36,8 +36,8 @@ from app.schemas.internal_v2.pending_request import (
 )
 from app.services.business.job.control_service import JobControlService
 from app.services.business.job.lifecycle import (
-    ACTIVE_JOB_STATUSES,
     FAILED_JOB_STATUSES,
+    HEARTBEAT_TRACKED_JOB_STATUSES,
     TERMINAL_JOB_STATUSES,
     transition_job_status,
 )
@@ -1443,7 +1443,7 @@ class JobService:
         """在执行器没有事件时仍更新可观察的 Job 活跃时间。"""
         while True:
             await asyncio.sleep(1)
-            if job.status not in ACTIVE_JOB_STATUSES:
+            if job.status not in HEARTBEAT_TRACKED_JOB_STATUSES:
                 return
             job.progress = max(job.progress, runtime_state.progress)
             if runtime_state.current_step is not None:

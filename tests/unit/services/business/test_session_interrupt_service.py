@@ -266,3 +266,44 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
     assert "<system_reminder>" in str(reminders[0]["content"])
     assert "文本生成" in str(reminders[0]["content"])
     SessionInterruptState.clear(session_id)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_ignores_interrupt_pending_job(
+    tmp_path,
+    session_bundle_factory,
+) -> None:
+    """interrupt_pending 的 Job 不属于可中断集合，不得被再次选为中断目标。
+
+    interrupt_pending 表示取消注入已在进行中；再次把它选为目标会重复注入取消。
+    该用例锁定可中断集合等于 {running, streaming, waiting_input}。
+    """
+
+    session_id = "ses_019d2e4f6a8b7c1d9e2f3a4b5c6d7e8f"
+    SessionInterruptState.clear(session_id)
+    session_bundle_factory(tmp_path, session_id)
+    saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    job = JobDTO(
+        job_id="job_interrupt_pending",
+        message_id="msg_interrupt_pending",
+        session_id=session_id,
+        mode=RunMode.single_agent,
+        status=JobStatus.interrupt_pending,
+        entry_agent="default",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    job_service = FakeJobService(job)
+    service = SessionInterruptService(
+        job_service=job_service,
+        job_event_bus=FakeJobEventBus(),
+        message_service=build_message_service(tmp_path, checkpointer=saver),
+        message_stream_store=MessageStreamStore(
+            path_resolver=get_session_path_resolver(tmp_path),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="当前没有正在运行的任务"):
+        await service.interrupt(session_id=session_id)
+
+    assert job_service.control_requests == []
