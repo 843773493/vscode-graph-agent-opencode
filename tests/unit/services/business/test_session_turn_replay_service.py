@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -497,3 +498,56 @@ async def test_replay_requires_explicit_context_only_acknowledgement(
             "msg_2",
             MessageReplayRequest(action="regenerate"),
         )
+
+
+@pytest.mark.asyncio
+async def test_replay_lock_table_stays_bounded_across_many_sessions(
+    tmp_path,
+    session_bundle_factory,
+) -> None:
+    """Replay 锁池对 session 数量必须有固定上界。
+
+    旧实现为每个 session 新建一把锁，长驻进程会随历史会话数无界增长；且
+    ``setdefault`` 发生在入参校验之前，连被拒绝的非法请求也会永久留下一个锁。
+    """
+    service, _, _ = await _build_service(
+        tmp_path,
+        session_bundle_factory,
+        [_job("msg_2", JobStatus.completed)],
+    )
+
+    for index in range(5000):
+        service._session_lock(f"ses_replay_{index}")
+
+    # 固定上界（与分片数一致的量级），不依赖内部常量即可断言有界性。
+    assert len(service._session_locks) <= 64
+
+
+@pytest.mark.asyncio
+async def test_replay_lock_is_stable_and_serializes_same_session(
+    tmp_path,
+    session_bundle_factory,
+) -> None:
+    """分片锁池：同一 session 恒得同一把锁，同 session 临界区仍严格互斥。"""
+    service, _, _ = await _build_service(
+        tmp_path,
+        session_bundle_factory,
+        [_job("msg_2", JobStatus.completed)],
+    )
+
+    assert service._session_lock("sess_shared") is service._session_lock("sess_shared")
+
+    lock = service._session_lock("sess_shared")
+    concurrent = 0
+    peak = 0
+
+    async def worker() -> None:
+        nonlocal concurrent, peak
+        async with lock:
+            concurrent += 1
+            peak = max(peak, concurrent)
+            await asyncio.sleep(0.01)
+            concurrent -= 1
+
+    await asyncio.gather(*(worker() for _ in range(20)))
+    assert peak == 1

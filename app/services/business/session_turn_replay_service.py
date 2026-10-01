@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import zlib
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Protocol
@@ -30,6 +31,9 @@ from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 
 CONTEXT_ONLY_NOTICE = "已移除目标消息及其后的会话上下文；工作区文件修改不会被撤销。"
+
+# Replay 锁按 session_id 分片；分片数固定，避免长驻进程随历史会话数无界增长。
+REPLAY_LOCK_SHARDS = 64
 
 
 class PreparedMessageDispatcher(Protocol):
@@ -65,7 +69,15 @@ class SessionTurnReplayService:
         self._job_service = job_service
         self._dispatcher = dispatcher
         self._trace_event_store = trace_event_store
-        self._session_locks: dict[str, asyncio.Lock] = {}
+        self._session_locks: tuple[asyncio.Lock, ...] = tuple(
+            asyncio.Lock() for _ in range(REPLAY_LOCK_SHARDS)
+        )
+
+    def _session_lock(self, session_id: str) -> asyncio.Lock:
+        # 分片锁池：同一 session_id 恒得同一把锁（保住互斥），数量恒为分片数
+        # （有界）。用 crc32 而非 hash() 是为了跨进程确定，不引入 hash 随机化。
+        shard = zlib.crc32(session_id.encode("utf-8")) % len(self._session_locks)
+        return self._session_locks[shard]
 
     async def replay(
         self,
@@ -80,7 +92,7 @@ class SessionTurnReplayService:
                 "必须确认：操作会移除目标消息及其后的会话上下文，但不会撤销工作区文件修改"
             )
 
-        session_lock = self._session_locks.setdefault(session_id, asyncio.Lock())
+        session_lock = self._session_lock(session_id)
         async with session_lock:
             await self._assert_session_idle(session_id)
             session = await self._session_service.get(session_id)
