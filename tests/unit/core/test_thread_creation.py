@@ -1029,6 +1029,132 @@ async def test_same_key_different_content_fails_closed_without_reuse(
     )
 
 
+# 说明：M7/M10 对应的身份判据位于 _publish_in_gate 的 published 恢复分支。
+# 正常软件路径下该分支的两侧恒等（同 key 的 child/preimage 在一次
+# create-or-get 内冻结，跨实例由 store 保证一致），因此只能在「服务取到
+# record 之后、publish 之前」注入外部直改来制造分歧；这正对应复核方判定
+# 的「仅外部直改 DB/record 可达」的 fail-closed 语义，需要被用例 pin 死。
+
+
+async def test_publish_reentry_rejects_preimage_drift_without_reuse(
+    store: SessionCatalogStore,
+    owner: OwnerSession,
+    sessions_root: Path,
+) -> None:
+    """published 恢复分支的 preimage 半边：同 key 但 record 的 preimage
+    已被外部改成与本次请求不同 → fail closed，不得静默复用他人线程。
+    """
+    control = SessionControlStore(owner.session_dir / "session-control.sqlite")
+    other_control = SessionControlStore(owner.session_dir / "session-control.sqlite")
+    original_publish = control.publish_thread_creation_record
+
+    def publish_then_corrupt(key: str):
+        # 另一执行根先抵达唯一可见性提交点，随后 record 被外部直改改坏
+        # preimage；本实例的 publish 因而失败（已发布），走 published 恢复分支。
+        other_control.publish_thread_creation_record(key)
+        other_control.connection.execute(
+            "UPDATE thread_creation_records SET preimage_hash = ? "
+            "WHERE thread_creation_idempotency_key = ?",
+            ("f" * 64, key),
+        )
+        return original_publish(key)
+
+    control.publish_thread_creation_record = publish_then_corrupt  # type: ignore[method-assign]
+    service = ThreadCreationService(
+        store=store,
+        control_store=control,
+        sessions_root=sessions_root,
+        workspace_id=WORKSPACE_ID,
+        compute_capability_profile_hash=compute_capability_profile_hash,
+        gate=NavigationTopologyGate(sessions_root),
+        session_gate=SessionLifecycleGate(sessions_root),
+    )
+    try:
+        with pytest.raises(RuntimeError, match="身份与本次请求不一致"):
+            await service.create(
+                idempotency_key="drift-key",
+                session_id=owner.session_id,
+                thread_id=None,
+                delegation_id=None,
+                initial_state="running",
+                session_metadata=make_metadata(),
+                artifact_manifest=make_artifacts(),
+            )
+    finally:
+        control.close()
+        other_control.close()
+    # 归因精确：preimage 半边单独成立（child 仍与本次一致）
+    record = owner.control.get_thread_creation_record("drift-key")
+    assert record.preimage_hash == "f" * 64
+    assert record.state == "published"
+
+
+async def test_publish_reentry_rejects_child_thread_id_drift_without_reuse(
+    store: SessionCatalogStore,
+    owner: OwnerSession,
+    sessions_root: Path,
+) -> None:
+    """published 恢复分支的 child_thread_id 半边：同 key、preimage 不变但
+    record 的 child_thread_id 被外部改成不同 → fail closed，不得静默复用。
+    """
+    control = SessionControlStore(owner.session_dir / "session-control.sqlite")
+    other_control = SessionControlStore(owner.session_dir / "session-control.sqlite")
+    original_publish = control.publish_thread_creation_record
+    other_child_id = make_thread_id()
+
+    def publish_then_corrupt(key: str):
+        other_control.publish_thread_creation_record(key)
+        row = other_control.connection.execute(
+            "SELECT child_created_at FROM thread_creation_records "
+            "WHERE thread_creation_idempotency_key = ?",
+            (key,),
+        ).fetchone()
+        created = datetime.fromisoformat(str(row["child_created_at"])).astimezone(
+            UTC
+        )
+        # child 与最终 locator 同步改成另一个（同日、合法形态），使 store 的
+        # 内部一致性复验可过，从而精确命中恢复分支的 child 半边判据。
+        other_control.connection.execute(
+            "UPDATE thread_creation_records SET child_thread_id = ?, "
+            "final_relative_locator = ? "
+            "WHERE thread_creation_idempotency_key = ?",
+            (
+                other_child_id,
+                f"threads/{created:%Y/%m/%d}/{other_child_id}",
+                key,
+            ),
+        )
+        return original_publish(key)
+
+    control.publish_thread_creation_record = publish_then_corrupt  # type: ignore[method-assign]
+    service = ThreadCreationService(
+        store=store,
+        control_store=control,
+        sessions_root=sessions_root,
+        workspace_id=WORKSPACE_ID,
+        compute_capability_profile_hash=compute_capability_profile_hash,
+        gate=NavigationTopologyGate(sessions_root),
+        session_gate=SessionLifecycleGate(sessions_root),
+    )
+    try:
+        with pytest.raises(RuntimeError, match="身份与本次请求不一致"):
+            await service.create(
+                idempotency_key="child-drift-key",
+                session_id=owner.session_id,
+                thread_id=None,
+                delegation_id=None,
+                initial_state="running",
+                session_metadata=make_metadata(),
+                artifact_manifest=make_artifacts(),
+            )
+    finally:
+        control.close()
+        other_control.close()
+    # 归因精确：child 半边单独成立（preimage 未被改动）
+    record = owner.control.get_thread_creation_record("child-drift-key")
+    assert record.child_thread_id == other_child_id
+
+
 # ----------------------------------------------------------------------
 # 崩溃点矩阵（恢复/定点清理）
 # ----------------------------------------------------------------------

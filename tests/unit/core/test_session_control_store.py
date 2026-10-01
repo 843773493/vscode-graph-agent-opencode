@@ -1391,6 +1391,128 @@ def test_publish_record_tolerates_sibling_delegation_growth(
     assert store.get_collaboration_member("del-sibling").state == "registering"
 
 
+def test_publish_record_rejects_own_member_already_published(
+    store: SessionControlStore,
+) -> None:
+    """自有 member 闸门只接受 registering：已 published 的自身 member 行
+    在 publish 时必须 fail closed（防重复转正/绕过登记），不得静默接受。
+
+    仅外部直改 DB 可达（正常路径 member 由本 publish 在同一事务内转正，
+    不会在 publish 前已是 published）。
+    """
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_fence("active", 1)
+    coordinator_session_id = make_session_id()
+    revision = register_collaboration_member_for_test(
+        store,
+        delegation_id="del-1",
+        coordinator_session_id=coordinator_session_id,
+        coordinator_thread_id=make_thread_id(),
+        description="做一件事",
+    )
+    kwargs = valid_thread_creation_kwargs(store)
+    record = store.create_or_get_thread_creation_record(
+        **kwargs,
+        delegation_id="del-1",
+        collaboration_precondition_revision=revision,
+    )
+    manifest = json.dumps({}, sort_keys=True, separators=(",", ":"))
+    store.freeze_thread_creation_artifact_manifest(
+        "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
+    )
+    # 外部直改：自身 member 行已是 published。
+    raw_execute(
+        store,
+        "UPDATE collaboration_members SET state = 'published' "
+        "WHERE delegation_id = ?",
+        ("del-1",),
+    )
+    with pytest.raises(RuntimeError, match="非 registering"):
+        store.publish_thread_creation_record("key-1")
+    assert store.get_thread_creation_record("key-1").state == "preparing"
+    visible = store.connection.execute(
+        "SELECT 1 FROM thread_catalog WHERE thread_id = ?",
+        (record.child_thread_id,),
+    ).fetchone()
+    assert visible is None
+
+
+def test_publish_record_rejects_missing_own_member_row(
+    store: SessionControlStore,
+) -> None:
+    """delegated record 的自身 member 行缺失时 publish 必须 fail closed，
+    绝不落下无协作账本支撑的可见 child。
+
+    仅外部直改 DB 可达（member 与 record 同事务创建、delegation_id 有
+    部分唯一约束，正常路径不会缺行）。
+    """
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_fence("active", 1)
+    coordinator_session_id = make_session_id()
+    revision = register_collaboration_member_for_test(
+        store,
+        delegation_id="del-1",
+        coordinator_session_id=coordinator_session_id,
+        coordinator_thread_id=make_thread_id(),
+        description="做一件事",
+    )
+    kwargs = valid_thread_creation_kwargs(store)
+    record = store.create_or_get_thread_creation_record(
+        **kwargs,
+        delegation_id="del-1",
+        collaboration_precondition_revision=revision,
+    )
+    manifest = json.dumps({}, sort_keys=True, separators=(",", ":"))
+    store.freeze_thread_creation_artifact_manifest(
+        "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
+    )
+    # 外部直改：删除自身 member 行。
+    raw_execute(
+        store,
+        "DELETE FROM collaboration_members WHERE delegation_id = ?",
+        ("del-1",),
+    )
+    with pytest.raises(RuntimeError, match="member 缺失"):
+        store.publish_thread_creation_record("key-1")
+    assert store.get_thread_creation_record("key-1").state == "preparing"
+    visible = store.connection.execute(
+        "SELECT 1 FROM thread_catalog WHERE thread_id = ?",
+        (record.child_thread_id,),
+    ).fetchone()
+    assert visible is None
+
+
+def test_publish_record_rejects_delegated_without_collaboration_revision(
+    store: SessionControlStore,
+) -> None:
+    """delegated record 若冻结的 collaboration precondition revision 为空，
+    publish 必须 fail closed（不得跳过 ledger CAS 直接转正）。
+
+    仅外部直改 record 可达（creation 流对 delegated child 必带 member、
+    因而必带非空 revision）。
+    """
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_fence("active", 1)
+    kwargs = valid_thread_creation_kwargs(store)
+    record = store.create_or_get_thread_creation_record(
+        **kwargs,
+        delegation_id="del-1",  # delegated，但 revision 留空
+    )
+    assert record.collaboration_precondition_revision is None
+    manifest = json.dumps({}, sort_keys=True, separators=(",", ":"))
+    store.freeze_thread_creation_artifact_manifest(
+        "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
+    )
+    with pytest.raises(RuntimeError, match="缺少 collaboration"):
+        store.publish_thread_creation_record("key-1")
+    assert store.get_thread_creation_record("key-1").state == "preparing"
+    visible = store.connection.execute(
+        "SELECT 1 FROM thread_catalog WHERE thread_id = ?",
+        (record.child_thread_id,),
+    ).fetchone()
+    assert visible is None
+
+
 def test_publish_record_rejects_published_and_aborted(
     store: SessionControlStore,
 ) -> None:
