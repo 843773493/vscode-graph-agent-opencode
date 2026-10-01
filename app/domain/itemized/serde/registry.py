@@ -13,10 +13,15 @@ from app.domain.itemized.request_plan import ContextContribution
 from app.domain.itemized.validation import _non_empty_string as _required_string
 
 
-def _optional_string(value: object, field_name: str) -> str | None:
-    if value is None:
-        return None
-    return _required_string(value, field_name)
+def _optional_string(
+    raw: Mapping[str, object], key: str, field_name: str
+) -> str | None:
+    """从 manifest 读取可选字符串字段；缺失或显式 null 都视作未提供。
+
+    字段存在时的类型/空串校验仍由 validation 的唯一 owner _required_string
+    承担，这里不复制实现。
+    """
+    return None if raw.get(key) is None else _required_string(raw[key], field_name)
 
 
 def _optional_non_negative_int(value: object, field_name: str) -> int | None:
@@ -108,27 +113,17 @@ def parse_context_ref(raw: Mapping[str, object]) -> ContextRef:
     return ContextRef(
         session_id=_required_string(raw["session_id"], "ContextRef.session_id"),
         thread_id=_required_string(raw["thread_id"], "ContextRef.thread_id"),
-        plan_id=_optional_string(raw["plan_id"], "ContextRef.plan_id"),
+        plan_id=_optional_string(raw, "plan_id", "ContextRef.plan_id"),
         ref_type=ref_type,
         ref_id=_required_string(raw["ref_id"], "ContextRef.ref_id"),
-        semantic_kind=(
-            _optional_string(raw.get("semantic_kind"), "ContextRef.semantic_kind")
+        semantic_kind=_optional_string(raw, "semantic_kind", "ContextRef.semantic_kind"),
+        payload_kind=_optional_string(raw, "payload_kind", "ContextRef.payload_kind"),
+        status=_optional_string(raw, "status", "ContextRef.status"),
+        content_hash=_optional_string(raw, "content_hash", "ContextRef.content_hash"),
+        redacted_stable_digest=_optional_string(
+            raw, "redacted_stable_digest", "ContextRef.redacted_stable_digest"
         ),
-        payload_kind=(
-            _optional_string(raw.get("payload_kind"), "ContextRef.payload_kind")
-        ),
-        status=_optional_string(raw.get("status"), "ContextRef.status"),
-        content_hash=_optional_string(
-            content_hash_value, "ContextRef.content_hash"
-        ),
-        redacted_stable_digest=(
-            _optional_string(digest_value, "ContextRef.redacted_stable_digest")
-        ),
-        source_revision=(
-            _optional_string(
-                raw.get("source_revision"), "ContextRef.source_revision"
-            )
-        ),
+        source_revision=_optional_string(raw, "source_revision", "ContextRef.source_revision"),
         item_sequence=_optional_positive_int(
             raw.get("item_sequence"), "ContextRef.item_sequence"
         ),
@@ -143,19 +138,18 @@ def parse_context_ref(raw: Mapping[str, object]) -> ContextRef:
             "ContextRef.source_overlay_epoch",
         ),
         overlay_from_revision=_optional_string(
-            raw["overlay_from_revision"],
-            "ContextRef.overlay_from_revision",
+            raw, "overlay_from_revision", "ContextRef.overlay_from_revision"
         ),
         overlay_to_revision=_optional_string(
-            raw["overlay_to_revision"], "ContextRef.overlay_to_revision"
+            raw, "overlay_to_revision", "ContextRef.overlay_to_revision"
         ),
         overlay_diff_hash=_optional_string(
-            raw["overlay_diff_hash"], "ContextRef.overlay_diff_hash"
+            raw, "overlay_diff_hash", "ContextRef.overlay_diff_hash"
         ),
         source_ref=(
             DetailRef.from_dict(raw["source_ref"])
             if isinstance(raw["source_ref"], Mapping)
-            else _optional_string(raw["source_ref"], "ContextRef.source_ref")
+            else _optional_string(raw, "source_ref", "ContextRef.source_ref")
         ),
         visibility=_required_string(raw["visibility"], "ContextRef.visibility"),
         protection=_required_string(raw["protection"], "ContextRef.protection"),
@@ -248,9 +242,7 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         source_revision=_required_string(
             raw["source_revision"], "ContextContribution.source_revision"
         ),
-        content_hash=_optional_string(
-            raw["content_hash"], "ContextContribution.content_hash"
-        ),
+        content_hash=_optional_string(raw, "content_hash", "ContextContribution.content_hash"),
         request_only=raw["request_only"],
         metadata=dict(raw["metadata"]),
         contribution_kind=_required_string(
@@ -267,12 +259,9 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
             raw["content_length"], "ContextContribution.content_length"
         ),
         redacted_stable_digest=_optional_string(
-            raw["redacted_stable_digest"],
-            "ContextContribution.redacted_stable_digest",
+            raw, "redacted_stable_digest", "ContextContribution.redacted_stable_digest"
         ),
-        assembly_id=_optional_string(
-            raw["assembly_id"], "ContextContribution.assembly_id"
-        ),
+        assembly_id=_optional_string(raw, "assembly_id", "ContextContribution.assembly_id"),
         contribution_ordinal=_optional_non_negative_int(
             raw["contribution_ordinal"],
             "ContextContribution.contribution_ordinal",
@@ -349,12 +338,9 @@ def parse_tool_set_ref(tool: object) -> ToolSetRef:
         content_length=_required_non_negative_int(
             tool["content_length"], "ToolSetRef.content_length"
         ),
-        content_hash=_optional_string(
-            tool["content_hash"], "ToolSetRef.content_hash"
-        ),
+        content_hash=_optional_string(tool, "content_hash", "ToolSetRef.content_hash"),
         redacted_stable_digest=_optional_string(
-            tool["redacted_stable_digest"],
-            "ToolSetRef.redacted_stable_digest",
+            tool, "redacted_stable_digest", "ToolSetRef.redacted_stable_digest"
         ),
         protection=_required_string(tool["protection"], "ToolSetRef.protection"),
         availability=_required_string(
@@ -362,9 +348,5 @@ def parse_tool_set_ref(tool: object) -> ToolSetRef:
         ),
         tool_policy=dict(tool["tool_policy"]),
         tools=tuple(dict(item) for item in tool["tools"]),
-        assembly_id=(
-            _optional_string(tool["assembly_id"], "ToolSetRef.assembly_id")
-            if tool.get("assembly_id") is not None
-            else None
-        ),
+        assembly_id=_optional_string(tool, "assembly_id", "ToolSetRef.assembly_id"),
     )

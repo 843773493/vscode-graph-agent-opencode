@@ -54,10 +54,10 @@ def unsealed_context_plan_from_dict(value: object) -> ContextRequestPlan:
             value["source_overlay_epoch"], "ContextRequestPlan.source_overlay_epoch"
         ),
         compiler_version=_required_string(value["compiler_version"], "compiler_version"),
-        active_view_id=_optional_string(value["active_view_id"], "active_view_id"),
+        active_view_id=_optional_string(value, "active_view_id", "active_view_id"),
         selection_policy=_required_string(value["selection_policy"], "selection_policy"),
         plan_creation_idempotency_key=_optional_string(
-            value["plan_creation_idempotency_key"], "plan_creation_idempotency_key"
+            value, "plan_creation_idempotency_key", "plan_creation_idempotency_key"
         ),
     )
     if plan.plan_hash() != _required_string(value["plan_hash"], "plan_hash"):
