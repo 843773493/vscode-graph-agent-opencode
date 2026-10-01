@@ -724,6 +724,8 @@ item `status` 只描述单个 canonical payload 的持久化/语义完成事实�
 
 `TurnRecord.final_item_id` MUST 只在 `turn_finalize` 与对应 canonical `assistant_output` item 的 terminal convergence 提交边界内写入。`Turn.status=completed` 时 `final_item_id` 必须非空，并指向同一 Turn 内 `status=completed` 的 `assistant_output` item；`completed_empty`、`open`、`active`、`interrupted`、`cancelled`、`failed` 和 `unknown` 时必须为空。Provider 空输出使用 `completed_empty`，不创建伪造 output item。`assistant_text` 和 `final_response` 是 projection；未完成 finalization 时，partial、failed、cancelled 或 unknown item 不得仅因其是最后一个 assistant item 就成为 final response。
 
+`ExecutionRecord` 与 `ModelCallRecord` MUST 与 `TurnRecord`、`ContextRef` 同口径携带 `thread_id`，其 typed relation（`TurnExecutionLink`、`ModelCallRecord(execution_id, model_call_id)`）与相应 SQLite 表/索引 MUST 以 `(session_id, thread_id)` 为 owner 并可按其机械定位；API 响应、SSE、cursor 与 cache key MUST 暴露并校验实际 thread identity，MUST NOT 以裸 `session_id` 或 `checkpoint_ns` 反推 thread。同一 Session 的 main thread 与 child thread 的 execution/model-call identity space 相互独立。
+
 #### Scenario: Provider retry 保留旧 item
 
 - **WHEN** 一次 model call 因超时或 provider 错误重新请求
@@ -738,6 +740,11 @@ item `status` 只描述单个 canonical payload 的持久化/语义完成事实�
 
 - **WHEN** assistant output 在中断时只有 partial item，且没有成功的 Turn finalization
 - **THEN** Turn 保留 partial/interrupted outcome，`final_item_id` 为空，历史 projection 不返回该 partial item 作为 `final_response`
+
+#### Scenario: execution 与 model-call 记录按 (session_id, thread_id) 定位
+
+- **WHEN** 同一 Session 的 main thread 与一个 child thread 各自产生 `ExecutionRecord`/`ModelCallRecord`，或调用方只提供裸 `session_id`/`checkpoint_ns` 要求解析某条 execution/model-call
+- **THEN** 每条记录 MUST 携带并按 `(session_id, thread_id)` 归属可机械定位，两个 thread 的 execution/model-call identity space 不重叠；仅给 `session_id` 或 `checkpoint_ns` 时 resolver 显式失败，MUST NOT 回退到 session 级或把 `checkpoint_ns` 升级为 thread identity
 
 ### Requirement: Turn、branch 和 view identity 必须避免隐式复制
 
