@@ -95,3 +95,46 @@ def test_parallel_tool_state_rejects_legacy_phase_overwrite() -> None:
     assert state.tool_name == "read_file"
     assert state.active_tools_by_run_id == {"run_active": "read_file"}
     SessionInterruptState.clear(session_id)
+
+
+def test_no_op_state_reset_does_not_accumulate_session_keys() -> None:
+    """全默认态与「无该 session」语义等价，不得为无状态会话留下键。
+
+    ``SessionInterruptState`` 是进程级长驻表：若全默认写入也落键，长驻进程
+    内存会随历史会话数无界增长（runner 在进入 try 之前的重置、以及
+    ``current_text=""`` 之类空写都属于此类）。上界必须与历史会话数无关。
+    """
+    SessionInterruptState._states.clear()
+    try:
+        for index in range(5000):
+            SessionInterruptState.set(
+                "ses_noop_" + str(index),
+                phase=None,
+                tool_name=None,
+                clear_active_tools=True,
+            )
+        # 上界恒定：全默认态不落键，不随会话数增长。
+        assert len(SessionInterruptState._states) == 0
+        # 无状态会话 get 仍返回全默认态（语义不变）。
+        state = SessionInterruptState.get("ses_noop_0")
+        assert state.phase is None
+        assert state.tool_name is None
+        assert state.active_tool_names == ()
+    finally:
+        SessionInterruptState._states.clear()
+
+
+def test_real_state_is_recalled_and_reclaimed() -> None:
+    """有实质状态的会话仍恒定命中；clear 后回收键，上界不随历史会话增长。"""
+    SessionInterruptState._states.clear()
+    try:
+        SessionInterruptState.set("ses_real", phase="tool", tool_name="read_file")
+        assert len(SessionInterruptState._states) == 1
+        # 同 session 恒定命中。
+        assert SessionInterruptState.get("ses_real").phase == "tool"
+        assert SessionInterruptState.get("ses_real").tool_name == "read_file"
+        # 回收：clear 释放键。
+        SessionInterruptState.clear("ses_real")
+        assert len(SessionInterruptState._states) == 0
+    finally:
+        SessionInterruptState._states.clear()
