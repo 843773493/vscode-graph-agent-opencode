@@ -16,8 +16,10 @@ from app.abstractions.session_target import SessionTarget
 from app.agents.custom_tools import CustomToolFactoryContext
 from app.schemas.internal_v2.session_context import (
     SessionContextInclude,
+    SessionContextMatchMode,
     SessionContextReadRequest,
     SessionContextSearchRequest,
+    SessionContextSearchSource,
 )
 
 ResultModel = TypeVar("ResultModel", bound=BaseModel)
@@ -66,10 +68,10 @@ class SearchContextInput(BaseModel):
         ),
     )
     query: str = Field(min_length=1, description="要搜索的文本或正则表达式。")
-    sources: list[
-        Literal["effective_context", "session_catalog", "session_information"]
-    ] = Field(default_factory=lambda: ["effective_context"])
-    match_mode: Literal["literal", "regex"] = "literal"
+    sources: list[SessionContextSearchSource] = Field(
+        default_factory=lambda: ["effective_context"]
+    )
+    match_mode: SessionContextMatchMode = "literal"
     case_sensitive: bool = False
     max_results: int = Field(default=20, ge=1, le=200)
     max_chars: int = Field(default=16_384, ge=1_024, le=65_536)
@@ -246,10 +248,8 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         resource: str,
         query: str,
         workspace_id: str | None = None,
-        sources: list[
-            Literal["effective_context", "session_catalog", "session_information"]
-        ] | None = None,
-        match_mode: Literal["literal", "regex"] = "literal",
+        sources: list[SessionContextSearchSource] | None = None,
+        match_mode: SessionContextMatchMode = "literal",
         case_sensitive: bool = False,
         max_results: int = 20,
         max_chars: int = 16_384,
