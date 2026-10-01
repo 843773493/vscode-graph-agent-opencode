@@ -94,27 +94,45 @@ def _decode_trace_cursor(cursor: str) -> _TraceCursorPosition | None:
     return position
 
 
+def _read_and_verify_line(
+    file: Path,
+    *,
+    start: int,
+    end: int,
+    digest: str,
+    label: str,
+) -> None:
+    """校验 [start, end) 恰为一行：起点前是换行，且首尾样本摘要与 digest 一致。"""
+    size = end - start
+    with file.open("rb") as stream:
+        if start > 0:
+            stream.seek(start - 1)
+            if stream.read(1) != b"\n":
+                raise ValueError(f"{label} 未指向事件行起点")
+        stream.seek(start)
+        if size <= TRACE_EVENT_LINE_SAMPLE_BYTES * 2:
+            sample = stream.read(size)
+        else:
+            prefix = stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
+            stream.seek(end - TRACE_EVENT_LINE_SAMPLE_BYTES)
+            sample = prefix + stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
+    if event_line_digest(size, sample) != digest:
+        raise ValueError(f"{label} 对应事件已变化")
+
+
 def _offset_from_transport_cursor(file: Path, cursor: str) -> int | None:
     position = _decode_trace_cursor(cursor)
     if position is None:
         return None
     if not file.is_file() or file.stat().st_size < position.end:
         raise ValueError("Trace transport cursor 越过文件末尾")
-    size = position.end - position.start
-    with file.open("rb") as stream:
-        if position.start > 0:
-            stream.seek(position.start - 1)
-            if stream.read(1) != b"\n":
-                raise ValueError("Trace transport cursor 未指向事件行起点")
-        stream.seek(position.start)
-        if size <= TRACE_EVENT_LINE_SAMPLE_BYTES * 2:
-            sample = stream.read(size)
-        else:
-            prefix = stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
-            stream.seek(position.end - TRACE_EVENT_LINE_SAMPLE_BYTES)
-            sample = prefix + stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
-    if event_line_digest(size, sample) != position.digest:
-        raise ValueError("Trace transport cursor 对应事件已变化")
+    _read_and_verify_line(
+        file,
+        start=position.start,
+        end=position.end,
+        digest=position.digest,
+        label="Trace transport cursor",
+    )
     return position.end
 
 

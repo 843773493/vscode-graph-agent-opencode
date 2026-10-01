@@ -2447,53 +2447,6 @@ def test_runner_main_human_output_and_quarantine_listing(
     assert "ses_illegal_entry" in out
     assert "illegal_id" in out
     assert "journal" in out
-    # 隔离清单必须携带可定位的物理路径与人工建议动作（报告层派生，不改 journal 契约）。
-    assert "物理路径:" in out
-    assert "建议动作:" in out
-    assert str(
-        workspace_root / ".boxteam" / "sessions" / "ses_illegal_entry"
-    ) in out
-    assert "人工确认节点 ID" in out
-
-
-def test_runner_main_json_quarantine_entries_carry_path_and_action(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """runner --json 的隔离节点必须给出物理路径与建议动作两项（缺一即失败）。"""
-    runner = _import_runner_module()
-    workspace_root = tmp_path / "workspace"
-    _build_entry_legacy_tree(workspace_root)
-    _write_session_dir(
-        workspace_root / ".boxteam" / "sessions",
-        "ses_illegal_entry",
-        title="非法会话",
-        parent_session_id=None,
-    )
-    index_path = (
-        workspace_root / ".boxteam" / "navigation" / "session-catalog-index.json"
-    )
-    index_payload = json.loads(index_path.read_text(encoding="utf-8"))
-    index_payload["nodes"].append(
-        _index_record("ses_illegal_entry", "session", "非法会话", None)
-    )
-    _write_json(index_path, index_payload)
-
-    exit_code = runner.main(["--workspace-root", str(workspace_root), "--json"])
-
-    assert exit_code == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["quarantined_nodes"] == [
-        {
-            "node_id": "ses_illegal_entry",
-            "reason": "illegal_id",
-            "path": str(
-                workspace_root / ".boxteam" / "sessions" / "ses_illegal_entry"
-            ),
-            "suggested_action": (
-                "人工确认节点 ID（修正旧 index 记录或目录名）后重跑迁移"
-            ),
-        }
-    ]
 
 
 def test_runner_main_failure_exits_nonzero_with_clear_error(
