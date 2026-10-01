@@ -7,7 +7,7 @@
 - `WorkspaceFileTree.tsx`：文件树组件外壳与交互编排（展开/选择状态、渲染行、恢复与文件变更消费）；只调用下面的 hook 与纯逻辑模块，不内联路径算法、目录缓存规则或菜单动作。
 - `WorkspaceFileTreeContextMenu.tsx`：右键菜单的渲染层。菜单目标来自 useWorkspaceFileTreeContextMenu，本文件只做标记与事件绑定。
 - `useWorkspaceFileTreeContextMenu.ts`：菜单目标与位置、剪贴板条目、动作错误横幅，以及全部菜单动作（新建/粘贴/上传/复制/下载/系统显示/刷新/快捷路径族）的唯一所有者。任何菜单动作失败必须显式呈现，不得静默。
-- `useWorkspaceFileTreeDirectories.ts`：目录缓存与懒加载的唯一所有者（并发请求去重、分页合并、失败登记、LRU 保护集、展开目录刷新）。展开态与活动文件夹在外部，经 ref 传入以读取最新值。
+- `useWorkspaceFileTreeDirectories.ts`：目录缓存与懒加载的唯一所有者（并发请求去重、分页合并、失败登记、LRU 保护集、精确子树失效 `invalidateDirectoriesUnder` 与基于它的全树重同步 `reloadExpandedDirectories`）。目录失效只有精确子树这一种语义，不存在第二套 stale 标记；全树重同步也必须复用同一原语。展开态与活动文件夹在外部，经 ref 传入以读取最新值。
 - `workspaceFileTreePaths.ts`：文件树路径的唯一语义权威（根路径常量、父子推导、作用域内判断、变更路径归一、绝对路径拼接、剪贴板路径解析）。任何路径归一都必须复用这里的实现。
 - `workspaceFileTreeCache.ts`：目录缓存条目结构与唯一构造入口（加载中/成功/失败/过期四种形态）、LRU 淘汰与按层恢复的并发控制。任何目录条目字面量都必须复用这里的工厂函数。
 - `workspaceFileTreeRows.ts`：把目录缓存与展开状态编译成可渲染的扁平行。

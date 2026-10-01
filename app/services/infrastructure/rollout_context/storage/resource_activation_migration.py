@@ -24,6 +24,8 @@ from app.services.infrastructure.rollout_context.storage.resource_activation_sch
     create_resource_activation_schema,
 )
 from app.services.infrastructure.rollout_context.storage.resource_activation_store import (
+    SCHEMA_CONFLICT_CODE,
+    SCHEMA_INVALID_CODE,
     ResourceActivationStoreError,
 )
 
@@ -47,7 +49,7 @@ def _read_version(connection: sqlite3.Connection) -> int | None:
     ).fetchone()
     if row is None:
         raise ResourceActivationStoreError(
-            "resource-activation-schema-conflict",
+            SCHEMA_CONFLICT_CODE,
             "activation schema 缺少版本 marker row",
         )
     return int(row[0])
@@ -63,14 +65,14 @@ def upgrade_resource_activation_schema(
 
     if not connection.in_transaction:
         raise ResourceActivationStoreError(
-            "resource-activation-schema-invalid",
+            SCHEMA_INVALID_CODE,
             "activation upgrade 必须在既有事务内执行",
         )
     existing_version = _read_version(connection)
     if existing_version is not None:
         if existing_version != RESOURCE_ACTIVATION_SCHEMA_VERSION:
             raise ResourceActivationStoreError(
-                "resource-activation-schema-conflict",
+                SCHEMA_CONFLICT_CODE,
                 f"activation schema 版本 {existing_version} 不能降级/重写",
             )
         return existing_version, ()
@@ -79,7 +81,7 @@ def upgrade_resource_activation_schema(
     ).fetchone()
     if session_row is None:
         raise ResourceActivationStoreError(
-            "resource-activation-schema-invalid", "rollout database_meta 缺失"
+            SCHEMA_INVALID_CODE, "rollout database_meta 缺失"
         )
     owner_session_id = str(session_row[0])
     create_resource_activation_schema(connection)

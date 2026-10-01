@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.migration import (
     store as migration_store,
@@ -40,8 +41,8 @@ def migration_setup(request: pytest.FixtureRequest, session_bundle_factory):
     sessions = workspace / ".boxteam" / "sessions"
 
     def setup(records: list[dict[str, object]] | None = None) -> SimpleNamespace:
-        source_id = f"ses_{uuid4().hex}"
-        target_id = f"ses_{uuid4().hex}"
+        source_id = f"ses_{create_uuid_hex()}"
+        target_id = f"ses_{create_uuid_hex()}"
         lines = _write_v1_source(
             sessions,
             session_id=source_id,

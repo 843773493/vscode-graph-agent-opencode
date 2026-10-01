@@ -7,6 +7,7 @@ import httpx
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.proxy_upstream import load_proxy_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.gateway_control import (
     GatewayResourceDTO,
@@ -194,12 +195,17 @@ class GatewayResourceCatalogService:
                 {
                     "X-BoxTeam-Workspace-Id": remote_workspace_id,
                     "X-BoxTeam-Federation-Token": credential.token,
+                    "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
                     "X-Request-ID": request_id,
                 },
             )
         return (
             f"{target.backend_url.rstrip('/')}/api/v1/{path}",
-            {"X-Local-Token": LOCAL_TOKEN, "X-Request-ID": request_id},
+            {
+                "X-Local-Token": LOCAL_TOKEN,
+                "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
+                "X-Request-ID": request_id,
+            },
         )
 
     def _gateway_name(self, target: WorkspaceTarget) -> str:

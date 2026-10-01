@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { AppState } from "../../types/frontend";
 import type { Session } from "../../types/backend";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
   apiResponse,
+  buildSessionHookState,
+  deleteSessionResponse,
   installGatewayFetch,
+  installSessionDeleteFetch,
   mountSessionLifecycleActions,
   restoreSessionHookGlobals,
+  sessionsListResponse,
 } from "./sessionHookTestFixtures";
 
 const WORKSPACE_ID = "gw_read_state";
@@ -31,24 +34,14 @@ function session(
   };
 }
 
-function state(value: Session): AppState {
-  return {
-    gatewayWorkspaces: [],
+function state(value: Session) {
+  return buildSessionHookState({
+    workspaceId: WORKSPACE_ID,
+    current: value,
     sessions: [value],
-    sessionsByWorkspace: new Map([[WORKSPACE_ID, [value]]]),
     sessionGatewayWorkspaceById: new Map([[CACHE_KEY, WORKSPACE_ID]]),
-    sessionAttachmentSummaries: new Map(),
-    eventQueuesBySession: new Map(),
-    pendingConversations: new Map(),
-    activeJobIdsBySession: new Map(),
     unreadSessionKeys: new Set([CACHE_KEY]),
-    activeGatewayWorkspaceId: WORKSPACE_ID,
-    currentSession: value,
-    currentSessionWorkspaceId: WORKSPACE_ID,
-    contentView: "default",
-    sessionHistoryReloadNonce: 0,
-    status: "",
-  } as unknown as AppState;
+  });
 }
 
 describe("会话已读状态", () => {
@@ -127,26 +120,15 @@ function raceSession(sessionId: string, agentId = "default"): Session {
   };
 }
 
-function raceState(current: Session | null, sessions: Session[]): AppState {
-  return {
+function raceState(current: Session | null, sessions: Session[]) {
+  return buildSessionHookState({
+    workspaceId: RACE_WORKSPACE,
+    current,
+    sessions,
     gatewayWorkspaces: [
       { workspace_id: RACE_WORKSPACE, root_path: "/tmp/ws", name: "ws" },
     ],
-    sessions,
-    sessionsByWorkspace: new Map([[RACE_WORKSPACE, sessions]]),
-    sessionGatewayWorkspaceById: new Map(),
-    sessionAttachmentSummaries: new Map(),
-    eventQueuesBySession: new Map(),
-    pendingConversations: new Map(),
-    activeJobIdsBySession: new Map(),
-    unreadSessionKeys: new Set(),
-    activeGatewayWorkspaceId: RACE_WORKSPACE,
-    currentSession: current,
-    currentSessionWorkspaceId: RACE_WORKSPACE,
-    contentView: "default",
-    sessionHistoryReloadNonce: 0,
-    status: "",
-  } as unknown as AppState;
+  });
 }
 
 /** 挂载生命周期动作：以当前会话为焦点，raceState 作为初始镜像。 */
@@ -160,6 +142,18 @@ function mountRace(current: Session, sessions: Session[], abort?: () => void) {
   });
 }
 
+/** 挂载生命周期动作并指定初始镜像，供需要预置会话级缓存的用例复用。 */
+function mountLifecycle(
+  currentSession: Session | null,
+  state: ReturnType<typeof raceState>,
+) {
+  return mountSessionLifecycleActions({
+    apiPort: 8014,
+    currentSession,
+    workspaceId: RACE_WORKSPACE,
+    state,
+  });
+}
 describe("会话生命周期写动作的竞态与失败补偿", () => {
   test("W4 切换 Agent 回包不覆盖用户请求在途期间切换到的会话", async () => {
     const sesA = raceSession("ses_a");
@@ -225,14 +219,9 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
   test("W6 删除成功但列表刷新失败时不报删除失败且本地列表收敛", async () => {
     const sesA = raceSession("ses_a");
     const sesB = raceSession("ses_b");
-    installGatewayFetch(({ path, method }) => {
-      if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
-        return apiResponse({ session_id: sesB.session_id });
-      }
-      if (path === "/api/v1/sessions") {
-        return apiResponse({ message: "列表不可用" }, 500);
-      }
-      return undefined;
+    installSessionDeleteFetch({
+      deleteResponse: deleteSessionResponse(sesB.session_id),
+      listResponse: apiResponse({ message: "列表不可用" }, 500),
     });
 
     const { state: readState, actions } = mountRace(sesA, [sesA, sesB]);
@@ -240,21 +229,42 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
 
     expect(readState().status).not.toContain("删除会话失败");
     expect(readState().status).toContain("已删除会话");
-    expect(readState().status).toContain("列表不可用");
+    // 成功路径不重拉会话列表（§10.3 前端半边）：即使列表端点不可用，删除也已
+    // 被后端确认，收敛完全靠本地删除闭包，状态里不应再出现列表错误。
+    expect(readState().status).not.toContain("列表不可用");
     expect(readState().sessions.map((item) => item.session_id)).toEqual(["ses_a"]);
+  });
+
+  test("§10.3 删除成功后零次全量列表请求，且级联删除的子会话一并从镜像消失", async () => {
+    const parent = raceSession("ses_parent");
+    const child = { ...raceSession("ses_child"), parent_session_id: "ses_parent" };
+    const unrelated = raceSession("ses_other");
+    let listCalls = 0;
+    installSessionDeleteFetch({
+      deleteResponse: deleteSessionResponse(parent.session_id),
+      listResponse: () => {
+        listCalls += 1;
+        // 若成功路径误重拉，这里会返回一个不该出现的陈旧条目。
+        return sessionsListResponse([unrelated, child]);
+      },
+    });
+
+    const { state: readState, actions } = mountRace(parent, [parent, child, unrelated]);
+    await actions.deleteSession(parent.session_id);
+
+    // 成功路径必须零次全量列表请求。
+    expect(listCalls).toBe(0);
+    // 被删父会话与其逻辑后代一起消失；无关会话保留。
+    expect(readState().sessions.map((item) => item.session_id)).toEqual(["ses_other"]);
+    expect(readState().currentSession?.session_id).toBe("ses_other");
   });
 
   test("删除会话后不得把它的事件队列残留在本地镜像", async () => {
     const sesA = raceSession("ses_a");
     const sesB = raceSession("ses_b");
-    installGatewayFetch(({ path, method }) => {
-      if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
-        return apiResponse({ session_id: sesA.session_id });
-      }
-      if (path === "/api/v1/sessions") {
-        return apiResponse({ items: [sesB], has_more: false, next_cursor: null });
-      }
-      return undefined;
+    installSessionDeleteFetch({
+      deleteResponse: deleteSessionResponse(sesA.session_id),
+      listResponse: sessionsListResponse([sesB]),
     });
 
     const initial = raceState(sesB, [sesA, sesB]);
@@ -263,12 +273,7 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     initial.turnTimelinesBySession = new Map([
       [deletedKey, { session_id: sesA.session_id, turns: [], details: new Map() } as never],
     ]);
-    const { state: readState, actions } = mountSessionLifecycleActions({
-      apiPort: 8014,
-      currentSession: sesB,
-      workspaceId: RACE_WORKSPACE,
-      state: initial,
-    });
+    const { state: readState, actions } = mountLifecycle(sesB, initial);
     await actions.deleteSession(sesA.session_id);
 
     // 被删会话的所有会话级缓存都必须随之一并消失，绝不能留成幽灵条目。
@@ -279,26 +284,16 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
   test("删除当前会话的抢占分支同样清空它的事件队列与未读标记", async () => {
     const sesA = raceSession("ses_a");
     const sesB = raceSession("ses_b");
-    installGatewayFetch(({ path, method }) => {
-      if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
-        return apiResponse({ session_id: sesA.session_id });
-      }
-      if (path === "/api/v1/sessions") {
-        return apiResponse({ items: [sesB], has_more: false, next_cursor: null });
-      }
-      return undefined;
+    installSessionDeleteFetch({
+      deleteResponse: deleteSessionResponse(sesA.session_id),
+      listResponse: sessionsListResponse([sesB]),
     });
 
     const initial = raceState(sesA, [sesA, sesB]);
     const deletedKey = sessionScopeKey(RACE_WORKSPACE, sesA.session_id);
     initial.eventQueuesBySession.set(deletedKey, []);
     initial.unreadSessionKeys = new Set([deletedKey]);
-    const { state: readState, actions } = mountSessionLifecycleActions({
-      apiPort: 8014,
-      currentSession: sesA,
-      workspaceId: RACE_WORKSPACE,
-      state: initial,
-    });
+    const { state: readState, actions } = mountLifecycle(sesA, initial);
     await actions.deleteSession(sesA.session_id);
 
     // 抢占分支在删除请求发出前就切走了当前会话，它同样必须清空被删会话的缓存。
@@ -389,19 +384,12 @@ describe("会话生命周期失败后的后端重取校准", () => {
     const sesA = raceSession("ses_a");
     const sesB = raceSession("ses_b");
     let listCalls = 0;
-    installGatewayFetch(({ path, method }) => {
-      if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
-        return apiResponse({ message: "会话正在运行" }, 409);
-      }
-      if (path === "/api/v1/sessions") {
+    installSessionDeleteFetch({
+      deleteResponse: apiResponse({ message: "会话正在运行" }, 409),
+      listResponse: () => {
         listCalls += 1;
-        return apiResponse({
-          items: [sesA, raceSession("ses_server")],
-          has_more: false,
-          next_cursor: null,
-        });
-      }
-      return undefined;
+        return sessionsListResponse([sesA, raceSession("ses_server")]);
+      },
     });
 
     const { state: readState, actions } = mountRace(sesA, [sesA, sesB]);
@@ -417,14 +405,9 @@ describe("会话生命周期失败后的后端重取校准", () => {
   test("W9-c2 删除失败且重取也失败时保留原始错误", async () => {
     const sesA = raceSession("ses_a");
     const sesB = raceSession("ses_b");
-    installGatewayFetch(({ path, method }) => {
-      if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
-        return apiResponse({ message: "会话正在运行" }, 409);
-      }
-      if (path === "/api/v1/sessions") {
-        return apiResponse({ message: "列表服务不可用" }, 503);
-      }
-      return undefined;
+    installSessionDeleteFetch({
+      deleteResponse: apiResponse({ message: "会话正在运行" }, 409),
+      listResponse: apiResponse({ message: "列表服务不可用" }, 503),
     });
 
     const { state: readState, actions } = mountRace(sesA, [sesA, sesB]);
@@ -457,12 +440,7 @@ describe("会话生命周期失败后的后端重取校准", () => {
     unknownState.workspaceRoot = "/prev/root";
     unknownState.workspaceName = "prev-ws";
     unknownState.sessionsByWorkspace = new Map([["gw_unknown", [target]]]);
-    const { state: readState, actions } = mountSessionLifecycleActions({
-      apiPort: 8014,
-      currentSession: current,
-      workspaceId: RACE_WORKSPACE,
-      state: unknownState,
-    });
+    const { state: readState, actions } = mountLifecycle(current, unknownState);
 
     actions.selectWorkspaceSession("gw_unknown", target.session_id);
 
@@ -470,5 +448,95 @@ describe("会话生命周期失败后的后端重取校准", () => {
     expect(readState().currentSession?.session_id).toBe(current.session_id);
     // 旧工作区的根目录/名称不得被当成新工作区身份继续用下去。
     expect(readState().workspaceRoot).toBe("/prev/root");
+  });
+});
+
+// —— 跨工作区边界：活动工作区之外的工作区列表收敛不得污染全局镜像 ——
+
+const OTHER_WORKSPACE = "gw_other";
+
+/** 全局 sessions 镜像归属活动工作区，sessionsByWorkspace 同时持有另一工作区。 */
+function crossWorkspaceState(current: Session) {
+  return buildSessionHookState({
+    workspaceId: RACE_WORKSPACE,
+    current,
+    sessions: [current],
+    gatewayWorkspaces: [
+      { workspace_id: RACE_WORKSPACE, root_path: "/tmp/ws", name: "ws" },
+      { workspace_id: OTHER_WORKSPACE, root_path: "/tmp/other", name: "other" },
+    ],
+    sessionsByWorkspace: new Map([
+      [RACE_WORKSPACE, [current]],
+      [OTHER_WORKSPACE, [raceSession("ses_other")]],
+    ]),
+  });
+}
+
+describe("会话列表收敛的活动工作区边界", () => {
+  test("P2-3 删除非活动工作区会话时收敛该工作区镜像且不改动全局 sessions", async () => {
+    const active = raceSession("ses_active");
+    const otherInOther = raceSession("ses_other");
+    const otherRemaining = raceSession("ses_other_keep");
+    installSessionDeleteFetch({
+      deleteResponse: deleteSessionResponse(otherInOther.session_id),
+      listResponse: sessionsListResponse([otherRemaining]),
+    });
+    const initial = crossWorkspaceState(active);
+    // 非活动工作区镜像里同时有「将被删的 ses_other」与「应保留的 ses_other_keep」。
+    initial.sessionsByWorkspace.set(OTHER_WORKSPACE, [otherInOther, otherRemaining]);
+
+    const { state: readState, actions } = mountLifecycle(active, initial);
+    await actions.deleteSession(otherInOther.session_id, OTHER_WORKSPACE);
+
+    // 非活动工作区的收敛只更新它自己的镜像：被删会话消失，其余（含后端未返回的
+    // 本地同名会话）保持——成功路径不再按后端列表整表替换。
+    expect(
+      readState().sessionsByWorkspace.get(OTHER_WORKSPACE)?.map(
+        (item) => item.session_id,
+      ),
+    ).toEqual([otherRemaining.session_id]);
+    // 全局镜像仍严格等于活动工作区的会话列表，绝不被其它工作区灌入。
+    expect(readState().sessions.map((item) => item.session_id)).toEqual([
+      active.session_id,
+    ]);
+    expect(readState().activeGatewayWorkspaceId).toBe(RACE_WORKSPACE);
+  });
+});
+
+describe("删除非当前会话的失败路径与后端真值校准", () => {
+  test("删除请求报错但后端其实已删且补偿重取成功时，级联消失的当前会话必须同步切走", async () => {
+    // 当前会话是被删父会话的后代：后端级联删除会把当前会话一并带走了。
+    const current = raceSession("ses_child");
+    current.parent_session_id = "ses_parent";
+    const parent = raceSession("ses_parent");
+    const survivor = raceSession("ses_survivor");
+    let listCalls = 0;
+    installGatewayFetch(({ path, method }) => {
+      if (path === "/api/v1/sessions/" + parent.session_id && method === "DELETE") {
+        // 响应丢失：前端看到删除失败，但后端其实已经提交。
+        return apiResponse({ message: "响应丢失" }, 500);
+      }
+      if (path === "/api/v1/sessions") {
+        listCalls += 1;
+        // 补偿重取成功：后端权威列表里当前会话已随父会话级联消失。
+        return sessionsListResponse([survivor]);
+      }
+      return undefined;
+    });
+
+    const { state: readState, actions } = mountRace(current, [current, parent, survivor]);
+    await expect(actions.deleteSession(parent.session_id)).rejects.toThrow("响应丢失");
+
+    expect(listCalls).toBe(1);
+    // 关键：重新校准后 currentSession 绝不能悬空指向一个已不在 sessions 里的
+    // 幽灵会话，必须与删除成功路径一样切到剩余会话。
+    expect(readState().currentSession?.session_id).toBe(survivor.session_id);
+    expect(readState().sessions.some(
+      (item) => item.session_id === readState().currentSession?.session_id,
+    )).toBe(true);
+    expect(readState().sessions.map((item) => item.session_id)).toEqual([
+      survivor.session_id,
+    ]);
+    expect(readState().status).toContain("删除会话失败");
   });
 });

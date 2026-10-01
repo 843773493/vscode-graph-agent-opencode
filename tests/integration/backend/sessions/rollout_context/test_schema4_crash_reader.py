@@ -10,10 +10,10 @@ import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -44,7 +44,7 @@ def reader_case(
 ) -> ReaderCase:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session = f"ses_{uuid4().hex}"
+    session = f"ses_{create_uuid_hex()}"
     session_bundle_factory(sessions, session)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(

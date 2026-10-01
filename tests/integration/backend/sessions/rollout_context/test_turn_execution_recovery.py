@@ -35,7 +35,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
-SESSION_ID = "ses_e6d2707870e54cab8c135193c0802532"
+SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 
 
 def _accept(saver: RolloutCheckpointSaver, session_id: str) -> dict[str, object]:

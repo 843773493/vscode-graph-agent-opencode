@@ -270,9 +270,3 @@ def parse_provider_api_mode(provider: Mapping[str, object]) -> ProviderApiMode:
         request_features=_parse_request_features(raw.get("request_features", {})),
         replay_policy=_parse_replay_policy(raw.get("replay_policy", {})),
     )
-
-
-def provider_instance_id(provider: Mapping[str, object]) -> str | None:
-    """返回用于密文回放绑定的应用 provider 实例 ID，而不是 custom_llm_provider。"""
-    value = provider.get("id")
-    return value if isinstance(value, str) and value else None

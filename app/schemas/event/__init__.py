@@ -14,6 +14,9 @@ from pydantic import BaseModel, Field, JsonValue, model_validator
 
 from app.schemas.internal_v2.pending_request import DeliveryBoundary, DeliveryPolicy
 
+# assistant 文本流的载体闭集：``markdown`` 为可见正文，``reasoning`` 为思考内容。
+TextStreamKind = Literal["markdown", "reasoning"]
+
 # ============= 1. 基础事件结构（所有事件的公共字段） =============
 
 class BaseEvent(BaseModel):
@@ -237,7 +240,7 @@ class SessionInterruptedPayload(BaseModel):
 class TextDeltaPayload(BaseModel):
     """TEXT_DELTA 事件的 payload"""
     text: str
-    kind: Literal["markdown", "reasoning"]
+    kind: TextStreamKind
     carrier_type: str | None = None
     content_block_index: int | None = Field(default=None, ge=0)
     item_index: int | None = Field(default=None, ge=0)
@@ -245,7 +248,7 @@ class TextDeltaPayload(BaseModel):
 
 class TextStartPayload(BaseModel):
     """TEXT_START 事件的 payload（标记 assistant 文本开始）"""
-    kind: Literal["markdown", "reasoning"]
+    kind: TextStreamKind
     carrier_type: str | None = None
     content_block_index: int | None = Field(default=None, ge=0)
     item_index: int | None = Field(default=None, ge=0)
@@ -253,7 +256,7 @@ class TextStartPayload(BaseModel):
 
 class TextEndPayload(BaseModel):
     """TEXT_END 事件的 payload（标记 assistant 文本结束）"""
-    kind: Literal["markdown", "reasoning"]
+    kind: TextStreamKind
     carrier_type: str | None = None
     content_block_index: int | None = Field(default=None, ge=0)
     item_index: int | None = Field(default=None, ge=0)

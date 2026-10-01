@@ -2,19 +2,15 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Literal
 
 from app.schemas.internal_v2.pending_request import (
     DeliveryBoundary,
     DeliveryPolicy,
 )
 
-QueueBoundary = Literal[
-    "idle",
-    "after_turn",
-    "after_tool_result",
-    "after_interrupt",
-]
+# 「等待队首」是纯位置理由：只有非队首项才等待队首。它必须随位置变化被
+# 清除，否则原队长被取走后，接替者会成为新队首却仍对外宣称「等待队首」。
+_POSITIONAL_WAITING_REASON = "等待队首"
 
 
 @dataclass
@@ -64,7 +60,7 @@ class JobPendingQueue:
             job_id=job_id,
             enqueue_sequence=sequence,
             delivery_policy=delivery_policy,
-            waiting_reason="等待队首" if self.ids(session_id) else None,
+            waiting_reason=_POSITIONAL_WAITING_REASON if self.ids(session_id) else None,
         )
         self._entries[job_id] = entry
         self._waiting.setdefault(session_id, deque()).append(job_id)
@@ -86,8 +82,9 @@ class JobPendingQueue:
                 f"待处理队列入队序号未严格递增: session_id={session_id}, sequences={sequences}"
             )
         for entry in entries:
-            entry.waiting_reason = entry.waiting_reason or (
-                "等待队首" if entries and entry is not entries[0] else None
+            JobPendingQueue._sync_positional_waiting_reason(
+                entry,
+                is_head=entry is entries[0],
             )
             self._entries[entry.job_id] = entry
         if entries:
@@ -107,7 +104,7 @@ class JobPendingQueue:
     def take_head(
         self,
         session_id: str,
-        boundary: QueueBoundary,
+        boundary: DeliveryBoundary,
         *,
         tool_result_available: bool = True,
     ) -> QueueEntry | None:
@@ -144,7 +141,7 @@ class JobPendingQueue:
         entry.waiting_reason = (
             None
             if self.peek_head(session_id) is entry
-            else "等待队首"
+            else _POSITIONAL_WAITING_REASON
         )
         self._bump(session_id)
         return entry
@@ -163,13 +160,16 @@ class JobPendingQueue:
 
     def clear(self, session_id: str) -> tuple[QueueEntry, ...]:
         waiting = self._waiting.pop(session_id, deque())
+        # 连同按会话持有的序号/版本计数一并释放：否则长驻进程里每个排队过的
+        # 会话都会永久留下 _next_sequence/_snapshot_versions 记录，无界增长。
+        # 清空后无队列项、无控制面 CAS 语义，重置不回退任何可回滚决策。
+        self._next_sequence.pop(session_id, None)
+        self._snapshot_versions.pop(session_id, None)
         removed: list[QueueEntry] = []
         for job_id in waiting:
             entry = self.entry(job_id)
             self._entries.pop(job_id, None)
             removed.append(entry)
-        if removed:
-            self._bump(session_id)
         return tuple(removed)
 
     def reject_reorder(self, session_id: str) -> None:
@@ -184,7 +184,7 @@ class JobPendingQueue:
     @staticmethod
     def _policy_allows(
         policy: DeliveryPolicy,
-        boundary: QueueBoundary,
+        boundary: DeliveryBoundary,
         *,
         tool_result_available: bool,
     ) -> bool:
@@ -204,7 +204,7 @@ class JobPendingQueue:
         return False
 
     @staticmethod
-    def _waiting_reason(policy: DeliveryPolicy, boundary: QueueBoundary) -> str:
+    def _waiting_reason(policy: DeliveryPolicy, boundary: DeliveryBoundary) -> str:
         if policy == "after_interrupt":
             return "等待已提交的 interrupt 边界"
         if boundary == "after_tool_result":
@@ -216,10 +216,28 @@ class JobPendingQueue:
     def _bump(self, session_id: str) -> int:
         version = self._snapshot_versions.get(session_id, 0) + 1
         self._snapshot_versions[session_id] = version
-        for job_id in self._waiting.get(session_id, ()):
-            self._entries[job_id].snapshot_version = version
-            self._entries[job_id].waiting_reason = (
-                self._entries[job_id].waiting_reason
-                or (None if self._entries[job_id] is self.peek_head(session_id) else "等待队首")
+        waiting = self._waiting.get(session_id)
+        head_id = waiting[0] if waiting else None
+        for job_id in waiting or ():
+            entry = self._entries[job_id]
+            entry.snapshot_version = version
+            JobPendingQueue._sync_positional_waiting_reason(
+                entry,
+                is_head=job_id == head_id,
             )
         return version
+
+    @staticmethod
+    def _sync_positional_waiting_reason(entry: QueueEntry, *, is_head: bool) -> None:
+        """按当前位置刷新位置理由，保留边界理由。
+
+        边界理由（如「等待已提交的 interrupt 边界」）由 ``take_head`` 写入，
+        与位置无关；位置理由只对非队首成立，成为队首后必须清除。改前用
+        ``已有理由 or 新理由`` 计算，一旦写入「等待队首」就再也不会被清掉。
+        """
+        if is_head:
+            if entry.waiting_reason == _POSITIONAL_WAITING_REASON:
+                entry.waiting_reason = None
+            return
+        if entry.waiting_reason is None:
+            entry.waiting_reason = _POSITIONAL_WAITING_REASON

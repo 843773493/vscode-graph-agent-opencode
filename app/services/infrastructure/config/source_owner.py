@@ -472,32 +472,14 @@ class WorkspaceSourceOwner:
         source_generation: int,
         workspace_id: str,
     ) -> SourceFanoutRecord:
-        connection = self._connect()
-        try:
-            row = connection.execute(
-                """
-                SELECT source_key, source_generation, workspace_id, status,
-                       layer_revision, layer_digest, result, error, updated_at
-                FROM config_source_fanout
-                WHERE source_key = ? AND source_generation = ? AND workspace_id = ?
-                """,
-                (source_key, source_generation, workspace_id),
-            ).fetchone()
-        finally:
-            connection.close()
-        if row is None:
-            raise RuntimeError("source owner fanout 提交后无法读取")
-        return SourceFanoutRecord(
-            source_key=str(row[0]),
-            source_generation=int(row[1]),
-            workspace_id=str(row[2]),
-            status=str(row[3]),
-            layer_revision=int(row[4]) if row[4] is not None else None,
-            layer_digest=str(row[5]) if row[5] is not None else None,
-            result=str(row[6]) if row[6] is not None else None,
-            error=str(row[7]) if row[7] is not None else None,
-            updated_at=datetime.fromisoformat(str(row[8])),
+        record = self._optional_fanout(
+            source_key=source_key,
+            source_generation=source_generation,
+            workspace_id=workspace_id,
         )
+        if record is None:
+            raise RuntimeError("source owner fanout 提交后无法读取")
+        return record
 
     def summary(
         self,
@@ -565,10 +547,16 @@ class WorkspaceSourceOwner:
             connection.close()
         if row is None:
             return None
-        return self.get_fanout(
-            source_key=source_key,
-            source_generation=source_generation,
-            workspace_id=workspace_id,
+        return SourceFanoutRecord(
+            source_key=str(row[0]),
+            source_generation=int(row[1]),
+            workspace_id=str(row[2]),
+            status=str(row[3]),
+            layer_revision=int(row[4]) if row[4] is not None else None,
+            layer_digest=str(row[5]) if row[5] is not None else None,
+            result=str(row[6]) if row[6] is not None else None,
+            error=str(row[7]) if row[7] is not None else None,
+            updated_at=datetime.fromisoformat(str(row[8])),
         )
 
     @staticmethod

@@ -1,23 +1,22 @@
+> 台账口径说明：本 change 对应的**生产实现尚未开工**，本文件同时登记 (a) **规范层可机械定稿**项（已在 `specs/session-context-resource-addressing/spec.md` 与 `design.md` 写清 MUST 断言，或为对 owner / 在途 change 的具名引用与核验）与 (b) **生产实现**项。凡 `[x]` 均只表示「规范层已定稿 / 已具名引用 / 已核验」，MUST NOT 读作「生产已实现」；其余 `[ ]` 为待实现或需 owner 裁定，逐项注明还差什么。
+
 ## 1. 依赖与前置对齐
 
-- [ ] 1.1 确认「统一虚拟资源寻址」change 已登记 scope 闭集（`workspace`/`user`/`gateway`/`inline`；`memory` 已移出）、VRN grammar、`kind` 闭集与拒绝码命名空间；未登记前不得进入第 3 组实施。
-- [ ] 1.2 采用已下发的**权威表**：scope 闭集 = `workspace`/`user`/`gateway`/`inline`；`scope_id` 由真实身份推导、MUST NOT 硬编码字面量（`workspace`→真实 workspace_id、`gateway`→真实 gateway_id（来源与注入 owner 按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿，本 change 只引用、不复述取值规则）、`inline`→真实 distribution_id（来源与编码按「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从其发行包 runtime manifest 的 `distribution` + `version` 推导，本 change 只引用）、`user`→`local`）。`memory` MUST NOT 作为 scope 出现。
-- [ ] 1.2-A 与其对齐段序与闭集落地：保留 `resources` 固定段、`scope_id` 对**所有** scope 必填；`builtin` 正名为 `inline`（含 layer `bundled`→`inline`，由 change 1 owner 负责，带持久化影响评估）；本 change 不自行改动 grammar。
-- [ ] 1.2-B 落地 `memory` 非 VRN 声明：入口对 `boxteam://memory/{scope}/{name}` 两点式以「未登记 scope」拒绝，并把该形态标注为**非 VRN 示意**。
-- [ ] 1.2-C 采用「统一虚拟资源寻址」change 已定稿的**会话上下文资源自身 `kind` = `session`**（闭集 `agent-spec`|`skills`|`config`|`session`）；本 change 直接引用、无需新登记、无待裁定。config 来源用 `config`。
-- [ ] 1.3 与 itemized rollout context 对齐 `assembly_ref` 的表示（资源身份或专用 ref 类型），确认不改变本 change 的结构化方向。
+- [ ] 1.1 确认「统一虚拟资源寻址」change 已登记 scope 闭集（`workspace`/`user`/`gateway`/`inline`；`memory` 已移出）、VRN grammar、`kind` 闭集与拒绝码命名空间；未登记前不得进入第 3 组实施。 **（未勾：owner 侧规范层已登记（见其 spec 的 scope/kind/拒绝码 requirement），但本项是**实施前置门**——在 owner 的 grammar 与拒绝码**代码**落地前不得进入本 change 第 3 组实施；属生产门，非规范层可定稿项。）**
+- [x] 1.2 按 `add-unified-virtual-resource-addressing` 的 scope 闭集/`scope_id` 唯一表与 kind 闭集**具名引用**落地：scope 闭集 `workspace`/`user`/`gateway`/`inline`、`scope_id` 由真实身份推导（取值规则一律引用该 change，本 change 不复述）、保留 `resources` 固定段、`scope_id` 对所有 scope 必填、`memory` 非 VRN 且入口拒绝、会话上下文 kind=`session` / config 来源 kind=`config`；`builtin`→`inline`（含 layer `bundled`→`inline`）改名归该 owner change。**段序、scope 名、scope_id 语义、kind 与拒绝码定义均归该 owner change，本 change 只引用、MUST NOT 复述或另立。** **（规范层已定稿：spec「scope 必须取自闭合集」与「VRN 语法形态统一」正文已改为对 owner requirement 的具名引用，不再复述取值表。）**
+- [ ] 1.3 与 itemized rollout context 对齐 `assembly_ref` 的表示（资源身份或专用 ref 类型），确认不改变本 change 的结构化方向。 **（未勾：下游对齐项，二选一分支见第 8 节 8.2；方向已定，取值待 owner 与 itemized assembly 身份模型对齐。）**
 
 ## 2. 会话上下文资源引用的结构化模型
 
-- [ ] 2.1 定义结构化会话上下文引用模型：`resource_identity`（不透明、稳定、revision-free、不依赖激活工作区）、`vrn`（位置、禁止编码 revision/hash）、`scope`（取自权威闭集，与 vrn 内 scope 一致可校验）、`revision`、`view`、`cursor` 作为彼此并列的字段。
-- [ ] 2.2 逐条落地三层分离 / three-layer separation 不变量校验：identity 不含 revision 且不随激活工作区变化；VRN 字符串不含 revision/hash/snapshot ref；real path 不出现在 API 响应体、持久化记录与模型可见载荷中。
-- [ ] 2.3 落地 scope 闭集与**必填 scope_id** 校验：拒绝未登记 scope（含 `memory`）；拒绝**任意 scope** 缺 scope_id；拒绝回退到隐含上下文补全；断言 `resources` 固定段存在且段序不被简化。
-- [ ] 2.4 落地 VRN 规范化只走单一实现（引用「统一虚拟资源寻址」owner），并拒绝 `%` 编码与 `#fragment`。
+- [x] 2.1 定义结构化会话上下文引用模型：`resource_identity`（不透明、稳定、revision-free、不依赖激活工作区）、`vrn`（位置、禁止编码 revision/hash）、`scope`（取自权威闭集，与 vrn 内 scope 一致可校验）、`revision`、`view`、`cursor` 作为彼此并列的字段。 **（规范层已定稿：模型字段与约束见 design D1；位置/VRN 政策引用 owner「默认寻址政策必须以 VRN 为默认形式」，本 change 不复述。）**
+- [x] 2.2 逐条落地三层分离 / three-layer separation 不变量校验：identity 不含 revision 且不随激活工作区变化；VRN 字符串不含 revision/hash/snapshot ref；real path 不出现在 API 响应体、持久化记录与模型可见载荷中。 **（规范层已定稿：三层分离正文引用 owner「三层职责必须严格分离」；会话上下文侧验收见 spec 的同名 requirement 两个 scenario。）**
+- [x] 2.3 落地 scope 闭集与**必填 scope_id** 校验：拒绝未登记 scope（含 `memory`）；拒绝**任意 scope** 缺 scope_id；拒绝回退到隐含上下文补全；断言 `resources` 固定段存在且段序不被简化。 **（规范层已定稿：spec「scope 必须取自闭合集」与「VRN 语法形态统一」的 scenario 覆盖拒绝未登记 scope、任意 scope 缺 scope_id、`resources` 固定段不可简化。）**
+- [x] 2.4 落地 VRN 规范化只走单一实现（引用「统一虚拟资源寻址」owner），并拒绝 `%` 编码与 `#fragment`。 **（规范层已定稿：spec「VRN 语法形态统一」的两个 scenario「拒绝百分号编码与 fragment」「规范化只走单一实现」。）**
 
 ## 3. 视图与修订的结构化迁移
 
-- [ ] 3.1 建立旧形 fragment 到结构化字段的映射：`#information` → `view=information`；`#record={index}` → `view=records` + `record_index`；`#assembly={id}` → `view=assembly` + `assembly_ref`。
-- [ ] 3.2 移植既有视图与资源种类兼容性校验规则集，并新增「未识别 view 取值显式失败、不降级为默认视图」。
+- [x] 3.1 建立旧形 fragment 到结构化字段的映射：`#information` → `view=information`；`#record={index}` → `view=records` + `record_index`；`#assembly={id}` → `view=assembly` + `assembly_ref`。 **（规范层已定稿：映射表见 design D2；`assembly_ref` 具体类型仍待与 itemized rollout context 对齐，见本文件 1.3 与 design Open Questions。）**
+- [x] 3.2 移植既有视图与资源种类兼容性校验规则集，并新增「未识别 view 取值显式失败、不降级为默认视图」。 **（规范层已定稿：spec「会话上下文视图选择必须结构化」正文与两个 scenario。）**
 - [ ] 3.3 保留可重读修订绑定能力：`expected_revision` 不匹配时返回显式修订变更错误；游标继续绑定资源 + revision + operation，在固定修订上推进分页，并在 resource/revision/operation 不匹配时显式失败。
 - [ ] 3.4 断言 revision 只存在于结构化字段：对全部会话上下文路径做检查，确认生成的 VRN 字符串在任何情况下都不含 revision/hash/snapshot 引用。
 
@@ -31,28 +30,39 @@
 
 ## 5. 入口破坏与「新写字段」（不是存量数据迁移）
 
-- [ ] 5.1 让入口停止接受旧式上下文 URI：对含 `%` 编码、`#fragment`、`memory` 两点式或未登记 scope 自有正则语法的字符串显式拒绝，并在错误信息中指向结构化字段表示。
+- [x] 5.1 让入口停止接受旧式上下文 URI：对含 `%` 编码、`#fragment`、`memory` 两点式或未登记 scope 自有正则语法的字符串显式拒绝，并在错误信息中指向结构化字段表示。 **（规范层已定稿：spec「旧式上下文 URI 只能被入口拒绝」的 scenario「旧式 fragment 形态被拒绝」。）**
 - [ ] 5.2 记录并复核**零存量**取证基线（见 design D5 与 spec「旧式上下文 URI 只能被入口拒绝」）：旧式上下文 URI 无任何持久化实例，故 MUST NOT 构造扫描/规范化/失效的历史数据迁移脚本。
 - [ ] 5.3 新写字段切换：让既有持久化挂点按 identity + VRN 的新格式**新写入**并在读路径切换——`resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`）与 `context_source_control_states`（来源追踪事实），不得保留旧写入形态或兼容读写双轨。
 - [ ] 5.4 移除旧的会话上下文自有正则与 `#selector` 解析实现，物理下线，不留兼容层或别名。
 
-## 5A. 配置来源真实路径持久化的迁移（已确证义务）
+## 5A. 配置来源真实路径持久化的迁移（正名出处：`add-unified-virtual-resource-addressing`）
 
-- [x] 5A.1 把 `app/core/config_sources.py` 的 `ConfigSource.path: Path` 换成 `vrn: VRN`，兄弟字段（`layer`/`precedence`/`loaded`/`source_key`/`presence`/`layer_revision`/`layer_digest`/`source_generation`）原样保留；不得另发明一套结构。 **（已落地：`ConfigSource.vrn: str | None`，兄弟字段逐字保留；构造点统一经 `config/source_vrn.py::inline_config_source_vrn`。）**
-- [x] 5A.2 移除 `app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord.source_path`/`backup_path` 持久化，改为 VRN 表达；`layer` 作为兄弟字段保留、不塞进 VRN。 **（已落地：`ConfigSourceLayerRecord.vrn`/`ConfigSourceJournalRecord.vrn` 取代 `source_path`，`backup_path` 物理删除；workspace 与 gateway 两侧 `config_source_layers`/`config_source_journal` 均以迁移 `DROP COLUMN source_path/backup_path` + `ADD COLUMN vrn` 收敛，旧值不迁移。）**
-- [ ] 5A.3 移除 API 响应体对外输出真实路径（`app/api/config.py:102` 的 `path=str(source.path)` 与 `app/schemas/internal_v2/config.py` 的 `ConfigSourceDTO.path`），改为 VRN；同步更新前端消费点。
-- [x] 5A.4 明确 `sqlite` 层不给 VRN（`user`/`user_local`/`workspace` 共享同一 `workspace.sqlite`），`inline` 层有稳定 disk 载体故有 VRN；在落地代码与注释中说明该不可寻址性。 **（已落地：`ConfigService._config_source`/`_read_shared_override` 与 `source_vrn.py` 文档改以「共享同一 `workspace.sqlite` 这一边界载体」为不可寻址依据——`user`/`user_local`/`workspace`/`sqlite` 一律 `vrn=None`；`user` scope 本身已由 `f6fc990f` 落地进 VRN 闭集，故该结论与 scope 闭集无关，仅由共享载体决定。）**
-- [x] 5A.5 落地时删除 `app/agents/skill_runtime.py:538` 的 bundled 到 builtin 改名映射，向 `inline` 收敛；评估 `layer` 名进入 `entry_identity`/catalog payload 的同步面。 **（已由 `298ef599` 落地：`layer_order` 改为 `(inline,gateway,workspace)`，`scope = {...}[layer]` 改名 shim 物理删除，`layer` 名与 VRN scope 名自此逐字一致；`rg -n 'bundled' app/agents/skill_runtime.py` 仅剩合法命名的 `resolve_bundled_skill_groups`。该 shim 已不存在，无需再删。）**
+本义务的 normative 正文（config 侧平级属性模式、config kind、尾段形态、`sqlite` 层不可寻址、real path 不持久化）MUST 取自 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段」；本 change 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套 config 迁移规范。以下任务只记录该义务的落地与验收证据。
+
+- [x] 5A.1 按 owner 上述 requirement 落地 `app/core/config_sources.py` 的 `ConfigSource.path: Path` → VRN，兄弟字段（`layer`/`precedence`/`loaded`/`source_key`/`presence`/`layer_revision`/`layer_digest`/`source_generation`）原样保留。 **（已落地：`ConfigSource.vrn: str | None`，兄弟字段逐字保留；构造点统一经 `config/source_vrn.py::inline_config_source_vrn`。）**
+- [x] 5A.2 按 owner 上述 requirement 移除 `app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord.source_path`/`backup_path` 持久化，改为 VRN 表达。 **（已落地：`ConfigSourceLayerRecord.vrn`/`ConfigSourceJournalRecord.vrn` 取代 `source_path`，`backup_path` 物理删除；workspace 与 gateway 两侧 `config_source_layers`/`config_source_journal` 均以迁移 `DROP COLUMN source_path/backup_path` + `ADD COLUMN vrn` 收敛，旧值不迁移。）**
+- [x] 5A.3 移除 API 响应体对外输出真实路径（`app/api/config.py:102` 的 `path=str(source.path)` 与 `app/schemas/internal_v2/config.py` 的 `ConfigSourceDTO.path`），改为 VRN；同步更新前端消费点。 **（已落地：`ConfigSourceDTO.path` 与 gateway 侧 `GatewayConfigSourceDTO.path` 此前已由来源 VRN 承载；本轮补齐遗留的 `ConfigSourcesDTO.schema_path` 与 gateway 侧 `GatewayConfigSourcesDTO.schema_path` 两处 real path 出口——`app/api/config.py` 的 `schema_path=str(schema_path)` 与 `app/gateway/main.py` 的 `schema_path=str(config.schema_path)`，值改为 config kind 的来源 VRN（复用唯一定点 `config/source_vrn.py::inline_config_source_vrn`，schema 与 `*_inline.jsonc` 同属发行包内资源，走 `inline` scope）；实测 `GET /api/v1/config/sources` 回 `boxteam://inline/<distribution>/resources/config/workspace_schema`，不再回绝对路径。`rg -n 'schema_path|schemaPath' src/clients/web/src --glob '!src/types/**'` 零命中（前端只消费生成类型、无组件读取该字段），故无需改前端消费点；字段名未改（`schema_path` 与 proto `ConfigSourcesDTO.schema_path`/`GatewayConfigSourcesDTO.schema_path` 同名），未触碰 proto 与 4 个生成目录，属值级非破坏性改动。门槛：`tests/unit/api/test_config.py`+`tests/unit/gateway/test_gateway_config.py`=32 passed；`test_config_service.py`+`test_config_reload_contract.py`=75 passed；`import app.main, app.gateway.main`=IMPORT_OK。）**
+- [x] 5A.4 按 owner 上述 requirement 落实 `sqlite` 层不给 VRN（`user`/`user_local`/`workspace` 共享同一 `workspace.sqlite`），`inline` 层有稳定 disk 载体故有 VRN。 **（已落地：`ConfigService._config_source`/`_read_shared_override` 与 `source_vrn.py` 文档改以「共享同一 `workspace.sqlite` 这一边界载体」为不可寻址依据——`user`/`user_local`/`workspace`/`sqlite` 一律 `vrn=None`；`user` scope 本身已由 `f6fc990f` 落地进 VRN 闭集，故该结论与 scope 闭集无关，仅由共享载体决定。）**
+- [x] 5A.5 删除 `app/agents/skill_runtime.py` 的 bundled 到 builtin 改名映射，向 `inline` 收敛（scope 正名由 `add-unified-virtual-resource-addressing` 归口）。 **（已由 `298ef599` 落地：`layer_order` 改为 `(inline,gateway,workspace)`，`scope = {...}[layer]` 改名 shim 物理删除，`layer` 名与 VRN scope 名自此逐字一致；`rg -n 'bundled' app/agents/skill_runtime.py` 仅剩合法命名的 `resolve_bundled_skill_groups`。该 shim 已不存在，无需再删。）**
 - [x] 5A.6 断言配置来源的持久化记录与 API 响应体均不含真实路径。 **（已落地：`test_workspace_config_source.py::test_persisted_source_records_never_hold_real_path`、`test_source_layer_vrn_round_trips_and_sqlite_layer_is_unaddressable`、`test_config_service.py::test_workspace_config_migrates_mutable_json_layers_to_sqlite` 与 `test_config.py::test_config_sources_endpoint_never_exposes_real_path`。）**
+
+- **5A.7 登记：`ConfigCandidateApplier` 双定义（只登记不删，2026-10-01 独立 slice）**：`app/services/infrastructure/config/store.py:18` 与 `app/services/infrastructure/config_service/config_service_common.py:20` **字面相同**地各定义一次 `Callable[[ConfigSnapshot, ConfigSnapshot], Awaitable[None]]`。同目录 `config_service/AGENTS.md` 明文要求「不得在 `config_service_common.py` 之外重复定义 `logger`、`ConfigCandidateApplier`」，故此为**违反既有指令的重复定义**。**性质**：本次 config 服务拆分（`out/tests/temp/review_config_split/artifacts/REVIEW_config_service_split.md` §五第 1 条）实测为**改动前既存重复**，拆分未消除也未扩大。**裁定：只登记不删，本轮不收口**；收敛归 5A.x config 来源切片（消除重复定义=共享符号唯一定义在 `common`，另一处改为 import）。
 
 ## 6. 收口在途 change
 
-- [ ] 6.1 更新 `openspec/changes/add-itemized-rollout-context/specs/itemized-rollout-context/spec.md` 的 requirement「跨 Session 协作必须只面向目标 main thread 且不共享协作状态」：声明语法与解析以本 change 为准，删除本地自有的 URI 形态定义。该收敛已由 `e8e65b97` 落地，本任务只做核验，按 requirement 名定位、不使用裸行号。
-- [ ] 6.2 更新同 change 的 `design.md` 小节「跨 Session 地址与无共享状态协作」与 `tasks.md` 任务 8.10，使其会话上下文寻址描述引用本 change，不再并列定义第二套 URI 语法。该收敛同样已由 `e8e65b97` 落地，按小节名与任务号定位、不使用裸行号。
-- [ ] 6.3 运行 `openspec validate add-itemized-rollout-context --strict` 与 `openspec validate migrate-session-context-uri-to-vrn --strict`，确认两 change 均通过且不存在互相矛盾的 URI 定义。
+- [x] 6.1 更新 `openspec/changes/add-itemized-rollout-context/specs/itemized-rollout-context/spec.md` 的 requirement「跨 Session 协作必须只面向目标 main thread 且不共享协作状态」：声明语法与解析以本 change 为准，删除本地自有的 URI 形态定义。该收敛已由 `e8e65b97` 落地，本任务只做核验，按 requirement 名定位、不使用裸行号。 **（规范层已核验：该 requirement「跨 Session 协作必须只面向目标 main thread 且不共享协作状态」现逐字声明「会话上下文资源引用的 VRN 语法、作用域/scope、网关授权段/gateway authority 与解析 MUST 以 `migrate-session-context-uri-to-vrn` change 为准；本 change MUST NOT 自行定义会话上下文 URI 形态」，与本 change 一致。）**
+- [x] 6.2 更新同 change 的 `design.md` 小节「跨 Session 地址与无共享状态协作」与 `tasks.md` 任务 8.10，使其会话上下文寻址描述引用本 change，不再并列定义第二套 URI 语法。该收敛同样已由 `e8e65b97` 落地，按小节名与任务号定位、不使用裸行号。 **（规范层已核验：`design.md` 该小节逐字声明其 VRN 形态与解析由本 change 拥有；`tasks.md` 8.10 逐字声明「以 `migrate-session-context-uri-to-vrn` 为准、只消费解析结果、不得自行定义会话上下文 URI 形态」。）**
+- [ ] 6.3 运行 `openspec validate add-itemized-rollout-context --strict` 与 `openspec validate migrate-session-context-uri-to-vrn --strict`，确认两 change 均通过且不存在互相矛盾的 URI 定义。 **（未勾：这是实现期/归档前的**复核命令**，保持未勾以便在实施与归档时重跑；两 change 的规范层当前均通过 `--strict`，见 7.3。）**
 
 ## 7. 命名与校验收口
 
-- [ ] 7.1 全仓校验命名一致性：只允许 `资源身份 / ResourceIdentity`、`虚拟资源地址 / VRN`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`；禁止 virtual url / VURI 等同义异名。
-- [ ] 7.2 确认本 change 未自造拒绝码、未改动 VRN 语法本体、固定段序与 `kind` 闭集；所有新增拒绝场景均引用「统一虚拟资源寻址」change 的登记结果。
+- [x] 7.1 全仓校验命名一致性：只允许 `资源身份 / ResourceIdentity`、`虚拟资源地址 / VRN`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`；禁止 virtual url / VURI 等同义异名。 **（规范层已核验：本 change 三个 `.md` 中此类禁用词仅出现在显式禁用条款；实现期对全仓再复核属实施项。）**
+- [x] 7.2 确认本 change 未自造拒绝码、未改动 VRN 语法本体、固定段序与 `kind` 闭集；所有新增拒绝场景均引用「统一虚拟资源寻址」change 的登记结果。 **（规范层已定稿：spec「VRN 语法形态统一」正文现只具名引用 owner，不再复述模板与段序。）**
 - [ ] 7.3 运行 `openspec validate migrate-session-context-uri-to-vrn --strict`，要求 0 failed。
+
+## 8. 需 owner 裁定（未定稿，MUST NOT 自行发明）
+
+下列为**必须由 owner 拍板**才能定稿的规范层缺口；本 change MUST NOT 自行选定分支。设计侧同一登记见 `design.md` 的 Open Questions（已按「需 owner 裁定 / 下游对齐」标注）。
+
+- [ ] 8.1 **「view 与资源不兼容」是否需新增拒绝码（分支二选一）**：会话上下文的视图-资源兼容性拒绝（原 `validate_session_context_read_view` 规则集）在统一语法下是 (a) 复用 owner 已登记的现有码（如 `unknown_operation`/`unknown_resource`），还是 (b) 由 owner 在 grammar/resolve 闭集内**新增一个专用码**。owner 现有 resolve 闭集 6 码（`scope_mismatch`/`unknown_resource`/`unknown_operation`/`capability_denied`/`snapshot_unavailable`/`historical_snapshot_missing`）均未表达「view 不受该 kind 支持」，故 (b) 很可能成立、需 owner 追加登记。本 change MUST NOT 自造码（原则见 spec「VRN 语法形态统一」与 task 7.2），具体归属待裁定。（「旧式 fragment 形态」「memory 两点式」两条已可由 owner 既有 grammar 码 `fragment_rejected` / `unknown_scope` 覆盖，不在待裁定之列。）
+- [ ] 8.2 **`assembly_ref` 的表示（分支二选一）**：D2 中 `assembly={id}` 迁移后的 `assembly_ref` 采用 (a) `资源身份 / ResourceIdentity`，还是 (b) 专用 ref 类型。方向已定（以资源身份表达、绝不拼进地址字符串），具体类型须 owner 与 itemized rollout context 的 assembly 身份模型对齐后裁定；属 design Open Questions 登记项。

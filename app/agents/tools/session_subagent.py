@@ -25,7 +25,9 @@ def create_session_subagent_tool(
         description=(
             "为复杂、可独立执行的工作在当前会话内创建一个持久化 child thread。"
             "本工具返回 child_thread_id 与委派 admission 状态（pending），"
-            "不会把子 Agent 最终文本作为隐藏返回值带回；"
+            "不会把子 Agent 最终文本作为隐藏返回值带回。当后端未装配真实 "
+            "thread binder 时本工具直接报错（fail closed），不会创建无法执行 "
+            "的 child thread；"
             "不要为寒暄、简单问题或单步操作创建 child thread。"
         ),
     )

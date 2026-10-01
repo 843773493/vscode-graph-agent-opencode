@@ -6,13 +6,7 @@
 
 ### Requirement: 资源引用必须遵循三层分离
 
-系统 MUST 将每个资源引用拆分为三层唯一 owner，任一层 MUST NOT 承担另一层的职责：
-
-- **资源身份 / ResourceIdentity**：不透明、稳定、**不含 revision**、**不依赖当前激活工作区**；MUST 持久化；用于去重与 lineage。
-- **虚拟资源地址 / VRN**：可解析地址；MUST 持久化且**允许悬空**（登记地址后资源可暂不可达）；**MUST NOT 编码 revision、hash、快照引用或 provider locator**；是软件内部与模型可见载荷传递资源的**默认**形式。
-- **真实路径 / real path**：机器本地、**临时**；MUST NOT 被持久化，MUST NOT 进入模型可见载荷，MUST NOT 跨越 gateway 边界。
-
-real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST 视为缺陷。
+**归属与引用**：三层分离（`资源身份 / ResourceIdentity` / `虚拟资源地址 / VRN` / `真实路径 / real path`）的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套三层分离规范；以下 scenario 只保留会话上下文侧的验收视角。
 
 #### Scenario: 持久化记录不得含 real path
 - **WHEN** 任意会话上下文资源被写入持久化记录或返回给模型
@@ -24,20 +18,9 @@ real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST
 
 ### Requirement: scope 必须取自闭合集且每个 scope 的 scope_id 一律必填
 
-系统 MUST 只承认闭合集内的 scope，MUST 拒绝任何其它 scope 取值。scope 闭集为 **`workspace` | `user` | `gateway` | `inline`**（依据权威表：`builtin` 正名为 `inline`；`user` 为本次新增）。scope 闭集与每个 scope 的 scope_id 取值来源 MUST 由「统一虚拟资源寻址」change 的**唯一权威表**规定；本 capability MUST NOT 自行发明 scope 名或 scope_id 语义。
+**归属与引用**：scope 闭集与每个 scope 的 `scope_id` 取值语义的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」（含 `workspace`/`user`/`gateway`/`inline` 闭集、`builtin` 正名 `inline`、`memory` 移出、`scope_id` 由真实身份推导而非硬编码字面量，以及各 scope 的取值规则）。本 capability 只**具名引用**该 requirement，MUST NOT 复述其取值表、MUST NOT 另立第二份 scope/scope_id 定义。
 
-**`memory` 已确证不是 VRN scope，MUST NOT 出现在闭合集内**：它零生产构造方、resolver 连 scope_id 都不比对、container 未装配、configs 自述未接入。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段）MUST 被显式标注为**非 VRN 示意**，MUST NOT 被当作合法 VRN 接受或产出（其解析期特例分支已由提交 32bc6256 物理删除，现以 `unknown_scope` 类拒绝码 fail-closed 拒绝）。
-
-**每个 scope 的 `scope_id` 段一律必填**，MUST NOT 只对某个 scope 必填而对其它 scope 可选。`scope_id` MUST 由**真实身份推导**，MUST NOT 硬编码字面量，MUST NOT 依赖隐含上下文：
-
-- `workspace` → 真实 workspace_id；
-- `gateway` → 真实 gateway_id（现状在 skill 目录生成链路上硬编码字面量 `"local"`，落地时改为真实身份推导，MUST NOT 继续硬编码字面量）；取值来源与注入 owner MUST 按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿落地，本 capability 只引用、不复述取值规则；
-- `inline` → 真实 distribution_id（现状与 `gateway` 共用字面量 `"local"`，且 `distribution_id` 全仓零赋值，属既有不一致）；来源与编码 MUST 按「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从其发行包 runtime manifest 的 `distribution` + `version` 推导，本 capability 只引用、不复述取值规则；
-- `user` → `local`，并 MUST 显式声明为单用户本地程序的约定。
-
-「当前工作区」MUST NOT 作为寻址概念的隐含前提，也 MUST NOT 作为持久化数据的隐含前提。
-
-「其它工作区」MUST 表达为同一 scope 加另一个 scope_id 取值，MUST NOT 引入新 scope；「其它 gateway」MUST 表达为可选的**网关授权段 / gateway authority**，其缺省值为本机。
+会话上下文资源使用的 VRN MUST 遵守该闭集与「`scope_id` 对所有 scope 必填」规则，MUST NOT 自行发明 scope 名或 `scope_id` 语义。「当前工作区」MUST NOT 作为会话上下文寻址或持久化数据的隐含前提；「其它工作区」MUST 表达为同一 scope 加另一个 scope_id 取值，MUST NOT 引入新 scope；「其它 gateway」MUST 表达为 owner 定义的可选**网关授权段 / gateway authority**（缺省为本机）。`memory` MUST NOT 作为 scope 出现（其非 VRN 判定与入口拒绝见以下 scenario）。
 
 #### Scenario: 拒绝未登记的 scope
 - **WHEN** 调用方提交 scope 不属于闭合集的 VRN（例如 `memory`、`session`）
@@ -53,20 +36,11 @@ real path 出现在 API 响应体、持久化记录或模型可见载荷中 MUST
 
 ### Requirement: VRN 语法形态统一且由单一 owner 规范化
 
-会话上下文资源 MUST 使用统一 VRN 形态（保留既有段序，MUST NOT 简化）：
+**归属与引用**：VRN 语法本体、固定段序、`resources` 固定段、闭合 charset 与规范化单一实现的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「VRN 语法必须保留固定段序并单一实现」；可选网关授权段的语义（缺省 = 本机、等于本机 gateway_id = 等价缺省、等于对端 = 跨 gateway）见其 requirement「gateway authority 承载稳定 gateway_id 且缺省等价本机」。本 capability 只**具名引用**上述 requirement，MUST NOT 定义 VRN 语法本体、MUST NOT 复述其模板与取值、MUST NOT 另立第二套语法，也 MUST NOT 新增拒绝码。
 
-`boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}`
+会话上下文资源 MUST 使用该统一形态（保留既有段序，MUST NOT 简化）；会话上下文侧的规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`（`session` 为 owner 定稿的 kind 取值）。本 capability MUST NOT 自行变更固定段序、MUST NOT 把 `scope_id` 改为可选、MUST NOT 省略 `resources` 固定段。
 
-- `{gateway_authority?}`：可选、**单段**，承载稳定 gateway_id；缺省 = 本机 gateway。
-- `{scope}`：必填，取自闭合集。
-- `{scope_id}`：必填，**对所有 scope 都必填**。
-- `resources`：固定段，MUST 保留。
-- `{kind}`：必填，取自闭合集。
-- `{...canonical path segments}`：canonical 尾段。
-
-VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码与 `#fragment`；规范化 MUST 由**单一实现**完成。
-
-本 capability MUST NOT 定义 VRN 语法本体，MUST NOT 自行变更固定段序，MUST NOT 把 `scope_id` 改为可选，也 MUST NOT 新增拒绝码；VRN grammar、固定段序、kind 闭集与**拒绝码 / rejection code** 登记由「统一虚拟资源寻址」change 独占，本 capability 只引用。
+**owner 待实施项（关联 `add-unified-virtual-resource-addressing` task 3.4）**：`{gateway_authority?}` 段当前在 owner 的 `grammar.py` 的 `parse_vrn` 中无解析分支（authority 首段会被当作 scope 并以 `unknown_scope` 拒绝），本 capability 对 authority 的使用依赖 owner 的 authority 实现。
 
 #### Scenario: 拒绝百分号编码与 fragment
 - **WHEN** 调用方提交含 `%` 编码或 `#fragment` 的 VRN
@@ -114,16 +88,9 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 
 ### Requirement: 解析必须遵循唯一星型顺序且 fail-closed
 
-解析 MUST 按唯一顺序执行：本地 parse（fail-closed）→ 本进程解析 → 跨边界时按**星型解析 / star-topology resolution** 交给 gateway 层，由对端按同一份 VRN 在本地解析。
+**归属与引用**：星型解析 / star-topology resolution 的唯一顺序、hub/spoke 关系、policy 常量上界（`visited set`、`max_transit_gateways=1`、`max_gateway_hops=2`、总 deadline）与「locator 是输入，不是输出」不变量的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「VRN 解析必须是星型且以 policy 常量界定上界」。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 为会话上下文另立第二套解析顺序，也 MUST NOT 新增拒绝码。
 
-- **网关授权段 / gateway authority** 承载稳定 gateway_id。
-- 本地 gateway **是自身联邦的 hub** 时，MUST 可直接解析其**直接 spoke** 的资源。
-- 本地 gateway **是 spoke** 时，MUST 通过其**唯一 hub** 做**一次有界 transit 解析**，并 MUST 携带 `visited set`、`max_transit_gateways=1`、`max_gateway_hops=2` 与**总 deadline**。
-- 上述上界 MUST 表达为**显式策略常量**，MUST NOT 硬编码为散落的魔法数字；拓扑变化时改策略而非重写解析器。
-- **解析命中只返回稳定身份与内容**，MUST NOT 返回或携带 locator。这是可机械检查的不变量：**locator 是输入，不是输出**。
-- 不可解析（不可达、未共享、未找到）时 MUST fail-closed 返回结构化**拒绝码 / rejection code**，MUST NOT 回退到猜测路径，MUST NOT 返回虚假默认值。
-
-跨边界传输 MUST 只包含资源身份、VRN、revision 与内容，MUST NOT 传输 real path。
+会话上下文资源的解析 MUST 复用该唯一星型顺序，MUST NOT 为会话上下文单开第二条解析路径；跨边界传输 MUST 只包含资源身份、VRN、revision 与内容，MUST NOT 传输 real path。
 
 #### Scenario: 跨 gateway 只回内容
 - **WHEN** VRN 的 gateway authority 指向对端且对端可达
@@ -151,7 +118,7 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 
 ### Requirement: 持久化资源引用必须使用身份加 VRN
 
-持久化的资源引用字段 MUST 使用资源身份加 VRN 的组合表达，并 MUST 在需要修订绑定时另设**独立的 revision 字段**；MUST NOT 持久化 real path。
+**归属与引用**：持久化资源引用政策的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「默认寻址政策必须以 VRN 为默认形式」。本 capability 只**具名引用**该 requirement，MUST NOT 复述正文、MUST NOT 另立第二套持久化引用政策；会话上下文侧的落点由以下 scenario 验收。
 
 #### Scenario: 字段不含 real path
 - **WHEN** 会话上下文资源引用被写入持久化记录
@@ -184,15 +151,7 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 
 ### Requirement: 配置来源的真实路径持久化必须迁移到 VRN
 
-已确证存在真实违约：配置来源的真实路径已写入 SQLite（`app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord` 含 `source_path: str` 与 `backup_path: str | None`），且该真实路径还会经 API 响应体对外（`app/api/config.py:102` 的 `path=str(source.path)`，经 `ConfigSourceDTO.path` 输出，实测 `GET /api/v1/config/sources` 回真实绝对路径）。按三层分离，真实路径 MUST NOT 被持久化，也 MUST NOT 进入 API 响应体。
-
-迁移 MUST **直接复用 config 侧已跑通的形态**：`app/core/config_sources.py` 的 `ConfigSource` 已是 `path` + `layer` + `precedence` 平级属性，且 `layer_revision` / `layer_digest` / `source_generation` 已是**兄弟字段**。因此改造等价于「把 `path: Path` 换成 `vrn: VRN`，其余兄弟字段原样保留」，MUST NOT 另发明一套结构。
-
-配置来源资源的 VRN MUST 标识来源文件本身，并使用属于「统一虚拟资源寻址」change 登记的 kind 闭集内的取值；`layer` MUST 作为**兄弟字段**保留、MUST NOT 塞进 VRN。
-
-**`sqlite` 层 MUST NOT 被赋予 VRN**：`user` / `user_local` / `workspace` 三层共享同一个 `workspace.sqlite` 文件（`app/services/infrastructure/config_service.py` 的 `_config_source` 在 state store 存在时统一返回 `self._workspace_state_store.path`），把它映射成单一 VRN 会立刻产生「同一 URI 对应多个逻辑来源」的冲突。`inline` 层有稳定 disk 载体（发行包内 `configs/*_inline.jsonc`），故有 VRN。
-
-迁移后：来源层身份 MUST 由 VRN 表达，API 响应体 MUST NOT 输出真实路径；真实路径只允许存在于最后访问点。
+**归属与引用**：本义务的正名 normative 出处为 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段」（含 config kind、尾段形态、`sqlite` 层不可寻址与 real path 不持久化的全部正文）。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套 config 迁移规范；以下 scenario 只保留会话上下文侧的验收视角。
 
 #### Scenario: 配置来源记录不含真实路径
 - **WHEN** 配置来源层被持久化到 SQLite
@@ -217,7 +176,7 @@ VRN 的字符集 MUST 为闭合集合；解析 MUST 拒绝 `%` 百分号编码�
 已确证（本轮实测取证）：
 
 - 旧式会话上下文 URI **零历史落盘实例**，迁移面只有「入口拒绝 + 新写字段」；
-- 配置来源真实路径**已持久化且已外泄**（`ConfigSourceLayerRecord.source_path`/`backup_path` 与 `app/api/config.py:102` 的 `ConfigSourceDTO.path`）；
+- 配置来源的真实路径外泄义务（持久化侧与 API 响应体侧）已由 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段」唯一登记，本 capability 只具名引用；该义务已由 `50bffa45`（持久化改 VRN、删 `source_path`/`backup_path`）与 `76ed0089`（`ConfigSourceDTO.path` 与 `ConfigSourcesDTO.schema_path` 均改 VRN）落地；
 - `inline` 层有稳定 disk 载体、`sqlite` 层是共享载体不可寻址，`memory` 不是 VRN scope。
 
 由「统一虚拟资源寻址」change 定稿并引用（本 capability 只引用、不得自行发明）：scope 闭集（`workspace` | `user` | `gateway` | `inline`，见其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」）、每个 scope 的 scope_id 语义（同前 requirement）、`kind` 闭集（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」）、以及全部拒绝码取值（见其拒绝码登记 requirement）。

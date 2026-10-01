@@ -69,13 +69,15 @@ afterEach(async () => {
 });
 
 describe("会话目录 outbox 持久层：按序写入与恢复", () => {
-  test("未落盘的 pending 写入后可按分区整体读回", async () => {
+  test("已落盘的 pending_local 写入后按分区读回并归一为可重放的 persisted", async () => {
     const port = memoryPort();
     const outbox = outboxWithRename();
     await persistCatalogOutboxPendingOperations(port, PARTITION, outbox.operations);
     const restored = await loadCatalogOutbox(port, PARTITION);
     expect(restored.operations.map((item) => item.client_operation_id)).toEqual([opId("a")]);
-    expect(restored.operations[0].state).toBe("pending_local");
+    // F1：`pending_local` 是「尚未确认本地持久化」的瞬时态；命令既然已成功写入
+    // 持久层，恢复时必须归一为可重放的 `persisted`，否则它既不重放也不对账。
+    expect(restored.operations[0].state).toBe("persisted");
     expect(restored.next_client_sequence).toBe(2);
   });
 

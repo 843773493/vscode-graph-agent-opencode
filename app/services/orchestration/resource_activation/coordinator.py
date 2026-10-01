@@ -17,7 +17,9 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from typing import Final
 
+from app.domain.itemized.errors import CodeCarryingError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
@@ -39,13 +41,16 @@ from app.services.orchestration.resource_activation.contracts import (
 DEFAULT_ACTIVATION_WAIT_SECONDS = 5.0
 DEFAULT_ACTIVATION_POLL_SECONDS = 0.02
 
+# 冻结失败码：只在此定义一次，杜绝同一 code 在多处裸写漂移。
+_CODE_PARENT_INVALID: Final = "resource-activation-parent-invalid"
+_CODE_POLICY_DRIFT: Final = "resource-activation-policy-drift"
 
-class ResourceActivationError(RuntimeError):
+
+class ResourceActivationError(CodeCarryingError, RuntimeError):
     """activation 冻结失败；调用方必须把它作为显式 dispatch 阻断处理。"""
 
     def __init__(self, code: str, message: str) -> None:
-        super().__init__(f"[{code}] {message}")
-        self.code = code
+        super().__init__(code, message)
 
 
 def _registry_generation(snapshots) -> int:
@@ -137,7 +142,7 @@ class ResourceActivationCoordinator:
 
         if parent.snapshot_kind != "turn":
             raise ResourceActivationError(
-                "resource-activation-parent-invalid",
+                _CODE_PARENT_INVALID,
                 f"model call preparation 的 parent 必须是 turn snapshot: {parent.snapshot_kind}",
             )
         if policy is not None and (
@@ -145,7 +150,7 @@ class ResourceActivationCoordinator:
             or policy.hash != parent.activation_policy_hash
         ):
             raise ResourceActivationError(
-                "resource-activation-policy-drift",
+                _CODE_POLICY_DRIFT,
                 "Turn 内 activation policy 不得漂移；新 policy 只对下一个 Turn 生效",
             )
         # policy revision/hash 是 boundaries 的 JCS 派生值：同一 revision/hash

@@ -11,7 +11,7 @@ from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
 
-SESSION_ID = "ses_0123456789abcdef0123456789abcdef"
+SESSION_ID = "ses_019bfb6b5f3c72178c7e8393ce89e7a6"
 
 
 def _sessions_root(tmp_path: Path, label: str) -> Path:

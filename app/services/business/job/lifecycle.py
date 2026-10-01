@@ -34,6 +34,15 @@ TERMINAL_JOB_STATUSES = frozenset(
     }
 )
 
+# 失败终态子集：父任务进入这些状态后，其未执行的终端收尾提醒必须被丢弃，
+# 且「失败轮次」判定只认这两个码（取消不算失败）。
+FAILED_JOB_STATUSES = frozenset(
+    {
+        JobStatus.failed,
+        JobStatus.timed_out,
+    }
+)
+
 ACTIVE_JOB_STATUSES = frozenset(
     {
         JobStatus.running,
@@ -41,6 +50,13 @@ ACTIVE_JOB_STATUSES = frozenset(
         JobStatus.waiting_input,
         JobStatus.interrupt_pending,
     }
+)
+
+# 心跳追踪子集：取消进行中的 Job 仍需继续推进 progress/current_step/updated_at，
+# 直到终态写入点接管；仅把 ``cancelling`` 并入活跃集合，不改动 ACTIVE_JOB_STATUSES
+# 本身（后者被 cancel 控制分支使用，语义为「可转为 cancelling 的活跃态」）。
+HEARTBEAT_TRACKED_JOB_STATUSES = frozenset(
+    ACTIVE_JOB_STATUSES | {JobStatus.cancelling}
 )
 
 PAUSABLE_JOB_STATUSES = frozenset(

@@ -39,8 +39,8 @@ def file_tree_settings() -> FileTreeFixture:
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     session_ids = (
-        "ses_00000000400040008000000000000011",
-        "ses_00000000400040008000000000000012",
+        "ses_00000000400070008000000000000011",
+        "ses_00000000400070008000000000000012",
     )
     for session_id in session_ids:
         seed_catalog_session_bundle(sessions_root, session_id, title=session_id)
@@ -148,7 +148,7 @@ def test_default_shortcut_only_applies_to_sessions_created_after_change(
     )
     existing = service.get(second_session_id)
 
-    third_session_id = "ses_00000000400040008000000000000013"
+    third_session_id = "ses_00000000400070008000000000000013"
     seed_catalog_session_bundle(
         file_tree_settings.workspace_root / ".boxteam" / "sessions",
         third_session_id,
@@ -184,7 +184,7 @@ def test_removing_default_does_not_change_existing_session_snapshots(
     )
     service.apply_to_workspace(first_session_id, path=str(shortcut_path))
 
-    inherited_session_id = "ses_00000000400040008000000000000014"
+    inherited_session_id = "ses_00000000400070008000000000000014"
     seed_catalog_session_bundle(
         file_tree_settings.workspace_root / ".boxteam" / "sessions",
         inherited_session_id,

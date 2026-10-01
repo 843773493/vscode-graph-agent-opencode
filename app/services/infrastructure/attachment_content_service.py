@@ -43,6 +43,9 @@ VIDEO_FRAME_COUNT = 6
 VIDEO_FRAME_FPS = 1
 VIDEO_FRAME_WIDTH = 512
 ATTACHMENT_PREVIEW_MAX_EDGE = 512
+# 视频抽帧必须在有界时间内返回：该路径在事件循环线程内同步执行（runner 在
+# 协程中直接调用 UserContentBuilder.build），无界子进程会连同任务取消一起卡死。
+VIDEO_FRAME_TIMEOUT_SECONDS = 30
 
 
 def _session_id_from_file_id(file_id: str) -> str:
@@ -240,12 +243,19 @@ def _extract_video_frame_data_urls(
             "3",
             str(frame_pattern),
         ]
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=VIDEO_FRAME_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(
+                f"视频附件 {attachment_name!r} 抽帧在 "
+                f"{VIDEO_FRAME_TIMEOUT_SECONDS} 秒内未完成，已终止"
+            ) from error
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip() or "无 ffmpeg 输出"
             raise RuntimeError(f"视频附件 {attachment_name!r} 抽帧失败: {detail}")

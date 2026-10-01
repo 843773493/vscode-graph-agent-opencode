@@ -35,7 +35,7 @@ from app.services.infrastructure.rollout_context.storage.resource_activation_sto
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
-SESSION_ID = "ses_4ac0b0f52f364cc7b90e18a6a6bb0c1f"
+SESSION_ID = "ses_019c13b18bcc7288beace1cd3b7c4c84"
 
 
 def _binding(

@@ -8,12 +8,21 @@
 
 # 可修改内容
 
-- 可以维护 `workspace_config_source.py` 中 `WorkspaceConfigSourceMixin` 的方法族
-  （`get_source_layer`、`sync_config_source`、`update_source_generation`、
-  `_append_config_source_journal_in_connection`、`append_config_source_journal`、
-  `list_config_source_journal`、`source_generation_high_water_mark`、
-  `record_config_source_fanout`、`prepare_config_source_fanout`、
-  `config_source_fanout_summary`、`list_config_source_fanout`）。
+- 可以维护 layer 族文件 `workspace_config_source_layer.py` 中
+  `WorkspaceConfigSourceLayerMixin` 的方法族（`get_source_layer`、
+  `sync_config_source`、`update_source_generation`）。
+- 可以维护 journal 族文件 `workspace_config_source_journal.py` 中
+  `WorkspaceConfigSourceJournalMixin` 的方法族与其行投影常量
+  （`_journal_from_row`、`_append_config_source_journal_in_connection`、
+  `append_config_source_journal`、`list_config_source_journal`、
+  `source_generation_high_water_mark`）。
+- 可以维护 fan-out 族文件 `workspace_config_source_fanout.py` 中
+  `WorkspaceConfigSourceFanoutMixin` 的方法族（`record_config_source_fanout`、
+  `prepare_config_source_fanout`、`config_source_fanout_summary`、
+  `list_config_source_fanout`）。
+- 可以维护 `workspace_config_source.py` 中仅组合三族的
+  `WorkspaceConfigSourceMixin`（继承 `WorkspaceConfigSourceLayerMixin`、
+  `WorkspaceConfigSourceJournalMixin`、`WorkspaceConfigSourceFanoutMixin`）。
 - 可以维护本族的 `config_source_journal` 行投影常量、行工厂、A-A 去重语义、
   generation CAS 与 fan-out 三态汇总。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/services/infrastructure/` 下。

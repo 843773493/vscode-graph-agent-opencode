@@ -23,11 +23,34 @@ class InterruptibleState:
         """按启动顺序返回仍在执行的工具名。"""
         return tuple(self.active_tools_by_run_id.values())
 
+    def is_default(self) -> bool:
+        """是否与 ``SessionInterruptState.get`` 对无记录会话返回的默认态等价。
+
+        全默认态与「无该 session」语义完全相同，因此不必占用进程级表的键。
+        """
+        return (
+            self.phase is None
+            and self.tool_name is None
+            and self.current_text == ""
+            and not self.user_interrupt_reminder_injected
+            and self.cancellation_reason is None
+            and self.interrupt_request_id is None
+            and not self.active_tools_by_run_id
+        )
+
 
 class SessionInterruptState:
     """按 session_id 维护当前可打断阶段，供跨 task 查询。"""
 
     _states: Dict[str, InterruptibleState] = {}
+
+    @classmethod
+    def _store(cls, session_id: str, state: InterruptibleState) -> None:
+        """写入或回收：全默认态等价于无记录，直接释放键避免长驻无界增长。"""
+        if state.is_default():
+            cls._states.pop(session_id, None)
+        else:
+            cls._states[session_id] = state
 
     @classmethod
     def get(cls, session_id: str) -> InterruptibleState:
@@ -67,7 +90,7 @@ class SessionInterruptState:
             state.cancellation_reason = cancellation_reason
         if interrupt_request_id is not _UNSET:
             state.interrupt_request_id = interrupt_request_id
-        cls._states[session_id] = state
+        cls._store(session_id, state)
 
     @classmethod
     def start_tool(cls, session_id: str, *, run_id: str, tool_name: str) -> InterruptibleState:
@@ -87,7 +110,7 @@ class SessionInterruptState:
         state.active_tools_by_run_id[run_id] = tool_name
         state.phase = "tool"
         state.tool_name = cls._summarize_active_tools(state)
-        cls._states[session_id] = state
+        cls._store(session_id, state)
         return state
 
     @classmethod
@@ -102,7 +125,7 @@ class SessionInterruptState:
         del state.active_tools_by_run_id[run_id]
         state.tool_name = cls._summarize_active_tools(state)
         state.phase = "tool" if state.active_tools_by_run_id else None
-        cls._states[session_id] = state
+        cls._store(session_id, state)
         return state
 
     @staticmethod

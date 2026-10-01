@@ -64,9 +64,9 @@ from tests.unit.services.infrastructure.test_context_source_reactor import (
     _write_skill,
 )
 
-MAIN_SESSION_ID = "ses_1cb2d44643ae45818a69dc2c654c06c7"
-CHILD_SESSION_ID = "ses_29399ea68ac24d0d8dfbb63d746c985e"
-ALT_SESSION_ID = "ses_47a1c2e9b0d34f5a8c6e7d2b1f0a9e83"
+MAIN_SESSION_ID = "ses_019c3dbcb2f6749b85bed7b51dfe889d"
+CHILD_SESSION_ID = "ses_019c52c6b01c7733850a1aaf64ac579e"
+ALT_SESSION_ID = "ses_019c58bdb8c670748915904c8d96a75f"
 
 
 TOOL_KEY_TOKEN = "sha256:jcs:v1:" + "a" * 64
@@ -75,7 +75,9 @@ TOOL_KEY_TOKEN = "sha256:jcs:v1:" + "a" * 64
 ADVERSARIAL_CONTROL_KEYS = {
     "source_ordinal": 999,
     "replaceable_source": True,
+    "replacement_policy": "replaceable",
     "selection_only": True,
+    "selection_role": "backing_only",
     "tracking_state": "untracked",
     "tracking_status": "untracked",
     "role": "delta",
@@ -141,7 +143,8 @@ def _contribution(
     source_ordinal: int | None = None,
     contribution_kind: str = "prompt",
     source_kind: str = "workspace_instructions",
-    replaceable_source: bool = False,
+    selection_role: str = "direct",
+    replacement_policy: str = "immutable",
 ) -> ContextContribution:
     return ContextContribution(
         contribution_id=contribution_id,
@@ -153,7 +156,8 @@ def _contribution(
         contribution_kind=contribution_kind,
         body=body,
         source_ordinal=source_ordinal,
-        replaceable_source=replaceable_source,
+        selection_role=selection_role,
+        replacement_policy=replacement_policy,
     )
 
 
@@ -228,18 +232,19 @@ class TestAdversarialControlKeys:
     def test_selection_only_flag_has_no_role_power(
         self, saver: RolloutCheckpointSaver,
     ) -> None:
-        # typed contribution_kind 说它是 full selection：metadata 的
-        # selection_only 键不能把它降级为 manifest backing。
+        # typed selection_role=direct 说它可独立候选：metadata 的 selection_only
+        # 键不能把它降级为 manifest backing。
         full_with_flag = _contribution(
             "full-with-flag",
             metadata={"selection_only": True},
         )
         _register(saver, MAIN_SESSION_ID, full_with_flag)
-        # typed contribution_kind 是 overlay backing：没有 selection_only
-        # 键也必须跳过，不能凭缺 key 变成第二个 request-only ref。
+        # typed selection_role=backing_only 是 manifest backing：即使没有
+        # selection_only 键也必须跳过，不能凭缺 key 变成第二个 request-only ref。
         overlay_without_flag = _contribution(
             "overlay:ov-1:base",
             contribution_kind="overlay_base",
+            selection_role="backing_only",
             metadata={"overlay_ref": "ov-1"},
         )
         _register(saver, MAIN_SESSION_ID, overlay_without_flag)
@@ -478,7 +483,7 @@ class TestRegistryStabilityAcrossRestart:
             request_only=True,
             # replaceable slot 只能由 typed core 字段声明；metadata 中的
             # 同名历史 key 不再拥有解释权（旧路径已物理下线）。
-            replaceable_source=True,
+            replacement_policy="replaceable",
             contribution_kind="prompt",
             body="v1",
             source_ordinal=0,
@@ -499,9 +504,9 @@ class TestRegistryStabilityAcrossRestart:
     def test_typed_replaceable_source_enables_in_place_revision_update(
         self, saver: RolloutCheckpointSaver,
     ) -> None:
-        # (a) typed replaceable_source=True 时替换链路生效：同一 owner slot
-        # 原位更新 revision，不产生第二行、不漂移 registry slot。
-        original = _contribution("typed-replaceable", replaceable_source=True)
+        # (a) typed replacement_policy=replaceable 时替换链路生效：同一 owner
+        # slot 原位更新 revision，不产生第二行、不漂移 registry slot。
+        original = _contribution("typed-replaceable", replacement_policy="replaceable")
         first = _register(saver, MAIN_SESSION_ID, original)
         updated = replace(
             original,
@@ -661,6 +666,135 @@ class TestComposerThreadIdentity:
 
 
 class TestSealedTypedFieldConsumption:
+    def test_explicit_tracked_rebind_freezes_old_item_bytes(
+        self, saver: RolloutCheckpointSaver, sessions_root: Path,
+    ) -> None:
+        """6.2-B：显式 tracked rebind 在同一 owner 事务冻结旧 registration、
+        追加当前 effective entry 的完整 activation；旧 source item 逐字节不变。"""
+        owner = ContextSourceOwnerKey(
+            session_id=MAIN_SESSION_ID, thread_id=MAIN_THREAD_ID,
+        )
+        manager = ContextSourceManager(
+            owner=owner,
+            control_state_port=saver,
+            mutation_intent_port=saver,
+        )
+        manager.register(
+            ContextSourceDescriptor(
+                source_id="skill:gateway:demo",
+                source_kind="skill",
+                name="demo",
+                description="Gateway 全局 Skill",
+                internal_locator="/.boxteam/skills/demo/SKILL.md",
+                resource_uri="boxteam://gateway/local/resources/skills/demo/SKILL.md",
+            )
+        )
+
+        def _install(
+            entry_layer: str, body: str, display_uri: str,
+        ) -> SkillCatalogBinding:
+            binding = SkillCatalogBinding(
+                name="demo",
+                resource_id=f"skill-entry:{entry_layer}:demo:activation",
+                entry_identity=f"skill-entry:{entry_layer}:demo",
+                display_uri=display_uri,
+                activation_revision=_revision(body),
+                body=body,
+            )
+            manager.install_skill_activation_snapshot(
+                SkillCatalogActivationSnapshot(
+                    catalog_revision=f"sha256:catalog-{entry_layer}",
+                    entries={"demo": binding},
+                )
+            )
+            return binding
+
+        _install(
+            "gateway",
+            "gateway body\n",
+            "boxteam://gateway/local/resources/skills/demo/SKILL.md",
+        )
+        first = manager.load_skill("demo", mode="tracked")
+        assert first.status == "loaded"
+        batch = manager.prepare_pending()
+        assert batch is not None
+        manager.commit_model_call_pending(batch)
+
+        with saver._storage._connect(MAIN_SESSION_ID, "") as probe:
+            database_path = probe.execute("PRAGMA database_list").fetchone()[2]
+        conn = sqlite3.connect(database_path)
+        try:
+            old_rows = conn.execute(
+                "SELECT item_id, content_hash, payload_length FROM item_catalog "
+                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
+            ).fetchall()
+            old_projection = conn.execute(
+                "SELECT item_id, content_hash, content FROM item_projections "
+                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
+            ).fetchall()
+        finally:
+            conn.close()
+        assert len(old_rows) == 1
+        # 真断言：旧 item 的正文与 hash 逐字节冻结。
+        assert old_projection == [
+            (old_rows[0][0], old_rows[0][1], "gateway body\n")
+        ]
+
+        # 同名 workspace 高优先级 effective entry 出现（不同 source identity）。
+        manager.register(
+            ContextSourceDescriptor(
+                source_id="skill:workspace:demo",
+                source_kind="skill",
+                name="demo",
+                description="Workspace Skill",
+                internal_locator="/ws/.boxteam/skills/demo/SKILL.md",
+                resource_uri="boxteam://workspace/ws/resources/skills/demo/SKILL.md",
+            )
+        )
+        new_binding = _install(
+            "workspace",
+            "workspace body\n",
+            "boxteam://workspace/ws/resources/skills/demo/SKILL.md",
+        )
+
+        rebound = manager.load_skill("demo", mode="tracked")
+        assert rebound.status == "rebound"
+        assert rebound.source_rebound is True
+        assert rebound.tracked is True
+        assert rebound.display_uri == new_binding.display_uri
+        rebound_batch = manager.prepare_pending()
+        assert rebound_batch is not None
+        manager.commit_model_call_pending(rebound_batch)
+
+        conn = sqlite3.connect(database_path)
+        try:
+            after_old_rows = conn.execute(
+                "SELECT item_id, content_hash, payload_length FROM item_catalog "
+                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
+            ).fetchall()
+            after_old_projection = conn.execute(
+                "SELECT item_id, content_hash, content FROM item_projections "
+                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
+            ).fetchall()
+            new_rows = conn.execute(
+                "SELECT item_id, content_hash, payload_length FROM item_catalog "
+                "WHERE item_id LIKE 'item-context-source:skill:workspace:demo:%'"
+            ).fetchall()
+        finally:
+            conn.close()
+        # 旧 item 逐字节不变，且未被删除。
+        assert after_old_rows == old_rows
+        assert after_old_projection == old_projection
+        # 新 effective entry 追加完整 activation item。
+        assert len(new_rows) == 1
+        # 旧 registration 冻结为 untracked；新 registration tracked。
+        states = {
+            item.source_id: item
+            for item in saver.load_context_source_control_states(owner)
+        }
+        assert states["skill:gateway:demo"].tracking_status == "untracked"
+        assert states["skill:workspace:demo"].tracking_status == "tracked"
+
     def test_rewind_reconciles_only_from_frozen_control_state(
         self, saver: RolloutCheckpointSaver,
     ) -> None:
@@ -740,7 +874,12 @@ class TestSealedTypedFieldConsumption:
             MAIN_SESSION_ID,
             _contribution(
                 "typed-1",
-                metadata={"source_ordinal": 123, "selection_only": True},
+                metadata={
+                    "source_ordinal": 123,
+                    "selection_only": True,
+                    "selection_role": "backing_only",
+                    "replacement_policy": "replaceable",
+                },
             ),
         )
         before = saver.compose_committed_context_plan(
@@ -752,13 +891,16 @@ class TestSealedTypedFieldConsumption:
         after = restarted.compose_committed_context_plan(
             MAIN_SESSION_ID, plan_id="plan-6",
         )
-        # 恢复只消费 registry 封存 typed 字段：metadata 中的旧 ordinal
-        # 键与对抗 selection_only 键均为 inert，前后 hash 一致。
+        # 恢复只消费 registry 封存 typed 字段：metadata 中的旧 ordinal 键与
+        # 对抗 selection_only/selection_role/replacement_policy 键均为 inert，
+        # 前后 hash 一致。
         assert context_plan_hash(after) == before_hash
         (row,) = _rows(restarted, MAIN_SESSION_ID)
         contribution = after.contributions[0]
         assert contribution.source_ordinal == row["source_ordinal"]
         assert contribution.source_ordinal != 123
+        assert contribution.selection_role == "direct"
+        assert contribution.replacement_policy == "immutable"
 
     @pytest.mark.asyncio
     async def test_out_of_order_watch_consumes_authoritative_revision(

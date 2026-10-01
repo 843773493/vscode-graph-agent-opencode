@@ -46,8 +46,8 @@ from app.services.infrastructure.node_debug.session.session_store import (
 )
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
-_SESSION_ID = "ses_00000000400040008000000000000001"
-_CHILD_THREAD_ID = "ses_00000000400040008000000000000002"
+_SESSION_ID = "ses_00000000400070008000000000000001"
+_CHILD_THREAD_ID = "ses_00000000400070008000000000000002"
 
 
 def _create_session(

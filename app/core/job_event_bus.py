@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -77,6 +78,11 @@ logger = logging.getLogger(__name__)
 # 临时订阅队列上限与短期历史长度保持既有行为不变。
 JOB_EVENT_QUEUE_SIZE: Final[int] = 100
 JOB_EVENT_HISTORY_SIZE: Final[int] = 1000
+
+# per-job publish 锁按 job_id 哈希分片到固定数量的锁对象：锁数量有界（不随
+# 历史 Job 总数增长），且同一 job_id 恒映射到同一把锁，串行语义不变。用
+# crc32 而非 hash() 以保证跨进程确定，不引入哈希随机化。
+JOB_PUBLISH_LOCK_SHARDS: Final[int] = 64
 
 
 class EventSubscription(asyncio.Queue[Event]):
@@ -264,7 +270,14 @@ class JobEventBus:
         self._event_service = event_service or EventChannelService()
         self._durable_listeners: set[DurableEventListener] = set()
         self._lock = asyncio.Lock()
-        self._job_publish_locks: dict[str, asyncio.Lock] = {}
+        self._job_publish_locks: tuple[asyncio.Lock, ...] = tuple(
+            asyncio.Lock() for _ in range(JOB_PUBLISH_LOCK_SHARDS)
+        )
+
+    def _publish_lock_for(self, job_id: str) -> asyncio.Lock:
+        """分片锁池：同一 job_id 恒得同一把锁（保住串行），数量恒为分片数。"""
+        shard = zlib.crc32(job_id.encode("utf-8")) % len(self._job_publish_locks)
+        return self._job_publish_locks[shard]
 
     @property
     def event_channel_service(self) -> EventChannelService:
@@ -302,8 +315,7 @@ class JobEventBus:
         # 根据 event_type 构建具体的事件对象
         event = self._build_event(job_id, event_type, payload, step_id, agent_id)
         channel = self._channel_for(job_id)
-        async with self._lock:
-            publish_lock = self._job_publish_locks.setdefault(job_id, asyncio.Lock())
+        publish_lock = self._publish_lock_for(job_id)
 
         async with publish_lock:
             # 持久化监听器属于发布事务的一部分。写入失败时 publish 直接失败，

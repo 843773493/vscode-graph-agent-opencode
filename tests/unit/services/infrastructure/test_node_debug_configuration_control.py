@@ -32,8 +32,8 @@ from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )
 
-_SESSION_ID = "ses_00000000000000000000000000000011"
-_OTHER_SESSION_ID = "ses_00000000000000000000000000000012"
+_SESSION_ID = "ses_019babb38ba07778852d854aa9b9de40"
+_OTHER_SESSION_ID = "ses_019ba6cd640e770e8ef07878aef47124"
 
 
 class _SessionCatalogResolverStub:

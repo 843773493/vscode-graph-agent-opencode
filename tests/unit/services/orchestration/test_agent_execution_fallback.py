@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.core.session_interrupt_state import SessionInterruptState
@@ -208,6 +208,9 @@ def _make_service(deps):
         tool_selection_store=deps["tool_selection_store"],
         message_stream_store=deps["message_stream_store"],
         workspace_root=deps["workspace_root"],
+        control_inbox_state_path=lambda _session_id, turn_stream_id: (
+            deps["workspace_root"] / "control" / f"{turn_stream_id}.json"
+        ),
     )
 
 
@@ -1122,25 +1125,6 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
     ]
     assert "ToolMessage" not in tool_end_payloads[0]["result"]
     assert "content=" not in tool_end_payloads[0]["result"]
-
-
-def test_extract_final_text_uses_visible_text_from_standard_blocks(mock_dependencies):
-    """从最终消息提取正文时不能把 reasoning block 拼进回复。"""
-    deps = mock_dependencies
-    service = _make_service(deps)
-    result = {
-        "messages": [
-            HumanMessage(content="只回复 OK"),
-            AIMessage(
-                content=[
-                    {"type": "reasoning", "reasoning": "用户只要 OK。"},
-                    {"type": "text", "text": "OK"},
-                ],
-            ),
-        ],
-    }
-
-    assert service._extract_final_text(result) == "OK"
 
 
 @pytest.mark.asyncio

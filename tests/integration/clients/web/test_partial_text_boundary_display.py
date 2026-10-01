@@ -39,7 +39,7 @@ from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
 from tests.support.workspaces import prepare_default_test_workspace
 
-PARTIAL_TEXT_SESSION_ID = "ses_b1a2c3d4e5f6478899aabbccddeeff04"
+PARTIAL_TEXT_SESSION_ID = "ses_019c5123cafb789e8fdf8704f6464f74"
 PARTIAL_TEXT_TURN_ID = "boundary-turn-0004"
 PARTIAL_TEXT_ITEM_ID = "item-boundary-assistant-partial-text-0004"
 PARTIAL_TEXT_MESSAGE_ID = "boundary-assistant-partial-text-0004"

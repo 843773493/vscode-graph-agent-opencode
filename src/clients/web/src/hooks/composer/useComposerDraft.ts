@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   composerDraftScopeKey,
+  composerDraftExceedsLimit,
   readComposerDraft,
   writeComposerDraft,
 } from "../../state/composerDrafts/storage";
@@ -71,7 +72,11 @@ export function useComposerDraft(
             : "";
       const next = typeof action === "function" ? action(currentValue) : action;
       if (persistentScopeKeyAtCall) {
-        writeComposerDraft(persistentScopeKeyAtCall, next);
+        // 超长草稿本身不是错误：界面必须照常持有并显示用户输入，只是不写盘，
+        // 否则粘贴一大段文本会把这个 setState 上抛的异常炸成整页渲染失败。
+        if (!composerDraftExceedsLimit(next)) {
+          writeComposerDraft(persistentScopeKeyAtCall, next);
+        }
       } else if (scopeKeyAtCall) {
         if (next) {
           ephemeralDraftsByScope.set(scopeKeyAtCall, next);

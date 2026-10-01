@@ -13,6 +13,7 @@ dataclass 定义做类级白名单校验，值按形状做值级校验；塞入�
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, fields
 from typing import Final
 
@@ -127,19 +128,66 @@ def _validate_optional_id(value: str | None, *, field_name: str) -> None:
         raise ValueError(f"{field_name} 包含非法控制字符: {value!r}")
 
 
-def _validate_field_whitelist(
-    event_type: type,
-    allowed: frozenset[str],
-    *,
-    label: str,
-) -> None:
-    """类级字段白名单：新增/改名/夹带字段都会显式失败，而不是恒真通过。"""
-    declared = {field.name for field in fields(event_type)}
-    unexpected = declared - allowed
-    if unexpected:
-        raise RuntimeError(
-            f"{label} 声明了未允许的字段: " + ",".join(sorted(unexpected))
-        )
+_NO_ENUM: Final[frozenset[str]] = frozenset()
+
+
+# 必填 revision 必须是完整 sha256 摘要；``with_type_name`` 只在构造校验路径附带值
+# 类型名，与历史消息逐字一致（McpCatalogEvent 断言路径不带）。
+def _required_revision_digest(*, with_type_name: bool) -> Callable[..., None]:
+    def validate(value: object, *, field_name: str) -> None:
+        if not isinstance(value, str) or not _SHA256_DIGEST_PATTERN.fullmatch(value):
+            suffix = f": {type(value).__name__}" if with_type_name else ""
+            raise RuntimeError(
+                f"{field_name} 必须是 sha256: 摘要（sha256: + 64 位小写 hex）{suffix}"
+            )
+
+    return validate
+
+
+_REVISION_DIGEST_WITH_TYPE = _required_revision_digest(with_type_name=True)
+_REVISION_DIGEST_PLAIN = _required_revision_digest(with_type_name=False)
+
+
+_EventCheck = tuple[Callable[..., None] | None, str, frozenset[str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _EventSchema:
+    """一个 typed channel 事件的类级白名单与有序值级校验（唯一定义处）。
+
+    ``checks``/``assert_checks`` 每项是 ``(validator, attribute, allowed)``：
+    validator 为 None 时按 ``allowed`` 闭集校验，否则调用
+    ``validator(value, field_name=label)``，字段名由 ``event_name`` 与 attribute 拼出。
+    ``assert_checks`` 仅在轻量断言路径消息与构造路径历史性不同的事件上覆盖。
+    """
+
+    event_name: str
+    allowed_fields: frozenset[str]
+    checks: tuple[_EventCheck, ...]
+    assert_checks: tuple[_EventCheck, ...] | None = None
+
+    def values(self, event: object) -> None:
+        """按序执行值级校验；构造（``__post_init__``）使用。"""
+        self._run(event, self.checks)
+
+    def full(self, event: object) -> None:
+        """类级字段白名单 + 值级校验；轻量断言使用。"""
+        unexpected = {field.name for field in fields(type(event))} - self.allowed_fields
+        if unexpected:
+            raise RuntimeError(
+                f"{self.event_name} 声明了未允许的字段: " + ",".join(sorted(unexpected))
+            )
+        self._run(event, self.assert_checks or self.checks)
+
+    def _run(self, event: object, checks: tuple[_EventCheck, ...]) -> None:
+        for validate, attribute, allowed in checks:
+            label = f"{self.event_name}.{attribute}"
+            value = getattr(event, attribute)
+            if validate is None:
+                if value not in allowed:
+                    raise ValueError(f"{label} 必须是 {sorted(allowed)} 之一: {value!r}")
+            else:
+                validate(value, field_name=label)
 
 
 # --------------------------------------------------------------------------
@@ -148,6 +196,18 @@ def _validate_field_whitelist(
 
 _ALLOWED_RESOURCE_STATE_FIELDS: Final[frozenset[str]] = frozenset(
     {"owner_domain", "resource_id", "state", "kind", "revision"}
+)
+
+_RESOURCE_STATE_SCHEMA: Final[_EventSchema] = _EventSchema(
+    event_name="ResourceStateEvent",
+    allowed_fields=_ALLOWED_RESOURCE_STATE_FIELDS,
+    checks=(
+        (_validate_identity, "owner_domain", _NO_ENUM),
+        (_validate_identity, "resource_id", _NO_ENUM),
+        (None, "state", RESOURCE_STATE_STATES),
+        (None, "kind", RESOURCE_STATE_KINDS),
+        (_validate_revision, "revision", _NO_ENUM),
+    ),
 )
 
 
@@ -167,41 +227,12 @@ class ResourceStateEvent:
     revision: str | None = None
 
     def __post_init__(self) -> None:
-        _validate_identity(self.owner_domain, field_name="ResourceStateEvent.owner_domain")
-        _validate_identity(self.resource_id, field_name="ResourceStateEvent.resource_id")
-        if self.state not in RESOURCE_STATE_STATES:
-            raise ValueError(
-                f"ResourceStateEvent.state 必须是 {sorted(RESOURCE_STATE_STATES)} 之一: "
-                f"{self.state!r}"
-            )
-        if self.kind not in RESOURCE_STATE_KINDS:
-            raise ValueError(
-                f"ResourceStateEvent.kind 必须是 {sorted(RESOURCE_STATE_KINDS)} 之一: "
-                f"{self.kind!r}"
-            )
-        _validate_revision(self.revision, field_name="ResourceStateEvent.revision")
+        _RESOURCE_STATE_SCHEMA.values(self)
 
 
 def assert_resource_state_event_is_lightweight(event: ResourceStateEvent) -> None:
     """类级 + 值级校验：resource.state 通知不得夹带正文/credential/宿主机路径。"""
-    _validate_field_whitelist(
-        type(event),
-        _ALLOWED_RESOURCE_STATE_FIELDS,
-        label="ResourceStateEvent",
-    )
-    _validate_identity(event.owner_domain, field_name="ResourceStateEvent.owner_domain")
-    _validate_identity(event.resource_id, field_name="ResourceStateEvent.resource_id")
-    if event.state not in RESOURCE_STATE_STATES:
-        raise ValueError(
-            f"ResourceStateEvent.state 必须是 {sorted(RESOURCE_STATE_STATES)} 之一: "
-            f"{event.state!r}"
-        )
-    if event.kind not in RESOURCE_STATE_KINDS:
-        raise ValueError(
-            f"ResourceStateEvent.kind 必须是 {sorted(RESOURCE_STATE_KINDS)} 之一: "
-            f"{event.kind!r}"
-        )
-    _validate_revision(event.revision, field_name="ResourceStateEvent.revision")
+    _RESOURCE_STATE_SCHEMA.full(event)
 
 
 class ResourceStateEventPublisher:
@@ -257,6 +288,17 @@ _ALLOWED_CONFIG_LIFECYCLE_FIELDS: Final[frozenset[str]] = frozenset(
     {"domain", "kind", "generation", "revision"}
 )
 
+_CONFIG_LIFECYCLE_SCHEMA: Final[_EventSchema] = _EventSchema(
+    event_name="ConfigLifecycleEvent",
+    allowed_fields=_ALLOWED_CONFIG_LIFECYCLE_FIELDS,
+    checks=(
+        (_validate_identity, "domain", _NO_ENUM),
+        (None, "kind", CONFIG_LIFECYCLE_KINDS),
+        (_validate_optional_id, "generation", _NO_ENUM),
+        (_validate_revision, "revision", _NO_ENUM),
+    ),
+)
+
 
 def config_lifecycle_channel_name(domain: str) -> str:
     """构造 ``config.lifecycle/{domain}`` channel 名。"""
@@ -273,31 +315,12 @@ class ConfigLifecycleEvent:
     revision: str | None = None
 
     def __post_init__(self) -> None:
-        _validate_identity(self.domain, field_name="ConfigLifecycleEvent.domain")
-        if self.kind not in CONFIG_LIFECYCLE_KINDS:
-            raise ValueError(
-                f"ConfigLifecycleEvent.kind 必须是 {sorted(CONFIG_LIFECYCLE_KINDS)} 之一: "
-                f"{self.kind!r}"
-            )
-        _validate_optional_id(self.generation, field_name="ConfigLifecycleEvent.generation")
-        _validate_revision(self.revision, field_name="ConfigLifecycleEvent.revision")
+        _CONFIG_LIFECYCLE_SCHEMA.values(self)
 
 
 def assert_config_lifecycle_event_is_lightweight(event: ConfigLifecycleEvent) -> None:
     """类级 + 值级校验：config.lifecycle 通知不得夹带配置正文或路径。"""
-    _validate_field_whitelist(
-        type(event),
-        _ALLOWED_CONFIG_LIFECYCLE_FIELDS,
-        label="ConfigLifecycleEvent",
-    )
-    _validate_identity(event.domain, field_name="ConfigLifecycleEvent.domain")
-    if event.kind not in CONFIG_LIFECYCLE_KINDS:
-        raise ValueError(
-            f"ConfigLifecycleEvent.kind 必须是 {sorted(CONFIG_LIFECYCLE_KINDS)} 之一: "
-            f"{event.kind!r}"
-        )
-    _validate_optional_id(event.generation, field_name="ConfigLifecycleEvent.generation")
-    _validate_revision(event.revision, field_name="ConfigLifecycleEvent.revision")
+    _CONFIG_LIFECYCLE_SCHEMA.full(event)
 
 
 # --------------------------------------------------------------------------
@@ -313,6 +336,19 @@ _ALLOWED_CONTEXT_SOURCE_FIELDS: Final[frozenset[str]] = frozenset(
         "session_id",
         "thread_id",
     }
+)
+
+_CONTEXT_SOURCE_SCHEMA: Final[_EventSchema] = _EventSchema(
+    event_name="ContextSourceEvent",
+    allowed_fields=_ALLOWED_CONTEXT_SOURCE_FIELDS,
+    checks=(
+        (_validate_identity, "source_id", _NO_ENUM),
+        (_validate_identity, "source_kind", _NO_ENUM),
+        (None, "kind", CONTEXT_SOURCE_KINDS),
+        (_validate_revision, "revision", _NO_ENUM),
+        (_validate_optional_id, "session_id", _NO_ENUM),
+        (_validate_optional_id, "thread_id", _NO_ENUM),
+    ),
 )
 
 
@@ -342,39 +378,12 @@ class ContextSourceEvent:
     thread_id: str | None = None
 
     def __post_init__(self) -> None:
-        _validate_identity(self.source_id, field_name="ContextSourceEvent.source_id")
-        _validate_identity(
-            self.source_kind, field_name="ContextSourceEvent.source_kind"
-        )
-        if self.kind not in CONTEXT_SOURCE_KINDS:
-            raise ValueError(
-                f"ContextSourceEvent.kind 必须是 {sorted(CONTEXT_SOURCE_KINDS)} 之一: "
-                f"{self.kind!r}"
-            )
-        _validate_revision(self.revision, field_name="ContextSourceEvent.revision")
-        _validate_optional_id(self.session_id, field_name="ContextSourceEvent.session_id")
-        _validate_optional_id(self.thread_id, field_name="ContextSourceEvent.thread_id")
+        _CONTEXT_SOURCE_SCHEMA.values(self)
 
 
 def assert_context_source_event_is_lightweight(event: ContextSourceEvent) -> None:
     """类级 + 值级校验：context.source 通知不得夹带正文/credential/宿主机路径。"""
-    _validate_field_whitelist(
-        type(event),
-        _ALLOWED_CONTEXT_SOURCE_FIELDS,
-        label="ContextSourceEvent",
-    )
-    _validate_identity(event.source_id, field_name="ContextSourceEvent.source_id")
-    _validate_identity(
-        event.source_kind, field_name="ContextSourceEvent.source_kind"
-    )
-    if event.kind not in CONTEXT_SOURCE_KINDS:
-        raise ValueError(
-            f"ContextSourceEvent.kind 必须是 {sorted(CONTEXT_SOURCE_KINDS)} 之一: "
-            f"{event.kind!r}"
-        )
-    _validate_revision(event.revision, field_name="ContextSourceEvent.revision")
-    _validate_optional_id(event.session_id, field_name="ContextSourceEvent.session_id")
-    _validate_optional_id(event.thread_id, field_name="ContextSourceEvent.thread_id")
+    _CONTEXT_SOURCE_SCHEMA.full(event)
 
 
 class ContextSourceEventPublisher:
@@ -435,6 +444,26 @@ _ALLOWED_MCP_CATALOG_FIELDS: Final[frozenset[str]] = frozenset(
     {"kind", "revision", "server_id", "previous_revision"}
 )
 
+# 目录 revision 必填且必须是完整 sha256 摘要（与其它 channel 事件合同一致）。
+# 该事件的构造函数在必填 revision 非法时额外附带值类型名，轻量断言则不带；
+# assert_checks 保留这一历史消息差异。
+_MCP_CATALOG_SCHEMA: Final[_EventSchema] = _EventSchema(
+    event_name="McpCatalogEvent",
+    allowed_fields=_ALLOWED_MCP_CATALOG_FIELDS,
+    checks=(
+        (None, "kind", MCP_CATALOG_KINDS),
+        (_REVISION_DIGEST_WITH_TYPE, "revision", _NO_ENUM),
+        (_validate_optional_id, "server_id", _NO_ENUM),
+        (_validate_revision, "previous_revision", _NO_ENUM),
+    ),
+    assert_checks=(
+        (None, "kind", MCP_CATALOG_KINDS),
+        (_REVISION_DIGEST_PLAIN, "revision", _NO_ENUM),
+        (_validate_optional_id, "server_id", _NO_ENUM),
+        (_validate_revision, "previous_revision", _NO_ENUM),
+    ),
+)
+
 
 def mcp_catalog_channel_name() -> str:
     """构造 ``mcp.catalog/workspace`` channel 名；目录是工作区后端进程级的。"""
@@ -458,49 +487,12 @@ class McpCatalogEvent:
     previous_revision: str | None = None
 
     def __post_init__(self) -> None:
-        if self.kind not in MCP_CATALOG_KINDS:
-            raise ValueError(
-                f"McpCatalogEvent.kind 必须是 {sorted(MCP_CATALOG_KINDS)} 之一: "
-                f"{self.kind!r}"
-            )
-        # 目录 revision 必填且必须是完整 sha256 摘要（与其它 channel 事件合同一致）。
-        if not isinstance(self.revision, str) or not _SHA256_DIGEST_PATTERN.fullmatch(
-            self.revision
-        ):
-            raise RuntimeError(
-                "McpCatalogEvent.revision 必须是 sha256: 摘要（sha256: + 64 位小写 hex）: "
-                f"{type(self.revision).__name__}"
-            )
-        _validate_optional_id(self.server_id, field_name="McpCatalogEvent.server_id")
-        _validate_revision(
-            self.previous_revision,
-            field_name="McpCatalogEvent.previous_revision",
-        )
+        _MCP_CATALOG_SCHEMA.values(self)
 
 
 def assert_mcp_catalog_event_is_lightweight(event: McpCatalogEvent) -> None:
     """类级 + 值级校验：mcp.catalog 通知不得夹带 schema 正文/credential/路径。"""
-    _validate_field_whitelist(
-        type(event),
-        _ALLOWED_MCP_CATALOG_FIELDS,
-        label="McpCatalogEvent",
-    )
-    if event.kind not in MCP_CATALOG_KINDS:
-        raise ValueError(
-            f"McpCatalogEvent.kind 必须是 {sorted(MCP_CATALOG_KINDS)} 之一: "
-            f"{event.kind!r}"
-        )
-    if not isinstance(event.revision, str) or not _SHA256_DIGEST_PATTERN.fullmatch(
-        event.revision
-    ):
-        raise RuntimeError(
-            "McpCatalogEvent.revision 必须是 sha256: 摘要（sha256: + 64 位小写 hex）"
-        )
-    _validate_optional_id(event.server_id, field_name="McpCatalogEvent.server_id")
-    _validate_revision(
-        event.previous_revision,
-        field_name="McpCatalogEvent.previous_revision",
-    )
+    _MCP_CATALOG_SCHEMA.full(event)
 
 
 class McpCatalogEventPublisher:

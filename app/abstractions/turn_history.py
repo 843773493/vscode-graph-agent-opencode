@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -39,53 +38,6 @@ class TurnMigrationSnapshot(BaseModel):
     message_trace_size: int = Field(ge=0)
     event_cursor: str | None = None
     projected_event_offset: int | None = Field(default=None, ge=1)
-
-
-@runtime_checkable
-class TurnHistoryEventSourceProtocol(Protocol):
-    def ensure_turn_index(self, session_id: str) -> None: ...
-
-    def read_turn_bootstrap_batch(
-        self,
-        session_id: str,
-        *,
-        max_events: int,
-        max_bytes: int,
-    ) -> TurnBootstrapBatch: ...
-
-    def read_turn_recovery_batch(
-        self,
-        session_id: str,
-        *,
-        after_event_id: str | None,
-        max_events: int,
-        max_bytes: int,
-    ) -> TurnRecoveryBatch: ...
-
-    def read_message_events(
-        self,
-        session_id: str,
-        tail_limit: int | None = None,
-    ) -> list[Event]: ...
-
-    def read_events(
-        self,
-        session_id: str,
-        after_event_id: str | None = None,
-        tail_limit: int | None = None,
-    ) -> list[Event]: ...
-
-    def capture_turn_migration_snapshot(
-        self,
-        session_id: str,
-    ) -> TurnMigrationSnapshot: ...
-
-    def iter_message_events(
-        self,
-        session_id: str,
-        *,
-        before_offset: int | None = None,
-    ) -> Iterator[Event]: ...
 
 
 @runtime_checkable

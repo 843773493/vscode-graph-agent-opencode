@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import zlib
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
@@ -16,6 +17,8 @@ from app.services.business.session_service import SessionService
 from app.services.infrastructure.session_goal_store import SessionGoalStore
 
 _UNSET = object()
+# Goal 锁按 session_id 分片；分片数固定，避免长驻进程随历史会话数无界增长。
+GOAL_LOCK_SHARDS = 64
 UNFINISHED_GOAL_STATUSES = {
     GoalStatus.active,
     GoalStatus.paused,
@@ -43,10 +46,15 @@ class SessionGoalService:
         self._store = store
         self._session_service = session_service
         self._job_event_bus = job_event_bus
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: tuple[asyncio.Lock, ...] = tuple(
+            asyncio.Lock() for _ in range(GOAL_LOCK_SHARDS)
+        )
 
     def lock_for(self, session_id: str) -> asyncio.Lock:
-        return self._locks.setdefault(session_id, asyncio.Lock())
+        # 分片锁池：同一 session_id 恒得同一把锁（保住互斥），数量恒为分片数
+        # （有界）。用 crc32 而非 hash() 是为了跨进程确定，不引入 hash 随机化。
+        shard = zlib.crc32(session_id.encode("utf-8")) % len(self._locks)
+        return self._locks[shard]
 
     async def get(self, session_id: str) -> SessionGoalDTO | None:
         thread_id = await self._session_service.resolve_main_thread(session_id)

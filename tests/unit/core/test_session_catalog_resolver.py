@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_resolver import (
     SessionCatalogFolderProjection,
     SessionCatalogPathResolver,
@@ -31,8 +32,12 @@ from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
+from tests.support.canonical_id_at import thread_id_at
 
 WORKSPACE_ID = "ws-resolver"
+
+# thread 分桶日期 MUST 与 thread_id 内嵌时间同日（§4.3），固定桶测试共用此时刻。
+JUNE_1 = datetime(2026, 6, 1, tzinfo=UTC)
 
 
 # ----------------------------------------------------------------------
@@ -55,13 +60,13 @@ def make_metadata(**overrides: object) -> dict[str, object]:
 
 
 def make_node_id() -> str:
-    """生成满足 UUIDv4 位 profile 的节点 ID（folder 与 session 同形）。"""
-    return f"ses_{uuid.uuid4().hex}"
+    """生成满足 UUIDv7 位 profile 的节点 ID（folder 与 session 同形）。"""
+    return f"ses_{create_uuid_hex()}"
 
 
 def make_thread_id() -> str:
-    """生成满足 UUIDv4 位 profile 的 thread ID。"""
-    return f"thr_{uuid.uuid4().hex}"
+    """生成满足 UUIDv7 位 profile 的 thread ID。"""
+    return f"thr_{create_uuid_hex()}"
 
 
 def read_manifest(directory: Path) -> dict[str, object]:
@@ -418,11 +423,11 @@ class TestReadMethods:
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         session_id, session_dir = await allocated_session(resolver)
-        thread_id = make_thread_id()
+        thread_id = thread_id_at(JUNE_1)
         thread_dir = publish_child_thread(
             session_dir,
             thread_id=thread_id,
-            created_at=datetime(2026, 6, 1, tzinfo=UTC),
+            created_at=JUNE_1,
         )
         assert resolver.resolve_thread_node(session_id, thread_id) == thread_dir
 
@@ -463,11 +468,11 @@ class TestReadMethods:
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         session_id, session_dir = await allocated_session(resolver)
-        thread_id = make_thread_id()
+        thread_id = thread_id_at(JUNE_1)
         publish_child_thread(
             session_dir,
             thread_id=thread_id,
-            created_at=datetime(2026, 6, 1, tzinfo=UTC),
+            created_at=JUNE_1,
         )
         thread_dir = session_dir / "threads" / "2026" / "06" / "01" / thread_id
         shutil.rmtree(thread_dir)
@@ -634,6 +639,58 @@ def store_main_thread_id(
 
 
 class TestNavigationWrites:
+
+
+    @pytest.mark.asyncio
+    async def test_list_nodes_hides_deleting_nodes_with_state(
+        self, resolver: SessionCatalogPathResolver
+    ) -> None:
+        """单个 deleting 节点不再拖垮整棵目录读取，且投影保留 state 供前端区分。"""
+        ids = await build_catalog_tree(resolver)
+        # 建树后全部 active，投影 state 全为 active。
+        assert all(node.state == "active" for node in resolver.list_nodes())
+        # 只把 f1 子树标 deleting（不隔离物理目录）。
+        resolver.begin_subtree_delete(ids["f1"])
+        visible = {node.node_id for node in resolver.list_nodes()}
+        # 不抛错；deleting 子树被暂时隐藏，子树外节点仍在。
+        assert visible == {ids["s3"]}
+        assert ids["s1"] not in visible
+        assert ids["f1"] not in visible
+
+    @pytest.mark.asyncio
+    async def test_child_nodes_hides_deleting_children(
+        self, resolver: SessionCatalogPathResolver
+    ) -> None:
+        ids = await build_catalog_tree(resolver)
+        folder_child = resolver.create_folder(name="子目录", parent_node_id=ids["s3"])
+        assert {node.node_id for node in resolver.child_nodes(ids["s3"])} == {
+            folder_child.node_id
+        }
+        # 该子 folder 标 deleting 后从 child_nodes 隐藏。
+        resolver.begin_subtree_delete(folder_child.node_id)
+        assert resolver.child_nodes(ids["s3"]) == []
+
+    @pytest.mark.asyncio
+    async def test_breadcrumb_survives_isolated_deleting_session(
+        self,
+        resolver: SessionCatalogPathResolver,
+        sessions_root: Path,
+    ) -> None:
+        """deleting 节点的物理目录已隔离时，breadcrumb 仍可解析并带 state。"""
+        ids = await build_catalog_tree(resolver)
+        s1_dir = resolver.resolve_session_node(ids["s1"])
+        resolver.begin_subtree_delete(ids["f1"])
+        # 模拟 drain 已把 s1 的日期桶目录隔离到 .deleting/。
+        target = sessions_root / ".deleting" / "manual" / ids["s1"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        s1_dir.rename(target)
+        # 修复前：resolve_session_node 因目录缺失 fail closed，breadcrumb 整体失败。
+        chain = resolver.breadcrumb(ids["s2"])
+        states = {node.node_id: node.state for node in chain}
+        assert states[ids["f1"]] == "deleting"
+        assert states[ids["s1"]] == "deleting"
+        assert states[ids["s2"]] == "deleting"
+
     @pytest.mark.asyncio
     async def test_update_node_name_only_changes_catalog(
         self, resolver: SessionCatalogPathResolver
@@ -680,6 +737,9 @@ class TestNavigationWrites:
     ) -> None:
         f1 = resolver.create_folder(name="外层", parent_node_id=None)
         f2 = resolver.create_folder(name="内层", parent_node_id=f1.node_id)
+        # 自环
+        with pytest.raises(RuntimeError, match="自身"):
+            resolver.move_node(node_id=f1.node_id, parent_node_id=f1.node_id)
         with pytest.raises(RuntimeError, match="循环"):
             resolver.move_node(node_id=f1.node_id, parent_node_id=f2.node_id)
 
@@ -707,65 +767,24 @@ class TestNavigationWrites:
             resolver.relocate_session(session_id=folder.node_id, parent_node_id=None)
 
     @pytest.mark.asyncio
-    async def test_relocate_folder_tree_moves_root_only(
+    async def test_move_folder_tree_moves_root_only(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
+        """folder 子树移动的唯一路径：move_node 只改根 parent，后代关系
+
+        与物理目录均不变（旧 relocate_folder_tree 语义并入本路径）。
+        """
         target, _ = await allocated_session(resolver, title="挂载会话")
         ids = await build_catalog_tree(resolver)
-        f1_node_before = resolver.get_node(ids["f1"])
         # S2 在 F1 子树内，抓 S2 目录指纹验证不动磁盘。
         s2_dir = resolver.resolve_session_node(ids["s2"])
         s2_fingerprint = directory_fingerprint(s2_dir)
-        moved = resolver.relocate_folder_tree(
-            folder_id=ids["f1"], parent_node_id=target
-        )
+        moved = resolver.move_node(node_id=ids["f1"], parent_node_id=target)
         assert moved.parent_node_id == target
         # 根改父，后代父子关系不变；会话物理目录不动。
         assert resolver.get_node(ids["s1"]).parent_node_id == ids["f1"]
         assert resolver.get_node(ids["s2"]).parent_node_id == ids["f2"]
         assert directory_fingerprint(s2_dir) == s2_fingerprint
-        assert f1_node_before.node_id == moved.node_id
-
-    @pytest.mark.asyncio
-    async def test_expected_session_parents_after_folder_move_derivation(
-        self, resolver: SessionCatalogPathResolver
-    ) -> None:
-        mount, _ = await allocated_session(resolver, title="挂载会话")
-        root_session, _ = await allocated_session(resolver, title="根会话")
-        f1 = resolver.create_folder(name="移动夹", parent_node_id=root_session)
-        a, _ = await allocated_session(
-            resolver, title="内层A", parent_node_id=f1.node_id
-        )
-        b, _ = await allocated_session(resolver, title="内层B", parent_node_id=a)
-        revision_before = resolver.revision
-        expected = resolver.expected_session_parents_after_folder_move(
-            folder_id=f1.node_id,
-            parent_node_id=mount,
-        )
-        # 移动后：A 的子树内最近 session 祖先缺失 → 外部挂载会话；B → A。
-        assert expected == {a: mount, b: a}
-        # 纯派生计算不产生任何写入。
-        assert resolver.revision == revision_before
-
-    @pytest.mark.asyncio
-    async def test_expected_session_parents_rejects_self_and_cycle(
-        self, resolver: SessionCatalogPathResolver
-    ) -> None:
-        root_session, _ = await allocated_session(resolver)
-        f1 = resolver.create_folder(name="夹", parent_node_id=root_session)
-        f2 = resolver.create_folder(name="子夹", parent_node_id=f1.node_id)
-        with pytest.raises(ValueError, match="自身下"):
-            resolver.expected_session_parents_after_folder_move(
-                folder_id=f1.node_id, parent_node_id=f1.node_id
-            )
-        with pytest.raises(ValueError, match="循环"):
-            resolver.expected_session_parents_after_folder_move(
-                folder_id=f1.node_id, parent_node_id=f2.node_id
-            )
-        with pytest.raises(ValueError, match="会话文件夹"):
-            resolver.expected_session_parents_after_folder_move(
-                folder_id=root_session, parent_node_id=None
-            )
 
     @pytest.mark.asyncio
     async def test_delete_folder_empty_ok_and_nonempty_rejected(

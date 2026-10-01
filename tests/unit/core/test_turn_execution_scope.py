@@ -12,6 +12,7 @@ from app.core.turn_execution_scope import (
     AgentLoopControlCoordinator,
     ScopeCancelledError,
     TurnExecutionScope,
+    TurnExecutionScopeRegistry,
 )
 
 
@@ -85,10 +86,53 @@ def test_control_inbox_persists_intent_but_does_not_auto_replay_after_restart(
     )
 
     restarted = AgentControlInbox("stream_1", state_path=state_path)
-    assert restarted.recoverable() == [command]
+    assert restarted.snapshot() == [command]
     assert restarted._pending.empty()
     restarted.mark("cmd_1", "rejected")
-    assert AgentControlInbox("stream_1", state_path=state_path).recoverable() == []
+    rejected = AgentControlInbox("stream_1", state_path=state_path).snapshot()
+    assert [item.status for item in rejected] == ["rejected"]
+
+
+@pytest.mark.asyncio
+async def test_control_inbox_state_is_reaped_on_turn_close(tmp_path: Path) -> None:
+    """Turn 收敛即确定性删除控制状态文件，不随 Turn 数无限堆积。"""
+    state_path = tmp_path / "control.json"
+    registry = TurnExecutionScopeRegistry()
+    registry.create("stream_1")
+    inbox = AgentControlInbox("stream_1", session_id="ses_1", state_path=state_path)
+    inbox.accept(
+        command_id="cmd_1",
+        kind="interrupt",
+        idempotency_key="idem_1",
+    )
+    registry.register_inbox("stream_1", inbox)
+    assert state_path.is_file()
+
+    await registry.close("stream_1")
+
+    assert not state_path.exists()
+    assert registry.get_inbox("stream_1") is None
+
+
+def test_control_inbox_rejects_state_file_from_another_session(tmp_path: Path) -> None:
+    """控制状态文件自述的 session_id 与请求归属不符时 fail closed。"""
+    state_path = tmp_path / "control.json"
+    AgentControlInbox(
+        "stream_1",
+        session_id="ses_owner",
+        state_path=state_path,
+    ).accept(
+        command_id="cmd_1",
+        kind="interrupt",
+        idempotency_key="idem_1",
+    )
+
+    with pytest.raises(RuntimeError, match="session_id 不匹配"):
+        AgentControlInbox(
+            "stream_1",
+            session_id="ses_other",
+            state_path=state_path,
+        )
 
 
 @pytest.mark.asyncio

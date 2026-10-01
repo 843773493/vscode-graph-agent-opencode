@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex, create_uuid_hex_at, to_epoch_ms
 from app.core.session_catalog_legacy_layout import (
     FOLDER_MANIFEST_NAME,
     SESSION_CHILDREN_DIR_NAME,
@@ -89,16 +90,18 @@ def make_migrator(workspace: MigrationWorkspace) -> SessionCatalogMigrator:
 
 
 def make_session_id() -> str:
-    return f"ses_{uuid.uuid4().hex}"
+    """内嵌时间与 DEFAULT_CREATED_AT 同日(§4 分桶一致性)。"""
+    return f"ses_{create_uuid_hex_at(to_epoch_ms(DEFAULT_CREATED_AT))}"
 
 
 def make_thread_id() -> str:
-    return f"thr_{uuid.uuid4().hex}"
+    """内嵌时间与 DEFAULT_CREATED_AT 同日(§4 分桶一致性)。"""
+    return f"thr_{create_uuid_hex_at(to_epoch_ms(DEFAULT_CREATED_AT))}"
 
 
 def _hex_payload_with(index: int, char: str) -> str:
-    """把合法 UUIDv4 payload 的指定 hex 位替换成给定字符。"""
-    payload = list(uuid.uuid4().hex)
+    """把合法 UUIDv7 payload 的指定 hex 位替换成给定字符。"""
+    payload = list(create_uuid_hex())
     payload[index] = char
     return "".join(payload)
 
@@ -646,11 +649,11 @@ async def test_migrate_empty_index_builds_empty_tree(
 
 
 def _illegal_session_ids() -> list[str]:
-    """非法旧 ID 参数集:非 ses_ 前缀/大写/非 v4 version 位/非 variant 位/长度错。"""
+    """非法旧 ID 参数集:非 ses_ 前缀/大写/非 v7 version 位/非 variant 位/长度错。"""
     return [
         "job_" + uuid.uuid4().hex,  # 非 ses_ 前缀
         "SES_" + uuid.uuid4().hex,  # 大写前缀
-        "ses_" + _hex_payload_with(12, "3"),  # 非 v4 version 位
+        "ses_" + _hex_payload_with(12, "3"),  # 非 v7 version 位
         "ses_" + _hex_payload_with(16, "c"),  # 非 variant 位
         "ses_" + "a" * 31,  # 长度 31
         "ses_" + "a" * 33,  # 长度 33
@@ -1403,7 +1406,8 @@ async def test_migrate_timezone_aware_created_at_uses_utc_date_bucket(
 ) -> None:
     plus8 = timezone(timedelta(hours=8))
     moment = datetime(2026, 6, 2, 2, 0, tzinfo=plus8)  # UTC 2026-06-01T18:00,跨日
-    session_id = make_session_id()
+    # id 内嵌时间必须与迁移后所在 UTC 桶(2026-06-01)同日，故按 moment 生成。
+    session_id = f"ses_{create_uuid_hex_at(to_epoch_ms(moment))}"
     _write_session_dir(
         workspace.sessions_root,
         session_id,
@@ -2443,6 +2447,53 @@ def test_runner_main_human_output_and_quarantine_listing(
     assert "ses_illegal_entry" in out
     assert "illegal_id" in out
     assert "journal" in out
+    # 隔离清单必须携带可定位的物理路径与人工建议动作（报告层派生，不改 journal 契约）。
+    assert "物理路径:" in out
+    assert "建议动作:" in out
+    assert str(
+        workspace_root / ".boxteam" / "sessions" / "ses_illegal_entry"
+    ) in out
+    assert "人工确认节点 ID" in out
+
+
+def test_runner_main_json_quarantine_entries_carry_path_and_action(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """runner --json 的隔离节点必须给出物理路径与建议动作两项（缺一即失败）。"""
+    runner = _import_runner_module()
+    workspace_root = tmp_path / "workspace"
+    _build_entry_legacy_tree(workspace_root)
+    _write_session_dir(
+        workspace_root / ".boxteam" / "sessions",
+        "ses_illegal_entry",
+        title="非法会话",
+        parent_session_id=None,
+    )
+    index_path = (
+        workspace_root / ".boxteam" / "navigation" / "session-catalog-index.json"
+    )
+    index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    index_payload["nodes"].append(
+        _index_record("ses_illegal_entry", "session", "非法会话", None)
+    )
+    _write_json(index_path, index_payload)
+
+    exit_code = runner.main(["--workspace-root", str(workspace_root), "--json"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["quarantined_nodes"] == [
+        {
+            "node_id": "ses_illegal_entry",
+            "reason": "illegal_id",
+            "path": str(
+                workspace_root / ".boxteam" / "sessions" / "ses_illegal_entry"
+            ),
+            "suggested_action": (
+                "人工确认节点 ID（修正旧 index 记录或目录名）后重跑迁移"
+            ),
+        }
+    ]
 
 
 def test_runner_main_failure_exits_nonzero_with_clear_error(

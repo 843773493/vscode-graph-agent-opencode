@@ -94,14 +94,14 @@ describe("会话资源树拖放决策", () => {
     expect(decideSessionResourceDrop(
       {
         kind: "session_folder",
-        nodeId: "fld_child",
+        nodeId: "ses_folder_child",
         workspaceId: "gw_a",
         parentNodeId: null,
       },
-      { kind: "session_folder", nodeId: "fld_parent", workspaceId: "gw_a" },
+      { kind: "session_folder", nodeId: "ses_folder_parent", workspaceId: "gw_a" },
     )).toEqual({
       allowed: true,
-      action: { kind: "move_catalog_node", parentNodeId: "fld_parent" },
+      action: { kind: "move_catalog_node", parentNodeId: "ses_folder_parent" },
     });
   });
 
@@ -114,7 +114,7 @@ describe("会话资源树拖放决策", () => {
         workspaceId: "gw_a",
         parentNodeId: null,
       },
-      { kind: "session_folder", nodeId: "fld_b", workspaceId: "gw_b" },
+      { kind: "session_folder", nodeId: "ses_folder_b", workspaceId: "gw_b" },
     )).toEqual({
       allowed: false,
       reason: "会话和会话文件夹不能拖到其他工作区",

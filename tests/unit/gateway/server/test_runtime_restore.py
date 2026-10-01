@@ -249,3 +249,81 @@ async def test_gateway_restore_failure_falls_back_from_active_workspace(
     assert registry.has_runtime("default") is True
     registry.release_route_reference("missing", streaming=True)
     registry.close()
+
+
+@pytest.mark.asyncio
+async def test_startup_fallback_from_stopped_managed_workspace_logs_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """启动时回退激活工作区必须留日志，不能静默发生。
+
+    persisted 的激活工作区是托管工作区、且 desired_running 为 False 时，启动阶段
+    无法恢复它，只能回退到默认工作区；该回退对用户可见（会话树整体切换），
+    必须像 _restore_managed_local_runtimes 的同语义回退一样给出 warning。
+    """
+
+    gateway_root = tmp_path / "gateway"
+    default_root = tmp_path / "default"
+    stopped_root = tmp_path / "stopped"
+    for workspace_root in (default_root, stopped_root):
+        workspace_root.mkdir(parents=True)
+
+    default_id = build_managed_local_workspace_id(str(default_root))
+    stopped_id = build_managed_local_workspace_id(str(stopped_root))
+    persisted = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
+    persisted.upsert(
+        WorkspaceTarget(
+            workspace_id=default_id,
+            name="Default",
+            root_path=str(default_root),
+            backend_url="http://127.0.0.1:41000",
+            connection_kind="local",
+            managed=True,
+            removable=False,
+            system_default=True,
+        )
+    )
+    persisted.upsert(
+        WorkspaceTarget(
+            workspace_id=stopped_id,
+            name="Stopped",
+            root_path=str(stopped_root),
+            backend_url="http://127.0.0.1:42000",
+            connection_kind="local",
+            managed=True,
+            desired_running=False,
+        ),
+    )
+    persisted.close()
+
+    async def fake_start_runtime(**_: object) -> WorkspaceRuntime:
+        return WorkspaceRuntime(
+            service_urls={
+                "workspace_api": "http://127.0.0.1:44000",
+                "terminal_manager": "http://127.0.0.1:44001",
+                "browser_manager": "http://127.0.0.1:44002",
+            }
+        )
+
+    monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
+    monkeypatch.setattr(bootstrap, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: default_root)
+    monkeypatch.setattr(bootstrap, "load_gateway_config", lambda: GatewayConfig())
+    monkeypatch.setattr(
+        bootstrap,
+        "start_managed_local_workspace_runtime",
+        fake_start_runtime,
+    )
+
+    registry = await bootstrap.create_registry()
+
+    assert registry.active_workspace_id == default_id
+    assert any(
+        record.levelname == "WARNING"
+        and "已回退到默认工作区" in record.getMessage()
+        and stopped_id in record.getMessage()
+        for record in caplog.records
+    ), [record.getMessage() for record in caplog.records]
+    registry.close()

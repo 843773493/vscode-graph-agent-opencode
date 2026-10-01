@@ -8,7 +8,7 @@ import jsonschema
 import pytest
 from watchfiles import Change
 
-import app.services.infrastructure.config_service as config_service_module
+import app.services.infrastructure.config_service.config_source_layers as config_source_layers_module
 from app.agents.policy import ToolMetadata
 from app.schemas.internal_v2.config import ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
@@ -573,13 +573,16 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
         assert service.list_agents()["default"]["name"] == "Workspace Agent"
         assert [source.layer for source in service.get_source_details()] == [
             "inline",
-            "sqlite",
-            "sqlite",
-            "sqlite",
+            "user",
+            "user_local",
+            "workspace",
             "sqlite",
         ]
-        # 5A.6：只有 inline 层可寻址；sqlite 层（user/user_local/workspace 共享同一
-        # workspace.sqlite）一律不可寻址，vrn MUST be None，且不含任何真实路径。
+        # D-A：`layer` MUST 是逻辑来源层。user/user_local/workspace 虽共享同一
+        # workspace.sqlite，但共享只是承载事实，MUST NOT 有损改写成 `sqlite`；只有
+        # runtime override 才是 `sqlite` 层。此处逐层断言比旧的「四层同为 sqlite」更强。
+        # 5A.6：只有 inline 层可寻址；user/user_local/workspace/sqlite 一律不可寻址，
+        # vrn MUST be None，且不含任何真实路径。
         details = service.get_source_details()
         assert details[0].vrn is not None
         assert details[0].vrn.startswith("boxteam://inline/")
@@ -591,6 +594,68 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
 
         config_path.write_text(json.dumps({"logger": {"level": "ERROR"}}), encoding="utf-8")
         assert service.get_logger_level() == "DEBUG"
+    finally:
+        store.close()
+
+
+def test_config_source_layer_consistent_across_read_paths(
+    tmp_path: Path,
+) -> None:
+    """D-A/D-B：两条读路径对同一 source_key MUST 报同一逻辑层。
+
+    源构建路径（`_config_source`/`_runtime_override_source`）与持久化恢复路径
+    （`_persisted_source_details`）此前对 user/user_local/workspace 报 `sqlite`/真层两套
+    值，且 inline 在恢复路径被兜底成 `sqlite`、precedence 由 0 翻成 1。本用例锁定两路一致。
+    """
+
+    config_path = _write_workspace_config(tmp_path, _base_config())
+    workspace_root = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace_root)
+    try:
+        first = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace_root,
+            workspace_state_store=store,
+        )
+        first.get_logger_level()
+        first.validate_workspace_config()
+        assert store.get_active_config_snapshot("workspace") is not None
+
+        # 同一 state store、未初始化的新 service 直接取诊断：命中
+        # `get_source_diagnostics` 的 `_persisted_source_details` 分支。
+        restored = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace_root,
+            workspace_state_store=store,
+        )
+        _, _, restored_sources = restored.get_source_diagnostics()
+
+        expected = {
+            "inline": 0,
+            "user": 1,
+            "user_local": 2,
+            "workspace": 3,
+            "sqlite": 4,
+        }
+
+        # 两路都按 {逻辑层: precedence} 收敛到同一张权威表；层名互不相同，故该映射
+        # 与顺序无关，恰好表达「同一 source_key MUST 报同一 layer 且 precedence 不翻转」。
+        restored_map = {source.layer: source.precedence for source in restored_sources}
+        first_sources = first.get_source_details()
+        first_map = {source.layer: source.precedence for source in first_sources}
+        assert restored_map == expected
+        assert first_map == expected
+
+        # D-B 定点：inline 在恢复路径 MUST 仍为 inline、precedence MUST 为 0，
+        # 不得被落进 `sqlite` 兜底或把 precedence 翻成 1。
+        restored_inline = [
+            source for source in restored_sources if source.layer == "inline"
+        ]
+        assert len(restored_inline) == 1
+        assert restored_inline[0].precedence == 0
+        assert restored_inline[0].vrn is not None
     finally:
         store.close()
 
@@ -869,7 +934,7 @@ def test_extension_selector_can_restore_one_custom_tool(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
-        "app.services.infrastructure.config_service.load_custom_tool_factory",
+        "app.services.infrastructure.config_service.config_agent_tools.load_custom_tool_factory",
         lambda _factory_path: object(),
     )
     config = _base_config()
@@ -894,7 +959,7 @@ def test_config_service_normalizes_custom_tool_specs(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
-        "app.services.infrastructure.config_service.load_custom_tool_factory",
+        "app.services.infrastructure.config_service.config_agent_tools.load_custom_tool_factory",
         lambda _factory_path: object(),
     )
     config = _base_config()
@@ -1621,7 +1686,7 @@ async def test_file_change_after_parse_is_rejected_before_source_layer_commit(
         source_before = store.get_source_layer("workspace_mutable_override")
         assert source_before is not None
 
-        original_parse = config_service_module.parse_stable_config_file
+        original_parse = config_source_layers_module.parse_stable_config_file
         mutated = False
 
         def parse_then_mutate(snapshot):
@@ -1635,7 +1700,7 @@ async def test_file_change_after_parse_is_rejected_before_source_layer_commit(
             return payload
 
         monkeypatch.setattr(
-            config_service_module,
+            config_source_layers_module,
             "parse_stable_config_file",
             parse_then_mutate,
         )

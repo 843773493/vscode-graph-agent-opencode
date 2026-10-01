@@ -114,7 +114,12 @@ function applySessionListConvergence(
   const next = cloneMaps(state);
   const previousSessions =
     state.sessionsByWorkspace.get(workspaceId) ?? state.sessions;
-  next.sessions = remainingSessions;
+  // 全局 sessions 镜像只描述当前活动工作区（selectWorkspaceSession /
+  // forkSessionContext 都先切 activeGatewayWorkspaceId 再写它）。收敛一个非
+  // 活动工作区的会话列表时若整表覆盖全局镜像，会把该工作区的会话灌进来。
+  if (state.activeGatewayWorkspaceId === workspaceId) {
+    next.sessions = remainingSessions;
+  }
   next.sessionsByWorkspace.set(workspaceId, remainingSessions);
   const remainingIds = new Set(
     remainingSessions.map((session) => session.session_id),
@@ -126,6 +131,78 @@ function applySessionListConvergence(
       removed.session_id,
       sessionScopeKey(workspaceId, removed.session_id),
     );
+  }
+  return next;
+}
+
+/**
+ * 本地已知的删除闭包：被删会话及其按 `parent_session_id` 可达的全部后代。
+ *
+ * 后端删除会级联整棵子会话树，本地镜像必须用同一闭包一次性收敛，否则被删子树
+ * 会作为幽灵条目残留（甚至被选为新的当前会话）。这是删除成功路径的唯一收敛依据；
+ * 不得再为此无条件重拉整个会话列表（§10.3 前端半边）。
+ */
+function localSessionDeletionClosure(
+  sessions: readonly Session[],
+  rootSessionId: string,
+): Set<string> {
+  const doomed = new Set<string>([rootSessionId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const session of sessions) {
+      if (doomed.has(session.session_id)) continue;
+      const parentId = session.parent_session_id;
+      if (parentId && doomed.has(parentId)) {
+        doomed.add(session.session_id);
+        changed = true;
+      }
+    }
+  }
+  return doomed;
+}
+
+/**
+ * 会话已消失后的统一收敛：按权威剩余列表收敛工作区镜像，并在当前会话确实已从
+ * 剩余列表中消失（含被删父会话级联带走的后代）时把它切到剩余首个会话。
+ *
+ * 删除成功路径与「请求报错但补偿重取成功」的失败路径必须共用这一份：失败路径若
+ * 只收敛 sessions 镜像而不校正 currentSession，就会出现 currentSession 悬空指向
+ * 一个已不在 sessions 里的幽灵会话（与成功路径行为不一致）。
+ *
+ * `reloadHistoryAfterSwitch` 只在「删除非当前会话、但级联带走了当前会话」时为真，
+ * 让新选中的会话触发一次历史加载；删除当前会话时调用方已先行切走，无需重复。
+ */
+function convergeAfterSessionRemoval(
+  prev: AppState,
+  workspaceId: string,
+  remainingSessions: Session[],
+  options: { reloadHistoryAfterSwitch: boolean },
+): AppState {
+  const next = applySessionListConvergence(prev, workspaceId, remainingSessions);
+  const remainingIds = new Set(
+    remainingSessions.map((session) => session.session_id),
+  );
+  const currentWasDeleted = Boolean(
+    prev.currentSession
+    && !remainingIds.has(prev.currentSession.session_id),
+  );
+  if (!currentWasDeleted) {
+    return next;
+  }
+  const nextSession = remainingSessions[0] ?? null;
+  next.currentSession = nextSession;
+  next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
+  if (options.reloadHistoryAfterSwitch) {
+    next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
+  }
+  Object.assign(next, resetSessionScopedFields(next));
+  next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
+  Object.assign(next, resetAgentStateFields(next));
+  if (nextSession) {
+    writeLastSessionId(nextSession.session_id);
+  } else {
+    clearLastSessionId();
   }
   return next;
 }
@@ -606,13 +683,16 @@ export function useSessionLifecycleActions({
           const workspaceSessions = workspaceIdForRequest
             ? previous.sessionsByWorkspace.get(workspaceIdForRequest) ?? previous.sessions
             : previous.sessions;
+          // 抢占分支同样按删除闭包收敛：级联删除会带走整棵子会话树，若只过滤
+          // 被删会话本身，新的当前会话可能选中一个即将消失的后代（幽灵会话）。
+          const doomed = localSessionDeletionClosure(workspaceSessions, sessionId);
           const nextSession = workspaceSessions.find(
-            (candidate) => candidate.session_id !== sessionId,
+            (candidate) => !doomed.has(candidate.session_id),
           ) ?? null;
           next.currentSession = nextSession;
           next.currentSessionWorkspaceId = nextSession ? workspaceIdForRequest : null;
           next.sessions = workspaceSessions.filter(
-            (candidate) => candidate.session_id !== sessionId,
+            (candidate) => !doomed.has(candidate.session_id),
           );
           if (workspaceIdForRequest) {
             next.sessionsByWorkspace.set(workspaceIdForRequest, next.sessions);
@@ -667,8 +747,13 @@ export function useSessionLifecycleActions({
             workspaceIdForRequest ??
             prev.activeGatewayWorkspaceId ??
             "workspace";
+          // 补偿重取成功时，删除可能已在后端生效（响应超时/丢失）：后端权威列表里
+          // 当前会话可能已被级联删除，必须与成功路径同样切走 currentSession，
+          // 否则它会悬空指向一个已不在 sessions 里的幽灵会话。
           const converged = reconciled
-            ? applySessionListConvergence(prev, resolvedWorkspaceId, reconciled)
+            ? convergeAfterSessionRemoval(prev, resolvedWorkspaceId, reconciled, {
+                reloadHistoryAfterSwitch: true,
+              })
             : prev;
           return {
             ...converged,
@@ -680,16 +765,6 @@ export function useSessionLifecycleActions({
         throw error;
       }
 
-      // 删除已成功，业务态到此确定。列表刷新只是收敛手段，它失败不得被
-      // 表述成「删除失败」——那会让用户对已经生效的删除重试。
-      let refreshed: Awaited<ReturnType<typeof apiListSessions>> | null = null;
-      let refreshFailure: string | null = null;
-      try {
-        refreshed = await apiListSessions(apiPort, workspaceIdForRequest);
-      } catch (error) {
-        refreshFailure = errorMessage(error);
-      }
-
       setState((prev) => {
         const workspaceId =
           workspaceIdForRequest ??
@@ -697,47 +772,24 @@ export function useSessionLifecycleActions({
           "workspace";
         const previousSessions =
           prev.sessionsByWorkspace.get(workspaceId) ?? prev.sessions;
-        // 刷新失败时按已知事实本地收敛：被删会话必须立即从列表消失。
-        const remainingSessions = refreshed
-          ? refreshed.items
-          : previousSessions.filter(
-              (session) => session.session_id !== sessionId,
-            );
-        const next = applySessionListConvergence(
+        // 删除成功路径不再重拉会话列表（§10.3 前端半边）：该 operation 已 committed，
+        // 前端直接按本地已知的删除闭包收敛镜像即可。后端已成功事实由上面的 DELETE
+        // 响应给出，无需用一次全量列表请求再次确认；全量重取只在失败/冲突时作为
+        // 显式可观测的校验兜底（见上面的 catch 分支）。
+        const doomed = localSessionDeletionClosure(previousSessions, sessionId);
+        const remainingSessions = previousSessions.filter(
+          (session) => !doomed.has(session.session_id),
+        );
+        // 删除非当前会话时，级联删除可能移除了当前会话；这时才需要为新选中的
+        // 会话触发一次历史加载（删除当前会话时上面已先行切走）。
+        const next = convergeAfterSessionRemoval(
           prev,
           workspaceId,
           remainingSessions,
+          { reloadHistoryAfterSwitch: !deletingCurrent },
         );
-        const remainingIds = new Set(remainingSessions.map((session) => session.session_id));
 
-        const currentWasDeleted = deletingCurrent
-          ? prev.currentSession === null || prev.currentSession.session_id === sessionId
-          : Boolean(
-            prev.currentSession
-            && !remainingIds.has(prev.currentSession.session_id),
-          );
-        if (currentWasDeleted) {
-          const nextSession = remainingSessions[0] ?? null;
-          next.currentSession = nextSession;
-          next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
-          if (!deletingCurrent) {
-            // 删除非当前会话时，级联删除可能移除了当前会话；这时才需要
-            // 为新选中的会话触发一次历史加载。
-            next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-          }
-          Object.assign(next, resetSessionScopedFields(next));
-          next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
-          Object.assign(next, resetAgentStateFields(next));
-          if (nextSession) {
-            writeLastSessionId(nextSession.session_id);
-          } else {
-            clearLastSessionId();
-          }
-        }
-
-        next.status = refreshFailure
-          ? `已删除会话: ${result.session_id}；会话列表刷新失败: ${refreshFailure}`
-          : `已删除会话: ${result.session_id}`;
+        next.status = `已删除会话: ${result.session_id}`;
         return next;
       });
     },

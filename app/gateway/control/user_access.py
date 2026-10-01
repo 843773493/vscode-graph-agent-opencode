@@ -295,7 +295,14 @@ class UserAccessService:
         finally:
             connection.close()
         if invalidated_session_id is not None:
-            self._invalidations.setdefault(invalidated_session_id, asyncio.Event()).set()
+            # 被顶替的 access_session_id 在数据库里的租约行已被删除，cleanup_expired
+            # 永远不会再看到它，必须在这里就回收对应的失效事件，否则每次 takeover
+            # 都会永久留下一个 asyncio.Event，进程内存随登录次数无界增长。
+            # 只有等待者曾调用 resolve_cookie 才会存在该事件；等待者已持有对象引用，
+            # 弹出后 set() 仍能唤醒它，所以弹出不会漏唤醒。
+            invalidated = self._invalidations.pop(invalidated_session_id, None)
+            if invalidated is not None:
+                invalidated.set()
         event = asyncio.Event()
         self._invalidations[session_id] = event
         return UserAccessContext("user", user_id, session_id, generation, event)

@@ -23,6 +23,7 @@ from app.gateway.federation.errors import (
     FederationError,
 )
 from app.gateway.federation.rpc import FederationSpoke
+from app.gateway.proxy_upstream import load_proxy_gateway_id
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,13 @@ class WorkspaceCatalogPort:
         self._request_timeout = request_timeout
         self._backend_urls: dict[str, str] = {}
 
-    def register_workspace(self, *, workspace_id: str, backend_url: str) -> None:
-        self._backend_urls[workspace_id] = backend_url.rstrip("/")
+    def project_workspaces(self, workspaces: tuple[tuple[str, str], ...]) -> None:
+        """整体重建本地工作区路由表；远端子工作区不参与。"""
+
+        self._backend_urls = {
+            workspace_id: backend_url.rstrip("/")
+            for workspace_id, backend_url in workspaces
+        }
 
     async def _export(self, *, workspace_id: str) -> dict[str, object]:
         request_id = f"federation-catalog-{secrets.token_hex(8)}"
@@ -62,7 +68,12 @@ class WorkspaceCatalogPort:
         async with httpx.AsyncClient(timeout=self._request_timeout) as client:
             response = await client.get(
                 f"{backend_url}/api/v1/session-catalog/export",
-                headers={"X-Local-Token": LOCAL_TOKEN, "X-Request-ID": request_id},
+                headers={
+                    "X-Local-Token": LOCAL_TOKEN,
+                    "X-Request-ID": request_id,
+                    # 按请求注入 Gateway 自身稳定身份，取值与两条 HTTP 代理同源。
+                    "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
+                },
             )
         if response.status_code >= 400:
             raise FederationError(
@@ -114,8 +125,13 @@ class WorkspaceSessionMainPort:
         self._request_timeout = request_timeout
         self._backend_urls: dict[str, str] = {}
 
-    def register_workspace(self, *, workspace_id: str, backend_url: str) -> None:
-        self._backend_urls[workspace_id] = backend_url.rstrip("/")
+    def project_workspaces(self, workspaces: tuple[tuple[str, str], ...]) -> None:
+        """整体重建本地工作区路由表；远端子工作区不参与。"""
+
+        self._backend_urls = {
+            workspace_id: backend_url.rstrip("/")
+            for workspace_id, backend_url in workspaces
+        }
 
     async def resolve_main_thread(
         self, *, gateway_id: str, workspace_id: str, session_id: str

@@ -53,15 +53,15 @@ def append_pending_debug_action(
 
 def append_runtime_debug_action(
     runtime: NodeDebugRuntime,
-    *,
     action: str,
     message: str,
-    actor: Literal["human", "ai", "system"],
-    tool_name: str | None,
-    tool_call_id: str | None,
-    result: Literal["success", "error"],
-    max_actions: int,
+    *,
+    actor: Literal["human", "ai", "system"] = "human",
+    tool_name: str | None = None,
+    tool_call_id: str | None = None,
     extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
+    result: Literal["success", "error"] = "success",
+    max_actions: int,
 ) -> None:
     append_pending_debug_action(
         runtime.actions,

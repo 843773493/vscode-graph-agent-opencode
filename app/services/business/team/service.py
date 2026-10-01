@@ -24,10 +24,11 @@ from .messages import (
     task_update_message,
     trusted_team_context,
 )
-from .rules import require_active_member, required_text
-
-
-COORDINATOR_NOTIFICATION_STATUSES = {"blocked", "completed", "failed"}
+from .rules import (
+    RESOLUTION_STATUSES,
+    require_active_member,
+    required_text,
+)
 
 
 class TeamCoordinationService:
@@ -301,7 +302,7 @@ class TeamCoordinationService:
         notification = None
         if (
             requester_session_id != board.coordinator_session_id
-            and status in COORDINATOR_NOTIFICATION_STATUSES
+            and status in RESOLUTION_STATUSES
         ):
             try:
                 notification = await self._session_orchestrator.create_and_run_internal(

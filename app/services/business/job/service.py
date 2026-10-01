@@ -6,14 +6,19 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol, TypeVar
+from typing import TypeVar
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobExecutorProtocol
 from app.abstractions.pending_request_store import PendingRequestStoreProtocol
+from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
+from app.core.trace_middleware import (
+    get_current_gateway_id,
+    get_current_request_id,
+)
 from app.schemas.internal_v2.common import JobStatus, RunMode
 from app.schemas.internal_v2.job import (
     JobControlRequest,
@@ -31,12 +36,13 @@ from app.schemas.internal_v2.pending_request import (
 )
 from app.services.business.job.control_service import JobControlService
 from app.services.business.job.lifecycle import (
+    FAILED_JOB_STATUSES,
+    HEARTBEAT_TRACKED_JOB_STATUSES,
     TERMINAL_JOB_STATUSES,
     transition_job_status,
 )
 from app.services.business.job.pending_queue import (
     JobPendingQueue,
-    QueueBoundary,
     QueueEntry,
 )
 from app.services.business.job.pending_request_service import (
@@ -60,18 +66,6 @@ class JobStartupTimeoutError(TimeoutError):
     """Job 已进入 running 但在启动预算内没有进入 AgentLoop。"""
 
 
-class TurnTerminalStatusWriter(Protocol):
-    """把 Job 终态同步到持久化 Turn，供历史回放使用。"""
-
-    def mark_turn_terminal_status(
-        self,
-        *,
-        session_id: str,
-        turn_id: str,
-        status: str,
-    ) -> bool: ...
-
-
 @dataclass(frozen=True, slots=True)
 class JobDrainBlocker:
     job_id: str
@@ -92,6 +86,11 @@ class JobState:
     status: JobStatus
     message_metadata: dict[str, object] = field(default_factory=dict)
     attachments: list[AttachmentRef] = field(default_factory=list)
+    # 请求级注入的真实 gateway_id；job 是独立执行根，MUST 显式携带。
+    gateway_id: str | None = None
+    # 请求级注入的权威 request_id（X-Request-ID）；job 是独立执行根，
+    # MUST 显式携带创建请求的 request_id，MUST NOT 在 job 内部补造第二个。
+    request_id: str | None = None
     progress: int = 0
     current_step: str | None = None
     error_message: str | None = None
@@ -179,6 +178,7 @@ class JobService:
             pending_requests=self._pending_requests,
             dispatch_lock=self._dispatch_lock,
             start_job_task=lambda job: self._start_job_task(job),
+            schedule_after_cancel=self._finalize_cancelled_without_task_body,
         )
 
     def _resolve_job_timeout_seconds(self) -> float:
@@ -302,16 +302,15 @@ class JobService:
                 error_message=reason,
                 now=ended_at,
             )
+            # 被排空的 Job 若执行任务早已结束（例如 paused 后任务体已跑完
+            # finally），其 finally 不会再触发调度；必须在写入终态的同一链路
+            # 上释放活动槽并唤醒 FIFO 队首，否则会话永久无人消费。
+            await self._schedule_next_job_if_needed(job)
         for session_id in sessions_with_queued_jobs:
             await self._pending_requests.persist(
                 await self._pending_requests.list(session_id)
             )
         return len(active_blockers)
-
-    def _normalize_result_text(self, result: object) -> str:
-        if isinstance(result, str):
-            return result
-        return str(result)
 
     async def list(self, session_id: str | None = None) -> list[JobDTO]:
         if session_id is not None:
@@ -719,6 +718,19 @@ class JobService:
             agent_id=agent_id,
             status=JobStatus.queued,
             message_metadata=dict(message_metadata or {}),
+            # job 创建发生在请求作用域内，此时读取 Gateway 按请求注入的真实
+            # gateway_id；job 是独立执行根，必须显式随 job 携带，不能依赖
+            # ContextVar 自动传播。
+            gateway_id=get_current_gateway_id(),
+            # 同一请求作用域内读取 TraceMiddleware 注入的权威 request_id；
+            # job 是独立执行根，必须显式随 job 携带，MUST NOT 在 job 内部补造。
+            # 本创建点还会被启动恢复（resume_active_goals）与事件驱动后台任务调用，
+            # 那些执行根没有请求上下文，故此处刻意用宽容版：无绑定即 None，属显式
+            # nullable 设计而非静默缺陷（这些 Job 本无「创建请求的权威 request_id」
+            # 可言，补造一个反而违反「任何一层不得补造第二个请求 ID」）。用户请求
+            # 链路必须已由 TraceMiddleware 在请求作用域内绑定；需要在请求作用域入口
+            # fail-closed 的消费方，改用 require_current_request_id。
+            request_id=get_current_request_id(),
         )
 
         self._jobs[resolved_job_id] = job
@@ -851,7 +863,12 @@ class JobService:
             try:
                 task.result()
             except asyncio.CancelledError:
-                pass
+                # 任务体可能在真正开始执行前就被取消（用户取消或运行期排空
+                # 先写 cancelling 再 cancel）：此时 CancelledError 直接终止
+                # task，_run_job_background 的 try/except 从未进入，权威终态
+                # 写入点没有机会执行。依赖回调补齐，否则 Job 永久停在
+                # cancelling，会话活动槽与 FIFO 队首一并卡死。
+                self._converge_cancel_without_task_body(job, task)
             except Exception as e:
                 logger.exception(
                     "Job task failed: job_id=%s",
@@ -876,6 +893,56 @@ class JobService:
             context=contextvars.Context(),
         )
         job.task.add_done_callback(_task_done_callback)
+
+    def _converge_cancel_without_task_body(
+        self,
+        job: JobState,
+        task: asyncio.Task,
+    ) -> None:
+        """任务体未进入 try 就被取消时补齐取消终态并交还会话。
+
+        唯一权威终态写入点仍是 ``_run_job_background`` 的 except
+        CancelledError 分支。只有任务以 cancelled 结束、且 Job 仍处于
+        ``cancelling``（说明任务体从未进入 try，权威写入点没有机会执行）时
+        才在此补写。其它情况一律不写：
+
+        - 已进入任务体的取消由权威写入点负责，此处看到终态后跳过；
+        - ``paused`` 是用户可 resume 显式持有的非终态，任务结束但语义未
+          终结，交由 ``_resume_job_locked`` 重启，不在此转成 cancelled；
+        - ``job.task is not task`` 说明该任务已被 resume 换掉，跳过以免
+          误伤正在运行的新任务。
+        """
+        if job.task is not task:
+            return
+        if job.status == JobStatus.paused:
+            return
+        if self._is_terminal_status(job.status):
+            return
+        transition_job_status(
+            job,
+            JobStatus.cancelled,
+            error_message=job.cancellation_reason or "任务被用户取消",
+        )
+        logger.info(
+            "[job_service] 任务体未启动即被取消，补写取消终态: job_id=%s session_id=%s",
+            job.job_id,
+            job.session_id,
+        )
+        asyncio.get_event_loop().create_task(
+            self._finalize_cancelled_without_task_body(job)
+        )
+
+    async def _finalize_cancelled_without_task_body(self, job: JobState) -> None:
+        """补齐权威写入点在取消路径上会做的收尾：Turn 终态、事件、交还会话。"""
+        await self._persist_terminal_turn_status(job, "cancelled")
+        if self._bus is not None:
+            await self._bus.publish(
+                job_id=job.job_id,
+                event_type=EventType.JOB_CANCELLED,
+                payload={"session_id": job.session_id},
+                agent_id="job_service",
+            )
+        await self._schedule_next_job_if_needed(job)
 
     async def _enqueue_or_dispatch(
         self,
@@ -920,13 +987,7 @@ class JobService:
     async def _schedule_next_job_if_needed(self, finished_job: JobState) -> None:
         # 任何终态都是 after_turn 语义下的已提交终止边界；取消同样会把
         # Session 交还给队列，否则该会话的 FIFO 队首将永久无人消费。
-        should_continue = finished_job.status in {
-            JobStatus.completed,
-            JobStatus.succeeded,
-            JobStatus.failed,
-            JobStatus.timed_out,
-            JobStatus.cancelled,
-        }
+        should_continue = finished_job.status in TERMINAL_JOB_STATUSES
         if not should_continue:
             async with self._dispatch_lock:
                 if finished_job.status == JobStatus.paused:
@@ -947,7 +1008,7 @@ class JobService:
             if current_job_id != finished_job.job_id:
                 return
 
-            if finished_job.status in {JobStatus.failed, JobStatus.timed_out}:
+            if finished_job.status in FAILED_JOB_STATUSES:
                 stale_internal_jobs = self._discard_stale_terminal_followups(
                     finished_job.session_id,
                     parent_job_id=finished_job.job_id,
@@ -1084,6 +1145,8 @@ class JobService:
                 attachments=list(job.attachments),
                 message_created_at=job.message_created_at,
                 message_metadata=dict(job.message_metadata),
+                gateway_id=job.gateway_id,
+                request_id=job.request_id,
                 status=job.status,
                 progress=job.progress,
                 current_step=job.current_step,
@@ -1380,13 +1443,7 @@ class JobService:
         """在执行器没有事件时仍更新可观察的 Job 活跃时间。"""
         while True:
             await asyncio.sleep(1)
-            if job.status not in {
-                JobStatus.running,
-                JobStatus.streaming,
-                JobStatus.waiting_input,
-                JobStatus.interrupt_pending,
-                JobStatus.cancelling,
-            }:
+            if job.status not in HEARTBEAT_TRACKED_JOB_STATUSES:
                 return
             job.progress = max(job.progress, runtime_state.progress)
             if runtime_state.current_step is not None:
@@ -1418,6 +1475,13 @@ class JobService:
                         message_id=record.message_id,
                         message_created_at=record.message_created_at,
                         agent_id=record.agent_id,
+                        # 恢复的 Job 沿用创建时持久化的真实 gateway_id（独立执行根，
+                        # MUST 显式携带），使重启后队首 Job 在 gateway 层可解析；
+                        # 缺该字段的老数据由 PendingRequestDTO 校验直接拒绝，不静默补齐。
+                        gateway_id=record.gateway_id,
+                        # 恢复的 Job 沿用创建时持久化的权威 request_id（独立执行根，
+                        # MUST 显式携带），使重启后 job 下游能沿用同一请求 ID。
+                        request_id=record.request_id,
                         status=JobStatus.queued,
                         message_metadata=dict(record.message_metadata),
                         attachments=list(record.attachments),
@@ -1487,7 +1551,7 @@ class JobService:
         self,
         session_id: str,
         *,
-        boundary: QueueBoundary = "idle",
+        boundary: DeliveryBoundary = "idle",
         tool_result_available: bool = True,
     ) -> bool:
         stale_internal_jobs: list[JobState] = []
@@ -1497,10 +1561,7 @@ class JobService:
             current_job = self._jobs.get(current_job_id) if current_job_id else None
             if current_job is not None and not self._is_terminal_status(current_job.status):
                 return False
-            if current_job is not None and current_job.status in {
-                JobStatus.failed,
-                JobStatus.timed_out,
-            }:
+            if current_job is not None and current_job.status in FAILED_JOB_STATUSES:
                 stale_parent_job_id = current_job.job_id
                 stale_internal_jobs = self._discard_stale_terminal_followups(
                     session_id,

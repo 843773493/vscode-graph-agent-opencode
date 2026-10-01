@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import hashlib
 import json
 import os
 import tempfile
@@ -161,48 +164,28 @@ class SessionService:
                 f"backend_workspace_id={self._workspace_id}"
             )
 
-    def _authoritative_navigation_projection(
-        self,
-        session_id: str,
-    ) -> tuple[SessionCatalogNodeProjection, dict[str, SessionCatalogNodeProjection]]:
-        """返回会话节点在 SQLite catalog 权威索引上的投影与全量节点表。
-
-        title 取 catalog display_name，parent_session_id 沿 catalog 父链派生。
-        使用 SQLite catalog 的唯一节点投影，避免把 manifest 中已剥离的
-        导航字段重新当作业务状态。
-        """
-        nodes = self._path_resolver.list_nodes()
-        nodes_by_id = {node.node_id: node for node in nodes}
-        node = nodes_by_id.get(session_id)
-        if node is None:
-            raise KeyError(f"权威会话目录索引不存在: session_id={session_id}")
-        return node, nodes_by_id
-
-    @staticmethod
-    def _nearest_session_ancestor_in_projection(
-        parent_node_id: str | None,
-        nodes_by_id: dict[str, SessionCatalogNodeProjection],
-    ) -> str | None:
-        """在 catalog 权威投影上派生最近 session 祖先（含传入节点本身）。
-
-        传入 session 直接返回它，folder 沿父链向上找第一个 session，None
-        返回 None。
-        """
-        current_id = parent_node_id
-        visited: set[str] = set()
-        while current_id is not None:
-            if current_id in visited:
-                raise RuntimeError(f"权威会话目录索引包含循环: {current_id}")
-            visited.add(current_id)
-            node = nodes_by_id.get(current_id)
-            if node is None:
-                raise RuntimeError(f"物理会话节点父节点不存在: {current_id}")
-            if node.kind == "session":
-                return node.node_id
-            current_id = node.parent_node_id
-        return None
-
     async def get(self, session_id: str) -> SessionDTO:
+        # 按 ID 的单节点查询（不触发全 catalog BFS）：单会话读取的工作量
+        # 与目录规模无关。未登记会话的 KeyError 与其余缺失同样归为 NotFound。
+        try:
+            node = self._path_resolver.get_node(session_id)
+        except KeyError as error:
+            raise NotFoundError(f"Session {session_id} not found") from error
+        return await self._read_session_dto(node)
+
+    async def _read_session_dto(
+        self,
+        node: SessionCatalogNodeProjection,
+    ) -> SessionDTO:
+        """读取单个会话的 session.json 并按权威索引回填导航字段。
+
+        唯一从 manifest 取得、无法由目录索引提供的字段是 ``title_source``
+        与 ``updated_at``；其余字段（title/parent_session_id/thread_id）以
+        resolver 权威投影为准回填，manifest 仍提供 kind/delegation/
+        created_at 等。该读路径只服务**当前页**的会话，不得对全工作区逐会话
+        调用（否则读取次数会随会话总数线性增长）。
+        """
+        session_id = node.node_id
         try:
             session_file = (
                 self._path_resolver.resolve_session_node_for_runtime(session_id)
@@ -213,16 +196,13 @@ class SessionService:
         if not session_file.is_file():
             raise NotFoundError(f"Session {session_id} not found")
 
-        node, nodes_by_id = self._authoritative_navigation_projection(session_id)
         data = json.loads(
             await asyncio.to_thread(session_file.read_text, encoding="utf-8")
         )
-        # 换源：title/parent_session_id 以 resolver 权威投影为准回填，
-        # manifest 仍提供其余字段（kind/delegation/created_at 等）。
         data["title"] = node.name
-        data["parent_session_id"] = self._nearest_session_ancestor_in_projection(
-            node.parent_node_id,
-            nodes_by_id,
+        # parent_session_id 沿 catalog 父链派生最近 session 祖先（不含 folder）。
+        data["parent_session_id"] = self._path_resolver.nearest_session_ancestor(
+            node.parent_node_id
         )
         # 普通 Session 入口只定位 main thread；身份取自 catalog 冻结指针，
         # 不接受 session_id 冒充 thread_id。
@@ -254,41 +234,65 @@ class SessionService:
         limit: int = 100,
         cursor: str | None = None,
     ) -> SessionListResultDTO:
-        sessions = []
+        """返回会话列表；读取工作量与返回页大小相关，不随会话总数增长。
+
+        目录索引是成员与顺序的唯一来源：先用索引节点（``kind`` 与权威
+        ``created_at``）排序并**只对当前页**调用 ``resolve_session_node`` /
+        逐个读取 session.json。读取次数因此与页大小相关，而非全工作区会话
+        总数；``total`` 与全量顺序仍由索引给出。
+        """
         nodes = self._path_resolver.list_nodes()
-        nodes_by_id = {node.node_id: node for node in nodes}
-        for node in nodes:
-            if node.kind != "session":
-                continue
-            session_file = (
-                self._path_resolver.resolve_session_node(node.node_id)
-                / "session.json"
+        session_nodes = [node for node in nodes if node.kind == "session"]
+        session_nodes.sort(key=lambda node: node.created_at, reverse=True)
+        total = len(session_nodes)
+        if limit < 1:
+            # 非正 limit 会返回空页却仍带 ``has_more=True`` 与相同 offset 的 cursor，
+            # 调用方按契约继续翻页时永远拿到空页且 next_cursor 不前进（死循环）。
+            # 公开查询参数必须 fail-closed，不能静默返回不可收敛的页。
+            raise ValueError(f"会话列表 limit 必须大于 0: limit={limit}")
+        revision = self._session_list_revision(session_nodes)
+        offset = (
+            _decode_session_list_cursor(cursor, revision=revision)
+            if cursor is not None
+            else skip
+        )
+        if offset < 0 or offset > total:
+            raise ValueError(
+                "会话列表 cursor offset 越界: "
+                f"offset={offset}, total={total}"
             )
-            data = json.loads(
-                await asyncio.to_thread(session_file.read_text, encoding="utf-8")
-            )
-            # 换源：与 get() 同口径，title 取权威索引节点显示名，
-            # parent_session_id 由父链派生，不读 manifest 中这两键。
-            data["title"] = node.name
-            data["parent_session_id"] = self._nearest_session_ancestor_in_projection(
-                node.parent_node_id,
-                nodes_by_id,
-            )
-            data["thread_id"] = self._path_resolver.main_thread_id(node.node_id)
-            session = SessionDTO.model_validate(data)
-            self._assert_workspace_binding(session)
-            if session.current_provider_id is None:
-                session.current_provider_id = (
-                    self._config_service.resolve_agent_provider_id(
-                        session.current_agent_id
-                    )
-                )
-            sessions.append(session)
+        page_nodes = session_nodes[offset : offset + limit]
 
-        sessions.sort(key=lambda s: s.created_at, reverse=True)
-        paginated = sessions[skip : skip + limit]
+        sessions = [await self._read_session_dto(node) for node in page_nodes]
+        next_offset = offset + len(page_nodes)
 
-        return SessionListResultDTO(items=paginated, total=len(sessions), cursor=None)
+        return SessionListResultDTO(
+            items=sessions,
+            total=total,
+            next_cursor=(
+                _encode_session_list_cursor(next_offset, revision=revision)
+                if next_offset < total
+                else None
+            ),
+            has_more=next_offset < total,
+        )
+
+    @staticmethod
+    def _session_list_revision(
+        session_nodes: list[SessionCatalogNodeProjection],
+    ) -> str:
+        """会话列表分页 revision：会话成员与顺序（创建时间倒序）的指纹。
+
+        cursor 绑定该值，使会话集合或顺序变化后旧 cursor 显式失效，
+        而不是静默跳页或重排。
+        """
+        payload = json.dumps(
+            [(node.node_id, str(node.created_at)) for node in session_nodes],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
 
     async def child_session_summary(
         self,
@@ -543,135 +547,6 @@ class SessionService:
         self._notify_changed("update", session_id)
         return existing
 
-    async def move_session(
-        self,
-        session_id: str,
-        parent_node_id: str | None,
-    ) -> SessionDTO:
-        """显式移动会话物理子树，并同步最近物理父会话。"""
-        existing = await self.get(session_id)
-        if parent_node_id is not None:
-            self._path_resolver.get_node(parent_node_id)
-        target_parent_session_id = self._path_resolver.nearest_session_ancestor(
-            parent_node_id
-        )
-        await self._validate_parent_session(
-            session_id=session_id,
-            workspace_id=existing.workspace_id,
-            parent_session_id=target_parent_session_id,
-        )
-        if (
-            existing.kind != "normal"
-            and target_parent_session_id is not None
-            and target_parent_session_id != existing.parent_session_id
-        ):
-            raise ValueError(f"{existing.kind} 会话不能移动到另一个父会话的目录下")
-        kind_demoted_to_normal = (
-            existing.kind == "context_fork" and target_parent_session_id is None
-        )
-        if kind_demoted_to_normal:
-            existing.kind = "normal"
-        existing.parent_session_id = target_parent_session_id
-        existing.updated_at = datetime.now(UTC)
-
-        async def move() -> None:
-            self._path_resolver.relocate_session(
-                session_id=session_id,
-                parent_node_id=parent_node_id,
-            )
-            if kind_demoted_to_normal:
-                session_file = (
-                    self._path_resolver.resolve_session_node(session_id)
-                    / "session.json"
-                )
-                self._write_session_file(session_file, existing)
-
-        affected_session_ids = self._path_resolver.descendant_session_ids(
-            session_id,
-            include_self=True,
-        )
-        if self._job_service is None:
-            await move()
-        else:
-            await self._job_service.run_sessions_idle_operation(
-                affected_session_ids,
-                move,
-            )
-        self._notify_changed("update", session_id)
-        return existing
-
-    async def move_to_folder(
-        self,
-        session_id: str,
-        folder_id: str | None,
-    ) -> SessionDTO:
-        if folder_id is not None:
-            folder = self._path_resolver.get_node(folder_id)
-            if folder.kind != "folder":
-                raise ValueError(f"目标节点不是会话文件夹: {folder_id}")
-        return await self.move_session(session_id, folder_id)
-
-    async def relocate_folder_tree(
-        self,
-        *,
-        folder_id: str,
-        parent_node_id: str | None,
-        name: str,
-    ) -> SessionCatalogNodeProjection:
-        """校验并逻辑移动文件夹子树，导航字段统一落在 catalog。"""
-        expected_parents = (
-            self._path_resolver.expected_session_parents_after_folder_move(
-                folder_id=folder_id,
-                parent_node_id=parent_node_id,
-            )
-        )
-        changed_session_ids: list[str] = []
-        demoted_sessions: list[SessionDTO] = []
-        for session_id, expected_parent_id in expected_parents.items():
-            existing = await self.get(session_id)
-            await self._validate_parent_session(
-                session_id=session_id,
-                workspace_id=existing.workspace_id,
-                parent_session_id=expected_parent_id,
-            )
-            if (
-                existing.kind != "normal"
-                and expected_parent_id is not None
-                and expected_parent_id != existing.parent_session_id
-            ):
-                raise ValueError(
-                    f"{existing.kind} 会话不能随文件夹改绑到另一个父会话: "
-                    f"session_id={session_id}"
-                )
-            parent_changed = existing.parent_session_id != expected_parent_id
-            if parent_changed:
-                existing.parent_session_id = expected_parent_id
-                existing.updated_at = datetime.now(UTC)
-                changed_session_ids.append(session_id)
-            if existing.kind == "context_fork" and expected_parent_id is None:
-                existing.kind = "normal"
-                demoted_sessions.append(existing)
-                if not parent_changed:
-                    existing.updated_at = datetime.now(UTC)
-                    changed_session_ids.append(session_id)
-
-        folder_node = self._path_resolver.get_node(folder_id)
-        if folder_node.name != name:
-            self._path_resolver.update_node_name(folder_id, name)
-        self._path_resolver.relocate_folder_tree(
-            folder_id=folder_id,
-            parent_node_id=parent_node_id,
-        )
-        for demoted in demoted_sessions:
-            session_file = (
-                self._path_resolver.resolve_session_node(demoted.session_id)
-                / "session.json"
-            )
-            self._write_session_file(session_file, demoted)
-        for session_id in changed_session_ids:
-            self._notify_changed("update", session_id)
-        return self._path_resolver.get_node(folder_id)
-
     async def _validate_parent_session(
         self,
         *,
@@ -813,3 +688,34 @@ class SessionService:
             dto = mapper.map_one(record.event.model_dump(), session_id=session_id)
             if dto is not None:
                 yield dto, record.cursor
+
+
+def _encode_session_list_cursor(offset: int, *, revision: str) -> str:
+    payload = json.dumps(
+        {"offset": offset, "revision": revision},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_session_list_cursor(cursor: str, *, revision: str) -> int:
+    """解析会话列表分页 cursor；revision 变化时显式报错，不静默降级。"""
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    except (
+        ValueError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        binascii.Error,
+    ) as error:
+        raise ValueError("会话列表 cursor 格式无效") from error
+    if not isinstance(payload, dict):
+        raise TypeError("会话列表 cursor 格式无效")
+    if payload.get("revision") != revision:
+        raise ValueError("会话列表已更新，请从第一页重新加载")
+    offset = payload.get("offset")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ValueError("会话列表 cursor offset 无效")
+    return offset

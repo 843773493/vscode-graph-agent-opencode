@@ -49,6 +49,10 @@ class StepExecutionPorts:
     message_stream_store: MessageStreamStore
     workspace_root: Path
     agent_factory: StepAgentFactory
+    # Turn 控制 inbox 的持久状态路径解析器：把 (session_id, turn_stream_id)
+    # 映射到会话节点内的绝对路径，保证控制事实与其它会话数据聚合在同一
+    # .boxteam/sessions 会话节点下；测试可用显式实现替换。
+    control_inbox_state_path: Callable[[str, str], Path]
     checkpointer_provider: Callable[[], BaseCheckpointSaver]
     session_service_provider: Callable[[], SessionLookupProtocol]
     external_resource_leases: ExternalResourceLeaseLedger | None = None

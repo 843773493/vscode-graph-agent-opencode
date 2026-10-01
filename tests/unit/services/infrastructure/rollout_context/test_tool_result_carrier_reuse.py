@@ -33,7 +33,7 @@ from app.services.infrastructure.rollout_context.storage.service import (
     RolloutStorage,
 )
 
-SESSION_ID = "ses_be073696349845c58564f112a3180697"
+SESSION_ID = "ses_019c3c97527e707e8dc56fca3f021b97"
 TURN_ID = "turn-delegated-turn2"
 MODEL_CALL_ID = "01a0a5cc-a65d-7dd2-acfb-9dad99508516"
 PROVIDER_TOOL_CALL_ID = "child-thread-task-call"

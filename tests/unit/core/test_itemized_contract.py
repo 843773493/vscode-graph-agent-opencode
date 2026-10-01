@@ -837,6 +837,12 @@ def test_parallel_checkpoint_tool_items_keep_unique_refs_and_one_provider_messag
     )
     assert len(call_items) == 4
     assert len({item.item_id for item in call_items}) == 4
+    # 非 anchor 伴随 item 失去消息级投影身份后，必须各自携带显式 provider
+    # call id，否则历史投影无法把每个并行调用还原为独立逻辑工具。
+    assert [item.metadata.get("tool_call_id") for item in call_items[:-1]] == [
+        call["id"] for call in calls[:-1]
+    ]
+    assert "tool_call_id" not in call_items[-1].metadata
     projected = codec.project_message(checkpoint_group)
     assert [call["id"] for call in projected["data"]["tool_calls"]] == [
         call["id"] for call in calls

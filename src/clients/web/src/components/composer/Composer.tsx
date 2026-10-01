@@ -3,6 +3,11 @@ import { DEFAULT_BACKEND_PORT } from "../../api";
 import { useComposerState } from "../../hooks";
 import { useComposerSlashCommands } from "../../hooks/composer/useComposerSlashCommands";
 import { useComposerDraft } from "../../hooks/composer/useComposerDraft";
+import {
+  composerDraftScopeKey,
+  composerDraftExceedsLimit,
+  writeComposerDraft,
+} from "../../state/composerDrafts/storage";
 import { VIEW_OPTIONS } from "../../state/contentViews";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
@@ -103,6 +108,14 @@ function Composer() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
+  // 同一份输入内容的重入闸门。产品明确支持「生成中继续排队下一条消息」
+  // （见 composerHint：「正在生成，可继续发送下一条或点击停止」），因此不能
+  // 禁用发送或整个会话级加锁——那会一并挡掉合法的排队。这里只挡「同一次提交
+  // 被瞬时重复触发」：Enter 提交会同步 setInput("")，但同一事件循环内的
+  // 重复触发仍可能读到尚未刷新的旧 input，导致同一 payload 被提交两次。
+  // 该身份在每次提交同步建立、按 payload 去重，成功的同内容再提交不会被误挡，
+  // 失败回填后也会被清空以允许重试。
+  const inFlightSubmissionRef = useRef<{ content: string; policy: DeliveryPolicy } | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const currentSessionId = state.currentSession?.session_id ?? null;
@@ -117,6 +130,10 @@ function Composer() {
     currentSessionId,
     state.gatewayUserScope,
   );
+  // 最近一次渲染的会话作用域键。提交失败回填必须按「发起提交时的作用域」归属，
+  // 否则用户在发送在途期间切走会话后，失败回填会把上一个会话的输入写进新会话。
+  const currentScopeKeyRef = useRef(currentSessionCacheKey);
+  currentScopeKeyRef.current = currentSessionCacheKey;
   // TODO: 附件包含 data URL，后续使用 IndexedDB 恢复；本轮只持久化文本草稿。
   const previousSessionIdRef = useRef<string | null>(currentSessionCacheKey);
   const visibleGoal = state.currentGoalSessionId === currentSessionId
@@ -433,6 +450,23 @@ function Composer() {
     const content = [typedContent || (attachments.length > 0 ? MEDIA_ONLY_PROMPT : ""), elementContext]
       .filter(Boolean)
       .join("\n\n");
+    // 同步重入守卫：同一 payload 的提交尚在进行时，重复触发直接返回，不重复
+    // 清空/发送/反馈。仅按 payload 身份去重，排队下一条不同内容不受影响。
+    const inFlight = inFlightSubmissionRef.current;
+    if (inFlight && inFlight.content === content && inFlight.policy === deliveryPolicy) {
+      return;
+    }
+    const submission = {
+      content,
+      policy: deliveryPolicy,
+      scopeKey: currentSessionCacheKey,
+      draftScopeKey: composerDraftScopeKey(
+        currentWorkspaceId,
+        currentSessionId,
+        state.gatewayUserScope,
+      ),
+    };
+    inFlightSubmissionRef.current = submission;
     const sentAttachments = attachments;
     const sentBrowserElements = browserElements;
     setInput("");
@@ -450,12 +484,30 @@ function Composer() {
       })),
       deliveryPolicy,
     ).catch((error: unknown) => {
-      setInput(typedContent);
-      setAttachments(sentAttachments);
-      setBrowserElements(sentBrowserElements);
-      setAttachmentError(
-        `发送失败：${errorMessage(error)}`,
-      );
+      if (inFlightSubmissionRef.current === submission) {
+        inFlightSubmissionRef.current = null;
+      }
+      if (currentScopeKeyRef.current === submission.scopeKey) {
+        // 只填空输入：发送在途期间用户可能已经写下下一条内容，失败回填绝不能
+        // 覆盖它。空输入时才把未发出的内容恢复回来，避免用户的草稿凭空消失。
+        setInput((current) => (current ? current : typedContent));
+        setAttachments((current) => (current.length > 0 ? current : sentAttachments));
+        setBrowserElements((current) => (current.length > 0 ? current : sentBrowserElements));
+        setAttachmentError(
+          `发送失败：${errorMessage(error)}`,
+        );
+        return;
+      }
+      // 用户已切走会话：把未发出的输入写回发起会话自己的持久草稿，避免把它
+      // 污染成当前会话的输入，同时用户切回该会话时内容仍在。失败原因已由
+      // AppProvider 写入 AppState.status，不会静默消失。
+      if (!composerDraftExceedsLimit(typedContent)) {
+        writeComposerDraft(submission.draftScopeKey, typedContent);
+      }
+    }).then(() => {
+      if (inFlightSubmissionRef.current === submission) {
+        inFlightSubmissionRef.current = null;
+      }
     });
   };
 

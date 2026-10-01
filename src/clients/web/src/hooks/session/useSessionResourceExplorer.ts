@@ -27,6 +27,8 @@ import type { SessionGeneratorResourcesController } from "../sessionResourceExpl
 import { changedCatalogWorkspaceIds } from "../sessionResourceExplorer/resourceTreeSync";
 import { errorMessage } from "../../utils/errorMessage";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
+import { HttpRequestError, isTransientNetworkError } from "../../api/http";
+import { isNavigationBackpressureStatus } from "../../api/session/sessionCatalogOperations";
 
 export interface CatalogBranchState extends SessionCatalogPage {
   loading: boolean;
@@ -41,16 +43,29 @@ const emptySearch: GatewaySessionSearchResults = {
 
 const CATALOG_RETRY_LIMIT = 3;
 
+/**
+ * 目录分支读取是否可重试的唯一判据：只认「明确的错误类型 + 状态码」，不再对错误
+ * 文案做正则嗅探——`HttpRequestError` 的消息形如 `请求失败 503 : <detail>`，与
+ * 旧正则要求的字面 `HTTP 503` 永不匹配，会让背压重试静默退化为 1 次。
+ *
+ * - `HttpRequestError` 的背压状态（408/425/429/502/503/504，权威集合见
+ *   `NAVIGATION_BACKPRESSURE_STATUSES`）→ 可重试；
+ * - fetch 网络层瞬时故障（Gateway/前端热切换窗口内的 TypeError、AbortError
+ *   等）→ 复用 `isTransientNetworkError`，不另写一套判据；
+ * - 其余错误（4xx 明确拒绝、500 内部故障、超时）一律不重试。
+ */
 function isRetryableCatalogError(error: unknown): boolean {
-  const message = errorMessage(error);
-  return /(?:HTTP\s*(?:502|503|504)|Failed to fetch|NetworkError|ERR_NETWORK_CHANGED|连接被拒绝|暂时不可用)/i.test(
-    message,
-  );
+  if (error instanceof HttpRequestError) {
+    return isNavigationBackpressureStatus(error.status);
+  }
+  return isTransientNetworkError(error);
 }
 
 function catalogRetryDelay(attempt: number): Promise<void> {
   return new Promise((resolve) => {
-    window.setTimeout(resolve, 250 * (attempt + 1));
+    // 基础设施计时用 globalThis，与 http.ts、turnLoadSupport 等既有实现一致；
+    // 不能依赖 window 全局，否则在无 window 的运行环境里重试退避会直接抛错。
+    globalThis.setTimeout(resolve, 250 * (attempt + 1));
   });
 }
 
@@ -442,6 +457,13 @@ export function useSessionResourceExplorer({
         cursor = page.cursor;
       }
     } catch (error) {
+      // 请求身份守卫：本次分页已被更新的一次 loadBranch（或刷新）顶掉时，它的
+      // 失败终态不得覆盖那份已成功写入的新结果。与 loadBranch 成功/失败分支
+      // （同文件使用 `branchRequestRefs.current.get(key) !== requestId` 同一手
+      // 法）保持一致，不再新造第二套 generation 机制。
+      if (branchRequestRefs.current.get(key) !== requestId) {
+        throw error;
+      }
       const message = errorMessage(error);
       setBranches((previous) => {
         const next = new Map(previous);

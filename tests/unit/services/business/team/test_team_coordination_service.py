@@ -211,3 +211,72 @@ async def test_existing_review_session_is_attached_without_replacement(tmp_path)
     )
     assert board.tasks[0].task_id == task.task.task_id
     assert board.members[1].source == "attached"
+
+
+async def _blocked_task_fixture(tmp_path):
+    parent = _session("ses_parent", title="开发主会话")
+    service, _, orchestrator, _ = _service(tmp_path, [parent])
+    team = await service.create_team(
+        requester_session_id=parent.session_id,
+        name="结论闭集",
+    )
+    member_result = await service.create_member(
+        requester_session_id=parent.session_id,
+        requester_agent_id="default",
+        requester_job_id="job_parent",
+        requester_tool_call_id="call_member",
+        team_id=team.team_id,
+        role="reviewer",
+        startup_prompt="等待任务。",
+        instructions="只读。",
+        work_mode="read_only",
+    )
+    assigned = await service.assign_task(
+        requester_session_id=parent.session_id,
+        team_id=team.team_id,
+        assignee_session_id=member_result.member.session_id,
+        title="审查",
+        description="检查。",
+        phase="review",
+        cycle=1,
+        depends_on_task_ids=[],
+        start_assignee=True,
+    )
+    return service, team, member_result.member.session_id, assigned.task.task_id, orchestrator
+
+
+@pytest.mark.asyncio
+async def test_blocked_status_requires_summary(tmp_path):
+    """blocked 属于结论闭集，summary 必填（续用 RESOLUTION_STATUSES 判定）。"""
+
+    service, team, reviewer_id, task_id, _ = await _blocked_task_fixture(tmp_path)
+
+    with pytest.raises(ValueError, match="时 summary 不能为空"):
+        await service.update_task(
+            requester_session_id=reviewer_id,
+            team_id=team.team_id,
+            task_id=task_id,
+            status="blocked",
+            summary="   ",
+        )
+
+
+@pytest.mark.asyncio
+async def test_blocked_status_notifies_coordinator(tmp_path):
+    """blocked 属于结论闭集，非协调者成员置 blocked 必须通知协调者。"""
+
+    service, team, reviewer_id, task_id, orchestrator = await _blocked_task_fixture(tmp_path)
+    calls_before = len(orchestrator.calls)
+
+    result = await service.update_task(
+        requester_session_id=reviewer_id,
+        team_id=team.team_id,
+        task_id=task_id,
+        status="blocked",
+        summary="BLOCKED：等待上游依赖。",
+    )
+
+    assert result.task.status == "blocked"
+    assert result.dispatched_job_id is not None
+    assert orchestrator.calls[-1]["session_id"] == "ses_parent"
+    assert len(orchestrator.calls) == calls_before + 1

@@ -10,7 +10,6 @@ import asyncio
 import hashlib
 import sqlite3
 import threading
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
@@ -18,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     CatalogBackupManifest,
     CatalogMaintenanceRequiredError,
@@ -35,19 +35,29 @@ from app.core.session_catalog_store import (
     validate_thread_id,
 )
 from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
+from tests.support.canonical_id_at import session_id_at
 
 WORKSPACE_ID = "ws-primary"
 OTHER_WORKSPACE_ID = "ws-other"
 
+# 固定日期桶测试统一时刻：canonical id 的内嵌 48 bit 毫秒 MUST 与分桶同日
+# （§4.1 一致性断言），故按该时刻生成 id。
+JUNE_1 = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+
 
 def make_session_id() -> str:
-    """生成满足 UUIDv4 位 profile 的 session_id。"""
-    return f"ses_{uuid.uuid4().hex}"
+    """生成满足 UUIDv7 位 profile 的 canonical session_id。"""
+    return f"ses_{create_uuid_hex()}"
+
+
+def make_session_id_at(moment: datetime) -> str:
+    """按给定时刻生成 canonical session_id（内嵌时间与该时刻同日）。"""
+    return session_id_at(moment)
 
 
 def make_thread_id() -> str:
-    """生成满足 UUIDv4 位 profile 的 thread_id。"""
-    return f"thr_{uuid.uuid4().hex}"
+    """生成满足 UUIDv7 位 profile 的 canonical thread_id。"""
+    return f"thr_{create_uuid_hex()}"
 
 
 def make_locator(session_id: str, moment: datetime) -> str:
@@ -65,8 +75,8 @@ def create_session(
     created_at: datetime | None = None,
 ) -> SessionCatalogNode:
     """测试辅助：创建一个合法 session 节点并返回投影。"""
-    session_id = make_session_id()
-    moment = created_at or datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    moment = created_at or JUNE_1
+    session_id = make_session_id_at(moment)
     return store.create_session_node(
         session_id,
         workspace_id,
@@ -79,8 +89,8 @@ def create_session(
 
 
 def _hex_payload_with(index: int, char: str) -> str:
-    """把合法 UUIDv4 payload 的指定 hex 位替换成给定字符。"""
-    payload = list(uuid.uuid4().hex)
+    """把合法 UUIDv7 payload 的指定 hex 位替换成给定字符。"""
+    payload = list(create_uuid_hex())
     payload[index] = char
     return "".join(payload)
 
@@ -161,36 +171,36 @@ def tree(store: SessionCatalogStore) -> CatalogTree:
 # ----------------------------------------------------------------------
 
 
-def test_validate_session_id_accepts_uuid_v4_profile() -> None:
+def test_validate_session_id_accepts_uuid_v7_profile() -> None:
     validate_session_id(make_session_id())
 
 
-def test_validate_thread_id_accepts_uuid_v4_profile() -> None:
+def test_validate_thread_id_accepts_uuid_v7_profile() -> None:
     validate_thread_id(make_thread_id())
 
 
 @pytest.mark.parametrize(
     "value",
     [
-        "thr_" + uuid.uuid4().hex,  # 错误前缀
-        "job_" + uuid.uuid4().hex,  # 错误前缀
-        uuid.uuid4().hex,  # 缺前缀
+        "thr_" + create_uuid_hex(),  # 错误前缀
+        "job_" + create_uuid_hex(),  # 错误前缀
+        create_uuid_hex(),  # 缺前缀
         "ses_" + "0" * 31,  # 长度 31
         "ses_" + "0" * 33,  # 长度 33
-        "SES_" + uuid.uuid4().hex,  # 大写前缀
-        "ses_" + uuid.uuid4().hex.upper(),  # 大写 hex
-        "ses_" + "g" + uuid.uuid4().hex[1:],  # 非 hex
-        "ses_" + _hex_payload_with(12, "3"),  # 坏 v4 version 位
-        "ses_" + _hex_payload_with(12, "5"),  # 坏 v4 version 位
+        "SES_" + create_uuid_hex(),  # 大写前缀
+        "ses_" + create_uuid_hex().upper(),  # 大写 hex
+        "ses_" + "g" + create_uuid_hex()[1:],  # 非 hex
+        "ses_" + _hex_payload_with(12, "4"),  # 坏 version 位（v4）
+        "ses_" + _hex_payload_with(12, "6"),  # 坏 version 位（v6）
         "ses_" + _hex_payload_with(16, "c"),  # 坏 variant 位
         "ses_" + _hex_payload_with(16, "7"),  # 坏 variant 位
-        "ses_/" + uuid.uuid4().hex[:31],  # 斜杠
+        "ses_/" + create_uuid_hex()[:31],  # 斜杠
         "ses_\\",  # 反斜杠
         "ses_..",
         "ses_.",
         "ses_" + "测" * 32,  # Unicode
-        "ses_" + uuid.uuid4().hex + "/",  # 尾部斜杠
-        " ses_" + uuid.uuid4().hex,  # 前导空白
+        "ses_" + create_uuid_hex() + "/",  # 尾部斜杠
+        " ses_" + create_uuid_hex(),  # 前导空白
         "",
     ],
 )
@@ -208,10 +218,10 @@ def test_validate_session_id_rejects_non_string(value: object) -> None:
 @pytest.mark.parametrize(
     "value",
     [
-        "ses_" + uuid.uuid4().hex,  # 错误前缀
+        "ses_" + create_uuid_hex(),  # 错误前缀
         "thr_" + "0" * 31,  # 长度 31
-        "THR_" + uuid.uuid4().hex,  # 大写前缀
-        "thr_" + _hex_payload_with(12, "3"),  # 坏 v4 version 位
+        "THR_" + create_uuid_hex(),  # 大写前缀
+        "thr_" + _hex_payload_with(12, "4"),  # 坏 version 位（v4）
         "thr_" + _hex_payload_with(16, "c"),  # 坏 variant 位
         "thr_..",
     ],
@@ -232,17 +242,22 @@ def test_validate_thread_id_rejects_non_string() -> None:
 
 
 def test_validate_storage_relative_locator_accepts_valid() -> None:
-    validate_storage_relative_locator(f"sessions/2026/06/01/{make_session_id()}")
+    validate_storage_relative_locator(f"sessions/2026/06/01/{make_session_id_at(JUNE_1)}")
 
 
 def test_validate_storage_relative_locator_accepts_leap_day() -> None:
     # 2024 是闰年，2 月 29 日合法
-    validate_storage_relative_locator(f"sessions/2024/02/29/{make_session_id()}")
+    leap_day = datetime(2024, 2, 29, 12, 0, tzinfo=UTC)
+    validate_storage_relative_locator(
+        f"sessions/2024/02/29/{make_session_id_at(leap_day)}"
+    )
 
 
 def _invalid_locators() -> list[str]:
     """构造逐类非法 locator；session_id 部分用真实合法 ID，确保失败归因于被测形态。"""
-    sid = make_session_id()
+    # sid 内嵌时间与 2026/06/01 同日，避免被 §4.1 日期一致性断言先行拦下，
+    # 从而确保失败归因于本函数构造的具体形态错误。
+    sid = make_session_id_at(JUNE_1)
     return [
         f"session/2026/06/01/{sid}",  # 坏前缀
         f"2026/06/01/{sid}",  # 缺前缀
@@ -258,8 +273,8 @@ def _invalid_locators() -> list[str]:
         f"sessions/2026/04/31/{sid}",  # 4 月 31 日
         f"sessions/2026/06/01/{sid}/",  # 尾部斜杠
         f"sessions/2026/06/01/{sid}/extra",  # 多余组件
-        f"sessions/2026/06/01/thr_{uuid.uuid4().hex}",  # 叶名是 thread 前缀
-        f"sessions/2026/06/01/ses_{_hex_payload_with(12, '3')}",  # session_id 非法
+        f"sessions/2026/06/01/thr_{create_uuid_hex()}",  # 叶名是 thread 前缀
+        f"sessions/2026/06/01/ses_{_hex_payload_with(12, '4')}",  # session_id 非法（v4）
         f"sessions/2026/06/01/ses_{_hex_payload_with(16, 'c')}",  # session_id 非法
         f"sessions/2026/06/01/ses_{'0' * 31}",  # session_id 长度非法
         f"sessions\\2026\\06\\01\\{sid}",  # 反斜杠
@@ -279,6 +294,21 @@ def test_validate_storage_relative_locator_rejects_invalid(locator: str) -> None
 def test_validate_storage_relative_locator_rejects_non_string() -> None:
     with pytest.raises(TypeError):
         validate_storage_relative_locator(None)  # type: ignore[arg-type]
+
+
+def test_validate_storage_relative_locator_rejects_bucket_id_drift() -> None:
+    """§4.2 负向：分桶日期与 id 内嵌 48 bit 毫秒 UTC 日期漂移 MUST
+    fail-closed；断言只凭 locator 字符串自足判定，不依赖另存 created_at。"""
+    sid = make_session_id_at(JUNE_1)
+    # 同日桶通过（基线）。
+    validate_storage_relative_locator(f"sessions/2026/06/01/{sid}")
+    # 漂移到相邻日、异年同日、以及跨月，一律 fail-closed。
+    with pytest.raises(ValueError, match="分桶与 id 漂移"):
+        validate_storage_relative_locator(f"sessions/2026/06/02/{sid}")
+    with pytest.raises(ValueError, match="分桶与 id 漂移"):
+        validate_storage_relative_locator(f"sessions/2026/05/01/{sid}")
+    with pytest.raises(ValueError, match="分桶与 id 漂移"):
+        validate_storage_relative_locator(f"sessions/2025/06/01/{sid}")
 
 
 # ----------------------------------------------------------------------
@@ -572,7 +602,7 @@ def test_invalid_state_rejected_by_check(store: SessionCatalogStore) -> None:
 
 
 def test_duplicate_node_id_rejected(store: SessionCatalogStore) -> None:
-    folder_id = make_session_id()
+    folder_id = make_session_id_at(JUNE_1)
     store.create_folder(folder_id, WORKSPACE_ID, None, "第一个")
     with pytest.raises(RuntimeError, match="已存在"):
         store.create_folder(folder_id, WORKSPACE_ID, None, "第二个")
@@ -591,7 +621,7 @@ def test_duplicate_node_id_rejected(store: SessionCatalogStore) -> None:
 
 def test_duplicate_main_thread_rejected(store: SessionCatalogStore) -> None:
     thread_id = make_thread_id()
-    first_id = make_session_id()
+    first_id = make_session_id_at(JUNE_1)
     store.create_session_node(
         first_id,
         WORKSPACE_ID,
@@ -601,7 +631,7 @@ def test_duplicate_main_thread_rejected(store: SessionCatalogStore) -> None:
         f"sessions/2026/06/01/{first_id}",
         thread_id,
     )
-    second_id = make_session_id()
+    second_id = make_session_id_at(JUNE_1)
     with pytest.raises(RuntimeError, match="main_thread_id"):
         store.create_session_node(
             second_id,
@@ -618,7 +648,7 @@ def test_same_main_thread_across_workspaces_allowed(
     store: SessionCatalogStore,
 ) -> None:
     thread_id = make_thread_id()
-    first_id = make_session_id()
+    first_id = make_session_id_at(JUNE_1)
     store.create_session_node(
         first_id,
         WORKSPACE_ID,
@@ -628,7 +658,7 @@ def test_same_main_thread_across_workspaces_allowed(
         f"sessions/2026/06/01/{first_id}",
         thread_id,
     )
-    second_id = make_session_id()
+    second_id = make_session_id_at(JUNE_1)
     node = store.create_session_node(
         second_id,
         OTHER_WORKSPACE_ID,
@@ -771,7 +801,7 @@ def test_nearest_session_ancestor_missing_node_raises_keyerror(
 
 
 def test_get_session_by_main_thread(store: SessionCatalogStore) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     thread_id = make_thread_id()
     store.create_session_node(
         session_id,
@@ -1125,6 +1155,69 @@ def test_move_node_to_deleting_parent_rejected(
         store.move_node(tree.session_s2, target.node_id)
 
 
+def test_move_node_rejects_deleting_node_out_of_subtree(
+    store: SessionCatalogStore,
+) -> None:
+    """deleting 子树内的 node 不得被移出到正常拓扑（否则随后 finish 仍
+    tombstone，形成「搬进去又自己消失」的伪成功）。"""
+    ids = build_delete_tree(store)
+    keep = store.create_folder(make_session_id(), WORKSPACE_ID, None, "正常父")
+    create_subtree_record(store, root_node_id=ids["root"])
+    store.mark_subtree_deleting("del-key-1")
+    # 被移动节点自身 deleting：即使新父正常也拒绝。
+    with pytest.raises(RuntimeError, match="被移动节点正在删除"):
+        store.move_node(ids["s2"], keep.node_id)
+    # 未发生任何写入：s2 父关系保持冻结前的值。
+    assert store.get_node(ids["s2"]).parent_node_id == ids["s1"]
+    # 对照 1：新父 deleting 时同样拒绝（父校验既有行为不回归）。
+    with pytest.raises(RuntimeError, match="正在删除"):
+        store.move_node(keep.node_id, ids["root"])
+    # 对照 2：子树外的正常节点移动到另一正常父节点仍被接受。
+    other = store.create_folder(make_session_id(), WORKSPACE_ID, None, "另一正常父")
+    moved = store.move_node(keep.node_id, other.node_id)
+    assert moved.parent_node_id == other.node_id
+
+
+def test_list_pending_subtree_delete_records_filters_terminal_states(
+    store: SessionCatalogStore,
+) -> None:
+    """列出恢复入口只返回未终结（preparing/deleting/draining）的 record。"""
+    first = build_delete_tree(store)
+    second = build_delete_tree(store)
+    create_subtree_record(store, key="del-preparing", root_node_id=first["root"])
+    create_subtree_record(store, key="del-draining", root_node_id=second["root"])
+    store.mark_subtree_deleting("del-preparing")
+    store.mark_subtree_deleting("del-draining")
+    for session_id in (second["s1"], second["s2"], second["s3"]):
+        store.record_drain_progress("del-draining", session_id)
+    pending = store.list_pending_subtree_delete_records(WORKSPACE_ID)
+    assert {
+        (record.subtree_delete_idempotency_key, record.state) for record in pending
+    } == {
+        ("del-preparing", "deleting"),
+        ("del-draining", "draining"),
+    }
+    # completed 与 aborted 不进入恢复面。
+    store.finish_subtree_delete("del-draining")
+    store.abort_subtree_delete("del-preparing", "人工中止")
+    assert store.list_pending_subtree_delete_records(WORKSPACE_ID) == []
+
+
+def test_list_pending_subtree_delete_records_scoped_to_workspace(
+    store: SessionCatalogStore,
+) -> None:
+    ids = build_delete_tree(store)
+    create_subtree_record(store, key="del-key-1", root_node_id=ids["root"])
+    store.mark_subtree_deleting("del-key-1")
+    assert [
+        record.subtree_delete_idempotency_key
+        for record in store.list_pending_subtree_delete_records(WORKSPACE_ID)
+    ] == ["del-key-1"]
+    assert (
+        store.list_pending_subtree_delete_records(OTHER_WORKSPACE_ID) == []
+    )
+
+
 # ----------------------------------------------------------------------
 # locator 日期 / created_at 一致性与路径预算
 # ----------------------------------------------------------------------
@@ -1151,26 +1244,27 @@ def test_create_session_locator_utc_date_semantics(
 ) -> None:
     # +08:00 时区的 20:00 是 UTC 12:00，locator 必须用 UTC 日期
     plus8 = timezone(timedelta(hours=8))
-    session_id = make_session_id()
+    moment = datetime(2026, 6, 1, 20, 0, tzinfo=plus8)
+    session_id = make_session_id_at(moment)
     node = store.create_session_node(
         session_id,
         WORKSPACE_ID,
         None,
         "时区会话",
-        datetime(2026, 6, 1, 20, 0, tzinfo=plus8),
+        moment,
         f"sessions/2026/06/01/{session_id}",
         make_thread_id(),
     )
     assert node.storage_relative_locator == f"sessions/2026/06/01/{session_id}"
     # UTC 日期是 06-01，用 06-02 的 locator 被拒
-    other_id = make_session_id()
+    other_id = make_session_id_at(moment)
     with pytest.raises(ValueError, match="UTC 日期"):
         store.create_session_node(
             other_id,
             WORKSPACE_ID,
             None,
             "时区会话2",
-            datetime(2026, 6, 1, 20, 0, tzinfo=plus8),
+            moment,
             f"sessions/2026/06/02/{other_id}",
             make_thread_id(),
         )
@@ -1179,7 +1273,7 @@ def test_create_session_locator_utc_date_semantics(
 def test_create_session_naive_created_at_rejected(
     store: SessionCatalogStore,
 ) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     with pytest.raises(ValueError, match="时区"):
         store.create_session_node(
             session_id,
@@ -1195,7 +1289,7 @@ def test_create_session_naive_created_at_rejected(
 def test_create_session_non_datetime_created_at_rejected(
     store: SessionCatalogStore,
 ) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     with pytest.raises(TypeError, match="created_at"):
         store.create_session_node(
             session_id,
@@ -1211,7 +1305,7 @@ def test_create_session_non_datetime_created_at_rejected(
 def test_create_session_none_created_at_rejected(
     store: SessionCatalogStore,
 ) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     with pytest.raises(TypeError, match="created_at"):
         store.create_session_node(
             session_id,
@@ -1257,7 +1351,7 @@ def test_create_session_none_locator_rejected(store: SessionCatalogStore) -> Non
 def test_create_session_locator_leaf_mismatch_rejected(
     store: SessionCatalogStore,
 ) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     with pytest.raises(ValueError, match="叶名"):
         store.create_session_node(
             session_id,
@@ -1265,7 +1359,7 @@ def test_create_session_locator_leaf_mismatch_rejected(
             None,
             "叶名不一致会话",
             datetime(2026, 6, 1, tzinfo=UTC),
-            f"sessions/2026/06/01/{make_session_id()}",
+            f"sessions/2026/06/01/{make_session_id_at(JUNE_1)}",
             make_thread_id(),
         )
 
@@ -1280,7 +1374,7 @@ def test_create_session_path_budget_component_rejected(
         sessions_root,
     )
     try:
-        session_id = make_session_id()
+        session_id = make_session_id_at(JUNE_1)
         with pytest.raises(ValueError, match="组件"):
             catalog.create_session_node(
                 session_id,
@@ -1303,7 +1397,7 @@ def test_create_session_path_budget_total_rejected(tmp_path: Path) -> None:
         sessions_root,
     )
     try:
-        session_id = make_session_id()
+        session_id = make_session_id_at(JUNE_1)
         with pytest.raises(ValueError, match="总长"):
             catalog.create_session_node(
                 session_id,
@@ -1319,7 +1413,7 @@ def test_create_session_path_budget_total_rejected(tmp_path: Path) -> None:
 
 
 def test_resolve_session_locator(store: SessionCatalogStore) -> None:
-    session_id = make_session_id()
+    session_id = make_session_id_at(JUNE_1)
     locator = f"sessions/2026/06/01/{session_id}"
     resolved = store.resolve_session_locator(locator)
     assert resolved == store.sessions_root / "2026" / "06" / "01" / session_id
@@ -3103,3 +3197,89 @@ def test_create_folder_in_caller_transaction(
             connection=connection,
         )
     assert store.get_node(created.node_id).display_name == "事务内 folder"
+
+
+# ----------------------------------------------------------------------
+# §5.1 DDL 未被 v7 变更：nodes 主键/索引形态冻结
+# ----------------------------------------------------------------------
+
+# nodes 表 DDL 对照基线（R10 冻结形态）；v7 只改值分布，MUST NOT 改本 DDL。
+_EXPECTED_NODES_DDL = """
+CREATE TABLE nodes (
+    node_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('folder', 'session')),
+    parent_node_id TEXT REFERENCES nodes(node_id),
+    display_name TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('active', 'deleting')),
+    revision INTEGER NOT NULL DEFAULT 1,
+    workspace_id TEXT NOT NULL,
+    created_at TEXT,
+    storage_relative_locator TEXT,
+    main_thread_id TEXT,
+    CHECK (
+        (kind = 'session'
+            AND created_at IS NOT NULL
+            AND storage_relative_locator IS NOT NULL
+            AND main_thread_id IS NOT NULL)
+        OR (kind = 'folder'
+            AND created_at IS NULL
+            AND storage_relative_locator IS NULL
+            AND main_thread_id IS NULL)
+    ),
+    UNIQUE (workspace_id, main_thread_id),
+    UNIQUE (workspace_id, storage_relative_locator)
+)"""
+
+
+def test_nodes_ddl_frozen_for_uuidv7(store: SessionCatalogStore) -> None:
+    """§5.1：nodes.node_id 仍为 TEXT PRIMARY KEY，DDL 未因 v7 变更。"""
+    row = store.connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'nodes'"
+    ).fetchone()
+    assert row is not None
+    assert " ".join(str(row[0]).split()) == " ".join(_EXPECTED_NODES_DDL.split())
+
+
+def test_nodes_primary_key_columns_unchanged(store: SessionCatalogStore) -> None:
+    """§5.1：nodes 主键仍是单列 node_id（TEXT），未加列/未加索引。"""
+    columns = store.connection.execute("PRAGMA table_info(nodes)").fetchall()
+    pk_columns = [str(c[1]) for c in columns if int(c[5]) > 0]
+    assert pk_columns == ["node_id"]
+    index_names = {
+        str(r[0])
+        for r in store.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND tbl_name = 'nodes' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+    assert index_names == {"idx_nodes_parent", "idx_nodes_workspace"}
+
+
+# ----------------------------------------------------------------------
+# §5.2 v7 主键按 id 排序 ≈ 按时间顺序
+# ----------------------------------------------------------------------
+
+
+def test_uuidv7_primary_key_ordering_matches_time_order(
+    store: SessionCatalogStore,
+) -> None:
+    """§5.2：v7 id 插入 nodes 后，按 node_id 文本排序 == 按创建时刻顺序。"""
+    moments = [
+        datetime(2026, 6, 1, 12, 0, 0, ms * 1000, tzinfo=UTC)
+        for ms in range(6)
+    ]
+    created = [create_session(store, created_at=moment) for moment in moments]
+    # 生成顺序（=创建时刻顺序）的 id 列表。
+    chronological = [node.node_id for node in created]
+    # SQLite 主键文本排序结果。
+    sorted_ids = [
+        str(row[0])
+        for row in store.connection.execute(
+            "SELECT node_id FROM nodes WHERE kind = 'session' ORDER BY node_id"
+        )
+    ]
+    assert sorted_ids == chronological
+    # 按内嵌时间戳解码的排序亦与文本排序一致（同毫秒分辨率）。
+    assert sorted_ids == sorted(
+        sorted_ids, key=lambda value: int(value[4:16], 16)
+    )

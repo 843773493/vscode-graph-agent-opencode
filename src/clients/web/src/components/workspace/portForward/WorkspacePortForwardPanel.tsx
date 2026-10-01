@@ -406,6 +406,25 @@ export default function WorkspacePortForwardPanel({
   const remotePortInvalid = remotePort !== "" && !isValidPortLiteral(remotePort);
   const localPortInvalid = localPort !== "" && !isValidPortLiteral(localPort);
 
+  // 行内「更多操作」菜单与右键上下文菜单逐字同族：两者此前各写一份完全相同的
+  // 条目与禁用条件，新增一个端口动作就要改两处、极易只改一处。收敛成唯一一份，
+  // 由调用方决定点击时是否需要先关闭右键菜单。
+  const renderPortActionItems = (
+    forward: GatewayPortForward,
+    canOpen: boolean,
+    beforeAction: () => void,
+  ) => (
+    <>
+      <button type="button" role="menuitem" onClick={() => { beforeAction(); void handleCopyAddress(forward); }} disabled={!forward.local_url}>复制本地地址</button>
+      <button type="button" role="menuitem" onClick={() => { beforeAction(); handleOpen(forward, "browser"); }} disabled={!canOpen}>在浏览器中打开</button>
+      <button type="button" role="menuitem" onClick={() => { beforeAction(); handleOpen(forward, "preview"); }} disabled={!canOpen}>在编辑器中预览</button>
+      <button type="button" role="menuitem" onClick={() => { beforeAction(); beginLabelEdit(forward); }}>编辑端口标签</button>
+      {forward.local_port ? <button type="button" role="menuitem" onClick={() => { beforeAction(); setEditingLocalPortId(forward.forward_id); setEditingLocalPort(String(forward.local_port)); setError(null); }}>更改本地端口</button> : null}
+      {forward.status === "error" || forward.status === "stopped" ? <button type="button" role="menuitem" onClick={() => { beforeAction(); void handleReconnect(forward); }} disabled={reconnectingId === forward.forward_id}>{reconnectingId === forward.forward_id ? "正在重连…" : "重新连接"}</button> : null}
+      {forward.status !== "stopped" ? <button type="button" role="menuitem" onClick={() => { beforeAction(); void handleStop(forward); }} disabled={stoppingId === forward.forward_id}>停止转发</button> : null}
+    </>
+  );
+
   return (
     <section className="port-forward-panel" aria-label="工作区 SSH 端口转发">
       {error ? (
@@ -600,13 +619,7 @@ export default function WorkspacePortForwardPanel({
                             <span className="codicon codicon-ellipsis" aria-hidden="true" />
                           </summary>
                           <div role="menu">
-                            <button type="button" role="menuitem" onClick={() => void handleCopyAddress(forward)} disabled={!forward.local_url}>复制本地地址</button>
-                            <button type="button" role="menuitem" onClick={() => handleOpen(forward, "browser")} disabled={!canOpen}>在浏览器中打开</button>
-                            <button type="button" role="menuitem" onClick={() => handleOpen(forward, "preview")} disabled={!canOpen}>在编辑器中预览</button>
-                            <button type="button" role="menuitem" onClick={() => beginLabelEdit(forward)}>编辑端口标签</button>
-                            {forward.local_port ? <button type="button" role="menuitem" onClick={() => { setEditingLocalPortId(forward.forward_id); setEditingLocalPort(String(forward.local_port)); setError(null); }}>更改本地端口</button> : null}
-                            {forward.status === "error" || forward.status === "stopped" ? <button type="button" role="menuitem" onClick={() => void handleReconnect(forward)} disabled={reconnectingId === forward.forward_id}>{reconnectingId === forward.forward_id ? "正在重连…" : "重新连接"}</button> : null}
-                            {forward.status !== "stopped" ? <button type="button" role="menuitem" onClick={() => void handleStop(forward)} disabled={stoppingId === forward.forward_id}>停止转发</button> : null}
+                            {renderPortActionItems(forward, canOpen, () => undefined)}
                           </div>
                         </details>
                       </div>
@@ -640,13 +653,7 @@ export default function WorkspacePortForwardPanel({
                       aria-label={`端口上下文菜单：${portLabel(forward)}`}
                       onPointerDown={(event) => event.stopPropagation()}
                     >
-                      <button type="button" role="menuitem" onClick={() => { setContextMenuId(null); void handleCopyAddress(forward); }} disabled={!forward.local_url}>复制本地地址</button>
-                      <button type="button" role="menuitem" onClick={() => { setContextMenuId(null); handleOpen(forward, "browser"); }} disabled={!canOpen}>在浏览器中打开</button>
-                      <button type="button" role="menuitem" onClick={() => { setContextMenuId(null); handleOpen(forward, "preview"); }} disabled={!canOpen}>在编辑器中预览</button>
-                      <button type="button" role="menuitem" onClick={() => { setContextMenuId(null); beginLabelEdit(forward); }}>编辑端口标签</button>
-                      {forward.local_port ? <button type="button" role="menuitem" onClick={() => { setContextMenuId(null); setEditingLocalPortId(forward.forward_id); setEditingLocalPort(String(forward.local_port)); setError(null); }}>更改本地端口</button> : null}
-                      {forward.status === "error" || forward.status === "stopped" ? <button type="button" role="menuitem" onClick={() => { setContextMenuId(null); void handleReconnect(forward); }} disabled={reconnectingId === forward.forward_id}>重新连接</button> : null}
-                      {forward.status !== "stopped" ? <button type="button" role="menuitem" onClick={() => { setContextMenuId(null); void handleStop(forward); }} disabled={stoppingId === forward.forward_id}>停止转发</button> : null}
+                      {renderPortActionItems(forward, canOpen, () => setContextMenuId(null))}
                     </div>
                   ) : null}
                 </article>

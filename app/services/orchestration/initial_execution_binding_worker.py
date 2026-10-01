@@ -15,8 +15,10 @@
   记录后在本轮结束时显式抛出，绝不静默吞掉。
 - 并发 worker 对同一 intent 只能产生一次有效 binding：claim 由 store
   的单事务闸门保证（不同 claim 冲突 fail closed）。
-- 生产装配只建立 worker 生命周期（显式 start/stop 入口）；缺 binder
-  时启动明确报告 unavailable，不把任何 intent 标成 bound。
+- 生产容器当前尚未构造本 worker（零装配）；OpenSpec 8.5-B 要求的
+  接线为「生产装配只建立 worker 生命周期（显式 start/stop 入口），
+  缺 binder 时启动明确报告 unavailable」，但该装配与 start/stop 入口
+  尚未落地，故当前生产运行期不会消费任何 initial execution intent。
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.core.session_control_primitives import validate_claim_fields
 from app.core.session_control_store import (
     SessionControlStore,
     ThreadExecutionIntent,
@@ -129,19 +132,8 @@ class InitialExecutionBindingWorker:
         binder: InitialExecutionBinder | None = None,
     ) -> None:
         if not isinstance(store, SessionControlStore):
-            raise TypeError(
-                f"store 必须是 SessionControlStore: {store!r}"
-            )
-        if not isinstance(claim_owner, str) or not claim_owner:
-            raise ValueError(f"claim_owner 不能为空: {claim_owner!r}")
-        if (
-            isinstance(claim_generation, bool)
-            or not isinstance(claim_generation, int)
-            or claim_generation < 1
-        ):
-            raise ValueError(
-                f"claim_generation 必须是 >= 1 的整数: {claim_generation!r}"
-            )
+            raise TypeError(f"store 必须是 SessionControlStore: {store!r}")
+        validate_claim_fields(claim_owner, claim_generation)
         self._store = store
         self._claim_owner = claim_owner
         self._claim_generation = claim_generation

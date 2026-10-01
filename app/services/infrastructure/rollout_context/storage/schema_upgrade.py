@@ -125,12 +125,27 @@ def execute_atomic_schema_sql(connection: sqlite3.Connection, script: str) -> No
         connection.set_authorizer(None)
 
 
+# v1→v2 为 contribution registry 新增的 typed core 列闭集（规范定稿名，不维护第二套
+# 别名）。升级时 v1 冻结表缺失这些列，必须由 schema owner 的 NOT NULL DEFAULT 回填，
+# 不允许静默留空或放宽成任意子集。
+_CONTRIBUTION_TYPED_CORE_COLUMNS: dict[str, frozenset[str]] = {
+    "context_contributions": frozenset({"selection_role", "replacement_policy"}),
+    "context_assembly_contributions": frozenset(),
+}
+
+
 def _contribution_upgrade_sql(connection: sqlite3.Connection) -> str:
-    """从唯一 schema owner 取得目标 DDL，不维护第二套 contribution 定义。"""
+    """从唯一 schema owner 取得目标 DDL，不维护第二套 contribution 定义。
+
+    v1 冻结表与本 change 的目标表差集只允许是本 change 新增的 typed core 列；
+    既有列逐字移植，新增列由目标 DDL 的 NOT NULL DEFAULT 回填。差集与具名闭集
+    不一致、缺可回填默认值或出现目标 schema 不认识的字段都 fail closed，绝不静默
+    按旧语义继续解释。
+    """
     statements: list[str] = []
     with closing(sqlite3.connect(":memory:")) as target_schema:
         schema.initialize_rollout_schema(target_schema)
-        for table in ("context_contributions", "context_assembly_contributions"):
+        for table, added_columns in _CONTRIBUTION_TYPED_CORE_COLUMNS.items():
             temporary = f"schema_upgrade_{table}"
             ddl = target_schema.execute(
                 "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
@@ -138,13 +153,31 @@ def _contribution_upgrade_sql(connection: sqlite3.Connection) -> str:
             prefix = f"CREATE TABLE {table}"
             if not ddl.startswith(prefix):
                 raise RuntimeError(f"schema owner 的建表声明无法识别: {table}")
-            columns = tuple(row[1] for row in target_schema.execute(f"PRAGMA table_info({table})"))
+            target_columns = {
+                row[1]: (row[2], row[3], row[4])
+                for row in target_schema.execute(f"PRAGMA table_info({table})")
+            }
+            target_names = tuple(target_columns)
             existing = tuple(row[1] for row in connection.execute(f"PRAGMA table_info({table})"))
-            if existing != columns:
+            unknown = tuple(name for name in existing if name not in target_columns)
+            if unknown:
                 raise RuntimeError(
-                    f"schema-upgrade-source-mismatch: {table} 字段不属于支持的 v1 schema"
+                    f"schema-upgrade-source-mismatch: {table} 字段不属于支持的 v1 schema: {unknown}"
                 )
-            fields = ",".join(columns)
+            missing = frozenset(name for name in target_names if name not in existing)
+            if missing != added_columns:
+                raise RuntimeError(
+                    f"schema-upgrade-source-mismatch: {table} 字段不属于支持的 v1 schema: "
+                    f"missing={sorted(missing)}"
+                )
+            for name in added_columns:
+                column_type, notnull, default = target_columns[name]
+                if not notnull or default is None:
+                    raise RuntimeError(
+                        f"schema-upgrade-source-mismatch: {table} 新增列 {name} "
+                        "缺少可回填的 NOT NULL DEFAULT"
+                    )
+            fields = ",".join(existing)
             statements.extend((
                 ddl.replace(prefix, f"CREATE TABLE {temporary}", 1),
                 f"INSERT INTO {temporary} ({fields}) SELECT {fields} FROM {table}",

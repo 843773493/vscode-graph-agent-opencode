@@ -597,7 +597,7 @@ async def test_read_file_resolves_model_visible_session_artifact_path(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_74af5c2d34f8436b8a00d59a9fdddb6d"
+    session_id = "ses_019bc4518d0079d3a53e974eea6f21a9"
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     store = ToolOutputStore(
         workspace_root=tmp_path,
@@ -642,7 +642,7 @@ async def test_grep_resolves_model_visible_session_artifact_path(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_aa2c03d86ae544448f7b390ed9c15dd3"
+    session_id = "ses_019bf1dcdb127cc0871f36d4c43359b5"
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     store = ToolOutputStore(
         workspace_root=tmp_path,

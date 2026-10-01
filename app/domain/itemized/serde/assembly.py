@@ -186,13 +186,8 @@ def context_assembly_snapshot_from_dict(
                     "ContextSelectionEntry.selection_kind",
                 ),
                 included=raw_entry["included"],
-                omission_reason=(
-                    _optional_string(
-                        raw_entry["omission_reason"],
-                        "ContextSelectionEntry.omission_reason",
-                    )
-                    if raw_entry.get("omission_reason") is not None
-                    else None
+                omission_reason=_optional_string(
+                    raw_entry, "omission_reason", "ContextSelectionEntry.omission_reason"
                 ),
                 loss=tuple(raw_entry["loss"]),
                 visibility=_required_string(
@@ -204,13 +199,8 @@ def context_assembly_snapshot_from_dict(
                 availability=_required_string(
                     raw_entry["availability"], "ContextSelectionEntry.availability"
                 ),
-                source_revision=(
-                    _optional_string(
-                        raw_entry["source_revision"],
-                        "ContextSelectionEntry.source_revision",
-                    )
-                    if raw_entry.get("source_revision") is not None
-                    else None
+                source_revision=_optional_string(
+                    raw_entry, "source_revision", "ContextSelectionEntry.source_revision"
                 ),
                 content_length=_optional_non_negative_int(
                     raw_entry.get("content_length"),
@@ -220,21 +210,13 @@ def context_assembly_snapshot_from_dict(
                 # optional omitted entry，ref manifest 仍可有正文 hash，但
                 # 这里不能把它回填成“已包含正文”，否则恢复会改变
                 # included/loss 语义并绕过 omission gate。
-                content_hash=(
-                    _optional_string(
-                        raw_entry["content_hash"],
-                        "ContextSelectionEntry.content_hash",
-                    )
-                    if raw_entry.get("content_hash") is not None
-                    else None
+                content_hash=_optional_string(
+                    raw_entry, "content_hash", "ContextSelectionEntry.content_hash"
                 ),
-                redacted_stable_digest=(
-                    _optional_string(
-                        raw_entry["redacted_stable_digest"],
-                        "ContextSelectionEntry.redacted_stable_digest",
-                    )
-                    if raw_entry.get("redacted_stable_digest") is not None
-                    else None
+                redacted_stable_digest=_optional_string(
+                    raw_entry,
+                    "redacted_stable_digest",
+                    "ContextSelectionEntry.redacted_stable_digest",
                 ),
                 base_delta_role=_required_string(
                     raw_entry["base_delta_role"],
@@ -245,16 +227,13 @@ def context_assembly_snapshot_from_dict(
                     "ContextSelectionEntry.source_overlay_epoch",
                 ),
                 overlay_from_revision=_optional_string(
-                    raw_entry.get("overlay_from_revision"),
-                    "ContextSelectionEntry.overlay_from_revision",
+                    raw_entry, "overlay_from_revision", "ContextSelectionEntry.overlay_from_revision"
                 ),
                 overlay_to_revision=_optional_string(
-                    raw_entry.get("overlay_to_revision"),
-                    "ContextSelectionEntry.overlay_to_revision",
+                    raw_entry, "overlay_to_revision", "ContextSelectionEntry.overlay_to_revision"
                 ),
                 overlay_diff_hash=_optional_string(
-                    raw_entry.get("overlay_diff_hash"),
-                    "ContextSelectionEntry.overlay_diff_hash",
+                    raw_entry, "overlay_diff_hash", "ContextSelectionEntry.overlay_diff_hash"
                 ),
                 contribution_ordinal=_optional_non_negative_int(
                     raw_entry.get("contribution_ordinal"),
@@ -265,8 +244,7 @@ def context_assembly_snapshot_from_dict(
                     if raw_entry["detail_ref"] is not None else None
                 ),
                 contribution_id=_optional_string(
-                    raw_entry.get("contribution_id"),
-                    "ContextSelectionEntry.contribution_id",
+                    raw_entry, "contribution_id", "ContextSelectionEntry.contribution_id"
                 ),
             )
         )
@@ -299,19 +277,11 @@ def context_assembly_snapshot_from_dict(
         ),
         target_format=_required_string(value["target_format"], "target_format"),
         request_hash_preimage=value["request_hash_preimage"],
-        active_view_id=(
-            _optional_string(value["active_view_id"], "active_view_id")
-            if value["active_view_id"] is not None
-            else None
-        ),
+        active_view_id=_optional_string(value, "active_view_id", "active_view_id"),
         selection_policy=_required_string(
             value["selection_policy"], "selection_policy"
         ),
-        model_call_id=(
-            _optional_string(value["model_call_id"], "model_call_id")
-            if value["model_call_id"] is not None
-            else None
-        ),
+        model_call_id=_optional_string(value, "model_call_id", "model_call_id"),
         hash_algorithm=_required_string(value["hash_algorithm"], "hash_algorithm"),
         loss=tuple(loss),
         sealed=_required_bool(value["sealed"], "sealed"),

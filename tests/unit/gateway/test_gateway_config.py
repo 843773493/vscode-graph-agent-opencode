@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,16 +21,16 @@ from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.scheduler import SessionGeneratorScheduler
-from app.gateway.main import (
+from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.routes.health_config import gateway_config_sources
+from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime_proof import (
     _apply_gateway_runtime_config,
     _gateway_pending_consumer_health_digests,
     _gateway_runtime_consumer_stages,
     _should_preserve_gateway_generation_for_handoff,
-    gateway_config_sources,
 )
-from app.gateway.registry import GatewayWorkspaceRegistry
-from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.services.infrastructure.config.state import ConfigConflictError
 
 
@@ -485,16 +486,25 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
         encoding="utf-8",
     )
     config = load_gateway_config(config_path=config_path, schema_path=schema_path)
-    monkeypatch.setattr("app.gateway.main.load_gateway_config", lambda: config)
+    monkeypatch.setattr(
+        "app.gateway.routes.health_config.load_gateway_config", lambda: config
+    )
 
     response = await gateway_config_sources(
+        # state 上无 gateway_state，等价于拆分前模块级 app 的初始状态，
+        # 走 load_gateway_config() 分支（已被 monkeypatch）。
+        request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
         _="gateway-token",
         request_id="req-gateway-config-sources",
     )
 
     assert response.request_id == "req-gateway-config-sources"
     assert response.data is not None
-    assert response.data.schema_path == str(schema_path)
+    # 5A.3：gateway schema 属发行包内资源，值为 config kind 的 VRN，不再泄漏真实路径。
+    assert response.data.schema_path.startswith("boxteam://inline/")
+    assert response.data.schema_path.endswith("/resources/config/gateway_schema")
+    body = response.model_dump_json()
+    assert str(tmp_path) not in body
     assert [source.layer for source in response.data.sources] == [
         "inline",
         "user",
@@ -502,6 +512,49 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
     ]
     assert response.data.sources[1].loaded is True
     assert response.data.policy_manifest
+
+
+@pytest.mark.asyncio
+async def test_gateway_config_sources_schema_vrn_only_for_release_inline_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非发行包 gateway schema MUST NOT 编 inline VRN：返回空串且端点不崩。
+
+    改前实现直接以 `config.schema_path.stem` 编 inline VRN，点号 stem 会抛
+    `VrnGrammarError` 令端点 500，普通自定义 schema 会被谎报成 inline 来源。
+    """
+
+    config_path, schema_path = _write_gateway_config(tmp_path, [])
+    config = load_gateway_config(config_path=config_path, schema_path=schema_path)
+
+    for custom_name in ("my.company.schema.jsonc", "custom_gateway_schema.jsonc"):
+        custom_schema = tmp_path / custom_name
+        custom_schema.write_text(
+            json.dumps(
+                {
+                    "type": "object",
+                    "properties": {"config_version": {"type": "integer"}},
+                    "required": ["config_version"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        non_inline = replace(config, schema_path=custom_schema)
+        monkeypatch.setattr(
+            "app.gateway.routes.health_config.load_gateway_config",
+            lambda cfg=non_inline: cfg,
+        )
+
+        response = await gateway_config_sources(
+            request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+            _="gateway-token",
+            request_id="req-gateway-custom-schema",
+        )
+
+        assert response.data is not None
+        assert response.data.schema_path == ""
+        assert str(tmp_path) not in response.model_dump_json()
 
 
 def test_gateway_loader_does_not_read_workspace_configuration(tmp_path: Path) -> None:
@@ -560,6 +613,55 @@ def test_gateway_config_migrates_mutable_json_layers_to_sqlite(tmp_path: Path) -
         assert local_config_path.with_name("gateway_local.jsonc.migrated.bak").is_file()
     finally:
         state.close()
+
+
+def test_gateway_source_layer_consistent_across_read_paths(tmp_path: Path) -> None:
+    """D-A2：gateway 可变 override 层在有/无 state store 两条路径 MUST 报同一 layer。
+
+    `_gateway_source_detail`（有 store）此前硬编码 `layer="sqlite"`，而无 store 分支报
+    `user`/`user_local`，同一 source_key 两条路径给出两套层名。本用例锁定两路一致。
+    """
+
+    config_path, schema_path = _write_gateway_config(tmp_path, [])
+    local_config_path = tmp_path / "gateway_local.jsonc"
+    local_config_path.write_text(
+        json.dumps({"ui": {"theme": {"default_theme_id": "blue"}}}),
+        encoding="utf-8",
+    )
+
+    expected = {
+        "inline": 0,
+        "user": 1,
+        "user_local": 2,
+    }
+
+    # 无 state store 路径。
+    without_store = load_gateway_config(
+        config_path=config_path,
+        schema_path=schema_path,
+        local_config_path=local_config_path,
+    )
+    without_map = {
+        source.layer: source.precedence for source in without_store.source_details
+    }
+    assert without_map == expected
+    assert "sqlite" not in without_map
+
+    # 有 state store 路径（命中 `_gateway_source_detail`）。
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        with_store = load_gateway_config(
+            config_path=config_path,
+            schema_path=schema_path,
+            local_config_path=local_config_path,
+            state_store=state,
+        )
+    finally:
+        state.close()
+    with_map = {source.layer: source.precedence for source in with_store.source_details}
+    assert with_map == expected
+    # D-A2 定点：可变 override 层 MUST NOT 被有损改写成 `sqlite`。
+    assert "sqlite" not in with_map
 
 
 def test_gateway_connection_id_migration_is_comment_preserving_and_idempotent(
@@ -666,14 +768,17 @@ def test_gateway_connection_id_migration_recovers_after_file_write_crash(
         ],
     )
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-    original_writer = gateway_config_module._atomic_write_gateway_jsonc
+    original_writer = gateway_config_module.connection_ids._atomic_write_gateway_jsonc
 
     def write_then_crash(path: Path, raw_bytes: bytes) -> None:
         original_writer(path, raw_bytes)
         raise OSError("模拟迁移写入后进程退出")
 
+    # 拆分后 _atomic_write_gateway_jsonc 的_具名定义处_在 config 包的 connection_ids
+    # 子模块；调用方 _migrate_gateway_connection_ids_in_source 也解析该子模块全局，
+    # 故注入点必须指向真正持有它的模块（注入 facade 不影响子模块查找）。
     monkeypatch.setattr(
-        gateway_config_module,
+        gateway_config_module.connection_ids,
         "_atomic_write_gateway_jsonc",
         write_then_crash,
     )
@@ -690,7 +795,7 @@ def test_gateway_connection_id_migration_recovers_after_file_write_crash(
         assert '"config_version": 2' in config_path.read_text(encoding="utf-8")
 
         monkeypatch.setattr(
-            gateway_config_module,
+            gateway_config_module.connection_ids,
             "_atomic_write_gateway_jsonc",
             original_writer,
         )

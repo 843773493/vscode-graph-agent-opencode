@@ -41,7 +41,7 @@ from app.gateway.runtime.process import allocate_local_port_in_range
 pytestmark = pytest.mark.contract
 
 PORT_RANGE = (8810, 8819)
-MAIN_C = "thr_44444444444444444444444444444444"
+MAIN_C = "thr_019bb545cb1f7ddc999cc895fa6285bc"
 
 
 class _Catalog:
@@ -366,3 +366,47 @@ async def test_hub_rejects_relay_from_unregistered_spoke(tmp_path: Path) -> None
                 timeout=5.0,
             )
         assert error.value.code == "federation-unknown-peer"
+
+
+@pytest.mark.asyncio
+async def test_relay_operation_propagates_absolute_deadline_across_every_hop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """请求方给出的绝对 deadline 必须逐跳透传，而非每跳各自重置为 8.0s 上界。
+
+    B → hub → C 三跳链路上，hub 与 C 入站 handle_request 收到的帧内 ``deadline_at``
+    必须逐字等于请求方给出的绝对 deadline；若只透传 ``timeout=remaining``，下游会
+    收到 ``None`` 并各自获得一个全新的 ``FEDERATION_DEADLINE_SECONDS=8.0`` 上界，
+    整体上界随跳数累加，违反规范「总 deadline」合同。
+    """
+
+    async with _federation(tmp_path, c_catalog={"ses_c": ("ws_c",)}) as (
+        _hub,
+        gateway_b,
+        _gateway_c,
+    ):
+        seen: dict[str, float | None] = {}
+        original = FederationRpcService.handle_request
+
+        async def recording(self, *, method, request, session, deadline_at):
+            seen[self.gateway_id] = deadline_at
+            return await original(
+                self,
+                method=method,
+                request=request,
+                session=session,
+                deadline_at=deadline_at,
+            )
+
+        monkeypatch.setattr(FederationRpcService, "handle_request", recording)
+        deadline_at = time.time() + 6.0
+        await gateway_b.service.relay_operation(
+            target=GrantTarget(
+                gateway_id="gateway_c", workspace_id="ws_c", session_id="ses_c"
+            ),
+            operation="read",
+            deadline_at=deadline_at,
+        )
+        assert seen["gateway_hub"] == deadline_at
+        assert seen["gateway_c"] == deadline_at

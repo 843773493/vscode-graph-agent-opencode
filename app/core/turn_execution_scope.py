@@ -326,9 +326,13 @@ class TurnExecutionScopeRegistry:
 
     async def close(self, turn_stream_id: str) -> None:
         scope = self._scopes.pop(turn_stream_id, None)
-        self._inboxes.pop(turn_stream_id, None)
+        inbox = self._inboxes.pop(turn_stream_id, None)
         if scope is not None:
             await scope.close()
+        # Turn 结束即确定性回收控制状态文件：控制意图只在 Turn 生命周期内
+        # 有意义，Turn 收敛后不再重放，避免控制事实在会话节点内无限堆积。
+        if inbox is not None:
+            inbox.discard_state()
 
     def active_ids(self) -> tuple[str, ...]:
         return tuple(self._scopes)
@@ -358,8 +362,15 @@ class AgentControlInbox:
         }
     )
 
-    def __init__(self, turn_stream_id: str, *, state_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        turn_stream_id: str,
+        *,
+        session_id: str | None = None,
+        state_path: Path | None = None,
+    ) -> None:
         self.turn_stream_id = turn_stream_id
+        self.session_id = session_id
         self._state_path = state_path
         self._next_seq = 0
         self._commands: dict[str, AgentControlCommand] = {}
@@ -430,13 +441,11 @@ class AgentControlInbox:
     def snapshot(self) -> list[AgentControlCommand]:
         return sorted(self._commands.values(), key=lambda command: command.control_seq)
 
-    def recoverable(self) -> list[AgentControlCommand]:
-        """返回崩溃前已接受但未消费的命令，不自动重放副作用。"""
-        return [
-            command
-            for command in self.snapshot()
-            if command.status == "accepted"
-        ]
+    def discard_state(self) -> None:
+        """Turn 收敛后确定性删除控制状态文件；无持久状态时为空操作。"""
+        if self._state_path is None:
+            return
+        self._state_path.unlink(missing_ok=True)
 
     def _load(self) -> None:
         if self._state_path is None or not self._state_path.is_file():
@@ -444,6 +453,15 @@ class AgentControlInbox:
         raw = json.loads(self._state_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise TypeError(f"AgentControlInbox 状态文件必须是对象: path={self._state_path}")
+        # 会话归属校验：状态文件按会话节点存放，文件自述的 session_id 必须与
+        # 请求写入的归属一致，防止跨会话复用同一 turn_stream_id 的状态。
+        persisted_session_id = raw.get("session_id")
+        if persisted_session_id is not None and persisted_session_id != self.session_id:
+            raise RuntimeError(
+                "AgentControlInbox 状态文件的 session_id 不匹配: "
+                f"path={self._state_path}, persisted={persisted_session_id}, "
+                f"expected={self.session_id}"
+            )
         for value in raw.get("commands", []):
             if not isinstance(value, dict):
                 raise TypeError("AgentControlInbox 状态文件包含无效命令")
@@ -460,6 +478,7 @@ class AgentControlInbox:
         temp_path = self._state_path.with_suffix(".tmp")
         payload = {
             "turn_stream_id": self.turn_stream_id,
+            "session_id": self.session_id,
             "commands": [
                 {
                     "command_id": command.command_id,

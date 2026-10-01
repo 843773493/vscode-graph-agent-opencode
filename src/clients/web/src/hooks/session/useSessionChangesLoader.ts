@@ -209,10 +209,16 @@ export function useSessionChangesLoader({
         // 失败必须给出带原因的可见诊断：之前只把「正在标记」留在状态栏，
         // 用户既看不到失败也看不到原因，属于静默失败。
         const message = errorMessage(error);
-        setState((prev) => ({
-          ...prev,
-          status: `${action}失败: ${message}`,
-        }));
+        setState((prev) => {
+          // 与成功路径同一守卫：会话已切走时，旧会话的失败诊断不得污染新会话状态栏。
+          if (prev.currentSession?.session_id !== sessionId) {
+            return prev;
+          }
+          return {
+            ...prev,
+            status: `${action}失败: ${message}`,
+          };
+        });
         throw error;
       }
     },

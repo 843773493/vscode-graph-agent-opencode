@@ -25,8 +25,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     _revision,
 )
 
-SESSION_ID = "ses_0123456789abcdef0123456789abcdef"
-CHILD_THREAD_ID = "thr_fedcba9876543210fedcba9876543210"
+SESSION_ID = "ses_019bfb6b5f3c72178c7e8393ce89e7a6"
+CHILD_THREAD_ID = "thr_019c58e117a67ec489710c058b3e22a3"
 UPDATED_AT = "2026-09-15T00:00:00+00:00"
 V1_REVISION = "sha256:" + hashlib.sha256(b"v1\n").hexdigest()
 CHILD_REVISION = "sha256:" + hashlib.sha256(b"child\n").hexdigest()

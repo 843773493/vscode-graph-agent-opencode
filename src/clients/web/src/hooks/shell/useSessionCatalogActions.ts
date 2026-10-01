@@ -194,7 +194,9 @@ export function useSessionCatalogActions({
         return;
       }
       await deleteSession(sessionId, workspaceId);
-      invalidateSessionCatalog(workspaceId);
+      // 删除成功路径不再额外强制刷新会话目录树（§10.3 前端半边）：会话列表已在
+      // deleteSession 内本地收敛，会话目录树的刷新由 `sessionCatalogSyncKeys`（按
+      // 会话集合变化派生）驱动，无需再叠加一次强制重拉。
     }).catch((error: unknown) => {
       setStatus(`删除会话失败: ${errorMessage(error)}`);
     });

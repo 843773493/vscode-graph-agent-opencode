@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import zlib
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
-from typing import ClassVar, Protocol
+from typing import Protocol
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -13,7 +14,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.checkpoint_config import build_checkpoint_config
-from app.schemas.internal_v2.common import JobStatus, MessageRole
+from app.core.job_event_bus import EventType
+from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import (
     MessageCreateRequest,
     MessageDTO,
@@ -21,10 +23,17 @@ from app.schemas.internal_v2.message import (
     MessageReplayRequest,
     MessageRunAccepted,
 )
+from app.services.business.job.lifecycle import (
+    FAILED_JOB_STATUSES,
+    TERMINAL_JOB_STATUSES,
+)
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 
 CONTEXT_ONLY_NOTICE = "已移除目标消息及其后的会话上下文；工作区文件修改不会被撤销。"
+
+# Replay 锁按 session_id 分片；分片数固定，避免长驻进程随历史会话数无界增长。
+REPLAY_LOCK_SHARDS = 64
 
 
 class PreparedMessageDispatcher(Protocol):
@@ -44,14 +53,6 @@ class FailedJobTraceReader(Protocol):
 class SessionTurnReplayService:
     """在当前会话追加截断 checkpoint，并用稳定 message_id 重新执行。"""
 
-    _TERMINAL_JOB_STATUSES: ClassVar[set[JobStatus]] = {
-        JobStatus.completed,
-        JobStatus.succeeded,
-        JobStatus.failed,
-        JobStatus.cancelled,
-        JobStatus.timed_out,
-    }
-
     def __init__(
         self,
         *,
@@ -68,7 +69,15 @@ class SessionTurnReplayService:
         self._job_service = job_service
         self._dispatcher = dispatcher
         self._trace_event_store = trace_event_store
-        self._session_locks: dict[str, asyncio.Lock] = {}
+        self._session_locks: tuple[asyncio.Lock, ...] = tuple(
+            asyncio.Lock() for _ in range(REPLAY_LOCK_SHARDS)
+        )
+
+    def _session_lock(self, session_id: str) -> asyncio.Lock:
+        # 分片锁池：同一 session_id 恒得同一把锁（保住互斥），数量恒为分片数
+        # （有界）。用 crc32 而非 hash() 是为了跨进程确定，不引入 hash 随机化。
+        shard = zlib.crc32(session_id.encode("utf-8")) % len(self._session_locks)
+        return self._session_locks[shard]
 
     async def replay(
         self,
@@ -83,7 +92,7 @@ class SessionTurnReplayService:
                 "必须确认：操作会移除目标消息及其后的会话上下文，但不会撤销工作区文件修改"
             )
 
-        session_lock = self._session_locks.setdefault(session_id, asyncio.Lock())
+        session_lock = self._session_lock(session_id)
         async with session_lock:
             await self._assert_session_idle(session_id)
             session = await self._session_service.get(session_id)
@@ -179,7 +188,7 @@ class SessionTurnReplayService:
         active = [
             job
             for job in await self._job_service.list(session_id=session_id)
-            if job.status not in self._TERMINAL_JOB_STATUSES
+            if job.status not in TERMINAL_JOB_STATUSES
         ]
         if active:
             details = ", ".join(f"{job.job_id}:{job.status.value}" for job in active)
@@ -231,7 +240,7 @@ class SessionTurnReplayService:
                 return True
             raise ValueError(f"目标轮次缺少对应 Job: message_id={message_id}")
         matching_jobs.sort(key=lambda job: job.created_at)
-        return matching_jobs[-1].status in {JobStatus.failed, JobStatus.timed_out}
+        return matching_jobs[-1].status in FAILED_JOB_STATUSES
 
     def _trace_has_failed_job(self, session_id: str, message_id: str) -> bool:
         job_message_ids: dict[str, str] = {}
@@ -242,21 +251,22 @@ class SessionTurnReplayService:
             payload = getattr(event, "payload", None)
             if not isinstance(job_id, str) or payload is None:
                 continue
-            if event_type == "job_created":
+            if event_type == EventType.JOB_CREATED:
                 created_message_id = getattr(payload, "message_id", None)
                 if isinstance(created_message_id, str):
                     job_message_ids[job_id] = created_message_id
             elif event_type in {
-                "job_completed",
-                "job_cancelled",
-                "job_failed",
-                "session_interrupted",
+                EventType.JOB_COMPLETED,
+                EventType.JOB_CANCELLED,
+                EventType.JOB_FAILED,
+                EventType.SESSION_INTERRUPTED,
             }:
                 terminal_statuses[job_id] = event_type
 
         return any(
             job_message_id == message_id
-            and terminal_statuses.get(job_id) in {"job_failed", "session_interrupted"}
+            and terminal_statuses.get(job_id)
+            in {EventType.JOB_FAILED, EventType.SESSION_INTERRUPTED}
             for job_id, job_message_id in job_message_ids.items()
         )
 

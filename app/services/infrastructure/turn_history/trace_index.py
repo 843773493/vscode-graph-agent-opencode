@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import RootModel
-
 from app.abstractions.turn_history import (
     TurnBootstrapBatch,
     TurnIndexedEvent,
@@ -12,17 +10,13 @@ from app.abstractions.turn_history import (
 )
 from app.schemas.event import Event
 
-from .trace_index_compaction import MAX_COMPACT_LINE_BYTES, compact_event
+from .trace_index_compaction import MAX_COMPACT_LINE_BYTES, _AnyEvent, compact_event
 from .trace_index_models import (
     PreparedTraceTurnEntry,
     TraceTurnIndexEntry,
     TraceTurnIndexManifest,
 )
 from .trace_index_storage import TraceIndexStorage
-
-
-class _AnyEvent(RootModel[Event]):
-    pass
 
 
 class TraceTurnIndex:

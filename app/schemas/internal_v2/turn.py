@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -9,8 +9,6 @@ from .common import JobStatus
 from .session import SessionDTO
 from .trace import TraceEventDTO
 
-TurnItemsView = Literal["summary", "full"]
-MAX_TURN_INCLUDE_FIELDS = 14
 TurnInclude = Literal[
     "user",
     "text",
@@ -27,6 +25,8 @@ TurnInclude = Literal[
     "metadata",
     "final_response",
 ]
+# 上限直接从闭集派生，避免闭集与计数两份清单漂移。
+MAX_TURN_INCLUDE_FIELDS = len(get_args(TurnInclude))
 TurnCursorDirection = Literal["head", "tail", "before", "after", "around", "older"]
 TurnProjectionState = Literal["ready", "partial"]
 

@@ -5,20 +5,15 @@ import threading
 from pathlib import Path
 from typing import BinaryIO
 
-from pydantic import RootModel
-
 from app.schemas.event import Event
 
 from .trace_index_compaction import (
     MAX_COMPACT_LINE_BYTES,
+    _AnyEvent,
     compact_event,
     is_turn_projected_event,
 )
 from .trace_index_models import TraceTurnIndexEntry, TraceTurnIndexManifest
-
-
-class _AnyEvent(RootModel[Event]):
-    pass
 
 
 def _read_complete_event(stream: BinaryIO, *, source: str) -> tuple[Event, int, int] | None:

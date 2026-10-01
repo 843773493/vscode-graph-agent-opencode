@@ -1,5 +1,8 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import { extractSessionIdFromClipboardText } from "../../state/session/sessionInformation";
+import {
+  extractSessionIdFromClipboardText,
+  isSessionId,
+} from "../../state/session/sessionInformation";
 import { copyTextToClipboard, readTextFromClipboard } from "../../utils/clipboard";
 import AnchoredOverlay from "../overlays/AnchoredOverlay";
 import WarmActionDialog from "../overlays/WarmActionDialog";
@@ -45,9 +48,13 @@ export type SessionResourceDialog =
 
 function extractFolderIdFromClipboardText(text: string): string {
   const match = text.trim().match(
-    /(?:^|[^A-Za-z0-9_-])(fld_[A-Za-z0-9_-]+)(?:$|[^A-Za-z0-9_-])/,
+    // 后端 canonical：folder 与 session 同表、id 一律 ses_ + 32 位小写 hex
+    // （app/core/session_catalog_store.py:create_folder 调 validate_session_id），
+    // 后端从不产出任何其它文件夹专用前缀。这里收敛到 ses_ 并复用唯一校验器
+    // isSessionId，不再自持文件夹专用正则。
+    /(?:^|[^A-Za-z0-9_-])(ses_[0-9a-f]{32})(?:$|[^A-Za-z0-9_-])/,
   );
-  if (!match) {
+  if (!match || !isSessionId(match[1])) {
     throw new Error("剪贴板中没有有效的会话文件夹 ID；请先右键目标文件夹并复制 ID");
   }
   return match[1];

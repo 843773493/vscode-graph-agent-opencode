@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.business.communication.errors import CommunicationContractError
 from app.services.business.communication.wait import (
@@ -51,8 +51,8 @@ def make_target() -> GlobalThreadAddress:
     return GlobalThreadAddress(
         gateway_id="gw_local",
         workspace_id="ws_main",
-        session_id=f"ses_{uuid.uuid4().hex}",
-        thread_id=f"thr_{uuid.uuid4().hex}",
+        session_id=f"ses_{create_uuid_hex()}",
+        thread_id=f"thr_{create_uuid_hex()}",
     )
 
 

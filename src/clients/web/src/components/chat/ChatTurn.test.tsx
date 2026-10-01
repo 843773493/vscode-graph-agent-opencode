@@ -558,7 +558,7 @@ describe("ChatTurn 轮次动作", () => {
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
-    expect(html).toContain("实时消息流出现缺口，正在请求 snapshot 恢复");
+    expect(html).toContain("实时消息流出现缺口，正在读取权威快照补齐");
     expect(html).toContain("诊断：消息流 event_seq 不连续: expected=8 actual=10");
   });
 

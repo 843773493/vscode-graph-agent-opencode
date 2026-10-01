@@ -3,11 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import zlib
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Iterator
 from pathlib import Path
-
-from pydantic import RootModel
 
 from app.abstractions.trace_event_sink import TraceAppendReceipt
 from app.abstractions.turn_history import (
@@ -24,6 +23,7 @@ from app.services.infrastructure.turn_history.trace_cursor import (
     offset_after_event,
 )
 from app.services.infrastructure.turn_history.trace_index import TraceTurnIndex
+from app.services.infrastructure.turn_history.trace_index_compaction import _AnyEvent
 from app.services.infrastructure.turn_history.trace_index_rebuild import (
     rebuild_trace_turn_index,
 )
@@ -40,9 +40,8 @@ from app.services.infrastructure.turn_history.trace_writer import (
 
 __all__ = ["TraceCursorGoneError", "TraceEventStore"]
 
-
-class _AnyEvent(RootModel[Event]):
-    pass
+# 会话级锁按 session_id 分片；分片数固定，避免长驻进程随历史会话数无界增长。
+TRACE_STORE_LOCK_SHARDS = 64
 
 
 class TraceEventStore:
@@ -50,10 +49,27 @@ class TraceEventStore:
         self._sessions_dir = sessions_dir
         self._path_resolver = get_session_path_resolver(sessions_dir)
         self._conditions: dict[str, asyncio.Condition] = defaultdict(asyncio.Condition)
-        self._append_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-        self._file_locks: defaultdict[str, threading.RLock] = defaultdict(
-            threading.RLock
+        self._append_locks: tuple[asyncio.Lock, ...] = tuple(
+            asyncio.Lock() for _ in range(TRACE_STORE_LOCK_SHARDS)
         )
+        self._file_locks: tuple[threading.RLock, ...] = tuple(
+            threading.RLock() for _ in range(TRACE_STORE_LOCK_SHARDS)
+        )
+
+    @staticmethod
+    def _shard(key: str, size: int) -> int:
+        # 分片用 crc32 而非 hash() 以保证跨进程确定，不引入哈希随机化。
+        return zlib.crc32(key.encode("utf-8")) % size
+
+    def _append_lock(self, session_id: str) -> asyncio.Lock:
+        # 分片锁池：同一 session_id 恒得同一把锁（保住同会话 append 互斥），数量恒
+        # 为分片数（有界），不随历史会话数增长。
+        return self._append_locks[self._shard(session_id, len(self._append_locks))]
+
+    def _file_lock(self, session_id: str) -> threading.RLock:
+        # 分片锁池：同一 session_id 恒得同一把锁（保住同会话文件读写互斥），数量恒
+        # 为分片数（有界），不随历史会话数增长。
+        return self._file_locks[self._shard(session_id, len(self._file_locks))]
 
     def _trace_file(self, session_id: str) -> Path:
         return (
@@ -90,7 +106,7 @@ class TraceEventStore:
         session_id: str,
         event: Event,
     ) -> TraceAppendReceipt:
-        with self._file_locks[session_id]:
+        with self._file_lock(session_id):
             return TraceEventWriter(
                 trace_file=self._trace_file(session_id),
                 message_file=self._message_trace_file(session_id),
@@ -98,7 +114,7 @@ class TraceEventStore:
             ).append(session_id, event)
 
     async def append(self, session_id: str, event: Event) -> TraceAppendReceipt:
-        async with self._append_locks[session_id]:
+        async with self._append_lock(session_id):
             receipt = await asyncio.to_thread(
                 self._append_event_files,
                 session_id,
@@ -114,14 +130,14 @@ class TraceEventStore:
         max_events: int,
         max_bytes: int,
     ) -> TurnBootstrapBatch:
-        with self._file_locks[session_id]:
+        with self._file_lock(session_id):
             return TraceTurnIndex(self._trace_file(session_id).parent).bootstrap_batch(
                 max_events=max_events,
                 max_bytes=max_bytes,
             )
 
     def ensure_turn_index(self, session_id: str) -> None:
-        with self._file_locks[session_id]:
+        with self._file_lock(session_id):
             index = TraceTurnIndex(self._trace_file(session_id).parent)
             snapshot = index.snapshot()
             if snapshot is not None and not snapshot.has_unindexed_prefix:
@@ -141,7 +157,7 @@ class TraceEventStore:
         max_events: int,
         max_bytes: int,
     ) -> TurnRecoveryBatch:
-        with self._file_locks[session_id]:
+        with self._file_lock(session_id):
             return TraceTurnIndex(self._trace_file(session_id).parent).recovery_batch(
                 after_event_id=after_event_id,
                 max_events=max_events,
@@ -193,7 +209,7 @@ class TraceEventStore:
 
     def latest_event_cursor(self, session_id: str) -> str | None:
         """读取事件日志尾部的可验证传输游标，供新 SSE 连接跳过历史事件。"""
-        with self._file_locks[session_id]:
+        with self._file_lock(session_id):
             file = self._trace_file(session_id)
             latest = self._read_last_event_line(file)
             if latest is None:
@@ -221,7 +237,7 @@ class TraceEventStore:
         limit: int,
         max_bytes: int = TRACE_PAGE_MAX_BYTES,
     ) -> TraceEventPage:
-        with self._file_locks[session_id]:
+        with self._file_lock(session_id):
             return read_trace_event_page(
                 session_id=session_id,
                 file=self._trace_file(session_id),
@@ -246,7 +262,7 @@ class TraceEventStore:
         session_id: str,
     ) -> TurnMigrationSnapshot:
         """在一次同步文件锁内捕获语义 Trace 边界和全量事件水位。"""
-        with self._file_locks[session_id]:
+        with self._file_lock(session_id):
             message_file = self._message_trace_file(session_id)
             message_trace_size = (
                 message_file.stat().st_size if message_file.exists() else 0

@@ -18,6 +18,7 @@ from app.core.path_utils import (
 )
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionCreateRequest, SessionUpdateRequest
+from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
@@ -74,7 +75,8 @@ async def test_create_and_get_reads_title_and_parent_from_resolver(
     # R25：child thread 是 owner Session 内的 durable thread；导航子会话
     # 用普通 Session + move 验证 title/parent 换源与 manifest 剥离口径。
     child = await service.create(SessionCreateRequest(title="委派子会话"))
-    child = await service.move_session(child.session_id, parent.session_id)
+    child_catalog = SessionCatalogService(session_service=service)
+    await child_catalog.move_node(child.session_id, parent.session_id)
 
     # 创建走 marker 回读：真实 session_id 即软件分配 ID（ses_ 前缀）。
     assert parent.session_id.startswith("ses_")
@@ -125,32 +127,38 @@ async def test_rename_updates_catalog_name_and_strips_manifest(
 
 @pytest.mark.asyncio
 async def test_move_session_uses_logical_relocation(catalog_service) -> None:
+    """逻辑移动唯一路径：catalog 父关系变更，物理目录与 manifest 字节不变。"""
     service, workspace = catalog_service
     parent = await service.create(SessionCreateRequest(title="父会话"))
     session = await service.create(SessionCreateRequest(title="待移动"))
     manifest_before = workspace.manifest(session.session_id)
     session_dir = workspace.session_dir(session.session_id)
+    catalog = SessionCatalogService(session_service=service)
 
-    moved = await service.move_session(session.session_id, parent.session_id)
+    await catalog.move_node(session.session_id, parent.session_id)
 
-    # 逻辑移动：父关系进 catalog，物理目录与 manifest 字节不变。
-    assert moved.parent_session_id == parent.session_id
     assert (await service.get(session.session_id)).parent_session_id == (
         parent.session_id
     )
     assert workspace.session_dir(session.session_id) == session_dir
     assert workspace.manifest(session.session_id) == manifest_before
 
-    # 解绑回根：context_fork 降级等业务规则由服务层维护（此处验证 None 目标）。
-    unbound = await service.move_session(session.session_id, None)
-    assert unbound.parent_session_id is None
+    # 解绑回根：仍走同一逻辑移动路径。旧物理语义（context_fork 降级改
+    # manifest）已被 design §9 明确删除，这里显式断言不再降级。
+    await catalog.assign_session(session.session_id, None)
+    assert (await service.get(session.session_id)).parent_session_id is None
 
 
 @pytest.mark.asyncio
-async def test_folder_move_persists_context_fork_demotion_across_restart(
+async def test_folder_move_keeps_context_fork_kind_across_restart(
     catalog_service,
     tmp_path: Path,
 ) -> None:
+    """逻辑移动 folder 子树只改 catalog 父关系；context_fork 的 kind 与
+
+    session.json 均不改写（design §9：移动文件夹不能把 context_fork 改成
+    normal 或修改任务来源），跨重启保持。”
+    """
     service, workspace = catalog_service
     parent = await service.create(SessionCreateRequest(title="父会话"))
     child = await service.create_context_fork(
@@ -160,16 +168,18 @@ async def test_folder_move_persists_context_fork_demotion_across_restart(
         context_source_session_id=parent.session_id,
     )
     folder = workspace.create_folder("子目录", parent=parent.session_id)
-    await service.move_session(child.session_id, folder)
+    catalog = SessionCatalogService(session_service=service)
+    await catalog.assign_session(child.session_id, folder)
+    manifest_before = workspace.manifest(child.session_id)
 
-    await service.relocate_folder_tree(
-        folder_id=folder,
-        parent_node_id=None,
-        name="根目录",
-    )
+    # 把 folder 子树移到根（唯一导航路径：executor.move_node）。
+    await catalog.move_node(folder, None)
 
-    assert (await service.get(child.session_id)).kind == "normal"
-    assert workspace.manifest(child.session_id)["kind"] == "normal"
+    assert (await service.get(child.session_id)).kind == "context_fork"
+    # 导航移动不改写 session.json 字节。
+    assert workspace.manifest(child.session_id) == manifest_before
+    assert workspace.manifest(child.session_id)["kind"] == "context_fork"
+    assert workspace.node(folder).parent_node_id is None
 
     restarted_workspace = build_catalog_workspace(
         tmp_path,
@@ -186,8 +196,10 @@ async def test_folder_move_persists_context_fork_demotion_across_restart(
             creation_service=restarted_workspace.creation_service,
         )
         restored = await restarted.get(child.session_id)
-        assert restored.kind == "normal"
-        assert restarted_workspace.manifest(child.session_id)["kind"] == "normal"
+        assert restored.kind == "context_fork"
+        assert restarted_workspace.manifest(child.session_id)["kind"] == (
+            "context_fork"
+        )
     finally:
         restarted_workspace.close()
 
@@ -304,6 +316,43 @@ async def test_get_parent_derivation_none_without_session_ancestor(
 
 
 @pytest.mark.asyncio
+async def test_get_derives_parent_without_full_catalog_bfs(
+    catalog_service,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """单会话读取的工作量与目录规模无关，不得触发全 catalog BFS。
+
+    §10.3：会话目录 tree 的成功路径退出全量重算。``get()`` 原先经
+    ``_authoritative_navigation_projection`` 对每个会话做一次全表
+    ``list_nodes()`` BFS，``_snapshot`` 的 N 次 ``get()`` 因此退化成
+    N×N 次全表扫描。改后 ``get()`` 只用按 ID 的单节点查询与父链上溯。
+    把 ``list_nodes`` 换成致命报错即可锁定该契约：任何退回全量投影的
+    实现都会立刻变红。
+    """
+    service, workspace = catalog_service
+
+    anchor_id = await workspace.create_session("锚点会话")
+    folder_a_id = workspace.create_folder("目录A", parent=anchor_id)
+    folder_b_id = workspace.create_folder("目录B", parent=folder_a_id)
+    deep_id = await workspace.create_session("深层会话", parent=folder_b_id)
+
+    def _forbidden_list_nodes() -> object:
+        raise AssertionError(
+            "单会话读取不得触发全 catalog BFS（list_nodes）"
+        )
+
+    monkeypatch.setattr(
+        workspace.resolver, "list_nodes", _forbidden_list_nodes
+    )
+
+    got = await service.get(deep_id)
+
+    assert got.session_id == deep_id
+    assert got.title == "深层会话"
+    assert got.parent_session_id == anchor_id
+
+
+@pytest.mark.asyncio
 async def test_resolve_main_thread_reads_catalog_frozen_pointer(
     catalog_service,
 ) -> None:
@@ -337,4 +386,4 @@ async def test_resolve_main_thread_missing_session_is_not_found(
     service, _ = catalog_service
 
     with pytest.raises(NotFoundError):
-        await service.resolve_main_thread("ses_00000000000040008000000000000000")
+        await service.resolve_main_thread("ses_00000000000070008000000000000000")

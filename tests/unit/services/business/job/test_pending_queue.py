@@ -114,3 +114,93 @@ def test_interrupt_boundary_also_releases_after_turn_head() -> None:
     assert queue.take_head("session", "after_tool_result") is None
     assert queue.take_head("session", "after_interrupt") is entry
     assert queue.ids("session") == ()
+
+
+def test_promoted_head_clears_stale_waiting_reason() -> None:
+    """队首被取走后，接替的新队首不得残留定位式的「等待队首」理由。
+
+    「等待队首」只是位置含义：只有非队首项才等待队首。改前 ``_bump`` 用
+    ``已有理由 or 新理由`` 计算，一旦写入「等待队首」就再也不会被清掉，导致
+    原队长被取走、接替者成为新队首后仍对外宣称「等待队首」（前端把它渲染成
+    排队条目的 hover 提示），而它当前恰恰就是队首、可立即投递。
+    """
+    queue = JobPendingQueue()
+    queue.append("session", "job_1", "after_turn")
+    second = queue.append("session", "job_2", "after_turn")
+    assert second.waiting_reason == "等待队首"
+
+    assert queue.take_head("session", "idle").job_id == "job_1"
+
+    assert queue.peek_head("session") is second
+    assert second.waiting_reason is None
+
+
+def test_promoted_head_after_remove_records_no_waiting_reason() -> None:
+    """撤回队首后接替者同样不得残留「等待队首」。"""
+    queue = JobPendingQueue()
+    queue.append("session", "job_1", "after_turn")
+    second = queue.append("session", "job_2", "after_turn")
+
+    queue.remove("session", "job_1")
+
+    assert queue.peek_head("session") is second
+    assert second.waiting_reason is None
+    assert queue.ids("session") == ("job_2",)
+
+
+def test_head_keeps_boundary_waiting_reason_when_bumped() -> None:
+    """队首的边界理由由投递边界决定，``_bump`` 不得把它误清成 None。"""
+    queue = JobPendingQueue()
+    head = queue.append("session", "job_head", "after_interrupt")
+    queue.append("session", "job_tail", "after_turn")
+
+    assert queue.take_head("session", "after_tool_result") is None
+    assert head.waiting_reason == "等待已提交的 interrupt 边界"
+    assert queue.peek_head("session") is head
+
+
+def test_clear_releases_per_session_counters() -> None:
+    """清空会话队列必须一并释放按会话持有的序号/版本计数，保持有界。
+
+    改前 ``clear`` 只清 ``_waiting``/``_entries``，``_next_sequence`` 与
+    ``_snapshot_versions`` 仍按 session_id 常驻：长驻进程里每个曾经排队过的
+    会话都会永久留下一条记录，且已清空会话的 ``snapshot_version`` 继续保留
+    陈旧纪元值。
+    """
+    queue = JobPendingQueue()
+    for session_id in ("ses_a", "ses_b", "ses_c"):
+        queue.append(session_id, f"job_{session_id}", "after_turn")
+        queue.clear(session_id)
+
+    assert queue._waiting == {}
+    assert queue._entries == {}
+    assert queue._next_sequence == {}
+    assert queue._snapshot_versions == {}
+    assert queue.snapshot_version("ses_a") == 0
+
+
+def test_clear_is_idempotent_and_reusable_session_restarts_sequence() -> None:
+    """clear 幂等；清空后同一会话重新排队从第一号重新开始。"""
+    queue = JobPendingQueue()
+    queue.append("session", "job_1", "after_turn")
+    queue.clear("session")
+    assert queue.clear("session") == ()
+
+    entry = queue.append("session", "job_2", "after_turn")
+
+    assert entry.enqueue_sequence == 1
+    assert entry.waiting_reason is None
+    assert queue.snapshot_version("session") == 1
+
+
+def test_policy_update_keeps_positional_reason_semantics() -> None:
+    """改策略不改位置：队首保持无位置理由，非队首标注「等待队首」。"""
+    queue = JobPendingQueue()
+    head = queue.append("session", "job_head", "after_turn")
+    tail = queue.append("session", "job_tail", "after_turn")
+
+    assert queue.update_policy("session", "job_head", "after_tool_result") is head
+    assert head.waiting_reason is None
+    assert queue.update_policy("session", "job_tail", "after_interrupt") is tail
+    assert tail.waiting_reason == "等待队首"
+    assert queue.peek_head("session") is head

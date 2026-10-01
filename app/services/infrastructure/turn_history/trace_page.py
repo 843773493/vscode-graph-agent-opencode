@@ -5,16 +5,15 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import RootModel
-
 from app.schemas.event import Event
 
 from .trace_cursor import (
-    TRACE_EVENT_LINE_SAMPLE_BYTES,
     TraceCursorGoneError,
+    _read_and_verify_line,
     event_line_digest,
     event_line_sample,
 )
+from .trace_index_compaction import _AnyEvent
 
 TRACE_PAGE_MAX_BYTES = 512 * 1024
 _TRACE_PAGE_CURSOR_PREFIX = "tp1."
@@ -22,10 +21,6 @@ _TRACE_PAGE_CURSOR_PREFIX = "tp1."
 
 class TracePageBudgetExceededError(RuntimeError):
     """单条 Trace 事件超过诊断页固定读取预算。"""
-
-
-class _AnyEvent(RootModel[Event]):
-    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,21 +77,13 @@ def _validate_page_cursor(file: Path, cursor: str) -> int:
     position = _decode_page_cursor(cursor)
     if not file.is_file() or file.stat().st_size < position.end:
         raise ValueError("Trace page cursor 越过文件末尾")
-    size = position.end - position.start
-    with file.open("rb") as stream:
-        if position.start > 0:
-            stream.seek(position.start - 1)
-            if stream.read(1) != b"\n":
-                raise ValueError("Trace page cursor 未指向事件行起点")
-        stream.seek(position.start)
-        if size <= TRACE_EVENT_LINE_SAMPLE_BYTES * 2:
-            sample = stream.read(size)
-        else:
-            prefix = stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
-            stream.seek(position.end - TRACE_EVENT_LINE_SAMPLE_BYTES)
-            sample = prefix + stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
-    if event_line_digest(size, sample) != position.digest:
-        raise ValueError("Trace page cursor 对应事件已变化")
+    _read_and_verify_line(
+        file,
+        start=position.start,
+        end=position.end,
+        digest=position.digest,
+        label="Trace page cursor",
+    )
     return position.start
 
 

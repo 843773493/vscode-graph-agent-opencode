@@ -57,6 +57,12 @@ export default function WorkspaceMarkdownImage({
       controller.signal,
     )
       .then((blob) => {
+        // 与同目录的 WorkspaceAttachmentPreview 同一判据：请求可能在途中被 abort，
+        // 迟到的旧响应若还创建对象 URL，就会泄漏一个永远得不到 revoke 的 URL，
+        // 并把上一个 src 的图片写回状态。作废后直接返回，不创建、不回写。
+        if (controller.signal.aborted) {
+          return;
+        }
         objectUrl = URL.createObjectURL(blob);
         setResolvedSrc(`${objectUrl}${target.fragment}`);
       })

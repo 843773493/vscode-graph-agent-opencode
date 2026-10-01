@@ -14,12 +14,12 @@ from app.schemas.internal_v2.message import (
 )
 from app.schemas.internal_v2.pending_request import DeliveryPolicy
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.gateway_client_common import (
+    MODEL_RECOVERABLE_HTTP_STATUSES,
+    GatewayTransportConnection,
+)
 
 ResponseDTO = TypeVar("ResponseDTO", bound=BaseModel)
-DEFAULT_GATEWAY_URL = "http://127.0.0.1:8014"
-_MODEL_RECOVERABLE_HTTP_STATUSES = frozenset(
-    {400, 401, 403, 404, 409, 422, 502, 503, 504}
-)
 
 
 class GatewaySessionMessageClient:
@@ -32,26 +32,10 @@ class GatewaySessionMessageClient:
         timeout_seconds: float | None = None,
         config_service: ConfigService | None = None,
     ) -> None:
-        self._config_service = config_service
-        self._gateway_url_from_config = gateway_url is None and config_service is not None
-        self._timeout_from_config = timeout_seconds is None and config_service is not None
-        self._gateway_url = (
-            gateway_url
-            if gateway_url is not None
-            else (
-                config_service.get_gateway_connection_url()
-                if config_service is not None
-                else DEFAULT_GATEWAY_URL
-            )
-        ).rstrip("/")
-        self._timeout_seconds = (
-            timeout_seconds
-            if timeout_seconds is not None
-            else (
-                config_service.get_gateway_connection_timeout_seconds()
-                if config_service is not None
-                else 30
-            )
+        self._connection = GatewayTransportConnection(
+            gateway_url=gateway_url,
+            timeout_seconds=timeout_seconds,
+            config_service=config_service,
         )
 
     async def dispatch(
@@ -86,8 +70,8 @@ class GatewaySessionMessageClient:
         json_body: dict[str, object],
     ) -> MessageRunAccepted:
         async with httpx.AsyncClient(
-            base_url=self._resolve_gateway_url(),
-            timeout=self._resolve_timeout_seconds(),
+            base_url=self._connection.resolve_gateway_url(),
+            timeout=self._connection.resolve_timeout_seconds(),
             headers={
                 "X-Local-Token": get_gateway_local_token(),
                 "X-BoxTeam-Workspace-Id": workspace_id,
@@ -109,7 +93,7 @@ class GatewaySessionMessageClient:
                 f"path={path}, status={response.status_code}, "
                 f"detail={response.text[:2000]}"
             )
-            if response.status_code in _MODEL_RECOVERABLE_HTTP_STATUSES:
+            if response.status_code in MODEL_RECOVERABLE_HTTP_STATUSES:
                 raise WorkspaceSessionContextAccessError(message)
             raise RuntimeError(message)
         payload = response.json()
@@ -118,16 +102,5 @@ class GatewaySessionMessageClient:
                 f"Gateway 会话消息派发响应缺少 data object: path={path}"
             )
         return MessageRunAccepted.model_validate(payload["data"])
-
-    def _resolve_gateway_url(self) -> str:
-        if self._gateway_url_from_config and self._config_service is not None:
-            return self._config_service.get_gateway_connection_url().rstrip("/")
-        return self._gateway_url
-
-    def _resolve_timeout_seconds(self) -> float:
-        if self._timeout_from_config and self._config_service is not None:
-            return self._config_service.get_gateway_connection_timeout_seconds()
-        return self._timeout_seconds
-
 
 __all__ = ["GatewaySessionMessageClient"]

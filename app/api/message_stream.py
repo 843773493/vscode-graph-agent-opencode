@@ -29,6 +29,7 @@ from app.protocol.codecs.message_stream import (
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.message_stream import MessageStreamSnapshotDTO
 from app.services.infrastructure.message_stream_store import (
+    MessageStreamCursorAheadError,
     MessageStreamCursorGoneError,
     MessageStreamError,
     MessageStreamNotFoundError,
@@ -207,6 +208,25 @@ async def stream_message_events(
     except (MessageStreamError, FileNotFoundError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
+    try:
+        # 越界游标必须在建流前 fail-closed：异常一旦落到 StreamingResponse 内部就
+        # 会变成裸 500，客户端拿不到明确的 400 就只会带着同一个坏游标重连。
+        await store.require_cursor_reachable(
+            turn_stream_id=writer.turn_stream_id,
+            after_seq=cursor,
+        )
+    except MessageStreamCursorAheadError as error:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "message_stream_cursor_ahead",
+                "message": str(error),
+                "turn_stream_id": error.turn_stream_id,
+                "after_seq": error.after_seq,
+                "high_water_seq": error.high_water_seq,
+            },
+        ) from error
+
     return StreamingResponse(
         _stream_message_sse(
             store.stream_records(
@@ -298,6 +318,17 @@ async def list_message_stream_events(
                 "message": str(error),
                 "turn_stream_id": error.turn_stream_id,
                 "first_seq": error.first_seq,
+            },
+        ) from error
+    except MessageStreamCursorAheadError as error:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "message_stream_cursor_ahead",
+                "message": str(error),
+                "turn_stream_id": error.turn_stream_id,
+                "after_seq": error.after_seq,
+                "high_water_seq": error.high_water_seq,
             },
         ) from error
     except (KeyError, NotFoundError) as error:

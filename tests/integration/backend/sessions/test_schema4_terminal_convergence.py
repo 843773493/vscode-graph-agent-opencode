@@ -8,10 +8,10 @@ import subprocess
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
+from app.core.identifier import create_uuid_hex
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -50,7 +50,7 @@ def terminal_case(
 ) -> TerminalCase:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
-    session_id = f"ses_{uuid4().hex}"
+    session_id = f"ses_{create_uuid_hex()}"
     session_node = session_bundle_factory(sessions, session_id)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(

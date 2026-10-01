@@ -49,7 +49,7 @@ from app.services.infrastructure.rollout_context.storage.resource_activation_sto
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 
-SESSION_ID = "ses_31b6a0d5c4e34f2a8b7d6901fe2c4a83"
+SESSION_ID = "ses_019c0fd1773c7b198a60f53aeeee17eb"
 PROTECTED_KEY = bytes(range(32))
 TURN_ID = "turn-1"
 

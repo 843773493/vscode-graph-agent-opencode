@@ -48,7 +48,7 @@ function fileNode(path: string): Record<string, unknown> {
 interface HarnessHandle {
   loadDirectory: (path: string, force?: boolean, append?: boolean) => Promise<boolean>;
   directoriesRef: { current: Record<string, unknown> };
-  refreshExpandedDirectories: () => void;
+  reloadExpandedDirectories: () => void;
   invalidateDirectoriesUnder: (treePath: string) => void;
   abortAllDirectoryRequests: () => string[];
   commitExpanded: (paths: string[]) => void;
@@ -79,7 +79,7 @@ function mountHarness(port: number): {
     });
     handle.loadDirectory = api.loadDirectory;
     handle.directoriesRef = api.directoriesRef;
-    handle.refreshExpandedDirectories = api.refreshExpandedDirectories;
+    handle.reloadExpandedDirectories = api.reloadExpandedDirectories;
     handle.invalidateDirectoriesUnder = api.invalidateDirectoriesUnder;
     handle.abortAllDirectoryRequests = api.abortAllDirectoryRequests;
     return null;
@@ -239,7 +239,7 @@ describe("workspace 文件树目录缓存", () => {
     expect(statuses.some((text) => text.startsWith("文件树加载失败: "))).toBe(true);
   });
 
-  test("刷新展开目录把已有条目标记过期并只重载已有缓存的展开路径", async () => {
+  test("全树重同步丢弃缓存并只重取已有缓存的展开路径", async () => {
     const port = 49_605;
     installWindow(port);
     const requestedPaths: string[] = [];
@@ -268,12 +268,14 @@ describe("workspace 文件树目录缓存", () => {
     await act(async () => {
       // ghost 已展开但从未加载过，不得因为它被展开就补发请求。
       handle.commitExpanded(["src", "ghost"]);
-      handle.refreshExpandedDirectories();
+      handle.reloadExpandedDirectories();
       await Promise.resolve();
     });
     expect(requestedPaths.filter((path) => path === "src").length).toBe(2);
     expect(requestedPaths.filter((path) => path === "other").length).toBe(1);
     expect(requestedPaths).not.toContain("ghost");
+    // other 未处于展开态：重同步只丢弃它的缓存，不得补发请求。
+    expect(handle.directoriesRef.current["other"]).toBeUndefined();
   });
 
   test("中止在途请求后迟到的响应不写入缓存", async () => {

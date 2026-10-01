@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
 
+from app.core.identifier import create_prefixed_id_at, to_epoch_ms
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -59,8 +59,10 @@ def _navigation_root(sessions_root: Path) -> Path:
     return resolved.parent / f".{resolved.name}-session-navigation"
 
 
-def _default_created_at() -> datetime:
-    return datetime.now(UTC).replace(microsecond=0)
+def _created_at_from_session_id(session_id: str) -> datetime:
+    """从 canonical v7 session_id 内嵌的 48 bit 毫秒时间戳推出 created_at。"""
+    embedded_ms = int(session_id[4:16], 16)
+    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=embedded_ms)
 
 
 def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle:
@@ -76,10 +78,12 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
         raise ValueError("workspace_id 不能为空")
     if not isinstance(spec.title, str) or not spec.title:
         raise ValueError("title 不能为空")
-    created_at = spec.created_at or _default_created_at()
+    # 固定 id 的夹具：created_at 缺省时由 id 内嵌时间推出，保证分桶日期自洽。
+    created_at = spec.created_at or _created_at_from_session_id(spec.session_id)
     if created_at.tzinfo is None:
         raise ValueError("created_at 必须带时区")
-    main_thread_id = f"thr_{uuid4().hex}"
+    # main thread 与 session 同源同一冻结毫秒，便于断言与解析一致。
+    main_thread_id = create_prefixed_id_at("thr", to_epoch_ms(created_at))
     locator = (
         f"sessions/{created_at.astimezone(UTC):%Y/%m/%d}/{spec.session_id}"
     )

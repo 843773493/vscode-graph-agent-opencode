@@ -20,6 +20,7 @@ from app.agents.workspace_tool_paths import (
     backend_virtual_to_workspace_relative,
 )
 
+GrepOutputMode = Literal["files_with_matches", "content", "count"]
 DEFAULT_MAX_LINES = 2_000
 DEFAULT_GREP_TIMEOUT_SECONDS = 10
 GREP_TIMEOUT_GRACE_SECONDS = 1
@@ -108,7 +109,7 @@ class WorkspaceGrepSchema(_ToolSchema):
         default=None,
         description="Optional glob pattern used to filter searched files.",
     )
-    output_mode: Literal["files_with_matches", "content", "count"] = Field(
+    output_mode: GrepOutputMode = Field(
         default="files_with_matches",
         description="Output format for matching files.",
     )
@@ -282,7 +283,7 @@ def _run_bounded_workspace_grep(
     pattern: str,
     relative_path: str,
     glob: str | None,
-    output_mode: Literal["files_with_matches", "content", "count"],
+    output_mode: GrepOutputMode,
     workspace_root: Path,
     runtime: ToolRuntime[None, FilesystemState],
 ) -> ToolMessage:
@@ -401,7 +402,7 @@ def _run_session_artifact_grep(
     pattern: str,
     relative_path: str,
     glob: str | None,
-    output_mode: Literal["files_with_matches", "content", "count"],
+    output_mode: GrepOutputMode,
     backend: SessionArtifactBackend,
     runtime: ToolRuntime[None, FilesystemState],
 ) -> ToolMessage:
@@ -453,14 +454,32 @@ def configure_workspace_filesystem_tools(
         for name in ("ls", "read_file", "write_file", "edit_file", "glob")
     }
 
+    def resolve_paths(
+        tool_name: str,
+        path: str,
+        *,
+        allow_attachment_paths: bool = False,
+    ) -> tuple[str, str]:
+        """统一模型相对路径与后端虚拟路径的规范化。
+
+        顺序固定为：先规范化为模型可见相对路径（越界、非法路径在此抛
+        ValueError），再做模型路径准入校验，最后投影为后端虚拟路径；
+        与各工具原有实现逐字一致。
+        """
+        relative_path = resolver.normalize_relative_path(path)
+        _validate_model_path(
+            tool_name,
+            relative_path,
+            allow_attachment_paths=allow_attachment_paths,
+        )
+        return relative_path, resolver.backend_virtual_path(path)
+
     def sync_ls(
         path: str,
         runtime: ToolRuntime[None, FilesystemState],
     ) -> ToolMessage:
         try:
-            relative_path = resolver.normalize_relative_path(path)
-            _validate_model_path("ls", relative_path)
-            backend_path = resolver.backend_virtual_path(path)
+            _, backend_path = resolve_paths("ls", path)
         except ValueError as error:
             return _path_error("ls", runtime, error)
         return _rewrite_path_list(
@@ -472,9 +491,7 @@ def configure_workspace_filesystem_tools(
         runtime: ToolRuntime[None, FilesystemState],
     ) -> ToolMessage:
         try:
-            relative_path = resolver.normalize_relative_path(path)
-            _validate_model_path("ls", relative_path)
-            backend_path = resolver.backend_virtual_path(path)
+            _, backend_path = resolve_paths("ls", path)
         except ValueError as error:
             return _path_error("ls", runtime, error)
         return _rewrite_path_list(
@@ -488,13 +505,11 @@ def configure_workspace_filesystem_tools(
         max_lines: int | None = None,
     ) -> ToolMessage:
         try:
-            relative_path = resolver.normalize_relative_path(path)
-            _validate_model_path(
+            relative_path, backend_path = resolve_paths(
                 "read_file",
-                relative_path,
+                path,
                 allow_attachment_paths=True,
             )
-            backend_path = resolver.backend_virtual_path(path)
         except ValueError as error:
             return _path_error("read_file", runtime, error)
         result = implementations["read_file"][0](
@@ -516,13 +531,11 @@ def configure_workspace_filesystem_tools(
         max_lines: int | None = None,
     ) -> ToolMessage:
         try:
-            relative_path = resolver.normalize_relative_path(path)
-            _validate_model_path(
+            relative_path, backend_path = resolve_paths(
                 "read_file",
-                relative_path,
+                path,
                 allow_attachment_paths=True,
             )
-            backend_path = resolver.backend_virtual_path(path)
         except ValueError as error:
             return _path_error("read_file", runtime, error)
         result = await implementations["read_file"][1](
@@ -543,9 +556,7 @@ def configure_workspace_filesystem_tools(
         runtime: ToolRuntime[None, FilesystemState],
     ) -> ToolMessage:
         try:
-            relative_path = resolver.normalize_relative_path(file_path)
-            _validate_model_path("write_file", relative_path)
-            backend_path = resolver.backend_virtual_path(file_path)
+            relative_path, backend_path = resolve_paths("write_file", file_path)
         except ValueError as error:
             return _path_error("write_file", runtime, error)
         result = implementations["write_file"][0](
@@ -565,9 +576,7 @@ def configure_workspace_filesystem_tools(
         runtime: ToolRuntime[None, FilesystemState],
     ) -> ToolMessage:
         try:
-            relative_path = resolver.normalize_relative_path(file_path)
-            _validate_model_path("write_file", relative_path)
-            backend_path = resolver.backend_virtual_path(file_path)
+            relative_path, backend_path = resolve_paths("write_file", file_path)
         except ValueError as error:
             return _path_error("write_file", runtime, error)
         result = await implementations["write_file"][1](
@@ -589,9 +598,7 @@ def configure_workspace_filesystem_tools(
         replace_all: bool = False,
     ) -> ToolMessage:
         try:
-            relative_path = resolver.normalize_relative_path(file_path)
-            _validate_model_path("edit_file", relative_path)
-            backend_path = resolver.backend_virtual_path(file_path)
+            relative_path, backend_path = resolve_paths("edit_file", file_path)
         except ValueError as error:
             return _path_error("edit_file", runtime, error)
         result = implementations["edit_file"][0](
@@ -615,9 +622,7 @@ def configure_workspace_filesystem_tools(
         replace_all: bool = False,
     ) -> ToolMessage:
         try:
-            relative_path = resolver.normalize_relative_path(file_path)
-            _validate_model_path("edit_file", relative_path)
-            backend_path = resolver.backend_virtual_path(file_path)
+            relative_path, backend_path = resolve_paths("edit_file", file_path)
         except ValueError as error:
             return _path_error("edit_file", runtime, error)
         result = await implementations["edit_file"][1](
@@ -640,9 +645,7 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         try:
             _validate_glob_pattern(pattern)
-            relative_path = resolver.normalize_relative_path(path)
-            _validate_model_path("glob", relative_path)
-            backend_path = resolver.backend_virtual_path(path)
+            _, backend_path = resolve_paths("glob", path)
         except ValueError as error:
             return _path_error("glob", runtime, error)
         return _rewrite_path_list(
@@ -660,9 +663,7 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         try:
             _validate_glob_pattern(pattern)
-            relative_path = resolver.normalize_relative_path(path)
-            _validate_model_path("glob", relative_path)
-            backend_path = resolver.backend_virtual_path(path)
+            _, backend_path = resolve_paths("glob", path)
         except ValueError as error:
             return _path_error("glob", runtime, error)
         return _rewrite_path_list(
@@ -678,9 +679,7 @@ def configure_workspace_filesystem_tools(
         runtime: ToolRuntime[None, FilesystemState],
         path: str | None = None,
         glob: str | None = None,
-        output_mode: Literal[
-            "files_with_matches", "content", "count"
-        ] = "files_with_matches",
+        output_mode: GrepOutputMode = "files_with_matches",
     ) -> ToolMessage:
         try:
             relative_path = _validate_grep_scope(resolver, path, glob)
@@ -711,9 +710,7 @@ def configure_workspace_filesystem_tools(
         runtime: ToolRuntime[None, FilesystemState],
         path: str | None = None,
         glob: str | None = None,
-        output_mode: Literal[
-            "files_with_matches", "content", "count"
-        ] = "files_with_matches",
+        output_mode: GrepOutputMode = "files_with_matches",
     ) -> ToolMessage:
         try:
             relative_path = _validate_grep_scope(resolver, path, glob)

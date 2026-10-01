@@ -299,6 +299,8 @@ target可见性发布前，worker MUST把全部required attachment claim推进`o
 
 target删除与finalizer竞争同一gate：finalizer先行时完成全部claim并把copy/board record分别推进成功终态`committed|published`后，删除按普通owner ref释放；删除先关闭fence时，排空流程按record中的精确claim ID释放`owner_reserved`的ref/claim，或验证已`committed` claim的精确target owner并按普通删除协议持久释放该owner ref，再把copy/board record分别推进终态`target_deleted|coordinator_deleted`。崩溃恢复只有在target仍active且publication preimage一致时才确认原owner ref用于finalization；target deleting/tombstoned时 MUST走删除settlement，不得重建owner、保留target owner ref、恢复active、写成功终态或报告target可用。未发布失败仍只按journal claim ID释放并进入`aborted`；不得扫描digest补claim、复用其它operation claim、复制blob bytes、留下GC空窗或在record非终态时隔离Session节点。
 
+**跨删除协议唯一 owner 待裁定（2026-10-01 第七轮登记，只加指针不改正文）**：本 requirement 的 copy/board 跨删除协议与终态闭集同被 `add-context-injection-lifecycle` 的 `specs/context-injection-lifecycle/spec.md`（copy attachment claim 一节）全文复述；最终唯一 owner 待裁定，见另一 change 的同名协议与 `tasks.md` §「2026-10-01 双轨登记：copy/board 跨删除协议与终态闭集重复」。
+
 #### Scenario: full rollout copy 与 source 删除按 gate 次序裁决
 
 - **WHEN** `full_rollout_copy`和source Session删除并发，且copy先取得source `SessionReadGuard`

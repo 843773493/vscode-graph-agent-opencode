@@ -52,7 +52,7 @@ import os
 import shutil
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from app.core.atomic_fs import (
@@ -64,13 +64,18 @@ from app.core.atomic_fs import (
 from app.core.atomic_fs import (
     fsync_file as _fsync_file,
 )
+from app.core.identifier import effective_now
+from app.core.key_lock_pool import KeyLockPool
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
     SessionCreationRecord,
     validate_path_budget,
 )
-from app.core.session_control_primitives import validate_thread_creation_key
+from app.core.session_control_primitives import (
+    CONTROL_DATABASE_NAME,
+    validate_thread_creation_key,
+)
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 
@@ -85,9 +90,6 @@ __all__ = [
 
 # session.json 文件名（创建流自用常量）。
 _SESSION_MANIFEST_NAME = "session.json"
-
-# 控制库文件名（与 R12 迁移机器一致）。
-_CONTROL_DATABASE_NAME = "session-control.sqlite"
 
 # staging 区：sessions_root / ".staging" / <idempotency_key>。
 _STAGING_DIR_NAME = ".staging"
@@ -272,7 +274,7 @@ class SessionCreationService:
         self._gate = (
             gate if gate is not None else NavigationTopologyGate(self._sessions_root)
         )
-        self._key_locks: dict[str, asyncio.Lock] = {}
+        self._key_locks = KeyLockPool()
 
     # ------------------------------------------------------------------
     # 公开入口
@@ -313,7 +315,9 @@ class SessionCreationService:
                     workspace_id=self._workspace_id,
                     parent_node_id=parent_node_id,
                     display_name=title,
-                    created_at=datetime.now(UTC),
+                    # 创建时刻取自 D4 唯一时间源 effective_now()：分桶日期与 id
+                    # 内嵌 48 bit 毫秒时间戳同源（intro：MUST NOT 独立取时）。
+                    created_at=effective_now(),
                     preimage_hash=preimage_hash,
                 )
             if record.state == "published":
@@ -385,12 +389,8 @@ class SessionCreationService:
         )
 
     def _key_lock(self, idempotency_key: str) -> asyncio.Lock:
-        """按 key create-or-get 进程内串行锁（锁随进程生命周期保留）。"""
-        lock = self._key_locks.get(idempotency_key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._key_locks[idempotency_key] = lock
-        return lock
+        """按 key 取进程内串行锁（固定分片，同 key 恒命中同一把）。"""
+        return self._key_locks.lock_for(idempotency_key)
 
     # ------------------------------------------------------------------
     # 路径定位
@@ -481,7 +481,7 @@ class SessionCreationService:
         Session」的物理侧保证：main row 与 fence 在目录可见（rename 到
         日期桶）之前初始化并校验完毕。
         """
-        control_path = staging / _CONTROL_DATABASE_NAME
+        control_path = staging / CONTROL_DATABASE_NAME
         store = SessionControlStore(control_path)
         try:
             store.initialize_main_thread(
@@ -515,7 +515,7 @@ class SessionCreationService:
             )
         entries = sorted(entry.name for entry in directory.iterdir())
         expected_entries = sorted(
-            [_SESSION_MANIFEST_NAME, _CONTROL_DATABASE_NAME]
+            [_SESSION_MANIFEST_NAME, CONTROL_DATABASE_NAME]
         )
         if entries != expected_entries:
             raise RuntimeError(
@@ -550,7 +550,7 @@ class SessionCreationService:
     ) -> None:
         """只读复验 session-control：唯一 main row == record.main_thread_id
         且 fence == (active, 1)（对齐 R12 迁移机器的只读校验模式）。"""
-        control_path = session_dir / _CONTROL_DATABASE_NAME
+        control_path = session_dir / CONTROL_DATABASE_NAME
         if not control_path.is_file():
             raise RuntimeError(
                 f"{stage}: session-control.sqlite 缺失: {control_path}"

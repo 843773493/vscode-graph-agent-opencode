@@ -1,7 +1,7 @@
 """upstream attempt 记录不得随进程内调用次数累积。
 
 历史缺陷：trace 回调挂在 LiteLLM 全局回调表上，而该表只增不减，导致第 N 次
-模型调用的日志里出现 N 条 attempt（见 ses_a307c20260f4417fa7ad41aad1b9b319）。
+模型调用的日志里出现 N 条 attempt（见 ses_019c546afc9f7b4b8a2048025ee8bebc）。
 """
 from __future__ import annotations
 

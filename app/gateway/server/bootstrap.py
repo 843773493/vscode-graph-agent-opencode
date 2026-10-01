@@ -369,7 +369,15 @@ async def create_registry(
                 # 工作区，避免冷启动时把会话树切回默认工作区。
                 registry.activate(requested_active_workspace_id)
             else:
+                # 上次激活的托管工作区已被标记为不期望运行，启动时无法恢复它，
+                # 必须回退到默认工作区；该回退用户可见，不能静默发生。
                 registry.activate(default_workspace_id)
+                logger.warning(
+                    "Gateway 启动时上次激活的托管工作区不期望运行，已回退到默认工作区: "
+                    "requested_workspace_id=%s, fallback_workspace_id=%s",
+                    requested_active_workspace_id,
+                    default_workspace_id,
+                )
         else:
             registry.activate(requested_active_workspace_id)
     elif default_workspace_id:

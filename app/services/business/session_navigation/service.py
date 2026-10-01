@@ -198,6 +198,7 @@ class SessionCatalogService:
             offset=0,
             limit=None,
             revision=revision,
+            cursor_scope=None,
         )
 
     async def list_children(
@@ -212,14 +213,18 @@ class SessionCatalogService:
             node.node_id == parent_node_id for node in nodes
         ):
             raise KeyError(f"会话目录节点不存在: {parent_node_id}")
-        offset = self._decode_cursor(cursor, revision)
         children = self._sorted_children(nodes, parent_node_id)
+        # cursor 绑定发牌时的分页作用域（父节点）：同一个 revision 下把某个父节点的
+        # cursor 拿去翻另一个父节点的页，会让 offset 落到错误切片的中间，静默跳项。
+        scope = parent_node_id
+        offset = self._decode_cursor(cursor, revision, scope)
         return self._build_page(
             children,
             parent_node_id=parent_node_id,
             offset=offset,
             limit=limit,
             revision=revision,
+            cursor_scope=scope,
         )
 
     def _build_page(
@@ -230,6 +235,7 @@ class SessionCatalogService:
         offset: int,
         limit: int | None,
         revision: str,
+        cursor_scope: str | None,
     ) -> SessionCatalogPageDTO:
         """构造目录分页页；limit 为 None 表示返回 offset 之后的全部节点。"""
         page = children[offset:] if limit is None else children[offset : offset + limit]
@@ -239,7 +245,7 @@ class SessionCatalogService:
             parent_node_id=parent_node_id,
             items=page,
             cursor=(
-                self._encode_cursor(next_offset, revision)
+                self._encode_cursor(next_offset, revision, cursor_scope)
                 if next_offset < len(children)
                 else None
             ),
@@ -251,7 +257,21 @@ class SessionCatalogService:
         nodes_by_id = {node.node_id: node for node in nodes}
         node = nodes_by_id.get(node_id)
         if node is None:
-            raise KeyError(f"会话目录节点不存在: {node_id}")
+            # 目标可能正处于 deleting（枚举已按 §9 语义隐藏）：这里用 catalog
+            # 父子链补齐并标 pending，使正在被删除的子树的 breadcrumb 仍可解析、
+            # 前端能区分 pending 与 committed，而不是整条读路径失败。
+            try:
+                chain = self._path_resolver.breadcrumb(node_id)
+            except KeyError:
+                raise KeyError(f"会话目录节点不存在: {node_id}") from None
+            return SessionCatalogBreadcrumbDTO(
+                revision=revision,
+                items=[
+                    nodes_by_id.get(item.node_id)
+                    or self._to_pending_catalog_node(item, nodes_by_id)
+                    for item in chain
+                ],
+            )
         return SessionCatalogBreadcrumbDTO(
             revision=revision,
             items=self._breadcrumb_items(node, nodes_by_id),
@@ -268,7 +288,10 @@ class SessionCatalogService:
         if not normalized_query:
             raise ValueError("会话目录搜索词不能为空")
         nodes, revision = await self._snapshot()
-        offset = self._decode_cursor(cursor, revision)
+        # 搜索的 cursor 作用域是查询词：把目录分页或其它查询词的 cursor 拿来翻本
+        # 次搜索，会让 offset 落到错误匹配集的中间，静默跳项。
+        scope = f"search\n{normalized_query}"
+        offset = self._decode_cursor(cursor, revision, scope)
         nodes_by_id = {node.node_id: node for node in nodes}
         matches: list[SessionCatalogNodeDTO] = []
         for node in nodes:
@@ -304,7 +327,7 @@ class SessionCatalogService:
             revision=revision,
             items=results,
             cursor=(
-                self._encode_cursor(next_offset, revision)
+                self._encode_cursor(next_offset, revision, scope)
                 if next_offset < len(matches)
                 else None
             ),
@@ -337,6 +360,19 @@ class SessionCatalogService:
         )
         self.invalidate()
         return await self.breadcrumb(_committed_node_id(records[-1]))
+
+    async def recover_pending_subtree_deletes(self) -> list[SubtreeDeleteResult]:
+        """启动恢复入口：按 SQLite 权威 record 幂等续跑未终结的子树删除。
+
+        返回已收敛（drain+finish 完成）的删除结果。只依据
+        ``subtree_delete_records`` 定点继续，不扫描磁盘、不吸收外部改动、
+        不假回滚 active；任一 record 恢复失败即向上抛错，由启动期如实记录并
+        继续启动（目录读取已对 deleting 节点隐藏，不再拖垮整个后端）。
+        """
+        results = await self._path_resolver.recover_pending_subtree_deletes()
+        if results:
+            self.invalidate()
+        return results
 
     async def update_folder(
         self,
@@ -623,7 +659,8 @@ class SessionCatalogService:
         ):
             return self._cached_nodes, self._cached_revision
         physical_nodes = self._path_resolver.list_nodes()
-        physical_revision = self._path_resolver.revision
+        # list_nodes() 读同一 catalog；其间若有并发写提交，其 generation 变化
+        # 由下一次 _snapshot 的缓存判据（非 force）重读 revision 捕获。
         child_parent_ids = {
             node.parent_node_id
             for node in physical_nodes
@@ -692,6 +729,7 @@ class SessionCatalogService:
             session_id=node.node_id if node.kind == "session" else None,
             folder_id=node.node_id if node.kind == "folder" else None,
             has_children=node.node_id in child_parent_ids,
+            state=node.state,
             storage_relative_path=(
                 session_projection.storage_relative_path
                 if session_projection is not None
@@ -704,6 +742,46 @@ class SessionCatalogService:
                 session_projection.updated_at if session_projection is not None else None
             ),
             session=session,
+        )
+
+    def _to_pending_catalog_node(
+        self,
+        node: SessionCatalogNodeProjection,
+        nodes_by_id: dict[str, SessionCatalogNodeDTO],
+    ) -> SessionCatalogNodeDTO:
+        """把一个未进入快照的 *deleting* 节点投影成 pending DTO。
+
+        仅用于 breadcrumb：目标节点已被 §9 语义从目录枚举隐藏，但仍处于
+        逻辑删除中（catalog 权威 state=deleting），其 session 元数据不可按
+        正常路径读取（物理目录可能已隔离）。因此这里只给出节点身份 + pending
+        标记，不伪造 session 元数据或 storage_relative_path。
+        """
+        session_projection = (
+            node if isinstance(node, SessionCatalogSessionProjection) else None
+        )
+        return SessionCatalogNodeDTO(
+            node_id=node.node_id,
+            kind=node.kind,
+            name=node.name,
+            parent_node_id=node.parent_node_id,
+            session_id=node.node_id if node.kind == "session" else None,
+            folder_id=node.node_id if node.kind == "folder" else None,
+            has_children=any(
+                item.parent_node_id == node.node_id for item in nodes_by_id.values()
+            ),
+            state=node.state,
+            storage_relative_path=(
+                session_projection.storage_relative_path
+                if session_projection is not None
+                else None
+            ),
+            created_at=(
+                session_projection.created_at if session_projection is not None else None
+            ),
+            updated_at=(
+                session_projection.updated_at if session_projection is not None else None
+            ),
+            session=None,
         )
 
     @staticmethod
@@ -785,12 +863,20 @@ class SessionCatalogService:
         return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
-    def _encode_cursor(offset: int, revision: str) -> str:
-        payload = json.dumps({"offset": offset, "revision": revision}).encode("utf-8")
+    def _encode_cursor(offset: int, revision: str, scope: str | None) -> str:
+        """签发分页 cursor：绑定 revision 与分页作用域，拒绝跨列表复用。
+
+        ``scope`` 是发牌时的分页上下文（list_children 为 ``parent_node_id``、
+        search 为查询词）：同一 revision 下把 A 列表的 cursor 交给 B 列表，offset
+        会落在 B 自身切片的中间，静默跳项且不报错。绑定后跨列表复用显式报错。
+        """
+        payload = json.dumps(
+            {"offset": offset, "revision": revision, "scope": scope}
+        ).encode("utf-8")
         return base64.urlsafe_b64encode(payload).decode("ascii")
 
     @staticmethod
-    def _decode_cursor(cursor: str | None, revision: str) -> int:
+    def _decode_cursor(cursor: str | None, revision: str, scope: str | None) -> int:
         if cursor is None:
             return 0
         try:
@@ -803,6 +889,8 @@ class SessionCatalogService:
             raise TypeError("会话目录 cursor 格式无效")
         if payload.get("revision") != revision:
             raise ValueError("会话目录已更新，请从第一页重新加载")
+        if payload.get("scope") != scope:
+            raise ValueError("会话目录 cursor 与当前列表不匹配，请从第一页重新加载")
         offset = payload.get("offset")
         if not isinstance(offset, int) or offset < 0:
             raise ValueError("会话目录 cursor offset 无效")

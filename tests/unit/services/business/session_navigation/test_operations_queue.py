@@ -29,12 +29,12 @@ from app.services.business.session_navigation.queue_store import (
     NavigationMutationConflictError,
     NavigationMutationQueueStore,
 )
+from tests.support.canonical_id_at import uuid7_hex_from_name
 
 
 def canonical(name: str) -> str:
-    """确定性 canonical session ID（仅测试播种用）。"""
-    digest = hashlib.md5(name.encode("utf-8")).hexdigest()
-    return f"ses_{digest[:12]}4{digest[13:16]}8{digest[17:]}"
+    """确定性 canonical session ID（v7 位 profile，仅测试播种用）。"""
+    return f"ses_{uuid7_hex_from_name(name)}"
 
 
 def operation_id(seed: str) -> str:

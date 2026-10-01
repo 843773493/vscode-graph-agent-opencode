@@ -27,9 +27,12 @@ import calendar
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
-from app.core.session_catalog_store import validate_thread_id
+from app.core.session_catalog_store import (
+    uuid7_embedded_utc_date,
+    validate_thread_id,
+)
 
 __all__ = [
     "FENCE_ROW_ID",
@@ -120,7 +123,9 @@ def validate_thread_relative_locator(value: str) -> None:
     ``validate_storage_relative_locator`` 同口径——YYYY 4 位数字、MM
     01-12、DD 按 ``calendar.monthrange`` 对应月份合法（含闰年），叶名
     thread_id 过完整验证器；child thread 按自身不可变 UTC ``created_at``
-    分桶（design.md §9），不额外加 hash shard。
+    分桶（design.md §9），不额外加 hash shard。日期段还必须与 thread_id
+    内嵌的 48 bit 毫秒时间戳按 UTC 推导出的日期一致（design D4/§4.3）：
+    只凭 locator 字符串自身推出，不一致即 fail-closed。
     """
     if not isinstance(value, str):
         raise TypeError(f"thread relative locator 必须是字符串: {value!r}")
@@ -136,6 +141,15 @@ def validate_thread_relative_locator(value: str) -> None:
     _, last_day = calendar.monthrange(int(year_text), month)
     if not 1 <= day <= last_day:
         raise ValueError(f"thread relative locator 日期非法: {value!r}")
+    locator_date = date(int(year_text), month, day)
+    embedded_date = uuid7_embedded_utc_date(thread_id[4:])
+    if locator_date != embedded_date:
+        raise ValueError(
+            "thread relative locator 日期段必须等于 thread_id 内嵌 48 bit "
+            "毫秒时间戳的 UTC 日期（分桶与 id 漂移，fail-closed）: "
+            f"locator={value!r}, locator_date={locator_date.isoformat()}, "
+            f"embedded_date={embedded_date.isoformat()}"
+        )
 
 
 @dataclass(frozen=True, slots=True)

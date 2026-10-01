@@ -20,8 +20,6 @@ ProtocolId = Literal[
     "openai_responses_sse",
     "anthropic_messages_sse",
 ]
-CassetteProtocol = ProtocolId | Literal["mixed"]
-
 _SCENARIO_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 

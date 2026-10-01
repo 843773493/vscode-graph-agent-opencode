@@ -8,6 +8,10 @@ R25 起委派不再创建 delegated child Session：``delegate``` 经装配好�
 
 - R25 **不启动真实 child Job**：intent 保持 ``pending```，由 R26
   thread-qualified binder 消费；本服务不触碰 JobService/orchestrator。
+  真实 thread binder 是构造必须显式声明的依赖：未装配时 ``delegate``
+  在任何持久化副作用前 fail closed 抛 ``SessionSubagentUnavailableError``，
+  绝不创建必然永久 pending 的 intent、绝不返回虚假 ``accepted``
+  （OpenSpec 主 spec 第 244 行 / tasks.md 8.5-B）。
 - 同一委派的 identity 由 (parent session, parent job, parent tool call,
   subagent type) 确定性派生：同 tool call 崩溃重试收敛同一 child thread
   与 intent；不同 preimage / aborted 后重登记由 store/ledger fail closed
@@ -34,8 +38,47 @@ from app.agents.graph_binding import (
     DEEP_AGENT_GRAPH_BINDING,
     compute_capability_profile_hash,
 )
+from app.services.orchestration.initial_execution_binding_worker import (
+    InitialExecutionBinder,
+)
 
-__all__ = ["SessionSubagentService"]
+__all__ = [
+    "SessionSubagentService",
+    "SessionSubagentUnavailableError",
+]
+
+
+class SessionSubagentUnavailableError(RuntimeError):
+    """生产未装配真实 thread binder：初始 execution 无法绑定，fail closed。
+
+    OpenSpec ``add-itemized-rollout-context`` 主 spec Requirement「main thread
+    与 durable child thread 必须支持真实的多任务协作模型」第 244 行规定：
+    delegated child 的初始 execution 绑定 MUST 由生产提供真实 thread
+    binder；缺少 binder 时系统 MUST 可观测地 fail-closed 报告
+    ``unavailable``（含具体 admission identity 与原因），MUST NOT 静默停留、
+    MUST NOT 把 intent 标成 ``bound``。在位真实 binder（§8.5 的 thread
+    binder 装配链路）落地前，``SessionSubagentService`` 不得向模型返回虚假
+    的 ``accepted`` + 绑定承诺：本异常是该唯一失败出口，携带确定性派生的
+    delegation identity（即 admission idempotency key）与缺失原因。
+    """
+
+    def __init__(
+        self,
+        *,
+        delegation_id: str,
+        parent_session_id: str,
+        subagent_type: str,
+    ) -> None:
+        super().__init__(
+            "委派 child thread unavailable：生产未装配真实 thread binder，"
+            "初始 execution admission intent 无法绑定（fail closed，"
+            "绝不静默停留 pending、绝不伪造 execution）: "
+            f"admission_idempotency_key={delegation_id} "
+            f"owner_session_id={parent_session_id} subagent_type={subagent_type}"
+        )
+        self.delegation_id = delegation_id
+        self.parent_session_id = parent_session_id
+        self.subagent_type = subagent_type
 
 # child thread 能力 profile：R25 冻结产品 canonical profile（与 main thread
 # 同一 GraphBinding 四元组，保证 R26/R28 restore 可解析）；child 专属
@@ -74,9 +117,14 @@ class SessionSubagentService:
         *,
         parent_session_reader: SessionReaderProtocol,
         thread_creation_factory: OwnerThreadCreationFactoryProtocol,
+        initial_execution_binder: InitialExecutionBinder | None,
     ) -> None:
         self._parent_session_reader = parent_session_reader
         self._thread_creation_factory = thread_creation_factory
+        # 真实 thread binder 是生产必须显式声明的依赖（OpenSpec 主 spec
+        # 第 244 行义务）。binder 缺省为 None 时本服务 fail closed，绝不向
+        # 模型返回虚假 accepted+绑定承诺；intent 不会永久滞留。
+        self._initial_execution_binder = initial_execution_binder
 
     async def delegate(
         self,
@@ -118,6 +166,15 @@ class SessionSubagentService:
             parent_tool_call_id=parent_tool_call_id,
             subagent_type=subagent_type,
         )
+        if self._initial_execution_binder is None:
+            # 没有真实 binder，delegate MUST NOT 创建必然永久 pending 的
+            # 初始 execution intent、MUST NOT 向调用方返回 accepted；在
+            # 任何持久化副作用前 fail closed（OpenSpec 主 spec 第 244 行）。
+            raise SessionSubagentUnavailableError(
+                delegation_id=delegation_id,
+                parent_session_id=parent_session_id,
+                subagent_type=subagent_type,
+            )
         parent_thread_id = self._thread_creation_factory.owner_main_thread_id(
             parent_session_id
         )

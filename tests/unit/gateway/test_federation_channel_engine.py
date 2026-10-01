@@ -16,6 +16,8 @@ from app.gateway.federation.channel import (
 )
 from app.gateway.federation.errors import (
     FEDERATION_CHANNEL_HEARTBEAT_TIMEOUT,
+    FEDERATION_DEADLINE_EXCEEDED,
+    FederationError,
 )
 from app.gateway.federation.identity import FederationPeerIdentity
 
@@ -133,6 +135,27 @@ async def test_request_rejects_unknown_method() -> None:
     with pytest.raises(Exception) as error:
         await session.request(method="federation.nope", request={}, timeout=1)
     assert "federation-unknown-method" in str(error.value)
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_raises_structured_deadline_error() -> None:
+    """channel 层超时必须收敛为稳定 FederationError，不得冒泡裸 asyncio.TimeoutError。
+
+    对端始终不回包时，``request`` 必须在有效 timeout 后抛出携带
+    ``federation-deadline-exceeded`` 的 :class:`FederationError`（与联邦其余拒绝
+    路径同一种失败表达），MUST NOT 让裸 ``TimeoutError`` 成为第二条正常路径。
+    """
+
+    transport = _MemoryTransport()
+    session = _session(transport, heartbeat_interval_seconds=30)
+    session.start()
+    with pytest.raises(FederationError) as error:
+        await session.request(method="federation.status", request={}, timeout=0.05)
+    assert error.value.code == FEDERATION_DEADLINE_EXCEEDED
+    assert not isinstance(error.value, asyncio.TimeoutError)
+    assert error.value.detail["method"] == "federation.status"
+    assert error.value.detail["timeout_seconds"] == 0.05
     await session.close()
 
 

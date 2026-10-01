@@ -100,8 +100,8 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     # 参数化 phase 的派生 ID 按任务书确定性映射函数（md5 + v4 位 profile）
     # 显式定值，保持与旧字面量同名的确定性对应。
     session_id = {
-        "text": "ses_4d61915efc1d469b80f735dad37dfec2",  # ses_user_interrupt_text
-        "tool": "ses_f786d2fb0aa04e768cd94003d6710fe9",  # ses_user_interrupt_tool
+        "text": "ses_019b782883b57e5b8a8f9d1b7645266d",  # ses_user_interrupt_text
+        "tool": "ses_019c531022297723866bc035db07731d",  # ses_user_interrupt_tool
     }[phase]
     job_id = f"job_user_interrupt_{phase}"
     SessionInterruptState.clear(session_id)
@@ -214,7 +214,7 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
     tmp_path,
     session_bundle_factory,
 ) -> None:
-    session_id = "ses_395c5d0c0b4b414d8a5248f16f17a677"
+    session_id = "ses_019c75960c0c763d844344c4deaada6e"
     job_id = "job_user_interrupt_missing_checkpoint"
     SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)
@@ -266,3 +266,44 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
     assert "<system_reminder>" in str(reminders[0]["content"])
     assert "文本生成" in str(reminders[0]["content"])
     SessionInterruptState.clear(session_id)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_ignores_interrupt_pending_job(
+    tmp_path,
+    session_bundle_factory,
+) -> None:
+    """interrupt_pending 的 Job 不属于可中断集合，不得被再次选为中断目标。
+
+    interrupt_pending 表示取消注入已在进行中；再次把它选为目标会重复注入取消。
+    该用例锁定可中断集合等于 {running, streaming, waiting_input}。
+    """
+
+    session_id = "ses_019d2e4f6a8b7c1d9e2f3a4b5c6d7e8f"
+    SessionInterruptState.clear(session_id)
+    session_bundle_factory(tmp_path, session_id)
+    saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    job = JobDTO(
+        job_id="job_interrupt_pending",
+        message_id="msg_interrupt_pending",
+        session_id=session_id,
+        mode=RunMode.single_agent,
+        status=JobStatus.interrupt_pending,
+        entry_agent="default",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    job_service = FakeJobService(job)
+    service = SessionInterruptService(
+        job_service=job_service,
+        job_event_bus=FakeJobEventBus(),
+        message_service=build_message_service(tmp_path, checkpointer=saver),
+        message_stream_store=MessageStreamStore(
+            path_resolver=get_session_path_resolver(tmp_path),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="当前没有正在运行的任务"):
+        await service.interrupt(session_id=session_id)
+
+    assert job_service.control_requests == []
