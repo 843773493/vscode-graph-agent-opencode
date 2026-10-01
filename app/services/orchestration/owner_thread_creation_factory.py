@@ -16,6 +16,7 @@ owner Session 目录惰性建立并缓存，gate 为工厂级共享实例（同�
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from pathlib import Path
 
 from app.agents.graph_binding import compute_capability_profile_hash
@@ -27,6 +28,14 @@ from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.thread_creation import ThreadCreationService
 
 __all__ = ["OwnerThreadCreationFactory"]
+
+
+#: 进程内 ThreadCreationService 缓存的容量上界。工厂是容器级长驻单例，每个
+#: 缓存值都持有一个打开 ``session-control.sqlite`` 的 ``SessionControlStore``；
+#: 缓存若无界，内存与文件描述符会随历史 owner session 数永久增长。上限内做
+#: LRU 淘汰；被淘汰的服务若仍被在飞的 ``create`` 持有，则等最后一个引用释放后
+#: 由其 ``SessionControlStore`` 的 sqlite 连接回收关闭 fd，绝不在使用中强关。
+_SERVICE_CACHE_LIMIT = 64
 
 
 class OwnerThreadCreationFactory:
@@ -58,26 +67,29 @@ class OwnerThreadCreationFactory:
             else get_session_path_resolver(self._sessions_root)
         )
         self._gate = NavigationTopologyGate(self._sessions_root)
-        self._services: dict[str, ThreadCreationService] = {}
+        self._services: OrderedDict[str, ThreadCreationService] = OrderedDict()
 
     def for_owner_session(self, session_id: str) -> ThreadCreationService:
         """返回绑定 owner Session 的 ThreadCreationService（进程内缓存）。"""
         resolver = self._require_catalog_resolver()
         service = self._services.get(session_id)
-        if service is None:
-            session_dir = self._session_dir_for(session_id)
-            control_store = SessionControlStore(
-                session_dir / CONTROL_DATABASE_NAME
-            )
-            service = ThreadCreationService(
-                store=resolver.catalog_store,
-                control_store=control_store,
-                sessions_root=self._sessions_root,
-                workspace_id=self._workspace_id,
-                compute_capability_profile_hash=compute_capability_profile_hash,
-                gate=self._gate,
-            )
-            self._services[session_id] = service
+        if service is not None:
+            self._services.move_to_end(session_id)
+            return service
+        session_dir = self._session_dir_for(session_id)
+        control_store = SessionControlStore(session_dir / CONTROL_DATABASE_NAME)
+        service = ThreadCreationService(
+            store=resolver.catalog_store,
+            control_store=control_store,
+            sessions_root=self._sessions_root,
+            workspace_id=self._workspace_id,
+            compute_capability_profile_hash=compute_capability_profile_hash,
+            gate=self._gate,
+        )
+        self._services[session_id] = service
+        self._services.move_to_end(session_id)
+        while len(self._services) > _SERVICE_CACHE_LIMIT:
+            self._services.popitem(last=False)
         return service
 
     def owner_main_thread_id(self, session_id: str) -> str:
