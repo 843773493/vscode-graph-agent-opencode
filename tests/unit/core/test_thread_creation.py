@@ -889,6 +889,151 @@ async def test_concurrent_sibling_delegations_each_publish_without_poisoning(
     assert count_rows(owner.control, "thread_creation_records") == 2
 
 
+async def test_cross_instance_duplicate_delivery_converges_to_same_child(
+    store: SessionCatalogStore,
+    owner: OwnerSession,
+    sessions_root: Path,
+) -> None:
+    """跨执行根（多进程）重复投递同一 idempotency_key 收敛到同一 child。
+
+    进程内 asyncio.Lock 只保护单进程，两个独立 ThreadCreationService（各自
+    连同一 session-control 库）并发投递同 key 时，输掉唯一可见性提交点的
+    一方必须按 create-or-get 幂等恢复同一结果，而不是对重复 publish 报错。
+    """
+    cs_a = SessionControlStore(owner.session_dir / "session-control.sqlite")
+    cs_b = SessionControlStore(owner.session_dir / "session-control.sqlite")
+
+    def build(control: SessionControlStore) -> ThreadCreationService:
+        return ThreadCreationService(
+            store=store,
+            control_store=control,
+            sessions_root=sessions_root,
+            workspace_id=WORKSPACE_ID,
+            compute_capability_profile_hash=compute_capability_profile_hash,
+            gate=NavigationTopologyGate(sessions_root),
+            session_gate=SessionLifecycleGate(sessions_root),
+        )
+
+    async def call(svc: ThreadCreationService):
+        return await svc.create(
+            idempotency_key="dup-key",
+            session_id=owner.session_id,
+            thread_id=None,
+            delegation_id=None,
+            initial_state="running",
+            session_metadata=make_metadata(),
+            artifact_manifest=make_artifacts(),
+        )
+
+    try:
+        first, second = await asyncio.gather(
+            call(build(cs_a)), call(build(cs_b))
+        )
+    finally:
+        cs_a.close()
+        cs_b.close()
+    # 双方拿到同一 child 身份（幂等收敛，非报错）
+    assert first.child_thread_id == second.child_thread_id
+    assert first == second
+    # 不重复：1 条 record / 1 个 child row（+main）/ 1 条 execution intent
+    assert count_rows(owner.control, "thread_creation_records") == 1
+    assert count_rows(owner.control, "thread_catalog") == 2
+    assert count_rows(owner.control, "thread_execution_intents") == 1
+    assert owner.control.get_thread_creation_record("dup-key").state == "published"
+
+
+async def test_concurrent_publish_reentry_recovers_same_child_deterministically(
+    store: SessionCatalogStore,
+    owner: OwnerSession,
+    sessions_root: Path,
+) -> None:
+    """确定性竞态：A 走到 publish 时，另一实例已抢先完成唯一可见性提交点。
+
+    通过让 A 的 control store 在 publish 前先触发 B（独立连接、独立
+    store 实例）完成 publish，精确复现「进程内锁没覆盖的另一个执行根
+    已发布同 key」的时序。A 必须 create-or-get 幂等恢复同一 child（而非
+    对重复 publish 报错），且唯一可见性提交点只产生一个 child。
+    """
+    cs_a = SessionControlStore(owner.session_dir / "session-control.sqlite")
+    cs_b = SessionControlStore(owner.session_dir / "session-control.sqlite")
+    original_publish = cs_a.publish_thread_creation_record
+    injected = {"done": False}
+
+    def publish_with_race(key: str):
+        if not injected["done"]:
+            injected["done"] = True
+            # 另一个执行根（独立 store/连接）先抵达唯一可见性提交点。
+            cs_b.publish_thread_creation_record(key)
+        return original_publish(key)
+
+    cs_a.publish_thread_creation_record = publish_with_race  # type: ignore[method-assign]
+    svc_a = ThreadCreationService(
+        store=store,
+        control_store=cs_a,
+        sessions_root=sessions_root,
+        workspace_id=WORKSPACE_ID,
+        compute_capability_profile_hash=compute_capability_profile_hash,
+        gate=NavigationTopologyGate(sessions_root),
+        session_gate=SessionLifecycleGate(sessions_root),
+    )
+    try:
+        result = await svc_a.create(
+            idempotency_key="race-key",
+            session_id=owner.session_id,
+            thread_id=None,
+            delegation_id=None,
+            initial_state="running",
+            session_metadata=make_metadata(),
+            artifact_manifest=make_artifacts(),
+        )
+    finally:
+        cs_a.close()
+        cs_b.close()
+    assert injected["done"] is True
+    assert result.record_state == "published"
+    # 恢复命中同一 child，唯一可见性提交点只产生一个 child
+    assert (
+        result.child_thread_id
+        == owner.control.get_thread_creation_record("race-key").child_thread_id
+    )
+    assert count_rows(owner.control, "thread_creation_records") == 1
+    assert count_rows(owner.control, "thread_catalog") == 2
+    assert count_rows(owner.control, "thread_execution_intents") == 1
+
+
+async def test_same_key_different_content_fails_closed_without_reuse(
+    service: ThreadCreationService,
+    owner: OwnerSession,
+) -> None:
+    """同 key 但内容不同：必须 fail closed，不得静默复用他人 child。
+
+    幂等命中以「key + 内容一致」为条件；preimage 漂移（此处 task seed
+    不同）必须明确报错，且已有可见 child 与 execution 不被改动。
+    """
+    first = await do_create(service, owner, key="dup-key")
+    with pytest.raises(RuntimeError, match="preimage 冲突"):
+        await do_create(
+            service,
+            owner,
+            key="dup-key",
+            metadata=make_metadata(task_seed={"task": "另一件事"}),
+        )
+    # 原有可见性产物与 execution 未受影响
+    assert owner.control.get_thread_creation_record("dup-key").state == "published"
+    assert count_rows(owner.control, "thread_creation_records") == 1
+    assert count_rows(owner.control, "thread_catalog") == 2
+    assert count_rows(owner.control, "thread_execution_intents") == 1
+    assert (
+        owner.control.get_thread_creation_record("dup-key").child_thread_id
+        == first.child_thread_id
+    )
+
+
+# ----------------------------------------------------------------------
+# 崩溃点矩阵（恢复/定点清理）
+# ----------------------------------------------------------------------
+
+
 async def test_crash_after_record_before_staging_recovers(
     service: ThreadCreationService,
     owner: OwnerSession,

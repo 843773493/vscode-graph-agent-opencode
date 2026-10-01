@@ -1219,12 +1219,34 @@ class ThreadCreationService:
             # （引入可重试错误）时必须收窄捕获范围——可用
             # ``type(error) is RuntimeError`` 精确捕获确定性冲突，让
             # RuntimeError 子类（可重试类）向调用方传播而不误 abort 换 key。
-            # 防御：publish 失败但 record 已 published（gate 期间被同 key
-            # 并发/人工推进）→ 绝不清理已发布线程，交由幂等收敛路径处理。
             current = self._control_store.get_thread_creation_record(
                 idempotency_key
             )
+            if current.state == "published":
+                # 跨执行根（多进程 GUI/worker/CLI）重复投递同一
+                # idempotency_key：进程内 asyncio.Lock 只保护本进程，另一
+                # 实例可能已完成唯一可见性提交点。按 create-or-get 语义
+                # 幂等恢复同一结果；但仅当身份逐字段一致才算命中——key
+                # 相同内容不同（preimage/child 漂移）必须 fail closed，绝不
+                # 静默复用他人线程。绝不走定点清理/abort（那是给真失败准备
+                # 的路，会误删/误 abort 已发布线程）。
+                if (
+                    current.preimage_hash != record.preimage_hash
+                    or current.child_thread_id != record.child_thread_id
+                ):
+                    raise RuntimeError(
+                        "thread creation publish 失败：record 已 published "
+                        "但身份与本次请求不一致（同 key 不同内容，fail "
+                        "closed，拒绝复用）: "
+                        f"key={idempotency_key!r}, "
+                        f"existing_preimage={current.preimage_hash!r}, "
+                        f"requested_preimage={record.preimage_hash!r}, "
+                        f"existing_child={current.child_thread_id!r}, "
+                        f"requested_child={record.child_thread_id!r}"
+                    ) from error
+                return current
             if current.state != "preparing":
+                # aborted（或未知非 preparing 态）：不清理、原样失败。
                 raise RuntimeError(
                     "thread creation publish 失败且 record 已非 preparing"
                     f"（state={current.state!r}），不执行定点清理: "
