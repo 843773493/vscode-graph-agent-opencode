@@ -10,13 +10,13 @@ from __future__ import annotations
 import sqlite3
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_store import validate_session_id
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.assembly.store import (
     ContextAssemblyStorageMixin,
 )
