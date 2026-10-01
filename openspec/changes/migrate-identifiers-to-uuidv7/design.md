@@ -78,30 +78,26 @@
 
 - *(跨进程也保证毫秒内有序)*：否决，需要跨进程共享计数器/锁，本地单机工具不值得引入该复杂度，且无法用本机实测支撑。
 
-### D3：破坏性范围 = 一次性显式迁移 + 同日原子收紧校验器（选方案 a：消除窗口期）
+### D3：破坏性范围 = 无运行时开关 + 存量 v4 一次性显式处置
 
-**决定**：**采用「消除窗口期」**（审查给的方案 a）。存量 v4 身份在同一次维护窗口内原子完成「迁移 + 校验器收紧」，窗口期校验器的确切形态判死如下：
+**决定**：**不引入任何运行时维护开关**——判死 `identity_profile_migration_active` 及任何等价的「窗口期接受 `v4|v7`」运行时分叉；canonical 校验器**始终只接受 v7**。存量 v4 走**一次性显式处置**：启动/迁移遇到 v4 canonical id MUST fail-closed 并隔离，同时给出可操作的显式报告。
 
-- **维护开关**：迁移由唯一的显式开关 `identity_profile_migration_active`（实现期命名可调，语义固定）门控。
-  - 开关 **开启**（迁移窗口内）：canonical 校验器接受 `v4|v7`；这是**唯一**允许双接受的时刻。
-  - 开关 **关闭**（默认、迁移完成后的常态）：canonical 校验器**只接受 v7**。
-- **原子切换**：迁移账本进入终态的那一笔事务提交后，**同一次维护操作内**把开关置为关闭，并把校验器的接受集切到「仅 v7」。MUST NOT 存在「只接受 v4」「长期双接受」的运行态。
-- **窗口期不得并行新旧代码**：迁移期间对外服务停止（维护窗口），MUST NOT 让新旧代码版本同时服务同一工作区；实现 MUST 在启动时做版本闸门检查（旧版本进程在开关开启的工作区上 MUST 拒绝启动，或由维护门禁保证单版本）。
-- **收敛断言**：开关关闭后，MUST 有一条测试断言「开关为 false 时，`v4` 位 profile 的 canonical 身份被拒绝、`v7` 被接受」；并有一条断言「开关为 true 时，`v4|v7` 均被接受，且该状态 MUST 同时携带显式维护标记」。
-- **不要口号**：本决策承认「只要开关处于 true，运行期就存在受控的双接受」；这不是长期双轨，而是**由单一开关门控、有终态、可机械检查的有限窗口**。MUST NOT 用「不双读」这类口号掩盖窗口期——窗口期的双接受由 `identity_profile_migration_active = true` 这一可观察事实显式承认。
+- **无运行时开关**：系统 MUST NOT 提供运行时维护开关，MUST NOT 存在「只接受 v4」「长期双接受」或「窗口期受控双接受」的任何运行态；MUST NOT 为兼容存量而放宽校验到 `v4|v7`。
+- **存量 v4 显式处置**：判据是既有迁移机对非法 id 的 `illegal_id` 隔离（`app/core/session_catalog_migration` 的 `_preflight`/`_physical` 段）。要求：**fail-closed 隔离 + 显式报告**（被隔离 id、物理路径、原因、建议动作），MUST NOT 回退 v4、MUST NOT 双读、MUST NOT 扫盘重建、MUST NOT 提供旧 ID path alias、MUST NOT 静默吸收。
+- **收敛断言**：MUST 有一条测试证明「`v4` 位 profile 的 canonical 身份被拒绝、`v7` 被接受」，以机械证明**不存在窗口期与运行时双轨**；另 MUST 有一条负向断言证明源码中不存在 `identity_profile_migration_active` 及等价开关。
 
 **理由**：
 
-- 与本仓既有纪律一致（AGENTS.md「彻底根除双轨」；`migrate-session-context-uri-to-vrn` 的「入口破坏性拒绝 + 新写字段」；`add-multi-workspace-backend-mounting` D7；`add-workspace-persistent-resource-management` 第 6 条）。
-- `validate_session_id` 当前**直接拒绝非 v4 位 profile**，所以「只对新写入生效」在实现上等价于「必须放宽校验到 v4|v7」。选方案 a 使双接受成为**有门控、有终态、可断言**的状态，而不是口头承诺。
-- 存量迁移可行性的判据以「代码是否声明了必须迁移的落盘形态」为准：代码明确声明 id 是 `.boxteam/sessions/YYYY/MM/DD/{session_id}` 的**目录叶名**（`session_catalog_store.py` 的 locator 校验）与 SQLite **主键**，且 id 会内嵌进 rollout/message_stream/trace/llm_request 等持久文件（实测同一 session 目录内 10+ 个文件命中该 `ses_` 值），因此存量数据**确实需要迁移**。
+- 与本仓既有纪律一致（AGENTS.md 第 1 条「彻底根除双轨」：运行时开关造成的窗口期双接受**本身就是双轨**，即使声明有终态也不接受；`migrate-session-context-uri-to-vrn` 的「入口破坏性拒绝 + 新写字段」；`add-multi-workspace-backend-mounting` D7；`add-workspace-persistent-resource-management` 第 6 条）。
+- `validate_session_id` 只接受 v7 位 profile；任何「放宽读到 `v4|v7`」都必须新增第二套接受分支，正是双轨，故**否决**窗口期方案。
+- 存量迁移可行性的判据以「代码是否声明了必须迁移的落盘形态」为准：代码明确声明 id 是 `.boxteam/sessions/YYYY/MM/DD/{session_id}` 的**目录叶名**（`session_catalog_store.py` 的 locator 校验）与 SQLite **主键**，且 id 会内嵌进 rollout/message_stream/trace/llm_request 等持久文件（实测同一 session 目录内 10+ 个文件命中该 `ses_` 值），因此存量数据确实是问题面——但处置方式定为 **fail-closed 隔离 + 可操作显式报告**，而不是运行时双轨重编号。
 
-**备选**：
+**否决的备选**：
 
-- *(b) 承认窗口期即双轨并给收口期限*：审查允许，但需要「窗口期长度由什么决定」的额外裁定面，且仍要引入等价的门控开关；方案 a 把同一开关的终态判死为「原子关闭」，约束更强、更少自由度，故选 a。
+- *(a) 维护窗口 + `identity_profile_migration_active` 门控的受控双接受*：否决——运行期双接受即双轨，违反 AGENTS.md 第 1 条。
+- *(b) 承认窗口期即双轨并给收口期限*：否决——同上，只是把双轨说成有期限。
 - *(c) 只对新写入生效（无终态的双接受期）*：否决，等价于长期 `v4|v7` 双轨。
-- *(d) 显式失效旧数据*：否决，会销毁用户会话/历史。
-
+- *(d) 显式失效旧数据*：否决，会销毁用户会话/历史；改用 fail-closed 隔离 + 可操作报告保留原数据，由用户显式决定归档或失效。
 
 ### D4：日期桶 = 必须与 id 内嵌时间戳（UTC）一致，且可校验
 
@@ -271,7 +267,7 @@
 
 1. **准备**：把 `uuid-utils>=0.16` 提升为 `pyproject.toml` 显式直接依赖；把唯一 id 工厂切到 `uuid_utils.uuid7()`；校验器正名为单一 v7 profile。
 2. **分桶自校验**：在 locator 校验中加入「`sessions/YYYY/MM/DD` 日期 == id 内嵌 48 bit 时间戳的 UTC 日期」断言（先以校验模式落地，再切换为强制）。
-3. **存量迁移**：在维护窗口 + 一致性备份下，运行一次性、可恢复、带 lineage 账本的迁移（session/thread id、目录叶名、SQLite 主键、持久文件内嵌引用），把 v4 重编号为 v7；无法归属者隔离到 `.boxteam/orphaned/`。
+3. **存量处置**：**无运行时开关**；启动/迁移路径遇到 v4 canonical id MUST fail-closed 隔离并产出可操作的显式报告（被隔离 id、物理路径、原因、建议动作），MUST NOT 回退 v4、MUST NOT 双读、MUST NOT 扫盘重建；无法归属者隔离到既有隔离惯例（`.boxteam/orphaned/`）。
 4. **收敛**：迁移完成后把校验器收紧为只接受 v7；删除任何过渡读取路径；确认无 v4 生成点残留（除 D7 豁免的非 canonical id）。
 5. **验证**：`openspec validate --strict --all`、工厂/校验器单测、迁移中断恢复测试、分桶一致性负向测试。
 
