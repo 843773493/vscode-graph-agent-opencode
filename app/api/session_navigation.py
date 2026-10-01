@@ -328,10 +328,11 @@ async def update_session_folder(
 ):
     try:
         result = await service.update_folder(folder_id, payload)
-    except KeyError as error:
-        raise not_found_http_error(error) from error
-    except (ValueError, RuntimeError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+    except (KeyError, ValueError, RuntimeError) as error:
+        # 与 create/delete/assign/move 同族入口同一分类：未知节点 404、形态/
+        # 语义/在途导航冲突 409。改前这里把语义冲突落成 400，且 detail 走裸
+        # str() 会带上 Python repr 引号，与同族入口的纯文本消息不一致。
+        raise _folder_mutation_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
