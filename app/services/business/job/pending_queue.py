@@ -160,13 +160,16 @@ class JobPendingQueue:
 
     def clear(self, session_id: str) -> tuple[QueueEntry, ...]:
         waiting = self._waiting.pop(session_id, deque())
+        # 连同按会话持有的序号/版本计数一并释放：否则长驻进程里每个排队过的
+        # 会话都会永久留下 _next_sequence/_snapshot_versions 记录，无界增长。
+        # 清空后无队列项、无控制面 CAS 语义，重置不回退任何可回滚决策。
+        self._next_sequence.pop(session_id, None)
+        self._snapshot_versions.pop(session_id, None)
         removed: list[QueueEntry] = []
         for job_id in waiting:
             entry = self.entry(job_id)
             self._entries.pop(job_id, None)
             removed.append(entry)
-        if removed:
-            self._bump(session_id)
         return tuple(removed)
 
     def reject_reorder(self, session_id: str) -> None:

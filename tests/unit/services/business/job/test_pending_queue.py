@@ -157,3 +157,37 @@ def test_head_keeps_boundary_waiting_reason_when_bumped() -> None:
     assert queue.take_head("session", "after_tool_result") is None
     assert head.waiting_reason == "等待已提交的 interrupt 边界"
     assert queue.peek_head("session") is head
+
+
+def test_clear_releases_per_session_counters() -> None:
+    """清空会话队列必须一并释放按会话持有的序号/版本计数，保持有界。
+
+    改前 ``clear`` 只清 ``_waiting``/``_entries``，``_next_sequence`` 与
+    ``_snapshot_versions`` 仍按 session_id 常驻：长驻进程里每个曾经排队过的
+    会话都会永久留下一条记录，且已清空会话的 ``snapshot_version`` 继续保留
+    陈旧纪元值。
+    """
+    queue = JobPendingQueue()
+    for session_id in ("ses_a", "ses_b", "ses_c"):
+        queue.append(session_id, f"job_{session_id}", "after_turn")
+        queue.clear(session_id)
+
+    assert queue._waiting == {}
+    assert queue._entries == {}
+    assert queue._next_sequence == {}
+    assert queue._snapshot_versions == {}
+    assert queue.snapshot_version("ses_a") == 0
+
+
+def test_clear_is_idempotent_and_reusable_session_restarts_sequence() -> None:
+    """clear 幂等；清空后同一会话重新排队从第一号重新开始。"""
+    queue = JobPendingQueue()
+    queue.append("session", "job_1", "after_turn")
+    queue.clear("session")
+    assert queue.clear("session") == ()
+
+    entry = queue.append("session", "job_2", "after_turn")
+
+    assert entry.enqueue_sequence == 1
+    assert entry.waiting_reason is None
+    assert queue.snapshot_version("session") == 1
