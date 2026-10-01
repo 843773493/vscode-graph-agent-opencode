@@ -304,10 +304,27 @@ class SessionSubtreeDeleteService:
         for session_id in sorted(record.frozen_session_locators):
             if session_id in record.drained_session_ids:
                 continue
+            target = self._deleting_dir(idempotency_key) / session_id
+            if target.exists() or target.is_symlink():
+                # 恢复窗口（上次运行已隔离、进度未记）：隔离目标存在即证
+                # 明上次的运行时/资源排空回调已成功返回（回调严格前于
+                # fence CAS，fence 前于 rename）——否则 rename 根本不会
+                # 发生。此时源目录已消失，重新回调只会对已隔离的 session
+                # 再次 resolve 而 fail closed，从而阻断崩溃恢复。跳回
+                # 调，交由 _drain_session 校验目标一致性并补记进度。
+                self._drain_session(
+                    idempotency_key=idempotency_key,
+                    session_id=session_id,
+                    storage_relative_locator=record.frozen_session_locators[
+                        session_id
+                    ],
+                )
+                self._store.record_drain_progress(idempotency_key, session_id)
+                continue
             async with self._session_gate.exclusive(session_id):
                 # 复合资源回调必须先于 fence CAS 与物理 rename。回调失败时
                 # 保留源目录与 catalog deleting 状态，供同一 record 定点
-                # 重试；不得制造“目录已删但进程/claim 未收敛”的伪成功。
+                # 重试；不得制造"目录已删但进程/claim 未收敛"的伪成功。
                 if self._session_drain_callback is not None:
                     await self._session_drain_callback(session_id)
                 self._drain_session(
