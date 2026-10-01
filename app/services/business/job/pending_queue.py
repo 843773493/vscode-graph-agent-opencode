@@ -141,7 +141,7 @@ class JobPendingQueue:
         entry.waiting_reason = (
             None
             if self.peek_head(session_id) is entry
-            else "等待队首"
+            else _POSITIONAL_WAITING_REASON
         )
         self._bump(session_id)
         return entry

@@ -191,3 +191,16 @@ def test_clear_is_idempotent_and_reusable_session_restarts_sequence() -> None:
     assert entry.enqueue_sequence == 1
     assert entry.waiting_reason is None
     assert queue.snapshot_version("session") == 1
+
+
+def test_policy_update_keeps_positional_reason_semantics() -> None:
+    """改策略不改位置：队首保持无位置理由，非队首标注「等待队首」。"""
+    queue = JobPendingQueue()
+    head = queue.append("session", "job_head", "after_turn")
+    tail = queue.append("session", "job_tail", "after_turn")
+
+    assert queue.update_policy("session", "job_head", "after_tool_result") is head
+    assert head.waiting_reason is None
+    assert queue.update_policy("session", "job_tail", "after_interrupt") is tail
+    assert tail.waiting_reason == "等待队首"
+    assert queue.peek_head("session") is head
