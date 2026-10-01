@@ -9,8 +9,7 @@ from pathlib import Path
 
 from app.gateway.config import ConfiguredTheme, GatewayConfig
 from app.gateway.control.user_access import USER_ID_PATTERN
-from app.gateway.ui_settings import merge_web_ui_settings_values
-from app.schemas.gateway import WebUISettingsDTO, WebUISettingsUpdateDTO
+from app.schemas.gateway import WebUISettingsDTO
 
 _PROFILE_VERSION = 1
 _PROFILE_GITIGNORE = """# 由 BoxTeam 管理；个人主题和 profile.jsonc 可以提交到用户自己的 Git 仓库。
@@ -149,19 +148,6 @@ class UserProfileStore:
                 ),
             }
         )
-
-    def merge_ui_settings(
-        self,
-        *,
-        user_id: str,
-        payload: WebUISettingsUpdateDTO,
-    ) -> WebUISettingsDTO:
-        updated = merge_web_ui_settings_values(
-            self.read_ui_settings(user_id=user_id),
-            payload,
-        )
-        self.write_ui_settings(user_id=user_id, settings=updated)
-        return updated
 
     def write_ui_settings(
         self,

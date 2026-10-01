@@ -149,33 +149,6 @@ class RegistryCrudMixin:
         if self._active_workspace_id == workspace_id:
             self._active_workspace_id = self._default_workspace_id()
         self._save(owner=mutation_owner)
-    def remove_backend_aliases(self, *, backend_url: str, keep_workspace_id: str) -> None:
-        normalized_backend_url = backend_url.rstrip("/")
-        for workspace_id, target in self._targets.items():
-            if (
-                workspace_id != keep_workspace_id
-                and target.connection_kind == "local"
-                and target.backend_url.rstrip("/") == normalized_backend_url
-            ):
-                self._assert_route_references_drained(workspace_id)
-        changed = False
-        for workspace_id, target in list(self._targets.items()):
-            if workspace_id == keep_workspace_id:
-                continue
-            if target.backend_url.rstrip("/") != normalized_backend_url:
-                continue
-            runtime = self._runtimes.pop(workspace_id, None)
-            if runtime is not None:
-                runtime.close()
-            self.invalidate_route(workspace_id)
-            del self._targets[workspace_id]
-            self._route_signatures.pop(workspace_id, None)
-            changed = True
-        if self._active_workspace_id not in self._targets:
-            self._active_workspace_id = self._default_workspace_id()
-            changed = True
-        if changed:
-            self._save(owner="system")
     def remove_system_default_aliases(self, *, keep_workspace_id: str) -> None:
         for workspace_id, target in self._targets.items():
             if (
