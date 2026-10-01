@@ -245,3 +245,5 @@
 
 
 **待裁定状态解除**：此前登记的「MCP target 级子 binding 形态在代码里不存在，属需 owner 新定稿的数据形态」**已由本文字定稿**（同批更正 `add-itemized-rollout-context/tasks.md` 的 §9 台账）。
+
+**验收门槛的可勾选条目**：本文字第九节三条验收门槛的可勾选 tasks 条目见 `add-itemized-rollout-context/tasks.md` 的 9.8–9.10（本条只作具名引用，不复述其内容）。
