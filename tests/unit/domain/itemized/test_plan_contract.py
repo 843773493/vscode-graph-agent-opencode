@@ -109,6 +109,47 @@ def test_contribution_alias_is_resolved_from_explicit_source_metadata(
         )
 
 
+def test_plan_hash_uses_canonical_contribution_order_key(
+    prompt_contribution: ContextContribution,
+) -> None:
+    """plan hash 的 contribution 顺序由 canonical key 决定，与入参元组顺序无关。"""
+    later = replace(prompt_contribution, contribution_id="zzz", source_ordinal=0)
+    earlier = replace(
+        prompt_contribution,
+        contribution_id="aaa",
+        body="other",
+        content_hash=contribution_content_hash("prompt", "other"),
+        content_length=None,
+        source_ordinal=1,
+    )
+    canonical = ContextRequestPlan(
+        session_id="session-order",
+        plan_id="plan-order",
+        refs=(),
+        contributions=(later, earlier),
+    )
+    reversed_input = ContextRequestPlan(
+        session_id="session-order",
+        plan_id="plan-order",
+        refs=(),
+        contributions=(earlier, later),
+    )
+    assert canonical.plan_hash() == reversed_input.plan_hash()
+    assert canonical.plan_hash() == (
+        "sha256:jcs:v1:b82dda14458bf0f317efe50bb478c568d90c422f377391c4fac192713d76ece9"
+    )
+    swapped_ordinals = ContextRequestPlan(
+        session_id="session-order",
+        plan_id="plan-order",
+        refs=(),
+        contributions=(
+            replace(later, source_ordinal=1),
+            replace(earlier, source_ordinal=0),
+        ),
+    )
+    assert swapped_ordinals.plan_hash() != canonical.plan_hash()
+
+
 @pytest.mark.parametrize("role", ["base", "delta"])
 def test_overlay_binding_requires_ref_role_and_epoch(
     prompt_contribution: ContextContribution, role: str

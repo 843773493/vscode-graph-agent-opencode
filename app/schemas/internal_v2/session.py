@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal, Optional, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -229,7 +229,7 @@ class SessionInterruptResultDTO(BaseModel):
     interrupt_request_id: str
     phase: str
     tool_name: Optional[str] = None
-    interrupted_at: datetime = Field(default_factory=lambda: datetime.now())
+    interrupted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class SessionCompactResultDTO(BaseModel):
@@ -244,7 +244,7 @@ class SessionCompactResultDTO(BaseModel):
     summary: Optional[str] = None
     history_file_path: Optional[str] = None
     strategy: Optional[Literal["cache_preserving", "cache_replacement"]] = None
-    compacted_at: datetime = Field(default_factory=lambda: datetime.now())
+    compacted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class SessionSkillUntrackRequest(BaseModel):

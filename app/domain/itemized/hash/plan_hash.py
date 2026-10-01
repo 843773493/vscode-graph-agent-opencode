@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.hash_projection import hash_scope_for_plan
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
-from app.domain.itemized.serialization import _hash_safe_value
+from app.domain.itemized.serialization import (
+    _contribution_order_key,
+    _hash_safe_value,
+)
 
 if TYPE_CHECKING:
-    from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+    from app.domain.itemized.request_plan import ContextRequestPlan
 
 
 def context_plan_hash(plan: ContextRequestPlan) -> str:
@@ -115,30 +117,9 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
         }
         for ref in sorted(tool_set_refs_for_hash, key=lambda value: value.ref_id)
     ]
-    def contribution_order_key(item: ContextContribution) -> tuple[int, str]:
-        # source_ordinal 只来自 itemized registry 分配的 typed 字段；
-        # metadata 中的同名历史键不再参与 hash 排序。
-        source_ordinal = item.source_ordinal
-        ordinal = (
-            item.contribution_ordinal
-            if item.contribution_ordinal is not None
-            else source_ordinal
-        )
-        if ordinal is None:
-            raise ItemSchemaError(
-                "ContextRequestPlan hash scope 缺少 contribution ordinal: "
-                f"{item.contribution_id}"
-            )
-        return (ordinal, item.contribution_id)
-
     contribution_rows = []
-    for item in sorted(contributions_for_hash, key=contribution_order_key):
+    for item in sorted(contributions_for_hash, key=_contribution_order_key):
         source_ordinal = item.source_ordinal
-        if item.contribution_ordinal is None and source_ordinal is None:
-            raise ItemSchemaError(
-                "ContextRequestPlan hash scope 缺少 contribution ordinal: "
-                f"{item.contribution_id}"
-            )
         contribution_rows.append(
             {
                 "source_ordinal": source_ordinal,

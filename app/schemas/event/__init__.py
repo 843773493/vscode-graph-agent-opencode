@@ -7,7 +7,7 @@
 参考：kilocode/packages/opencode/src/session/status.ts
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
@@ -231,7 +231,7 @@ class SessionInterruptedPayload(BaseModel):
     session_id: str
     phase: str
     tool_name: str | None = None
-    interrupted_at: datetime = Field(default_factory=datetime.now)
+    interrupted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     code: str | None = None
     message: str | None = None
     resumable: bool = False
