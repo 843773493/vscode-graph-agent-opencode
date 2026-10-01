@@ -722,6 +722,12 @@ class JobService:
             gateway_id=get_current_gateway_id(),
             # 同一请求作用域内读取 TraceMiddleware 注入的权威 request_id；
             # job 是独立执行根，必须显式随 job 携带，MUST NOT 在 job 内部补造。
+            # 本创建点还会被启动恢复（resume_active_goals）与事件驱动后台任务调用，
+            # 那些执行根没有请求上下文，故此处刻意用宽容版：无绑定即 None，属显式
+            # nullable 设计而非静默缺陷（这些 Job 本无「创建请求的权威 request_id」
+            # 可言，补造一个反而违反「任何一层不得补造第二个请求 ID」）。用户请求
+            # 链路必须已由 TraceMiddleware 在请求作用域内绑定；需要在请求作用域入口
+            # fail-closed 的消费方，改用 require_current_request_id。
             request_id=get_current_request_id(),
         )
 
