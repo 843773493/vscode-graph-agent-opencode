@@ -28,6 +28,10 @@ _TEXT_CONTENT_TYPES = (
     "application/xhtml+xml",
     "application/xml",
 )
+# Web 搜索参数闭集：输入模型与工具内联签名共用同一事实来源。
+WebSearchType = Literal["text", "news"]
+SafeSearch = Literal["on", "moderate", "off"]
+SearchTimeRange = Literal["d", "w", "m", "y"]
 
 
 class WebSearchInput(BaseModel):
@@ -35,16 +39,16 @@ class WebSearchInput(BaseModel):
 
     query: str = Field(description="搜索查询。")
     max_results: int = Field(default=5, ge=1, le=10, description="最多返回的结果数。")
-    search_type: Literal["text", "news"] = Field(
+    search_type: WebSearchType = Field(
         default="text",
         description="普通网页搜索或新闻搜索。",
     )
     region: str = Field(default="wt-wt", description="DuckDuckGo 区域代码。")
-    safesearch: Literal["on", "moderate", "off"] = Field(
+    safesearch: SafeSearch = Field(
         default="moderate",
         description="安全搜索级别。",
     )
-    time_range: Literal["d", "w", "m", "y"] | None = Field(
+    time_range: SearchTimeRange | None = Field(
         default=None,
         description="可选时间范围：日、周、月、年。",
     )
@@ -377,10 +381,10 @@ def create_web_search_tool(context: CustomToolFactoryContext) -> BaseTool:
     async def web_search(
         query: str,
         max_results: int = 5,
-        search_type: Literal["text", "news"] = "text",
+        search_type: WebSearchType = "text",
         region: str = "wt-wt",
-        safesearch: Literal["on", "moderate", "off"] = "moderate",
-        time_range: Literal["d", "w", "m", "y"] | None = None,
+        safesearch: SafeSearch = "moderate",
+        time_range: SearchTimeRange | None = None,
     ) -> str:
         normalized_query = query.strip()
         if not normalized_query:
