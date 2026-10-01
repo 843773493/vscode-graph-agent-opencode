@@ -134,3 +134,87 @@ def test_catalog_sync_lock_pool_is_bounded_and_stable(tmp_path: Path) -> None:
     distinct = {id(service._sync_lock_for(f"ws-{index}")) for index in range(5000)}
     assert len(distinct) <= 64
     assert len(service._sync_locks) <= 64
+
+
+@pytest.mark.asyncio
+async def test_catalog_caches_are_pruned_when_workspaces_are_removed(
+    tmp_path: Path,
+) -> None:
+    """已删除工作区的目录快照/错误/新鲜度缓存必须回收，不随历史工作区无界增长。
+
+    快照含该工作区全部会话节点，是三者中最重的；若只增不减，长驻 Gateway
+    内存会随历史工作区单调增长。
+    """
+
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "workspaces.json",
+        state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
+    )
+    service = GatewaySessionCatalogSearchService(
+        registry=registry,
+        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
+        cache_dir=tmp_path / "indexes",
+        navigation_store=WorkspaceNavigationStore(
+            storage_path=tmp_path / "navigation.json"
+        ),
+    )
+
+    for index in range(3000):
+        workspace_id = f"ws_pruned_{index}"
+        target = WorkspaceTarget(
+            workspace_id=workspace_id,
+            name=workspace_id,
+            root_path=f"/tmp/{workspace_id}",
+            backend_url="",
+            connection_kind="local",
+            managed=True,
+        )
+        registry.upsert(target)
+        service._snapshots[workspace_id] = object()  # type: ignore[assignment]
+        service._fresh_workspace_ids.add(workspace_id)
+        service._workspace_errors[workspace_id] = "boom"
+        registry.remove(workspace_id)
+
+    # 上一轮每工作区已留残留；同步一轮后必须全部回收（没有任何存活工作区）。
+    await service._sync_all()
+
+    assert service._snapshots == {}
+    assert service._fresh_workspace_ids == set()
+    assert service._workspace_errors == {}
+
+
+@pytest.mark.asyncio
+async def test_catalog_caches_are_retained_for_live_workspaces(tmp_path: Path) -> None:
+    """回收不得误删存活工作区的缓存：仍有 backend_url 的工作区状态必须保留语义。"""
+
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "workspaces.json",
+        state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
+    )
+    live = WorkspaceTarget(
+        workspace_id="ws_live",
+        name="存活工作区",
+        root_path="/tmp/ws_live",
+        backend_url="",
+        connection_kind="local",
+        managed=True,
+    )
+    registry.upsert(live)
+    service = GatewaySessionCatalogSearchService(
+        registry=registry,
+        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
+        cache_dir=tmp_path / "indexes",
+        navigation_store=WorkspaceNavigationStore(
+            storage_path=tmp_path / "navigation.json"
+        ),
+    )
+    service._snapshots["ws_live"] = object()  # type: ignore[assignment]
+    service._workspace_errors["ws_live"] = "旧错误先占位"
+
+    await service._sync_all()
+
+    # 存活工作区的快照保留；其 error 由本轮同步结果覆盖（无 backend_url → 记错误）。
+    assert "ws_live" in service._snapshots
+    assert service._workspace_errors["ws_live"] == (
+        f"工作区后端尚未连接: {live.workspace_id}"
+    )

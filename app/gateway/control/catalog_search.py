@@ -264,6 +264,15 @@ class GatewaySessionCatalogSearchService:
                 )
 
         targets = self._registry.targets()
+        # 会话目录快照/新鲜度/错误表都按 workspace_id 累积，工作区删除后
+        # 若只增不减，长驻进程内存会随历史工作区无界增长（快照含全部会话节点）。
+        # 每轮同步以权威 registry 存活集为界回收，用集合差而非再扫一遍 targets。
+        live_workspace_ids = {target.workspace_id for target in targets}
+        for workspace_id in set(self._snapshots) - live_workspace_ids:
+            self._snapshots.pop(workspace_id, None)
+        self._fresh_workspace_ids &= live_workspace_ids
+        for workspace_id in set(self._workspace_errors) - live_workspace_ids:
+            self._workspace_errors.pop(workspace_id, None)
         for target in targets:
             if target.connection_kind != "remote_gateway" and not target.backend_url.strip():
                 message = f"工作区后端尚未连接: {target.workspace_id}"
