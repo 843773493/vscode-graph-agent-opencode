@@ -37,11 +37,11 @@ from app.agents.itemized_context_middleware import (
 from app.agents.workspace_tool_paths import backend_virtual_to_workspace_relative
 from app.core.identifier import create_uuid_hex
 from app.prompting import internal_message_factory
-from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
+from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     CompactionPreflightPort,
     prefix_has_open_tool_group,
 )
-from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
 )
 from app.services.orchestration.activity_runtime import (

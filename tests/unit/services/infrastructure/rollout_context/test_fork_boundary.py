@@ -21,7 +21,7 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     CONFLICT_CODE,
     ToolProtocolBoundaryConflict,
 )

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.core.sqlite_state import utc_now_text as _now
-from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
 from app.services.infrastructure.rollout_context.storage.resource_activation_reads import (

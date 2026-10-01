@@ -16,19 +16,19 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
-from app.services.infrastructure.rollout_context.checkpoint.composition import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.composition import (
     ContextPlanCompositionMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.context_details import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_details import (
     ContextDetailOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.context_dispatch import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_dispatch import (
     ContextDispatchOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.context_projection import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
     ContextProjectionOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.resource_activation import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.resource_activation import (
     ResourceActivationOwnerMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (

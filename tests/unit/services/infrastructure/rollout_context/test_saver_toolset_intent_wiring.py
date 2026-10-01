@@ -12,7 +12,7 @@ from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
     SwitchToolSetIntent,
 )
-from app.services.infrastructure.rollout_context.checkpoint.mutation_intents import (
+from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
     MutationIntentConsumptionRejected,
     MutationIntentOwnerMismatch,
 )

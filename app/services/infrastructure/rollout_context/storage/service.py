@@ -20,19 +20,19 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.assembly.store import (
     ContextAssemblyStorageMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
+from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     RolloutCompactionPreflightOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.context_source_control import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
     ContextSourceControlStorageMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.fork_boundary import (
+from app.services.infrastructure.rollout_context.checkpoint.boundary.fork_boundary import (
     RolloutForkBoundaryOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.operations import (
+from app.services.infrastructure.rollout_context.checkpoint.boundary.operations import (
     RolloutCheckpointOperationsMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.persistence import (
+from app.services.infrastructure.rollout_context.checkpoint.durable.persistence import (
     RolloutCheckpointPersistenceMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.projection.message_materializer import (
@@ -44,7 +44,7 @@ from app.services.infrastructure.rollout_context.checkpoint.projection.message_p
 from app.services.infrastructure.rollout_context.checkpoint.projection.message_view import (
     RolloutMessageViewMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.view_anchor import (
+from app.services.infrastructure.rollout_context.checkpoint.durable.view_anchor import (
     RolloutViewAnchorMixin,
 )
 from app.services.infrastructure.rollout_context.execution.executions import (

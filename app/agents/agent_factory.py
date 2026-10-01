@@ -95,7 +95,7 @@ from app.services.infrastructure.resource_platform.registry.semantic_registry im
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
-from app.services.infrastructure.rollout_context.checkpoint.compaction_boundary_adapter import (
+from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     CompactionPreflightPort,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (

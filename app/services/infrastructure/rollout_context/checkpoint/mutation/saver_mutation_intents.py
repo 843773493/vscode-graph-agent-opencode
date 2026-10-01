@@ -23,7 +23,7 @@ from app.domain.itemized.mutation_intents import (
 )
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.node_debug.session.thread_owner import MAIN_THREAD_ID
-from app.services.infrastructure.rollout_context.checkpoint.mutation_intents import (
+from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
     MutationIntentOwnerMismatch,
     MutationIntentPortError,
     SessionThreadMutationIntents,

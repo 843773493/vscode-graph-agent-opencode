@@ -38,40 +38,40 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from app.services.infrastructure.node_debug.session.thread_owner import MAIN_THREAD_ID
-from app.services.infrastructure.rollout_context.checkpoint.async_api import (
+from app.services.infrastructure.rollout_context.checkpoint.runtime.async_api import (
     RolloutLangGraphAsyncMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.context_owner import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_owner import (
     ContextOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.context_plan_registry import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_plan_registry import (
     ContextPlanRegistryOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.context_reconciliation import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_reconciliation import (
     ContextReconciliationMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.context_replay import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_replay import (
     ContextReplayMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.context_source import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_source import (
     ContextSourceOverlayMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.context_source_control import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
     ContextSourceControlOwnerMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.fork_compaction import (
     ForkCompactionMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.langgraph_api import (
+from app.services.infrastructure.rollout_context.checkpoint.runtime.langgraph_api import (
     RolloutLangGraphCheckpointMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
-from app.services.infrastructure.rollout_context.checkpoint.mutation_intents import (
+from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
     SessionThreadMutationIntents,
 )
-from app.services.infrastructure.rollout_context.checkpoint.saver_mutation_intents import (
+from app.services.infrastructure.rollout_context.checkpoint.mutation.saver_mutation_intents import (
     RolloutMutationIntentPortMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.reader import (

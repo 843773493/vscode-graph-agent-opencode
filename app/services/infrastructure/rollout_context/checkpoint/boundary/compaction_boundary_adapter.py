@@ -14,7 +14,7 @@ from typing import Protocol
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
     validate_tool_protocol_closure,
 )

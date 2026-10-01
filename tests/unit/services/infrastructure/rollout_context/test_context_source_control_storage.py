@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from app.services.infrastructure.rollout_context.checkpoint.context_source_control import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
     ContextSourceControlOwnerMixin,
     ContextSourceControlStorageMixin,
 )

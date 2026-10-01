@@ -8,7 +8,7 @@ target mutation 或 pending epoch transition 之前调用本模块验证 source 
 
 from __future__ import annotations
 
-from app.services.infrastructure.rollout_context.checkpoint.tool_protocol_boundary import (
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
