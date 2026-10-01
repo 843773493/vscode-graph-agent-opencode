@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS thread_execution_intents (
     claim_generation INTEGER,
     last_error TEXT,
     intent_created_at TEXT NOT NULL,
-    intent_updated_at TEXT NOT NULL
+    intent_updated_at TEXT NOT NULL,
+    CHECK ((claim_owner IS NULL) = (claim_generation IS NULL)),
+    CHECK (claim_generation IS NULL OR claim_generation >= 1)
 )
 """
 

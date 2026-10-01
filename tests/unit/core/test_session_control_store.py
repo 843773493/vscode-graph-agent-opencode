@@ -3719,3 +3719,55 @@ def test_thread_catalog_uuidv7_ordering_matches_time_order(
         )
     finally:
         store.close()
+
+
+def test_fresh_database_intent_claim_check_constraints(tmp_path: Path) -> None:
+    """全新库的 intent 表必须与 v2→v3 升级表携带同一 claim CHECK 约束。
+
+    半空 claim（owner 非空 / generation NULL）与 generation < 1 都必须被
+    数据库拒绝：claim 字段是「可恢复领取」的不变量，任何写入路径（含
+    绕过软件直改库）都不得留下半空或非法 generation 的 claim。
+    """
+    target = tmp_path / "session-control.sqlite"
+    store = SessionControlStore(target)
+    try:
+        with pytest.raises(sqlite3.IntegrityError):
+            store.connection.execute(
+                "INSERT INTO thread_execution_intents "
+                "(admission_idempotency_key, session_id, thread_id, "
+                "creation_idempotency_key, initial_state, state, "
+                "execution_binding_id, job_id, binding_preimage_hash, "
+                "claim_owner, claim_generation, last_error, "
+                "intent_created_at, intent_updated_at) "
+                "VALUES (?, ?, ?, ?, 'running', 'pending', ?, ?, 'hash', "
+                "'owner-1', NULL, NULL, 't', 't')",
+                (
+                    "key-half-owner",
+                    make_session_id(),
+                    make_thread_id(),
+                    "tkey_" + "0" * 32,
+                    "tbind_" + "a" * 32,
+                    "job_" + "b" * 32,
+                ),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            store.connection.execute(
+                "INSERT INTO thread_execution_intents "
+                "(admission_idempotency_key, session_id, thread_id, "
+                "creation_idempotency_key, initial_state, state, "
+                "execution_binding_id, job_id, binding_preimage_hash, "
+                "claim_owner, claim_generation, last_error, "
+                "intent_created_at, intent_updated_at) "
+                "VALUES (?, ?, ?, ?, 'running', 'pending', ?, ?, 'hash', "
+                "'owner-2', 0, NULL, 't', 't')",
+                (
+                    "key-bad-generation",
+                    make_session_id(),
+                    make_thread_id(),
+                    "tkey_" + "1" * 32,
+                    "tbind_" + "c" * 32,
+                    "job_" + "d" * 32,
+                ),
+            )
+    finally:
+        store.close()
