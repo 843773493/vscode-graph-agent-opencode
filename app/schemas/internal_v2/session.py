@@ -76,7 +76,8 @@ class SessionDTO(TimestampedDTO):
 class SessionListResultDTO(BaseModel):
     items: list[SessionDTO]
     total: int
-    cursor: Optional[str] = None
+    next_cursor: Optional[str] = None
+    has_more: bool = False
 
 
 class ChildThreadSummaryDTO(BaseModel):

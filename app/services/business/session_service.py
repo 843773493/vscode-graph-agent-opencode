@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import hashlib
 import json
 import os
 import tempfile
@@ -241,15 +244,50 @@ class SessionService:
         nodes = self._path_resolver.list_nodes()
         session_nodes = [node for node in nodes if node.kind == "session"]
         session_nodes.sort(key=lambda node: node.created_at, reverse=True)
-        page_nodes = session_nodes[skip : skip + limit]
+        total = len(session_nodes)
+        revision = self._session_list_revision(session_nodes)
+        offset = (
+            _decode_session_list_cursor(cursor, revision=revision)
+            if cursor is not None
+            else skip
+        )
+        if offset < 0 or offset > total:
+            raise ValueError(
+                "会话列表 cursor offset 越界: "
+                f"offset={offset}, total={total}"
+            )
+        page_nodes = session_nodes[offset : offset + limit]
 
         sessions = [await self._read_session_dto(node) for node in page_nodes]
+        next_offset = offset + len(page_nodes)
 
         return SessionListResultDTO(
             items=sessions,
-            total=len(session_nodes),
-            cursor=None,
+            total=total,
+            next_cursor=(
+                _encode_session_list_cursor(next_offset, revision=revision)
+                if next_offset < total
+                else None
+            ),
+            has_more=next_offset < total,
         )
+
+    @staticmethod
+    def _session_list_revision(
+        session_nodes: list[SessionCatalogNodeProjection],
+    ) -> str:
+        """会话列表分页 revision：会话成员与顺序（创建时间倒序）的指纹。
+
+        cursor 绑定该值，使会话集合或顺序变化后旧 cursor 显式失效，
+        而不是静默跳页或重排。
+        """
+        payload = json.dumps(
+            [(node.node_id, str(node.created_at)) for node in session_nodes],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
 
     async def child_session_summary(
         self,
@@ -645,3 +683,34 @@ class SessionService:
             dto = mapper.map_one(record.event.model_dump(), session_id=session_id)
             if dto is not None:
                 yield dto, record.cursor
+
+
+def _encode_session_list_cursor(offset: int, *, revision: str) -> str:
+    payload = json.dumps(
+        {"offset": offset, "revision": revision},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_session_list_cursor(cursor: str, *, revision: str) -> int:
+    """解析会话列表分页 cursor；revision 变化时显式报错，不静默降级。"""
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    except (
+        ValueError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        binascii.Error,
+    ) as error:
+        raise ValueError("会话列表 cursor 格式无效") from error
+    if not isinstance(payload, dict):
+        raise TypeError("会话列表 cursor 格式无效")
+    if payload.get("revision") != revision:
+        raise ValueError("会话列表已更新，请从第一页重新加载")
+    offset = payload.get("offset")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ValueError("会话列表 cursor offset 无效")
+    return offset

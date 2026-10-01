@@ -219,9 +219,9 @@ async def list_sessions(
 ):
     try:
         result = await session_service.list(limit=limit, cursor=cursor)
-    except (RuntimeError, TimeoutError) as error:
-        # 目录索引/物理树异常属于可恢复的工作区状态，不能伪装成空列表，
-        # 也不能让前端收到无上下文的 500。
+    except (KeyError, ValueError, TypeError, RuntimeError, TimeoutError) as error:
+        # 目录索引/物理树异常属于可恢复的工作区状态；非法/过期 cursor 属于
+        # 客户端输入错误。两者都不能伪装成空列表，也不能让前端收到无上下文的 500。
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
