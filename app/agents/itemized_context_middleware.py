@@ -246,25 +246,6 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         )
         return prepared
 
-    def _cleanup(
-        self, request: ModelRequest[Any], prepared: Mapping[str, object]
-    ) -> None:
-        assembly_id = prepared.get("assembly_id")
-        if not isinstance(assembly_id, str) or not assembly_id:
-            return
-        discard = getattr(
-            self._checkpointer,
-            "discard_prepared_context_for_dispatch",
-            None,
-        )
-        if callable(discard):
-            discard(
-                _runtime_session_id(request),
-                turn_id=_request_turn_id(request),
-                assembly_id=assembly_id,
-                checkpoint_ns=_runtime_checkpoint_ns(request),
-            )
-
     def _prepare_projection(
         self,
         request: ModelRequest[Any],
