@@ -247,6 +247,7 @@ async def search_all_workspace_sessions(
     response_model=APIResponse[WorkspaceNavigationTreeDTO],
 )
 async def list_workspace_navigation(
+    _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(_registry),
     store: WorkspaceNavigationStore = Depends(_navigation_store),
