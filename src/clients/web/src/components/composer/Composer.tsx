@@ -3,6 +3,10 @@ import { DEFAULT_BACKEND_PORT } from "../../api";
 import { useComposerState } from "../../hooks";
 import { useComposerSlashCommands } from "../../hooks/composer/useComposerSlashCommands";
 import { useComposerDraft } from "../../hooks/composer/useComposerDraft";
+import {
+  composerDraftScopeKey,
+  writeComposerDraft,
+} from "../../state/composerDrafts/storage";
 import { VIEW_OPTIONS } from "../../state/contentViews";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
@@ -125,6 +129,10 @@ function Composer() {
     currentSessionId,
     state.gatewayUserScope,
   );
+  // 最近一次渲染的会话作用域键。提交失败回填必须按「发起提交时的作用域」归属，
+  // 否则用户在发送在途期间切走会话后，失败回填会把上一个会话的输入写进新会话。
+  const currentScopeKeyRef = useRef(currentSessionCacheKey);
+  currentScopeKeyRef.current = currentSessionCacheKey;
   // TODO: 附件包含 data URL，后续使用 IndexedDB 恢复；本轮只持久化文本草稿。
   const previousSessionIdRef = useRef<string | null>(currentSessionCacheKey);
   const visibleGoal = state.currentGoalSessionId === currentSessionId
@@ -447,7 +455,16 @@ function Composer() {
     if (inFlight && inFlight.content === content && inFlight.policy === deliveryPolicy) {
       return;
     }
-    const submission = { content, policy: deliveryPolicy };
+    const submission = {
+      content,
+      policy: deliveryPolicy,
+      scopeKey: currentSessionCacheKey,
+      draftScopeKey: composerDraftScopeKey(
+        currentWorkspaceId,
+        currentSessionId,
+        state.gatewayUserScope,
+      ),
+    };
     inFlightSubmissionRef.current = submission;
     const sentAttachments = attachments;
     const sentBrowserElements = browserElements;
@@ -469,12 +486,21 @@ function Composer() {
       if (inFlightSubmissionRef.current === submission) {
         inFlightSubmissionRef.current = null;
       }
-      setInput(typedContent);
-      setAttachments(sentAttachments);
-      setBrowserElements(sentBrowserElements);
-      setAttachmentError(
-        `发送失败：${errorMessage(error)}`,
-      );
+      if (currentScopeKeyRef.current === submission.scopeKey) {
+        // 只填空输入：发送在途期间用户可能已经写下下一条内容，失败回填绝不能
+        // 覆盖它。空输入时才把未发出的内容恢复回来，避免用户的草稿凭空消失。
+        setInput((current) => (current ? current : typedContent));
+        setAttachments((current) => (current.length > 0 ? current : sentAttachments));
+        setBrowserElements((current) => (current.length > 0 ? current : sentBrowserElements));
+        setAttachmentError(
+          `发送失败：${errorMessage(error)}`,
+        );
+        return;
+      }
+      // 用户已切走会话：把未发出的输入写回发起会话自己的持久草稿，避免把它
+      // 污染成当前会话的输入，同时用户切回该会话时内容仍在。失败原因已由
+      // AppProvider 写入 AppState.status，不会静默消失。
+      writeComposerDraft(submission.draftScopeKey, typedContent);
     }).then(() => {
       if (inFlightSubmissionRef.current === submission) {
         inFlightSubmissionRef.current = null;
