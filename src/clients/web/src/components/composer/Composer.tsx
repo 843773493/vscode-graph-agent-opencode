@@ -103,6 +103,14 @@ function Composer() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
+  // 同一份输入内容的重入闸门。产品明确支持「生成中继续排队下一条消息」
+  // （见 composerHint：「正在生成，可继续发送下一条或点击停止」），因此不能
+  // 禁用发送或整个会话级加锁——那会一并挡掉合法的排队。这里只挡「同一次提交
+  // 被瞬时重复触发」：Enter 提交会同步 setInput("")，但同一事件循环内的
+  // 重复触发仍可能读到尚未刷新的旧 input，导致同一 payload 被提交两次。
+  // 该身份在每次提交同步建立、按 payload 去重，成功的同内容再提交不会被误挡，
+  // 失败回填后也会被清空以允许重试。
+  const inFlightSubmissionRef = useRef<{ content: string; policy: DeliveryPolicy } | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const currentSessionId = state.currentSession?.session_id ?? null;
@@ -433,6 +441,14 @@ function Composer() {
     const content = [typedContent || (attachments.length > 0 ? MEDIA_ONLY_PROMPT : ""), elementContext]
       .filter(Boolean)
       .join("\n\n");
+    // 同步重入守卫：同一 payload 的提交尚在进行时，重复触发直接返回，不重复
+    // 清空/发送/反馈。仅按 payload 身份去重，排队下一条不同内容不受影响。
+    const inFlight = inFlightSubmissionRef.current;
+    if (inFlight && inFlight.content === content && inFlight.policy === deliveryPolicy) {
+      return;
+    }
+    const submission = { content, policy: deliveryPolicy };
+    inFlightSubmissionRef.current = submission;
     const sentAttachments = attachments;
     const sentBrowserElements = browserElements;
     setInput("");
@@ -450,12 +466,19 @@ function Composer() {
       })),
       deliveryPolicy,
     ).catch((error: unknown) => {
+      if (inFlightSubmissionRef.current === submission) {
+        inFlightSubmissionRef.current = null;
+      }
       setInput(typedContent);
       setAttachments(sentAttachments);
       setBrowserElements(sentBrowserElements);
       setAttachmentError(
         `发送失败：${errorMessage(error)}`,
       );
+    }).then(() => {
+      if (inFlightSubmissionRef.current === submission) {
+        inFlightSubmissionRef.current = null;
+      }
     });
   };
 
