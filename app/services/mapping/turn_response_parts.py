@@ -92,9 +92,9 @@ def _bounded(value: object, limit: int = _TEXT_LIMIT) -> tuple[str, bool]:
 
 
 def _int_or_none(raw: Mapping[str, object], key: str) -> int | None:
-    """读取可选 canonical 坐标；缺失或非 int（含 bool）都返回 None。"""
+    """读取可选 canonical 坐标；缺失或非 int 都返回 None（与原内联分支逐字等价）。"""
     value = raw.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    return value if isinstance(value, int) else None
 
 
 def _raw_tool_call_id(tool_call_id: str | None) -> str | None:
