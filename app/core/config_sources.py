@@ -10,6 +10,8 @@ from typing import Literal
 import commentjson
 
 ConfigSourceLayer = Literal["inline", "user", "user_local", "workspace", "sqlite"]
+# 配置来源的存在性闭集：present 表示来源实际存在，absent 表示已探测但不含内容。
+ConfigSourcePresence = Literal["present", "absent"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +26,7 @@ class ConfigSource:
     precedence: int
     loaded: bool
     source_key: str | None = None
-    presence: Literal["present", "absent"] = "present"
+    presence: ConfigSourcePresence = "present"
     layer_revision: int | None = None
     layer_digest: str | None = None
     source_generation: int | None = None
@@ -35,7 +37,7 @@ class StableConfigFile:
     """描述一次前后字节一致的 JSONC 文件读取。"""
 
     path: Path
-    presence: Literal["present", "absent"]
+    presence: ConfigSourcePresence
     raw_bytes: bytes | None
     digest: str | None
     stat_signature: tuple[int, int, int, int] | None = None
