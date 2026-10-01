@@ -280,10 +280,6 @@ class GoalRuntimeService:
             )
 
     @staticmethod
-    def _continuation_prompt(goal: SessionGoalDTO) -> str:
-        return GoalRuntimeService._continuation_message(goal).content
-
-    @staticmethod
     def _continuation_message(
         goal: SessionGoalDTO,
         *,
