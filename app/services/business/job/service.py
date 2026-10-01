@@ -36,6 +36,7 @@ from app.schemas.internal_v2.pending_request import (
 )
 from app.services.business.job.control_service import JobControlService
 from app.services.business.job.lifecycle import (
+    ACTIVE_JOB_STATUSES,
     FAILED_JOB_STATUSES,
     TERMINAL_JOB_STATUSES,
     transition_job_status,
@@ -986,13 +987,7 @@ class JobService:
     async def _schedule_next_job_if_needed(self, finished_job: JobState) -> None:
         # 任何终态都是 after_turn 语义下的已提交终止边界；取消同样会把
         # Session 交还给队列，否则该会话的 FIFO 队首将永久无人消费。
-        should_continue = finished_job.status in {
-            JobStatus.completed,
-            JobStatus.succeeded,
-            JobStatus.failed,
-            JobStatus.timed_out,
-            JobStatus.cancelled,
-        }
+        should_continue = finished_job.status in TERMINAL_JOB_STATUSES
         if not should_continue:
             async with self._dispatch_lock:
                 if finished_job.status == JobStatus.paused:
@@ -1448,13 +1443,7 @@ class JobService:
         """在执行器没有事件时仍更新可观察的 Job 活跃时间。"""
         while True:
             await asyncio.sleep(1)
-            if job.status not in {
-                JobStatus.running,
-                JobStatus.streaming,
-                JobStatus.waiting_input,
-                JobStatus.interrupt_pending,
-                JobStatus.cancelling,
-            }:
+            if job.status not in ACTIVE_JOB_STATUSES:
                 return
             job.progress = max(job.progress, runtime_state.progress)
             if runtime_state.current_step is not None:

@@ -15,6 +15,7 @@ from app.core.turn_execution_scope import (
 from app.schemas.internal_v2.common import ControlAction, JobStatus
 from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.session import SessionInterruptResultDTO
+from app.services.business.job.lifecycle import ACTIVE_JOB_STATUSES
 from app.services.business.message_service import MessageService
 from app.services.business.system_reminder_checkpoint_service import (
     build_user_interrupt_reminder,
@@ -44,12 +45,7 @@ class SessionInterruptService:
             (
                 job
                 for job in jobs
-                if job.status
-                in {
-                    JobStatus.running,
-                    JobStatus.streaming,
-                    JobStatus.waiting_input,
-                }
+                if job.status in ACTIVE_JOB_STATUSES
             ),
             None,
         )
