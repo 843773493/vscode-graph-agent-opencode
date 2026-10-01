@@ -7,6 +7,7 @@ import { useSessionChangesLoader } from "./useSessionChangesLoader";
 import {
   apiResponse,
   errorResponse,
+  hangUntilReleased,
   installGatewayFetch,
   restoreSessionHookGlobals,
 } from "./sessionHookTestFixtures";
@@ -184,4 +185,65 @@ describe("会话文件变更请求协调", () => {
     expect(refreshedList.items.map((item) => item.changeset_id)).toEqual(["cs_refreshed"]);
     mounted.unmount();
   });
+
+  test("切走会话后，上一个会话在途审查的失败不得写进新会话的状态栏", async () => {
+    const sessionA = session();
+    const sessionB: Session = {
+      ...session(),
+      session_id: "ses_other_changes_loader",
+      title: "另一个会话",
+    };
+    const { promise: reviewResponse, release: releaseReview } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path.endsWith("/review")) return reviewResponse;
+      return undefined;
+    });
+
+    let currentState = state(sessionA);
+    let activeSession = sessionA;
+    let loader: ReturnType<typeof useSessionChangesLoader> | null = null;
+    function Harness(): React.ReactNode {
+      loader = useSessionChangesLoader({
+        apiPort: 49_405,
+        currentSession: activeSession,
+        workspaceId: activeSession.workspace_id,
+        setState: (update) => {
+          currentState = typeof update === "function" ? update(currentState) : update;
+        },
+      });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+
+    // 在会话 A 上发起审查，请求一直挂在途。
+    const review = loader!.reviewSessionChangeFile(
+      { file_path: "src/a.ts", reviewed: false } as never,
+      true,
+    ).catch(() => undefined);
+    // 请求仍在途时切到会话 B：AppState 的 currentSession 与 hook 入参一起切换。
+    await act(async () => {
+      currentState = { ...currentState, currentSession: sessionB };
+      activeSession = sessionB;
+      renderer.update(<Harness />);
+    });
+    expect(currentState.currentSession?.session_id).toBe("ses_other_changes_loader");
+
+    releaseReview(errorResponse(500, "会话 A 的审查后端崩了"));
+    await act(async () => {
+      await review;
+    });
+
+    // 会话 A 的失败诊断属于旧会话事实：不得污染已切到的会话 B 状态栏。
+    expect(currentState.status).not.toContain("会话 A 的审查后端崩了");
+    expect(currentState.status).not.toContain("标记文件已审查失败");
+    expect(currentState.status).toBe("正在标记文件已审查");
+    await act(async () => {
+      renderer.unmount();
+    });
+  });
+
 });
