@@ -1,23 +1,22 @@
-"""ConfigService 拆分后的共享模块级符号：logger、候选应用器别名、来源层权威表与 inline VRN 判定（唯一定义点）。"""
+"""ConfigService 拆分后的共享模块级符号：logger、候选应用器别名、来源层权威表与 inline VRN 判定。
+
+`ConfigCandidateApplier` 的定义点已上移到中性层 `config/contracts.py`（避开 `config`
+反向依赖本包成环），本模块只做包内再导出，不再重复定义。
+"""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.core.config_sources import (
     ConfigSourceLayer,
 )
-from app.services.infrastructure.config import (
-    ConfigSnapshot,
-)
+from app.services.infrastructure.config.contracts import ConfigCandidateApplier
 from app.services.infrastructure.config.source_vrn import inline_config_source_vrn
 from configs.installer import resolve_config_resource_source
 
 logger = logging.getLogger(__name__)
-
-ConfigCandidateApplier = Callable[[ConfigSnapshot, ConfigSnapshot], Awaitable[None]]
 
 # 来源权威表：每个 source_key 的逻辑来源层与 precedence 只在这里登记一次。
 # `_config_source`（从源 JSONC 构建）、`_runtime_override_source`、
