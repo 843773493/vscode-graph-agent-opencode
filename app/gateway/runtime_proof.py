@@ -82,18 +82,17 @@ def _refresh_federation_workspace_ports(
         return
     if not isinstance(service.session_main, WorkspaceSessionMainPort):
         return
+    local_workspaces: list[tuple[str, str]] = []
     for target in registry.targets():
         if target.connection_kind != "local":
             continue
         backend_url = target.backend_url.strip()
         if not backend_url:
             continue
-        service.catalog.register_workspace(
-            workspace_id=target.workspace_id, backend_url=backend_url
-        )
-        service.session_main.register_workspace(
-            workspace_id=target.workspace_id, backend_url=backend_url
-        )
+        local_workspaces.append((target.workspace_id, backend_url))
+    projected = tuple(local_workspaces)
+    service.catalog.project_workspaces(projected)
+    service.session_main.project_workspaces(projected)
 
 
 async def _cleanup_user_access_periodically(

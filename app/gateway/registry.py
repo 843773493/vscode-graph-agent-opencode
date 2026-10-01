@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import tempfile
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -150,6 +151,7 @@ class GatewayWorkspaceRegistry:
         self._route_reference_counts: dict[str, tuple[int, int]] = {}
         self._route_reference_connections: dict[str, set[str]] = {}
         self._route_signatures: dict[str, tuple[object, ...]] = {}
+        self._commit_observers: list[Callable[[], None]] = []
         self._load()
         self._route_signatures = {
             workspace_id: self._route_signature(target)
@@ -2200,6 +2202,7 @@ class GatewayWorkspaceRegistry:
                     self._restore_registry_state(previous_state)
                 raise
             self._last_committed_snapshot = self._capture_registry_state()
+            self._notify_commit_observers()
             return
         self._storage_path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(
@@ -2220,3 +2223,15 @@ class GatewayWorkspaceRegistry:
         finally:
             temporary_path.unlink(missing_ok=True)
         self._last_committed_snapshot = self._capture_registry_state()
+        self._notify_commit_observers()
+
+    def add_commit_observer(self, observer: Callable[[], None]) -> None:
+        """注册 registry commit 观察者；每次成功持久化后按注册顺序回调。"""
+
+        self._commit_observers.append(observer)
+
+    def _notify_commit_observers(self) -> None:
+        """在单点提交后通知观察者；端口重投影失败必须响亮失败，不得静默。"""
+
+        for observer in self._commit_observers:
+            observer()

@@ -76,7 +76,7 @@ async def test_workspace_catalog_port_injects_authoritative_gateway_id(
     monkeypatch.setattr(workspace_port_module.httpx, "AsyncClient", handler_client)
 
     port = WorkspaceCatalogPort()
-    port.register_workspace(workspace_id="gw_catalog", backend_url="http://127.0.0.1:41100")
+    port.project_workspaces((("gw_catalog", "http://127.0.0.1:41100"),))
 
     data = await port._export(workspace_id="gw_catalog")
 

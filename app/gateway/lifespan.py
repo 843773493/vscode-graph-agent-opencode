@@ -176,9 +176,14 @@ async def lifespan(app: FastAPI):
         session_main=WorkspaceSessionMainPort(),
         spoke_directory=None,
     )
-    _refresh_federation_workspace_ports(
-        app.state.federation_rpc_service, registry
+    # 工作区注册/注销必须让联邦只读端口随之更新；接在 registry 的单点 commit
+    # 观察者上，任一注册/注销入口（新建、删除、远程投影、配置 batch）都立即生效。
+    registry.add_commit_observer(
+        lambda: _refresh_federation_workspace_ports(
+            app.state.federation_rpc_service, registry
+        )
     )
+    _refresh_federation_workspace_ports(app.state.federation_rpc_service, registry)
     app.state.port_forward_manager = SshPortForwardManager(
         registry=registry,
         storage_path=_gateway_root() / "port-forwards.json",
