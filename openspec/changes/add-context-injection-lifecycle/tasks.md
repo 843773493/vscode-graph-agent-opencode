@@ -71,14 +71,14 @@
 
 本节 4.6 的producer迁移必须让每个source owner声明typed`root_placement=root_eligible|tail_only`并持久化/验证；未声明不得由CSM猜测。默认外部MCP指引为`tail_only`，不把不可信server文本放进system；Skill、AGENTS及其它来源由各实际owner明确分类。初次组装以外的同epoch变化全部是独立user-role item，只有真实新epoch可将`root_eligible`的完整有效状态合并新root，旧item/detail/assembly不改写。
 
-### 2026-10-01 联邦 hub 装配缺口登记（F7/F8/F9，未接线/实施中）
+### 2026-10-01 联邦 hub 装配缺口登记（F7 未接线；F8/F9/无界等待 已修）
 
-来源：`out/tests/temp/hunt_gateway_federation_edges/artifacts/report.md`（F7 §1 / F8 §2 / F9 §3 / 无界等待 §4.1）。以下属 4.7-B 联邦路由面；写成**登记项 + 实施中**，MUST NOT 写成已修。
+来源：`out/tests/temp/hunt_gateway_federation_edges/artifacts/report.md`（F7 §1 / F8 §2 / F9 §3 / 无界等待 §4.1），修复留痕 `.../artifacts/FIX_federation_r1.md`。以下属 4.7-B 联邦路由面；F7 为**登记项（未接线）**，MUST NOT 写成已修；F8/F9/无界等待三项已落地并各有回归用例。
 
 - **F7 联邦装配缺失（feature gap，非回归；本轮不接线）**：`app/gateway/lifespan.py:180` 硬编码 `spoke_directory=None`，`app/gateway/federation/rpc.py:112` 的 `local_role = "hub" if self.spoke_directory is not None else "spoke"` ⇒ 生产恒为 `spoke`。hub 侧支柱 `FederationSpokeDirectory`（`federation/workspace_port.py:34`）、`dial_spoke_channel`（`federation/dialer.py:66`）、`adopt_outbound_channel`（`federation/rpc.py:136`）、`resolve_session_target`/`relay_operation` 均**零生产调用方**（经真实双 gateway loopback 探针确证：不调 dialer 时 `outbound_channels={}`、`local_role=spoke`）。裁定：**保持未启用，启用时必须一次性接线全部上述入口**（MUST NOT 只接一半成新双轨）。
-- **F8 冷 catalog 只在启动时刷新一次（实施中）**：`_refresh_federation_workspace_ports`（`app/gateway/runtime_proof.py:74`）只被 `app/gateway/lifespan.py:182` 调用一次；运行中新增本地工作区后，联邦 `WorkspaceCatalogPort` 永久看不到它（registry 已含、federated catalog 不含）。须补读时最新或事件驱动刷新；**落地提交留空待补**。
-- **F9 `auxiliary_proxy` 引用归位（实施中）**：`app/gateway/auxiliary_proxy.py` 的 HTTP 路径在 `resolve_service_url` 抛 `RuntimeError` 时**未走** `:169` 的 `(LookupError, ValueError)` 显式释放，仅靠 `:204` 的 `except BaseException` 兜底；同族泄漏路径须归位到显式释放并收紧宽泛 `except BaseException`。**落地提交留空待补**。
-- **无界等待（实施中）**：`app/gateway/federation/__init__.py` 的 `obtain_pairing_credential_over_ssh` 的 `subprocess.run` **无 `timeout=`**，经 `app/gateway/remote_gateway.py` 的 `asyncio.to_thread` 调用、位于启动/重连主链路；对端 TCP 吞包时可无限挂起且 `to_thread` 无法被 `wait_for` 取消。须补进程外上界；**落地提交留空待补**。
+- **F8 冷 catalog 只在启动时刷新一次（已修）**：`_refresh_federation_workspace_ports`（`app/gateway/runtime_proof.py`）原先只被 `app/gateway/lifespan.py` 调用一次；运行中新增本地工作区后，联邦 `WorkspaceCatalogPort` 永久看不到它（registry 已含、federated catalog 不含）。已改为**事件驱动**：registry 唯一提交点 `_save` 成功后回调 `add_commit_observer` 注册的同一生产刷新函数，端口侧由累积式 `register_workspace` 改为整体重建式 `project_workspaces`（`register_workspace` 已物理下线）。落地提交 `52f7d20e`；回归 `tests/unit/gateway/test_federation_workspace_port_refresh.py`。
+- **F9 `auxiliary_proxy` 引用归位（已修）**：HTTP 路径原在 `resolve_service_url` 抛 `RuntimeError` 时**未走**显式释放，仅靠 `except BaseException` 兜底。已重构为单点 `try/finally` + 移交标志（与 `server/workspace_proxy.py` 同款），删除 `except BaseException`，`RuntimeError` 显式收敛为 503。落地提交 `350dcf89`；回归 `tests/unit/gateway/test_auxiliary_proxy.py`。
+- **无界等待（已修）**：`app/gateway/federation/__init__.py` 的 `obtain_pairing_credential_over_ssh` 的 `subprocess.run` 原**无 `timeout=`**，经 `app/gateway/remote_gateway.py` 的 `asyncio.to_thread` 位于启动/重连主链路，对端 TCP 吞包时可无限挂起。已补 `timeout=PAIRING_SSH_TIMEOUT_SECONDS`（30s），`subprocess.TimeoutExpired` 收敛为既有稳定错误码 `FEDERATION_DEADLINE_EXCEEDED`（不新造）。落地提交 `1ef0019a`；回归 `tests/unit/gateway/test_federation.py`。
 
 **报告更正（如实登记）**：`hunt_gateway_federation_edges` 报告落盘 **早于**提交 `fa0c6b19`「修复(job): 任务体未启动即被取消时收敛到 cancelled」，故其 §P1-A（Job 取消卡 cancelling）与 §P1-B（委派缺 binder 永久 pending）条目**相对当前 HEAD 已陈旧**；本 change 台账只登记 F7/F8/F9/无界等待四项，Job/委派两节按前述 §8 后小节在 `add-itemized-rollout-context` 登记。功能缺失（binder 未装配）本身仍成立（本报告不作已修结论）。
 
