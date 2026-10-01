@@ -3,6 +3,7 @@ import {
   buildSessionInformationDump,
   extractSessionIdFromClipboardText,
   formatSessionInformationDump,
+  isSessionId,
   SESSION_INFORMATION_KIND,
 } from "./sessionInformation";
 import type {
@@ -16,7 +17,7 @@ function information(): SessionInformationSnapshot {
     schema_version: 2,
     generated_at: "2026-07-15T12:00:00Z",
     session: {
-      session_id: "ses_12345678123446788234567812345678",
+      session_id: "ses_0190f2a3b4c570008000000000000001",
       workspace_id: "ws_local",
       title: "会话信息测试",
       current_agent_id: "default",
@@ -154,8 +155,8 @@ describe("通用会话信息", () => {
   });
 
   test("粘贴纯会话 ID 时直接返回 ID", () => {
-    expect(extractSessionIdFromClipboardText(" ses_12345678123446788234567812345678 ")).toBe(
-      "ses_12345678123446788234567812345678",
+    expect(extractSessionIdFromClipboardText(" ses_0190f2a3b4c570008000000000000001 ")).toBe(
+      "ses_0190f2a3b4c570008000000000000001",
     );
     // 非 canonical 形态（宽松旧 ID）在 UI 入口同样拒绝，不留旧 ID 别名。
     expect(() =>
@@ -167,15 +168,25 @@ describe("通用会话信息", () => {
     const text = formatSessionInformationDump(
       buildSessionInformationDump(information(), gatewayWorkspace("local")),
     );
-    expect(extractSessionIdFromClipboardText(text)).toBe("ses_12345678123446788234567812345678");
+    expect(extractSessionIdFromClipboardText(text)).toBe("ses_0190f2a3b4c570008000000000000001");
     expect(extractSessionIdFromClipboardText(`\`\`\`json\n${text}\n\`\`\``)).toBe(
-      "ses_12345678123446788234567812345678",
+      "ses_0190f2a3b4c570008000000000000001",
     );
   });
 
   test("不接受没有协议 kind 的任意 JSON", () => {
     expect(() =>
-      extractSessionIdFromClipboardText('{"session":{"id":"ses_12345678123446788234567812345678"}}'),
+      extractSessionIdFromClipboardText('{"session":{"id":"ses_0190f2a3b4c570008000000000000001"}}'),
     ).toThrow("既不是会话 ID，也不是有效的通用会话信息 JSON");
+  });
+
+  test("canonical 校验器只认后端 UUIDv7 位 profile，拒绝 v4 与非法 variant", () => {
+    // 后端 app/core/session_catalog_store.py:_validate_uuid_payload 只接受
+    // payload[12]==="7" 且 payload[16] 落在 "89ab"；前端唯一校验器必须同口径。
+    expect(isSessionId("ses_0190f2a3b4c570008000000000000001")).toBe(true);
+    // 同一形态但 version 位仍是 v4：必须拒绝（这正是本次缺陷的根因）。
+    expect(isSessionId("ses_0190f2a3b4c540008000000000000001")).toBe(false);
+    // variant 位非法（"c" 不在 "89ab"）：必须拒绝。
+    expect(isSessionId("ses_0190f2a3b4c57000c000000000000001")).toBe(false);
   });
 });
