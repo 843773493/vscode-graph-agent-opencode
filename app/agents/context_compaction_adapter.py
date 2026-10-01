@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from deepagents.backends import CompositeBackend
 from langchain_core.messages import AnyMessage, BaseMessage
 
 from app.agents.agent_factory import build_runtime_for_agent
@@ -12,7 +13,6 @@ from app.agents.cache_preserving_summarization import (
     create_cache_preserving_summarization_middleware,
 )
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.context_history_store import ContextHistoryStore
 
 
 @dataclass(slots=True)
@@ -27,10 +27,10 @@ class AgentSummarizationCompactor:
         self,
         *,
         config_service: ConfigService,
-        history_store: ContextHistoryStore,
+        history_backend: CompositeBackend,
     ) -> None:
         self._config_service = config_service
-        self._history_store = history_store
+        self._history_backend = history_backend
 
     async def check(
         self,
@@ -65,7 +65,7 @@ class AgentSummarizationCompactor:
         )
         summarization = create_cache_preserving_summarization_middleware(
             runtime["model"],
-            self._history_store.backend,
+            self._history_backend,
             # 预览装配没有 durable Saver owner；端口仅在真实触发压缩时
             # 才会被调用，按合成装配合同给显式失败端口，不静默跳过。
             compaction_preflight=NoDurableOwnerCompactionPreflight(),

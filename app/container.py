@@ -16,6 +16,7 @@ from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
 from app.agents.context_compaction_adapter import AgentSummarizationCompactor
 from app.agents.graph_binding import JsonFileGraphBindingStore
+from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.env import get_project_root
@@ -83,7 +84,6 @@ from app.services.infrastructure.background_task_history_store import (
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config import WorkspaceSourceOwner
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.context_history_store import ContextHistoryStore
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )
@@ -721,13 +721,12 @@ def build_app_container(
     session_context_query_service.bind_information_source(
         session_information_service
     )
-    context_history_store = ContextHistoryStore(resolved_workspace_root)
     context_checkpoint_store = ContextCompactionCheckpointStore(
         checkpointer=checkpointer,
     )
     summarization_compactor = AgentSummarizationCompactor(
         config_service=config_service,
-        history_store=context_history_store,
+        history_backend=build_workspace_backend(resolved_workspace_root),
     )
     context_compaction_service = ContextCompactionService(
         checkpoint_store=context_checkpoint_store,

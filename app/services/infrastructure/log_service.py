@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.core.path_utils import get_workspace_root
 from app.schemas.internal_v2.common import LogSnapshotResultDTO
 
 
@@ -21,14 +20,6 @@ class LogSnapshotRecord:
 
 
 class LogService:
-    def __init__(self) -> None:
-        self._base_dir = get_workspace_root() / ".boxteam" / "logs"
-
-    def _ensure_dir(self, *parts: str) -> Path:
-        path = self._base_dir.joinpath(*parts)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
     def _build_file_stem(self, session_id: str | None) -> str:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         safe_session_id = session_id.strip() if session_id else "no-session"

@@ -310,11 +310,6 @@ class JobService:
             )
         return len(active_blockers)
 
-    def _normalize_result_text(self, result: object) -> str:
-        if isinstance(result, str):
-            return result
-        return str(result)
-
     async def list(self, session_id: str | None = None) -> list[JobDTO]:
         if session_id is not None:
             async def restore_and_list() -> list[JobDTO]:
