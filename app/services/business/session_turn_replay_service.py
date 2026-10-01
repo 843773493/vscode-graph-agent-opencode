@@ -13,6 +13,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.job_event_bus import EventType
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.message import (
     MessageCreateRequest,
@@ -235,21 +236,22 @@ class SessionTurnReplayService:
             payload = getattr(event, "payload", None)
             if not isinstance(job_id, str) or payload is None:
                 continue
-            if event_type == "job_created":
+            if event_type == EventType.JOB_CREATED:
                 created_message_id = getattr(payload, "message_id", None)
                 if isinstance(created_message_id, str):
                     job_message_ids[job_id] = created_message_id
             elif event_type in {
-                "job_completed",
-                "job_cancelled",
-                "job_failed",
-                "session_interrupted",
+                EventType.JOB_COMPLETED,
+                EventType.JOB_CANCELLED,
+                EventType.JOB_FAILED,
+                EventType.SESSION_INTERRUPTED,
             }:
                 terminal_statuses[job_id] = event_type
 
         return any(
             job_message_id == message_id
-            and terminal_statuses.get(job_id) in {"job_failed", "session_interrupted"}
+            and terminal_statuses.get(job_id)
+            in {EventType.JOB_FAILED, EventType.SESSION_INTERRUPTED}
             for job_id, job_message_id in job_message_ids.items()
         )
 
