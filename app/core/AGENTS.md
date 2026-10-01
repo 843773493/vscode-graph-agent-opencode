@@ -13,6 +13,7 @@
 - `session_control_operation_lease/`：通用 operation lease 一条垂直链路（`session_operation_leases` DDL 与非终态索引、行投影、create-or-get 幂等准入、fencing token CAS 链与读取）。只放持久准入/操作 lease；`SessionOperationLease` 的 typed 字段集与状态闭集仍由 `session_lifecycle_gate.py` 单点定义。
 - `session_control_communication_ledger/`：跨 Session 通信 ledger 一条垂直链路（`communication_outbox`/`communication_inbox` DDL 与 target_accepted 索引、行投影、source 侧 create-or-get 与状态 CAS、target 侧 create-or-get/领取/绑定/失败记录与读取、kind=reply 双端因果证明）。只放这两张 telemetry 账表；typed 合同的 field 集与状态闭集仍由对应 facade 单点定义。
 - `session_control_store/`：per-session `session-control.sqlite` 基础设施 `SessionControlStore` 的唯一实现点（facade 在 `__init__.py`，保留类声明、连接生命周期与模块级符号再导出）。其下按垂直链路分 mixin：thread creation record（`thread_creation_record.py`）、创建发布与终结（`thread_creation_publish.py`）、初始 execution intent（`execution_intent.py`）、collaboration 成员账本（`collaboration.py`）、schema 初始化/升级（`_schema.py`）与共享 SQL 常量（`sql.py`）。thread catalog/fence、operation lease、owner binding 与通信 ledger 仍归各自的兄弟子包，不在此重复。
+- `session_catalog_store/`：workspace 导航权威库 `session-catalog.sqlite` 基础设施 `SessionCatalogStore` 的唯一实现点（facade 在 `__init__.py`，保留类声明、连接生命周期与 schema 闸门、模块级符号再导出）。其下按垂直链路分 mixin：canonical 校验器与生命周期栅栏（`validators.py`）、不可变投影 DTO 与错误类（`contracts.py`）、nodes 表读写（`nodes.py`）、fork retention claim（`fork_retention.py`）、creation record journal（`creation_journal.py`）、subtree delete journal 与空 folder 删除（`subtree_delete.py`）、只读查询（`queries.py`）、备份与目录一致性（`backup.py`），表 DDL 与共享列清单收敛在 `_schema.py`。`write_transaction` 的事务边界与 `_bump_generation` 提交前无条件调用顺序是 8.1-F/10.3b 依赖的不变量，不得改动。
 
 # 可修改内容
 
