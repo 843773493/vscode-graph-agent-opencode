@@ -10,16 +10,9 @@ export interface WorkspaceBottomPanelState {
   terminalId: string | null;
 }
 
-export interface WorkspaceBottomPanelFallback {
-  visible: boolean;
-  height: number;
-  tab: WebUiBottomPanelTab;
-  terminalId: string | null;
-}
-
 export function resolveWorkspaceBottomPanelState(
   persisted: WebUiWorkspaceBottomPanelSettings | null | undefined,
-  fallback: WorkspaceBottomPanelFallback,
+  fallback: WorkspaceBottomPanelState,
 ): WorkspaceBottomPanelState {
   return {
     visible: persisted?.visible ?? fallback.visible,
