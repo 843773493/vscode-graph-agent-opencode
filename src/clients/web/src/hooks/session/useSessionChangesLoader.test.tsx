@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { AppState } from "../../types/frontend";
 import type { Session } from "../../types/backend";
 import { useSessionChangesLoader } from "./useSessionChangesLoader";
+import { useSessionResourceLoader } from "./useSessionResourceLoader";
 import {
   apiResponse,
   errorResponse,
@@ -246,4 +247,97 @@ describe("会话文件变更请求协调", () => {
     });
   });
 
+});
+
+/**
+ * 控制后台连接（取消 / 关闭 / 删除终端与浏览器）与文件审查同族：请求失败必须给出
+ * 带原因的可见诊断，且失败诊断与成功路径共用同一会话守卫，切走后不得污染新会话。
+ */
+describe("后台连接控制请求协调", () => {
+  /** 挂载资源加载器并把最新 AppState 镜像到闭包；会话可随后切换。 */
+  async function mountResourceLoader(apiPort: number) {
+    const sessionA = session();
+    let currentState = state(sessionA);
+    let activeSession = sessionA;
+    let loader: ReturnType<typeof useSessionResourceLoader> | null = null;
+    function Harness(): React.ReactNode {
+      loader = useSessionResourceLoader({
+        apiPort,
+        currentSession: activeSession,
+        workspaceId: activeSession.workspace_id,
+        setState: (update) => {
+          currentState = typeof update === "function" ? update(currentState) : update;
+        },
+      });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    return {
+      loader: () => loader!,
+      state: () => currentState,
+      switchTo: async (nextSession: Session) => {
+        currentState = { ...currentState, currentSession: nextSession };
+        activeSession = nextSession;
+        await act(async () => {
+          renderer.update(<Harness />);
+        });
+      },
+      unmount: () => act(() => renderer.unmount()),
+    };
+  }
+
+  test("控制后台连接失败时必须给出带原因的可见诊断", async () => {
+    installGatewayFetch(({ path }) => {
+      if (path.endsWith("/control")) {
+        return errorResponse(500, "后台连接服务崩溃");
+      }
+      return undefined;
+    });
+
+    const mounted = await mountResourceLoader(49_407);
+    await mounted.loader()
+      .controlSessionResource("terminal", "term_1", "cancel")
+      .catch(() => undefined);
+
+    // 失败后状态栏必须点明失败原因，绝不能停在「正在取消/关闭」的假进行态。
+    expect(mounted.state().status).toContain("失败");
+    expect(mounted.state().status).toContain("后台连接服务崩溃");
+    mounted.unmount();
+  });
+
+  test("切走会话后，上一个会话在途控制失败的诊断不得写进新会话的状态栏", async () => {
+    const sessionB: Session = {
+      ...session(),
+      session_id: "ses_other_resource_loader",
+      title: "另一个会话",
+    };
+    const { promise: controlResponse, release: releaseControl } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path.endsWith("/control")) return controlResponse;
+      return undefined;
+    });
+
+    const mounted = await mountResourceLoader(49_408);
+    // 在会话 A 上发起控制，请求一直挂在途。
+    const control = mounted.loader()
+      .controlSessionResource("terminal", "term_2", "cancel")
+      .catch(() => undefined);
+    await mounted.switchTo(sessionB);
+    expect(mounted.state().currentSession?.session_id).toBe("ses_other_resource_loader");
+
+    releaseControl(errorResponse(500, "会话 A 的后台连接崩了"));
+    await act(async () => {
+      await control;
+    });
+
+    // 会话 A 的失败诊断属于旧会话事实：不得污染已切到的会话 B 状态栏。
+    expect(mounted.state().status).not.toContain("会话 A 的后台连接崩了");
+    expect(mounted.state().status).not.toContain("失败");
+    expect(mounted.state().status).toBe("正在终止");
+    mounted.unmount();
+  });
 });
