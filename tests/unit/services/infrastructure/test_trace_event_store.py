@@ -64,6 +64,43 @@ def test_store_lock_pools_are_bounded_and_stable(tmp_path: Path) -> None:
     assert store._file_lock("ses_shared") is store._file_lock("ses_shared")
 
 
+def test_condition_pool_is_bounded_and_stable(tmp_path: Path) -> None:
+    """Condition 池对 session 数量必有固定上界，且同 session 恒定命中同一个。"""
+    store = TraceEventStore(sessions_dir=tmp_path)
+
+    for index in range(5000):
+        store._condition_for(f"ses_cond_{index}")
+
+    # 上界恒定：Condition 数量不随历史会话数增长。
+    assert len(store._conditions) <= 64
+    # 同 session 恒定命中同一个 Condition（保住 append 唤醒 reader 的语义）。
+    assert store._condition_for("ses_shared") is store._condition_for("ses_shared")
+
+
+def test_condition_wakes_same_session_waiter(tmp_path: Path) -> None:
+    """分片后同 session 的 append 仍能唤醒等待中的 reader。"""
+
+    async def run() -> bool:
+        store = TraceEventStore(sessions_dir=tmp_path)
+        condition = store._condition_for("ses_wake")
+        woke = False
+
+        async def waiter() -> None:
+            nonlocal woke
+            async with condition:
+                await asyncio.wait_for(condition.wait(), timeout=2.0)
+            woke = True
+
+        task = asyncio.create_task(waiter())
+        # 让 waiter 真正进入 condition.wait() 再通知。
+        await asyncio.sleep(0.05)
+        await store._notify("ses_wake")
+        await asyncio.wait_for(task, timeout=2.0)
+        return woke
+
+    assert asyncio.run(run()) is True
+
+
 def test_store_append_lock_serializes_same_session(tmp_path: Path) -> None:
     """分片后同一 session 的 append 临界区仍严格互斥（峰值恒为 1）。"""
 

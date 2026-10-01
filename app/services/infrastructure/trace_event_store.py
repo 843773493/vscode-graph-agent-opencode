@@ -4,7 +4,6 @@ import asyncio
 import json
 import threading
 import zlib
-from collections import defaultdict
 from collections.abc import AsyncGenerator, Iterator
 from pathlib import Path
 
@@ -48,12 +47,18 @@ class TraceEventStore:
     def __init__(self, sessions_dir: Path) -> None:
         self._sessions_dir = sessions_dir
         self._path_resolver = get_session_path_resolver(sessions_dir)
-        self._conditions: dict[str, asyncio.Condition] = defaultdict(asyncio.Condition)
         self._append_locks: tuple[asyncio.Lock, ...] = tuple(
             asyncio.Lock() for _ in range(TRACE_STORE_LOCK_SHARDS)
         )
         self._file_locks: tuple[threading.RLock, ...] = tuple(
             threading.RLock() for _ in range(TRACE_STORE_LOCK_SHARDS)
+        )
+        # 会话级唤醒 Condition 同样按 session_id 分片：分片数固定，同 shard 的
+        # 读/写命中同一个 Condition，既保住「同会话 append 唤醒同会话 reader」的
+        # 语义，又不会随历史会话数无界增长。跨会话共用 shard 只会带来无副作用的
+        # 伪唤醒（reader 醒来后仍只按自己的文件重新读）。
+        self._conditions: tuple[asyncio.Condition, ...] = tuple(
+            asyncio.Condition() for _ in range(TRACE_STORE_LOCK_SHARDS)
         )
 
     @staticmethod
@@ -70,6 +75,11 @@ class TraceEventStore:
         # 分片锁池：同一 session_id 恒得同一把锁（保住同会话文件读写互斥），数量恒
         # 为分片数（有界），不随历史会话数增长。
         return self._file_locks[self._shard(session_id, len(self._file_locks))]
+
+    def _condition_for(self, session_id: str) -> asyncio.Condition:
+        # 分片 Condition 池：同一 session_id 恒得同一个 Condition（保住 append
+        # 唤醒对应 reader 的语义），数量恒为分片数（有界）。
+        return self._conditions[self._shard(session_id, len(self._conditions))]
 
     def _trace_file(self, session_id: str) -> Path:
         return (
@@ -95,9 +105,7 @@ class TraceEventStore:
         )
 
     async def _notify(self, session_id: str) -> None:
-        condition = self._conditions.get(session_id)
-        if condition is None:
-            return
+        condition = self._condition_for(session_id)
         async with condition:
             condition.notify_all()
 
@@ -454,7 +462,7 @@ class TraceEventStore:
             file=file,
             initial_offset=offset,
             requested_cursor=after_event_id,
-            condition=self._conditions[session_id],
+            condition=self._condition_for(session_id),
         ):
             yield record
 
@@ -466,7 +474,7 @@ class TraceEventStore:
             file=self._message_trace_file(session_id),
             initial_offset=0,
             requested_cursor=None,
-            condition=self._conditions[session_id],
+            condition=self._condition_for(session_id),
         ):
             yield record.event
 
