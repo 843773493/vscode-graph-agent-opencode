@@ -7,6 +7,9 @@
 - `atomic_fs.py`：文件级 durability 原语（`fsync_directory`/`fsync_file`/
   `atomic_write_bytes`）。会话创建、child thread 创建、catalog 迁移与子树删除
   四条链路共用同一套 tempfile + fsync + os.replace + 目录 fsync 语义，单点承载。
+- `key_lock_pool.py`：进程内 per-key 串行锁的中立实现（`KeyLockPool` 固定分片锁池）。
+  同一 key 经 `crc32` 恒命中同一把 `asyncio.Lock`，锁对象数量恒为分片数，不随历史
+  key 数无界增长。会话创建、child thread 创建与子树删除三条链路共用，单点承载。
 - `session_control_primitives.py`：per-session `session-control.sqlite` 各垂直链路共享的形态原语（`CONTROL_DATABASE_NAME`、`SHA256_HEX_PATTERN`、`EXECUTION_BINDING_ID_PATTERN`、`EXECUTION_JOB_ID_PATTERN` 与 `validate_claim_fields`）。只放跨子包共用的形态约束与校验器，不放任何表的 DDL、行投影或读写方法。
 - `session_control_thread_catalog/`：thread catalog 与 lifecycle fence 一条垂直链路（main/child 权威指针、生命周期闸门 CAS、已发布 child 的冻结 locator 解析、`thread_catalog` v1→v2 加法升级）。只放这两张表的职责；creation record、execution intent、operation lease、owner binding 与通信账本不放这里。
 - `session_control_thread_owner_binding/`：thread owner binding 字段槽一条垂直链路（`thread_owner_bindings` 行投影、canonical JSON 列表槽解析、2.1 负面合同校验、ensure/get/update，以及该表行插入的唯一 SQL 实现）。只放 owner 侧记录槽；prefix epoch 与 ToolSet revision 的权威解释仍属对应 domain owner，不构成第二 writer。
