@@ -98,6 +98,7 @@ from app.core.session_control_primitives import (
     validate_thread_creation_key,
 )
 from app.core.session_control_store import (
+    _INITIAL_STATE_VALUES,
     SessionControlStore,
     ThreadCreationRecord,
     validate_thread_id,
@@ -160,9 +161,6 @@ _GRAPH_BINDING_KEYS = frozenset(
         "capability_profile_hash",
     }
 )
-
-_INITIAL_STATE_VALUES = ("running", "idle")
-
 
 def canonical_json_text(payload: object) -> str:
     """canonical JSON 文本（紧凑 + sort_keys，preimage/冻结列共用口径）。
