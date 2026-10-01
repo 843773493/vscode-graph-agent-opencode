@@ -12,6 +12,7 @@
 - `session_control_thread_owner_binding/`：thread owner binding 字段槽一条垂直链路（`thread_owner_bindings` 行投影、canonical JSON 列表槽解析、2.1 负面合同校验、ensure/get/update，以及该表行插入的唯一 SQL 实现）。只放 owner 侧记录槽；prefix epoch 与 ToolSet revision 的权威解释仍属对应 domain owner，不构成第二 writer。
 - `session_control_operation_lease/`：通用 operation lease 一条垂直链路（`session_operation_leases` DDL 与非终态索引、行投影、create-or-get 幂等准入、fencing token CAS 链与读取）。只放持久准入/操作 lease；`SessionOperationLease` 的 typed 字段集与状态闭集仍由 `session_lifecycle_gate.py` 单点定义。
 - `session_control_communication_ledger/`：跨 Session 通信 ledger 一条垂直链路（`communication_outbox`/`communication_inbox` DDL 与 target_accepted 索引、行投影、source 侧 create-or-get 与状态 CAS、target 侧 create-or-get/领取/绑定/失败记录与读取、kind=reply 双端因果证明）。只放这两张 telemetry 账表；typed 合同的 field 集与状态闭集仍由对应 facade 单点定义。
+- `session_control_store/`：per-session `session-control.sqlite` 基础设施 `SessionControlStore` 的唯一实现点（facade 在 `__init__.py`，保留类声明、连接生命周期与模块级符号再导出）。其下按垂直链路分 mixin：thread creation record（`thread_creation_record.py`）、创建发布与终结（`thread_creation_publish.py`）、初始 execution intent（`execution_intent.py`）、collaboration 成员账本（`collaboration.py`）、schema 初始化/升级（`_schema.py`）与共享 SQL 常量（`sql.py`）。thread catalog/fence、operation lease、owner binding 与通信 ledger 仍归各自的兄弟子包，不在此重复。
 
 # 可修改内容
 

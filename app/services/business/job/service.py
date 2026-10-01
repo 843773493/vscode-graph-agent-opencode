@@ -176,7 +176,6 @@ class JobService:
             pending_requests=self._pending_requests,
             dispatch_lock=self._dispatch_lock,
             start_job_task=lambda job: self._start_job_task(job),
-            schedule_after_cancel=self._finalize_cancelled_without_task_body,
         )
 
     def _resolve_job_timeout_seconds(self) -> float:
@@ -300,10 +299,6 @@ class JobService:
                 error_message=reason,
                 now=ended_at,
             )
-            # 被排空的 Job 若执行任务早已结束（例如 paused 后任务体已跑完
-            # finally），其 finally 不会再触发调度；必须在写入终态的同一链路
-            # 上释放活动槽并唤醒 FIFO 队首，否则会话永久无人消费。
-            await self._schedule_next_job_if_needed(job)
         for session_id in sessions_with_queued_jobs:
             await self._pending_requests.persist(
                 await self._pending_requests.list(session_id)
