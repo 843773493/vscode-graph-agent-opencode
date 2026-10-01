@@ -1,15 +1,21 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import {
   apiResponse,
+  createStateMirror,
   errorResponse,
+  hangUntilReleased,
   installGatewayFetch,
   mountSessionRunActions,
   restoreSessionHookGlobals,
 } from "./sessionHookTestFixtures";
 import { errorMessage } from "../../utils/errorMessage";
 import { INITIAL_APP_STATE } from "../app/appStateSeed";
+import { sessionScopeKey } from "../../state/session/sessionScope";
+import { useSessionRunActions } from "./useSessionRunActions";
 
 const CACHE_KEY = "gw_send_regression::ses_send_regression";
 const SESSION_ID = "ses_send_regression";
@@ -127,6 +133,7 @@ const PENDING_PATH = `/api/v1/sessions/${SESSION_ID}/pending-requests`;
 const MESSAGES_PATH = `/api/v1/sessions/${SESSION_ID}/messages`;
 const INTERRUPT_PATH = `/api/v1/sessions/${SESSION_ID}/interrupt`;
 const REPLAY_PATH = `/api/v1/sessions/${SESSION_ID}/messages/msg_original/replay`;
+const COMPACT_PATH = `/api/v1/sessions/${SESSION_ID}/compact`;
 
 describe("发送消息状态更新", () => {
   test("同一毫秒并发两次发送时，一次失败的回滚不得抹掉仍在途的另一条", async () => {
@@ -520,5 +527,184 @@ describe("发送消息状态更新", () => {
 
     await expect(mounted.actions.interruptSession())
       .rejects.toThrow("当前没有可中断的会话");
+  });
+});
+
+describe("在途运行动作的迟到回写不得污染已切到的会话", () => {
+  const OTHER_SESSION_ID = "ses_switched_away";
+
+  /** 切走后的目标会话：只有它才应出现在 AppState.currentSession 上。 */
+  function otherSession(): Session {
+    return { ...session(), session_id: OTHER_SESSION_ID, title: "切走后的会话" };
+  }
+
+  /**
+   * 静态渲染一次，再在动作归还后把 AppState.currentSession 替换成目标会话，
+   * 用来模拟「请求在途期间用户已切走会话」这一并发窗口。
+   */
+  function mountWithSessionSwitch(options: {
+    startedSession: Session;
+    switchedSession: Session;
+  }): {
+    mirror: { current: () => AppState };
+    actions: ReturnType<typeof useSessionRunActions>;
+    switchAway: () => void;
+  } {
+    const mirror = createStateMirror({
+      ...state(options.startedSession),
+      sessions: [options.startedSession, options.switchedSession],
+    });
+    let actions: ReturnType<typeof useSessionRunActions> | null = null;
+    function Harness(): React.ReactNode {
+      actions = useSessionRunActions({
+        apiPort: 8014,
+        currentSession: options.startedSession,
+        activeGatewayWorkspaceId: "gw_send_regression",
+        currentSessionGatewayWorkspaceId: "gw_send_regression",
+        currentSessionCacheKey: sessionScopeKey(
+          "gw_send_regression",
+          options.startedSession.session_id,
+        ),
+        defaultGatewayWorkspaceId: "gw_send_regression",
+        contentView: "default",
+        setState: mirror.setState,
+        refreshAgentStateSnapshot: async () => undefined,
+      });
+      return null;
+    }
+    renderToStaticMarkup(React.createElement(Harness));
+    if (!actions) throw new Error("Harness 未完成渲染");
+    return {
+      mirror,
+      actions,
+      switchAway: () => {
+        mirror.setState((prev) => ({
+          ...prev,
+          currentSession: options.switchedSession,
+        }));
+      },
+    };
+  }
+
+  test("发送失败回填不得把上一个会话的失败文案写进新会话状态栏", async () => {
+    const started = session();
+    const { promise: sendResponse, release: releaseSend } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path, method }) => {
+      if (path === MESSAGES_PATH && method === "POST") return sendResponse;
+      if (path === PENDING_PATH) {
+        return pendingRequestsResponse({ active_job_id: null });
+      }
+      return undefined;
+    }, { token: "test-run-actions-session-switch-send" });
+
+    const { mirror, actions, switchAway } = mountWithSessionSwitch({
+      startedSession: started,
+      switchedSession: otherSession(),
+    });
+
+    const sending = actions.sendMessage("在途发送").catch(() => undefined);
+    // 请求仍在途时用户切到另一个会话。
+    switchAway();
+    expect(mirror.current().currentSession?.session_id).toBe(OTHER_SESSION_ID);
+
+    releaseSend(errorResponse(502, "模型网关拒绝"));
+    await sending;
+
+    // 旧会话的发送失败属于旧会话事实，不得写进新会话状态栏。
+    expect(mirror.current().status).not.toContain("模型网关拒绝");
+    expect(mirror.current().status).not.toContain("发送失败");
+  });
+
+  test("压缩在途切走后，迟到的结果仍须复位全局 compactLoading", async () => {
+    const started = session();
+    const { promise: compactResponse, release: releaseCompact } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path === COMPACT_PATH) return compactResponse;
+      return undefined;
+    }, { token: "test-run-actions-session-switch-compact" });
+
+    const { mirror, actions, switchAway } = mountWithSessionSwitch({
+      startedSession: started,
+      switchedSession: otherSession(),
+    });
+
+    const compacting = actions.compactSession().catch(() => undefined);
+    switchAway();
+    expect(mirror.current().currentSession?.session_id).toBe(OTHER_SESSION_ID);
+    expect(mirror.current().compactLoading).toBe(true);
+
+    releaseCompact(apiResponse({
+      session_id: SESSION_ID,
+      status: "compacted",
+      message: "ok",
+      summarized_message_count: 3,
+      before_message_count: 10,
+      effective_message_count_before: 10,
+      effective_message_count_after: 4,
+      retained_message_count: 7,
+      history_file_path: null,
+    }));
+    await compacting;
+
+    // compactLoading 是全局单值，压缩请求无论落在哪个会话都必须复位，
+    // 否则新会话的 /compact 命令会被永久禁用。
+    expect(mirror.current().compactLoading).toBe(false);
+    // 但旧会话的压缩结果属于旧会话事实，不得写进新会话状态栏。
+    expect(mirror.current().status).not.toContain("已压缩上下文");
+  });
+
+  test("中断在途切走后，迟到的成功结果不得改写新会话状态栏", async () => {
+    const started = session();
+    const { promise: interruptResponse, release: releaseInterrupt } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path === INTERRUPT_PATH) return interruptResponse;
+      return undefined;
+    }, { token: "test-run-actions-session-switch-interrupt" });
+
+    const { mirror, actions, switchAway } = mountWithSessionSwitch({
+      startedSession: started,
+      switchedSession: otherSession(),
+    });
+
+    const interrupting = actions.interruptSession().catch(() => undefined);
+    switchAway();
+    expect(mirror.current().currentSession?.session_id).toBe(OTHER_SESSION_ID);
+
+    releaseInterrupt(apiResponse({ phase: "interrupted" }));
+    await interrupting;
+
+    // 旧会话的中断结果属于旧会话事实，不得写进新会话状态栏。
+    expect(mirror.current().status).not.toContain("已中断");
+  });
+
+  test("轮次回放失败发生在切走之后时，不得把失败原因写进新会话状态栏", async () => {
+    const started = session();
+    const { promise: replayResponsePromise, release: releaseReplay } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path === REPLAY_PATH) return replayResponsePromise;
+      return undefined;
+    }, { token: "test-run-actions-session-switch-replay" });
+
+    const { mirror, actions, switchAway } = mountWithSessionSwitch({
+      startedSession: started,
+      switchedSession: otherSession(),
+    });
+
+    const replaying = actions
+      .replayTurn("msg_original", "regenerate", "原始回复")
+      .catch(() => undefined);
+    switchAway();
+    expect(mirror.current().currentSession?.session_id).toBe(OTHER_SESSION_ID);
+
+    releaseReplay(errorResponse(409, "上下文窗口已失效"));
+    await replaying;
+
+    // 旧会话的回放失败属于旧会话事实，不得写进新会话状态栏。
+    expect(mirror.current().status).not.toContain("上下文窗口已失效");
+    expect(mirror.current().status).not.toContain("轮次操作失败");
   });
 });

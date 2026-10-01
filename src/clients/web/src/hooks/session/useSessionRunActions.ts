@@ -250,7 +250,11 @@ export function useSessionRunActions({
               ),
             );
           }
-          next.status = `发送失败: ${message}`;
+          // 待处理队列按会话作用域写回，切走后仍须校准发起会话自己的队列；
+          // 但失败文案是全局状态栏字段，会话已切走时不得写进新会话。
+          if (prev.currentSession?.session_id === activeSession.session_id) {
+            next.status = `发送失败: ${message}`;
+          }
           return next;
         });
         throw error;
@@ -300,8 +304,12 @@ export function useSessionRunActions({
           accepted.dispatch,
           activeSessionCacheKey,
         );
-        next.status =
-          accepted.status === "queued" ? "已排队，等待当前任务结束" : "已发送，等待生成";
+        // 会话已切走时，旧会话的接受结果不得改写新会话状态栏；乐观回合本身
+        // 仍按 activeSessionCacheKey 落在发起会话自己的队列里。
+        if (prev.currentSession?.session_id === activeSession.session_id) {
+          next.status =
+            accepted.status === "queued" ? "已排队，等待当前任务结束" : "已发送，等待生成";
+        }
         // 普通发送只是向当前历史追加一个回合，不改变 context view。
         // 保留已有时间线，由 pending 镜像、SSE 和目标 Turn 详情增量补齐。
         next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
@@ -341,11 +349,15 @@ export function useSessionRunActions({
         const next = cloneMaps(prev);
         next.compactLoading = false;
         next.lastCompactResult = result;
-        next.status = result.status === "scheduled"
-          ? "已安排上下文压缩，将在下一条消息发送前执行"
-          : result.status === "compacted"
-            ? `已压缩上下文: ${result.summarized_message_count} 条`
-            : `上下文未压缩: ${result.message}`;
+        // compactLoading/lastCompactResult 是全局单值，无论会话是否切走都要复位；
+        // 但状态栏文案属于当前会话事实，会话已切走时不得写进新会话。
+        if (prev.currentSession?.session_id === session.session_id) {
+          next.status = result.status === "scheduled"
+            ? "已安排上下文压缩，将在下一条消息发送前执行"
+            : result.status === "compacted"
+              ? `已压缩上下文: ${result.summarized_message_count} 条`
+              : `上下文未压缩: ${result.message}`;
+        }
         appendFrontendEvent(
           next.eventQueuesBySession,
           result.session_id,
@@ -377,11 +389,17 @@ export function useSessionRunActions({
       return result;
     } catch (error) {
       const message = errorMessage(error);
-      setState((prev) => ({
-        ...prev,
-        compactLoading: false,
-        status: `上下文压缩失败: ${message}`,
-      }));
+      setState((prev) => {
+        // compactLoading 必须复位；失败文案同样只在仍停留在发起会话时才写。
+        if (prev.currentSession?.session_id !== session.session_id) {
+          return { ...prev, compactLoading: false };
+        }
+        return {
+          ...prev,
+          compactLoading: false,
+          status: `上下文压缩失败: ${message}`,
+        };
+      });
       throw error;
     }
   }, [
@@ -394,7 +412,8 @@ export function useSessionRunActions({
   ]);
 
   const interruptSession = useCallback(async () => {
-    if (!currentSession) {
+    const session = currentSession;
+    if (!session) {
       throw new Error("当前没有可中断的会话");
     }
 
@@ -402,14 +421,20 @@ export function useSessionRunActions({
     try {
       const result = await apiInterruptSession(
         apiPort,
-        currentSession.session_id,
+        session.session_id,
         currentSessionGatewayWorkspaceId,
       );
-      setState((prev) => ({ ...prev, status: `已中断: ${result.phase}` }));
+      setState((prev) => {
+        // 会话已切走时，旧会话的中断结果不得改写新会话状态栏。
+        if (prev.currentSession?.session_id !== session.session_id) {
+          return prev;
+        }
+        return { ...prev, status: `已中断: ${result.phase}` };
+      });
     } catch (error) {
       const sessionCacheKey = currentSessionGatewayWorkspaceId
-        ? sessionScopeKey(currentSessionGatewayWorkspaceId, currentSession.session_id)
-        : currentSession.session_id;
+        ? sessionScopeKey(currentSessionGatewayWorkspaceId, session.session_id)
+        : session.session_id;
       if (!(error instanceof HttpRequestError) || error.status !== 404) {
         // 中断失败说明后端任务很可能仍在运行，不能在这里乐观清掉前端运行态；
         // 但要重新拉取待处理队列快照，让 activeJobIds 与后端真值保持一致。
@@ -418,7 +443,7 @@ export function useSessionRunActions({
         try {
           const snapshot = await apiListPendingRequests(
             apiPort,
-            currentSession.session_id,
+            session.session_id,
             currentSessionGatewayWorkspaceId,
           );
           setState((prev) => {
@@ -429,13 +454,21 @@ export function useSessionRunActions({
               snapshot,
               sessionCacheKey,
             );
-            next.status = notice;
+            // 队列快照按会话作用域写回；失败文案只在仍停留在发起会话时才写。
+            if (prev.currentSession?.session_id === session.session_id) {
+              next.status = notice;
+            }
             return next;
           });
         } catch (recoveryError) {
           const recoveryMessage = errorMessage(recoveryError);
           notice = `${notice}；重新读取运行状态也失败: ${recoveryMessage}`;
-          setState((prev) => ({ ...prev, status: notice }));
+          setState((prev) => {
+            if (prev.currentSession?.session_id !== session.session_id) {
+              return prev;
+            }
+            return { ...prev, status: notice };
+          });
         }
         throw error;
       }
@@ -446,7 +479,9 @@ export function useSessionRunActions({
         next.activeJobIdsBySession.delete(sessionCacheKey);
         next.pendingConversations.delete(sessionCacheKey);
         next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-        next.status = "运行任务已结束，正在同步会话历史";
+        if (prev.currentSession?.session_id === session.session_id) {
+          next.status = "运行任务已结束，正在同步会话历史";
+        }
         return next;
       });
     }
@@ -531,7 +566,11 @@ export function useSessionRunActions({
           sessionCacheKey,
         );
         next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-        next.status = `${accepted.notice} 正在生成新回复。`;
+        // 会话已切走时，旧会话的回放结果不得改写新会话状态栏；历史重载与乐观
+        // 回合本身仍按会话作用域落回发起会话。
+        if (prev.currentSession?.session_id === session.session_id) {
+          next.status = `${accepted.notice} 正在生成新回复。`;
+        }
         return next;
       });
     } catch (error) {
@@ -551,7 +590,11 @@ export function useSessionRunActions({
       setState((prev) => ({
         ...prev,
         sessionHistoryReloadNonce: prev.sessionHistoryReloadNonce + 1,
-        status: `轮次操作失败: ${message}`,
+        // 历史 bootstrap 属于会话作用域，必须触发；失败文案属于当前会话事实，
+        // 会话已切走时不得写进新会话状态栏。
+        ...(prev.currentSession?.session_id === session.session_id
+          ? { status: `轮次操作失败: ${message}` }
+          : {}),
       }));
       throw error;
     }
