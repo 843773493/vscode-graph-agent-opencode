@@ -229,8 +229,34 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
 
     expect(readState().status).not.toContain("删除会话失败");
     expect(readState().status).toContain("已删除会话");
-    expect(readState().status).toContain("列表不可用");
+    // 成功路径不重拉会话列表（§10.3 前端半边）：即使列表端点不可用，删除也已
+    // 被后端确认，收敛完全靠本地删除闭包，状态里不应再出现列表错误。
+    expect(readState().status).not.toContain("列表不可用");
     expect(readState().sessions.map((item) => item.session_id)).toEqual(["ses_a"]);
+  });
+
+  test("§10.3 删除成功后零次全量列表请求，且级联删除的子会话一并从镜像消失", async () => {
+    const parent = raceSession("ses_parent");
+    const child = { ...raceSession("ses_child"), parent_session_id: "ses_parent" };
+    const unrelated = raceSession("ses_other");
+    let listCalls = 0;
+    installSessionDeleteFetch({
+      deleteResponse: deleteSessionResponse(parent.session_id),
+      listResponse: () => {
+        listCalls += 1;
+        // 若成功路径误重拉，这里会返回一个不该出现的陈旧条目。
+        return sessionsListResponse([unrelated, child]);
+      },
+    });
+
+    const { state: readState, actions } = mountRace(parent, [parent, child, unrelated]);
+    await actions.deleteSession(parent.session_id);
+
+    // 成功路径必须零次全量列表请求。
+    expect(listCalls).toBe(0);
+    // 被删父会话与其逻辑后代一起消失；无关会话保留。
+    expect(readState().sessions.map((item) => item.session_id)).toEqual(["ses_other"]);
+    expect(readState().currentSession?.session_id).toBe("ses_other");
   });
 
   test("删除会话后不得把它的事件队列残留在本地镜像", async () => {
@@ -455,14 +481,15 @@ describe("会话列表收敛的活动工作区边界", () => {
       deleteResponse: deleteSessionResponse(otherInOther.session_id),
       listResponse: sessionsListResponse([otherRemaining]),
     });
+    const initial = crossWorkspaceState(active);
+    // 非活动工作区镜像里同时有「将被删的 ses_other」与「应保留的 ses_other_keep」。
+    initial.sessionsByWorkspace.set(OTHER_WORKSPACE, [otherInOther, otherRemaining]);
 
-    const { state: readState, actions } = mountLifecycle(
-      active,
-      crossWorkspaceState(active),
-    );
+    const { state: readState, actions } = mountLifecycle(active, initial);
     await actions.deleteSession(otherInOther.session_id, OTHER_WORKSPACE);
 
-    // 非活动工作区的收敛只更新它自己的镜像。
+    // 非活动工作区的收敛只更新它自己的镜像：被删会话消失，其余（含后端未返回的
+    // 本地同名会话）保持——成功路径不再按后端列表整表替换。
     expect(
       readState().sessionsByWorkspace.get(OTHER_WORKSPACE)?.map(
         (item) => item.session_id,
@@ -475,4 +502,3 @@ describe("会话列表收敛的活动工作区边界", () => {
     expect(readState().activeGatewayWorkspaceId).toBe(RACE_WORKSPACE);
   });
 });
-
