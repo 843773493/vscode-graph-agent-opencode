@@ -251,7 +251,21 @@ class SessionCatalogService:
         nodes_by_id = {node.node_id: node for node in nodes}
         node = nodes_by_id.get(node_id)
         if node is None:
-            raise KeyError(f"会话目录节点不存在: {node_id}")
+            # 目标可能正处于 deleting（枚举已按 §9 语义隐藏）：这里用 catalog
+            # 父子链补齐并标 pending，使正在被删除的子树的 breadcrumb 仍可解析、
+            # 前端能区分 pending 与 committed，而不是整条读路径失败。
+            try:
+                chain = self._path_resolver.breadcrumb(node_id)
+            except KeyError:
+                raise KeyError(f"会话目录节点不存在: {node_id}") from None
+            return SessionCatalogBreadcrumbDTO(
+                revision=revision,
+                items=[
+                    nodes_by_id.get(item.node_id)
+                    or self._to_pending_catalog_node(item, nodes_by_id)
+                    for item in chain
+                ],
+            )
         return SessionCatalogBreadcrumbDTO(
             revision=revision,
             items=self._breadcrumb_items(node, nodes_by_id),
@@ -337,6 +351,19 @@ class SessionCatalogService:
         )
         self.invalidate()
         return await self.breadcrumb(_committed_node_id(records[-1]))
+
+    async def recover_pending_subtree_deletes(self) -> list[SubtreeDeleteResult]:
+        """启动恢复入口：按 SQLite 权威 record 幂等续跑未终结的子树删除。
+
+        返回已收敛（drain+finish 完成）的删除结果。只依据
+        ``subtree_delete_records`` 定点继续，不扫描磁盘、不吸收外部改动、
+        不假回滚 active；任一 record 恢复失败即向上抛错，由启动期如实记录并
+        继续启动（目录读取已对 deleting 节点隐藏，不再拖垮整个后端）。
+        """
+        results = await self._path_resolver.recover_pending_subtree_deletes()
+        if results:
+            self.invalidate()
+        return results
 
     async def update_folder(
         self,
@@ -693,6 +720,7 @@ class SessionCatalogService:
             session_id=node.node_id if node.kind == "session" else None,
             folder_id=node.node_id if node.kind == "folder" else None,
             has_children=node.node_id in child_parent_ids,
+            state=node.state,
             storage_relative_path=(
                 session_projection.storage_relative_path
                 if session_projection is not None
@@ -705,6 +733,46 @@ class SessionCatalogService:
                 session_projection.updated_at if session_projection is not None else None
             ),
             session=session,
+        )
+
+    def _to_pending_catalog_node(
+        self,
+        node: SessionCatalogNodeProjection,
+        nodes_by_id: dict[str, SessionCatalogNodeDTO],
+    ) -> SessionCatalogNodeDTO:
+        """把一个未进入快照的 *deleting* 节点投影成 pending DTO。
+
+        仅用于 breadcrumb：目标节点已被 §9 语义从目录枚举隐藏，但仍处于
+        逻辑删除中（catalog 权威 state=deleting），其 session 元数据不可按
+        正常路径读取（物理目录可能已隔离）。因此这里只给出节点身份 + pending
+        标记，不伪造 session 元数据或 storage_relative_path。
+        """
+        session_projection = (
+            node if isinstance(node, SessionCatalogSessionProjection) else None
+        )
+        return SessionCatalogNodeDTO(
+            node_id=node.node_id,
+            kind=node.kind,
+            name=node.name,
+            parent_node_id=node.parent_node_id,
+            session_id=node.node_id if node.kind == "session" else None,
+            folder_id=node.node_id if node.kind == "folder" else None,
+            has_children=any(
+                item.parent_node_id == node.node_id for item in nodes_by_id.values()
+            ),
+            state=node.state,
+            storage_relative_path=(
+                session_projection.storage_relative_path
+                if session_projection is not None
+                else None
+            ),
+            created_at=(
+                session_projection.created_at if session_projection is not None else None
+            ),
+            updated_at=(
+                session_projection.updated_at if session_projection is not None else None
+            ),
+            session=None,
         )
 
     @staticmethod

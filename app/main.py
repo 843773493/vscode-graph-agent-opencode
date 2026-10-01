@@ -186,6 +186,21 @@ async def lifespan(_: FastAPI):
                 "检测到 %s 个上次进程未正常结束的 Job，已持久化为中断状态",
                 reconciled_jobs,
             )
+        # 崩溃恢复：删除 drain 中途崩溃留下的整树 deleting 仍可被读取路径
+        # 安全隐藏（不再让后端启动失败），这里按 SQLite 权威 record 定点续跑
+        # 未终结的子树删除。恢复失败按「永不默默失败」如实记录并继续启动。
+        try:
+            recovered_deletes = await (
+                container.session_catalog_service.recover_pending_subtree_deletes()
+            )
+        except (RuntimeError, KeyError, ValueError) as error:
+            logger.error("子树删除恢复失败，保留 record 并继续启动: %s", error)
+        else:
+            if recovered_deletes:
+                logger.warning(
+                    "已恢复 %s 条未终结的会话子树删除",
+                    len(recovered_deletes),
+                )
         await container.session_generation_service.start()
         await container.terminal_steering_service.start()
         await container.goal_runtime_service.resume_active_goals()

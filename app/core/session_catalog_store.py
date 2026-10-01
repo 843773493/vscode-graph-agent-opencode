@@ -1247,6 +1247,11 @@ class SessionCatalogStore:
         共用本实现，不是第二套校验。
         """
         node = self._require_node(connection, node_id)
+        # 被移动节点自身必须 active：deleting 子树内的 node 不得被移出并把
+        # 已逻辑删除的节点重新写进正常拓扑（否则随后 finish 仍按冻结集合
+        # tombstone，形成「搬进去又自己消失」的伪成功）。
+        if node["state"] == "deleting":
+            raise RuntimeError(f"被移动节点正在删除: {node_id}")
         if new_parent_node_id == node_id:
             raise RuntimeError(f"移动目标不能是节点自身: {node_id}")
         if new_parent_node_id is not None:
@@ -2522,6 +2527,30 @@ class SessionCatalogStore:
                     f"subtree delete record 不存在: key={idempotency_key!r}"
                 )
             return self._subtree_delete_record_from_row(row)
+
+    def list_pending_subtree_delete_records(
+        self,
+        workspace_id: str,
+    ) -> list[SubtreeDeleteRecord]:
+        """列出本 workspace 未终结的子树删除 record（唯一恢复入口）。
+
+        返回 ``preparing``/``deleting``/``draining`` 三种中间态 record，按
+        ``record_created_at`` + key 稳定排序；``completed``（已 tombstone）与
+        ``aborted``（已显式终结）不返回。这是崩溃恢复的**权威依据**：按
+        SQLite record 定点继续或 fail-closed 报告，不扫描磁盘、不吸收外部
+        改动，也不假回滚 active。
+        """
+        _validate_workspace_id(workspace_id)
+        with self.read_transaction() as connection:
+            rows = connection.execute(
+                f"SELECT {_SUBTREE_DELETE_RECORD_COLUMNS} "
+                "FROM subtree_delete_records "
+                "WHERE workspace_id = ? "
+                "AND state IN ('preparing', 'deleting', 'draining') "
+                "ORDER BY record_created_at, subtree_delete_idempotency_key",
+                (workspace_id,),
+            ).fetchall()
+            return [self._subtree_delete_record_from_row(row) for row in rows]
 
     def delete_empty_folder(self, folder_id: str) -> None:
         """空 folder 的非递归简单删除（design.md §9 约 776 行允许面）。

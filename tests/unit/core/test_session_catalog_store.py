@@ -1155,6 +1155,69 @@ def test_move_node_to_deleting_parent_rejected(
         store.move_node(tree.session_s2, target.node_id)
 
 
+def test_move_node_rejects_deleting_node_out_of_subtree(
+    store: SessionCatalogStore,
+) -> None:
+    """deleting 子树内的 node 不得被移出到正常拓扑（否则随后 finish 仍
+    tombstone，形成「搬进去又自己消失」的伪成功）。"""
+    ids = build_delete_tree(store)
+    keep = store.create_folder(make_session_id(), WORKSPACE_ID, None, "正常父")
+    create_subtree_record(store, root_node_id=ids["root"])
+    store.mark_subtree_deleting("del-key-1")
+    # 被移动节点自身 deleting：即使新父正常也拒绝。
+    with pytest.raises(RuntimeError, match="被移动节点正在删除"):
+        store.move_node(ids["s2"], keep.node_id)
+    # 未发生任何写入：s2 父关系保持冻结前的值。
+    assert store.get_node(ids["s2"]).parent_node_id == ids["s1"]
+    # 对照 1：新父 deleting 时同样拒绝（父校验既有行为不回归）。
+    with pytest.raises(RuntimeError, match="正在删除"):
+        store.move_node(keep.node_id, ids["root"])
+    # 对照 2：子树外的正常节点移动到另一正常父节点仍被接受。
+    other = store.create_folder(make_session_id(), WORKSPACE_ID, None, "另一正常父")
+    moved = store.move_node(keep.node_id, other.node_id)
+    assert moved.parent_node_id == other.node_id
+
+
+def test_list_pending_subtree_delete_records_filters_terminal_states(
+    store: SessionCatalogStore,
+) -> None:
+    """列出恢复入口只返回未终结（preparing/deleting/draining）的 record。"""
+    first = build_delete_tree(store)
+    second = build_delete_tree(store)
+    create_subtree_record(store, key="del-preparing", root_node_id=first["root"])
+    create_subtree_record(store, key="del-draining", root_node_id=second["root"])
+    store.mark_subtree_deleting("del-preparing")
+    store.mark_subtree_deleting("del-draining")
+    for session_id in (second["s1"], second["s2"], second["s3"]):
+        store.record_drain_progress("del-draining", session_id)
+    pending = store.list_pending_subtree_delete_records(WORKSPACE_ID)
+    assert {
+        (record.subtree_delete_idempotency_key, record.state) for record in pending
+    } == {
+        ("del-preparing", "deleting"),
+        ("del-draining", "draining"),
+    }
+    # completed 与 aborted 不进入恢复面。
+    store.finish_subtree_delete("del-draining")
+    store.abort_subtree_delete("del-preparing", "人工中止")
+    assert store.list_pending_subtree_delete_records(WORKSPACE_ID) == []
+
+
+def test_list_pending_subtree_delete_records_scoped_to_workspace(
+    store: SessionCatalogStore,
+) -> None:
+    ids = build_delete_tree(store)
+    create_subtree_record(store, key="del-key-1", root_node_id=ids["root"])
+    store.mark_subtree_deleting("del-key-1")
+    assert [
+        record.subtree_delete_idempotency_key
+        for record in store.list_pending_subtree_delete_records(WORKSPACE_ID)
+    ] == ["del-key-1"]
+    assert (
+        store.list_pending_subtree_delete_records(OTHER_WORKSPACE_ID) == []
+    )
+
+
 # ----------------------------------------------------------------------
 # locator 日期 / created_at 一致性与路径预算
 # ----------------------------------------------------------------------

@@ -18,6 +18,7 @@ from app.schemas.internal_v2.session import (
     SessionCreateRequest,
     SessionUpdateRequest,
 )
+from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
@@ -58,6 +59,8 @@ class TestSessionService:
             path_resolver=self.path_resolver,
             creation_service=self.creation_service,
         )
+        # 目录父关系变更的唯一路径：导航 SessionCatalogService（executor）。
+        self.catalog = SessionCatalogService(session_service=self.service)
 
     def teardown_method(self):
         """测试后恢复原始目录"""
@@ -109,7 +112,7 @@ class TestSessionService:
             name="归档",
             parent_node_id=None,
         )
-        await self.service.move_session(session.session_id, folder.node_id)
+        await self.catalog.move_node(session.session_id, folder.node_id)
 
         # 只模拟遗留的空物理目录，不删除或修正它；列表必须保留索引中的会话。
         (get_sessions_dir() / session.session_id).mkdir()
@@ -385,14 +388,15 @@ class TestSessionService:
         child = await self.service.create(SessionCreateRequest(title="Child"))
         grandchild = await self.service.create(SessionCreateRequest(title="Grandchild"))
 
-        bound_child = await self.service.move_session(
+        await self.catalog.move_node(
             child.session_id,
             parent.session_id,
         )
-        await self.service.move_session(grandchild.session_id, child.session_id)
+        await self.catalog.move_node(grandchild.session_id, child.session_id)
 
-        assert bound_child.parent_session_id == parent.session_id
-        assert (await self.service.get(child.session_id)).parent_session_id == parent.session_id
+        assert (await self.service.get(child.session_id)).parent_session_id == (
+            parent.session_id
+        )
         resolver = self.service.path_resolver
         parent_path = resolver.resolve_session_node(parent.session_id)
         # 父子是 catalog 逻辑关系，物理目录都在日期桶下。
@@ -402,9 +406,9 @@ class TestSessionService:
             parent.session_id
         )
 
-        unbound_child = await self.service.move_session(child.session_id, None)
+        await self.catalog.move_node(child.session_id, None)
 
-        assert unbound_child.parent_session_id is None
+        assert (await self.service.get(child.session_id)).parent_session_id is None
         assert (await self.service.get(grandchild.session_id)).parent_session_id == child.session_id
         assert (
             self.service.path_resolver.resolve_session_node(child.session_id).parent
@@ -432,7 +436,7 @@ class TestSessionService:
             child.session_id
         )
 
-        moved = await self.service.move_to_folder(
+        await self.catalog.move_node(
             parent.session_id,
             target_folder.node_id,
         )
@@ -443,7 +447,7 @@ class TestSessionService:
         moved_child_path = self.service.path_resolver.resolve_session_node(
             child.session_id
         )
-        assert moved.parent_session_id is None
+        assert (await self.service.get(parent.session_id)).parent_session_id is None
         # 逻辑移动不搬磁盘，folder 关系由 catalog 承载，物理目录保持在日期桶。
         assert moved_parent_path.parent == child_path_before.parent
         assert moved_child_path.parent == moved_parent_path.parent
@@ -470,7 +474,7 @@ class TestSessionService:
             session.session_id,
             SessionUpdateRequest(title="Updated Title"),
         )
-        await self.service.move_to_folder(session.session_id, target_folder.node_id)
+        await self.catalog.move_node(session.session_id, target_folder.node_id)
 
         moved_path = self.service.path_resolver.resolve_session_node(
             session.session_id
@@ -488,21 +492,23 @@ class TestSessionService:
     async def test_session_parent_relationship_rejects_self_and_cycles(self):
         parent = await self.service.create(SessionCreateRequest(title="Parent"))
         child = await self.service.create(SessionCreateRequest(title="Child"))
-        await self.service.move_session(child.session_id, parent.session_id)
+        await self.catalog.move_node(child.session_id, parent.session_id)
 
-        with pytest.raises(ValueError, match="自身"):
-            await self.service.move_session(parent.session_id, parent.session_id)
+        # 唯一导航路径下，自环/成环由 store 的 _validate_move_target 以
+        # RuntimeError 拒绝（经 executor 归类为 conflict）。
+        with pytest.raises(RuntimeError, match="自身"):
+            await self.catalog.move_node(parent.session_id, parent.session_id)
 
-        with pytest.raises(ValueError, match="循环"):
-            await self.service.move_session(parent.session_id, child.session_id)
+        with pytest.raises(RuntimeError, match="循环"):
+            await self.catalog.move_node(parent.session_id, child.session_id)
 
     @pytest.mark.asyncio
     async def test_delete_parent_requires_confirmation_and_cascades_children(self):
         parent = await self.service.create(SessionCreateRequest(title="Parent"))
         child = await self.service.create(SessionCreateRequest(title="Child"))
         grandchild = await self.service.create(SessionCreateRequest(title="Grandchild"))
-        await self.service.move_session(child.session_id, parent.session_id)
-        await self.service.move_session(grandchild.session_id, child.session_id)
+        await self.catalog.move_node(child.session_id, parent.session_id)
+        await self.catalog.move_node(grandchild.session_id, child.session_id)
 
         parent_path = self.service.path_resolver.resolve_session_node(parent.session_id)
         child_path = self.service.path_resolver.resolve_session_node(child.session_id)
