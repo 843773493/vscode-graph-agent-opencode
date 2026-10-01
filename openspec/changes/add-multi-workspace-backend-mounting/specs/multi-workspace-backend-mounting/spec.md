@@ -84,15 +84,15 @@
 - **WHEN** 系统表达一次跨 gateway 的目标工作区引用
 - **THEN** gateway 身份 MUST 与 workspace 身份一样显式可表达，MUST NOT 由任何进程级「当前 gateway」状态补齐
 
-#### Scenario: gateway_id 来源已裁定，剩通道与装配
+#### Scenario: gateway_id 通道与装配已落地
 
 - **WHEN** 跨 gateway 寻址依赖 `gateway` scope 的 `scope_id`
-- **THEN** 该值 MUST 是真实 gateway_id，取值与注入必须按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」建立（owner = Gateway 侧按请求注入）；在此之前当前硬编码字面量的形态 MUST 被视为**未满足的接口前提**，MUST NOT 被当作跨 gateway 寻址已成立
+- **THEN** 该值 MUST 是真实 gateway_id，取值与注入按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」建立（owner = Gateway 侧按请求注入），**当前装配已落地**（提交 `64ba30c8`/`53befbfc`/`9881a3b2`，原硬编码字面量分支已物理删除），MUST NOT 被当作靠硬编码字面量已成立
 
-#### Scenario: distribution_id 来源已裁定，剩装配
+#### Scenario: distribution_id 装配已落地
 
 - **WHEN** 系统需要为 `inline` scope 推导 `scope_id`
-- **THEN** 其来源 MUST 取发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一虚拟资源寻址」change 的 requirement），在此之前 MUST NOT 以硬编码字面量冒充已推导
+- **THEN** 其来源 MUST 取发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一虚拟资源寻址」change 的 requirement），**当前装配已落地**（提交 `298ef599`+`f3bd8213`），MUST NOT 以硬编码字面量冒充已推导
 
 ### Requirement: 进程级资源必须按 workspace_id 分区
 

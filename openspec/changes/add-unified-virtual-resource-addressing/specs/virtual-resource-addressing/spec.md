@@ -85,7 +85,7 @@ VRN 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 
 - `workspace` → 真实 workspace_id（现状即为真实 id）；
 - `gateway` → **真实 gateway_id**（取值来源与注入 owner MUST 按本 capability 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿落地）；
-- `inline` → **真实 distribution_id**（现状与 `gateway` 逐字共用字面量 `local`，且 `distribution_id` 全仓零生产赋值，属既有不一致）；来源与编码 MUST 按本 capability 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」定稿落地； **（修订注，`298ef599`+`f3bd8213` 落地）**：现状已改为按 manifest 推导，不再与 `gateway` 共用字面量 `local`，`distribution_id` 不再是全仓零生产赋值。
+- `inline` → **真实 distribution_id**（修订前现状为与 `gateway` 逐字共用字面量 `local`、`distribution_id` 全仓零生产赋值，属既有不一致；**已由 `298ef599`+`f3bd8213` 落地改为按 manifest 推导，2026-10-01 第八轮复核更正**）；来源与编码 MUST 按本 capability 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」定稿落地； **（修订注，`298ef599`+`f3bd8213` 落地）**：现状已改为按 manifest 推导，不再与 `gateway` 共用字面量 `local`，`distribution_id` 不再是全仓零生产赋值。
 - `user` → `local`，并 MUST 显式声明为**单用户本地程序的约定**（AGENTS.md 明确无云服务、无多租户），MUST NOT 虚构用户名； **（修订注，`f6fc990f` 落地）**：现状已在 `grammar.py` 的 `_SCOPE_KEYWORDS` 落地 `user` scope，`user` 的 `scope_id` 由 `app/core/user_identity.py::user_scope_id` 单点返回 `local`（与 `inline` 的 `distribution_identity`、`gateway` 的真实 gateway_id 推导同族），resolve 时经 `ResolutionContext.user_scope_id` 显式携带并由 `resolver.require_scope_binding` 校验，故 `user` 不再是「parse 成功而 resolve 无绑定」的悬空 scope。
 
 「当前工作区」不是寻址概念，MUST NOT 作为持久化数据的隐含前提。其它工作区 MUST 复用 `workspace` scope 加另一个 `workspace_id` 表达，MUST NOT 引入新 scope。
@@ -267,6 +267,8 @@ VRN 的 kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session`（�
 
 VRN 的可选 gateway authority 段 MUST 承载**稳定 gateway_id**：段缺省表示本机 gateway；段等于本机 gateway_id 与缺省等价；段等于对端 gateway_id 表示跨 gateway。系统 MUST NOT 为「其它 gateway」引入新 scope，MUST NOT 把 authority 段与 scope 段混为一谈，MUST NOT 让 authority 承载瞬时通道标识（channel instance/epoch/route）。
 
+**实施状态注记（2026-10-01 第八轮）**：当前 `parse_vrn` 无 authority 分支（`grammar.py` 对 `authority` 零命中），故以下三条 Scenario 待 authority 解析（本 change task 3.4）实施后方可判真；本注记只标实施状态，不删除 Scenario。
+
 #### Scenario: authority 缺省等价本机
 
 - **WHEN** VRN 不含 authority 段
@@ -403,7 +405,7 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 **config VRN 的尾段形态（定稿）**：尾段 MUST 取该来源的**逻辑资源名**，MUST NOT 取原始文件名。尾段 MUST 是**单段**、MUST 落在动态段闭合 charset `[A-Za-z0-9_-]` 内、MUST NOT 含点号——真实文件名 `workspace_inline.jsonc` / `gateway_inline.jsonc` 的点号与扩展名不可原样入 VRN（`parse_vrn` 对含 `.` 的尾段以 `invalid_character` fail-closed 拒绝，该 charset MUST NOT 放宽、MUST NOT 新增转义后门）。尾段取值 MUST 与该来源的 `layer` 兄弟字段**一一对应**（`layer` 仍留在 VRN 之外，不进 VRN 字符串）。规范形态即 `boxteam://{scope}/{scope_id}/resources/config/{logical_source_name}`，其中 `scope`/`scope_id` 按本 capability 的 scope 闭集 requirement 取值（`inline` 层取 `scope=inline` 与真实 `distribution_id`），逻辑资源名取该层可寻址载体的逻辑名（如 `workspace_inline` / `gateway_inline`）。
 
-**`sqlite` 层 MUST NOT 被赋予 VRN**：它是**边界变量**而非固定资源——`user`/`user_local`/`workspace` 三层共享同一个 `workspace.sqlite`（`app/services/infrastructure/config_service.py` 的 `_config_source` 在 state store 存在时统一返回同一个 `path`，同层再按 `layer_names` 映射回三种层名）。把它映射成单一 VRN 会立刻产生「同一 URI 对应四个逻辑来源」的冲突，故 MUST 显式说明其**共享载体导致的不可寻址性**。
+**`sqlite` 层 MUST NOT 被赋予 VRN**：它是**边界变量**而非固定资源——`user`/`user_local`/`workspace` 三层共享同一个 `workspace.sqlite`（`app/services/infrastructure/config_service/` 包（原单文件已拆为同名包）的 `_config_source` 在 state store 存在时统一返回同一个 `path`，同层再按 `layer_names` 映射回三种层名）。把它映射成单一 VRN 会立刻产生「同一 URI 对应四个逻辑来源」的冲突，故 MUST 显式说明其**共享载体导致的不可寻址性**。
 
 #### Scenario: config 资源有 VRN
 

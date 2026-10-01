@@ -14,7 +14,7 @@
 
 ## 3. 校验层正名与单一 profile（D5）
 
-- [x] 3.1 把 `app/core/session_catalog_store.py` 的 `_validate_uuid_v4_payload` 正名为 `_validate_uuid_payload`，`_UUID_VERSION_HEX_INDEX` 语义改为要求 `version == 7`；删除任何 `v4` 命名残留；更新 `validate_session_id`/`validate_thread_id` 的 docstring 与注释为「UUIDv7 位 profile」。门槛：`uv run python -c "import app.core.session_catalog_store as s; print([n for n in dir(s) if 'uuid' in n.lower()])"` 退出码 0 且输出无 v4 命名。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「3.1」。）**
+- [x] 3.1 把 `app/core/session_catalog_store/`（原单文件已拆为同名包，见 `fbf56cdd`；校验器在 `validators.py`）的 `_validate_uuid_v4_payload` 正名为 `_validate_uuid_payload`，`_UUID_VERSION_HEX_INDEX` 语义改为要求 `version == 7`；删除任何 `v4` 命名残留；更新 `validate_session_id`/`validate_thread_id` 的 docstring 与注释为「UUIDv7 位 profile」。门槛：`uv run python -c "import app.core.session_catalog_store as s; print([n for n in dir(s) if 'uuid' in n.lower()])"` 退出码 0 且输出无 v4 命名。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「3.1」。）**
 - [x] 3.2 同步 `app/protocol/canonical.py` 的注释（现写「payload 第 13 个 hex 位为 4（UUIDv4 version）…」）。门槛：`rg -n 'UUIDv4|非 v4|v4 bit' app/core/session_catalog_store app/protocol/canonical.py` 退出码 1（0 命中）。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「3.2」。）**
 - [x] 3.3 补负向测试：payload 第 13 个 hex 为 `4` 的 id MUST 被拒绝。门槛：`uv run pytest -q tests/unit/core/test_canonical_identifier_matrix.py` 退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「3.3」。）**
 - [x] 3.4 更新 `tests/unit/core/test_canonical_identifier_matrix.py` 的 docstring（现写「非 v4 bits」）与 `make_session_id`/`make_thread_id`（现用 `uuid.uuid4().hex`）为 v7 生成。门槛：`rg -n 'uuid4' tests/unit/core/test_canonical_identifier_matrix.py` 退出码 1。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「3.4」。）**
@@ -50,7 +50,7 @@
 
 ## 5B. 阻断性前置：gateway 控制面库逐表分类（D10，MUST 在 §6 之前完成）
 
-- [x] 5B.1 对控制面库（`app/gateway/control/gateway_state.py` 等）承载 session 身份的表逐表分类为 `migrate` / `explicitly_invalidated` / `not_affected`。**已实测控制面只有两个 SQLite 库**：库 A `gateway.sqlite`（`app/gateway/main.py` 实例化，建表权威在 `gateway_state.py` 的 `_GATEWAY_MIGRATIONS`，21 张表 + 框架表 `schema_migrations`）、库 B `federation/control.sqlite`（`app/gateway/federation/store.py`，4 张表）。门槛：报告给出逐表分类与判定依据，且 `rg -n 'session_id|access_session_id' app/gateway/control/gateway_state.py` 退出码 0。
+- [x] 5B.1 对控制面库（`app/gateway/control/gateway_state/` 包，原单文件已随 `579001a8` 拆分 等）承载 session 身份的表逐表分类为 `migrate` / `explicitly_invalidated` / `not_affected`。**已实测控制面只有两个 SQLite 库**：库 A `gateway.sqlite`（`app/gateway/main.py` 实例化，建表权威在 `gateway_state.py` 的 `_GATEWAY_MIGRATIONS`，21 张表 + 框架表 `schema_migrations`）、库 B `federation/control.sqlite`（`app/gateway/federation/store.py`，4 张表）。门槛：报告给出逐表分类与判定依据，且 `rg -n 'session_id|access_session_id' app/gateway/control/gateway_state/` 退出码 0。
 - [x] 5B.2 `user_access_lease` MUST NOT 归入 `explicitly_invalidated`，除非实测证明其为「可安全丢弃的租约」；否则归 `migrate`。门槛：报告给出该表的分类与安全依据。
 - [x] 5B.3 归入 `explicitly_invalidated` 的表 MUST 有用户可见的显式报告（表名、行数、失效原因），MUST NOT 静默重建。门槛：对应显式报告路径与测试存在，退出码 0。
 > **（2026-09-30 owner 裁定，落定分类；取证见 `out/tests/temp/uuidv7_control_db_audit/artifacts/report.md`）**：
@@ -116,7 +116,7 @@
 ## 7. JS 服务进程与浏览器前端边界（D7）
 
 - [x] 7.1 在 `src/workspace-services/{browser,terminal}/server/` 与 `src/clients/web/src/utils/media/mediaAttachments.ts` 的 id 生成点上方加中文注释，显式声明这些是非 canonical 身份、允许使用 v4，并说明原因（Node 无 `randomUUIDv7`；浏览器无 `Bun.*`）。门槛：`rg -n '非 canonical' src/workspace-services src/clients/web/src/utils/media/mediaAttachments.ts` 退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「7.1」。）**
-- [x] 7.1c 把运行时非工厂前缀豁免纳入正名后的枚举：`runtime_lease_<uuid4>`（`app/gateway/control/gateway_state.py`）与 `target_generation_<uuid4>`（Gateway 目标生成标识）经 2026-09-30 实测确认**不是 `IdentifierPrefix` 工厂前缀**，与 §7.1b 的豁免集同属「非 canonical 身份」，MUST 在豁免枚举中显式登记，MUST NOT 被当作 v4 残留误列入迁移面。门槛：报告给出具名载体与生成点，且豁免枚举测试覆盖这两者。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「7.1c」。）**
+- [x] 7.1c 把运行时非工厂前缀豁免纳入正名后的枚举：`runtime_lease_<uuid4>`（`app/gateway/control/gateway_state/` 包）与 `target_generation_<uuid4>`（Gateway 目标生成标识）经 2026-09-30 实测确认**不是 `IdentifierPrefix` 工厂前缀**，与 §7.1b 的豁免集同属「非 canonical 身份」，MUST 在豁免枚举中显式登记，MUST NOT 被当作 v4 残留误列入迁移面。门槛：报告给出具名载体与生成点，且豁免枚举测试覆盖这两者。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「7.1c」。）**
 - [x] 7.2 补断言：canonical 校验器 MUST 拒绝这些非 canonical id 作为 session/thread 身份。门槛：对应单测退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「7.2」。）**
 - [x] 7.3 若前端 UI 改动，执行 `bun run --cwd src/clients/web build`。门槛：退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「7.3」。）**
 
