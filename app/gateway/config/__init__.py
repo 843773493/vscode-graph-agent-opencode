@@ -1,3 +1,13 @@
+"""Gateway 配置加载与热重载（facade）。
+
+原单文件 app/gateway/config.py 已按垂直链路拆入本包：values.py 承载配置值对象与
+取值/路径解析；connection_ids.py 承载 connection_id 规范化与迁移；sources.py 承载
+来源层加载/迁移/日志；loader.py 承载 load_gateway_config 与 consumer 健康摘要；
+reload_lifecycle.py 与 reload_pending_restart.py 承载 GatewayConfigReloadService 的
+两个 mixin。本 facade 组装并再导出全部原顶层符号（含原模块级导入名），导入路径
+app.gateway.config 与其属性访问契约保持不变。
+"""
+
 from __future__ import annotations
 
 import asyncio as asyncio
@@ -139,20 +149,9 @@ from .values import _skill_groups_config as _skill_groups_config
 from .values import _workspace_from_validated_config as _workspace_from_validated_config
 from .values import resolve_gateway_path as resolve_gateway_path
 
-"""Gateway 配置加载与热重载（facade）。
-
-原单文件 app/gateway/config.py 已按垂直链路拆入本包：values.py 承载配置值对象与
-取值/路径解析；connection_ids.py 承载 connection_id 规范化与迁移；sources.py 承载
-来源层加载/迁移/日志；loader.py 承载 load_gateway_config 与 consumer 健康摘要；
-reload_lifecycle.py 与 reload_pending_restart.py 承载 GatewayConfigReloadService 的
-两个 mixin。本 facade 组装并再导出全部原顶层符号（含原模块级导入名），导入路径
-app.gateway.config 与其属性访问契约保持不变。
-"""
-
 
 class GatewayConfigReloadService(
     ReloadLifecycleMixin,
     ReloadPendingRestartMixin,
 ):
     """Gateway 配置的候选、pending 和 active 管理器。"""
-

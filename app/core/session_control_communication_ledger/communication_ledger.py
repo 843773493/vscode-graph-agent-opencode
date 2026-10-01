@@ -24,37 +24,16 @@ from app.core.session_control_primitives import (
 
 from .inbox_writes import InboxWritesMixin
 from .outbox_writes import OutboxWritesMixin
-from .reads import (
-    ReadsMixin,
-    _fetch_inbox_row,  # noqa: F401
-    _fetch_outbox_row_by_communication,  # noqa: F401
-    _fetch_outbox_row_by_operation,  # noqa: F401
-)
+from .reads import ReadsMixin
 from .records import (
     CommunicationInboxRecord,
     CommunicationOutboxRecord,
-    _communication_inbox_from_row,  # noqa: F401
-    _communication_outbox_from_row,  # noqa: F401
     derive_communication_admission_identity,
 )
 from .schema import (
-    _COMMUNICATION_ID_PATTERN,  # noqa: F401
-    _COMMUNICATION_INBOX_COLUMNS,  # noqa: F401
-    _COMMUNICATION_KINDS,  # noqa: F401
-    _COMMUNICATION_OUTBOX_COLUMNS,  # noqa: F401
-    _COMMUNICATION_OUTBOX_TERMINAL_STATES,  # noqa: F401
-    _COMMUNICATION_OUTBOX_TRANSITIONS,  # noqa: F401
     COMMUNICATION_INBOX_TABLE_DDL,
     COMMUNICATION_OUTBOX_TABLE_DDL,
     IDX_COMMUNICATION_INBOX_TARGET_ACCEPTED_DDL,
-)
-from .validation import (
-    _OUTBOX_PREIMAGE_FIELDS,  # noqa: F401
-    _inbox_preimage_mismatches,  # noqa: F401
-    _outbox_preimage_mismatches,  # noqa: F401
-    _validate_communication_address,  # noqa: F401
-    _validate_communication_kind_and_reply,  # noqa: F401
-    _validate_communication_text,  # noqa: F401
 )
 
 __all__ = [

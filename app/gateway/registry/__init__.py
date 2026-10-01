@@ -1,3 +1,11 @@
+"""Gateway 工作区注册表（facade）。
+
+原单文件 app/gateway/registry.py 已按垂直链路拆入本包：core.py 承载顶层常量、
+数据类与 __init__/核心属性；persistence/crud/routes/runtime/remote/projection/dtos
+七个 mixin 承载各条垂直链路；facade 组装并再导出全部原顶层符号（含原模块级
+导入名），导入路径 app.gateway.registry 与其属性访问契约保持不变。
+"""
+
 from __future__ import annotations
 
 import asyncio as asyncio
@@ -63,14 +71,6 @@ from .projection import RegistryProjectionMixin
 from .remote import RegistryRemoteMixin
 from .routes import RegistryRoutesMixin
 from .runtime import RegistryRuntimeMixin
-
-"""Gateway 工作区注册表（facade）。
-
-原单文件 app/gateway/registry.py 已按垂直链路拆入本包：core.py 承载顶层常量、
-数据类与 __init__/核心属性；persistence/crud/routes/runtime/remote/projection/dtos
-七个 mixin 承载各条垂直链路；facade 组装并再导出全部原顶层符号（含原模块级
-导入名），导入路径 app.gateway.registry 与其属性访问契约保持不变。
-"""
 
 
 class GatewayWorkspaceRegistry(
