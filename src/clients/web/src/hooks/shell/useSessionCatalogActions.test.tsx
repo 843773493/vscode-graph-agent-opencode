@@ -213,7 +213,7 @@ describe("会话目录编排链路", () => {
     expect(accepted.removed).toEqual(["ws-1"]);
   });
 
-  test("删除会话确认后按工作区刷新目录", async () => {
+  test("删除会话确认后本地收敛，不再叠加强制刷新目录", async () => {
     const mounted = mountHook();
     await mounted.mount();
 
@@ -224,6 +224,8 @@ describe("会话目录编排链路", () => {
     });
 
     expect(mounted.deleted).toEqual([["ses-1", "ws-1"]]);
-    expect(mounted.hook().sessionCatalogRefreshVersions.get("ws-1")).toBe(1);
+    // §10.3 前端半边：删除成功路径 MUST NOT 无条件重拉会话列表或强制刷新目录树；
+    // 会话列表已在 deleteSession 内本地收敛，目录树由会话集合派生的 sync key 驱动。
+    expect(mounted.hook().sessionCatalogRefreshVersions.get("ws-1")).toBeUndefined();
   });
 });
