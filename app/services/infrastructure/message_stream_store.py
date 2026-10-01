@@ -69,6 +69,28 @@ class MessageStreamCursorGoneError(MessageStreamError):
         )
 
 
+class MessageStreamCursorAheadError(MessageStreamError):
+    """游标越过服务端已持久化的最高事件序号，属于不可能的客户端输入。
+
+    与「游标已被保留窗口裁掉」的 ``CursorGone`` 是相反方向的失效：``CursorGone``
+    说明客户端落后于保留窗口，客户端可用快照重新对齐；这里则说明客户端持有的序号
+    从未被服务端产生过（坏游标或越界代理），不存在可对齐的续播点。越过最高水位曾
+    在续播链路上静默返回空页，让 SSE 永久阻塞在订阅队列上。
+    """
+
+    def __init__(
+        self, *, turn_stream_id: str, after_seq: int, high_water_seq: int
+    ) -> None:
+        self.turn_stream_id = turn_stream_id
+        self.after_seq = after_seq
+        self.high_water_seq = high_water_seq
+        super().__init__(
+            "消息流游标越过已持久化的最高事件序号: "
+            "turn_stream_id="
+            f"{turn_stream_id} after_seq={after_seq} high_water_seq={high_water_seq}"
+        )
+
+
 class MessageStreamTerminalError(MessageStreamError):
     """终态消息流拒绝新的业务事件。"""
 
@@ -2236,6 +2258,11 @@ class MessageStreamStore:
     ) -> list[dict[str, Any]]:
         """返回游标之后的事件；``limit`` 为空表示不截断，供 SSE 续播使用。"""
         state = await self.get_state(turn_stream_id)
+        self._raise_if_cursor_ahead(
+            state,
+            turn_stream_id=turn_stream_id,
+            after_seq=after_seq,
+        )
         path = self._stream_path(session_id, turn_stream_id)
         records = self._read_records(
             path,
@@ -2260,6 +2287,37 @@ class MessageStreamStore:
                 first_seq=int(state["snapshot_seq"]),
             )
         return events if limit is None else events[:limit]
+
+    @staticmethod
+    def _raise_if_cursor_ahead(
+        state: Mapping[str, Any],
+        *,
+        turn_stream_id: str,
+        after_seq: int,
+    ) -> None:
+        """游标越过最高水位时 fail-closed；``list_events`` 与 SSE 入口共用同一判定。
+
+        越过最高水位不是「已追平」：服务端从未产生过这些序号，重放窗口与后续事件都
+        无法补齐。``list_events`` 曾在此静默返回空页，使 ``stream_records`` 既不重放
+        也不收敛、永久阻塞在订阅队列上。
+        """
+        high_water_seq = int(state["snapshot_seq"])
+        if after_seq > high_water_seq:
+            raise MessageStreamCursorAheadError(
+                turn_stream_id=turn_stream_id,
+                after_seq=after_seq,
+                high_water_seq=high_water_seq,
+            )
+
+    async def require_cursor_reachable(
+        self, *, turn_stream_id: str, after_seq: int
+    ) -> None:
+        """SSE 建流前校验游标：越过最高水位必须 fail-closed，不能静默挂起连接。"""
+        self._raise_if_cursor_ahead(
+            await self.get_state(turn_stream_id),
+            turn_stream_id=turn_stream_id,
+            after_seq=after_seq,
+        )
 
     async def subscribe(self, turn_stream_id: str) -> MessageStreamSubscription:
         subscription = MessageStreamSubscription(

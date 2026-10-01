@@ -13,6 +13,7 @@ import pytest
 import app.services.infrastructure.message_stream_store as message_stream_store_module
 from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.message_stream_store import (
+    MessageStreamCursorAheadError,
     MessageStreamCursorGoneError,
     MessageStreamError,
     MessageStreamStore,
@@ -1800,6 +1801,84 @@ async def test_stream_records_closes_when_cursor_is_at_terminal_event(
     ]
     assert tail_events[-1]["payload"]["stream_status"] == "completed"
     assert not store._subscriptions.get(writer.turn_stream_id)
+
+
+@pytest.mark.asyncio
+async def test_stream_records_rejects_cursor_beyond_high_water_without_hanging(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    """游标越过最高水位时必须 fail-closed，不能静默挂起 SSE 续播。
+
+    回归：``list_events`` 只在「游标早于保留窗口」时报 CursorGone，对「游标越过
+    最高水位」静默返回空页。于是 ``stream_records`` 既无重放事件、流又处于非终态，
+    生成器永久阻塞在订阅队列上：SSE 连接、订阅与心跳都不释放，客户端既不收帧也
+    收不到结束。这里断言越界立刻抛 ``MessageStreamCursorAheadError``（而非超时），
+    并保留「游标恰好等于最高水位」是合法追平态这一既有契约。
+    """
+    store, _, session_id = message_stream_store
+    writer = await store.open(session_id=session_id, turn_id="job_sse_future_cursor")
+    await writer.commit(
+        "block.started",
+        {"block_id": "block_1", "block_index": 0, "carrier_type": "text"},
+        block_id="block_1",
+    )
+    high_water_seq = int((await store.get_state(writer.turn_stream_id))["snapshot_seq"])
+
+    with pytest.raises(MessageStreamCursorAheadError) as captured:
+        await store.list_events(
+            session_id=session_id,
+            turn_stream_id=writer.turn_stream_id,
+            after_seq=high_water_seq + 1,
+        )
+    assert captured.value.turn_stream_id == writer.turn_stream_id
+    assert captured.value.after_seq == high_water_seq + 1
+    assert captured.value.high_water_seq == high_water_seq
+    # 游标恰好等于最高水位是「已追平」，仍是合法的空页，不得误判为越界。
+    assert (
+        await store.list_events(
+            session_id=session_id,
+            turn_stream_id=writer.turn_stream_id,
+            after_seq=high_water_seq,
+        )
+        == []
+    )
+
+    # 续播入口同样必须立刻报错而不是阻塞在订阅队列上（``_collect_stream`` 带 3s
+    # 超时，一旦回归成挂起就会以 asyncio.TimeoutError 失败）。
+    with pytest.raises(MessageStreamCursorAheadError):
+        await _collect_stream(
+            store,
+            session_id,
+            writer.turn_stream_id,
+            after_seq=high_water_seq + 1,
+        )
+    assert not store._subscriptions.get(writer.turn_stream_id)
+
+
+@pytest.mark.asyncio
+async def test_require_cursor_reachable_rejects_cursor_beyond_high_water(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    """SSE 建流前的游标校验必须与 ``list_events`` 共用同一越界判定。"""
+    store, _, session_id = message_stream_store
+    writer = await store.open(session_id=session_id, turn_id="job_sse_cursor_gate")
+    await writer.commit(
+        "block.started",
+        {"block_id": "block_1", "block_index": 0, "carrier_type": "text"},
+        block_id="block_1",
+    )
+    high_water_seq = int((await store.get_state(writer.turn_stream_id))["snapshot_seq"])
+
+    await store.require_cursor_reachable(
+        turn_stream_id=writer.turn_stream_id,
+        after_seq=high_water_seq,
+    )
+    with pytest.raises(MessageStreamCursorAheadError) as captured:
+        await store.require_cursor_reachable(
+            turn_stream_id=writer.turn_stream_id,
+            after_seq=high_water_seq + 5,
+        )
+    assert captured.value.high_water_seq == high_water_seq
 
 
 @pytest.mark.asyncio
