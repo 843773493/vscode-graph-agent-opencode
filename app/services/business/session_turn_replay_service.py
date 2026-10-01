@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
-from typing import ClassVar, Protocol
+from typing import Protocol
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -21,6 +21,7 @@ from app.schemas.internal_v2.message import (
     MessageReplayRequest,
     MessageRunAccepted,
 )
+from app.services.business.job.lifecycle import TERMINAL_JOB_STATUSES
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 
@@ -43,14 +44,6 @@ class FailedJobTraceReader(Protocol):
 
 class SessionTurnReplayService:
     """在当前会话追加截断 checkpoint，并用稳定 message_id 重新执行。"""
-
-    _TERMINAL_JOB_STATUSES: ClassVar[set[JobStatus]] = {
-        JobStatus.completed,
-        JobStatus.succeeded,
-        JobStatus.failed,
-        JobStatus.cancelled,
-        JobStatus.timed_out,
-    }
 
     def __init__(
         self,
@@ -179,7 +172,7 @@ class SessionTurnReplayService:
         active = [
             job
             for job in await self._job_service.list(session_id=session_id)
-            if job.status not in self._TERMINAL_JOB_STATUSES
+            if job.status not in TERMINAL_JOB_STATUSES
         ]
         if active:
             details = ", ".join(f"{job.job_id}:{job.status.value}" for job in active)
