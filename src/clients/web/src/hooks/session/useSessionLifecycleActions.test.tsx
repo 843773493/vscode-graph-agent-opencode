@@ -502,3 +502,41 @@ describe("会话列表收敛的活动工作区边界", () => {
     expect(readState().activeGatewayWorkspaceId).toBe(RACE_WORKSPACE);
   });
 });
+
+describe("删除非当前会话的失败路径与后端真值校准", () => {
+  test("删除请求报错但后端其实已删且补偿重取成功时，级联消失的当前会话必须同步切走", async () => {
+    // 当前会话是被删父会话的后代：后端级联删除会把当前会话一并带走了。
+    const current = raceSession("ses_child");
+    current.parent_session_id = "ses_parent";
+    const parent = raceSession("ses_parent");
+    const survivor = raceSession("ses_survivor");
+    let listCalls = 0;
+    installGatewayFetch(({ path, method }) => {
+      if (path === "/api/v1/sessions/" + parent.session_id && method === "DELETE") {
+        // 响应丢失：前端看到删除失败，但后端其实已经提交。
+        return apiResponse({ message: "响应丢失" }, 500);
+      }
+      if (path === "/api/v1/sessions") {
+        listCalls += 1;
+        // 补偿重取成功：后端权威列表里当前会话已随父会话级联消失。
+        return sessionsListResponse([survivor]);
+      }
+      return undefined;
+    });
+
+    const { state: readState, actions } = mountRace(current, [current, parent, survivor]);
+    await expect(actions.deleteSession(parent.session_id)).rejects.toThrow("响应丢失");
+
+    expect(listCalls).toBe(1);
+    // 关键：重新校准后 currentSession 绝不能悬空指向一个已不在 sessions 里的
+    // 幽灵会话，必须与删除成功路径一样切到剩余会话。
+    expect(readState().currentSession?.session_id).toBe(survivor.session_id);
+    expect(readState().sessions.some(
+      (item) => item.session_id === readState().currentSession?.session_id,
+    )).toBe(true);
+    expect(readState().sessions.map((item) => item.session_id)).toEqual([
+      survivor.session_id,
+    ]);
+    expect(readState().status).toContain("删除会话失败");
+  });
+});

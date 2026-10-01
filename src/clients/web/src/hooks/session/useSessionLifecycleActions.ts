@@ -162,6 +162,51 @@ function localSessionDeletionClosure(
   return doomed;
 }
 
+/**
+ * 会话已消失后的统一收敛：按权威剩余列表收敛工作区镜像，并在当前会话确实已从
+ * 剩余列表中消失（含被删父会话级联带走的后代）时把它切到剩余首个会话。
+ *
+ * 删除成功路径与「请求报错但补偿重取成功」的失败路径必须共用这一份：失败路径若
+ * 只收敛 sessions 镜像而不校正 currentSession，就会出现 currentSession 悬空指向
+ * 一个已不在 sessions 里的幽灵会话（与成功路径行为不一致）。
+ *
+ * `reloadHistoryAfterSwitch` 只在「删除非当前会话、但级联带走了当前会话」时为真，
+ * 让新选中的会话触发一次历史加载；删除当前会话时调用方已先行切走，无需重复。
+ */
+function convergeAfterSessionRemoval(
+  prev: AppState,
+  workspaceId: string,
+  remainingSessions: Session[],
+  options: { reloadHistoryAfterSwitch: boolean },
+): AppState {
+  const next = applySessionListConvergence(prev, workspaceId, remainingSessions);
+  const remainingIds = new Set(
+    remainingSessions.map((session) => session.session_id),
+  );
+  const currentWasDeleted = Boolean(
+    prev.currentSession
+    && !remainingIds.has(prev.currentSession.session_id),
+  );
+  if (!currentWasDeleted) {
+    return next;
+  }
+  const nextSession = remainingSessions[0] ?? null;
+  next.currentSession = nextSession;
+  next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
+  if (options.reloadHistoryAfterSwitch) {
+    next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
+  }
+  Object.assign(next, resetSessionScopedFields(next));
+  next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
+  Object.assign(next, resetAgentStateFields(next));
+  if (nextSession) {
+    writeLastSessionId(nextSession.session_id);
+  } else {
+    clearLastSessionId();
+  }
+  return next;
+}
+
 export function useSessionLifecycleActions({
   apiPort,
   currentSession,
@@ -702,8 +747,13 @@ export function useSessionLifecycleActions({
             workspaceIdForRequest ??
             prev.activeGatewayWorkspaceId ??
             "workspace";
+          // 补偿重取成功时，删除可能已在后端生效（响应超时/丢失）：后端权威列表里
+          // 当前会话可能已被级联删除，必须与成功路径同样切走 currentSession，
+          // 否则它会悬空指向一个已不在 sessions 里的幽灵会话。
           const converged = reconciled
-            ? applySessionListConvergence(prev, resolvedWorkspaceId, reconciled)
+            ? convergeAfterSessionRemoval(prev, resolvedWorkspaceId, reconciled, {
+                reloadHistoryAfterSwitch: true,
+              })
             : prev;
           return {
             ...converged,
@@ -730,37 +780,14 @@ export function useSessionLifecycleActions({
         const remainingSessions = previousSessions.filter(
           (session) => !doomed.has(session.session_id),
         );
-        const next = applySessionListConvergence(
+        // 删除非当前会话时，级联删除可能移除了当前会话；这时才需要为新选中的
+        // 会话触发一次历史加载（删除当前会话时上面已先行切走）。
+        const next = convergeAfterSessionRemoval(
           prev,
           workspaceId,
           remainingSessions,
+          { reloadHistoryAfterSwitch: !deletingCurrent },
         );
-        const remainingIds = new Set(remainingSessions.map((session) => session.session_id));
-
-        const currentWasDeleted = deletingCurrent
-          ? prev.currentSession === null || prev.currentSession.session_id === sessionId
-          : Boolean(
-            prev.currentSession
-            && !remainingIds.has(prev.currentSession.session_id),
-          );
-        if (currentWasDeleted) {
-          const nextSession = remainingSessions[0] ?? null;
-          next.currentSession = nextSession;
-          next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
-          if (!deletingCurrent) {
-            // 删除非当前会话时，级联删除可能移除了当前会话；这时才需要
-            // 为新选中的会话触发一次历史加载。
-            next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-          }
-          Object.assign(next, resetSessionScopedFields(next));
-          next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
-          Object.assign(next, resetAgentStateFields(next));
-          if (nextSession) {
-            writeLastSessionId(nextSession.session_id);
-          } else {
-            clearLastSessionId();
-          }
-        }
 
         next.status = `已删除会话: ${result.session_id}`;
         return next;
