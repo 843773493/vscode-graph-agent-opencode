@@ -6,8 +6,6 @@ from pathlib import Path
 from typing import Any, Final
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage
-
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_step_executor import JobStepExecutor
@@ -44,7 +42,6 @@ from app.services.infrastructure.resource_platform.registry.context_source_react
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
-from app.services.mapping.agent_content_mapper import split_agent_content
 from app.services.orchestration.event_stream.contracts import AgentEventSource
 from app.services.orchestration.execution_step.ports import StepExecutionPorts
 from app.services.orchestration.execution_step.runner import StepRunner
@@ -423,24 +420,6 @@ class AgentExecutionService(JobStepExecutor):
             del self._tool_face_cache[stale_key]
         self._tool_face_cache[cache_key] = definitions
         return definitions
-
-    def _extract_final_text(self, result: dict[str, Any]) -> str:
-        messages = result.get("messages", []) if isinstance(result, dict) else []
-        for message in reversed(messages):
-            if not isinstance(message, AIMessage):
-                continue
-            content = getattr(message, "content", None)
-            if content is None:
-                continue
-            _, text = split_agent_content(content)
-            text = text.strip()
-            if text:
-                return text
-        raise RuntimeError(
-            "Agent 执行完成但没有提取到任何最终文本。"
-            f" session_id={result.get('session_id') if isinstance(result, dict) else 'unknown'}"
-            " 这通常表示最终消息不是 assistant 文本，或者消息链路中出现了空响应。"
-        )
 
     def get_available_tools(self, agent_id: str = "default") -> list[dict[str, Any]]:
         """工具目录读写路径：返回 Provider 工具面定义（blueprint 投影）。"""
