@@ -155,6 +155,7 @@ async def proxy_auxiliary_http(
     client = _http_client(request.app)
     registry.acquire_route_reference(workspace_id, streaming=False)
     route_reference_released = False
+    route_reference_handed_off = False
 
     def release_route_reference() -> None:
         nonlocal route_reference_released
@@ -164,68 +165,70 @@ async def proxy_auxiliary_http(
         registry.release_route_reference(workspace_id, streaming=False)
 
     try:
-        service_url = registry.resolve_service_url(workspace_id, service)
-    except (LookupError, ValueError) as error:
-        release_route_reference()
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    try:
-        target_url = str(build_upstream_url(service_url, (), path))
-    except ValueError as error:
-        release_route_reference()
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    try:
-        forwarded = client.build_request(
-            request.method,
-            target_url,
-            params=request.query_params,
-            content=await request.body(),
-            headers=_proxy_request_headers(request, target),
-        )
-        response = await send_upstream_request(client, forwarded)
-    except httpx.RequestError as error:
-        release_route_reference()
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"无法连接工作区辅助服务: workspace_id={workspace_id}, "
-                f"service={service}: {error}"
-            ),
-        ) from error
-    except TimeoutError as error:
-        release_route_reference()
-        raise HTTPException(
-            status_code=504,
-            detail=(
-                "工作区辅助服务在有限等待时间内未返回响应头: "
-                f"workspace_id={workspace_id}, service={service}, "
-                f"timeout_seconds={UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS:g}"
-            ),
-        ) from error
-    except BaseException:
-        release_route_reference()
-        raise
-    media_type = response.headers.get("content-type")
-    if media_type and "text/event-stream" in media_type:
-        return StreamingResponse(
-            _stream_response(response, release_route_reference),
-            status_code=response.status_code,
-            media_type=media_type,
-            headers=_proxy_response_headers(response),
-        )
-    try:
-        content = await response.aread()
-        headers = _proxy_response_headers(response)
-    finally:
         try:
-            await response.aclose()
+            service_url = registry.resolve_service_url(workspace_id, service)
+        except (LookupError, ValueError) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except RuntimeError as error:
+            # 远程投影工作区缺少连接信息是 registry 的权威拒绝语义；与本地运行时
+            # 未就绪同样属于「暂时不可达」，但错误必须显式暴露而非被宽泛兜底吞掉。
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        try:
+            target_url = str(build_upstream_url(service_url, (), path))
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        try:
+            forwarded = client.build_request(
+                request.method,
+                target_url,
+                params=request.query_params,
+                content=await request.body(),
+                headers=_proxy_request_headers(request, target),
+            )
+            response = await send_upstream_request(client, forwarded)
+        except httpx.RequestError as error:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"无法连接工作区辅助服务: workspace_id={workspace_id}, "
+                    f"service={service}: {error}"
+                ),
+            ) from error
+        except TimeoutError as error:
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    "工作区辅助服务在有限等待时间内未返回响应头: "
+                    f"workspace_id={workspace_id}, service={service}, "
+                    f"timeout_seconds={UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS:g}"
+                ),
+            ) from error
+        media_type = response.headers.get("content-type")
+        if media_type and "text/event-stream" in media_type:
+            # SSE 响应的引用随响应体存活，移交给生成器的单点释放。
+            route_reference_handed_off = True
+            return StreamingResponse(
+                _stream_response(response, release_route_reference),
+                status_code=response.status_code,
+                media_type=media_type,
+                headers=_proxy_response_headers(response),
+            )
+        try:
+            content = await response.aread()
+            headers = _proxy_response_headers(response)
         finally:
+            await response.aclose()
+        return Response(
+            content=content,
+            status_code=response.status_code,
+            headers=headers,
+            media_type=media_type,
+        )
+    finally:
+        # 客户端断连会在任意 await 点抛 CancelledError；同步释放闭环放在 finally
+        # 保证归还，取消仍向上传播。已移交给 SSE 响应体的引用不在这里释放。
+        if not route_reference_handed_off:
             release_route_reference()
-    return Response(
-        content=content,
-        status_code=response.status_code,
-        headers=headers,
-        media_type=media_type,
-    )
 
 
 def _websocket_target(base_url: str, socket_path: str) -> str:
