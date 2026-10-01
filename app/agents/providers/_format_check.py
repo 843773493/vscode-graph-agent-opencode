@@ -13,7 +13,6 @@ __all__ = [
     "FixtureStreamBuilder",
     "FormatCheckItem",
     "FormatCheckResult",
-    "MessageFormatValidator",
     "MixedReasoningTextFixture",
     "ReasoningAndToolFixture",
     "ReasoningOnlyFixture",
@@ -44,11 +43,6 @@ SUPPORTED_CONTENT_BLOCK_TYPES = frozenset(
         "tool_call",
     }
 )
-
-
-class MessageFormatValidator(Protocol):
-    def self_check(self) -> FormatCheckResult:
-        ...
 
 
 @dataclass
