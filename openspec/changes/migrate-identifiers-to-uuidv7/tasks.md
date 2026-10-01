@@ -64,59 +64,54 @@
 
 ## 6. 存量 UUIDv4 一次性显式迁移（D3）
 
-### 6.0 待裁定：存量 v4→v7 重编号的迁移形态（阻塞 §6.2/§6.3/§6.5/§6.6）
+### 6.0 owner 裁定（2026-10-01 定稿）：无运行时开关 + 存量 v4 一次性显式处置
 
-> **状态：待 owner 裁定。本节不改写 O-1 的任何已落定决定，只把 §6 的阻塞显式化为 2–3 个可判否的选项。**
+> **状态：已定稿（不再是「待裁定」）。** 本裁定由 owner 直接给出，**不与第二轮 §6.0 的 A/B/C 三选项机械对应**（方向接近「C 其它形态」）；凡与第二轮选项文字冲突处，**以本条裁定为准**。
 >
-> **§6.2/§6.3/§6.5/§6.6 保持未勾，阻塞原因如上；MUST NOT 为凑勾选而勾选。**
+> **§6.2/§6.3/§6.5/§6.6 保持未勾**，原因是「一次性显式处置路径尚未实现/未测」，**不再是因为「迁移形态待裁定」**；MUST NOT 为凑勾选而勾选。
 
-**事实（带 file:line 与原始 rg 输出，第二轮 2026-10-01 实测）**：
+**裁定结论**：
+
+1. **不接受运行时维护开关**：`identity_profile_migration_active`（以及任何等价「窗口期接受 `v4|v7`」的运行时分叉）**判死**。理由：AGENTS.md 第 1 条严禁双轨，**运行时开关就是双轨**；且 HEAD 已机械断言源码中不存在该开关（见下「事实 3」）。**分支 B（维护窗口 + 双接受）就此判死，不再是候选。**
+2. **坚持 HEAD 现状（canonical 校验器只接受 v7）**，这是 O-1 的既有裁定，**不推翻**。
+3. **存量 v4 必须一次性显式处置**，不得静默吸收、不得扫盘重建。判据是既有迁移机对非法 id 的 `illegal_id` 隔离（`app/core/session_catalog_migration` 的 `_preflight`/`_physical` 段）。要求：启动/迁移时遇到 v4 canonical id MUST **fail-closed** 并给出**可操作的显式处置指引（隔离 + 报告）**，MUST NOT 回退 v4、MUST NOT 双读。
+4. **勾选口径变更**：§6.2/§6.3/§6.5/§6.6 的验收门从「运行时开关可用」改为「**一次性显式处置路径可用且有测试**」；因该路径尚未实现/未测，**逐条保持未勾**。
+
+**判死的方案（原分支 B）**：维护窗口 + `identity_profile_migration_active` + 窗口期接受 `v4|v7`。— **判死**：窗口期的运行时双接受即双轨，与 AGENTS.md 第 1 条及本 change「彻底根除双轨」目标冲突。
+
+**仍有效的事实（第二轮 2026-10-01 实测）**：
 
 1. **生产读写路径的校验器只接受 v7，不接受 v4。** `app/core/session_catalog_store/validators.py:31-55` 的 `validate_session_id`/`validate_thread_id` → `_validate_uuid_payload` 对 payload 第 13 个 hex 位**硬要求 `== "7"`**，非 v7 一律 `raise ValueError`。
    原始输出：`rg -n 'v4|uuid4' app/core/session_catalog_store` → **EXIT=1（0 命中）**。
-2. **迁移机对非法 id 直接隔离，绝不重编号。** `app/core/session_catalog_migration.py:1173-1198` 的 `_quarantine_reason_for`：`validate_session_id(node.node_id)` 失败即 `return "illegal_id"`，节点进隔离区而非被读出重写。**即今天直接跑该迁移机会把全部 v4 存量隔离，而不是重编号。**
+2. **迁移机对非法 id 直接隔离，绝不重编号——这就是「一次性显式处置」的既有判据。** `app/core/session_catalog_migration` 的 `_preflight`/`_physical` 段中，`validate_session_id(node.node_id)` 失败即返回 `illegal_id`，节点进隔离区而非被读出重写；**不存在「放宽读到 v4 再重编号」的路径**。
 3. **HEAD 已机械断言源码中不存在维护开关。** `tests/unit/core/test_canonical_identifier_matrix.py:170` 的 `test_identifier_profile_converged_to_v7_only`（注释写明「O-1 分支 A：不引入维护开关」）断言 `"identity_profile_migration_active" not in source` 且 `"_validate_uuid_v4_payload" not in source`。
    原始输出：`rg -n 'identity_profile_migration_active' app tests scripts` → 仅 1 行命中，即该断言行本身（`tests/unit/core/test_canonical_identifier_matrix.py:173`），**app/ 生产源码 0 命中**。
 
-**冲突陈述**：
+**存量 v4 一次性显式处置的验收口径（§6.2/§6.3/§6.5/§6.6 共用，可判否）**：
 
-- **读 v4 与「只接受 v7」不可同时成立**（事实 1）：重编号必须先能读出 `ses_<v4>`，而校验器今天会拒绝它。
-- **§6.2（执行重编号）与 §6.5/§6.6（维护开关）互斥**：§6.5/§6.6 描述的正是 O-1 **分支 B**（引入 `identity_profile_migration_active` 并放宽读到 `v4|v7`），而 HEAD 已 adopted O-1 **分支 A**（无开关、单一只接受 v7，事实 3）。二者只能择一：要么改判 O-1 走分支 B，要么承认「存量 v4 不做重编号」。
+- **MUST**：启动/迁移遇到 v4 canonical id → **fail-closed**（`illegal_id` 隔离），MUST NOT 回退 v4、MUST NOT 双读、MUST NOT 扫盘重建。
+- **MUST**：给出**可操作的显式处置指引**——隔离报告须含**被隔离 id、物理路径、原因、建议动作**，MUST NOT 静默丢弃。
+- **MUST**：有测试机械证明「v4 存量被隔离且报告可见、不静默吸收」。
+- **MUST NOT**：引入 `identity_profile_migration_active` 或任何运行时开关、放宽校验器到 `v4|v7`。
 
-**选项（每个选项含前置条件、影响面、可判否验收门、是否推翻 O-1）**：
+**定稿后果（对原始动机：`sessions/YYYY/MM/DD/` 分桶与 SQLite 主键）**：
 
-- **选项 A（维护窗口「放宽读 → 迁移 → 收紧」，即 O-1 分支 B）**
-  - 前置条件：owner **改判 O-1**，允许在维护窗口内引入 `identity_profile_migration_active`；维护窗口内服务停止、单版本运行。
-  - 影响面（必须同一切片一起改）：`app/core/session_catalog_store/**`（校验器放宽到 `v4|v7`）、`app/core/session_catalog_migration*`（迁移主干新增「重算 id → 重写目录叶名 + 13 个持久文件 + rollout `index.sqlite` 的 17 个 `ses_` 列 + 相关 hash」）、`app/services/infrastructure/rollout_context/**`、`app/gateway/**`（控制面 `user_view_state.session_id` 与 `federation_route_hint`）——**多 owner 交叉，非单一 owner 可闭**。
-  - 验收门（可判否）：① 开关 true 时 v4/v7 均接受、false 时仅 v7；② 迁移中断可恢复、不可归属 fail-closed 隔离；③ `rg -n 'v4|uuid4' app/core/session_catalog_store` 在**开关关闭后** EXIT=1；④ 迁移前后 §5A 判定的 hash/幂等键**随迁移一致重算**（`default_idempotency_key`、`compute_thread_creation_preimage_hash`、`context_plan_hash`）。
-  - **推翻 O-1？是**（分支 A → 分支 B）。
-- **选项 B（放弃存量重编号：新数据一律 v7，存量 v4 冻结处置）**
-  - 前置条件：owner 确认「存量 v4 不重编号」为终态；§6.2 显式判为 not-implemented。
-  - 影响面：无需改校验器/迁移机；只需**显式规定存量 v4 的处置**（例如：保持可读的历史只读快照，或一次性显式失效并给用户可见报告）并在 spec 落成文本；`session_catalog_migration` 保持现状（对 v4 存量继续 `illegal_id` 隔离，属 fail-closed 明示）。
-  - 验收门（可判否）：① spec 有「存量 v4 一次性显式处置」的 requirement 与负向测试（不得静默丢弃）；② `rg -n 'identity_profile_migration_active' app` EXIT=1（不引入开关）；③ 新创建路径产出的全部 canonical id 为 v7（既有 §3/§6.7 断言已覆盖）。
-  - **推翻 O-1？否**（与分支 A 一致，只是把 §6.2 判为 not-implemented）。
-- **选项 C（其它形态，由 owner 提出）**
-  - 前置条件：owner 给出替代迁移形态（例如「停服 + 离线脚本一次性重编号，脚本不共享生产校验器」）。
-  - 影响面 / 验收门 / 是否推翻 O-1：**随 owner 给出的形态而定，须补齐与本表同构的三栏后再开工。**
+| 对象 | 定稿后果 |
+|---|---|
+| **存量 v4 分桶** | **保持现状**：存量继续停留在原 v4 所在 UTC 日期桶（由另存 `created_at` 决定），新数据落 v7 日期桶；两段历史共存，**存量不享受「id 自校验分桶」收益**。 |
+| **存量 v4 主键** | **保持 v4 文本序**：`nodes.node_id`/`thread_catalog.thread_id` 等存量主键不改写，B-tree 时间局部性**只对新写入的 v7 段生效**；同一表内 v4/v7 混合，排序≈时间仅对新增段成立。 |
+| **存量 v4 的可达性** | 遇到即 fail-closed 隔离 + 显式报告，**不静默吸收、不扫盘重建**；由用户/owner 按报告中的处置指引显式决定归档或失效。 |
 
-**各选项对原始动机（`sessions/YYYY/MM/DD/` 分桶与 SQLite 主键）的具体后果**：
-
-| 选项 | 对 `sessions/YYYY/MM/DD/` 分桶的后果 | 对 SQLite 主键（`nodes.node_id`/`thread_catalog.thread_id` 等）的后果 |
-|---|---|---|
-| A | 存量目录叶名被重写为新 v7 id，落回**同一** UTC 日期桶（因 `4.1`/§4.7 同源校验，重算后分桶与 id 内嵌时间恒一致）；物理目录 rename。 | 存量主键被改写为新 v7 id；B-tree 需重建/重平衡；所有以外键/JSON 引用该 id 的列与文件同步重写（§6.1b 13 文件 + `index.sqlite` 17 列）。 |
-| B | 分桶**保持现状**：存量继续落在原 v4 所在日期桶（由另存 `created_at` 决定），新数据落 v7 日期桶；两段历史共存，但均由 `created_at` 独立记账，**不享受「id 自校验分桶」收益**。 | 存量主键**保持 v4 文本序**（B-tree 时间局部性只对新写入生效）；同一表内 v4/v7 混合，排序≈时间仅对新增段成立。 |
-| C | 取决于 owner 形态；MUST 显式写清存量分桶是「重写」还是「冻结」。 | 同上。 |
-
-**裁定落点建议**：A 与 B 的取舍本质是「是否愿意为存量数据重编号而临时引入维护窗口（分支 B）」。若 owner 维持 O-1 分支 A 不变，则 §6.2/§6.3/§6.5/§6.6 应改为**选项 B**（显式 not-implemented + 存量处置文本），并把本 change 的目标从「存量重编号」收敛为「新数据 v7 + 存量显式处置」。
+**这是接受「运行时无双轨」的代价，已定稿，不再重新讨论。**
 
 - [x] 6.1 按 design D12 的「工厂前缀 × 持久面」全集矩阵（`IdentifierPrefix` 的 33 个前缀）枚举迁移面，MUST NOT 只匹配 `ses_`/`thr_` 字面。门槛：矩阵落盘到 `out/tests/temp/uuidv7_openspec/artifacts/`；命令 `rg -n 'IdentifierPrefix = Literal' -A40 app/core/identifier.py` 退出码 0 且矩阵行数 MUST 等于该 `Literal` 的前缀数（33）；每个持久面前缀 MUST 给出具名载体证据，每个非持久面前缀 MUST 给出「不落盘」的负向证据。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「6.1」。）**
 - [x] 6.1b 复核已实测的持久面漏项至少覆盖 `op_`（`navigation_mutation_records` 主键）、`strm_`（`message_streams/*.jsonl` 文件名）、`msg_`（rollout `messages.message_id`）、`evt_`/`snapshot_`（message_stream JSONL）、`part_`（`item_parts.part_id`）、`goal_`（`goal.json`）、`gen_`/`grun_`（generators 文件）、`team_`/`ttask_`/`tevt_`（team JSON/JSONL），**外加 2026-09-30 控制面审计新点的四处非 SQLite 持久面**：控制面会话索引缓存 `state/gateway/indexes/session-catalogs/*.json`（含真实 `ses_`/`thr_`）、用户档案 `state/gateway/users/<id>/profile.jsonc` 的 `session_sidebar.collapsed_session_ids`（含 canonical `ses_`）、Gateway generators 产出的 `state/gateway/generators/*.json` 与 `generation-runs/**`（含 `placement.session_id`/`message_id`/`job_id`）、工作区后端持久面（`workspace_activity.session_id`、`attachment_*.owner_session_id`）。门槛：报告逐项列出具名路径与调用点。**注意：迁移 generators 的产出数据文件不等于修改 `app/gateway/control/generators.py` 源码，后者为受保护路径，全程禁改。** **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「6.1b」。）**
-- [ ] 6.2（**待裁定，见 §6.0 待裁定**）复用 `app/core/session_catalog_migration.py` 的 staging + journal + 隔离区形态，实现一次性、可恢复、带 source→target lineage 账本的 v4→v7 重编号迁移。**阻塞：读 v4 ⟂ 只接受 v7（见 §6.0 事实 1/2）**；迁移形态未裁定前本项 MUST NOT 执行。门槛：`uv run pytest -q tests/unit/core/test_session_catalog_migration.py` 退出码 0。
-- [ ] 6.3（**待裁定，见 §6.0 待裁定**）补迁移中断恢复测试与「无法归属即 fail-closed/隔离、不扫盘吸收」测试。依赖 6.2，随 6.2 一并裁定。门槛：对应迁移测试退出码 0。
-- [x] 6.4（**主门槛已满足；「迁移收敛测试」子门槛随 §6.2 保持未达，见 §台账补勾证据「6.4」**）迁移完成后把校验器收紧为只接受 v7，并断言运行路径无 v4 双读、无旧 ID path alias。门槛：`rg -n 'v4|uuid4' app/core/session_catalog_store` 退出码 1（已满足，实测 0 命中）；迁移收敛测试退出码 0（**依赖 §6.2 的存量重编号，该项待裁定，故子门槛未达**）。
-- [ ] 6.5（**待裁定，见 §6.0；本条描述的是已被 O-1 否决的分支 B**）实现唯一维护开关 `identity_profile_migration_active`：开启时校验器接受 `v4|v7`（唯一允许双接受的时刻），关闭时只接受 `v7`；账本终态事务提交后 MUST 在同一次维护操作内把开关置为关闭。门槛：单测断言「开关 true → v4/v7 均接受」「开关 false → 仅 v7，v4 被拒绝」，`uv run pytest -q <该测试>` 退出码 0。
-- [ ] 6.6（**待裁定，见 §6.0；与 6.5 同因**）实现启动期版本闸门：某工作区处于迁移窗口（开关为 true）时，旧代码版本 MUST 拒绝服务该工作区，MUST NOT 新旧代码并行。门槛：对应测试断言旧版本启动被拒，退出码 0。
-- [x] 6.7（A2）收敛断言：开关关闭后，必须有一条测试证明「`v4` 位 profile 的 canonical 身份被拒绝且 `v7` 被接受」，以机械证明窗口期已结束。门槛：该测试退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「6.7」。）**
+- [ ] 6.2（**存量 v4 一次性显式处置；验收门已按 §6.0 裁定改为「处置路径可用且有测试」**）在既有 `app/core/session_catalog_migration` 的 `illegal_id` 隔离机制上，落成**可操作的显式处置路径**：启动/迁移遇到 v4 canonical id MUST fail-closed 隔离并产出显式报告（被隔离 id、物理路径、原因、建议动作），MUST NOT 回退 v4、MUST NOT 双读、MUST NOT 扫盘重建、MUST NOT 引入运行时维护开关。门槛：处置路径有测试且 `uv run pytest -q tests/unit/core/test_session_catalog_migration.py` 退出码 0。**当前未实现/未测，保持未勾。**
+- [ ] 6.3（**存量 v4 一次性显式处置；随 §6.2**）补测试：迁移遇到 v4 存量时 MUST fail-closed 隔离且报告可见（含被隔离 id/路径/原因/建议动作），MUST NOT 静默吸收、MUST NOT 扫盘重建；并覆盖「处置中断可恢复」。门槛：对应迁移测试退出码 0。**当前未测，保持未勾。**
+- [x] 6.4（**主门槛已满足；「存量 v4 显式处置测试」子门槛随 §6.2 保持未达，见 §台账补勾证据「6.4」**）校验器收紧为只接受 v7，并断言运行路径无 v4 双读、无旧 ID path alias。门槛：`rg -n 'v4|uuid4' app/core/session_catalog_store` 退出码 1（已满足，实测 0 命中）；存量 v4 显式处置测试退出码 0（**依赖 §6.2 的处置路径，尚未实现，故子门槛未达**）。
+- [ ] 6.5（**已按 §6.0 裁定改写：不再是运行时维护开关**）存量 v4 一次性显式处置的**负向断言**：系统 MUST NOT 引入运行时维护开关 `identity_profile_migration_active`（判死），MUST NOT 放宽校验器到 `v4|v7`；遇到 v4 canonical id MUST fail-closed 隔离并给可操作处置指引。门槛：单测断言「`rg -n 'identity_profile_migration_active' app` 0 命中」且「v4 存量被隔离 + 报告含 id/路径/原因/建议动作」，`uv run pytest -q <该测试>` 退出码 0。**当前未实现/未测，保持未勾。**
+- [ ] 6.6（**已按 §6.0 裁定改写**）存量 v4 显式处置的**「不静默」断言**：处置 MUST 产生用户可见报告（列出被隔离 id 与路径），MUST NOT 静默丢弃、MUST NOT 扫盘重建、MUST NOT 新旧代码并行双读。门槛：对应测试退出码 0。**当前未测，保持未勾。**
+- [x] 6.7（A2，已按 §6.0 裁定改写措辞）**无运行时开关的收敛断言**：必须有一条测试证明「`v4` 位 profile 的 canonical 身份被拒绝且 `v7` 被接受」，以机械证明**不存在窗口期、不存在运行时双轨**。门槛：该测试退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「6.7」。）**
 
 ## 7. JS 服务进程与浏览器前端边界（D7）
 
