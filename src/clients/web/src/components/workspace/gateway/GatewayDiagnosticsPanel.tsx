@@ -45,6 +45,19 @@ export default function GatewayDiagnosticsPanel({
   // 诊断范围可被连续切换；只有最后一次发起的响应才允许写入展示态，否则先发后到的
   // 旧范围响应会覆盖新范围，用户看到与当前选择不符的工作区/日志。
   const requestRevisionRef = useRef(0);
+  // 上一次渲染的诊断范围。范围一变化必须在同一提交内作废旧快照：仅靠 revision
+  // 只能丢弃先发后到的旧响应，但「新范围选择 + 旧 diagnostics」仍会让 selectedLog
+  // 回退到 diagnostics.logs[0]，在新响应到达前继续渲染旧工作区/旧日志入口的 tail。
+  const lastScopeRef = useRef(`${gatewayConnectionId ?? ""}:${workspaceId}`);
+  const scopeKey = `${gatewayConnectionId ?? ""}:${workspaceId}`;
+  if (lastScopeRef.current !== scopeKey) {
+    lastScopeRef.current = scopeKey;
+    requestRevisionRef.current += 1;
+    setDiagnostics(null);
+    setSelectedLogId(null);
+    setError(null);
+    setLoading(true);
+  }
 
   const selectedGroup = useMemo(
     () =>

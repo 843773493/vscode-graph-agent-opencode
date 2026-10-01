@@ -207,3 +207,61 @@ test("先发后到的旧诊断响应不得覆盖切换后的新范围", async ()
   expect(text).not.toContain("TAIL_first");
   renderer.unmount();
 });
+
+test("切换工作区后、新范围响应到达前不得继续渲染旧范围日志", async () => {
+  // 切换窗口保护（与底部输出面板同型缺陷）：用户从一个工作区切到另一个时，
+  // 新范围的诊断请求仍在途。此前 diagnostics 仍是旧范围的快照，selectedLog
+  // 回退到 diagnostics.logs[0] 继续渲染旧工作区的 tail，用户会在「已切到 B」
+  // 的面板上读到 A 的日志。必须在同一提交内作废旧快照，形成空窗期而非假数据。
+  const pending: Array<{ label: string; resolve: () => void }> = [];
+  let callIndex = 0;
+  installGatewayFetch(({ path }) => {
+    if (path !== "/api/gateway/diagnostics") return undefined;
+    const label = callIndex === 0 ? "first" : "second";
+    callIndex += 1;
+    return new Promise<Response>((resolve) => {
+      pending.push({
+        label,
+        resolve: () =>
+          resolve(
+            Response.json({ data: diagnosticsFor(label), request_id: `req_${label}` }),
+          ),
+      });
+    });
+  }, { token: "switch-window-token" });
+
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(
+      <GatewayDiagnosticsPanel apiPort={8025} workspaces={[workspace, secondWorkspace()]} />,
+    );
+  });
+  await flush();
+  await act(async () => {
+    pending[0].resolve();
+    await Promise.resolve();
+  });
+  await flush();
+  expect(JSON.stringify(renderer.toJSON())).toContain("TAIL_first");
+
+  // 切到 gw_second：该范围的诊断请求仍在途。
+  const workspaceSelect = renderer.root.findAllByType("select")[1];
+  act(() => workspaceSelect.props.onChange({ target: { value: "gw_second" } }));
+  await flush();
+  expect(pending.length).toBe(2);
+
+  const during = JSON.stringify(renderer.toJSON());
+  expect(during).not.toContain("TAIL_first");
+  expect(during).not.toContain("日志读取失败");
+
+  // 新范围到达后正常渲染，证明上面是切换空窗而不是面板被卡死。
+  await act(async () => {
+    pending[1].resolve();
+    await Promise.resolve();
+  });
+  await flush();
+  const after = JSON.stringify(renderer.toJSON());
+  expect(after).toContain("TAIL_second");
+  expect(after).not.toContain("TAIL_first");
+  renderer.unmount();
+});
