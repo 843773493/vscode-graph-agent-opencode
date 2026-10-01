@@ -41,11 +41,81 @@ if __package__ in {None, ""}:
         )
     sys.path.insert(0, str(_repo_root))
 
-from app.core.session_catalog_migration import migrate_workspace_session_catalog
+from app.core.session_catalog_migration import (
+    SessionCatalogMigrationResult,
+    migrate_workspace_session_catalog,
+)
 from app.core.workspace_identity import (
     WORKSPACE_IDENTITY_FILE_NAME,
     validate_workspace_id,
 )
+
+# 隔离原因闭集 → 建议动作。只描述人工处理方向，绝不暗示可自动修复。
+_QUARANTINE_SUGGESTED_ACTIONS = {
+    "illegal_id": "人工确认节点 ID（修正旧 index 记录或目录名）后重跑迁移",
+    "illegal_date": "补齐或修正该节点的 created_at 后重跑迁移",
+    "parent_quarantined": "先处理其父节点的隔离原因后重跑迁移",
+}
+
+
+def _quarantine_report_entries(
+    result: SessionCatalogMigrationResult,
+) -> list[dict[str, str]]:
+    """为隔离节点派生「物理路径 + 建议动作」（报告层，不改 journal 契约）。
+
+    物理路径的唯一权威来源是 journal 的 ``physical`` 节：隔离节点被移入
+    ``orphaned/session-catalog-migration/{node_id}`` 前，其 ``old_relative_path``
+    相对旧 ``sessions`` 根定位。取不到时显式标注「路径不可定位」，绝不静默省略。
+    """
+    journal_path = result.journal_path
+    sessions_root = journal_path.parents[2] / "sessions"
+    physical_sessions: dict[str, object] = {}
+    physical_folders: dict[str, object] = {}
+    journal_error: str | None = None
+    try:
+        journal_payload = json.loads(journal_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        journal_error = f"{type(error).__name__}: {error}"
+    else:
+        physical = (
+            journal_payload.get("physical")
+            if isinstance(journal_payload, dict)
+            else None
+        )
+        if isinstance(physical, dict):
+            raw_sessions = physical.get("sessions")
+            raw_folders = physical.get("folders")
+            if isinstance(raw_sessions, dict):
+                physical_sessions = raw_sessions
+            if isinstance(raw_folders, dict):
+                physical_folders = raw_folders
+        else:
+            journal_error = "journal 缺少 physical 节"
+
+    entries: list[dict[str, str]] = []
+    for item in result.quarantined_nodes:
+        record = physical_sessions.get(item.node_id)
+        if not isinstance(record, dict):
+            record = physical_folders.get(item.node_id)
+        old_relative_path = (
+            record.get("old_relative_path") if isinstance(record, dict) else None
+        )
+        if isinstance(old_relative_path, str) and old_relative_path:
+            path = str(sessions_root / old_relative_path)
+        else:
+            detail = journal_error or "journal 中缺少该节点的旧位置记录"
+            path = f"路径不可定位（{detail}）"
+        entries.append(
+            {
+                "node_id": item.node_id,
+                "reason": item.reason,
+                "path": path,
+                "suggested_action": _QUARANTINE_SUGGESTED_ACTIONS.get(
+                    item.reason, "人工核账后重跑迁移"
+                ),
+            }
+        )
+    return entries
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -137,10 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         "workspace_root": str(workspace_root),
         "migrated_session_nodes": result.migrated_session_nodes,
         "migrated_folder_nodes": result.migrated_folder_nodes,
-        "quarantined_nodes": [
-            {"node_id": item.node_id, "reason": item.reason}
-            for item in result.quarantined_nodes
-        ],
+        "quarantined_nodes": _quarantine_report_entries(result),
         "journal_path": str(result.journal_path),
     }
     if args.json:
@@ -150,8 +217,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  迁移 session 节点: {result.migrated_session_nodes}")
         print(f"  迁移 folder 节点: {result.migrated_folder_nodes}")
         print(f"  quarantine 节点: {len(result.quarantined_nodes)}")
-        for item in result.quarantined_nodes:
-            print(f"    - {item.node_id}（原因: {item.reason}）")
+        for entry in payload["quarantined_nodes"]:
+            print(f"    - {entry['node_id']}（原因: {entry['reason']}）")
+            print(f"      物理路径: {entry['path']}")
+            print(f"      建议动作: {entry['suggested_action']}")
         print(f"  迁移 journal: {result.journal_path}")
     return 0
 
