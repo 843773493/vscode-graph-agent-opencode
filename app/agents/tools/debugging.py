@@ -50,6 +50,22 @@ _ENDING_DEBUG_TOOLS = frozenset(
         "restart_debugging",
     }
 )
+# 结束类调试工具在进程进入 exited/failed 终态时仍需附失效断点清单。
+_FINAL_DEBUG_RUNTIME_STATUSES = frozenset({"exited", "failed"})
+
+
+def _include_invalid_breakpoints(
+    tool_name: str,
+    state: NodeDebugStateDTO | None,
+) -> bool:
+    """start_debugging 始终附失效断点清单；其余结束类工具仅在进程已到 exited/failed 时附带。"""
+    if tool_name == "start_debugging":
+        return True
+    return (
+        tool_name in _ENDING_DEBUG_TOOLS
+        and state is not None
+        and state.status in _FINAL_DEBUG_RUNTIME_STATUSES
+    )
 
 
 class _StrictDebugInput(BaseModel):
@@ -539,12 +555,9 @@ class DebuggingToolFactory:
             return _success(
                 f"{tool_name} 执行成功",
                 state,
-                include_invalid_breakpoints=(
-                    tool_name == "start_debugging"
-                    or (
-                        tool_name in _ENDING_DEBUG_TOOLS
-                        and state.status in {"exited", "failed"}
-                    )
+                include_invalid_breakpoints=_include_invalid_breakpoints(
+                    tool_name,
+                    state,
                 ),
             )
         except Exception as error:  # noqa: BLE001 - 工具协议必须把运行时错误转成结构化结果
@@ -560,13 +573,9 @@ class DebuggingToolFactory:
                 self._error_code(error),
                 str(error),
                 state,
-                include_invalid_breakpoints=(
-                    tool_name == "start_debugging"
-                    or (
-                        tool_name in _ENDING_DEBUG_TOOLS
-                        and state is not None
-                        and state.status in {"exited", "failed"}
-                    )
+                include_invalid_breakpoints=_include_invalid_breakpoints(
+                    tool_name,
+                    state,
                 ),
             )
 
@@ -627,13 +636,9 @@ class DebuggingToolFactory:
             self._error_code(error),
             str(error),
             state,
-            include_invalid_breakpoints=(
-                tool_name == "start_debugging"
-                or (
-                    tool_name in _ENDING_DEBUG_TOOLS
-                    and state is not None
-                    and state.status in {"exited", "failed"}
-                )
+            include_invalid_breakpoints=_include_invalid_breakpoints(
+                tool_name,
+                state,
             ),
         )
 
