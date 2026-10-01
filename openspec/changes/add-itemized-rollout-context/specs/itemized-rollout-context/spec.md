@@ -1398,6 +1398,8 @@ Turn取得active execution slot时 MUST冻结整个Turn不可变的activation po
 
 额外的`source_lineage_digest/ref` MUST只进入`activation_provenance_hash`和受保护manifest完整性校验，不得进入`bindings_hash`、`plan_hash`、wire bytes或普通history字段；raw来源变化但被选择的语义facet未变时，既有binding的语义revision、lineage ref与plan hash均保持不变。required lineage缺失、digest不符或derivation版本无法验证时 MUST fail closed，不得从当前来源或Registry回填。
 
+`ToolSetRef` 与普通 `ContextRef` MUST NOT 被当作 `ResourceActivationSnapshotRef`/`ResourceProvenanceRef` 的替代物或回退来源：`ToolSetRef` 只承载 Provider 可见 tools/tool-config 投影，普通 `ContextRef` 只承载 canonical/request-only/overlay selection，二者都不携带 registry generation、activation policy revision/hash、resource semantic revision、source lineage 或 target-local resource identity。当 plan/assembly 需要资源激活上下文而缺失 typed `ResourceActivationSnapshotRef`/`ResourceProvenanceRef` 时，系统 MUST fail closed，MUST NOT 以 tools 快照或 canonical ref 冒充资源激活事实、MUST NOT 从当前 Registry 或文件补造 provenance。
+
 #### Scenario: 默认Turn跨多个model call复用资源快照
 
 - **WHEN** Turn取得active slot时冻结resource revision A，第一次call后Registry发布revision B且该Turn继续第二次call

@@ -234,6 +234,8 @@ storage resolver MUST 在读取catalog或构造路径前用共享canonical valid
 
 主thread的相对locator MUST是`threads/{main_thread_id}`；非主durable thread的相对locator MUST是`threads/YYYY/MM/DD/{thread_id}`，其中日期来自thread不可变UTC `created_at`，不得额外增加hash shard。两类目录叶名都必须严格等于`thread_id`，且locator一经提交不可因日期变化、重启、显示名或thread kind变化而重写。可预测的主路径也不得绕过catalog/resolver。
 
+聚合入口 MUST NOT 通过继续追加 Mixin 承载新职责：`RolloutStorage`（`app/services/infrastructure/rollout_context/storage/service.py`）与 `RolloutCheckpointSaver`（`app/services/infrastructure/rollout_context/checkpoint/saver.py`）等聚合入口 MUST 收敛为 `design.md` 1.1/1.1.1 冻结边界下的薄 facade，新增职责 MUST 落到对应聚焦模块（storage/checkpoint/assembly/operations/mapping 等），聚合入口作为类定义直接基类的 Mixin 集合 MUST NOT 净增长；已存在的大文件拆分义务只增不减。
+
 #### Scenario: 两个 thread 不能共享 offset 或上下文事实
 
 - **WHEN** 同一 Session 的 main thread 与 delegated child thread 都提交 item 或 checkpoint
