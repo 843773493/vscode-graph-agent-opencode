@@ -226,6 +226,7 @@ async def get_gateway_diagnostics(
 async def search_all_workspace_sessions(
     query: str,
     limit_per_workspace: int = 50,
+    _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     service: GatewaySessionCatalogSearchService = Depends(_catalog_search),
 ):
@@ -366,6 +367,7 @@ async def delete_workspace_folder(
 )
 async def get_workspace_navigation_breadcrumb(
     node_id: str,
+    _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(_registry),
     store: WorkspaceNavigationStore = Depends(_navigation_store),
@@ -382,6 +384,7 @@ async def get_workspace_navigation_breadcrumb(
     response_model=APIResponse[GeneratorDefinitionListDTO],
 )
 async def list_session_generators(
+    _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     store: SessionGeneratorStore = Depends(_generator_store),
 ):
@@ -520,6 +523,7 @@ async def delete_session_generator(
 )
 async def preview_generator_placement(
     payload: GeneratorPlacementPreviewRequest,
+    _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     store: SessionGeneratorStore = Depends(_generator_store),
 ):
@@ -536,6 +540,7 @@ async def preview_generator_placement(
 )
 async def list_generation_runs(
     generator_id: str,
+    _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     store: SessionGeneratorStore = Depends(_generator_store),
 ):
