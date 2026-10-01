@@ -12,6 +12,10 @@ from typing import Literal
 import httpx
 
 from app.gateway.credentials import FederationCredential
+from app.gateway.federation.errors import (
+    FEDERATION_DEADLINE_EXCEEDED,
+    FederationError,
+)
 from app.gateway.runtime.process import (
     allocate_ssh_tunnel_port,
     start_ssh_tunnel_process,
@@ -22,6 +26,9 @@ from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
 
 FEDERATION_PROTOCOL_VERSION = 1
+#: SSH 配对是有界等待：对端 TCP 吞包时必须在有限时间内响亮失败，绝不无限挂起
+#: （``to_thread`` 不可被取消，故上界必须落在 subprocess 自身）。
+PAIRING_SSH_TIMEOUT_SECONDS = 30.0
 DEFAULT_REMOTE_PAIR_COMMAND = "boxteam gateway issue-federation-token"
 WINDOWS_SOURCE_PAIR_COMMAND = (
     "powershell -NoProfile -Command "
@@ -109,21 +116,33 @@ def obtain_pairing_credential_over_ssh(
     )
     if remote_command == pairing_command:
         remote_command = f"{pairing_command} {pairing_args}"
-    result = subprocess.run(
-        build_ssh_command(
-            host=host,
-            port=port,
-            username=username,
-            private_key_path=(
-                str(private_key_path) if private_key_path is not None else None
+    try:
+        result = subprocess.run(
+            build_ssh_command(
+                host=host,
+                port=port,
+                username=username,
+                private_key_path=(
+                    str(private_key_path) if private_key_path is not None else None
+                ),
+                ssh_config_host=ssh_config_host,
+                remote_command=remote_command,
             ),
-            ssh_config_host=ssh_config_host,
-            remote_command=remote_command,
-        ),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=PAIRING_SSH_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        # 复用联邦既有稳定错误码，与 channel 超时同一口径；不新造第二条超时语义。
+        raise FederationError(
+            FEDERATION_DEADLINE_EXCEEDED,
+            "远程 Gateway SSH 配对在有界超时内未完成",
+            detail={
+                "connection_id": connection_id,
+                "timeout_seconds": PAIRING_SSH_TIMEOUT_SECONDS,
+            },
+        ) from error
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "SSH 命令无输出"
         raise RuntimeError(f"远程 Gateway SSH 配对失败: {detail}")
