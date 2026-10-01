@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -31,13 +33,33 @@ __all__ = ["WorkspaceStateStoreApplyMixin"]
 
 
 class WorkspaceStateStoreApplyMixin:
+    @contextmanager
+    def _read_connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._database.connection()
+        try:
+            yield connection
+        finally:
+            connection.close()
+
+    @contextmanager
+    def _write_transaction(self) -> Iterator[sqlite3.Connection]:
+        connection = self._database.connection()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            connection.execute("COMMIT")
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def get_config_apply_claim(
         self,
         *,
         config_domain: str,
     ) -> ConfigApplyClaimRecord | None:
-        connection = self._database.connection()
-        try:
+        with self._read_connection() as connection:
             row = connection.execute(
                 """
                 SELECT config_domain, candidate_id, attempt_id, apply_id, owner,
@@ -48,8 +70,6 @@ class WorkspaceStateStoreApplyMixin:
                 """,
                 (config_domain,),
             ).fetchone()
-        finally:
-            connection.close()
         if row is None:
             return None
         return ConfigApplyClaimRecord(
@@ -83,9 +103,7 @@ class WorkspaceStateStoreApplyMixin:
             raise ValueError("配置 apply lease 必须大于 0 秒")
         if not all((config_domain, candidate_id, attempt_id, apply_id, owner)):
             raise ValueError("配置 apply claim 的身份字段不能为空")
-        connection = self._database.connection()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_transaction() as connection:
             now = datetime.now(UTC)
             now_text = now.isoformat()
             existing = connection.execute(
@@ -164,12 +182,6 @@ class WorkspaceStateStoreApplyMixin:
                     candidate_id,
                 ),
             )
-            connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
         result = self.get_config_apply_claim(config_domain=config_domain)
         if result is None:
             raise RuntimeError("配置 apply claim 提交后无法读取")
@@ -185,9 +197,7 @@ class WorkspaceStateStoreApplyMixin:
     ) -> ConfigApplyClaimRecord:
         if lease_seconds <= 0:
             raise ValueError("配置 apply lease 必须大于 0 秒")
-        connection = self._database.connection()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_transaction() as connection:
             now = datetime.now(UTC)
             cursor = connection.execute(
                 """
@@ -205,12 +215,6 @@ class WorkspaceStateStoreApplyMixin:
             )
             if cursor.rowcount != 1:
                 raise ConfigConflictError("配置 apply claim fencing 校验失败")
-            connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
         result = self.get_config_apply_claim(config_domain=config_domain)
         if result is None:
             raise RuntimeError("配置 apply claim 更新后无法读取")
@@ -223,9 +227,7 @@ class WorkspaceStateStoreApplyMixin:
         apply_id: str,
         fencing_token: str,
     ) -> None:
-        connection = self._database.connection()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_transaction() as connection:
             cursor = connection.execute(
                 """
                 DELETE FROM config_apply_claim
@@ -235,12 +237,6 @@ class WorkspaceStateStoreApplyMixin:
             )
             if cursor.rowcount != 1:
                 raise ConfigConflictError("配置 apply claim 释放 fencing 校验失败")
-            connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
 
     def recover_expired_config_applies(
         self,
@@ -248,9 +244,7 @@ class WorkspaceStateStoreApplyMixin:
         config_domain: str,
     ) -> tuple[str, ...]:
         """把遗留的 applying 候选标为 recovery_required，避免启动时猜测。"""
-        connection = self._database.connection()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_transaction() as connection:
             now = datetime.now(UTC).isoformat()
             rows = connection.execute(
                 """
@@ -295,13 +289,7 @@ class WorkspaceStateStoreApplyMixin:
                     """,
                     (config_domain, now),
                 )
-            connection.execute("COMMIT")
             return candidate_ids
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
 
     @staticmethod
     def _apply_journal_from_row(row: sqlite3.Row) -> ConfigApplyJournalRecord:
@@ -337,8 +325,7 @@ class WorkspaceStateStoreApplyMixin:
         *,
         apply_id: str,
     ) -> ConfigApplyJournalRecord | None:
-        connection = self._database.connection()
-        try:
+        with self._read_connection() as connection:
             row = connection.execute(
                 """
                 SELECT config_domain, apply_id, candidate_id, attempt_id, owner,
@@ -349,8 +336,6 @@ class WorkspaceStateStoreApplyMixin:
                 """,
                 (apply_id,),
             ).fetchone()
-        finally:
-            connection.close()
         return self._apply_journal_from_row(row) if row is not None else None
 
     def list_config_apply_journals(
@@ -372,11 +357,8 @@ class WorkspaceStateStoreApplyMixin:
             query += f" AND state IN ({placeholders})"
             params.extend(states)
         query += " ORDER BY updated_at ASC, apply_id ASC"
-        connection = self._database.connection()
-        try:
+        with self._read_connection() as connection:
             rows = connection.execute(query, tuple(params)).fetchall()
-        finally:
-            connection.close()
         return tuple(self._apply_journal_from_row(row) for row in rows)
 
     def start_config_apply_journal(
@@ -395,9 +377,7 @@ class WorkspaceStateStoreApplyMixin:
     ) -> ConfigApplyJournalRecord:
         if not all((config_domain, apply_id, candidate_id, attempt_id, owner)):
             raise ValueError("Workspace apply journal 身份字段不能为空")
-        connection = self._database.connection()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_transaction() as connection:
             existing = connection.execute(
                 "SELECT apply_id FROM config_apply_journal WHERE apply_id = ?",
                 (apply_id,),
@@ -421,12 +401,6 @@ class WorkspaceStateStoreApplyMixin:
                         now,
                     ),
                 )
-            connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
         result = self.get_config_apply_journal(apply_id=apply_id)
         if result is None:
             raise RuntimeError("Workspace apply journal 提交后无法读取")
@@ -441,9 +415,7 @@ class WorkspaceStateStoreApplyMixin:
         side_effects: tuple[dict[str, object], ...] | None = None,
         last_error: str | None = None,
     ) -> ConfigApplyJournalRecord:
-        connection = self._database.connection()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_transaction() as connection:
             cursor = connection.execute(
                 """
                 UPDATE config_apply_journal
@@ -462,12 +434,6 @@ class WorkspaceStateStoreApplyMixin:
             )
             if cursor.rowcount != 1:
                 raise ConfigConflictError("Workspace apply journal 状态 CAS 失败")
-            connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
         result = self.get_config_apply_journal(apply_id=apply_id)
         if result is None:
             raise RuntimeError("Workspace apply journal 更新后无法读取")
@@ -484,9 +450,7 @@ class WorkspaceStateStoreApplyMixin:
 
         if not side_effect:
             raise ValueError("Workspace apply journal 副作用记录不能为空")
-        connection = self._database.connection()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_transaction() as connection:
             row = connection.execute(
                 "SELECT state, side_effects_json FROM config_apply_journal WHERE apply_id = ?",
                 (apply_id,),
@@ -514,12 +478,6 @@ class WorkspaceStateStoreApplyMixin:
                 raise ConfigConflictError(
                     "Workspace apply journal 副作用追加状态 CAS 失败"
                 )
-            connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
         result = self.get_config_apply_journal(apply_id=apply_id)
         if result is None:
             raise RuntimeError("Workspace apply journal 副作用提交后无法读取")
@@ -545,9 +503,7 @@ class WorkspaceStateStoreApplyMixin:
         ):
             raise ValueError("Workspace 补偿记录必须包含 resource 和 action")
         entry = {"phase": "compensation", **compensation}
-        connection = self._database.connection()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_transaction() as connection:
             row = connection.execute(
                 "SELECT state, side_effects_json FROM config_apply_journal WHERE apply_id = ?",
                 (apply_id,),
@@ -561,7 +517,7 @@ class WorkspaceStateStoreApplyMixin:
             ):
                 raise TypeError("Workspace apply journal side_effects 结构无效")
             if current_state == "compensated" and entry in side_effects:
-                connection.execute("COMMIT")
+                pass
             else:
                 if current_state != expected_state:
                     raise ConfigConflictError(
@@ -593,12 +549,6 @@ class WorkspaceStateStoreApplyMixin:
                 )
                 if cursor.rowcount != 1:
                     raise ConfigConflictError("Workspace 补偿记录状态 CAS 失败")
-                connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
         result = self.get_config_apply_journal(apply_id=apply_id)
         if result is None:
             raise RuntimeError("Workspace 补偿记录提交后无法读取")
@@ -649,9 +599,7 @@ class WorkspaceStateStoreApplyMixin:
         validate_state_transition(expected_candidate_state, "applying")
         if not all((config_domain, candidate_id, attempt_id, apply_id, owner)):
             raise ValueError("配置 apply 的身份字段不能为空")
-        connection = self._database.connection()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_transaction() as connection:
             pending = connection.execute(
                 _PENDING_CANDIDATE_SNAPSHOT_SELECT,
                 (config_domain, candidate_id),
@@ -761,12 +709,6 @@ class WorkspaceStateStoreApplyMixin:
                 or str(journal[5]) != dump_json(active_baseline)
             ):
                 raise ConfigConflictError("Workspace begin apply 的 journal 身份不一致")
-            connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
         result = self.get_config_apply_claim(config_domain=config_domain)
         if result is None:
             raise RuntimeError("Workspace begin apply 提交后缺少 claim")
