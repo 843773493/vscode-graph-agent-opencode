@@ -10,6 +10,7 @@ thread_id 拼路径；thread 维度缺省或非法时 fail closed。
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,51 @@ from tests.support.catalog_session_bundle import (
 
 SESSION_ID = f"ses_{create_uuid_hex()}"
 CHILD_THREAD_ID = f"thr_{create_uuid_hex()}"
+
+
+def test_staging_owners_accept_thread_qualified_root_signature() -> None:
+    """fork/migration 私有 staging owner 必须与基类 thread-qualified root 签名一致。
+
+    回归：thread-qualified 化把 _lock 改成调用
+    self.root(owner_session_id, checkpoint_ns, thread_id=owner_thread_id)，
+    但两个 staging 子类仍保留旧签名 root(session_id, checkpoint_ns)。私有
+    staging 根按 session 建立、owner_thread_id 恒为 None；子类不接受该 kwarg
+    时，full_rollout_copy 与 legacy migration 在取锁处直接 TypeError。显式传入
+    真实 non-main thread 时必须 fail closed，绝不把 thread 当 session 静默解析
+    到同一个 staging 根。
+    """
+    import pathlib
+
+    from app.services.infrastructure.rollout_context.fork.full_copy.staging import (
+        FullCopyStagingStorage,
+    )
+    from app.services.infrastructure.rollout_context.migration.store import (
+        _StagingStorage,
+    )
+
+    target = f"ses_{create_uuid_hex()}"
+    for cls in (FullCopyStagingStorage, _StagingStorage):
+        parameters = inspect.signature(cls.root).parameters
+        assert "thread_id" in parameters, (
+            f"{cls.__name__}.root 必须接受 thread_id kwarg，"
+            "否则 _lock 的 thread-qualified 调用会 TypeError"
+        )
+        assert parameters["thread_id"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameters["thread_id"].default is None
+
+    probe_root = pathlib.Path("/tmp/staging-root-signature-probe")
+    for cls in (FullCopyStagingStorage, _StagingStorage):
+        instance = object.__new__(cls)
+        if cls is FullCopyStagingStorage:
+            instance._source = f"ses_{create_uuid_hex()}"
+            instance._target = target
+            instance._stage_root = probe_root
+        else:
+            instance._target = target
+            instance._root = probe_root
+        assert instance.root(target, "", thread_id=None) == probe_root
+        with pytest.raises(ValueError, match="不接受显式 thread_id"):
+            instance.root(target, "", thread_id=CHILD_THREAD_ID)
 
 
 def _publish_child_thread(
