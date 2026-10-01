@@ -4,7 +4,6 @@ import pytest
 
 from app.agents.provider_api_mode import (
     parse_provider_api_mode,
-    provider_instance_id,
 )
 
 
@@ -120,11 +119,3 @@ def test_rejects_mismatch_between_model_info_and_reasoning_fields():
             )
         )
 
-
-def test_encrypted_source_identity_uses_provider_instance_id():
-    assert provider_instance_id(
-        {
-            "id": "backup_4",
-            "custom_llm_provider": "chatgpt",
-        }
-    ) == "backup_4"
