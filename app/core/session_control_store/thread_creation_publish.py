@@ -246,9 +246,10 @@ class ThreadCreationPublishMixin:
                     f"frozen_revision={frozen_revision}, "
                     f"actual_revision={actual_revision}"
                 )
-            # CAS 3：collaboration precondition revision 未漂移（R25 起
-            # ledger 在本库落地；delegated record 必须冻结非空 revision，
-            # manual creation（无 delegation）保持 None 且跳过校验）。
+            # CAS 3：collaboration precondition revision 未回退 + 本
+            # delegation 自身 member 行仍待转正（R25 起 ledger 在本库落地；
+            # delegated record 必须冻结非空 revision，manual creation（无
+            # delegation）保持 None 且跳过校验）。
             if row["delegation_id"] is not None and (
                 row["collaboration_precondition_revision"] is None
             ):
@@ -266,15 +267,19 @@ class ThreadCreationPublishMixin:
                 frozen_collaboration_revision = int(
                     row["collaboration_precondition_revision"]
                 )
-                if (
-                    actual_collaboration_revision
-                    != frozen_collaboration_revision
-                ):
+                # 与 CAS 2 同口径：revision 是「member 登记」单调推进的
+                # 计数，同 Session 并发 sibling delegation 登记（不同
+                # delegation_id）是合法交错，sibling 会让 revision 合法
+                # 增长。故只有收缩（actual < frozen）才是外部直改/账本被
+                # 回退，必须 fail closed；相等与合法增长都放行，随后只按
+                # 本 delegation 自身 member 行状态做真正的转正闸门。
+                if actual_collaboration_revision < frozen_collaboration_revision:
                     raise RuntimeError(
                         "thread creation publish CAS 失败：collaboration "
-                        "ledger revision 已漂移: "
+                        "ledger revision 已回退（账本收缩=外部改动，fail "
+                        "closed）: "
                         f"key={idempotency_key!r}, "
-                        f"expected_revision={frozen_collaboration_revision}, "
+                        f"frozen_revision={frozen_collaboration_revision}, "
                         f"actual_revision={actual_collaboration_revision}"
                     )
                 member_row = connection.execute(

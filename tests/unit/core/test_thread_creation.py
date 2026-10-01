@@ -39,6 +39,7 @@ from app.core.session_creation import SessionCreationService
 from app.core.session_lifecycle_gate import (
     NavigationTopologyGate,
     SessionDeletionPendingError,
+    SessionLifecycleGate,
 )
 from app.core.thread_creation import (
     ThreadCreationResult,
@@ -809,9 +810,83 @@ async def test_create_concurrent_different_keys_both_publish(
     assert count_rows(owner.control, "thread_execution_intents") == 2
 
 
-# ----------------------------------------------------------------------
-# 崩溃点矩阵（恢复/定点清理）
-# ----------------------------------------------------------------------
+async def test_concurrent_sibling_delegations_each_publish_without_poisoning(
+    store: SessionCatalogStore,
+    owner: OwnerSession,
+    sessions_root: Path,
+) -> None:
+    """同 owner Session 并发两个不同 delegation 的 child 创建各自成功：
+
+    sibling delegation 让 collaboration ledger revision 合法增长，不得被
+    当成「漂移」误伤；误伤会让失败方被 abort + member cancelled，而
+    「同 delegation 不换绑」使其同 key 同内容重试永久失败（毒化）。
+    因此断言：两个 delegation 都 published、member 都 published、都留下
+    child row + 独立 intent，且各自同 key 重试幂等命中同一 child。
+    """
+    cs_a = SessionControlStore(owner.session_dir / "session-control.sqlite")
+    cs_b = SessionControlStore(owner.session_dir / "session-control.sqlite")
+    key_a = "del_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    key_b = "del_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+    def build(control: SessionControlStore) -> ThreadCreationService:
+        return ThreadCreationService(
+            store=store,
+            control_store=control,
+            sessions_root=sessions_root,
+            workspace_id=WORKSPACE_ID,
+            compute_capability_profile_hash=compute_capability_profile_hash,
+            gate=NavigationTopologyGate(sessions_root),
+            session_gate=SessionLifecycleGate(sessions_root),
+        )
+
+    async def delegate(svc: ThreadCreationService, key: str):
+        return await svc.create(
+            idempotency_key=key,
+            session_id=owner.session_id,
+            thread_id=None,
+            delegation_id=key,
+            initial_state="running",
+            session_metadata=make_metadata(task_seed={"task": "任务 " + key}),
+            artifact_manifest={},
+            collaboration_member={
+                "role": "delegated_subagent",
+                "subagent_type": "general-purpose",
+                "title": "成员 " + key,
+            },
+        )
+
+    try:
+        first, second = await asyncio.gather(
+            delegate(build(cs_a), key_a),
+            delegate(build(cs_b), key_b),
+        )
+    finally:
+        cs_a.close()
+        cs_b.close()
+
+    assert first.record_state == "published"
+    assert second.record_state == "published"
+    assert first.child_thread_id != second.child_thread_id
+    # 两个 delegation 的 member 全部转正，无一被 abort 取消（不毒化）
+    assert owner.control.get_collaboration_member(key_a).state == "published"
+    assert owner.control.get_collaboration_member(key_b).state == "published"
+    assert count_rows(owner.control, "thread_creation_records") == 2
+    assert count_rows(owner.control, "thread_catalog") == 3  # main + 2 child
+    assert count_rows(owner.control, "thread_execution_intents") == 2
+    # 无可见空 child：每条 child row 都有对应 execution intent（初始
+    # execution 已 create-or-get），且 record 均 published。
+    for child_id in (first.child_thread_id, second.child_thread_id):
+        assert owner.control.get_published_child_thread_locator(child_id)
+        intent = owner.control.get_initial_execution_intent(
+            key_a if child_id == first.child_thread_id else key_b
+        )
+        assert intent.thread_id == child_id
+        assert intent.state == "pending"
+    # 同 key 同内容重试（新 service）收敛同一 child，不产生第二个
+    retry = build(SessionControlStore(owner.session_dir / "session-control.sqlite"))
+    again = await delegate(retry, key_a)
+    assert again.child_thread_id == first.child_thread_id
+    assert count_rows(owner.control, "thread_creation_records") == 2
 
 
 async def test_crash_after_record_before_staging_recovers(

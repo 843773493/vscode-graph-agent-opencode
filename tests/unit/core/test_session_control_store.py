@@ -815,6 +815,31 @@ def valid_thread_creation_kwargs(store: SessionControlStore) -> dict[str, object
     }
 
 
+def register_collaboration_member_for_test(
+    store: SessionControlStore,
+    *,
+    delegation_id: str,
+    coordinator_session_id: str,
+    coordinator_thread_id: str,
+    description: str,
+) -> int:
+    """测试辅助：登记一个 collaboration member 并返回当前 ledger revision。"""
+    return store.register_collaboration_member(
+        delegation_id=delegation_id,
+        coordinator_session_id=coordinator_session_id,
+        coordinator_thread_id=coordinator_thread_id,
+        role="delegated_subagent",
+        subagent_type="general-purpose",
+        title=f"委派：{description}",
+        task_seed=json.dumps(
+            {"description": description},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+
+
 def prepare_record(
     store: SessionControlStore,
     **overrides: object,
@@ -1282,18 +1307,88 @@ def test_publish_record_requires_frozen_artifact_manifest(
     assert store.get_thread_creation_record("key-1").state == "preparing"
 
 
-def test_publish_record_rejects_frozen_collaboration_drift(
+def test_publish_record_rejects_collaboration_ledger_regression(
     store: SessionControlStore,
 ) -> None:
-    """R25 起 ledger 已落地：冻结 revision 与当前 revision 漂移即拒绝。"""
-    prepare_record(store, collaboration_precondition_revision=5)
+    """ledger revision 回退（账本收缩=外部直改）才 fail closed。
+
+    与 catalog CAS 同口径：revision 是 member 登记单调推进的计数，合法
+    sibling 增长必须放行；只有 actual < frozen（账本被外部回退）才拒绝。
+    """
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_fence("active", 1)
+    coordinator_session_id = make_session_id()
+    register_collaboration_member_for_test(
+        store,
+        delegation_id="del-1",
+        coordinator_session_id=coordinator_session_id,
+        coordinator_thread_id=make_thread_id(),
+        description="做一件事",
+    )
+    revision = store.get_collaboration_ledger_revision()
+    kwargs = valid_thread_creation_kwargs(store)
+    store.create_or_get_thread_creation_record(
+        **kwargs,
+        delegation_id="del-1",
+        collaboration_precondition_revision=revision,
+    )
     manifest = json.dumps({}, sort_keys=True, separators=(",", ":"))
     store.freeze_thread_creation_artifact_manifest(
         "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
     )
-    with pytest.raises(RuntimeError, match="collaboration ledger revision"):
+    # 外部直改把 ledger revision 回退到冻结值以下 → publish fail closed。
+    raw_execute(
+        store,
+        "UPDATE collaboration_ledger SET revision = revision - 1 WHERE id = 1",
+    )
+    with pytest.raises(RuntimeError, match="collaboration ledger revision 已回退"):
         store.publish_thread_creation_record("key-1")
     assert store.get_thread_creation_record("key-1").state == "preparing"
+
+
+def test_publish_record_tolerates_sibling_delegation_growth(
+    store: SessionControlStore,
+) -> None:
+    """同 Session 并发 sibling delegation 是合法交错：冻结 revision 小于
+    当前 revision（合法增长）不拦截，只按本 delegation 自身 member 行
+    状态转正。"""
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_fence("active", 1)
+    coordinator_session_id = make_session_id()
+    register_collaboration_member_for_test(
+        store,
+        delegation_id="del-1",
+        coordinator_session_id=coordinator_session_id,
+        coordinator_thread_id=make_thread_id(),
+        description="做一件事",
+    )
+    revision = store.get_collaboration_ledger_revision()
+    kwargs = valid_thread_creation_kwargs(store)
+    record = store.create_or_get_thread_creation_record(
+        **kwargs,
+        delegation_id="del-1",
+        collaboration_precondition_revision=revision,
+    )
+    manifest = json.dumps({}, sort_keys=True, separators=(",", ":"))
+    store.freeze_thread_creation_artifact_manifest(
+        "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
+    )
+    # sibling delegation 并发登记（合法增长，冻结 revision 落后）。
+    register_collaboration_member_for_test(
+        store,
+        delegation_id="del-sibling",
+        coordinator_session_id=coordinator_session_id,
+        coordinator_thread_id=make_thread_id(),
+        description="另一件事",
+    )
+    assert store.get_collaboration_ledger_revision() > revision
+    published = store.publish_thread_creation_record("key-1")
+    assert published.state == "published"
+    # 本 delegation member 原子转正；sibling 仍 registering（未被本 publish 触碰）
+    own = store.get_collaboration_member("del-1")
+    assert own.state == "published"
+    assert own.child_thread_id == record.child_thread_id
+    assert store.get_collaboration_member("del-sibling").state == "registering"
 
 
 def test_publish_record_rejects_published_and_aborted(
@@ -2121,22 +2216,25 @@ def test_delegated_record_publish_cas_and_member_atomic_visibility(
     member = store.get_collaboration_member("del-1")
     assert member.state == "registering"
     assert member.child_thread_id is None
-    # ledger 漂移（其他 delegation 登记）→ publish CAS fail closed，
-    # record 保持 preparing、无 child row 可见性。
-    store.register_collaboration_member(
-        delegation_id="del-2",
-        coordinator_session_id=coordinator_session_id,
-        coordinator_thread_id=coordinator_thread_id,
-        role="delegated_subagent",
-        subagent_type="general-purpose",
-        title="委派：另一件事",
-        task_seed=json.dumps(
-            {"description": "另一件事"}, sort_keys=True, separators=(",", ":")
-        ),
+    # 真损坏：本 delegation 自身 member 行被外部改成非 registering →
+    # publish 的自身 member 转正闸门 fail closed，record 保持 preparing、
+    # 无 child row 可见性。（合法 sibling 增长不属于此，见
+    # test_publish_record_tolerates_sibling_delegation_growth。）
+    raw_execute(
+        store,
+        "UPDATE collaboration_members SET state = 'cancelled' "
+        "WHERE delegation_id = ?",
+        ("del-1",),
     )
-    with pytest.raises(RuntimeError, match="collaboration ledger revision"):
+    with pytest.raises(RuntimeError, match="非 registering"):
         store.publish_thread_creation_record("key-1")
     assert store.get_thread_creation_record("key-1").state == "preparing"
+    raw_execute(
+        store,
+        "UPDATE collaboration_members SET state = 'registering' "
+        "WHERE delegation_id = ?",
+        ("del-1",),
+    )
     visible = store.connection.execute(
         "SELECT 1 FROM thread_catalog WHERE thread_id = ?",
         (record.child_thread_id,),
