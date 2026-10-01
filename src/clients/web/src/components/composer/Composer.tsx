@@ -5,6 +5,7 @@ import { useComposerSlashCommands } from "../../hooks/composer/useComposerSlashC
 import { useComposerDraft } from "../../hooks/composer/useComposerDraft";
 import {
   composerDraftScopeKey,
+  composerDraftExceedsLimit,
   writeComposerDraft,
 } from "../../state/composerDrafts/storage";
 import { VIEW_OPTIONS } from "../../state/contentViews";
@@ -500,7 +501,9 @@ function Composer() {
       // 用户已切走会话：把未发出的输入写回发起会话自己的持久草稿，避免把它
       // 污染成当前会话的输入，同时用户切回该会话时内容仍在。失败原因已由
       // AppProvider 写入 AppState.status，不会静默消失。
-      writeComposerDraft(submission.draftScopeKey, typedContent);
+      if (!composerDraftExceedsLimit(typedContent)) {
+        writeComposerDraft(submission.draftScopeKey, typedContent);
+      }
     }).then(() => {
       if (inFlightSubmissionRef.current === submission) {
         inFlightSubmissionRef.current = null;
