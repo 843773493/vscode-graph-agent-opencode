@@ -36,6 +36,7 @@ from app.schemas.internal_v2.pending_request import (
 )
 from app.services.business.job.control_service import JobControlService
 from app.services.business.job.lifecycle import (
+    FAILED_JOB_STATUSES,
     TERMINAL_JOB_STATUSES,
     transition_job_status,
 )
@@ -1012,7 +1013,7 @@ class JobService:
             if current_job_id != finished_job.job_id:
                 return
 
-            if finished_job.status in {JobStatus.failed, JobStatus.timed_out}:
+            if finished_job.status in FAILED_JOB_STATUSES:
                 stale_internal_jobs = self._discard_stale_terminal_followups(
                     finished_job.session_id,
                     parent_job_id=finished_job.job_id,
@@ -1571,10 +1572,7 @@ class JobService:
             current_job = self._jobs.get(current_job_id) if current_job_id else None
             if current_job is not None and not self._is_terminal_status(current_job.status):
                 return False
-            if current_job is not None and current_job.status in {
-                JobStatus.failed,
-                JobStatus.timed_out,
-            }:
+            if current_job is not None and current_job.status in FAILED_JOB_STATUSES:
                 stale_parent_job_id = current_job.job_id
                 stale_internal_jobs = self._discard_stale_terminal_followups(
                     session_id,

@@ -14,7 +14,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.job_event_bus import EventType
-from app.schemas.internal_v2.common import JobStatus, MessageRole
+from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import (
     MessageCreateRequest,
     MessageDTO,
@@ -22,7 +22,10 @@ from app.schemas.internal_v2.message import (
     MessageReplayRequest,
     MessageRunAccepted,
 )
-from app.services.business.job.lifecycle import TERMINAL_JOB_STATUSES
+from app.services.business.job.lifecycle import (
+    FAILED_JOB_STATUSES,
+    TERMINAL_JOB_STATUSES,
+)
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 
@@ -225,7 +228,7 @@ class SessionTurnReplayService:
                 return True
             raise ValueError(f"目标轮次缺少对应 Job: message_id={message_id}")
         matching_jobs.sort(key=lambda job: job.created_at)
-        return matching_jobs[-1].status in {JobStatus.failed, JobStatus.timed_out}
+        return matching_jobs[-1].status in FAILED_JOB_STATUSES
 
     def _trace_has_failed_job(self, session_id: str, message_id: str) -> bool:
         job_message_ids: dict[str, str] = {}
