@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.schemas.internal_v2.common import LogSnapshotResultDTO
@@ -21,7 +21,7 @@ class LogSnapshotRecord:
 
 class LogService:
     def _build_file_stem(self, session_id: str | None) -> str:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
         safe_session_id = session_id.strip() if session_id else "no-session"
         safe_session_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in safe_session_id)
         return f"{timestamp}_{safe_session_id}"
@@ -42,7 +42,7 @@ class LogService:
             "status": record.status,
             "source": record.source,
             "category": record.category,
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "html_file": html_path.name,
         }
 
