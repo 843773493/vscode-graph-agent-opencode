@@ -21,6 +21,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
+from app.domain.itemized.errors import CodeCarryingError
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
@@ -45,12 +46,11 @@ SAFE_RESOURCE_PROJECTION_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 
-class ResourceActivationProjectionError(RuntimeError):
+class ResourceActivationProjectionError(CodeCarryingError, RuntimeError):
     """sealed refs 的历史投影违反安全边界；调用方必须显式失败。"""
 
     def __init__(self, code: str, message: str) -> None:
-        super().__init__(f"[{code}] {message}")
-        self.code = code
+        super().__init__(code, message)
 
 
 @dataclass(frozen=True, slots=True)

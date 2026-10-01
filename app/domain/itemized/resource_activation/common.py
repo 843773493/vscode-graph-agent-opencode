@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from app.domain.itemized.enums import DetailAvailability
-from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.errors import CodeCarryingError, ItemSchemaError
 from app.domain.itemized.hashing import sha256_jcs
 
 
@@ -58,14 +58,13 @@ RESOURCE_ACTIVATION_ERROR_CODES: Final[frozenset[str]] = frozenset(
 )
 
 
-class ResourceActivationContractError(ItemSchemaError):
+class ResourceActivationContractError(CodeCarryingError, ItemSchemaError):
     """资源激活 snapshot/provenance 违反领域合同；code 是闭合集合。"""
 
     def __init__(self, code: str, message: str) -> None:
         if code not in RESOURCE_ACTIVATION_ERROR_CODES:
             raise ValueError(f"未知 ResourceActivationContractError code: {code}")
-        super().__init__(f"[{code}] {message}")
-        self.code = code
+        super().__init__(code, message)
 
 
 RESOURCE_ACTIVATION_SNAPSHOT_FIELDS: Final[frozenset[str]] = frozenset(

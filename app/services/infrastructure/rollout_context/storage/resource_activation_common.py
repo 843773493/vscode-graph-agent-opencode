@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from typing import Final, Protocol
 
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.errors import CodeCarryingError
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
@@ -84,12 +85,11 @@ ASSEMBLY_BINDING_COLUMNS: Final = (
 )
 
 
-class ResourceActivationStoreError(RuntimeError):
+class ResourceActivationStoreError(CodeCarryingError, RuntimeError):
     """activation storage 的显式失败；``code`` 是闭合错误码。"""
 
     def __init__(self, code: str, message: str) -> None:
-        super().__init__(f"[{code}] {message}")
-        self.code = code
+        super().__init__(code, message)
 
 
 class ResourceActivationLineageBodyStore(Protocol):

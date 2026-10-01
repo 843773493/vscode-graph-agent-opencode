@@ -18,6 +18,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 
+from app.domain.itemized.errors import CodeCarryingError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
@@ -40,12 +41,11 @@ DEFAULT_ACTIVATION_WAIT_SECONDS = 5.0
 DEFAULT_ACTIVATION_POLL_SECONDS = 0.02
 
 
-class ResourceActivationError(RuntimeError):
+class ResourceActivationError(CodeCarryingError, RuntimeError):
     """activation 冻结失败；调用方必须把它作为显式 dispatch 阻断处理。"""
 
     def __init__(self, code: str, message: str) -> None:
-        super().__init__(f"[{code}] {message}")
-        self.code = code
+        super().__init__(code, message)
 
 
 def _registry_generation(snapshots) -> int:
