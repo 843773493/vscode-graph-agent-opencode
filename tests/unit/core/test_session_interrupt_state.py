@@ -138,3 +138,42 @@ def test_real_state_is_recalled_and_reclaimed() -> None:
         assert len(SessionInterruptState._states) == 0
     finally:
         SessionInterruptState._states.clear()
+
+
+def test_pre_try_default_reset_leaves_no_residue_without_clear() -> None:
+    """进入 try 之前的默认态重置即使不被 clear 回收，也不得留下残留键。
+
+    复核窗口：``runner`` 在 ``try`` 之前只做一次全默认重置；若紧随其后在
+    ``try`` 之前抛出校验异常（``finally`` 的 ``clear`` 不执行），全默认重置
+    必须已把键释放，长驻表里不得留下该 session。
+    """
+    SessionInterruptState._states.clear()
+    session_id = "ses_pre_try_window"
+    try:
+        # 等价 runner 进入 try 之前的唯一写入。
+        SessionInterruptState.set(
+            session_id,
+            phase=None,
+            tool_name=None,
+            clear_active_tools=True,
+        )
+        assert session_id not in SessionInterruptState._states
+        # 模拟 try 之前的校验异常：finally 的 clear 不会执行。
+        with pytest.raises(RuntimeError):
+            raise RuntimeError("会话模型 provider id 必须是字符串")
+        assert session_id not in SessionInterruptState._states
+    finally:
+        SessionInterruptState._states.clear()
+
+
+def test_non_default_state_is_retained_until_clear() -> None:
+    """非默认态是合法状态：不得被默认态重置逻辑误清空，须由 clear 回收。"""
+    SessionInterruptState._states.clear()
+    try:
+        SessionInterruptState.set("ses_keep", interrupt_request_id="intr_keep")
+        assert "ses_keep" in SessionInterruptState._states
+        assert SessionInterruptState.get("ses_keep").interrupt_request_id == "intr_keep"
+        SessionInterruptState.clear("ses_keep")
+        assert "ses_keep" not in SessionInterruptState._states
+    finally:
+        SessionInterruptState._states.clear()
