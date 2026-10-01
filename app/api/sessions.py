@@ -103,6 +103,19 @@ from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
+def _not_found_or_invalid_input_http_error(error: Exception) -> HTTPException:
+    """把「按 ID 查不到目标」落成 404，「客户端输入非法」落成 400（唯一实现）。
+
+    五个会话资源入口逐字重复同一套分支：``KeyError``（目录解析器）与
+    ``NotFoundError``（服务层的「会话不存在」）都是查不到 → ``not_found_http_error``；
+    ``ValueError`` 是客户端输入非法 → 400 纯文本。此处收敛为单一定义处，
+    各入口只把已类型化的异常交给它。
+    """
+    if isinstance(error, (KeyError, NotFoundError)):
+        return not_found_http_error(error)
+    return HTTPException(status_code=400, detail=str(error))
+
+
 @router.get(
     "/{session_id}/goal",
     response_model=APIResponse[SessionGoalDTO | None],
@@ -161,10 +174,8 @@ async def set_session_goal(
             ):
                 await runtime.apply_objective_update(goal)
             await runtime.ensure_active_goal_running(session_id)
-    except (KeyError, NotFoundError) as exc:
-        raise not_found_http_error(exc) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (KeyError, NotFoundError, ValueError) as error:
+        raise _not_found_or_invalid_input_http_error(error) from error
     return APIResponse(data=goal, request_id=request_id)
 
 
@@ -479,10 +490,8 @@ async def get_session_changeset(
             session_id=session_id,
             changeset_id=changeset_id,
         )
-    except (KeyError, NotFoundError) as exc:
-        raise not_found_http_error(exc) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (KeyError, NotFoundError, ValueError) as error:
+        raise _not_found_or_invalid_input_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -508,11 +517,9 @@ async def review_session_changeset_file(
             file_path=payload.file_path,
             reviewed=payload.reviewed,
         )
-    except (KeyError, NotFoundError) as exc:
+    except (KeyError, NotFoundError, ValueError) as error:
         # 服务入口先用 SessionService.get 校验会话，缺失时抛 NotFoundError。
-        raise not_found_http_error(exc) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _not_found_or_invalid_input_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -539,11 +546,9 @@ async def control_session_resource(
             resource_id=resource_id,
             action=payload.action,
         )
-    except (KeyError, NotFoundError) as exc:
+    except (KeyError, NotFoundError, ValueError) as error:
         # 会话缺失由 SessionService.get 抛 NotFoundError：与 list_session_resources 同口径落 404。
-        raise not_found_http_error(exc) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _not_found_or_invalid_input_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -758,10 +763,8 @@ async def update_session(
 ):
     try:
         result = await session_service.update(session_id, payload)
-    except NotFoundError as exc:
-        raise not_found_http_error(exc) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (NotFoundError, ValueError) as error:
+        raise _not_found_or_invalid_input_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

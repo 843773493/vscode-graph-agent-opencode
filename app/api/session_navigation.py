@@ -61,6 +61,18 @@ def _navigation_scope(service: SessionCatalogService) -> NavigationAuthScope:
     return local_navigation_scope(service.workspace_id)
 
 
+def _folder_mutation_http_error(error: Exception) -> HTTPException:
+    """folder 目录变更入口的统一失败分类（唯一实现）。
+
+    ``KeyError``（未知父节点/节点）→ 404；``(ValueError, RuntimeError)``
+    （形态/语义冲突与在途导航冲突）→ 409。create/delete/assign/move 四入口
+    逐字重复同一套闭集，此处收敛为单一定义处。
+    """
+    if isinstance(error, KeyError):
+        return not_found_http_error(error)
+    return state_conflict_http_error(error)
+
+
 @router.post(
     "/session-catalog/operations:enqueue",
     status_code=202,
@@ -302,12 +314,9 @@ async def create_session_folder(
 ):
     try:
         result = await service.create_folder(payload)
-    except KeyError as error:
-        # 未知父节点：与 delete_folder/assign_session/move_node 同一分类（404）。
-        raise not_found_http_error(error) from error
-    except (ValueError, RuntimeError) as error:
-        # 形态/语义冲突与在途导航冲突：与上述三入口同一分类（409）。
-        raise state_conflict_http_error(error) from error
+    except (KeyError, ValueError, RuntimeError) as error:
+        # 未知父节点（404）与形态/语义/在途冲突（409）：与同族三入口同一分类。
+        raise _folder_mutation_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -340,10 +349,8 @@ async def delete_session_folder(
 ) -> Response:
     try:
         await service.delete_folder(folder_id, recursive=recursive)
-    except KeyError as error:
-        raise not_found_http_error(error) from error
-    except (ValueError, RuntimeError) as error:
-        raise state_conflict_http_error(error) from error
+    except (KeyError, ValueError, RuntimeError) as error:
+        raise _folder_mutation_http_error(error) from error
     return Response(status_code=204)
 
 
@@ -360,10 +367,8 @@ async def assign_session_folder(
 ):
     try:
         result = await service.assign_session(session_id, payload.folder_id)
-    except KeyError as error:
-        raise not_found_http_error(error) from error
-    except (ValueError, RuntimeError) as error:
-        raise state_conflict_http_error(error) from error
+    except (KeyError, ValueError, RuntimeError) as error:
+        raise _folder_mutation_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -380,10 +385,8 @@ async def move_session_catalog_node(
 ):
     try:
         result = await service.move_node(node_id, payload.parent_node_id)
-    except KeyError as error:
-        raise not_found_http_error(error) from error
-    except (ValueError, RuntimeError) as error:
-        raise state_conflict_http_error(error) from error
+    except (KeyError, ValueError, RuntimeError) as error:
+        raise _folder_mutation_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
