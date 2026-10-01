@@ -3,6 +3,7 @@ import type { Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import {
   apiResponse,
+  errorResponse,
   installGatewayFetch,
   mountSessionRunActions,
   restoreSessionHookGlobals,
@@ -14,14 +15,6 @@ const CACHE_KEY = "gw_send_regression::ses_send_regression";
 const SESSION_ID = "ses_send_regression";
 
 afterEach(restoreSessionHookGlobals);
-
-/** 用例逐字复用的错误响应（HTTP 状态 + detail），走真实 fetch 错误通路。 */
-function errorResponse(status: number, message: string): Response {
-  return Response.json(
-    { detail: message },
-    { status, headers: { "content-type": "application/json" } },
-  );
-}
 
 /** 回归用的固定会话：网关工作区、当前 agent 与时间戳都取稳定值。 */
 function session(): Session {
