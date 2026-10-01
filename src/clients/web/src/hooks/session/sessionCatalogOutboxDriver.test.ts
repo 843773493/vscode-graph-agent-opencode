@@ -5,7 +5,12 @@ import type {
   SessionCatalogOperationReceipt,
   SessionCatalogOperationStatusPage,
 } from "../../api/session/sessionCatalogOperations";
-import type { CatalogOutbox, CatalogOutboxOperation } from "../../state/session/sessionCatalogOutbox";
+import {
+  addCatalogOutboxIntent,
+  createCatalogOutbox,
+  type CatalogOutbox,
+  type CatalogOutboxOperation,
+} from "../../state/session/sessionCatalogOutbox";
 import {
   createCatalogOutboxBroadcaster,
   createSessionCatalogOutboxDriver,
@@ -309,6 +314,71 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
       },
     });
     expect(() => driver.current()).toThrow("会话目录 outbox 尚未恢复");
+  });
+
+  test("F1：落盘后进程在标记前退出，恢复的 pending_local 必须重放而非静默丢失", async () => {
+    // 直接构造磁盘残留：driver.applyIntent 先按 pending_local 落盘、之后才在内存标记
+    // persisted；模拟程序在该窗口退出，磁盘上留下的就是 pending_local。
+    const seed = addCatalogOutboxIntent(
+      createCatalogOutbox(PARTITION),
+      opId("a"),
+      { kind: "rename_node", targetNodeId: "cnode_1", name: "新名字" },
+      { baseCatalogRevision: 7, expectedRevision: 3 },
+    );
+    const disk = new Map<number, CatalogOutboxOperation>([[1, seed.operations[0]]]);
+    const persistence: CatalogOutboxPersistencePort = {
+      async load() {
+        return [...disk.entries()]
+          .sort(([left], [right]) => left - right)
+          .map(([clientSequence, operation]) => ({
+            partition_key: "local:8014\u0000workspace-1\u0000guest",
+            client_sequence: clientSequence,
+            operation,
+          }));
+      },
+      async write(records) {
+        for (const record of records) disk.set(record.client_sequence, record.operation);
+      },
+      async delete(_partitionKey, clientSequences) {
+        for (const clientSequence of clientSequences) disk.delete(clientSequence);
+      },
+    };
+    const enqueued: string[][] = [];
+    const adapter: SessionCatalogOperationsAdapter = {
+      async enqueue(_port, _workspaceId, intents) {
+        enqueued.push(intents.map((intent) => intent.client_operation_id));
+        return {
+          workspace_id: "workspace-1",
+          accepted_count: intents.length,
+          receipts: intents.map((intent) => receipt(intent.client_operation_id)),
+          created_node_ids: {},
+        } satisfies SessionCatalogEnqueueResult;
+      },
+      // F1 修复前该命令停留在 `pending_local`，不会被 `reconcile` 收进对账集合；
+      // 归一为 persisted 后必须真的按 ID 查询：后端「不认识该 ID」即允许按同一 ID 重放。
+      async queryStatus(_port, _workspaceId, operationIds) {
+        return {
+          workspace_id: "workspace-1",
+          catalog_revision: 7,
+          items: [],
+          unknown_operation_ids: [...operationIds],
+        } satisfies SessionCatalogOperationStatusPage;
+      },
+    };
+    const driver = createSessionCatalogOutboxDriver({
+      port: PORT,
+      partition: PARTITION,
+      persistence,
+      adapter,
+    });
+    const restored = await driver.restore();
+    // 归一为可重放态：既不留在 pending_local，也不落在对账集合之外。
+    expect(restored.operations[0].state).toBe("persisted");
+
+    // 对账时命中该 ID 并确认后端不认识它，随后 flush 把该命令按同一 ID 重新入队。
+    await driver.reconcile();
+    expect(enqueued).toEqual([[opId("a")]]);
+    expect(driver.current().operations[0].state).toBe("accepted");
   });
 });
 
