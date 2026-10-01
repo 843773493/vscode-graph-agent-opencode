@@ -175,6 +175,8 @@ worker MUST在实际执行时按最新已提交SQLite和`NavigationTopologyGate`
 
 乐观投影 SHALL 只由已提交权威快照加本地有序命令重放计算得到，MUST NOT 修改后端权威镜像、MUST NOT 被当作业务事实提交给模型或持久化链路；仅 pending 或仅 accepted 的意图 MUST NOT 进入 canonical history、MUST NOT 触发 owner rehydrate 或重新 seal。
 
+本条与「会话目录编辑必须支持乐观投影、持久入队和失败回退」是集合型 mutation 统一乐观协议的**唯一规范载体**，四个必答问题分别由既有条款承载，MUST NOT 另立第二份协议 requirement：① 权威基线（已提交快照 + revision）由「会话目录编辑…」首段「只以 workspace `navigation/session-catalog.sqlite` 已提交 node 为业务事实」与「revision-pinned catalog snapshot/分页」承载，取证落点为该 requirement 的 Scenario「事件乱序、cursor gap 与 Gateway 旧快照」；② 本地意图排序（有序队列 + 依赖）由该 requirement 的 `client_sequence` 同分区有序与 `created_by_operation_id` 跨批依赖条款承载，取证落点为 Scenario「快速连续移动与独立操作」「新建文件夹后立即移动 Session 进去」；③ durable acceptance（202）不等于已改完由该 requirement「202 只表示 durable acceptance，不得显示为成功」承载，取证落点为 Scenario「网络未知结果与刷新恢复」「Backend 在入队和执行之间重启」；④ 失败收敛（重读权威 + 重放仍独立的命令 + 依赖失败项一并终结）由该 requirement 末段与本条 Scenario「冲突时才走全量校验兜底」承载，取证落点为 Scenario「并发客户端修改与局部回退」「递归删除预检失败与提交后排空失败」。
+
 #### Scenario: 删除集合成员不重取全集合
 - **WHEN** 用户删除一个会话且该 operation 进入 committed
 - **THEN** 前端从本地投影移除该成员并保持其它成员与展开状态不变，MUST NOT 因该成功结果再次请求整个会话列表或重拉整棵目录树
