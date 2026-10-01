@@ -6,7 +6,6 @@ import {
   apiResponse,
   catalogChildrenResponse,
   errorResponse,
-  explorerProps,
   flushEffects,
   installGatewayFetch,
   liveExplorerHarness,
