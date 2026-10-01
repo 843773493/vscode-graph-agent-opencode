@@ -42,8 +42,6 @@ class StoredFileEdit:
 class AggregatedFileChange:
     file_path: str
     kind: SessionFileChangeKind
-    additions: int
-    deletions: int
     latest_edit_id: str
     tool_call_ids: tuple[str, ...]
     execution_ids: tuple[str, ...]
