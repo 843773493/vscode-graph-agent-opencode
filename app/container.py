@@ -618,6 +618,11 @@ def build_app_container(
     session_subagent_service = SessionSubagentService(
         parent_session_reader=session_service,
         thread_creation_factory=thread_creation_factory,
+        # OpenSpec 8.5-B：真实 thread binder 尚未装配（§8.5 的 thread
+        # binder 装配链路不在本轮）。显式传 None 让 SessionSubagentService
+        # 对委派 fail closed 报告 unavailable，而不是创建永久 pending 的
+        # intent 并返回虚假 accepted。
+        initial_execution_binder=None,
     )
     dependency_provider.set_session_subagent_service(session_subagent_service)
     team_service = TeamCoordinationService(

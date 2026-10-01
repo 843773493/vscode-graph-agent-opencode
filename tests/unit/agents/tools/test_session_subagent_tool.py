@@ -6,6 +6,9 @@ from app.abstractions.session_subagent import SessionSubagentAccepted
 from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.session_subagent import create_session_subagent_tool
 from app.core.job_context import reset_current_job_id, set_current_job_id
+from app.services.orchestration.session_subagent_service import (
+    SessionSubagentUnavailableError,
+)
 
 
 class _SessionSubagentService:
@@ -60,3 +63,36 @@ async def test_task_returns_child_thread_identity_not_subagent_final_text():
     assert service.calls[0]["parent_job_id"] == "job_parent"
     assert service.calls[0]["parent_tool_call_id"] == "call_task"
     assert "runtime" not in task.get_input_schema().model_fields
+
+
+@pytest.mark.asyncio
+async def test_task_tool_propagates_fail_closed_when_no_real_binder():
+    """后端未装配真实 binder 时 task 工具必须报错，不得返回虚假 accepted。"""
+
+    class _UnavailableService:
+        async def delegate(self, **kwargs):
+            raise SessionSubagentUnavailableError(
+                delegation_id="del_" + "b" * 32,
+                parent_session_id=kwargs["parent_session_id"],
+                subagent_type=kwargs["subagent_type"],
+            )
+
+    invocation_context = ToolInvocationContext()
+    task = create_session_subagent_tool(
+        parent_session_id="ses_parent",
+        parent_agent_id="default",
+        session_subagent_service=_UnavailableService(),
+        invocation_context=invocation_context,
+    )
+    job_token = set_current_job_id("job_parent")
+    tool_token = invocation_context.set_tool_call_id("call_task")
+    try:
+        assert task.coroutine is not None
+        with pytest.raises(SessionSubagentUnavailableError, match="unavailable"):
+            await task.coroutine(
+                description="独立检查代码",
+                subagent_type="general-purpose",
+            )
+    finally:
+        invocation_context.reset_tool_call_id(tool_token)
+        reset_current_job_id(job_token)
