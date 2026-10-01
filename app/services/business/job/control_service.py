@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from typing import Protocol
 
 from app.schemas.internal_v2.common import (
@@ -102,6 +102,7 @@ class JobControlService:
         pending_requests: JobPendingRequestService,
         dispatch_lock: asyncio.Lock,
         start_job_task: Callable[[JobControlTarget], None],
+        schedule_after_cancel: Callable[[JobControlTarget], Awaitable[None]],
     ) -> None:
         self._get_jobs = get_jobs
         self._get_current_jobs = get_current_jobs
@@ -109,6 +110,9 @@ class JobControlService:
         self._pending_requests = pending_requests
         self._dispatch_lock = dispatch_lock
         self._start_job_task = start_job_task
+        # 把「暂停中的 Job 被取消」接入与权威取消终态写入点同一条收尾链路：
+        # 终态写入与活动槽释放、FIFO 唤醒必须成对发生。
+        self._schedule_after_cancel = schedule_after_cancel
 
     async def control(
         self,
@@ -124,6 +128,7 @@ class JobControlService:
 
         task_to_cancel: asyncio.Task | None = None
         task_to_wait: asyncio.Task | None = None
+        job_to_finalize: JobControlTarget | None = None
         pending_session_id: str | None = None
         result: JobControlResponseDTO | None = None
         async with self._dispatch_lock:
@@ -169,6 +174,10 @@ class JobControlService:
                     JobStatus.cancelled,
                     error_message="任务被用户取消",
                 )
+                # paused 的执行任务在暂停时刻即已结束（finally 已跑完），
+                # 之后不会再有任何代码释放活动槽；必须在此把终态与槽释放
+                # 放在同一条链路上，否则会话 FIFO 队首永久无人消费。
+                job_to_finalize = job
             elif job.status == JobStatus.cancelling:
                 if job.task is not None and not job.task.done():
                     task_to_cancel = job.task
@@ -214,6 +223,10 @@ class JobControlService:
                     )
                 self._resume_job_locked(job)
                 result = self._response(job_id, job, control_request)
+        if job_to_finalize is not None:
+            # 在锁外等待收尾：control 返回时活动槽必已释放、FIFO 队首已被唤醒，
+            # 不会留下「已 terminal 但槽未释放」的可观察中间态。
+            await self._schedule_after_cancel(job_to_finalize)
         if pending_session_id is not None:
             await self._pending_requests.persist(
                 await self._pending_requests.list(pending_session_id)
