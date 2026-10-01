@@ -443,10 +443,6 @@ class ConfigSnapshotMixin:
             tuple(source_details),
         )
 
-    def get_schema_path(self) -> Path:
-        snapshot = self._require_snapshot()
-        return snapshot.schema_path or self._resolve_schema_path()
-
     def get_runtime_override_keys(self) -> tuple[str, ...]:
         return tuple(sorted(self._runtime_config_overrides))
 
