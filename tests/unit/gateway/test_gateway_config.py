@@ -21,16 +21,16 @@ from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.scheduler import SessionGeneratorScheduler
-from app.gateway.main import (
+from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.routes.health_config import gateway_config_sources
+from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime_proof import (
     _apply_gateway_runtime_config,
     _gateway_pending_consumer_health_digests,
     _gateway_runtime_consumer_stages,
     _should_preserve_gateway_generation_for_handoff,
-    gateway_config_sources,
 )
-from app.gateway.registry import GatewayWorkspaceRegistry
-from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.services.infrastructure.config.state import ConfigConflictError
 
 
@@ -486,9 +486,14 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
         encoding="utf-8",
     )
     config = load_gateway_config(config_path=config_path, schema_path=schema_path)
-    monkeypatch.setattr("app.gateway.main.load_gateway_config", lambda: config)
+    monkeypatch.setattr(
+        "app.gateway.routes.health_config.load_gateway_config", lambda: config
+    )
 
     response = await gateway_config_sources(
+        # state 上无 gateway_state，等价于拆分前模块级 app 的初始状态，
+        # 走 load_gateway_config() 分支（已被 monkeypatch）。
+        request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
         _="gateway-token",
         request_id="req-gateway-config-sources",
     )
@@ -537,10 +542,12 @@ async def test_gateway_config_sources_schema_vrn_only_for_release_inline_schema(
         )
         non_inline = replace(config, schema_path=custom_schema)
         monkeypatch.setattr(
-            "app.gateway.main.load_gateway_config", lambda cfg=non_inline: cfg
+            "app.gateway.routes.health_config.load_gateway_config",
+            lambda cfg=non_inline: cfg,
         )
 
         response = await gateway_config_sources(
+            request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
             _="gateway-token",
             request_id="req-gateway-custom-schema",
         )

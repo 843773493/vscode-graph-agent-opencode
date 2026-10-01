@@ -16,7 +16,8 @@ from app.gateway.auxiliary_proxy import (
 )
 from app.gateway.config import GatewayConfig
 from app.gateway.control.scheduler import SessionGeneratorScheduler
-from app.gateway.main import app, get_registry
+from app.gateway.main import app
+from app.gateway.routes._shared import get_registry
 from app.gateway.server.workspace_proxy import _proxy_headers
 
 

@@ -24,9 +24,9 @@ from app.gateway.federation import (
     obtain_pairing_credential_over_ssh,
     start_remote_gateway_tunnel,
 )
-from app.gateway.main import _inbound_gateway_access_list
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.remote_gateway import reconcile_configured_remote_gateways
+from app.gateway.routes.workspaces_managed import _inbound_gateway_access_list
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import _proxy_headers
