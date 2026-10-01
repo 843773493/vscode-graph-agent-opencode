@@ -162,19 +162,19 @@
 
 8.3/8.4/8.7/8.13 的未完成验收同步覆盖新版ToolSet与source role边界：只有Provider可见直接工具或固定`invoke_extension_tool`信封形状变化才hard rebase；扩展目标目录增删改不能制造ToolSetRef/epoch。source owner typed`root_placement`必须在初次组装、实际compaction/rewind、Provider ToolSet hard rebase或fork目标首次assembly的新root编译中生效，同epoch变化一律独立user-role追加；校验新root去重、base/delta lineage、旧sealed bytes、tool call/result因果顺序与MCP指引默认`tail_only`。在唯一Web E2E模块和分层测试中分别验证默认Turn/显式model_call下MCP工具新增、改schema、删除、无通知server刷新、空目录信封恒定、旧in-flight调用、撤权、重连及错误candidate不半发布；前端live/history/刷新不能按binding重复计Item。
 
-### 2026-10-01 会话目录与执行面边界实测登记（P0/P1，实施中，MUST NOT 写成已修）
+### 2026-10-01 会话目录与执行面边界实测登记（**已实施**，2026-10-01 第四轮复核更正）
 
-来源：`out/tests/temp/session_catalog_edge_hunt/artifacts/report.md`、`out/tests/temp/hunt_execution_edges/artifacts/report.md`。以下为**实施中**条目，**落地提交留空待补**，MUST NOT 据本节判定任何条目已闭合。
+来源：`out/tests/temp/session_catalog_edge_hunt/artifacts/report.md`、`out/tests/temp/hunt_execution_edges/artifacts/report.md`。**更正（2026-10-01 第四轮复核）**：本节原写「实施中 / 落地提交留空待补」，现据实测提交更正为**已实施**；**本节更正不改动任何任务勾选状态**（P0/P1 的验收仍按 §8.1 与 8.1-A…H 各自门槛判定，MUST NOT 仅因有提交就勾选未验收的条目）。
 
-- **会话目录 P0/P1（修复实施中，归 §8.1 目录权威合同）**：
-  - **P0-1**：递归删除 drain 中途崩溃后，工作区后端**无法启动且无受支持的恢复入口**（`BackgroundTaskRegistry.__init__` → `mark_active_tasks_lost` → `resolve_session_node` 对已隔离目录 fail closed；全仓无扫描/续跑 `subtree_delete_records` 的启动入口，`finish_subtree_delete` 依赖重启即丢的实例内存映射）。属「任一中途崩溃保持整树 deleting 并按 record 定点继续」义务的未落地部分。
-  - **P1-1**：单个 `deleting` 节点使目录读路径（`refresh`/`list_children`/`breadcrumb`/`export_index`）整体失败，而非 design 要求的「暂时隐藏 + pending 标注」；`SessionCatalogNodeDTO` 不暴露 `state`，前端无法区分 deleting/active。
-  - **P1-2**：`_validate_move_target` 只校验目标父节点非 deleting，**不校验被移动节点自身 `state`**，致 deleting 子树内节点可经生产导航 API 被移出并返回 accepted（伪成功：随后 finish 按冻结集合无条件 tombstone，用户看到「搬进去又消失」）。
-  - **P2-1（双轨）**：`SessionService.move_session`/`move_to_folder`/`relocate_folder_tree` 是与导航 executor 并存的**第二套**目录写语义，二者对同一逻辑移动产出不同结果（含改写 `session.json` kind/manifest）。按 AGENTS.md「彻底根除双轨」须归口下线。
-  - **承诺义务**：上述四条修复须保持 §8.1 的 catalog 权威合同与 §9.0 乐观协议，落地后按各自证据门槛重新验收；**本条不改变 8.1 及各子项的勾选状态**。
-- **执行面 P1-A：Job 在任务体尚未启动即被取消 → 永久卡 `cancelling`（实施中）**：派发后立即取消时 `_run_job_background` 从未进入，`app/services/business/job/service.py` 的 `_task_done_callback` 对 `CancelledError` 直接 `pass`，终态写入点（在 `_run_job_background` 的 except 内）不可达；会话活动槽不释放、FIFO 永久阻塞（并发取消 probe 100/100 卡 `cancelling`）。修复须在 `CancelledError` 分支补写终态并触发 `_schedule_next_job_if_needed`；**落地提交留空待补**。
-  - **规范层缺口判定（owner 要求核验）**：本 change `specs/itemized-rollout-context/spec.md:244` 的 binder requirement 与 `spec.md:276-279` 的 Scenario「缺 binder 时初始 execution 不得静默滞留 pending」**已存在、无需新增**，其规范「intent MUST NOT 永久停留 `pending`、MUST 可观测 fail-closed」的一般义务。**但须区分**：该 requirement 约束的是 delegated child 初始 execution intent 的 binder，而 Job 取消卡 `cancelling` 是 **Job 生命周期**问题，二者不同域；本条只登记 Job 侧实施中，MUST NOT 以该 binder 条目替代 Job 终态收敛义务。
-
+- **会话目录 P0/P1（已实施，`7ccefd19`，归 §8.1 目录权威合同）**：
+  - **P0-1（已修）**：递归删除 drain 中途崩溃后工作区后端无法启动且无受支持恢复入口。修复：`SessionCatalogStore.list_pending_subtree_delete_records(workspace_id)` 按 SQLite 权威 record 列出 `preparing`/`deleting`/`draining` 中间态（唯一恢复入口）；`SessionCatalogPathResolver.pending_subtree_deletes`/`recover_pending_subtree_deletes` 以原 idempotency key 幂等续跑共享删除流；`app/main.py` lifespan 启动时按 record 恢复、失败如实记录并继续启动。
+  - **P1-1（已修）**：单个 `deleting` 节点使目录读路径整体失败。修复：resolver 读路径按 §9 语义暂时隐藏 deleting 子树，投影与 `SessionCatalogNodeDTO` 增加 `state`；`refresh`/`list_children`/`breadcrumb`/`export_index` 不再整体失败。
+  - **P1-2（已修）**：`_validate_move_target` 增加被移动节点自身 `state` 校验，deleting 子树内节点不得被移出。
+  - **P2-1（已修，双轨已物理下线）**：`SessionService.move_session`/`move_to_folder`/`relocate_folder_tree`，及仅被其使用的 `resolver.relocate_folder_tree`/`expected_session_parents_after_folder_move` 与私有 helper 已删除；相关断言平移到唯一导航路径 `SessionCatalogService`，并显式断言不再降级 `context_fork`。
+  - **验证**：`7ccefd19` 改动 `app/core/session_catalog_{resolver,store}.py`、`app/main.py`、`app/schemas/internal_v2/session_navigation/models.py`、`app/services/business/session_navigation/service.py`、`app/services/business/session_service.py` 与 5 个聚焦测试文件。勾选仍按 §8.1 门槛判定，本次只更正状态、未据此勾选任何任务项。
+- **执行面 P1-A：Job 在任务体尚未启动即被取消 → 永久卡 `cancelling`（已实施，`fa0c6b19`）**：修复后 `_task_done_callback` 的 `CancelledError` 分支补写终态并触发 `_schedule_next_job_if_needed`；单测 `tests/unit/services/business/job/test_service_cancel_convergence.py`（`test_cancel_before_task_body_runs_converges_to_cancelled`、`test_cancel_before_task_body_releases_fifo_head`、`test_concurrent_cancel_before_start_never_stalls_in_cancelling` 等 5 用例，含并发 100/100 不卡）。
+- **委派 fail-closed（已实施，`5b2872db`）**：无真实 thread binder 时委派 fail closed 报告 `unavailable`；改动 `app/agents/tools/session_subagent.py`、`app/container.py`、`app/services/orchestration/session_subagent_service.py`，单测 `tests/unit/services/orchestration/test_session_subagent_service.py::test_delegate_without_real_binder_fails_closed_before_side_effects`。
+  - **规范层缺口判定（owner 要求核验，保持成立）**：本 change `specs/itemized-rollout-context/spec.md:244` 的 binder requirement 与 `spec.md:276-279` 的 Scenario「缺 binder 时初始 execution 不得静默滞留 pending」**已存在、无需新增**；`5b2872db` 即该「intent MUST NOT 永久停留 `pending`、MUST 可观测 fail-closed」义务的实现。**须区分**：该 requirement 约束 delegated child 初始 execution intent 的 binder，与 Job 生命周期（P1-A）不同域，二者各自独立闭合。
 ### 2026-09-30 owner 裁定：orchestration 边界审计两条登记项（未实施）
 
 来源：`out/tests/temp/orchestration_edge_audit/artifacts/report.md`（§2.5 / §4.2）。两条均属本 change 的 subagent/工具面合同范围，写成**登记项 + owner 裁定**，MUST NOT 写成已实施。
@@ -283,6 +283,13 @@ v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migrat
     - **F4（P1）**：outbox 子系统零生产调用方（`driver` 仅测试引用）；接线时 MUST 同时收口前端双协议与后端**非递归 `delete_folder` 绕队列的第二写路径**（`session_navigation/service.py` 非递归分支直写 `delete_empty_folder`，与 8.1-G 已登记的第二写路径同源）。
   - **死配置登记（2026-10-01 独立 slice，只登记不删）**：`configs/tests/workspace/default.jsonc:486` 的 `enable_doc_retrieval` 为零消费方死配置候选（全仓 `rg -w 'enable_doc_retrieval'` 仅命中该配置自身，`app/`/`src/` 零读取；所在 `agent.env.feature_flags` 为开放布尔 map，schema 不拦删除）。**须如实说明**：此前仅在 `out/tests/temp/memory_residue_verify/`、`knowledge_retrieval_removal/` 的**临时报告**中登记过，`openspec/` 与 `docs/` **零命中**，故本条为**首次登记进 openspec 台账**。裁定：**只登记不删**，删除须连同同段其它未接线 `feature_flags` 由 owner 统一裁定。
 
+### 2026-10-01 双轨登记：copy/board 跨删除协议与终态闭集重复（MUST 收敛为单一定义处）
+
+**来源**：`out/tests/temp/openspec_review_round1/artifacts/SPEC_COHERENCE_AUDIT.md` §2 矛盾 D、§5 第 1 条。
+
+- **事实（实测）**：同一套 copy/board 跨删除协议与终态闭集被两份 change 各自**全文复述**——`add-context-injection-lifecycle/specs/context-injection-lifecycle/spec.md:848`（详列 claim preimage 与 GC 窗口）与本 change `specs/checkpoint-context-branching/spec.md:296`、`:298`（较简）；「finalizer 先行 / 删除先行」措辞在两份 change 共 4 处出现，二者语义一致但属**同义重复**，违反仓库「MUST NOT 复述、MUST NOT 另立第二份」的既有纪律。
+- **登记项（owner 裁定待定，本轮不做大改）**：裁定 = **MUST 收敛为单一定义处**——由其中一个 change 作为唯一 owner 定稿终态闭集与跨删除协议，另一个 change 改为具名引用。**本轮 MUST NOT 合并两份 change 的正文**（属大改，风险超出本轮范围）；owner 须裁定唯一 owner 归属后另起切片实施。
+- **待裁定要点**：① 唯一 owner 归属（`add-context-injection-lifecycle` 的 collaboration/copy 面 vs 本 change 的 checkpoint-context-branching 面）；② 被引用方保留的最小内容（仅具名引用，不保留闭集取值表与状态机细节）；③ 两份 change 现有验收门槛是否随之调整（不得因收敛削弱任一 change 已冻的 MUST）。
 ### 2026-09-28 Section 9.1–9.3 补证勾选与规模台账判据化
 
 - 基线：`git rev-parse HEAD` = `14fbf4df57a9c98995425b879c1be0007689e0b3`（本轮修复前的 9.1–9.3 实现在 `03f8ecd2`/`bb02c155`/`8e63f4e9`/`0fc4d6c9`，均为 HEAD 祖先）。

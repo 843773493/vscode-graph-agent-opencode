@@ -84,6 +84,9 @@
 
 **owner 要求核验**：委托书中「已存在该 requirement、无需新增」的委派缺 binder 条目，已独立核实**确凿存在**于 `add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md:244` 与 `:276-279`；本 change 只具名引用，不重复定义。
 
+### 2026-10-01 双轨登记指针：copy/board 跨删除协议与终态闭集 唯一 owner 待裁定
+
+同一套 `CopyAttachmentSettlementRecord`/`BoardMigrationRecord` 跨删除协议与终态闭集被本 change `spec.md:848` 与 `add-itemized-rollout-context` 的 `specs/checkpoint-context-branching/spec.md:296`/`:298` 各自全文复述（详见 `out/tests/temp/openspec_review_round1/artifacts/SPEC_COHERENCE_AUDIT.md` §2 矛盾 D）。**登记项 + owner 裁定待定**：MUST 收敛为单一定义处，另一处改为具名引用；本轮 MUST NOT 合并正文。该条目的完整登记与待裁定要点见 `add-itemized-rollout-context/tasks.md` 的「2026-10-01 双轨登记」小节，本处只作指针、不复述细节。
 ## 5. ToolSet hard rebase、Provider、history 与 display projection
 
 - [ ] 5.1 修改plan compiler，使首次组装及fork目标首次assembly时只把owner声明`root_eligible`且有效的初始贡献编译成一个不可变root system item，并保存source identity/revision/ordinal/hash/included reason/ToolSet binding/visibility/loss；仅实际compaction、rewind或Provider可见ToolSet hard rebase的新epoch可重编译root并吸收合格post-user source的完整有效状态，记录base/delta lineage且不重复选择。`tail_only`始终不入root，旧item/assembly不改写。

@@ -85,7 +85,7 @@
 
 **决定**：`gateway` scope 的 `scope_id` 取值来源为 `${BOXTEAM_HOME}/gateway/identity.json` 中由 `app/gateway/credentials.py:138` 的 `load_or_create_gateway_id` 生成的随机不透明 id（形如 `gateway_<32hex>`）；MUST NOT 用 host:port 或监听端口。注入 owner 为 **Gateway 侧**：Gateway 代理 `/api/v1/*` 时附加 Gateway 身份头（按既有 `X-BoxTeam-*` 约定命名为 `X-BoxTeam-Gateway-Id`），workspace 后端从请求上下文读入。因同一 workspace 后端可被不同 Gateway 挂载，gateway 身份 MUST 按请求注入并读取，MUST NOT 用进程级单例或「当前激活」态；缺失或非法时 fail-closed。MUST NOT 改写或复用 `X-Request-ID` 的语义与职责。
 
-**实测依据**：`load_or_create_gateway_id` 生成 `f"gateway_{secrets.token_hex(16)}"` 并写入 `identity.json`；`app/gateway/main.py:356/366/1027/2646/2706` 与 `app/gateway/remote_gateway.py:192/496` 已在该路径读写。仓库既有 `X-BoxTeam-*` 头为 `X-BoxTeam-Federation-Token`/`X-BoxTeam-Workspace-Id`（`app/gateway/auxiliary_proxy.py:91-92`、`app/gateway/registry.py:1837-1838`），此前无 gateway 身份头。
+**实测依据**：`load_or_create_gateway_id` 生成 `f"gateway_{secrets.token_hex(16)}"` 并写入 `identity.json`；`app/gateway/` 与 `app/gateway/remote_gateway.py` 已在该路径读写（原 `main.py` 行号随 `45f9ada2` 拆分失效：现分布于 `lifespan.py`/`routes/**`）。仓库既有 `X-BoxTeam-*` 头为 `X-BoxTeam-Federation-Token`/`X-BoxTeam-Workspace-Id`（`app/gateway/auxiliary_proxy.py:91-92`、`app/gateway/registry.py:1837-1838`），此前无 gateway 身份头。
 
 **前端口径冲突（登记影响项）**：`src/clients/web/src/state/session/sessionCatalogOutbox.ts:32` 的 `CatalogOutboxPartition.gatewayId` 注释逐字为「稳定 Gateway 身份：本地 Gateway 用其监听端口，远程 Gateway 用其 gateway_id。」，与本决定「MUST NOT 用监听端口」冲突；统一口径归 Gateway 侧（网关身份由 Gateway 按请求注入、取值按 spec requirement 推导），该注释 MUST 在实施期清理。
 
@@ -175,7 +175,7 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 
 1. 本 change 落地寻址 capability：术语表、scope 闭集与 scope_id 表、kind 闭集、**分三套**拒绝码集中登记处（spec 层）。
 2. 实现统一语法与规范化单一实现，替换 `virtual_resources/grammar.py` 的旧形态；同一步内修正 `skill_runtime.py:52` 与 `:619` 的裸拼接、删除 `:538` 的 `bundled`→`builtin` shim、并把 layer 名同步正名为 `inline`（不暴露中间态）。
-3. 把 `distribution_id` 接到已定稿来源（发行 manifest 的 `distribution` + `version`，编码规则见 D4b；当前零装配），并把 `gateway` 的 `gateway_id` 接到已定稿来源（`identity.json` 的 `load_or_create_gateway_id`，由 Gateway 侧按请求经 `X-BoxTeam-Gateway-Id` 注入，见 D4c）；落实 `gateway`/`inline` 的 scope_id 由真实身份推导。 **（修订注：`distribution_id` 部分已由 `298ef599`+`f3bd8213` 落地；`gateway_id` 请求级注入仍为后续切片）**
+3. 把 `distribution_id` 接到已定稿来源（发行 manifest 的 `distribution` + `version`，编码规则见 D4b；已由 `298ef599`+`f3bd8213` 装配），并把 `gateway` 的 `gateway_id` 接到已定稿来源（`identity.json` 的 `load_or_create_gateway_id`，由 Gateway 侧按请求经 `X-BoxTeam-Gateway-Id` 注入，见 D4c）；落实 `gateway`/`inline` 的 scope_id 由真实身份推导。 **（修订注（2026-10-01 第四轮复核更正）：`distribution_id` 部分已由 `298ef599`+`f3bd8213` 落地；`gateway_id` 请求级注入已落地——`64ba30c8`/`53befbfc`/`9881a3b2`）**
 4. 接入解析链（本机分支），使 Skill/配置/状态链路改用 VRN 解析，而非仅打印。
 5. 按 D10 把配置来源 real path 迁移为 VRN 兄弟字段（`config/state.py` + `config_sources.py` + `api/config.py` 对齐）；`sqlite` 层显式不编 VRN。
 6. 接入 gateway 层星型解析、policy 常量上界与集中登记的拒绝码。

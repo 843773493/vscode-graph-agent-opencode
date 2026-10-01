@@ -1111,5 +1111,5 @@ E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、threa
 - 量化实测（design 9.2.4）的规模基线、观测口径（是否含首次冷缓存、是否含浏览器渲染耗时）尚未冻结，实施前需裁定。
 
 - SQLite item projection 的名称和 Python 类型归属已经冻结：canonical item 的最小事实索引是 `item_catalog`，关系/来源是 `item_relations`，content-part locator 是 `item_parts`，按需历史/消息投影是 `item_projections`；不得复用 `messages` 作为 canonical item 表，也不得新增未在本设计中登记的并行 item 事实表。当前聚合文件若因 import 迁移暂留，只能是有删除门槛的临时 import shim；目标类型位置以 1.1 的 `app/domain/itemized/` 和 infrastructure/mapping 目录为准，shim 最迟在 7.5/change 完成前删除。
-- `content_part` 的 domain 类型固定进入 `app/domain/itemized/parts.py`，其 `item_parts` locator 由 `app/services/infrastructure/rollout_context/storage/catalog.py` 维护，JSON Pointer/part resolver 属于同一 storage catalog 边界；这些物理模块位置不改变 payload 作为唯一 canonical 正文来源、`content_hash` 输入、part locator 校验、anchor identity/hash/recovery contract 或 detail-store 敏感边界。
+- `content_part` 的 domain 类型固定进入 `app/domain/itemized/parts.py`，其 `item_parts` locator 由 `app/services/infrastructure/rollout_context/storage/catalog/`（子包，非单文件路径） 维护，JSON Pointer/part resolver 属于同一 storage catalog 边界；这些物理模块位置不改变 payload 作为唯一 canonical 正文来源、`content_hash` 输入、part locator 校验、anchor identity/hash/recovery contract 或 detail-store 敏感边界。
 - 首个生产切换是否按新 session 默认、配置开关或显式迁移命令分阶段启用，延期到迁移 fixture、回滚演练和真实恢复证据完成后决定；该部署顺序不改变已冻结的 `rollout_format_version`/`format_version` 字段、legacy reader、v2 writer 不双写或 commit/replay 行为。
