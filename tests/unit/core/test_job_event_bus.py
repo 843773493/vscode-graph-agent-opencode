@@ -266,3 +266,47 @@ async def test_list_events_rejects_non_positive_limit():
         await bus.list_events("job_limit", limit=0)
     with pytest.raises(ValueError, match="limit"):
         await bus.list_events("job_limit", limit=-1)
+
+
+@pytest.mark.asyncio
+async def test_publish_lock_table_stays_bounded_across_many_jobs():
+    """per-job publish 锁表对 job 数量必须有固定上界。
+
+    JobEventBus 是容器级长驻单例：若每个出现过的 job_id 都永久留下一把
+    ``asyncio.Lock``，长驻进程内存会随历史 Job 数无界增长（与 e18e4c48 /
+    bdd6ecd1 同源）。上界必须与历史 Job 数无关。
+    """
+    bus = JobEventBus()
+    for index in range(5000):
+        await bus.publish(
+            job_id="job_bounded_" + str(index),
+            event_type=EventType.JOB_COMPLETED,
+            payload={"result": str(index)},
+            agent_id="test",
+        )
+
+    # 固定上界（分片数量级），不依赖内部常量即可断言有界性。
+    assert len(bus._job_publish_locks) <= 64
+
+
+@pytest.mark.asyncio
+async def test_publish_lock_is_stable_and_serializes_same_job():
+    """分片锁池：同一 job 恒得同一把锁，同 job 发布仍严格串行。"""
+    bus = JobEventBus()
+
+    assert bus._publish_lock_for("job_shared") is bus._publish_lock_for("job_shared")
+
+    lock = bus._publish_lock_for("job_shared")
+    concurrent = 0
+    peak = 0
+
+    async def worker() -> None:
+        nonlocal concurrent, peak
+        async with lock:
+            concurrent += 1
+            peak = max(peak, concurrent)
+            await asyncio.sleep(0.01)
+            concurrent -= 1
+
+    await asyncio.gather(*(worker() for _ in range(20)))
+    assert peak == 1
