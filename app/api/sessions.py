@@ -104,13 +104,7 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
 def _not_found_or_invalid_input_http_error(error: Exception) -> HTTPException:
-    """把「按 ID 查不到目标」落成 404，「客户端输入非法」落成 400（唯一实现）。
-
-    五个会话资源入口逐字重复同一套分支：``KeyError``（目录解析器）与
-    ``NotFoundError``（服务层的「会话不存在」）都是查不到 → ``not_found_http_error``；
-    ``ValueError`` 是客户端输入非法 → 400 纯文本。此处收敛为单一定义处，
-    各入口只把已类型化的异常交给它。
-    """
+    """按 ID 查不到目标（KeyError/NotFoundError）→ 404；客户端输入非法 → 400。"""
     if isinstance(error, (KeyError, NotFoundError)):
         return not_found_http_error(error)
     return HTTPException(status_code=400, detail=str(error))

@@ -62,12 +62,7 @@ def _navigation_scope(service: SessionCatalogService) -> NavigationAuthScope:
 
 
 def _folder_mutation_http_error(error: Exception) -> HTTPException:
-    """folder 目录变更入口的统一失败分类（唯一实现）。
-
-    ``KeyError``（未知父节点/节点）→ 404；``(ValueError, RuntimeError)``
-    （形态/语义冲突与在途导航冲突）→ 409。create/delete/assign/move 四入口
-    逐字重复同一套闭集，此处收敛为单一定义处。
-    """
+    """folder 目录变更统一失败分类：KeyError（未知节点）→ 404，其余 → 409。"""
     if isinstance(error, KeyError):
         return not_found_http_error(error)
     return state_conflict_http_error(error)
