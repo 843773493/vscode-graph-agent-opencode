@@ -544,6 +544,46 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     expect(pruned.operations).toEqual([]);
     expect(deleted).toEqual([[1]]);
   });
+
+  test("F2：依赖未满足时本轮零入队，必须返回 idle 而非谎报 accepted", async () => {
+    // op_2 依赖 op_1；op_1 入队结果未知（unknown），因此 op_2 本轮不可入队。
+    const enqueued: string[][] = [];
+    const driver = driverWithAdapter({
+      async enqueue(_port, _workspaceId, intents) {
+        enqueued.push(intents.map((intent) => intent.client_operation_id));
+        if (intents.some((intent) => intent.client_operation_id === opId("a"))) {
+          throw new Error("请求超时: enqueue");
+        }
+        return {
+          workspace_id: "workspace-1",
+          accepted_count: intents.length,
+          receipts: intents.map((intent) => receipt(intent.client_operation_id)),
+          created_node_ids: {},
+        } satisfies SessionCatalogEnqueueResult;
+      },
+      async queryStatus() {
+        throw new Error("本用例不应查询状态");
+      },
+    });
+    await driver.restore();
+    expect(await driver.applyIntent(opId("a"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    })).toBe("unknown");
+
+    const outcome2 = await driver.applyIntent(
+      opId("b"),
+      { kind: "move_node", targetNodeId: "cnode_2", parentNodeId: null },
+      { baseCatalogRevision: 7, expectedRevision: 2, dependsOn: [opId("a")] },
+    );
+    // 本轮队列被依赖挡住，op_2 未入队：不得返回 accepted。
+    expect(outcome2).toBe("idle");
+    expect(enqueued).toEqual([[opId("a")]]);
+    const op2 = driver.current().operations.find(
+      (operation) => operation.client_operation_id === opId("b"),
+    );
+    expect(op2?.state).toBe("persisted");
+  });
 });
 
 describe("会话目录 outbox 驱动：真 IndexedDB 与跨 tab", () => {

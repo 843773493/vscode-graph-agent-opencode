@@ -299,8 +299,11 @@ export function createSessionCatalogOutboxDriver(
       }
       publish(markCatalogOutboxOperationPersisted(requireOutbox(), clientOperationId), false);
       // 3. 持久化成功后才允许后台有序批量入队。
-      const outcome = await flush();
-      return outcome === "idle" ? "accepted" : outcome;
+      // 返回值必须如实反映本条命令是否已入队：`flush` 可能因依赖未满足（前序
+      // 命令仍 unknown/persisted）或批量上限而在本轮**一条都没入队**，此时命令
+      // 的本地状态仍是 `persisted`，把它坍缩成 `accepted` 会与后端 durable
+      // acceptance 脱钩（F2）。直接透传 flush 的 outcome 区分这两种情形。
+      return await flush();
     },
     async reconcile() {
       const next = await reconcileInternal();
