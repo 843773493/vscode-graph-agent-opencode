@@ -158,3 +158,49 @@ async def test_stale_policy_update_is_rejected(monkeypatch):
             delivery_policy="after_interrupt",
             expected_snapshot_version=(queued.queue_snapshot_version or 0) - 1,
         )
+
+
+@pytest.mark.asyncio
+async def test_promoted_pending_head_exposes_no_waiting_reason(monkeypatch):
+    """待处理 DTO 不得把「等待队首」暴露给已升为队首的条目。
+
+    改前 ``_bump`` 用「已有理由 or 新理由」计算位置理由，写过的「等待队首」
+    永不失效：撤回原队首后，接替者在其 DTO.waiting_reason 里仍对外宣称
+    「等待队首」，前端 PendingQueueBar 会把它渲染成 hover 提示，而此时它恰恰
+    就是可立即投递的队首。
+    """
+    service = _service(monkeypatch)
+    session_id = "session_promoted_head"
+    await service.start_job(
+        session_id,
+        "active",
+        message_id="msg_active",
+        message_created_at="2026-07-17T00:00:00+00:00",
+    )
+    await service.start_job(
+        session_id,
+        "queued",
+        message_id="msg_queued",
+        message_created_at="2026-07-17T00:00:01+00:00",
+        delivery_policy="after_turn",
+    )
+    await service.start_job(
+        session_id,
+        "tail",
+        message_id="msg_tail",
+        message_created_at="2026-07-17T00:00:02+00:00",
+        delivery_policy="after_turn",
+    )
+
+    wait_reason_before = {
+        item.message_id: item.waiting_reason
+        for item in (await service.list_pending(session_id)).requests
+    }
+    assert wait_reason_before == {"msg_queued": None, "msg_tail": "等待队首"}
+
+    after_remove = await service.remove_pending(session_id, "msg_queued")
+
+    promoted = next(
+        item for item in after_remove.requests if item.message_id == "msg_tail"
+    )
+    assert promoted.waiting_reason is None

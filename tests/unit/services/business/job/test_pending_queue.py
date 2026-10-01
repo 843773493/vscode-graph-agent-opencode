@@ -114,3 +114,46 @@ def test_interrupt_boundary_also_releases_after_turn_head() -> None:
     assert queue.take_head("session", "after_tool_result") is None
     assert queue.take_head("session", "after_interrupt") is entry
     assert queue.ids("session") == ()
+
+
+def test_promoted_head_clears_stale_waiting_reason() -> None:
+    """队首被取走后，接替的新队首不得残留定位式的「等待队首」理由。
+
+    「等待队首」只是位置含义：只有非队首项才等待队首。改前 ``_bump`` 用
+    ``已有理由 or 新理由`` 计算，一旦写入「等待队首」就再也不会被清掉，导致
+    原队长被取走、接替者成为新队首后仍对外宣称「等待队首」（前端把它渲染成
+    排队条目的 hover 提示），而它当前恰恰就是队首、可立即投递。
+    """
+    queue = JobPendingQueue()
+    queue.append("session", "job_1", "after_turn")
+    second = queue.append("session", "job_2", "after_turn")
+    assert second.waiting_reason == "等待队首"
+
+    assert queue.take_head("session", "idle").job_id == "job_1"
+
+    assert queue.peek_head("session") is second
+    assert second.waiting_reason is None
+
+
+def test_promoted_head_after_remove_records_no_waiting_reason() -> None:
+    """撤回队首后接替者同样不得残留「等待队首」。"""
+    queue = JobPendingQueue()
+    queue.append("session", "job_1", "after_turn")
+    second = queue.append("session", "job_2", "after_turn")
+
+    queue.remove("session", "job_1")
+
+    assert queue.peek_head("session") is second
+    assert second.waiting_reason is None
+    assert queue.ids("session") == ("job_2",)
+
+
+def test_head_keeps_boundary_waiting_reason_when_bumped() -> None:
+    """队首的边界理由由投递边界决定，``_bump`` 不得把它误清成 None。"""
+    queue = JobPendingQueue()
+    head = queue.append("session", "job_head", "after_interrupt")
+    queue.append("session", "job_tail", "after_turn")
+
+    assert queue.take_head("session", "after_tool_result") is None
+    assert head.waiting_reason == "等待已提交的 interrupt 边界"
+    assert queue.peek_head("session") is head
