@@ -855,7 +855,12 @@ class JobService:
             try:
                 task.result()
             except asyncio.CancelledError:
-                pass
+                # 任务体可能在真正开始执行前就被取消（用户取消或运行期排空
+                # 先写 cancelling 再 cancel）：此时 CancelledError 直接终止
+                # task，_run_job_background 的 try/except 从未进入，权威终态
+                # 写入点没有机会执行。依赖回调补齐，否则 Job 永久停在
+                # cancelling，会话活动槽与 FIFO 队首一并卡死。
+                self._converge_cancel_without_task_body(job, task)
             except Exception as e:
                 logger.exception(
                     "Job task failed: job_id=%s",
@@ -880,6 +885,56 @@ class JobService:
             context=contextvars.Context(),
         )
         job.task.add_done_callback(_task_done_callback)
+
+    def _converge_cancel_without_task_body(
+        self,
+        job: JobState,
+        task: asyncio.Task,
+    ) -> None:
+        """任务体未进入 try 就被取消时补齐取消终态并交还会话。
+
+        唯一权威终态写入点仍是 ``_run_job_background`` 的 except
+        CancelledError 分支。只有任务以 cancelled 结束、且 Job 仍处于
+        ``cancelling``（说明任务体从未进入 try，权威写入点没有机会执行）时
+        才在此补写。其它情况一律不写：
+
+        - 已进入任务体的取消由权威写入点负责，此处看到终态后跳过；
+        - ``paused`` 是用户可 resume 显式持有的非终态，任务结束但语义未
+          终结，交由 ``_resume_job_locked`` 重启，不在此转成 cancelled；
+        - ``job.task is not task`` 说明该任务已被 resume 换掉，跳过以免
+          误伤正在运行的新任务。
+        """
+        if job.task is not task:
+            return
+        if job.status == JobStatus.paused:
+            return
+        if self._is_terminal_status(job.status):
+            return
+        transition_job_status(
+            job,
+            JobStatus.cancelled,
+            error_message=job.cancellation_reason or "任务被用户取消",
+        )
+        logger.info(
+            "[job_service] 任务体未启动即被取消，补写取消终态: job_id=%s session_id=%s",
+            job.job_id,
+            job.session_id,
+        )
+        asyncio.get_event_loop().create_task(
+            self._finalize_cancelled_without_task_body(job)
+        )
+
+    async def _finalize_cancelled_without_task_body(self, job: JobState) -> None:
+        """补齐权威写入点在取消路径上会做的收尾：Turn 终态、事件、交还会话。"""
+        await self._persist_terminal_turn_status(job, "cancelled")
+        if self._bus is not None:
+            await self._bus.publish(
+                job_id=job.job_id,
+                event_type=EventType.JOB_CANCELLED,
+                payload={"session_id": job.session_id},
+                agent_id="job_service",
+            )
+        await self._schedule_next_job_if_needed(job)
 
     async def _enqueue_or_dispatch(
         self,
