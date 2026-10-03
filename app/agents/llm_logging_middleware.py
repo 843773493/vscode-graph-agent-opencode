@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from contextvars import Token
 from pathlib import Path
 from typing import Any
 
@@ -288,19 +289,24 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             response = handler(request)
             upstream_attempts = end_upstream_capture(capture_token)
         except BaseException as error:
-            record_upstream_error(error)
-            upstream_attempts = end_upstream_capture(capture_token)
-            self._save_log(
-                session_id,
-                request,
-                None,
-                upstream_attempts,
-                error,
-            )
+            self._record_failed_call(session_id, request, capture_token, error)
             raise
         else:
             self._save_log(session_id, request, response, upstream_attempts)
             return response
+
+    def _record_failed_call(
+        self,
+        session_id: str,
+        request: ModelRequest[Any],
+        capture_token: Token[list[dict[str, Any]] | None],
+        error: BaseException,
+    ) -> None:
+        """归档失败的上游 attempt 与 LLM 日志；异常仍由调用方原样抛出。"""
+        record_upstream_error(error)
+        upstream_attempts = end_upstream_capture(capture_token)
+        self._save_log(session_id, request, None, upstream_attempts, error)
+
     async def awrap_model_call(
         self,
         request: ModelRequest[Any],
@@ -314,15 +320,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             response = await handler(request)
             upstream_attempts = end_upstream_capture(capture_token)
         except BaseException as error:
-            record_upstream_error(error)
-            upstream_attempts = end_upstream_capture(capture_token)
-            self._save_log(
-                session_id,
-                request,
-                None,
-                upstream_attempts,
-                error,
-            )
+            self._record_failed_call(session_id, request, capture_token, error)
             raise
         else:
             self._save_log(session_id, request, response, upstream_attempts)

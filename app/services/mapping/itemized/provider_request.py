@@ -22,6 +22,8 @@ _SERVER_OWNED_FIELDS = {
 
 _RUNTIME_NOTICE_TEXT_TYPES = frozenset({"text", "input_text", "output_text"})
 
+_TOOL_IMAGE_BLOCK_TYPES = frozenset({"image", "image_url", "input_image"})
+
 
 def project_runtime_notice_content(content: Any) -> str | list[dict[str, str]]:
     """把 runtime source 正文规范化为两种 Provider 共用的 user 文本。"""
@@ -69,7 +71,7 @@ def project_user_message_content(
     diagnostics: list[dict[str, Any]] = []
     for index, source in enumerate(source_blocks):
         block_type = source.get("type")
-        if block_type in {"text", "input_text", "output_text"}:
+        if block_type in _RUNTIME_NOTICE_TEXT_TYPES:
             text = source.get("text")
             if isinstance(text, str):
                 projected.append(
@@ -88,7 +90,7 @@ def project_user_message_content(
                 }
             )
             continue
-        if block_type not in {"image_url", "image", "input_image"}:
+        if block_type not in _TOOL_IMAGE_BLOCK_TYPES:
             if isinstance(block_type, str) and block_type not in {
                 "reasoning",
                 "thinking",
@@ -164,8 +166,6 @@ def project_user_message_content(
         "diagnostics": diagnostics,
     }
 
-
-_TOOL_IMAGE_BLOCK_TYPES = frozenset({"image", "image_url", "input_image"})
 
 _TOOL_MEDIA_UNSUPPORTED_NOTE = (
     "图片仍保留在会话记录中；本次请求将其按文本占位符回放，"

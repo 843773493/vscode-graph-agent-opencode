@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import get_args
@@ -11,19 +10,19 @@ import pytest
 
 from app.main import app
 from app.schemas.internal_v2.session import ChildThreadStatus, ChildThreadSummaryDTO
-
-PUBLIC_PROTO = Path.cwd() / "proto/boxteam/workspace/v2/public.proto"
-SNAPSHOTS = (
-    "src/clients/web/openapi.json",
-    "src/clients/web/src/types/openapi/index.json",
+from tests.contracts.api.openapi_snapshots import (
+    OPENAPI_SNAPSHOTS,
+    load_openapi_snapshot,
 )
 
+PUBLIC_PROTO = Path.cwd() / "proto/boxteam/workspace/v2/public.proto"
 
-@pytest.fixture(params=("live", *SNAPSHOTS))
+
+@pytest.fixture(params=("live", *OPENAPI_SNAPSHOTS))
 def openapi_document(request: pytest.FixtureRequest) -> dict[str, object]:
     if request.param == "live":
         return app.openapi()
-    return json.loads((Path.cwd() / request.param).read_text(encoding="utf-8"))
+    return load_openapi_snapshot(request.param)
 
 
 def test_child_thread_status_has_one_authoritative_openapi_field(
@@ -40,9 +39,9 @@ def test_child_thread_status_has_one_authoritative_openapi_field(
     ]
 
 
-@pytest.mark.parametrize("snapshot", SNAPSHOTS)
+@pytest.mark.parametrize("snapshot", OPENAPI_SNAPSHOTS)
 def test_child_thread_openapi_snapshots_match_routes(snapshot: str) -> None:
-    document = json.loads((Path.cwd() / snapshot).read_text(encoding="utf-8"))
+    document = load_openapi_snapshot(snapshot)
     assert document == app.openapi(), f"需运行 bun run gen:openapi 更新 {snapshot}"
 
 

@@ -12,6 +12,7 @@ export function cloneMaps(state: AppState): AppState {
     sessionAttachmentSummaries: new Map(state.sessionAttachmentSummaries),
     sessionsByWorkspace: new Map(state.sessionsByWorkspace),
     sessionGatewayWorkspaceById: new Map(state.sessionGatewayWorkspaceById),
+    removingGatewayWorkspaceIds: new Set(state.removingGatewayWorkspaceIds),
     turnTimelinesBySession: new Map(state.turnTimelinesBySession ?? []),
     messageStreamsByTurnStream: new Map(state.messageStreamsByTurnStream ?? []),
   };

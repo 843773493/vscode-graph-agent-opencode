@@ -2,24 +2,20 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 from app.main import app
-
-SNAPSHOTS = (
-    "src/clients/web/openapi.json",
-    "src/clients/web/src/types/openapi/index.json",
+from tests.contracts.api.openapi_snapshots import (
+    OPENAPI_SNAPSHOTS,
+    load_openapi_snapshot,
 )
 
 
-@pytest.fixture(params=("live", *SNAPSHOTS))
+@pytest.fixture(params=("live", *OPENAPI_SNAPSHOTS))
 def openapi_document(request: pytest.FixtureRequest):
     if request.param == "live":
         return app.openapi()
-    return json.loads((Path.cwd() / request.param).read_text(encoding="utf-8"))
+    return load_openapi_snapshot(request.param)
 
 
 def test_node_debug_state_requires_explicit_thread_owner(openapi_document) -> None:
@@ -57,7 +53,7 @@ def test_node_debug_action_record_exposes_extension_binding_audit(
     ]
 
 
-@pytest.mark.parametrize("snapshot", SNAPSHOTS)
+@pytest.mark.parametrize("snapshot", OPENAPI_SNAPSHOTS)
 def test_node_debug_openapi_snapshot_matches_routes(snapshot: str) -> None:
-    document = json.loads((Path.cwd() / snapshot).read_text(encoding="utf-8"))
+    document = load_openapi_snapshot(snapshot)
     assert document == app.openapi(), f"需运行 bun run gen:openapi 更新 {snapshot}"

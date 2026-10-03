@@ -10,7 +10,6 @@ from pathlib import Path
 import httpx
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
@@ -26,28 +25,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
-
-
-async def _create_session(client: httpx.AsyncClient, title: str) -> str:
-    response = await client.post("/api/v1/sessions", json={"title": title})
-    assert response.status_code == 200, response.text
-    return str(response.json()["data"]["session_id"])
-
-
-def _checkpoint(
-    checkpoint_id: str,
-    messages: list[object],
-    *,
-    channel_version: int,
-) -> dict[str, object]:
-    checkpoint = empty_checkpoint()
-    checkpoint["id"] = checkpoint_id
-    checkpoint["channel_values"] = {"messages": messages}
-    checkpoint["channel_versions"] = {
-        "messages": f"{channel_version:032d}.fixture"
-    }
-    checkpoint["updated_channels"] = ["messages"]
-    return checkpoint
+from tests.support.api_helpers import checkpoint_fixture, create_session
 
 
 def _turn_messages(
@@ -172,7 +150,7 @@ def _seed_rollout(
         )
         config = saver.put(
             config,
-            _checkpoint(
+            checkpoint_fixture(
                 f"checkpoint-{turn_index:04d}",
                 all_messages,
                 channel_version=turn_index,
@@ -211,7 +189,7 @@ async def test_history_loads_rollout_summary_and_tool_details(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
 ) -> None:
-    session_id = await _create_session(integration_client, "rollout 历史投影")
+    session_id = await create_session(integration_client, "rollout 历史投影")
     rollout_root = _seed_rollout(
         Path(integration_workspace_root_path),
         session_id,
@@ -360,7 +338,7 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
 ) -> None:
-    session_id = await _create_session(integration_client, "用户附件 canonical 投影")
+    session_id = await create_session(integration_client, "用户附件 canonical 投影")
     timestamp = "2026-01-01T00:01:00+00:00"
     file_id = f"boxteam-session://{session_id}/attachments/preview.png"
     user = HumanMessage(
@@ -422,7 +400,7 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
     saver = RolloutCheckpointSaver(sessions_dir)
     saver.put(
         build_checkpoint_config(session_id),
-        _checkpoint(
+        checkpoint_fixture(
             "checkpoint-attachment-projection",
             [user, final],
             channel_version=1,
@@ -472,7 +450,7 @@ async def test_history_tool_selector_only_materializes_requested_tool(
     integration_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = await _create_session(integration_client, "定点工具详情")
+    session_id = await create_session(integration_client, "定点工具详情")
     _seed_rollout(
         Path(integration_workspace_root_path),
         session_id,
@@ -550,7 +528,7 @@ async def test_history_tool_selector_accepts_model_call_scoped_tool_call_id(
     而 SQLite ``tool_calls`` 表按 provider 原始 ``<raw-id>`` 保存。若不归一化，
     定点请求会查不到任何记录，工具参数/结果在历史上静默为空。
     """
-    session_id = await _create_session(integration_client, "scoped 工具详情")
+    session_id = await create_session(integration_client, "scoped 工具详情")
     _seed_rollout(
         Path(integration_workspace_root_path), session_id, count=1, tool_count=2
     )
@@ -590,7 +568,7 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
     integration_workspace_root_path: str,
     history_catalog_copy: sqlite3.Connection,
 ) -> None:
-    session_id = await _create_session(
+    session_id = await create_session(
         integration_client,
         "最终 checkpoint reasoning part 引用去重",
     )
@@ -667,7 +645,7 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
     saver = RolloutCheckpointSaver(sessions_dir)
     config = saver.put(
         build_checkpoint_config(session_id),
-        _checkpoint("checkpoint-shared-reasoning", messages, channel_version=1),
+        checkpoint_fixture("checkpoint-shared-reasoning", messages, channel_version=1),
         {"source": "deterministic-rollout-stub"},
         {"messages": "1"},
     )
@@ -725,7 +703,7 @@ async def test_rollout_history_cursor_windows_are_complete_and_unique(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
 ) -> None:
-    session_id = await _create_session(integration_client, "rollout 游标")
+    session_id = await create_session(integration_client, "rollout 游标")
     _seed_rollout(Path(integration_workspace_root_path), session_id, count=24)
 
     tail = await _load_history(
@@ -792,7 +770,7 @@ async def test_rollout_history_around_anchor_returns_bidirectional_cursors(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
 ) -> None:
-    session_id = await _create_session(integration_client, "around 锚点双向窗口")
+    session_id = await create_session(integration_client, "around 锚点双向窗口")
     _seed_rollout(Path(integration_workspace_root_path), session_id, count=32)
 
     around = await _load_history(
@@ -858,7 +836,7 @@ async def test_default_history_window_loads_five_turns_and_three_turn_anchor_sid
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
 ) -> None:
-    session_id = await _create_session(integration_client, "默认历史窗口")
+    session_id = await create_session(integration_client, "默认历史窗口")
     _seed_rollout(Path(integration_workspace_root_path), session_id, count=24)
 
     tail = await _load_history(
@@ -886,7 +864,7 @@ async def test_history_does_not_fallback_to_old_trace_projection(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
 ) -> None:
-    session_id = await _create_session(integration_client, "不回退旧投影")
+    session_id = await create_session(integration_client, "不回退旧投影")
     old_trace_root = (
         Path(integration_workspace_root_path)
         / ".boxteam"
@@ -921,7 +899,7 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
     integration_workspace_root_path: str,
     integration_client: httpx.AsyncClient,
 ) -> None:
-    session_id = await _create_session(integration_client, "finalization 指针优先")
+    session_id = await create_session(integration_client, "finalization 指针优先")
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     saver = RolloutCheckpointSaver(sessions_dir)
     config = build_checkpoint_config(session_id)
@@ -941,7 +919,7 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
     )
     saver.put(
         config,
-        _checkpoint(
+        checkpoint_fixture(
             "checkpoint-finalization",
             [user, marked_final, later_unmarked],
             channel_version=1,
@@ -969,7 +947,7 @@ async def test_finalization_window_keeps_unfinalized_history_readable(
     integration_workspace_root_path: str,
     integration_client: httpx.AsyncClient,
 ) -> None:
-    session_id = await _create_session(integration_client, "finalization 崩溃窗口")
+    session_id = await create_session(integration_client, "finalization 崩溃窗口")
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     saver = RolloutCheckpointSaver(sessions_dir)
     config = build_checkpoint_config(session_id)
@@ -982,7 +960,7 @@ async def test_finalization_window_keeps_unfinalized_history_readable(
     final = AIMessage(id="assistant-finalization-window", content="仍可恢复的最终响应")
     saver.put(
         config,
-        _checkpoint(
+        checkpoint_fixture(
             "checkpoint-finalization-window",
             [user, final],
             channel_version=1,
@@ -1028,7 +1006,7 @@ async def test_bounded_history_uses_sqlite_turn_spans_without_materializing_all_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """普通 append-only rollout 的有界加载不能重放完整消息列表。"""
-    session_id = await _create_session(
+    session_id = await create_session(
         integration_client,
         "索引历史性能回归",
     )
@@ -1084,7 +1062,7 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
     integration_workspace_root_path: str,
     integration_client: httpx.AsyncClient,
 ) -> None:
-    session_id = await _create_session(
+    session_id = await create_session(
         integration_client,
         "内部消息不创建空 Turn",
     )
@@ -1100,7 +1078,7 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
     messages = [internal, *_turn_messages(1)]
     saver.put(
         config,
-        _checkpoint(
+        checkpoint_fixture(
             "internal-leading-checkpoint",
             messages,
             channel_version=1,
@@ -1127,7 +1105,7 @@ async def test_history_detail_enforces_per_item_budget(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
 ) -> None:
-    session_id = await _create_session(integration_client, "详情预算")
+    session_id = await create_session(integration_client, "详情预算")
     _seed_rollout(
         Path(integration_workspace_root_path),
         session_id,
@@ -1165,7 +1143,7 @@ async def test_history_tool_summary_truncates_long_turn_without_response_400(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
 ) -> None:
-    session_id = await _create_session(integration_client, "长工具摘要")
+    session_id = await create_session(integration_client, "长工具摘要")
     _seed_rollout(
         Path(integration_workspace_root_path),
         session_id,
@@ -1203,7 +1181,7 @@ async def test_history_final_summary_never_reads_final_jsonl_body(
     integration_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = await _create_session(integration_client, "final 有界读取")
+    session_id = await create_session(integration_client, "final 有界读取")
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     saver = RolloutCheckpointSaver(sessions_dir)
     messages = _turn_messages(1)
@@ -1211,7 +1189,7 @@ async def test_history_final_summary_never_reads_final_jsonl_body(
     messages[-1] = messages[-1].model_copy(update={"content": final_text})
     saver.put(
         build_checkpoint_config(session_id),
-        _checkpoint("bounded-final", messages, channel_version=1),
+        checkpoint_fixture("bounded-final", messages, channel_version=1),
         {"source": "bounded-final-test"},
         {"messages": "1"},
     )
@@ -1277,7 +1255,7 @@ async def test_history_turn_visibility_uses_canonical_root_membership(
     mutation: str,
     expected: int,
 ) -> None:
-    session_id = await _create_session(integration_client, "canonical root 可见性")
+    session_id = await create_session(integration_client, "canonical root 可见性")
     _seed_rollout(Path(integration_workspace_root_path), session_id, count=1)
     storage = RolloutStorage(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions",
@@ -1305,7 +1283,7 @@ async def test_history_bounded_final_rejects_mismatched_canonical_pointer(
     integration_workspace_root_path: str,
     history_catalog_copy,
 ) -> None:
-    session_id = await _create_session(integration_client, "final pointer 必须一致")
+    session_id = await create_session(integration_client, "final pointer 必须一致")
     _seed_rollout(Path(integration_workspace_root_path), session_id, count=1)
     storage = RolloutStorage(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions",

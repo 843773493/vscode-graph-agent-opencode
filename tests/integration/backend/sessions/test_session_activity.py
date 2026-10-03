@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from tests.integration.stubs.http_stubs import openai_chat_stub
+from tests.support.api_helpers import create_session
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
 
@@ -64,12 +65,6 @@ async def activity_client(
         yield client
 
 
-async def _create_session(client: httpx.AsyncClient, title: str) -> str:
-    response = await client.post("/api/v1/sessions", json={"title": title})
-    assert response.status_code == 200, response.text
-    return str(response.json()["data"]["session_id"])
-
-
 async def _run_message(
     client: httpx.AsyncClient,
     session_id: str,
@@ -111,8 +106,8 @@ async def test_unopened_session_activity_is_recoverable_and_does_not_leak_conten
     activity_client: httpx.AsyncClient,
     activity_backend: tuple[str, Path],
 ) -> None:
-    completed_session_id = await _create_session(activity_client, "未打开会话完成")
-    failed_session_id = await _create_session(activity_client, "未打开会话失败")
+    completed_session_id = await create_session(activity_client, "未打开会话完成")
+    failed_session_id = await create_session(activity_client, "未打开会话失败")
     completed_job = await _run_message(
         activity_client,
         completed_session_id,

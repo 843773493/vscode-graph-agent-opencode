@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
+from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
@@ -68,17 +69,11 @@ async def generation_client(
         yield client
 
 
-async def _create_session(client: httpx.AsyncClient, title: str) -> str:
-    response = await client.post("/api/v1/sessions", json={"title": title})
-    assert response.status_code == 200, response.text
-    return str(response.json()["data"]["session_id"])
-
-
 @pytest.mark.asyncio
 async def test_literal_reminder_markup_is_visible_but_internal_metadata_is_rejected(
     generation_client: httpx.AsyncClient,
 ):
-    session_id = await _create_session(
+    session_id = await create_session(
         generation_client,
         "literal structured markup",
     )
@@ -146,7 +141,7 @@ async def _create_nested_anchor(
     )
     assert child_response.status_code == 200, child_response.text
     child_id = child_response.json()["data"]["items"][-1]["folder_id"]
-    session_id = await _create_session(client, title)
+    session_id = await create_session(client, title)
     assign_response = await client.put(
         f"/api/v1/session-catalog/sessions/{session_id}/folder",
         json={"folder_id": child_id},
