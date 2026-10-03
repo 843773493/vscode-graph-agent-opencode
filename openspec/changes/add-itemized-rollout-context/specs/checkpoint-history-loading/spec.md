@@ -269,3 +269,20 @@ loader MUST 校验 resource ref 的 owner session/thread、assembly、activation
 
 - **WHEN** 业务 service 或 projector 试图直接读取 RolloutStorage、AppendWriter 或内部 context reader 以构造 ContextRequestPlan
 - **THEN** 系统拒绝该旁路访问；只有 RolloutCheckpointSaver 返回的已提交 view/plan/snapshot 可以进入编译与请求投影
+
+### Requirement: 内部 execution history 由持久 admission 独立加载
+
+历史 loader MUST 从目标 `(session_id, thread_id)` 的持久 `ExecutionAdmission`、execution owner state 与 committed canonical items 加载内部 execution history。只有 history request 的 include 集合显式包含 `internal` 时，响应才填充顶层 `internal_executions[]`；未请求时不得查询后再合并、不得把 internal execution 塞进普通 Turn summary/detail，也不得从 source completed Turn 或邻接项推断归属。
+
+`internal_executions[]` MUST 按 execution owner 身份返回 standalone history envelope；每项不得要求 `TurnDetailDTO`、`turn_id`、root 或 final pointer。`RuntimeNoticePayload` 的 history projection 只读取 `display_part`，Provider/checkpoint 消费的 `prompt` 不得出现在 Web history。内部输出仍按该 `execution_id` 的 committed item identity/order 投影，不挂到 source Turn；普通 Turn 的分页、`item_count`、elapsed 和 `final_response` 不因内部 execution 改变。
+
+#### Scenario: 默认 history 不装载内部 execution
+
+- **WHEN** history include 未请求 `internal`
+- **THEN** 响应不填充 `internal_executions[]`，`pending_next_turn` report-back 不成为独立 Turn 或普通 Turn 的 response part
+
+#### Scenario: 显式加载内部 execution history
+
+- **WHEN** include 显式请求 `internal` 且目标 thread 存在已持久 internal admission
+- **THEN** loader 从该 admission 绑定的 execution 与 committed item 坐标返回独立 `internal_executions[]`；runtime notice 的 history projection 只使用安全 `display_part`，不得返回私有 prompt 或 branch result；默认 Web 只展示安全固定文案和标签，不渲染来源 ID。模型 prompt、控制 ID 和 source branch 正文不作为展示内容
+- **AND** 输出不会被并入 source completed Turn，也不会增加任何 Turn 的 item count 或 elapsed 统计

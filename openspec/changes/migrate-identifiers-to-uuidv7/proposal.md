@@ -1,11 +1,13 @@
 ## Why
 
-项目当前所有 canonical 标识符（`session_id`、`thread_id` 及其它由 id 工厂生成的持久身份）都是 **UUIDv4 位 profile**：`app/core/identifier.py` 的 `create_uuid_hex()` 返回 `uuid.uuid4().hex`，`app/core/session_catalog_store.py` 的校验器把 payload 第 13 个 hex 硬性要求为 `4`（注释与 docstring 逐字写「UUIDv4 位 profile」「非 v4 位 profile 一律直接拒绝」）。这使得：
+本 change 最初立项前，项目所有 canonical 标识符（`session_id`、`thread_id` 及其它由 id 工厂生成的持久身份）都是 **UUIDv4 位 profile**：`app/core/identifier.py` 的 `create_uuid_hex()` 返回 `uuid.uuid4().hex`，`app/core/session_catalog_store.py` 的校验器把 payload 第 13 个 hex 硬性要求为 `4`（注释与 docstring 逐字写「UUIDv4 位 profile」「非 v4 位 profile 一律直接拒绝」）。这使得：
 
-- **按时间分桶的目录无法由 id 自校验**：`sessions/YYYY/MM/DD/{session_id}` 的日期桶当前由创建时刻**独立记账**（`session_catalog_store.py` 以 `created_at.astimezone(UTC).date()` 生成 locator），id 本身不携带任何时间信息，因此「分桶与 id 是否一致」只能靠另存的 `created_at` 复核，无法从 id 直接推导或反查。
+- **按时间分桶的目录无法由 id 自校验**：当时 `sessions/YYYY/MM/DD/{session_id}` 的日期桶由创建时刻**独立记账**（`session_catalog_store.py` 以 `created_at.astimezone(UTC).date()` 生成 locator），UUIDv4 id 本身不携带任何时间信息，因此「分桶与 id 是否一致」只能靠另存的 `created_at` 复核，无法从 id 直接推导或反查。
 - **SQLite 主键没有时间局部性**：`nodes.node_id`、`thread_catalog.thread_id` 等以 id 文本作 `TEXT PRIMARY KEY`，随机 v4 让 B-tree 插入散布在整个页空间。改为 v7 后，**同一进程内**的 id 按 32 位 hex 有序，使同一进程连续写入的主键落在相邻 B-tree 页上，获得写入局部性；但该收益**只对同进程写入成立**，见下方量化边界。
 
 UUIDv7（RFC 9562）前 48 bit 承载 Unix 毫秒时间戳，正好让 id 自带时间序：分桶可由 id 内嵌时间戳推导并复核；主键在同一进程内获得写入局部性。本 change 把项目所有 UUIDv4 身份统一改为 UUIDv7，并把它作为 canonical id profile 的**唯一 owner**。
+
+截至本次复核，位 profile 已切换为 UUIDv7，但 A07 在最终契约核验（主树提交 `7653dd92`）中发现 Session、main-thread 与 child-thread 的真实分配仍走显式时间戳路径，实测同毫秒 ID 不单调。故原 2.4/4.7/9.3 完成记录不成立；本次将实时 natural allocation 与嵌入毫秒唯一时间源列为待实现、待真实路径回归的要求，保留原强排序和 UTC 分桶契约。
 
 **价值主张的量化边界（按实测收紧）**：本 change 只承诺两件**已被实测支撑**的事——(1) **同进程内**同一毫秒内生成的 id 非递减且唯一（实测 500000 个自然生成的 id 中，同毫秒组最多 **3710** 个，全部唯一且组内有序）；(2) `sessions/YYYY/MM/DD` 的日期可由 id 内嵌时间戳按 UTC 复核。**MUST NOT** 声称跨进程/跨重启在同一毫秒内有序：跨进程只共享 48 bit 毫秒分辨率。因此「B-tree 时间局部性」的实际收益是**同进程连续写入**的局部性；跨进程并发写入同一毫秒时，其插入顺序仍可能在毫秒内交错，局部性退化为「毫秒粒度相邻」而非「严格相邻」。
 
@@ -14,8 +16,8 @@ UUIDv7（RFC 9562）前 48 bit 承载 Unix 毫秒时间戳，正好让 id 自带
 - **BREAKING**：canonical 标识符的位 profile 从 UUIDv4 改为 **UUIDv7**。`app/core/identifier.py` 的唯一 id 工厂产出 v7 hex；`app/core/session_catalog_store.py` 的校验器（现名 `_validate_uuid_v4_payload`，硬要求 `payload[12] == "4"`）**正名并改为只接受 v7 位 profile**，不再存在第二套 v4 分支。
 - **拒绝双轨：不引入运行时开关**。**MUST NOT** 把「同时接受 v4|v7」当作运行期常态，也 **MUST NOT** 以「维护窗口 + `identity_profile_migration_active` 门控」这类运行时开关形式恢复双接受（判死）。canonical 校验器**始终只接受 v7**。存量 v4 走**一次性显式处置**：启动/迁移遇到 v4 canonical id MUST fail-closed 隔离并产出可操作显式报告（被隔离 id、物理路径、原因、建议动作），**MUST NOT** 回退 v4、**MUST NOT** 双读、**MUST NOT** 扫盘重建、**MUST NOT** 提供旧 ID path alias。收敛断言见 design D3。
 - **生成来源定稿为显式直接依赖 `uuid-utils`**：本机 Python 3.12.3 无 `uuid.uuid7()`（实测），stdlib v7 需 Python 3.14，而发行包与 Docker 运行时固定为 3.12（`packaging/runtime/versions.mjs`、`tools/cross-platform-development-targets/docker/Dockerfile`），抬高到 3.14 代价过大，故否决 stdlib 方案。`uuid-utils` 已在 `uv.lock` 作**传递依赖**（langchain-core/langsmith）存在且已是锁定版本 `0.16.0`，本 change 必须把它提升为 `pyproject.toml` 的**显式直接依赖**，MUST NOT 依赖「某个第三方包偶然传递存在」。缺失或不可用时 **fail-closed**，绝不回退到 v4。
-- **单调性合同**：v7 的「时间有序」是本 change 的全部价值，故 MUST 明确：同一进程内、同一毫秒内的 id **MUST 非递减且唯一**（用 `rand_a` / 计数器方案）；跨进程/跨重启只保证 **48 bit 毫秒分辨率**的时间序。MUST NOT 传入显式时间戳破坏单调（实测 `uuid-utils` 传显式 `timestamp=` 时同毫秒内**不再单调**）。
-- **日期桶由 id 自推导且可校验**：`sessions/YYYY/MM/DD/{session_id}` 的日期 MUST 与 id 内嵌 48 bit 毫秒时间戳按 **UTC** 推导出的日期一致；不一致即 fail-closed 完整性错误。时钟回拨（NTP 校时）行为 MUST 显式规定为「进程内非递减钳制」。
+- **单调性合同**：v7 的「时间有序」是本 change 的全部价值，故 MUST 明确：同一进程内、同一毫秒内的 id **MUST 非递减且唯一**（用 `rand_a` / 计数器方案）；跨进程/跨重启只保证 **48 bit 毫秒分辨率**的时间序。所有实时 canonical allocation MUST 走自然 UUIDv7 分配，不传显式时间戳；`uuid-utils` 显式 `timestamp=` 路径实测同毫秒内不单调，因此不得用于 Session、main thread 或 child thread 的实时创建。A07 发现现有创建链路违反此合同，规划中的修复须由真实 allocation 回归验收，不以工厂单测或旧完成记录替代。
+- **日期桶由实际分配 ID 自推导且可校验**：新建 Session 与 child Thread 的 UUIDv7 内嵌 48 bit 毫秒时间戳 MUST 是各自 `created_at` 与 locator 时间分桶的唯一来源；Session 的 `sessions/YYYY/MM/DD` 日期由 `session_id` 推导，child Thread 日期 locator 由其自身的 `thread_id` 推导；main row 的 `created_at` 沿用 Session 创建时间，没有独立日期桶。本合同不扩展为全部 canonical ID 的业务创建时间定义。日期按 **UTC** 推导；不一致即 fail-closed 完整性错误。时钟回拨时保留自然 UUIDv7 allocation 的进程内非递减与唯一合同，不预读另一时间源再以显式时间戳生成 ID。
 - **校验层正名**：`_validate_uuid_v4_payload` / `_UUID_VERSION_HEX_INDEX` 一类把 `v4` 写进名字的标识、注释与 docstring MUST 一并正名为与「当前 profile」一致的单一名词，**MUST NOT** 同概念异名或保留第二套校验函数。
 - **JS / 前端边界必须诚实声明**：`src/workspace-services/**` 的 browser/terminal 后端进程实际由 **Node** 启动（`BOXTEAM_NODE_BIN`，见 `app/gateway/runtime/process.py`），Node 22 **无** `randomUUIDv7`（实测）；`src/clients/web` 是浏览器构建产物，**其生产代码**没有任何 `Bun.*` 引用（实测 `rg -n '\bBun\.' src/clients` 的 8 个命中**全部是 `*.test.ts(x)` 测试文件**，生产代码 0 命中；指向测试而非生产代码的表述才是准确的）。故：Node 服务进程与浏览器前端**拿不到原生 v7**，其生成的 id（`term_` / `browser_` / `screenshot_` / `page_` / `inline:` 附件 file id 等）MUST 被显式声明为**非 canonical 身份**并允许继续使用 v4；**MUST NOT** 假装两者已统一。
 - **显式边界**：本 change 是 **id 生成位 profile** 的唯一 owner，**不是** VRN / ResourceIdentity 的 owner。VRN/ResourceIdentity 是「不可解析身份」，本 change 改的是「生成位 profile」，两者 MUST NOT 混为一谈；具名引用在途 change。

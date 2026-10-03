@@ -249,3 +249,20 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 
 - **WHEN** 同一 `accepted_ingress_id` 被不同 acceptance key 使用，或同一 key 的 payload hash/origin branch 不同
 - **THEN** 服务返回可诊断的 acceptance idempotency conflict，不创建、重编号或覆盖任何 Turn/item
+
+### Requirement: Internal execution history 使用独立 envelope 和 typed display coordinate
+
+顶层 history envelope MUST 仅在 include 显式包含 `internal` 时填充 `internal_executions: InternalExecutionHistoryDTO[]`。每个 `InternalExecutionHistoryDTO` 的字段固定为 `execution_id`、`job_id`、`session_id`、`thread_id`、`status`、`created_at`、`updated_at`、`display_parts` 和 `response_parts`；不得套用 `TurnDetailDTO`，也不得增加 `turn_id`、root/final Turn 字段或把内部 execution 映射成 synthetic Turn。`status` 与时间来自目标 thread 的 durable execution/admission owner；`response_parts` 只表示该 `execution_id` 下的内部输出 history。
+
+每个 `display_parts` 元素 MUST 使用 `InternalExecutionDisplayPartDTO={kind,text,item_id,item_sequence,created_at,provenance}`。`item_id` 和 `item_sequence` 必须指向当前 canonical display carrier item 的稳定 identity 与物理坐标；`kind` 为 `generated_session_result`。`provenance` 是 typed source identity object，仅允许有值时出现的 `source_session_id`、`source_thread_id`、`delegation_id`、`source_execution_id`、`source_item_id`，不得携带 run/generator/control ID 或分支正文。普通 Turn history、SSE 与 Web 默认展示不得把这些 provenance ID 当可见文本；Web 对生成回报只展示安全 `text` 和“会话生成”标签，不展示私有 prompt、source branch 正文或可由其推导的内容。
+
+#### Scenario: internal history 保持 execution-scoped 且不伪造 Turn
+
+- **WHEN** 客户端显式请求 include `internal` 并读取一次 internal execution
+- **THEN** history envelope 返回具备目标 session/thread、execution/job、状态和时间的 `InternalExecutionHistoryDTO`，其中 `display_parts` 坐标指向真实 runtime notice carrier，`response_parts` 只属于同一 execution
+- **AND** 响应不含 `turn_id`，不构造 `TurnDetailDTO`、用户 root 或 final response，不改变任何 completed Turn
+
+#### Scenario: Web 只呈现安全的生成回报
+
+- **WHEN** Web 渲染 `generated_session_result` display part
+- **THEN** 可见内容仅为安全固定文案和“会话生成”标签；DOM 不包含来源 ID、run/control ID、模型 prompt 或 source branch 正文

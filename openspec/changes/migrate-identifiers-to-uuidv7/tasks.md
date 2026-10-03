@@ -8,8 +8,8 @@
 
 - [x] 2.1 为唯一工厂补充同毫秒单调测试：同进程内同一毫秒连续生成 20000 个 id，断言按 hex 排序与生成顺序逐字节一致且全部唯一。门槛：`uv run pytest -q tests/unit/core/test_identifier_uuidv7_monotonic.py` 退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「2.1」。）**
 - [x] 2.2 补跨毫秒自然单调测试：连续生成 200000 个 id，断言全局有序且唯一。门槛：同一测试文件退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「2.2」。）**
-- [x] 2.3 实现并测试时钟回拨钳制：注入早于上次生成时刻的时间源时，新 id MUST 不小于上一次。门槛：单测断言回拨场景下非递减，退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「2.3」。）**
-- [x] 2.4 断言生成路径不传显式 `timestamp`（可静态检查或断言调用形态），并在代码注释中说明显式时间戳会破坏同毫秒单调。门槛：对应单测退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「2.4」。）**
+- [ ] 2.3 通过自然 UUIDv7 allocation 路径验证时钟回拨合同：注入回拨必须驱动底层自然 allocator 时钟，不得把固定时间戳传给生成器；真实生成 ID 的内嵌毫秒及完整 hex 顺序 MUST 非递减且唯一。旧 `effective_now_ms()` 单独钳制测试不满足本项。门槛：回拨场景的实际 UUIDv7 输出测试退出码 0。
+- [ ] 2.4 为实时 Session、main thread 和 child thread allocation 增加真实路径回归：检查幂等 miss 后走自然 UUIDv7 且不调用任何显式 timestamp helper；捕获同毫秒分组，断言每个真实创建路径内 ID 按生成顺序非递减且唯一。MUST 覆盖 Session ID、main-thread ID 与 child-thread ID，不得以独立工厂 spy 代替。A07 核验报告指出当前实时链路使用 `_at` 显式时间戳生成，旧工厂级测试不能证明该任务完成。门槛：相关受保护测试退出码 0，且实时调用链静态检查不命中 `*_at` 分配。
 - [x] 2.5（A3 量化）补一条量化上界测试：同一毫秒内生成 500000 个 id，断言同毫秒组最大规模被实测记录（约 3710）且组内全部有序唯一；并断言实现与文档只承诺「同进程内同毫秒非递减且唯一」+「跨进程共享 48 bit 毫秒分辨率」，不承诺跨进程同毫秒有序。门槛：对应测试退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「2.5」。）**
 
 ## 3. 校验层正名与单一 profile（D5）
@@ -24,9 +24,9 @@
 - [x] 4.1 在 `validate_storage_relative_locator()` 中加入「`sessions/YYYY/MM/DD` 的 UTC 日期 == id 内嵌 48 bit 毫秒时间戳的 UTC 日期」断言；不一致抛显式完整性错误。门槛：`uv run pytest -q tests/unit/core/test_session_catalog_store.py` 退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「4.1」。）**
 - [x] 4.2 补负向测试：构造「分桶日期与 id 内嵌时间戳不一致」的 locator，断言 fail-closed 且不扫盘、不改桶。门槛：同一测试文件退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「4.2」。）**
 - [x] 4.3 确认 child thread 的 `threads/YYYY/MM/DD/{thread_id}`（`app/core/session_control_store.py`）同样按 UTC 且与 id 内嵌时间戳一致。门槛：`uv run pytest -q tests/unit/core/test_thread_creation.py` 退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「4.3」。）**
-- [x] 4.7（规范层可机械复核项，**第二轮 2026-10-01 定稿**）日期桶与 id 内嵌时间的**同一时间源**：系统 MUST 以唯一时间源 `app/core/identifier.py::effective_now_ms()`（其 datetime 投影 `effective_now()`）= `max(墙钟毫秒, 上次已发放毫秒)` 同时推出 id 内嵌 48 bit 毫秒时间戳与 `sessions/YYYY/MM/DD` 分桶 UTC 日期，MUST NOT 从两处独立取时。**实测（已接线，非滞留项）**：`app/core/session_creation.py:319` 与 `app/core/thread_creation.py:695` 均 `created_at=effective_now()`；`app/core/session_catalog_store/creation_journal.py:164-173` 由**同一** `created_at` 推出 `create_ms = to_epoch_ms(created_at)` → `create_prefixed_id_at("ses"/"thr", create_ms)` 派生 id，并用 `created_at.astimezone(UTC).date()` 冻结 `sessions/YYYY/MM/DD` 分桶——id 内嵌时间与分桶**同源同一已钳制值**。门槛（可机械复核）：4.1 的「分桶日期 == id 内嵌时间戳 UTC 日期」断言由该同源关系直接推出、MUST NOT 依赖两次独立取时的偶然一致；回拨场景由 `tests/unit/core/test_session_creation.py::test_create_clamps_clock_rollback_keeping_bucket_consistent` 机械佐证（分桶被钳到 2026-06-01 且与 id/main_thread 内嵌时间同日），**467 passed**（见 §台账补勾证据「4.7」）。
-- [x] 4.4（A3）实现「回拨与分桶互不冲突」语义：创建流程用同一已钳制时间源 `effective_created_ms = max(monotonic_now_ms, last_issued_ms)` 同时推出 id 内嵌时间戳与分桶 UTC 日期。门槛：新增测试断言「注入回拨后创建 session，其分桶日期与 id 内嵌时间戳一致且不报错」，退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「4.4」。）**
-- [x] 4.5（A3）断言默认语义下回拨 MUST NOT 变成用户可见故障（不拒绝创建）；若实现选择「拒绝并报告」的显式配置语义，MUST 有对应测试并在文档判死二选一。门槛：`uv run pytest -q <该测试>` 退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「4.5」。）**
+- [ ] 4.7 实时创建时间的唯一来源 MUST 是实际自然分配 UUIDv7 的 48-bit 毫秒：Session journal 在幂等查找 miss 后自然分配 `session_id` 与 `main_thread_id`，再从 `session_id` 推导 Session `created_at` 和 `sessions/YYYY/MM/DD` locator；child Thread record 在幂等查找 miss 后自然分配 `thread_id`，再从该 ID 推导 child `created_at` 与 UTC locator。幂等 hit 必须先于 ID allocation 并复用冻结 record。main-thread ID 自然分配可跨 UTC 午夜；main row 的 `created_at` MUST 等于 Session `created_at`，无独立物理桶；Session 目录只按 Session ID 日期分桶。固定历史 fixture 必须显式提供 ID 和时间成组校验：Session 为 `session_id + main_thread_id + created_at`，child 为 `thread_id + created_at`，内嵌毫秒须与 `created_at` 精确一致；store 不得用 `*_at` helper 分配。门槛：真实 Session / child 创建回归覆盖幂等 hit/miss、UTC 日期边界、回拨和 ID/created_at/locator 一致，退出码 0。
+- [ ] 4.4（A3）通过真实 natural allocation 回归断言：回拨只影响底层 UUIDv7 自身的自然非递减行为，Session/child 的 `created_at` 与 locator 都直接从各自真实分配 ID 推导；MUST NOT 预读 `effective_now_ms()` 后将其作为 ID 时间戳或单独用作 locator 时间。门槛：注入回拨后创建 Session 与 child thread，验证 ID、created_at、UTC locator 一致且不报错。
+- [ ] 4.5（A3）断言默认真实分配路径下 NTP 回拨 MUST NOT 变成用户可见故障，且 ID 仍非递减、唯一、分桶自洽；MUST NOT 用显式 timestamp 旁路 natural allocator。门槛：Session/child 创建 API 回归退出码 0；若实现选择“拒绝并报告”，须另经 owner 裁定更新规范后才可验收。
 - [x] 4.6（A3）量化断言的负向测试：断言文档/实现不声称跨进程同毫秒有序或主键严格按时间相邻。门槛：对应断言测试退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「4.6」。）**
 
 ## 5. SQLite 主键与索引（D6）
@@ -131,7 +131,7 @@
 
 - [x] 9.1 `openspec validate migrate-identifiers-to-uuidv7 --strict` 输出 `Change 'migrate-identifiers-to-uuidv7' is valid`，退出码 0。 **（本次实测（提交 `f6fc990f`）现状：`openspec validate migrate-identifiers-to-uuidv7 --strict` 输出 `Change 'migrate-identifiers-to-uuidv7' is valid`，退出码 0；门槛满足。）**
 - [x] 9.2 `openspec validate --strict --all` 退出码 0 且 `0 failed`（本 change 加入后为 40 passed）。 **（本次实测（提交 `f6fc990f`）现状：`openspec validate --strict --all` 输出 `Totals: 40 passed, 0 failed (40 items)`，退出码 0；门槛满足。）**
-- [x] 9.3 2026-10-04 主树以 `timeout 1200` 和 `ulimit -d 4194304` 完成 UUIDv7 的十一份关联测试文件：工厂、单调性、canonical/豁免、catalog/control、Session/Thread creation、migration 与两份新增隔离恢复测试，**685 passed / 129.82s，退出码 0**。完整命令与保护参数见同轮 `coordinator/artifacts/u04-complete-identifier-slice-validation.json`，原始输出见 `u04-complete-identifier-slice.log`；这是本切片完整关联集，不代表全仓测试。
+- [ ] 9.3 在 U05 完成自然 UUIDv7 实时分配接线后，使用进程外内存/超时保护重跑完整十一份关联测试（工厂、单调性、canonical/豁免、catalog/control、Session/Thread creation、migration 与隔离恢复）。回归必须包含真实 Session journal、main-thread 与 child-thread allocation：幂等 hit 不额外分配 ID；miss 不调用 `*_at`；Session 从 `session_id`、child 从自身 `thread_id` 派生毫秒级 `created_at` 与 UTC locator；main-thread 自然 ID 可跨午夜而不改变 Session locator，main row 的 `created_at` 仍等于 Session `created_at`；固定 fixture 的 ID/时间成组相等；同毫秒单调唯一和默认库回拨语义仍通过。任何只跑单测或旧接线的绿测不得勾选本项。命令使用 `timeout 1200 bash -c 'ulimit -d 4194304; exec "$@"' bash ...` 或正式 matrix runner；记录完整命令、环境和逐测试结果。旧 2026-10-04 685 passed 是 A07 反例发现前的基线，不能作为本项完成证据。
 
 ## 台账补勾证据（第二轮 2026-10-01）
 
@@ -148,8 +148,8 @@
 | 1.3 | `uv run --no-sync pytest -q tests/unit/core/test_identifier.py` | test_uuid_utils_missing_fails_closed / test_uuid7_unavailable_fails_closed 均绿；86 passed（round2_suite_identifier.txt） |
 | 2.1 | `... pytest -q tests/unit/core/test_identifier_uuidv7_monotonic.py` | test_same_millisecond_batch_is_non_decreasing_and_unique / test_prefixed_ids_same_millisecond_are_non_decreasing；86 passed |
 | 2.2 | 同上 | test_cross_millisecond_batch_is_globally_ordered_and_unique；86 passed |
-| 2.3 | 同上 | test_effective_now_ms_clamps_clock_rollback / test_clock_rollback_does_not_produce_smaller_id；86 passed |
-| 2.4 | 同上 | test_generation_path_does_not_pass_explicit_timestamp / test_generation_docstring_forbids_explicit_timestamp；86 passed |
+| 2.3 | 同上 | 历史测试 test_effective_now_ms_clamps_clock_rollback / test_clock_rollback_does_not_produce_smaller_id 曾为 86 passed；它注入的是 Python clamp 源而非真实 UUIDv7 allocator 时钟，不满足本次 natural allocation 回拨验收，保持未勾。 |
+| 2.4 | 同上及真实创建链路回归 | 历史工厂测试曾为 86 passed，但 A07 证明 Session/main-thread/child-thread 实时路径仍调用显式 timestamp helper；工厂测试未覆盖生产分配路径，保持未勾。 |
 | 2.5 | 同上 | test_quantified_same_millisecond_density_upper_bound / test_documented_contract_only_promises_same_process_same_ms_order；86 passed |
 | 3.1 | `uv run --no-sync python -c "import app.core.session_catalog_store as s; print([n for n in dir(s) if 'uuid' in n.lower()])"` | `['uuid7_embedded_utc_date']`（无 v4 命名）；EXIT=0 |
 | 3.2 | `rg -n 'UUIDv4|非 v4|v4 bit' app/core/session_catalog_store app/protocol/canonical.py` | EXIT=1（0 命中） |
@@ -158,8 +158,8 @@
 | 4.1 | `... pytest -q tests/unit/core/test_session_catalog_store.py` | validators.py:88 断言 + test_validate_storage_relative_locator_rejects_bucket_id_drift；467 passed（round2_suite_creation.txt） |
 | 4.2 | 同上 + `test_canonical_identifier_matrix.py` | test_validate_storage_relative_locator_rejects_bucket_id_drift / test_storage_locator_date_drift_from_embedded_time_rejected；绿 |
 | 4.3 | `... tests/unit/core/test_session_control_store.py` 等 | test_thread_locator_date_drift_from_embedded_time_rejected；467 passed |
-| 4.7 | `rg -n 'effective_now' app --glob '*.py'` + `... tests/unit/core/test_session_creation.py` | session_creation.py:319 / thread_creation.py:695 = effective_now()；creation_journal.py:164-173 同一 created_at 派生 id 与分桶；test_create_clamps_clock_rollback_keeping_bucket_consistent；467 passed |
-| 4.4 / 4.5 | 同上 | test_create_clamps_clock_rollback_keeping_bucket_consistent（record_state=="published"，分桶钳到 2026-06-01）；467 passed |
+| 4.7 | `... tests/unit/core/test_session_creation.py` + child Thread creation regression | 历史 `effective_now()` + `create_prefixed_id_at()` 接线和 467 passed 已被 A07 实际分配 probe 否定；改为验证真实自然 ID 决定 created_at/locator、幂等 hit 前置和固定 fixture 成组校验，保持未勾。 |
+| 4.4 / 4.5 | Session/Thread creation allocation regression | 旧 test_create_clamps_clock_rollback_keeping_bucket_consistent 的 467 passed 只证明显式时间值与 locator 一致，不证明实时 UUIDv7 单调与唯一来源；更新后的真实 allocation 回归通过前保持未勾。 |
 | 4.6 | `... test_identifier_uuidv7_monotonic.py` | test_documented_contract_only_promises_same_process_same_ms_order；86 passed |
 | 5.1 | `... tests/unit/core/test_session_catalog_store.py tests/unit/core/test_session_control_store.py` | test_nodes_ddl_frozen_for_uuidv7 / test_nodes_primary_key_columns_unchanged / test_thread_catalog_primary_key_frozen_for_uuidv7；467 passed |
 | 5.2 | 同上 | test_uuidv7_primary_key_ordering_matches_time_order / test_thread_catalog_uuidv7_ordering_matches_time_order；467 passed |
@@ -174,6 +174,8 @@
 | 7.3 | `bun run --cwd src/clients/web build` | EXIT=0（built in 17.00s，round2_web_build.txt） |
 
 **复跑口径**：`86 passed` = `timeout 1200 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run --no-sync pytest -q tests/unit/core/test_identifier.py tests/unit/core/test_identifier_uuidv7_monotonic.py tests/unit/core/test_canonical_identifier_matrix.py tests/unit/core/test_non_canonical_exemptions.py`；`467 passed` = 同名保护下 `tests/unit/core/{test_session_catalog_store,test_session_control_store,test_session_creation,test_thread_creation}.py`。
+
+**2026-10-04 A07 owner 核验（主树 commit `7653dd92`）**：`uuidv7-final-contract-verification.md`（本轮保留证据，根为 `out/tests/temp/2026/10/04/024121-team-execution/architecture_reviewer/artifacts/`） 通过只读链路检查与进程外 probe 确认，Session、main-thread 与 child-thread 实时路径使用显式时间戳 helper；200 个 `create_uuid_hex_at(effective_now_ms())` 样本出现 3 组同毫秒 ID，其中 2 组非单调。故 §2.3/2.4、§4.4/4.5/4.7 与 §9.3 的旧历史证据不满足自然 realtime allocation 合同；相关项保持未勾，必须等 U05 修复后由真实创建路径回归验收。历史日志与旧通过数字仅表示修复前基线，不作为当前完成证明。
 
 **第二轮曾未能复跑的项（2026-10-01 已收敛）**：`tests/unit/core/test_session_catalog_migration.py` 第二轮复跑为 67 failed / 21 passed（EXIT=1），失败原因为 `app/core/session_catalog_migration/_journal.py` 的 `NameError: name '_atomic_write_bytes' is not defined`——该模块当时正被并发 agent 从单文件重构为包（`app/core/session_catalog_migration{,.py}` 并存于工作树，未提交），属他人**在途**改动。**该在途重构现已合并**：单文件 `app/core/session_catalog_migration.py` 已物理下线、包版 `_journal.py:10` 已 `from app.core.atomic_fs import atomic_write_bytes as _atomic_write_bytes`；独立复核 2026-10-01 复跑 `timeout 1200 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run --no-sync pytest -q tests/unit/core/test_session_catalog_migration.py -p no:randomly` → **88 passed in 19.06s（EXIT=0）**。失败项已闭合；但 6.4 的「子门槛」仍按上文口径（报告缺路径/建议动作）保持未完全达。
 

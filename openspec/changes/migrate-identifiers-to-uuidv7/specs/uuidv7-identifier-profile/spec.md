@@ -34,9 +34,9 @@ canonical 标识符 MUST 由唯一 id 工厂（`app/core/identifier.py` 的 `cre
 
 v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证的排序保证：
 
-- **同进程**内、**同一毫秒**（相同 48 bit 时间前缀）生成的 id MUST **非递减**（按 32 位 hex 字典序）且 **MUST 唯一**，由 `rand_a` / 计数器方案提供；
+- **同进程**内、**同一毫秒**（相同 48 bit 时间前缀）生成的 canonical id MUST **非递减**（按 32 位 hex 字典序）且 **MUST 唯一**，由 `rand_a` / 计数器方案提供；该保证覆盖真实 Session、main thread 与 child thread allocation 路径，不能只由独立工厂单测代表；
 - **跨进程或跨重启**只保证 **48 bit 毫秒分辨率**的时间序；MUST NOT 声称跨进程在同一毫秒内有序；
-- 生成路径 MUST NOT 传入显式时间戳参数（实测传显式时间戳会破坏同毫秒内单调）；若允许注入时间源（如测试），该注入 MUST 保持与生产相同的单调合同。
+- 实时 canonical allocation MUST 使用自然 UUIDv7 分配，不得传入显式时间戳参数；显式 `timestamp=` 路径会破坏同毫秒内单调，因此 MUST NOT 用于实时 Session、main thread 或 child thread 创建。为测试注入时间的方式 MUST 驱动自然分配时钟，而不得改走显式时间戳生成路径。
 
 **排序保证的量化上界与对主键局部性的边界（按实测收紧，MUST NOT 弱化）**：同毫秒组实测可达 **3710** 个 id（500000 个样本中 `max ids per same-ms group`），故「同一进程内同毫秒数千个 id 仍保持顺序」是本 capability 承诺的量化上界。据此，`TEXT PRIMARY KEY` 的时间局部性 MUST 表述为「**按毫秒聚簇**的写入局部性」：同进程连续写入获得毫秒内相邻的页插入，而跨进程并发写入同一毫秒时，毫秒内顺序可能交错，局部性退化为毫秒粒度相邻。系统 MUST NOT 声称「主键严格按时间相邻」或「跨进程同毫秒有序」。
 
@@ -54,7 +54,7 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 
 ### Requirement: sessions/YYYY/MM/DD 日期桶必须可由 id 内嵌时间戳推导且一致
 
-`sessions/YYYY/MM/DD/{session_id}` 的日期段 MUST 与 `session_id` 内嵌的 48 bit Unix 毫秒时间戳按 **UTC** 推导出的日期逐段一致。系统 MUST 能仅凭 id 复核分桶日期，MUST NOT 只依赖另存的 `created_at` 作为唯一依据。
+新建 Session 的 `created_at` 与 `sessions/YYYY/MM/DD/{session_id}` 日期 MUST 由 `session_id` 内嵌的 48 bit Unix 毫秒时间戳按 **UTC** 推导；系统 MUST 能仅凭 id 复核 locator 日期，MUST NOT 以独立墙钟读取或另存的 `created_at` 作为唯一来源。新建 child Thread 的 `created_at` 与 `threads/YYYY/MM/DD/{thread_id}` 日期 MUST 同样由该 child 自身 `thread_id` 内嵌时间戳按 UTC 推导。main-thread ID MUST 自然分配，但无独立物理日期桶，且不得决定 Session `created_at` 或 Session locator 日期。`thread_catalog.kind=main` 行 MUST 沿用 Session `created_at`；它记录同一 Session 创建事实中的主线程指针，不以 main-thread ID 内嵌时间另定创建时间。上述唯一创建时间源合同仅覆盖 Session 与 child Thread，不扩展到所有 canonical ID 的业务时间字段。
 
 日期 MUST 使用 **UTC**（与既有分桶一致：`session_catalog_store.py` 以 `created_at.astimezone(UTC).date()` 生成 locator）；MUST NOT 改为本地时区。
 
@@ -68,15 +68,23 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 
 ### Requirement: 时钟回拨行为必须显式定义为进程内非递减钳制
 
-系统时钟回拨（NTP 校时）时，同一进程内生成的 id MUST 保持非递减：MUST 使用进程内上一次已发放的时间戳作下界钳制（单调时钟保护），MUST NOT 因回拨而产出比此前更小的 id。跨进程/跨重启对回拨不做跨进程保证，但 MUST NOT 产出与既有 id 重复的值。
+系统时钟回拨（NTP 校时）时，同一进程内自然分配的 id MUST 保持非递减：MUST 由 UUIDv7 allocation 的单调行为保证，MUST NOT 预读独立墙钟值并以显式时间戳生成 ID，也 MUST NOT 因回拨产出比此前更小的 id。跨进程/跨重启对回拨不做排序保证，但 MUST NOT 产出与既有 id 重复的值。
 
 #### Scenario: 回拨不产生更小 id
 - **WHEN** 系统时钟被回拨到早于上一次生成时刻
 - **THEN** 新生成的 id 按 hex 序 MUST 不小于上一次生成的 id
 
-#### Scenario: 回拨时分桶日期与 id 内嵌时间戳仍一致
-- **WHEN** 系统时钟被回拨后创建一个新 session
-- **THEN** 该 session 的 id 内嵌毫秒时间戳 MUST 取「创建时刻的已钳制值」（`max(monotonic_now_ms, last_issued_ms)`），且 `sessions/YYYY/MM/DD` 的 UTC 日期 MUST 由**同一个已钳制值**推出，故二者恒一致；一致性校验 MUST NOT 因回拨本身而报错
+#### Scenario: 实时分配的 UUIDv7 时间戳是 Session 与 child 创建时间唯一来源
+- **WHEN** 系统通过真实创建路径创建 Session 或 child thread
+- **THEN** Session 的 `created_at` 和 `sessions/YYYY/MM/DD` 日期 MUST 从实际分配的 `session_id` 推导；child 的 `created_at` 和 UTC 日期 locator MUST 从该 child 自身 `thread_id` 推导；创建路径 MUST NOT 预读另一墙钟值再传给显式 timestamp helper
+
+#### Scenario: main-thread ID 不改写 Session 时间或目录日期
+- **WHEN** Session 创建跨过 UTC 午夜，导致自然分配的 main-thread ID 与 `session_id` 的日期不同
+- **THEN** main-thread ID MUST 仍来自自然 UUIDv7 allocation，Session `created_at` 与 `sessions/YYYY/MM/DD` locator MUST 保持由 `session_id` 决定；main row 的 `created_at` MUST 等于 Session `created_at`，main thread MUST NOT 因自身时间戳另建物理日期桶
+
+#### Scenario: 回拨时分桶仍与实际分配 ID 一致
+- **WHEN** 系统时钟被回拨后真实创建一个 Session 或 child thread
+- **THEN** 自然分配 ID MUST 保持进程内非递减且唯一，实体 `created_at` 与对应 UTC locator 日期 MUST 由该 ID 的内嵌毫秒时间戳推导；一致性校验 MUST NOT 因回拨本身报错
 
 #### Scenario: 不得把回拨变成用户可见故障
 - **WHEN** 发生 NTP 回拨

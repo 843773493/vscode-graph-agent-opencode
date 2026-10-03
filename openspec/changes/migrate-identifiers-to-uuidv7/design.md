@@ -48,7 +48,7 @@
 
 ### D2：单调性 = 同进程内同毫秒非递减且唯一，跨进程只保证毫秒分辨率
 
-**决定**：同进程同毫秒 MUST 非递减且唯一（`rand_a`/计数器方案）；跨进程/跨重启仅保证 48 bit 毫秒时间序；生成路径 MUST NOT 传显式时间戳。
+**决定**：同进程同毫秒 MUST 非递减且唯一（`rand_a`/计数器方案）；跨进程/跨重启仅保证 48 bit 毫秒时间序；包括真实 Session、main thread 与 child thread 在内的实时 canonical allocation MUST 走自然 UUIDv7 分配，不得传显式时间戳。Session 与 child Thread 的创建时间/日期 locator 由各自 ID 推导，具体范围及 main row 归属见 D4。
 
 **理由**：
 
@@ -101,27 +101,32 @@
 
 ### D4：日期桶 = 必须与 id 内嵌时间戳（UTC）一致，且可校验
 
-**决定**：(a) `sessions/YYYY/MM/DD/{session_id}` 的日期 MUST 与 id 内嵌 48 bit 毫秒时间戳按 UTC 推导的日期一致，不一致即 fail-closed；(b) 时区取 **UTC**（与既有 `created_at.astimezone(UTC).date()` 一致，不改为本地时区）；(c) 时钟回拨的确切语义见下方「回拨与分桶互不冲突的判死」。
+**决定**：(a) 新建 Session 与 child Thread 的自然 UUIDv7 分配结果是各自创建时间唯一来源；不得先从独立墙钟取值再传给显式时间戳生成器；(b) Session 的 `sessions/YYYY/MM/DD/{session_id}` 日期必须从 `session_id` 内嵌 48 bit 毫秒时间戳按 UTC 推导，child Thread 日期 locator 从其自身的 `thread_id` 时间戳推导，两者不一致即 fail-closed；(c) 时区取 **UTC**；(d) 时钟回拨的确切语义见下方。
 
-**回拨与分桶互不冲突的判死（消除审查指出的义务冲突）**：
+**回拨、自然分配与分桶的一致合同（保留 D2 强排序与 D4 精确分桶）**：
 
-- 回拨钳制**只作用于新 id 的时间戳来源**：进程维护 `last_issued_ms`，新 id 的毫秒取 `max(monotonic_now_ms, last_issued_ms)`；钳制后的值才是该 id 的真实内嵌时间戳。
-- **分桶日期以「创建时刻的已钳制时间戳」为准**：创建流程先用同一个已钳制时间源取得 `effective_created_ms`，再由它同时推出 (i) id 的内嵌时间戳与 (ii) `sessions/YYYY/MM/DD` 的 UTC 日期。因为两者**源自同一个已钳制值**，`id 内嵌时间戳的 UTC 日期 == 分桶日期` 恒成立。
-- 因此分桶一致性校验在回拨场景下**不会误伤**：它能检出的是「分桶与 id 人为漂移」，而不是回拨本身。回拨只表现为「新 id 的时间戳停在旧值上」，其分桶仍与之自洽。
-- **MUST NOT** 采用「回拨时拒绝创建」作为默认（会把 NTP 校时变成用户可见故障）；若某部署需要更严语义，MAY 选择显式拒绝并报告，但该形态 MUST 与 `S-回拨` Scenario 的可验证断言二选一实现，MUST NOT 两者都写而都不判死。
+- Session 先通过自然 UUIDv7 工厂分配 `session_id`，该 ID 的内嵌毫秒时间戳是 Session `created_at` 与 `sessions/YYYY/MM/DD` 日期 locator 的唯一依据。child thread 通过自然工厂分配自己的 `thread_id`，该 ID 的内嵌毫秒时间戳是 child 创建时间与其 `threads/YYYY/MM/DD` 日期 locator 的唯一依据。
+- 创建流程 MUST NOT 在 allocation 前独立调用 `effective_now_ms()` / `effective_now()` 作为 ID 时间源，也 MUST NOT 把预读时间传给 `create_prefixed_id_at()` 一类显式时间戳 helper。事务重试命中已持久化 idempotency record 时，直接复用其冻结 ID、创建时间和 locator，不得额外分配新 ID。
+- UTC 分桶由对应 ID 的内嵌毫秒时间戳直接推导，所以 ID、`created_at` 和 locator 在回拨时仍一致。一致性校验继续拒绝任何人为漂移，不因回拨放宽。
+- Session 主记录在自然分配 `session_id` 与 `main_thread_id` 后，以 `session_id` 时间戳冻结 Session `created_at` 与 Session locator；main-thread ID 独立自然分配，可能跨 UTC 午夜，但没有独立物理日期桶，也不决定 Session 时间或目录日期；`thread_catalog.kind=main` 行是该 Session 创建事实的主线程指针，其 `created_at` MUST 沿用 Session `created_at`，不另按 main-thread ID 时间戳定时。D4 不把其他 canonical ID 的内嵌时间一概定义为其业务创建时间。child Thread 则以自身自然分配的 `thread_id` 同时冻结其 `created_at` 与 locator。
+- 两类 create-or-get 的 `created_at` 参数以 `datetime | None = None` 表示实时 allocation：`None` 时先完成 idempotency lookup，miss 后自然分配 ID 并从 ID 派生时间；hit 时返回已冻结 record 且不分配新 ID。固定测试 fixture 可以显式提供 ID 与时间，但 Session 的 `session_id`、`main_thread_id`、`created_at` 必须同毫秒一致，child 的 `thread_id` 与 `created_at` 必须同毫秒一致。存储层不得另用 `_at` helper 分配 ID。
+- `create_prefixed_id_at()` 等显式固定时间 helper 只允许用于测试中建立上述固定 fixture，不得进入任何实时 Session、main-thread 或 child-thread allocation；测试注入应控制自然 allocator 使用的时钟并经过真实创建路径。
+- **MUST NOT** 采用「回拨时拒绝创建」作为默认（会把 NTP 校时变成用户可见故障）；自然分配在回拨时仍须保证同进程内非递减和唯一，创建时间与分桶从该 allocation 推导。
 
 **原决定（保留）**：(a) 日期 MUST 与 id 内嵌时间戳按 UTC 一致、不一致 fail-closed；(b) 时区取 UTC。
 
 **理由**：
 
 - 现有分桶已用 UTC（`session_catalog_store.py`、`session_control_store.py` 均 `astimezone(UTC)`），改成本地时区会破坏既有 locator 与跨机一致性。
-- 让分桶可由 id 复核，才能兑现「方便按时间分桶」的价值主张，并把「分桶与 id 漂移」变成可机械检查的完整性错误。
-- 时钟回拨必须显式规定，否则「id 自带时间」会在 NTP 校时下产生乱序；钳制是本地场景下最简单且不误报的做法。
+- 让分桶可由实际分配的 id 复核，才能兑现「方便按时间分桶」的价值主张，并把「分桶与 id 漂移」变成可机械检查的完整性错误。
+- A07 已证实将独立读取的创建时间传给显式 timestamp API 会同时违反 D2 排序保证与 D4 时间源合同；让自然分配结果成为唯一来源，才能同时保留强排序与 UTC 分桶，不引入双时间源。
 
 **备选**：
 
-- *(a) 分桶继续独立记账、只把 v7 当额外信息*：否决，等于不兑现价值主张，也留下两套时间事实。
-- *(b) 用本地时区分桶*：否决，破坏既有 UTC locator 与跨机一致性。
+- *(a) 预读墙钟并把它传给显式 UUIDv7 timestamp API，然后用同一预读值分桶*：否决，A07 probe 已实测真实调用形态出现同毫秒非单调，违反 D2。
+- *(b) 自然分配 ID 后仍独立读取墙钟作为创建时间或 locator 日期*：否决，会留下两套时间事实并可能违反 D4 精确一致。
+- *(c) 分桶继续独立记账、只把 v7 当额外信息*：否决，等于不兑现价值主张，也留下两套时间事实。
+- *(d) 用本地时区分桶*：否决，破坏既有 UTC locator 与跨机一致性。
 
 ### D5：校验层正名
 

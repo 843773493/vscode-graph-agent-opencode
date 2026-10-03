@@ -493,3 +493,20 @@ source `accepted_ingress_id` 与 `acceptance_idempotency_key` 同样不能直接
 - **THEN** active view 可以复制或引用 source history 作为上下文前缀，但系统必须另创建并登记新的 target-local Turn、新的 `user_input` root、accepted ingress、acceptance、initial execution 和新的 view-local `logical_turn_ordinal`，并以 `replay_of_turn_id` 保存 source lineage；原 Turn 保持 `cancelled` 且不创建或修改其 execution，source Turn/root 不成为新 Turn 的 root
 - **AND** 该操作不是原 Turn 的 `dispatch_replay` 或 `resume_turn`，不能在同一 API 语义中同时返回 `turn_not_resumable` 并创建新 Turn
 - 此两条 thread 隔离条款的唯一 owner 是 requirement「rollout 定位必须收敛为 thread-qualified 的单一落点」正文（见本 spec :249），本 Scenario 不得复述。
+
+### Requirement: Runtime notice 的生成结果 payload 闭合且完整参与内容哈希
+
+持久化的 `generated_session_result` MUST 作为 `semantic_kind=runtime_notice`、`payload_kind=structured_content` 的 canonical item 写入既有 v2 envelope。其闭合 `RuntimeNoticePayload` 只包含既有私有模型输入 `prompt` 与 `display_part={kind: generated_session_result, text, provenance}`；`prompt` 可以包含完成 report-back 所需的 branch result，`display_part` 只包含 `kind`、安全固定文案 `text` 和 typed `provenance`，后者只允许可得的 `source_session_id`、`source_thread_id`、`delegation_id`、`source_execution_id`、`source_item_id`。branch 正文 MUST NOT 出现在 `display_part.text`、`provenance`、metadata、extensions 或 history/Web 展示字段。payload 不得扩展任意 key，不得把 display 内容复制到顶层、`metadata` 或 `extensions`，也不得保存 run/generator/control ID。
+
+canonical item 的 `content_hash` MUST 继续按既有 `{payload_kind, payload}` JCS/SHA-256 preimage 计算，并完整覆盖私有 prompt（包括其中的 branch result）、display part 与 typed provenance。`ExecutionAdmission` 的 admission `payload_hash` 独立覆盖 `admit_internal_execution` request/preimage；`InitialExecutionIntent.binding_preimage_hash` 则覆盖该 intent 冻结的 admission key、owner Session、thread、creation key、initial state、execution binding ID 与 job ID；三者作用域不同、不得互相替代。JSONL canonical payload 保持完整且不可变；Provider request 与 checkpoint message codec 只能从它投影既有 `prompt`，不能把 display part 作为模型输入。schema 不闭合、provenance 字段越界或 hash 不匹配时，写入/读取必须显式失败，不能丢弃 display part 或退化成普通文本。
+
+#### Scenario: display 文案和 prompt 共同受 canonical hash 保护
+
+- **WHEN** `generated_session_result` 被追加到 v2 rollout，或恢复时重新校验其 canonical item
+- **THEN** hash preimage 同时包含 `payload_kind=structured_content`、原有 `prompt`、安全 `display_part` 和 typed provenance；任何一部分变化都导致 hash 校验失败
+- **AND** JSONL envelope 不新增顶层 display、metadata 或兼容副本字段
+
+#### Scenario: checkpoint 与 Provider 投影不把 display 当模型内容
+
+- **WHEN** Provider request 或 checkpoint message codec 从该 canonical runtime notice 构造模型消息
+- **THEN** 只投影 `RuntimeNoticePayload.prompt`，不把 `display_part.text`、provenance ID 或控制字段加入模型消息
