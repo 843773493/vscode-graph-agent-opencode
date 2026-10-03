@@ -64,7 +64,9 @@ class SessionCatalogMigratorPhysicalMixin:
             record = sessions[session_id]
             classification = record["classification"]
             if classification == "quarantine":
-                self._process_quarantine_session(session_id, record, context)
+                self._process_quarantine_node(
+                    session_id, record, context, kind="session"
+                )
                 continue
             frozen = frozen_by_id[session_id]
             if frozen.created_at is None or frozen.storage_relative_locator is None:
@@ -99,7 +101,9 @@ class SessionCatalogMigratorPhysicalMixin:
             record = folders[folder_id]
             if record["classification"] == "quarantine":
                 # B.4:quarantine 节点(含 folder)物理目录隔离到 orphaned 保留审计。
-                self._process_quarantine_folder(folder_id, record, context)
+                self._process_quarantine_node(
+                    folder_id, record, context, kind="folder"
+                )
                 continue
             if record["state"] == "pending":
                 self._delete_folder(folder_id, record, context)
@@ -112,58 +116,6 @@ class SessionCatalogMigratorPhysicalMixin:
                         f"folder_id={folder_id}, path={old_path}",
                     )
         self._sweep_staging(context)
-
-    def _process_quarantine_folder(
-        self,
-        folder_id: str,
-        record: dict[str, object],
-        context: _MigrationContext,
-    ) -> None:
-        """quarantine folder:pending → 隔离到 orphaned;isolated → 复验存在。
-
-        其内 session 已在深序 session 段先搬出,目录此刻只余 folder manifest。"""
-        stage = "物理迁移(quarantine 隔离)"
-        target = self._resolved_orphaned_root / folder_id
-        if record["state"] == "quarantine_isolated":
-            if not target.is_dir():
-                raise self._fail(
-                    stage,
-                    "journal 记 quarantine_isolated 但隔离目录缺失(外部改动): "
-                    f"folder_id={folder_id}, target={target}",
-                )
-            return
-        old_path = self._old_path_for(record, stage=stage)
-        if not old_path.is_dir() or old_path.is_symlink():
-            raise self._fail(
-                stage,
-                "folder 目录已不存在且 journal 记 pending,无法证明(外部改动,拒绝继续): "
-                f"folder_id={folder_id}, path={old_path}",
-            )
-        if PurePosixPath(folder_id).name != folder_id or folder_id in (".", ".."):
-            raise self._fail(
-                stage,
-                f"quarantine 节点 ID 不能作为隔离目录叶名: {folder_id!r}",
-            )
-        if (target.exists() or target.is_symlink()) and not (
-            target.is_dir() and not any(target.iterdir())
-        ):
-            raise self._fail(
-                stage,
-                "隔离目录已存在且非空(拒绝覆盖,保留审计): "
-                f"folder_id={folder_id}, target={target}",
-            )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.rename(old_path, target)
-        except OSError as error:
-            raise self._fail(
-                stage,
-                f"旧位置 rename 到隔离区失败: {old_path} -> {target}: {error}",
-            ) from error
-        _fsync_directory(target.parent)
-        _fsync_directory(old_path.parent)
-        record["state"] = "quarantine_isolated"
-        self._write_journal_context(context, state="catalog_rebuilt", result=None)
 
     def _check_staging_residues(
         self,
@@ -300,56 +252,6 @@ class SessionCatalogMigratorPhysicalMixin:
         record["state"] = "placed"
         self._write_journal_context(context, state="catalog_rebuilt", result=None)
         self._verify_placed_session(session_id, record, target, stage=stage)
-
-    def _process_quarantine_session(
-        self,
-        session_id: str,
-        record: dict[str, object],
-        context: _MigrationContext,
-    ) -> None:
-        """quarantine session:pending → 隔离到 orphaned;isolated → 复验存在。"""
-        stage = "物理迁移(quarantine 隔离)"
-        target = self._resolved_orphaned_root / session_id
-        if record["state"] == "quarantine_isolated":
-            if not target.is_dir():
-                raise self._fail(
-                    stage,
-                    "journal 记 quarantine_isolated 但隔离目录缺失(外部改动): "
-                    f"session_id={session_id}, target={target}",
-                )
-            return
-        old_path = self._old_path_for(record, stage=stage)
-        if not old_path.is_dir() or old_path.is_symlink():
-            raise self._fail(
-                stage,
-                "旧位置目录已不存在且 journal 记 pending,无法证明(外部改动,拒绝继续): "
-                f"session_id={session_id}, path={old_path}",
-            )
-        if PurePosixPath(session_id).name != session_id or session_id in (".", ".."):
-            raise self._fail(
-                stage,
-                f"quarantine 节点 ID 不能作为隔离目录叶名: {session_id!r}",
-            )
-        if (target.exists() or target.is_symlink()) and not (
-            target.is_dir() and not any(target.iterdir())
-        ):
-            raise self._fail(
-                stage,
-                "隔离目录已存在且非空(拒绝覆盖,保留审计): "
-                f"session_id={session_id}, target={target}",
-            )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.rename(old_path, target)
-        except OSError as error:
-            raise self._fail(
-                stage,
-                f"旧位置 rename 到隔离区失败: {old_path} -> {target}: {error}",
-            ) from error
-        _fsync_directory(target.parent)
-        _fsync_directory(old_path.parent)
-        record["state"] = "quarantine_isolated"
-        self._write_journal_context(context, state="catalog_rebuilt", result=None)
 
     def _delete_folder(
         self,

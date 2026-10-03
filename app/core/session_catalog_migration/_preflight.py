@@ -229,7 +229,8 @@ class SessionCatalogMigratorPreflightMixin:
           (排除 session.json)逐文件 sha256/size 一致;
         - session-control:main row thread_id == 冻结映射 main_thread_id、
           fence == (active, 1);
-        - quarantine_isolated:隔离目录存在于 orphaned;
+        - quarantine_isolated:隔离目录源/目标布局与 journal durable intent
+          的全树内容证据一致;
         - folder:journal 记 deleted 则旧目录必须已删除;
         - staging 区已清理(无 staged 记录、无残留、目录不存在);
         - completed journal 的 physical 节必须全部处于终态。
@@ -259,13 +260,12 @@ class SessionCatalogMigratorPreflightMixin:
                     target, frozen_by_id[session_id], stage=stage
                 )
             elif state == "quarantine_isolated":
-                target = self._resolved_orphaned_root / session_id
-                if not target.is_dir():
-                    raise self._fail(
-                        stage,
-                        "quarantine 隔离目录缺失(物理树被外部改动): "
-                        f"session_id={session_id}, target={target}",
-                    )
+                self._verify_quarantine_isolated(
+                    session_id,
+                    record,
+                    kind="session",
+                    stage=stage,
+                )
             else:
                 raise self._fail(
                     stage,
@@ -281,13 +281,12 @@ class SessionCatalogMigratorPreflightMixin:
                         f"quarantine folder 未隔离(与已完成迁移不一致): "
                         f"folder_id={folder_id}, state={record['state']!r}",
                     )
-                target = self._resolved_orphaned_root / folder_id
-                if not target.is_dir():
-                    raise self._fail(
-                        stage,
-                        "quarantine folder 隔离目录缺失(物理树被外部改动): "
-                        f"folder_id={folder_id}, target={target}",
-                    )
+                self._verify_quarantine_isolated(
+                    folder_id,
+                    record,
+                    kind="folder",
+                    stage=stage,
+                )
                 continue
             if record["state"] != "deleted":
                 raise self._fail(

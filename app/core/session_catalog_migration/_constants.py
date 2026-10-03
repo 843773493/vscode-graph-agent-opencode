@@ -29,9 +29,11 @@ _STRIP_MANIFEST_KEYS = ("title", "title_source", "parent_session_id")
 # journal physical 节的 per-session 分类与状态闭集。
 _CLASSIFICATIONS = frozenset({"migrate", "quarantine"})
 _SESSION_PHYSICAL_STATES = frozenset(
-    {"pending", "staged", "placed", "quarantine_isolated"}
+    {"pending", "staged", "placed", "quarantine_intent", "quarantine_isolated"}
 )
-_FOLDER_PHYSICAL_STATES = frozenset({"pending", "deleted", "quarantine_isolated"})
+_FOLDER_PHYSICAL_STATES = frozenset(
+    {"pending", "deleted", "quarantine_intent", "quarantine_isolated"}
+)
 _CONTROL_STATES = frozenset({"pending", "initialized"})
 
 # migration_id 形态:uuid4().hex,32 位小写 hex(staging 目录名,安全单段)。

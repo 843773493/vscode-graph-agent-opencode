@@ -4,14 +4,15 @@
 Session/Folder/children 物理树)→ SQLite catalog + 日期桶的**一次性迁移机器**的唯一实现点
 （原先的 `app/core/session_catalog_migration.py` 单文件已按迁移阶段拆分入本包）。facade 落在
 本包 `__init__.py`，只保留原模块 docstring/红线、`__all__`、`SessionCatalogMigrator` 的类声明
-（六个扁平 mixin）与模块级入口（`migrate_workspace_session_catalog`、
+（七个扁平 mixin）与模块级入口（`migrate_workspace_session_catalog`、
 `_ensure_entry_workspace_id_bound`），并按原名再导出模块级公开符号。
 
 本包承载的族：契约与共享常量（`_constants.py` 的目录/状态闭集常量、`_contracts.py` 的 DTO/
 异常/journal 映射与拓扑序工具）、journal 读取校验与写入（`_journal.py`）、首次迁移入口
 （`_fresh.py`）、预检/旧权威/备份复验/冻结与 quarantine 分类（`_preflight.py`）、迁移主管线
 （`_pipeline.py`）、gate 内 catalog 幂等重建与对账（`_catalog.py`）、物理树迁移与
-session-control 初始化/终验/通用工具（`_physical.py`）。
+session-control 初始化/终验/通用工具（`_physical.py`）、quarantine durable intent、全树证据
+与定点恢复（`_quarantine.py`）。
 
 # 可修改内容
 
@@ -33,8 +34,12 @@ session-control 初始化/终验/通用工具（`_physical.py`）。
 - **不得改变迁移语义**：迁移执行顺序（阶段1 gate 内重建 → 阶段2 备份复验 → 阶段3 物理树迁移
   → 阶段4 终验 → 阶段5 completed）、staging/journal/隔离区目录命名（`.staging/<migration_id>/`、
   `maintenance/session-catalog-migration/journal.json`、`orphaned/session-catalog-migration/`）、
-  事务边界、物理段幂等判据（pending/staged/placed/control_state 的定点继续规则）与 fail-closed
-  行为均 MUST NOT 改变。物理段 session/folder 一律按旧路径深度**降序**处理，不得重排。
+  事务边界、物理段幂等判据与 fail-closed 行为均 MUST NOT 改变。quarantine 物理动作须先在
+  journal 写入包含节点 ID、kind、冻结源/目标路径和完整树内容哈希的 `quarantine_intent`，再
+  rename；目标目录链每层必须先 fsync 父目录，rename 前源/目标必须恰有一侧存在且完整匹配
+  intent，否则拒绝继续。无 intent 或证据不合法的隔离记录一律拒绝恢复，包括 completed 记录。
+  物理段 session/folder
+  一律按旧路径深度**降序**处理，不得重排。
 - 不得为兼容旧调用点保留转发方法、旧模块 shim 或双套实现；跨族协作必须走同一 `self`。
 - 不得静默改动搬迁方法的异常类型、错误消息或注释；搬迁必须逐字保留语义（禁止把
   `RuntimeError` 改成 `TypeError` 之类）。

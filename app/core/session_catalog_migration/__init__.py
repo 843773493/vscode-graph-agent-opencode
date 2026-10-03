@@ -56,6 +56,7 @@ from ._journal import SessionCatalogMigratorJournalMixin
 from ._physical import SessionCatalogMigratorPhysicalMixin
 from ._pipeline import SessionCatalogMigratorPipelineMixin
 from ._preflight import SessionCatalogMigratorPreflightMixin
+from ._quarantine import SessionCatalogMigratorQuarantineMixin
 
 __all__ = [
     "QuarantinedNode",
@@ -73,6 +74,7 @@ class SessionCatalogMigrator(
     SessionCatalogMigratorPipelineMixin,
     SessionCatalogMigratorCatalogMixin,
     SessionCatalogMigratorPhysicalMixin,
+    SessionCatalogMigratorQuarantineMixin,
 ):
     """旧 JSON index + 物理树 → SQLite catalog + 日期桶的一次性迁移器(切片2)。
 
@@ -102,9 +104,9 @@ class SessionCatalogMigrator(
     跳过;旧位置目录已不存在且 journal 记 pending → fail closed(外部改动
     无法证明);staging 残留目录(journal 无 staged 记录)→ fail closed;
     日期桶目标已存在且 journal 记 pending/staged → fail closed(不覆盖)。
-    已知残余崩溃窗口(rename 与 journal 写之间):重入按上述规则 fail
-    closed,数据完整保留在 staging/隔离区/日期桶,由人工核账后推进——
-    绝不自动吸收。
+    quarantine 隔离会先把节点 ID、冻结源/目标路径与全树内容哈希耐久写入
+    journal v2，再 rename；重入时源与目标必须恰有一侧存在且完整匹配证据，
+    两侧同时存在、同时缺失、缺少 intent 或证据漂移都 fail closed。
     """
 
     JOURNAL_SCHEMA_VERSION = 2

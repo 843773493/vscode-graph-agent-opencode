@@ -33,6 +33,7 @@ from ._contracts import (
     _MigrationContext,
     _quarantined_to_dict,
 )
+from ._quarantine import validate_quarantine_intent
 
 
 class SessionCatalogMigratorJournalMixin:
@@ -184,6 +185,7 @@ class SessionCatalogMigratorJournalMixin:
             raise self._fail(stage, "quarantined_nodes 存在重复 node_id")
         migrate_session_ids: set[str] = set()
         quarantine_session_ids: set[str] = set()
+        journal_state = journal.get("state")
         for session_id, record in raw_sessions.items():
             prefix = f"physical.sessions[{session_id}]"
             if not isinstance(record, dict):
@@ -198,7 +200,7 @@ class SessionCatalogMigratorJournalMixin:
                 record.get("old_relative_path"), stage=stage, context=prefix
             )
             if classification == "migrate":
-                if state == "quarantine_isolated":
+                if state in ("quarantine_intent", "quarantine_isolated"):
                     raise self._fail(
                         stage, f"{prefix} migrate 记录出现非法状态: {state!r}"
                     )
@@ -221,7 +223,11 @@ class SessionCatalogMigratorJournalMixin:
                             )
                 migrate_session_ids.add(session_id)
             else:
-                if state not in ("pending", "quarantine_isolated"):
+                if state not in (
+                    "pending",
+                    "quarantine_intent",
+                    "quarantine_isolated",
+                ):
                     raise self._fail(
                         stage, f"{prefix} quarantine 记录出现非法状态: {state!r}"
                     )
@@ -230,6 +236,15 @@ class SessionCatalogMigratorJournalMixin:
                     raise self._fail(
                         stage, f"{prefix}.quarantine_reason 非法: {reason!r}"
                     )
+                self._validate_quarantine_physical_record(
+                    record,
+                    node_id=session_id,
+                    kind="session",
+                    state=cast(str, state),
+                    journal_state=journal_state,
+                    context=prefix,
+                    stage=stage,
+                )
                 quarantine_session_ids.add(session_id)
         folder_ids: set[str] = set()
         quarantine_folder_ids_parsed: set[str] = set()
@@ -246,21 +261,36 @@ class SessionCatalogMigratorJournalMixin:
                 raise self._fail(
                     stage, f"{prefix}.state 非法: {record.get('state')!r}"
                 )
-            if classification == "quarantine" and record.get("state") == "deleted":
-                raise self._fail(
-                    stage, f"{prefix} quarantine folder 出现非法状态: deleted"
-                )
-            if classification == "migrate" and record.get("state") == (
-                "quarantine_isolated"
+            folder_state = record.get("state")
+            if classification == "quarantine" and folder_state not in (
+                "pending",
+                "quarantine_intent",
+                "quarantine_isolated",
             ):
                 raise self._fail(
-                    stage, f"{prefix} migrate folder 出现非法状态: quarantine_isolated"
+                    stage, f"{prefix} quarantine folder 出现非法状态: {folder_state!r}"
+                )
+            if classification == "migrate" and folder_state in (
+                "quarantine_intent",
+                "quarantine_isolated",
+            ):
+                raise self._fail(
+                    stage, f"{prefix} migrate folder 出现非法状态: {folder_state!r}"
                 )
             self._validate_old_relative_path(
                 record.get("old_relative_path"), stage=stage, context=prefix
             )
             folder_ids.add(folder_id)
             if classification == "quarantine":
+                self._validate_quarantine_physical_record(
+                    record,
+                    node_id=folder_id,
+                    kind="folder",
+                    state=cast(str, folder_state),
+                    journal_state=journal_state,
+                    context=prefix,
+                    stage=stage,
+                )
                 quarantine_folder_ids_parsed.add(folder_id)
         # 三向一致性校验。
         if migrate_session_ids != frozen_sessions:
@@ -291,6 +321,46 @@ class SessionCatalogMigratorJournalMixin:
         if folder_ids & raw_sessions.keys() or raw_sessions.keys() & folder_ids:
             raise self._fail(stage, "physical sessions/folders 存在重复 node_id")
         return raw
+
+    def _validate_quarantine_physical_record(
+        self,
+        record: dict[str, object],
+        *,
+        node_id: str,
+        kind: str,
+        state: str,
+        journal_state: object,
+        context: str,
+        stage: str,
+    ) -> None:
+        """任何 quarantine_isolated 状态都必须带可校验 intent。"""
+        has_intent = "quarantine_intent" in record
+        if state == "pending":
+            if has_intent:
+                raise self._fail(
+                    stage, f"{context} pending 记录不应包含 quarantine_intent"
+                )
+            return
+        if state == "quarantine_isolated" and not has_intent:
+            raise self._fail(
+                stage,
+                f"{context} quarantine_isolated 缺少 durable intent",
+            )
+        if state == "quarantine_intent" and journal_state == "completed":
+            raise self._fail(
+                stage, f"{context} completed journal 仍处于 quarantine_intent"
+            )
+        try:
+            validate_quarantine_intent(
+                record.get("quarantine_intent"),
+                node_id=node_id,
+                kind=kind,
+                old_relative_path=cast(str, record["old_relative_path"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise self._fail(
+                stage, f"{context}.quarantine_intent 非法: {error}"
+            ) from error
 
     def _validate_old_relative_path(
         self, value: object, *, stage: str, context: str
