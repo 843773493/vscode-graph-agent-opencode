@@ -159,7 +159,9 @@ def prepare_messages(
             codec.project_message(group)
             if stored:
                 _compare_group(group, stored)
-            if not codec.is_internal(message):
+            if not codec.is_internal(message) or (
+                message_role == "user" and not turn_id.startswith("internal-")
+            ):
                 current_turn = turn_id
             batch.item_ids.extend(item.item_id for item in group)
             if indexed is not None:
