@@ -55,6 +55,22 @@ def _hermetic_proxy_env():
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _integration_runtime_manifest_env(
+    runtime_manifest_path: Path,
+) -> Generator[None, None, None]:
+    """在 integration 会话启动前注入 manifest，供模块级后端进程继承。"""
+    previous_manifest = os.environ.get("BOXTEAM_RUNTIME_MANIFEST")
+    os.environ["BOXTEAM_RUNTIME_MANIFEST"] = str(runtime_manifest_path)
+    try:
+        yield
+    finally:
+        if previous_manifest is None:
+            os.environ.pop("BOXTEAM_RUNTIME_MANIFEST", None)
+        else:
+            os.environ["BOXTEAM_RUNTIME_MANIFEST"] = previous_manifest
+
+
+@pytest.fixture(scope="session", autouse=True)
 def integration_is_debug() -> bool:
     return os.getenv("BOXTEAM_INTEGRATION_BACKEND_DEBUGPY") == "1"
 
