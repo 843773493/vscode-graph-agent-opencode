@@ -145,15 +145,15 @@ SessionContextResourceRef {
 
 ### D6：配置来源真实路径持久化的迁移（已确证义务）
 
-**决定**：把配置来源的真实路径持久化改造为 VRN 表达，**直接复用 config 侧已跑通的形态**。
+**决定**：把配置来源的真实路径持久化改造为 VRN 表达，并复用 `ConfigSource` 的平级字段模式。配置 VRN、逻辑 layer/precedence、runtime override 的 nullable VRN、内部 SQLite carrier 与 active/pending snapshot 的边界，均由 `add-unified-virtual-resource-addressing` 独占定义；本 change 只引用其配置来源 VRN requirement 与 config layer requirement，不另立 layer 规则。
 
 现状（已实测）：`app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord` 含 `source_path: str` 与 `backup_path: str | None`——真实路径已写入 SQLite；`app/schemas/internal_v2/config.py` 的 `ConfigSourceDTO.path: str` 又把它经 API 响应体对外（`app/api/config.py:102` 的 `path=str(source.path)`，实测 `GET /api/v1/config/sources` 回真实绝对路径）。两处都违反「real path 永不持久化 / 永不进模型可见载荷」。
 
 改造形态：`app/core/config_sources.py` 的 `ConfigSource` 已是 `path: Path` + `layer` + `precedence` 平级属性，且 `layer_revision` / `layer_digest` / `source_generation` 已是**兄弟字段**。因此改造等价于**把 `path: Path` 换成 `vrn: VRN`，其余兄弟字段原样保留**。MUST NOT 另发明一套结构。
 
-**config 寻址形态**：config 资源用「统一虚拟资源寻址」change 已定稿的 `config` kind 标识来源文件本身（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」与「配置来源寻址必须使用 config kind 且 sqlite 层不可寻址」）；`layer` 作为**兄弟字段**保留，**不塞进 VRN**。`inline` 层有稳定 disk 载体（发行包内 `configs/*_inline.jsonc`，经 `resolve_config_resource_source` 校验 `is_file()`），故有 VRN。`sqlite` 层 MUST NOT 编 VRN：`user` / `user_local` / `workspace` 三层共享同一个 `workspace.sqlite`（`app/services/infrastructure/config_service/config_source_layers.py` 的 `_config_source` 在 `_workspace_state_store` 存在时统一返回 `self._workspace_state_store.path`），单一 VRN 会立刻对应多个逻辑来源。
+**config 寻址与 layer 规则只引用 owner**：配置 VRN 使用既有 `config` kind；逻辑 layer 与 precedence 是 VRN 外的兄弟字段。`inline` 来源的地址构造、不可寻址来源允许 VRN 缺失、runtime override 的来源身份，以及 `active_snapshot` / `pending_snapshot` 不属于来源清单，均以 owner requirements「配置来源 VRN 必须使用 config kind 且只标识来源文件」和「配置 layer 必须表示逻辑来源且与载体和快照分离」为准。本 change 不复述 layer 闭集，不将 carrier 或 snapshot 伪装成新的来源、kind、VRN 地址或公开字段。
 
-**理由**：这是明示的迁移义务，属「已确证」而非假设。复用既有 sibling 字段形态可以同时达成两点——真实路径不再持久化、不再进 API 响应体；且不引入第三套来源层结构（避免双轨）。
+**理由**：这是明示的迁移义务，属「已确证」而非假设。复用既有 sibling 字段形态可以同时达成两点——真实路径不再持久化、不再进 API 响应体；且不引入第三套来源层结构。配置 layer 的唯一规范定义在其 owner，本 change 的任务只实施该已定稿契约。
 
 ### D7：命名与 owner 收口
 
@@ -175,7 +175,7 @@ SessionContextResourceRef {
 1. **冻结入口**：会话上下文入口按 D1 的结构化引用表示；旧式字符串入口对**新写入**直接拒绝（`%`/`#`/未登记 scope，含 `memory` 两点式）。
 2. **确认无存量**：按 D5 的取证确认不存在内嵌旧式上下文 URI 的持久化记录，**不构造**扫描/规范化/失效的存量迁移脚本。
 3. **新写字段切换**：让既有持久化挂点（`display_uri` 列、`context_source_control_states` 的来源事实）按 identity + VRN 的新格式写入，并在读路径切换到新格式，旧写入形态物理下线。
-4. **配置来源真实路径迁移（已确证义务，见 D6）**：把 `ConfigSource.path: Path` 换成 `vrn: VRN`，兄弟字段（`layer`/`precedence`/`layer_revision`/`layer_digest`/`source_generation`）原样保留；同步移除 `ConfigSourceLayerRecord.source_path`/`backup_path` 与 `ConfigSourceDTO.path` 对真实路径的持久化/输出。
+4. **配置来源真实路径迁移（已确证义务，见 D6）**：按 `add-unified-virtual-resource-addressing` 的配置来源 VRN 与 config layer 两项 owner requirement，实施 `ConfigSource` 平级字段模式与 real path 清除；layer 表、runtime override carrier、snapshot 边界与 nullable VRN 按 owner 定义执行，不在本 change 重复定义。
 5. **（已落地，登记为完成基线）删除 bundled 到 builtin 的改名 shim**：`app/agents/skill_runtime.py` 的 `bundled`→`builtin` 映射已由 `298ef599` 物理删除（`layer_order` 现为 `(inline, gateway, workspace)`），`layer` 名与 VRN scope 名自此逐字一致；该 shim 已不存在，实施期无需再删。
 
 **部署顺序约束**：本 change 的 spec/design/tasks 先于「统一虚拟资源寻址」的 VRN grammar 与拒绝码登记落地之前**不得**进入实施，因为会话上下文解析直接依赖其 grammar 与拒绝码；`kind` 取值（`session`）已由该 change 定稿，不再是前置阻塞项。

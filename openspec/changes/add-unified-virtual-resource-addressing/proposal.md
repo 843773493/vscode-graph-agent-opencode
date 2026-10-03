@@ -21,7 +21,7 @@
 - 建立**三层职责分离**并作为核心不变量：`ResourceIdentity`（不透明、稳定、无 revision、不依赖激活工作区、持久化）／`VRN`（可解析、持久化、允许悬空、禁编码 revision/hash）／`real path`（机器本地、临时、永不持久化、永不进模型可见载荷、永不跨 gateway 边界）。
 - 细化**星型解析**：`gateway_authority` 承载稳定 gateway_id；本地是 hub 可直接解析直接 spoke；是 spoke 经唯一 hub 做一次有界 transit，携带 `visited set`、`max_transit_gateways=1`、`max_gateway_hops=2` 与总 deadline；上界 MUST 是**显式策略常量**而非散落魔法数字。**解析命中只返回稳定身份与内容，不返回 locator**（`locator 是输入，不是输出`）。不可解析一律 fail-closed。
 - **拒绝码集中登记（分三套，不可混用）**：`VrnGrammarError.reason_code` **17 个**（`grammar.py:25-44`，构造函数对未登记 code 直接 `raise ValueError`，闭集不可扩展）、`VrnResolveError` 的规范闭集 **7 个**（现有 6 个加 `unsupported_view`，专用于已识别 view 与资源 kind 不兼容；生产实现仍待任务 1.3 完成）与**联邦解析期第三套**（`app/gateway/federation/errors.py` 的 `FederationError.code`，归属 `app/gateway/federation/`）是**三个独立闭集**，MUST 各列一套、标明各自适用范围与「不可混用」。其它 change 只能引用本登记处。
-- **`config` 寻址形态（kind 与词汇归本 change）**：config 资源用 `kind=config`；VRN 标识**来源文件本身**；`layer` 作为**兄弟字段**保留（不塞进 VRN）。`inline` 层有稳定 disk 载体（发行包内 `configs/*_inline.jsonc`，经 `resolve_config_resource_source` 的 `is_file()` 校验）→ 有 VRN。`sqlite` 层是**边界变量**（`user`/`user_local`/`workspace` 三层共享同一 `workspace.sqlite`）→ **不给它编 VRN**（否则同一 URI 对应四个逻辑来源）。
+- **配置来源地址与逻辑来源层由本 change 唯一裁定**：配置文件地址使用既有 `config` kind；VRN 只标识可寻址来源文件，`layer` 与 `precedence` 是独立兄弟字段。具体逻辑 layer 闭集与 precedence 见 requirement「配置 layer 必须表示逻辑来源且与载体和快照分离」；SQLite 只作内部 carrier，`runtime_override` 可无 VRN，`active_snapshot` / `pending_snapshot` 与 `sources[]` 分开。其他 change 只引用该定义，不新增 kind 或 VRN 形态。
 - 固化**identity 独立于 VRN**：同一逻辑名出现在两个不同 scope 时是两个不同 identity；跨来源等价/覆盖是独立 concern。
 - 固化**默认寻址政策**：配置/skill/状态/资源引用默认用 VRN 传递；新增持久化字段若需定位资源，一律用 `identity + VRN(+ 独立 revision 字段)`，禁止存 real path。
 - 建立**可机械检查的 real path 不变量**：real path 出现在 API 响应体／持久化记录／模型可见载荷中即为缺陷，禁止用脱敏或截断静默掩盖。
@@ -34,7 +34,7 @@
 
 ### New Capabilities
 
-- `virtual-resource-addressing`：统一虚拟资源寻址的三层职责分离（ResourceIdentity / VRN / real path）、scope 闭集与必填 scope_id、统一 VRN 语法（保留 `resources` 固定段序）与规范化、kind 闭集（含 `config`/`session`）、可选 gateway authority、星型 gateway 解析链与 policy 常量上界、**分三套集中登记的拒绝码（语法期 17 + 解析授权期 7〔含专用于 view 与资源 kind 不兼容的 `unsupported_view`〕+ 联邦解析期）**、「locator 不是输出」不变量、身份与寻址的职责边界、real path 永不外泄的可检查不变量、`builtin`→`inline` 正名（含 layer），以及配置来源持久化的 VRN 兄弟字段迁移与 `sqlite` 层不可寻址说明。
+- `virtual-resource-addressing`：统一虚拟资源寻址的三层职责分离（ResourceIdentity / VRN / real path）、scope 闭集与必填 scope_id、统一 VRN 语法（保留 `resources` 固定段序）与规范化、kind 闭集（含 `config`/`session`）、可选 gateway authority、星型 gateway 解析链与 policy 常量上界、**分三套集中登记的拒绝码（语法期 17 + 解析授权期 7〔含专用于 view 与资源 kind 不兼容的 `unsupported_view`〕+ 联邦解析期）**、「locator 不是输出」不变量、身份与寻址的职责边界、real path 永不外泄的可检查不变量、`builtin`→`inline` 正名（含 layer），以及配置来源 VRN、逻辑来源 layer、precedence 与快照边界的唯一规范。
 
 ### Modified Capabilities
 

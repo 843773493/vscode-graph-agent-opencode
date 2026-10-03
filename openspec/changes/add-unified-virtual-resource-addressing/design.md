@@ -18,7 +18,7 @@
 - 给出一套统一 VRN 语法（保留 `resources` 固定段序）与规范化单一实现、**定稿**的 scope 闭集、scope_id 语义表与 kind 闭集。
 - 给出**分三套**集中登记的拒绝码（grammar 17 + resolve 7 + 联邦解析期）与其不混用约束；resolve 闭集包含 `unsupported_view`，专用于已识别的 view 与资源 kind 不兼容。
 - 给出顶层 gateway 之间**星型解析**的边界契约，并把上界做成显式 policy 常量。
-- 登记配置来源 real path 持久化这一**已存在违约**的迁移形态，并说明 `sqlite` 层为何无 VRN。
+- 登记配置来源 real path 持久化这一**已存在违约**的迁移形态，并唯一规定来源 VRN、逻辑 layer/precedence 与 carrier/snapshot 的边界。
 - 明确与另外三个 change 的接口面，避免多份定义并存。
 
 **Non-Goals**
@@ -131,11 +131,13 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 
 **备选**：让会话上下文资源复用 `agent-spec` 或 `skills`（被否：语义完全不匹配，等于用错误词汇掩盖新资源种类）；把该 kind 留成待登记（被否：会阻塞并行 change 落地，且违背本 change 的 kind 所有权）。
 
-### D9：配置来源寻址用 config kind，sqlite 层不编 VRN
+### D9：配置来源 VRN 使用 config kind 且只标识可寻址来源文件
 
-**理由**：`inline` 层是发行包内真实文件（`is_file()` 校验），有稳定 disk 载体；`sqlite` 层是共享同一 `workspace.sqlite` 的**边界变量**，单 VRN 会对应四个逻辑来源。`layer` 保留为兄弟字段，与 config 侧既有平级属性一致。
+**决定**：配置来源 VRN 使用既有 `config` kind，只指向可寻址的来源文件；`layer` 与 `precedence` 保留为 VRN 外的兄弟字段。`inline` 是发行包内稳定文件来源，按 owner requirement 使用 VRN；没有稳定、可寻址来源文件的 `runtime_override` 可不带 VRN，并按资源身份与地址分离的 owner requirement 保持其来源身份。SQLite 仅是内部 carrier，不产生新的资源 kind、地址形式或公开 carrier 字段。
 
-**备选**：为每层各编一个 VRN（被否：`sqlite` 层物理同文件，编造出「同一 URI 对应多来源」）；把 layer 塞进 VRN（被否：VRN 只承载位置，layer 是并列语义）。
+**理由**：VRN 表达来源文件位置，逻辑来源层和存储 carrier 各有职责；为非文件来源造地址会把身份、位置和存储实现重新混在一起。
+
+**备选**：为 runtime override 或 SQLite carrier 新造 kind / VRN（被否：它们不是新增资源类型或来源文件）；把 layer 塞进 VRN（被否：VRN 只承载位置，layer 是并列语义）。
 
 ### D10：配置来源迁移直接复用 config 侧既有平级属性模式
 
@@ -155,11 +157,19 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 
 ### D12：与其它 change 的接口以「术语冻结 + 单向引用」实现
 
-本 change 是术语、scope、scope_id 语义、语法、kind 闭集与拒绝码的唯一 owner；另外四个 change 引用。
+本 change 是术语、scope、scope_id 语义、语法、kind 闭集、拒绝码与配置来源 layer/precedence 语义的唯一 owner；另外四个 change 引用。
 
 **理由**：用户要求各方不得各自重新定义；物理删除在途 change 的 VRN 定义不可行（其 requirement 已被引用），故采用「引用 + 声明从属」。
 
 **备选**：把 VRN 语法从在途 change 的 spec 中物理删除并全迁到本 change（被否：破坏未归档 change 的 requirement 连续性）。
+
+### D13：config layer 表示逻辑来源，carrier 与快照保持分离
+
+**决定**：config `layer` 只表示逻辑配置来源，闭集与既有 precedence 由 spec requirement「配置 layer 必须表示逻辑来源且与载体和快照分离」唯一登记。读侧将 runtime override 从旧 `sqlite` 值归入逻辑来源 `runtime_override`，保留原 precedence；SQLite 继续作为内部 carrier，不暴露 `sqlite` layer 或新增公开 storage/carrier 字段。`active_snapshot` 与 `pending_snapshot` 是快照状态，不是配置来源，必须位于 `sources[]` 之外。各配置数据 owner 对自己的 `source_key` 映射各自保有唯一权威表；所有读路径一致使用对应映射。
+
+旧开发中间数据不要求兼容：升级实现可以删除并重建不兼容的中间数据，不得为其增加双读、回填或兼容映射。该决定不改变 VRN kind、语法或已有地址形态。
+
+**理由**：`layer` 描述配置为何生效，carrier 描述状态存在哪里，snapshot 描述一次完整配置状态；把这些角色压进同一个 layer 既误报来源，也让 active/pending 状态伪装成可寻址的来源。
 
 ## Risks / Trade-offs
 
@@ -177,7 +187,7 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 2. 实现统一语法与规范化单一实现，替换 `virtual_resources/grammar.py` 的旧形态；同一步内修正 `skill_runtime.py:52` 与 `:619` 的裸拼接、删除 `:538` 的 `bundled`→`builtin` shim、并把 layer 名同步正名为 `inline`（不暴露中间态）。
 3. 把 `distribution_id` 接到已定稿来源（发行 manifest 的 `distribution` + `version`，编码规则见 D4b；已由 `298ef599`+`f3bd8213` 装配），并把 `gateway` 的 `gateway_id` 接到已定稿来源（`identity.json` 的 `load_or_create_gateway_id`，由 Gateway 侧按请求经 `X-BoxTeam-Gateway-Id` 注入，见 D4c）；落实 `gateway`/`inline` 的 scope_id 由真实身份推导。 **（修订注（2026-10-01 第四轮复核更正）：`distribution_id` 部分已由 `298ef599`+`f3bd8213` 落地；`gateway_id` 请求级注入已落地——`64ba30c8`/`53befbfc`/`9881a3b2`）**
 4. 接入解析链（本机分支），使 Skill/配置/状态链路改用 VRN 解析，而非仅打印。
-5. 按 D10 把配置来源 real path 迁移为 VRN 兄弟字段（`config/state.py` + `config_sources.py` + `api/config.py` 对齐）；`sqlite` 层显式不编 VRN。
+5. 按 D10 把配置来源 real path 迁移为 VRN 兄弟字段（`config/state.py` + `config_sources.py` + `api/config.py` 对齐）；layer、precedence、VRN 是否存在、内部 carrier 与 snapshot 边界均按 D13 及其 spec owner requirement 实施。
 6. 接入 gateway 层星型解析、policy 常量上界与集中登记的拒绝码。
 7. **迁移面**：全部为「加列 + 写路径 + 切读路径」（VRN 零落盘，已确证）；MUST NOT 构造存量扫描或数据改写。
 8. 与其它 change 对表：会话上下文 URI 与多工作区复用本 change 的 scope/scope_id/kind 归属；`memory` 在各方均按「非 VRN scope」处理，解析器侧特例分支已物理移除（提交 32bc6256）并以 `unknown_scope` 类拒绝码 fail-closed 拒绝。
@@ -196,7 +206,7 @@ identity 不可解析、不做寻址；VRN 可解析、不承担身份。同一�
 
 契约的**逐字权威文本**存在于本 change 的规划产物，二者互为唯一来源：
 
-- `openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md`：定义三层分离、scope 闭集与必填 scope_id（含 `gateway` scope 的 scope_id 由 Gateway 身份文件按请求注入推导、`inline` scope 由 manifest 推导）、VRN 语法、kind 闭集、gateway authority、星型解析与 policy 常量、**分三套**拒绝码、identity 独立、默认寻址政策与「新写字段」迁移面、配置来源 VRN 迁移与 `sqlite` 不可寻址、多工作区显式 scope_id、`builtin`→`inline` 正名（含 layer）。
+- `openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md`：定义三层分离、scope 闭集与必填 scope_id（含 `gateway` scope 的 scope_id 由 Gateway 身份文件按请求注入推导、`inline` scope 由 manifest 推导）、VRN 语法、kind 闭集、gateway authority、星型解析与 policy 常量、**分三套**拒绝码、identity 独立、默认寻址政策与「新写字段」迁移面，以及配置来源 VRN、逻辑 layer/precedence、carrier/snapshot 分离与多工作区显式 scope_id；`builtin`→`inline` 正名归并于相关 scope/layer 定义。
 - `openspec/changes/add-unified-virtual-resource-addressing/tasks.md` 任务 `1.1`：术语表登记处；任务 `1.2`：scope 闭集与 scope_id 唯一表落点；任务 `1.3`：**分三套拒绝码集中登记处**（新增/更新拒绝码闭合集的唯一落点）。
 
 实施阶段的机械约束（写入任务，不在本 change 执行）：

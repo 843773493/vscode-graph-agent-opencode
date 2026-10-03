@@ -402,19 +402,19 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 - **WHEN** 某个既有持久化字段需要承载资源引用
 - **THEN** 它以 identity + VRN 的新格式新写入并切换读路径，旧写入形态物理下线，且不构造任何存量扫描或数据改写
 
-### Requirement: 配置来源寻址必须使用 config kind 且 sqlite 层不可寻址
+### Requirement: 配置来源 VRN 必须使用 config kind 且只标识来源文件
 
-配置来源资源的 VRN MUST 标识**来源文件本身**，kind 取自闭集 `config`；`layer` MUST 作为**兄弟字段**保留，MUST NOT 塞进 VRN。
+配置来源的 VRN MUST 使用闭集内的 `config` kind，且只标识**可寻址的来源文件本身**。`layer` MUST 作为独立兄弟字段保留，遵循本 capability 的 requirement「配置 layer 必须表示逻辑来源且与载体和快照分离」，MUST NOT 塞进 VRN。
 
-**`inline` 层有 VRN**：它是发行包内真实存在的 JSONC 文件（`configs/workspace_inline.jsonc` / `configs/gateway_inline.jsonc`，经 `resolve_config_resource_source` 的 `is_file()` 校验），有稳定 disk 载体。
+**`inline` 来源有 VRN**：它是发行包内真实存在的 JSONC 文件（`configs/workspace_inline.jsonc` / `configs/gateway_inline.jsonc`，经 `resolve_config_resource_source` 的 `is_file()` 校验），有稳定 disk 载体。
 
 **config VRN 的尾段形态（定稿）**：尾段 MUST 取该来源的**逻辑资源名**，MUST NOT 取原始文件名。尾段 MUST 是**单段**、MUST 落在动态段闭合 charset `[A-Za-z0-9_-]` 内、MUST NOT 含点号——真实文件名 `workspace_inline.jsonc` / `gateway_inline.jsonc` 的点号与扩展名不可原样入 VRN（`parse_vrn` 对含 `.` 的尾段以 `invalid_character` fail-closed 拒绝，该 charset MUST NOT 放宽、MUST NOT 新增转义后门）。尾段取值 MUST 与该来源的 `layer` 兄弟字段**一一对应**（`layer` 仍留在 VRN 之外，不进 VRN 字符串）。规范形态即 `boxteam://{scope}/{scope_id}/resources/config/{logical_source_name}`，其中 `scope`/`scope_id` 按本 capability 的 scope 闭集 requirement 取值（`inline` 层取 `scope=inline` 与真实 `distribution_id`），逻辑资源名取该层可寻址载体的逻辑名（如 `workspace_inline` / `gateway_inline`）。
 
-**`sqlite` 层 MUST NOT 被赋予 VRN**：它是**边界变量**而非固定资源——`user`/`user_local`/`workspace` 三层共享同一个 `workspace.sqlite`（`app/services/infrastructure/config_service/` 包（原单文件已拆为同名包）的 `_config_source` 在 state store 存在时统一返回同一个 `path`，同层再按 `layer_names` 映射回三种层名）。把它映射成单一 VRN 会立刻产生「同一 URI 对应四个逻辑来源」的冲突，故 MUST 显式说明其**共享载体导致的不可寻址性**。
+没有稳定、可寻址来源文件的配置来源 MAY 不带 VRN；`runtime_override` 在没有此类文件时 MAY 以 `vrn = null` 表达。此时配置来源身份仍独立于 VRN，MUST 遵循 requirement「identity 必须独立于 VRN 且不跨 scope 混同」与「默认寻址政策必须以 VRN 为默认形式」；`vrn = null` 只表示来源元数据没有可寻址文件位置，不构成可持久化资源 locator，也不授权存储真实路径。MUST NOT 将来源身份塞入 VRN 或为它编造新的 `kind` / 地址形态。真实路径 MUST 继续只在读取内容的调用栈内出现。
 
 #### Scenario: config 资源有 VRN
 
-- **WHEN** 系统为一条 `inline` 层配置来源构造地址
+- **WHEN** 系统为一条 `inline` 配置来源构造地址
 - **THEN** 它使用 `config` kind 的 VRN，`layer` 作为兄弟字段随行，VRN 字符串本身不含 layer 取值
 
 #### Scenario: config VRN 尾段是逻辑资源名而非原始文件名
@@ -422,14 +422,30 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 - **WHEN** 系统为一条 `inline` 层配置来源构造 VRN，其底层真实文件名为 `workspace_inline.jsonc`
 - **THEN** 尾段取逻辑资源名（`workspace_inline`，单段、落在 `[A-Za-z0-9_-]` 内、无点号），MUST NOT 取含 `.jsonc` 的原始文件名；含点号的尾段被 grammar 以 `invalid_character` 拒绝，且 charset MUST NOT 被放宽
 
-#### Scenario: sqlite 层不编 VRN
+#### Scenario: 没有可寻址来源文件时不编造 VRN
 
-- **WHEN** 系统处理 `user`/`user_local`/`workspace` 这些共享同一 `workspace.sqlite` 的来源
-- **THEN** 不为该 sqlite 文件编造 VRN，并显式说明其共享载体导致的不可寻址性
+- **WHEN** 系统处理没有稳定、可寻址来源文件的 `runtime_override`
+- **THEN** `vrn` MAY 为空，来源仍按既有身份字段识别；系统 MUST NOT 为内部 SQLite carrier 或 runtime override 编造 VRN
+
+### Requirement: 配置 layer 必须表示逻辑来源且与载体和快照分离
+
+config `layer` MUST 只表示逻辑配置来源，其闭集与 `precedence` 唯一由本 requirement 定义：`inline` → 0，`user` → 1，`user_local` → 2，`workspace` → 3，`runtime_override` → 4。`sqlite` 是实现可选的内部持久化 carrier，MUST NOT 作为 layer 值或新增公开的 storage/carrier 字段暴露。读侧原以 `sqlite` 表示的 runtime override MUST 改用 `runtime_override`，并保持其既有 `precedence`；其它来源的既有 precedence MUST 保持不变。
+
+`active_snapshot` 与 `pending_snapshot` 是配置状态快照，不是配置来源，MUST NOT 作为 `sources[]` 条目或 `layer` 值出现；快照生命周期 MUST 与来源清单分开表达，MUST NOT 把它们重映射成 `runtime_override`。`source_key` 到 `layer`/`precedence` 的映射 MUST 由其配置数据 owner 唯一登记，所有读路径 MUST 使用同一映射，不得按 SQLite 等物理 carrier 推导或覆盖逻辑来源层。
+
+#### Scenario: Workspace runtime override 的逻辑层与优先级不受物理 carrier 改写
+
+- **WHEN** 系统读取 `workspace_runtime_override` 配置来源
+- **THEN** 来源报告 `layer=runtime_override` 与既有 `precedence=4`；不因 carrier 改写成 `sqlite`，也不新增公开 storage/carrier 字段
+
+#### Scenario: active 与 pending snapshot 不进入来源清单
+
+- **WHEN** 系统恢复或报告 active/pending 配置快照
+- **THEN** 快照保持独立的配置状态，不作为 `sources[]` 中的来源条目，不获得 config `layer` 或来源 VRN
 
 ### Requirement: config 的 layer 轴与 VRN 的 scope 轴相互独立且同名不蕴含同义
 
-系统的 config `layer` 轴与 VRN `scope` 轴 MUST 被当作**两个相互独立、不可互换的轴**：`layer` 是 config 来源层身份、由 `app/core/config_sources.py` 的 `ConfigSourceLayer` 与 `app/schemas/internal_v2/config.py:20` 定义；`scope` 是 VRN 寻址身份、由本 capability 的 scope 闭集 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」定义。两个轴都含 `inline`，且另有同名异义取值——**同名 MUST NOT 被解释为同义、MUST NOT 被当作等价或可互换的枚举**；本 requirement MUST NOT 复述任一轴的取值表（避免制造第二份定义）。
+系统的 config `layer` 轴与 VRN `scope` 轴 MUST 被当作**两个相互独立、不可互换的轴**：`layer` 的唯一规范定义见本 capability 的 requirement「配置 layer 必须表示逻辑来源且与载体和快照分离」；`scope` 的唯一规范定义见本 capability 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」。两个轴都含 `inline`，且另有同名异义取值——**同名 MUST NOT 被解释为同义、MUST NOT 被当作等价或可互换的枚举**；本 requirement MUST NOT 复述任一轴的取值表。
 
 #### Scenario: 同名不同轴不被混用
 
@@ -438,8 +454,8 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 #### Scenario: 同一 source_key 在所有读路径报同一逻辑来源层
 
-- **WHEN** 系统分别从源 JSONC 构建与从 active snapshot 基线恢复同一条配置来源，并分别通过 `_config_source`/`_runtime_override_source` 与 `_persisted_source_details` 取得其 `layer`
-- **THEN** 两条读路径对同一 `source_key` MUST 报同一个逻辑来源层与同一个 `precedence`；`layer` MUST 是逻辑来源层，MUST NOT 因该来源被同一 `workspace.sqlite` 承载而被改写成 `sqlite`（该共享载体的不可寻址性只以 VRN 缺失表达，MUST NOT 作为有损层名）；`inline` 层的 `precedence` MUST 保持其权威值，MUST NOT 落入任何兜底取值
+- **WHEN** 系统从源 JSONC 构建或从 active snapshot 的来源基线恢复同一条配置来源，并取得其 `layer` 与 `precedence`
+- **THEN** 对同一 `source_key` 的所有读路径 MUST 返回同一逻辑来源层与同一优先级；结果 MUST 符合本 capability 的 config layer 权威表，不得按物理 carrier 改写，也不得把 active/pending snapshot 本身报告成来源
 
 ### Requirement: 既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段
 

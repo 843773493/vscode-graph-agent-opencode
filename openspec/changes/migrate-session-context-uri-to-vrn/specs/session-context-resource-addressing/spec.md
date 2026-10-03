@@ -153,25 +153,21 @@
 - **WHEN** 某个既有持久化字段（如 `display_uri`、来源事实）需要承载资源引用
 - **THEN** 它以资源身份加 VRN 的新格式写入并在读路径切换，旧写入形态物理下线，不留兼容层
 
-### Requirement: 配置来源的真实路径持久化必须迁移到 VRN
+### Requirement: 配置来源位置字段遵循 owner VRN 形态且不泄漏真实路径
 
-**归属与引用**：本义务的正名 normative 出处为 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段」（含 config kind、尾段形态、`sqlite` 层不可寻址与 real path 不持久化的全部正文）。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套 config 迁移规范；以下 scenario 只保留会话上下文侧的验收视角。
+**归属与引用**：配置来源 VRN 与 real path 迁移规范唯一归 `add-unified-virtual-resource-addressing` 所有；本 capability 只具名引用其 requirement「配置来源 VRN 必须使用 config kind 且只标识来源文件」及「配置 layer 必须表示逻辑来源且与载体和快照分离」，MUST NOT 复制其 layer 表、VRN 规则或 carrier/snapshot 规则，也 MUST NOT 另立第二套 config 迁移规范。以下 scenario 只保留会话上下文 change 对该义务的引用验收。
 
 #### Scenario: 配置来源记录不含真实路径
 - **WHEN** 配置来源层被持久化到 SQLite
-- **THEN** 记录中用 VRN 表达来源，不含 `source_path`/`backup_path` 一类真实路径字段
+- **THEN** 记录不含 `source_path`/`backup_path` 一类真实路径字段；VRN 是否存在遵循 owner 的可寻址来源文件规则
 
 #### Scenario: API 不输出配置来源真实路径
 - **WHEN** 客户端请求配置来源列表（`GET /api/v1/config/sources`）
-- **THEN** 响应体只含 VRN 与兄弟字段（layer/precedence/layer_revision/layer_digest/source_generation 等），不含真实路径
+- **THEN** 响应体不含真实路径；VRN 与其它来源字段遵循 owner 的平级字段和 nullable VRN 规则
 
-#### Scenario: sqlite 层不编 VRN
-- **WHEN** 迁移处理 `user` / `user_local` / `workspace` 这些共享同一 `workspace.sqlite` 的来源
-- **THEN** 不为该 sqlite 文件编造 VRN，并显式说明其共享载体导致的不可寻址性
-
-#### Scenario: 复用既有 sibling 字段形态
-- **WHEN** 实施把配置来源改造成 VRN 表达
-- **THEN** 直接以 `ConfigSource` 既有的平级 `layer`/`precedence`/`layer_revision`/`layer_digest`/`source_generation` 兄弟字段承载，不新增第二套结构
+#### Scenario: 配置来源 layer 规则单向引用唯一 owner
+- **WHEN** 会话上下文 change 描述配置来源的逻辑 layer、precedence、runtime override、物理 carrier 或 active/pending snapshot
+- **THEN** 它只具名引用上述 owner requirements，不重复定义或改写配置来源合同
 
 ### Requirement: 已确证义务与 owner 已定稿项必须显式区分
 
@@ -181,7 +177,7 @@
 
 - 旧式会话上下文 URI **零历史落盘实例**，迁移面只有「入口拒绝 + 新写字段」；
 - 配置来源的真实路径外泄义务（持久化侧与 API 响应体侧）已由 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段」唯一登记，本 capability 只具名引用；该义务已由 `50bffa45`（持久化改 VRN、删 `source_path`/`backup_path`）与 `76ed0089`（`ConfigSourceDTO.path` 与 `ConfigSourcesDTO.schema_path` 均改 VRN）落地；
-- `inline` 层有稳定 disk 载体、`sqlite` 层是共享载体不可寻址，`memory` 不是 VRN scope。
+- `inline` 配置来源的地址与逻辑 layer/precedence 规则均引用「统一虚拟资源寻址」change 的对应 owner requirement；`memory` 不是 VRN scope。
 
 由「统一虚拟资源寻址」change 定稿并引用（本 capability 只引用、不得自行发明）：scope 闭集（`workspace` | `user` | `gateway` | `inline`，见其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」）、每个 scope 的 scope_id 语义（同前 requirement）、`kind` 闭集（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」）、以及全部拒绝码取值（含 view-kind 校验所用的 `unsupported_view`，见其拒绝码登记 requirement）。
 
