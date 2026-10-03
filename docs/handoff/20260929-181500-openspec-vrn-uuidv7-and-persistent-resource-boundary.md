@@ -1,5 +1,7 @@
 # OpenSpec / VRN / UUIDv7 与持久资源边界交接
 
+> 2026-10-03 调度整理：本文保留历史记录，旧模型、端口禁令与 Git 命令不再作为当前执行指令。尤其本文早期的 commit pathspec 与共享索引 reset 示例已被后续事故推翻，禁止照搬。继续任务以用户当前决定及 [团队协作技能](../../.codex/skills/team-collaboration-workflow.md) 为准。
+
 - 交接时间：2026-09-29 18:15:00 UTC+8
 - 仓库：`/data/hyf/20260629_agent/vscode-graph-agent-opencode`
 - 分支：`main`

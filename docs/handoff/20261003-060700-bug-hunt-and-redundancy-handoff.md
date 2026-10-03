@@ -2,7 +2,11 @@
 
 日期：2026-10-03
 停止点 HEAD：`11dcfa394261e70ffa7aba3a033a285eaebb1bb2`
-工作树状态：**完全干净**（独立索引 `read-tree HEAD` 后 `git status` 零残留）
+工作树状态：**当时完全干净**（独立索引 `read-tree HEAD` 后 `git status` 零残留）。这是历史停止点，恢复任务需重新检查。
+
+2026-10-03 调度整理：handoff 文档提交为 `9bc4246b`；模型、派单、路径和提交方法改由 [团队协作技能](../../.codex/skills/team-collaboration-workflow.md) 维护。两种模型版本已准备，本轮仅整理文档及遗留目录，未继续 OpenSpec。目录问题与待审建议见 [目录审查](20261003-151500-team-collaboration-directory-review.md)。
+
+2026-10-04 迁移更新：仓库物理根为 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，原路径为软链接；后续不复用历史临时测试工作区。默认工作区与 `/data1/hyf/test_workspace/drive_bicicle` 的旧 `.boxteam/` 数据已分别按用户授权清理，普通文件保留，两个连接均恢复 `ready`。完整开发服务已恢复（前端 8027、Gateway 8030）。模型、目录、验证与回收状态继续以技能实时台账为准；尚未继续本交接的业务实施任务。
 
 ---
 
@@ -90,13 +94,13 @@
 
 ## 四、必须交由环境 owner 处理的两项（超出本仓库改动范围）
 
-### 1. 共享 `.git/index` 已损坏（**最高优先级**）
+### 1. 共享 `.git/index` 陈旧（**最高优先级**）
 
 实测状态：
 
 - 索引条目 **3266**，而 HEAD 树条目 **3434**；
 - 两份前端 openapi 快照在索引中仍停在旧 blob `eca0c3b7…`，而 HEAD 与工作树均已正确（`586d73ca…`）；
-- `git status` / `git diff HEAD` 会把未改动文件谎报成整文件 `D`/`MM`。
+- 使用这份索引的 `git status` / `git diff HEAD` 会把未改动文件报成 `D`/`MM`；不能据此认定磁盘文件被删。这是索引与 HEAD 不一致，不是已证实的对象数据库损坏。
 
 **危害**：任何不带 `GIT_INDEX_FILE` 的 `git add`/`git commit` 都会吞并陈旧暂存内容。本轮已真实发生 3 次「陈旧索引快照吞并发提交」事故：
 
@@ -105,25 +109,16 @@
 - `3ea48090` 用旧 read-tree 快照反向还原 `1287390f` → 由 `911491c2` 前向恢复；
 - 另有 `f0711273` 同类自查恢复。
 
-**建议**：显式 `git read-tree HEAD` 重建共享索引（owner 决定）。在修复前，所有 agent 必须走独立临时索引。
+**当前处理**：保留共享暂存内容，不直接重建共享索引。状态检查使用任务自己的新索引；是否备份并重建共享索引，由用户审查后决定。任务专属索引放在已分配的 `out/` 目录，不再以 `/tmp` 为默认根。
 
-### 2. 隔离索引提交防线（已落地，继续强制）
+### 2. 集成提交与防线
 
-`scripts/assert_isolated_index_commit.mjs`：
+`scripts/assert_isolated_index_commit.mjs` 已落地，当前执行方法统一见 [技能的集成与索引流程](../../.codex/skills/team-collaboration-workflow.md#集成与索引)。
 
-```
-git rev-parse HEAD
-GIT_INDEX_FILE=/tmp/<任务名>.idx git read-tree HEAD
-GIT_INDEX_FILE=/tmp/<任务名>.idx git add <精确路径...>   # 绝不用 -A / .
-GIT_INDEX_FILE=/tmp/<任务名>.idx git diff --cached --name-only   # 逐条核对
-node scripts/assert_isolated_index_commit.mjs record --index /tmp/<任务名>.idx --task <任务名>
-GIT_INDEX_FILE=/tmp/<任务名>.idx git commit -F <文件>    # ★ MUST NOT 带 -- <路径>
-node scripts/assert_isolated_index_commit.mjs verify --index /tmp/<任务名>.idx --task <任务名>
-```
-
-- **`git commit -- <路径>` 会绕过隔离索引**（真实事故 `d4e864fc`）；
-- **禁用 `printf '%s'` 写多行提交信息**（曾把换行写成字面 `\n`，两起）；
-- 提交前重新取 HEAD 并**立刻** read-tree（缩小并发窗口）。
+- 独立索引只能隔离暂存内容，不能隔离工作树文件，也不能防止旧 HEAD 快照覆盖并发提交；默认由主代理串行集成。
+- `git commit -- <路径>` 会绕过隔离索引（事故 `d4e864fc`），禁止使用；禁止 `--amend` 与裸共享索引提交。
+- 防线脚本用于事后核验，不是互斥锁。提交前核对 HEAD，提交后核对本笔提交及祖先链；失败需取证与前向恢复。
+- 多行提交正文写入任务 `git/` 下的文件，保留真实换行。
 
 ---
 
@@ -149,7 +144,7 @@ node scripts/assert_isolated_index_commit.mjs verify --index /tmp/<任务名>.id
    环境细节：`ps` 曾观察到并发 agent 争用同一持久 `gateway.sqlite`、`401 invalid local token`。
    修复 `11dcfa39` 时已用干净副本对照确证因果。
 2. `tests/unit/gateway/test_openapi_document_matches_baseline` 的过期哈希（`a0263a90` 已修摘要基线；若仍红需重跑确认）。
-3. 仓库存在 git-ignored 的 `.boxteam/`（仅 `terminal-manager`，Sep 29，非本轮产物）。
+3. 历史仓库根曾存在 git-ignored 的 `.boxteam/terminal-manager/`（Sep 29 旧测试状态，workspace_id 为 `gw_terminal_steering_test`）。2026-10-04 已按用户授权删除该目录及空的 `.boxteam/` 父目录，当前不再存在；无法确认具体创建者。
 
 ---
 
@@ -176,18 +171,14 @@ bun run --cwd src/clients/web build                             EXIT=0
 
 ## 八、下一步建议
 
-1. **先修共享 `.git/index`**（`git read-tree HEAD`），否则每次裸提交都可能重演吞并事故。
+1. **先检查共享索引与真实工作树**：使用任务新索引，保留现有暂存内容；按技能集中集成。共享索引重建不是继续准备工作的前提。
 2. 裁定第五节 1、6 两项（其余可继续按既定口径推进）。
 3. 继续 bug 猎捕时仍未深挖的面：
    - `app/services/infrastructure/{resource_platform, rollout_context, turn_history, team, mcp, node_debug, attachment_*}`；
    - `app/services/orchestration/**` 的执行面（ThreadExecutionQueue、admission ordinal、ExecutionContextFence，OpenSpec 8.3-A）；
    - 前端 `hooks/{session*,sessionEventStream}` 的深层分支、`components/{agentSessions,overlays,shell,eventQueue}`；
    - `tests/integration/**` 的变异鉴别力审计（哪些用例还原缺陷后仍绿）。
-4. **并行协作口径**（本轮已验证有效）：
-   - 每个 agent 派单必须写死**独占文件面**，并列出其他在跑 agent 的面以防双写；
-   - 每次派单要求「同时发现并减少冗余代码」并回报改造前后行数与 expect/assert 数量变化；
-   - 三类结论严格区分：**真实缺陷（改）/ 设计有意（登记）/ 不可达或未接线（登记）**；
-   - 鼓励自我推翻（本轮已有 `audit_orchestration_edges` 撤销自身判断、`redundancy_scout_infra` 证明候选不可落地、`be_navigation_bug_hunt` 拒绝删除待接线代码等多例）。
+4. **并行协作口径**统一见 [团队协作技能](../../.codex/skills/team-collaboration-workflow.md)，不在历史交接中维护第二套指令。保留本轮经验：独占文件范围、独立核验、区分真实缺陷与设计/未接线候选，允许审查者推翻自己的初判。
 
 ---
 
