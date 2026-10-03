@@ -103,4 +103,4 @@
 - **漂移后果**：任何一次 `buf generate`（经 `bun run gen:protocol` / `scripts/generate_protocol.mjs` 调 `buf generate`）或 `bun run gen:openapi`，都会把全部 ts-proto 产物的版本头从 `2.12.1` 改成 `2.12.4`，形成与本次语义无关的**非预期生成物漂移**。
 - **owner 裁定（2026-09-30，书面）**：锁版本或整体升级作为**独立切片**，MUST NOT 夹带进任何功能提交；在独立切片完成前，任何 `buf generate` / `bun run gen:openapi` 都会引入上述非预期生成物漂移。
 
-- [ ] 生成器版本漂移收口（独立切片，未勾选）：把 `buf.gen.yaml` 的 `stephenh-ts-proto` 锁定到与已提交产物一致的版本（`v2.12.1`）或整体升级到 `v2.12.4` 并接受一次性全量重生成；二者择一，作为独立切片提交，MUST NOT 与任何功能改动混提。完成前 MUST NOT 在并发期执行 `buf generate` / `bun run gen:openapi`。证据：`out/tests/temp/impl_job_gateway_id/artifacts/report.md`（第 85-94、201-202、227 行）。
+- [x] 生成器版本漂移收口（独立切片）：`7596a841` 将 ts-proto 固定为当前产物 `v2.12.1`；真实生成又暴露 es header 漂移，故同时固定两个 es 为 `v2.15.0`、python 为 `v36.2`。`bun run gen:protocol` 退出 0，四个生成根相对 HEAD 零差异；Python/Node 跨文件 oneof 绑定测试各 1 项通过。未升级业务协议或夹带功能修改。证据：`out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/g03-validation.json`。后续功能切片在独立 worktree 使用此配置生成，主树串行集成。
