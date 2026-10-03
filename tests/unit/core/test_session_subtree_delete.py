@@ -20,7 +20,6 @@ from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_prefixed_id_at, to_epoch_ms
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -32,6 +31,7 @@ from app.core.session_subtree_delete import (
     SubtreeDeleteResult,
 )
 from app.services.business.session_resource_service import SessionResourceService
+from tests.support.canonical_id_at import session_id_at, thread_id_at
 
 WORKSPACE_ID = "ws-delete"
 
@@ -43,11 +43,11 @@ _DELETING_DIR_NAME = ".deleting"
 def make_node_id() -> str:
     """生成满足 UUIDv7 位 profile 的节点 ID（folder 与 session 同形）。"""
     # id 内嵌时间 MUST 与 sessions/2026/06/01 分桶同日（§4.1）。
-    return create_prefixed_id_at("ses", to_epoch_ms(_MOMENT))
+    return session_id_at(_MOMENT)
 
 
 def make_thread_id() -> str:
-    return create_prefixed_id_at("thr", to_epoch_ms(_MOMENT))
+    return thread_id_at(_MOMENT)
 
 
 def build_session_directory(

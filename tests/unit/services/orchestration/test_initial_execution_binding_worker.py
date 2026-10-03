@@ -22,6 +22,7 @@ from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBindingWorker,
     InitialExecutionBindOutcome,
 )
+from tests.support.canonical_id_at import thread_id_at
 
 DEFAULT_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
@@ -65,6 +66,7 @@ def prepare_published_intent(store: SessionControlStore):
         graph_binding=graph_binding,
         capability_profile=capability_profile,
         created_at=DEFAULT_CREATED_AT,
+        thread_id=thread_id_at(DEFAULT_CREATED_AT),
         task_seed=json.dumps(
             {"task": "做一件事"},
             ensure_ascii=False,

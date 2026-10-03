@@ -35,7 +35,11 @@ from app.core.session_catalog_store import (
     validate_thread_id,
 )
 from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
-from tests.support.canonical_id_at import session_id_at
+from tests.support.canonical_id_at import (
+    session_id_at,
+    session_id_for_name_at,
+    thread_id_for_name_at,
+)
 
 WORKSPACE_ID = "ws-primary"
 OTHER_WORKSPACE_ID = "ws-other"
@@ -1443,13 +1447,16 @@ def create_record(
     preimage_hash: str = "preimage-A",
 ) -> SessionCreationRecord:
     """测试辅助：create-or-get 一个 creation record。"""
+    moment = created_at or datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
     return store.create_or_get_creation_record(
         idempotency_key=key,
         workspace_id=WORKSPACE_ID,
         parent_node_id=parent_node_id,
         display_name=display_name,
-        created_at=created_at or datetime(2026, 6, 1, 12, 0, tzinfo=UTC),
         preimage_hash=preimage_hash,
+        created_at=moment,
+        session_id=session_id_for_name_at(key, moment),
+        main_thread_id=thread_id_for_name_at(key, moment),
     )
 
 

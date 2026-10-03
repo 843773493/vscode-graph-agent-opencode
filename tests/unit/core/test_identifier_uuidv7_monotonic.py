@@ -1,14 +1,14 @@
-"""唯一 id 工厂的 UUIDv7 单调性、时钟回拨与量化上界测试。
+"""唯一 id 工厂的 UUIDv7 单调性与量化上界测试。
 
-覆盖 OpenSpec change `migrate-identifiers-to-uuidv7` 的 §2（D2、D4c、D2b/A3）：
-同进程同毫秒非递减且唯一、跨毫秒自然单调、时钟回拨进程内非递减钳制、
-生成路径不得传显式 timestamp，以及「只承诺同进程内同毫秒有序」的量化边界。
+覆盖 OpenSpec change `migrate-identifiers-to-uuidv7` 的 §2（D2、D2b/A3）：
+同进程同毫秒非递减且唯一、跨毫秒自然单调、生成路径不得传显式 timestamp，
+以及「只承诺同进程内同毫秒有序」的量化边界。时钟回拨由 uuid-utils 默认路径
+处理，创建链路直接从已分配 ID 派生时间与日期桶。
 """
 
 from __future__ import annotations
 
 import collections
-import time
 
 import pytest
 
@@ -21,12 +21,6 @@ def _ms_groups(hex_ids: list[str]) -> dict[str, list[str]]:
     for value in hex_ids:
         groups[value[:12]].append(value)
     return dict(groups)
-
-
-@pytest.fixture(autouse=True)
-def _reset_issued_clock(monkeypatch: pytest.MonkeyPatch) -> None:
-    """隔离进程级已发放时钟，避免测试间相互污染。"""
-    monkeypatch.setattr(identifier, "_last_issued_ms", None)
 
 
 # ----------------------------------------------------------------------
@@ -68,53 +62,8 @@ def test_cross_millisecond_batch_is_globally_ordered_and_unique() -> None:
 
 
 # ----------------------------------------------------------------------
-# 2.3 时钟回拨钳制
 # ----------------------------------------------------------------------
-
-
-def test_effective_now_ms_clamps_clock_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
-    base = time.time_ns() // 1_000_000
-    # 注入时间源：先前进，再回拨到更早的时刻。
-    sequence = iter([base, base + 5, base - 500, base - 1000, base + 2])
-    monkeypatch.setattr(identifier, "_wall_clock_ms", lambda: next(sequence))
-
-    observed = [identifier.effective_now_ms() for _ in range(5)]
-
-    # 钳制后的时间源 MUST 非递减（回拨被钳到上一次已发放值）。
-    assert observed == sorted(observed)
-    assert observed[2] == base + 5 and observed[3] == base + 5
-
-
-def test_clock_rollback_does_not_produce_smaller_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    base = time.time_ns() // 1_000_000
-    sequence = iter([base, base + 3, base - 900, base - 1800, base + 1, base + 1])
-    monkeypatch.setattr(identifier, "_wall_clock_ms", lambda: next(sequence))
-
-    from uuid_utils import UUID as _UUIDv7
-
-    hex_ids: list[str] = []
-    clamped: list[int] = []
-    for _ in range(5):
-        clamped.append(identifier.effective_now_ms())
-        hex_ids.append(create_uuid_hex())
-
-    # 回拨场景下钳制时间源 MUST 非递减（回拨被钳到上一次已发放值）。
-    assert clamped == sorted(clamped)
-    # 新 id 均由 uuid_utils 的进程内单调时钟提供，MUST 非递减且唯一。
-    assert hex_ids == sorted(hex_ids)
-    assert len(set(hex_ids)) == 5
-
-    # 关键不变式：分桶时间源 MUST NOT 落后于最近一次发放的 id 内嵌时间戳，
-    # 否则回拨时分桶日期会早于 id 日期。
-    last_issued = identifier._last_issued_ms
-    assert last_issued is not None
-    for value in hex_ids:
-        assert last_issued >= int(_UUIDv7(hex=value).timestamp)
-    assert identifier.effective_now_ms() >= last_issued
-
-
-# ----------------------------------------------------------------------
-# 2.4 生成路径不得传显式 timestamp
+# 2.3 生成路径不得传显式 timestamp
 # ----------------------------------------------------------------------
 
 

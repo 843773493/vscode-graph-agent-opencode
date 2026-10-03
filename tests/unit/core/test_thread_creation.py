@@ -53,6 +53,7 @@ from app.core.thread_creation import (
     validate_thread_session_metadata,
     verify_node_directory,
 )
+from tests.support.canonical_id_at import thread_id_for_name_at
 
 WORKSPACE_ID = "ws-thread-create"
 
@@ -299,6 +300,16 @@ def prepare_manual_record(
         session_metadata=effective_metadata,
         artifact_manifest=effective_artifacts,
     )
+    fixture_created_at = (
+        created_at
+        if created_at is not None
+        else OWNER_CREATED_AT
+    )
+    fixture_thread_id = (
+        thread_id
+        if thread_id is not None
+        else thread_id_for_name_at(key, fixture_created_at)
+    )
     record = owner.control.create_or_get_thread_creation_record(
         idempotency_key=key,
         initial_state=initial_state,
@@ -307,8 +318,8 @@ def prepare_manual_record(
         capability_profile=canonical_json_text(
             effective_metadata["capability_profile"]
         ),
-        created_at=created_at if created_at is not None else OWNER_CREATED_AT,
-        thread_id=thread_id,
+        created_at=fixture_created_at,
+        thread_id=fixture_thread_id,
         delegation_id=delegation_id,
         task_seed=(
             canonical_json_text(effective_metadata["task_seed"])

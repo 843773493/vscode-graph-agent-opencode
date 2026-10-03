@@ -19,7 +19,11 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.core.identifier import create_prefixed_id_at, to_epoch_ms
+from app.core.identifier import (
+    create_prefixed_id,
+    to_epoch_ms,
+    uuid7_datetime_from_hex,
+)
 from app.core.session_catalog_store import validate_thread_id
 from app.core.session_control_primitives import validate_thread_creation_key
 from app.core.session_control_store.sql import (
@@ -248,7 +252,7 @@ class ThreadCreationRecordMixin:
         preimage_hash: str,
         graph_binding: str,
         capability_profile: str,
-        created_at: datetime,
+        created_at: datetime | None = None,
         thread_id: str | None = None,
         delegation_id: str | None = None,
         task_seed: str | None = None,
@@ -284,12 +288,25 @@ class ThreadCreationRecordMixin:
         self._validate_frozen_json_text(capability_profile, "capability_profile")
         self._validate_optional_frozen_json_text(task_seed, "task_seed")
         self._validate_optional_frozen_json_text(task_reference, "task_reference")
-        if not isinstance(created_at, datetime):
+        if created_at is not None and not isinstance(created_at, datetime):
             raise TypeError(f"created_at 必须是 datetime: {created_at!r}")
-        if created_at.tzinfo is None:
-            raise ValueError(f"created_at 必须带时区: {created_at!r}")
         if thread_id is not None:
             validate_thread_id(thread_id)
+        if (created_at is None) != (thread_id is None):
+            raise ValueError(
+                "固定 Thread fixture 必须同时提供 created_at 与 thread_id"
+            )
+        if created_at is not None and created_at.tzinfo is None:
+            raise ValueError(f"created_at 必须带时区: {created_at!r}")
+        if created_at is not None and thread_id is not None:
+            thread_ms = to_epoch_ms(uuid7_datetime_from_hex(thread_id[4:]))
+            created_ms = to_epoch_ms(created_at)
+            if thread_ms != created_ms:
+                raise ValueError(
+                    "固定 Thread fixture 的 created_at 必须与 thread_id "
+                    "内嵌时间戳一致: "
+                    f"created_at_ms={created_ms}, thread_ms={thread_ms}"
+                )
         if delegation_id is not None and (
             not isinstance(delegation_id, str) or not delegation_id
         ):
@@ -361,7 +378,7 @@ class ThreadCreationRecordMixin:
         preimage_hash: str,
         graph_binding: str,
         capability_profile: str,
-        created_at: datetime,
+        created_at: datetime | None,
         thread_id: str | None,
         delegation_id: str | None,
         task_seed: str | None,
@@ -393,15 +410,14 @@ class ThreadCreationRecordMixin:
                 f"main_rows={[str(row['thread_id']) for row in main_rows]}"
             )
         main_thread_id = str(main_rows[0]["thread_id"])
-        # child ID：调用方传入（已验证 canonical）或按冻结 created_at 的 Unix
-        # 毫秒软件分配（"thr" 已在 IdentifierPrefix Literal 中声明；
-        # create_prefixed_id_at 基于显式直接依赖 uuid-utils 的 uuid7()，天然满足
-        # v7 位 profile，且内嵌时间与 threads/YYYY/MM/DD 分桶同源同日 §4.3/§4.7）。
-        child_thread_id = (
-            thread_id
-            if thread_id is not None
-            else create_prefixed_id_at("thr", to_epoch_ms(created_at))
-        )
+        if thread_id is None:
+            child_thread_id = create_prefixed_id("thr")
+            child_created_at = uuid7_datetime_from_hex(child_thread_id[4:])
+        else:
+            if created_at is None:
+                raise RuntimeError("Thread creation record 固定 fixture 时间缺失")
+            child_thread_id = thread_id
+            child_created_at = created_at
         validate_thread_id(child_thread_id)
         if child_thread_id == main_thread_id:
             raise RuntimeError(
@@ -417,7 +433,7 @@ class ThreadCreationRecordMixin:
                 "child thread ID 已被 thread catalog 占用（fail closed）: "
                 f"thread_id={child_thread_id!r}"
             )
-        utc_date = created_at.astimezone(UTC).date()
+        utc_date = child_created_at.astimezone(UTC).date()
         final_relative_locator = f"threads/{utc_date:%Y/%m/%d}/{child_thread_id}"
         validate_thread_relative_locator(final_relative_locator)
         locator_taken = self._connection.execute(
@@ -492,7 +508,7 @@ class ThreadCreationRecordMixin:
                 "collaboration_revision": collaboration_precondition_revision,
                 "initial_state": initial_state,
                 "admission_intent": admission_intent,
-                "child_created_at": created_at.isoformat(),
+                "child_created_at": child_created_at.isoformat(),
                 "record_created_at": record_created_at,
                 "record_updated_at": record_created_at,
             },

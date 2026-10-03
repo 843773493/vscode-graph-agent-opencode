@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -69,48 +68,9 @@ def _resolve_uuid7() -> Callable[[], object]:
     return uuid7
 
 
-# 可注入的墙钟毫秒源（测试用）。生产绑定真实系统时钟。
-_wall_clock_ms: Callable[[], int] = lambda: time.time_ns() // 1_000_000
-
 # Unix 纪元与 1 毫秒的 timedelta：把带时区 datetime 折算为整数 Unix 毫秒。
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _ONE_MILLISECOND = timedelta(milliseconds=1)
-
-# 进程内上一次已发放的 Unix 毫秒（时钟回拨钳制下界，design D4）。
-_last_issued_ms: int | None = None
-
-
-def effective_now_ms() -> int:
-    """返回进程内单调钳制的「创建时刻」Unix 毫秒（design D4）。
-
-    新值 = ``max(墙钟毫秒, 上次已发放毫秒)``：系统时钟回拨（NTP 校时）时不
-    后退。``_last_issued_ms`` 由 ``create_uuid_hex`` 与上一次本函数调用共同
-    抬高，故钳制值恒不小于最近一次发放的 id 内嵌时间戳。
-
-    ``sessions/YYYY/MM/DD`` 分桶日期 MUST 由本函数返回值推出，而 id 内嵌
-    时间戳由 uuid_utils 提供、与本函数的墙钟钳制是两个独立时钟；二者均不
-    回退（uuid_utils 在系统时钟回拨时保持时间戳不后退），故分桶与 id 内嵌
-    时间戳的 UTC 日期恒一致。
-    """
-    global _last_issued_ms
-    now_ms = _wall_clock_ms()
-    effective = now_ms if _last_issued_ms is None else max(now_ms, _last_issued_ms)
-    _last_issued_ms = effective
-    return effective
-
-
-def effective_now() -> datetime:
-    """返回进程内单调钳制的「创建时刻」UTC datetime（design D4 唯一时间源）。
-
-    本函数即 :func:`effective_now_ms` 的 datetime 投影：``sessions/YYYY/MM/DD``
-    分桶日期 MUST 由本函数返回值推出，id 内嵌 48 bit 毫秒由同一已钳制值
-    （经 uuid_utils 进程内单调时钟，恒不小于它）提供，故二者 UTC 日期恒一致；
-    MUST NOT 从两处独立取时。
-    """
-    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(
-        milliseconds=effective_now_ms()
-    )
-
 
 def create_uuid_hex() -> str:
     """生成 canonical 身份的 32 位小写 hex payload（UUIDv7）。
@@ -119,13 +79,9 @@ def create_uuid_hex() -> str:
     ``timestamp`` —— 显式时间戳会绕过 uuid_utils 的单调时钟上下文（同毫秒内
     改用随机计数器），从而破坏同毫秒单调（实测 8 个同 ``timestamp`` 值按 hex
     序无序）。uuid_utils 默认路径使用进程内单调计数器，同进程同毫秒非递减且
-    唯一，并在系统时钟回拨时保持时间戳不后退；跨进程只共享 48 bit 毫秒分辨率。
+    唯一，并在系统时钟回拨时钳制内嵌时间不后退；跨进程只共享 48 bit 毫秒分辨率。
     """
-    global _last_issued_ms
     value = _resolve_uuid7()()
-    issued_ms = int(value.timestamp)
-    if _last_issued_ms is None or issued_ms > _last_issued_ms:
-        _last_issued_ms = issued_ms
     return value.hex
 
 
@@ -141,6 +97,13 @@ def to_epoch_ms(moment: datetime) -> int:
     return int((moment.astimezone(UTC) - _EPOCH) // _ONE_MILLISECOND)
 
 
+def uuid7_datetime_from_hex(payload: str) -> datetime:
+    """从已校验的 UUIDv7 hex payload 投影其 UTC 毫秒时刻。"""
+    if len(payload) != 32:
+        raise ValueError(f"UUIDv7 payload 必须为 32 位 hex: {payload!r}")
+    return _EPOCH + timedelta(milliseconds=int(payload[:12], 16))
+
+
 def create_uuid_hex_at(epoch_ms: int) -> str:
     """按给定的 Unix 毫秒生成 canonical UUIDv7 payload（创建时刻已确定的场景）。
 
@@ -149,9 +112,9 @@ def create_uuid_hex_at(epoch_ms: int) -> str:
     一致」的场景——存量 v4→v7 重编号 MUST 保持 id 内嵌时间与既有日期桶同日，
     固定日期桶的测试夹具同理。
 
-    显式时间戳路径不参与同级同毫秒单调计数器，也不抬高 ``_last_issued_ms`` 的
-    回拨钳制下界，故仅供时间已确定、无需同毫秒排序保证的场景使用；实时创建
-    路径 MUST NOT 调用本函数（破坏同毫秒单调，见 :func:`create_uuid_hex`）。
+    显式时间戳路径不参与同毫秒单调计数器，故仅供固定历史 ID 等非实时场景
+    使用；实时创建路径 MUST NOT 调用本函数（破坏同毫秒单调，见
+    :func:`create_uuid_hex`）。
     """
     if not isinstance(epoch_ms, int) or isinstance(epoch_ms, bool) or epoch_ms < 0:
         raise ValueError(f"epoch_ms 必须是非负整数: {epoch_ms!r}")

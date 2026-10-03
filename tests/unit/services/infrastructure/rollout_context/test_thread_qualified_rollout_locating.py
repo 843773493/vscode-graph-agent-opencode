@@ -20,12 +20,14 @@ import pytest
 from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import SessionControlStore
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from tests.support.canonical_id_at import thread_id_at
 from tests.support.catalog_session_bundle import (
     seed_catalog_session_bundle,
 )
 
 SESSION_ID = f"ses_{create_uuid_hex()}"
-CHILD_THREAD_ID = f"thr_{create_uuid_hex()}"
+CHILD_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+CHILD_THREAD_ID = thread_id_at(CHILD_CREATED_AT)
 
 
 def test_staging_owners_accept_thread_qualified_root_signature() -> None:
@@ -140,8 +142,7 @@ def test_child_thread_resolves_to_own_thread_node_rollout(
     thread_dir = _publish_child_thread(
         session_node,
         thread_id=CHILD_THREAD_ID,
-        # locator 日期段必须等于 thread_id 内嵌 UUIDv7 UTC 日期，故用当前时刻。
-        created_at=datetime.now(UTC),
+        created_at=CHILD_CREATED_AT,
     )
     child_root = storage.root(SESSION_ID, thread_id=CHILD_THREAD_ID)
     assert child_root == thread_dir / "rollout"
@@ -176,7 +177,7 @@ def test_main_and_child_rollout_stores_are_physically_isolated(
     _publish_child_thread(
         session_node,
         thread_id=CHILD_THREAD_ID,
-        created_at=datetime.now(UTC),
+        created_at=CHILD_CREATED_AT,
     )
     main_root = storage.root(SESSION_ID)
     child_root = storage.root(SESSION_ID, thread_id=CHILD_THREAD_ID)

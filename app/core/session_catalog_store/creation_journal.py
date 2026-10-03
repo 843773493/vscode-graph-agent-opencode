@@ -13,7 +13,11 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 
-from app.core.identifier import create_prefixed_id_at, to_epoch_ms
+from app.core.identifier import (
+    create_prefixed_id,
+    to_epoch_ms,
+    uuid7_datetime_from_hex,
+)
 from app.core.session_catalog_store._schema import _CREATION_RECORD_COLUMNS
 from app.core.session_catalog_store.contracts import (
     SessionCatalogNode,
@@ -87,27 +91,24 @@ class CreationJournalMixin:
         workspace_id: str,
         parent_node_id: str | None,
         display_name: str,
-        created_at: datetime,
         preimage_hash: str,
+        created_at: datetime | None = None,
         session_id: str | None = None,
+        main_thread_id: str | None = None,
     ) -> SessionCreationRecord:
         """create-or-get 创建流 journal record（gate 内短事务，8.1-A）。
 
         - 同 key 已存在：``preimage_hash`` 一致 → 返回既有 record（幂等，
           created_at 等冻结值以既有 record 为准）；不一致 → ``RuntimeError``
           （同 key 不同 preimage 冲突）。
-        - ``session_id`` 可选传入已验证的 canonical session ID，仅供固定
-          ID 的测试 fixture 使用；生产创建服务始终由 store 分配 ID。
-          提供时先过 ``validate_session_id``（非法形态直接 ``ValueError``，
-          不清洗不改写），并以该 ID 作为分配结果（不再软件分配）；未提供
-          时保持软件分配现状。幂等语义不变：同 key 同 preimage 返回既有
-          record——既有 record 的 ``session_id`` 若与传入不同，属同 key
-          身份冲突，``RuntimeError`` 拒绝（不静默改绑）。
-        - 不存在 → 软件分配（或采用传入的）canonical ``session_id``
-          （``ses_``）与软件分配 ``main_thread_id``（``thr_``）、按
-          created_at 的 UTC 日期冻结 ``sessions/YYYY/MM/DD/{session_id}``
-          最终 locator、冻结父节点当前 revision，插入 ``state='preparing'``。
-          **不发布可见 node**。
+        - 实时创建省略 ``created_at`` 与固定 ID：session/main-thread ID 均走
+          uuid-utils 默认 UUIDv7 分配，``created_at`` 与 session locator 日期
+          只从 session ID 内嵌毫秒推导。
+        - 固定历史 fixture 必须同时传入 ``session_id``、``main_thread_id`` 与
+          ``created_at``，两个 ID 的内嵌毫秒都须与给定时刻相同；journal 不按
+          显式时刻生成 ID。
+        - 幂等命中直接复用冻结 record，不重新分配 ID 或时间。新 record 插入
+          ``state='preparing'``，不发布可见 node。
         - parent 校验：存在、非 deleting、同 workspace（复用
           :meth:`_require_mutable_parent`）；同时预检 session_id /
           main_thread_id / locator 未被既有 nodes 行占用（fail fast，
@@ -115,16 +116,42 @@ class CreationJournalMixin:
         """
         self._validate_idempotency_key(idempotency_key)
         self._validate_common_fields(workspace_id, display_name)
-        if not isinstance(created_at, datetime):
+        if created_at is not None and not isinstance(created_at, datetime):
             raise TypeError(f"created_at 必须是 datetime: {created_at!r}")
-        if created_at.tzinfo is None:
+        if created_at is not None and created_at.tzinfo is None:
             raise ValueError(f"created_at 必须带时区: {created_at!r}")
         if not isinstance(preimage_hash, str) or not preimage_hash:
             raise ValueError(f"preimage_hash 不能为空: {preimage_hash!r}")
-        # 传入 session_id 的形态校验先行（在任何事务/状态变更之前 fail fast；
-        # 非法形态直接 ValueError，不静默回退到软件分配）。
+        fixture_values = (created_at, session_id, main_thread_id)
+        if any(value is not None for value in fixture_values) and any(
+            value is None for value in fixture_values
+        ):
+            raise ValueError(
+                "固定 Session fixture 必须同时提供 created_at、session_id 与 "
+                "main_thread_id"
+            )
         if session_id is not None:
             validate_session_id(session_id)
+        if main_thread_id is not None:
+            validate_thread_id(main_thread_id)
+        if created_at is not None:
+            if session_id is None or main_thread_id is None:
+                raise ValueError(
+                    "固定 Session fixture 必须同时提供 created_at、session_id 与 "
+                    "main_thread_id"
+                )
+            expected_ms = to_epoch_ms(created_at)
+            session_ms = to_epoch_ms(uuid7_datetime_from_hex(session_id[4:]))
+            main_thread_ms = to_epoch_ms(
+                uuid7_datetime_from_hex(main_thread_id[4:])
+            )
+            if session_ms != expected_ms or main_thread_ms != expected_ms:
+                raise ValueError(
+                    "固定 Session fixture 的 created_at 必须与 session_id 和 "
+                    "main_thread_id 内嵌时间戳一致: "
+                    f"created_at_ms={expected_ms}, session_ms={session_ms}, "
+                    f"main_thread_ms={main_thread_ms}"
+                )
         with self.write_transaction() as connection:
             existing = self._fetch_creation_record(connection, idempotency_key)
             if existing is not None:
@@ -147,6 +174,17 @@ class CreationJournalMixin:
                         f"existing_session_id={existing['session_id']!r}, "
                         f"requested_session_id={session_id!r}"
                     )
+                if (
+                    main_thread_id is not None
+                    and str(existing["main_thread_id"]) != main_thread_id
+                ):
+                    raise RuntimeError(
+                        "session creation record main_thread_id 冲突（同 key 幂等"
+                        "复用时传入 ID 与既有 record 不一致，拒绝改绑）: "
+                        f"key={idempotency_key!r}, "
+                        f"existing_main_thread_id={existing['main_thread_id']!r}, "
+                        f"requested_main_thread_id={main_thread_id!r}"
+                    )
                 return self._creation_record_from_row(existing)
             # 插入路径：事务内先验证后写入。
             self._require_mutable_parent(connection, parent_node_id, workspace_id)
@@ -157,27 +195,28 @@ class CreationJournalMixin:
                     # 防御性兜底：_require_mutable_parent 刚验证过存在。
                     raise KeyError(f"会话目录节点不存在: {parent_node_id}")
                 parent_revision = int(parent_row["revision"])
-            # "thr" 已在 IdentifierPrefix Literal 中声明；
-            # 分配身份按冻结 created_at 的 Unix 毫秒生成，使 id 内嵌 48 bit 时间戳
-            # 与 sessions/YYYY/MM/DD 分桶同源同日（§4.1/§4.7）；create_prefixed_id_at
-            # 基于 uuid_utils.uuid7()，天然满足 v7 位 profile。
-            create_ms = to_epoch_ms(created_at)
-            allocated_session_id = (
-                session_id
-                if session_id is not None
-                else create_prefixed_id_at("ses", create_ms)
-            )
-            main_thread_id = create_prefixed_id_at("thr", create_ms)
+            if session_id is None:
+                allocated_session_id = create_prefixed_id("ses")
+                allocated_main_thread_id = create_prefixed_id("thr")
+                allocated_created_at = uuid7_datetime_from_hex(
+                    allocated_session_id[4:]
+                )
+            else:
+                if created_at is None or main_thread_id is None:
+                    raise RuntimeError("Session journal 固定 fixture 字段缺失")
+                allocated_session_id = session_id
+                allocated_main_thread_id = main_thread_id
+                allocated_created_at = created_at
             validate_session_id(allocated_session_id)
-            validate_thread_id(main_thread_id)
-            utc_date = created_at.astimezone(UTC).date()
+            validate_thread_id(allocated_main_thread_id)
+            utc_date = allocated_created_at.astimezone(UTC).date()
             locator = f"sessions/{utc_date:%Y/%m/%d}/{allocated_session_id}"
             validate_storage_relative_locator(locator)
             self._validate_locator_budget(locator)
             # fail fast：新分配身份不得与既有可见 node 冲突（UNIQUE 兜底）。
             self._require_node_id_available(connection, allocated_session_id)
             self._require_unique_session_fields(
-                connection, workspace_id, locator, main_thread_id
+                connection, workspace_id, locator, allocated_main_thread_id
             )
             record_created_at = datetime.now(UTC).isoformat()
             connection.execute(
@@ -190,11 +229,11 @@ class CreationJournalMixin:
                 (
                     idempotency_key,
                     allocated_session_id,
-                    main_thread_id,
+                    allocated_main_thread_id,
                     workspace_id,
                     parent_node_id,
                     display_name,
-                    created_at.isoformat(),
+                    allocated_created_at.isoformat(),
                     locator,
                     preimage_hash,
                     parent_revision,
@@ -380,4 +419,3 @@ class CreationJournalMixin:
                     f"key={idempotency_key!r}"
                 )
             return self._creation_record_from_row(updated)
-

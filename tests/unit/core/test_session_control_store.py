@@ -25,7 +25,11 @@ from app.core.session_control_store import (
     validate_thread_relative_locator,
 )
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from tests.support.canonical_id_at import session_id_at, thread_id_at
+from tests.support.canonical_id_at import (
+    session_id_at,
+    thread_id_at,
+    thread_id_for_name_at,
+)
 
 DEFAULT_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 JUNE_2 = datetime(2026, 6, 2, 12, 0, tzinfo=UTC)
@@ -794,16 +798,21 @@ def make_thread_metadata_json() -> tuple[str, str]:
     return graph_binding, capability_profile
 
 
-def valid_thread_creation_kwargs(store: SessionControlStore) -> dict[str, object]:
+def valid_thread_creation_kwargs(
+    store: SessionControlStore,
+    *,
+    idempotency_key: str = "key-1",
+) -> dict[str, object]:
     """构造 create_or_get_thread_creation_record 的最小合法参数。"""
     graph_binding, capability_profile = make_thread_metadata_json()
     return {
-        "idempotency_key": "key-1",
+        "idempotency_key": idempotency_key,
         "initial_state": "running",
         "preimage_hash": "a" * 64,
         "graph_binding": graph_binding,
         "capability_profile": capability_profile,
         "created_at": DEFAULT_CREATED_AT,
+        "thread_id": thread_id_for_name_at(idempotency_key, DEFAULT_CREATED_AT),
         # ensure_ascii=False：与生产 canonical JSON 同口径（中文不转义）。
         "task_seed": json.dumps(
             {"task": "做一件事"},
@@ -928,7 +937,7 @@ def test_create_or_get_record_thread_id_conflict(
 ) -> None:
     first = prepare_record(store)
     kwargs = valid_thread_creation_kwargs(store)
-    kwargs["thread_id"] = make_thread_id()
+    kwargs["thread_id"] = thread_id_for_name_at("different-child", DEFAULT_CREATED_AT)
     with pytest.raises(RuntimeError, match="拒绝改绑"):
         store.create_or_get_thread_creation_record(**kwargs)  # type: ignore[arg-type]
     # 原 record 未受影响
@@ -938,7 +947,7 @@ def test_create_or_get_record_thread_id_conflict(
 def test_create_or_get_record_honors_provided_thread_id(
     store: SessionControlStore,
 ) -> None:
-    provided = make_thread_id()
+    provided = thread_id_for_name_at("provided-child", DEFAULT_CREATED_AT)
     record = prepare_record(store, thread_id=provided)
     assert record.child_thread_id == provided
 
@@ -1019,18 +1028,15 @@ def test_create_or_get_record_delegation_unique(
 ) -> None:
     prepare_record(store, delegation_id="dlg-1")
     # 同 delegation 不同 key → 部分唯一约束拒绝
-    kwargs = valid_thread_creation_kwargs(store)
-    kwargs["idempotency_key"] = "key-2"
+    kwargs = valid_thread_creation_kwargs(store, idempotency_key="key-2")
     kwargs["delegation_id"] = "dlg-1"
     with pytest.raises(RuntimeError, match="delegation_id"):
         store.create_or_get_thread_creation_record(**kwargs)  # type: ignore[arg-type]
     # 不同 delegation / None delegation 不受影响
-    kwargs2 = valid_thread_creation_kwargs(store)
-    kwargs2["idempotency_key"] = "key-3"
+    kwargs2 = valid_thread_creation_kwargs(store, idempotency_key="key-3")
     kwargs2["delegation_id"] = "dlg-2"
     store.create_or_get_thread_creation_record(**kwargs2)  # type: ignore[arg-type]
-    kwargs3 = valid_thread_creation_kwargs(store)
-    kwargs3["idempotency_key"] = "key-4"
+    kwargs3 = valid_thread_creation_kwargs(store, idempotency_key="key-4")
     kwargs3["delegation_id"] = None
     store.create_or_get_thread_creation_record(**kwargs3)  # type: ignore[arg-type]
 
@@ -1043,8 +1049,7 @@ def test_create_or_get_record_rejects_rebind_aborted_delegation(
     prepare_record(store, delegation_id="dlg-1")
     aborted = store.abort_thread_creation_record("key-1", "定点清理完成")
     assert aborted.state == "aborted"
-    kwargs = valid_thread_creation_kwargs(store)
-    kwargs["idempotency_key"] = "key-2"
+    kwargs = valid_thread_creation_kwargs(store, idempotency_key="key-2")
     kwargs["delegation_id"] = "dlg-1"
     with pytest.raises(RuntimeError, match="delegation_id"):
         store.create_or_get_thread_creation_record(**kwargs)  # type: ignore[arg-type]
@@ -1285,8 +1290,7 @@ def test_publish_record_tolerates_sibling_growth_and_rejects_shrink(
     assert (binding.prefix_epoch, binding.prefix_epoch_reason) == (1, "initial")
     # 行数收缩（外部直改）→ 新 record 冻结当前更高 revision 后收缩，
     # CAS 2 先于 occupied 预检触发（收缩=外部改动，fail closed）。
-    kwargs2 = valid_thread_creation_kwargs(store)
-    kwargs2["idempotency_key"] = "key-2"
+    kwargs2 = valid_thread_creation_kwargs(store, idempotency_key="key-2")
     record2 = store.create_or_get_thread_creation_record(**kwargs2)  # type: ignore[arg-type]
     assert record2.catalog_precondition_revision == 3  # main+published+sibling
     store.freeze_thread_creation_artifact_manifest(
@@ -1963,8 +1967,7 @@ def prepare_published_intent(
     except KeyError:
         store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
         store.initialize_fence("active", 1)
-    kwargs = valid_thread_creation_kwargs(store)
-    kwargs["idempotency_key"] = admission_key
+    kwargs = valid_thread_creation_kwargs(store, idempotency_key=admission_key)
     record = store.create_or_get_thread_creation_record(**kwargs)  # type: ignore[arg-type]
     store.freeze_thread_creation_artifact_manifest(
         admission_key,
@@ -2375,8 +2378,7 @@ def test_delegated_record_publish_cas_and_member_atomic_visibility(
             {"description": "第三件事"}, sort_keys=True, separators=(",", ":")
         ),
     )
-    kwargs2 = valid_thread_creation_kwargs(store)
-    kwargs2["idempotency_key"] = "key-2"
+    kwargs2 = valid_thread_creation_kwargs(store, idempotency_key="key-2")
     record2 = store.create_or_get_thread_creation_record(
         **kwargs2,
         delegation_id="del-3",

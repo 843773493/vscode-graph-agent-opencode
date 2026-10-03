@@ -15,11 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_uuid_hex, to_epoch_ms
+from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     SessionCatalogStore,
     SessionCreationRecord,
-    uuid7_embedded_utc_date,
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import (
@@ -30,6 +29,10 @@ from app.core.session_creation import (
     serialize_session_creation_manifest,
 )
 from app.core.session_lifecycle_gate import NavigationTopologyGate
+from tests.support.canonical_id_at import (
+    session_id_for_name_at,
+    thread_id_for_name_at,
+)
 
 WORKSPACE_ID = "ws-create"
 
@@ -104,13 +107,16 @@ def create_manual_record(
         title=title,
         session_metadata=effective_metadata,
     )
+    created_at = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
     return store.create_or_get_creation_record(
         idempotency_key=key,
         workspace_id=WORKSPACE_ID,
         parent_node_id=parent_node_id,
         display_name=title,
-        created_at=datetime(2026, 6, 1, 12, 0, tzinfo=UTC),
         preimage_hash=preimage_hash,
+        created_at=created_at,
+        session_id=session_id_for_name_at(key, created_at),
+        main_thread_id=thread_id_for_name_at(key, created_at),
     )
 
 
@@ -278,43 +284,6 @@ async def test_create_under_folder_parent(
     result = await do_create(service, parent_node_id=folder.node_id)
     assert result.node.parent_node_id == folder.node_id
     assert result.node.kind == "session"
-
-
-async def test_create_clamps_clock_rollback_keeping_bucket_consistent(
-    service: SessionCreationService,
-    sessions_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """§4.4/§4.5：注入回拨后创建 MUST NOT 报错，且分桶日期与 id 内嵌
-    48 bit 毫秒 UTC 日期同源且一致（分桶被钳到回拨前值）。"""
-    from app.core import identifier
-
-    june1_ms = to_epoch_ms(datetime(2026, 6, 1, 12, 0, tzinfo=UTC))
-    may31_ms = to_epoch_ms(datetime(2026, 5, 31, 12, 0, tzinfo=UTC))
-    monkeypatch.setattr(identifier, "_last_issued_ms", None)
-    monkeypatch.setattr(identifier, "_wall_clock_ms", lambda: june1_ms)
-    # 先发放一次，把回拨钳制下界抬到 2026-06-01。
-    assert identifier.effective_now_ms() == june1_ms
-    # 注入回拨：墙钟退到 5 月 31 日。
-    monkeypatch.setattr(identifier, "_wall_clock_ms", lambda: may31_ms)
-
-    result = await do_create(service)
-
-    # 默认语义不把回拨变成可见故障。
-    assert result.record_state == "published"
-    # 分桶被钳到 06-01（不是回拨后的 05-31），且与 id 内嵌时间同日。
-    year, month, day = result.storage_relative_locator.split("/")[1:4]
-    assert (year, month, day) == ("2026", "06", "01")
-    assert (
-        uuid7_embedded_utc_date(result.session_id[4:]).isoformat()
-        == "2026-06-01"
-    )
-    assert uuid7_embedded_utc_date(result.main_thread_id[4:]).isoformat() == (
-        "2026-06-01"
-    )
-    # 物理目录落在钳制后的日期桶。
-    session_dir = date_bucket_dir(sessions_root, result.storage_relative_locator)
-    assert session_dir.is_dir()
 
 
 # ----------------------------------------------------------------------

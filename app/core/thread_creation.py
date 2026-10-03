@@ -87,7 +87,7 @@ from app.core.atomic_fs import (
 from app.core.atomic_fs import (
     fsync_directory as _fsync_directory,
 )
-from app.core.identifier import effective_now
+from app.core.identifier import uuid7_datetime_from_hex
 from app.core.key_lock_pool import KeyLockPool
 from app.core.session_catalog_store import (
     SessionCatalogNode,
@@ -617,9 +617,9 @@ class ThreadCreationService:
     ) -> ThreadCreationResult:
         """执行（或幂等恢复）一次 child thread 创建（协议见类 docstring）。
 
-        ``thread_id=None`` 时 child ID 由 store 软件分配（``thr_``）；
-        提供时必须为 canonical thread ID。``delegation_id`` 提供即为
-        delegated child（纳入 preimage 与部分唯一约束）。
+        ``thread_id=None`` 时 child ID 由 store 自然分配（``thr_``）；提供
+        时其 UUIDv7 时间戳作为固定 ID 的创建时刻。``delegation_id`` 提供即
+        为 delegated child（纳入 preimage 与部分唯一约束）。
         """
         self._validate_create_inputs(
             idempotency_key=idempotency_key,
@@ -691,9 +691,11 @@ class ThreadCreationService:
                     capability_profile=canonical_json_text(
                         session_metadata["capability_profile"]
                     ),
-                    # 创建时刻取自 D4 唯一时间源 effective_now()：thread 分桶日期
-                    # 与 id 内嵌 48 bit 毫秒时间戳同源（MUST NOT 独立取时）。
-                    created_at=effective_now(),
+                    created_at=(
+                        uuid7_datetime_from_hex(thread_id[4:])
+                        if thread_id is not None
+                        else None
+                    ),
                     thread_id=thread_id,
                     delegation_id=delegation_id,
                     collaboration_precondition_revision=collaboration_revision,

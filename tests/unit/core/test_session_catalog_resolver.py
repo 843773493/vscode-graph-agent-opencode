@@ -32,7 +32,11 @@ from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
-from tests.support.canonical_id_at import thread_id_at
+from tests.support.canonical_id_at import (
+    session_id_for_name_at,
+    thread_id_at,
+    thread_id_for_name_at,
+)
 
 WORKSPACE_ID = "ws-resolver"
 
@@ -927,13 +931,17 @@ class TestSubtreeDelete:
 
 class TestStoreCreationRecordHonorsSessionId:
     def _create_kwargs(self, **overrides: object) -> dict[str, object]:
+        created_at = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+        idempotency_key = f"key-{uuid.uuid4().hex}"
         kwargs: dict[str, object] = {
-            "idempotency_key": f"key-{uuid.uuid4().hex}",
+            "idempotency_key": idempotency_key,
             "workspace_id": WORKSPACE_ID,
             "parent_node_id": None,
             "display_name": "指定ID会话",
-            "created_at": datetime.now(UTC),
+            "created_at": created_at,
             "preimage_hash": "preimage-" + uuid.uuid4().hex,
+            "session_id": session_id_for_name_at(idempotency_key, created_at),
+            "main_thread_id": thread_id_for_name_at(idempotency_key, created_at),
         }
         kwargs.update(overrides)
         return kwargs
@@ -941,9 +949,14 @@ class TestStoreCreationRecordHonorsSessionId:
     def test_honors_canonical_session_id(
         self, store: SessionCatalogStore
     ) -> None:
-        session_id = make_node_id()
+        created_at = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+        session_id = session_id_for_name_at("provided", created_at)
         record = store.create_or_get_creation_record(
-            **self._create_kwargs(session_id=session_id)
+            **self._create_kwargs(
+                created_at=created_at,
+                session_id=session_id,
+                main_thread_id=thread_id_for_name_at("provided", created_at),
+            )
         )
         assert record.session_id == session_id
         # locator 叶名 == 传入 ID（日期桶按 record.created_at 冻结）。
@@ -961,8 +974,13 @@ class TestStoreCreationRecordHonorsSessionId:
     def test_idempotent_same_key_same_session_id_returns_existing(
         self, store: SessionCatalogStore
     ) -> None:
-        session_id = make_node_id()
-        kwargs = self._create_kwargs(session_id=session_id)
+        created_at = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+        session_id = session_id_for_name_at("provided", created_at)
+        kwargs = self._create_kwargs(
+            created_at=created_at,
+            session_id=session_id,
+            main_thread_id=thread_id_for_name_at("provided", created_at),
+        )
         first = store.create_or_get_creation_record(**kwargs)
         second = store.create_or_get_creation_record(**kwargs)
         assert second.session_id == first.session_id == session_id
@@ -973,17 +991,27 @@ class TestStoreCreationRecordHonorsSessionId:
     def test_conflicting_session_id_on_same_key_rejected(
         self, store: SessionCatalogStore
     ) -> None:
-        kwargs = self._create_kwargs(session_id=make_node_id())
+        created_at = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+        kwargs = self._create_kwargs(
+            session_id=session_id_for_name_at("first", created_at)
+        )
         store.create_or_get_creation_record(**kwargs)
         with pytest.raises(RuntimeError, match="session_id 冲突"):
             store.create_or_get_creation_record(
-                **{**kwargs, "session_id": make_node_id()}
+                **{
+                    **kwargs,
+                    "session_id": session_id_for_name_at("second", created_at),
+                }
             )
 
     def test_software_allocation_unchanged_without_session_id(
         self, store: SessionCatalogStore
     ) -> None:
-        record = store.create_or_get_creation_record(**self._create_kwargs())
+        record = store.create_or_get_creation_record(
+            **self._create_kwargs(
+                created_at=None, session_id=None, main_thread_id=None
+            )
+        )
         assert record.session_id.startswith("ses_")
         assert len(record.session_id) == 4 + 32
         validate_session_id(record.session_id)

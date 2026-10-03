@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.core.identifier import create_prefixed_id_at, to_epoch_ms
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -21,6 +20,7 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import load_or_create_workspace_id
+from tests.support.canonical_id_at import thread_id_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +83,7 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
     if created_at.tzinfo is None:
         raise ValueError("created_at 必须带时区")
     # main thread 与 session 同源同一冻结毫秒，便于断言与解析一致。
-    main_thread_id = create_prefixed_id_at("thr", to_epoch_ms(created_at))
+    main_thread_id = thread_id_at(created_at)
     locator = (
         f"sessions/{created_at.astimezone(UTC):%Y/%m/%d}/{spec.session_id}"
     )
