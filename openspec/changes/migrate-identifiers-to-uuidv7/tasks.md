@@ -131,7 +131,7 @@
 
 - [x] 9.1 `openspec validate migrate-identifiers-to-uuidv7 --strict` 输出 `Change 'migrate-identifiers-to-uuidv7' is valid`，退出码 0。 **（本次实测（提交 `f6fc990f`）现状：`openspec validate migrate-identifiers-to-uuidv7 --strict` 输出 `Change 'migrate-identifiers-to-uuidv7' is valid`，退出码 0；门槛满足。）**
 - [x] 9.2 `openspec validate --strict --all` 退出码 0 且 `0 failed`（本 change 加入后为 40 passed）。 **（本次实测（提交 `f6fc990f`）现状：`openspec validate --strict --all` 输出 `Totals: 40 passed, 0 failed (40 items)`，退出码 0；门槛满足。）**
-- [ ] 9.3 实施阶段的完整测试带进程外保护执行（按 AGENTS.md：`bun run test:matrix -- --suite=<id>` 或 `timeout <秒> bash -c 'ulimit -d 4194304; exec "$@"' bash <命令>`），退出码 0。
+- [x] 9.3 2026-10-04 主树以 `timeout 1200` 和 `ulimit -d 4194304` 完成 UUIDv7 的十一份关联测试文件：工厂、单调性、canonical/豁免、catalog/control、Session/Thread creation、migration 与两份新增隔离恢复测试，**685 passed / 129.82s，退出码 0**。完整命令与保护参数见同轮 `coordinator/artifacts/u04-complete-identifier-slice-validation.json`，原始输出见 `u04-complete-identifier-slice.log`；这是本切片完整关联集，不代表全仓测试。
 
 ## 台账补勾证据（第二轮 2026-10-01）
 
