@@ -4,7 +4,7 @@
 
 - [ ] 1.1 确认「统一虚拟资源寻址」change 已登记 scope 闭集（`workspace`/`user`/`gateway`/`inline`；`memory` 已移出）、VRN grammar、`kind` 闭集与拒绝码命名空间；未登记前不得进入第 3 组实施。 **（未勾：owner 侧规范层已登记（见其 spec 的 scope/kind/拒绝码 requirement），但本项是**实施前置门**——在 owner 的 grammar 与拒绝码**代码**落地前不得进入本 change 第 3 组实施；属生产门，非规范层可定稿项。）**
 - [x] 1.2 按 `add-unified-virtual-resource-addressing` 的 scope 闭集/`scope_id` 唯一表与 kind 闭集**具名引用**落地：scope 闭集 `workspace`/`user`/`gateway`/`inline`、`scope_id` 由真实身份推导（取值规则一律引用该 change，本 change 不复述）、保留 `resources` 固定段、`scope_id` 对所有 scope 必填、`memory` 非 VRN 且入口拒绝、会话上下文 kind=`session` / config 来源 kind=`config`；`builtin`→`inline`（含 layer `bundled`→`inline`）改名归该 owner change。**段序、scope 名、scope_id 语义、kind 与拒绝码定义均归该 owner change，本 change 只引用、MUST NOT 复述或另立。** **（规范层已定稿：spec「scope 必须取自闭合集」与「VRN 语法形态统一」正文已改为对 owner requirement 的具名引用，不再复述取值表。）**
-- [ ] 1.3 与 itemized rollout context 对齐 `assembly_ref` 的表示（资源身份或专用 ref 类型），确认不改变本 change 的结构化方向。 **（未勾：下游对齐项，二选一分支见第 8 节 8.2；方向已定，取值待 owner 与 itemized assembly 身份模型对齐。）**
+- [x] 1.3 与 itemized rollout context 对齐 `assembly_ref` 的表示并确认不改变结构化方向：`assembly_ref` 使用 `ResourceIdentity`，具名引用「统一虚拟资源寻址」的 requirement「identity 必须独立于 VRN 且不跨 scope 混同」，不另造专用 ref 类型。**（规范裁定已完成；资源身份字段的生产建模、转换与接线仍属未完成实现工作，不由本项勾选表示。）**
 
 ## 2. 会话上下文资源引用的结构化模型
 
@@ -15,8 +15,8 @@
 
 ## 3. 视图与修订的结构化迁移
 
-- [x] 3.1 建立旧形 fragment 到结构化字段的映射：`#information` → `view=information`；`#record={index}` → `view=records` + `record_index`；`#assembly={id}` → `view=assembly` + `assembly_ref`。 **（规范层已定稿：映射表见 design D2；`assembly_ref` 具体类型仍待与 itemized rollout context 对齐，见本文件 1.3 与 design Open Questions。）**
-- [x] 3.2 移植既有视图与资源种类兼容性校验规则集，并新增「未识别 view 取值显式失败、不降级为默认视图」。 **（规范层已定稿：spec「会话上下文视图选择必须结构化」正文与两个 scenario。）**
+- [ ] 3.1 将原 fragment 表达的信息迁移为会话上下文解析与入口的结构化字段：`information` → `view=information`；`record={index}` → `view=records` + `record_index`；`assembly={id}` → `view=assembly` + `assembly_ref: ResourceIdentity`。新入口拒绝 fragment，不保留旧字符串解析兼容分支。**生产实现未完成；规范裁定已单独登记于 8.3。**
+- [ ] 3.2 移植既有视图与资源种类兼容性校验规则集，并要求未登记 view 显式失败、已登记但与资源 kind 不兼容的 view 以 owner 已登记的 `unsupported_view` 显式失败，均不得降级为默认视图。**生产实现未完成；规范裁定已单独登记于 8.1。**
 - [ ] 3.3 保留可重读修订绑定能力：`expected_revision` 不匹配时返回显式修订变更错误；游标继续绑定资源 + revision + operation，在固定修订上推进分页，并在 resource/revision/operation 不匹配时显式失败。
 - [ ] 3.4 断言 revision 只存在于结构化字段：对全部会话上下文路径做检查，确认生成的 VRN 字符串在任何情况下都不含 revision/hash/snapshot 引用。
 
@@ -60,9 +60,10 @@
 - [x] 7.2 确认本 change 未自造拒绝码、未改动 VRN 语法本体、固定段序与 `kind` 闭集；所有新增拒绝场景均引用「统一虚拟资源寻址」change 的登记结果。 **（规范层已定稿：spec「VRN 语法形态统一」正文现只具名引用 owner，不再复述模板与段序。）**
 - [ ] 7.3 运行 `openspec validate migrate-session-context-uri-to-vrn --strict`，要求 0 failed。
 
-## 8. 需 owner 裁定（未定稿，MUST NOT 自行发明）
+## 8. 已由 owner 裁定（规范定稿，不代表生产实现完成）
 
-下列为**必须由 owner 拍板**才能定稿的规范层缺口；本 change MUST NOT 自行选定分支。设计侧同一登记见 `design.md` 的 Open Questions（已按「需 owner 裁定 / 下游对齐」标注）。
+以下决定只收口规范分支；其 `[x]` 不代表生产 resolver 或会话上下文代码已经实现。owner 唯一登记处见 `add-unified-virtual-resource-addressing` 的对应 requirement。
 
-- [ ] 8.1 **「view 与资源不兼容」是否需新增拒绝码（分支二选一）**：会话上下文的视图-资源兼容性拒绝（原 `validate_session_context_read_view` 规则集）在统一语法下是 (a) 复用 owner 已登记的现有码（如 `unknown_operation`/`unknown_resource`），还是 (b) 由 owner 在 grammar/resolve 闭集内**新增一个专用码**。owner 现有 resolve 闭集 6 码（`scope_mismatch`/`unknown_resource`/`unknown_operation`/`capability_denied`/`snapshot_unavailable`/`historical_snapshot_missing`）均未表达「view 不受该 kind 支持」，故 (b) 很可能成立、需 owner 追加登记。本 change MUST NOT 自造码（原则见 spec「VRN 语法形态统一」与 task 7.2），具体归属待裁定。（「旧式 fragment 形态」「memory 两点式」两条已可由 owner 既有 grammar 码 `fragment_rejected` / `unknown_scope` 覆盖，不在待裁定之列。）
-- [ ] 8.2 **`assembly_ref` 的表示（分支二选一）**：D2 中 `assembly={id}` 迁移后的 `assembly_ref` 采用 (a) `资源身份 / ResourceIdentity`，还是 (b) 专用 ref 类型。方向已定（以资源身份表达、绝不拼进地址字符串），具体类型须 owner 与 itemized rollout context 的 assembly 身份模型对齐后裁定；属 design Open Questions 登记项。
+- [x] 8.1 **视图兼容性规则定稿**：未登记 view 显式失败；已识别但与资源 kind 不兼容的 view 以 owner 登记的 resolve 拒绝码 `unsupported_view` 显式失败，二者均不得降级为默认视图。本 change 只引用 owner 的拒绝码，不定义第二套；owner 的 resolver 实现任务仍未完成。
+- [x] 8.2 **`assembly_ref` 使用 `ResourceIdentity`**：复用统一 VRN owner 的既有领域定义，不另造专用 ref 类型；本决定收口类型分支，相关生产建模与接线仍未完成。
+- [x] 8.3 **fragment 信息映射为结构化字段**：`#information` 映射到 `view=information`；`#record={index}` 映射到 `view=records` 与 `record_index`；`#assembly={assembly_id}` 映射到 `view=assembly` 与 `assembly_ref: ResourceIdentity`。映射与禁止 fragment 的规范已定稿于 design D2 与 spec「会话上下文视图选择必须结构化」；生产实现仍由 3.1 跟踪。

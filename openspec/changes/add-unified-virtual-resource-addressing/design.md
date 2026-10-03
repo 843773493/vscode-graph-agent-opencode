@@ -16,7 +16,7 @@
 
 - 把「身份 / 地址 / 真实路径」三层分离落成**唯一 owner 与唯一实现**，并给出可机械检查的不变量。
 - 给出一套统一 VRN 语法（保留 `resources` 固定段序）与规范化单一实现、**定稿**的 scope 闭集、scope_id 语义表与 kind 闭集。
-- 给出**分三套**集中登记的拒绝码（grammar 17 + resolve 6 + 联邦解析期）与其不混用约束。
+- 给出**分三套**集中登记的拒绝码（grammar 17 + resolve 7 + 联邦解析期）与其不混用约束；resolve 闭集包含 `unsupported_view`，专用于已识别的 view 与资源 kind 不兼容。
 - 给出顶层 gateway 之间**星型解析**的边界契约，并把上界做成显式 policy 常量。
 - 登记配置来源 real path 持久化这一**已存在违约**的迁移形态，并说明 `sqlite` 层为何无 VRN。
 - 明确与另外三个 change 的接口面，避免多份定义并存。
@@ -109,7 +109,7 @@
 
 ### D7：拒绝码分三套集中登记，不可混用
 
-**理由**：权威表实测存在**三个独立闭集**——`VrnGrammarError.reason_code` 17 个（`grammar.py:25-44`，构造函数拒绝未登记 code）、`_RESOLVE_REASON_CODES` 6 个（`resolver.py:29-38`）与**联邦解析期第三套**（`app/gateway/federation/errors.py` 的 `FederationError.code`，归属 `app/gateway/federation/`）。它们分别对应「字符串→ParsedVrn 的语法期」「已解析后的解析/授权期」与「跨 gateway 联邦解析期」，混用会让阶段职责错位。集中登记可机械检查「无自造同义码」。
+**理由与裁定**：规范包含三个独立拒绝码闭集——`VrnGrammarError.reason_code` 17 个、resolve 解析/授权期闭集 7 个（原有 6 个加 `unsupported_view`）与**联邦解析期第三套**（`app/gateway/federation/errors.py` 的 `FederationError.code`，归属 `app/gateway/federation/`）。`unsupported_view` 专用于已识别的 view 与资源 kind 不兼容。当前生产 resolver 仍只登记原有 6 个 resolve 码；任务 1.3 保持未完成，须在实现中加入 `unsupported_view` 并维持闭集构造校验。三套分别对应「字符串→ParsedVrn 的语法期」「已解析后的解析/授权期」与「跨 gateway 联邦解析期」，混用会让阶段职责错位。集中登记可机械检查「无自造同义码」。
 
 **备选**：合并为一套码（被否：语义阶段不同，合并会丢掉「哪一期拒绝」的信息）；每个模块自带枚举（被否：正是要消除的多份定义）。
 

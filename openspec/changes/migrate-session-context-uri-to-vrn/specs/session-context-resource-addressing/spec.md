@@ -8,6 +8,8 @@
 
 **归属与引用**：三层分离（`资源身份 / ResourceIdentity` / `虚拟资源地址 / VRN` / `真实路径 / real path`）的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套三层分离规范；以下 scenario 只保留会话上下文侧的验收视角。
 
+本 capability 的 `resource_identity` 与 `assembly_ref` 均复用该 owner 定义的 `ResourceIdentity`，MUST NOT 另建会话局部 identity 或专用 assembly ref 类型。
+
 #### Scenario: 持久化记录不得含 real path
 - **WHEN** 任意会话上下文资源被写入持久化记录或返回给模型
 - **THEN** 记录中只出现资源身份与 VRN（以及独立的 revision 字段），不出现任何真实路径、绝对路径或 provider locator
@@ -78,13 +80,15 @@
 
 系统 MUST 对「视图字段」与「资源种类」的组合做显式校验，拒绝不兼容组合，且 MUST NOT 静默忽略未识别的视图取值。
 
+已识别的 view 不受资源 kind 支持时，拒绝码 MUST 引用 `add-unified-virtual-resource-addressing` 的 requirement「拒绝码必须分三套集中登记且命名不得自造」所登记的 resolve 码 `unsupported_view`；本 capability MUST NOT 自行定义或复制拒绝码闭集。
+
 #### Scenario: 原 fragment 信息可经结构化字段表达
 - **WHEN** 调用方需要读取原先以 `#assembly={id}` 指定的 assembly 视图
-- **THEN** 该选择经结构化字段表达并被正确解析，生成的 VRN 中不含 `#`
+- **THEN** 该选择经 `view=assembly` 与 owner 定义的 `assembly_ref: ResourceIdentity` 表达并被正确解析，生成的 VRN 中不含 `#`，也不编码该资源身份
 
 #### Scenario: 不兼容的视图与资源组合被拒绝
-- **WHEN** 调用方对某资源请求其不支持的视图
-- **THEN** 系统显式失败并说明不支持，不得降级为默认视图
+- **WHEN** 调用方对单个 Session 根资源（`kind=session`）请求仅适用于工作区会话清单的 `view=inventory`
+- **THEN** 系统以 owner 登记的 resolve 拒绝码 `unsupported_view` 显式失败并说明不支持，不得降级为默认视图
 
 ### Requirement: 解析必须遵循唯一星型顺序且 fail-closed
 
@@ -179,7 +183,7 @@
 - 配置来源的真实路径外泄义务（持久化侧与 API 响应体侧）已由 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 VRN 兄弟字段」唯一登记，本 capability 只具名引用；该义务已由 `50bffa45`（持久化改 VRN、删 `source_path`/`backup_path`）与 `76ed0089`（`ConfigSourceDTO.path` 与 `ConfigSourcesDTO.schema_path` 均改 VRN）落地；
 - `inline` 层有稳定 disk 载体、`sqlite` 层是共享载体不可寻址，`memory` 不是 VRN scope。
 
-由「统一虚拟资源寻址」change 定稿并引用（本 capability 只引用、不得自行发明）：scope 闭集（`workspace` | `user` | `gateway` | `inline`，见其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」）、每个 scope 的 scope_id 语义（同前 requirement）、`kind` 闭集（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」）、以及全部拒绝码取值（见其拒绝码登记 requirement）。
+由「统一虚拟资源寻址」change 定稿并引用（本 capability 只引用、不得自行发明）：scope 闭集（`workspace` | `user` | `gateway` | `inline`，见其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」）、每个 scope 的 scope_id 语义（同前 requirement）、`kind` 闭集（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」）、以及全部拒绝码取值（含 view-kind 校验所用的 `unsupported_view`，见其拒绝码登记 requirement）。
 
 会话上下文资源**自身**使用的 `kind` 取值已由「统一虚拟资源寻址」change 在 kind 闭集内**定稿为 `session`**（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」，闭集为 `agent-spec` | `skills` | `config` | `session`）。本 capability **直接引用该已登记取值，无需新登记、无待裁定项**；规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`。
 

@@ -25,7 +25,7 @@
 - scope 闭合集定稿为 `workspace` / `user` / `gateway` / `inline`：`builtin` 正名为 `inline`，`user` 为本次新增；`memory` **已确证不是 VRN scope，移出闭合集**（零生产构造方、resolver 不比对 scope_id、container 未装配（原 `configs/workspace_inline.jsonc:427-433` 的 `agent.memory` 6 键配置块与 schema `$defs.agentMemory` 已随 `remove-agent-memory` 物理删除，现配置已无该块））。
 - `scope_id` 必须由真实身份推导、MUST NOT 硬编码字面量：`workspace`→真实 workspace_id、`gateway`→真实 gateway_id（取值来源与注入 owner 按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿，本 change 只具名引用、不复述取值规则）、`inline`→真实 distribution_id、`user`→`local`（单用户本地约定，已由 owner 定为终值）。
 - 星型解析唯一顺序，上界为显式策略常量；不可达/未共享/未找到 fail-closed 结构化拒绝码；**locator 是输入不是输出**。
-- 拒绝码**本 change 只引用其中两套**——`grammar.py` 的 17 个与 `resolver.py` 的 6 个——由「统一虚拟资源寻址」change 集中登记（该 owner 另登记**第三套：联邦解析期** `FederationError.code`，归属 `app/gateway/federation/`，见其 requirement「拒绝码必须分三套集中登记且命名不得自造」，本 change 不引用该套、也不实现跨 gateway 解析）；本 change **只能引用不能自造**，且 MUST NOT 混用任何两套闭集。VRN 语法本体、固定段序与 `kind` 闭集同样不由本 change 拥有。
+- 拒绝码**本 change 只引用其中两套**——grammar 规范闭集 17 个、resolve 规范闭集 7 个——均由「统一虚拟资源寻址」change 集中登记；当前生产 resolver 仍只有原有 6 个 resolve 码，缺少 `unsupported_view`，由 owner 的实现任务 1.3 补齐。该 owner 另登记**第三套：联邦解析期** `FederationError.code`，归属 `app/gateway/federation/`，见其 requirement「拒绝码必须分三套集中登记且命名不得自造」；本 change 不引用该套、也不实现跨 gateway 解析。本 change **只能引用不能自造**，且 MUST NOT 混用任何两套闭集。VRN 语法本体、固定段序与 `kind` 闭集同样不由本 change 拥有。
 - `memory` 不是 VRN scope：不基于它做设计、不为它规定 scope_id；既有两点式 `boxteam://memory/{scope}/{name}` 只作**非 VRN 示意**（它无 `resources` 段、无 kind、恰好两段，曾走独立特例分支；**该特例分支已由提交 32bc6256 物理删除，现以 `unknown_scope` 类拒绝码 fail-closed 拒绝**）。
 - 命名必须逐字使用：`资源身份 / ResourceIdentity`、`虚拟资源地址 / VRN`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`。
 
@@ -60,8 +60,11 @@ SessionContextResourceRef {
     revision          : str | None         # 兄弟字段：期望修订绑定
     view              : <闭合枚举> | None  # 兄弟字段：原 fragment 承载的视图选择
     cursor            : str | None         # 兄弟字段：分页游标（内部已绑定 resource+revision+operation）
+    assembly_ref      : ResourceIdentity | None # view=assembly 时引用 assembly 资源身份
 }
 ```
+
+`resource_identity` 与 `assembly_ref` 中的 `ResourceIdentity` 均引用 `add-unified-virtual-resource-addressing` 的既有领域定义（requirement「三层职责必须严格分离」）；本 change 不另定义 identity，也不增加专用 assembly ref 类型。
 
 **为什么两个约束能同时成立**——这是本 change 的核心，论证分三步：
 
@@ -87,9 +90,9 @@ SessionContextResourceRef {
 |---|---|---|
 | `#information` | 视图选择 | `view = information` |
 | `#record={index}` | 视图选择 + 记录定位 | `view = records` + `record_index = {index}`（或等价结构化选择） |
-| `#assembly={assembly_id}` | 视图选择 + assembly 身份 | `view = assembly` + `assembly_ref`（以资源身份表达，不以字符串拼进地址） |
+| `#assembly={assembly_id}` | 视图选择 + assembly 身份 | `view = assembly` + `assembly_ref: ResourceIdentity`（复用 owner 定义的资源身份，不另造 ref 类型，也不把身份拼进地址） |
 
-`view` 与资源种类的兼容性沿用既有校验语义（旧 `validate_session_context_read_view` 的规则集），并额外要求**未识别的 view 取值显式失败**，不得降级为默认视图。
+`view` 与资源种类的兼容性沿用既有校验语义（旧 `validate_session_context_read_view` 的规则集）；已识别但不受资源 kind 支持的 view 须引用 `add-unified-virtual-resource-addressing` 的 resolve 拒绝码 `unsupported_view`。未登记的 view 仍须显式失败，不得降级为默认视图；本 change 不另设拒绝码。
 
 **理由**：fragment 是把「位置」与「选择」拼进一个字符串的旧机制；统一后选择必须走结构化字段，否则就是在 VRN 上开一个语法后门，重新制造双轨。
 
@@ -179,9 +182,5 @@ SessionContextResourceRef {
 
 ## Open Questions
 
-**下列各项分两类**——标「需 owner 裁定」者为**必须由 owner 拍板二选一/多选一**才能定稿的规范层缺口；其余为**下游对齐**项，方向已定、只需与对应 change 的模型对齐取值，不阻塞本 change 的规范层。
-
-- **（下游对齐）会话上下文资源自身的 `kind`（已定稿，不再是 open question）**：由「统一虚拟资源寻址」change 在 kind 闭集内定稿为 `session`（其 requirement「kind 闭集定稿且描述符闭集独立不可混用」，闭集为 `agent-spec` | `skills` | `config` | `session`）。本 change 直接引用该已登记取值，无需新登记、无待裁定项；规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`。`scope_id` 语义同样已由该 owner 定稿，本 change 直接引用。
-- **（需 owner 裁定）拒绝码的具体归属**：会话上下文新增拒绝场景（如「旧式 fragment 形态」「view 与资源不兼容」「memory 两点式」）落到 `grammar.py` 的 17 个码还是 `resolver.py` 的 6 个码，由寻址 change 集中登记后引用；本 change 只引用 grammar/resolve 这两套、不新增码、不混用闭集，第三套（联邦解析期）归属见 `add-unified-virtual-resource-addressing` 的拒绝码登记 requirement「拒绝码必须分三套集中登记且命名不得自造」。
-- **（需 owner 裁定）`assembly_ref` 的表示**：D2 中 `assembly={id}` 迁为 `assembly_ref`，其具体采用资源身份还是专用 ref 类型，待与 itemized rollout context 的 assembly 身份模型对齐后确定（不改变本 change 的结构化方向）。
+本 change 当前没有待 owner 裁定的规范项；剩余内容只记录不影响当前规范终值的未来可能。
 - **（下游对齐 / 未来可能）`user` scope 的未来扩展（不影响当前终值）**：`user` → `local` 已由「统一虚拟资源寻址」change 定为**终值**（其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」规定 `user` → `local` 并 MUST 显式声明为单用户本地程序约定）。本 change 直接引用该终值，不存在后续判定。若将来出现多用户场景如何扩展语义（例如是否引入用户名细分），属**未来可能**，须由 owner 另行发起变更，不得据此改动当前终值。

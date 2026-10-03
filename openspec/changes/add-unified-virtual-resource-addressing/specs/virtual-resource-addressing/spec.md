@@ -337,8 +337,8 @@ VRN 解析 MUST 按唯一顺序执行：本地 parse（fail-closed）→ 无 aut
 系统 MUST 复用既有拒绝码命名空间与风格，并 MUST 在**唯一一处集中登记处**登记全部拒绝码，且 MUST **分三套独立列出（语法期 / 解析授权期 / 联邦解析期）、标明各自适用范围与「不可混用」**：
 
 - **grammar 拒绝码（17 个）**：`VrnGrammarError.reason_code`，闭集定义于 `grammar.py:25-44`（`empty_uri`、`unknown_scheme`、`scheme_case_error`、`userinfo_rejected`、`query_rejected`、`fragment_rejected`、`backslash_rejected`、`control_char_rejected`、`percent_encoding_rejected`、`non_ascii_rejected`、`empty_segment`、`dot_segment`、`invalid_character`、`case_error`、`unknown_scope`、`unknown_resource_kind`、`malformed_path`）。构造函数对未登记 code 直接 `raise ValueError`（`grammar.py:51-53`），故该闭集**不可扩展**，适用于字符串→`ParsedVrn` 的语法解析期。
-- **resolve 拒绝码（6 个）**：`VrnResolveError.reason_code`，闭集定义于 `resolver.py:29-38`（`scope_mismatch`、`unknown_resource`、`unknown_operation`、`capability_denied`、`snapshot_unavailable`、`historical_snapshot_missing`），适用于已解析出 VRN 之后的解析/授权期。
-- **联邦解析期拒绝码（第三套，独立闭集）**：`app/gateway/federation/errors.py` 的 `FederationError.code`，**归属 `app/gateway/federation/`**，与上述 grammar 17 + resolve 6 两套不混用。真实码名（实测，含两种命名风格）：`federation-unknown-peer`（未知 / 未登记对端 gateway）、`federation-channel-closed`（channel / 对端连接不可用，即不可达）、`target_not_resolvable`（目标在当前有界拓扑内不可解析，覆盖「未共享 / 未找到」，对「未授权存在」与「不存在」返回同一码）、`target_ambiguous`（裸 session id 命中多个已授权候选）、`federation-deadline-exceeded`（总 deadline 耗尽）、`federation-transit-limit-exceeded`（中继次数 / 跳数超 policy 上界）。注意：`federation-` 前缀**不是本套一致约定**——`target_not_resolvable` 与 `target_ambiguous` 逐字不带前缀。
+- **resolve 拒绝码（规范闭集 7 个）**：`VrnResolveError.reason_code` 适用于已解析出 VRN 之后的解析/授权期，闭集为 `scope_mismatch`、`unknown_resource`、`unknown_operation`、`capability_denied`、`snapshot_unavailable`、`historical_snapshot_missing` 与 `unsupported_view`。后者专用于已识别的 view 与资源 kind 不兼容。当前生产 resolver 仍仅实现原有 6 个码，任务 1.3 尚须把 `unsupported_view` 登记到实现闭集中。
+- **联邦解析期拒绝码（第三套，独立闭集）**：`app/gateway/federation/errors.py` 的 `FederationError.code`，**归属 `app/gateway/federation/`**，与上述 grammar 17 + resolve 7 两套不混用。真实码名（实测，含两种命名风格）：`federation-unknown-peer`（未知 / 未登记对端 gateway）、`federation-channel-closed`（channel / 对端连接不可用，即不可达）、`target_not_resolvable`（目标在当前有界拓扑内不可解析，覆盖「未共享 / 未找到」，对「未授权存在」与「不存在」返回同一码）、`target_ambiguous`（裸 session id 命中多个已授权候选）、`federation-deadline-exceeded`（总 deadline 耗尽）、`federation-transit-limit-exceeded`（中继次数 / 跳数超 policy 上界）。注意：`federation-` 前缀**不是本套一致约定**——`target_not_resolvable` 与 `target_ambiguous` 逐字不带前缀。
 
 上述三套闭集 MUST NOT 混用：语法期 MUST NOT 抛 resolve 码或联邦解析期码，解析/授权期 MUST NOT 抛 grammar 码或联邦解析期码，联邦解析期 MUST NOT 抛 grammar 码或 resolve 码。新增码 MUST 只出现在集中登记处一次，其它模块与其它 change MUST 只引用、MUST NOT 自造同义码。
 
@@ -356,6 +356,11 @@ VRN 解析 MUST 按唯一顺序执行：本地 parse（fail-closed）→ 无 aut
 
 - **WHEN** 另一个 change 需要表达一种新的拒绝
 - **THEN** 它 MUST 引用集中登记处并说明归属哪一套闭集，MUST NOT 自行发明名称或定义同义码
+
+#### Scenario: view 与资源 kind 不兼容使用专用 resolve 拒绝码
+
+- **WHEN** 已识别的 view 与资源 kind 不兼容
+- **THEN** resolve 阶段以 `unsupported_view` 显式失败；该码只在本登记处定义，其它 change 只引用，不得另造同义拒绝码
 
 #### Scenario: 联邦解析期拒绝码引用真实码名
 
