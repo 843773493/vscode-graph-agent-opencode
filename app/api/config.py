@@ -97,17 +97,10 @@ async def get_config_sources(
     return APIResponse(
         data=ConfigSourcesDTO(
             revision=revision,
-            # TODO(5A.3): 字段名与 proto 的 ConfigSourcesDTO.schema_path 属独立破坏性协议
-            # 切片，本切片不改其名；值改为配置来源 VRN（config kind，复用唯一定点构造），
-            # 避免真实路径外泄。仅发行包 inline 层 schema 有 VRN，非 inline schema（用户
-            # 自定义 `$schema`、用户级安装 schema）返回空串，不得编造 inline 来源身份。
-            schema_path=config_service.get_schema_source_vrn() or "",
+            schema_vrn=config_service.get_schema_source_vrn(),
             sources=[
                 ConfigSourceDTO(
-                    # TODO(5A.3): 该字段名与 proto 中的 ConfigSourceDTO.path 属独立的破坏性
-                    # 协议切片（需同步 proto 与 4 个生成目录及契约基线），本切片不改其名，
-                    # 仅把值由 real path 改为来源 VRN，避免真实路径外泄。
-                    path=source.vrn or "",
+                    vrn=source.vrn,
                     layer=source.layer,
                     precedence=source.precedence,
                     loaded=source.loaded,

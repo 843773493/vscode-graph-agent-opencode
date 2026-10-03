@@ -287,7 +287,7 @@ class ConfigSourceLayersMixin:
         ——路径相等会把正常安装（用户级拷贝）误判成非 inline。
 
         用户自定义 `$schema`（内容与发行包不同）即判为不可寻址，返回 None。返回 None 由
-        调用方以空字符串对外表达；MUST NOT 在此抛错，故含点号或非法字符的自定义 stem
+        调用方以 null 对外表达；MUST NOT 在此抛错，故含点号或非法字符的自定义 stem
         永不进入 VRN 构造。VRN 尾段取发行包 schema 的逻辑资源名，MUST NOT 取用户文件 stem。
         """
         try:

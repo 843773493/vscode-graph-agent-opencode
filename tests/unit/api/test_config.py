@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from app.api.config import get_config, get_config_sources
 from app.core.config_sources import ConfigSourceLayer
 from app.schemas.gateway import GatewayConfigSourceDTO
-from app.schemas.internal_v2.config import ConfigSourceDTO
+from app.schemas.internal_v2.config import ConfigSourceDTO, ConfigSourcesDTO
 from app.services.infrastructure.config_service import ConfigService
 
 
@@ -27,14 +27,20 @@ def test_config_source_dtos_share_the_closed_logical_layer_set() -> None:
 
     for source_model in (ConfigSourceDTO, GatewayConfigSourceDTO):
         source = source_model(
-            path="",
+            vrn=None,
             layer="runtime_override",
             precedence=4,
             loaded=True,
         )
+        assert source.vrn is None
+        assert "path" not in source.model_dump()
         assert source.layer == "runtime_override"
         with pytest.raises(ValidationError):
-            source_model(path="", layer="sqlite", precedence=4, loaded=True)
+            source_model(vrn=None, layer="sqlite", precedence=4, loaded=True)
+
+    sources = ConfigSourcesDTO(revision="rev-1", schema_vrn=None)
+    assert sources.schema_vrn is None
+    assert "schema_path" not in sources.model_dump()
 
 
 def _base_config() -> dict[str, object]:
@@ -87,9 +93,8 @@ async def test_config_sources_endpoint_exposes_layers_and_schema(
 
     assert response.request_id == "req-config-sources"
     assert response.data is not None
-    # 5A.3：schema 属发行包内资源，值为 config kind 的 VRN，不再泄漏真实路径。
-    assert response.data.schema_path.startswith("boxteam://inline/")
-    assert response.data.schema_path.endswith("/resources/config/workspace_schema")
+    assert response.data.schema_vrn.startswith("boxteam://inline/")
+    assert response.data.schema_vrn.endswith("/resources/config/workspace_schema")
     assert [source.layer for source in response.data.sources] == [
         "inline",
         "user",
@@ -102,7 +107,7 @@ async def test_config_sources_endpoint_exposes_layers_and_schema(
 async def test_config_sources_endpoint_never_exposes_real_path(
     tmp_path: Path,
 ) -> None:
-    """5A.6：响应体只含来源 VRN，不泄漏任何真实路径（字段名 5A.3 后续切片再改）。"""
+    """响应体只含 nullable VRN locator 与来源兄弟字段，不泄漏真实路径。"""
 
     config_path = tmp_path / "workspace.jsonc"
     config_path.write_text(json.dumps(_base_config()), encoding="utf-8")
@@ -119,23 +124,29 @@ async def test_config_sources_endpoint_never_exposes_real_path(
 
     assert response.data is not None
     dumped = json.dumps(
-        [source.path for source in response.data.sources], ensure_ascii=False
+        [source.vrn for source in response.data.sources], ensure_ascii=False
     )
     assert str(tmp_path) not in dumped
     assert str(Path.cwd() / "configs") not in dumped
-    # inline 层是唯一可寻址的 config 来源，其 path 值为 VRN。
-    assert response.data.sources[0].path.startswith("boxteam://inline/")
-    assert response.data.sources[0].path.endswith("/resources/config/workspace_inline")
-    # user/user_local 不可寻址：值为空串。
-    assert response.data.sources[1].path == ""
-    assert response.data.sources[2].path == ""
-    # schema 属发行包内资源，只以 VRN 表达，响应体整体不含真实路径。
-    assert response.data.schema_path.startswith("boxteam://inline/")
-    assert response.data.schema_path.endswith("/resources/config/workspace_schema")
+    assert response.data.sources[0].vrn.startswith("boxteam://inline/")
+    assert response.data.sources[0].vrn.endswith("/resources/config/workspace_inline")
+    assert response.data.sources[1].vrn is None
+    assert response.data.sources[2].vrn is None
+    assert response.data.sources[0].layer == "inline"
+    assert response.data.sources[0].precedence == 0
+    assert response.data.sources[0].source_key is None
+    assert response.data.sources[1].layer == "user"
+    assert response.data.sources[1].precedence == 1
+    assert response.data.sources[2].layer == "user_local"
+    assert response.data.sources[2].precedence == 2
+    assert response.data.schema_vrn.startswith("boxteam://inline/")
+    assert response.data.schema_vrn.endswith("/resources/config/workspace_schema")
     body = response.model_dump_json()
     assert str(tmp_path) not in body
     assert str(Path.cwd() / "configs") not in body
     assert _REAL_PATH_PATTERN.search(body) is None
+    assert '"path"' not in body
+    assert '"schema_path"' not in body
 
 
 _REAL_PATH_PATTERN = re.compile(
@@ -154,11 +165,11 @@ _CUSTOM_SCHEMA = {
 async def test_config_sources_schema_vrn_only_for_release_inline_schema(
     tmp_path: Path,
 ) -> None:
-    """非发行包 schema MUST NOT 编 inline VRN：返回空串且端点不崩。
+    """非发行包 schema MUST NOT 编 inline VRN：返回 null 且端点不崩。
 
     点号 stem（`my.company.schema`，非法 VRN 字符）与普通自定义 schema 都走此判据；
     改前实现直接以 `schema_path.stem` 编 inline VRN，点号 stem 会抛 `VrnGrammarError`
-    令端点 500。本用例锁定「不可寻址返回空串、任何输入不 500」。
+    令端点 500。本用例锁定「不可寻址返回 null、任何输入不 500」。
     """
 
     for schema_name in ("my.company.schema.jsonc", "custom_schema.jsonc"):
@@ -182,8 +193,7 @@ async def test_config_sources_schema_vrn_only_for_release_inline_schema(
         )
 
         assert response.data is not None
-        # 非 inline schema 不可寻址：空串，MUST NOT 谎报 inline 来源、MUST NOT 抛错。
-        assert response.data.schema_path == ""
+        assert response.data.schema_vrn is None
         assert str(tmp_path) not in response.model_dump_json()
 
 

@@ -73,19 +73,32 @@ message ConfigReloadStatusDTO {
 }
 
 message ConfigSourceDTO {
-  string path = 1;
+  reserved 1;
+  reserved "path";
+
   // 逻辑来源闭集：inline、user、user_local、workspace、runtime_override。
   // SQLite 仅为内部 carrier。
   string layer = 2;
   int64 precedence = 3;
   bool loaded = 4;
+  optional string source_key = 5;
+  string presence = 6;
+  optional int64 layer_revision = 7;
+  optional string layer_digest = 8;
+  optional int64 source_generation = 9;
+  // 可寻址来源文件的 VRN；没有稳定文件位置时不设置。
+  optional string vrn = 10;
 }
 
 message ConfigSourcesDTO {
+  reserved 2;
+  reserved "schema_path";
+
   string revision = 1;
-  string schema_path = 2;
   repeated ConfigSourceDTO sources = 3;
   repeated string runtime_overrides = 4;
+  // 配置 schema 文件的 VRN；没有可寻址 schema 时不设置。
+  optional string schema_vrn = 5;
 }
 
 message ConfigUpdateRequest {

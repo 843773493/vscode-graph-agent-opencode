@@ -501,11 +501,12 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
 
     assert response.request_id == "req-gateway-config-sources"
     assert response.data is not None
-    # 5A.3：gateway schema 属发行包内资源，值为 config kind 的 VRN，不再泄漏真实路径。
-    assert response.data.schema_path.startswith("boxteam://inline/")
-    assert response.data.schema_path.endswith("/resources/config/gateway_schema")
+    assert response.data.schema_vrn.startswith("boxteam://inline/")
+    assert response.data.schema_vrn.endswith("/resources/config/gateway_schema")
     body = response.model_dump_json()
     assert str(tmp_path) not in body
+    assert '"path"' not in body
+    assert '"schema_path"' not in body
     assert [source.layer for source in response.data.sources] == [
         "inline",
         "user",
@@ -513,6 +514,17 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
     ]
     assert response.data.sources[1].loaded is True
     assert response.data.policy_manifest
+    assert response.data.sources[0].vrn.startswith("boxteam://inline/")
+    assert response.data.sources[0].vrn.endswith("/resources/config/gateway_inline")
+    assert response.data.sources[1].vrn is None
+    assert response.data.sources[2].vrn is None
+    assert response.data.sources[0].layer == "inline"
+    assert response.data.sources[0].precedence == 0
+    assert response.data.sources[0].source_key is None
+    assert response.data.sources[1].layer == "user"
+    assert response.data.sources[1].precedence == 1
+    assert response.data.sources[2].layer == "user_local"
+    assert response.data.sources[2].precedence == 2
 
 
 @pytest.mark.asyncio
@@ -520,7 +532,7 @@ async def test_gateway_config_sources_schema_vrn_only_for_release_inline_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """非发行包 gateway schema MUST NOT 编 inline VRN：返回空串且端点不崩。
+    """非发行包 gateway schema MUST NOT 编 inline VRN：返回 null 且端点不崩。
 
     改前实现直接以 `config.schema_path.stem` 编 inline VRN，点号 stem 会抛
     `VrnGrammarError` 令端点 500，普通自定义 schema 会被谎报成 inline 来源。
@@ -554,8 +566,10 @@ async def test_gateway_config_sources_schema_vrn_only_for_release_inline_schema(
         )
 
         assert response.data is not None
-        assert response.data.schema_path == ""
+        assert response.data.schema_vrn is None
         assert str(tmp_path) not in response.model_dump_json()
+        assert '"path"' not in response.model_dump_json()
+        assert '"schema_path"' not in response.model_dump_json()
 
 
 def test_gateway_loader_does_not_read_workspace_configuration(tmp_path: Path) -> None:

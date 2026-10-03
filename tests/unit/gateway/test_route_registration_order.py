@@ -20,7 +20,7 @@ from app.gateway.main import app
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 BASELINE_OPENAPI_SHA256 = (
-    "972847090dd540e2d02418e708f9d7134f34ee7b254b7d40392b5ca94c8c9dec"
+    "167ed8fa787b5c9dc73e5b21c980e7f454612ee9e6ca1f3e20053f9419b7644e"
 )
 BASELINE_ROUTE_COUNT = 96
 BASELINE_PATH_COUNT = 76

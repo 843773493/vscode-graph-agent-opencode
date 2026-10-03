@@ -45,7 +45,7 @@ def release_inline_config_vrn_for_file(
     的 `atomic_write(target, source.read_bytes())`），故「真属发行包 inline 层」的正确
     判据是**与发行包资源内容一致**，而非路径相等——路径相等会把正常安装的拷贝误判为非
     inline。判据失败（路径缺失、不可读、内容不同）一律返回 None，MUST NOT 抛错：调用方
-    以空字符串对外表达不可寻址，故含点号或非法字符的用户自定义文件名永不进入 VRN 构造。
+    以 null 对外表达不可寻址，故含点号或非法字符的用户自定义文件名永不进入 VRN 构造。
     VRN 尾段取发行包资源的逻辑名（`release_config_name` 去扩展名），MUST NOT 取生效文件 stem。
     """
     if effective_path is None:

@@ -73,7 +73,6 @@ export interface ConfigReloadStatusDTO {
 }
 
 export interface ConfigSourceDTO {
-  path: string;
   /**
    * 逻辑来源闭集：inline、user、user_local、workspace、runtime_override。
    * SQLite 仅为内部 carrier。
@@ -81,13 +80,23 @@ export interface ConfigSourceDTO {
   layer: string;
   precedence: number;
   loaded: boolean;
+  source_key?: string | undefined;
+  presence: string;
+  layer_revision?: number | undefined;
+  layer_digest?: string | undefined;
+  source_generation?:
+    | number
+    | undefined;
+  /** 可寻址来源文件的 VRN；没有稳定文件位置时不设置。 */
+  vrn?: string | undefined;
 }
 
 export interface ConfigSourcesDTO {
   revision: string;
-  schema_path: string;
   sources: ConfigSourceDTO[];
   runtime_overrides: string[];
+  /** 配置 schema 文件的 VRN；没有可寻址 schema 时不设置。 */
+  schema_vrn?: string | undefined;
 }
 
 export interface ConfigUpdateRequest {
@@ -2221,24 +2230,36 @@ export const ConfigReloadStatusDTO: MessageFns<ConfigReloadStatusDTO> = {
 };
 
 function createBaseConfigSourceDTO(): ConfigSourceDTO {
-  return { path: "", layer: "", precedence: 0, loaded: false };
+  return {
+    layer: "",
+    precedence: 0,
+    loaded: false,
+    source_key: undefined,
+    presence: "",
+    layer_revision: undefined,
+    layer_digest: undefined,
+    source_generation: undefined,
+    vrn: undefined,
+  };
 }
 
 export const ConfigSourceDTO: MessageFns<ConfigSourceDTO> = {
   fromJSON(object: any): ConfigSourceDTO {
     return {
-      path: isSet(object.path) ? globalThis.String(object.path) : "",
       layer: isSet(object.layer) ? globalThis.String(object.layer) : "",
       precedence: isSet(object.precedence) ? globalThis.Number(object.precedence) : 0,
       loaded: isSet(object.loaded) ? globalThis.Boolean(object.loaded) : false,
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : undefined,
+      presence: isSet(object.presence) ? globalThis.String(object.presence) : "",
+      layer_revision: isSet(object.layer_revision) ? globalThis.Number(object.layer_revision) : undefined,
+      layer_digest: isSet(object.layer_digest) ? globalThis.String(object.layer_digest) : undefined,
+      source_generation: isSet(object.source_generation) ? globalThis.Number(object.source_generation) : undefined,
+      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : undefined,
     };
   },
 
   toJSON(message: ConfigSourceDTO): unknown {
     const obj: any = {};
-    if (message.path !== "") {
-      obj.path = message.path;
-    }
     if (message.layer !== "") {
       obj.layer = message.layer;
     }
@@ -2248,6 +2269,24 @@ export const ConfigSourceDTO: MessageFns<ConfigSourceDTO> = {
     if (message.loaded !== false) {
       obj.loaded = message.loaded;
     }
+    if (message.source_key !== undefined) {
+      obj.source_key = message.source_key;
+    }
+    if (message.presence !== "") {
+      obj.presence = message.presence;
+    }
+    if (message.layer_revision !== undefined) {
+      obj.layer_revision = Math.round(message.layer_revision);
+    }
+    if (message.layer_digest !== undefined) {
+      obj.layer_digest = message.layer_digest;
+    }
+    if (message.source_generation !== undefined) {
+      obj.source_generation = Math.round(message.source_generation);
+    }
+    if (message.vrn !== undefined) {
+      obj.vrn = message.vrn;
+    }
     return obj;
   },
 
@@ -2256,29 +2295,34 @@ export const ConfigSourceDTO: MessageFns<ConfigSourceDTO> = {
   },
   fromPartial<I extends Exact<DeepPartial<ConfigSourceDTO>, I>>(object: I): ConfigSourceDTO {
     const message = createBaseConfigSourceDTO();
-    message.path = object.path ?? "";
     message.layer = object.layer ?? "";
     message.precedence = object.precedence ?? 0;
     message.loaded = object.loaded ?? false;
+    message.source_key = object.source_key ?? undefined;
+    message.presence = object.presence ?? "";
+    message.layer_revision = object.layer_revision ?? undefined;
+    message.layer_digest = object.layer_digest ?? undefined;
+    message.source_generation = object.source_generation ?? undefined;
+    message.vrn = object.vrn ?? undefined;
     return message;
   },
 };
 
 function createBaseConfigSourcesDTO(): ConfigSourcesDTO {
-  return { revision: "", schema_path: "", sources: [], runtime_overrides: [] };
+  return { revision: "", sources: [], runtime_overrides: [], schema_vrn: undefined };
 }
 
 export const ConfigSourcesDTO: MessageFns<ConfigSourcesDTO> = {
   fromJSON(object: any): ConfigSourcesDTO {
     return {
       revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
-      schema_path: isSet(object.schema_path) ? globalThis.String(object.schema_path) : "",
       sources: globalThis.Array.isArray(object?.sources)
         ? object.sources.map((e: any) => ConfigSourceDTO.fromJSON(e))
         : [],
       runtime_overrides: globalThis.Array.isArray(object?.runtime_overrides)
         ? object.runtime_overrides.map((e: any) => globalThis.String(e))
         : [],
+      schema_vrn: isSet(object.schema_vrn) ? globalThis.String(object.schema_vrn) : undefined,
     };
   },
 
@@ -2287,14 +2331,14 @@ export const ConfigSourcesDTO: MessageFns<ConfigSourcesDTO> = {
     if (message.revision !== "") {
       obj.revision = message.revision;
     }
-    if (message.schema_path !== "") {
-      obj.schema_path = message.schema_path;
-    }
     if (message.sources?.length) {
       obj.sources = message.sources.map((e) => ConfigSourceDTO.toJSON(e));
     }
     if (message.runtime_overrides?.length) {
       obj.runtime_overrides = message.runtime_overrides;
+    }
+    if (message.schema_vrn !== undefined) {
+      obj.schema_vrn = message.schema_vrn;
     }
     return obj;
   },
@@ -2305,9 +2349,9 @@ export const ConfigSourcesDTO: MessageFns<ConfigSourcesDTO> = {
   fromPartial<I extends Exact<DeepPartial<ConfigSourcesDTO>, I>>(object: I): ConfigSourcesDTO {
     const message = createBaseConfigSourcesDTO();
     message.revision = object.revision ?? "";
-    message.schema_path = object.schema_path ?? "";
     message.sources = object.sources?.map((e) => ConfigSourceDTO.fromPartial(e)) || [];
     message.runtime_overrides = object.runtime_overrides?.map((e) => e) || [];
+    message.schema_vrn = object.schema_vrn ?? undefined;
     return message;
   },
 };

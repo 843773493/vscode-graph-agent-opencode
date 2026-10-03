@@ -38,12 +38,29 @@ export type ChangePortForwardLabelRequest = Omit<OptionalFields<GatewayProtocol.
 export type DevelopmentRuntimeRestartDTO = OptionalFields<GatewayProtocol.DevelopmentRuntimeRestartDTO>;
 export type GatewayConfigSourceDTO = Omit<
   OptionalFields<GatewayProtocol.GatewayConfigSourceDTO>,
-  "layer"
-> & { layer: ConfigSourceLayer };
+  | "vrn"
+  | "layer"
+  | "source_key"
+  | "presence"
+  | "layer_revision"
+  | "layer_digest"
+  | "source_generation"
+> & {
+  vrn: string | null;
+  layer: ConfigSourceLayer;
+  source_key: string | null;
+  presence: "present" | "absent";
+  layer_revision: number | null;
+  layer_digest: string | null;
+  source_generation: number | null;
+};
 export type GatewayConfigSourcesDTO = Omit<
   OptionalFields<GatewayProtocol.GatewayConfigSourcesDTO>,
-  "sources"
-> & { sources: GatewayConfigSourceDTO[] };
+  "schema_vrn" | "sources"
+> & {
+  schema_vrn: string | null;
+  sources: GatewayConfigSourceDTO[];
+};
 export type GatewayDiagnosticLogDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticLogDTO>;
 export type GatewayDiagnosticWorkspaceDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticWorkspaceDTO>;
 export type GatewayDiagnosticsDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticsDTO>;

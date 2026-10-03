@@ -304,11 +304,6 @@ export declare const ConfigReloadStatusDTOSchema: GenMessage<ConfigReloadStatusD
  */
 export declare type ConfigSourceDTO = Message<"boxteam.workspace.v2.ConfigSourceDTO"> & {
   /**
-   * @generated from field: string path = 1;
-   */
-  path: string;
-
-  /**
    * 逻辑来源闭集：inline、user、user_local、workspace、runtime_override。
    * SQLite 仅为内部 carrier。
    *
@@ -325,6 +320,38 @@ export declare type ConfigSourceDTO = Message<"boxteam.workspace.v2.ConfigSource
    * @generated from field: bool loaded = 4;
    */
   loaded: boolean;
+
+  /**
+   * @generated from field: optional string source_key = 5;
+   */
+  sourceKey?: string | undefined;
+
+  /**
+   * @generated from field: string presence = 6;
+   */
+  presence: string;
+
+  /**
+   * @generated from field: optional int64 layer_revision = 7;
+   */
+  layerRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string layer_digest = 8;
+   */
+  layerDigest?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 source_generation = 9;
+   */
+  sourceGeneration?: bigint | undefined;
+
+  /**
+   * 可寻址来源文件的 VRN；没有稳定文件位置时不设置。
+   *
+   * @generated from field: optional string vrn = 10;
+   */
+  vrn?: string | undefined;
 };
 
 /**
@@ -343,11 +370,6 @@ export declare type ConfigSourcesDTO = Message<"boxteam.workspace.v2.ConfigSourc
   revision: string;
 
   /**
-   * @generated from field: string schema_path = 2;
-   */
-  schemaPath: string;
-
-  /**
    * @generated from field: repeated boxteam.workspace.v2.ConfigSourceDTO sources = 3;
    */
   sources: ConfigSourceDTO[];
@@ -356,6 +378,13 @@ export declare type ConfigSourcesDTO = Message<"boxteam.workspace.v2.ConfigSourc
    * @generated from field: repeated string runtime_overrides = 4;
    */
   runtimeOverrides: string[];
+
+  /**
+   * 配置 schema 文件的 VRN；没有可寻址 schema 时不设置。
+   *
+   * @generated from field: optional string schema_vrn = 5;
+   */
+  schemaVrn?: string | undefined;
 };
 
 /**

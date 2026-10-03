@@ -18,7 +18,7 @@ class ConfigDTO(BaseModel):
 
 
 class ConfigSourceDTO(BaseModel):
-    path: str
+    vrn: str | None
     layer: ConfigSourceLayer
     precedence: int
     loaded: bool
@@ -31,7 +31,7 @@ class ConfigSourceDTO(BaseModel):
 
 class ConfigSourcesDTO(BaseModel):
     revision: str
-    schema_path: str
+    schema_vrn: str | None
     sources: list[ConfigSourceDTO] = Field(default_factory=list)
     runtime_overrides: list[str] = Field(default_factory=list)
     policy_manifest: list[dict[str, object]] = Field(default_factory=list)

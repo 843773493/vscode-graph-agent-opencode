@@ -194,20 +194,13 @@ async def gateway_config_sources(
     return APIResponse(
         data=GatewayConfigSourcesDTO(
             revision=config.revision,
-            # TODO(5A.3): 字段名与 proto 的 GatewayConfigSourcesDTO.schema_path 属独立
-            # 破坏性协议切片，本切片不改其名；值改为 config kind 的来源 VRN（可为空）。
-            # 仅当生效 schema 与发行包 gateway_schema.jsonc 内容一致时才编 inline VRN，
-            # 否则返回空串（非 inline schema 不得编造来源身份）。
-            schema_path=release_inline_config_vrn_for_file(
+            schema_vrn=release_inline_config_vrn_for_file(
                 config.schema_path,
                 release_config_name="gateway_schema.jsonc",
-            )
-            or "",
+            ),
             sources=[
                 GatewayConfigSourceDTO(
-                    # TODO(5A.3): 同 app/api/config.py，字段名属独立破坏性协议切片，
-                    # 本切片只把值由 real path 改为来源 VRN（可为空）。
-                    path=source.vrn or "",
+                    vrn=source.vrn,
                     layer=source.layer,
                     precedence=source.precedence,
                     loaded=source.loaded,
