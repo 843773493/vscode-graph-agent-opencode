@@ -35,11 +35,11 @@
 回报：复现/判定、改动与断言变化、验证退出码、未验证项、产物和进程
 ```
 
-工具没有 cwd 参数时，每次命令显式指定 workdir，先核验物理 cwd 与 Git 顶层目录。共享主工作树的派单必须提供主代理已按当前 HEAD 初始化的任务索引，状态检查显式使用 `GIT_INDEX_FILE` 和 `GIT_OPTIONAL_LOCKS=0`；裸 `git status` 只作索引观察，不能判断实际在途改动。先串行落地基线再派单；派单后发生 HEAD 变化时由主代理说明变化范围，不能由 agent 猜测。独立审查提供原始需求和稳定产物，不预告期望结论。任务所需未提交变更先审查并集成，或完整交付补丁，不能让测试与生产代码错配。
+工具没有 cwd 参数时，每次命令显式指定 workdir，先核验物理 cwd 与 Git 顶层目录。共享主工作树的派单必须提供主代理已按当前 HEAD 初始化的任务索引，状态检查显式使用 `GIT_INDEX_FILE` 和 `GIT_OPTIONAL_LOCKS=0`；裸 `git status` 只作索引观察，不能判断实际在途改动。先串行落地基线再派单；派单后发生 HEAD 变化时由主代理说明变化范围，不能由 agent 猜测。独立审查提供原始需求和稳定产物，不预告期望结论。任务所需未提交变更先审查并集成，或完整交付补丁，不能让测试与生产代码错配。消费者准入门只检查提供者已承诺的接口和生产依赖；待消费者实现的新必填归属造成的预期红灯必须明确归给消费者，不能要求消费者先完成才能获得依赖，形成循环等待。
 
-恢复时区分任务分支 HEAD、补丁基线与主树已集成依赖；它们可能不同。依赖交付须包含可应用的完整生产补丁、精确文件列表与 hash，主代理同步后再通知消费者运行；只冻结接口名称不能证明目标工作树已有模块、DDL 与 codec。依赖只由提供者交固定补丁，主代理串行同步消费者工作树；提供者不得自行写入或启动消费者测试。导出补丁后逐文件核验其目标 blob/hash 与实际源码一致，报告 hash 不以先前同名产物推断。模型 429 只表示该轮失败：保留独有改动与证据，不静默换模型、不密集重复恢复。
+恢复时区分任务分支 HEAD、补丁基线与主树已集成依赖；它们可能不同。依赖交付须包含 repo-relative 且可应用的完整生产补丁、精确文件列表与 hash，并通过真实 import 与已承诺接口的定向调用，主代理同步后再通知消费者运行；只冻结接口名称不能证明目标工作树已有模块、DDL 与 codec。依赖只由提供者交固定补丁，主代理串行同步消费者工作树；提供者不得自行写入或启动消费者测试。导出补丁后逐文件核验其目标 blob/hash 与实际源码一致；新旧文件 patch header 均只能出现仓库相对路径，不能把 git diff --no-index 的绝对工作树路径直接交付；文件清单包含未跟踪源码，hash 必须从实际文件计算，不手填或以先前同名产物推断。冻结交付后新增切片另导补丁，不覆盖已审版本。模型 429 只表示该轮失败：保留独有改动与证据，不静默换模型、不密集重复恢复。
 
-agent 空回复、报错或中断时先核对实际改动、提交与后台进程，再决定复用或替换；释放写入范围后才能交给新实现者。 已授权的纵向切片包含其调用方、DTO/协议和必要测试，agent 不因跨层再次等待范围确认；共享文件按消息或符号片段分配，由主代理串行合并。接口阻塞只暂停依赖部分，先交具体字段合同并继续独立实现。跨范围修改必须先重新分配。调查已有可行动结论时先回报并写入已分配产物，不等全量报告；上下文恢复时主代理重发工作目录、状态索引、产物根、固定基线与当前边界，agent 先读既有阶段证据再继续，避免重复泛读。恢复后的默认 cwd 可能回到主树；首次写入前显式核对物理 cwd、Git 顶层和分支与派单一致，每次命令仍传 workdir、编辑使用分配的绝对路径。不一致时停止写入并报告主代理，不把错误工作树的差异当作需要重做的工作。后续审查派单也重复报告根的绝对路径；agent 写报告前将目标与最近一次派单比对，路径缺失时询问主代理，不按任务短名另建目录。
+agent 空回复、报错或中断时先核对实际改动、提交与后台进程，再决定复用或替换；释放写入范围后才能交给新实现者。 已授权的纵向切片包含其调用方、DTO/协议和必要测试，agent 不因跨层再次等待范围确认；共享文件按消息或符号片段分配，由主代理串行合并。接口阻塞只暂停依赖部分，先交具体字段合同并继续独立实现。跨范围修改必须先重新分配。调查已有可行动结论时先回报并写入已分配产物，不等全量报告；上下文恢复时主代理重发工作目录、状态索引、产物根、固定基线与当前边界，agent 先读既有阶段证据再继续，避免重复泛读。恢复后的默认 cwd 可能回到主树；首次写入前显式核对物理 cwd、Git 顶层和分支与派单一致，每次命令仍传 workdir、编辑使用分配的绝对路径。不一致时停止写入并报告主代理，不把错误工作树的差异当作需要重做的工作。主代理每次新派单、恢复和转交都提供完整字面绝对 workdir/index/artifact/report 路径，不能以“主 root/task/artifacts”替代。后续审查派单也重复报告根的绝对路径；agent 写报告前将目标与最近一次派单比对，路径缺失时询问主代理，不按任务短名另建目录。
 
 ## 路径与生命周期
 
@@ -96,15 +96,15 @@ git merge-base --is-ancestor <本笔提交hash> HEAD
 
 ## 实时台账
 
-更新时间：2026-10-04 06:05（北京时间）。goal 已启动；使用 GPT 全队，九个常驻 agent 分别实施、准备后续切片和独立审查，部分轮次受 429 中断。先核对本节事实再恢复，历史服务状态只表示上次验证结果。
+更新时间：2026-10-04 07:15（北京时间）。goal 已启动；使用 GPT 全队，九个常驻 agent 分别实施、准备后续切片和独立审查，部分轮次受 429 中断。先核对本节事实再恢复，历史服务状态只表示上次验证结果。
 
 | 项目 | 已核验状态与下一步 |
 |---|---|
 | 当前范围 | 用户已启动交接任务与关联 OpenSpec 实施、缺陷修复、冗余清理及技能实测改进 goal；正在核对七个关联 change 的依赖和边界，UUIDv7 685 项关联测试通过后，真实实时分配核验又发现 D2 单调性缺口，正修复，不自动扩展到新需求 |
 | 版本与模型 | 两个版本入口维护唯一模型配置；GPT 精确 ID 的创建、回复及实际模型记录已通过 [只读探针](../../out/tests/temp/2026/10/03/154301-gpt-model-probe/coordinator/artifacts/model-probe.json) |
-| Git 基线 | 当前业务/规范集成 HEAD `04a5e30d`；T01 `0a73ae37`、G01/G02 `72e755eb`、S01 `ad093e0c`、U01/U02 `c16b2c17`、G03 `7596a841`、S02 `122e7939`、验收文档 `a625db31`、T04 `fd6292da`、UUID关联测试记录 `0a7eda26`、配置来源 `f42b6f77`、S03/S04规范 `04a5e30d` 已串行集成，防线与祖先链通过。主树在途为 B01 三文件与主代理技能更新；共享暂存保留 |
+| Git 基线 | 当前业务集成 HEAD `00edda52`；T01 `0a73ae37`、G01/G02 `72e755eb`、S01 `ad093e0c`、U01/U02 `c16b2c17`、G03 `7596a841`、S02 `122e7939`、验收文档 `a625db31`、T04 `fd6292da`、UUID关联测试记录 `0a7eda26`、配置来源 `f42b6f77`、S03/S04规范 `04a5e30d`、UUID自然分配 `e27260ca`、配置公共 VRN 字段 `69d77eea`、S05 规划 `710ffca4`、C03 验收 `d1aa533d`、U06 路径预算 `00edda52` 已串行集成，防线与祖先链通过。主树在途为 B01 三文件、handoff 与技能更新；共享暂存保留 |
 | 迁移与历史清理 | 数据盘物理根及旧入口软链接已核验，旧副本均删除，系统盘可用空间增加约 238GB；另删除 14 份可重建副本、分类整理 67 项、校验 23092 个保留文件。详见目录审查及其清单 |
-| 业务数据清理 | 默认工作区与 Drive 的旧 .boxteam 分别获用户授权清空，普通文件保留；该授权不扩大到其他工作区。仓库根的旧终端测试目录及空 .boxteam 已另获授权删除，创建者未确认 |
+| 业务数据清理 | 默认工作区与 Drive 的旧 .boxteam 分别获用户授权清空，普通文件保留；用户随后统一授权删除源码开发生成的新旧中间数据；该授权不包括普通源码与未集成独有改动。仓库根的旧终端测试目录及空 .boxteam 已另获授权删除，创建者未确认 |
 | 开发服务 | 上次核验默认与 Drive 均为 ready，前端 8027 三条初始化 API 为 200 且 request_id 一致；管理 dev:status/dev:stop/dev 使用下述原环境，恢复时重新检查 |
 | 验证与证据 | T01 activity 1、history 20 项通过；G01/G02主树受保护10 passed（3.54s），旧顺序变异有效。T02 generation 最终4 passed（41.69s），R04发现消息展示断言移除，当前拒绝集成、复核canonical展示合同；T03锁定internal root未推进执行归属，T04真实writer修复已集成并主树2passed/1.76s；新版runtime_notice还须E01独立execution binding。U01/U02独立A03通过并集成c16b2c17，主树117 passed/24.20s、profile负向1passed/0.22s；UUIDv7十一份完整关联测试主树685passed/129.82s，保护命令与结果已存JSON；完整 users.py Ruff 有18条既有诊断 |
 | 明确裁定 | `assembly_ref=ResourceIdentity`；统一寻址拒绝码 `unsupported_view`；Gateway ID `current` 创建拒绝；config layer只表示逻辑来源、读侧sqlite换runtime_override、优先级不变、快照独立。delegate 复用 Session SQLite collaboration ledger 同事务发布，不另建 Team JSON intent；internal admission 无 Turn/accepted ingress，输出保留原 semantic、显式 execution link。证据 `coordinator/artifacts/owner-decisions.json` |
@@ -115,14 +115,14 @@ git merge-base --is-ancestor <本笔提交hash> HEAD
 |---|---|---|---|
 | U01–U03 / uuidv7_implementer | U01/U02已集成且旧worktree已回收；U03恢复后已给typed合同，正在实施 | 新worktree out/worktrees/2026/10/04/024121-team-execution/internal_display_projection / 同名任务产物根 | 基线7596a841；以runtime_notice structured payload保存prompt+safe display，同一hash；canonical/history→Web闭包，不复活旧metadata，执行binding依赖E01 |
 | R01–R04 / behavior_reviewer | T01/G01/G02审查已落盘；R03发现U01恢复durability blocker；R04审T02 | 主仓库 / 任务根的 behavior_reviewer | R04b已厘清完整旧metadata过时但安全展示丢失真实，U03实施；R05找到S02逐记录VRN/layer歧义，修正已复核，R06通过T04；R07发现B01删除失败后晚准入P1，交E01/W01；R08通过C01；R09b通过S03最终合同 |
-| A01/A02 / architecture_reviewer | 依赖报告与U01架构复审已落盘，无新增架构blocker | 主仓库 / 任务根的 architecture_reviewer | A03/A04已完成并支持UUID/G03验收；A05残留审查完成；A06拒第二Team JSON权威；A07发现UUID真实allocation破D2；A09b通过S04最终合同，A10查SQLite路径边界 |
-| G01/G02/C01 / gateway_user_implementer | G01已集成72e755eb；C01/C02已集成f42b6f77，C02在429后由主代理接管；C03独立配置VRN字段正名已派同模型恢复 | C01 worktree已核27差异等集成HEAD且无进程后回收；C03：out/worktrees/2026/10/04/024121-team-execution/config_vrn_contract / 同名产物根 | R08无阻塞；主树113+14项测试、Ruff、生成、tsc/build均通过；layer切片完成，VRN字段正名不在本次验收 |
-| T01–T05 / integration_fixture_implementer | T04真实writer修复已集成；T05消费者依赖两次验证均7passed/2failed，fork identity已补，storage index reader签名仍缺；429中断，待完整依赖通过后恢复 | out/worktrees/2026/10/04/024121-team-execution/integration_fixture_implementer / 任务根的 integration_fixture_implementer | 不将partial依赖集成主树，不从display provenance猜Turn；E01一次核对完整callee闭包再交付 |
+| A01/A02 / architecture_reviewer | 依赖报告与U01架构复审已落盘，无新增架构blocker | 主仓库 / 任务根的 architecture_reviewer | A03/A04已完成并支持UUID/G03验收；A05残留审查完成；A06拒第二Team JSON权威；A07发现UUID真实allocation破D2；A09b通过S04最终合同，A10确认SQLite主路径504/505真实边界；A11核internal display-only view成员和Provider全局pending泄漏 |
+| G01/G02/C01 / gateway_user_implementer | G01已集成72e755eb；C01/C02已集成f42b6f77，C02在429后由主代理接管；C03配置VRN字段正名已交固定10文件补丁，R11独审中 | C01 worktree已核27差异等集成HEAD且无进程后回收；C03：out/worktrees/2026/10/04/024121-team-execution/config_vrn_contract / 同名产物根 | R08无阻塞；主树113+14项测试、Ruff、生成、tsc/build均通过；layer切片完成，VRN字段正名不在本次验收 |
+| T01–T05 / integration_fixture_implementer | T04真实writer修复已集成；T05 snapshot2已串行同步并修mixin错导/漏组装，真实接口gate9pass，已恢复writer实施 | out/worktrees/2026/10/04/024121-team-execution/integration_fixture_implementer / 任务根的 integration_fixture_implementer | 不将partial依赖集成主树，不从display provenance猜Turn；E01一次核对完整callee闭包再交付 |
 | S01/S02 / spec_writer | S01集成ad093e0c；S02集成122e7939；S03/S04经主代理修订、R09b/A09b通过并集成04a5e30d；writer暂停写入 | out/worktrees/2026/10/04/024121-team-execution/spec_writer / 任务根的 spec_writer | S01两个strict通过；3.1/3.2错误历史实现勾选已撤销，规范决定另登记，不混完成含义 |
-| W01 / workspace_owner_implementer | 已授权registry→服务图→Session导航及CRUD→Gateway/bootstrap→Web双workspace闭包 | out/worktrees/2026/10/04/024121-team-execution/workspace_owner_implementer / 任务根的 workspace_owner_implementer | 基线ad093e0c，codex/workspace-session-mount；独占container/deps/main/path/session resolver，UUIDv4不改v7；固定启动mount集合/backend-owned身份CLI/单一完整service graph；真实双graph启停与160并发API/子Task通过，Gateway475项通过；Job构造guard依赖已由主代理同步，真实双mount/代理闭包继续 |
-| E01 / thread_owner_implementer | 已授权8.3-E执行完整闭包与Job/pending/message真实Thread入口 | out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer / 任务根的 thread_owner_implementer | 基线ad093e0c，codex/thread-execution-owner；domain39passed、sibling Thread acceptance7passed，仍须main-child/Job→Step/model-call/stream/Web闭合；采用typed owner ContextVar，fork/index reader依赖已补，admission2项通过；attribution2项因旧/新lock key自锁失败，SessionThread显式owner传递仍在修；v2历史reader需真实execution.updated_at与有界response投影 |
+| W01 / workspace_owner_implementer | 已授权registry→服务图→Session导航及CRUD→Gateway/bootstrap→Web双workspace闭包 | out/worktrees/2026/10/04/024121-team-execution/workspace_owner_implementer / 任务根的 workspace_owner_implementer | 基线ad093e0c，codex/workspace-session-mount；独占container/deps/main/path/session resolver，UUIDv4不改v7；固定启动mount集合/backend-owned身份CLI/单一完整service graph；真实双graph启停与160并发API/子Task通过，Gateway475项通过；Job构造guard依赖已由主代理同步，真实单backend双mount与Gateway代理已通过；56文件patch缺公开backend UUID DTO/proto/Web，正补用户链路，不视slice完成 |
+| E01 / thread_owner_implementer | 已授权8.3-E执行完整闭包与Job/pending/message真实Thread入口 | out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer / 任务根的 thread_owner_implementer | 基线ad093e0c，codex/thread-execution-owner；domain39passed、sibling Thread acceptance7passed，仍须main-child/Job→Step/model-call/stream/Web闭合；采用typed owner ContextVar，fork/index reader依赖已补，admission2项通过；锁alias回归通过，fresh checkpoint失败主因是T05未填messages.execution_id，非stale；所有execution INSERT/updated_at仍在闭合。A11要求复用view display_only显式成员，v2按canonical rows有界续读 |
 
-| U05 / canonical_allocation_implementer | 修 UUID 真实 Session/Thread canonical allocation，规范由 S04 独占 | out/worktrees/2026/10/04/024121-team-execution/uuid_live_allocation / 同名任务产物根 | 基线7653dd92；默认自然uuid7内嵌时间派生created_at/UTC locator，保持强单调与幂等重放；首次429后同模型恢复 |
+| U05 / canonical_allocation_implementer | 修 UUID 真实 Session/Thread canonical allocation，规范由 S04 独占 | out/worktrees/2026/10/04/024121-team-execution/uuid_live_allocation / 同名任务产物根 | 基线7653dd92；18文件已集成e27260ca、主树684pass/Ruff0/双独审；主树浅根255key通过不能关闭隔离深根516-byte真fail。U06已集成00edda52、主树433pass/R12通过，Linux VFS512预算与零副作用证据确认，Windows/macOS未测；U07补真实回拨与fixture毫秒校验，未整体验收 |
 
 ### 调度实测改进
 
@@ -140,8 +140,16 @@ git merge-base --is-ancestor <本笔提交hash> HEAD
 | W01将双graph探针写入未分配的out/tests/temp/w01-dual-mount；C01/E01已授权跨层闭包仍再次请求范围确认 | 重发字面产物根并要求清理越界探针；派单明确共享文件片段与生成器负责人，阻塞接口先交字段合同并继续独立部分 | W01曾纠正后又用worktree/out下短名；主代理保留失败启动证据并删可复现副本，重发task根；C01主树静态/构建与127测试均通过 |
 
 | S03/E01把产物写进worktree/out，却回报主树同名路径；主树S03仍旧583b而新2896在分支 | 交付统一使用字面绝对产物根，消费前核实际hash；主代理将固定版本移至分配根 | U03依赖正确；S03后续artifact再次漏最终改动，主代理逐文件定位、导出完整patch并独审集成；作者自报主树越界未被当时文件证据支持 |
-| E01声称21文件依赖可独立使用；两次T05验证先报fork identity签名冲突、补后又报index reader签名缺失 | 稳定接口须交完整生产callee闭包，先全仓核参数调用与SQL写入；消费者工作树通过后再派writer实现 | signature补齐后admission2项通过，但真实append自锁2failed；继续暂停消费者，生产入口的锁owner闭包待交付 |
-| UUID工厂与关联685测试绿，但真实Session/child allocation调用显式timestamp并破D2 | 按真实生产入口审契约，保同ms强单调，统一用自然分配ID内嵌时间派生桶 | A07独立确认；U05修复与S04规范收口在途，未验收 |
+| E01声称21文件依赖可独立使用；两次T05验证先报fork identity签名冲突、补后又报index reader签名缺失 | 稳定接口须交完整生产callee闭包，先全仓核参数调用与SQL写入；消费者工作树通过后再派writer实现 | signature补齐后admission2项通过，真实append自锁已由E01修复；完整snapshot待交后恢复T05，不以writer归属未填的红灯反堵依赖 |
+| UUID工厂与关联685测试绿，但真实Session/child allocation调用显式timestamp并破D2 | 按真实生产入口审契约，保同ms强单调，统一用自然分配ID内嵌时间派生桶 | A07独立确认；U05/S04 已集成，主树684项通过；真实回拨与深路径另开 U06/U07，未整体验收 |
+| U05交付报告给未跟踪新测试手填hash，R10实核不符；W01 API绿但固定patch缺既定Web/DTO闭包 | 清单覆盖未跟踪源码并实算hash；固定patch后新slice另导；验收按原完整入口核，不以proxy转写替代Web identity | U05纠正后18/18hash匹配且3回归重跑通过；W01承认Web未迁并继续用户链路，尚未验收 |
+
+| S05 新增合同仍留旧 staging/view 文字，引用不存在的 default_include；v2 cursor 未冻结过滤条件 | 只修改对应 owner 合同，沿 initial/anchor 既有配置；冻结 include/query/window，拒绝同 cursor 换条件；提供最新版四文件固定 patch | C04 最终五文件复审通过，S05已提交710ffca4；U03 实现验证在途 |
+| W01 路由隔离 patch 引入 API→具体组装根依赖，并混入 main-thread 物理布局 | API 消费窄结构协议；存储改动拆开交由线程 owner，固定旧 patch 保留，新交付另导 | W01 已移除具体依赖并恢复两处非必要布局，重新冻结与独审待完成 |
+
+| E01 snapshot2 hash/reverse-check通过，但混合绝对新文件patch路径且新mixin错导/漏组装 | 固定交付全为repo-relative，完整生产import与接口gate必须真跑；中央从固定index重建目标并串行同步，保U03独有exports | 作者已改repo-relative；中央消除ImportError并正在真实9项gate，不把hash一致当可运行证明 |
+
+| 主代理恢复W01时只写“主root/task/artifacts”，作者再次询问路径；C04转任务报告误写另一reviewer根 | 主代理每次派单补完整字面路径，报告提交前比对最新派单；旧位置搬回指定根，不创建第二报告 | W01已收到字面根；C04最终报告中央迁回config_vrn_contract/artifacts，后续派单待继续验证 |
 
 本轮基线：UUIDv7标识3个文件63 passed；OpenSpec strict/all为40 passed、0 failed。T01 activity 1、history 20项通过，T02 generation最终4项通过；S01两个change strict通过。日志在coordinator与对应implementer artifacts，正式业务数据仅在out/tests对应路径。没有跑全量integration；T04修复现生产source history归属，内部runtime_notice执行合同尚待E01闭合。G03所有generator按当前产物版本pin后真实gen:protocol退出0，四个生成根零差异，已独立核验并提交7596a841，绑定测试Python/Node各1passed。G01/U01旧worktree已精确核对所有独有差异均等主树、无进程后回收；外部patch/report/hash保留。
 
@@ -149,6 +157,6 @@ git merge-base --is-ancestor <本笔提交hash> HEAD
 
 每次派单、换任务、报错、审查、集成和回收后更新本节；每个活动任务登记 `编号 / agent / 已核实模型与 effort / 状态 / 基线与分支 / 独占文件 / 绝对 workdir / 产物及业务工作区 / 验证与提交 / 阻塞与回收`。无任务时不创建占位 agent。OpenSpec 台账由一个指定写入者按证据更新。
 
-审查不通过时保留原业务断言，追到唯一权威合同与真实调用链；不能把现实现已丢失的字段直接解释为设计，也不能只凭旧测试强留兼容。数据清理授权不能用于绕过当前代码刚生成的真实缺陷。主代理统一排审查队列，subagent 只向主代理提交复审请求，避免多个发送者串改 reviewer 当前任务。
+审查不通过时保留原业务断言，追到唯一权威合同与真实调用链；不能把现实现已丢失的字段直接解释为设计，也不能只凭旧测试强留兼容。数据清理授权不能用于绕过当前代码刚生成的真实缺陷。归因先读原始失败集合：fresh writer 的 NOT NULL/owner 错误不是旧 fixture；同平台短路径成功也不能把真实 SQLite VFS 预算不足归为环境噪声。主代理统一排审查队列，subagent 只向主代理提交复审请求，避免多个发送者串改 reviewer 当前任务。
 
 实际事故出现后修订对应条款并引用证据；已关闭的历史详情放入已有报告，本节只保留恢复所需事实，避免技能随每轮日志持续膨胀。

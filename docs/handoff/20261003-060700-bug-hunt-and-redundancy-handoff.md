@@ -6,7 +6,7 @@
 
 2026-10-03 调度整理：handoff 文档提交为 `9bc4246b`；模型、派单、路径和提交方法改由 [团队协作技能](../../.codex/skills/team-collaboration-workflow.md) 维护。两种模型版本已准备，本轮仅整理文档及遗留目录，未继续 OpenSpec。目录问题与待审建议见 [目录审查](20261003-151500-team-collaboration-directory-review.md)。
 
-2026-10-04 迁移更新：仓库物理根为 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，原路径为软链接；后续不复用历史临时测试工作区。默认工作区与 `/data1/hyf/test_workspace/drive_bicicle` 的旧 `.boxteam/` 数据已分别按用户授权清理，普通文件保留，两个连接均恢复 `ready`。完整开发服务已恢复（前端 8027、Gateway 8030）。模型、目录、验证与回收状态继续以技能实时台账为准；尚未继续本交接的业务实施任务。
+2026-10-04 迁移更新：仓库物理根为 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，原路径为软链接；后续不复用历史临时测试工作区。默认工作区与 `/data1/hyf/test_workspace/drive_bicicle` 的旧 `.boxteam/` 数据已分别按用户授权清理，普通文件保留，两个连接均恢复 `ready`。完整开发服务已恢复（前端 8027、Gateway 8030）。以上为迁移时的历史服务状态，恢复时需重新核验。当前 goal 已继续本交接及七个关联 OpenSpec 的实施与独立验收，实际进展以技能实时台账为准。用户随后授权按架构熵减自主决策，开发生成的新旧中间数据可直接删除，不保留旧兼容，不再逐项询问。
 
 ---
 
@@ -86,9 +86,9 @@
 
 | 位置 | 现状 | 判定 |
 |---|---|---|
-| `app/core/background_message_bus.py:18 _messages` | 键 `(session_id, agent_id)` 永不回收 | 无界，但它是「供 collect 拉取的 backlog 缓冲」，任何有界化都会改变「稀有会话仍可拉到历史 backlog」的语义，属**产品决策**，需 TTU/会话关闭钩子，未擅改 |
+| `app/core/background_message_bus.py:18 _messages` | 键 `(session_id, agent_id)` 永不回收 | 无界，但它是「供 collect 拉取的 backlog 缓冲」，任何有界化都会改变「稀有会话仍可拉到历史 backlog」的语义，当前按关闭生命周期回收；B01 删除失败后的晚准入仍需 E01/W01 的 catalog guard 闭合后独审，不能单独提交 |
 | `app/services/orchestration/thread_residency.py ThreadResidencyTracker._states` | 随 (session,thread) 无界 | 唯一淘汰路径 `sweep()` 全仓无生产调用点；朴素 LRU 会因 generation fence 复用误纳迟到 callback，需 owner 配合 |
-| `app/services/infrastructure/trace_event_store.py _event_ids` 的自动 `evt_*` 条目 | 单流有界但自动条目纯冗余 | 涉及契约边界（用例隐含依赖、侧车合并语义），只登记 |
+| `app/services/infrastructure/trace_event_store.py _event_ids` 的自动 `evt_*` 条目 | 单流有界但自动条目纯冗余 | 旧报告候选，当前源码已无 `_event_ids`；A13 正核历史与真实生产证据，不能据旧文本重复修复 |
 
 ---
 
@@ -122,16 +122,16 @@
 
 ---
 
-## 五、待 owner 裁定的规范/实现缺口（勿自行改）
+## 五、规范与实现缺口（历史调查，按当前 owner 与授权推进）
 
 1. **`delegate` 的 `before_start` 失败后 child 已 publish，无回收路径**（OpenSpec 8.5 已知缺口）。
    探针实测：child row 与 intent 都留下，`abort_thread_creation_record` 只覆盖 `preparing`，对已 `published` 直接抛错；全库无任何回收已发布 child 的路径。
-   二选一：(a) 新增定点回收补偿（跨 5 个 owner，且与 8.5-A「已发布不回退」红线冲突）；(b) 把 `before_start` 下沉到 publish/写 intent 之前。
+   当前选择：发布前准备复用 Session `session-control.sqlite` 的唯一 collaboration/creation ledger，与 child publication 同事务收敛；不增加 Team JSON intent/readiness 权威，published child 不回滚。实施及依赖验证仍待完成。
 2. **`Resource activation/provenance` 层尚不存在**（OpenSpec 第 9 节未实施）。
 3. **`replaceable_source` 仍暂存在 `ContextItem.metadata`**（`itemized_context_middleware.py` 有 TODO），应迁移为 typed 领域字段。
 4. **SessionThread 未成为统一 owner**（`ContextRef.session_id` 无 `thread_id`，OpenSpec 第 8 节要求 `(session_id, thread_id)` 定位）。
 5. **前端会话目录 outbox 尚未接线**（`add-itemized-rollout-context` §8.1-H / §10.8 F4，接线门控 §10.1）：`sessionCatalogProjection.ts`(371) / `sessionCatalogOutboxIdbFake.ts`(138) / `sessionCatalogOutboxStore.ts`(221) 生产零调用，但**属在途接线目标，禁止当死码删除**。
-6. **`config_sources.py` 的 layer 命名轴不一致**：`inline/user/user_local/workspace` 是来源权威轴，`sqlite` 是存储介质轴；且读侧 `sqlite` vs 写侧 `runtime_override` 异名。需 owner 裁定是否破坏性改名。
+6. **配置来源轴与公共地址字段已完成独立切片**：用户确定 layer 表示逻辑来源，读侧 `sqlite` → `runtime_override`，precedence 不变，active/pending snapshot 从来源清单分开；`f42b6f77` 已实施验收。公共配置字段 `path/schema_path` → nullable `vrn/schema_vrn` 由 `69d77eea` 完成，R11 独审及 46+10+73+2 项关联验证通过；其它持久化 VRN 接线仍须完成。
 7. **uuidv7 change** 的 `tasks.md:107` 前缀数 33 待独立复核；`add-itemized` `tasks.md:174` 迁移测试未收敛。
 
 ---
@@ -172,7 +172,7 @@ bun run --cwd src/clients/web build                             EXIT=0
 ## 八、下一步建议
 
 1. **先检查共享索引与真实工作树**：使用任务新索引，保留现有暂存内容；按技能集中集成。共享索引重建不是继续准备工作的前提。
-2. 裁定第五节 1、6 两项（其余可继续按既定口径推进）。
+2. 第五节 1、6 的选择已确定，按对应唯一 owner 继续实现或保持已通过的验收；不重复请求用户裁定。
 3. 继续 bug 猎捕时仍未深挖的面：
    - `app/services/infrastructure/{resource_platform, rollout_context, turn_history, team, mcp, node_debug, attachment_*}`；
    - `app/services/orchestration/**` 的执行面（ThreadExecutionQueue、admission ordinal、ExecutionContextFence，OpenSpec 8.3-A）；
