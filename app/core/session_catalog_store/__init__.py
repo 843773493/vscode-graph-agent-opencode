@@ -67,7 +67,10 @@ from app.core.session_catalog_store.validators import (
     validate_storage_relative_locator,
     validate_thread_id,
 )
-from app.core.sqlite_state import SQLITE_BUSY_TIMEOUT_MS
+from app.core.sqlite_state import (
+    SQLITE_BUSY_TIMEOUT_MS,
+    validate_sqlite_path_budget,
+)
 
 __all__ = [
     "CatalogBackupManifest",
@@ -110,6 +113,7 @@ class SessionCatalogStore(
     def __init__(self, database_path: Path, sessions_root: Path) -> None:
         self.database_path = database_path.expanduser().resolve()
         self.sessions_root = sessions_root.expanduser().resolve()
+        validate_sqlite_path_budget(self.database_path)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._closed = False
         # R18-3：单连接跨线程串行锁（可重入）。本 store 只持有一条共享

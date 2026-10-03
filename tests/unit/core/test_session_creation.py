@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core import sqlite_state
 from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     SessionCatalogStore,
@@ -29,12 +30,17 @@ from app.core.session_creation import (
     serialize_session_creation_manifest,
 )
 from app.core.session_lifecycle_gate import NavigationTopologyGate
+from app.core.sqlite_state import (
+    sqlite_vfs_max_pathname,
+    validate_sqlite_path_budget,
+)
 from tests.support.canonical_id_at import (
     session_id_for_name_at,
     thread_id_for_name_at,
 )
 
 WORKSPACE_ID = "ws-create"
+_SESSION_ID_PATH_PLACEHOLDER = "ses_00000000000070008000000000000000"
 
 # 剥离 manifest 的完整字段闭集（调用方六字段 + 服务派生四字段）。
 _STRIPPED_MANIFEST_KEYS = {
@@ -155,6 +161,100 @@ def count_rows(store: SessionCatalogStore, table: str) -> int:
     )
 
 
+def sessions_root_beyond_vfs_limit(tmp_path: Path) -> Path:
+    """构造控制库 sidecar 超过当前 VFS 上限的 sessions 根。"""
+    sessions_root = tmp_path.resolve() / "sessions"
+    control_path = (
+        sessions_root
+        / ".staging"
+        / _SESSION_ID_PATH_PLACEHOLDER
+        / "session-control.sqlite"
+    )
+    maximum = sqlite_vfs_max_pathname()
+    while len(f"{control_path}-journal".encode()) <= maximum:
+        sessions_root = (
+            sessions_root.parent / ("x" * 200) / sessions_root.name
+        )
+        control_path = (
+            sessions_root
+            / ".staging"
+            / _SESSION_ID_PATH_PLACEHOLDER
+            / "session-control.sqlite"
+        )
+    return sessions_root
+
+
+def database_path_beyond_vfs_limit(tmp_path: Path, database_name: str) -> Path:
+    """构造组件合法、但主库绝对路径超过当前 VFS 上限的路径。"""
+    path = tmp_path.resolve() / database_name
+    maximum = sqlite_vfs_max_pathname()
+    while len(str(path).encode("utf-8")) <= maximum:
+        path = path.parent / ("x" * 200) / path.name
+    return path
+
+
+def test_sqlite_path_budget_checks_rollback_journal_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path.resolve() / "catalog.sqlite"
+    main_path_bytes = len(str(path).encode("utf-8"))
+    monkeypatch.setattr(
+        sqlite_state,
+        "sqlite_vfs_max_pathname",
+        lambda: main_path_bytes + len("-journal") - 1,
+    )
+    with pytest.raises(ValueError, match="-journal"):
+        validate_sqlite_path_budget(path)
+
+
+def test_catalog_constructor_rejects_long_path_before_creating_parent(
+    tmp_path: Path,
+) -> None:
+    database_path = database_path_beyond_vfs_limit(
+        tmp_path, "session-catalog.sqlite"
+    )
+    with pytest.raises(ValueError, match="SQLite 绝对路径"):
+        SessionCatalogStore(database_path, tmp_path / "sessions")
+    assert not database_path.parent.exists()
+
+
+def test_control_constructor_rejects_long_path_before_creating_parent(
+    tmp_path: Path,
+) -> None:
+    database_path = database_path_beyond_vfs_limit(
+        tmp_path, "session-control.sqlite"
+    )
+    with pytest.raises(ValueError, match="SQLite 绝对路径"):
+        SessionControlStore(database_path)
+    assert not database_path.parent.exists()
+
+
+async def test_deep_sessions_root_rejected_before_record_or_staging(
+    tmp_path: Path,
+) -> None:
+    sessions_root = sessions_root_beyond_vfs_limit(tmp_path)
+    store = SessionCatalogStore(
+        tmp_path / "catalog" / "session-catalog.sqlite", sessions_root
+    )
+    service = SessionCreationService(
+        store=store,
+        sessions_root=sessions_root,
+        workspace_id=WORKSPACE_ID,
+        gate=NavigationTopologyGate(sessions_root),
+    )
+    try:
+        with pytest.raises(ValueError, match="SQLite 绝对路径"):
+            await do_create(service)
+        assert count_rows(store, "session_creation_records") == 0
+        assert not sessions_root.exists()
+        assert not (
+            sessions_root.parent / "orphaned" / "session-creation"
+        ).exists()
+    finally:
+        store.close()
+
+
 @pytest.fixture
 def sessions_root(tmp_path: Path) -> Path:
     # parent 即 .boxteam/ 根：orphaned 隔离区落位 .boxteam/orphaned/。
@@ -272,7 +372,7 @@ async def test_create_places_directory_in_date_bucket_and_clears_staging(
         "session.json",
     ]
     # staging 区已清空（目录被 rename 走）
-    assert not (sessions_root / ".staging" / "key-1").exists()
+    assert not (sessions_root / ".staging" / result.session_id).exists()
 
 
 async def test_create_under_folder_parent(
@@ -403,47 +503,61 @@ async def test_create_empty_title_rejected(
         store.get_creation_record("key-1")
 
 
-@pytest.mark.parametrize("key", ["", "a/b", "a\\b", "..", ".", "嵌\x00入"])
-async def test_create_unsafe_idempotency_key_rejected(
-    service: SessionCreationService, store: SessionCatalogStore, key: str
+async def test_create_empty_idempotency_key_rejected(
+    service: SessionCreationService, store: SessionCatalogStore
 ) -> None:
+    key = ""
     with pytest.raises(ValueError, match="idempotency_key"):
         await do_create(service, key=key)
-    if key:
-        with pytest.raises(KeyError):
-            store.get_creation_record(key)
+    assert count_rows(store, "session_creation_records") == 0
 
 
 @pytest.mark.parametrize("key_len", [256, 300, 4096])
-async def test_create_over_long_idempotency_key_rejected_before_record(
-    service: SessionCreationService, store: SessionCatalogStore, key_len: int
-) -> None:
-    """幂等键超出单段路径预算时，必须在冻结 record 之前就拒绝。
-
-    幂等键是 ``.staging/<key>/`` 目录名。键长超过文件系统单段上限
-    （255 bytes）时，旧实现先在 catalog 冻结一个 preparing record，随后
-    ``mkdir`` 抛裸 ``OSError``；record 已按输入 preimage 冻结，同 key
-    重入必然再次失败，形成永久 fail closed（拒绝服务）。本断言固化
-    「路径预算在落盘前校验」的修复：既不落 record，也不留 staging。
-    """
-    key = "k" * key_len
-    with pytest.raises(ValueError, match="超出预算"):
-        await do_create(service, key=key)
-    with pytest.raises(KeyError):
-        store.get_creation_record(key)
-    # 超长键的绝对路径本身已无法 stat，改查 `.staging` 目录项集合。
-    staging_root = store.sessions_root / ".staging"
-    assert not staging_root.exists() or key not in {
-        entry.name for entry in staging_root.iterdir()
-    }
-
-
-async def test_create_idempotency_key_at_component_budget_accepted(
+async def test_create_long_idempotency_key_is_not_a_path_component(
     service: SessionCreationService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+    key_len: int,
 ) -> None:
-    """255 bytes 是单段路径上限本身，边界内必须照常创建成功。"""
-    result = await do_create(service, key="k" * 255)
+    """超长幂等键只进入 journal，不再被当作物理路径组件。"""
+    key = "k" * key_len
+    result = await do_create(service, key=key)
+    record = store.get_creation_record(key)
+    session_dir = date_bucket_dir(sessions_root, result.storage_relative_locator)
+    assert record.session_id == result.session_id
+    assert session_dir.name == record.session_id
+    assert session_dir.is_dir()
+    assert not (sessions_root / ".staging" / record.session_id).exists()
+
+
+async def test_create_255_byte_idempotency_key_accepted(
+    service: SessionCreationService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+) -> None:
+    """既有 255-byte key 成功契约保持，物理目录使用冻结 session ID。"""
+    key = "k" * 255
+    result = await do_create(service, key=key)
     assert result.record_state == "published"
+    record = store.get_creation_record(key)
+    session_dir = date_bucket_dir(sessions_root, result.storage_relative_locator)
+    assert session_dir.name == record.session_id
+
+
+async def test_slash_idempotency_key_replays_by_frozen_session_id(
+    service: SessionCreationService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+) -> None:
+    key = "opaque/request/key"
+    first = await do_create(service, key=key)
+    second = await do_create(service, key=key)
+    record = store.get_creation_record(key)
+    session_dir = date_bucket_dir(sessions_root, first.storage_relative_locator)
+    assert first.session_id == second.session_id == record.session_id
+    assert session_dir.name == record.session_id
+    assert session_dir.is_dir()
+    assert not (sessions_root / ".staging" / record.session_id).exists()
 
 
 async def test_create_missing_parent_rejected(
@@ -489,7 +603,7 @@ async def test_recovery_record_preparing_without_staging(
     assert date_bucket_dir(
         sessions_root, record.storage_relative_locator
     ).is_dir()
-    assert not (sessions_root / ".staging" / "key-1").exists()
+    assert not (sessions_root / ".staging" / record.session_id).exists()
 
 
 async def test_recovery_record_preparing_with_staging(
@@ -500,7 +614,7 @@ async def test_recovery_record_preparing_with_staging(
     """崩溃点2：staging 后、rename 前崩溃 → 重入校验 staging 后继续。"""
     record = create_manual_record(store)
     build_session_directory(
-        sessions_root / ".staging" / "key-1", record, make_metadata()
+        sessions_root / ".staging" / record.session_id, record, make_metadata()
     )
     result = await do_create(service)
     assert result.record_state == "published"
@@ -508,7 +622,7 @@ async def test_recovery_record_preparing_with_staging(
     assert date_bucket_dir(
         sessions_root, record.storage_relative_locator
     ).is_dir()
-    assert not (sessions_root / ".staging" / "key-1").exists()
+    assert not (sessions_root / ".staging" / record.session_id).exists()
 
 
 async def test_recovery_target_already_renamed(
@@ -526,7 +640,7 @@ async def test_recovery_target_already_renamed(
     assert target.is_dir()
     assert store.get_node(record.session_id) == result.node
     # 全程未建 staging
-    assert not (sessions_root / ".staging" / "key-1").exists()
+    assert not (sessions_root / ".staging" / record.session_id).exists()
 
 
 async def test_recovery_target_inconsistent_fails_closed(
@@ -561,7 +675,7 @@ async def test_recovery_target_and_staging_both_exist_fails_closed(
         make_metadata(),
     )
     build_session_directory(
-        sessions_root / ".staging" / "key-1", record, make_metadata()
+        sessions_root / ".staging" / record.session_id, record, make_metadata()
     )
     with pytest.raises(RuntimeError, match="同时存在"):
         await do_create(service)
@@ -627,17 +741,17 @@ async def test_cas_failure_parent_drift_quarantines_and_aborts(
     )
     record = create_manual_record(store, parent_node_id=parent.node_id)
     build_session_directory(
-        sessions_root / ".staging" / "key-1", record, make_metadata()
+        sessions_root / ".staging" / record.session_id, record, make_metadata()
     )
     # 手工制造父节点 revision 漂移
     store.rename_node(parent.node_id, "漂移")
     target = date_bucket_dir(sessions_root, record.storage_relative_locator)
     with pytest.raises(RuntimeError, match="CAS 失败"):
         await do_create(service, parent_node_id=parent.node_id)
-    # 日期桶目录被定点回收（隔离到 .boxteam/orphaned/session-creation/<key>/）
+    # 日期桶目录按冻结 Session ID 定点回收到 orphaned 隔离区。
     assert not target.exists()
     quarantined = (
-        sessions_root.parent / "orphaned" / "session-creation" / "key-1"
+        sessions_root.parent / "orphaned" / "session-creation" / record.session_id
     )
     assert quarantined.is_dir()
     assert (quarantined / "session.json").is_file()
@@ -650,7 +764,7 @@ async def test_cas_failure_parent_drift_quarantines_and_aborts(
     with pytest.raises(KeyError):
         store.get_node(record.session_id)
     # staging 区已清空
-    assert not (sessions_root / ".staging" / "key-1").exists()
+    assert not (sessions_root / ".staging" / record.session_id).exists()
 
 
 async def test_cas_failure_locator_occupied_quarantines_and_aborts(
@@ -661,7 +775,7 @@ async def test_cas_failure_locator_occupied_quarantines_and_aborts(
     """CAS 失败：目标 locator 被其它 node 占用 → 同样定点回收 + abort。"""
     record = create_manual_record(store)
     build_session_directory(
-        sessions_root / ".staging" / "key-1", record, make_metadata()
+        sessions_root / ".staging" / record.session_id, record, make_metadata()
     )
     # 直连 SQL 注入同 locator 的既有 node（record 尚未发布，占用合法存在）
     store.connection.execute(
@@ -683,7 +797,7 @@ async def test_cas_failure_locator_occupied_quarantines_and_aborts(
         sessions_root, record.storage_relative_locator
     ).exists()
     assert (
-        sessions_root.parent / "orphaned" / "session-creation" / "key-1"
+        sessions_root.parent / "orphaned" / "session-creation" / record.session_id
     ).is_dir()
     assert store.get_creation_record("key-1").state == "aborted"
 

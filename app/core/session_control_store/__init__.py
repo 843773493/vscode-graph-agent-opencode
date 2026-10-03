@@ -74,7 +74,10 @@ from app.core.session_control_thread_owner_binding.thread_owner_binding import (
     ThreadOwnerBinding,
     ThreadOwnerBindingMixin,
 )
-from app.core.sqlite_state import SQLITE_BUSY_TIMEOUT_MS
+from app.core.sqlite_state import (
+    SQLITE_BUSY_TIMEOUT_MS,
+    validate_sqlite_path_budget,
+)
 
 __all__ = [
     "CommunicationInboxRecord",
@@ -124,6 +127,7 @@ class SessionControlStore(
                 f"database_path 必须是 Path: {database_path!r}"
             )
         self.database_path = database_path.expanduser().resolve()
+        validate_sqlite_path_budget(self.database_path)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._closed = False
         self._connection = self._connect()

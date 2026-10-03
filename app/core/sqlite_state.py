@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import _sqlite3
+import ctypes
 import os
 import re
 import sqlite3
@@ -9,8 +11,77 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
-
 SQLITE_BUSY_TIMEOUT_MS: Final = 5000
+
+
+class _SQLiteVFSHeader(ctypes.Structure):
+    """SQLite VFS 稳定头部；读取 mxPathname 所需的最小 ABI 前缀。"""
+
+    _fields_ = [
+        ("iVersion", ctypes.c_int),
+        ("szOsFile", ctypes.c_int),
+        ("mxPathname", ctypes.c_int),
+    ]
+
+
+def sqlite_vfs_max_pathname() -> int:
+    """返回当前 Python SQLite 默认 VFS 的路径上限，能力不可用时明确报错。"""
+    extension_path = getattr(_sqlite3, "__file__", None)
+    if not isinstance(extension_path, str) or not extension_path:
+        raise RuntimeError(
+            "无法定位当前 Python SQLite 扩展，不能读取默认 VFS mxPathname: "
+            f"sqlite_version={sqlite3.sqlite_version}, extension={extension_path!r}"
+        )
+    try:
+        native_sqlite = ctypes.CDLL(extension_path)
+    except OSError as error:
+        raise RuntimeError(
+            "无法加载当前 Python SQLite 扩展以读取默认 VFS mxPathname: "
+            f"sqlite_version={sqlite3.sqlite_version}, extension={extension_path!r}, "
+            f"error={error}"
+        ) from error
+    try:
+        find_vfs = native_sqlite.sqlite3_vfs_find
+    except AttributeError as error:
+        raise RuntimeError(
+            "当前 Python SQLite 未导出 sqlite3_vfs_find，不能读取默认 VFS "
+            f"mxPathname: sqlite_version={sqlite3.sqlite_version}, "
+            f"extension={extension_path!r}"
+        ) from error
+    find_vfs.argtypes = [ctypes.c_char_p]
+    find_vfs.restype = ctypes.POINTER(_SQLiteVFSHeader)
+    header = find_vfs(None)
+    if not header:
+        raise RuntimeError(
+            "当前 Python SQLite 未注册默认 VFS，不能校验数据库路径: "
+            f"sqlite_version={sqlite3.sqlite_version}, extension={extension_path!r}"
+        )
+    value = header.contents
+    if value.iVersion < 1 or value.szOsFile < 0 or value.mxPathname < 1:
+        raise RuntimeError(
+            "当前 Python SQLite 默认 VFS 头部字段非法，不能校验数据库路径: "
+            f"sqlite_version={sqlite3.sqlite_version}, extension={extension_path!r}, "
+            f"iVersion={value.iVersion}, szOsFile={value.szOsFile}, "
+            f"mxPathname={value.mxPathname}"
+        )
+    return value.mxPathname
+
+
+def validate_sqlite_path_budget(database_path: Path) -> None:
+    """校验 SQLite 主库及 rollback/WAL sidecar 的绝对 UTF-8 路径预算。"""
+    if not isinstance(database_path, Path):
+        raise TypeError(f"database_path 必须是 Path: {database_path!r}")
+    absolute_path = database_path.expanduser().resolve()
+    maximum = sqlite_vfs_max_pathname()
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        candidate = f"{absolute_path}{suffix}"
+        path_bytes = len(candidate.encode("utf-8"))
+        if path_bytes > maximum:
+            raise ValueError(
+                "SQLite 绝对路径超出当前默认 VFS 预算: "
+                f"path={candidate}, bytes={path_bytes}, mxPathname={maximum}, "
+                f"sqlite_version={sqlite3.sqlite_version}"
+            )
 
 # 迁移文本里的建表/删表语句；用于把「已登记应用的迁移」绑定到它应建出的表。
 _CREATE_TABLE_PATTERN: Final = re.compile(

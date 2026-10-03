@@ -17,19 +17,18 @@
   目录不可见（staging 与日期桶中的未发布目录不被 reader 扫描：正常
   runtime 只按 catalog locator 定位、不扫盘）。
 - **staging 命名空间约定**：本流 staging 目录名 =
-  ``session_creation_idempotency_key``（即 operation_id）；R12 迁移机器
-  （``session_catalog_migration.py``）staging 目录名 = ``migration_id``。
+  冻结的 ``session_id``；R12 迁移机器（``session_catalog_migration.py``）
+  staging 目录名 = ``migration_id``。
   两者共享 ``sessions/.staging/`` 父目录，但各自只触碰自己的子目录，
-  残留互不扫描、互不吸收；本流对非本流 key 的 staging 目录不做任何
-  假设（「staging 残留无 record → 不属于本流」）。
+  残留互不扫描、互不吸收；幂等 key 只用于 journal 查询与进程内 key lock。
 - **CAS 失败定点回收**：publish CAS 失败（父节点漂移/删除/目标被占）时，
-  把日期桶目录隔离到 ``.boxteam/orphaned/session-creation/<key>/`` 后
+  把日期桶目录隔离到 ``.boxteam/orphaned/session-creation/<session_id>/`` 后
   abort record 并抛错；调用方须换新 idempotency_key 重试，不静默改绑。
   选隔离而非 rename 回 staging 的理由：(1) record 已终态 aborted，同 key
-  重试必被拒，保留在 staging 会与「staging 目录名 = 活跃 operation」的
-  命名空间约定混淆；(2) orphaned/ 隔离区保留可诊断审计（对齐
-  app/core/AGENTS.md「无法可靠归属的旧数据移入 .boxteam/orphaned/」与
-  R12 迁移机器的隔离惯例）；(3) 回收后 staging 区干净。
+  重试必被拒，保留在 staging 会与活动 Session 的物理数据冲突；(2)
+  orphaned/ 隔离区保留可诊断审计（对齐 app/core/AGENTS.md「无法可靠归属的
+  旧数据移入 .boxteam/orphaned/」与 R12 迁移机器的隔离惯例）；(3) 回收后
+  staging 区干净。
 - **并发边界**：进程内同 key 并发由 per-key ``asyncio.Lock`` 串行收敛
   到同一结果；gate 为进程内原语，跨进程互斥归 8.1-C（构造时可注入共享
   workspace gate；``gate=None`` 时自建进程内 gate，仅适合测试/单进程）。
@@ -71,12 +70,10 @@ from app.core.session_catalog_store import (
     SessionCreationRecord,
     validate_path_budget,
 )
-from app.core.session_control_primitives import (
-    CONTROL_DATABASE_NAME,
-    validate_thread_creation_key,
-)
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import NavigationTopologyGate
+from app.core.sqlite_state import validate_sqlite_path_budget
 
 __all__ = [
     "SessionCreationResult",
@@ -90,13 +87,14 @@ __all__ = [
 # session.json 文件名（创建流自用常量）。
 _SESSION_MANIFEST_NAME = "session.json"
 
-# staging 区：sessions_root / ".staging" / <idempotency_key>。
+# staging 区：sessions_root / ".staging" / <session_id>。
 _STAGING_DIR_NAME = ".staging"
 
 # CAS 失败定点回收隔离区：sessions_root.parent("orphaned") / "session-creation"
-# / <idempotency_key>（sessions_root.parent 即 workspace .boxteam/ 根）。
+# / <session_id>（sessions_root.parent 即 workspace .boxteam/ 根）。
 _ORPHANED_DIR_NAME = "orphaned"
 _ORPHANED_CREATION_DIR_NAME = "session-creation"
+_SESSION_ID_PATH_PLACEHOLDER = "ses_00000000000070008000000000000000"
 
 # 调用方须提供的剥离 manifest 字段闭集（与真实 session.json 的剥离版一致：
 # 真实 manifest 含 created_at/updated_at/session_id/workspace_id/kind/
@@ -231,7 +229,7 @@ class SessionCreationService:
     2. preparing 时先探目标日期桶：已存在且内容与预期一致 → 视为
        rename 已完成（rename 后、publish 前崩溃的恢复窗口），直接进入
        步骤 4；不一致 → fail closed。目标不存在 → 步骤 3。
-    3. staging 准备（gate 外）：``.staging/<key>/`` 已存在 → 逐文件校验
+    3. staging 准备（gate 外）：``.staging/<session_id>/`` 已存在 → 逐文件校验
        （session.json 字节、session-control main row/fence、条目集）复用；
        不存在 → 完整准备 + durability barrier（文件 fsync + 目录 fsync）。
     4. 原子 rename staging → 冻结日期桶（父目录链 mkdir + fsync）。
@@ -334,7 +332,7 @@ class SessionCreationService:
                     session_metadata,
                     stage="恢复(目标日期桶已存在)",
                 )
-                staging = self._staging_dir(idempotency_key)
+                staging = self._staging_dir(record.session_id)
                 if staging.exists() or staging.is_symlink():
                     raise RuntimeError(
                         "目标日期桶与 staging 同时存在（外部改动，fail "
@@ -345,9 +343,9 @@ class SessionCreationService:
                     record, idempotency_key
                 )
             # 步骤 2/3：staging 准备 + 原子 rename（gate 外）。
-            self._prepare_staging(record, session_metadata, idempotency_key)
+            self._prepare_staging(record, session_metadata)
             self._rename_staging_to_target(
-                record, session_metadata, idempotency_key
+                record, session_metadata
             )
             # 步骤 4：gate exclusive 内 CAS publish（唯一可见性提交点）。
             return await self._publish_in_gate(record, idempotency_key)
@@ -365,10 +363,12 @@ class SessionCreationService:
         session_metadata: dict[str, object],
     ) -> None:
         """create 入参校验（在任何状态变更之前 fail fast）。"""
-        # idempotency_key 是 staging/隔离目录名；形态口径与 store、thread
-        # creation 共用同一实现，避免任一处放宽后其它链路静默失效。
-        validate_thread_creation_key(idempotency_key)
-        self._validate_filesystem_budget(idempotency_key)
+        if not isinstance(idempotency_key, str):
+            raise TypeError(
+                f"idempotency_key 必须是字符串: {idempotency_key!r}"
+            )
+        if not idempotency_key:
+            raise ValueError("idempotency_key 不能为空")
         if not isinstance(title, str) or not title:
             raise ValueError(f"title 不能为空: {title!r}")
         if parent_node_id is not None and not isinstance(parent_node_id, str):
@@ -383,6 +383,7 @@ class SessionCreationService:
             title=title,
             session_metadata=session_metadata,
         )
+        self._validate_filesystem_budget()
 
     def _key_lock(self, idempotency_key: str) -> asyncio.Lock:
         """按 key 取进程内串行锁（固定分片，同 key 恒命中同一把）。"""
@@ -392,39 +393,36 @@ class SessionCreationService:
     # 路径定位
     # ------------------------------------------------------------------
 
-    def _staging_dir(self, idempotency_key: str) -> Path:
-        return self._sessions_root / _STAGING_DIR_NAME / idempotency_key
+    def _staging_dir(self, session_id: str) -> Path:
+        return self._sessions_root / _STAGING_DIR_NAME / session_id
 
-    def _validate_filesystem_budget(self, idempotency_key: str) -> None:
-        """在冻结 record 前校验落盘路径的组件/总长预算。
-
-        staging 目录名（幂等键）必须在文件系统预算内（组件 ≤255 bytes、
-        总长 ≤4096 bytes）；否则 prepare/回收阶段抛裸 ``OSError``，而
-        record 已按输入 preimage 冻结为 preparing，重入永久 fail closed
-        （拒绝服务）。预算口径复用 ``session_catalog_store.
-        validate_path_budget``，不复制第二份常量。
-
-        幂等键只出现在 staging 与 CAS 失败隔离区两处路径；日期桶与
-        session_id 长度固定，不含调用方可变输入。
-        """
-        validate_path_budget(
-            self._sessions_root, f"{_STAGING_DIR_NAME}/{idempotency_key}"
+    def _validate_filesystem_budget(self) -> None:
+        """在 creation record 前校验固定形态目录与 SQLite 主库/sidecar。"""
+        session_id = _SESSION_ID_PATH_PLACEHOLDER
+        relative_directories = (
+            (self._sessions_root, f"{_STAGING_DIR_NAME}/{session_id}"),
+            (self._sessions_root, f"1970/01/01/{session_id}"),
+            (
+                self._sessions_root.parent,
+                f"{_ORPHANED_DIR_NAME}/{_ORPHANED_CREATION_DIR_NAME}/{session_id}",
+            ),
         )
-        validate_path_budget(
-            self._sessions_root.parent,
-            f"{_ORPHANED_DIR_NAME}/{_ORPHANED_CREATION_DIR_NAME}/{idempotency_key}",
-        )
+        for base, relative_directory in relative_directories:
+            relative_database = f"{relative_directory}/{CONTROL_DATABASE_NAME}"
+            for suffix in ("", "-journal", "-wal", "-shm"):
+                validate_path_budget(base, f"{relative_database}{suffix}")
+            validate_sqlite_path_budget(base / relative_database)
 
     def _date_bucket_dir(self, storage_relative_locator: str) -> Path:
         relative = storage_relative_locator[len("sessions/"):]
         return self._sessions_root / relative
 
-    def _orphaned_dir(self, idempotency_key: str) -> Path:
+    def _orphaned_dir(self, session_id: str) -> Path:
         return (
             self._sessions_root.parent
             / _ORPHANED_DIR_NAME
             / _ORPHANED_CREATION_DIR_NAME
-            / idempotency_key
+            / session_id
         )
 
     # ------------------------------------------------------------------
@@ -444,10 +442,9 @@ class SessionCreationService:
         self,
         record: SessionCreationRecord,
         session_metadata: dict[str, object],
-        idempotency_key: str,
     ) -> None:
         """staging 已存在 → 逐文件校验复用；不存在 → 完整准备 + barrier。"""
-        staging = self._staging_dir(idempotency_key)
+        staging = self._staging_dir(record.session_id)
         if staging.exists() or staging.is_symlink():
             self._verify_session_directory(
                 staging, record, session_metadata, stage="staging 复验"
@@ -462,7 +459,7 @@ class SessionCreationService:
         self._initialize_control_database(staging, record)
         # durability barrier：session.json（文件+父目录）与控制库（文件）
         # 已各自 fsync；此处补 staging 目录与 .staging 父目录 fsync
-        # （新建 <key> 目录条目的持久性）。
+        # （新建 <session_id> 目录条目的持久性）。
         _fsync_directory(staging)
         _fsync_directory(staging.parent)
 
@@ -655,11 +652,10 @@ class SessionCreationService:
         self,
         record: SessionCreationRecord,
         session_metadata: dict[str, object],
-        idempotency_key: str,
     ) -> None:
         """staging 原子 rename 到冻结日期桶（locator 来自 record）。"""
         stage = "rename 到日期桶"
-        staging = self._staging_dir(idempotency_key)
+        staging = self._staging_dir(record.session_id)
         if not staging.is_dir() or staging.is_symlink():
             raise RuntimeError(
                 f"{stage}: staging 缺失或不是目录: {staging}"
@@ -698,7 +694,7 @@ class SessionCreationService:
         except RuntimeError as error:
             # CAS 失败：定点回收日期桶目录到 orphaned 隔离区（物理回收
             # 失败则保持 record preparing 并直接抛错，人工核账）。
-            self._quarantine_target(record, idempotency_key)
+            self._quarantine_target(record)
             self._store.abort_creation_record(idempotency_key, str(error))
             raise RuntimeError(
                 "session creation publish CAS 失败，已定点回收日期桶目录并 "
@@ -716,18 +712,17 @@ class SessionCreationService:
     def _quarantine_target(
         self,
         record: SessionCreationRecord,
-        idempotency_key: str,
     ) -> None:
-        """CAS 失败后的定点回收：日期桶目录 → orphaned/session-creation/<key>。"""
+        """CAS 失败后的定点回收：日期桶目录 → orphaned/session-creation/<session_id>。"""
         stage = "CAS 失败定点回收"
         target = self._date_bucket_dir(record.storage_relative_locator)
         if not target.is_dir() or target.is_symlink():
             raise RuntimeError(
                 f"{stage}: 日期桶目录缺失或不是目录，无法定点回收"
-                f"（外部改动，fail closed）: key={idempotency_key!r}, "
+                f"（外部改动，fail closed）: session_id={record.session_id!r}, "
                 f"target={target}"
             )
-        quarantine_target = self._orphaned_dir(idempotency_key)
+        quarantine_target = self._orphaned_dir(record.session_id)
         if quarantine_target.exists() or quarantine_target.is_symlink():
             raise RuntimeError(
                 f"{stage}: 隔离目标已存在，拒绝覆盖: {quarantine_target}"
