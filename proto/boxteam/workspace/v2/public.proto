@@ -74,6 +74,8 @@ message ConfigReloadStatusDTO {
 
 message ConfigSourceDTO {
   string path = 1;
+  // 逻辑来源闭集：inline、user、user_local、workspace、runtime_override。
+  // SQLite 仅为内部 carrier。
   string layer = 2;
   int64 precedence = 3;
   bool loaded = 4;

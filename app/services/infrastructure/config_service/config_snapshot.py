@@ -197,7 +197,7 @@ class ConfigSnapshotMixin:
             # source_key=None 的层（inline）在 `_source_baseline` 里退化成
             # `f"{layer}:{precedence}"`，故这里把权威表反查成 `"{layer}:{precedence}"`
             # 一并匹配，保证同一份权威表能逐字还原真层。**禁止兜底**：未登记的持久化键
-            # 一律 fail-closed（见 `_source_baseline`），绝不静默映射成 `sqlite` 一类。
+            # 一律 fail-closed（见 `_source_baseline`），绝不静默映射成其它逻辑层。
             layer, precedence = ConfigSnapshotMixin._resolve_persisted_layer(source_key)
             details.append(
                 ConfigSource(
@@ -237,9 +237,9 @@ class ConfigSnapshotMixin:
         """
         if source_key in _SOURCE_LAYER_AUTHORITY:
             return _SOURCE_LAYER_AUTHORITY[source_key]
-        for authority_layer, authority_precedence in _SOURCE_LAYER_AUTHORITY.values():
-            if source_key == f"{authority_layer}:{authority_precedence}":
-                return authority_layer, authority_precedence
+        inline_layer, inline_precedence = _SOURCE_LAYER_AUTHORITY["inline"]
+        if source_key == f"{inline_layer}:{inline_precedence}":
+            return inline_layer, inline_precedence
         raise ValueError(
             "source baseline 含未登记的持久化键，无法还原逻辑来源层: "
             f"key={source_key!r}"

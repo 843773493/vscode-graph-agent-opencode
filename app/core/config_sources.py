@@ -9,7 +9,13 @@ from typing import Literal
 
 import commentjson
 
-ConfigSourceLayer = Literal["inline", "user", "user_local", "workspace", "sqlite"]
+ConfigSourceLayer = Literal[
+    "inline",
+    "user",
+    "user_local",
+    "workspace",
+    "runtime_override",
+]
 # 配置来源的存在性闭集：present 表示来源实际存在，absent 表示已探测但不含内容。
 ConfigSourcePresence = Literal["present", "absent"]
 
@@ -18,8 +24,8 @@ ConfigSourcePresence = Literal["present", "absent"]
 class ConfigSource:
     """描述一个配置层及其在最终配置中的优先级。"""
 
-    # 来源位置以 VRN 表达（owner change「配置来源寻址必须使用 config kind 且 sqlite
-    # 层不可寻址」定稿形态）；不可寻址的来源（sqlite 层）为 None。真实路径永不在此
+    # 来源位置以 VRN 表达；不可寻址的来源（如 runtime_override）为 None。
+    # 真实路径永不在此
     # 持久化或对外，只在读取该来源内容的调用栈内出现。
     vrn: str | None
     layer: ConfigSourceLayer

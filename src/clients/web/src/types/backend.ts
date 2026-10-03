@@ -1,10 +1,13 @@
 // 该文件是前端业务类型适配层，封装后端实际返回结构。
 // 本目录业务代码统一从这里导入类型；后端 DTO 直接别名到生成文件，避免手写协议漂移。
-import type { Session, SessionResource } from "./protocol";
+import type { ConfigSourceDTO, ConfigSourcesDTO, Session, SessionResource } from "./protocol";
 
 export type {
   Agent,
   AgentStateMessages,
+  ConfigSourceDTO,
+  ConfigSourcesDTO,
+  ConfigSourceLayer,
   ControlAction,
   ControlScope,
   ChildThreadStatus,
@@ -408,6 +411,8 @@ export type GatewayConfigReloadStatus = Omit<
 };
 export type GatewayConfigSource = GatewayConfigSourceDTO;
 export type GatewayConfigSources = GatewayConfigSourcesDTO;
+export type WorkspaceConfigSource = ConfigSourceDTO;
+export type WorkspaceConfigSources = ConfigSourcesDTO;
 export type GatewayRemoteConnectionSummary = GatewayRemoteConnectionSummaryDTO;
 export type GatewayServiceStatus = GatewayServiceStatusDTO;
 export type GatewayWorkspaceList = Omit<

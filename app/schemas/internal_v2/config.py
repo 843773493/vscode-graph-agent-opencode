@@ -4,6 +4,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.core.config_sources import ConfigSourceLayer
+
 
 class ConfigDTO(BaseModel):
     default_model: str
@@ -17,7 +19,7 @@ class ConfigDTO(BaseModel):
 
 class ConfigSourceDTO(BaseModel):
     path: str
-    layer: Literal["inline", "user", "user_local", "workspace", "sqlite"]
+    layer: ConfigSourceLayer
     precedence: int
     loaded: bool
     source_key: str | None = None
@@ -38,7 +40,7 @@ class ConfigSourcesDTO(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    # 当前 REST 入口只允许写入 Workspace-owned runtime override SQLite layer。
+    # 当前 REST 入口只允许写入 Workspace-owned runtime_override 来源；SQLite 是内部 carrier。
     # 用户级 JSONC 物化需要独立的 source-writer 入口，不能借此接口绕过文件 CAS。
     config_layer: Literal["runtime_override"] = Field(...)
     scope: Literal["workspace"] = Field(...)

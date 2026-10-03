@@ -124,6 +124,10 @@ export interface GatewayConfigReloadStatusDTO {
 
 export interface GatewayConfigSourceDTO {
   path: string;
+  /**
+   * 逻辑来源闭集：inline、user、user_local、workspace、runtime_override。
+   * SQLite 仅为内部 carrier。
+   */
   layer: string;
   precedence: number;
   loaded: boolean;

@@ -133,7 +133,7 @@ class ConfigPublicMixin:
                 "revision": snapshot.revision,
                 # 来源位置一律只以 VRN 表达：``source_details[].vrn`` 是唯一出处。
                 # 原先此处的 ``config_path``（真实 user 层路径）与 ``source_paths``
-                # （跨 user/user_local/workspace/sqlite 四层的真实路径列表）既无 VRN
+                # （跨 user/user_local/workspace/runtime_override 四层的真实路径列表）既无 VRN
                 # 替代（上述层共享同一 ``workspace.sqlite`` 边界载体，故不可寻址，与
                 # VRN scope 闭集无关），又会外泄真实路径，故 MUST 从对外响应体移除；
                 # 不得以空串/省略号做替身。

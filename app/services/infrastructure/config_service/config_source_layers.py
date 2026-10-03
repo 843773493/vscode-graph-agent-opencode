@@ -174,8 +174,8 @@ class ConfigSourceLayersMixin:
         return config, tuple(source_paths), tuple(source_details)
 
     def _runtime_override_source(self) -> ConfigSource:
-        # runtime override 由 SQLite 承载：sqlite 层不可寻址（real path 永不持久化，
-        # 且 user/user_local/workspace 三层共享同一个 workspace.sqlite），故 vrn=None。
+        # runtime_override 是逻辑来源；物理 carrier 不属于来源身份，且没有来源文件，
+        # 故 vrn=None。
         layer, precedence = _SOURCE_LAYER_AUTHORITY[self._RUNTIME_OVERRIDE_CONFIG_KEY]
         if self._workspace_state_store is None:
             return ConfigSource(

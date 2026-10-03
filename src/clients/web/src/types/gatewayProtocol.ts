@@ -1,6 +1,7 @@
 // Gateway JSON 类型适配层。
 // 字段结构来自 gateway/v1/public.proto；这里补回 JSON API 的 null 约定和字符串枚举。
 import type * as GatewayProtocol from "./protocol_generated/boxteam/gateway/v1/public";
+import type { ConfigSourceLayer } from "./protocol";
 
 type OptionalFields<T> = T extends readonly (infer Item)[]
   ? OptionalFields<Item>[]
@@ -35,8 +36,14 @@ export type ChangePortForwardLabelRequest = Omit<OptionalFields<GatewayProtocol.
   label?: string | null;
 };
 export type DevelopmentRuntimeRestartDTO = OptionalFields<GatewayProtocol.DevelopmentRuntimeRestartDTO>;
-export type GatewayConfigSourceDTO = OptionalFields<GatewayProtocol.GatewayConfigSourceDTO>;
-export type GatewayConfigSourcesDTO = OptionalFields<GatewayProtocol.GatewayConfigSourcesDTO>;
+export type GatewayConfigSourceDTO = Omit<
+  OptionalFields<GatewayProtocol.GatewayConfigSourceDTO>,
+  "layer"
+> & { layer: ConfigSourceLayer };
+export type GatewayConfigSourcesDTO = Omit<
+  OptionalFields<GatewayProtocol.GatewayConfigSourcesDTO>,
+  "sources"
+> & { sources: GatewayConfigSourceDTO[] };
 export type GatewayDiagnosticLogDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticLogDTO>;
 export type GatewayDiagnosticWorkspaceDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticWorkspaceDTO>;
 export type GatewayDiagnosticsDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticsDTO>;

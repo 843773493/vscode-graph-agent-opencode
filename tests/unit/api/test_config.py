@@ -3,11 +3,38 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import get_args
 
 import pytest
+from pydantic import ValidationError
 
 from app.api.config import get_config, get_config_sources
+from app.core.config_sources import ConfigSourceLayer
+from app.schemas.gateway import GatewayConfigSourceDTO
+from app.schemas.internal_v2.config import ConfigSourceDTO
 from app.services.infrastructure.config_service import ConfigService
+
+
+def test_config_source_dtos_share_the_closed_logical_layer_set() -> None:
+    expected_layers = (
+        "inline",
+        "user",
+        "user_local",
+        "workspace",
+        "runtime_override",
+    )
+    assert get_args(ConfigSourceLayer) == expected_layers
+
+    for source_model in (ConfigSourceDTO, GatewayConfigSourceDTO):
+        source = source_model(
+            path="",
+            layer="runtime_override",
+            precedence=4,
+            loaded=True,
+        )
+        assert source.layer == "runtime_override"
+        with pytest.raises(ValidationError):
+            source_model(path="", layer="sqlite", precedence=4, loaded=True)
 
 
 def _base_config() -> dict[str, object]:

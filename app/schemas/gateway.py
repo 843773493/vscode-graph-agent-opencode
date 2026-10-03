@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.config_sources import ConfigSourceLayer
 from app.gateway.theme.defaults import DEFAULT_THEME_BACKGROUND_OVERLAY
 
 GatewayConnectionKind = Literal["local", "remote_gateway"]
@@ -181,7 +182,7 @@ class GatewayConfigEventsDTO(BaseModel):
 
 class GatewayConfigSourceDTO(BaseModel):
     path: str
-    layer: Literal["inline", "user", "user_local", "sqlite"]
+    layer: ConfigSourceLayer
     precedence: int
     loaded: bool
     source_key: str | None = None

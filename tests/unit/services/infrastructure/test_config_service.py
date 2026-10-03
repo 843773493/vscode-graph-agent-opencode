@@ -576,12 +576,12 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
             "user",
             "user_local",
             "workspace",
-            "sqlite",
+            "runtime_override",
         ]
         # D-A：`layer` MUST 是逻辑来源层。user/user_local/workspace 虽共享同一
-        # workspace.sqlite，但共享只是承载事实，MUST NOT 有损改写成 `sqlite`；只有
-        # runtime override 才是 `sqlite` 层。此处逐层断言比旧的「四层同为 sqlite」更强。
-        # 5A.6：只有 inline 层可寻址；user/user_local/workspace/sqlite 一律不可寻址，
+        # workspace.sqlite，但共享只是承载事实，MUST NOT 有损改写成 carrier 名。
+        # runtime_override 只表达逻辑来源，不暴露 SQLite carrier。此处逐层断言比旧的
+        # 「四层同为 sqlite」更强。5A.6：只有 inline 层可寻址；其它层一律不可寻址，
         # vrn MUST be None，且不含任何真实路径。
         details = service.get_source_details()
         assert details[0].vrn is not None
@@ -604,8 +604,8 @@ def test_config_source_layer_consistent_across_read_paths(
     """D-A/D-B：两条读路径对同一 source_key MUST 报同一逻辑层。
 
     源构建路径（`_config_source`/`_runtime_override_source`）与持久化恢复路径
-    （`_persisted_source_details`）此前对 user/user_local/workspace 报 `sqlite`/真层两套
-    值，且 inline 在恢复路径被兜底成 `sqlite`、precedence 由 0 翻成 1。本用例锁定两路一致。
+    （`_persisted_source_details`）此前同一 source_key 可能得到不同逻辑层，且 inline
+    在恢复路径 precedence 由 0 翻成 1。本用例锁定两路一致。
     """
 
     config_path = _write_workspace_config(tmp_path, _base_config())
@@ -637,7 +637,7 @@ def test_config_source_layer_consistent_across_read_paths(
             "user": 1,
             "user_local": 2,
             "workspace": 3,
-            "sqlite": 4,
+            "runtime_override": 4,
         }
 
         # 两路都按 {逻辑层: precedence} 收敛到同一张权威表；层名互不相同，故该映射
@@ -647,9 +647,11 @@ def test_config_source_layer_consistent_across_read_paths(
         first_map = {source.layer: source.precedence for source in first_sources}
         assert restored_map == expected
         assert first_map == expected
+        assert "sqlite" not in restored_map
+        assert "sqlite" not in first_map
 
         # D-B 定点：inline 在恢复路径 MUST 仍为 inline、precedence MUST 为 0，
-        # 不得被落进 `sqlite` 兜底或把 precedence 翻成 1。
+        # 不得映射成其它来源层或把 precedence 翻成 1。
         restored_inline = [
             source for source in restored_sources if source.layer == "inline"
         ]
@@ -658,6 +660,17 @@ def test_config_source_layer_consistent_across_read_paths(
         assert restored_inline[0].vrn is not None
     finally:
         store.close()
+
+
+@pytest.mark.parametrize(
+    "source_key",
+    ("active_snapshot", "pending_snapshot", "sqlite:1", "user:1"),
+)
+def test_workspace_persisted_source_layer_rejects_unregistered_keys(
+    source_key: str,
+) -> None:
+    with pytest.raises(ValueError, match="未登记的持久化键"):
+        ConfigService._resolve_persisted_layer(source_key)
 
 
 def test_workspace_config_restarts_from_sqlite_after_source_json_changes(
@@ -722,6 +735,16 @@ async def test_public_runtime_overrides_restart_from_workspace_sqlite(tmp_path: 
             workspace_state_store=store,
         )
         assert (await second.get()).default_model == "runtime-model"
+        runtime_source = next(
+            source
+            for source in second.get_source_details()
+            if source.source_key == "workspace_runtime_override"
+        )
+        assert (runtime_source.layer, runtime_source.precedence) == (
+            "runtime_override",
+            4,
+        )
+        assert runtime_source.vrn is None
         active = store.get_active_config_snapshot("workspace")
         source = store.get_source_layer("workspace_runtime_override")
         assert active is not None

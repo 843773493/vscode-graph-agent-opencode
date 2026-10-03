@@ -21,7 +21,11 @@ from configs.installer import resolve_config_resource_source
 from configs.runtime import merge_json_objects, read_jsonc_object, validate_config
 
 from .connection_ids import _normalize_connection_ids
-from .sources import _gateway_source_detail, _load_or_migrate_gateway_override
+from .sources import (
+    _gateway_persisted_source_details,
+    _gateway_source_detail,
+    _load_or_migrate_gateway_override,
+)
 from .values import (
     _GATEWAY_SOURCE_LAYER_AUTHORITY,
     REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS,
@@ -62,15 +66,17 @@ def load_gateway_config(
     source_paths: list[Path] = [resolved_inline_config_path]
     user_override: dict[str, object] | None = None
     local_override: dict[str, object] | None = None
+    inline_layer, inline_precedence = _GATEWAY_SOURCE_LAYER_AUTHORITY["inline:0"]
     source_details: list[ConfigSource] = [
         ConfigSource(
             vrn=inline_config_source_vrn(logical_name="gateway_inline"),
-            layer="inline",
-            precedence=0,
+            layer=inline_layer,
+            precedence=inline_precedence,
             loaded=True,
         )
     ]
     loaded_persisted_snapshot = False
+    persisted_source_baseline: dict[str, object] | None = None
     if startup and state_store is not None:
         blocked = state_store.migrate_legacy_active_snapshot_secrets(
             config_domain="gateway"
@@ -82,9 +88,6 @@ def load_gateway_config(
             )
         candidate_ref = os.environ.get("BOXTEAM_CONFIG_CANDIDATE_REF")
         persisted_payload: dict[str, object] | None = None
-        persisted_source_key: str | None = None
-        persisted_digest: str | None = None
-        persisted_generation: int | None = None
         if candidate_ref:
             pending = state_store.load_gateway_pending_candidate(
                 candidate_ref=candidate_ref,
@@ -104,9 +107,7 @@ def load_gateway_config(
             if pending.fencing_token != fencing_token:
                 raise ConfigConflictError("Gateway pending 启动 fencing token 不匹配")
             persisted_payload = pending.payload
-            persisted_source_key = "pending_snapshot"
-            persisted_digest = pending.effective_digest
-            persisted_generation = None
+            persisted_source_baseline = pending.source_baseline
         else:
             active = state_store.get_active_config_snapshot("gateway")
             if active is not None:
@@ -116,28 +117,17 @@ def load_gateway_config(
                         f"state={active.state}, error={active.last_error}"
                     )
                 persisted_payload = active.payload
-                persisted_source_key = "active_snapshot"
-                persisted_digest = active.effective_digest
-                persisted_generation = active.source_generation
+                persisted_source_baseline = active.source_baseline
         if persisted_payload is not None:
+            if persisted_source_baseline is None:
+                raise ConfigConflictError(
+                    "Gateway active/pending snapshot 缺少来源基线"
+                )
             raw_gateway_config = dict(persisted_payload)
             source_paths = [resolved_inline_config_path, state_store.path]
-            source_details = [
-                source_details[0],
-                ConfigSource(
-                    vrn=None,
-                    layer="sqlite",
-                    precedence=1,
-                    loaded=True,
-                    source_key=persisted_source_key,
-                    layer_digest=persisted_digest,
-                    source_generation=(
-                        int(persisted_generation)
-                        if persisted_generation is not None
-                        else None
-                    ),
-                ),
-            ]
+            source_details = list(
+                _gateway_persisted_source_details(persisted_source_baseline)
+            )
             loaded_persisted_snapshot = True
     if state_store is None:
         # 无 state store 分支同样只查权威表，保证与 `_gateway_source_detail` 逐字一致。

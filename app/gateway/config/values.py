@@ -16,14 +16,17 @@ from app.core.history_loading import (
 )
 from app.core.path_utils import get_user_config_root
 
-# Gateway 来源权威表：每个 source_key 的逻辑来源层与 precedence 只在本文件登记一次。
-# `_gateway_source_detail`（有 state store）与无 store 分支都只查它。Gateway 控制面库
+# Gateway 来源权威表：每个来源键的逻辑来源层与 precedence 只在本文件登记一次；`inline:0`
+# 是 writer 为无 source_key 的 inline 记录生成的 canonical baseline key。
+# `_gateway_source_detail`、inline 构造、无 store 分支及 baseline 恢复都只查它。Gateway 控制面库
 # 与工作区库是两个独立持久化 owner（owner 裁定 B2「不合并」），故本表是 Gateway 侧
 # 自有权威表，MUST NOT 从 workspace 侧 import 共享；但取值语义与 workspace 侧一致。
-# `gateway_mutable_override`→`user`、`gateway_local_mutable_override`→`user_local` 与
-# 无 store 分支逐字一致——有 store 时共享 `gateway.sqlite` 只是**承载事实**，MUST NOT
-# 有损改写成 `sqlite` 对外暴露；不可寻址性一律以 `vrn=None` 表达。
+# `inline:0`→`inline`、`gateway_mutable_override`→`user` 与
+# `gateway_local_mutable_override`→`user_local` 与无 store 分支逐字一致；有 store 时
+# 共享 `gateway.sqlite` 只是**承载事实**，MUST NOT 有损改写成 carrier 名对外暴露；
+# 不可寻址性一律以 `vrn=None` 表达。
 _GATEWAY_SOURCE_LAYER_AUTHORITY: dict[str, tuple[ConfigSourceLayer, int]] = {
+    "inline:0": ("inline", 0),
     "gateway_mutable_override": ("user", 1),
     "gateway_local_mutable_override": ("user_local", 2),
 }

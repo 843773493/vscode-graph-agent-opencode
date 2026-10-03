@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import cast
 
 from app.core.config_sources import (
     ConfigSource,
+    ConfigSourceLayer,
+    ConfigSourcePresence,
     parse_stable_config_file,
     read_stable_config_file,
     verify_stable_config_file,
@@ -75,6 +78,79 @@ def _gateway_source_detail(
         layer_digest=record.layer_digest if record is not None else None,
         source_generation=record.source_generation if record is not None else None,
     )
+
+
+def _gateway_persisted_source_details(
+    source_baseline: dict[str, object],
+) -> tuple[ConfigSource, ...]:
+    """从 active/pending baseline 恢复逻辑来源，不把快照本身当作来源。"""
+
+    if not source_baseline:
+        raise ValueError("Gateway active/pending snapshot 来源基线不能为空")
+    details: list[ConfigSource] = []
+    for source_key, raw_value in sorted(source_baseline.items()):
+        if not isinstance(raw_value, dict):
+            raise TypeError(f"Gateway source baseline 必须是对象: key={source_key}")
+        raw_value = cast(dict[str, object], raw_value)
+        raw_vrn = raw_value.get("vrn")
+        if raw_vrn is not None and (not isinstance(raw_vrn, str) or not raw_vrn):
+            raise ValueError(
+                f"Gateway source baseline vrn 必须是非空字符串或 None: key={source_key}"
+            )
+        presence_value = raw_value.get("presence")
+        if presence_value == "present":
+            presence: ConfigSourcePresence = "present"
+        elif presence_value == "absent":
+            presence = "absent"
+        else:
+            raise ValueError(
+                f"Gateway source baseline presence 无效: key={source_key}"
+            )
+        layer, precedence = _resolve_gateway_persisted_layer(source_key)
+        details.append(
+            ConfigSource(
+                vrn=raw_vrn,
+                layer=layer,
+                precedence=precedence,
+                loaded=presence == "present",
+                source_key=source_key,
+                presence=presence,
+                layer_revision=(
+                    int(raw_value["layer_revision"])
+                    if raw_value.get("layer_revision") is not None
+                    else None
+                ),
+                layer_digest=(
+                    str(raw_value["layer_digest"])
+                    if raw_value.get("layer_digest") is not None
+                    else None
+                ),
+                source_generation=(
+                    int(raw_value["source_generation"])
+                    if raw_value.get("source_generation") is not None
+                    else None
+                ),
+            )
+        )
+    if not any(source.layer == "inline" for source in details):
+        raise ValueError("Gateway active/pending snapshot 来源基线缺少 inline 来源")
+    details.sort(key=lambda source: source.precedence)
+    return tuple(details)
+
+
+def _resolve_gateway_persisted_layer(
+    source_key: str,
+) -> tuple[ConfigSourceLayer, int]:
+    """只从 Gateway owner authority 还原持久来源层，未登记键必须失败。"""
+
+    if source_key in _GATEWAY_SOURCE_LAYER_AUTHORITY:
+        return _GATEWAY_SOURCE_LAYER_AUTHORITY[source_key]
+    raise ValueError(
+        "Gateway source baseline 含未登记的持久化键，无法还原逻辑来源层: "
+        f"key={source_key!r}"
+    )
+
+
 def _load_or_migrate_gateway_override(
     *,
     state_store: GatewayStateStore,

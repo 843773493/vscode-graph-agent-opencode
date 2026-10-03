@@ -23,14 +23,14 @@ logger = logging.getLogger(__name__)
 # `_persisted_source_details`（从 active snapshot 基线恢复）都只查这一张表，MUST NOT
 # 任何一条读路径再自行推导——那正是双轨，会让同一 source_key 报出不同 layer。
 # inline 用固定权威键 `_INLINE_SOURCE_KEY`：发行包内文件，其 `source_key` 对外为 None，
-# 绝不参与分层兜底（否则会被错标成 `sqlite` 且 precedence 由 0 翻成 1）。
+# 绝不参与分层兜底（否则会落入其它来源的 precedence）。
 _INLINE_SOURCE_KEY = "inline"
 _SOURCE_LAYER_AUTHORITY: dict[str, tuple[ConfigSourceLayer, int]] = {
     _INLINE_SOURCE_KEY: ("inline", 0),
     "workspace_mutable_override": ("user", 1),
     "workspace_local_mutable_override": ("user_local", 2),
     "workspace_root_mutable_override": ("workspace", 3),
-    "workspace_runtime_override": ("sqlite", 4),
+    "workspace_runtime_override": ("runtime_override", 4),
 }
 
 

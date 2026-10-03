@@ -16,6 +16,7 @@ from app.gateway.config import (
     resolve_gateway_path,
     rollback_gateway_connection_id_migration,
 )
+from app.gateway.config.sources import _gateway_persisted_source_details
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.generators import SessionGeneratorStore
@@ -664,6 +665,74 @@ def test_gateway_source_layer_consistent_across_read_paths(tmp_path: Path) -> No
     assert "sqlite" not in with_map
 
 
+@pytest.mark.parametrize(
+    "source_key",
+    ("active_snapshot", "pending_snapshot", "sqlite:1"),
+)
+def test_gateway_persisted_source_details_reject_snapshot_and_carrier_keys(
+    source_key: str,
+) -> None:
+    with pytest.raises(ValueError, match="未登记的持久化键"):
+        _gateway_persisted_source_details(
+            {
+                source_key: {
+                    "vrn": None,
+                    "presence": "present",
+                    "layer_revision": None,
+                    "layer_digest": None,
+                    "source_generation": None,
+                }
+            }
+        )
+
+
+def test_gateway_persisted_source_details_restores_absence_and_precedence() -> None:
+    details = _gateway_persisted_source_details(
+        {
+            "gateway_local_mutable_override": {
+                "vrn": None,
+                "presence": "absent",
+                "layer_revision": 3,
+                "layer_digest": None,
+                "source_generation": 4,
+            },
+            "inline:0": {
+                "vrn": "boxteam://inline/distribution/resources/config/gateway_inline",
+                "presence": "present",
+                "layer_revision": None,
+                "layer_digest": None,
+                "source_generation": None,
+            },
+            "gateway_mutable_override": {
+                "vrn": None,
+                "presence": "present",
+                "layer_revision": 2,
+                "layer_digest": "digest-user",
+                "source_generation": 4,
+            },
+        }
+    )
+
+    assert [(source.layer, source.precedence) for source in details] == [
+        ("inline", 0),
+        ("user", 1),
+        ("user_local", 2),
+    ]
+    assert [source.presence for source in details] == [
+        "present",
+        "present",
+        "absent",
+    ]
+    assert [source.loaded for source in details] == [True, True, False]
+    assert details[2].layer_revision == 3
+    assert details[2].source_generation == 4
+
+
+def test_gateway_persisted_source_details_rejects_empty_baseline() -> None:
+    with pytest.raises(ValueError, match="来源基线不能为空"):
+        _gateway_persisted_source_details({})
+
+
 def test_gateway_connection_id_migration_is_comment_preserving_and_idempotent(
     tmp_path: Path,
 ) -> None:
@@ -892,6 +961,28 @@ def test_gateway_startup_without_ref_uses_persisted_active_snapshot(
         )
         assert restored.revision == initial.revision
         assert restored.default_theme_id == initial.default_theme_id
+        assert [
+            (source.layer, source.precedence) for source in restored.source_details
+        ] == [("inline", 0), ("user", 1), ("user_local", 2)]
+        assert [source.presence for source in restored.source_details] == [
+            "present",
+            "present",
+            "absent",
+        ]
+        active = state.get_active_config_snapshot("gateway")
+        assert active is not None
+        for source in restored.source_details:
+            baseline = active.source_baseline[source.source_key]
+            assert isinstance(baseline, dict)
+            assert source.vrn == baseline["vrn"]
+            assert source.presence == baseline["presence"]
+            assert source.layer_revision == baseline["layer_revision"]
+            assert source.layer_digest == baseline["layer_digest"]
+            assert source.source_generation == baseline["source_generation"]
+        assert all(
+            source.source_key not in {"active_snapshot", "pending_snapshot"}
+            for source in restored.source_details
+        )
     finally:
         state.close()
 
@@ -976,6 +1067,28 @@ async def test_gateway_pending_startup_loads_exact_candidate_and_promotes(
         )
         assert restored.revision != initial.revision
         assert restored.payload["runtime"] != initial.payload.get("runtime")
+        assert [
+            (source.layer, source.precedence) for source in restored.source_details
+        ] == [("inline", 0), ("user", 1), ("user_local", 2)]
+        assert [source.presence for source in restored.source_details] == [
+            "present",
+            "present",
+            "absent",
+        ]
+        pending = state.get_pending_config_candidate(config_domain="gateway")
+        assert pending is not None
+        for source in restored.source_details:
+            baseline = pending.source_baseline[source.source_key]
+            assert isinstance(baseline, dict)
+            assert source.vrn == baseline["vrn"]
+            assert source.presence == baseline["presence"]
+            assert source.layer_revision == baseline["layer_revision"]
+            assert source.layer_digest == baseline["layer_digest"]
+            assert source.source_generation == baseline["source_generation"]
+        assert all(
+            source.source_key not in {"active_snapshot", "pending_snapshot"}
+            for source in restored.source_details
+        )
         restarted_service = GatewayConfigReloadService(
             state_store=state,
             config=restored,

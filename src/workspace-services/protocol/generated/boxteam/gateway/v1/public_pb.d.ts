@@ -523,6 +523,9 @@ export declare type GatewayConfigSourceDTO = Message<"boxteam.gateway.v1.Gateway
   path: string;
 
   /**
+   * 逻辑来源闭集：inline、user、user_local、workspace、runtime_override。
+   * SQLite 仅为内部 carrier。
+   *
    * @generated from field: string layer = 2;
    */
   layer: string;

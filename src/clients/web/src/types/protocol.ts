@@ -6,6 +6,18 @@ import type { TraceEventDTO } from "../protocol/jsonTypes";
 
 export type JsonObject = Record<string, unknown>;
 export type DeliveryPolicy = "after_turn" | "after_tool_result" | "after_interrupt";
+export type ConfigSourceLayer =
+  | "inline"
+  | "user"
+  | "user_local"
+  | "workspace"
+  | "runtime_override";
+export type ConfigSourceDTO = Omit<WorkspaceProtocol.ConfigSourceDTO, "layer"> & {
+  layer: ConfigSourceLayer;
+};
+export type ConfigSourcesDTO = Omit<WorkspaceProtocol.ConfigSourcesDTO, "sources"> & {
+  sources: ConfigSourceDTO[];
+};
 
 export type JobStatus =
   | "accepted"
