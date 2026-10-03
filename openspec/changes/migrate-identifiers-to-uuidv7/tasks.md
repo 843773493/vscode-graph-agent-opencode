@@ -8,8 +8,8 @@
 
 - [x] 2.1 为唯一工厂补充同毫秒单调测试：同进程内同一毫秒连续生成 20000 个 id，断言按 hex 排序与生成顺序逐字节一致且全部唯一。门槛：`uv run pytest -q tests/unit/core/test_identifier_uuidv7_monotonic.py` 退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「2.1」。）**
 - [x] 2.2 补跨毫秒自然单调测试：连续生成 200000 个 id，断言全局有序且唯一。门槛：同一测试文件退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「2.2」。）**
-- [ ] 2.3 通过自然 UUIDv7 allocation 路径验证时钟回拨合同：注入回拨必须驱动底层自然 allocator 时钟，不得把固定时间戳传给生成器；真实生成 ID 的内嵌毫秒及完整 hex 顺序 MUST 非递减且唯一。旧 `effective_now_ms()` 单独钳制测试不满足本项。门槛：回拨场景的实际 UUIDv7 输出测试退出码 0。
-- [ ] 2.4 为实时 Session、main thread 和 child thread allocation 增加真实路径回归：检查幂等 miss 后走自然 UUIDv7 且不调用任何显式 timestamp helper；捕获同毫秒分组，断言每个真实创建路径内 ID 按生成顺序非递减且唯一。MUST 覆盖 Session ID、main-thread ID 与 child-thread ID，不得以独立工厂 spy 代替。A07 核验报告指出当前实时链路使用 `_at` 显式时间戳生成，旧工厂级测试不能证明该任务完成。门槛：相关受保护测试退出码 0，且实时调用链静态检查不命中 `*_at` 分配。
+- [x] 2.3 通过自然 UUIDv7 allocation 路径验证时钟回拨合同：注入回拨必须驱动底层自然 allocator 时钟，不得把固定时间戳传给生成器；真实生成 ID 的内嵌毫秒及完整 hex 顺序 MUST 非递减且唯一。旧 `effective_now_ms()` 单独钳制测试不满足本项。门槛：回拨场景的实际 UUIDv7 输出测试退出码 0。
+- [x] 2.4 为实时 Session、main thread 和 child thread allocation 增加真实路径回归：检查幂等 miss 后走自然 UUIDv7 且不调用任何显式 timestamp helper；捕获同毫秒分组，断言每个真实创建路径内 ID 按生成顺序非递减且唯一。MUST 覆盖 Session ID、main-thread ID 与 child-thread ID，不得以独立工厂 spy 代替。A07 核验报告指出当前实时链路使用 `_at` 显式时间戳生成，旧工厂级测试不能证明该任务完成。门槛：相关受保护测试退出码 0，且实时调用链静态检查不命中 `*_at` 分配。
 - [x] 2.5（A3 量化）补一条量化上界测试：同一毫秒内生成 500000 个 id，断言同毫秒组最大规模被实测记录（约 3710）且组内全部有序唯一；并断言实现与文档只承诺「同进程内同毫秒非递减且唯一」+「跨进程共享 48 bit 毫秒分辨率」，不承诺跨进程同毫秒有序。门槛：对应测试退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「2.5」。）**
 
 ## 3. 校验层正名与单一 profile（D5）
@@ -24,9 +24,9 @@
 - [x] 4.1 在 `validate_storage_relative_locator()` 中加入「`sessions/YYYY/MM/DD` 的 UTC 日期 == id 内嵌 48 bit 毫秒时间戳的 UTC 日期」断言；不一致抛显式完整性错误。门槛：`uv run pytest -q tests/unit/core/test_session_catalog_store.py` 退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「4.1」。）**
 - [x] 4.2 补负向测试：构造「分桶日期与 id 内嵌时间戳不一致」的 locator，断言 fail-closed 且不扫盘、不改桶。门槛：同一测试文件退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「4.2」。）**
 - [x] 4.3 确认 child thread 的 `threads/YYYY/MM/DD/{thread_id}`（`app/core/session_control_store.py`）同样按 UTC 且与 id 内嵌时间戳一致。门槛：`uv run pytest -q tests/unit/core/test_thread_creation.py` 退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「4.3」。）**
-- [ ] 4.7 实时创建时间的唯一来源 MUST 是实际自然分配 UUIDv7 的 48-bit 毫秒：Session journal 在幂等查找 miss 后自然分配 `session_id` 与 `main_thread_id`，再从 `session_id` 推导 Session `created_at` 和 `sessions/YYYY/MM/DD` locator；child Thread record 在幂等查找 miss 后自然分配 `thread_id`，再从该 ID 推导 child `created_at` 与 UTC locator。幂等 hit 必须先于 ID allocation 并复用冻结 record。main-thread ID 自然分配可跨 UTC 午夜；main row 的 `created_at` MUST 等于 Session `created_at`，无独立物理桶；Session 目录只按 Session ID 日期分桶。固定历史 fixture 必须显式提供 ID 和时间成组校验：Session 为 `session_id + main_thread_id + created_at`，child 为 `thread_id + created_at`，内嵌毫秒须与 `created_at` 精确一致；store 不得用 `*_at` helper 分配。门槛：真实 Session / child 创建回归覆盖幂等 hit/miss、UTC 日期边界、回拨和 ID/created_at/locator 一致，退出码 0。
-- [ ] 4.4（A3）通过真实 natural allocation 回归断言：回拨只影响底层 UUIDv7 自身的自然非递减行为，Session/child 的 `created_at` 与 locator 都直接从各自真实分配 ID 推导；MUST NOT 预读 `effective_now_ms()` 后将其作为 ID 时间戳或单独用作 locator 时间。门槛：注入回拨后创建 Session 与 child thread，验证 ID、created_at、UTC locator 一致且不报错。
-- [ ] 4.5（A3）断言默认真实分配路径下 NTP 回拨 MUST NOT 变成用户可见故障，且 ID 仍非递减、唯一、分桶自洽；MUST NOT 用显式 timestamp 旁路 natural allocator。门槛：Session/child 创建 API 回归退出码 0；若实现选择“拒绝并报告”，须另经 owner 裁定更新规范后才可验收。
+- [x] 4.7 实时创建时间的唯一来源 MUST 是实际自然分配 UUIDv7 的 48-bit 毫秒：Session journal 在幂等查找 miss 后自然分配 `session_id` 与 `main_thread_id`，再从 `session_id` 推导 Session `created_at` 和 `sessions/YYYY/MM/DD` locator；child Thread record 在幂等查找 miss 后自然分配 `thread_id`，再从该 ID 推导 child `created_at` 与 UTC locator。幂等 hit 必须先于 ID allocation 并复用冻结 record。main-thread ID 自然分配可跨 UTC 午夜；main row 的 `created_at` MUST 等于 Session `created_at`，无独立物理桶；Session 目录只按 Session ID 日期分桶。固定历史 fixture 必须显式提供 ID 和时间成组校验：Session 为 `session_id + main_thread_id + created_at`，child 为 `thread_id + created_at`，内嵌毫秒须与 `created_at` 精确一致；store 不得用 `*_at` helper 分配。门槛：真实 Session / child 创建回归覆盖幂等 hit/miss、UTC 日期边界、回拨和 ID/created_at/locator 一致，退出码 0。
+- [x] 4.4（A3）通过真实 natural allocation 回归断言：回拨只影响底层 UUIDv7 自身的自然非递减行为，Session/child 的 `created_at` 与 locator 都直接从各自真实分配 ID 推导；MUST NOT 预读 `effective_now_ms()` 后将其作为 ID 时间戳或单独用作 locator 时间。门槛：注入回拨后创建 Session 与 child thread，验证 ID、created_at、UTC locator 一致且不报错。
+- [x] 4.5（A3）断言默认真实分配路径下 NTP 回拨 MUST NOT 变成用户可见故障，且 ID 仍非递减、唯一、分桶自洽；MUST NOT 用显式 timestamp 旁路 natural allocator。门槛：Session/child 创建 API 回归退出码 0；若实现选择“拒绝并报告”，须另经 owner 裁定更新规范后才可验收。
 - [x] 4.6（A3）量化断言的负向测试：断言文档/实现不声称跨进程同毫秒有序或主键严格按时间相邻。门槛：对应断言测试退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「4.6」。）**
 
 ## 5. SQLite 主键与索引（D6）
@@ -131,7 +131,17 @@
 
 - [x] 9.1 `openspec validate migrate-identifiers-to-uuidv7 --strict` 输出 `Change 'migrate-identifiers-to-uuidv7' is valid`，退出码 0。 **（本次实测（提交 `f6fc990f`）现状：`openspec validate migrate-identifiers-to-uuidv7 --strict` 输出 `Change 'migrate-identifiers-to-uuidv7' is valid`，退出码 0；门槛满足。）**
 - [x] 9.2 `openspec validate --strict --all` 退出码 0 且 `0 failed`（本 change 加入后为 40 passed）。 **（本次实测（提交 `f6fc990f`）现状：`openspec validate --strict --all` 输出 `Totals: 40 passed, 0 failed (40 items)`，退出码 0；门槛满足。）**
-- [ ] 9.3 在 U05 完成自然 UUIDv7 实时分配接线后，使用进程外内存/超时保护重跑完整十一份关联测试（工厂、单调性、canonical/豁免、catalog/control、Session/Thread creation、migration 与隔离恢复）。回归必须包含真实 Session journal、main-thread 与 child-thread allocation：幂等 hit 不额外分配 ID；miss 不调用 `*_at`；Session 从 `session_id`、child 从自身 `thread_id` 派生毫秒级 `created_at` 与 UTC locator；main-thread 自然 ID 可跨午夜而不改变 Session locator，main row 的 `created_at` 仍等于 Session `created_at`；固定 fixture 的 ID/时间成组相等；同毫秒单调唯一和默认库回拨语义仍通过。任何只跑单测或旧接线的绿测不得勾选本项。命令使用 `timeout 1200 bash -c 'ulimit -d 4194304; exec "$@"' bash ...` 或正式 matrix runner；记录完整命令、环境和逐测试结果。旧 2026-10-04 685 passed 是 A07 反例发现前的基线，不能作为本项完成证据。
+- [x] 9.3 在 U05 完成自然 UUIDv7 实时分配接线后，使用进程外内存/超时保护重跑完整十一份关联测试（工厂、单调性、canonical/豁免、catalog/control、Session/Thread creation、migration 与隔离恢复）。回归必须包含真实 Session journal、main-thread 与 child-thread allocation：幂等 hit 不额外分配 ID；miss 不调用 `*_at`；Session 从 `session_id`、child 从自身 `thread_id` 派生毫秒级 `created_at` 与 UTC locator；main-thread 自然 ID 可跨午夜而不改变 Session locator，main row 的 `created_at` 仍等于 Session `created_at`；固定 fixture 的 ID/时间成组相等；同毫秒单调唯一和默认库回拨语义仍通过。任何只跑单测或旧接线的绿测不得勾选本项。命令使用 `timeout 1200 bash -c 'ulimit -d 4194304; exec "$@"' bash ...` 或正式 matrix runner；记录完整命令、环境和逐测试结果。旧 2026-10-04 685 passed 是 A07 反例发现前的基线，不能作为本项完成证据。
+
+## 2026-10-04 自然分配最终验收（U05/U06/U07）
+
+`e27260ca` 已统一真实 Session/main/child 的自然 UUIDv7 分配；`00edda52` 以 Session ID 命名 staging/quarantine，并在写入前核验实际 SQLite VFS 路径预算；`b75dbd90` 使用 Linux `LD_PRELOAD` 拦截底层实时钟，在独立进程经真实 `uuid_utils.uuid7()`、SessionCreationService 和 child creation record 验证跨午夜与回拨，不以显式 timestamp 或 fake allocator 代替该回拨验收。
+
+- §2.3/4.4/4.5：真实 allocator 回拨一小时后仍可创建 Session/child，完整 ID 次序非递减且唯一，ID/created_at/locator/manifest/catalog 自洽。Linux + cc 实测通过；其它平台该时钟 shim 明确 skip，未声称跨平台实测。
+- §2.4/4.7：真实创建 journal 的默认 allocator 路径、同毫秒 Session/main/child 分配次序、幂等 hit 零额外分配由 `test_canonical_creation_id_allocation.py` 三项验证；真实自然库回拨/跨日由 U07 补充。固定 fixture 在同一天内偏差 1ms 时拒绝，并逐字节核对实际 `.boxteam/navigation/session-catalog.sqlite` 及状态没有写入。main ID 可跨午夜但 main row 时间沿 Session；这些是 owner 服务/API 的验收，不冒称 HTTP 请求覆盖。
+- §9.3：外部 `timeout 1200` + `ulimit -d 4194304` 完整十一份关联测试 **684 passed / 127.12s，退出码 0**；随后仅对 A15 提出的测试覆盖修正运行定向回归 **1 passed / 0.28s**，自然 allocation 三项 **3 passed / 0.76s**。静态 Ruff 两文件通过；A15b 独立复核通过。6.1 前缀闭集当前 `typing.get_args(IdentifierPrefix)` 与去重均为 **33**。
+
+完整命令与目标 hash/中央修正记录：`out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/u07-main-validation.json`、`u07-main-complete-identifier.log`、`u07-millisecond-revised-test.log`、`u07-main-natural-allocation.log`；独立报告：`architecture_reviewer/artifacts/u07-real-clock-review.md`。本项验收不等同整个七 change 或其它执行链完成。
 
 ## 台账补勾证据（第二轮 2026-10-01）
 
