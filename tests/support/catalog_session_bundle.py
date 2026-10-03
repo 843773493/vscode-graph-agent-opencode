@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from app.core.identifier import to_epoch_ms
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -82,6 +83,13 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
     created_at = spec.created_at or _created_at_from_session_id(spec.session_id)
     if created_at.tzinfo is None:
         raise ValueError("created_at 必须带时区")
+    session_id_ms = int(spec.session_id[4:16], 16)
+    created_at_ms = to_epoch_ms(created_at)
+    if created_at_ms != session_id_ms:
+        raise ValueError(
+            "固定会话夹具 created_at 必须与 session_id 内嵌毫秒一致: "
+            f"created_at_ms={created_at_ms}, session_id_ms={session_id_ms}"
+        )
     # main thread 与 session 同源同一冻结毫秒，便于断言与解析一致。
     main_thread_id = thread_id_at(created_at)
     locator = (
