@@ -1,19 +1,19 @@
 version: v2
 
 plugins:
-  - remote: buf.build/protocolbuffers/python
+  - remote: buf.build/protocolbuffers/python:v36.2
     out: app/protocol/generated
-  - remote: buf.build/bufbuild/es
+  - remote: buf.build/bufbuild/es:v2.15.0
     out: src/workspace-services/protocol/generated
     opt:
       - target=js+dts
       - import_extension=.js
-  - remote: buf.build/bufbuild/es
+  - remote: buf.build/bufbuild/es:v2.15.0
     out: src/clients/web/src/types/protocol_buf_generated
     opt:
       - target=js+dts
       - import_extension=.js
-  - remote: buf.build/community/stephenh-ts-proto
+  - remote: buf.build/community/stephenh-ts-proto:v2.12.1
     out: src/clients/web/src/types/protocol_generated
     opt:
       - snakeToCamel=false
