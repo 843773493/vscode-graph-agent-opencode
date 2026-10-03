@@ -272,13 +272,15 @@ loader MUST 校验 resource ref 的 owner session/thread、assembly、activation
 
 ### Requirement: 内部 execution history 由持久 admission 独立加载
 
-历史 loader MUST 从目标 `(session_id, thread_id)` 的持久 `ExecutionAdmission`、execution owner state 与 committed canonical items 加载内部 execution history。只有 history request 的 include 集合显式包含 `internal` 时，响应才填充顶层 `internal_executions[]`；未请求时不得查询后再合并、不得把 internal execution 塞进普通 Turn summary/detail，也不得从 source completed Turn 或邻接项推断归属。
+历史 loader MUST 从目标 `(session_id, thread_id)` 的持久 `ExecutionAdmission`、execution owner state 与 committed canonical items 加载内部 execution history。无 cursor 时，有效 include 由请求中明确提供的集合决定；未提供时，tail 使用配置 `initial_include`，before/after/around 使用 `anchor_include`。两套内置默认集合各加入 `internal`，并保留原消息/summary 选择；显式配置覆盖按实际集合执行，不再新增 `default_include`。continuation 未提供 include 时沿用 token 冻结的有效集合，显式提供时必须相同；不得重新按方向或当前配置计算默认。只有有效 include 包含 `internal` 时，响应才填充顶层 `internal_executions[]`。Web 的默认集合保留原 messages/summary 并包含 `internal`；明确排除时不得查询后再合并、不得把 internal execution 塞进普通 Turn summary/detail，也不得从 source completed Turn 或邻接项推断归属。
 
 `internal_executions[]` MUST 按 execution owner 身份返回 standalone history envelope；每项不得要求 `TurnDetailDTO`、`turn_id`、root 或 final pointer。`RuntimeNoticePayload` 的 history projection 只读取 `display_part`，Provider/checkpoint 消费的 `prompt` 不得出现在 Web history。内部输出仍按该 `execution_id` 的 committed item identity/order 投影，不挂到 source Turn；普通 Turn 的分页、`item_count`、elapsed 和 `final_response` 不因内部 execution 改变。
 
-#### Scenario: 默认 history 不装载内部 execution
+internal admission MUST 在同一权威事务冻结真实 `source_branch_id` 与 `source_view_id`；幂等重入复用原绑定，不能改绑当前分支。其 notice 和同 execution 的 response items MUST 在既有 `context_view_items` 中明确登记为 `source_kind=display_only`；该 membership 是当前视图中可展示成员的唯一事实。checkpoint 后继、rewind 和 fork 必须按选定源成员显式继承或裁切，fork 同步重映射 target-local view/branch/execution/item identity；不得只凭 admission 的源 view、物理 sequence 范围或时间猜测当前成员，也不得新增第二 context tree。Provider 的 canonical history selection 只消费 `source_kind=canonical`，不从全局 catalog 补入 pending notice；当前 internal execution 的私有 prompt 及其自身已提交输出仍通过 admission 绑定的执行请求恢复路径消费，工具调用与结果保持协议闭合，不因展示成员隔离而丢失。
 
-- **WHEN** history include 未请求 `internal`
+#### Scenario: 明确排除内部 execution
+
+- **WHEN** history request 明确提供不包含 `internal` 的 include 集合
 - **THEN** 响应不填充 `internal_executions[]`，`pending_next_turn` report-back 不成为独立 Turn 或普通 Turn 的 response part
 
 #### Scenario: 显式加载内部 execution history
@@ -286,3 +288,48 @@ loader MUST 校验 resource ref 的 owner session/thread、assembly、activation
 - **WHEN** include 显式请求 `internal` 且目标 thread 存在已持久 internal admission
 - **THEN** loader 从该 admission 绑定的 execution 与 committed item 坐标返回独立 `internal_executions[]`；runtime notice 的 history projection 只使用安全 `display_part`，不得返回私有 prompt 或 branch result；默认 Web 只展示安全固定文案和标签，不渲染来源 ID。模型 prompt、控制 ID 和 source branch 正文不作为展示内容
 - **AND** 输出不会被并入 source completed Turn，也不会增加任何 Turn 的 item count 或 elapsed 统计
+
+#### Scenario: 分支切换不吸收其它分支的内部记录
+
+- **WHEN** 两个分支分别有 internal execution，随后读取一个选定视图或执行 rewind/fork
+- **THEN** 只返回该视图明确登记或继承的 display-only 成员；Provider 不因全局物理序号补入另一分支的 pending prompt，目标 internal dispatch 仍消费自己的 admission 输入
+
+### Requirement: 同一历史游标有界推进 Turn 与内部 execution
+
+系统 SHALL 在现有 history API 使用唯一 v2 opaque cursor，同时保存 Turn stream 的 exclusive `logical_turn_ordinal` 和 internal stream 的 exclusive canonical `item_sequence`。internal stream 按当前视图中显式可见、属于具有唯一 display notice 的 internal admission 的 canonical notice/response record 分页，单页最多 256 条 canonical record；初始 seed/reference admission 没有 notice 时不产生展示项。视图成员关系必须由持久 owner 明确登记，不得从物理邻接、时间或 metadata 推断。
+
+v2 token MUST 绑定 `session_id`、`thread_id`、`checkpoint_ns`、`rollout_id`、`projection_epoch`、`view_id`、`history_view_revision`、首次同一 snapshot 的 canonical `item_sequence` 与 Turn ordinal 读上界、固定 `direction`、递增 `stage`、排序规范化的有效 include 集合、初始查询模式，以及 around 初始 `anchor_turn_id` 与 before/after window；同时保存可空的 `turn_ordinal`、`item_sequence`。continuation 延续初始查询模式与窗口，不能替换过滤条件、anchor 或窗口；请求省略这些参数时使用 token 冻结值，显式提供且不一致时返回 invalid cursor。未请求的 lane 不查询且明确由冻结 include 标为禁用；已启用 lane 的 anchor 为 NULL 只表示该方向真实耗尽，后续不得从头再读，也不能改 include 复活。两路必须在同一个 `RolloutReadSnapshot` 和 resolved view 中进行有界 keyset 查询；不得全量读取后截断。旧开发期 v1 cursor 直接以 invalid cursor 拒绝，不保留兼容解码。owner/direction 不符返回 invalid cursor，epoch/view/history_view_revision 漂移返回 stale cursor。首次读上界必须从真实 snapshot 与选定 view 的显式成员取得，不能以 message sequence 冒充 item 坐标；后续各 lane 查询不得超过这些上界，上界只定位不推 membership。不新建第二历史快照表，也不以活动 view ID 未变为由混入后续追加或终态修订。
+
+每页仅投影本页命中的 response records，并从同一 snapshot 批量关联其 execution admission 和唯一安全 display notice；同一 execution 可跨页出现。Web MUST 按 `execution_id` 合并同一 entry，按稳定 canonical item/part identity 去重并按 canonical 顺序展示，不按正文去重；重复关联的 display notice 不得重影。Turn 预算与统计保持原语义；`has_more` 由两路实际剩余记录的并集决定，两路耗尽时游标为空。
+
+`around` SHALL 保持现有 `anchor_turn_id` 请求；storage 从选中 Turn window 的显式成员解析 canonical 边界，只把边界作为查询坐标，不作为 membership 判据。窗口内超过 256 条 internal record 时，后续 cursor 继续剩余 record，Turn anchor 保持已返回窗口的边界；空 internal 窗口也必须检查窗口两侧是否尚有可读记录。首尾没有 Turn 的 internal record 和零 Turn view 必须可达。
+
+#### Scenario: 零 Turn 的内部历史仍可续读
+
+- **WHEN** 目标视图没有用户 Turn，但存在超过 256 条可见 internal canonical record
+- **THEN** head/tail 返回有界 internal-only 页面和相应 continuation cursor，逐页遍历全部记录而不合成 Turn、不重复耗尽的 Turn stream
+
+#### Scenario: 单次内部 execution 的输出跨页
+
+- **WHEN** 一个 internal execution 的 canonical notice、assistant、reasoning 或 tool records 超过单页预算
+- **THEN** 同一 item_sequence lane 继续其后续 records，每页关联同一 admission/display；前端合并后每个真实 item/part 只出现一次，不静默截断输出、不引入第二 API 或 execution 专用分页 phase
+
+#### Scenario: around 窗口的密集内部记录可继续
+
+- **WHEN** anchor Turn 两侧窗口内存在超过 256 条 internal record，或窗口外仍有无 Turn 的 notice
+- **THEN** before/after composite cursor 保留真实 continuation；Turn 与 internal anchors 分别推进，不重返已加载 Turn、不把截断窗口标为耗尽
+
+#### Scenario: 游标不能跨 owner 或视图复用
+
+- **WHEN** cursor 被用于其它 thread、namespace、方向，或原视图/epoch 已变化
+- **THEN** loader 返回对应 invalid/stale cursor 错误，不混入另一 owner 或新视图的记录
+
+#### Scenario: continuation 保留原 include 与查询窗口
+
+- **WHEN** tail 或 around 返回 cursor 后，调用方省略 include 继续读，或尝试更换 include/around anchor/window
+- **THEN** 省略时沿用 token 冻结条件，不因 continuation 方向改变而套用另一套默认；显式不一致时拒绝，不复活已禁用或耗尽 lane
+
+#### Scenario: 活动视图原位修改使旧 cursor 失效
+
+- **WHEN** 首页返回后，在同一 view/epoch 追加 item、更新 execution 终态或进行会改变 history_view_revision 的控制操作
+- **THEN** continuation 以 stale cursor 明确拒绝，不能把新 revision 与原页混合；未变化时从首次 snapshot 冻结上界内续读
