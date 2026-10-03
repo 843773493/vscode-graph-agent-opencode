@@ -188,6 +188,8 @@ class UserAccessService:
     def create_user(self, *, display_name: str, user_id: str | None = None) -> UserRecord:
         normalized_name = self._validate_display_name(display_name)
         normalized_id = self._validate_user_id(user_id) if user_id else self._new_user_id()
+        if normalized_id == "current":
+            raise ValueError("用户 ID current 是当前访问路由的保留标识")
         created_at = _timestamp(_now())
         connection = self._connection()
         try:

@@ -195,36 +195,6 @@ async def create_gateway_user(
     )
 
 
-@router.delete("/api/gateway/users/{user_id}")
-async def delete_gateway_user(
-    user_id: str,
-    _: str = Depends(verify_gateway_token),
-    request_id: str = Depends(get_request_id),
-    service: UserAccessService = Depends(get_user_access_service),
-    profiles: UserProfileStore = Depends(get_user_profile_store),
-):
-    try:
-        service.delete_user(user_id)
-    except UserLeaseOccupiedError as error:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "user_lease_occupied",
-                "client_label": error.summary.client_label,
-                "expires_at": error.summary.expires_at,
-            },
-        ) from error
-    except (KeyError, ValueError) as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    try:
-        profiles.delete_user(user_id=user_id)
-    except OSError as error:
-        raise HTTPException(
-            status_code=500, detail=f"用户 profile 删除失败: {error}"
-        ) from error
-    return APIResponse(data={"user_id": user_id}, request_id=request_id)
-
-
 @router.post(
     "/api/gateway/users/{user_id}/access",
     response_model=APIResponse[GatewayUserAccessDTO],
@@ -373,6 +343,36 @@ async def release_gateway_user(
     service.release(context)
     response.delete_cookie(key=USER_ACCESS_COOKIE_NAME, path="/")
     return APIResponse(data={"released": True}, request_id=request_id)
+
+
+@router.delete("/api/gateway/users/{user_id}")
+async def delete_gateway_user(
+    user_id: str,
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+    service: UserAccessService = Depends(get_user_access_service),
+    profiles: UserProfileStore = Depends(get_user_profile_store),
+):
+    try:
+        service.delete_user(user_id)
+    except UserLeaseOccupiedError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "user_lease_occupied",
+                "client_label": error.summary.client_label,
+                "expires_at": error.summary.expires_at,
+            },
+        ) from error
+    except (KeyError, ValueError) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    try:
+        profiles.delete_user(user_id=user_id)
+    except OSError as error:
+        raise HTTPException(
+            status_code=500, detail=f"用户 profile 删除失败: {error}"
+        ) from error
+    return APIResponse(data={"user_id": user_id}, request_id=request_id)
 
 
 @router.get("/api/gateway/users/current/view-state")

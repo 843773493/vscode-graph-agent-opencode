@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -31,6 +32,26 @@ def test_user_lease_blocks_second_client_and_takeover_invalidates_old_session(tm
         assert first.invalidated.is_set()
         assert service.resolve_cookie(first.access_session_id) is None
         assert service.resolve_cookie(second.access_session_id) is not None
+    finally:
+        state.close()
+
+
+def test_current_is_reserved_only_for_new_user_creation(tmp_path):
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    service = UserAccessService(state=state)
+    try:
+        with pytest.raises(ValueError, match="用户 ID current 是当前访问路由的保留标识"):
+            service.create_user(display_name="保留 ID", user_id="current")
+
+        assert service.list_users() == ()
+        connection = state.connection()
+        try:
+            assert connection.execute("SELECT COUNT(*) FROM user_account").fetchone()[0] == 0
+            assert connection.execute("SELECT COUNT(*) FROM user_access_lease").fetchone()[0] == 0
+        finally:
+            connection.close()
+
+        assert service.create_user(display_name="大小写不同", user_id="Current").user_id == "Current"
     finally:
         state.close()
 
