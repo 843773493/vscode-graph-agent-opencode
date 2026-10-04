@@ -88,7 +88,7 @@
 |---|---|---|
 | `app/core/background_message_bus.py:18 _messages` | 键 `(session_id, agent_id)` 永不回收 | 无界，但它是「供 collect 拉取的 backlog 缓冲」，任何有界化都会改变「稀有会话仍可拉到历史 backlog」的语义，当前按关闭生命周期回收；B01 删除失败后的晚准入仍需 E01/W01 的 catalog guard 闭合后独审，不能单独提交 |
 | `app/services/orchestration/thread_residency.py ThreadResidencyTracker._states` | 随 (session,thread) 无界 | 唯一淘汰路径 `sweep()` 全仓无生产调用点；朴素 LRU 会因 generation fence 复用误纳迟到 callback，需 owner 配合 |
-| `app/services/infrastructure/trace_event_store.py _event_ids` 的自动 `evt_*` 条目 | 单流有界但自动条目纯冗余 | 旧报告候选，当前源码已无 `_event_ids`；A13 正核历史与真实生产证据，不能据旧文本重复修复 |
+| `app/services/infrastructure/trace_event_store.py _event_ids` 的自动 `evt_*` 条目 | 旧报告候选 | A13 已核验当前 Store/writer 使用调用方 Event ID，源码已无该侧车；不重开修复，证据见实时台账引用的 residency/Trace owner 审查 |
 
 ---
 
@@ -132,7 +132,7 @@
 4. **SessionThread 未成为统一 owner**（`ContextRef.session_id` 无 `thread_id`，OpenSpec 第 8 节要求 `(session_id, thread_id)` 定位）。
 5. **前端会话目录 outbox 尚未接线**（`add-itemized-rollout-context` §8.1-H / §10.8 F4，接线门控 §10.1）：`sessionCatalogProjection.ts`(371) / `sessionCatalogOutboxIdbFake.ts`(138) / `sessionCatalogOutboxStore.ts`(221) 生产零调用，但**属在途接线目标，禁止当死码删除**。
 6. **配置来源轴与公共地址字段已完成独立切片**：用户确定 layer 表示逻辑来源，读侧 `sqlite` → `runtime_override`，precedence 不变，active/pending snapshot 从来源清单分开；`f42b6f77` 已实施验收。公共配置字段 `path/schema_path` → nullable `vrn/schema_vrn` 由 `69d77eea` 完成，R11 独审及 46+10+73+2 项关联验证通过；其它持久化 VRN 接线仍须完成。
-7. **uuidv7 change** 的 `tasks.md:107` 前缀数 33 待独立复核；`add-itemized` `tasks.md:174` 迁移测试未收敛。
+7. **uuidv7 change** 的前缀数已实核为 33 个、33 个唯一值；自然创建、真实时钟回拨及路径预算已集成验收，49/49 任务完成。关联 SessionThread 与端到端迁移验收仍按 `add-itemized` 第 8 节单独推进，不能由 UUID 验收代替；证据见 `coordinator/artifacts/u07-main-validation.json` 与实时台账。
 
 ---
 
