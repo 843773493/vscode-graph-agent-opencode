@@ -90,6 +90,8 @@ git merge-base --is-ancestor <提交前HEAD> HEAD
 git merge-base --is-ancestor <本笔提交hash> HEAD
 ```
 
+恢复后的第一条 Git 命令同样受索引隔离约束；`--git-dir/--work-tree` 不隔离 index。已经重复误操作的实现者改为只编辑指定 owned 源码，Git 冻结、导出和运行检查由主代理承担，再以真实交付核效果。该任务边界没有工具沙箱保证。恢复/集成窗口前主代理保存共享索引及 `ls-files --stage` 清单到分配的产物根；发现 hash 改变先保现场，不凭状态文字或陈旧摘要假称精确恢复。
+
 每个 shell 或 subprocess 命令单元在环境中固定绝对 `GIT_INDEX_FILE`，不能仅给第一条命令加前缀后让后续命令回落默认索引。暂存只含本次精确路径，提交不带 pathspec；禁用 `git add -A/.`、`--amend`、共享索引写入和共享历史 reset/rebase。提交窗口内 HEAD 变化则核对并重建任务索引。陈旧独立索引也会覆盖并发提交，防线脚本只做事后核验，不能替代串行集成；发现吞并时取证并用新提交前向恢复。
 
 ## 独立核验与收口

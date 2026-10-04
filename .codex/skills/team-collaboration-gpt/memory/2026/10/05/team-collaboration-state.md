@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-两个团队共用、主代理独占维护。恢复/派单/集成/报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-05 00:29（北京时间）。goal **active、无预算上限**，交接及七个 change 的必要实施、独审、验证、清理和技能实测未完成。
+两个团队共用、主代理独占维护。恢复/派单/集成/报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-05 01:06（北京时间）。goal **active、无预算上限**，交接及七个 change 的必要实施、独审、验证、清理和技能实测未完成。
 
 ## 授权与路径
 
@@ -18,11 +18,11 @@
 
 ## 主树与验收事实
 
-主HEAD **`1f80c6d49086212b9e45716eed9269fef4ef77fe`**（技能/台账文档）；主源码 **`68b99261022f85aff7c4dc66811c2b4ebb8c73fc`**，T05a owner三path已串行集成；40原绿复用，真正generation=0 snapshot与29:59 registered两case复验2pass3.55s、Ruff0、独审通过。guard/祖先/defaultindex/未知fork全0，证据`coordinator/artifacts/t05a-main-integration/attempt-2/result.json`。文档1f80已收闭包遗漏、重复断言误改和整树复制；本文与SKILL当前由主继续维护。生产T05b未完成，不勾8.14。
+主HEAD **`4ea674097a4199ff78b92ae52983c09b5b170d19`**（技能/台账文档）；主源码 **`68b99261022f85aff7c4dc66811c2b4ebb8c73fc`**，T05a owner三path已串行集成；40原绿复用，真正generation=0 snapshot与29:59 registered两case复验2pass3.55s、Ruff0、独审通过。guard/祖先/defaultindex/未知fork全0，证据`coordinator/artifacts/t05a-main-integration/attempt-2/result.json`。文档1f80已收闭包遗漏、重复断言误改和整树复制；本文与SKILL当前由主继续维护。生产T05b未完成，不勾8.14。
 
 上一主源码 **`7c39f2d10c7f6a97b4ef50dd6fe7b7e8c0e6a732`** = O02a完整24paths，主28queue+2lifespan、R43及追加test-cache隔离独审通过，证据`coordinator/artifacts/o02a-main-integration/commit-result.json`。此前O02b/route、L01、M01/M02、UUID、配置来源/地址等已集成绿复用；历史关闭事实见Git与原报告，不重新全矩阵。
 
-主树唯一未知源码diff：`app/services/infrastructure/rollout_context/checkpoint/boundary/fork_boundary.py`，blob **`928f17eed7f50d14f101eee67e8e9ecb9894b0d1`**，保、不覆盖。默认 `.git/index`极陈旧未动，SHA256 **`53bff61fe3f4c69658bd178ce4e59eb441b654a0764ed0e211f0a14f34f71954`**，裸status不能判断删除/变化。
+主树唯一未知源码diff：`app/services/infrastructure/rollout_context/checkpoint/boundary/fork_boundary.py`，blob **`928f17eed7f50d14f101eee67e8e9ecb9894b0d1`**，保、不覆盖。默认 index 于17:33 UTC被WVL裸read-tree清空；主按历史tree重建，详见本段事故记录，不能用裸status判断代码丢失。
 
 交接 [bug hunt](../../../../../../../docs/handoff/20261003-060700-bug-hunt-and-redundancy-handoff.md)。实际OpenSpec勾选仍 itemized52/87、uuid49/49、unified5/40、sessionVRN20/35、multiworkspace5/34、context21/57、persistent2/21；raw `coordinator/artifacts/current-openspec-progress/`。不因部分gate/候选可合而勾大任务。ThreadRuntime/delegate/activation/P05及真实产品验收仍必要。
 
@@ -132,3 +132,24 @@ delegate发布前准备复用唯一Session SQLite ledger与childpublication同�
 服务default/Drive ready、前端8027初始化三API200/request_id一致为历史。恢复用 [migration-state.json](../../../../../../../out/tests/temp/2026/10/03/160552-workspace-migration/coordinator/artifacts/migration-state.json) 原环境：BOXTEAM_PROJECT_ROOT旧入口、BOXTEAM_HOME旧入口/out/development-runtime/boxteam-home、BOXTEAM_DEV_PORT_OFFSET=16；cwd数据盘。先dev:status，不另一unit/另起整组。
 
 下一步：T05a已集成、U03bootstrap16case/build/独审绿、lookup6test/独审绿仅中央候选；先收MJS/body新独审及WVL完整source+5shared+targetseam固定包→strict/真实caller/增量独审→仅受影响失败与新入口验→先串行主集成可独立通过owner，再E01A/T05b/delegate/activation/P05；最终组合协议/OpenAPI、OpenSpec、唯一WebE2E/真实浏览器、产物清理。未全部完成保持goal active，不只改文档收工。已关闭细节在原报告及Git历史（19a版state含完整事故链），不每次恢复重读旧调查。
+
+## 2026-10-05 当前接续增量
+
+- 主已采纳用户“分工只是建议”：继续比较相近闭包的实际重建、入口遗漏、等待、返工及主补救量；本轮producer先固定、consumer独立nullable迁移、T05b图生命周期另推进，仍是局部试验，不能称最优。
+- Body port ac713→53b6ea增量独审无finding，真实freeze入口5pass2.20s；coordinator/artifacts/resource-body-review/port-forward.md。作者原behavior_reviewer/artifacts/resource-activation-body-owner/pytest.log现已读，确为ROOT live旧DetailStore签名3fail1pass，不归固定候选绿，未见首失败被覆盖。
+- Fork provider作者429保源；主接其既有三path forward，dd10c5→ec6a2bda34a4e3442329f3c0b3f9c0a7fd60a13b strict/blob/hash/AST/Ruff0，逐preimage同步E01WT。修normal唯一main/pathbudget、fork唯一main rollout与purpose/metadata kind/source一致性；11原失败+6新增拒绝+fork结构共18pass3.76s、exit0，不复跑307旧绿。coordinator/artifacts/fork-provider-forward-{fixed,runtime}/attempt-1/。旧v5开发schema不加迁移；独审原P1对此已按用户授权裁定非阻塞。purpose实际漏洞采纳，forward独审待收；committed journal proof/retention/recovery仍consumer合流硬门。
+- 最新中央a19c2964c067b899783562cde6e963679e2ca5d0包含provider、E01A producer/consumer与Terminal首16path，未主源码集成。coordinator/artifacts/e01a-producer-central/attempt-1/result.json。
+- E01A producer97b→a811999358dd13962a7f7bf2426ecefeae121d28 22paths严格重建/blob/hash/AST0，作者snapshot逐path相符、候选外diff0。39/11/1/2定向绿仅工具转录、raw缺失如实登记，不补跑造日志。原Protocol缺reserve/dispatch与pending nullable wire projection由原owner窄forward，internaldurable caller另交。无.git快照不适配verify工具时曾拟再建WT，已停止/移除空WT，主按对象核验继续，不整树重建。
+- Consumer首17path patch仅numstat/lint绿，主cached/check/whitespace=error因3处EOF空白拒收，原作者修owned源码再标准导出forward，并补真实run-step caller/tests闭包；coordinator/artifacts/e01a-consumer-central/attempt-1/。私有index未隔离live的MM又让producer恢复时请求共享编辑，主纠正到已存snapshot/对象，ROOT未因此改动。
+- 新thread_graph_runtime_owner显式gpt-6-luna/max，只owned/object。T05b沿唯一ThreadResidencyTracker扩admission+generation_key、lazybuild/reuse/close，factory/tool/middleware按真实invocation拆；Runner/AgentExecutionService/main/container由各owner后forward合。GraphBinding先创建事务固定selector、准入strictresolve、不compile补写，main创建写点主合；新旧runtime generation不重用。产物coordinator/artifacts/t05b-runtime-owner/，未运行完整生产验收。
+- WVL继续a952固定preimage、不要拿ROOTHEAD代current，不以DB2机械blob一致覆候选；最新SessionService provider facade由主符号合。P05 Terminal首创建闭包14JS单测作者绿/static0待fixed包，Python真实验待E01WT。activation生产最小接线盘点已交coordinator/artifacts/activation-production-wiring/review-plan.md：runtime/store/schema/key、唯一publishedregistry、execution/modelcall冻结与assembly原子bind、恢复仍缺，未勾9.3。
+
+## 2026-10-05 01:55 接续事实
+
+- WVL恢复首条裸`git --git-dir=.git --work-tree=. read-tree --empty`于2026-10-04 17:33:41 UTC清空共享index（65bytes）。HEAD与未知fork源码保留。无原SHA精确备份；主将XY/rename完整展开，867暂存路径状态与6个历史commit匹配（3266entries），按`cbc15fc3/cbf81075`共有tree `39f1bec28354dd74efeffc94f4ad8d6eabd2c8fe`重建，安装SHA `606c1fd3632b8ae2bb55caa24f05421e1e4c08ac96d91a2f9ac98a77f49d80ca`。匹配历史候选在handoff/uuid任务两文档blob有差异，原stage inventory缺失，不能声称字节/全部blob精确恢复；版本仍在objects，事故前status、空index、重建index/inventory均保。首次安装末尾目录fsync参数TypeError，安装已成功；修正fsync与清单核验通过。证据`coordinator/artifacts/shared-index-incident/attempt-1/recovery-result.json`。不是HEAD重建，无live源码/ref写。
+- 调整实际执行分工：WVL作者后续只读/改精确owned源码；主承担Git冻结/导出/运行验证，不能只重复env提醒。ROOT live不归它，实际权限无sandbox保证，后续效果待验。主下一窗口保索引与stage inventory。
+- E01WT真实七filepytest 65pass/11fail、20.14s/exit1，真实repo Ruff8个I001，raw分别在`coordinator/artifacts/e01a-combined-runtime/attempt-1/`与`e01a-runtime-sync/attempt-1/`。65旧绿按依赖复用，失败归本地providerfixture、interrupt真实admission/thread与stream真实flush顺序。
+- Producer40b已合a19；空reserved Job ID会先副作用后失败的P2由原作者交40b→`a184697338e2d3687517675d27368f91b51994f9`7path，16pass作者raw保，主strict/真实配置/新增差异独审待验。consumer9c3e→`e409d0bae54b58c7b8ba911deb84a2cab71d5d92`imports与e409→`de94dfd5ad718433d3783e881f83981b04af5e88`真实fixture闭包分别固定；Runner setup取消窗口另forward在途，不能归fixture绿。
+- T05b已交27path patch/postimage/contract；GNUroundtrip/AST/Ruff作者静态，未runtime。唯一遗漏production main初始化归主，resolve API `resolve_graph_binding(owner_thread_id, store, registry)`，主strict/full-index与接线待验。
+- fork main路径按现resolver折叠Session根rollout，child仍threads/id；prepared materialization允许按被冻结source lineage提前真实target身份mapping，唯一journal capability写，不造Job/Turn喂普通aput，不在sourcegate释放后重读source；prepare私有、commitproof/retention后publishCAS，失败同journal回滚。作者继续完整source闭包，未验收。
+- Terminal批准本机trust：Node仅127.0.0.1、Backend唯一业务owner/lease，Gateway精确禁管理POST/DELETE旁路，保必要GET/WS与browser路径。auxiliary_proxy精确片段归原作者闭包，main/container/deps主合，不另认证/账本。agent恢复后误认同名自己是冲突owner、裸status误读仍重复；主重发字面路径并纠正，不称已解决。
