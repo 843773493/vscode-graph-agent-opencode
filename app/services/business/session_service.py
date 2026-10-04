@@ -21,6 +21,7 @@ from app.core.session_catalog_resolver import (
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.workspace_identity import (
     LEGACY_BACKEND_WORKSPACE_IDS,
     validate_workspace_id,
@@ -162,6 +163,21 @@ class SessionService:
                 f"session_id={session.session_id}, "
                 f"session_workspace_id={session.workspace_id}, "
                 f"backend_workspace_id={self._workspace_id}"
+            )
+
+    def assert_session_active(self, session_id: str) -> None:
+        """拒绝删除中的 owner 进入新业务准入，目录与清理读取仍可见。"""
+
+        node = self._path_resolver.get_node(session_id)
+        if node.kind != "session":
+            raise RuntimeError(
+                "Session 准入要求 catalog session 节点: "
+                f"session_id={session_id!r}, kind={node.kind!r}"
+            )
+        if node.state != "active":
+            raise SessionDeletionPendingError(
+                "session_deletion_pending: catalog owner 正在删除，"
+                f"拒绝新业务准入: session_id={session_id!r}, state={node.state!r}"
             )
 
     async def get(self, session_id: str) -> SessionDTO:

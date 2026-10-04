@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
+from app.abstractions.background_message_bus import BackgroundMessageKind
 from app.core.background_message_bus import (
     BackgroundMessageBus,
     emit_background_message,
 )
-from app.abstractions.background_message_bus import BackgroundMessageKind
 
 
 @pytest.fixture(autouse=True)
@@ -67,3 +67,36 @@ def test_emit_background_message_requires_explicit_identifiers():
 
     with pytest.raises(RuntimeError, match="agent_id 不能为空"):
         emit_background_message("missing agent", session_id="session_test")
+
+
+@pytest.mark.asyncio
+async def test_close_session_releases_all_agent_backlogs_and_preserves_other_session():
+    service = BackgroundMessageBus()
+    for agent_id in ("agent-a", "agent-b"):
+        service.emit("deleted-session", agent_id, "已删除会话的消息")
+    retained = service.emit("retained-session", "agent-a", "保留会话的消息")
+
+    service.close_session("deleted-session")
+    service.close_session("deleted-session")
+
+    assert all(key[0] != "deleted-session" for key in service._messages)
+    for agent_id in ("agent-a", "agent-b"):
+        assert await service.list_messages("deleted-session", agent_id) == []
+    assert await service.list_messages("retained-session", "agent-a") == [retained]
+
+
+@pytest.mark.asyncio
+async def test_close_session_rejects_active_collector_without_dropping_backlog():
+    service = BackgroundMessageBus()
+    original = service.emit("session", "agent", "收集者仍需读取")
+    queue = await service.subscribe("session", "agent")
+
+    with pytest.raises(RuntimeError, match="后台消息收集尚未排空.*session.*agent"):
+        service.close_session("session")
+
+    assert await service.list_messages("session", "agent") == [original]
+    following = service.emit("session", "agent", "失败后保留订阅")
+    assert queue.get_nowait() == following
+    await service.unsubscribe("session", "agent", queue)
+    service.close_session("session")
+    assert service._messages == {}

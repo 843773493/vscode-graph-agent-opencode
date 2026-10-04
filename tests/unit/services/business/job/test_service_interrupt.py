@@ -18,8 +18,12 @@ class _DummyJobExecutor:
         return "ok"
 
 
-def create_job_service() -> JobService:
-    return JobService(job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor())
+def create_job_service(session_lifecycle_guard) -> JobService:
+    return JobService(
+        job_event_bus=JobEventBus(),
+        job_executor=_DummyJobExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
+    )
 
 
 class DummyTask:
@@ -36,8 +40,10 @@ class DummyTask:
 
 
 @pytest.mark.asyncio
-async def test_session_idle_operation_is_atomic_with_job_admission() -> None:
-    service = create_job_service()
+async def test_session_idle_operation_is_atomic_with_job_admission(
+    session_lifecycle_guard,
+) -> None:
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     session_id = "session_compaction_lock"
     operation_started = asyncio.Event()
     release_operation = asyncio.Event()
@@ -74,8 +80,10 @@ async def test_session_idle_operation_is_atomic_with_job_admission() -> None:
 
 
 @pytest.mark.asyncio
-async def test_multiple_session_storage_operation_rejects_any_active_session() -> None:
-    service = create_job_service()
+async def test_multiple_session_storage_operation_rejects_any_active_session(
+    session_lifecycle_guard,
+) -> None:
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     service._session_current_job["ses_active"] = "job_active"
     operation_called = False
 
@@ -93,8 +101,10 @@ async def test_multiple_session_storage_operation_rejects_any_active_session() -
 
 
 @pytest.mark.asyncio
-async def test_storage_move_rejects_message_preparation_window() -> None:
-    service = create_job_service()
+async def test_storage_move_rejects_message_preparation_window(
+    session_lifecycle_guard,
+) -> None:
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     preparation_started = asyncio.Event()
     release_preparation = asyncio.Event()
 
@@ -118,8 +128,10 @@ async def test_storage_move_rejects_message_preparation_window() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_tombstone_blocks_new_session_writes() -> None:
-    service = create_job_service()
+async def test_delete_tombstone_blocks_new_session_writes(
+    session_lifecycle_guard,
+) -> None:
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     delete_started = asyncio.Event()
     release_delete = asyncio.Event()
 
@@ -144,8 +156,10 @@ async def test_delete_tombstone_blocks_new_session_writes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_job_control_pause_cancels_running_task(monkeypatch):
-    service = create_job_service()
+async def test_job_control_pause_cancels_running_task(
+    monkeypatch, session_lifecycle_guard
+):
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     service._jobs = {}
 
     job = JobState(
@@ -171,7 +185,9 @@ async def test_job_control_pause_cancels_running_task(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_job_control_resume_waits_for_paused_task_to_finish() -> None:
+async def test_job_control_resume_waits_for_paused_task_to_finish(
+    session_lifecycle_guard,
+) -> None:
     started = asyncio.Event()
 
     class _BlockingJobExecutor:
@@ -183,6 +199,7 @@ async def test_job_control_resume_waits_for_paused_task_to_finish() -> None:
     service = JobService(
         job_event_bus=JobEventBus(),
         job_executor=_BlockingJobExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_pause_resume"
     job = JobState(
@@ -223,8 +240,10 @@ async def test_job_control_resume_waits_for_paused_task_to_finish() -> None:
 
 
 @pytest.mark.asyncio
-async def test_job_control_resume_restarts_completed_pause(monkeypatch):
-    service = create_job_service()
+async def test_job_control_resume_restarts_completed_pause(
+    monkeypatch, session_lifecycle_guard
+):
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     service._jobs = {}
 
     job = JobState(
@@ -258,7 +277,7 @@ async def test_job_control_resume_restarts_completed_pause(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_job_task_starts_in_fresh_context():
+async def test_job_task_starts_in_fresh_context(session_lifecycle_guard):
     inherited_value: contextvars.ContextVar[str | None] = contextvars.ContextVar(
         "inherited_value",
         default=None,
@@ -274,6 +293,7 @@ async def test_job_task_starts_in_fresh_context():
     service = JobService(
         job_event_bus=JobEventBus(),
         job_executor=_ContextRecordingJobExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     service._jobs = {}
     context_token = inherited_value.set("sender_context")
@@ -295,7 +315,9 @@ async def test_job_task_starts_in_fresh_context():
 
 
 @pytest.mark.asyncio
-async def test_cross_session_job_does_not_leak_langchain_events_to_sender():
+async def test_cross_session_job_does_not_leak_langchain_events_to_sender(
+    session_lifecycle_guard,
+):
     async def target_runnable_function(value: str) -> str:
         return value
 
@@ -316,6 +338,7 @@ async def test_cross_session_job_does_not_leak_langchain_events_to_sender():
     service = JobService(
         job_event_bus=JobEventBus(),
         job_executor=_TargetJobExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     service._jobs = {}
 
@@ -344,8 +367,10 @@ async def test_cross_session_job_does_not_leak_langchain_events_to_sender():
 
 
 @pytest.mark.asyncio
-async def test_job_control_cancel_requests_task_cancel(monkeypatch):
-    service = create_job_service()
+async def test_job_control_cancel_requests_task_cancel(
+    monkeypatch, session_lifecycle_guard
+):
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     service._jobs = {}
 
     task = DummyTask()
@@ -376,8 +401,10 @@ async def test_job_control_cancel_requests_task_cancel(monkeypatch):
     "action",
     [ControlAction.pause, ControlAction.resume, ControlAction.cancel],
 )
-async def test_job_control_rejects_terminal_job(action: ControlAction) -> None:
-    service = create_job_service()
+async def test_job_control_rejects_terminal_job(
+    action: ControlAction, session_lifecycle_guard
+) -> None:
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     job = JobState(
         job_id="job_terminal_control",
         session_id="session_test",
@@ -397,8 +424,10 @@ async def test_job_control_rejects_terminal_job(action: ControlAction) -> None:
 
 
 @pytest.mark.asyncio
-async def test_job_control_rejects_unimplemented_action() -> None:
-    service = create_job_service()
+async def test_job_control_rejects_unimplemented_action(
+    session_lifecycle_guard,
+) -> None:
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     job = JobState(
         job_id="job_unimplemented_control",
         session_id="session_test",
@@ -421,8 +450,10 @@ async def test_job_control_rejects_unimplemented_action() -> None:
 
 
 @pytest.mark.asyncio
-async def test_job_control_rejects_pause_for_interrupt_pending_job() -> None:
-    service = create_job_service()
+async def test_job_control_rejects_pause_for_interrupt_pending_job(
+    session_lifecycle_guard,
+) -> None:
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     job = JobState(
         job_id="job_interrupt_pending_pause",
         session_id="session_test",
@@ -445,8 +476,10 @@ async def test_job_control_rejects_pause_for_interrupt_pending_job() -> None:
 
 
 @pytest.mark.asyncio
-async def test_force_interrupt_skips_job_finished_after_blocker_snapshot(monkeypatch):
-    service = create_job_service()
+async def test_force_interrupt_skips_job_finished_after_blocker_snapshot(
+    monkeypatch, session_lifecycle_guard
+):
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     job = JobState(
         job_id="job_finished_after_snapshot",
         session_id="session_test",
@@ -477,8 +510,10 @@ async def test_force_interrupt_skips_job_finished_after_blocker_snapshot(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_job_control_cancel_queued_job_removes_it_from_queue(monkeypatch):
-    service = create_job_service()
+async def test_job_control_cancel_queued_job_removes_it_from_queue(
+    monkeypatch, session_lifecycle_guard
+):
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
 
     def fake_start_job_task(job):
         job.task = DummyTask()
@@ -509,8 +544,10 @@ async def test_job_control_cancel_queued_job_removes_it_from_queue(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_job_queues_same_session_until_previous_finishes(monkeypatch):
-    service = create_job_service()
+async def test_start_job_queues_same_session_until_previous_finishes(
+    monkeypatch, session_lifecycle_guard
+):
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     service._jobs = {}
     service._session_current_job = {}
     started_jobs: list[str] = []
@@ -584,8 +621,9 @@ async def test_start_job_queues_same_session_until_previous_finishes(monkeypatch
 @pytest.mark.asyncio
 async def test_boundary_notification_keeps_fifo_head_and_records_waiting_reason(
     monkeypatch,
+    session_lifecycle_guard,
 ):
-    service = create_job_service()
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     monkeypatch.setattr(
         service,
         "_start_job_task",
@@ -612,7 +650,9 @@ async def test_boundary_notification_keeps_fifo_head_and_records_waiting_reason(
         tool_result_available=True,
     )
 
-    request = next(item for item in snapshot.requests if item.message_id == "msg_queued")
+    request = next(
+        item for item in snapshot.requests if item.message_id == "msg_queued"
+    )
     assert request.status == "queued"
     assert request.waiting_reason is None
     assert service._pending_queue.ids(session_id) == (queued.job_id,)
@@ -621,9 +661,10 @@ async def test_boundary_notification_keeps_fifo_head_and_records_waiting_reason(
 @pytest.mark.asyncio
 async def test_interrupt_releases_after_turn_head_instead_of_stalling_fifo(
     monkeypatch,
+    session_lifecycle_guard,
 ):
     """用户中断当前 turn 后，after_turn 队首必须被投递，不能永久停留在队列中。"""
-    service = create_job_service()
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     started: list[str] = []
 
     def fake_start_job_task(job):
@@ -673,6 +714,7 @@ async def test_interrupt_releases_after_turn_head_instead_of_stalling_fifo(
 @pytest.mark.asyncio
 async def test_direct_cancel_releases_after_turn_head_when_boundary_stays_idle(
     monkeypatch,
+    session_lifecycle_guard,
 ):
     """直接取消（未经过 notify_boundary、边界仍是 idle）也必须交还 Session。
 
@@ -680,7 +722,7 @@ async def test_direct_cancel_releases_after_turn_head_when_boundary_stays_idle(
     只有中断边界路径才能放行 after_turn 队首；直接取消会让该会话的活动槽被腾空
     而队列队首永久滞留 pending。
     """
-    service = create_job_service()
+    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     started: list[str] = []
 
     def fake_start_job_task(job):

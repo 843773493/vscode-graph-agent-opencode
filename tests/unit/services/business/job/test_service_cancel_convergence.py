@@ -37,14 +37,20 @@ async def _wait_slot_cleared(service: JobService, session_id: str) -> None:
     raise AssertionError(f"会话活动槽未释放: session_id={session_id}")
 
 
-def _make_service() -> tuple[JobService, _InstantExecutor]:
+def _make_service(session_lifecycle_guard) -> tuple[JobService, _InstantExecutor]:
     executor = _InstantExecutor()
-    return JobService(job_event_bus=JobEventBus(), job_executor=executor), executor
+    return JobService(
+        job_event_bus=JobEventBus(),
+        job_executor=executor,
+        session_lifecycle_guard=session_lifecycle_guard,
+    ), executor
 
 
 @pytest.mark.asyncio
-async def test_cancel_before_task_body_runs_converges_to_cancelled() -> None:
-    service, executor = _make_service()
+async def test_cancel_before_task_body_runs_converges_to_cancelled(
+    session_lifecycle_guard,
+) -> None:
+    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard)
     session_id = "session_cancel_before_start"
     dispatch = await service.start_job(
         session_id,
@@ -66,8 +72,10 @@ async def test_cancel_before_task_body_runs_converges_to_cancelled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancel_before_task_body_releases_fifo_head() -> None:
-    service, executor = _make_service()
+async def test_cancel_before_task_body_releases_fifo_head(
+    session_lifecycle_guard,
+) -> None:
+    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard)
     session_id = "session_cancel_before_start_fifo"
     first = await service.start_job(
         session_id,
@@ -96,15 +104,20 @@ async def test_cancel_before_task_body_releases_fifo_head() -> None:
 
 
 @pytest.mark.asyncio
-async def test_concurrent_cancel_before_start_never_stalls_in_cancelling() -> None:
+async def test_concurrent_cancel_before_start_never_stalls_in_cancelling(
+    session_lifecycle_guard,
+) -> None:
     """100 次并发「派发后立即取消」全部收敛，不允许残留 cancelling。"""
 
     for index in range(100):
-        await _run_concurrent_cancel_case(index)
+        await _run_concurrent_cancel_case(
+            index,
+            session_lifecycle_guard=session_lifecycle_guard,
+        )
 
 
-async def _run_concurrent_cancel_case(index: int) -> None:
-    service, executor = _make_service()
+async def _run_concurrent_cancel_case(index: int, session_lifecycle_guard) -> None:
+    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard)
     session_id = f"session_cancel_race_{index}"
     started = asyncio.Event()
     holder: list[str] = []
@@ -136,10 +149,12 @@ async def _run_concurrent_cancel_case(index: int) -> None:
 
 
 @pytest.mark.asyncio
-async def test_pause_before_task_body_runs_resumes_cleanly() -> None:
+async def test_pause_before_task_body_runs_resumes_cleanly(
+    session_lifecycle_guard,
+) -> None:
     """同一未启动任务的 pause 变体：任务已死但语义未终结，resume 后须继续。"""
 
-    service, executor = _make_service()
+    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard)
     session_id = "session_pause_before_start"
     dispatch = await service.start_job(
         session_id,
@@ -168,7 +183,9 @@ async def test_pause_before_task_body_runs_resumes_cleanly() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancel_after_task_body_started_keeps_task_path_terminal() -> None:
+async def test_cancel_after_task_body_started_keeps_task_path_terminal(
+    session_lifecycle_guard,
+) -> None:
     """任务体已进入执行时，权威写入点仍是唯一终态写入者。"""
 
     entered = asyncio.Event()
@@ -184,7 +201,11 @@ async def test_cancel_after_task_body_started_keeps_task_path_terminal() -> None
             await asyncio.Future()
 
     executor = _BlockingExecutor()
-    service = JobService(job_event_bus=JobEventBus(), job_executor=executor)
+    service = JobService(
+        job_event_bus=JobEventBus(),
+        job_executor=executor,
+        session_lifecycle_guard=session_lifecycle_guard,
+    )
     session_id = "session_cancel_after_start"
     dispatch = await service.start_job(
         session_id,
@@ -231,7 +252,9 @@ class _BlockFirstThenFast:
 
 
 @pytest.mark.asyncio
-async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo() -> None:
+async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
+    session_lifecycle_guard,
+) -> None:
     """P-1 回归：暂停后等执行任务彻底结束再取消，槽必须释放且 FIFO 队首被唤醒。
 
     暂停时任务体的 finally 已跑完并调用过调度（当时是 paused，被早退跳过），
@@ -240,7 +263,11 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo() -> N
     """
 
     executor = _BlockFirstThenFast()
-    service = JobService(job_event_bus=JobEventBus(), job_executor=executor)
+    service = JobService(
+        job_event_bus=JobEventBus(),
+        job_executor=executor,
+        session_lifecycle_guard=session_lifecycle_guard,
+    )
     session_id = "session_paused_cancel_fifo"
     first = await service.start_job(
         session_id,
@@ -286,11 +313,15 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo() -> N
 
 
 @pytest.mark.asyncio
-async def test_force_interrupt_paused_releases_slot() -> None:
+async def test_force_interrupt_paused_releases_slot(session_lifecycle_guard) -> None:
     """P2 变体：运行期排空作用于 paused Job 时也必须释放活动槽。"""
 
     executor = _BlockFirstThenFast()
-    service = JobService(job_event_bus=JobEventBus(), job_executor=executor)
+    service = JobService(
+        job_event_bus=JobEventBus(),
+        job_executor=executor,
+        session_lifecycle_guard=session_lifecycle_guard,
+    )
     session_id = "session_force_interrupt_paused"
     first = await service.start_job(
         session_id,

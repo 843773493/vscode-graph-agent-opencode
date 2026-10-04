@@ -558,6 +558,7 @@ def build_app_container(
         job_event_bus=job_event_bus,
         job_executor=job_executor,
         pending_request_store=pending_request_store,
+        session_lifecycle_guard=session_service.assert_session_active,
         job_timeout_seconds=config_service.get_agent_run_timeout_seconds(),
         job_timeout_seconds_provider=config_service.get_agent_run_timeout_seconds,
         terminal_status_writer=checkpointer,
@@ -704,6 +705,7 @@ def build_app_container(
         async def drain_session_resources(session_id: str) -> None:
             await node_debug_service.drain_session(session_id)
             await session_resource_service.cleanup_session(session_id)
+            background_message_bus.close_session(session_id)
             # 附件引用释放与 ingest/claim 定点收敛必须先于 fence CAS 与物理
             # 隔离：删除 owner 按 pin 阻断 canonical 使用、释放 reference 后
             # 才隔离 Session 节点，且不留下指向已删除 owner 的 reference。

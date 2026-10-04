@@ -113,6 +113,7 @@ class JobService:
         job_event_bus: JobEventBusProtocol,
         job_executor: JobExecutorProtocol,
         pending_request_store: PendingRequestStoreProtocol | None = None,
+        session_lifecycle_guard: Callable[[str], None],
         job_timeout_seconds: float = 600.0,
         job_timeout_seconds_provider: Callable[[], float] | None = None,
         job_startup_timeout_seconds: float = 30.0,
@@ -150,6 +151,7 @@ class JobService:
         self._deleting_sessions: set[str] = set()
         self._accepting_jobs = True
         self._job_executor = job_executor
+        self._session_lifecycle_guard = session_lifecycle_guard
         self._job_timeout_seconds = job_timeout_seconds
         self._job_timeout_seconds_provider = job_timeout_seconds_provider
         self._job_startup_timeout_seconds = job_startup_timeout_seconds
@@ -427,6 +429,7 @@ class JobService:
         """登记消息、附件和 Job 创建前的会话存储写入窗口。"""
         async with self._dispatch_lock:
             self.assert_accepting_jobs()
+            self._session_lifecycle_guard(session_id)
             if session_id in self._deleting_sessions:
                 raise RuntimeError(f"会话正在删除，拒绝写入新消息: {session_id}")
             self._session_preparations[session_id] = (
@@ -672,6 +675,7 @@ class JobService:
     ) -> JobDispatchSnapshotDTO:
         self.assert_accepting_jobs()
         async with self._dispatch_lock:
+            self._session_lifecycle_guard(session_id)
             if session_id in self._deleting_sessions:
                 raise RuntimeError(f"会话正在删除，拒绝创建 Job: {session_id}")
         import logging

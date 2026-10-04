@@ -50,10 +50,11 @@ def _job(job_id: str, session_id: str, status: JobStatus) -> JobState:
 
 
 @pytest.fixture()
-def service() -> JobService:
+def service(session_lifecycle_guard) -> JobService:
     return JobService(
         job_event_bus=_RecordingBus(),
         job_executor=_NeverFinishExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
 
 

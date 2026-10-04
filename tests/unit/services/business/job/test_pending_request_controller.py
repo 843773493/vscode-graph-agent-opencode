@@ -18,10 +18,11 @@ class _DummyTask:
         return None
 
 
-def _service(monkeypatch: pytest.MonkeyPatch) -> JobService:
+def _service(monkeypatch: pytest.MonkeyPatch, session_lifecycle_guard) -> JobService:
     service = JobService(
         job_event_bus=JobEventBus(),
         job_executor=_DummyJobExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     monkeypatch.setattr(
         service,
@@ -32,8 +33,10 @@ def _service(monkeypatch: pytest.MonkeyPatch) -> JobService:
 
 
 @pytest.mark.asyncio
-async def test_pending_controls_edit_policy_remove_without_reordering(monkeypatch):
-    service = _service(monkeypatch)
+async def test_pending_controls_edit_policy_remove_without_reordering(
+    monkeypatch, session_lifecycle_guard
+):
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
     session_id = "session_pending_controls"
     await service.start_job(
         session_id,
@@ -72,9 +75,9 @@ async def test_pending_controls_edit_policy_remove_without_reordering(monkeypatc
         content="tail edited",
         attachments=[],
     )
-    assert next(item for item in updated.requests if item.message_id == "msg_tail").content == (
-        "tail edited"
-    )
+    assert next(
+        item for item in updated.requests if item.message_id == "msg_tail"
+    ).content == ("tail edited")
 
     changed = await service.update_pending_policy(
         session_id,
@@ -82,7 +85,9 @@ async def test_pending_controls_edit_policy_remove_without_reordering(monkeypatc
         delivery_policy="after_tool_result",
         expected_snapshot_version=updated.snapshot_version,
     )
-    changed_tail = next(item for item in changed.requests if item.message_id == "msg_tail")
+    changed_tail = next(
+        item for item in changed.requests if item.message_id == "msg_tail"
+    )
     assert changed_tail.delivery_policy == "after_tool_result"
     assert [item.message_id for item in changed.requests] == [
         "msg_queued",
@@ -99,8 +104,10 @@ async def test_pending_controls_edit_policy_remove_without_reordering(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_pending_request_uses_safe_display_content(monkeypatch):
-    service = _service(monkeypatch)
+async def test_pending_request_uses_safe_display_content(
+    monkeypatch, session_lifecycle_guard
+):
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
     session_id = "session_internal_display"
     await service.start_job(
         session_id,
@@ -128,15 +135,17 @@ async def test_pending_request_uses_safe_display_content(monkeypatch):
 
     snapshot = await service.list_pending(session_id)
 
-    internal = next(item for item in snapshot.requests if item.message_id == "msg_internal")
+    internal = next(
+        item for item in snapshot.requests if item.message_id == "msg_internal"
+    )
     assert internal.content == "生成分支已结束，主会话正在处理返回结果。"
     assert "generated_session_result" not in internal.content
     assert "secret_route" not in internal.message_metadata
 
 
 @pytest.mark.asyncio
-async def test_stale_policy_update_is_rejected(monkeypatch):
-    service = _service(monkeypatch)
+async def test_stale_policy_update_is_rejected(monkeypatch, session_lifecycle_guard):
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
     session_id = "session_stale_policy"
     await service.start_job(
         session_id,
@@ -161,7 +170,9 @@ async def test_stale_policy_update_is_rejected(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_promoted_pending_head_exposes_no_waiting_reason(monkeypatch):
+async def test_promoted_pending_head_exposes_no_waiting_reason(
+    monkeypatch, session_lifecycle_guard
+):
     """待处理 DTO 不得把「等待队首」暴露给已升为队首的条目。
 
     改前 ``_bump`` 用「已有理由 or 新理由」计算位置理由，写过的「等待队首」
@@ -169,7 +180,7 @@ async def test_promoted_pending_head_exposes_no_waiting_reason(monkeypatch):
     「等待队首」，前端 PendingQueueBar 会把它渲染成 hover 提示，而此时它恰恰
     就是可立即投递的队首。
     """
-    service = _service(monkeypatch)
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
     session_id = "session_promoted_head"
     await service.start_job(
         session_id,

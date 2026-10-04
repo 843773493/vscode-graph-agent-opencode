@@ -22,6 +22,22 @@ class BackgroundMessageBus:
     def _key(self, session_id: str, agent_id: str) -> tuple[str, str]:
         return session_id, agent_id
 
+    def close_session(self, session_id: str) -> None:
+        """生产者与收集任务排空后，释放该会话的全部消息缓存。"""
+        active_agents = sorted(
+            agent_id
+            for (owner_id, agent_id), queues in self._subscribers.items()
+            if owner_id == session_id and queues
+        )
+        if active_agents:
+            raise RuntimeError(
+                f"后台消息收集尚未排空: session_id={session_id!r}, "
+                f"agent_ids={active_agents!r}"
+            )
+        for key in tuple(self._messages):
+            if key[0] == session_id:
+                del self._messages[key]
+
     async def subscribe(self, session_id: str, agent_id: str) -> asyncio.Queue[BackgroundMessageDTO]:
         queue: asyncio.Queue[BackgroundMessageDTO] = asyncio.Queue(maxsize=100)
         key = self._key(session_id, agent_id)

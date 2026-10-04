@@ -23,11 +23,12 @@ class _PendingTask:
         return None
 
 
-def _service(sessions_dir: Path) -> JobService:
+def _service(sessions_dir: Path, session_lifecycle_guard) -> JobService:
     return JobService(
         job_event_bus=JobEventBus(),
         job_executor=_UnusedExecutor(),
         pending_request_store=PendingRequestStore(sessions_dir=sessions_dir),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
 
 
@@ -77,6 +78,7 @@ async def test_job_service_restores_only_messages_still_in_queue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     session_bundle_factory,
+    session_lifecycle_guard,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, "ses_019c018e721e70b38f769ca61010e13a")
@@ -99,7 +101,7 @@ async def test_job_service_restores_only_messages_still_in_queue(
         ],
     )
 
-    service = _service(sessions_dir)
+    service = _service(sessions_dir, session_lifecycle_guard=session_lifecycle_guard)
     started_jobs: list[str] = []
     _prevent_background_execution(service, monkeypatch, started_jobs)
 
@@ -116,20 +118,23 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     session_bundle_factory,
+    session_lifecycle_guard,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, "ses_019b8605a35b7fd6829e9dfec660d38c")
     store = PendingRequestStore(sessions_dir=sessions_dir)
     await store.save(
         "ses_019b8605a35b7fd6829e9dfec660d38c",
-        [_request(
-            "ses_019b8605a35b7fd6829e9dfec660d38c",
-            job_id="job_restored_first",
-            message_id="msg_restored_first",
-            sequence=1,
-        )],
+        [
+            _request(
+                "ses_019b8605a35b7fd6829e9dfec660d38c",
+                job_id="job_restored_first",
+                message_id="msg_restored_first",
+                sequence=1,
+            )
+        ],
     )
-    service = _service(sessions_dir)
+    service = _service(sessions_dir, session_lifecycle_guard=session_lifecycle_guard)
     started_jobs: list[str] = []
     _prevent_background_execution(service, monkeypatch, started_jobs)
 
@@ -145,8 +150,13 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
 
     assert started_jobs == ["job_restored_first"]
     assert new_dispatch.job_status == "queued"
-    assert service._session_current_job["ses_019b8605a35b7fd6829e9dfec660d38c"] == "job_restored_first"
-    assert service._pending_queue.ids("ses_019b8605a35b7fd6829e9dfec660d38c") == (new_dispatch.job_id,)
+    assert (
+        service._session_current_job["ses_019b8605a35b7fd6829e9dfec660d38c"]
+        == "job_restored_first"
+    )
+    assert service._pending_queue.ids("ses_019b8605a35b7fd6829e9dfec660d38c") == (
+        new_dispatch.job_id,
+    )
 
 
 @pytest.mark.asyncio
@@ -154,6 +164,7 @@ async def test_dispatch_removes_started_head_from_persistent_queue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     session_bundle_factory,
+    session_lifecycle_guard,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_id = "ses_019c5edf70037e1791483733a8865f97"
@@ -171,7 +182,7 @@ async def test_dispatch_removes_started_head_from_persistent_queue(
         ],
     )
 
-    service = _service(sessions_dir)
+    service = _service(sessions_dir, session_lifecycle_guard=session_lifecycle_guard)
     started_jobs: list[str] = []
     _prevent_background_execution(service, monkeypatch, started_jobs)
 
@@ -188,6 +199,7 @@ async def test_restored_pending_job_carries_persisted_gateway_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     session_bundle_factory,
+    session_lifecycle_guard,
 ) -> None:
     """磁盘恢复的待处理 Job 必须沿用创建时持久化的真实 gateway_id。"""
     sessions_dir = tmp_path / "sessions"
@@ -214,7 +226,7 @@ async def test_restored_pending_job_carries_persisted_gateway_id(
         ],
     )
 
-    service = _service(sessions_dir)
+    service = _service(sessions_dir, session_lifecycle_guard=session_lifecycle_guard)
     _prevent_background_execution(service, monkeypatch)
 
     restored = await service.list_pending(session_id)
@@ -229,6 +241,7 @@ async def test_restored_pending_job_carries_persisted_request_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     session_bundle_factory,
+    session_lifecycle_guard,
 ) -> None:
     """磁盘恢复的待处理 Job 必须沿用创建请求的权威 request_id，不补造第二个。"""
     sessions_dir = tmp_path / "sessions"
@@ -248,7 +261,7 @@ async def test_restored_pending_job_carries_persisted_request_id(
         ],
     )
 
-    service = _service(sessions_dir)
+    service = _service(sessions_dir, session_lifecycle_guard=session_lifecycle_guard)
     _prevent_background_execution(service, monkeypatch)
 
     restored = await service.list_pending(session_id)

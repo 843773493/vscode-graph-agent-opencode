@@ -52,12 +52,13 @@ class _RecordingJobEventBus:
         self.events.append(event)
 
 
-def _build_runtime(tmp_path: Path) -> RuntimeService:
+def _build_runtime(tmp_path: Path, session_lifecycle_guard) -> RuntimeService:
     """真实 RuntimeService；只替换 executor/bus 这些外部边界。"""
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     jobs = JobService(
         job_event_bus=_RecordingJobEventBus(),
         job_executor=_NeverFinishExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     return RuntimeService(
         workspace_id="00000000-0000-4000-8000-000000000001",
@@ -74,8 +75,10 @@ def _build_runtime(tmp_path: Path) -> RuntimeService:
 
 
 @pytest.mark.asyncio
-async def test_cancel_drain_before_draining_is_conflict_not_500(tmp_path: Path) -> None:
-    runtime = _build_runtime(tmp_path)
+async def test_cancel_drain_before_draining_is_conflict_not_500(
+    tmp_path: Path, session_lifecycle_guard
+) -> None:
+    runtime = _build_runtime(tmp_path, session_lifecycle_guard=session_lifecycle_guard)
 
     with pytest.raises(HTTPException) as raised:
         await cancel_runtime_drain(
@@ -94,8 +97,9 @@ async def test_cancel_drain_before_draining_is_conflict_not_500(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_force_interrupt_before_draining_is_conflict_not_500(
     tmp_path: Path,
+    session_lifecycle_guard,
 ) -> None:
-    runtime = _build_runtime(tmp_path)
+    runtime = _build_runtime(tmp_path, session_lifecycle_guard=session_lifecycle_guard)
 
     with pytest.raises(HTTPException) as raised:
         await force_runtime_drain(
@@ -112,8 +116,10 @@ async def test_force_interrupt_before_draining_is_conflict_not_500(
 
 
 @pytest.mark.asyncio
-async def test_begin_drain_after_stopping_is_conflict_not_500(tmp_path: Path) -> None:
-    runtime = _build_runtime(tmp_path)
+async def test_begin_drain_after_stopping_is_conflict_not_500(
+    tmp_path: Path, session_lifecycle_guard
+) -> None:
+    runtime = _build_runtime(tmp_path, session_lifecycle_guard=session_lifecycle_guard)
     await runtime.begin_drain()
     await runtime.force_interrupt()
 
@@ -133,8 +139,9 @@ async def test_begin_drain_after_stopping_is_conflict_not_500(tmp_path: Path) ->
 
 def test_drain_guards_http_envelope_is_409_without_internal_class_name(
     tmp_path: Path,
+    session_lifecycle_guard,
 ) -> None:
-    runtime = _build_runtime(tmp_path)
+    runtime = _build_runtime(tmp_path, session_lifecycle_guard=session_lifecycle_guard)
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.include_router(router, prefix="/api/v1")

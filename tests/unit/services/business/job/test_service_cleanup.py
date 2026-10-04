@@ -19,10 +19,13 @@ class FakeJobExecutor:
 
 
 @pytest.mark.asyncio
-async def test_delete_session_jobs_removes_running_and_queued_jobs():
+async def test_delete_session_jobs_removes_running_and_queued_jobs(
+    session_lifecycle_guard,
+):
     service = JobService(
         job_event_bus=FakeJobEventBus(),
         job_executor=FakeJobExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     service._jobs.clear()
     session_id = "ses_cleanup"

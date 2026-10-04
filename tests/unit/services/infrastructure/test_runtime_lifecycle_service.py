@@ -66,12 +66,15 @@ class RecordingTurnStatusWriter:
 def build_runtime(
     tmp_path: Path,
     terminal_status_writer: RecordingTurnStatusWriter | None = None,
+    *,
+    session_lifecycle_guard,
 ) -> tuple[RuntimeService, JobService]:
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     bus = RecordingJobEventBus()
     jobs = JobService(
         job_event_bus=bus,
         job_executor=NeverFinishExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     runtime = RuntimeService(
         workspace_id="00000000-0000-4000-8000-000000000001",
@@ -94,8 +97,13 @@ def build_runtime(
 
 
 @pytest.mark.asyncio
-async def test_status_reports_the_injected_workspace_uuid_and_root(tmp_path: Path) -> None:
-    runtime, _ = build_runtime(tmp_path)
+async def test_status_reports_the_injected_workspace_uuid_and_root(
+    tmp_path: Path,
+    session_lifecycle_guard,
+) -> None:
+    runtime, _ = build_runtime(
+        tmp_path, session_lifecycle_guard=session_lifecycle_guard
+    )
 
     status = await runtime.status()
 
@@ -105,8 +113,13 @@ async def test_status_reports_the_injected_workspace_uuid_and_root(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_drain_closes_admission_and_cancel_reopens_it(tmp_path: Path) -> None:
-    runtime, jobs = build_runtime(tmp_path)
+async def test_drain_closes_admission_and_cancel_reopens_it(
+    tmp_path: Path,
+    session_lifecycle_guard,
+) -> None:
+    runtime, jobs = build_runtime(
+        tmp_path, session_lifecycle_guard=session_lifecycle_guard
+    )
 
     draining = await runtime.begin_drain()
 
@@ -123,8 +136,13 @@ async def test_drain_closes_admission_and_cancel_reopens_it(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_force_interrupt_persists_event_and_cancels_job(tmp_path: Path) -> None:
-    runtime, jobs = build_runtime(tmp_path)
+async def test_force_interrupt_persists_event_and_cancels_job(
+    tmp_path: Path,
+    session_lifecycle_guard,
+) -> None:
+    runtime, jobs = build_runtime(
+        tmp_path, session_lifecycle_guard=session_lifecycle_guard
+    )
     task = asyncio.create_task(asyncio.sleep(60))
     job = JobState(
         job_id="job_running",
@@ -154,9 +172,14 @@ async def test_force_interrupt_persists_event_and_cancels_job(tmp_path: Path) ->
 async def test_startup_reconciles_job_without_terminal_event(
     tmp_path: Path,
     session_bundle_factory,
+    session_lifecycle_guard,
 ) -> None:
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_019c70f868da751480de63aa344e28c9")
-    runtime, _ = build_runtime(tmp_path)
+    session_bundle_factory(
+        tmp_path / ".boxteam" / "sessions", "ses_019c70f868da751480de63aa344e28c9"
+    )
+    runtime, _ = build_runtime(
+        tmp_path, session_lifecycle_guard=session_lifecycle_guard
+    )
     store = runtime._trace_event_store
     now = datetime.now(UTC)
     await store.append(
@@ -181,6 +204,7 @@ async def test_startup_reconciles_job_without_terminal_event(
 async def test_startup_keeps_session_with_invalid_trace_available(
     tmp_path: Path,
     session_bundle_factory,
+    session_lifecycle_guard,
 ) -> None:
     session_root = session_bundle_factory(
         tmp_path / ".boxteam" / "sessions", "ses_019b7e56befb747788f3efc9aace9dbc"
@@ -202,7 +226,9 @@ async def test_startup_keeps_session_with_invalid_trace_available(
         + "\n",
         encoding="utf-8",
     )
-    runtime, _ = build_runtime(tmp_path)
+    runtime, _ = build_runtime(
+        tmp_path, session_lifecycle_guard=session_lifecycle_guard
+    )
 
     assert await runtime.reconcile_stale_executions() == 0
     assert runtime.startup_reconciliation_errors == [
@@ -221,10 +247,17 @@ async def test_startup_keeps_session_with_invalid_trace_available(
 async def test_startup_reconciles_persisted_turn_as_failed(
     tmp_path: Path,
     session_bundle_factory,
+    session_lifecycle_guard,
 ) -> None:
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_019c70f868da751480de63aa344e28c9")
+    session_bundle_factory(
+        tmp_path / ".boxteam" / "sessions", "ses_019c70f868da751480de63aa344e28c9"
+    )
     writer = RecordingTurnStatusWriter()
-    runtime, _ = build_runtime(tmp_path, writer)
+    runtime, _ = build_runtime(
+        tmp_path,
+        writer,
+        session_lifecycle_guard=session_lifecycle_guard,
+    )
     await runtime._trace_event_store.append(
         "ses_019c70f868da751480de63aa344e28c9",
         JobStartedEvent(
@@ -238,9 +271,15 @@ async def test_startup_reconciles_persisted_turn_as_failed(
     await runtime.reconcile_stale_executions()
 
     assert writer.calls == [
-        {"session_id": "ses_019c70f868da751480de63aa344e28c9", "turn_id": "job_stale", "status": "failed"}
+        {
+            "session_id": "ses_019c70f868da751480de63aa344e28c9",
+            "turn_id": "job_stale",
+            "status": "failed",
+        }
     ]
-    event = runtime._trace_event_store.read_events("ses_019c70f868da751480de63aa344e28c9")[-1]
+    event = runtime._trace_event_store.read_events(
+        "ses_019c70f868da751480de63aa344e28c9"
+    )[-1]
     assert event.payload.code == "execution_lost"
     assert event.payload.resumable is False
 
@@ -249,10 +288,17 @@ async def test_startup_reconciles_persisted_turn_as_failed(
 async def test_startup_repairs_existing_process_exit_turn_status(
     tmp_path: Path,
     session_bundle_factory,
+    session_lifecycle_guard,
 ) -> None:
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_019c70f868da751480de63aa344e28c9")
+    session_bundle_factory(
+        tmp_path / ".boxteam" / "sessions", "ses_019c70f868da751480de63aa344e28c9"
+    )
     writer = RecordingTurnStatusWriter()
-    runtime, _ = build_runtime(tmp_path, writer)
+    runtime, _ = build_runtime(
+        tmp_path,
+        writer,
+        session_lifecycle_guard=session_lifecycle_guard,
+    )
     now = datetime.now(UTC)
     await runtime._trace_event_store.append(
         "ses_019c70f868da751480de63aa344e28c9",
@@ -282,19 +328,37 @@ async def test_startup_repairs_existing_process_exit_turn_status(
 
     assert reconciled == 0
     assert writer.calls == [
-        {"session_id": "ses_019c70f868da751480de63aa344e28c9", "turn_id": "job_stale", "status": "failed"}
+        {
+            "session_id": "ses_019c70f868da751480de63aa344e28c9",
+            "turn_id": "job_stale",
+            "status": "failed",
+        }
     ]
-    assert len(runtime._trace_event_store.read_events("ses_019c70f868da751480de63aa344e28c9")) == 2
+    assert (
+        len(
+            runtime._trace_event_store.read_events(
+                "ses_019c70f868da751480de63aa344e28c9"
+            )
+        )
+        == 2
+    )
 
 
 @pytest.mark.asyncio
 async def test_startup_preserves_timeout_status_from_failed_event(
     tmp_path: Path,
     session_bundle_factory,
+    session_lifecycle_guard,
 ) -> None:
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_019c162a2dfb7cf08123d546495a99c8")
+    session_bundle_factory(
+        tmp_path / ".boxteam" / "sessions", "ses_019c162a2dfb7cf08123d546495a99c8"
+    )
     writer = RecordingTurnStatusWriter()
-    runtime, _ = build_runtime(tmp_path, writer)
+    runtime, _ = build_runtime(
+        tmp_path,
+        writer,
+        session_lifecycle_guard=session_lifecycle_guard,
+    )
     await runtime._trace_event_store.append(
         "ses_019c162a2dfb7cf08123d546495a99c8",
         JobFailedEvent(
@@ -311,21 +375,30 @@ async def test_startup_preserves_timeout_status_from_failed_event(
 
     await runtime.reconcile_stale_executions()
 
-    assert writer.calls == [{
-        "session_id": "ses_019c162a2dfb7cf08123d546495a99c8",
-        "turn_id": "job_timeout",
-        "status": "timed_out",
-    }]
+    assert writer.calls == [
+        {
+            "session_id": "ses_019c162a2dfb7cf08123d546495a99c8",
+            "turn_id": "job_timeout",
+            "status": "timed_out",
+        }
+    ]
 
 
 @pytest.mark.asyncio
 async def test_startup_preserves_legacy_timeout_text_status(
     tmp_path: Path,
     session_bundle_factory,
+    session_lifecycle_guard,
 ) -> None:
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_019c1bbd6ff678cf8f3e8598a8ae7327")
+    session_bundle_factory(
+        tmp_path / ".boxteam" / "sessions", "ses_019c1bbd6ff678cf8f3e8598a8ae7327"
+    )
     writer = RecordingTurnStatusWriter()
-    runtime, _ = build_runtime(tmp_path, writer)
+    runtime, _ = build_runtime(
+        tmp_path,
+        writer,
+        session_lifecycle_guard=session_lifecycle_guard,
+    )
     await runtime._trace_event_store.append(
         "ses_019c1bbd6ff678cf8f3e8598a8ae7327",
         JobFailedEvent(
@@ -338,8 +411,10 @@ async def test_startup_preserves_legacy_timeout_text_status(
 
     await runtime.reconcile_stale_executions()
 
-    assert writer.calls == [{
-        "session_id": "ses_019c1bbd6ff678cf8f3e8598a8ae7327",
-        "turn_id": "job_legacy_timeout",
-        "status": "timed_out",
-    }]
+    assert writer.calls == [
+        {
+            "session_id": "ses_019c1bbd6ff678cf8f3e8598a8ae7327",
+            "turn_id": "job_legacy_timeout",
+            "status": "timed_out",
+        }
+    ]

@@ -184,16 +184,20 @@ class _RecordingTurnStatusWriter:
         turn_id: str,
         status: str,
     ) -> bool:
-        self.calls.append({
-            "session_id": session_id,
-            "turn_id": turn_id,
-            "status": status,
-        })
+        self.calls.append(
+            {
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "status": status,
+            }
+        )
         return True
 
 
 @pytest.mark.asyncio
-async def test_job_timeout_marks_job_terminal_and_releases_session() -> None:
+async def test_job_timeout_marks_job_terminal_and_releases_session(
+    session_lifecycle_guard,
+) -> None:
     bus = _RecordingBus()
     writer = _RecordingTurnStatusWriter()
     service = JobService(
@@ -201,6 +205,7 @@ async def test_job_timeout_marks_job_terminal_and_releases_session() -> None:
         job_executor=_NeverFinishExecutor(),
         job_timeout_seconds=0.01,
         terminal_status_writer=writer,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_job_timeout"
     job = JobState(
@@ -224,9 +229,7 @@ async def test_job_timeout_marks_job_terminal_and_releases_session() -> None:
     assert "总超时上限" in job.error_message
     assert service._session_current_job.get(session_id) is None
     failed_events = [
-        event
-        for event in bus.events
-        if event.get("event_type") == EventType.JOB_FAILED
+        event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     ]
     assert len(failed_events) == 1
     assert failed_events[0]["payload"] == {
@@ -235,15 +238,19 @@ async def test_job_timeout_marks_job_terminal_and_releases_session() -> None:
         "code": "job_timeout",
         "timeout_seconds": 0.01,
     }
-    assert writer.calls == [{
-        "session_id": session_id,
-        "turn_id": job.job_id,
-        "status": "timed_out",
-    }]
+    assert writer.calls == [
+        {
+            "session_id": session_id,
+            "turn_id": job.job_id,
+            "status": "timed_out",
+        }
+    ]
 
 
 @pytest.mark.asyncio
-async def test_job_timeout_provider_is_read_for_each_new_job() -> None:
+async def test_job_timeout_provider_is_read_for_each_new_job(
+    session_lifecycle_guard,
+) -> None:
     configured_timeout = [0.01]
     bus = _RecordingBus()
     service = JobService(
@@ -252,6 +259,7 @@ async def test_job_timeout_provider_is_read_for_each_new_job() -> None:
         job_timeout_seconds=10.0,
         job_timeout_seconds_provider=lambda: configured_timeout[0],
         execution_cancel_timeout_seconds=0.01,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     job = JobState(
         job_id="job_dynamic_timeout",
@@ -270,9 +278,7 @@ async def test_job_timeout_provider_is_read_for_each_new_job() -> None:
 
     assert job.status == JobStatus.timed_out
     timeout_events = [
-        event
-        for event in bus.events
-        if event.get("event_type") == EventType.JOB_FAILED
+        event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     ]
     assert timeout_events
     payload = timeout_events[-1]["payload"]
@@ -281,12 +287,15 @@ async def test_job_timeout_provider_is_read_for_each_new_job() -> None:
 
 
 @pytest.mark.asyncio
-async def test_job_timeout_does_not_wait_for_uncooperative_executor() -> None:
+async def test_job_timeout_does_not_wait_for_uncooperative_executor(
+    session_lifecycle_guard,
+) -> None:
     service = JobService(
         job_event_bus=_RecordingBus(),
         job_executor=_CancellationResistantExecutor(),
         job_timeout_seconds=0.01,
         execution_cancel_timeout_seconds=0.01,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     job = JobState(
         job_id="job_uncooperative_timeout",
@@ -309,7 +318,9 @@ async def test_job_timeout_does_not_wait_for_uncooperative_executor() -> None:
 
 
 @pytest.mark.asyncio
-async def test_job_startup_timeout_closes_job_without_agent_start() -> None:
+async def test_job_startup_timeout_closes_job_without_agent_start(
+    session_lifecycle_guard,
+) -> None:
     bus = _RecordingBus()
     writer = _RecordingTurnStatusWriter()
     service = JobService(
@@ -318,6 +329,7 @@ async def test_job_startup_timeout_closes_job_without_agent_start() -> None:
         job_timeout_seconds=1.0,
         job_startup_timeout_seconds=0.01,
         terminal_status_writer=writer,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_job_startup_timeout"
     job = JobState(
@@ -340,20 +352,22 @@ async def test_job_startup_timeout_closes_job_without_agent_start() -> None:
     assert job.error_message is not None
     assert "启动超过等待 AgentLoop 的上限" in job.error_message
     failed_event = next(
-        event
-        for event in bus.events
-        if event.get("event_type") == EventType.JOB_FAILED
+        event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     )
     assert failed_event["payload"]["code"] == "job_startup_timeout"
-    assert writer.calls == [{
-        "session_id": session_id,
-        "turn_id": job.job_id,
-        "status": "timed_out",
-    }]
+    assert writer.calls == [
+        {
+            "session_id": session_id,
+            "turn_id": job.job_id,
+            "status": "timed_out",
+        }
+    ]
 
 
 @pytest.mark.asyncio
-async def test_agent_start_does_not_mask_first_model_or_tool_startup_timeout() -> None:
+async def test_agent_start_does_not_mask_first_model_or_tool_startup_timeout(
+    session_lifecycle_guard,
+) -> None:
     bus = _RecordingBus()
     executor = _AgentStartThenNeverFinishExecutor()
     service = JobService(
@@ -361,6 +375,7 @@ async def test_agent_start_does_not_mask_first_model_or_tool_startup_timeout() -
         job_executor=executor,
         job_timeout_seconds=1.0,
         job_startup_timeout_seconds=0.01,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_agent_start_without_progress"
     job = JobState(
@@ -382,19 +397,20 @@ async def test_agent_start_does_not_mask_first_model_or_tool_startup_timeout() -
 
     assert job.status == JobStatus.timed_out
     failed_event = next(
-        event
-        for event in bus.events
-        if event.get("event_type") == EventType.JOB_FAILED
+        event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     )
     assert failed_event["payload"]["code"] == "job_startup_timeout"
 
 
 @pytest.mark.asyncio
-async def test_job_failure_event_preserves_executor_error_code() -> None:
+async def test_job_failure_event_preserves_executor_error_code(
+    session_lifecycle_guard,
+) -> None:
     bus = _RecordingBus()
     service = JobService(
         job_event_bus=bus,
         job_executor=_CodedFailureExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_coded_job_failure"
     job = JobState(
@@ -414,9 +430,7 @@ async def test_job_failure_event_preserves_executor_error_code() -> None:
     await job.task
 
     failed_event = next(
-        event
-        for event in bus.events
-        if event.get("event_type") == EventType.JOB_FAILED
+        event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     )
     assert failed_event["payload"] == {
         "session_id": session_id,
@@ -426,7 +440,9 @@ async def test_job_failure_event_preserves_executor_error_code() -> None:
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_ready_uses_event_watchdog_not_startup_watchdog() -> None:
+async def test_agent_loop_ready_uses_event_watchdog_not_startup_watchdog(
+    session_lifecycle_guard,
+) -> None:
     bus = _RecordingBus()
     executor = _AgentLoopReadyThenNeverFinishExecutor()
     service = JobService(
@@ -434,6 +450,7 @@ async def test_agent_loop_ready_uses_event_watchdog_not_startup_watchdog() -> No
         job_executor=executor,
         job_timeout_seconds=0.02,
         job_startup_timeout_seconds=0.01,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_agent_loop_ready"
     job = JobState(
@@ -456,15 +473,15 @@ async def test_agent_loop_ready_uses_event_watchdog_not_startup_watchdog() -> No
     assert executor.cancel_reason == "job_timeout"
     assert job.status == JobStatus.timed_out
     timeout_event = next(
-        event
-        for event in bus.events
-        if event.get("event_type") == EventType.JOB_FAILED
+        event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     )
     assert timeout_event["payload"]["code"] == "job_timeout"
 
 
 @pytest.mark.asyncio
-async def test_two_short_messages_start_and_converge_after_previous_turn() -> None:
+async def test_two_short_messages_start_and_converge_after_previous_turn(
+    session_lifecycle_guard,
+) -> None:
     bus = _RecordingBus()
     executor = _ShortMessageExecutor()
     service = JobService(
@@ -472,6 +489,7 @@ async def test_two_short_messages_start_and_converge_after_previous_turn() -> No
         job_executor=executor,
         job_timeout_seconds=0.2,
         job_startup_timeout_seconds=0.02,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_two_short_messages"
 
@@ -505,13 +523,16 @@ async def test_two_short_messages_start_and_converge_after_previous_turn() -> No
 
 
 @pytest.mark.asyncio
-async def test_running_job_exposes_progress_and_current_step_before_executor_event() -> None:
+async def test_running_job_exposes_progress_and_current_step_before_executor_event(
+    session_lifecycle_guard,
+) -> None:
     bus = _RecordingBus()
     executor = _BlockingExecutor()
     service = JobService(
         job_event_bus=bus,
         job_executor=executor,
         job_timeout_seconds=2.0,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_job_progress"
     job = JobState(
@@ -546,13 +567,16 @@ async def test_running_job_exposes_progress_and_current_step_before_executor_eve
 
 
 @pytest.mark.asyncio
-async def test_tool_progress_refreshes_job_and_timeout_has_distinct_cancel_reason() -> None:
+async def test_tool_progress_refreshes_job_and_timeout_has_distinct_cancel_reason(
+    session_lifecycle_guard,
+) -> None:
     bus = _RecordingBus()
     executor = _ProgressThenNeverFinishExecutor()
     service = JobService(
         job_event_bus=bus,
         job_executor=executor,
         job_timeout_seconds=0.02,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_job_tool_progress"
     job = JobState(
@@ -580,15 +604,15 @@ async def test_tool_progress_refreshes_job_and_timeout_has_distinct_cancel_reaso
     assert job.current_step is None
     assert job.progress < 100
     timeout_event = next(
-        event
-        for event in bus.events
-        if event.get("event_type") == EventType.JOB_FAILED
+        event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     )
     assert timeout_event["payload"]["code"] == "job_timeout"
 
 
 @pytest.mark.asyncio
-async def test_model_finalization_grace_preserves_response_after_total_budget() -> None:
+async def test_model_finalization_grace_preserves_response_after_total_budget(
+    session_lifecycle_guard,
+) -> None:
     bus = _RecordingBus()
     executor = _ModelFinalizationExecutor()
     service = JobService(
@@ -596,6 +620,7 @@ async def test_model_finalization_grace_preserves_response_after_total_budget() 
         job_executor=executor,
         job_timeout_seconds=0.02,
         job_finalization_grace_seconds=0.1,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_model_finalization_grace"
     job = JobState(
@@ -621,14 +646,14 @@ async def test_model_finalization_grace_preserves_response_after_total_budget() 
     assert job.status == JobStatus.completed
     assert job.result == "final-response-after-grace"
     assert not [
-        event
-        for event in bus.events
-        if event.get("event_type") == EventType.JOB_FAILED
+        event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     ]
 
 
 @pytest.mark.asyncio
-async def test_tool_finalization_grace_preserves_result_after_total_budget() -> None:
+async def test_tool_finalization_grace_preserves_result_after_total_budget(
+    session_lifecycle_guard,
+) -> None:
     bus = _RecordingBus()
     executor = _ToolFinalizationExecutor()
     service = JobService(
@@ -636,6 +661,7 @@ async def test_tool_finalization_grace_preserves_result_after_total_budget() -> 
         job_executor=executor,
         job_timeout_seconds=0.02,
         job_finalization_grace_seconds=0.1,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_tool_finalization_grace"
     job = JobState(
@@ -662,14 +688,14 @@ async def test_tool_finalization_grace_preserves_result_after_total_budget() -> 
     assert job.result == "browser-result-and-final-response"
     assert job.current_step is None
     assert not [
-        event
-        for event in bus.events
-        if event.get("event_type") == EventType.JOB_FAILED
+        event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     ]
 
 
 @pytest.mark.asyncio
-async def test_finalization_grace_does_not_require_fresh_step_projection() -> None:
+async def test_finalization_grace_does_not_require_fresh_step_projection(
+    session_lifecycle_guard,
+) -> None:
     bus = _RecordingBus()
     executor = _StaleStepFinalizationExecutor()
     service = JobService(
@@ -677,6 +703,7 @@ async def test_finalization_grace_does_not_require_fresh_step_projection() -> No
         job_executor=executor,
         job_timeout_seconds=0.02,
         job_finalization_grace_seconds=0.1,
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_stale_step_finalization"
     job = JobState(
@@ -702,20 +729,20 @@ async def test_finalization_grace_does_not_require_fresh_step_projection() -> No
     assert job.status == JobStatus.completed
     assert job.result == "final-response-after-stale-step"
     assert not [
-        event
-        for event in bus.events
-        if event.get("event_type") == EventType.JOB_FAILED
+        event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     ]
 
 
 @pytest.mark.asyncio
 async def test_failed_job_discards_queued_terminal_followup_without_new_stream(
     monkeypatch: pytest.MonkeyPatch,
+    session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
     service = JobService(
         job_event_bus=bus,
         job_executor=_NeverFinishExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_failed_terminal_followup"
     parent = JobState(
@@ -755,11 +782,13 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(
         status=JobStatus.queued,
         delivery_policy="after_turn",
     )
-    service._jobs.update({
-        parent.job_id: parent,
-        followup.job_id: followup,
-        user_job.job_id: user_job,
-    })
+    service._jobs.update(
+        {
+            parent.job_id: parent,
+            followup.job_id: followup,
+            user_job.job_id: user_job,
+        }
+    )
     service._session_current_job[session_id] = parent.job_id
     service._pending_queue.append(
         session_id,
@@ -793,10 +822,12 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(
 @pytest.mark.asyncio
 async def test_pending_dispatch_race_cannot_start_terminal_followup_after_failure(
     monkeypatch: pytest.MonkeyPatch,
+    session_lifecycle_guard,
 ) -> None:
     service = JobService(
         job_event_bus=_RecordingBus(),
         job_executor=_NeverFinishExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
     )
     session_id = "session_failed_followup_race"
     parent = JobState(
