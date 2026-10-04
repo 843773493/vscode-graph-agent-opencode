@@ -36,15 +36,22 @@ class FakeTerminalManagerClient:
     def __init__(self, terminals: list[dict[str, object]] | None = None) -> None:
         self.terminals = terminals or []
         self.deleted_terminal_ids: list[str] = []
+        self.killed_terminal_ids: list[str] = []
+        self.listed_session_ids: list[str | None] = []
 
     def attach_url(self, terminal_id: str) -> str:
         return f"http://127.0.0.1:8013/?terminalId={terminal_id}"
 
-    def list_terminals_from_state(self, session_id: str) -> list[dict[str, object]]:
+    async def list_terminals(
+        self,
+        *,
+        session_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        self.listed_session_ids.append(session_id)
         return [
             terminal
             for terminal in self.terminals
-            if terminal.get("session_id") == session_id
+            if session_id is None or terminal.get("session_id") == session_id
         ]
 
     async def delete_terminal(self, terminal_id: str) -> dict[str, object]:
@@ -52,6 +59,7 @@ class FakeTerminalManagerClient:
         return {"deleted": True, "terminal_id": terminal_id}
 
     async def kill_terminal(self, terminal_id: str) -> dict[str, object]:
+        self.killed_terminal_ids.append(terminal_id)
         return {
             "terminal": {
                 "terminal_id": terminal_id,
@@ -329,6 +337,40 @@ async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
 
     assert [resource.resource_id for resource in resources] == ["term_live"]
     assert resources[0].status == "running"
+    assert provider._terminal_manager.listed_session_ids == [
+        "ses_019b94653e71714b8d406f83ab3d2b3b"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_terminal_control_rejects_resource_outside_session_owner_list() -> None:
+    terminal_manager = FakeTerminalManagerClient(
+        terminals=[
+            {
+                "terminal_id": "term_other_session",
+                "session_id": "ses_other",
+                "status": "running",
+            }
+        ]
+    )
+    provider = TerminalResourceProvider(
+        terminal_manager=terminal_manager,
+        historical_reader=FakeHistoricalTerminalRecordReader(),
+        message_service=FakeMessageService(),
+        resource_mapper=_resource_mapper(),
+    )
+
+    for action in ("cancel", "delete"):
+        with pytest.raises(ValueError, match="不属于当前 session"):
+            await provider.control(
+                session_id="ses_current",
+                resource_id="term_other_session",
+                action=action,
+            )
+
+    assert terminal_manager.listed_session_ids == ["ses_current", "ses_current"]
+    assert terminal_manager.killed_terminal_ids == []
+    assert terminal_manager.deleted_terminal_ids == []
 
 
 @pytest.mark.asyncio
@@ -558,6 +600,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
     assert job_service.deleted_session_id == session_id
     assert registry.list_handles(session_id) == []
     assert terminal_client.deleted_terminal_ids == ["term_cleanup"]
+    assert terminal_client.listed_session_ids == [session_id]
     assert browser_client.deleted_browser_ids == ["browser_cleanup"]
     assert handle.status == "deleted"
 

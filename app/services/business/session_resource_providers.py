@@ -120,7 +120,9 @@ class TerminalResourceProvider:
         *,
         include_history: bool = True,
     ) -> list[SessionResourceDTO]:
-        active_terminals = self._terminal_manager.list_terminals_from_state(session_id)
+        active_terminals = await self._terminal_manager.list_terminals(
+            session_id=session_id
+        )
         if not include_history:
             return [
                 self._to_resource(terminal)
@@ -145,7 +147,7 @@ class TerminalResourceProvider:
         resource_id: str,
         action: SessionResourceAction,
     ) -> SessionResourceControlResultDTO:
-        terminal = self._get_record(session_id, resource_id)
+        terminal = await self._get_record(session_id, resource_id)
         if action == "cancel":
             result = await self._terminal_manager.kill_terminal(resource_id)
             resource = self._to_resource(result["terminal"])
@@ -176,7 +178,7 @@ class TerminalResourceProvider:
         raise ValueError(f"terminal 资源不支持操作: {action}")
 
     async def cleanup_session(self, session_id: str) -> int:
-        terminals = self._terminal_manager.list_terminals_from_state(session_id)
+        terminals = await self._terminal_manager.list_terminals(session_id=session_id)
         for terminal in terminals:
             terminal_id = terminal.get("terminal_id")
             if not isinstance(terminal_id, str) or not terminal_id:
@@ -184,8 +186,14 @@ class TerminalResourceProvider:
             await self._terminal_manager.delete_terminal(terminal_id)
         return len(terminals)
 
-    def _get_record(self, session_id: str, terminal_id: str) -> dict[str, object]:
-        for terminal in self._terminal_manager.list_terminals_from_state(session_id):
+    async def _get_record(
+        self,
+        session_id: str,
+        terminal_id: str,
+    ) -> dict[str, object]:
+        for terminal in await self._terminal_manager.list_terminals(
+            session_id=session_id
+        ):
             if terminal.get("terminal_id") == terminal_id:
                 return terminal
         raise ValueError(f"terminal 不存在或不属于当前 session: {terminal_id}")

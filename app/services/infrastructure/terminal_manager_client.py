@@ -10,7 +10,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from app.core.path_utils import get_boxteam_root, get_workspace_root
+from app.core.path_utils import get_workspace_root
 from app.protocol.codecs.terminal import (
     terminal_session_to_json,
     terminal_session_to_proto,
@@ -25,7 +25,6 @@ class TerminalManagerClient:
         self,
         *,
         backend_url: str | None = None,
-        state_file: Path | None = None,
         workspace_id: str | None = None,
         config_service: ConfigService | None = None,
     ) -> None:
@@ -44,7 +43,6 @@ class TerminalManagerClient:
             )
             or DEFAULT_TERMINAL_BACKEND_URL
         ).rstrip("/")
-        self._state_file = state_file or get_boxteam_root() / "terminal-manager" / "terminals.json"
         workspace_root = get_workspace_root()
         self._workspace_id = workspace_id or self._managed_workspace_id(workspace_root)
 
@@ -63,27 +61,6 @@ class TerminalManagerClient:
         if self._config_service is not None:
             return self._config_service.get_terminal_backend_url().rstrip("/")
         return self._backend_url
-
-    def list_terminals_from_state(self, session_id: str) -> list[dict[str, Any]]:
-        if not self._state_file.exists():
-            return []
-        raw = json.loads(self._state_file.read_text(encoding="utf-8"))
-        terminals = raw.get("terminals")
-        if not isinstance(terminals, list):
-            raise TypeError(f"终端状态文件格式错误: {self._state_file}")
-        result = []
-        for terminal in terminals:
-            if not isinstance(terminal, dict):
-                raise TypeError(f"终端状态文件包含非对象记录: {self._state_file}")
-            if terminal.get("session_id") == session_id:
-                normalized = dict(terminal)
-                normalized.pop("attach_url", None)
-                result.append(normalized)
-        return sorted(
-            result,
-            key=lambda terminal: str(terminal.get("updated_at") or terminal.get("created_at") or ""),
-            reverse=True,
-        )
 
     async def create_terminal(
         self,

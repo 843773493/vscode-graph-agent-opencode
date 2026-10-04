@@ -56,6 +56,39 @@ async def test_delete_terminal_normalizes_nested_terminal_snapshot() -> None:
     }
 
 
+@pytest.mark.asyncio
+async def test_list_terminals_queries_session_owner_and_hides_attach_url() -> None:
+    client = TerminalManagerClient(backend_url="http://terminal.test")
+
+    async def fake_request(
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        assert method == "GET"
+        assert path == "/api/terminals?session_id=session%2F1"
+        assert payload is None
+        return {
+            "data": [
+                {
+                    "terminal_id": "term_1",
+                    "session_id": "session/1",
+                    "status": "running",
+                    "attach_url": "http://127.0.0.1:8013/?terminalId=term_1",
+                }
+            ]
+        }
+
+    client._json_request = fake_request  # type: ignore[method-assign]
+
+    terminals = await client.list_terminals(session_id="session/1")
+
+    assert len(terminals) == 1
+    assert terminals[0]["terminal_id"] == "term_1"
+    assert terminals[0]["session_id"] == "session/1"
+    assert "attach_url" not in terminals[0]
+
+
 def test_terminal_backend_url_is_resolved_from_current_config_snapshot() -> None:
     config_service = Mock(spec=ConfigService)
     current_url = ["http://terminal-a"]

@@ -368,12 +368,6 @@ async def test_agent_exec_command_uses_windows_cmd_and_powershell_wrappers(
     backend = windows_terminal_backend
     client = TerminalManagerClient(
         backend_url=f"http://127.0.0.1:{backend.port}",
-        state_file=(
-            Path(backend.workspace_root)
-            / ".boxteam"
-            / "terminal-manager"
-            / "terminals.json"
-        ),
         workspace_id=backend.workspace_id,
     )
     tool = create_exec_command_tool(

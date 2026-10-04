@@ -14,7 +14,11 @@ from app.schemas.internal_v2.session_resource import (
 
 @runtime_checkable
 class TerminalManagerClientProtocol(Protocol):
-    def list_terminals_from_state(self, session_id: str) -> list[dict[str, object]]: ...
+    async def list_terminals(
+        self,
+        *,
+        session_id: str | None = None,
+    ) -> list[dict[str, object]]: ...
 
     async def kill_terminal(self, terminal_id: str) -> dict[str, object]: ...
 
