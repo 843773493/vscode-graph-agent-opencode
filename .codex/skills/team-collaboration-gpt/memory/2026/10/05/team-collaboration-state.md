@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-两个团队共用、主代理独占维护。恢复/派单/集成/报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-05 01:06（北京时间）。goal **active、无预算上限**，交接及七个 change 的必要实施、独审、验证、清理和技能实测未完成。
+两个团队共用、主代理独占维护。恢复/派单/集成/报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-05 02:22（北京时间）。goal **active、无预算上限**，交接及七个 change 的必要实施、独审、验证、清理和技能实测未完成。
 
 ## 授权与路径
 
@@ -8,7 +8,7 @@
 
 - 物理 ROOT `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
 - TEMP=`ROOT/out/tests/temp/2026/10/04/024121-team-execution`；WT=`ROOT/out/worktrees/2026/10/04/024121-team-execution`。以下证据路径相对 TEMP，每次派单给**字面绝对** workdir/index/artifact/report，不能自行简化日期或落 worktree/out、/tmp。
-- GPT subagent 精确 `gpt-6-luna / max`、不带前缀，创建参数/实际模型已核，证据 `coordinator/artifacts/{model-context-latest.json,u05-model-context.json,new-review-model-context.json,new-consumer-review-model-context.json}`。用户选择覆盖旧 AGENTS DeepSeek模型要求。至少3、最多15常驻，主统一派单，agent不自行派生；429保源、不密集恢复、不换模型。
+- 当前用户效率试验：唯一实现subagent `gpt-6.1-sol / max`，实际model/effort已核；Luna实现者均停写，保只读独审。上述当前授权覆盖默认Luna与旧人数模板，不为凑人数重复派单。429保源、不密集恢复、不擅换模型，agent不自行派生。
 - 每shell全程 export 绝对 `GIT_INDEX_FILE`、`GIT_OPTIONAL_LOCKS=0`，显式物理workdir、绝对编辑目标。固定检索 `git grep <tree>`/`--cached`，差异给base/target；独立index不隔离默认live检索。新派单主实际read-tree初始化索引。
 - 主唯一串行提交者，index `coordinator/git/integration.idx`；fresh read-tree→精确add→record→commit无pathspec→verify→祖先。禁amend/reset/rebase/push/defaultindex写。
 - 测试走matrix或 `timeout N bash -c 'ulimit -d 4194304; exec "$@"' bash <命令>`；uv/bun，代码静态、Web改后build。raw按candidate/attempt保存真实退出码，不覆失败、不为补日志复跑绿。正式测试workspace镜像out/tests/testpath；fixture源只读，临时仅分配根，不注册源码根/复制全树。
@@ -18,7 +18,7 @@
 
 ## 主树与验收事实
 
-主HEAD **`4ea674097a4199ff78b92ae52983c09b5b170d19`**（技能/台账文档）；主源码 **`68b99261022f85aff7c4dc66811c2b4ebb8c73fc`**，T05a owner三path已串行集成；40原绿复用，真正generation=0 snapshot与29:59 registered两case复验2pass3.55s、Ruff0、独审通过。guard/祖先/defaultindex/未知fork全0，证据`coordinator/artifacts/t05a-main-integration/attempt-2/result.json`。文档1f80已收闭包遗漏、重复断言误改和整树复制；本文与SKILL当前由主继续维护。生产T05b未完成，不勾8.14。
+主HEAD **`73b4754b6da858560786f153152f8e03079625bb`**（技能/台账文档）；主源码 **`68b99261022f85aff7c4dc66811c2b4ebb8c73fc`**，T05a owner三path已串行集成；40原绿复用，真正generation=0 snapshot与29:59 registered两case复验2pass3.55s、Ruff0、独审通过。guard/祖先/defaultindex/未知fork全0，证据`coordinator/artifacts/t05a-main-integration/attempt-2/result.json`。文档1f80已收闭包遗漏、重复断言误改和整树复制；本文与SKILL当前由主继续维护。生产T05b未完成，不勾8.14。
 
 上一主源码 **`7c39f2d10c7f6a97b4ef50dd6fe7b7e8c0e6a732`** = O02a完整24paths，主28queue+2lifespan、R43及追加test-cache隔离独审通过，证据`coordinator/artifacts/o02a-main-integration/commit-result.json`。此前O02b/route、L01、M01/M02、UUID、配置来源/地址等已集成绿复用；历史关闭事实见Git与原报告，不重新全矩阵。
 
@@ -153,3 +153,16 @@ delegate发布前准备复用唯一Session SQLite ledger与childpublication同�
 - T05b已交27path patch/postimage/contract；GNUroundtrip/AST/Ruff作者静态，未runtime。唯一遗漏production main初始化归主，resolve API `resolve_graph_binding(owner_thread_id, store, registry)`，主strict/full-index与接线待验。
 - fork main路径按现resolver折叠Session根rollout，child仍threads/id；prepared materialization允许按被冻结source lineage提前真实target身份mapping，唯一journal capability写，不造Job/Turn喂普通aput，不在sourcegate释放后重读source；prepare私有、commitproof/retention后publishCAS，失败同journal回滚。作者继续完整source闭包，未验收。
 - Terminal批准本机trust：Node仅127.0.0.1、Backend唯一业务owner/lease，Gateway精确禁管理POST/DELETE旁路，保必要GET/WS与browser路径。auxiliary_proxy精确片段归原作者闭包，main/container/deps主合，不另认证/账本。agent恢复后误认同名自己是冲突owner、裸status误读仍重复；主重发字面路径并纠正，不称已解决。
+
+## 2026-10-05 02:11 用户调整：单 Sol 贯穿试验
+
+- 用户因速度要求改用一个`gpt-6.1-sol`实现，停止多Luna写代码；原consumer/T05b已停止且本B/runtime未新增源码，无后台。fork/Terminal正在交接释放，独有源码保留，不并发接管。新`sol_vertical_implementer`显式model/effort创建成功，实际turn_context `gpt-6.1-sol/max`，证`coordinator/artifacts/sol-efficiency-trial/model-context.json`。首轮只读，主发写入释放后贯穿fork/source，再顺序必要依赖。
+- 比较首完整包耗时、入口遗漏、定向测试首次成功、返工/等待/主补代码量；Luna已有前置和历史投入单列，不能直接累计时长推模型因果；试验尚无结果，不设永久默认。用户新派单优先于旧人数/模型模板。
+- 文档已commit73b4754b（3path guard/ancestor/shared-index0）。E01forward真实repoRuff0；首次主错误testpath pytest4/no tests，保attempt1；attempt2 37pass4fail14.92s，全部4fail为CSM storage mixin错误self._storage以及main目录名假设，原forkowner窄修在交接；raw`coordinator/artifacts/e01a-forward-runtime/attempt-2/`。producer空reservedID与consumer独立Turn P2新增独审已闭，Runner setup取消仍缺，message夹具P3随下一forward对齐。
+- T05b GraphBinding主strict27path target10dafc73；只有creation/test两shared，production AST相等的无关全格式改动丢弃，test仅helper语义合，主factory编译前strict读取+container SessionControl适配+creation显式selector组成`6a44a65957afc3561d93dcf920a0b2a77817a148`。真实runtime未验；同步dryrun4个live冲突（container/creation/support/test）为fork在途，未覆盖。仍需实际Runtime lease包（27path中无tracker，不能称T05b完成）。证`t05b-{fixed-central,main-wiring,runtime-sync}/attempt-1/`。
+- WVL源码只读交接确认legacy/port/stabletarget修已在merge-r54，没重复改。作者只查current-resolved根未找到matrixraw就声称缺失，主须核原运行root再判；1244/13旧组合不归新绿。恢复实际无Git写，首只读试验未再破索引；下一fixed冻结与运行归主。
+
+- 18:13:52 UTC主释放Sol独占E01WT写入，精确pre-Sol tree `e8141e9cd9677a6e3d45907526444d26baa59440`（596已跟踪diff/48untracked，实际inventory/patch及独有untracked备份保，非新全树副本）；Sol只读已指出普通aput→target身份准入循环、缺source control lineage冻结与startup恢复，实施开始，效率未判。
+- WVL主接管冻结183path从r54私有index，先EOF空白拒（test_mounted_workspaces），仅AST等价去EOF后strict0，但fixed`519dd1a405ce7042db2539b24760ec6fe3421dca`的main.py248悬空try被AST拒（109其它Python绿）；不要把作者workspace测试绿归该固定包。保原postimage和failure，未主集成，后续Sol闭合原caller再验。证`coordinator/artifacts/wvl-final-frozen/attempt-{1,2}/`。
+- 主从原工具转录找到unit-web13具体失败（重复stderr/stdout去重），故作者“无法分类”不成立；原raw未保仍如实transcript。旧explorer2修后2pass仅转录，不复跑补日志；其余分属outbox广播/非活跃workspace镜像、assembly迟到/中断请求、catalog tree错误反馈及定位归属，不能简单说环境。`wvl-final-frozen/attempt-1/matrix-disposition.json`。
+- WVL又新建整源码运行副本`integration_fixture_implementer/workspace`，主核3436源码/唯一EOF差异保b95bc617tree、无所属进程，已删可复现副本，保owned/index/原工具转录。证`coordinator/artifacts/wvl-replica-preservation/attempt-1/result.json`。不再使用该临时源码工作区。Terminal postimage私建.venv亦需核后清理；8path独有源保待Sol接。
