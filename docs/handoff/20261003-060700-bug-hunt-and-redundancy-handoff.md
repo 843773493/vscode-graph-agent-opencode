@@ -86,7 +86,7 @@
 
 | 位置 | 现状 | 判定 |
 |---|---|---|
-| `app/core/background_message_bus.py:18 _messages` | 键 `(session_id, agent_id)` 永不回收 | 无界，但它是「供 collect 拉取的 backlog 缓冲」，任何有界化都会改变「稀有会话仍可拉到历史 backlog」的语义，当前按关闭生命周期回收；B01 删除失败后的晚准入仍需 E01/W01 的 catalog guard 闭合后独审，不能单独提交 |
+| `app/core/background_message_bus.py:18 _messages` | B01/B02 已集成 `28359675` | 删除排空后回收目标 Session 全部 backlog，活跃 collector 明确拒绝关闭；删除失败后 catalog `deleting` 拒绝消息准备、Job 创建和迟到 continuation。74 项相关单测及 1 项真实集成通过，两个入口单点变异分别命中拒绝断言，R19 独审通过。其它非 Job Session 写入准入缺口由 A20 单独继续收敛，不把 backlog 改成 LRU |
 | `app/services/orchestration/thread_residency.py ThreadResidencyTracker._states` | 随 (session,thread) 无界 | 唯一淘汰路径 `sweep()` 全仓无生产调用点；朴素 LRU 会因 generation fence 复用误纳迟到 callback，需 owner 配合 |
 | `app/services/infrastructure/trace_event_store.py _event_ids` 的自动 `evt_*` 条目 | 旧报告候选 | A13 已核验当前 Store/writer 使用调用方 Event ID，源码已无该侧车；不重开修复，证据见实时台账引用的 residency/Trace owner 审查 |
 

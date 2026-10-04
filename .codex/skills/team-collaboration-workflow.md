@@ -35,7 +35,7 @@
 回报：复现/判定、改动与断言变化、验证退出码、未验证项、产物和进程
 ```
 
-工具没有 cwd 参数时，每次命令显式指定 workdir，先核验物理 cwd 与 Git 顶层目录。共享主工作树的派单必须提供主代理已按当前 HEAD 初始化的任务索引，状态检查显式使用 `GIT_INDEX_FILE` 和 `GIT_OPTIONAL_LOCKS=0`；裸 `git status` 只作索引观察，不能判断实际在途改动。先串行落地基线再派单；派单后发生 HEAD 变化时由主代理说明变化范围，不能由 agent 猜测。独立审查提供原始需求和稳定产物，不预告期望结论。任务所需未提交变更先审查并集成，或完整交付补丁，不能让测试与生产代码错配。消费者准入门只检查提供者已承诺的接口和生产依赖；待消费者实现的新必填归属造成的预期红灯必须明确归给消费者，不能要求消费者先完成才能获得依赖，形成循环等待。
+工具没有 cwd 参数时，每次命令显式指定 workdir，先核验物理 cwd 与 Git 顶层目录。审查说明须区分状态观察索引、补丁基线 preimage 与候选 postimage；base-relative patch 从声明提交重建，不对陈旧 status 索引强行应用或重基。共享主工作树的派单必须提供主代理已按当前 HEAD 初始化的任务索引，状态检查显式使用 `GIT_INDEX_FILE` 和 `GIT_OPTIONAL_LOCKS=0`；裸 `git status` 只作索引观察，不能判断实际在途改动。先串行落地基线再派单；派单后发生 HEAD 变化时由主代理说明变化范围，不能由 agent 猜测。独立审查提供原始需求和稳定产物，不预告期望结论。任务所需未提交变更先审查并集成，或完整交付补丁，不能让测试与生产代码错配。消费者准入门只检查提供者已承诺的接口和生产依赖；待消费者实现的新必填归属造成的预期红灯必须明确归给消费者，不能要求消费者先完成才能获得依赖，形成循环等待。
 
 恢复时区分任务分支 HEAD、补丁基线与主树已集成依赖；它们可能不同。依赖交付须包含 repo-relative 且可应用的完整生产补丁、精确文件列表与 hash，并通过真实 import 与已承诺接口的定向调用，主代理同步后再通知消费者运行；只冻结接口名称不能证明目标工作树已有模块、DDL 与 codec。依赖只由提供者交固定补丁，主代理串行同步消费者工作树；提供者不得自行写入或启动消费者测试。导出补丁后从声明的固定基线应用补丁重建目标，再核验每个目标 blob/hash 与实际源码一致；工作树 hash 不能代替补丁实际携带的内容。消费者已有其它 owner 的合同片段时，先核对并保留其合并结果，不整文件覆盖；新旧文件 patch header 均只能出现仓库相对路径，不能把 git diff --no-index 的绝对工作树路径直接交付；文件清单包含未跟踪源码，hash 必须从实际文件计算，不手填或以先前同名产物推断。冻结交付后新增切片另导补丁，不覆盖已审版本。模型 429 只表示该轮失败：保留独有改动与证据，不静默换模型、不密集重复恢复。
 
@@ -61,6 +61,7 @@ agent 空回复、报错或中断时先核对实际改动、提交与后台进�
 - worktree 用 Git 创建、移动和移除；递归检索与测试排除其生成根。复制前按用途确定范围，排除历史运行、缓存、打包和参考仓库编译输出；报告与独有差异单独保留。必要重现或变异整体 archive 指定提交并应用完整补丁，不只覆盖测试文件，不复制 `.env` 充当隔离。
 - 独立源码不自动隔离运行状态；需要启动服务时配套业务工作区、BOXTEAM_HOME、端口与 Gateway registry。重启全组开发服务由主代理协调；重测试按资源串行或有限并行，15 个 agent 不代表 15 个重测试槽位。
 - 进程测试显式指定生命周期 owner：既有 backend URL 表示 attached，空目标才表示 Gateway-managed；健康探测只验证就绪，不能把超时解释为切换 owner 再启动一个进程。清理范围从首个进程启动开始覆盖后续启动失败，不能只在全部 ready 后进入清理块。
+- 清理只终止已登记 handle 所属进程或进程组；端口号不能证明进程归属，端口被其它服务重占后不得按端口强杀。registry 尚未交给 lifespan 前，构造函数仍负责失败时关闭已创建的 runtime，并保留启动与清理错误。
 - 结束时登记目录、进程、集成状态与保留理由；纯临时产物主动清理，需复查的证据保留，正式测试输出默认保留。worktree 已集成且无未提交改动后才能移除，不用 force 清理未知工作。
 
 ## 集成与索引
@@ -90,21 +91,23 @@ git merge-base --is-ancestor <本笔提交hash> HEAD
 - 缺陷必须有复现与契约依据；区分真实缺陷、设计有意、待接线目标。下线符号前全仓核对直接、间接调用和测试，包含 `configs/`、`tools/`、`scripts/`；不能只凭零生产调用删除 OpenSpec 接线目标。
 - 新 typed 字段先核对唯一权威载体、hash preimage 与读写投影；展示 provenance 不能兼任执行归属，新增语义不得依靠旧 carrier/root 偶然行为。
 - 新增账本、intent 或 readiness gate 前，核对现有权威状态机和事务；同一身份与生命周期只保留一个 owner，展示投影不得再决定准入。数量与绿灯之外，还要从真实生产入口核对调用路径；helper 测试通过不能代替入口兑现同一合同。
+- 必需的 owner/gate 采用必填构造依赖，不允许先构造无效服务再在入口检查缺失；调用方和测试 fixture 全量迁移。归属只由已校验 admission 决定，metadata 分类与 admission 冲突须明确拒绝。合同要求首次输入与 admission 原子提交时，核对真实 connection/commit 边界，两个各自成功的事务不能算闭合。
 - “纯搬迁”比较新增/删除代码行的规范化多重集，逐条核验未保留行，特别是异常类型、默认值、调用顺序、导入和注释。净减代码不能靠删断言或必要功能取得，测试通过不能代替语义审查。
 - 每次代码改动执行项目要求的静态分析，Web 改动执行构建。测试走矩阵 runner，或使用 `timeout <秒> bash -c 'ulimit -d 4194304; exec "$@"' bash <命令>`；记录实际退出码，后台运行与管道不能掩盖失败。相关检查通过后，只在新改动、失败或未解决疑点出现时扩测或重跑。
+- 运行时直接保存原始 stdout/stderr 与实际退出码。已过期工具输出只能如实标记为转录和推断，不补造原始日志；有摘要的既有通过项不为补日志重跑，必要依赖闭合后的重验再保存原始证据。
 - DTO、手写 proto 与生成类型不一致时，先定位唯一权威合同及遗漏的生成依赖；生成器由主代理协调，消费者可在独立树生成用于验证。不得删除业务身份字段或手写临时类型来迁就陈旧生成结果；build 与类型检查分别记录。
 - 当前切片通过对应测试、独立审查并集成后，才更新 OpenSpec 完成状态。交付前核验依赖闭合、相关契约快照、OpenSpec 校验和产品路径；涉及交互时做真实浏览器验证。基线同样失败只排除改动独有性，不能直接认定环境根因，也不能当作通过。
 - goal 仅在授权范围内的必需实现、清理、审查、验证和集成全部完成后结束；未解决的必要项保持未完成。时间或预算不足时准确交代完成部分与剩余项，不虚报完成。没有必要工作时不继续制造重构或诊断轮次。
 
 ## 实时台账
 
-更新时间：2026-10-04 08:10（北京时间）。goal 已启动；使用 GPT 全队，八个常驻 agent 分别实施、准备后续切片和独立审查，U08 当前受 429 中断并保留证据，不密集恢复。先核对本节事实再恢复，历史服务状态只表示上次验证结果。
+更新时间：2026-10-04 09:11（北京时间）。goal 持续实施；使用 GPT 全队，常驻实现者与两名独立审查者按依赖推进，U08 受 429 中断并保留证据，不密集恢复。先核对本节事实再恢复，历史服务状态只表示上次验证结果。
 
 | 项目 | 已核验状态与下一步 |
 |---|---|
 | 当前范围 | 用户已启动交接任务与关联 OpenSpec 实施、缺陷修复、冗余清理及技能实测改进 goal；按七个关联 change 的依赖推进；UUID自然分配及路径预算已集成，真实回拨 U07 已集成，完整关联回归 684 项及定向修正/自然分配 1+3 项通过、A15b 独审通过；E/T/U 执行与历史闭包、W01/W02 多工作区路由及 V01 Session VRN 链继续实施，不自动扩展到新需求 |
 | 版本与模型 | 两个版本入口维护唯一模型配置；GPT 精确 ID 的创建、回复及实际模型记录已通过 [只读探针](../../out/tests/temp/2026/10/03/154301-gpt-model-probe/coordinator/artifacts/model-probe.json) |
-| Git 基线 | 当前恢复 HEAD `c894e7be`；业务集成至 U07 `b75dbd90`，UUID 验收与技能文档 `c894e7be` 已提交。T01 `0a73ae37`、G01/G02 `72e755eb`、S01 `ad093e0c`、U01/U02 `c16b2c17`、G03 `7596a841`、S02 `122e7939`、验收文档 `a625db31`、T04 `fd6292da`、UUID关联测试记录 `0a7eda26`、配置来源 `f42b6f77`、S03/S04规范 `04a5e30d`、UUID自然分配 `e27260ca`、配置公共 VRN 字段 `69d77eea`、S05 规划 `710ffca4`、C03 验收 `d1aa533d`、U06 路径预算 `00edda52` 已串行集成，防线与祖先链通过。主树在途为 B01 三文件与本次技能更新，共享暂存保留 |
+| Git 基线 | 当前主树 HEAD `28359675`；业务集成至 U07 `b75dbd90`，UUID 验收与技能文档 `c894e7be`、证据更新 `5a958b20` 已提交。T01 `0a73ae37`、G01/G02 `72e755eb`、S01 `ad093e0c`、U01/U02 `c16b2c17`、G03 `7596a841`、S02 `122e7939`、验收文档 `a625db31`、T04 `fd6292da`、UUID关联测试记录 `0a7eda26`、配置来源 `f42b6f77`、S03/S04规范 `04a5e30d`、UUID自然分配 `e27260ca`、配置公共 VRN 字段 `69d77eea`、S05 规划 `710ffca4`、C03 验收 `d1aa533d`、U06 路径预算 `00edda52` 已串行集成，防线与祖先链通过。B01/B02/J01已集成28359675，R19独审通过，74+1pass/imports0；S06四份规划与技能更新在途，共享暂存保留 |
 | 迁移与历史清理 | 数据盘物理根及旧入口软链接已核验，旧副本均删除，系统盘可用空间增加约 238GB；另删除 14 份可重建副本、分类整理 67 项、校验 23092 个保留文件。详见目录审查及其清单 |
 | 业务数据清理 | 默认工作区与 Drive 的旧 .boxteam 分别获用户授权清空，普通文件保留；用户随后统一授权删除源码开发生成的新旧中间数据；该授权不包括普通源码与未集成独有改动。仓库根的旧终端测试目录及空 .boxteam 已另获授权删除，创建者未确认 |
 | 开发服务 | 上次核验默认与 Drive 均为 ready，前端 8027 三条初始化 API 为 200 且 request_id 一致；管理 dev:status/dev:stop/dev 使用下述原环境，恢复时重新检查 |
@@ -115,16 +118,16 @@ git merge-base --is-ancestor <本笔提交hash> HEAD
 
 | 编号 / agent | 状态与范围 | 工作目录 / 产物 | 验证与下一步 |
 |---|---|---|---|
-| U01–U03 / uuidv7_implementer | U01/U02已集成且旧worktree已回收；U03 typed codec已交付；E01 snapshot2+history ports已同步，继续真实分页/Web闭包 | 新worktree out/worktrees/2026/10/04/024121-team-execution/internal_display_projection / 同名任务产物根 | 基线7596a841加完整E01依赖；四个reader wrapper真实import/signature与F/I Ruff通过，中央恢复codec合同并保union exports。分页独占test_internal_history_paging.py，不写共享test_turn.py；真实分页7pass/Web build绿，37项Web/132断言、tsc/build均绿；旧generated已在独立树真实生成闭合；integration20例阻于E01 _rollout_id签名；真实writer仍依T05 |
+| U01–U03/J01 / uuidv7_implementer | U01/U02已集成；U03固定source/tests补丁9f5bba3c/8c34c823，中央34/34hash匹配，R17在途；J01本轮429，主代理接管fixture并集成28359675 | out/worktrees/2026/10/04/024121-team-execution/internal_display_projection / 同名任务产物根 | 基线7596a841加完整E01依赖；reader真实import/signature通过，保union exports。分页7pass、Web37项/132断言、tsc/build绿；旧generated已真实生成闭合；integration20例阻于E01 _rollout_id签名。7/37通过记录为工具输出转录、退出码推断，已明确标注。J01九测试去fixture注入后AST9/9同基线；必填guard与10份fixture中央同步，主树74pass（含Bus5）；B02独立集成1pass，imports0；U03b等S06-v2/E01固定闭包，原U03不改 |
 | R01–R04 / behavior_reviewer | T01/G01/G02审查已落盘；R03发现U01恢复durability blocker；R13审E01固定snapshot2已完成；R14审W01最终固定88文件已交报告，R15审history ports | 主仓库 / 任务根的 behavior_reviewer | R04b已厘清完整旧metadata过时但安全展示丢失真实，U03实施；R05找到S02逐记录VRN/layer歧义，修正已复核，R06通过T04；R07发现B01删除失败后晚准入P1，交E01/W01；R08通过C01；R09b通过S03最终合同；R11通过C03、R12通过U06；R13定位真实user acceptance、terminal convergence及admission context接线缺口，E01收口；R14纯身份路由无新缺陷，7startup失败W02在途 |
 | A01/A02 / architecture_reviewer | 依赖报告与U01架构复审已落盘，无新增架构blocker | 主仓库 / 任务根的 architecture_reviewer | A03/A04已完成并支持UUID/G03验收；A05残留审查完成；A06拒第二Team JSON权威；A07发现UUID真实allocation破D2；A09b通过S04最终合同，A10确认SQLite主路径504/505真实边界；A11核internal display-only view成员和Provider全局pending泄漏；A13确认真实ThreadRuntime/sweep未接线且Trace旧侧车已无，A14交Session VRN纵向计划，A15b通过U07，A16复审W01 |
 | G01/G02/C01 / gateway_user_implementer | G01已集成72e755eb；C01/C02已集成f42b6f77，C02在429后由主代理接管；C03已集成69d77eea/R11通过；S05最终规划复审通过；V01正在实施 | C01 worktree已核27差异等集成HEAD且无进程后回收；V01：out/worktrees/2026/10/04/024121-team-execution/session_vrn_owner / 同名产物根；C03旧证据保留 | R08无阻塞；C03主树46+10+73+2项验证、生成/tsc/build通过；V01从230e9dc2独立worktree统一ResourceIdentity与结构化Session引用/cursor/scope及API/Agent/Web；W01 backend_workspace_id schema及Web request target已中央精确同步/真gate通过；与W01仅container构造片段共享，context client认证缺头归V01闭合 |
-| T01–T05 / integration_fixture_implementer | T04已集成；T05固定4文件patch `38be8c13` 已交、中央从eb9380aa重建4/4hash匹配；A17/R16独审在途，作者暂不写源码 | out/worktrees/2026/10/04/024121-team-execution/integration_fixture_implementer / 任务根的 integration_fixture_implementer | Ruff0，owner/admission/rollback2pass，完整4例2pass/2fail，红灯是E01 acceptance root NULL execution；依赖未闭不验收。已给真实ThreadRuntime下一切片只读计划 |
-| S01/S02 / spec_writer | S01集成ad093e0c；S02集成122e7939；S03/S04经主代理修订、R09b/A09b通过并集成04a5e30d；writer暂停写入 | out/worktrees/2026/10/04/024121-team-execution/spec_writer / 任务根的 spec_writer | S01两个strict通过；3.1/3.2错误历史实现勾选已撤销，规范决定另登记，不混完成含义 |
-| W01 / workspace_owner_implementer | 已授权registry→服务图→Session导航及CRUD→Gateway/bootstrap→Web双workspace闭包 | out/worktrees/2026/10/04/024121-team-execution/workspace_owner_implementer / 任务根的 workspace_owner_implementer | 基线ad093e0c，codex/workspace-session-mount；独占container/deps/main/path/session resolver，UUIDv4不改v7；固定启动mount集合/backend-owned身份CLI/单一完整service graph；真实双graph启停与160并发API/子Task通过，Gateway475项通过；Job构造guard依赖已由主代理同步，真实单backend双mount与Gateway代理已通过；最终88文件纯routing/API/Web补丁80aa6489已冻结，中央重建88/88hash匹配；74Python/130Web/AppState reload5pass；A16架构复审无新缺陷；7Gateway integration原startup锁冲突未验收，W02 e0976d固定13文件中央13/13hash，14处managed caller迁None，原锁复现1pass；扩展6fail/1pass/2skip仍收口UUID/header/PID。固定W01还漏SessionService guard，59f6b增量已同步E01/真gate通过；context client缺认证头的401归V01 |
+| T01–T05/B02 / integration_fixture_implementer | T04已集成；T05固定38be8c13中央4/4hash匹配，A17通过结构审查；R16发现metadata覆盖归属与首次输入跨事务，交T05/E01分别闭合；B02最终交付并集成28359675 | out/worktrees/2026/10/04/024121-team-execution/integration_fixture_implementer / 任务根的 integration_fixture_implementer | T05 Ruff0、2pass/2fail，红灯在E01 acceptance root NULL。B02已迁integration，真实catalog删除失败1pass/Ruff0，两个单gate完整archive变异各exit1且精确命中各入口；中央1pass，R19通过，集成28359675。T05后续独立增量明确拒绝user_turn下新internal HumanMessage；T05归属冲突a93893e0增量1pass且原始日志保存，首次notice原子输入接口归E01。ThreadRuntime下一切片计划已交 |
+| S01/S02 / spec_writer | S01集成ad093e0c；S02集成122e7939；S03/S04经主代理修订、R09b/A09b通过并集成04a5e30d；writer暂停写入，worktree已保独有source overlay后回收 | 原out/worktrees/2026/10/04/024121-team-execution/spec_writer / 任务根的 spec_writer | S01两个strict通过；3.1/3.2错误历史实现勾选已撤销，规范决定另登记，不混完成含义 |
+| W01/W02 / workspace_owner_implementer | 已授权registry→服务图→Session导航及CRUD→Gateway/bootstrap→Web双workspace闭包 | out/worktrees/2026/10/04/024121-team-execution/workspace_owner_implementer / 任务根的 workspace_owner_implementer | 基线ad093e0c，codex/workspace-session-mount；88文件routing/API/Web补丁80aa6489中央88/88hash；真实双graph160并发、Gateway475、Python74/Web130/reload5通过。W02 e0976d固定13文件中央13/13hash，explicit managed/attached与原锁复现1pass；六caller首跑3pass/3fail，后续aeefd07a已冻结，catalog fixture通过，physical fork空Turn及browser PID仍阻塞。A18发现按port越界kill与registry构造失败泄漏，owner继续修。Session guard59f6b及import-order c0d7b已交；context认证401归V01。不得将局部绿灯算作完整集成通过 |
 | E01 / thread_owner_implementer | 已授权8.3-E执行完整闭包与Job/pending/message真实Thread入口 | out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer / 任务根的 thread_owner_implementer | 基线ad093e0c，codex/thread-execution-owner；domain39passed、sibling Thread acceptance7passed，仍须main-child/Job→Step/model-call/stream/Web闭合；采用typed owner ContextVar，fork/index reader依赖已补，admission2项通过；锁alias回归通过，fresh checkpoint失败主因是T05未填messages.execution_id，非stale；R13发现真实user checkpoint helper与converge签名/语义未闭合，E01正补完整入口；ports b282fa重建5/6hash匹配，中央恢复遗漏codec两行后6/6一致，四wrapper已同步U03/T05。R15真实SQLite探针发现Turn visible谓词漏canonical，window随后TypeError，E01单独修；A11要求复用view display_only显式成员，v2按canonical rows有界续读 |
 
-| U05 / canonical_allocation_implementer | 修 UUID 真实 Session/Thread canonical allocation，规范由 S04 独占 | out/worktrees/2026/10/04/024121-team-execution/uuid_live_allocation / 同名任务产物根 | 基线7653dd92；18文件已集成e27260ca、主树684pass/Ruff0/双独审；主树浅根255key通过不能关闭隔离深根516-byte真fail。U06已集成00edda52、主树433pass/R12通过，Linux VFS512预算与零副作用证据确认，Windows/macOS未测；U07真实allocator回拨/跨午夜与fixture毫秒校验补丁9743e079中央2/2hash、Ruff0、主树9pass；完整11模块684pass，A15b指出并关闭同日毫秒/实际catalog无写覆盖；中央定向1+3pass，已提交b75dbd90；U08受429未重试，剩余验收中央完成 |
+| U05 / canonical_allocation_implementer | 修 UUID 真实 Session/Thread canonical allocation，规范由 S04 独占 | 原out/worktrees/2026/10/04/024121-team-execution/uuid_live_allocation已保source overlay/hash后回收 / 同名任务产物根保留 | 基线7653dd92；18文件已集成e27260ca、主树684pass/Ruff0/双独审；主树浅根255key通过不能关闭隔离深根516-byte真fail。U06已集成00edda52、主树433pass/R12通过，Linux VFS512预算与零副作用证据确认，Windows/macOS未测；U07真实allocator回拨/跨午夜与fixture毫秒校验补丁9743e079中央2/2hash、Ruff0、主树9pass；完整11模块684pass，A15b指出并关闭同日毫秒/实际catalog无写覆盖；中央定向1+3pass，已提交b75dbd90；U08受429未重试，剩余验收中央完成 |
 
 ### 调度实测改进
 
@@ -163,6 +166,13 @@ git merge-base --is-ancestor <本笔提交hash> HEAD
 
 | E01再次把R15/codec/probe落到worktree/out，却回报主树同名路径；消费前实际FileNotFound | 主代理拒收并要求搬回唯一字面根、实算hash、删除错误副本；保留原证据不另建规则副本 | 已搬回并实核71f1ce4c，2/2目标重建匹配、consumer真probe通过；路径遵守仍未稳定，不能称已解决 |
 | W01固定container引用SessionService guard，但88文件patch不带方法；live测试不暴露遗漏 | 从固定graph调用边查完整callee；独立增量交59f6b并主代理串行同步真实method gate | E01 active/deleting方法gate通过，Job入口与失败后晚准入真实回归仍待闭合 |
+| R16发现user_turn新internal消息由metadata改成无Turn，且internal admission与first notice各自commit | 归属冲突由writer明确拒绝；首次输入与admission交同一SQLite owner事务，新增独立补丁，不伪装跨事务原子 | 已分配T05/E01；B02独立catalog删除失败回归1pass、完整archive去两guard后预期红，原始退出码0/1已核；上述writer原子合同仍待验证 |
+| U03通过记录未在执行时落盘，工具session过期后仅能转录；V01又拟手写临时类型迁就旧generated | 保存实际进程日志/退出码；转录显式标记推断。消费者独立树可真实生成用于验证，中央最终再生成，不引入第二DTO | U03已如实标记转录，未为补日志重跑；V01已重申真实gen→tsc→build授权，待验证 |
+| A18核W02自动scope仍调用按port全杀，registry构造异常发生在lifespan接管前 | 按真实handle/process group回收，构造失败仍由构造owner关闭局部runtime；端口占用不代表可杀 | W02 owned-process与registry构造失败回归各1pass，固定42de6281中央严格git apply重建8/8hash匹配、A21复审排队；共享stub归并及2+7+1+1focused通过，W03真实handoff已派 |
+
+| B02同时删除两个gate的变异只证明外层拒绝，跨真实模块回归放unit；Job guard可选构造留下无效服务 | 测试归integration，增加prepared continuation真实callee断言，两入口分别单点变异；依赖必填且全量fixture显式注入 | 两独立变异各在目标断言exit1；中央Job/Bus74+集成1pass，AST9/9证实未删旧断言；R19独审通过并集成28359675 |
+| R18用陈旧status索引当作已声明base-relative patch的preimage，误判规划需迁就旧索引；view排序合同也缺owner/同序约束 | 候选明确base与postimage index两种角色，不在旧status index上应用；补同view唯一稳定与Turn严格同序，缺损明确拒绝 | S06-v2 strict通过，R19确认合同闭合可作实施基线；display-only、派生顺序/同序校验/revision与真实SQL行为仍未验收 |
+| A19发现非Job Session mutation绕过持久deleting；W02旧Browser用例普通stop/start却要求PID保留 | Session短写复用既有topology/session gate与catalog，不另起通用Job状态；Browser测试迁真实supervisor handoff且保全部业务断言 | A20统一准入时序/调用方清单在途；W03只授权触发/setup迁移，尚未验证 |
 
 本轮基线：UUIDv7标识3个文件63 passed；OpenSpec strict/all为40 passed、0 failed。T01 activity 1、history 20项通过，T02 generation最终4项通过；S01两个change strict通过。日志在coordinator与对应implementer artifacts，正式业务数据仅在out/tests对应路径。没有跑全量integration；T04修复现生产source history归属，内部runtime_notice执行合同尚待E01闭合。G03所有generator按当前产物版本pin后真实gen:protocol退出0，四个生成根零差异，已独立核验并提交7596a841，绑定测试Python/Node各1passed。G01/U01旧worktree已精确核对所有独有差异均等主树、无进程后回收；外部patch/report/hash保留。
 
