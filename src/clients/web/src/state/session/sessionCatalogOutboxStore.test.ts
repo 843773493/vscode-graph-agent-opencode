@@ -1,212 +1,195 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   addCatalogOutboxIntent,
   createCatalogOutbox,
-  markCatalogOutboxOperationPersisted,
+  type CatalogOutboxOperation,
 } from "./sessionCatalogOutbox";
 import {
-  createIndexedDbCatalogOutboxPort,
   deleteCatalogOutboxOperations,
-  openCatalogOutboxDatabase,
   loadCatalogOutbox,
-  persistCatalogOutboxPendingOperations,
+  persistCatalogOutboxPendingOperation,
   type CatalogOutboxPersistencePort,
+  type CatalogOutboxStoredOperation,
 } from "./sessionCatalogOutboxStore";
-import { createIndexedDbFake } from "./sessionCatalogOutboxIdbFake";
 
 const PARTITION = { gatewayId: "local:8014", workspaceId: "workspace-1", principal: "guest" };
+const PARTITION_KEY = "local:8014\u0000workspace-1\u0000guest";
 const OTHER_PARTITION = { ...PARTITION, principal: "user_b" };
 
 function opId(suffix: string): string {
-  return `op_${suffix.padStart(32, "0")}`;
+  return "op_" + suffix.padStart(32, "0");
 }
 
-function outboxWithRename() {
+function pendingRename(operationId: string, name = "新名字"): CatalogOutboxOperation {
   return addCatalogOutboxIntent(
     createCatalogOutbox(PARTITION),
-    opId("a"),
-    { kind: "rename_node", targetNodeId: "node-1", name: "新名字" },
+    operationId,
+    { kind: "rename_node", targetNodeId: "node-1", name },
     { baseCatalogRevision: 7, expectedRevision: 3 },
-  );
+  ).operations[0];
 }
 
-// 每个用例前装入干净的桩 IndexedDB：进程级同名数据库会保留数据，因此必须显式换新。
-function installIndexedDbFake(): void {
-  Object.defineProperty(globalThis, "indexedDB", {
-    configurable: true,
-    value: createIndexedDbFake(),
-  });
-}
-
-installIndexedDbFake();
-
-/** 只实现本端口三方法的确定性内存桩：用于验证端口契约本身，不模拟 IndexedDB 语义。 */
+/** 端口单测桩；不模拟跨 tab 隔离，真实事务语义由 Chromium 集成测试覆盖。 */
 function memoryPort(): CatalogOutboxPersistencePort {
-  const records = new Map<string, Map<number, StoredRecord>>();
-  type StoredRecord = Parameters<CatalogOutboxPersistencePort["write"]>[0][number];
+  const records = new Map<string, Map<number, CatalogOutboxStoredOperation>>();
+  const nextSequence = new Map<string, number>();
   return {
     async load(partitionKey) {
       return [...(records.get(partitionKey)?.values() ?? [])];
     },
-    async write(batch) {
-      for (const record of batch) {
-        const bucket = records.get(record.partition_key) ?? new Map();
-        bucket.set(record.client_sequence, record);
-        records.set(record.partition_key, bucket);
+    async insert(partitionKey, operation) {
+      if (operation.client_sequence !== null) {
+        throw new Error("memory port 只接收尚未赋号的 operation");
       }
+      const bucket = records.get(partitionKey) ?? new Map();
+      if ([...bucket.values()].some(
+        (record) => record.operation.client_operation_id === operation.client_operation_id,
+      )) {
+        throw new Error("duplicate operation ID");
+      }
+      const sequence = nextSequence.get(partitionKey) ?? 1;
+      const stored: CatalogOutboxStoredOperation = {
+        partition_key: partitionKey,
+        client_sequence: sequence,
+        operation: { ...operation, client_sequence: sequence },
+      };
+      bucket.set(sequence, stored);
+      records.set(partitionKey, bucket);
+      nextSequence.set(partitionKey, sequence + 1);
+      return stored;
     },
-    async delete(partitionKey, clientSequences) {
+    async delete(partitionKey, clientOperationIds) {
       const bucket = records.get(partitionKey);
       if (!bucket) return;
-      for (const clientSequence of clientSequences) bucket.delete(clientSequence);
+      for (const [sequence, record] of bucket) {
+        if (clientOperationIds.includes(record.operation.client_operation_id)) bucket.delete(sequence);
+      }
     },
   };
 }
 
-afterEach(async () => {
-  // 桩数据库是进程级的：每个用例结束后换新，避免用例之间互相看到对方的 pending。
-  installIndexedDbFake();
-});
-
-describe("会话目录 outbox 持久层：按序写入与恢复", () => {
-  test("已落盘的 pending_local 写入后按分区读回并归一为可重放的 persisted", async () => {
+describe("会话目录 outbox 持久层端口", () => {
+  test("事务端口为同一分区依次分配 canonical sequence，restore 不改写持久事实", async () => {
     const port = memoryPort();
-    const outbox = outboxWithRename();
-    await persistCatalogOutboxPendingOperations(port, PARTITION, outbox.operations);
-    const restored = await loadCatalogOutbox(port, PARTITION);
-    expect(restored.operations.map((item) => item.client_operation_id)).toEqual([opId("a")]);
-    // F1：`pending_local` 是「尚未确认本地持久化」的瞬时态；命令既然已成功写入
-    // 持久层，恢复时必须归一为可重放的 `persisted`，否则它既不重放也不对账。
-    expect(restored.operations[0].state).toBe("persisted");
-    expect(restored.next_client_sequence).toBe(2);
-  });
-
-  test("按 client_sequence 有序写入，读回顺序与本地一致", async () => {
-    const port = memoryPort();
-    let outbox = outboxWithRename();
-    outbox = addCatalogOutboxIntent(
-      outbox,
-      opId("b"),
-      { kind: "rename_node", targetNodeId: "node-2", name: "第二个" },
-      { baseCatalogRevision: 7, expectedRevision: 1 },
+    const first = await persistCatalogOutboxPendingOperation(
+      port,
+      PARTITION,
+      pendingRename(opId("a")),
     );
-    // 故意乱序提交：持久层必须按 client_sequence 落盘。
-    await persistCatalogOutboxPendingOperations(port, PARTITION, [...outbox.operations].reverse());
-    const restored = await loadCatalogOutbox(port, PARTITION);
-    expect(restored.operations.map((item) => item.client_sequence)).toEqual([1, 2]);
-    expect(restored.operations.map((item) => item.client_operation_id))
-      .toEqual([opId("a"), opId("b")]);
-  });
-
-  test("不同 principal 分区互不可见", async () => {
-    const port = memoryPort();
-    await persistCatalogOutboxPendingOperations(port, PARTITION, outboxWithRename().operations);
-    const other = await loadCatalogOutbox(port, OTHER_PARTITION);
-    expect(other.operations).toEqual([]);
-    expect(other.next_client_sequence).toBe(1);
-  });
-
-  test("恢复后继续登记不会复用已用过的 client_sequence", async () => {
-    const port = memoryPort();
-    await persistCatalogOutboxPendingOperations(port, PARTITION, outboxWithRename().operations);
-    const restored = await loadCatalogOutbox(port, PARTITION);
-    const continued = addCatalogOutboxIntent(
-      restored,
-      opId("b"),
-      { kind: "rename_node", targetNodeId: "node-2", name: "第二个" },
-      { baseCatalogRevision: 7, expectedRevision: 1 },
+    const second = await persistCatalogOutboxPendingOperation(
+      port,
+      PARTITION,
+      pendingRename(opId("b"), "第二个"),
     );
-    expect(continued.operations.map((item) => item.client_sequence)).toEqual([1, 2]);
-    expect(continued.next_client_sequence).toBe(3);
-  });
-
-  test("已对账条目删除后不再被恢复", async () => {
-    const port = memoryPort();
-    await persistCatalogOutboxPendingOperations(port, PARTITION, outboxWithRename().operations);
-    await deleteCatalogOutboxOperations(port, PARTITION, [1]);
     const restored = await loadCatalogOutbox(port, PARTITION);
-    expect(restored.operations).toEqual([]);
+
+    expect([first.client_sequence, second.client_sequence]).toEqual([1, 2]);
+    expect(restored.operations.map((operation) => operation.client_sequence)).toEqual([1, 2]);
+    expect(restored.operations.map((operation) => operation.state)).toEqual(["persisted", "persisted"]);
   });
 
-  test("分区键与记录主键不一致时必须响亮失败", async () => {
-    const outbox = outboxWithRename();
-    // 契约破坏场景：持久层把不属于本分区的记录返回给调用方（索引/键错配的典型症状）。
-    // 读取方必须响亮失败，而不是把别的分区的 pending 串进当前投影。
-    const port: CatalogOutboxPersistencePort = {
+  test("不同 principal 分区互不可见且分别从 1 分配", async () => {
+    const port = memoryPort();
+    await persistCatalogOutboxPendingOperation(port, PARTITION, pendingRename(opId("a")));
+    const otherOperation = addCatalogOutboxIntent(
+      createCatalogOutbox(OTHER_PARTITION),
+      opId("b"),
+      { kind: "rename_node", targetNodeId: "node-2", name: "用户 B" },
+      { baseCatalogRevision: 7, expectedRevision: 1 },
+    ).operations[0];
+    const other = await persistCatalogOutboxPendingOperation(port, OTHER_PARTITION, otherOperation);
+
+    expect(other.client_sequence).toBe(1);
+    expect((await loadCatalogOutbox(port, OTHER_PARTITION)).operations).toEqual([
+      { ...other.operation, state: "persisted" },
+    ]);
+  });
+
+  test("清理最高序号 operation 后持久高水位不回退", async () => {
+    const port = memoryPort();
+    const first = await persistCatalogOutboxPendingOperation(
+      port,
+      PARTITION,
+      pendingRename(opId("a")),
+    );
+    const highest = await persistCatalogOutboxPendingOperation(
+      port,
+      PARTITION,
+      pendingRename(opId("b"), "最高"),
+    );
+    await deleteCatalogOutboxOperations(
+      port,
+      PARTITION,
+      [highest.operation.client_operation_id],
+    );
+    const next = await persistCatalogOutboxPendingOperation(
+      port,
+      PARTITION,
+      pendingRename(opId("c"), "清理后"),
+    );
+
+    expect(first.client_sequence).toBe(1);
+    expect(highest.client_sequence).toBe(2);
+    expect(next.client_sequence).toBe(3);
+  });
+
+  test("重复 operation ID 的插入失败且原命令不变", async () => {
+    const port = memoryPort();
+    const original = await persistCatalogOutboxPendingOperation(
+      port,
+      PARTITION,
+      pendingRename(opId("a"), "原命令"),
+    );
+    await expect(persistCatalogOutboxPendingOperation(
+      port,
+      PARTITION,
+      pendingRename(opId("a"), "冲突命令"),
+    )).rejects.toThrow("duplicate operation ID");
+
+    const restored = await loadCatalogOutbox(port, PARTITION);
+    expect(restored.operations).toEqual([{ ...original.operation, state: "persisted" }]);
+    expect(restored.operations[0].name).toBe("原命令");
+  });
+
+  test("加载时拒绝不匹配的分区或 sequence 主键", async () => {
+    const operation = pendingRename(opId("a"));
+    const wrongPartition: CatalogOutboxPersistencePort = {
       load: async () => [{
-        partition_key: "wrong-key",
+        partition_key: "wrong",
         client_sequence: 1,
-        operation: outbox.operations[0],
+        operation: { ...operation, client_sequence: 1 },
       }],
-      write: async () => undefined,
+      insert: async () => { throw new Error("unexpected insert"); },
       delete: async () => undefined,
     };
-    await expect(loadCatalogOutbox(port, PARTITION))
+    await expect(loadCatalogOutbox(wrongPartition, PARTITION))
       .rejects.toThrow("outbox 记录的分区键与请求不符");
-  });
 
-  test("记录主键与 operation 序号不一致时必须响亮失败", async () => {
-    const outbox = outboxWithRename();
-    const port: CatalogOutboxPersistencePort = {
+    const wrongSequence: CatalogOutboxPersistencePort = {
       load: async () => [{
-        partition_key: "local:8014\u0000workspace-1\u0000guest",
+        partition_key: PARTITION_KEY,
         client_sequence: 9,
-        operation: outbox.operations[0],
+        operation: { ...operation, client_sequence: 1 },
       }],
-      write: async () => undefined,
+      insert: async () => { throw new Error("unexpected insert"); },
       delete: async () => undefined,
     };
-    await expect(loadCatalogOutbox(port, PARTITION))
+    await expect(loadCatalogOutbox(wrongSequence, PARTITION))
       .rejects.toThrow("outbox 记录主键与 operation 序号不一致");
   });
-});
 
-describe("会话目录 outbox 持久层：写入失败必须透明抛出", () => {
-  test("本地存储写入失败时原样抛出，绝不静默降级为内存态", async () => {
+  test("首次持久化失败必须原样显式抛出", async () => {
     const failing: CatalogOutboxPersistencePort = {
       load: async () => [],
-      write: async () => {
+      insert: async () => {
         throw new Error("QuotaExceededError: 本地存储已满");
       },
       delete: async () => undefined,
     };
-    await expect(persistCatalogOutboxPendingOperations(
+    await expect(persistCatalogOutboxPendingOperation(
       failing,
       PARTITION,
-      outboxWithRename().operations,
+      pendingRename(opId("a")),
     )).rejects.toThrow("QuotaExceededError: 本地存储已满");
-  });
-});
-
-describe("会话目录 outbox 真 IndexedDB 持久层", () => {
-  test("真实 IndexedDB 往返保留操作状态与序号", async () => {
-    const database = await openCatalogOutboxDatabase();
-    const port = createIndexedDbCatalogOutboxPort(database);
-    const persisted = markCatalogOutboxOperationPersisted(outboxWithRename(), opId("a"));
-    await persistCatalogOutboxPendingOperations(port, PARTITION, persisted.operations);
-    const restored = await loadCatalogOutbox(port, PARTITION);
-    expect(restored.operations.map((item) => item.client_operation_id)).toEqual([opId("a")]);
-    expect(restored.operations[0].state).toBe("persisted");
-    expect(restored.next_client_sequence).toBe(2);
-  });
-
-  test("真实 IndexedDB 删除后不再恢复，且不影响其它分区", async () => {
-    const database = await openCatalogOutboxDatabase();
-    const port = createIndexedDbCatalogOutboxPort(database);
-    await persistCatalogOutboxPendingOperations(port, PARTITION, outboxWithRename().operations);
-    await persistCatalogOutboxPendingOperations(port, OTHER_PARTITION, outboxWithRename().operations);
-    await deleteCatalogOutboxOperations(port, PARTITION, [1]);
-    expect((await loadCatalogOutbox(port, PARTITION)).operations).toEqual([]);
-    expect((await loadCatalogOutbox(port, OTHER_PARTITION)).operations.length).toBe(1);
-  });
-
-  test("环境没有 IndexedDB 时打开数据库必须响亮失败", () => {
-    Reflect.deleteProperty(globalThis, "indexedDB");
-    try {
-      expect(() => openCatalogOutboxDatabase())
-        .toThrow("当前运行环境没有 IndexedDB");
-    } finally {
-      installIndexedDbFake();
-    }
   });
 });

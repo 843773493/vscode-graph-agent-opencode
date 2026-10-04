@@ -8,10 +8,12 @@ import {
 } from "../../api/session/sessionCatalogOperations";
 import {
   addCatalogOutboxIntent,
+  assignCatalogOutboxOperationSequence,
   applyCatalogOutboxReceipts,
   catalogOutboxPartitionKey,
   markCatalogOutboxOperationPersisted,
   markCatalogOutboxOperationsUnknown,
+  orderedCatalogOutboxOperations,
   planCatalogOutboxBatch,
   pruneReconciledCatalogOutbox,
   resolveCatalogOutboxFailures,
@@ -26,7 +28,7 @@ import {
 import {
   deleteCatalogOutboxOperations,
   loadCatalogOutbox,
-  persistCatalogOutboxPendingOperations,
+  persistCatalogOutboxPendingOperation,
   type CatalogOutboxPersistencePort,
 } from "../../state/session/sessionCatalogOutboxStore";
 import { errorMessage } from "../../utils/errorMessage";
@@ -119,6 +121,11 @@ export interface CatalogOutboxDriver {
 
 const DEFAULT_MAX_BATCH_SIZE = 50;
 
+interface CatalogOutboxFlushResult {
+  outcome: CatalogOutboxDispatchOutcome;
+  operationOutcomes: ReadonlyMap<string, CatalogOutboxDispatchOutcome>;
+}
+
 function isDefinitiveRejection(error: unknown): boolean {
   return error instanceof HttpRequestError
     && error.status >= 400
@@ -146,7 +153,7 @@ export function createSessionCatalogOutboxDriver(
   // 没有这个确认前，unknown 一律保留 pending，不当可入队、不当依赖已满足。
   const retryableOperationIds = new Set<string>();
   // 同一分区同一时刻只允许一个 flush：并发 flush 会把同一批命令重复入队。
-  let flushInFlight: Promise<CatalogOutboxDispatchOutcome> | null = null;
+  let flushInFlight: Promise<CatalogOutboxFlushResult> | null = null;
 
   const publish = (next: CatalogOutbox, broadcast: boolean): CatalogOutbox => {
     outbox = next;
@@ -163,14 +170,15 @@ export function createSessionCatalogOutboxDriver(
   };
 
   /** 后台有序批量入队：一次一批，直到无可入队命令或遇到未知/拒绝结果。 */
-  const flushOnce = async (): Promise<CatalogOutboxDispatchOutcome> => {
+  const flushOnce = async (): Promise<CatalogOutboxFlushResult> => {
     let outcome: CatalogOutboxDispatchOutcome = "idle";
+    const operationOutcomes = new Map<string, CatalogOutboxDispatchOutcome>();
     for (;;) {
       const batch = planCatalogOutboxBatch(requireOutbox(), {
         maxBatchSize,
         retryableOperationIds: [...retryableOperationIds],
       });
-      if (batch.length === 0) return outcome;
+      if (batch.length === 0) return { outcome, operationOutcomes };
       const batchIds = batch.map((operation) => operation.client_operation_id);
       try {
         const result = await adapter.enqueue(
@@ -180,11 +188,30 @@ export function createSessionCatalogOutboxDriver(
         );
         for (const operationId of batchIds) retryableOperationIds.delete(operationId);
         publish(applyCatalogOutboxReceipts(requireOutbox(), result.receipts), true);
+        for (const operationId of batchIds) {
+          operationOutcomes.set(operationId, "accepted");
+        }
         outcome = "accepted";
       } catch (error: unknown) {
         if (isDefinitiveRejection(error)) {
-          publish(await reconcileInternal(), true);
-          return "rejected";
+          const operationIdsBeforeReconcile = requireOutbox().operations.map(
+            (operation) => operation.client_operation_id,
+          );
+          await reconcileInternal();
+          const remainingOperationIds = new Set(
+            requireOutbox().operations.map((operation) => operation.client_operation_id),
+          );
+          for (const operationId of operationIdsBeforeReconcile) {
+            if (!remainingOperationIds.has(operationId)) {
+              operationOutcomes.set(operationId, "rejected");
+            }
+          }
+          for (const operationId of batchIds) {
+            if (!operationOutcomes.has(operationId)) {
+              operationOutcomes.set(operationId, "idle");
+            }
+          }
+          return { outcome: "rejected", operationOutcomes };
         }
         if (!isUnknownOutcome(error)) throw error;
         // 结果未知：只做 unknown 标记，绝不把 ID 当作可重试——重试必须等
@@ -194,12 +221,15 @@ export function createSessionCatalogOutboxDriver(
           markCatalogOutboxOperationsUnknown(requireOutbox(), batchIds),
           true,
         );
-        return "unknown";
+        for (const operationId of batchIds) {
+          operationOutcomes.set(operationId, "unknown");
+        }
+        return { outcome: "unknown", operationOutcomes };
       }
     }
   };
 
-  const flush = async (): Promise<CatalogOutboxDispatchOutcome> => {
+  const flush = async (): Promise<CatalogOutboxFlushResult> => {
     if (flushInFlight !== null) return await flushInFlight;
     const run = flushOnce().finally(() => {
       if (flushInFlight === run) flushInFlight = null;
@@ -227,17 +257,59 @@ export function createSessionCatalogOutboxDriver(
       publish(applyCatalogOutboxReceipts(requireOutbox(), page.items), false);
     }
     const resolution = resolveCatalogOutboxFailures(requireOutbox());
-    if (resolution.removed_operation_ids.length === 0) return requireOutbox();
+    if (resolution.removed_operation_ids.length === 0) {
+      if (tracked.length > 0) input.broadcast?.post(partitionKey);
+      return requireOutbox();
+    }
+    // 先从即时状态移除闭包，避免持久化删除等待期间把新操作覆盖回旧快照。
+    publish(resolution.outbox, false);
     await deleteCatalogOutboxOperations(
       input.persistence,
       input.partition,
-      requireOutbox().operations
-        .filter((operation) => resolution.removed_operation_ids.includes(
-          operation.client_operation_id,
-        ))
-        .map((operation) => operation.client_sequence),
+      resolution.removed_operation_ids,
     );
-    return publish(resolution.outbox, true);
+    input.broadcast?.post(partitionKey);
+    return requireOutbox();
+  };
+
+  const flushOperation = async (
+    operationId: string,
+  ): Promise<CatalogOutboxDispatchOutcome> => {
+    for (;;) {
+      const operation = requireOutbox().operations.find(
+        (candidate) => candidate.client_operation_id === operationId,
+      );
+      if (!operation) return "rejected";
+      if (operation.state === "accepted" || operation.state === "committed") {
+        return "accepted";
+      }
+      if (operation.state === "unknown") return "unknown";
+      if (operation.state !== "persisted") return "idle";
+
+      const result = await flush();
+      const ownOutcome = result.operationOutcomes.get(operationId);
+      if (ownOutcome !== undefined) return ownOutcome;
+
+      const current = requireOutbox().operations.find(
+        (candidate) => candidate.client_operation_id === operationId,
+      );
+      if (!current) return result.outcome === "rejected" ? "rejected" : "idle";
+      if (current.state === "accepted" || current.state === "committed") {
+        return "accepted";
+      }
+      if (current.state === "unknown") return "unknown";
+      if (current.state !== "persisted") return "idle";
+
+      const nextBatch = planCatalogOutboxBatch(requireOutbox(), {
+        maxBatchSize,
+        retryableOperationIds: [...retryableOperationIds],
+      });
+      if (!nextBatch.some((candidate) => candidate.client_operation_id === operationId)) {
+        return "idle";
+      }
+      // 共享 flush 可能在本命令落盘前结束，也可能只处理了另一条被明确拒绝的命令。
+      // 仅当本命令仍可入队时重新规划，避免把别的命令 outcome 传给它。
+    }
   };
 
   return {
@@ -246,8 +318,38 @@ export function createSessionCatalogOutboxDriver(
       return publish(restored, false);
     },
     async reload() {
+      const beforeLoad = requireOutbox();
       const restored = await loadCatalogOutbox(input.persistence, input.partition);
-      return publish(restored, false);
+      const current = requireOutbox();
+      if (current === beforeLoad) return publish(restored, false);
+
+      const beforeById = new Map(
+        beforeLoad.operations.map((operation) => [operation.client_operation_id, operation]),
+      );
+      const currentById = new Map(
+        current.operations.map((operation) => [operation.client_operation_id, operation]),
+      );
+      const mergedById = new Map(
+        restored.operations.map((operation) => [operation.client_operation_id, operation]),
+      );
+      for (const operation of beforeLoad.operations) {
+        if (!currentById.has(operation.client_operation_id)) {
+          mergedById.delete(operation.client_operation_id);
+        }
+      }
+      for (const operation of current.operations) {
+        if (beforeById.get(operation.client_operation_id) !== operation) {
+          mergedById.set(operation.client_operation_id, operation);
+        }
+      }
+      const merged = {
+        ...restored,
+        operations: orderedCatalogOutboxOperations({
+          ...restored,
+          operations: [...mergedById.values()],
+        }),
+      };
+      return publish(merged, false);
     },
     current: requireOutbox,
     async applyIntent(clientOperationId, intent, options) {
@@ -259,32 +361,55 @@ export function createSessionCatalogOutboxDriver(
         options,
       );
       publish(withPending, false);
-      // 2. 按 client_sequence 有序持久化本次意图；失败必须撤销并报错，不得派发。
+      // 2. IndexedDB 原子分配 canonical sequence 并写入；失败必须撤销并报错。
+      let insertedOperationId: string | null = null;
       try {
-        await persistCatalogOutboxPendingOperations(
+        const pending = withPending.operations.find(
+          (operation) => operation.client_operation_id === clientOperationId,
+        );
+        if (!pending) throw new Error(`pending operation 丢失: ${clientOperationId}`);
+        const stored = await persistCatalogOutboxPendingOperation(
           input.persistence,
           input.partition,
-          withPending.operations.filter(
-            (operation) => operation.client_operation_id === clientOperationId,
-          ),
+          pending,
+        );
+        insertedOperationId = stored.operation.client_operation_id;
+        if (stored.operation.client_operation_id !== clientOperationId
+          || stored.partition_key !== partitionKey) {
+          throw new Error(`IndexedDB 返回了不匹配的 outbox operation: ${clientOperationId}`);
+        }
+        if (!requireOutbox().operations.some(
+          (operation) => operation.client_operation_id === clientOperationId,
+        )) {
+          throw new Error(`该 operation 已随失败依赖回滚，未派发: ${clientOperationId}`);
+        }
+        const sequenced = assignCatalogOutboxOperationSequence(
+          requireOutbox(),
+          clientOperationId,
+          stored.client_sequence,
+        );
+        publish(
+          markCatalogOutboxOperationPersisted(sequenced, clientOperationId),
+          true,
         );
       } catch (error: unknown) {
         const beforeRollback = requireOutbox();
         const rollback = rollbackCatalogOutboxIntents(beforeRollback, [clientOperationId]);
         const removedOperationIds = new Set(rollback.removed_operation_ids);
-        const removedSequences = beforeRollback.operations
-          .filter((operation) => removedOperationIds.has(operation.client_operation_id))
-          .map((operation) => operation.client_sequence);
+        if (insertedOperationId !== null) {
+          removedOperationIds.add(insertedOperationId);
+        }
         publish(rollback.outbox, true);
-        // 本地写入可能在「记录已落盘、事务随后才失败」的窗口抛错。此时只撤销内存
-        // pending 会留下磁盘残留，刷新恢复后它会被后续 flush 当作可派发命令重新
-        // 入队（静默复活一个用户已看到失败的操作）。必须把已落盘条目一并清除。
+        // IndexedDB insert 事务若失败不会留下半条 operation；但更早已提交的依赖项
+        // 可能仍需随回滚闭包清除，因此按稳定 operation ID 清理。
         try {
-          await deleteCatalogOutboxOperations(
-            input.persistence,
-            input.partition,
-            removedSequences,
-          );
+          if (removedOperationIds.size > 0) {
+            await deleteCatalogOutboxOperations(
+              input.persistence,
+              input.partition,
+              [...removedOperationIds],
+            );
+          }
         } catch (cleanupError: unknown) {
           throw new Error(
             "会话目录 pending 变更未能本地持久化，且已落盘条目回滚也失败，请检查本地存储:"
@@ -297,35 +422,41 @@ export function createSessionCatalogOutboxDriver(
           + errorMessage(error),
         );
       }
-      publish(markCatalogOutboxOperationPersisted(requireOutbox(), clientOperationId), false);
       // 3. 持久化成功后才允许后台有序批量入队。
       // 返回值必须如实反映本条命令是否已入队：`flush` 可能因依赖未满足（前序
       // 命令仍 unknown/persisted）或批量上限而在本轮**一条都没入队**，此时命令
       // 的本地状态仍是 `persisted`，把它坍缩成 `accepted` 会与后端 durable
       // acceptance 脱钩（F2）。直接透传 flush 的 outcome 区分这两种情形。
-      return await flush();
+      return await flushOperation(clientOperationId);
     },
     async reconcile() {
-      const next = await reconcileInternal();
+      await reconcileInternal();
       await flush();
-      return next;
+      return requireOutbox();
     },
     async prune(reconciledCatalogRevision) {
       const before = requireOutbox();
       const next = pruneReconciledCatalogOutbox(before, reconciledCatalogRevision);
-      const prunedSequences = before.operations
+      const prunedOperationIds = before.operations
         .filter((operation) => !next.operations.some(
           (kept) => kept.client_operation_id === operation.client_operation_id,
         ))
-        .map((operation) => operation.client_sequence);
-      if (prunedSequences.length > 0) {
+        .map((operation) => operation.client_operation_id);
+      if (prunedOperationIds.length > 0) {
         await deleteCatalogOutboxOperations(
           input.persistence,
           input.partition,
-          prunedSequences,
+          prunedOperationIds,
         );
       }
-      return publish(next, false);
+      const prunedIds = new Set(prunedOperationIds);
+      const current = requireOutbox();
+      return publish({
+        ...current,
+        operations: current.operations.filter(
+          (operation) => !prunedIds.has(operation.client_operation_id),
+        ),
+      }, false);
     },
   };
 }

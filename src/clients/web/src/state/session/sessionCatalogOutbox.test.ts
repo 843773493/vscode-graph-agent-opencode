@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   addCatalogOutboxIntent,
+  assignCatalogOutboxOperationSequence,
   applyCatalogOutboxReceipts,
   catalogOutboxBatchToIntents,
   catalogOutboxOperationIsTerminal,
@@ -59,6 +60,17 @@ function outboxWithRename(): CatalogOutbox {
   );
 }
 
+function persisted(
+  outbox: CatalogOutbox,
+  operationId: string,
+  sequence: number,
+): CatalogOutbox {
+  return markCatalogOutboxOperationPersisted(
+    assignCatalogOutboxOperationSequence(outbox, operationId, sequence),
+    operationId,
+  );
+}
+
 function operation(outbox: CatalogOutbox, operationId: string): CatalogOutboxOperation {
   const found = outbox.operations.find(
     (item) => item.client_operation_id === operationId,
@@ -88,7 +100,7 @@ describe("会话目录 outbox 分区键", () => {
 });
 
 describe("会话目录 outbox 意图登记", () => {
-  test("同步登记 pending_local 并给出单调 client_sequence", () => {
+  test("同步登记 pending_local 时不伪造尚未分配的 client_sequence", () => {
     let outbox = outboxWithRename();
     outbox = addCatalogOutboxIntent(
       outbox,
@@ -98,9 +110,8 @@ describe("会话目录 outbox 意图登记", () => {
     );
     const ordered = orderedCatalogOutboxOperations(outbox);
     expect(ordered.map((item) => item.client_operation_id)).toEqual([opId("a"), opId("b")]);
-    expect(ordered.map((item) => item.client_sequence)).toEqual([1, 2]);
+    expect(ordered.map((item) => item.client_sequence)).toEqual([null, null]);
     expect(ordered.map((item) => item.state)).toEqual(["pending_local", "pending_local"]);
-    expect(outbox.next_client_sequence).toBe(3);
   });
 
   test("create_folder 用 client_ref 投影且不接受 target_node_id", () => {
@@ -160,8 +171,30 @@ describe("会话目录 outbox 持久化推进与回退", () => {
   test("只有 persisted 之后才进入入队批次", () => {
     const pending = outboxWithRename();
     expect(planCatalogOutboxBatch(pending, { maxBatchSize: 10 })).toEqual([]);
-    const persisted = markCatalogOutboxOperationPersisted(pending, opId("a"));
-    expect(planCatalogOutboxBatch(persisted, { maxBatchSize: 10 })
+    expect(() => markCatalogOutboxOperationPersisted(pending, opId("a")))
+      .toThrow("尚未获得持久化 client_sequence");
+    const durable = persisted(pending, opId("a"), 1);
+    expect(planCatalogOutboxBatch(durable, { maxBatchSize: 10 })
+      .map((item) => item.client_operation_id)).toEqual([opId("a")]);
+  });
+
+  test("较早 pending 尚未获得事务序号时后续命令不得越过它入队", () => {
+    let outbox = persisted(outboxWithRename(), opId("a"), 1);
+    outbox = addCatalogOutboxIntent(
+      outbox,
+      opId("b"),
+      { kind: "rename_node", targetNodeId: "node-2", name: "中间命令" },
+      { baseCatalogRevision: 7, expectedRevision: 1 },
+    );
+    outbox = addCatalogOutboxIntent(
+      outbox,
+      opId("c"),
+      { kind: "rename_node", targetNodeId: "node-3", name: "后续命令" },
+      { baseCatalogRevision: 7, expectedRevision: 1 },
+    );
+    outbox = persisted(outbox, opId("c"), 3);
+
+    expect(planCatalogOutboxBatch(outbox, { maxBatchSize: 10 })
       .map((item) => item.client_operation_id)).toEqual([opId("a")]);
   });
 
@@ -212,14 +245,14 @@ describe("会话目录 outbox 持久化推进与回退", () => {
 describe("会话目录 outbox 有序批量入队", () => {
   test("同 node 连续编辑按 client_sequence 顺序且依赖可在同批解析", () => {
     let outbox = outboxWithRename();
-    outbox = markCatalogOutboxOperationPersisted(outbox, opId("a"));
+    outbox = persisted(outbox, opId("a"), 1);
     outbox = addCatalogOutboxIntent(
       outbox,
       opId("b"),
       { kind: "move_node", targetNodeId: "node-1", parentNodeId: null },
       { baseCatalogRevision: 7, expectedRevision: 4, dependsOn: [opId("a")] },
     );
-    outbox = markCatalogOutboxOperationPersisted(outbox, opId("b"));
+    outbox = persisted(outbox, opId("b"), 2);
 
     const batch = planCatalogOutboxBatch(outbox, { maxBatchSize: 10 });
     expect(batch.map((item) => item.client_operation_id)).toEqual([opId("a"), opId("b")]);
@@ -249,14 +282,14 @@ describe("会话目录 outbox 有序批量入队", () => {
 
   test("依赖未取得 acceptance 时后继不得越序入队", () => {
     let outbox = outboxWithRename();
-    outbox = markCatalogOutboxOperationPersisted(outbox, opId("a"));
+    outbox = persisted(outbox, opId("a"), 1);
     outbox = addCatalogOutboxIntent(
       outbox,
       opId("b"),
       { kind: "rename_node", targetNodeId: "node-1", name: "第二次改名" },
       { baseCatalogRevision: 7, expectedRevision: 3, dependsOn: [opId("a")] },
     );
-    outbox = markCatalogOutboxOperationPersisted(outbox, opId("b"));
+    outbox = persisted(outbox, opId("b"), 2);
 
     // 前一批只含 a：b 依赖 a，但同批已解析，因此两题一起入队；先只让 a 入队来验证越序防护。
     const firstBatch = planCatalogOutboxBatch(outbox, { maxBatchSize: 1 });
@@ -268,7 +301,7 @@ describe("会话目录 outbox 有序批量入队", () => {
 
   test("依赖 accepted 后才放行后继", () => {
     let outbox = outboxWithRename();
-    outbox = markCatalogOutboxOperationPersisted(outbox, opId("a"));
+    outbox = persisted(outbox, opId("a"), 1);
     outbox = applyCatalogOutboxReceipts(outbox, [receipt(opId("a"))]);
     outbox = addCatalogOutboxIntent(
       outbox,
@@ -276,7 +309,7 @@ describe("会话目录 outbox 有序批量入队", () => {
       { kind: "rename_node", targetNodeId: "node-1", name: "第二次改名" },
       { baseCatalogRevision: 7, expectedRevision: 3, dependsOn: [opId("a")] },
     );
-    outbox = markCatalogOutboxOperationPersisted(outbox, opId("b"));
+    outbox = persisted(outbox, opId("b"), 2);
     expect(planCatalogOutboxBatch(outbox, { maxBatchSize: 10 })
       .map((item) => item.client_operation_id)).toEqual([opId("b")]);
   });
@@ -287,7 +320,7 @@ describe("会话目录 outbox 有序批量入队", () => {
   });
 
   test("unknown 未确认时不得入队，服务端确认不认识该 ID 后才按同一 ID 重试", () => {
-    let outbox = markCatalogOutboxOperationPersisted(outboxWithRename(), opId("a"));
+    let outbox = persisted(outboxWithRename(), opId("a"), 1);
     outbox = markCatalogOutboxOperationsUnknown(outbox, [opId("a")]);
     expect(planCatalogOutboxBatch(outbox, { maxBatchSize: 10 })).toEqual([]);
     const retried = planCatalogOutboxBatch(outbox, {
@@ -405,7 +438,7 @@ describe("会话目录 outbox 对账", () => {
   });
 
   test("unknown 属于未终态：仍留在投影与对账集合中", () => {
-    let outbox = markCatalogOutboxOperationPersisted(outboxWithRename(), opId("a"));
+    let outbox = persisted(outboxWithRename(), opId("a"), 1);
     outbox = markCatalogOutboxOperationsUnknown(outbox, [opId("a")]);
     expect(unsettledCatalogOutboxOperations(outbox)
       .map((item) => item.client_operation_id)).toEqual([opId("a")]);

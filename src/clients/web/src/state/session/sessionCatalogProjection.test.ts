@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SessionCatalogNode, SessionCatalogPage } from "../../types/backend";
 import {
   addCatalogOutboxIntent,
+  assignCatalogOutboxOperationSequence,
   applyCatalogOutboxReceipts,
   createCatalogOutbox,
   markCatalogOutboxOperationPersisted,
@@ -195,7 +196,10 @@ describe("会话目录 pending 投影：新建 Folder 的 client_ref", () => {
       { kind: "create_folder", name: "新文件夹", parentNodeId: "cnode_root" },
       { baseCatalogRevision: 0 },
     ));
-    outbox = markCatalogOutboxOperationPersisted(outbox, opId("f"));
+    outbox = markCatalogOutboxOperationPersisted(
+      assignCatalogOutboxOperationSequence(outbox, opId("f"), 1),
+      opId("f"),
+    );
     outbox = applyCatalogOutboxReceipts(outbox, [receipt(opId("f"), {
       kind: "create_folder",
       created_node_id: "cnode_new",

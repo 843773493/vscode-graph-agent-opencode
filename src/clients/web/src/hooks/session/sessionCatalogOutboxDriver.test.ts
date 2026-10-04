@@ -7,6 +7,7 @@ import type {
 } from "../../api/session/sessionCatalogOperations";
 import {
   addCatalogOutboxIntent,
+  assignCatalogOutboxOperationSequence,
   createCatalogOutbox,
   type CatalogOutbox,
   type CatalogOutboxOperation,
@@ -17,15 +18,21 @@ import {
   type CatalogOutboxDriver,
   type SessionCatalogOperationsAdapter,
 } from "./sessionCatalogOutboxDriver";
-import { createIndexedDbFake } from "../../state/session/sessionCatalogOutboxIdbFake";
 import {
-  createIndexedDbCatalogOutboxPort,
-  openCatalogOutboxDatabase,
   type CatalogOutboxPersistencePort,
+  type CatalogOutboxStoredOperation,
 } from "../../state/session/sessionCatalogOutboxStore";
 
 const PARTITION = { gatewayId: "local:8014", workspaceId: "workspace-1", principal: "guest" };
 const PORT = 48_901;
+type StoredCatalogOutboxOperation = CatalogOutboxStoredOperation["operation"];
+
+function withStoredSequence(
+  operation: CatalogOutboxOperation,
+  sequence: number,
+): StoredCatalogOutboxOperation {
+  return { ...operation, client_sequence: sequence };
+}
 
 function opId(suffix: string): string {
   return `op_${suffix.padStart(32, "0")}`;
@@ -52,18 +59,54 @@ function receipt(
   };
 }
 
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((complete) => { resolve = complete; });
+  return { promise, resolve };
+}
+
 /** 记录端口写入的确定性内存桩：用于验证「持久化先于入队」与时序，不模拟 IndexedDB。 */
 function recordingPort(): CatalogOutboxPersistencePort & { writes: CatalogOutboxOperation[] } {
   const writes: CatalogOutboxOperation[] = [];
+  const records = new Map<string, Map<number, CatalogOutboxStoredOperation>>();
+  const nextSequences = new Map<string, number>();
   return {
     writes,
-    async load() {
-      return [];
+    async load(partitionKey) {
+      return [...(records.get(partitionKey)?.values() ?? [])];
     },
-    async write(records) {
-      for (const record of records) writes.push(record.operation);
+    async insert(partitionKey, operation) {
+      if (operation.client_sequence !== null) {
+        throw new Error("driver 必须把未赋号的 pending 提交给持久层");
+      }
+      const bucket = records.get(partitionKey) ?? new Map();
+      if ([...bucket.values()].some(
+        (record) => record.operation.client_operation_id === operation.client_operation_id,
+      )) {
+        throw new Error("duplicate operation ID");
+      }
+      const sequence = nextSequences.get(partitionKey) ?? 1;
+      const stored: CatalogOutboxStoredOperation = {
+        partition_key: partitionKey,
+        client_sequence: sequence,
+        operation: { ...operation, client_sequence: sequence },
+      };
+      bucket.set(sequence, stored);
+      records.set(partitionKey, bucket);
+      nextSequences.set(partitionKey, sequence + 1);
+      writes.push(stored.operation);
+      return stored;
     },
-    async delete() {},
+    async delete(partitionKey, clientOperationIds) {
+      const bucket = records.get(partitionKey);
+      if (!bucket) return;
+      for (const [sequence, record] of bucket) {
+        if (clientOperationIds.includes(record.operation.client_operation_id)) bucket.delete(sequence);
+      }
+    },
   };
 }
 
@@ -126,7 +169,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     let enqueueCount = 0;
     const persistence: CatalogOutboxPersistencePort = {
       load: async () => [],
-      write: async () => {
+      insert: async () => {
         throw new Error("QuotaExceededError: 本地存储已满");
       },
       delete: async () => undefined,
@@ -156,9 +199,9 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     expect(driver.current().operations).toEqual([]);
   });
 
-  test("本地写入先落盘后抛错：已落盘条目必须一并回滚，刷新恢复不复活", async () => {
-    const disk = new Map<number, CatalogOutboxOperation>();
-    let failNextWrite = false;
+  test("唯一 insert 事务失败时撤销 pending、保持 IDB 无记录且绝不派发", async () => {
+    const disk = new Map<number, StoredCatalogOutboxOperation>();
+    let failNextInsert = false;
     const persistence: CatalogOutboxPersistencePort = {
       load: async () => [...disk.entries()]
         .sort(([left], [right]) => left - right)
@@ -167,16 +210,25 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
           client_sequence: clientSequence,
           operation,
         })),
-      write: async (records) => {
-        for (const record of records) disk.set(record.client_sequence, record.operation);
-        if (failNextWrite) {
-          failNextWrite = false;
-          // 模拟真实 IndexedDB：记录已写入底层存储，事务随后才失败。
+      insert: async (partitionKey, operation) => {
+        if (failNextInsert) {
+          failNextInsert = false;
           throw new Error("QuotaExceededError: 本地存储已满");
         }
+        if (operation.client_sequence !== null) throw new Error("pending 已提前赋号");
+        const sequence = disk.size + 1;
+        const stored = {
+          partition_key: partitionKey,
+          client_sequence: sequence,
+          operation: withStoredSequence(operation, sequence),
+        };
+        disk.set(sequence, stored.operation);
+        return stored;
       },
-      delete: async (_partitionKey, clientSequences) => {
-        for (const clientSequence of clientSequences) disk.delete(clientSequence);
+      delete: async (_partitionKey, clientOperationIds) => {
+        for (const [clientSequence, operation] of disk) {
+          if (clientOperationIds.includes(operation.client_operation_id)) disk.delete(clientSequence);
+        }
       },
     };
     const enqueued: string[] = [];
@@ -206,7 +258,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
       expectedRevision: 3,
     });
 
-    failNextWrite = true;
+    failNextInsert = true;
     await expect(driver.applyIntent(opId("b"), renameIntent(), {
       baseCatalogRevision: 7,
       expectedRevision: 3,
@@ -230,42 +282,6 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
       expectedRevision: 3,
     });
     expect(enqueued.slice(before)).not.toContain(opId("b"));
-  });
-
-  test("落盘失败且回滚也失败时，错误必须同时含写入与回滚两条原因", async () => {
-    let failNextWrite = false;
-    const persistence: CatalogOutboxPersistencePort = {
-      load: async () => [],
-      write: async () => {
-        if (failNextWrite) {
-          failNextWrite = false;
-          throw new Error("QuotaExceededError: 本地存储已满");
-        }
-      },
-      delete: async () => {
-        throw new Error("删除已落盘条目也失败");
-      },
-    };
-    const driver = createSessionCatalogOutboxDriver({
-      port: PORT,
-      partition: PARTITION,
-      persistence,
-      adapter: {
-        async enqueue() { throw new Error("持久化失败时不得派发入队"); },
-        async queryStatus() { throw new Error("本用例不应查询状态"); },
-      },
-    });
-    await driver.restore();
-    failNextWrite = true;
-
-    const failure = await driver.applyIntent(opId("a"), renameIntent(), {
-      baseCatalogRevision: 7,
-      expectedRevision: 3,
-    }).then(() => null, (error: Error) => error);
-
-    expect(failure?.message).toContain("回滚也失败");
-    expect(failure?.message).toContain("QuotaExceededError");
-    expect(failure?.message).toContain("删除已落盘条目也失败");
   });
 
   test("刷新恢复 outbox 后未对账命令仍保留并可继续入队", async () => {
@@ -297,10 +313,83 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
       expectedRevision: 3,
     });
 
-    // 模拟刷新：新的驱动实例从同一持久层恢复（recordingPort 的 load 返回空，
-    // 因此这里验证的是「未终态命令不会因重建驱动而丢失本地记录」这一契约的输入侧）。
+    // 模拟刷新：新 driver 从同一持久层恢复，序号与 operation ID 都来自原记录。
     expect(persistence.writes.map((operation) => operation.client_operation_id)).toEqual([opId("a")]);
     expect(enqueued).toEqual([[opId("a")]]);
+    const resumed = createSessionCatalogOutboxDriver({
+      port: PORT,
+      partition: PARTITION,
+      persistence,
+      adapter,
+    });
+    const restored = await resumed.restore();
+    expect(restored.operations.map((operation) => operation.client_operation_id)).toEqual([opId("a")]);
+    expect(restored.operations[0].state).toBe("persisted");
+  });
+
+  test("reload 合并外部持久化命令与读取期间本地新命令", async () => {
+    const base = recordingPort();
+    const loadStarted = deferred<void>();
+    const releaseLoad = deferred<void>();
+    let delayNextLoad = false;
+    const persistence: CatalogOutboxPersistencePort = {
+      ...base,
+      async load(partitionKey) {
+        const records = await base.load(partitionKey);
+        if (delayNextLoad) {
+          delayNextLoad = false;
+          loadStarted.resolve();
+          await releaseLoad.promise;
+        }
+        return records;
+      },
+    };
+    const adapter: SessionCatalogOperationsAdapter = {
+      async enqueue(_port, _workspaceId, intents) {
+        return {
+          workspace_id: "workspace-1",
+          accepted_count: intents.length,
+          receipts: intents.map((intent) => receipt(intent.client_operation_id)),
+          created_node_ids: {},
+        };
+      },
+      async queryStatus() { throw new Error("本用例不应查询状态"); },
+    };
+    const driver = createSessionCatalogOutboxDriver({
+      port: PORT,
+      partition: PARTITION,
+      persistence,
+      adapter,
+    });
+    await driver.restore();
+
+    const otherTab = createSessionCatalogOutboxDriver({
+      port: PORT,
+      partition: PARTITION,
+      persistence,
+      adapter,
+    });
+    await otherTab.restore();
+    await otherTab.applyIntent(opId("b"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    });
+
+    delayNextLoad = true;
+    const reloading = driver.reload();
+    await loadStarted.promise;
+    await driver.applyIntent(opId("c"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    });
+    releaseLoad.resolve();
+    await reloading;
+
+    expect(driver.current().operations.map((operation) => operation.client_operation_id))
+      .toEqual([opId("b"), opId("c")]);
+    expect((await base.load("local:8014\u0000workspace-1\u0000guest"))
+      .map((record) => record.operation.client_operation_id))
+      .toEqual([opId("b"), opId("c")]);
   });
 
   test("未 restore 即操作必须响亮失败", async () => {
@@ -325,7 +414,13 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
       { kind: "rename_node", targetNodeId: "cnode_1", name: "新名字" },
       { baseCatalogRevision: 7, expectedRevision: 3 },
     );
-    const disk = new Map<number, CatalogOutboxOperation>([[1, seed.operations[0]]]);
+    const seededOperation = assignCatalogOutboxOperationSequence(
+      seed,
+      opId("a"),
+      1,
+    ).operations[0];
+    const storedSeed = withStoredSequence(seededOperation, 1);
+    const disk = new Map<number, StoredCatalogOutboxOperation>([[1, storedSeed]]);
     const persistence: CatalogOutboxPersistencePort = {
       async load() {
         return [...disk.entries()]
@@ -336,11 +431,21 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
             operation,
           }));
       },
-      async write(records) {
-        for (const record of records) disk.set(record.client_sequence, record.operation);
+      async insert(partitionKey, operation) {
+        if (operation.client_sequence !== null) throw new Error("pending 已提前赋号");
+        const clientSequence = Math.max(0, ...disk.keys()) + 1;
+        const stored = {
+          partition_key: partitionKey,
+          client_sequence: clientSequence,
+          operation: withStoredSequence(operation, clientSequence),
+        };
+        disk.set(clientSequence, stored.operation);
+        return stored;
       },
-      async delete(_partitionKey, clientSequences) {
-        for (const clientSequence of clientSequences) disk.delete(clientSequence);
+      async delete(_partitionKey, clientOperationIds) {
+        for (const [clientSequence, operation] of disk) {
+          if (clientOperationIds.includes(operation.client_operation_id)) disk.delete(clientSequence);
+        }
       },
     };
     const enqueued: string[][] = [];
@@ -459,6 +564,126 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     expect(driver.current().operations).toEqual([]);
   });
 
+  test("拒绝对账与未完成 insert 交错时，依赖闭包和独立命令在磁盘与内存一致", async () => {
+    const base = recordingPort();
+    const bInserted = deferred<void>();
+    const releaseBInsert = deferred<void>();
+    const deleteStarted = deferred<void>();
+    const bCleanupStarted = deferred<void>();
+    const releaseDelete = deferred<void>();
+    const enqueueStarted = deferred<void>();
+    const rejectA = deferred<void>();
+    const cPersisted = deferred<void>();
+    const deleteCalls: string[][] = [];
+    const enqueueCalls: string[][] = [];
+    const persistence: CatalogOutboxPersistencePort = {
+      ...base,
+      async insert(partitionKey, operation) {
+        const stored = await base.insert(partitionKey, operation);
+        if (operation.client_operation_id === opId("b")) {
+          bInserted.resolve();
+          await releaseBInsert.promise;
+        }
+        return stored;
+      },
+      async delete(partitionKey, clientOperationIds) {
+        deleteCalls.push([...clientOperationIds]);
+        if (deleteCalls.length === 1) deleteStarted.resolve();
+        else bCleanupStarted.resolve();
+        await releaseDelete.promise;
+        await base.delete(partitionKey, clientOperationIds);
+      },
+    };
+    const driver = createSessionCatalogOutboxDriver({
+      port: PORT,
+      partition: PARTITION,
+      persistence,
+      adapter: {
+        async enqueue(_port, _workspaceId, intents) {
+          const operationIds = intents.map((intent) => intent.client_operation_id);
+          enqueueCalls.push(operationIds);
+          if (enqueueCalls.length === 1) {
+            enqueueStarted.resolve();
+            await rejectA.promise;
+            throw new HttpRequestError(409, "Conflict", "revision conflict", "/enqueue");
+          }
+          return {
+            workspace_id: "workspace-1",
+            accepted_count: intents.length,
+            receipts: intents.map((intent) => receipt(intent.client_operation_id)),
+            created_node_ids: {},
+          };
+        },
+        async queryStatus(_port, _workspaceId, operationIds) {
+          return {
+            workspace_id: "workspace-1",
+            catalog_revision: 12,
+            items: [receipt(operationIds[0], {
+              kind: "create_folder",
+              state: "rejected",
+              error_code: "revision_changed",
+              error_detail: "目录版本已变化",
+            })],
+            unknown_operation_ids: [],
+          };
+        },
+      },
+      onChange(outbox) {
+        for (const operation of outbox.operations) {
+          if (operation.state !== "persisted") continue;
+          if (operation.client_operation_id === opId("c")) cPersisted.resolve();
+        }
+      },
+    });
+    await driver.restore();
+
+    const first = driver.applyIntent(opId("a"), {
+      kind: "create_folder",
+      name: "待创建目录",
+    }, { baseCatalogRevision: 7 });
+    await enqueueStarted.promise;
+    const dependent = driver.applyIntent(opId("b"), {
+      kind: "move_node",
+      targetNodeId: "cnode_2",
+      parentCreatedByOperationId: opId("a"),
+    }, { baseCatalogRevision: 7, expectedRevision: 2, dependsOn: [opId("a")] });
+    await bInserted.promise;
+    const independent = driver.applyIntent(opId("c"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    });
+    await cPersisted.promise;
+
+    rejectA.resolve();
+    await deleteStarted.promise;
+    // B 的 IDB 行已提交，但它的 insert continuation 尚未把序号回填到内存。
+    releaseBInsert.resolve();
+    await bCleanupStarted.promise;
+    releaseDelete.resolve();
+    const outcomes = await Promise.allSettled([first, dependent, independent]);
+    expect(outcomes[0]).toMatchObject({ status: "fulfilled", value: "rejected" });
+    expect(outcomes[1]).toMatchObject({ status: "rejected" });
+    expect(outcomes[2]).toMatchObject({ status: "fulfilled", value: "accepted" });
+    expect(deleteCalls[0]).toEqual([opId("a"), opId("b")]);
+    expect(enqueueCalls).toEqual([[opId("a")], [opId("c")]]);
+
+    expect(driver.current().operations.map((operation) => operation.client_operation_id))
+      .toEqual([opId("c")]);
+    expect(driver.current().operations[0].state).toBe("accepted");
+    const restored = await createSessionCatalogOutboxDriver({
+      port: PORT,
+      partition: PARTITION,
+      persistence,
+      adapter: {
+        async enqueue() { throw new Error("本用例不应重放 outbox"); },
+        async queryStatus() { throw new Error("本用例不应查询状态"); },
+      },
+    }).restore();
+    expect(restored.operations.map((operation) => operation.client_operation_id))
+      .toEqual([opId("c")]);
+    expect(restored.operations[0].state).toBe("persisted");
+  });
+
   test("对账时服务端不认识该 ID 才允许按同一 ID 重试", async () => {
     const attempts: string[][] = [];
     let rejectFirst = true;
@@ -500,11 +725,11 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
 
   test("对账拿到 committed 后按已确认 revision 清理持久条目", async () => {
     const persistence = recordingPort();
-    const deleted: number[][] = [];
+    const deleted: string[][] = [];
     const port: CatalogOutboxPersistencePort = {
       ...persistence,
-      async delete(_partitionKey, clientSequences) {
-        deleted.push([...clientSequences]);
+      async delete(_partitionKey, clientOperationIds) {
+        deleted.push([...clientOperationIds]);
       },
     };
     const driver = createSessionCatalogOutboxDriver({
@@ -542,7 +767,75 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     await driver.reconcile();
     const pruned = await driver.prune(12);
     expect(pruned.operations).toEqual([]);
-    expect(deleted).toEqual([[1]]);
+    expect(deleted).toEqual([[opId("a")]]);
+  });
+
+  test("剪枝等待持久删除时保留并发新增的命令", async () => {
+    const base = recordingPort();
+    const deleteStarted = deferred<void>();
+    const releaseDelete = deferred<void>();
+    const persistence: CatalogOutboxPersistencePort = {
+      ...base,
+      async delete(partitionKey, operationIds) {
+        deleteStarted.resolve();
+        await releaseDelete.promise;
+        await base.delete(partitionKey, operationIds);
+      },
+    };
+    const driver = createSessionCatalogOutboxDriver({
+      port: PORT,
+      partition: PARTITION,
+      persistence,
+      adapter: {
+        async enqueue(_port, _workspaceId, intents) {
+          return {
+            workspace_id: "workspace-1",
+            accepted_count: intents.length,
+            receipts: intents.map((intent) => receipt(intent.client_operation_id)),
+            created_node_ids: {},
+          };
+        },
+        async queryStatus(_port, _workspaceId, operationIds) {
+          return {
+            workspace_id: "workspace-1",
+            catalog_revision: 12,
+            items: [receipt(operationIds[0], {
+              state: "committed",
+              committed_catalog_revision: 12,
+              receipt_revision: 12,
+            })],
+            unknown_operation_ids: [],
+          };
+        },
+      },
+    });
+    await driver.restore();
+    await driver.applyIntent(opId("a"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    });
+    await driver.reconcile();
+
+    const pruning = driver.prune(12);
+    await deleteStarted.promise;
+    await driver.applyIntent(opId("b"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    });
+    releaseDelete.resolve();
+    const pruned = await pruning;
+
+    expect(pruned.operations.map((operation) => operation.client_operation_id)).toEqual([opId("b")]);
+    const restored = await createSessionCatalogOutboxDriver({
+      port: PORT,
+      partition: PARTITION,
+      persistence,
+      adapter: {
+        async enqueue() { throw new Error("本用例不应重放 outbox"); },
+        async queryStatus() { throw new Error("本用例不应查询状态"); },
+      },
+    }).restore();
+    expect(restored.operations.map((operation) => operation.client_operation_id)).toEqual([opId("b")]);
   });
 
   test("F2：依赖未满足时本轮零入队，必须返回 idle 而非谎报 accepted", async () => {
@@ -586,14 +879,9 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
   });
 });
 
-describe("会话目录 outbox 驱动：真 IndexedDB 与跨 tab", () => {
-  test("真实 IndexedDB 恢复 + 跨 tab 通知重读不制造重复 node", async () => {
-    Object.defineProperty(globalThis, "indexedDB", {
-      configurable: true,
-      value: createIndexedDbFake(),
-    });
-    const database = await openCatalogOutboxDatabase();
-    const port = createIndexedDbCatalogOutboxPort(database);
+describe("会话目录 outbox 驱动：分区广播", () => {
+  test("持久化后广播并让另一个 driver 从 port 重读同一条 operation", async () => {
+    const persistence = recordingPort();
     const enqueued: string[][] = [];
     const adapter: SessionCatalogOperationsAdapter = {
       async enqueue(_port, _workspaceId, intents) {
@@ -613,7 +901,7 @@ describe("会话目录 outbox 驱动：真 IndexedDB 与跨 tab", () => {
     const driver = createSessionCatalogOutboxDriver({
       port: PORT,
       partition: PARTITION,
-      persistence: port,
+      persistence,
       adapter,
       broadcast: broadcaster,
     });
@@ -627,11 +915,13 @@ describe("会话目录 outbox 驱动：真 IndexedDB 与跨 tab", () => {
     const otherTab = createSessionCatalogOutboxDriver({
       port: PORT,
       partition: PARTITION,
-      persistence: port,
+      persistence,
       adapter,
     });
     const reloaded = await otherTab.restore();
     expect(reloaded.operations.map((operation) => operation.client_operation_id)).toEqual([opId("a")]);
+    expect(reloaded.operations[0].client_sequence).toBe(1);
+    expect(reloaded.operations[0].state).toBe("persisted");
     expect(broadcaster.posted.length).toBeGreaterThan(0);
   });
 

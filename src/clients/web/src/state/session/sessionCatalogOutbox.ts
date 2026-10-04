@@ -58,7 +58,8 @@ export interface CatalogOutboxOptions {
 
 export interface CatalogOutboxOperation {
   client_operation_id: string;
-  client_sequence: number;
+  /** IDB 事务分配前只有内存 pending，此时序号尚未确定。 */
+  client_sequence: number | null;
   kind: NavigationMutationKind;
   target_node_id: string | null;
   parent_node_id: string | null;
@@ -83,8 +84,6 @@ export interface CatalogOutboxOperation {
 
 export interface CatalogOutbox {
   partition: CatalogOutboxPartition;
-  /** 单调递增的本地序号，用作后端 `client_sequence`。 */
-  next_client_sequence: number;
   operations: CatalogOutboxOperation[];
 }
 
@@ -114,7 +113,7 @@ export function catalogOutboxPartitionKey(
 
 export function createCatalogOutbox(partition: CatalogOutboxPartition): CatalogOutbox {
   catalogOutboxPartitionKey(partition);
-  return { partition, next_client_sequence: 1, operations: [] };
+  return { partition, operations: [] };
 }
 
 /** 终态判定的唯一实现：终态集合来自后端协议，本地不得再写第二份。 */
@@ -129,7 +128,11 @@ export function orderedCatalogOutboxOperations(
   outbox: CatalogOutbox,
 ): CatalogOutboxOperation[] {
   return [...outbox.operations].sort(
-    (left, right) => left.client_sequence - right.client_sequence,
+    (left, right) => {
+      if (left.client_sequence === null) return right.client_sequence === null ? 0 : 1;
+      if (right.client_sequence === null) return -1;
+      return left.client_sequence - right.client_sequence;
+    },
   );
 }
 
@@ -221,7 +224,7 @@ export function addCatalogOutboxIntent(
   }
   const operation: CatalogOutboxOperation = {
     client_operation_id: clientOperationId,
-    client_sequence: outbox.next_client_sequence,
+    client_sequence: null,
     kind: intent.kind,
     target_node_id: intent.targetNodeId ?? null,
     parent_node_id: intent.parentNodeId ?? null,
@@ -244,9 +247,38 @@ export function addCatalogOutboxIntent(
   };
   return {
     ...outbox,
-    next_client_sequence: outbox.next_client_sequence + 1,
     operations: [...outbox.operations, operation],
   };
+}
+
+/** IDB 已原子分配序号后，将唯一持久化结果回填到即时 pending 投影。 */
+export function assignCatalogOutboxOperationSequence(
+  outbox: CatalogOutbox,
+  operationId: string,
+  sequence: number,
+): CatalogOutbox {
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new Error(`client_sequence 必须是正安全整数: ${sequence}`);
+  }
+  const conflictingOperation = outbox.operations.find(
+    (operation) => operation.client_operation_id !== operationId
+      && operation.client_sequence === sequence,
+  );
+  if (conflictingOperation) {
+    throw new Error(
+      `client_sequence 已分配给另一 operation: ${sequence} `
+      + `${conflictingOperation.client_operation_id}`,
+    );
+  }
+  return updateCatalogOutboxOperation(outbox, operationId, (operation) => {
+    if (operation.client_sequence !== null && operation.client_sequence !== sequence) {
+      throw new Error(
+        `operation 已分配不同 client_sequence: ${operationId} `
+        + `${operation.client_sequence} != ${sequence}`,
+      );
+    }
+    return { ...operation, client_sequence: sequence };
+  });
 }
 
 function updateCatalogOutboxOperation(
@@ -274,9 +306,15 @@ export function markCatalogOutboxOperationPersisted(
   outbox: CatalogOutbox,
   operationId: string,
 ): CatalogOutbox {
-  return updateCatalogOutboxOperation(outbox, operationId, (operation) =>
-    operation.state === "pending_local" ? { ...operation, state: "persisted" } : operation,
-  );
+  return updateCatalogOutboxOperation(outbox, operationId, (operation) => {
+    if (operation.client_sequence === null) {
+      throw new Error(`operation 尚未获得持久化 client_sequence: ${operationId}`);
+    }
+    if (operation.state !== "pending_local") {
+      throw new Error(`只有 pending_local operation 可以推进为 persisted: ${operationId}`);
+    }
+    return { ...operation, state: "persisted" };
+  });
 }
 
 /**
@@ -293,7 +331,7 @@ export function normalizeRestoredCatalogOutbox(outbox: CatalogOutbox): CatalogOu
   return {
     ...outbox,
     operations: outbox.operations.map((operation) =>
-      operation.state === "pending_local"
+      operation.state === "pending_local" && operation.client_sequence !== null
         ? { ...operation, state: "persisted" }
         : operation,
     ),
@@ -368,9 +406,20 @@ export function planCatalogOutboxBatch(
   );
   const batch: CatalogOutboxOperation[] = [];
   const batchDependable = new Set<string>();
+  const firstUnsequencedIndex = outbox.operations.findIndex(
+    (operation) => operation.client_sequence === null,
+  );
+  const insertionIndex = new Map(
+    outbox.operations.map((operation, index) => [operation.client_operation_id, index]),
+  );
   for (const operation of ordered) {
     const includable = operation.state === "persisted"
       || (operation.state === "unknown" && retryable.has(operation.client_operation_id));
+    if (operation.client_sequence === null) continue;
+    if (firstUnsequencedIndex >= 0
+      && (insertionIndex.get(operation.client_operation_id) ?? -1) > firstUnsequencedIndex) {
+      continue;
+    }
     if (!includable) continue;
     if (batch.length >= options.maxBatchSize) break;
     const ready = operation.depends_on.every(
@@ -389,6 +438,11 @@ export function catalogOutboxBatchToIntents(
 ): SessionCatalogOperationIntent[] {
   const batchIds = new Set(batch.map((operation) => operation.client_operation_id));
   return batch.map((operation) => {
+    if (operation.client_sequence === null) {
+      throw new Error(
+        `不能派发尚未由 IndexedDB 分配序号的 operation: ${operation.client_operation_id}`,
+      );
+    }
     const intent: SessionCatalogOperationIntent = {
       client_operation_id: operation.client_operation_id,
       client_sequence: operation.client_sequence,

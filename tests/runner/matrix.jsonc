@@ -39,6 +39,15 @@
       "command": ["bun", "tests/integration/clients/web/anchored_overlay_positioning.mjs"]
     },
     {
+      "id": "integration-web-session-catalog-outbox-idb",
+      "layer": "integration",
+      "client": "web",
+      "enabled": true,
+      "timeoutMs": 180000,
+      "dataLimitKb": 4194304,
+      "command": ["bun", "tests/integration/clients/web/session_catalog_outbox_idb.mjs"]
+    },
+    {
       "id": "e2e-web",
       "layer": "e2e",
       "client": "web",
