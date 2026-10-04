@@ -33,6 +33,8 @@ start_delegated_task({
 
 以同一业务闭包记录首个完整候选所用时间、真实入口遗漏、必要测试首次通过、返工、依赖等待和主线程补救量；接手前的 Luna 投入及已完成前置单列，不把累计耗时差直接归因于模型。结果出来后据证据选择分工及模型，未验收前不宣布 Sol 更快。
 
+首个 fork 主体及窄返修已通过固定对象核验、真实入口验证与独审，主补实现源码为零；本阶段继续同一 Sol 贯穿 Runner，审查只覆盖新增差异和未证实的合同。前置聚合报告若只重复既知阻塞，没有给出所需精确依赖，不算完成新的验收，不再重复派相同调查。下一闭包继续检验该选择，详见实时台账。
+
 ## 按实际交付选择分工
 
 主代理负责依赖协调、独立核验和串行集成，分工由实际结果决定。独立业务可由一个实现者贯穿；公共接口有多个消费者时，唯一提供者先固定完整合同，再按依赖推进消费者。用户建议是试验选项，不能推成全仓模板。
@@ -45,9 +47,9 @@ start_delegated_task({
 
 - **交付包不完整。** 手筛 hunk、旧白名单与只测 helper 多次漏签名、删除、UI caller 和生产接线。用[交付校验脚本](scripts/verify_delivery.py)从固定 base/target 导出标准补丁，严格重建并核 blob/hash；冻结前列候选外源码及未跟踪文件。再从候选的真实入口核 callee、装配和必要测试闭包。`numstat`、AST 或机械绿灯都不证明业务完成；无 `.git` 的既有快照直接按对象核，不再为工具新建全树副本。
 - **前置和公共合同错配。** 作者 live、旧 HEAD、固定候选被混当同一源码；旧 union 回退新 owner，消费者被循环依赖拖住。检索显式给 tree，核真实共同祖先和逐路径 preimage；公共合同先固定，主串行同步。文档也核合同来源，较新 HEAD 仍可能含旧规范；共享文件按符号保双方语义，不能选一侧整覆盖或沿旧数量清单造 no-op。
-- **真实身份与生命周期漏项。** 合成 Job/Turn、metadata 猜归属、helper 测试和伪 SQLite 播种掩盖准入、取消、fork、恢复缺口。核用户动作到唯一 writer 的真实 owner、transaction/await 边界及副作用顺序；创建参数与 GraphBinding 等合同进入唯一 durable creation preimage。幂等快路径也须先比对规范化原始请求，不能提前返回绕过冲突；解析后 source facts 单独冻结，不因隐式 latest 或 source 已删除重算，不把控制意图塞入业务 manifest。内部 execution 不造 Turn。复制或恢复的输出仍须能再次作为合法输入；身份重映射同时核 SQL 与 JSON/metadata 镜像，原始 lineage 不替代本地身份。拒绝、取消、重启和并发都要收口，不能删 guard 或放宽断言求绿。普通 admission writer 不替代 fork journal materialization capability。
+- **真实身份与生命周期漏项。** helper 绿、合成身份和 metadata 猜归属掩盖生产缺口。沿真实 user/internal/child 入口核唯一 writer、事务、await 与恢复；取消 `to_thread` 等待不会停止写入，Job 终态须等受保护 writer 收口，缺 owner 不默认 main，internal 不造 Turn或套用 user 展示字段裁剪。创建合同进入 durable preimage；幂等快路径先核原请求，解析后的 source facts 分开冻结，源已删除不重算。fork 输出仍须能再次作为合法输入，身份重映射同时核 SQL 与 JSON 镜像。具体反例及验证状态留在台账，不删 guard、断言或真实入口求绿。
 - **路径说明没有防住误写。** 默认 cwd、相对编辑、私有 index 下裸 live 检索与自建 archive/.venv 反复错根。给字面绝对 workdir/index/源码/产物路径，核实际写入和进程代码来源；独立 index 只隔离暂存。保独有源码后删可复现副本，对象审查用 Git tree，运行复用主指定完整 worktree，不 `/tmp`、不再复制整树。
-- **恢复命令清空共享索引。** WVL 裸 `read-tree --empty` 破坏共享 stage；显式 `--git-dir/--work-tree` 不隔离 index，重复文字提醒已失效。该实现者收窄为指定源码编辑，由主负责 Git 冻结和验证；主在恢复窗口保 index 与 stage inventory。首恢复守界不代表永久解决，工具没有文件系统沙箱；恢复缺精确备份时如实记不确定性，不拿 HEAD 冒充原 stage。
+- **索引误写与误检。** WVL 裸 `read-tree --empty` 破坏共享 stage，已收窄为源码编辑、主负责冻结。主也曾在设置 `GIT_INDEX_FILE` 后用 `git --git-path index` 误认共享索引，制造无效修复和导出暂停；共享备份路径须从 `--absolute-git-dir` 定位，明确区分私有 index。保精确 index 与 stage inventory，恢复缺备份则如实记不确定性；协调者错误单列成本，不能归给实现模型。
 - **修补与审查也会引入返工。** 为 lint 移动 await 曾制造取消窗口，重复断言替换改错邻例；main alias 被误判必须以 thread ID 命名。先核规范和真实输入，小修限定函数并核 postimage，定向验证原失败。当前用户已允许删旧开发数据，不把旧 schema 兼容当阻塞；fresh writer 和必要生产能力仍必须兑现。
 - **检查和日志不绑定候选。** 作者额外 workspace 的测试绿不能归给缺接线或语法错误的固定包；重试曾覆盖首失败 raw。每次保候选、命令、源码根和真实 stdout/stderr/exit，attempt 运行前确定。日志遗失如实记工具转录，不补造、不为补日志重跑旧绿。边界 fixture 先用实际完整路径核条件可达性，再有限构造；不可能的预算约束曾让同步搜索永不结束，单例栈确认后修 fixture，保真实 guard 与拒绝断言。
 
