@@ -296,13 +296,13 @@ internal admission MUST 在同一权威事务冻结真实 `source_branch_id` 与
 
 ### Requirement: 同一历史游标有界推进 Turn 与内部 execution
 
-系统 SHALL 在现有 history API 使用唯一 v2 opaque cursor，同时保存 Turn stream 的 exclusive `logical_turn_ordinal` 和 internal stream 的 exclusive canonical `item_sequence`。internal stream 按当前视图中显式可见、属于具有唯一 display notice 的 internal admission 的 canonical notice/response record 分页，单页最多 256 条 canonical record；初始 seed/reference admission 没有 notice 时不产生展示项。视图成员关系必须由持久 owner 明确登记，不得从物理邻接、时间或 metadata 推断。
+系统 SHALL 在现有 history API 使用唯一 v2 opaque cursor，同时保存 Turn stream 的 exclusive `logical_turn_ordinal` 和 internal stream 的 exclusive view membership `logical_item_ordinal`（0 为合法坐标）。internal stream 按当前视图中显式可见、属于具有唯一 display notice 的 internal admission 的 canonical notice/response record 分页，单页最多 256 条 canonical record；初始 seed/reference admission 没有 notice 时不产生展示项。视图成员关系必须由持久 owner 明确登记，不得从物理邻接、时间或 metadata 推断。
 
-v2 token MUST 绑定 `session_id`、`thread_id`、`checkpoint_ns`、`rollout_id`、`projection_epoch`、`view_id`、`history_view_revision`、首次同一 snapshot 的 canonical `item_sequence` 与 Turn ordinal 读上界、固定 `direction`、递增 `stage`、排序规范化的有效 include 集合、初始查询模式，以及 around 初始 `anchor_turn_id` 与 before/after window；同时保存可空的 `turn_ordinal`、`item_sequence`。continuation 延续初始查询模式与窗口，不能替换过滤条件、anchor 或窗口；请求省略这些参数时使用 token 冻结值，显式提供且不一致时返回 invalid cursor。未请求的 lane 不查询且明确由冻结 include 标为禁用；已启用 lane 的 anchor 为 NULL 只表示该方向真实耗尽，后续不得从头再读，也不能改 include 复活。两路必须在同一个 `RolloutReadSnapshot` 和 resolved view 中进行有界 keyset 查询；不得全量读取后截断。旧开发期 v1 cursor 直接以 invalid cursor 拒绝，不保留兼容解码。owner/direction 不符返回 invalid cursor，epoch/view/history_view_revision 漂移返回 stale cursor。首次读上界必须从真实 snapshot 与选定 view 的显式成员取得，不能以 message sequence 冒充 item 坐标；后续各 lane 查询不得超过这些上界，上界只定位不推 membership。不新建第二历史快照表，也不以活动 view ID 未变为由混入后续追加或终态修订。
+v2 token MUST 绑定 `session_id`、`thread_id`、`checkpoint_ns`、`rollout_id`、`projection_epoch`、`view_id`、`history_view_revision`、首次同一 snapshot 的 `logical_item_read_upper_bound` 与 Turn ordinal 读上界、固定 `direction`、递增 `stage`、排序规范化的有效 include 集合、初始查询模式，以及 around 初始 `anchor_turn_id` 与 before/after window；同时保存可空的 `turn_ordinal`、`logical_item_ordinal`。continuation 延续初始查询模式与窗口，不能替换过滤条件、anchor 或窗口；请求省略这些参数时使用 token 冻结值，显式提供且不一致时返回 invalid cursor。未请求的 lane 不查询且明确由冻结 include 标为禁用；已启用 lane 的 anchor 为 NULL 只表示该方向真实耗尽，后续不得从头再读，也不能改 include 复活。两路必须在同一个 `RolloutReadSnapshot` 和 resolved view 中进行有界 keyset 查询；不得全量读取后截断。旧开发期 v1 cursor 及使用物理 item sequence 字段的旧 v2 cursor 直接以 invalid cursor 拒绝，不保留兼容解码。owner/direction 不符返回 invalid cursor，epoch/view/history_view_revision 漂移返回 stale cursor。首次 `logical_item_read_upper_bound` 必须取同一 snapshot 中选定 view 全部可见 `context_view_items.logical_item_ordinal` 的最大值，canonical 与 display-only 成员共用这一坐标 fence；只有没有可见 membership 时才为 NULL，没有 eligible internal record 不等于上界为 NULL。internal reader 仍以 admission 与 display-only membership 判定成员，物理 `item_sequence` 只定位 canonical item，不能决定分页顺序；后续各 lane 查询不得超过这些上界，上界只定位不推 membership。不新建第二历史快照表，也不以活动 view ID 未变为由混入后续追加或终态修订。
 
 每页仅投影本页命中的 response records，并从同一 snapshot 批量关联其 execution admission 和唯一安全 display notice；同一 execution 可跨页出现。Web MUST 按 `execution_id` 合并同一 entry，按稳定 canonical item/part identity 去重，不按正文去重；同一 entry 的 committed outputs 保持其权威成员顺序，standalone notice 与完整 Turn 的合并顺序复用 `session-turn-history`「Internal execution history 使用独立 envelope 和 typed display coordinate」规定的同 view membership ordinal，不使用活动统计范围、物理邻接或时间；重复关联的 display notice 不得重影。Turn 预算与统计保持原语义；`has_more` 由两路实际剩余记录的并集决定，两路耗尽时游标为空。
 
-`around` SHALL 保持现有 `anchor_turn_id` 请求；storage 从选中 Turn window 的显式成员解析 canonical 边界，只把边界作为查询坐标，不作为 membership 判据。窗口内超过 256 条 internal record 时，后续 cursor 继续剩余 record，Turn anchor 保持已返回窗口的边界；空 internal 窗口也必须检查窗口两侧是否尚有可读记录。首尾没有 Turn 的 internal record 和零 Turn view 必须可达。
+`around` SHALL 保持现有 `anchor_turn_id` 请求；storage 从选中 Turn window 的显式成员解析 canonical 边界，只把边界作为查询坐标，不作为 membership 判据。around 的 canonical 窗口边界不能裁切到 internal-only 上界；internal 全在窗口前、窗口后或完全为空时，仍以同 view 坐标 fence 判定两侧续读。窗口内超过 256 条 internal record 时，后续 cursor 继续剩余 record，Turn anchor 保持已返回窗口的边界；空 internal 窗口也必须检查窗口两侧是否尚有可读记录。首尾没有 Turn 的 internal record 和零 Turn view 必须可达。
 
 #### Scenario: 零 Turn 的内部历史仍可续读
 
@@ -312,7 +312,7 @@ v2 token MUST 绑定 `session_id`、`thread_id`、`checkpoint_ns`、`rollout_id`
 #### Scenario: 单次内部 execution 的输出跨页
 
 - **WHEN** 一个 internal execution 的 canonical notice、assistant、reasoning 或 tool records 超过单页预算
-- **THEN** 同一 item_sequence lane 继续其后续 records，每页关联同一 admission/display；前端合并后每个真实 item/part 只出现一次，不静默截断输出、不引入第二 API 或 execution 专用分页 phase
+- **THEN** 同一 logical_item_ordinal lane 继续其后续 records，每页关联同一 admission/display；前端合并后每个真实 item/part 只出现一次，不静默截断输出、不引入第二 API 或 execution 专用分页 phase
 
 #### Scenario: around 窗口的密集内部记录可继续
 
