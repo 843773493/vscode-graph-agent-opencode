@@ -45,10 +45,10 @@ start_delegated_task({
 
 - **交付包不完整。** 手筛 hunk、旧白名单与只测 helper 多次漏签名、删除、UI caller 和生产接线。用[交付校验脚本](scripts/verify_delivery.py)从固定 base/target 导出标准补丁，严格重建并核 blob/hash；冻结前列候选外源码及未跟踪文件。再从候选的真实入口核 callee、装配和必要测试闭包。`numstat`、AST 或机械绿灯都不证明业务完成；无 `.git` 的既有快照直接按对象核，不再为工具新建全树副本。
 - **前置和公共合同错配。** 作者 live、旧 HEAD、固定候选被混当同一源码；旧 union 回退新 owner，消费者被循环依赖拖住。检索显式给 tree，核真实共同祖先和逐路径 preimage；公共合同先固定，主串行同步。文档也核合同来源，较新 HEAD 仍可能含旧规范；共享文件按符号保双方语义，不能选一侧整覆盖或沿旧数量清单造 no-op。
-- **真实身份与生命周期漏项。** 合成 Job/Turn、metadata 猜归属、helper 测试和伪 SQLite 播种掩盖准入、取消、fork、恢复缺口。核用户动作到唯一 writer 的真实 owner、transaction/await 边界及副作用顺序；创建时选定的 GraphBinding 等合同必须进入 durable creation preimage，重入只能使用并核对冻结值，不能再取当前代码常量。内部 execution 不造 Turn。复制或恢复的输出仍须能再次作为合法输入；身份重映射同时核 SQL 与 JSON/metadata 镜像，原始 lineage 不替代本地身份。拒绝、取消、重启和并发都要收口，不能删 guard 或放宽断言求绿。普通 admission writer 不替代 fork journal materialization capability。
+- **真实身份与生命周期漏项。** 合成 Job/Turn、metadata 猜归属、helper 测试和伪 SQLite 播种掩盖准入、取消、fork、恢复缺口。核用户动作到唯一 writer 的真实 owner、transaction/await 边界及副作用顺序；创建参数与 GraphBinding 等合同进入唯一 durable creation preimage。幂等快路径也须先比对规范化原始请求，不能提前返回绕过冲突；解析后 source facts 单独冻结，不因隐式 latest 或 source 已删除重算，不把控制意图塞入业务 manifest。内部 execution 不造 Turn。复制或恢复的输出仍须能再次作为合法输入；身份重映射同时核 SQL 与 JSON/metadata 镜像，原始 lineage 不替代本地身份。拒绝、取消、重启和并发都要收口，不能删 guard 或放宽断言求绿。普通 admission writer 不替代 fork journal materialization capability。
 - **路径说明没有防住误写。** 默认 cwd、相对编辑、私有 index 下裸 live 检索与自建 archive/.venv 反复错根。给字面绝对 workdir/index/源码/产物路径，核实际写入和进程代码来源；独立 index 只隔离暂存。保独有源码后删可复现副本，对象审查用 Git tree，运行复用主指定完整 worktree，不 `/tmp`、不再复制整树。
 - **恢复命令清空共享索引。** WVL 裸 `read-tree --empty` 破坏共享 stage；显式 `--git-dir/--work-tree` 不隔离 index，重复文字提醒已失效。该实现者收窄为指定源码编辑，由主负责 Git 冻结和验证；主在恢复窗口保 index 与 stage inventory。首恢复守界不代表永久解决，工具没有文件系统沙箱；恢复缺精确备份时如实记不确定性，不拿 HEAD 冒充原 stage。
 - **修补与审查也会引入返工。** 为 lint 移动 await 曾制造取消窗口，重复断言替换改错邻例；main alias 被误判必须以 thread ID 命名。先核规范和真实输入，小修限定函数并核 postimage，定向验证原失败。当前用户已允许删旧开发数据，不把旧 schema 兼容当阻塞；fresh writer 和必要生产能力仍必须兑现。
-- **检查和日志不绑定候选。** 作者额外 workspace 的测试绿不能归给缺接线或语法错误的固定包；重试曾覆盖首失败 raw。每次保候选、命令、源码根和真实 stdout/stderr/exit，attempt 运行前确定。日志遗失如实记工具转录，不补造、不为补日志重跑旧绿。
+- **检查和日志不绑定候选。** 作者额外 workspace 的测试绿不能归给缺接线或语法错误的固定包；重试曾覆盖首失败 raw。每次保候选、命令、源码根和真实 stdout/stderr/exit，attempt 运行前确定。日志遗失如实记工具转录，不补造、不为补日志重跑旧绿。边界 fixture 先用实际完整路径核条件可达性，再有限构造；不可能的预算约束曾让同步搜索永不结束，单例栈确认后修 fixture，保真实 guard 与拒绝断言。
 
 已通过的审查按 tree、路径和依赖复用；后续只审新增差异和受影响入口。依赖变化、真实失败或未解决疑点才重验。每次严重失败先纠正具体任务，再简洁更新本入口与台账；只有后续交付验证有效的调整才记为已解决，不继续叠加同义规则。
