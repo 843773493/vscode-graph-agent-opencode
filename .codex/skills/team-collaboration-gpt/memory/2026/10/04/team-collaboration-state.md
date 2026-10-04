@@ -1,13 +1,13 @@
 # 团队协作实时状态与实测改进
 
-两个团队入口共用，主代理独占写入。恢复、派单、集成及报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-04 16:46（北京时间）。goal active、无预算上限，交接及七个 change 的必要实现、独审、验证、清理和技能实测仍未全部完成。
+两个团队入口共用，主代理独占写入。恢复、派单、集成及报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-04 17:32（北京时间）。goal active、无预算上限，交接及七个 change 的必要实现、独审、验证、清理和技能实测仍未全部完成。
 
 ## 当前授权与现场
 
 - 用户授权按架构熵减自主统一 owner、显式身份和单链路，删除旧兼容；源码开发生成的新旧中间数据可直接删除，不再询问。保普通源码、未集成独有改动、来源不明业务文件；不能用删数据掩盖 fresh writer 缺陷。
 - GPT 团队精确 `gpt-6-luna / max`，不带前缀；主模型由用户选。至少3、最多15常驻，主代理统一派单/审查/集成。既有九个 agent 的创建参数与实际模型均已核，证据 `coordinator/artifacts/model-context-latest.json`、`u05-model-context.json`。429保源和真实错误，不换模型、不密集恢复。
 - 物理根 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。活动 worktree 根 `out/worktrees/2026/10/04/024121-team-execution/`，产物/索引根 `out/tests/temp/2026/10/04/024121-team-execution/`。下文路径相对此物理根；每次派单仍给字面绝对 workdir/index/artifact/report。
-- 当前主树 HEAD `80cd707a6f5bc8dbecc4826028ac946c0f17e6e4`；本笔仅技能/流程/状态三文档，quick_validate、链接、diff-check、guard及祖先通过，证据 `coordinator/artifacts/r33-practice-main-commit.json`。D01 helper/流程五文件d76和技能实测记录两文件400已提交。L01主树17pass5.78s/Ruff0，M01/M02主树40pass及独审证据复用。恢复时用 fresh 独立索引核真实状态；共享 `.git/index` 极陈旧，裸 status 的 D/MM 不能当源码差异。本文件与流程由主代理独占。
+- 当前主树 HEAD `cb1a4cca71751c58cf2f3ca81082b3ce4d409e44`；本笔集成 O02b outbox 最终10paths，主树 tsc/Web build/语法解析0、R40 fixed独审无阻断；guard/祖先/default index与来源不明fork片段保全通过，证据 `coordinator/artifacts/o02b-outbox-main-commit.json`。前笔 e0ba93ab 同步技能与logical cursor规范五文档，校验0，证据 `coordinator/artifacts/r36-r38-practice-main-commit.json`。D01 helper/流程五文件d76和技能实测记录两文件400已提交。L01主树17pass5.78s/Ruff0，M01/M02主树40pass及独审证据复用。恢复时用 fresh 独立索引核真实状态；共享 `.git/index` 极陈旧，裸 status 的 D/MM 不能当源码差异。本文件与流程由主代理独占。
 - 主代理唯一串行提交者，索引 `coordinator/git/integration.idx`；fresh read-tree→精确add→record→commit无pathspec→verify→祖先。禁amend/reset/rebase/push与共享index写入。
 - 三处受保护路径：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`，不能修改。
 - 测试/probe用matrix或外部 `timeout N bash -c 'ulimit -d 4194304; exec "$@"' bash ...`。uv/bun；保存raw stdout/stderr及实际exit。已pass不为补日志重跑；缺失raw如实lost/转录。源码改后静态，Web改后build。
@@ -39,12 +39,12 @@
 |---|---|---|
 | E01b / thread_owner_implementer | thread_owner_implementer / 同名 | HEAD ad093e0c、branch codex/thread-execution-owner，共同ready ef86c12b。一个作者贯穿typed admission→首次notice原子→真实writer membership→middleware/plan/provider/recovery；append_items/ensure_request_items/append_control_commit均完整pair，62定点单测通过，尚无完整fixed交付。R32 ToolSet真实thread intent被main alias gate拒绝已派此作者修；child applied binding也须独立。admissions.py新增必要lint由此作者收口，保回滚失败透明。 |
 | E02b-R36 forward / gateway_user_implementer | **integration_fixture_implementer** / **gateway_user_implementer** | HEAD eb938、branch codex/integration-runtime-manifest；完整fixed 0a7972、176paths/中央verify0，73 preimages实hash全部一致，E02-only 59db61→0a7972为55paths，121paths同步前置。R36揭staging root拒thread、clone metadata错pair、assembly seal/Turn acceptance INSERT漏NOT NULL thread，另CSM/seal漏必填session_id、execution turn_index/recovery/model_calls漏pair，原作者按DDL与真实caller集中修闭包；items.py仍E01。index git/e02b-r36-forward.idx，报告e02b-r36-forward-delivery.md；旧50绿不重跑。 |
-| E04b-forward/E04c / integration_fixture_implementer | **session_mutation_admission** / integration_fixture_implementer | HEAD5383、branch codex/session-mutation-admission；E04b forward canonical fixture准备入口与五消费者正在验证。asset contract已通过，real provider 2pass/118.41s/Ruff0，三个真实reasoning carrier保留；progressive/partial/boundary Web待验。E04c child NodeDebug drain/main按钮明确尚未实施，不称在途代码。 |
-| U03c-forward、R36 / architecture_reviewer | internal_display_projection / 同名 | U03固定58e703→79c2、forward→7e7a（3paths），中央verify0；新增SQLite3pass19deselected、Ruff0，原30+19+60/tsc/build/protocol复用。R38代码未见P1/P2，仅规范漂移；中央同步logical membership fence合同，reader writer仍E01。现只读R36 E02 owner闭包，报告r36-e02-owner-review.md；不独审自己的U03。 |
-| O02b-R37 forward / session_vrn_convergence | navigation_outbox_store / 同名 | 原forward 9db→e761，5paths/中央verify0，23unit/tsc/真实Chromium/build0；R37再揭shared flush错归命令outcome与reload跨tab丢远端B两P2，原作者最小增量修。baseline e761，index git/o02b-forward-2.idx，报告o02b-r37-forward-delivery.md。R38 U03只读审已完成，仅规范漂移，未重跑旧绿灯。 |
-| O02a-forward / behavior_reviewer | navigation_queue_owner / 同名 | R35独审完成一P2；现修非本人R34两P1，固定preimagea4ba797d、index git/o02a-forward.idx，报告o02a-lifespan-recovery-delivery.md。真实lifespan启动恢复；queue terminal/event与mark deleting同库同事务，后续drain失败仍committed/pending，不回滚。原22+16+真process1pass复用，新受影响入口另验。 |
-| O03b / terminal_owner_api_implementer | navigation_authenticated_scope / 同名 | HEAD80cd、branch codex/navigation-authenticated-scope，preimage5418；认证provider 37pass及request_id邻接6pass，主树误投已恢复。真实跨子系统suite迁integration；目录AGENTS明确Gateway与下游独立HTTP进程，复用既有process helper，待O02a显式start/stop同步。主代理曾未读目录指引建议不新增进程，已纠正。后同作者接UI，不新driver。 |
-| fixed_delivery_reviewer、uuidv7_implementer、workspace_owner_implementer | 保旧独有树/证据 | 429 errored，不密集恢复或换模型。W/V/UUID已固定历史交付与证据见下文队列和Git；未完成的owner/runtime/resource任务保持goal内，不以模型错误标已完成。 |
+| E04b-forward/E04c / integration_fixture_implementer | **session_mutation_admission** / integration_fixture_implementer | HEAD5383；canonical准备器与真实5消费者已通过provider2/118.41s、browser3/617.26s；以e94固定tree构建窄forward，166path包含其他前置不得整包当新增。已fixed e94→5b13bcd717c1d893347e601eee9ab368fc3a2979，12paths/verify0/outside0；unknown-tool补1/160.04s。误声明2条unused deferred的exit2保；前五gate raw未保存如实lost，不能称已保。E04c child drain/main按钮独立实现中，R42作者429未审。 |
+| U03c-forward、R36 / architecture_reviewer | internal_display_projection / 同名 | U03 fixed/forward/R38已完，当前E05只迁E01 unit消费者及hash_vectors.json（不独审自己U03）。源码借E01 thread_owner_implementer共享树，索引/产物仍internal_display_projection/git/e05-consumer.idx与artifacts/e05-consumer/；真实preimage保E01前置，唯一测试owner，production不动。 |
+| O02b-R37 forward / session_vrn_convergence | navigation_outbox_store / 同名 | b876最终2path增量作者/中央verify0，17unit/tsc/build0、R40无阻断，已集成主cb1a10paths。O02c b876→830bfcc21381b1ae818a7737a29cec492e9ca5d0 2paths/verify0、17unit60assertions/tsc/build0，已sync O03b实际9db preimage5paths，主树尚未集成。现此作者改非本人O02a R41-P1，source navigation_queue_owner，index git/o02a-r41-forward.idx，报告artifacts/o02a-r41-forward/delivery.md。 |
+| O02a-forward / behavior_reviewer | navigation_queue_owner / 同名 | 最终a4ba→4a9690ee7cf70cf66e4181b07f45e52ebb4f77c4，18paths/作者verify0/额外源码0，28queue/46service/2integration+fixture微调2定点绿。原failed attempts保；无旧running补交分支。源码冻结/中央verify0；R41揭pre-mark拒绝preparing journal残留令restart失败P1，暂拒集成，session_vrn接手独立forward（原作者429）；随后sync O03b。 |
+| O03b / terminal_owner_api_implementer | navigation_authenticated_scope / 同名 | 认证37+request_id邻接6绿；真实Gateway/下游独立HTTP集成等O02a start/stop。R40已审b876无阻断。现按原任务推进生产UI消费者唯一owner，用稳定Gateway ID/backend UUID/principal；health缺gateway_id最小字段闭包归此作者，driver route参数另由O02c提供。报告artifacts/o03b-ui-consumer-delivery.md列独占path/preimages。 |
+| behavior_reviewer、fixed_delivery_reviewer、uuidv7_implementer、workspace_owner_implementer | 保旧独有树/证据 | 429 errored，不密集恢复或换模型。W/V/UUID已固定历史交付与证据见下文队列和Git；未完成的owner/runtime/resource任务保持goal内，不以模型错误标已完成。 |
 
 ## 集成队列与依赖门
 
@@ -97,6 +97,17 @@
 
 40. 恢复后的E01作者错误缩scope为items-only，导致E02误以typed Detail/Snapshot/schema无人维护；中央核既有A/B事实重新下发责任并要求两作者给final符号，保独有改动。E02全量owner DML/caller缺pair（turn_index/recovery/model_calls）明确归E02，不因新finding编号再次等待确认。O02a作者55pass/44.38s真实lifespan gate，但只交完成时间摘要、未固定tree/raw引用，已退补机械交付、禁重跑55。中央静态发现两旧部署窗口补交分支，按无旧兼容授权要求核fresh合法状态后删除或修根因，尚未fixed。
 
+
+41. e0ba五文档提交后的完整union文档组合3e50a0ef；E02旧only55排builder后54path三方合仍14conflicts，index coordinator/git/union-e02-filtered.idx 保待final，不反复合旧owner。证据e02b-union-filtered-preview.json。已完成B合同仍应独立fixed，不因A新入口/consumer未全绿持续拖住整包。
+42. O02b最终b876两新增竞态经R40固定blob独审无阻断；主e0ba与原base d76在10path逐字preimage相同，strict预览446eb0d9、live全部postimages匹配后集成cb1a，tsc/build0，不复跑作者17/原Chromium。主代理误用bun --check实际执行MJS浏览器套件且遗漏进程外保护，执行exit0但不当语法检查；保工具转录及误执行记录，随后Bun.Transpiler只解析exit0。证据o02b-main-validation/mjs-check-misexecution.json；后续不复现误命令。default .git/index hash/mtime仍与e0ba一致。
+43. O03b真实consumer提前核出backend UUID不同Gateway route ID、driver混用，已派原O02b作者必填gatewayWorkspaceId，partition仍backend身份；health权威gateway_id缺字段由O03作者最小补DTO/手写proto，中央生成。禁止local:port稳定身份补造。该前置准入实践尚未验收，不记成功。
+44. E01A真实producer无独立key，checkpoint message-derived key拒绝；采用现有Job创建点独立分配/queued持久及显式全链传递，accept_turn先于runtime/provider。当前active dequeue到acceptance无自动重启恢复，准确保限制，不扩active journal/新manager。E02 checkpoint helper only-validate，缺真实admission失败；fork exactpair验证source真实Job/key/hash，target copied历史保source Job事实但target-local identity/hash，绝不启动target Job；后续resume由真实caller传新Job/key。待fixed/真实gate。
+45. O02a最终4a9690ee机械18paths/0outside，新28+46+2绿；最后配置stub微调tuple误改中间37fail保raw，修后只定点2pass，不复跑46。R41只读独审固定a4ba→4a9690ee进行，报告coordinator/artifacts/r41-review/report.md。E04b首次deferred把HEAD untracked误当tree diff导致unused拒绝，原exit2保，不修改candidate造差异。
+
+46. R41固定4a早期P1：prepare journal独立commit后retention/CAS拒绝仍preparing，operation rejected，startup recovery对该pair报错导致workspace不能启动。是fresh合法拒绝未收敛，不是旧数据兼容；转session_vrn修唯一journal abort状态/真实拒绝→重启回归，原behavior在R42时报429，保源不密集恢复。R41仍核另lifecycle边界。
+47. O02c fixed830bfcc中央读2pathdelta无多余改动，source17unit/60assertions、tsc/build0。O03b原live是5418/9db组合，中央初次误按d76preimage断言失败、再误计4paths（实际5含browser harness）失败，都在写前；核完整实际preimage逐blob后sync5paths，报告o02c-fixed-to-o03b-sync.json。UI CAS又发现旧hash revision/node无numeric值，授权O03b补同SQLite snapshot的generation/node revision读投影闭包，不拼多请求或假值。Gateway workspace-navigation另owner暂不扩该slice。
+48. E01再次恢复丢typed schema/source_overlays与assembly/overlays责任，已重发完整A/B片段，B应先固定；E02 exactpair caller等待该列，恢复test9pass41fail保raw，完成摘要仍无fixedtree，已退补。production only-validate变化的直接root fixtures精确清单已交，须真实acceptance先行、owner scope明确，不能仅插SQL/加假的thread。当前B尚未交，不宣称依赖闭合。
+
 ## 分工实践比较
 
 用户建议按实际效果择优。先在既有切片记录可比结果，不全面更换分工、不以工具pass推断业务正确。
@@ -107,7 +118,7 @@
 | L02同作者跨Node/Python，L02b扩至Gateway启动/接管/请求 | 原fixed13paths可重建但R28真实入口失败；L02b缺registry前置19fail，真实启动再揭health/代码来源缺口，修后定点19+25及真managed1pass | L02c固定完整、独审无finding；真入口收口后中央主要合依赖，仍有前置补齐成本，不由一条链宣布最优 |
 | E01b单实现者纵向writer→reader | 已改append durable attribution、parent display_only继承，middleware/plan internal branch仍在收口，尚无fixed交付 | 等真实入口/atomic gate/首次交付和新增merge量后比较，不能预称最优 |
 | E04b旧catalog删除/fixture消费者 | 机械94paths重建通过且137pass；独审两P1揭五fixture缺seed与两个漏导，forward返作者 | 固定对象提高完整性、不能替代fresh消费者闭包；修后真实gate及主代理补丁量仍待比较 |
-| O02按backend/IDB owner并行、交叉独审 | 两个首次固定包均完整且作者差异0，可main strict独立合21paths；独审分别揭启动/逻辑提交两P1与insert回滚一P2 | 机械合并成本低，backend一轮forward仍在验，IDB第二轮forward在途；先验真实竞态再判断，不与E01不同规模直接排名 |
+| O02按backend/IDB owner并行、交叉独审 | 两个首次固定包均完整且作者差异0，可main strict独立合21paths；独审分别揭启动/逻辑提交两P1与insert回滚一P2 | 机械合并成本低；IDB两轮forward后R40无阻断并主cb1a集成，backend一轮forward+fixture收口后待R41；真实UI前置仍发现route合同，分工效果继续观察，不与E01不同规模直接排名 |
 | U03c同作者贯穿reader/DTO/Web | 第一次完整25paths/机械0、30+19+60通过；独审追加空/前分布揭真实around游标P1 | forward3case通过、R38代码无P1/P2但规范漂移，中央手写3path冲突已合；主代理仍需协调生成合同，不能由单链比较判最优 |
 | D01机械交付辅助 | 原始L02成功与三负例拒绝；独立D02发现后缀漏判，定点修复复验通过 | 工具可复用，分类规则仍需随语言核验；业务owner仍需独审与真实入口 |
 
