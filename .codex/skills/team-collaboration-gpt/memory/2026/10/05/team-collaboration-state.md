@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-两个团队共用、主代理独占维护。恢复/派单/集成/报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-05 02:22（北京时间）。goal **active、无预算上限**，交接及七个 change 的必要实施、独审、验证、清理和技能实测未完成。
+两个团队共用、主代理独占维护。恢复/派单/集成/报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-05 02:52（北京时间）。goal **active、无预算上限**，交接及七个 change 的必要实施、独审、验证、清理和技能实测未完成。
 
 ## 授权与路径
 
@@ -18,13 +18,24 @@
 
 ## 主树与验收事实
 
-主HEAD **`73b4754b6da858560786f153152f8e03079625bb`**（技能/台账文档）；主源码 **`68b99261022f85aff7c4dc66811c2b4ebb8c73fc`**，T05a owner三path已串行集成；40原绿复用，真正generation=0 snapshot与29:59 registered两case复验2pass3.55s、Ruff0、独审通过。guard/祖先/defaultindex/未知fork全0，证据`coordinator/artifacts/t05a-main-integration/attempt-2/result.json`。文档1f80已收闭包遗漏、重复断言误改和整树复制；本文与SKILL当前由主继续维护。生产T05b未完成，不勾8.14。
+主HEAD **`d01db6cffbece423500495cfd26c4db642ea7517`**（技能/台账/OpenSpec文档）；主源码 **`68b99261022f85aff7c4dc66811c2b4ebb8c73fc`**，T05a owner三path已串行集成；40原绿复用，真正generation=0 snapshot与29:59 registered两case复验2pass3.55s、Ruff0、独审通过。guard/祖先/defaultindex/未知fork全0，证据`coordinator/artifacts/t05a-main-integration/attempt-2/result.json`。文档1f80已收闭包遗漏、重复断言误改和整树复制；本文与SKILL当前由主继续维护。生产T05b未完成，不勾8.14。
 
 上一主源码 **`7c39f2d10c7f6a97b4ef50dd6fe7b7e8c0e6a732`** = O02a完整24paths，主28queue+2lifespan、R43及追加test-cache隔离独审通过，证据`coordinator/artifacts/o02a-main-integration/commit-result.json`。此前O02b/route、L01、M01/M02、UUID、配置来源/地址等已集成绿复用；历史关闭事实见Git与原报告，不重新全矩阵。
 
 主树唯一未知源码diff：`app/services/infrastructure/rollout_context/checkpoint/boundary/fork_boundary.py`，blob **`928f17eed7f50d14f101eee67e8e9ecb9894b0d1`**，保、不覆盖。默认 index 于17:33 UTC被WVL裸read-tree清空；主按历史tree重建，详见本段事故记录，不能用裸status判断代码丢失。
 
-交接 [bug hunt](../../../../../../../docs/handoff/20261003-060700-bug-hunt-and-redundancy-handoff.md)。实际OpenSpec勾选仍 itemized52/87、uuid49/49、unified5/40、sessionVRN20/35、multiworkspace5/34、context21/57、persistent2/21；raw `coordinator/artifacts/current-openspec-progress/`。不因部分gate/候选可合而勾大任务。ThreadRuntime/delegate/activation/P05及真实产品验收仍必要。
+交接 [bug hunt](../../../../../../../docs/handoff/20261003-060700-bug-hunt-and-redundancy-handoff.md)。实际OpenSpec勾选 itemized51/87（9.5已撤整项）、uuid49/49、unified5/40、sessionVRN20/35、multiworkspace5/34、context21/57、persistent2/21；raw `coordinator/artifacts/current-openspec-progress/`。不因部分gate/候选可合而勾大任务。ThreadRuntime/delegate/activation/P05及真实产品验收仍必要。
+
+## 当前 Sol 试验（未完成验收）
+
+唯一实现者继续独占 `WT/thread_owner_implementer`；私有索引 `coordinator/git/sol-trial-status.idx`，完整运行前置是 `e8141e9cd9677a6e3d45907526444d26baa59440`，不是 WT HEAD 或中央 e16。18:13:52 UTC 释放写入后，主没有改该 WT 源码。
+
+- 同具名真实 fork anchor 第4次定向尝试通过（1pass/4.52s），退出文件时戳距释放约26.66分钟；此前三次失败原始日志均保留。另4条 pinned删除/释放与 history/full Turn边界在 attempt-6 通过（4pass/9.79s）。只能算阶段进展：Luna原整组17fail/4pass和Sol单项/小组范围不同，原前置贡献单列，不能据此给速度倍率或宣告完整交付。证据 `coordinator/artifacts/sol-efficiency-trial/{efficiency-phase-1.json,prefix-runtime/}`。
+- Sol已报告真实source控制库/generation纳入冻结、专用checkpoint物化和退出source scope后的既有claim激活；`recover_prepared_forks`及main lifespan已接，生产AppContainer/HTTP和启动故障验证尚在实施，未主核固定包、未验收。
+- GraphBinding固定6a44独审发现Main selector仅在staging写当前常量，未纳durable creation preimage/hash；已交Sol后续同owner修。child冻结/publication/runtime strict read复用已审证据；不能据27path包宣告ThreadRuntime lease完成。报告 `coordinator/artifacts/t05b-graph-fixed-review/report.md`。
+- fork验收映射明确公开HTTP仅默认detached成功；pinned saga、source capture竞态、proof/publish失败和启动恢复不能由散落helper绿代替。真实入口补齐已交Sol；报告 `coordinator/artifacts/sol-efficiency-trial/fork-acceptance-plan.md`。
+- e814相对中央e16有131个既有差异，含旧导航/标题/DTO回退和3个运行依赖软链接。主仅对象准备继承fork42path，tree `58de7dd1d6fd2ae466084b69d277357a5ef1fff6`、strict重建/AST通过，未写运行源码、未验收；最终按Sol完整闭包合中央，不能整树替换。证据 `coordinator/artifacts/sol-efficiency-trial/fork-integration-preparation/attempt-1/result.json`。
+- 本窗口共享index SHA `d541fd806cf0f78241ab421632efa325d4a84805bcb8c5584b3faf14b582ea2d` 与试验释放前备份一致，3266 stage entries逐字相同；历史重建安装SHA不是此窗口的比较基线。未知fork blob仍928f。证据 `coordinator/artifacts/sol-efficiency-trial/shared-index-recheck/attempt-1/result.json`。
 
 ## 当前组合：对象依赖；T05a三path已主集成
 
