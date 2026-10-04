@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 05:51（北京时间）。goal **active、无预算上限**，交接及七个 change 的实施、独审、验证、集成、清理与技能实测尚未完成。已关闭调查留在 Git 历史与对应报告，不在恢复时重复泛读。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 06:28（北京时间）。goal **active、无预算上限**，交接及七个 change 的实施、独审、验证、集成、清理与技能实测尚未完成。已关闭调查留在 Git 历史与对应报告，不在恢复时重复泛读。
 
 ## 当前授权与唯一实现者
 
@@ -8,7 +8,7 @@
 
 - 物理 ROOT：`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
 - TEMP：`ROOT/out/tests/temp/2026/10/04/024121-team-execution`；WT：`ROOT/out/worktrees/2026/10/04/024121-team-execution`。以下证据相对 TEMP。
-- Sol 唯一运行源码根：`WT/thread_owner_implementer`，当前完整运行 baseline **`4cf1d8ddf43c7c32ce27f883e8848e72c383e6e0`**；fork P2窄包已通过strict与增量独审，同一Sol正在接续Runner。状态 index：`TEMP/coordinator/git/sol-trial-status.idx`；产物：`TEMP/coordinator/artifacts/sol-efficiency-trial/`。
+- Sol 唯一运行源码根：`WT/thread_owner_implementer`，最新冻结完整源码 **`f6eb49ddf1c0ae80ee089367fba78727d2fb235e`**；fork P2、Runner与Graph main创建冻结均已机械核验及窄独审通过，同一Sol在f6上继续生产runtime lease。最终Graph/runtime完整增量仍从abbb导出；WT HEAD与作者live不能代替冻结对象。状态 index：`TEMP/coordinator/git/sol-trial-status.idx`；产物：`TEMP/coordinator/artifacts/sol-efficiency-trial/`。
 - WT HEAD `ad093e0cdee2ca1225b1b9086db5e1d2c6b6b316`；**实际接手完整 preimage `e8141e9cd9677a6e3d45907526444d26baa59440`**。不是中央 e16 或 WT HEAD。每 shell 绝对 index/workdir/编辑路径，固定对象检索，索引隔离不隔离 live。
 - 主唯一串行提交者，index `TEMP/coordinator/git/integration.idx`；fresh read-tree → 精确 stage → guard record → 无 pathspec commit → verify → 双祖先。禁 shared index、amend/reset/rebase/push。测试必须 matrix 或进程外 timeout+4GB，uv/bun；代码静态，Web 改后 build。raw 按 candidate/attempt 保真，不覆盖失败、不补造、不为补日志复跑已绿。
 - 三保护路径：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`。不新建整树副本/archive/.venv，不 `/tmp`，正式 workspace 镜像测试路径、fixture 源只读。
@@ -20,6 +20,8 @@
 主 HEAD 每次运行时实际核验，不在本文维护自引用hash；最后源码集成 `68b99261022f85aff7c4dc66811c2b4ebb8c73fc`，T05a 三路径通过独审与定向验证。O02a、Gateway、UUID、配置和寻址等已审绿按依赖复用，原证据不重跑。中央相对主仍609路径未集成，不能将Sol11文件直接套旧主树。只读 `central-dependency-review/attempt-1/report.md` 只确认B01/B02/J01、T05a、C01/C03已集成及fork/E01既知阻塞，未提供其余609路径的精确最小闭合清单；不能据此声称所有前置已审完或可全量覆盖。
 
 主唯一未知源码 diff：`app/services/infrastructure/rollout_context/checkpoint/boundary/fork_boundary.py`，blob **`928f17eed7f50d14f101eee67e8e9ecb9894b0d1`**。原字节保留，主尚未改写或提交；最终组合须独审其 owner/connection 语义，不静默覆盖。
+
+ROOT另有未跟踪 `app/services/business/session_context_assembly_query_service.py`，blob `69b99c88e6298d60ffa418c09486326a45302367`；HEAD/e16/f6均无该路径或class引用，已核与未验收WVL519dd同blob；原文件与Git对象保留，后续WVL统一纳入caller闭包，不自动叠进当前候选或文档提交，也不按无引用误删。`root-source-preservation/attempt-1/result.json`记来源边界。未跟踪Web `sessionCatalogOutboxRuntime.test.ts`则与f6同blob，最终同步仍核preimage。
 
 中央完整候选 **`e16c5679002730a2fcf766a04d104be7e207da73`** 尚未全量主集成。e814 相对 e16 有131个既有差异，含旧导航 actor、同步 DELETE、标题/DTO 回退及3依赖软链接，不能把 Sol live 整树替换主树。主对象准备：fork42路径 prelude `58de7dd1d6fd2ae466084b69d277357a5ef1fff6`；当前协作/交接、9.5撤勾与原未知源码保留后为 **`22b6248b50ed4e806fa090f6095d1b52e7a7a012`**。strict 重建相等，未写运行源码、未 runtime 验收；42不是最终白名单。证据 `sol-efficiency-trial/{fork-integration-preparation,fork-root-preservation}/`。
 
@@ -53,8 +55,9 @@ fork P2窄包 **ce595→`4cf1d8ddf43c7c32ce27f883e8848e72c383e6e0`**11路径已�
 精确对象、源路径与失败分组只在 `coordinator/artifacts/sol-efficiency-trial/implementation-queue.json` 维护；恢复读当前条目，不泛读已关闭调查。
 
 1. **Runner setup cancellation**：固定e16只读核实 persist acceptance/admission 的 `to_thread` 在最外cleanup之外，worker可在取消后继续提交；user Job收尾不能覆盖internal outcome。同一Sol从4cf1接续外层cleanup与真实binding读回；真实Saver屏障覆盖 user/internal × writer进行中/admission已提交setup未完两个窗口，不靠mock绿；JobService有界等待不提前终态。显式cancel→cancelled，timeout→interrupted，保护吸收终态，failed但lost/unknown保恢复轴，不造无admission execution/Turn。定位 `sol-efficiency-trial/runner-cancellation-plan.md`，本轮raw `runner-cancellation/`。
-   当前阶段回报：真实Job.control重复取消的user/internal四窗口及stream.open等待writer共5例通过；测试暴露Runner无条件裁掉internal `display_content`，已同链修复。completed吸收、failed/lost保留、无admission零造账、真实child启动恢复及typed Trace owner漂移仍在补必要证据，未交固定候选、不能算验收。main重复Job-as-Turn终态写与旧独立SQL移除；recovery user lost入口也须委派同一converge并保原幂等键，不只修internal。
-2. **GraphBinding + ThreadRuntime lease**：Graph候选 `6a44a65957afc3561d93dcf920a0b2a77817a148` 独审P2为main selector未进入durable creation preimage/hash；child已审合同复用，4共享冲突未同步。修main冻结与重入核，再唯一tracker.acquire(pair,admission,generation_key,builder)、singleflight、旧lease排空/代scope关闭后换代、真实Runner/lifespan。Graph包不等于runtime lease完成。
+   已交 **4cf1→`847e7bcf8fced202e47006f6fe9480b2cc2357dc`**29路径，主strict重建同tree/同patch SHA、AST0/作者候选外0/保护0；真实集成全文件20pass30.52s、fallback/P3定向37pass10.58s、Ruff0。无admission零造账、completed吸收、failed/lost保留、真实child重启及typed owner漂移已覆盖；writer/stream.open取消都等真实settlement。internal display字段错误同链修复，旧Job-as-Turn listener及独立终态SQL删除，recovery user lost也委派同一converge保原键。主机械证据`runner-verification/attempt-1/`；增量独审`runner-independent-review/attempt-1/report.md`已通过，无确认finding，静态合同与raw独立核验；未代跑测试、未验证全仓/Gateway E2E及遗留Turn控制整文件。原72pass18fail与后37重叠，不相加；失败集中fixture合同迁移，未变证据复用。生产净+117/测试+764；精确Runner派单起点尚无可靠统计，不拿首次对象操作误作开始时间，不能算速度倍率。主仍补实现0，主集成未完成。
+2. **GraphBinding + ThreadRuntime lease**：主以e16共同祖先刷新组合Runner847e与Graph6a44，得到 **`abbbbfca9b41f004089cbe74fd673e494b2c501e`**，29path merge0/strict/AST0；逐preimage同步唯一WT28写1删，Runner29blob、保护路径与实际共享index均未变。`graph-integration-preparation/attempt-2/`、`graph-sync/attempt-1/`保证据。Sol从此baseline修main selector进入durable creation preimage/hash与staging重入核，typed四字段与六业务manifest分开；child已审合同复用。随后唯一tracker.acquire(pair,admission,generation_key,builder)、singleflight、旧lease排空/代scope关闭后换代、真实Runner/lifespan。新产物唯一根`graph-runtime/`；Graph包不等于runtime lease完成。
+   Main冻结子包 **abbb→`f6eb49ddf1c0ae80ee089367fba78727d2fb235e`**16路径，主strict同tree/同patch SHA、AST0/作者候选外0/保护0；`graph-main-freeze-verification/attempt-1/result.json`。定向attempt3为14pass、attempt4为3pass，范围有重叠不相加；原fixture失败raw保留。`graph-main-freeze-review/attempt-1/report.md`独审无finding，未跑测试，runtime不在本次范围。Sol已继续唯一acquire、factory与lifespan，不为等已闭合独审停写。主补实现0，未主集成。
 3. **WVL**：固定 `519dd1a405ce7042db2539b24760ec6fe3421dca` 从a952严格183path，但main.py:248悬空try被AST拒，未合中央；不采用e814旧导航/DTO回退。原Web1244pass13fail仅转录，6组13失败路径在queue；先生产main/caller合同，再定向，完整matrix仅必要新闭包后。额外整树workspace已保独有源码后删除。
 4. **Terminal/Browser**：Terminal首16path在e16，后8path partial保 `navigation_authenticated_scope/artifacts/p05-terminal-owner/lease-forward-attempt-1/handoff.md`；Backend唯一owner/operationlease，Node127本机trust/一次WS grant，Gateway精确禁管理POST/DELETE旁路，真实ThreadRuntimeBinding，API/Agent/UI全调用闭包。随后Browser，不能全表reconcile误清Browser。
 5. **Resource activation生产**：底座7path draft、上层唯一registry、持久workspace key/freshmarker、真实execution/modelcall冻结/恢复、原子sealbind，无None/当前源旁路；`coordinator/artifacts/activation-production-wiring/review-plan.md`。
