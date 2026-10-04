@@ -1,13 +1,13 @@
 # 团队协作实时状态与实测改进
 
-两个团队入口共用，主代理独占写入。恢复、派单、集成及报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-04 12:18（北京时间）。goal active、无预算上限，交接及七个 change 的必要实现、独审、验证、清理和技能实测仍未全部完成。
+两个团队入口共用，主代理独占写入。恢复、派单、集成及报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-04 13:01（北京时间）。goal active、无预算上限，交接及七个 change 的必要实现、独审、验证、清理和技能实测仍未全部完成。
 
 ## 当前授权与现场
 
 - 用户授权按架构熵减自主统一 owner、显式身份和单链路，删除旧兼容；源码开发生成的新旧中间数据可直接删除，不再询问。保普通源码、未集成独有改动、来源不明业务文件；不能用删数据掩盖 fresh writer 缺陷。
 - GPT 团队精确 `gpt-6-luna / max`，不带前缀；主模型由用户选。至少3、最多15常驻，主代理统一派单/审查/集成。既有九个 agent 的创建参数与实际模型均已核，证据 `coordinator/artifacts/model-context-latest.json`、`u05-model-context.json`。429保源和真实错误，不换模型、不密集恢复。
 - 物理根 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。活动 worktree 根 `out/worktrees/2026/10/04/024121-team-execution/`，产物/索引根 `out/tests/temp/2026/10/04/024121-team-execution/`。下文路径相对此物理根；每次派单仍给字面绝对 workdir/index/artifact/report。
-- 主树 HEAD `787744172f5b519207d094f57deae0a190f400dd`；L01已集成六路径，主树17pass5.78s/Ruff0、R25无阻断、guard/祖先0。M01/M02已集成，40pass、Ruff0、A24b无finding、guard/祖先0。恢复时用 fresh 独立索引核真实状态；共享 `.git/index` 极陈旧，裸 status 的 D/MM 不能当源码差异。本文件与流程由主代理独占；f4789001两文件提交防线/祖先0。
+- 本次文档提交前主树 HEAD `5aeb8fe0adfdc1c1d9851f54a6c7d3d8b17a4a6a`；L01已集成六路径，主树17pass5.78s/Ruff0、R25无阻断、guard/祖先0。M01/M02已集成，40pass、Ruff0、A24b无finding、guard/祖先0。恢复时用 fresh 独立索引核真实状态；共享 `.git/index` 极陈旧，裸 status 的 D/MM 不能当源码差异。本文件与流程由主代理独占；f4789001两文件提交防线/祖先0。
 - 主代理唯一串行提交者，索引 `coordinator/git/integration.idx`；fresh read-tree→精确add→record→commit无pathspec→verify→祖先。禁amend/reset/rebase/push与共享index写入。
 - 三处受保护路径：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`，不能修改。
 - 测试/probe用matrix或外部 `timeout N bash -c 'ulimit -d 4194304; exec "$@"' bash ...`。uv/bun；保存raw stdout/stderr及实际exit。已pass不为补日志重跑；缺失raw如实lost/转录。源码改后静态，Web改后build。
@@ -15,7 +15,7 @@
 
 ## 集成事实与范围
 
-交接：[bug hunt](../../docs/handoff/20261003-060700-bug-hunt-and-redundancy-handoff.md)。已集成T01、G01/G02、S01/S02、U01/U02、T04、G03、配置来源/C03、S03/S04、UUID自然allocation/U06/U07、B01/B02/J01、S06-v2、M01/M02；闭合历史以Git与对应报告为准，不复跑完整绿灯矩阵。近期提交：UUID真实回拨`b75dbd90`、B01/B02/J01`28359675`、S06-v2`5383baf3`、稳定流程分离`d79deb5e`、用户熵减授权去重`0821b506`、M01/M02`ca0de6da`。UUID十一模块684项加定向1+3通过；不能由UUID验收替代SessionThread/执行及E2E。
+交接：[bug hunt](../../../../../../../docs/handoff/20261003-060700-bug-hunt-and-redundancy-handoff.md)。已集成T01、G01/G02、S01/S02、U01/U02、T04、G03、配置来源/C03、S03/S04、UUID自然allocation/U06/U07、B01/B02/J01、S06-v2、M01/M02；闭合历史以Git与对应报告为准，不复跑完整绿灯矩阵。近期提交：UUID真实回拨`b75dbd90`、B01/B02/J01`28359675`、S06-v2`5383baf3`、稳定流程分离`d79deb5e`、用户熵减授权去重`0821b506`、M01/M02`ca0de6da`。UUID十一模块684项加定向1+3通过；不能由UUID验收替代SessionThread/执行及E2E。
 
 2026-10-04本次实测 `openspec list --json`：
 
@@ -51,21 +51,22 @@
 
 ## 集成队列与依赖门
 
-1. 收E02a正常生产read闭包fixed patch/manifest，strict candidate/hash/import后由主代理串行sync U/V/E01相应符号；保primitives/message/query其它owner片段，再通知U03b跑新14case。
-2. 收E04 main独立线程节点创建/resolver/caller/proof fixed，真实主子并存/reopen独审后sync E01/E02/U/V；E02历史20与完整read gates随必要writer依赖闭合。
-3. E01 typed plan/detail/overlay writer及DDL fixed与E02三元SQL同步，首次notice原子/真实JobStep执行后续仍待，不能以口头签名当依赖。
-4. V02独立Web/Gateway/resolver先fixed审，pair backend后续；W04 field5独立协议增量与真实生成不可漏。
-5. W/V旧base preview `5c83f1a6`仅预览。主代理已用git merge-tree与ca0主树三方合并→`529282d3`，M01/M02六path逐片段保留、三保护路径不变；再strict加W05c→`ea2386e2`，证据 `coordinator/artifacts/w-v-ca0-main-preview.json`、`w-v-ca0-w05c-preview.json`。均未集成，待V02/E04/E02及central统一gen。不能把旧tree直接替当前HEAD，必须保C03/B01/J01/M01/M02。
-6. 已授纵向链路caller完整迁，共享文件按符号合并，提供者不自行写消费者树。独审统一由主代理排队，实现者只提交请求。
-7. Terminal L01按R24已派独立实现，ThreadRuntime A25已完成compile/scope接口审，真实runtime依赖E01admission仍待、真实execution pair仍必要；outbox/delegate/activation尚未启动新实现，仍属原goal必要项。
+1. E02c combined固定 `c9b2577a→4c2d238c`，5paths patch `dd634ba8` 中央strict/hash/raw0，3pass1.99s；旧 `_existing_index_connection(session_id=None)` 属E02b未迁，不能说全面闭合。E02d reader/indexed非空正常路径candidate `6d24717f`、3paths/patch `2e0fbad9` 待完整manifest和真实main/child验证。
+2. E04 root五path固定 `8392b195→a746ed8b`，中央standard patch `f182f78f`，4源码/test live一致，fixture仅目录hunk；104pass为工具转录，无配对raw不重跑补日志。已串行sync T/U/V/E01且Ruff0。A27两P1 gate：NodeDebug canonical全caller未交；旧catalog迁移仍Session折叠。已裁定删除仅旧JSON/开发兼容迁移链，全caller/fixture/spec完整迁至现行canonical；NodeDebug与旧链删除各交独立delta。
+3. E01 overlay写/fork固定 `69d19b5e→589c18a7`、19paths/patch `b624e226`，中央strict19hash0；读侧三元SQL与E02合后验。E01b由一个实现者贯穿admission+首次notice原子、execution/catalog关联、display_only生产membership；R27确认fixture直接INSERT掩盖生产两缺口，旧16+1 reader evidence仍保，不能当入口验收。
+4. V02closure `5eb701fb→388705ab`、29paths/patch `c5aaa589`，中央strict29hash0，候选外仅W04七path+OpenAPI两path。A26b Web身份闭包无finding。MessageRead独立 `388705ab→9aff7453`、2paths/patch `a6449f29` 中央strict/hash0，完整read依赖sync后newcaller2pass/21deselected2.81s；assembly pair callee待E01typed、normalindexed待E02d，不整体判pass。
+5. 中央E02sync V曾以dependency-only中间base三方合并，把消费树旧内容当删除，静态F821发现；用实际公共祖先eb9380aa重合六共享路径，完整owner模块恢复、Ruff0/import0。E04sync又漏已集成UUID生产前置；sqlite_state与六UUID模块已补T/U/E01，V补ExecutionAdmission/corecontext两模块。只读import不充分，真实creator入口仍须验；事实见coordinator/*prerequisite-sync.json。
+6. L02固定 `2323b40e→647cb052`、13paths/patch `10a07a15`，Node12/Python4/lifecycle2/resilience9pass；persistent首次1pass2setup errors，命令env指正式manifest后仅失败2case2pass30.53s。R28独审中，Windows/真实remote未验，不当pass。L01仍主树已集成。
+7. 继续W/V预览与当前main合并，保C03/B01/J01/M01/M02/L01及三保护路径，最终统一生成协议/OpenAPI。既有 `529282d3/ea2386e2` 仅preview；不能旧tree替HEAD。ThreadRuntime/delegate/activation/persistent resource仍必要。outbox driver生产检索只定义，接线仍未完成；下一任务按既有量化gate和F1/F2/F4新source判定，勿重复造driver。
+8. D01机械化固定tree交付helper由Terminal作者独立实现，路径 `.codex/skills/team-collaboration-gpt/scripts/verify_delivery.py`，不写入口/台账；真实候选成功与遗漏caller/deletion变异拒绝证据待验。主代理继续依赖/独审/集成，不全面换分工；独立纵向切片与公共合同先提供后消费按返工/合并成本比较。
 
 ## 目录、服务与清理
 
-系统盘旧副本已删除，迁移释放约238GB；14可重建副本删、67项分类、23092保留文件校验。详见 [目录审查](../../docs/handoff/20261003-151500-team-collaboration-directory-review.md)。默认及Drive旧.boxteam分别获授权清空、普通源码保留；仓库根旧terminal-manager和空.boxteam已删除，创建者未证实。
+系统盘旧副本已删除，迁移释放约238GB；14可重建副本删、67项分类、23092保留文件校验。详见 [目录审查](../../../../../../../docs/handoff/20261003-151500-team-collaboration-directory-review.md)。默认及Drive旧.boxteam分别获授权清空、普通源码保留；仓库根旧terminal-manager和空.boxteam已删除，创建者未证实。
 
 最近删除E01旧snapshot2-base 261222487字节：3428基线matching、32不同/extra、无missing，所有差异保Git tree `1e312a7e`及262120字节patch，strict重建、无使用进程后删；证据 `coordinator/artifacts/e01-snapshot2-cleanup-audit.json`、`e01-snapshot2-cleanup-result.json`及`e01-snapshot2-unique-delta.patch`。当前worktree/未集成独有源未删，后续不复制整树。
 
-服务上次default/Drive ready、前端8027初始化三API200且request_id一致，属历史核验。恢复使用 [migration-state.json](../../out/tests/temp/2026/10/03/160552-workspace-migration/coordinator/artifacts/migration-state.json) 原环境：BOXTEAM_PROJECT_ROOT旧入口、BOXTEAM_HOME旧入口/out/development-runtime/boxteam-home、BOXTEAM_DEV_PORT_OFFSET=16；cwd数据盘物理根。重新查dev:status，不能查另一unit或擅启第二组。
+服务上次default/Drive ready、前端8027初始化三API200且request_id一致，属历史核验。恢复使用 [migration-state.json](../../../../../../../out/tests/temp/2026/10/03/160552-workspace-migration/coordinator/artifacts/migration-state.json) 原环境：BOXTEAM_PROJECT_ROOT旧入口、BOXTEAM_HOME旧入口/out/development-runtime/boxteam-home、BOXTEAM_DEV_PORT_OFFSET=16；cwd数据盘物理根。重新查dev:status，不能查另一unit或擅启第二组。
 
 ## 实测问题、调整与效果
 
@@ -75,7 +76,7 @@
 |---|---|---|
 | 多次恢复默认cwd回主树、裸共享status误判D/MM或“并发回滚”；最近U03b/V02又发生 | 派单提供字面绝对workdir/index/artifact/report、写前核物理cwd/Git顶层/branch、按fixed git show归因 | 已撤误判，未证实越界source写入；每次命令cwd纪律仍未稳定，不能称已解决 |
 | E01/W01/S03重复落worktree/out，E02composition又落T产物；V02 W04与E04新preimages再次落worktree/out，E02首轮3pass/1fail raw遗失 | 唯一字面产物根，消费实hash，现存证据搬回、lost如实标，不补造日志 | e02-9gate raw保正确根；V02 W04搬回并核固定7/7、full可重建baseline删；E04错根6file93766byte正在搬回/去重，路径规则仍观察，不能用“out内”放宽 |
-| E01多次patch少callee/ports，原hash一致但绝对header/mixin错导、reader旧arity；中央整file曾覆盖U03codec两行；E02a手筛hunk产生畸形@@并丢核心pair | repo-relative固定candidate+manifest严格重建，全生产callee真实import/signature，共享按符号保其它owner | 6/6、8/8严格hash及真实gate通过；E02首版strict128且21/21目标AST仍旧签名，拒收；v2 standard tree strict30/30+AST/runtime签名0，U三方同步changedfiles Ruff0；R26揭cache/error分支漏pair，E02c进行中。V02另漏Web候选，新增candidate-vs-live白名单核对规则待closure实测 |
+| E01多次patch少callee/ports，原hash一致但绝对header/mixin错导、reader旧arity；中央整file曾覆盖U03codec两行；E02a手筛hunk产生畸形@@并丢核心pair | repo-relative固定candidate+manifest严格重建，全生产callee真实import/signature，共享按符号保其它owner | 6/6、8/8严格hash及真实gate通过；E02首版strict128且21/21目标AST仍旧签名，拒收；v2 standard tree strict30/30+AST/runtime签名0，U三方同步changedfiles Ruff0；R26揭cache/error分支漏pair，E02c进行中。V02closure 388705ab严格29blob/hash通过，fresh比live仅7W04+2OpenAPI，A26b Web无finding；机械化校验脚本D01待实测 |
 | E01/T05首次internal notice与admission分事务，metadata误改user_turn；fresh hash混acceptance/admission preimage | 同SQLite owner事务、typed admission决定归属、冲突明确拒；两hash各按正确preimage | hashfix后7pass/2fail到read identity，T05归属冲突独立1pass；原子首notice仍待E01 |
 | E02 main+child真实checkpoint发现main折叠Sessionnode，child拒legacy | E04按规范统一创建/locator/resolver全根链，无旧path兼容，不删guard掩盖 | 规范248/253已确认，完整实现/主子并存/reopen尚未验收 |
 | W02健康1s误转managed二次spawn、按port杀、构造清理杀adopted；A21b又发现preferred mismatch提前close | 明确attached/managed owner、从首spawn涵盖失败清理、按handle进程组回收，adopt mismatch保旧PID并显式报错 | 37pass、真实handoff1pass、W05两项pass、A21c source无finding；整链待主树集成 |
@@ -89,3 +90,5 @@
 另已清掉E02 v1 rejected scratch628KB可复现副本，错误候选保Git tree和标准小patch，strict重建后删除，原失败报告保。证据 coordinator/artifacts/e02a-v1-scratch-cleanup.json。
 
 本状态文件只记真实fixed/验证/集成事实。原始失败集合用于归因；数据清理不能把fresh NOT NULL/owner错误说成旧fixture。独审发现问题先纠正任务并更新已有对应规则，不累积同义禁令。
+
+本轮记忆移动至 GPT 技能同级 `memory/2026/10/04/`，两个团队共用唯一文件，所有入口/AGENTS/交接引用同步；旧顶层文件删除。严重延迟原因在 GPT SKILL.md 简述：残补丁/漏交、公共合同并改/错基线/缺前置、合成fixture掩盖writer、cwd/index/产物名错配。D01新规则效果待真实forward验证，不先宣称解决。

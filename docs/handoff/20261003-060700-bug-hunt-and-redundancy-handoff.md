@@ -4,7 +4,7 @@
 停止点 HEAD：`11dcfa394261e70ffa7aba3a033a285eaebb1bb2`
 工作树状态：**当时完全干净**（独立索引 `read-tree HEAD` 后 `git status` 零残留）。这是历史停止点，恢复任务需重新检查。
 
-2026-10-03 调度整理：handoff 文档提交为 `9bc4246b`；模型、派单、路径和提交方法改由 [团队协作技能](../../.codex/skills/team-collaboration-workflow.md) 维护。两种模型版本已准备，本轮仅整理文档及遗留目录，未继续 OpenSpec。目录问题与待审建议见 [目录审查](20261003-151500-team-collaboration-directory-review.md)。
+2026-10-03 调度整理：handoff 文档提交为 `9bc4246b`；模型、派单、路径和提交方法改由 [团队协作技能](../../.codex/skills/team-collaboration-gpt/memory/2026/10/04/team-collaboration-workflow.md) 维护。两种模型版本已准备，本轮仅整理文档及遗留目录，未继续 OpenSpec。目录问题与待审建议见 [目录审查](20261003-151500-team-collaboration-directory-review.md)。
 
 2026-10-04 迁移更新：仓库物理根为 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，原路径为软链接；后续不复用历史临时测试工作区。默认工作区与 `/data1/hyf/test_workspace/drive_bicicle` 的旧 `.boxteam/` 数据已分别按用户授权清理，普通文件保留，两个连接均恢复 `ready`。完整开发服务已恢复（前端 8027、Gateway 8030）。以上为迁移时的历史服务状态，恢复时需重新核验。当前 goal 已继续本交接及七个关联 OpenSpec 的实施与独立验收，实际进展以技能实时台账为准。用户随后授权按架构熵减自主决策，开发生成的新旧中间数据可直接删除，不保留旧兼容，不再逐项询问。
 
@@ -113,7 +113,7 @@
 
 ### 2. 集成提交与防线
 
-`scripts/assert_isolated_index_commit.mjs` 已落地，当前执行方法统一见 [技能的集成与索引流程](../../.codex/skills/team-collaboration-workflow.md#集成与索引)。
+`scripts/assert_isolated_index_commit.mjs` 已落地，当前执行方法统一见 [技能的集成与索引流程](../../.codex/skills/team-collaboration-gpt/memory/2026/10/04/team-collaboration-workflow.md#集成与索引)。
 
 - 独立索引只能隔离暂存内容，不能隔离工作树文件，也不能防止旧 HEAD 快照覆盖并发提交；默认由主代理串行集成。
 - `git commit -- <路径>` 会绕过隔离索引（事故 `d4e864fc`），禁止使用；禁止 `--amend` 与裸共享索引提交。
@@ -178,7 +178,7 @@ bun run --cwd src/clients/web build                             EXIT=0
    - `app/services/orchestration/**` 的执行面（ThreadExecutionQueue、admission ordinal、ExecutionContextFence，OpenSpec 8.3-A）；
    - 前端 `hooks/{session*,sessionEventStream}` 的深层分支、`components/{agentSessions,overlays,shell,eventQueue}`；
    - `tests/integration/**` 的变异鉴别力审计（哪些用例还原缺陷后仍绿）。
-4. **并行协作口径**统一见 [团队协作技能](../../.codex/skills/team-collaboration-workflow.md)，不在历史交接中维护第二套指令。保留本轮经验：独占文件范围、独立核验、区分真实缺陷与设计/未接线候选，允许审查者推翻自己的初判。
+4. **并行协作口径**统一见 [团队协作技能](../../.codex/skills/team-collaboration-gpt/memory/2026/10/04/team-collaboration-workflow.md)，不在历史交接中维护第二套指令。保留本轮经验：独占文件范围、独立核验、区分真实缺陷与设计/未接线候选，允许审查者推翻自己的初判。
 
 ---
 
