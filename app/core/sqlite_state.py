@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import Final, Self
 
 SQLITE_BUSY_TIMEOUT_MS: Final = 5000
 
@@ -348,7 +348,7 @@ class SQLiteStateDatabase:
         self._closed = True
         self._ownership.release()
 
-    def __enter__(self) -> SQLiteStateDatabase:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_: object) -> None:
