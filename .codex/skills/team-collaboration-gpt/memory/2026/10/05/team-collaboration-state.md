@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 03:46（北京时间）。goal **active、无预算上限**，交接及七个 change 的实施、独审、验证、集成、清理与技能实测尚未完成。已关闭调查留在 Git 历史与对应报告，不在恢复时重复泛读。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 04:09（北京时间）。goal **active、无预算上限**，交接及七个 change 的实施、独审、验证、集成、清理与技能实测尚未完成。已关闭调查留在 Git 历史与对应报告，不在恢复时重复泛读。
 
 ## 当前授权与唯一实现者
 
@@ -8,7 +8,7 @@
 
 - 物理 ROOT：`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
 - TEMP：`ROOT/out/tests/temp/2026/10/04/024121-team-execution`；WT：`ROOT/out/worktrees/2026/10/04/024121-team-execution`。以下证据相对 TEMP。
-- Sol 唯一运行源码根：`WT/thread_owner_implementer`；状态 index：`TEMP/coordinator/git/sol-trial-status.idx`；产物：`TEMP/coordinator/artifacts/sol-efficiency-trial/`。
+- Sol 唯一运行源码根：`WT/thread_owner_implementer`，当前完整运行 baseline **`ce5950b628a86db61826a71d4d8e05d69eafeaee`**，Runner cancellation已释放写入；状态 index：`TEMP/coordinator/git/sol-trial-status.idx`；产物：`TEMP/coordinator/artifacts/sol-efficiency-trial/`。
 - WT HEAD `ad093e0cdee2ca1225b1b9086db5e1d2c6b6b316`；**实际接手完整 preimage `e8141e9cd9677a6e3d45907526444d26baa59440`**。不是中央 e16 或 WT HEAD。每 shell 绝对 index/workdir/编辑路径，固定对象检索，索引隔离不隔离 live。
 - 主唯一串行提交者，index `TEMP/coordinator/git/integration.idx`；fresh read-tree → 精确 stage → guard record → 无 pathspec commit → verify → 双祖先。禁 shared index、amend/reset/rebase/push。测试必须 matrix 或进程外 timeout+4GB，uv/bun；代码静态，Web 改后 build。raw 按 candidate/attempt 保真，不覆盖失败、不补造、不为补日志复跑已绿。
 - 三保护路径：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`。不新建整树副本/archive/.venv，不 `/tmp`，正式 workspace 镜像测试路径、fixture 源只读。
@@ -17,7 +17,7 @@
 
 ## 主树、候选与保护事实
 
-主 HEAD `dd63bfe79af156cdf4d31a55e89adac740a2a10c`（后续文档提交请实际核 HEAD，不维护自引用 hash）；最后源码集成 `68b99261022f85aff7c4dc66811c2b4ebb8c73fc`，T05a 三路径通过独审与定向验证。O02a、Gateway、UUID、配置和寻址等已审绿按依赖复用，原证据不重跑。
+主 HEAD `81e8dda7bb2eb4e1f5ee6a646bc6f7b40065cc1e`（后续文档提交请实际核 HEAD，不维护自引用 hash）；最后源码集成 `68b99261022f85aff7c4dc66811c2b4ebb8c73fc`，T05a 三路径通过独审与定向验证。O02a、Gateway、UUID、配置和寻址等已审绿按依赖复用，原证据不重跑。
 
 主唯一未知源码 diff：`app/services/infrastructure/rollout_context/checkpoint/boundary/fork_boundary.py`，blob **`928f17eed7f50d14f101eee67e8e9ecb9894b0d1`**。原字节保留，主尚未改写或提交；最终组合须独审其 owner/connection 语义，不静默覆盖。
 
@@ -34,13 +34,15 @@ Sol 于 **2026-10-04 18:13:52.8585 UTC** 接手写入，主之后补源码量 **
 - 真实 anchor 第4次定向通过：1pass/4.52s，退出文件 mtime 距释放约26.66分钟；前三次失败 raw 保。pinned 删除/释放与 history/full Turn 边界4pass/9.79s。
 - 真实 AppContainer HTTP 两例通过；新容器实际 `app.main.lifespan` 的 prepared/target_committed/committed ready前恢复3pass/15.23s。旧 helper 重开不能冒充进程入口；首 collection/dependency 与锁未释放失败保 raw。
 - 真实 user acceptance → lost → retry、internal notice、闭合 tool call/result → completed checkpoint 的新增谱系，暴露 full-copy 对 internal 强制 Turn、execution/metadata 引用漏映射，原失败保留，Sol统一修真实映射而未造 Turn/Job。
-- 整个 `test_rollout_fork_modes.py` 首轮31pass5fail/72.02s；剩余5条旧签名/owner fixture 迁移后定向5pass/17.77s，31绿按源码依赖复用。尚未收完整固定包及独审，不宣布 fork 整项完成。
-- 真实source删除先于claim、preparing claim先于删除及源删后的两状态lifespan恢复4pass；completion proof/publish CAS失败精确release4pass。新增三模式fork-of-imported仍3fail（本地导入proof/二次message映射），Sol继续同闭包，不伪造native admission，未冻结完成。`sol-efficiency-trial/race-proof-runtime/`保原raw。
+- 整个 `test_rollout_fork_modes.py` 最终 **47pass/98.58s/exit0**（attempt-3），首轮31pass5fail与定向5pass原raw保。固定 **e814→`f25989c37a27bead6954ab78f627b0e4dfe0c513`**20文件，verify_delivery strict重建相等/作者候选外差异0；20:00:43 UTC释放写入，接手至完整交付106.84分钟，主补实现0，生产净行数+220/测试+601（不宣称全包净减）。独审仍pending。
+- 真实source删除/claim双顺序与源删后lifespan恢复、proof/publish失败release、三模式递归fork均已在最终47条通过。本地导入用committed journal证明，不伪造native admission；full二次fork暴露SQL checkpoint主键已重映射但JSON core.id仍原值，现同事务一致且新增反证断言通过。`sol-efficiency-trial/race-proof-runtime/`保每轮原失败。sealed model-call/retry assembly及generation mode/pinned/title意图漂移无专门新增证据，9.5等整项仍不勾。
 - 原 Luna 同文件17fail4pass/33.80s，同 anchor 当时失败；测试数量与断言合同已变且起始投入不可比，不能计算模型速度倍率。阶段记录 `sol-efficiency-trial/efficiency-phase-{1,2}.json`；原日志 `thread_owner_implementer/artifacts/r51-current-forward/pytest-rollout-fork-modes-r7.log`。
 
 当前 fork 合同：main物理alias=Session根rollout，child=threads/id；一次 source guard 冻结 selector/bytes/control/generation/Turn/execution lineage，释放后 target 只读冻结事实。prepared 私有 target 用唯一 journal materialization capability 提前映射真实 target-local身份，不新 user acceptance/Job/Turn、不用普通 admission writer顶替；prepare before claim，严格复用既有 claim。失败 release/abort，committed 补 proof/retention 后publish，published 不倒删。普通HTTP每次新fork，generation stable key复用；startup按creation records定点恢复，不扫盘。fresh v9 journal四列 source_thread_id/target_thread_id/checkpoint_ns/source_snapshot_sha256，不加旧开发schema兼容。
 
-下一步：收 e814→Sol 完整固定增量 → strict/blob/作者外差异核验 → 与当前 prelude 三方合并保中央合同 → Sol释放后同步唯一WT → 增量独审及受影响入口复验 → 主串行集成。source capture/deletion双顺序、pinned preparing竞争与proof/publish故障按真实证据核，不用散落helper绿代替。验收映射 `sol-efficiency-trial/fork-acceptance-plan.md`。
+中央组合 **`ce5950b628a86db61826a71d4d8e05d69eafeaee`** 已strict/AST0，19个Sol源码blob不变，仅API三方保现代导航合同；逐preimage同步唯一WT（92写/3删，3运行依赖symlink物理保但不入tree）。组合真实HTTP/ready恢复/anchor **7pass/29.72s**、Web build0；同步范围Ruff exit1的81诊断全部与22b基线一致，新增0，不把既有红说绿或改异常类型求lint。主未知fork源码928f仍原字节，组合检查已覆盖其入口。证据 `sol-efficiency-trial/{central-combination,central-sync,combined-pytest,combined-build,combined-ruff}/`；效率完整候选 `efficiency-first-candidate.json`。独审固定f259及组合增量正在进行；主串行集成仍未完成。
+
+Sol已接续Runner取消，不并发其他实现者；其固定baseline=ce595，产物`sol-efficiency-trial/runner-cancellation/`。主保固定fork对象独审，新增finding交同Sol窄修，不重复旧绿。不宣告永久默认模型或速度倍率；对比Luna前置/不同测试范围和Sol当前接手成本后继续实测。
 
 ## 后续唯一实现队列
 
