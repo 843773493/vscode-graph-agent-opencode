@@ -186,7 +186,7 @@ async def test_list_rejects_non_positive_limit(workspace) -> None:
 
 
 def test_list_sessions_http_rejects_zero_limit(tmp_path: Path) -> None:
-    """HTTP 入口对 limit=0/负数 fail-closed 落 409，而不是 200 + 不可收敛的空页。"""
+    """HTTP 参数校验拒绝非正 limit，不能返回不可收敛的空页。"""
 
     async def build():
         context = build_catalog_workspace(tmp_path, workspace_id=WORKSPACE_ID)
@@ -206,10 +206,9 @@ def test_list_sessions_http_rejects_zero_limit(tmp_path: Path) -> None:
                     f"/api/v1/sessions?limit={bad}",
                     headers={"X-Local-Token": "local-dev-token"},
                 )
-                # 路由沿用既有 409 状态冲突映射（不新增 422 契约），detail 为
-                # 纯文本消息本体。改前这里是 200 + 空 items + 重复 cursor。
-                assert response.status_code == 409, response.text
-                assert "limit 必须大于 0" in response.json()["detail"]
+                assert response.status_code == 422, response.text
+                assert response.json()["detail"][0]["loc"] == ["query", "limit"]
+                assert response.json()["detail"][0]["type"] == "greater_than_equal"
     finally:
         app.dependency_overrides.clear()
         context.close()
