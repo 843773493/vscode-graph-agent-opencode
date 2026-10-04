@@ -15,6 +15,7 @@ from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.trace_middleware import (
     get_current_gateway_id,
     get_current_request_id,
@@ -378,7 +379,10 @@ class JobService:
         """与 job admission 共用锁，仅在会话空闲期间执行 checkpoint 操作。"""
         async with self._dispatch_lock:
             if session_id in self._deleting_sessions:
-                raise RuntimeError(f"会话正在删除，不能修改 checkpoint: {session_id}")
+                raise SessionDeletionPendingError(
+                    "session_deletion_pending: 会话正在删除，拒绝 checkpoint 操作: "
+                    f"session_id={session_id}"
+                )
             preparation_count = self._session_preparations.get(session_id, 0)
             if preparation_count:
                 raise RuntimeError(

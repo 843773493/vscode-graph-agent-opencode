@@ -35,6 +35,7 @@ from app.api.sse_heartbeat import (
     stream_sse_with_heartbeat,
 )
 from app.core.exceptions import NotFoundError
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.protocol.codecs.workspace_events import trace_to_json, trace_to_proto
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.goal import (
@@ -136,10 +137,11 @@ async def get_session_goal(
 async def set_session_goal(
     session_id: CanonicalSessionId,
     payload: SessionGoalSetRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    goal_service: SessionGoalService = Depends(get_goal_service),
-    runtime: GoalRuntimeService = Depends(get_goal_runtime_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    goal_service: Annotated[SessionGoalService, Depends(get_goal_service)],
+    runtime: Annotated[GoalRuntimeService, Depends(get_goal_runtime_service)],
+    session_service: Annotated[SessionService, Depends(get_session_service)],
 ):
     token_budget = (
         payload.token_budget
@@ -152,13 +154,14 @@ async def set_session_goal(
             payload.status is not None and payload.status.value != "active"
         ):
             await runtime.settle_active_progress(session_id)
-        goal = await goal_service.set(
-            session_id,
-            objective=payload.objective,
-            status=payload.status,
-            token_budget=token_budget,
-            replace=payload.replace,
-        )
+        async with session_service.session_write_admission(session_id):
+            goal = await goal_service.set(
+                session_id,
+                objective=payload.objective,
+                status=payload.status,
+                token_budget=token_budget,
+                replace=payload.replace,
+            )
         if goal.status.value == "active":
             if (
                 not payload.replace
@@ -168,6 +171,8 @@ async def set_session_goal(
             ):
                 await runtime.apply_objective_update(goal)
             await runtime.ensure_active_goal_running(session_id)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError, ValueError) as error:
         raise _not_found_or_invalid_input_http_error(error) from error
     return APIResponse(data=goal, request_id=request_id)
@@ -180,14 +185,18 @@ async def set_session_goal(
 )
 async def clear_session_goal(
     session_id: CanonicalSessionId,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    goal_service: SessionGoalService = Depends(get_goal_service),
-    runtime: GoalRuntimeService = Depends(get_goal_runtime_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    goal_service: Annotated[SessionGoalService, Depends(get_goal_service)],
+    runtime: Annotated[GoalRuntimeService, Depends(get_goal_runtime_service)],
+    session_service: Annotated[SessionService, Depends(get_session_service)],
 ):
     try:
         await runtime.settle_active_progress(session_id)
-        cleared = await goal_service.clear(session_id)
+        async with session_service.session_write_admission(session_id):
+            cleared = await goal_service.clear(session_id)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     return APIResponse(
@@ -757,6 +766,8 @@ async def update_session(
 ):
     try:
         result = await session_service.update(session_id, payload)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except (NotFoundError, ValueError) as error:
         raise _not_found_or_invalid_input_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -806,6 +817,8 @@ async def compact_session_context(
 ):
     try:
         result = await context_compaction_service.compact(session_id=session_id)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)

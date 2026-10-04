@@ -7,7 +7,8 @@ import hashlib
 import json
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar, Protocol
@@ -21,7 +22,11 @@ from app.core.session_catalog_resolver import (
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
-from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.session_lifecycle_gate import (
+    NavigationTopologyGate,
+    SessionDeletionPendingError,
+    SessionLifecycleGate,
+)
 from app.core.workspace_identity import (
     LEGACY_BACKEND_WORKSPACE_IDS,
     validate_workspace_id,
@@ -75,6 +80,10 @@ class SessionService:
         self._path_resolver = path_resolver
         self._creation_service = creation_service
         self._fork_relationship_checker = fork_relationship_checker
+        self._navigation_topology_gate = NavigationTopologyGate(
+            path_resolver.sessions_root
+        )
+        self._session_lifecycle_gate = SessionLifecycleGate(path_resolver.sessions_root)
         self._path_resolver.initialize()
         self._migrate_legacy_workspace_ids()
         self._job_service: JobServiceProtocol | None = None
@@ -165,20 +174,41 @@ class SessionService:
                 f"backend_workspace_id={self._workspace_id}"
             )
 
-    def assert_session_active(self, session_id: str) -> None:
-        """拒绝删除中的 owner 进入新业务准入，目录与清理读取仍可见。"""
-
-        node = self._path_resolver.get_node(session_id)
+    @staticmethod
+    def _assert_session_node_active(node: SessionCatalogNodeProjection) -> None:
         if node.kind != "session":
             raise RuntimeError(
                 "Session 准入要求 catalog session 节点: "
-                f"session_id={session_id!r}, kind={node.kind!r}"
+                f"session_id={node.node_id!r}, kind={node.kind!r}"
             )
         if node.state != "active":
             raise SessionDeletionPendingError(
                 "session_deletion_pending: catalog owner 正在删除，"
-                f"拒绝新业务准入: session_id={session_id!r}, state={node.state!r}"
+                f"拒绝新业务准入: session_id={node.node_id!r}, state={node.state!r}"
             )
+
+    def assert_session_active(self, session_id: str) -> None:
+        """拒绝删除中的 owner 进入新业务准入，目录与清理读取仍可见。"""
+        self._assert_session_node_active(self._path_resolver.get_node(session_id))
+
+    @asynccontextmanager
+    async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:
+        """准入单会话短写，并让删除 drain 等待已准入写入完成。"""
+        async with AsyncExitStack() as session_gate:
+            async with self._navigation_topology_gate.shared():
+                await session_gate.enter_async_context(
+                    self._session_lifecycle_gate.exclusive(session_id)
+                )
+                try:
+                    node = self._path_resolver.get_node(session_id)
+                except KeyError as error:
+                    raise NotFoundError(
+                        f"Session {session_id} not found"
+                    ) from error
+                if node.kind != "session":
+                    raise NotFoundError(f"Session {session_id} not found")
+                self._assert_session_node_active(node)
+            yield
 
     async def get(self, session_id: str) -> SessionDTO:
         # 按 ID 的单节点查询（不触发全 catalog BFS）：单会话读取的工作量
@@ -523,43 +553,45 @@ class SessionService:
         self, session_id: str, session: SessionUpdateRequest
     ) -> SessionDTO:
         """更新会话并同步 catalog 显示名。"""
-        existing = await self.get(session_id)
+        async with self.session_write_admission(session_id):
+            existing = await self.get(session_id)
 
-        if session.agent_id is not None:
-            if self._config_service is None:
-                raise RuntimeError("SessionService 未绑定 ConfigService")
-            self._config_service.validate_agent_id(session.agent_id)
+            if session.agent_id is not None:
+                if self._config_service is None:
+                    raise RuntimeError("SessionService 未绑定 ConfigService")
+                self._config_service.validate_agent_id(session.agent_id)
 
-        update_data = session.model_dump(exclude_unset=True)
-        target_agent_id = update_data.get("agent_id", existing.current_agent_id)
-        requested_provider_id = update_data.get("provider_id")
-        if "agent_id" in update_data and "provider_id" not in update_data:
-            requested_provider_id = None
-        if "agent_id" in update_data or "provider_id" in update_data:
-            update_data["current_provider_id"] = (
-                self._config_service.resolve_agent_provider_id(
-                    target_agent_id,
-                    requested_provider_id,
+            update_data = session.model_dump(exclude_unset=True)
+            target_agent_id = update_data.get("agent_id", existing.current_agent_id)
+            requested_provider_id = update_data.get("provider_id")
+            if "agent_id" in update_data and "provider_id" not in update_data:
+                requested_provider_id = None
+            if "agent_id" in update_data or "provider_id" in update_data:
+                update_data["current_provider_id"] = (
+                    self._config_service.resolve_agent_provider_id(
+                        target_agent_id,
+                        requested_provider_id,
+                    )
                 )
-            )
-        update_data.pop("provider_id", None)
+            update_data.pop("provider_id", None)
 
-        for key, value in update_data.items():
-            if key == "agent_id":
-                existing.current_agent_id = value
-            elif key == "title_source":
-                existing.title_source = value
-            else:
-                setattr(existing, key, value)
+            for key, value in update_data.items():
+                if key == "agent_id":
+                    existing.current_agent_id = value
+                elif key == "title_source":
+                    existing.title_source = value
+                else:
+                    setattr(existing, key, value)
 
-        if "title" in update_data and "title_source" not in update_data:
-            existing.title_source = "user"
+            if "title" in update_data and "title_source" not in update_data:
+                existing.title_source = "user"
 
-        existing.updated_at = datetime.now(UTC)
+            existing.updated_at = datetime.now(UTC)
 
-        session_dir = self._path_resolver.resolve_session_node(session_id)
-        self._write_session_file(session_dir / "session.json", existing)
-        self._path_resolver.update_node_name(session_id, existing.title)
+            session_dir = self._path_resolver.resolve_session_node(session_id)
+            self._write_session_file(session_dir / "session.json", existing)
+            self._path_resolver.update_node_name(session_id, existing.title)
+
         self._notify_changed("update", session_id)
         return existing
 
