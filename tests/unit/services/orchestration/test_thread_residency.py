@@ -909,7 +909,8 @@ async def test_snapshot_fields_complete_and_blocker_reasons_sanitized(
     snapshot = tracker.snapshot(*_OWNER)
     # 字段齐全：identity / residency / execution / last activity / deadline / blockers
     assert (snapshot.session_id, snapshot.thread_id) == _OWNER
-    assert snapshot.residency == "resident"
+    # 持久化 debug blocker 不代表 Agent runtime 已驻留。
+    assert snapshot.residency == "cold"
     assert snapshot.cold_eligible is False
     assert snapshot.execution_state == "node_debug_process"
     assert snapshot.last_activity_at is not None
