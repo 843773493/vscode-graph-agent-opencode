@@ -198,7 +198,7 @@
 2. 团队的模型选择、并发人数、派单、独立审查、集成提交和运行台账统一维护在 `.codex/skills/` 的团队协作技能中，不在本文件绑定某个模型或调度策略：
    - [DeepSeek 团队协作](.codex/skills/team-collaboration-deepseek/SKILL.md)。
    - [GPT 团队协作](.codex/skills/team-collaboration-gpt/SKILL.md)。
-   - 两者共用 [调度流程](.codex/skills/team-collaboration-gpt/memory/2026/10/04/team-collaboration-workflow.md) 与 [实时台账](.codex/skills/team-collaboration-gpt/memory/2026/10/04/team-collaboration-state.md)。
+   - 两者共用 [调度流程](.codex/skills/team-collaboration-gpt/memory/2026/10/05/team-collaboration-workflow.md) 与 [实时台账](.codex/skills/team-collaboration-gpt/memory/2026/10/05/team-collaboration-state.md)。
 3. 使用技能仍须遵守用户当前授权；仅整理文档不代表授权开始实施。多人改动不得相互覆盖，不得改写共享提交历史或擅自清空已有暂存内容。
 
 ### 环境配置

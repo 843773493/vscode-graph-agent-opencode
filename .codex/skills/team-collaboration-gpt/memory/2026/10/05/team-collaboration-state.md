@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-两个团队共用、主代理独占维护。恢复/派单/集成/报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-04 23:16（北京时间）。goal **active、无预算上限**，交接及七个 change 的必要实施、独审、验证、清理和技能实测未完成。
+两个团队共用、主代理独占维护。恢复/派单/集成/报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-05 00:29（北京时间）。goal **active、无预算上限**，交接及七个 change 的必要实施、独审、验证、清理和技能实测未完成。
 
 ## 授权与路径
 
@@ -8,7 +8,7 @@
 
 - 物理 ROOT `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
 - TEMP=`ROOT/out/tests/temp/2026/10/04/024121-team-execution`；WT=`ROOT/out/worktrees/2026/10/04/024121-team-execution`。以下证据路径相对 TEMP，每次派单给**字面绝对** workdir/index/artifact/report，不能自行简化日期或落 worktree/out、/tmp。
-- GPT subagent 精确 `gpt-6-luna / max`、不带前缀，创建参数/实际模型已核，证据 `coordinator/artifacts/{model-context-latest.json,u05-model-context.json,new-review-model-context.json}`。用户选择覆盖旧 AGENTS DeepSeek模型要求。至少3、最多15常驻，主统一派单，agent不自行派生；429保源、不密集恢复、不换模型。
+- GPT subagent 精确 `gpt-6-luna / max`、不带前缀，创建参数/实际模型已核，证据 `coordinator/artifacts/{model-context-latest.json,u05-model-context.json,new-review-model-context.json,new-consumer-review-model-context.json}`。用户选择覆盖旧 AGENTS DeepSeek模型要求。至少3、最多15常驻，主统一派单，agent不自行派生；429保源、不密集恢复、不换模型。
 - 每shell全程 export 绝对 `GIT_INDEX_FILE`、`GIT_OPTIONAL_LOCKS=0`，显式物理workdir、绝对编辑目标。固定检索 `git grep <tree>`/`--cached`，差异给base/target；独立index不隔离默认live检索。新派单主实际read-tree初始化索引。
 - 主唯一串行提交者，index `coordinator/git/integration.idx`；fresh read-tree→精确add→record→commit无pathspec→verify→祖先。禁amend/reset/rebase/push/defaultindex写。
 - 测试走matrix或 `timeout N bash -c 'ulimit -d 4194304; exec "$@"' bash <命令>`；uv/bun，代码静态、Web改后build。raw按candidate/attempt保存真实退出码，不覆失败、不为补日志复跑绿。正式测试workspace镜像out/tests/testpath；fixture源只读，临时仅分配根，不注册源码根/复制全树。
@@ -18,7 +18,7 @@
 
 ## 主树与验收事实
 
-主HEAD **`68b99261022f85aff7c4dc66811c2b4ebb8c73fc`**，T05a owner三path已串行集成；40原绿复用，真正generation=0 snapshot与29:59 registered两case复验2pass3.55s、Ruff0、独审通过。guard/祖先/defaultindex/未知fork全0，证据`coordinator/artifacts/t05a-main-integration/attempt-2/result.json`。之前文档a844已收实践比较及压缩记忆；本文与SKILL当前由主更新。生产T05b未完成，不勾8.14。
+主HEAD **`1f80c6d49086212b9e45716eed9269fef4ef77fe`**（技能/台账文档）；主源码 **`68b99261022f85aff7c4dc66811c2b4ebb8c73fc`**，T05a owner三path已串行集成；40原绿复用，真正generation=0 snapshot与29:59 registered两case复验2pass3.55s、Ruff0、独审通过。guard/祖先/defaultindex/未知fork全0，证据`coordinator/artifacts/t05a-main-integration/attempt-2/result.json`。文档1f80已收闭包遗漏、重复断言误改和整树复制；本文与SKILL当前由主继续维护。生产T05b未完成，不勾8.14。
 
 上一主源码 **`7c39f2d10c7f6a97b4ef50dd6fe7b7e8c0e6a732`** = O02a完整24paths，主28queue+2lifespan、R43及追加test-cache隔离独审通过，证据`coordinator/artifacts/o02a-main-integration/commit-result.json`。此前O02b/route、L01、M01/M02、UUID、配置来源/地址等已集成绿复用；历史关闭事实见Git与原报告，不重新全矩阵。
 
@@ -44,6 +44,19 @@
 最新中央组合 **`97b015cb9f3910bb8e4530b2f1a1da3ec6f265f9`** = b295+O03Web+da5 T05+主a844 docs+U03 bootstrap六path1a0fe+unused imports538bb+正确snapshot3611。三T05 postimage与主68b逐blob相同，strict0；`coordinator/artifacts/current-t05a-combined/`。两imports小包b295→538bb348/合bf910→1bb8b4c1，SHAe4de748...、strict0；旧主代际不直接套。
 
 O03 backend **`4cc6528bda0af287773f2ccc6823ffc6bce0b0ca`** 59paths、57PythonAST/strict/hash0；标准SHA5d4f5e99...。合97b→**`9a1a047ab9f0a7edb9ae1c783383ccc7b059f786`**，手proto三方内容合0，workspace pb2暂保current等最终统一gen，实际58diff，strict0。私有read-tree只做tree级合会把不同行文本改也stage冲突，不能当内容真实冲突；主首断言失败及未解index重读失败如实保attempt1/2，attempt3成功。`coordinator/artifacts/o03-backend-current-combined/`。独审caller遗漏尚返修，不称验收。
+
+## 最新固定增量与派单（不等于主验收）
+
+- O03 caller **4cc→5edaa86517fa2dbb0ca9e6f77603290410b1155a**四path，strict/static0，合9a1a→40f7；独审新增P2：MJS只泛enqueue/2xx、不等精确receipt。末尾publicDELETE也仍旧caller。主已窄修MJS **a952→7bf3b611ea1cc01bb079e251aa150ae204aad221**，匹配kind/target/name/parent/workspace，回显同operation ID，按原路由/凭据等committed，删除也走queue；strict/Bun static0、独审无finding，runtime待最终组合。`coordinator/artifacts/{o03-caller-central,o03-caller-review,o03-e2e-forward,o03-e2e-review}/`。
+- R54 **293a→327092b2e1631aff4af7faf67df4885db2be51ef**九path，strict/blob0、独审无blocking，合40f7→**437c53e77ce6b9a5c4d77a13f0f6ad36e54f7c64**。原验证40test/tsc/build仅transcript可见，作者artifact只有manifest/patch、raw缺失；不补跑造日志，target seam变化后的必要新验再保存raw。`coordinator/artifacts/{r54-central,r54-review,r54-current-combined}/`。
+- 主admission job lookup **97b→7b6c67a89674572fd09a394f02b8463310e63afc**三path，精确session/thread/job查询LIMIT2，missing/ambiguous明报，复用既有admission校验；6pass3.49s（完整E01WT依赖在途）、Ruff/AST/strict0、独审无finding。严格合437c→**当前无WVL中央 `a952612c6e55674c779a462f47cb6769870c75b4`**；尚未主commit。`coordinator/artifacts/admission-job-{lookup-owner,lookup-review,current-combined}/`。
+- Fork creation provider归session_vrn，base9a1a、index `coordinator/git/fork-creation-provider.idx`，仅owned postimage；统一catalog v6 record purpose=context_fork+canonical session_metadata_json、typed ForkCompletionProof、prepared private resolver。thread_owner消费prepare/publish/recovery及source manifest/stagingbytes一次冻结；sourcegate释放后target不重开source、不持双gate，startup `recover_prepared_forks()`由主接lifespan。provider **9a1a→dd10c5e750bc54d84e4f55d39f91da03e6b0add0**18path已strict/AST/hash0，合a952→**d97308f856c76b66c12637eedbc26d8d6ab7d949**；逐97b preimage核WT后同步18+nodes/queries共20（`coordinator/artifacts/fork-provider-{central,sync}/`）。主core创建/catalog/body首320case=307pass13fail/59.51s，11provider失败含normal canonicalmain目录/pathbudget被漏掉、旧fixture/DDL冲突断言，2body失败为同正式workspace逐case重建但resolver缓存旧DB；raw保 `coordinator/artifacts/provider-body-runtime/attempt-1/`，原作者provider窄forward正修，独审core合同进行中，不放宽断言求绿。
+- E01A producer归architecture，index `coordinator/git/e01a-producer-owner.idx`，base97b、仅owned；完整Job/pending/generationbinding先固定，internal耐久caller另forward。唯一JobState/runtime执行binding，内部只读 `get_execution_binding(job_id)->ExecutionBinding`、publicJobDTO不加key。新consumer `execution_identity_consumer`（gpt-6-luna/max）base437c、index `coordinator/git/e01a-consumer-owner.idx`，artifact `coordinator/artifacts/e01a-consumer-owner/`：runner/retry/processor/changes/interrupt/message_stream_runtime及现有mixins真实nullableTurn，保canonical/modelcall/tool/result/cancel，禁fakeTurn/NoOp。producer/consumer直接收敛合同，主符号集成；不能互等或逐caller重复请求已授权范围。
+- Activation body作者违反对象/产物派单写主树、在live错代际测试3fail1pass，又提整archive；主已制止（未archive），两新增源逐字节保到 `behavior_reviewer/artifacts/resource-activation-body-owner/postimage/`并清主树副本。fixed **97b→e5c6fe35df00afe92d15523f484304229f99b2d9**两path strict/AST0；主e5→ac修TYPE_CHECKING存储类型/正式fixture。独审P1 concrete write_payload不符合既有coordinator write_resource_body port；主 **ac→53b6ea7b9e39792e59767ced24019ddc4a03b1aa**直接实现唯一port全args→DetailRef，保catalog关联，不加alias，新增真实freeze入口。module完整fixture只准备一次避免cached SQLite连接指旧inode；Ruff/AST/strict0，E01WT定向5pass2.20s，raw `coordinator/artifacts/resource-body-runtime/attempt-2/`，增量独审待收。原raw实际位置待核。body只管理required/protected payload/ref/hash/length，association仍activationcatalog；重复freeze/production接线另切片。作者后续429保源不密集恢复。
+- `candidate_boundary_reviewer` 新只读审MJS7bf3/bodye5两个固定增量，初始化index `coordinator/git/{o03-e2e-review-v2,resource-body-review}.idx`；fixed_delivery后续turn429，保既有三份审报，不换模型。
+- P05 terminal_owner已一次授权Terminal持久owner/schema+真实createcaller，base293a、index `coordinator/git/p05-terminal-owner.idx`、artifact `navigation_authenticated_scope/artifacts/p05-terminal-owner/`；可信ThreadRuntimeBinding由agent_tools注入，无factory修改。crossprocesslease ledger port/API resolver/Browser/Web是后续明确前置，不造第二lease表、不称stop/delete完整验收；handproto主合、gen统一。
+- 新strict合d973+MJS7bf3+body53b→**最新无WVL候选 `6fc4f5be6c48ca0bfb62af85b7b1faaf4cdb2e57`**，`coordinator/artifacts/latest-verified-deltas-combined/`；未主集成、provider有待修11failure，不能全组合称绿。
+- WVL正在把DB2真实source与必要caller完整闭包合当前a952；新发现Pythonphysicaltree仍旧managed URL，作者又拿ROOT旧HEAD复活folder POST，主已拒并要求保a952 queue/helper断言。禁止将旧HEAD/live当current；MJS主owned7bf3后叠，作者只改Python必要managed/mount片段。无最终fixedtree，不用旧26/32等数目作通过门。
 
 ## 当前任务、依赖与验证
 
@@ -107,6 +120,7 @@ delegate发布前准备复用唯一Session SQLite ledger与childpublication同�
 | E01fork每个guard后仍问fixture/tests范围，旧append与materialization顺序红 | 沿既有纵链授权继续，不routine停问；需核心owner统一顺序，不丢guard/造事实；E01A仍未端到端验 |
 | R46 HTTP绿UI旧writer；R54 principal/receipt/rejection缺真实竞态 | 沿用户动作→权威owner和身份代际/回执消费审；原作者小forward、独审只新diff，原绿按candidate依赖复用 |
 | O03恢复错cwd、审查wrongroot、报告写作者fixed，日志raw遗失重复 | 派单字面绝对workdir/index/编辑/产物；主核实际文件不据status；报告字节搬回，lost如实；重复失败仍观察，不能称规则解决 |
+| WVL旧HEAD回退新caller、activation对象派单仍主树写/live错配测试 | 固定tree/blobs核真实preimage，主保两独有源并清越界副本；禁止补整archive，已有流程尚未消除违规，效果未验 |
 | T05a状态闭集漏项、重复断言误改邻case；WVLstrict但漏source DTO/helper | 静态/机械不能代替实际函数输入与入口闭包；T05 corrected两case绿且已主集成，WVL完整source返修未验 |
 
 比较只在相近范围记录首次可重建性、入口遗漏、返修、公共合同等待与中央修补量。独立owner适合单人纵向，公共接口先固定消费者顺序；目前证据不足以全面改变分工。原作者修必要caller/fixture、机械导出、复用已过审查已有局部收益，实际新缺陷仍需验证。
@@ -117,4 +131,4 @@ delegate发布前准备复用唯一Session SQLite ledger与childpublication同�
 
 服务default/Drive ready、前端8027初始化三API200/request_id一致为历史。恢复用 [migration-state.json](../../../../../../../out/tests/temp/2026/10/03/160552-workspace-migration/coordinator/artifacts/migration-state.json) 原环境：BOXTEAM_PROJECT_ROOT旧入口、BOXTEAM_HOME旧入口/out/development-runtime/boxteam-home、BOXTEAM_DEV_PORT_OFFSET=16；cwd数据盘。先dev:status，不另一unit/另起整组。
 
-下一步：T05a已集成、U03bootstrap16case/build/独审绿；收O03caller/R54/WVL完整source+5shared+targetseam固定包→strict/真实caller/增量独审→仅受影响失败与新入口验→先串行主集成可独立通过owner，再E01A/T05b/delegate/activation/P05；最终组合协议/OpenAPI、OpenSpec、唯一WebE2E/真实浏览器、产物清理。未全部完成保持goal active，不只改文档收工。已关闭细节在原报告及Git历史（19a版state含完整事故链），不每次恢复重读旧调查。
+下一步：T05a已集成、U03bootstrap16case/build/独审绿、lookup6test/独审绿仅中央候选；先收MJS/body新独审及WVL完整source+5shared+targetseam固定包→strict/真实caller/增量独审→仅受影响失败与新入口验→先串行主集成可独立通过owner，再E01A/T05b/delegate/activation/P05；最终组合协议/OpenAPI、OpenSpec、唯一WebE2E/真实浏览器、产物清理。未全部完成保持goal active，不只改文档收工。已关闭细节在原报告及Git历史（19a版state含完整事故链），不每次恢复重读旧调查。
