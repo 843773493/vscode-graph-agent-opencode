@@ -85,6 +85,8 @@ export type CatalogOutboxDispatchOutcome =
 
 export interface CatalogOutboxDriverInput {
   port: number;
+  /** Gateway 注册表中的路由 ID；与 partition.workspaceId 的后端身份分离。 */
+  gatewayWorkspaceId: string;
   partition: CatalogOutboxPartition;
   persistence: CatalogOutboxPersistencePort;
   adapter?: SessionCatalogOperationsAdapter;
@@ -183,7 +185,7 @@ export function createSessionCatalogOutboxDriver(
       try {
         const result = await adapter.enqueue(
           input.port,
-          input.partition.workspaceId,
+          input.gatewayWorkspaceId,
           catalogOutboxBatchToIntents(batch),
         );
         for (const operationId of batchIds) retryableOperationIds.delete(operationId);
@@ -246,7 +248,7 @@ export function createSessionCatalogOutboxDriver(
     if (tracked.length > 0) {
       const page = await adapter.queryStatus(
         input.port,
-        input.partition.workspaceId,
+        input.gatewayWorkspaceId,
         tracked.map((operation) => operation.client_operation_id),
       );
       // 服务端明确「不认识该 ID」→ 允许按同一 ID 重试；其余 unknown 继续等待。
