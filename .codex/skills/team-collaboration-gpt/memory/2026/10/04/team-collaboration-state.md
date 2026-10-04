@@ -1,13 +1,13 @@
 # 团队协作实时状态与实测改进
 
-两个团队入口共用，主代理独占写入。恢复、派单、集成及报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-04 14:25（北京时间）。goal active、无预算上限，交接及七个 change 的必要实现、独审、验证、清理和技能实测仍未全部完成。
+两个团队入口共用，主代理独占写入。恢复、派单、集成及报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-04 15:08（北京时间）。goal active、无预算上限，交接及七个 change 的必要实现、独审、验证、清理和技能实测仍未全部完成。
 
 ## 当前授权与现场
 
 - 用户授权按架构熵减自主统一 owner、显式身份和单链路，删除旧兼容；源码开发生成的新旧中间数据可直接删除，不再询问。保普通源码、未集成独有改动、来源不明业务文件；不能用删数据掩盖 fresh writer 缺陷。
 - GPT 团队精确 `gpt-6-luna / max`，不带前缀；主模型由用户选。至少3、最多15常驻，主代理统一派单/审查/集成。既有九个 agent 的创建参数与实际模型均已核，证据 `coordinator/artifacts/model-context-latest.json`、`u05-model-context.json`。429保源和真实错误，不换模型、不密集恢复。
 - 物理根 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。活动 worktree 根 `out/worktrees/2026/10/04/024121-team-execution/`，产物/索引根 `out/tests/temp/2026/10/04/024121-team-execution/`。下文路径相对此物理根；每次派单仍给字面绝对 workdir/index/artifact/report。
-- 当前主树 HEAD `d76be86bf7985a4ac05bf24a1353369f7f5cf3ef`；D01机械交付 helper及技能/流程/状态五文件已提交，Ruff、skill校验、guard及祖先0。L01主树17pass5.78s/Ruff0，M01/M02主树40pass及独审通过的证据复用。恢复时用 fresh 独立索引核真实状态；共享 `.git/index` 极陈旧，裸 status 的 D/MM 不能当源码差异。本文件与流程由主代理独占。
+- 当前主树 HEAD `400566c8a25e11deb53e61d03dcc23ce47326ac9`；D01 helper/流程五文件d76和技能实测记录两文件400已提交，Ruff、skill校验、guard及祖先0。L01主树17pass5.78s/Ruff0，M01/M02主树40pass及独审通过的证据复用。恢复时用 fresh 独立索引核真实状态；共享 `.git/index` 极陈旧，裸 status 的 D/MM 不能当源码差异。本文件与流程由主代理独占。
 - 主代理唯一串行提交者，索引 `coordinator/git/integration.idx`；fresh read-tree→精确add→record→commit无pathspec→verify→祖先。禁amend/reset/rebase/push与共享index写入。
 - 三处受保护路径：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`，不能修改。
 - 测试/probe用matrix或外部 `timeout N bash -c 'ulimit -d 4194304; exec "$@"' bash ...`。uv/bun；保存raw stdout/stderr及实际exit。已pass不为补日志重跑；缺失raw如实lost/转录。源码改后静态，Web改后build。
@@ -68,11 +68,15 @@
 12. E04 NodeDebug fixed `a746ed8b→e47f8f99bcca136ccf9963e55ba9cbfcb232d1c1`，63path作者patch`5661e878`严格cached重建tree/blobs/hash全过，中央fullindex标准patch`e7878f46`；作者live源码零差异，仅.venv未跟踪。R30行为/A29架构独审已派；作者13unit/1integration/1232Web+build通过，fork4setup缺APIkey不当pass。E04b旧migration删除另delta，以e47为base，caller审计明确两个fixturegen/五integration/pathutils提示与旧reader/layout，继续canonical seeding、保业务断言与v4拒绝，不更改NodeDebug fixed。
 13. V新增真实POST Turn→MessageRead selector红灯1failed/15.73s，尚未到read断言；cleanup failures.py→Saver→storage recovery旧pair导致thread_id重复参数，可能覆盖首异常。E01b确认put缺execution_admission_scope、JobID当TurnID及stream/middleware只userturn、append硬编码main，正在同一纵链闭合reportback/Job/Runner/原子notice/membership/recovery。V暂停依赖重跑，原selector/raw保留；独立O01仅审当前Session outbox真实入口/已有driver/APIqueue，区分历史量化与固定main。
 
-14. L02b补齐registry七路径后完整依赖base `ec2fc3d98270c1174bd80034f9aeb63d80043b4d`，新CLI/caller/health不埋base。首消费者51pass19fail仅转录、raw遗失；修后定点19pass5.00s和新process/CLI25pass4.06s raw/exit0，既绿不补日志复跑。真实managed integration首失败health缺UUID及继承Python配置指错源码树；从唯一WorkspaceService输出health UUID、测试显式选当前Python/cwd后1pass17.53s/exit0，实Terminal launch/health/错UUID adoption保PID/Python create-list-kill闭合。成功及首失败raw在正式 `out/tests/integration/test_managed_terminal_workspace_identity/artifacts/`；worktree日志和只读import探针核代码来源。作者停写，正导fixed九路径供独审，Windows/真实remote未验。
+14. L02b补齐registry七路径后完整依赖base `ec2fc3d98270c1174bd80034f9aeb63d80043b4d`，fixed candidate `aea29e4ebff9eae0a73f1247d69bdb8c40202f54`、九path/patch `7be5cb3c`，中央strict重建tree及九blob/hash、作者候选外源码为空。首消费者51pass19fail仅转录、raw遗失；修后定点19pass5.00s和新process/CLI25pass4.06s raw/exit0，既绿不补日志复跑。真实managed integration首失败health缺UUID及继承Python配置指错源码树；从唯一WorkspaceService输出health UUID、测试显式选当前Python/cwd后1pass17.53s/exit0。raw在正式 `out/tests/integration/test_managed_terminal_workspace_identity/artifacts/`。A30确认新Terminal readiness仅HTTP200漏UUID，L02c同作者在terminal_owner_api树继续修；Windows/真实remote未验。
 15. A29依据 `agent-debug-tool-group/spec.md:445-447` 与 lifecycle design538撤回可选thread的P2：普通Session入口允许catalog解析main，最终同一owner；不强收紧API。R30两真实问题另交E04c：main按钮传alias、Session drain漏child调试runtime。E04b先删旧catalog迁移链。主代理曾误写E04 worktree短名，agent误树只读无写；fresh核真正树为 `session_mutation_admission`/codex/session-mutation-admission，E02树为 `integration_fixture_implementer`/codex/integration-runtime-manifest；证据coordinator/artifacts/e04b-current-worktree-audit.json。已完整重发正确目录/index，不重做已有删除。
 16. O01当前outbox审计完成：真实UI未接已有driver，queue FIFO/claim-time/跨进程recovery、非递归delete与IDB跨tab分配均有缺口。O02a由behavior_reviewer转实现，worktree/产物 `navigation_queue_owner`、base d76、branch codex/navigation-queue-owner；范围queue唯一writer/完整owner/recovery，不同时独审自己。O02b由session_vrn_convergence实现，worktree/产物 `navigation_outbox_store`、base d76、branch codex/navigation-outbox-store；同IDBtxn分配+insert、高水位、ID冲突、driver全caller与真实双tab验证。只用Git创建worktree、链接依赖，不复制生成数据。二者fixed后才O03真实UI全入口接线；Gateway导航和文件树另属owner，不借历史Session量化开工。报告沿各任务唯一artifacts根；V selector仍等E01。
 17. E02b最新只读AST生产 `_connect`118/`_lock`60，88/52缺必填session kwarg（140/178）；部分Session-only入口不能机械补kw，必须catalog main后pair。已要求公共提供者先完成全量身份片段及真实gate，含execution/checkpoint必要callers而不改E01业务symbols；历史ledger清扫不阻塞完整合同交付。E01新增调用按同shape，runner execution_intent仍待闭合。
 18. 主代理W/V/main合成预览仅Git对象/private index，无live/ref变化：d76 union `8aa10630`，V02+W04七protocol blob+SessionService lifecycle/VRN合并 `1aa97dd0`，registry纯静态合入 `504bfab1eeeef77608d8d8a084f54b92ad670c86`。等E01/E02/U/E04/L02完整依赖union、最终protocol/OpenAPI统一gen及入口验收；不可用旧tree替HEAD。
+19. 最新完整依赖合成仍仅Git对象/privateindex：W/V/L02 union `db2a24b6`→合E01/E02 ready `f8caa0be`→U03完整前置及U03b `c915d08b`→E04 NodeDebug及A31取消窗口修复 `5ce2a722`→16文件仅import排序 `d4ebc1efa48496845e8c817aa8846d5e948fe247`。347Python AST全过，新Ruff诊断仅16个I001且已消除；既存lint未改语义。保main SessionService M准入/VRN、显式thread与owns_thread，排除ready里的.venv/node_modules及旧buf配置，三保护无diff。主代理已取真实基线/固定对象，未写main/live/ref，未把未完整E01b/E02b算通过。记录coordinator/artifacts/{ready-w-v-l02-resolved-union.json,w-v-l02-e01ready-u-e04-union.json,complete-union-static-audit.json,complete-union-import-fixed.json}。
+20. R31 fixed U03b树缺 `InternalExecutionHistoryMixin` MRO，作者运行态16pass不能证明独立fixed tree；完整ready union已有该装配，组合验收仍待。另物理item_sequence分页未证等于membership logicalorder，已派architecture_reviewer为U03c实现者，不独审自己；worktree/产物internal_display_projection，完整live baseline `58e7036e8f3b1f4cab3c9e0af19b11feefdb04df`，仅本轮logicalkeyset/DTO/cursor/必要consumer与反序跨页测试delta。production notice/membership writer仍E01b；保持原reader证据边界。报告u03c-logical-keyset-delivery.md。
+21. E04b作者回报137pass26.77s/Ruff0/OpenSpec40pass，源码删旧catalogimporter并canonicalfixture/spec调用平移；尚未机械fixed，已要求e47基线完整候选。作者起初误裸只读status可能刷新默认index统计缓存，无暂存/提交。E04c后续同作者收child NodeDebug drain及main按钮真ID，普通Session合法可选thread不收紧。索引/产物仍integration_fixture_implementer、worktree session_mutation_admission。E02b最新AST178调用中28缺session kwarg，继续唯一provider全caller，暂不称closed。
+22. A31主审W/V/L02无新增身份冲突；中央to_thread(Popen)取消窗口P3已恢复同步创建/登记并明确noqa，fixed `5ce2a722` Ruff0，新增独审R32任务fixed_delivery_reviewer创建即429失败，未有审查结果，不密集恢复或换模型。已保固定candidate及原审查，后续由空闲同模型审查者补。
 
 ## 分工实践比较
 
@@ -82,7 +86,7 @@
 |---|---|---|
 | E02读公共提供者→U/V/E01消费者 | 首次手筛patch残缺被拒；随后cache/indexed缺pair两轮；中央sync缺前置/基线错误又返工 | 固定tree机械交付与完整前置准入先试；主代理合并成本仍高，不能称已解决 |
 | L02同作者跨Node/Python，L02b扩至Gateway启动/接管/请求 | 原fixed13paths可重建但R28真实入口失败；L02b缺registry前置19fail，真实启动再揭health/代码来源缺口，修后定点19+25及真managed1pass | 单作者完整链降低主代理业务补丁重建，但完整依赖准入仍有成本；fixed/独审未完，不称最优 |
-| E01b单实现者纵向writer→reader | 当前只读设计完成，完整依赖已就绪并开工，尚无实现结果 | 等真实入口/atomic gate/首次交付和新增merge量后比较，不能预称最优 |
+| E01b单实现者纵向writer→reader | 已改append durable attribution、parent display_only继承，middleware/plan internal branch仍在收口，尚无fixed交付 | 等真实入口/atomic gate/首次交付和新增merge量后比较，不能预称最优 |
 | D01机械交付辅助 | 原始L02成功与三负例拒绝；独立D02发现后缀漏判，定点修复复验通过 | 工具可复用，分类规则仍需随语言核验；业务owner仍需独审与真实入口 |
 
 ## 目录、服务与清理
