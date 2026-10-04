@@ -7,7 +7,7 @@ description: 使用 DeepSeek 全队开展本仓库的长期开发、缺陷排查
 
 主模型由用户选择 `newapi-local/deepseek-v4.1-flash`；技能不能切换正在运行的主模型。主模型不符时说明情况，由用户选择团队版本。
 
-执行前读取 [共同调度流程与实时台账](../team-collaboration-workflow.md)。队伍人数、派单、目录、提交和验收只在共同流程维护；模型配置只在本入口维护，不写回 `AGENTS.md`。
+执行前读取 [共同调度流程](../team-collaboration-workflow.md)。队伍人数、派单、目录、提交和验收只在共同流程维护；模型配置只在本入口维护，不写回 `AGENTS.md`。继续实施或处理报错时，再读取 [实时状态与实测改进](../team-collaboration-state.md)。
 
 创建 subagent 时显式传入：
 

@@ -7,7 +7,7 @@ description: 使用用户选择的 GPT 主模型与 gpt-6-luna/max subagent 开�
 
 主模型由用户选择 GPT 系列；技能不能切换正在运行的主模型。
 
-执行前读取 [共同调度流程与实时台账](../team-collaboration-workflow.md)。队伍人数、派单、目录、提交和验收只在共同流程维护；模型配置只在本入口维护，不写回 `AGENTS.md`。
+执行前读取 [共同调度流程](../team-collaboration-workflow.md)。队伍人数、派单、目录、提交和验收只在共同流程维护；模型配置只在本入口维护，不写回 `AGENTS.md`。继续实施或处理报错时，再读取 [实时状态与实测改进](../team-collaboration-state.md)。
 
 创建 subagent 时显式传入：
 
