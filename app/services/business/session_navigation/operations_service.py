@@ -21,10 +21,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
 from app.core.session_catalog_store import SessionCatalogStore
+from app.core.session_subtree_delete import SubtreeDeleteResult
 from app.core.sqlite_state import utc_now_text
 from app.schemas.internal_v2.session_navigation.operations import (
     NavigationEventDTO,
@@ -43,6 +46,7 @@ from app.services.business.session_navigation.queue_store import (
     NavigationEventRecord,
     NavigationMutationQueueStore,
     NavigationMutationRecord,
+    NavigationQueueOwnerError,
     read_catalog_revision,
 )
 
@@ -59,6 +63,9 @@ _DEFAULT_EVENT_LIMIT = 200
 # 同步 façade 等待 operation 终态的有界窗口与轮询间隔。
 _TERMINAL_WAIT_TIMEOUT_SECONDS = 30.0
 _TERMINAL_POLL_INTERVAL_SECONDS = 0.02
+# 应用启动必须在有限时间内取得 owner 并完成 durable recovery。
+_OWNER_READY_TIMEOUT_SECONDS = 30.0
+logger = logging.getLogger(__name__)
 
 # 本地工作区后端的认证主体。当前架构没有云端控制面，工作区后端只经本地 token
 # 被同机 Gateway 访问，因此不存在可区分的第二主体；gateway_id/actor 取本地固定
@@ -109,25 +116,169 @@ class SessionCatalogOperationsService:
         self._workspace_id = workspace_id
         self._queue = queue
         self._executor = executor
-        # 进程内唯一 worker：首次使用时惰性启动（见 ensure_worker_started），
-        # 随应用事件循环结束而被取消，不需要额外的停止入口。
+        # worker 由应用 lifespan 显式启动和停止；请求入口不得临时创建第二种 owner。
         self._worker_task: asyncio.Task[None] | None = None
+        self._worker_state = "stopped"
+        self._worker_error: BaseException | None = None
+        self._worker_ready = asyncio.Event()
 
     # ------------------------------------------------------------------
     # 进程内唯一执行 owner
     # ------------------------------------------------------------------
 
-    def ensure_worker_started(self) -> None:
-        """惰性启动本进程唯一的导航 worker（幂等）。
+    async def start(
+        self,
+        *,
+        owner_timeout_seconds: float = _OWNER_READY_TIMEOUT_SECONDS,
+    ) -> None:
+        """等待唯一 owner 取得锁并完成恢复；冲突超时使应用启动明确失败。"""
+        if owner_timeout_seconds <= 0:
+            raise ValueError(
+                "导航 queue owner readiness timeout 必须为正数: "
+                f"{owner_timeout_seconds}"
+            )
+        if self._worker_error is not None:
+            raise self._worker_failure_error() from self._worker_error
+        task = self._worker_task
+        if task is None or task.done():
+            self._worker_ready = asyncio.Event()
+            self._worker_state = "starting"
+            task = asyncio.create_task(run_worker(self))
+            self._worker_task = task
+            task.add_done_callback(self._observe_worker_exit)
+        try:
+            await asyncio.wait_for(
+                self._worker_ready.wait(),
+                timeout=owner_timeout_seconds,
+            )
+        except asyncio.CancelledError:
+            self._worker_state = "stopping"
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                if self._worker_task is task:
+                    self._worker_task = None
+                if self._worker_error is None:
+                    self._worker_state = "stopped"
+            raise
+        except TimeoutError as error:
+            detail = (
+                "等待导航 queue owner 锁与启动恢复超时，拒绝以未就绪状态启动: "
+                f"workspace_id={self._workspace_id}, state={self._worker_state}, "
+                f"timeout_seconds={owner_timeout_seconds}"
+            )
+            conflict = NavigationQueueOwnerError(detail)
+            self._worker_state = "stopping"
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                if self._worker_task is task:
+                    self._worker_task = None
+            self._worker_error = conflict
+            self._worker_state = "failed"
+            raise self._worker_failure_error() from error
+        if self._worker_error is not None:
+            raise self._worker_failure_error() from self._worker_error
+        if self._worker_state != "running":
+            error = NavigationQueueOwnerError(
+                "导航 queue worker 在 ready 前退出: "
+                f"workspace_id={self._workspace_id}, state={self._worker_state}"
+            )
+            self._worker_error = error
+            self._worker_state = "failed"
+            raise self._worker_failure_error() from error
 
-        单进程单事件循环（uvicorn 单 worker）下不需要跨线程调度；跨进程互斥由
-        SQLite 写事务与 fencing token 承担。worker 崩溃后由同一入口重新拉起，
-        启动时先做崩溃恢复（把遗留 ``running`` 重置为 ``queued``），因此不会
-        跳过较早未终态的命令或重复应用。
-        """
-        if self._worker_task is not None and not self._worker_task.done():
+    async def stop(self) -> None:
+        """取消并等待 worker 退出，确保其释放 queue owner OS lock。"""
+        task = self._worker_task
+        if task is None:
+            if self._worker_error is None:
+                self._worker_state = "stopped"
             return
-        self._worker_task = asyncio.create_task(run_worker(self))
+        if not task.done():
+            self._worker_state = "stopping"
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except BaseException as error:
+            if self._worker_error is None:
+                self._worker_error = error
+                self._worker_state = "failed"
+                logger.error(
+                    "导航 queue worker 失败，工作区操作不再被后台执行: workspace_id=%s",
+                    self._workspace_id,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+            elif error is not self._worker_error:
+                raise
+            logger.debug("已观察并记录导航 queue worker 后台错误: %s", error)
+        finally:
+            if self._worker_task is task:
+                self._worker_task = None
+            if self._worker_error is None:
+                self._worker_state = "stopped"
+
+    @property
+    def worker_state(self) -> str:
+        """返回 owner 生命周期状态。"""
+        return self._worker_state
+
+    @property
+    def worker_error(self) -> str | None:
+        """返回后台 worker 最近一次失败的详细异常。"""
+        return None if self._worker_error is None else repr(self._worker_error)
+
+    def _observe_worker_exit(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            if self._worker_state not in ("stopping", "failed"):
+                error = RuntimeError("导航 queue owner 在 lifespan 之外被取消")
+                self._worker_error = error
+                self._worker_state = "failed"
+                logger.error("导航 queue worker 异常取消: %s", error)
+            self._worker_ready.set()
+            return
+        error = task.exception()
+        if error is None:
+            error = RuntimeError("导航 queue worker 意外退出")
+        self._worker_error = error
+        self._worker_state = "failed"
+        logger.error(
+            "导航 queue worker 失败，工作区操作不再被后台执行: workspace_id=%s",
+            self._workspace_id,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        self._worker_ready.set()
+
+    def _worker_failure_error(self) -> NavigationQueueOwnerError:
+        detail = repr(self._worker_error)
+        return NavigationQueueOwnerError(
+            "导航 queue worker 已失败，工作区导航队列不可用: "
+            f"workspace_id={self._workspace_id}, error={detail}"
+        )
+
+    def _require_worker_ready(self) -> None:
+        task = self._worker_task
+        if task is not None and task.done() and self._worker_error is None:
+            self._observe_worker_exit(task)
+        if self._worker_error is not None:
+            raise self._worker_failure_error() from self._worker_error
+        if (
+            task is None
+            or task.done()
+            or self._worker_state != "running"
+        ):
+            raise NavigationQueueOwnerError(
+                "导航 queue worker 尚未取得 owner 并完成启动恢复: "
+                f"workspace_id={self._workspace_id}, state={self._worker_state}"
+            )
 
     # ------------------------------------------------------------------
     # 入队（短事务，202 durable acceptance）
@@ -139,6 +290,7 @@ class SessionCatalogOperationsService:
         scope: NavigationAuthScope,
     ) -> NavigationMutationEnqueueResultDTO:
         """原子接受一批 intent 并返回 202 receipt（不执行任何目录变更）。"""
+        self._require_worker_ready()
         self._require_scope(scope)
         now = utc_now_text()
         with self._store.write_transaction() as connection:
@@ -155,9 +307,8 @@ class SessionCatalogOperationsService:
             for record in records
             if record.reserved_node_id is not None
         }
-        # 202 已是 durable acceptance；唤醒本进程 owner 尽快执行，但不在此等待
-        # 执行结果（入队不得因执行而阻塞，也不得把执行结果当成功展示）。
-        self.ensure_worker_started()
+        # 202 已是 durable acceptance；已由 lifespan 启动的 owner 异步排空，不在
+        # 此等待执行结果，也不把执行结果当成功展示。
         return NavigationMutationEnqueueResultDTO(
             workspace_id=self._workspace_id,
             accepted_count=len(records),
@@ -170,14 +321,14 @@ class SessionCatalogOperationsService:
         operation_id: str,
         scope: NavigationAuthScope,
     ) -> NavigationMutationRecord:
-        """驱动本进程 owner 执行并等待指定 operation 到达终态。
+        """只轮询 durable 状态，不从 API caller 绕过唯一 worker 执行队列。
 
-        执行权可能在后台 worker 手里，因此这里不能只看一次 ``drain`` 的返回值：
-        必须按 operation ID 轮询 durable 状态直到终态（有界超时）。超时是明确错误
-        （可能被前置依赖阻塞），绝不静默当作成功。
+        超时是明确错误（可能被前置依赖阻塞），绝不静默当作成功。
         """
+        self._require_worker_ready()
         deadline = asyncio.get_running_loop().time() + _TERMINAL_WAIT_TIMEOUT_SECONDS
         while True:
+            self._require_worker_ready()
             record = self._queue.get_record(
                 gateway_id=scope.gateway_id,
                 workspace_id=self._workspace_id,
@@ -193,7 +344,6 @@ class SessionCatalogOperationsService:
                     "会话目录 operation 未在等待窗口内到达终态（可能被前置依赖阻塞）: "
                     f"operation_id={operation_id}, state={record.state}"
                 )
-            await self._executor.drain()
             await asyncio.sleep(_TERMINAL_POLL_INTERVAL_SECONDS)
 
     def node_revision(self, node_id: str) -> int:
@@ -243,6 +393,7 @@ class SessionCatalogOperationsService:
         scope: NavigationAuthScope,
     ) -> NavigationMutationStatusPageDTO:
         """按精确 ID 返回 durable 状态；未知 ID 显式列出而不当作失败。"""
+        self._require_worker_ready()
         self._require_scope(scope)
         records, unknown = self._queue.list_records(
             gateway_id=scope.gateway_id,
@@ -263,6 +414,7 @@ class SessionCatalogOperationsService:
 
     def snapshot(self) -> NavigationSnapshotDTO:
         """在只读单事务内取同一 revision 与事件水位。"""
+        self._require_worker_ready()
         with self._store.read_transaction() as connection:
             revision = self._revision_in(connection)
             watermark = self._queue.event_watermark_in(connection, self._workspace_id)
@@ -281,6 +433,7 @@ class SessionCatalogOperationsService:
         limit: int | None = None,
     ) -> NavigationEventsPageDTO:
         """返回 ``event_seq > after`` 的终态事件页与可恢复 cursor。"""
+        self._require_worker_ready()
         if after < 0:
             raise ValueError(f"navigation 事件 cursor 不能为负: {after}")
         resolved_limit = limit if limit is not None else _DEFAULT_EVENT_LIMIT
@@ -312,6 +465,7 @@ class SessionCatalogOperationsService:
         定位，不构成授权。重复/乱序事件由客户端按 ``event_seq`` + ``operation_id``
         去重，本方法不保证去重。
         """
+        self._require_worker_ready()
         try:
             payload = json.loads(
                 base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
@@ -333,12 +487,32 @@ class SessionCatalogOperationsService:
     # ------------------------------------------------------------------
 
     async def drain_once(self) -> list[NavigationExecutionOutcome]:
-        """执行一次 FIFO 排空（供后台 worker 与测试调用）。"""
+        """在唯一 workspace owner 生命周期内执行一次 FIFO 排空。"""
         return await self._executor.drain()
 
+    @asynccontextmanager
+    async def worker_owner(self):
+        """持有 workspace owner；等待其它有效 owner 时保留可取消状态。"""
+        self._worker_state = "waiting_for_owner"
+        logger.info(
+            "导航 queue worker 等待 workspace owner lock: workspace_id=%s",
+            self._workspace_id,
+        )
+        async with self._executor.queue_owner():
+            self._worker_state = "recovering"
+            logger.info(
+                "导航 queue worker 已取得 workspace owner lock: workspace_id=%s",
+                self._workspace_id,
+            )
+            yield
+
     async def recover_after_restart(self) -> int:
-        """进程启动时重置崩溃遗留的 ``running`` 行，返回被重置数量。"""
+        """新 owner 持锁后重置旧 generation 的 ``running`` 行。"""
         return await self._executor.recover_in_flight()
+
+    async def recover_pending_subtree_deletes(self) -> list[SubtreeDeleteResult]:
+        """持有 queue owner 后恢复没有待执行队列记录的子树删除。"""
+        return await self._executor.recover_pending_subtree_deletes()
 
     # ------------------------------------------------------------------
     # 内部
@@ -410,13 +584,21 @@ async def run_worker(
 ) -> None:
     """以轮询方式持续排空队列的后台 worker（进程内唯一 owner）。
 
-    首个周期先做崩溃恢复（重置遗留 ``running``），随后按 FIFO 排空；队列空时
-    等待 ``poll_interval_seconds``。本任务与所属事件循环同生命周期：应用关停时
-    由事件循环取消，因此不额外维护停止事件（无调用方的停止入口属于死代码）。
+    持有跨进程 workspace owner lock 直至 worker 退出；拿到锁后递增 durable
+    owner generation，再恢复旧 ``running`` 并按 FIFO 排空。其它进程等待 owner
+    锁期间不能 recovery 或执行。worker 与所属事件循环同生命周期，应用关停时由
+    事件循环取消。
     """
-    await service.recover_after_restart()
-    while True:
-        outcomes = await service.drain_once()
-        if outcomes:
-            continue
-        await asyncio.sleep(poll_interval_seconds)
+    async with service.worker_owner():
+        await service.recover_after_restart()
+        recovered_deletes = await service.recover_pending_subtree_deletes()
+        if recovered_deletes:
+            logger.warning("已恢复 %s 条未终结的会话子树删除", len(recovered_deletes))
+        service._worker_state = "running"
+        logger.info("导航 queue worker 恢复完成并开始排空: workspace_id=%s", service._workspace_id)
+        service._worker_ready.set()
+        while True:
+            outcomes = await service.drain_once()
+            if outcomes:
+                continue
+            await asyncio.sleep(poll_interval_seconds)

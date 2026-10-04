@@ -35,6 +35,8 @@ __all__ = [
     "NavigationEventRecord",
     "NavigationMutationConflictError",
     "NavigationMutationRecord",
+    "NavigationQueueOwner",
+    "NavigationQueueOwnerError",
     "compute_intent_preimage_hash",
 ]
 
@@ -63,6 +65,10 @@ class NavigationBackpressureError(RuntimeError):
 
 class NavigationMutationConflictError(RuntimeError):
     """同 ``(gateway, workspace, actor, operation_id)`` 但 preimage 不同。"""
+
+
+class NavigationQueueOwnerError(RuntimeError):
+    """queue owner generation 失效或缺少必需的 owner。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +123,20 @@ class NavigationEventRecord:
     error_code: str | None
     error_detail: str | None
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class NavigationQueueOwner:
+    """同一 workspace queue worker 的 durable generation 身份。"""
+
+    workspace_id: str
+    owner_id: str
+    generation: int
+
+    @property
+    def holder_id(self) -> str:
+        """嵌入 operation receipt 的 holder identity，随 generation 单调变化。"""
+        return f"{self.owner_id}:{self.generation}"
 
 
 def compute_intent_preimage_hash(intent: NavigationMutationIntentDTO) -> str:

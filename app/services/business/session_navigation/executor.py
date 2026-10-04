@@ -26,9 +26,12 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from uuid import uuid4
 
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import (
@@ -36,7 +39,12 @@ from app.core.session_catalog_store import (
     SourceRetainedByForkError,
     SourceRetentionOperationPendingError,
 )
+from app.core.session_catalog_store.contracts import (
+    CatalogTransactionHook,
+    SubtreeDeleteRecord,
+)
 from app.core.session_lifecycle_gate import (
+    NavigationMutationQueueOwnerGate,
     NavigationTopologyGate,
     SessionDeletionPendingError,
 )
@@ -45,6 +53,8 @@ from app.core.sqlite_state import utc_now_text
 from app.services.business.session_navigation.queue_store import (
     NavigationMutationQueueStore,
     NavigationMutationRecord,
+    NavigationQueueOwner,
+    NavigationQueueOwnerError,
     read_catalog_revision,
 )
 
@@ -57,7 +67,11 @@ __all__ = [
 # 删除执行器：以确定性 operation_id 进入**共享**子树删除流。生产装配注入保持
 # JobService 删除 admission 与后台任务预检的版本；未注入时退回 resolver 的共享
 # ``delete_subtree``（同一删除流，无第二套实现）。
-DeleteRunner = Callable[[str, str], Awaitable[SubtreeDeleteResult]]
+DeleteRunner = Callable[
+    [str, str, CatalogTransactionHook, CatalogTransactionHook],
+    Awaitable[SubtreeDeleteResult],
+]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +127,41 @@ class NavigationMutationExecutor:
         self._gate = (
             gate if gate is not None else NavigationTopologyGate(store.sessions_root)
         )
+        self._queue_owner_gate = NavigationMutationQueueOwnerGate(store.sessions_root)
+        self._owner: NavigationQueueOwner | None = None
+
+    @asynccontextmanager
+    async def queue_owner(self):
+        """持有 workspace owner OS 锁并建立本次 worker generation。"""
+        async with self._queue_owner_gate.exclusive():
+            if self._owner is not None:
+                raise NavigationQueueOwnerError(
+                    "同一 executor 不能重复取得 queue owner"
+                )
+            with self._store.write_transaction() as connection:
+                owner = self._queue.acquire_owner(
+                    connection,
+                    workspace_id=self._workspace_id,
+                    owner_id=uuid4().hex,
+                    now=utc_now_text(),
+                )
+            self._owner = owner
+            try:
+                yield owner
+            finally:
+                self._owner = None
+
+    def _require_owner(self) -> NavigationQueueOwner:
+        if self._owner is None:
+            raise NavigationQueueOwnerError(
+                "导航 queue 执行缺少持锁的 workspace owner"
+            )
+        return self._owner
+
+    @property
+    def has_queue_owner(self) -> bool:
+        """当前 executor 是否处于持锁的 worker owner 生命周期。"""
+        return self._owner is not None
 
     # ------------------------------------------------------------------
     # 队列驱动
@@ -121,19 +170,18 @@ class NavigationMutationExecutor:
     async def execute_next(self) -> NavigationExecutionOutcome | None:
         """执行下一条 runnable operation；None 表示队列已无可执行项。
 
-        被其它 owner 抢先领取的 operation 由 :class:`NavigationSkipped` 标识，
-        此处继续尝试下一条（``next_runnable`` 只返回 ``queued``，已被领取的
-        不会再次返回，因此循环必然前进）。
+        只有最早非终态 operation 可以成为 candidate；claim 若发现队首变化，本轮
+        不跳到后继项。
         """
-        while True:
-            with self._store.read_transaction() as connection:
-                candidate = self._queue.next_runnable(connection, self._workspace_id)
-            if candidate is None:
-                return None
-            try:
-                return await self.execute_record(candidate)
-            except NavigationSkipped:
-                continue
+        self._require_owner()
+        with self._store.read_transaction() as connection:
+            candidate = self._queue.next_runnable(connection, self._workspace_id)
+        if candidate is None:
+            return None
+        try:
+            return await self.execute_record(candidate)
+        except NavigationSkipped:
+            return None
 
     async def drain(self, *, max_operations: int = 1000) -> list[NavigationExecutionOutcome]:
         """按 ``queue_seq`` FIFO 连续执行直到无可执行项（有界）。"""
@@ -149,13 +197,45 @@ class NavigationMutationExecutor:
         return outcomes
 
     async def recover_in_flight(self) -> int:
-        """新 owner 启动时把崩溃遗留的 ``running`` 行重置为 ``queued``。"""
+        """持有 OS owner lock 后按新 generation 接管旧 worker 的 running 行。"""
+        owner = self._require_owner()
         with self._store.write_transaction() as connection:
             return self._queue.recover_in_flight(
                 connection,
                 workspace_id=self._workspace_id,
+                owner_id=owner.owner_id,
+                owner_generation=owner.generation,
                 now=utc_now_text(),
             )
+
+    async def recover_pending_subtree_deletes(self) -> list[SubtreeDeleteResult]:
+        """恢复不再由 queued/running 导航 operation 驱动的删除 settlement。"""
+        self._require_owner()
+        recovered: list[SubtreeDeleteResult] = []
+        for delete_record in self._path_resolver.pending_subtree_deletes():
+            with self._store.read_transaction() as connection:
+                operation = self._queue.find_delete_operation_in(
+                    connection,
+                    workspace_id=self._workspace_id,
+                    operation_id=delete_record.subtree_delete_idempotency_key,
+                )
+            if operation is not None and operation.state in ("queued", "running"):
+                # 仍按 queue_seq 执行；启动恢复不得越过前置 operation。
+                continue
+            if operation is not None and operation.state != "committed":
+                raise RuntimeError(
+                    "待恢复的子树删除对应非 committed 导航终态，拒绝改写 tombstone: "
+                    f"operation_id={operation.operation_id}, state={operation.state}"
+                )
+            recovered.append(
+                await self._path_resolver.delete_subtree(
+                    idempotency_key=delete_record.subtree_delete_idempotency_key,
+                    root_node_id=delete_record.root_node_id,
+                    mark_transaction_hook=self._subtree_delete_mark_hook,
+                    finish_transaction_hook=self._subtree_delete_finish_hook,
+                )
+            )
+        return recovered
 
     async def execute_record(
         self,
@@ -166,8 +246,13 @@ class NavigationMutationExecutor:
         未取得执行权时抛 :class:`NavigationSkipped`（不是假终态）：调用方据此
         区分「已完成」与「本轮被其它 owner 抢先」。
         """
+        self._require_owner()
         if record.is_terminal:
             return NavigationExecutionOutcome(record=record, settled=True)
+        if record.kind == "delete_folder" and not bool(
+            record.params.get("recursive", False)
+        ):
+            return await self._execute_empty_folder_delete(record)
         if record.kind in ("delete_folder", "delete_session"):
             return await self._execute_delete(record)
         return await self._execute_node_mutation(record)
@@ -215,6 +300,8 @@ class NavigationMutationExecutor:
                 # 本轮被其它 owner 抢先：不是业务拒绝，绝不可在下面被归类为
                 # RuntimeError 而误写成 rejected 终态。领取事务已整体回滚。
                 raise
+            except NavigationQueueOwnerError:
+                raise
             except (KeyError, ValueError, RuntimeError) as error:
                 return self._reject(record, error)
 
@@ -260,6 +347,38 @@ class NavigationMutationExecutor:
     # 删除类 operation：复用 NavigationSubtreeDeleteRecord 协议
     # ------------------------------------------------------------------
 
+    async def _execute_empty_folder_delete(
+        self,
+        record: NavigationMutationRecord,
+    ) -> NavigationExecutionOutcome:
+        """在唯一队列事务内删除空 folder；非空 folder 明确拒绝。"""
+        async with self._gate.exclusive():
+            try:
+                with self._store.write_transaction() as connection:
+                    claimed = self._claim(connection, record)
+                    if claimed is None:
+                        raise NavigationSkipped(record.operation_id)
+                    self._store.delete_empty_folder(
+                        str(claimed.target_node_id), connection=connection
+                    )
+                    terminal = self._finish(
+                        connection,
+                        claimed,
+                        state="committed",
+                        result_node_id=claimed.target_node_id,
+                        affected=[str(claimed.target_node_id)],
+                    )
+                return NavigationExecutionOutcome(record=terminal, settled=True)
+            except NavigationSkipped:
+                raise
+            except NavigationQueueOwnerError:
+                raise
+            except (KeyError, ValueError, RuntimeError) as error:
+                rejection = (
+                    ValueError(str(error)) if isinstance(error, RuntimeError) else error
+                )
+                return self._reject(record, rejection)
+
     def _claim_or_raise(
         self,
         record: NavigationMutationRecord,
@@ -285,7 +404,8 @@ class NavigationMutationExecutor:
         """递归删除：delete service 的 mark 事务即导航逻辑 committed 点。
 
         删除流自身取 topology exclusive 与 Session gate，本处不得再持 gate
-        （避免双 gate / 反向锁序）。physical settlement 独立于逻辑提交上报。
+        （避免双 gate / 反向锁序）。mark transaction hook 把导航 committed 事实
+        与 catalog deleting 原子提交；physical settlement 独立上报。
         """
         claimed = self._claim_or_raise(record)
         try:
@@ -293,30 +413,160 @@ class NavigationMutationExecutor:
                 result = await self._path_resolver.delete_subtree(
                     idempotency_key=claimed.operation_id,
                     root_node_id=claimed.target_node_id,
+                    mark_transaction_hook=self._subtree_delete_mark_hook,
+                    finish_transaction_hook=self._subtree_delete_finish_hook,
                 )
             else:
                 result = await self._delete_runner(
-                    claimed.operation_id, claimed.target_node_id
+                    claimed.operation_id,
+                    claimed.target_node_id,
+                    self._subtree_delete_mark_hook,
+                    self._subtree_delete_finish_hook,
                 )
         except (KeyError, ValueError, RuntimeError) as error:
-            return self._reject(claimed, error, claim=False)
-        affected = [claimed.target_node_id, *result.frozen_node_ids]
+            committed = self._read_committed_delete(claimed)
+            if committed is None:
+                return self._reject(claimed, error, claim=False)
+            logger.error(
+                "递归删除已逻辑提交但物理 settlement 失败，保留 pending 状态: "
+                "operation_id=%s, error=%s",
+                claimed.operation_id,
+                error,
+            )
+            return self._terminal_outcome(committed)
+        except Exception:
+            committed = self._read_committed_delete(claimed)
+            if committed is None:
+                raise
+            logger.exception(
+                "递归删除已逻辑提交但物理 settlement 异常，保留 pending 状态: "
+                "operation_id=%s",
+                claimed.operation_id,
+            )
+            return self._terminal_outcome(committed)
+
         settled = result.record_state == "completed"
         with self._store.write_transaction() as connection:
-            # 本 owner 已持有该 operation（``running`` + 本 token）；这里不再领取，
-            # 只用 token CAS 写终态：若中途被接管，写事务会被拒绝而不是覆盖新 owner。
-            live = self._require_live(connection, claimed)
-            if live is None:
-                return self._terminal_outcome(claimed)
-            terminal = self._finish(
+            current = self._queue.fetch_record_in(
                 connection,
-                live,
-                state="committed",
-                result_node_id=claimed.target_node_id,
-                affected=affected,
-                pending_settlement=not settled,
+                gateway_id=claimed.gateway_id,
+                workspace_id=claimed.workspace_id,
+                actor=claimed.actor,
+                operation_id=claimed.operation_id,
             )
-        return NavigationExecutionOutcome(record=terminal, settled=settled)
+            if current is None:
+                raise KeyError(f"会话目录 operation 不存在: {claimed.operation_id}")
+            if current.state == "committed" and settled:
+                terminal = self._queue.settle_delete_operation_in(
+                    connection,
+                    record=current,
+                    now=utc_now_text(),
+                ) if current.pending_settlement else current
+            elif current.state == "committed":
+                terminal = current
+            else:
+                raise RuntimeError(
+                    "递归删除完成后导航 operation 状态不一致: "
+                    f"operation_id={claimed.operation_id}, state={current.state}"
+                )
+        return self._terminal_outcome(terminal)
+
+    def _subtree_delete_mark_hook(
+        self,
+        connection: sqlite3.Connection,
+        delete_record: SubtreeDeleteRecord,
+    ) -> None:
+        operation = self._queue.find_delete_operation_in(
+            connection,
+            workspace_id=self._workspace_id,
+            operation_id=delete_record.subtree_delete_idempotency_key,
+        )
+        if operation is None:
+            return
+        if operation.target_node_id != delete_record.root_node_id:
+            raise RuntimeError(
+                "subtree delete root 与导航 operation target 不一致: "
+                f"operation_id={operation.operation_id}, "
+                f"target={operation.target_node_id}, root={delete_record.root_node_id}"
+            )
+        if operation.state == "committed":
+            if operation.result_node_id != delete_record.root_node_id:
+                raise RuntimeError(
+                    "已 committed 的递归删除 receipt 与 catalog root 不一致: "
+                    f"operation_id={operation.operation_id}"
+                )
+            return
+        if operation.state != "running":
+            raise RuntimeError(
+                "子树删除 mark 只能提交当前 running 导航 operation: "
+                f"operation_id={operation.operation_id}, state={operation.state}"
+            )
+        live = self._require_live(connection, operation)
+        if live is None:
+            raise RuntimeError(
+                "子树删除 mark 时导航 operation 已终结: "
+                f"operation_id={operation.operation_id}"
+            )
+        self._finish(
+            connection,
+            live,
+            state="committed",
+            result_node_id=delete_record.root_node_id,
+            affected=[
+                delete_record.root_node_id,
+                *(item.node_id for item in delete_record.frozen_node_ids),
+            ],
+            pending_settlement=True,
+        )
+
+    def _subtree_delete_finish_hook(
+        self,
+        connection: sqlite3.Connection,
+        delete_record: SubtreeDeleteRecord,
+    ) -> None:
+        operation = self._queue.find_delete_operation_in(
+            connection,
+            workspace_id=self._workspace_id,
+            operation_id=delete_record.subtree_delete_idempotency_key,
+        )
+        if operation is None:
+            return
+        owner = self._require_owner()
+        self._queue.require_owner_generation(
+            connection,
+            workspace_id=self._workspace_id,
+            owner_id=owner.owner_id,
+            generation=owner.generation,
+        )
+        if operation.state != "committed":
+            raise RuntimeError(
+                "子树删除完成时导航 operation 未由 mark 事务同步提交为 committed: "
+                f"operation_id={operation.operation_id}, state={operation.state}"
+            )
+        if operation.pending_settlement:
+            self._queue.settle_delete_operation_in(
+                connection,
+                record=operation,
+                now=utc_now_text(),
+            )
+
+    def _read_committed_delete(
+        self,
+        record: NavigationMutationRecord,
+    ) -> NavigationMutationRecord | None:
+        current = self._queue.get_record(
+            gateway_id=record.gateway_id,
+            workspace_id=record.workspace_id,
+            actor=record.actor,
+            operation_id=record.operation_id,
+        )
+        if (
+            current is None
+            or current.state != "committed"
+            or current.result_node_id != record.target_node_id
+        ):
+            return None
+        return current
 
     # ------------------------------------------------------------------
     # 拒绝路径
@@ -416,13 +666,16 @@ class NavigationMutationExecutor:
         if current.is_terminal:
             return None
         if current.state == "running":
-            # 上一 owner 仍在执行，或崩溃遗留尚未被 recover_in_flight 重置：
-            # 本轮不接管，避免两个 owner 同时执行同一条 operation。
+            # running owner 在 OS lock 仍存活期间不可接管；只由已获新 generation
+            # 的 worker 在 recover_in_flight 中恢复。
             return None
+        owner = self._require_owner()
         return self._queue.claim_running(
             connection,
             record=current,
-            holder_id="worker",
+            holder_id=owner.holder_id,
+            owner_id=owner.owner_id,
+            owner_generation=owner.generation,
             now=utc_now_text(),
         )
 
@@ -440,6 +693,13 @@ class NavigationMutationExecutor:
         pending_settlement: bool = False,
     ) -> NavigationMutationRecord:
         """在同一事务内写 terminal record 与导航事件 outbox。"""
+        owner = self._require_owner()
+        self._queue.require_owner_generation(
+            connection,
+            workspace_id=self._workspace_id,
+            owner_id=owner.owner_id,
+            generation=owner.generation,
+        )
         terminal = self._queue.finish_terminal(
             connection,
             record=record,
@@ -473,6 +733,13 @@ class NavigationMutationExecutor:
         record: NavigationMutationRecord,
     ) -> NavigationMutationRecord | None:
         """重读同一 operation；返回 None 表示已终态（幂等 no-op）。"""
+        owner = self._require_owner()
+        self._queue.require_owner_generation(
+            connection,
+            workspace_id=self._workspace_id,
+            owner_id=owner.owner_id,
+            generation=owner.generation,
+        )
         current = self._queue.fetch_record_in(
             connection,
             gateway_id=record.gateway_id,

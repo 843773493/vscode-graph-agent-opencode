@@ -1,13 +1,16 @@
 """SessionService 在 SQLite catalog authority 下的换源冒烟测试。
 
 8.2-切片3b-1 的 §2.1 换源目标态验证：title/parent_session_id 从 resolver
-读、manifest 剥离三键、marker 回读 session_id、逻辑移动签名。只使用
-tmp_path。
+读、manifest 剥离三键、marker 回读 session_id、逻辑移动签名。工作区从完整只读
+fixture 复制到测试文件镜像输出目录。
 """
 
 from __future__ import annotations
 
+import shutil
+from collections.abc import Awaitable
 from pathlib import Path
+from typing import TypeVar
 
 import pytest
 
@@ -20,20 +23,47 @@ from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionCreateRequest, SessionUpdateRequest
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_service import SessionService
-from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
+from tests.unit.services.business.session_service_test_support import (
+    SessionServiceConfigStub,
+    prepare_session_test_workspace,
+)
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
+T = TypeVar("T")
+
+
+async def _run_with_catalog_worker(
+    catalog: SessionCatalogService,
+    operation: Awaitable[T],
+) -> T:
+    await catalog.operations.start()
+    try:
+        return await operation
+    finally:
+        await catalog.operations.stop()
 
 
 @pytest.fixture()
-def catalog_service(tmp_path: Path) -> tuple[SessionService, object]:
+def session_config_service() -> SessionServiceConfigStub:
+    return SessionServiceConfigStub()
+
+
+@pytest.fixture()
+def catalog_service(
+    request: pytest.FixtureRequest,
+    session_config_service: SessionServiceConfigStub,
+) -> tuple[SessionService, object]:
     """直构新链 + SessionService 注入（不经环境变量开关）。"""
-    workspace = build_catalog_workspace(tmp_path, workspace_id=WORKSPACE_ID)
+    context, workspace_base, _ = prepare_session_test_workspace(
+        test_file=Path(request.node.path),
+        node_id=request.node.nodeid,
+    )
+    workspace = build_catalog_workspace(workspace_base, workspace_id=WORKSPACE_ID)
     sessions_dir = workspace.sessions_root
     service = SessionService(
-        config_service=ConfigService(),
+        config_service=session_config_service,
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         workspace_id=WORKSPACE_ID,
         path_resolver=workspace.resolver,
@@ -43,12 +73,19 @@ def catalog_service(tmp_path: Path) -> tuple[SessionService, object]:
         yield service, workspace
     finally:
         workspace.close()
+        context.close()
 
 
 @pytest.fixture()
-def factory_resolver(tmp_path: Path):
+def factory_resolver(
+    request: pytest.FixtureRequest,
+    session_config_service: SessionServiceConfigStub,
+):
     """经 path_utils 唯一 catalog 工厂取得 resolver 的冒烟入口。"""
-    workspace_root = tmp_path / "workspace"
+    context, _, workspace_root = prepare_session_test_workspace(
+        test_file=Path(request.node.path),
+        node_id=request.node.nodeid,
+    )
     sessions_root = workspace_root / ".boxteam" / "sessions"
     resolver = get_session_path_resolver(sessions_root)
     assert isinstance(resolver, SessionCatalogPathResolver)
@@ -56,13 +93,17 @@ def factory_resolver(tmp_path: Path):
 
     workspace_id = load_or_create_workspace_id(workspace_root)
     service = SessionService(
-        config_service=ConfigService(),
+        config_service=session_config_service,
         trace_event_store=TraceEventStore(sessions_dir=sessions_root),
         workspace_id=workspace_id,
         path_resolver=resolver,
         creation_service=get_session_creation_service(sessions_root),
     )
-    return service, resolver, workspace_id
+    try:
+        yield service, resolver, workspace_id
+    finally:
+        resolver.catalog_store.close()
+        context.close()
 
 
 @pytest.mark.asyncio
@@ -76,7 +117,10 @@ async def test_create_and_get_reads_title_and_parent_from_resolver(
     # 用普通 Session + move 验证 title/parent 换源与 manifest 剥离口径。
     child = await service.create(SessionCreateRequest(title="委派子会话"))
     child_catalog = SessionCatalogService(session_service=service)
-    await child_catalog.move_node(child.session_id, parent.session_id)
+    await _run_with_catalog_worker(
+        child_catalog,
+        child_catalog.move_node(child.session_id, parent.session_id),
+    )
 
     # 创建走 marker 回读：真实 session_id 即软件分配 ID（ses_ 前缀）。
     assert parent.session_id.startswith("ses_")
@@ -135,7 +179,10 @@ async def test_move_session_uses_logical_relocation(catalog_service) -> None:
     session_dir = workspace.session_dir(session.session_id)
     catalog = SessionCatalogService(session_service=service)
 
-    await catalog.move_node(session.session_id, parent.session_id)
+    await _run_with_catalog_worker(
+        catalog,
+        catalog.move_node(session.session_id, parent.session_id),
+    )
 
     assert (await service.get(session.session_id)).parent_session_id == (
         parent.session_id
@@ -145,14 +192,17 @@ async def test_move_session_uses_logical_relocation(catalog_service) -> None:
 
     # 解绑回根：仍走同一逻辑移动路径。旧物理语义（context_fork 降级改
     # manifest）已被 design §9 明确删除，这里显式断言不再降级。
-    await catalog.assign_session(session.session_id, None)
+    await _run_with_catalog_worker(
+        catalog,
+        catalog.assign_session(session.session_id, None),
+    )
     assert (await service.get(session.session_id)).parent_session_id is None
 
 
 @pytest.mark.asyncio
 async def test_folder_move_keeps_context_fork_kind_across_restart(
     catalog_service,
-    tmp_path: Path,
+    session_config_service: SessionServiceConfigStub,
 ) -> None:
     """逻辑移动 folder 子树只改 catalog 父关系；context_fork 的 kind 与
 
@@ -169,11 +219,14 @@ async def test_folder_move_keeps_context_fork_kind_across_restart(
     )
     folder = workspace.create_folder("子目录", parent=parent.session_id)
     catalog = SessionCatalogService(session_service=service)
-    await catalog.assign_session(child.session_id, folder)
+    await _run_with_catalog_worker(
+        catalog,
+        catalog.assign_session(child.session_id, folder),
+    )
     manifest_before = workspace.manifest(child.session_id)
 
     # 把 folder 子树移到根（唯一导航路径：executor.move_node）。
-    await catalog.move_node(folder, None)
+    await _run_with_catalog_worker(catalog, catalog.move_node(folder, None))
 
     assert (await service.get(child.session_id)).kind == "context_fork"
     # 导航移动不改写 session.json 字节。
@@ -181,13 +234,16 @@ async def test_folder_move_keeps_context_fork_kind_across_restart(
     assert workspace.manifest(child.session_id)["kind"] == "context_fork"
     assert workspace.node(folder).parent_node_id is None
 
+    restart_base = workspace.workspace_root.parent / "restart"
+    workspace.close()
+    shutil.copytree(workspace.workspace_root, restart_base / "workspace")
     restarted_workspace = build_catalog_workspace(
-        tmp_path,
+        restart_base,
         workspace_id=WORKSPACE_ID,
     )
     try:
         restarted = SessionService(
-            config_service=ConfigService(),
+            config_service=session_config_service,
             trace_event_store=TraceEventStore(
                 sessions_dir=restarted_workspace.sessions_root
             ),

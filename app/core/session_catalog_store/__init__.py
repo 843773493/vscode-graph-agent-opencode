@@ -51,6 +51,7 @@ from app.core.session_catalog_store.contracts import (
     SessionCreationRecord,
     SourceRetainedByForkError,
     SourceRetentionOperationPendingError,
+    SubtreeDeleteMarkRejectedError,
     SubtreeDeleteRecord,
     SubtreeFrozenNode,
 )
@@ -83,6 +84,7 @@ __all__ = [
     "SessionLifecycleFence",
     "SourceRetainedByForkError",
     "SourceRetentionOperationPendingError",
+    "SubtreeDeleteMarkRejectedError",
     "SubtreeDeleteRecord",
     "SubtreeFrozenNode",
     "uuid7_embedded_utc_date",
@@ -288,8 +290,8 @@ class SessionCatalogStore(
         共享连接上不再出现事务交叠（OperationalError 两种变体的根源）。
         SQL 语义与 BEGIN 模式不变；RLock 可重入，同线程嵌套安全。
 
-        提交前自增 ``catalog_metadata.generation``（8.1-F）：每个提交的写
-        事务恰好推进一次 generation，作为备份/一致性快照的版本锚点。
+        提交前无条件自增 ``catalog_metadata.generation``（8.1-F）：每个已提交的
+        catalog 写事务恰好推进一次 generation，作为备份/一致性快照的版本锚点。
 
         公开入口：调用方可在自己持有的连接上执行 node 写方法与同库旁挂
         journal/事件写入，由本事务一次性提交或回滚。

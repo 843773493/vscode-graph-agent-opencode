@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 
 from app.core.session_catalog_store._schema import _SUBTREE_DELETE_RECORD_COLUMNS
 from app.core.session_catalog_store.contracts import (
+    CatalogTransactionHook,
+    SubtreeDeleteMarkRejectedError,
     SubtreeDeleteRecord,
     SubtreeFrozenNode,
     _parse_drained_session_ids,
@@ -233,7 +235,12 @@ class SubtreeDeleteMixin:
                 )
             return self._subtree_delete_record_from_row(inserted)
 
-    def mark_subtree_deleting(self, idempotency_key: str) -> None:
+    def mark_subtree_deleting(
+        self,
+        idempotency_key: str,
+        *,
+        transaction_hook: CatalogTransactionHook | None = None,
+    ) -> None:
         """单事务 CAS 把整棵冻结子树 active→deleting（**唯一逻辑可见性关闭点**）。
 
         record 必须 ``preparing``（已 ``deleting`` → 幂等 no-op；其余状态
@@ -251,8 +258,13 @@ class SubtreeDeleteMixin:
                     f"subtree delete record 不存在: key={idempotency_key!r}"
                 )
             state = str(row["state"])
-            if state == "deleting":
-                # 幂等重入：整树已 deleting，不重验子树（以首次 mark 提交为准）。
+            if state in ("deleting", "draining"):
+                # 幂等重入：整树已 deleting，不重验子树（以首次 mark 提交为准）；
+                # transaction_hook 可与既有逻辑提交事实原子对账。
+                if transaction_hook is not None:
+                    transaction_hook(
+                        connection, self._subtree_delete_record_from_row(row)
+                    )
                 return
             if state != "preparing":
                 raise RuntimeError(
@@ -275,20 +287,20 @@ class SubtreeDeleteMixin:
             for item in record.frozen_node_ids:
                 node = self._fetch_node(connection, item.node_id)
                 if node is None:
-                    raise RuntimeError(
+                    raise SubtreeDeleteMarkRejectedError(
                         "mark CAS 失败：冻结节点已不存在: "
                         f"key={idempotency_key!r}, node_id={item.node_id}, "
                         f"expected_revision={item.revision}, actual=缺失"
                     )
                 if str(node["state"]) != "active":
-                    raise RuntimeError(
+                    raise SubtreeDeleteMarkRejectedError(
                         "mark CAS 失败：冻结节点非 active: "
                         f"key={idempotency_key!r}, node_id={item.node_id}, "
                         f"expected_state='active', actual_state={node['state']!r}"
                     )
                 actual_revision = int(node["revision"])
                 if actual_revision != item.revision:
-                    raise RuntimeError(
+                    raise SubtreeDeleteMarkRejectedError(
                         "mark CAS 失败：冻结节点 revision 已漂移: "
                         f"key={idempotency_key!r}, node_id={item.node_id}, "
                         f"expected_revision={item.revision}, "
@@ -305,6 +317,18 @@ class SubtreeDeleteMixin:
                 "record_updated_at = ? WHERE subtree_delete_idempotency_key = ?",
                 (datetime.now(UTC).isoformat(), idempotency_key),
             )
+            if transaction_hook is not None:
+                updated = self._fetch_subtree_delete_record(
+                    connection, idempotency_key
+                )
+                if updated is None:
+                    raise RuntimeError(
+                        "mark 后 subtree delete record 不可见: "
+                        f"key={idempotency_key!r}"
+                    )
+                transaction_hook(
+                    connection, self._subtree_delete_record_from_row(updated)
+                )
 
     def record_drain_progress(self, idempotency_key: str, session_id: str) -> None:
         """记录单个 session 的物理隔离进度；首次调用把 record → draining。
@@ -350,7 +374,12 @@ class SubtreeDeleteMixin:
                 ),
             )
 
-    def finish_subtree_delete(self, idempotency_key: str) -> None:
+    def finish_subtree_delete(
+        self,
+        idempotency_key: str,
+        *,
+        transaction_hook: CatalogTransactionHook | None = None,
+    ) -> None:
         """单事务终结删除：drain 完整性校验 + 全树 tombstone（行删除）。
 
         record 必须 ``draining``；无 session 的空子树允许 ``deleting``
@@ -368,6 +397,11 @@ class SubtreeDeleteMixin:
                     f"subtree delete record 不存在: key={idempotency_key!r}"
                 )
             state = str(row["state"])
+            if state == "completed" and transaction_hook is not None:
+                transaction_hook(
+                    connection, self._subtree_delete_record_from_row(row)
+                )
+                return
             if state not in ("deleting", "draining"):
                 raise RuntimeError(
                     "subtree delete record 状态不允许 finish: "
@@ -431,6 +465,18 @@ class SubtreeDeleteMixin:
                 "record_updated_at = ? WHERE subtree_delete_idempotency_key = ?",
                 (datetime.now(UTC).isoformat(), idempotency_key),
             )
+            if transaction_hook is not None:
+                updated = self._fetch_subtree_delete_record(
+                    connection, idempotency_key
+                )
+                if updated is None:
+                    raise RuntimeError(
+                        "finish 后 subtree delete record 不可见: "
+                        f"key={idempotency_key!r}"
+                    )
+                transaction_hook(
+                    connection, self._subtree_delete_record_from_row(updated)
+                )
 
     def abort_subtree_delete(
         self,
@@ -516,7 +562,12 @@ class SubtreeDeleteMixin:
             ).fetchall()
             return [self._subtree_delete_record_from_row(row) for row in rows]
 
-    def delete_empty_folder(self, folder_id: str) -> None:
+    def delete_empty_folder(
+        self,
+        folder_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
         """空 folder 的非递归简单删除（design.md §9 约 776 行允许面）。
 
         folder 必须存在、active 且无任何直接子节点；非 folder 节点、
@@ -526,27 +577,30 @@ class SubtreeDeleteMixin:
         删除协议，不经本方法。
         """
         validate_session_id(folder_id)
-        with self.write_transaction() as connection:
-            row = self._require_node(connection, folder_id)
-            if str(row["kind"]) != "folder":
-                raise RuntimeError(
-                    "非 folder 节点拒绝非递归删除（session 走子树删除协议）: "
-                    f"node_id={folder_id}, kind={row['kind']!r}"
-                )
-            if str(row["state"]) != "active":
-                raise RuntimeError(
-                    f"folder 非 active，拒绝删除: node_id={folder_id}, "
-                    f"state={row['state']!r}"
-                )
-            child_count = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM nodes WHERE parent_node_id = ?",
-                    (folder_id,),
-                ).fetchone()[0]
+        if connection is None:
+            with self.write_transaction() as transaction:
+                self.delete_empty_folder(folder_id, connection=transaction)
+            return
+        row = self._require_node(connection, folder_id)
+        if str(row["kind"]) != "folder":
+            raise RuntimeError(
+                "非 folder 节点拒绝非递归删除（session 走子树删除协议）: "
+                f"node_id={folder_id}, kind={row['kind']!r}"
             )
-            if child_count > 0:
-                raise RuntimeError(
-                    "非空 folder 的非递归删除被明确拒绝: "
-                    f"folder_id={folder_id}, child_count={child_count}"
-                )
-            connection.execute("DELETE FROM nodes WHERE node_id = ?", (folder_id,))
+        if str(row["state"]) != "active":
+            raise RuntimeError(
+                f"folder 非 active，拒绝删除: node_id={folder_id}, "
+                f"state={row['state']!r}"
+            )
+        child_count = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM nodes WHERE parent_node_id = ?",
+                (folder_id,),
+            ).fetchone()[0]
+        )
+        if child_count > 0:
+            raise RuntimeError(
+                "非空 folder 的非递归删除被明确拒绝: "
+                f"folder_id={folder_id}, child_count={child_count}"
+            )
+        connection.execute("DELETE FROM nodes WHERE node_id = ?", (folder_id,))

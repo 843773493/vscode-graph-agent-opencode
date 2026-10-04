@@ -836,6 +836,31 @@ async def test_recovery_finish_crash_completes_on_reentry(
 # ----------------------------------------------------------------------
 
 
+async def test_mark_cas_rejection_aborts_preparing_record_and_keeps_nodes_active(
+    service: SessionSubtreeDeleteService,
+    store: SessionCatalogStore,
+    tree: DeleteTree,
+) -> None:
+    store.create_or_get_subtree_delete_record(
+        idempotency_key="del-key-1",
+        workspace_id=WORKSPACE_ID,
+        root_node_id=tree.root,
+    )
+    store.rename_node(tree.root, "并发修改后的根")
+
+    with pytest.raises(RuntimeError, match="revision 已漂移"):
+        await service.delete(
+            idempotency_key="del-key-1", root_node_id=tree.root
+        )
+
+    record = store.get_subtree_delete_record("del-key-1")
+    assert record.state == "aborted"
+    assert record.abort_reason is not None
+    assert "revision 已漂移" in record.abort_reason
+    for node_id in tree.subtree_node_ids:
+        assert store.get_node(node_id).state == "active"
+
+
 async def test_abort_mid_drain_keeps_nodes_and_isolated_dir(
     service: SessionSubtreeDeleteService,
     store: SessionCatalogStore,

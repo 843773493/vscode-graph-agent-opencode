@@ -11,6 +11,8 @@ JSON 槽的解析 helper（外部改动一律 fail closed）、“只能进入�
 from __future__ import annotations
 
 import json
+import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.core.session_catalog_store.validators import (
@@ -94,6 +96,9 @@ class SubtreeDeleteRecord:
     record_created_at: str
     record_updated_at: str
     drained_session_ids: tuple[str, ...]
+
+
+CatalogTransactionHook = Callable[[sqlite3.Connection, SubtreeDeleteRecord], None]
 
 
 def _validate_workspace_id(workspace_id: object) -> None:
@@ -240,7 +245,11 @@ class CatalogMaintenanceRequiredError(RuntimeError):
     """
 
 
-class SourceRetainedByForkError(RuntimeError):
+class SubtreeDeleteMarkRejectedError(RuntimeError):
+    """mark 的业务前置条件拒绝，事务未提交任何导航状态变更。"""
+
+
+class SourceRetainedByForkError(SubtreeDeleteMarkRejectedError):
     """整树删除提交前发现 source Session 被 **active** pinned fork claim 保留。
 
     删除必须在提交 catalog deleting 之前返回具体 blocker（哪个 Session、哪个
@@ -266,7 +275,7 @@ class SourceRetainedByForkError(RuntimeError):
         )
 
 
-class SourceRetentionOperationPendingError(RuntimeError):
+class SourceRetentionOperationPendingError(SubtreeDeleteMarkRejectedError):
     """整树删除提交前发现 source Session 存在 **preparing** pinned fork claim。
 
     preparing claim 无墙钟过期；删除必须 fail closed 并要求显式 recovery，不能
@@ -341,4 +350,3 @@ class CatalogIntegrityReport:
 
 # ``apply_navigation_mutation`` 区分「不改父」与「显式移到根(None)」的哨兵。
 _UNSET: object = object()
-

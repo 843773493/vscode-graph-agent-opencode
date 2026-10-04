@@ -13,6 +13,7 @@ from app.core.session_catalog_resolver import (
     SessionCatalogPathResolver,
     SessionCatalogSessionProjection,
 )
+from app.core.session_catalog_store.contracts import CatalogTransactionHook
 from app.core.session_subtree_delete import SubtreeDeleteResult
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
@@ -132,6 +133,8 @@ class SessionCatalogService:
         self,
         idempotency_key: str,
         root_node_id: str,
+        mark_transaction_hook: CatalogTransactionHook,
+        finish_transaction_hook: CatalogTransactionHook,
     ) -> SubtreeDeleteResult:
         """以确定性 key 进入共享子树删除流，保留既有 admission/预检语义。
 
@@ -159,6 +162,8 @@ class SessionCatalogService:
             return await self._path_resolver.delete_subtree(
                 idempotency_key=idempotency_key,
                 root_node_id=root_node_id,
+                mark_transaction_hook=mark_transaction_hook,
+                finish_transaction_hook=finish_transaction_hook,
             )
 
         if self._job_service is None:
@@ -369,7 +374,7 @@ class SessionCatalogService:
         不假回滚 active；任一 record 恢复失败即向上抛错，由启动期如实记录并
         继续启动（目录读取已对 deleting 节点隐藏，不再拖垮整个后端）。
         """
-        results = await self._path_resolver.recover_pending_subtree_deletes()
+        results = await self.operations.recover_pending_subtree_deletes()
         if results:
             self.invalidate()
         return results
@@ -522,7 +527,7 @@ class SessionCatalogService:
         await self.operations.drain_once()
 
     def _catalog_revision(self) -> int:
-        return self.operations.snapshot().catalog_revision
+        return self._path_resolver.revision
 
     async def _submit_batch(
         self,
@@ -621,16 +626,7 @@ class SessionCatalogService:
         *,
         recursive: bool = False,
     ) -> None:
-        """删除 folder：非递归要求为空，递归走共享子树删除 operation。"""
-        if self._operations_service.node_kind(folder_id) != "folder":
-            raise KeyError(f"会话文件夹不存在: {folder_id}")
-        if not recursive:
-            try:
-                self._path_resolver.delete_folder(folder_id)
-            except RuntimeError as error:
-                raise ValueError(str(error)) from error
-            self.invalidate()
-            return
+        """删除 folder：空目录删除和递归子树删除都经唯一 operation queue。"""
         await self._submit_batch(
             [
                 NavigationMutationIntentDTO(
@@ -639,7 +635,7 @@ class SessionCatalogService:
                     kind="delete_folder",
                     base_catalog_revision=self._catalog_revision(),
                     target_node_id=folder_id,
-                    recursive=True,
+                    recursive=recursive,
                 )
             ]
         )

@@ -46,6 +46,7 @@ __all__ = [
     "SESSION_OPERATION_LEASE_KINDS",
     "SESSION_OPERATION_LEASE_STATES",
     "SESSION_OPERATION_LEASE_TERMINAL_STATES",
+    "NavigationMutationQueueOwnerGate",
     "NavigationTopologyGate",
     "SessionDeletionPendingError",
     "SessionLifecycleGate",
@@ -59,6 +60,7 @@ _NAVIGATION_DIRECTORY_NAME = "navigation"
 _SESSION_GATE_DIRECTORY_NAME = "session-lifecycle-gates"
 # workspace 级 topology 锁文件名。
 _TOPOLOGY_LOCK_FILE_NAME = "topology.lock"
+_NAVIGATION_QUEUE_OWNER_LOCK_FILE_NAME = "mutation-queue-owner.lock"
 
 # 通用 operation lease 状态闭集（design.md §544）。
 SESSION_OPERATION_LEASE_STATES = (
@@ -149,7 +151,13 @@ class _CrossProcessFileLock:
         fd = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o600)
         mode = fcntl.LOCK_EX if self._exclusive else fcntl.LOCK_SH
         try:
-            await asyncio.to_thread(fcntl.flock, fd, mode)
+            while True:
+                try:
+                    fcntl.flock(fd, mode | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    await asyncio.sleep(0.05)
+                else:
+                    break
         except BaseException:
             os.close(fd)
             raise
@@ -198,6 +206,29 @@ class NavigationTopologyGate:
     def shared(self) -> _CrossProcessFileLock:
         """以 shared 语义进入导航拓扑临界区（短时准入 fresh 校验）。"""
         return _CrossProcessFileLock(self._lock_path, exclusive=False)
+
+
+class NavigationMutationQueueOwnerGate:
+    """工作区 mutation queue 的跨进程 owner 锁，不持有 topology gate。
+
+    owner 进程在 worker 生命周期内持锁；锁文件只创建、不删除或重建，进程退出
+    后由 OS 释放。SQLite 中的 owner generation 才是 durable fencing 值，OS 锁只
+    提供旧 owner 已停止的接管证据。
+    """
+
+    def __init__(self, sessions_root: Path) -> None:
+        self._lock_path = (
+            _navigation_root(sessions_root) / _NAVIGATION_QUEUE_OWNER_LOCK_FILE_NAME
+        )
+
+    @property
+    def lock_path(self) -> Path:
+        """owner 锁文件绝对路径（诊断/测试用）。"""
+        return self._lock_path
+
+    def exclusive(self) -> _CrossProcessFileLock:
+        """取得 workspace 唯一 queue worker owner。"""
+        return _CrossProcessFileLock(self._lock_path, exclusive=True)
 
 
 class SessionLifecycleGate:

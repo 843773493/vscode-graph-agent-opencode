@@ -46,6 +46,7 @@ from app.services.business.session_navigation.operations_service import (
 from app.services.business.session_navigation.queue_store import (
     NavigationBackpressureError,
     NavigationMutationConflictError,
+    NavigationQueueOwnerError,
 )
 
 router = APIRouter(tags=["session-navigation"])
@@ -65,6 +66,8 @@ def _folder_mutation_http_error(error: Exception) -> HTTPException:
     """folder 目录变更统一失败分类：KeyError（未知节点）→ 404，其余 → 409。"""
     if isinstance(error, KeyError):
         return not_found_http_error(error)
+    if isinstance(error, NavigationQueueOwnerError):
+        return HTTPException(status_code=503, detail=str(error))
     return state_conflict_http_error(error)
 
 
@@ -83,6 +86,8 @@ async def enqueue_session_catalog_operations(
     try:
         result = await service.submit_operation_batch(payload, _navigation_scope(service))
     except NavigationBackpressureError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except NavigationQueueOwnerError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except NavigationMutationConflictError as error:
         raise state_conflict_http_error(error) from error
@@ -104,6 +109,8 @@ async def get_session_catalog_operation_status(
     """按精确 operation ID 返回 durable 状态；未知 ID 显式回报。"""
     try:
         result = service.operation_status(operation_id, _navigation_scope(service))
+    except NavigationQueueOwnerError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     except (KeyError, ValueError, TypeError) as error:
         raise HTTPException(status_code=400, detail=client_error_message(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -119,7 +126,11 @@ async def get_session_catalog_snapshot(
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
     """revision-pinned catalog snapshot：同一只读事务返回 revision 与事件水位。"""
-    return APIResponse(data=service.navigation_snapshot(), request_id=request_id)
+    try:
+        result = service.navigation_snapshot()
+    except NavigationQueueOwnerError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.get(
@@ -139,6 +150,8 @@ async def list_session_catalog_navigation_events(
         if cursor is not None:
             after, _watermark = service.decode_navigation_events_cursor(cursor)
         result = service.navigation_events(after=after, limit=limit)
+    except NavigationQueueOwnerError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     except (ValueError, TypeError) as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)

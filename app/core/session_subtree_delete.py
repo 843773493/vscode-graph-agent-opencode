@@ -77,6 +77,10 @@ from app.core.session_catalog_store import (
     SubtreeDeleteRecord,
     validate_session_id,
 )
+from app.core.session_catalog_store.contracts import (
+    CatalogTransactionHook,
+    SubtreeDeleteMarkRejectedError,
+)
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
@@ -198,6 +202,8 @@ class SessionSubtreeDeleteService:
         *,
         idempotency_key: str,
         root_node_id: str,
+        mark_transaction_hook: CatalogTransactionHook | None = None,
+        finish_transaction_hook: CatalogTransactionHook | None = None,
     ) -> SubtreeDeleteResult:
         """执行（或幂等恢复）一次子树删除（协议见模块/类 docstring）。
 
@@ -218,12 +224,29 @@ class SessionSubtreeDeleteService:
                     workspace_id=self._workspace_id,
                     root_node_id=root_node_id,
                 )
-                if record.state == "preparing":
-                    self._store.mark_subtree_deleting(idempotency_key)
+                if record.state == "preparing" or (
+                    mark_transaction_hook is not None
+                    and record.state in ("deleting", "draining")
+                ):
+                    try:
+                        self._store.mark_subtree_deleting(
+                            idempotency_key,
+                            transaction_hook=mark_transaction_hook,
+                        )
+                    except SubtreeDeleteMarkRejectedError as error:
+                        self._store.abort_subtree_delete(
+                            idempotency_key, str(error)
+                        )
+                        raise
                     record = self._store.get_subtree_delete_record(
                         idempotency_key
                     )
             if record.state == "completed":
+                if finish_transaction_hook is not None:
+                    self._store.finish_subtree_delete(
+                        idempotency_key,
+                        transaction_hook=finish_transaction_hook,
+                    )
                 return self._result_from_record(record)
             if record.state == "aborted":
                 raise RuntimeError(
@@ -236,7 +259,10 @@ class SessionSubtreeDeleteService:
             await self._drain(record, idempotency_key)
             # 步骤 3：gate exclusive 内 finish（全树 tombstone）。
             async with self._gate.exclusive():
-                self._store.finish_subtree_delete(idempotency_key)
+                self._store.finish_subtree_delete(
+                    idempotency_key,
+                    transaction_hook=finish_transaction_hook,
+                )
             record = self._store.get_subtree_delete_record(idempotency_key)
             return self._result_from_record(record)
 

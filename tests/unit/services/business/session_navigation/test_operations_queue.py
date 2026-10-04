@@ -7,6 +7,7 @@ worker 崩溃接管、同 node 串行编辑不误判冲突、其它客户端修�
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
 
@@ -14,22 +15,34 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_catalog_store import SessionCatalogStore
+from app.core.session_catalog_store.contracts import (
+    CatalogTransactionHook,
+    SubtreeDeleteRecord,
+)
+from app.core.session_subtree_delete import SubtreeDeleteResult
+from app.core.sqlite_state import utc_now_text
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationEnqueueRequest,
+    NavigationMutationEnqueueResultDTO,
     NavigationMutationIntentDTO,
 )
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.executor import NavigationMutationExecutor
 from app.services.business.session_navigation.operations_service import (
+    NavigationAuthScope,
     SessionCatalogOperationsService,
     local_navigation_scope,
 )
 from app.services.business.session_navigation.queue_store import (
     NavigationMutationConflictError,
     NavigationMutationQueueStore,
+    NavigationQueueOwnerError,
 )
+from tests.harness.python.run_context import TestRunContext
 from tests.support.canonical_id_at import uuid7_hex_from_name
+from tests.support.workspaces import prepare_default_test_workspace
 
 
 def canonical(name: str) -> str:
@@ -100,7 +113,7 @@ class _Stack:
             client_operation_id=operation_id(seed),
             client_sequence=sequence,
             kind="create_folder",
-            base_catalog_revision=self.service.snapshot().catalog_revision,
+            base_catalog_revision=self.resolver.revision,
             name=name,
             parent_node_id=parent_node_id,
             created_by_operation_id=created_by_operation_id,
@@ -119,22 +132,286 @@ class _Stack:
 
     async def settle(self, *operation_ids: str) -> list:
         """等待给定 operation 全部到达终态（后台 worker 可能并发认领，按 ID 等）。"""
+        await self.service.start()
         records = [
             await self.service.await_terminal(operation_id, self.scope)
             for operation_id in operation_ids
         ]
         return records
 
+    async def enqueue(
+        self,
+        request: NavigationMutationEnqueueRequest,
+        scope: NavigationAuthScope,
+    ) -> NavigationMutationEnqueueResultDTO:
+        """模拟由应用 lifespan 显式启动 worker 后接受导航请求。"""
+        await self.service.start()
+        return await self.service.enqueue(request, scope)
+
+
+def _enqueue_without_worker(
+    stack: _Stack,
+    intents: list[NavigationMutationIntentDTO],
+) -> None:
+    with stack.store.write_transaction() as connection:
+        stack.queue.enqueue_batch(
+            connection,
+            gateway_id=stack.scope.gateway_id,
+            workspace_id=stack.workspace_id,
+            actor=stack.scope.actor,
+            intents=intents,
+            now=utc_now_text(),
+        )
+
+
+@pytest.mark.parametrize("dependency_kind", ["depends_on", "created_by_operation_id"])
+@pytest.mark.asyncio
+async def test_enqueue_rejects_forward_dependency_in_same_batch(
+    navigation_workspace: Path,
+    dependency_kind: str,
+) -> None:
+    """同批依赖若排在后面，必须拒绝而不能让严格 FIFO 队首永久停滞。"""
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    later = stack.create_folder_intent(seed="forward_dependency", sequence=2, name="后置")
+    dependent_fields: dict[str, object] = {
+        "client_operation_id": operation_id(f"forward_dependent_{dependency_kind}"),
+        "client_sequence": 1,
+        "kind": "create_folder",
+        "base_catalog_revision": stack.resolver.revision,
+        "name": "前置错误的依赖方",
+    }
+    dependent_fields[dependency_kind] = (
+        [later.client_operation_id]
+        if dependency_kind == "depends_on"
+        else later.client_operation_id
+    )
+    dependent = NavigationMutationIntentDTO.model_validate(dependent_fields)
+    request = NavigationMutationEnqueueRequest(intents=[dependent, later])
+
+    with pytest.raises(ValueError, match="同批依赖必须先于依赖方入队"):
+        await stack.enqueue(request, stack.scope)
+
+    assert stack.queue.get_record(
+        gateway_id=stack.scope.gateway_id,
+        workspace_id=stack.workspace_id,
+        actor=stack.scope.actor,
+        operation_id=dependent.client_operation_id,
+    ) is None
+    assert stack.queue.get_record(
+        gateway_id=stack.scope.gateway_id,
+        workspace_id=stack.workspace_id,
+        actor=stack.scope.actor,
+        operation_id=later.client_operation_id,
+    ) is None
+
+
+def _independent_service(stack: _Stack):
+    store = SessionCatalogStore(stack.store.database_path, stack.store.sessions_root)
+    queue = NavigationMutationQueueStore(store)
+    executor = NavigationMutationExecutor(
+        store=store,
+        workspace_id=stack.workspace_id,
+        queue=queue,
+        path_resolver=stack.resolver,
+    )
+    service = SessionCatalogOperationsService(
+        store=store,
+        workspace_id=stack.workspace_id,
+        queue=queue,
+        executor=executor,
+    )
+    return store, queue, executor, service
+
+
+@pytest.fixture
+def navigation_workspace(request: pytest.FixtureRequest) -> Path:
+    """为该测试节点复制独立完整 fixture，避免跨测试复用 SQLite 连接。"""
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    template = Path.cwd() / "tests" / "fixtures" / "workspaces" / "default_test_workspace"
+    return prepare_default_test_workspace(
+        workspace_root=(
+            context.workspace_root
+            / f"node-{hashlib.sha256(request.node.nodeid.encode()).hexdigest()[:12]}"
+        ),
+        template_root=template,
+    )
+
+
+@pytest.mark.asyncio
+async def test_running_queue_head_blocks_later_candidate(
+    navigation_workspace: Path,
+) -> None:
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    first = stack.create_folder_intent(seed="running_head", sequence=1, name="队首")
+    second = stack.create_folder_intent(seed="running_next", sequence=2, name="后继")
+    _enqueue_without_worker(stack, [first, second])
+    with stack.store.write_transaction() as connection:
+        connection.execute(
+            "UPDATE navigation_mutation_records SET state = 'running', "
+            "holder_id = 'old-owner:1' WHERE operation_id = ?",
+            (first.client_operation_id,),
+        )
+
+    with stack.store.read_transaction() as connection:
+        candidate = stack.queue.next_runnable(connection, stack.workspace_id)
+        later = stack.queue.fetch_record_in(
+            connection,
+            gateway_id=stack.scope.gateway_id,
+            workspace_id=stack.workspace_id,
+            actor=stack.scope.actor,
+            operation_id=second.client_operation_id,
+        )
+
+    assert candidate is None
+    assert later is not None and later.state == "queued"
+
+
+@pytest.mark.asyncio
+async def test_claim_rechecks_queue_head_after_candidate_selection(
+    navigation_workspace: Path,
+) -> None:
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    first = stack.create_folder_intent(seed="stale_head_first", sequence=1, name="先")
+    second = stack.create_folder_intent(seed="stale_head_second", sequence=2, name="后")
+    _enqueue_without_worker(stack, [first, second])
+    with stack.store.write_transaction() as connection:
+        connection.execute(
+            "UPDATE navigation_mutation_records SET state = 'committed' "
+            "WHERE operation_id = ?",
+            (first.client_operation_id,),
+        )
+    with stack.store.read_transaction() as connection:
+        stale_candidate = stack.queue.next_runnable(connection, stack.workspace_id)
+    assert stale_candidate is not None
+    assert stale_candidate.operation_id == second.client_operation_id
+    with stack.store.write_transaction() as connection:
+        connection.execute(
+            "UPDATE navigation_mutation_records SET state = 'queued' "
+            "WHERE operation_id = ?",
+            (first.client_operation_id,),
+        )
+
+    async with stack.executor.queue_owner() as owner:
+        with stack.store.write_transaction() as connection:
+            claimed = stack.queue.claim_running(
+                connection,
+                record=stale_candidate,
+                holder_id=owner.holder_id,
+                owner_id=owner.owner_id,
+                owner_generation=owner.generation,
+                now=utc_now_text(),
+            )
+        assert claimed is None
+
+
+@pytest.mark.asyncio
+async def test_second_worker_cannot_recover_or_skip_a_live_running_owner(
+    navigation_workspace: Path,
+) -> None:
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    created = stack.create_folder_intent(seed="owner_delete", sequence=1, name="待删")
+    await stack.enqueue(
+        NavigationMutationEnqueueRequest(intents=[created]), stack.scope
+    )
+    await stack.settle(created.client_operation_id)
+    folder_id = stack.node_id(created.client_operation_id)
+
+    delete_started = asyncio.Event()
+    release_delete = asyncio.Event()
+
+    async def blocked_delete(
+        operation_id: str,
+        root_node_id: str,
+        mark_transaction_hook: CatalogTransactionHook,
+        finish_transaction_hook: CatalogTransactionHook,
+    ):
+        delete_started.set()
+        await release_delete.wait()
+        return await stack.resolver.delete_subtree(
+            idempotency_key=operation_id,
+            root_node_id=root_node_id,
+            mark_transaction_hook=mark_transaction_hook,
+            finish_transaction_hook=finish_transaction_hook,
+        )
+
+    stack.executor._delete_runner = blocked_delete
+    deletion = NavigationMutationIntentDTO(
+        client_operation_id=operation_id("live_owner_delete"),
+        client_sequence=1,
+        kind="delete_folder",
+        base_catalog_revision=stack.resolver.revision,
+        target_node_id=folder_id,
+        recursive=True,
+    )
+    second_store, second_queue, second_executor, second_service = _independent_service(
+        stack
+    )
+    successor = stack.create_folder_intent(
+        seed="live_owner_successor", sequence=1, name="不得越过的后继"
+    )
+    try:
+        with pytest.raises(NavigationQueueOwnerError, match="启动恢复超时"):
+            await second_service.start(owner_timeout_seconds=0.05)
+        await stack.enqueue(
+            NavigationMutationEnqueueRequest(intents=[deletion]), stack.scope
+        )
+        await asyncio.wait_for(delete_started.wait(), timeout=5)
+        await stack.service.enqueue(
+            NavigationMutationEnqueueRequest(intents=[successor]), stack.scope
+        )
+        with stack.store.read_transaction() as connection:
+            owner_before = connection.execute(
+                "SELECT owner_id, owner_generation FROM navigation_queue_owners "
+                "WHERE workspace_id = ?",
+                (stack.workspace_id,),
+            ).fetchone()
+        await asyncio.sleep(0.1)
+        with second_store.read_transaction() as connection:
+            owner_after = connection.execute(
+                "SELECT owner_id, owner_generation FROM navigation_queue_owners "
+                "WHERE workspace_id = ?",
+                (stack.workspace_id,),
+            ).fetchone()
+            running = second_queue.fetch_record_in(
+                connection,
+                gateway_id=stack.scope.gateway_id,
+                workspace_id=stack.workspace_id,
+                actor=stack.scope.actor,
+                operation_id=deletion.client_operation_id,
+            )
+            later = second_queue.fetch_record_in(
+                connection,
+                gateway_id=stack.scope.gateway_id,
+                workspace_id=stack.workspace_id,
+                actor=stack.scope.actor,
+                operation_id=successor.client_operation_id,
+            )
+            candidate = second_queue.next_runnable(connection, stack.workspace_id)
+        assert tuple(owner_before) == tuple(owner_after)
+        assert running is not None and running.state == "running"
+        assert later is not None and later.state == "queued"
+        assert candidate is None
+        assert second_executor.has_queue_owner is False
+
+        release_delete.set()
+        await stack.settle(deletion.client_operation_id, successor.client_operation_id)
+        assert second_service.record(successor.client_operation_id, stack.scope).state == "committed"
+    finally:
+        release_delete.set()
+        await stack.service.stop()
+        await second_service.stop()
+        second_store.close()
+
 
 @pytest.mark.asyncio
 async def test_enqueue_returns_durable_receipt_without_touching_catalog(
-    tmp_path: Path,
+    navigation_workspace: Path,
 ) -> None:
     """202 只表示 durable acceptance：入队后目录事实必须保持不变。"""
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     intent = stack.create_folder_intent(seed="accept_only", sequence=1, name="新目录")
 
-    result = await stack.service.enqueue(
+    result = await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[intent]), stack.scope
     )
 
@@ -151,25 +428,27 @@ async def test_enqueue_returns_durable_receipt_without_touching_catalog(
 
 @pytest.mark.asyncio
 async def test_same_key_same_preimage_is_idempotent_and_reuses_queue_seq(
-    tmp_path: Path,
+    navigation_workspace: Path,
 ) -> None:
     """同 key 同 preimage 重试返回原 receipt：不重复分配 queue_seq。"""
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     intent = stack.create_folder_intent(seed="idem", sequence=1, name="幂等目录")
     request = NavigationMutationEnqueueRequest(intents=[intent])
 
-    first = await stack.service.enqueue(request, stack.scope)
-    second = await stack.service.enqueue(request, stack.scope)
+    first = await stack.enqueue(request, stack.scope)
+    second = await stack.enqueue(request, stack.scope)
 
     assert first.receipts[0].queue_seq == second.receipts[0].queue_seq
     assert first.receipts[0].created_node_id == second.receipts[0].created_node_id
 
 
 @pytest.mark.asyncio
-async def test_same_key_different_preimage_conflicts(tmp_path: Path) -> None:
+async def test_same_key_different_preimage_conflicts(
+    navigation_workspace: Path,
+) -> None:
     """同 key 异 preimage 必须明确冲突，不得覆盖已接受命令。"""
-    stack = _Stack(tmp_path / "sessions")
-    await stack.service.enqueue(
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(
             intents=[
                 stack.create_folder_intent(seed="conflict", sequence=1, name="原名")
@@ -179,7 +458,7 @@ async def test_same_key_different_preimage_conflicts(tmp_path: Path) -> None:
     )
 
     with pytest.raises(NavigationMutationConflictError):
-        await stack.service.enqueue(
+        await stack.enqueue(
             NavigationMutationEnqueueRequest(
                 intents=[
                     stack.create_folder_intent(seed="conflict", sequence=1, name="新名")
@@ -191,10 +470,10 @@ async def test_same_key_different_preimage_conflicts(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_batch_is_atomic_and_dependency_chain_resolves_parent(
-    tmp_path: Path,
+    navigation_workspace: Path,
 ) -> None:
     """一批原子入队，跨 intent 依赖按 committed 结果解析父节点。"""
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     parent_intent = stack.create_folder_intent(
         seed="chain_parent", sequence=1, name="父目录"
     )
@@ -204,7 +483,7 @@ async def test_batch_is_atomic_and_dependency_chain_resolves_parent(
         name="子目录",
         created_by_operation_id=parent_intent.client_operation_id,
     )
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[parent_intent, child_intent]),
         stack.scope,
     )
@@ -219,12 +498,14 @@ async def test_batch_is_atomic_and_dependency_chain_resolves_parent(
 
 
 @pytest.mark.asyncio
-async def test_terminal_tombstone_blocks_late_replay(tmp_path: Path) -> None:
+async def test_terminal_tombstone_blocks_late_replay(
+    navigation_workspace: Path,
+) -> None:
     """terminal 后重放同 key 同 preimage 返回原 terminal，不重复应用。"""
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     intent = stack.create_folder_intent(seed="tombstone", sequence=1, name="一次性")
     request = NavigationMutationEnqueueRequest(intents=[intent])
-    await stack.service.enqueue(request, stack.scope)
+    await stack.enqueue(request, stack.scope)
     await stack.settle(intent.client_operation_id)
     committed = stack.queue.get_record(
         gateway_id=stack.scope.gateway_id,
@@ -234,7 +515,7 @@ async def test_terminal_tombstone_blocks_late_replay(tmp_path: Path) -> None:
     )
     assert committed is not None and committed.state == "committed"
 
-    replay = await stack.service.enqueue(request, stack.scope)
+    replay = await stack.enqueue(request, stack.scope)
     await stack.service.drain_once()
 
     assert replay.receipts[0].state == "committed"
@@ -243,10 +524,10 @@ async def test_terminal_tombstone_blocks_late_replay(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_dependency_failed_successor_has_no_business_effect(
-    tmp_path: Path,
+    navigation_workspace: Path,
 ) -> None:
     """前置失败的后继从 queued 直接进入 dependency_failed，零副作用。"""
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     failing = NavigationMutationIntentDTO(
         client_operation_id=operation_id("fail_parent"),
         client_sequence=1,
@@ -262,7 +543,7 @@ async def test_dependency_failed_successor_has_no_business_effect(
         name="后继目录",
         created_by_operation_id=failing.client_operation_id,
     )
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[failing, successor]), stack.scope
     )
 
@@ -287,26 +568,32 @@ async def test_dependency_failed_successor_has_no_business_effect(
 
 @pytest.mark.asyncio
 async def test_worker_restart_resumes_same_operation_without_duplication(
-    tmp_path: Path,
+    navigation_workspace: Path,
 ) -> None:
-    """worker 崩溃（遗留 running）后新 owner 继续原 operation，不重复应用。"""
-    stack = _Stack(tmp_path / "sessions")
+    """取得 OS owner lock 的新 generation 才能恢复遗留 running 并继续原操作。"""
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     intent = stack.create_folder_intent(seed="restart", sequence=1, name="恢复目录")
-    await stack.service.enqueue(
-        NavigationMutationEnqueueRequest(intents=[intent]), stack.scope
-    )
-    # 模拟「202 已返回但 worker 在执行前退出」：直接标记为 running。
+    with stack.store.write_transaction() as connection:
+        stack.queue.enqueue_batch(
+            connection,
+            gateway_id=stack.scope.gateway_id,
+            workspace_id=stack.workspace_id,
+            actor=stack.scope.actor,
+            intents=[intent],
+            now=utc_now_text(),
+        )
+    # 模拟旧 owner 进程退出后保留的 durable running receipt。
     with stack.store.write_transaction() as connection:
         connection.execute(
             "UPDATE navigation_mutation_records SET state = 'running', "
-            "holder_id = 'crashed', fencing_token = 7"
+            "holder_id = 'crashed:7', fencing_token = 7"
         )
 
-    recovered = await stack.service.recover_after_restart()
-    assert recovered == 1
-    await stack.settle(intent.client_operation_id)
+    async with stack.executor.queue_owner():
+        recovered = await stack.executor.recover_in_flight()
+        assert recovered == 1
+        await stack.executor.drain()
     # 再次排空必须幂等 no-op（terminal tombstone）。
-    await stack.service.drain_once()
 
     record = stack.queue.get_record(
         gateway_id=stack.scope.gateway_id,
@@ -320,12 +607,12 @@ async def test_worker_restart_resumes_same_operation_without_duplication(
 
 @pytest.mark.asyncio
 async def test_sequential_edits_on_same_node_do_not_false_conflict(
-    tmp_path: Path,
+    navigation_workspace: Path,
 ) -> None:
     """同 node 连续编辑以前序结果 revision 为前置，不因自身推进而误判冲突。"""
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     created = stack.create_folder_intent(seed="seq_base", sequence=1, name="初始名")
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[created]), stack.scope
     )
     await stack.settle(created.client_operation_id)
@@ -352,7 +639,7 @@ async def test_sequential_edits_on_same_node_do_not_false_conflict(
         name="第二次改名",
         depends_on=[first_rename.client_operation_id],
     )
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[first_rename, second_rename]),
         stack.scope,
     )
@@ -373,12 +660,12 @@ async def test_sequential_edits_on_same_node_do_not_false_conflict(
 
 @pytest.mark.asyncio
 async def test_other_client_modification_conflicts_explicitly(
-    tmp_path: Path,
+    navigation_workspace: Path,
 ) -> None:
     """其它客户端已修改同 node 时，陈旧 expected_revision 的编辑明确拒绝。"""
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     created = stack.create_folder_intent(seed="other_base", sequence=1, name="初始名")
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[created]), stack.scope
     )
     await stack.settle(created.client_operation_id)
@@ -397,7 +684,7 @@ async def test_other_client_modification_conflicts_explicitly(
         target_node_id=node_id,
         name="我的改名",
     )
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[stale]), stack.scope
     )
 
@@ -416,14 +703,16 @@ async def test_other_client_modification_conflicts_explicitly(
 
 
 @pytest.mark.asyncio
-async def test_events_cursor_is_incremental_and_duplicate_free(tmp_path: Path) -> None:
+async def test_events_cursor_is_incremental_and_duplicate_free(
+    navigation_workspace: Path,
+) -> None:
     """事件按单调 event_seq 增量推送：cursor 不丢不重。"""
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     intents = [
         stack.create_folder_intent(seed=f"evt_{index}", sequence=index + 1, name=f"目录{index}")
         for index in range(3)
     ]
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=intents), stack.scope
     )
     # 等全部 operation 到达终态（后台 worker 可能并发认领，必须按 ID 等终态）。
@@ -450,12 +739,12 @@ async def test_events_cursor_is_incremental_and_duplicate_free(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_snapshot_reports_same_revision_as_committed_receipt(
-    tmp_path: Path,
+    navigation_workspace: Path,
 ) -> None:
     """snapshot 的 revision 与事件水位来自同一只读快照，且与已提交 receipt 一致。"""
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     intent = stack.create_folder_intent(seed="snap", sequence=1, name="快照目录")
-    result = await stack.service.enqueue(
+    result = await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[intent]), stack.scope
     )
     del result
@@ -474,11 +763,13 @@ async def test_snapshot_reports_same_revision_as_committed_receipt(
 
 
 @pytest.mark.asyncio
-async def test_status_query_reports_unknown_ids_explicitly(tmp_path: Path) -> None:
+async def test_status_query_reports_unknown_ids_explicitly(
+    navigation_workspace: Path,
+) -> None:
     """未知 operation ID 显式列出（不是失败），客户端据此保留 pending 重试。"""
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     intent = stack.create_folder_intent(seed="status", sequence=1, name="状态目录")
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[intent]), stack.scope
     )
 
@@ -491,14 +782,22 @@ async def test_status_query_reports_unknown_ids_explicitly(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_sync_facade_uses_same_single_write_path(tmp_path: Path) -> None:
+async def test_sync_facade_uses_same_single_write_path(
+    navigation_workspace: Path,
+) -> None:
     """同步目录 API 只是同一写路径的 façade：产生相同的 durable operation 记录。"""
-    sessions_root = tmp_path / "sessions"
+    sessions_root = navigation_workspace / ".boxteam" / "sessions"
     session_service = _SessionService(sessions_root)
     catalog = SessionCatalogService(session_service=session_service)
     from app.schemas.internal_v2.session_navigation import SessionFolderCreateRequest
 
-    breadcrumb = await catalog.create_folder(SessionFolderCreateRequest(name="同步目录"))
+    await catalog.operations.start()
+    try:
+        breadcrumb = await catalog.create_folder(
+            SessionFolderCreateRequest(name="同步目录")
+        )
+    finally:
+        await catalog.operations.stop()
 
     assert [item.name for item in breadcrumb.items] == ["同步目录"]
     created_id = breadcrumb.items[-1].node_id
@@ -511,24 +810,91 @@ async def test_sync_facade_uses_same_single_write_path(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stale_base_catalog_revision_does_not_global_cas(tmp_path: Path) -> None:
+async def test_nonrecursive_folder_delete_uses_queue_and_preserves_nonempty_tree(
+    navigation_workspace: Path,
+) -> None:
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    catalog = SessionCatalogService(
+        session_service=stack.session_service,
+        operations_service=stack.service,
+    )
+    parent_intent = stack.create_folder_intent(
+        seed="nonrecursive_parent", sequence=1, name="父目录"
+    )
+    await stack.enqueue(
+        NavigationMutationEnqueueRequest(intents=[parent_intent]), stack.scope
+    )
+    await stack.settle(parent_intent.client_operation_id)
+    parent_id = stack.node_id(parent_intent.client_operation_id)
+    child_intent = stack.create_folder_intent(
+        seed="nonrecursive_child",
+        sequence=1,
+        name="子目录",
+        parent_node_id=parent_id,
+    )
+    await stack.enqueue(
+        NavigationMutationEnqueueRequest(intents=[child_intent]), stack.scope
+    )
+    await stack.settle(child_intent.client_operation_id)
+    child_id = stack.node_id(child_intent.client_operation_id)
+
+    with pytest.raises(ValueError, match="非空 folder 的非递归删除被明确拒绝"):
+        await catalog.delete_folder(parent_id, recursive=False)
+
+    parent = stack.resolver.get_node(parent_id)
+    child = stack.resolver.get_node(child_id)
+    with stack.store.read_transaction() as connection:
+        delete_rows = connection.execute(
+            "SELECT state, error_code, params_json FROM navigation_mutation_records "
+            "WHERE kind = 'delete_folder' ORDER BY queue_seq"
+        ).fetchall()
+    assert parent.node_id == parent_id
+    assert child.parent_node_id == parent_id
+    assert len(delete_rows) == 1
+    assert delete_rows[0]["state"] == "rejected"
+    assert delete_rows[0]["error_code"] == "invalid_operation"
+
+    empty_intent = stack.create_folder_intent(
+        seed="nonrecursive_empty", sequence=1, name="空目录"
+    )
+    await stack.enqueue(
+        NavigationMutationEnqueueRequest(intents=[empty_intent]), stack.scope
+    )
+    await stack.settle(empty_intent.client_operation_id)
+    empty_id = stack.node_id(empty_intent.client_operation_id)
+    await catalog.delete_folder(empty_id, recursive=False)
+    with pytest.raises(KeyError):
+        stack.resolver.get_node(empty_id)
+    with stack.store.read_transaction() as connection:
+        terminal = connection.execute(
+            "SELECT state, params_json FROM navigation_mutation_records "
+            "WHERE kind = 'delete_folder' ORDER BY queue_seq DESC LIMIT 1"
+        ).fetchone()
+    assert terminal["state"] == "committed"
+    assert '"recursive":false' in terminal["params_json"]
+
+
+@pytest.mark.asyncio
+async def test_stale_base_catalog_revision_does_not_global_cas(
+    navigation_workspace: Path,
+) -> None:
     """``base_catalog_revision`` 只供快照/事件对账，绝不充当全局 CAS。
 
     钉死 spec.md 的「不得对无关 node 变更做全局 CAS」：客户端带着明显陈旧的
     base revision（此处恒为 0）提交一次无关 node 上的新建，仍必须 committed。
     若有人把它实现成全局 revision CAS，本用例立刻变红。
     """
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     # 先推进 catalog revision 若干次，制造「客户端 base revision 明显陈旧」的局面。
     for index in range(3):
         seeded = stack.create_folder_intent(
             seed=f"base_seed_{index}", sequence=1, name=f"基线目录{index}"
         )
-        await stack.service.enqueue(
+        await stack.enqueue(
             NavigationMutationEnqueueRequest(intents=[seeded]), stack.scope
         )
         await stack.settle(seeded.client_operation_id)
-    current = stack.service.snapshot().catalog_revision
+    current = stack.resolver.revision
     assert current > 1
 
     stale = NavigationMutationIntentDTO(
@@ -538,7 +904,7 @@ async def test_stale_base_catalog_revision_does_not_global_cas(tmp_path: Path) -
         base_catalog_revision=0,
         name="陈旧基线目录",
     )
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[stale]), stack.scope
     )
     await stack.settle(stale.client_operation_id)
@@ -556,17 +922,17 @@ async def test_stale_base_catalog_revision_does_not_global_cas(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_intent_carries_base_catalog_revision_for_snapshot_reconciliation(
-    tmp_path: Path,
+    navigation_workspace: Path,
 ) -> None:
     """``base_catalog_revision`` 被持久化保留（供对账），但不参与 preimage。
 
     两个可选收敛方向各自会失败在读哪一端：删掉该字段会让本用例读不到持久值；
     把它纳入 preimage 会让「同 key 仅 base revision 变化的重试」误判为冲突。
     """
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     intent = stack.create_folder_intent(seed="carry_base", sequence=1, name="留存目录")
     base_revision = intent.base_catalog_revision
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[intent]), stack.scope
     )
 
@@ -582,7 +948,7 @@ async def test_intent_carries_base_catalog_revision_for_snapshot_reconciliation(
     # 同 key、仅 base revision 变化（重试时客户端可能换用最新快照修订）：
     # 意图未变，必须幂等复用原 record，而不是报 preimage 冲突。
     retried = intent.model_copy(update={"base_catalog_revision": base_revision + 100})
-    replay = await stack.service.enqueue(
+    replay = await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[retried]), stack.scope
     )
     assert replay.receipts[0].operation_id == intent.client_operation_id
@@ -591,7 +957,7 @@ async def test_intent_carries_base_catalog_revision_for_snapshot_reconciliation(
 
 @pytest.mark.asyncio
 async def test_recursive_delete_reports_logical_commit_with_pending_settlement(
-    tmp_path: Path,
+    navigation_workspace: Path,
 ) -> None:
     """递归删除：导航逻辑 committed 与物理排空分开上报（8.1-G 删除链路契约）。
 
@@ -600,9 +966,9 @@ async def test_recursive_delete_reports_logical_commit_with_pending_settlement(
     这一区分：若有人把删除接进普通 node mutation 的单事务路径，或直接丢掉
     ``pending_settlement``，这里立刻变红。
     """
-    stack = _Stack(tmp_path / "sessions")
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     created = stack.create_folder_intent(seed="del_root", sequence=1, name="待删目录")
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[created]), stack.scope
     )
     await stack.settle(created.client_operation_id)
@@ -616,7 +982,7 @@ async def test_recursive_delete_reports_logical_commit_with_pending_settlement(
         target_node_id=folder_id,
         recursive=True,
     )
-    await stack.service.enqueue(
+    await stack.enqueue(
         NavigationMutationEnqueueRequest(intents=[deletion]), stack.scope
     )
     record = await stack.service.await_terminal(
@@ -638,3 +1004,263 @@ async def test_recursive_delete_reports_logical_commit_with_pending_settlement(
         event.operation_id for event in events.items
     ] == [created.client_operation_id, deletion.client_operation_id]
     assert events.items[-1].result_state == "committed"
+
+
+@pytest.mark.asyncio
+async def test_delete_return_with_running_queue_fails_instead_of_committing(
+    navigation_workspace: Path,
+) -> None:
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    created = stack.create_folder_intent(
+        seed="delete_unhooked_root",
+        sequence=1,
+        name="未接 hook 的目录",
+    )
+    _enqueue_without_worker(stack, [created])
+    async with stack.executor.queue_owner():
+        await stack.executor.drain()
+    folder_id = stack.node_id(created.client_operation_id)
+
+    deletion = NavigationMutationIntentDTO(
+        client_operation_id=operation_id("delete_unhooked_runner"),
+        client_sequence=1,
+        kind="delete_folder",
+        base_catalog_revision=stack.resolver.revision,
+        target_node_id=folder_id,
+        recursive=True,
+    )
+    _enqueue_without_worker(stack, [deletion])
+
+    async def return_without_hooks(
+        operation_id_value: str,
+        root_node_id: str,
+        mark_transaction_hook: CatalogTransactionHook,
+        finish_transaction_hook: CatalogTransactionHook,
+    ) -> SubtreeDeleteResult:
+        del operation_id_value, mark_transaction_hook, finish_transaction_hook
+        return SubtreeDeleteResult(
+            root_node_id=root_node_id,
+            frozen_node_ids=(root_node_id,),
+            drained_session_ids=(),
+            record_state="completed",
+        )
+
+    stack.executor._delete_runner = return_without_hooks
+    async with stack.executor.queue_owner():
+        with pytest.raises(RuntimeError, match="导航 operation 状态不一致.*running"):
+            await stack.executor.drain()
+
+    record = stack.queue.get_record(
+        gateway_id=stack.scope.gateway_id,
+        workspace_id=stack.workspace_id,
+        actor=stack.scope.actor,
+        operation_id=deletion.client_operation_id,
+    )
+    assert record is not None and record.state == "running"
+
+
+@pytest.mark.asyncio
+async def test_delete_finish_hook_rejects_running_operation_with_completed_catalog_record(
+    navigation_workspace: Path,
+) -> None:
+    """catalog 先由另一条 key 写入完成时，不把 running queue 伪装成成功。"""
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    created = stack.create_folder_intent(
+        seed="delete_unhooked_journal_root",
+        sequence=1,
+        name="已有完成 journal 的目录",
+    )
+    _enqueue_without_worker(stack, [created])
+    async with stack.executor.queue_owner():
+        await stack.executor.drain()
+    folder_id = stack.node_id(created.client_operation_id)
+
+    deletion = NavigationMutationIntentDTO(
+        client_operation_id=operation_id("delete_unhooked_journal"),
+        client_sequence=1,
+        kind="delete_folder",
+        base_catalog_revision=stack.resolver.revision,
+        target_node_id=folder_id,
+        recursive=True,
+    )
+    await stack.resolver.delete_subtree(
+        idempotency_key=deletion.client_operation_id,
+        root_node_id=folder_id,
+    )
+    assert (
+        stack.store.get_subtree_delete_record(deletion.client_operation_id).state
+        == "completed"
+    )
+    _enqueue_without_worker(stack, [deletion])
+
+    async with stack.executor.queue_owner():
+        outcomes = await stack.executor.drain()
+
+    assert len(outcomes) == 1
+    assert outcomes[0].record.state == "rejected"
+    assert "未由 mark 事务同步提交为 committed" in (
+        outcomes[0].record.error_detail or ""
+    )
+
+
+@pytest.mark.asyncio
+async def test_operations_worker_lifecycle_is_explicit_and_cancellable(
+    navigation_workspace: Path,
+) -> None:
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    intent = stack.create_folder_intent(seed="lifecycle", sequence=1, name="生命周期")
+
+    with pytest.raises(NavigationQueueOwnerError, match="尚未取得 owner"):
+        await stack.service.enqueue(
+            NavigationMutationEnqueueRequest(intents=[intent]), stack.scope
+        )
+    assert stack.service._worker_task is None
+
+    async with stack.executor.queue_owner():
+        with pytest.raises(NavigationQueueOwnerError, match="启动恢复超时"):
+            await stack.service.start(owner_timeout_seconds=0.05)
+        assert stack.service.worker_state == "failed"
+        assert stack.service._worker_task is None
+
+        cancelled_stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+        starting = asyncio.create_task(
+            cancelled_stack.service.start(owner_timeout_seconds=5)
+        )
+        deadline = asyncio.get_running_loop().time() + 1
+        while cancelled_stack.service.worker_state != "waiting_for_owner":
+            if asyncio.get_running_loop().time() >= deadline:
+                raise AssertionError("worker 未进入 owner lock 等待状态")
+            await asyncio.sleep(0.01)
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+        assert cancelled_stack.service.worker_state == "stopped"
+        assert cancelled_stack.service._worker_task is None
+
+    ready_stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    await ready_stack.service.start()
+    assert ready_stack.service.worker_state == "running"
+    await ready_stack.service.stop()
+    assert ready_stack.service.worker_state == "stopped"
+    async with stack.executor.queue_owner():
+        assert stack.executor.has_queue_owner is True
+
+
+@pytest.mark.asyncio
+async def test_worker_failure_is_visible_to_status_snapshot_and_events(
+    navigation_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    fail_worker = asyncio.Event()
+
+    async def fail_after_ready() -> list:
+        await fail_worker.wait()
+        raise RuntimeError("测试注入的 worker 故障")
+
+    monkeypatch.setattr(stack.service, "drain_once", fail_after_ready)
+    await stack.service.start()
+    assert stack.service.worker_state == "running"
+    fail_worker.set()
+
+    deadline = asyncio.get_running_loop().time() + 2
+    while stack.service.worker_state != "failed":
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError("worker 故障未在有限时间内暴露")
+        await asyncio.sleep(0.01)
+
+    with pytest.raises(NavigationQueueOwnerError, match="测试注入的 worker 故障"):
+        stack.service.status([operation_id("worker_failed_status")], stack.scope)
+    with pytest.raises(NavigationQueueOwnerError, match="测试注入的 worker 故障"):
+        stack.service.snapshot()
+    with pytest.raises(NavigationQueueOwnerError, match="测试注入的 worker 故障"):
+        stack.service.events(after=0)
+    await stack.service.stop()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_owner_recovers_a_persisted_running_operation(
+    navigation_workspace: Path,
+) -> None:
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    intent = stack.create_folder_intent(seed="lifespan_recovery", sequence=1, name="恢复")
+    _enqueue_without_worker(stack, [intent])
+    with stack.store.write_transaction() as connection:
+        connection.execute(
+            "UPDATE navigation_mutation_records SET state = 'running', "
+            "holder_id = 'crashed:9', fencing_token = 9 WHERE operation_id = ?",
+            (intent.client_operation_id,),
+        )
+
+    await stack.service.start()
+    try:
+        record = await stack.service.await_terminal(
+            intent.client_operation_id, stack.scope
+        )
+        assert record.state == "committed"
+        assert len(stack.resolver.list_nodes()) == 1
+    finally:
+        await stack.service.stop()
+
+
+@pytest.mark.asyncio
+async def test_delete_mark_commits_before_physical_drain_and_recovers_settlement(
+    navigation_workspace: Path,
+) -> None:
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    created = stack.create_folder_intent(
+        seed="delete_recovery_root", sequence=1, name="待删"
+    )
+    await stack.enqueue(NavigationMutationEnqueueRequest(intents=[created]), stack.scope)
+    await stack.settle(created.client_operation_id)
+    folder_id = stack.node_id(created.client_operation_id)
+    delete = NavigationMutationIntentDTO(
+        client_operation_id=operation_id("delete_mark_recovery"),
+        client_sequence=1,
+        kind="delete_folder",
+        base_catalog_revision=stack.resolver.revision,
+        target_node_id=folder_id,
+        recursive=True,
+    )
+    delete_service = stack.resolver._delete_service
+    original_drain = delete_service._drain
+
+    async def fail_after_mark(
+        record: SubtreeDeleteRecord,
+        idempotency_key: str,
+    ) -> None:
+        raise RuntimeError(f"测试注入：mark 后 drain 失败: {idempotency_key}")
+
+    delete_service._drain = fail_after_mark
+    try:
+        await stack.enqueue(NavigationMutationEnqueueRequest(intents=[delete]), stack.scope)
+        receipt = await stack.service.await_terminal(
+            delete.client_operation_id, stack.scope
+        )
+        assert receipt.state == "committed"
+        assert receipt.pending_settlement is True
+        assert stack.store.get_subtree_delete_record(delete.client_operation_id).state == "deleting"
+        with stack.store.read_transaction() as connection:
+            node = connection.execute(
+                "SELECT state FROM nodes WHERE node_id = ?", (folder_id,)
+            ).fetchone()
+        assert node is not None and node["state"] == "deleting"
+        event = stack.service.events(after=0).items[-1]
+        assert event.operation_id == delete.client_operation_id
+        assert event.result_state == "committed"
+
+        delete_service._drain = original_drain
+        await stack.service.stop()
+        await stack.service.start()
+        deadline = asyncio.get_running_loop().time() + 5
+        while stack.service.record(delete.client_operation_id, stack.scope).pending_settlement:
+            if asyncio.get_running_loop().time() >= deadline:
+                raise AssertionError("子树删除 settlement 未在有限时间内恢复")
+            await asyncio.sleep(0.02)
+        settled = stack.service.record(delete.client_operation_id, stack.scope)
+        assert settled.state == "committed"
+        assert settled.pending_settlement is False
+        assert stack.store.get_subtree_delete_record(delete.client_operation_id).state == "completed"
+    finally:
+        delete_service._drain = original_drain
+        await stack.service.stop()

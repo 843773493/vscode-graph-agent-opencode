@@ -39,6 +39,7 @@ from app.core.session_catalog_store import (
     SubtreeDeleteRecord,
     validate_thread_id,
 )
+from app.core.session_catalog_store.contracts import CatalogTransactionHook
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_subtree_delete import (
@@ -159,6 +160,8 @@ class SessionCatalogPathResolver:
         *,
         idempotency_key: str,
         root_node_id: str,
+        mark_transaction_hook: CatalogTransactionHook | None = None,
+        finish_transaction_hook: CatalogTransactionHook | None = None,
     ) -> SubtreeDeleteResult:
         """以调用方给定 key 进入**共享**子树删除流（确定性恢复锚点）。
 
@@ -169,6 +172,8 @@ class SessionCatalogPathResolver:
         return await self._delete_service.delete(
             idempotency_key=idempotency_key,
             root_node_id=root_node_id,
+            mark_transaction_hook=mark_transaction_hook,
+            finish_transaction_hook=finish_transaction_hook,
         )
 
     def bind_session_drain_callback(
@@ -661,7 +666,12 @@ class SessionCatalogPathResolver:
         """列出本 workspace 待恢复的子树删除 record（启动恢复的权威依据）。"""
         return self._store.list_pending_subtree_delete_records(self._workspace_id)
 
-    async def recover_pending_subtree_deletes(self) -> list[SubtreeDeleteResult]:
+    async def recover_pending_subtree_deletes(
+        self,
+        *,
+        mark_transaction_hook: CatalogTransactionHook | None = None,
+        finish_transaction_hook: CatalogTransactionHook | None = None,
+    ) -> list[SubtreeDeleteResult]:
         """按 SQLite 权威 record 幂等恢复所有未终结的子树删除（崩溃恢复入口）。
 
         对每条 ``preparing``/``deleting``/``draining`` record 以**原 idempotency
@@ -675,6 +685,8 @@ class SessionCatalogPathResolver:
                 await self._delete_service.delete(
                     idempotency_key=record.subtree_delete_idempotency_key,
                     root_node_id=record.root_node_id,
+                    mark_transaction_hook=mark_transaction_hook,
+                    finish_transaction_hook=finish_transaction_hook,
                 )
             )
         return results

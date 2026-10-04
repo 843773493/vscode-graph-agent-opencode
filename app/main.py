@@ -186,32 +186,28 @@ async def lifespan(_: FastAPI):
                 "检测到 %s 个上次进程未正常结束的 Job，已持久化为中断状态",
                 reconciled_jobs,
             )
-        # 崩溃恢复：删除 drain 中途崩溃留下的整树 deleting 仍可被读取路径
-        # 安全隐藏（不再让后端启动失败），这里按 SQLite 权威 record 定点续跑
-        # 未终结的子树删除。恢复失败按「永不默默失败」如实记录并继续启动。
-        try:
-            recovered_deletes = await (
-                container.session_catalog_service.recover_pending_subtree_deletes()
-            )
-        except (RuntimeError, KeyError, ValueError) as error:
-            logger.error("子树删除恢复失败，保留 record 并继续启动: %s", error)
-        else:
-            if recovered_deletes:
-                logger.warning(
-                    "已恢复 %s 条未终结的会话子树删除",
-                    len(recovered_deletes),
-                )
         await container.session_generation_service.start()
         await container.terminal_steering_service.start()
         await container.goal_runtime_service.resume_active_goals()
-        activity_prune_task = asyncio.create_task(
-            _prune_workspace_activity_periodically(container)
-        )
+        operations = container.session_catalog_service.operations
+        activity_prune_task: asyncio.Task[None] | None = None
         try:
+            # lifespan 只有在持锁、完成遗留 running/subtree-delete 恢复后才 ready；
+            # owner 冲突超过有限等待窗口会使启动失败，并释放本实例的 worker 锁。
+            await operations.start()
+            logger.info(
+                "导航 queue worker 已取得 owner 并完成恢复: state=%s",
+                operations.worker_state,
+            )
+            activity_prune_task = asyncio.create_task(
+                _prune_workspace_activity_periodically(container)
+            )
             yield
         finally:
-            activity_prune_task.cancel()
-            await asyncio.gather(activity_prune_task, return_exceptions=True)
+            if activity_prune_task is not None:
+                activity_prune_task.cancel()
+                await asyncio.gather(activity_prune_task, return_exceptions=True)
+            await operations.stop()
             await container.node_debug_service.close()
             await container.terminal_steering_service.shutdown()
             await container.session_generation_service.shutdown()

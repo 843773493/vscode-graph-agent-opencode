@@ -50,6 +50,8 @@ from app.services.business.session_navigation.queue_records import (
     NavigationEventRecord,
     NavigationMutationConflictError,
     NavigationMutationRecord,
+    NavigationQueueOwner,
+    NavigationQueueOwnerError,
     _event_from_row,
     _params_json,
     _record_from_row,
@@ -66,6 +68,8 @@ __all__ = [
     "NavigationMutationConflictError",
     "NavigationMutationQueueStore",
     "NavigationMutationRecord",
+    "NavigationQueueOwner",
+    "NavigationQueueOwnerError",
     "compute_intent_preimage_hash",
 ]
 
@@ -146,8 +150,14 @@ class NavigationMutationQueueStore(
             )
         batch_ids = {intent.client_operation_id for intent in intents}
         ordered = sorted(intents, key=lambda item: item.client_sequence)
+        if len(batch_ids) != len(ordered):
+            raise ValueError("同批 client_operation_id 必须唯一")
+        batch_positions = {
+            intent.client_operation_id: position
+            for position, intent in enumerate(ordered)
+        }
         receipts: list[NavigationMutationRecord] = []
-        for intent in ordered:
+        for position, intent in enumerate(ordered):
             preimage_hash = compute_intent_preimage_hash(intent)
             existing = self._fetch_record(
                 connection, gateway_id, workspace_id, actor, intent.client_operation_id
@@ -160,6 +170,13 @@ class NavigationMutationQueueStore(
                     )
                 receipts.append(self._record_from_row(existing))
                 continue
+            self._require_batch_dependencies_precede(
+                connection,
+                workspace_id=workspace_id,
+                intent=intent,
+                batch_positions=batch_positions,
+                position=position,
+            )
             self._require_dependencies_resolvable(
                 connection,
                 workspace_id=workspace_id,
@@ -228,6 +245,40 @@ class NavigationMutationQueueStore(
         ).fetchone()
         return int(row[0])
 
+    @staticmethod
+    def _require_batch_dependencies_precede(
+        connection: sqlite3.Connection,
+        *,
+        workspace_id: str,
+        intent: NavigationMutationIntentDTO,
+        batch_positions: dict[str, int],
+        position: int,
+    ) -> None:
+        """拒绝尚未 durable 的同批后序依赖，避免严格 FIFO 队首永久停滞。"""
+        dependency_ids = set(intent.depends_on)
+        if intent.created_by_operation_id is not None:
+            dependency_ids.add(intent.created_by_operation_id)
+        for dependency_id in dependency_ids:
+            if dependency_id == intent.client_operation_id:
+                raise ValueError(
+                    "intent 不能依赖自身: "
+                    f"operation_id={intent.client_operation_id}"
+                )
+            dependency_position = batch_positions.get(dependency_id)
+            if dependency_position is None or dependency_position < position:
+                continue
+            row = connection.execute(
+                "SELECT 1 FROM navigation_mutation_records "
+                "WHERE workspace_id = ? AND operation_id = ? LIMIT 1",
+                (workspace_id, dependency_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError(
+                    "同批依赖必须先于依赖方入队，避免 FIFO 队首永久阻塞: "
+                    f"operation_id={intent.client_operation_id}, "
+                    f"dependency_id={dependency_id}"
+                )
+
     # ------------------------------------------------------------------
     # 单条读写
     # ------------------------------------------------------------------
@@ -294,6 +345,68 @@ class NavigationMutationQueueStore(
         )
         return None if row is None else self._record_from_row(row)
 
+    def find_delete_operation_in(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        workspace_id: str,
+        operation_id: str,
+    ) -> NavigationMutationRecord | None:
+        """按 subtree delete 的稳定 key 找对应递归删除 operation。"""
+        rows = connection.execute(
+            f"SELECT {_RECORD_COLUMNS} FROM navigation_mutation_records "
+            "WHERE workspace_id = ? AND operation_id = ? "
+            "AND kind IN ('delete_folder', 'delete_session') LIMIT 2",
+            (workspace_id, operation_id),
+        ).fetchall()
+        if len(rows) > 1:
+            raise RuntimeError(
+                "subtree delete key 对应多个导航 operation，拒绝猜测 scope: "
+                f"workspace_id={workspace_id}, operation_id={operation_id}"
+            )
+        return None if not rows else self._record_from_row(rows[0])
+
+    def settle_delete_operation_in(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        record: NavigationMutationRecord,
+        now: str,
+    ) -> NavigationMutationRecord:
+        """将已 committed 的递归删除 receipt 从 pending settlement 推进为 settled。"""
+        cursor = connection.execute(
+            "UPDATE navigation_mutation_records SET pending_settlement = 0, "
+            "receipt_revision = receipt_revision + 1, updated_at = ? "
+            "WHERE gateway_id = ? AND workspace_id = ? AND actor = ? "
+            "AND operation_id = ? AND state = 'committed' "
+            "AND pending_settlement = 1",
+            (
+                now,
+                record.gateway_id,
+                record.workspace_id,
+                record.actor,
+                record.operation_id,
+            ),
+        )
+        current = self.fetch_record_in(
+            connection,
+            gateway_id=record.gateway_id,
+            workspace_id=record.workspace_id,
+            actor=record.actor,
+            operation_id=record.operation_id,
+        )
+        if current is None:
+            raise KeyError(f"会话目录 operation 不存在: {record.operation_id}")
+        if cursor.rowcount == 1:
+            return current
+        if current.state == "committed" and not current.pending_settlement:
+            return current
+        raise RuntimeError(
+            "递归删除 settlement CAS 失败，operation 不在 committed/pending 状态: "
+            f"operation_id={record.operation_id}, state={current.state}, "
+            f"pending_settlement={current.pending_settlement}"
+        )
+
     def list_records(
         self,
         *,
@@ -333,16 +446,85 @@ class NavigationMutationQueueStore(
         的后继由 :meth:`mark_dependency_failed_successors` 直接终结，不会出现
         「前置未终态却先跑后继」的乱序。
         """
-        rows = connection.execute(
+        row = connection.execute(
             f"SELECT {_RECORD_COLUMNS} FROM navigation_mutation_records "
-            "WHERE workspace_id = ? AND state = 'queued' ORDER BY queue_seq",
+            "WHERE workspace_id = ? AND state IN ('queued', 'running') "
+            "ORDER BY queue_seq LIMIT 1",
             (workspace_id,),
-        ).fetchall()
-        records = [self._record_from_row(row) for row in rows]
-        for record in records:
-            if self._dependencies_terminal(connection, workspace_id, record):
-                return record
-        return None
+        ).fetchone()
+        if row is None:
+            return None
+        record = self._record_from_row(row)
+        if record.state != "queued":
+            return None
+        return (
+            record
+            if self._dependencies_terminal(connection, workspace_id, record)
+            else None
+        )
+
+    @staticmethod
+    def acquire_owner(
+        connection: sqlite3.Connection,
+        *,
+        workspace_id: str,
+        owner_id: str,
+        now: str,
+    ) -> NavigationQueueOwner:
+        """OS lock 已证明旧 owner 退出后，CAS 递增 durable generation。"""
+        connection.execute(
+            "INSERT INTO navigation_queue_owners "
+            "(workspace_id, owner_id, owner_generation, updated_at) "
+            "VALUES (?, ?, 1, ?) ON CONFLICT(workspace_id) DO UPDATE SET "
+            "owner_id = excluded.owner_id, "
+            "owner_generation = navigation_queue_owners.owner_generation + 1, "
+            "updated_at = excluded.updated_at",
+            (workspace_id, owner_id, now),
+        )
+        row = connection.execute(
+            "SELECT owner_generation FROM navigation_queue_owners "
+            "WHERE workspace_id = ?",
+            (workspace_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"queue owner generation 更新后缺失: workspace_id={workspace_id}"
+            )
+        return NavigationQueueOwner(
+            workspace_id=workspace_id,
+            owner_id=owner_id,
+            generation=int(row[0]),
+        )
+
+    @staticmethod
+    def require_owner_generation(
+        connection: sqlite3.Connection,
+        *,
+        workspace_id: str,
+        owner_id: str,
+        generation: int,
+    ) -> None:
+        """在业务 claim 同一事务中校验本 worker 的 durable fencing token。"""
+        row = connection.execute(
+            "SELECT owner_id, owner_generation FROM navigation_queue_owners "
+            "WHERE workspace_id = ?",
+            (workspace_id,),
+        ).fetchone()
+        if (
+            row is None
+            or str(row["owner_id"]) != owner_id
+            or int(row["owner_generation"]) != generation
+        ):
+            current = (
+                None
+                if row is None
+                else f"{row['owner_id']}:{int(row['owner_generation'])}"
+            )
+            raise NavigationQueueOwnerError(
+                "navigation queue owner fencing token 已失效: "
+                f"workspace_id={workspace_id}, expected={owner_id}:{generation}, "
+                f"current={current}"
+            )
 
     # ------------------------------------------------------------------
     # 状态转移（全部在调用方写事务内）
@@ -354,6 +536,8 @@ class NavigationMutationQueueStore(
         *,
         record: NavigationMutationRecord,
         holder_id: str,
+        owner_id: str,
+        owner_generation: int,
         now: str,
     ) -> NavigationMutationRecord | None:
         """严格 ``queued → running`` CAS 领取；已被他人领取时返回 None。
@@ -363,6 +547,41 @@ class NavigationMutationQueueStore(
         崩溃遗留的 ``running`` 行先由 :meth:`recover_in_flight` 重置为 ``queued``
         才能被重新领取——因此接管路径显式且可审计，不靠模糊的 token 递增。
         """
+        self.require_owner_generation(
+            connection,
+            workspace_id=record.workspace_id,
+            owner_id=owner_id,
+            generation=owner_generation,
+        )
+        if holder_id != f"{owner_id}:{owner_generation}":
+            raise NavigationQueueOwnerError(
+                "operation holder 与 durable queue owner generation 不一致: "
+                f"holder_id={holder_id}, owner_generation={owner_generation}"
+            )
+        head = connection.execute(
+            "SELECT operation_id, queue_seq, state FROM navigation_mutation_records "
+            "WHERE workspace_id = ? AND state IN ('queued', 'running') "
+            "ORDER BY queue_seq LIMIT 1",
+            (record.workspace_id,),
+        ).fetchone()
+        if (
+            head is None
+            or str(head["operation_id"]) != record.operation_id
+            or int(head["queue_seq"]) != record.queue_seq
+            or str(head["state"]) != "queued"
+        ):
+            return None
+        current = self.fetch_record_in(
+            connection,
+            gateway_id=record.gateway_id,
+            workspace_id=record.workspace_id,
+            actor=record.actor,
+            operation_id=record.operation_id,
+        )
+        if current is None or not self._dependencies_terminal(
+            connection, record.workspace_id, current
+        ):
+            return None
         cursor = connection.execute(
             "UPDATE navigation_mutation_records SET state = 'running', "
             "holder_id = ?, fencing_token = fencing_token + 1, "
@@ -395,6 +614,8 @@ class NavigationMutationQueueStore(
         connection: sqlite3.Connection,
         *,
         workspace_id: str,
+        owner_id: str,
+        owner_generation: int,
         now: str,
     ) -> int:
         """把崩溃前遗留的 ``running`` 行重置为 ``queued``，供新 owner 继续执行。
@@ -406,11 +627,18 @@ class NavigationMutationQueueStore(
 
         返回被重置的 operation 数。
         """
+        self.require_owner_generation(
+            connection,
+            workspace_id=workspace_id,
+            owner_id=owner_id,
+            generation=owner_generation,
+        )
         cursor = connection.execute(
             "UPDATE navigation_mutation_records SET state = 'queued', "
             "holder_id = NULL, receipt_revision = receipt_revision + 1, "
-            "updated_at = ? WHERE workspace_id = ? AND state = 'running'",
-            (now, workspace_id),
+            "updated_at = ? WHERE workspace_id = ? AND state = 'running' "
+            "AND holder_id != ?",
+            (now, workspace_id, f"{owner_id}:{owner_generation}"),
         )
         return int(cursor.rowcount)
 
@@ -476,4 +704,3 @@ class NavigationMutationQueueStore(
                 record.operation_id,
             )
         )
-

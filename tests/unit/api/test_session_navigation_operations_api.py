@@ -17,6 +17,7 @@ from app.schemas.internal_v2.session_navigation.operations import (
 from app.services.business.session_navigation.queue_store import (
     NavigationBackpressureError,
     NavigationMutationConflictError,
+    NavigationQueueOwnerError,
 )
 
 
@@ -59,6 +60,8 @@ class _StubService:
 
     def operation_status(self, operation_ids, scope):
         assert scope.workspace_id == self.workspace_id
+        if self.error is not None:
+            raise self.error
         return NavigationMutationStatusPageDTO(
             workspace_id=self.workspace_id,
             catalog_revision=0,
@@ -66,10 +69,14 @@ class _StubService:
         )
 
     def navigation_snapshot(self):
+        if self.error is not None:
+            raise self.error
         raise AssertionError("本用例不应调用 snapshot")
 
     def navigation_events(self, *, after, limit):
         self.navigation_events_calls += 1
+        if self.error is not None:
+            raise self.error
         raise AssertionError("本用例不应调用 events")
 
     def decode_navigation_events_cursor(self, cursor: str):
@@ -87,6 +94,21 @@ async def test_enqueue_maps_backpressure_to_retryable_503() -> None:
             payload=_enqueue_request(),
             _="local-dev-token",
             request_id="req_backpressure",
+            service=service,
+        )
+
+    assert captured.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_enqueue_maps_missing_owner_to_503() -> None:
+    service = _StubService(NavigationQueueOwnerError("worker 未就绪"))
+
+    with pytest.raises(HTTPException) as captured:
+        await nav.enqueue_session_catalog_operations(
+            payload=_enqueue_request(),
+            _="local-dev-token",
+            request_id="req_owner_conflict",
             service=service,
         )
 
@@ -124,6 +146,52 @@ async def test_operation_status_reports_unknown_ids_without_error() -> None:
     assert response.data is not None
     assert response.data.unknown_operation_ids == ["op_" + "b" * 32]
     assert response.request_id == "req_status"
+
+
+@pytest.mark.asyncio
+async def test_operation_status_maps_worker_failure_to_503() -> None:
+    service = _StubService(NavigationQueueOwnerError("worker 已失败"))
+
+    with pytest.raises(HTTPException) as captured:
+        await nav.get_session_catalog_operation_status(
+            operation_id=["op_" + "b" * 32],
+            _="local-dev-token",
+            request_id="req_status_failed",
+            service=service,
+        )
+
+    assert captured.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_snapshot_maps_worker_failure_to_503() -> None:
+    service = _StubService(NavigationQueueOwnerError("worker 已失败"))
+
+    with pytest.raises(HTTPException) as captured:
+        await nav.get_session_catalog_snapshot(
+            _="local-dev-token",
+            request_id="req_snapshot_failed",
+            service=service,
+        )
+
+    assert captured.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_events_maps_worker_failure_to_503() -> None:
+    service = _StubService(NavigationQueueOwnerError("worker 已失败"))
+
+    with pytest.raises(HTTPException) as captured:
+        await nav.list_session_catalog_navigation_events(
+            after=0,
+            limit=200,
+            cursor=None,
+            _="local-dev-token",
+            request_id="req_events_failed",
+            service=service,
+        )
+
+    assert captured.value.status_code == 503
 
 
 @pytest.mark.asyncio

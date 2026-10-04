@@ -26,6 +26,17 @@ def canonical(name: str) -> str:
     return f"ses_{uuid7_hex_from_name(name)}"
 
 
+async def _run_with_catalog_worker(
+    catalog: SessionCatalogService,
+    operation: Awaitable[T],
+) -> T:
+    await catalog.operations.start()
+    try:
+        return await operation
+    finally:
+        await catalog.operations.stop()
+
+
 def _relocate(
     resolver: SessionCatalogPathResolver,
     session_id: str,
@@ -233,9 +244,12 @@ async def test_renaming_folder_does_not_require_descendant_sessions_idle(
         for session_id in session_ids
     }
 
-    await catalog.update_folder(
-        folder.node_id,
-        SessionFolderUpdateRequest(name="任务目录已改名"),
+    await _run_with_catalog_worker(
+        catalog,
+        catalog.update_folder(
+            folder.node_id,
+            SessionFolderUpdateRequest(name="任务目录已改名"),
+        ),
     )
 
     # 不再经过 idle guard，且物理 locator 不变。
@@ -335,7 +349,10 @@ async def test_recursive_delete_uses_catalog_subtree_protocol_without_folder_pat
     )
 
     await asyncio.wait_for(
-        catalog.delete_folder(parent.node_id, recursive=True),
+        _run_with_catalog_worker(
+            catalog,
+            catalog.delete_folder(parent.node_id, recursive=True),
+        ),
         timeout=2,
     )
 
@@ -402,8 +419,11 @@ async def test_snapshot_aggregates_full_catalog_once(
 
     # 一次目录 mutation（新建 folder）后一次读：同样只聚合一次。
     count[0] = 0
-    await catalog.create_folder(
-        SessionFolderCreateRequest(name="新建目录", parent_folder_id=None)
+    await _run_with_catalog_worker(
+        catalog,
+        catalog.create_folder(
+            SessionFolderCreateRequest(name="新建目录", parent_folder_id=None)
+        ),
     )
     await catalog.list_children(parent_node_id=None, limit=50, cursor=None)
     assert count[0] == 1

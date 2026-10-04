@@ -15,13 +15,17 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from app import main
+from app.api import session_navigation as navigation_api
 from app.api.deps import get_session_catalog_service, verify_local_token
-from app.main import app
+from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session_navigation import SessionFolderCreateRequest
 from app.services.business.session_navigation import SessionCatalogService
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
@@ -65,25 +69,41 @@ def service(tmp_path: Path) -> SessionCatalogService:
         workspace.close()
 
 
-def _client(service: object) -> TestClient:
-    app.dependency_overrides[get_session_catalog_service] = lambda: service
-    app.dependency_overrides[verify_local_token] = lambda: "local"
-    return TestClient(app, raise_server_exceptions=False)
+def _client(service: object) -> tuple[FastAPI, TestClient]:
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        catalog = service if isinstance(service, SessionCatalogService) else None
+        if catalog is not None:
+            await catalog.operations.start()
+        try:
+            yield
+        finally:
+            if catalog is not None:
+                await catalog.operations.stop()
+
+    test_app = FastAPI(lifespan=lifespan)
+    test_app.add_middleware(TraceMiddleware)
+    test_app.add_exception_handler(HTTPException, main.workspace_http_exception_handler)
+    test_app.include_router(navigation_api.router, prefix="/api/v1")
+    test_app.dependency_overrides[get_session_catalog_service] = lambda: service
+    test_app.dependency_overrides[verify_local_token] = lambda: "local"
+    return test_app, TestClient(test_app, raise_server_exceptions=False)
 
 
 def test_create_folder_unknown_parent_maps_to_404_not_500(
     service: SessionCatalogService,
 ) -> None:
     """客户端传不存在的父节点 → 404 + 纯文本 detail（原 500 + RuntimeError 类名）。"""
-    client = _client(service)
+    test_app, client = _client(service)
     try:
-        response = client.post(
-            "/api/v1/session-catalog/folders",
-            json={"name": "子目录", "parent_folder_id": MISSING_NODE},
-            headers={"X-Request-ID": "req_create_missing"},
-        )
+        with client:
+            response = client.post(
+                "/api/v1/session-catalog/folders",
+                json={"name": "子目录", "parent_folder_id": MISSING_NODE},
+                headers={"X-Request-ID": "req_create_missing"},
+            )
     finally:
-        app.dependency_overrides.clear()
+        test_app.dependency_overrides.clear()
 
     assert response.status_code == 404
     assert response.json() == {
@@ -105,15 +125,16 @@ def test_create_folder_rejection_maps_to_409(
     expected_detail: str,
 ) -> None:
     """形态/语义冲突与在途导航冲突都落 409，与同族三入口同一分类。"""
-    client = _client(_RejectingCatalogService(error))
+    test_app, client = _client(_RejectingCatalogService(error))
     try:
-        response = client.post(
-            "/api/v1/session-catalog/folders",
-            json={"name": "子目录"},
-            headers={"X-Request-ID": "req_create_conflict"},
-        )
+        with client:
+            response = client.post(
+                "/api/v1/session-catalog/folders",
+                json={"name": "子目录"},
+                headers={"X-Request-ID": "req_create_conflict"},
+            )
     finally:
-        app.dependency_overrides.clear()
+        test_app.dependency_overrides.clear()
 
     assert response.status_code == 409
     assert response.json() == {
@@ -124,15 +145,16 @@ def test_create_folder_rejection_maps_to_409(
 
 def test_create_folder_success_returns_root_page(service: SessionCatalogService) -> None:
     """正常创建仍是 200 + 根页，修复不改变成功契约。"""
-    client = _client(service)
+    test_app, client = _client(service)
     try:
-        response = client.post(
-            "/api/v1/session-catalog/folders",
-            json={"name": "正常目录"},
-            headers={"X-Request-ID": "req_create_ok"},
-        )
+        with client:
+            response = client.post(
+                "/api/v1/session-catalog/folders",
+                json={"name": "正常目录"},
+                headers={"X-Request-ID": "req_create_ok"},
+            )
     finally:
-        app.dependency_overrides.clear()
+        test_app.dependency_overrides.clear()
 
     assert response.status_code == 200
     assert response.json()["data"]["items"][-1]["name"] == "正常目录"
@@ -165,15 +187,16 @@ def test_update_folder_maps_failures_consistently(
     expected_detail: str,
 ) -> None:
     """PATCH folder 的失败分类必须与同族四入口一致（404/409），不得是 400。"""
-    client = _client(_RejectingUpdateService(error))
+    test_app, client = _client(_RejectingUpdateService(error))
     try:
-        response = client.patch(
-            "/api/v1/session-catalog/folders/ses_example",
-            json={"name": "新名"},
-            headers={"X-Request-ID": "req_update_conflict"},
-        )
+        with client:
+            response = client.patch(
+                "/api/v1/session-catalog/folders/ses_example",
+                json={"name": "新名"},
+                headers={"X-Request-ID": "req_update_conflict"},
+            )
     finally:
-        app.dependency_overrides.clear()
+        test_app.dependency_overrides.clear()
 
     assert response.status_code == expected_status, response.text
     assert response.json() == {

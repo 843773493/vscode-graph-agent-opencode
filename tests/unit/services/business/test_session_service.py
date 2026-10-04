@@ -1,6 +1,6 @@
 import asyncio
 import json
-import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -20,8 +20,23 @@ from app.schemas.internal_v2.session import (
 )
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_service import SessionService
-from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from tests.unit.services.business.session_service_test_support import (
+    SessionServiceConfigStub,
+    prepare_session_test_workspace,
+)
+
+
+@pytest.fixture()
+def session_config_service() -> SessionServiceConfigStub:
+    return SessionServiceConfigStub()
+
+
+def test_config_stub_preserves_explicit_empty_configuration():
+    config_service = SessionServiceConfigStub({})
+
+    with pytest.raises(ValueError, match="agent default 不存在"):
+        config_service.resolve_agent_provider_id(None)
 
 
 class TestSessionService:
@@ -33,17 +48,22 @@ class TestSessionService:
     # resolver 同源。真实值在 setup_method 按同一来源计算（实例属性遮蔽）。
     workspace_id = "00000000-0000-4000-8000-000000000001"
 
-    def setup_method(self):
-        """每个测试前设置临时会话目录"""
-        self.temp_dir = tempfile.mkdtemp()
-        import os
-
-        self.original_workspace = os.environ.get("WORKSPACE_ROOT")
-        os.environ["WORKSPACE_ROOT"] = self.temp_dir
+    @pytest.fixture(autouse=True)
+    def setup_workspace(
+        self,
+        request: pytest.FixtureRequest,
+        monkeypatch: pytest.MonkeyPatch,
+        session_config_service: SessionServiceConfigStub,
+    ):
+        """从完整只读模板准备正式测试工作区，并注入离线配置替身。"""
+        context, _, workspace_root = prepare_session_test_workspace(
+            test_file=Path(request.node.path),
+            node_id=request.node.nodeid,
+        )
+        self.temp_dir = workspace_root
+        monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
 
         get_sessions_dir().mkdir(exist_ok=True, parents=True)
-        # 与 path_utils._build_session_catalog_resolver 同源：标准布局下
-        # 工作区根 = sessions 目录上溯两级（temp_dir/.boxteam/sessions）。
         from app.core.workspace_identity import load_or_create_workspace_id
 
         self.workspace_id = load_or_create_workspace_id(
@@ -52,8 +72,9 @@ class TestSessionService:
         self.path_resolver = get_session_path_resolver(get_sessions_dir())
         self.creation_service = get_session_creation_service(get_sessions_dir())
         self.trace_event_store = TraceEventStore(sessions_dir=get_sessions_dir())
+        self.config_service = session_config_service
         self.service = SessionService(
-            config_service=ConfigService(),
+            config_service=self.config_service,
             trace_event_store=self.trace_event_store,
             workspace_id=self.workspace_id,
             path_resolver=self.path_resolver,
@@ -61,18 +82,20 @@ class TestSessionService:
         )
         # 目录父关系变更的唯一路径：导航 SessionCatalogService（executor）。
         self.catalog = SessionCatalogService(session_service=self.service)
+        yield
+        self.path_resolver.catalog_store.close()
+        context.close()
 
-    def teardown_method(self):
-        """测试后恢复原始目录"""
-        import os
-        import shutil
-
-        if self.original_workspace is not None:
-            os.environ["WORKSPACE_ROOT"] = self.original_workspace
-        else:
-            os.environ.pop("WORKSPACE_ROOT", None)
-
-        shutil.rmtree(self.temp_dir)
+    async def _move_catalog_node(
+        self,
+        node_id: str,
+        parent_node_id: str | None,
+    ) -> None:
+        await self.catalog.operations.start()
+        try:
+            await self.catalog.move_node(node_id, parent_node_id)
+        finally:
+            await self.catalog.operations.stop()
 
     @pytest.mark.asyncio
     async def test_create_session(self):
@@ -112,7 +135,7 @@ class TestSessionService:
             name="归档",
             parent_node_id=None,
         )
-        await self.catalog.move_node(session.session_id, folder.node_id)
+        await self._move_catalog_node(session.session_id, folder.node_id)
 
         # 只模拟遗留的空物理目录，不删除或修正它；列表必须保留索引中的会话。
         (get_sessions_dir() / session.session_id).mkdir()
@@ -161,9 +184,7 @@ class TestSessionService:
                 }
             },
         }
-        config_path = Path(self.temp_dir) / "workspace.jsonc"
-        config_path.write_text(json.dumps(config), encoding="utf-8")
-        config_service = ConfigService(config_path=config_path)
+        config_service = SessionServiceConfigStub(config)
         service = SessionService(
             config_service=config_service,
             trace_event_store=self.trace_event_store,
@@ -240,12 +261,7 @@ class TestSessionService:
                 },
             },
         }
-        config_path = Path(self.temp_dir) / "workspace-defaults.jsonc"
-        config_path.write_text(json.dumps(config), encoding="utf-8")
-        config_service = ConfigService(
-            config_path=config_path,
-            workspace_root=self.temp_dir,
-        )
+        config_service = SessionServiceConfigStub(config)
         service = SessionService(
             config_service=config_service,
             trace_event_store=self.trace_event_store,
@@ -324,7 +340,7 @@ class TestSessionService:
         session_file.write_text(json.dumps(data), encoding="utf-8")
 
         restarted_service = SessionService(
-            config_service=ConfigService(),
+            config_service=self.config_service,
             trace_event_store=self.trace_event_store,
             workspace_id=self.workspace_id,
             path_resolver=self.path_resolver,
@@ -388,11 +404,11 @@ class TestSessionService:
         child = await self.service.create(SessionCreateRequest(title="Child"))
         grandchild = await self.service.create(SessionCreateRequest(title="Grandchild"))
 
-        await self.catalog.move_node(
+        await self._move_catalog_node(
             child.session_id,
             parent.session_id,
         )
-        await self.catalog.move_node(grandchild.session_id, child.session_id)
+        await self._move_catalog_node(grandchild.session_id, child.session_id)
 
         assert (await self.service.get(child.session_id)).parent_session_id == (
             parent.session_id
@@ -406,7 +422,7 @@ class TestSessionService:
             parent.session_id
         )
 
-        await self.catalog.move_node(child.session_id, None)
+        await self._move_catalog_node(child.session_id, None)
 
         assert (await self.service.get(child.session_id)).parent_session_id is None
         assert (await self.service.get(grandchild.session_id)).parent_session_id == child.session_id
@@ -436,7 +452,7 @@ class TestSessionService:
             child.session_id
         )
 
-        await self.catalog.move_node(
+        await self._move_catalog_node(
             parent.session_id,
             target_folder.node_id,
         )
@@ -474,7 +490,7 @@ class TestSessionService:
             session.session_id,
             SessionUpdateRequest(title="Updated Title"),
         )
-        await self.catalog.move_node(session.session_id, target_folder.node_id)
+        await self._move_catalog_node(session.session_id, target_folder.node_id)
 
         moved_path = self.service.path_resolver.resolve_session_node(
             session.session_id
@@ -492,23 +508,23 @@ class TestSessionService:
     async def test_session_parent_relationship_rejects_self_and_cycles(self):
         parent = await self.service.create(SessionCreateRequest(title="Parent"))
         child = await self.service.create(SessionCreateRequest(title="Child"))
-        await self.catalog.move_node(child.session_id, parent.session_id)
+        await self._move_catalog_node(child.session_id, parent.session_id)
 
         # 唯一导航路径下，自环/成环由 store 的 _validate_move_target 以
         # RuntimeError 拒绝（经 executor 归类为 conflict）。
         with pytest.raises(RuntimeError, match="自身"):
-            await self.catalog.move_node(parent.session_id, parent.session_id)
+            await self._move_catalog_node(parent.session_id, parent.session_id)
 
         with pytest.raises(RuntimeError, match="循环"):
-            await self.catalog.move_node(parent.session_id, child.session_id)
+            await self._move_catalog_node(parent.session_id, child.session_id)
 
     @pytest.mark.asyncio
     async def test_delete_parent_requires_confirmation_and_cascades_children(self):
         parent = await self.service.create(SessionCreateRequest(title="Parent"))
         child = await self.service.create(SessionCreateRequest(title="Child"))
         grandchild = await self.service.create(SessionCreateRequest(title="Grandchild"))
-        await self.catalog.move_node(child.session_id, parent.session_id)
-        await self.catalog.move_node(grandchild.session_id, child.session_id)
+        await self._move_catalog_node(child.session_id, parent.session_id)
+        await self._move_catalog_node(grandchild.session_id, child.session_id)
 
         parent_path = self.service.path_resolver.resolve_session_node(parent.session_id)
         child_path = self.service.path_resolver.resolve_session_node(child.session_id)
@@ -832,17 +848,34 @@ class TestSessionListReadAmplification:
 
     workspace_id = "00000000-0000-4000-8000-000000000001"
 
+    @pytest.fixture()
+    def workspace_base(self, request: pytest.FixtureRequest) -> Iterator[Path]:
+        context, workspace_base, _ = prepare_session_test_workspace(
+            test_file=Path(request.node.path),
+            node_id=request.node.nodeid,
+        )
+        try:
+            yield workspace_base
+        finally:
+            context.close()
+
     @pytest.mark.asyncio
     async def test_list_reads_only_current_page_manifests(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        workspace_base: Path,
+        session_config_service: SessionServiceConfigStub,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
-        workspace = build_catalog_workspace(tmp_path, workspace_id=self.workspace_id)
+        workspace = build_catalog_workspace(
+            workspace_base,
+            workspace_id=self.workspace_id,
+        )
         try:
             sessions_dir = workspace.sessions_root
             service = SessionService(
-                config_service=ConfigService(),
+                config_service=session_config_service,
                 trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
                 workspace_id=self.workspace_id,
                 path_resolver=workspace.resolver,

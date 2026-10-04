@@ -79,6 +79,15 @@ CREATE TABLE IF NOT EXISTS navigation_events (
 )
 """
 
+_QUEUE_OWNERS_DDL = """
+CREATE TABLE IF NOT EXISTS navigation_queue_owners (
+    workspace_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    owner_generation INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
 
 def ensure_navigation_queue_tables(store: SessionCatalogStore) -> None:
     """幂等建旁挂表；已存在时不写事务（避免无谓推进 generation）。"""
@@ -89,10 +98,15 @@ def ensure_navigation_queue_tables(store: SessionCatalogStore) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-    if {"navigation_mutation_records", "navigation_events"} <= present:
+    if {
+        "navigation_mutation_records",
+        "navigation_events",
+        "navigation_queue_owners",
+    } <= present:
         return
     with store.write_transaction() as connection:
         connection.execute(_MUTATION_RECORDS_DDL)
         connection.execute(_MUTATION_RECORDS_QUEUE_DDL)
         connection.execute(_MUTATION_RECORDS_PENDING_DDL)
         connection.execute(_EVENTS_DDL)
+        connection.execute(_QUEUE_OWNERS_DDL)
