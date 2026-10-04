@@ -1,13 +1,13 @@
 # 团队协作实时状态与实测改进
 
-两个团队入口共用，主代理独占写入。恢复、派单、集成及报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-04 13:25（北京时间）。goal active、无预算上限，交接及七个 change 的必要实现、独审、验证、清理和技能实测仍未全部完成。
+两个团队入口共用，主代理独占写入。恢复、派单、集成及报错时读本文件；稳定规则只在 [共同流程](team-collaboration-workflow.md) 维护。更新时间：2026-10-04 13:56（北京时间）。goal active、无预算上限，交接及七个 change 的必要实现、独审、验证、清理和技能实测仍未全部完成。
 
 ## 当前授权与现场
 
 - 用户授权按架构熵减自主统一 owner、显式身份和单链路，删除旧兼容；源码开发生成的新旧中间数据可直接删除，不再询问。保普通源码、未集成独有改动、来源不明业务文件；不能用删数据掩盖 fresh writer 缺陷。
 - GPT 团队精确 `gpt-6-luna / max`，不带前缀；主模型由用户选。至少3、最多15常驻，主代理统一派单/审查/集成。既有九个 agent 的创建参数与实际模型均已核，证据 `coordinator/artifacts/model-context-latest.json`、`u05-model-context.json`。429保源和真实错误，不换模型、不密集恢复。
 - 物理根 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。活动 worktree 根 `out/worktrees/2026/10/04/024121-team-execution/`，产物/索引根 `out/tests/temp/2026/10/04/024121-team-execution/`。下文路径相对此物理根；每次派单仍给字面绝对 workdir/index/artifact/report。
-- 当前主树 HEAD `65fb5d182284d34f09b86c8244fb3b3f6c3d9b5d`；L01已集成六路径，主树17pass5.78s/Ruff0、R25无阻断、guard/祖先0。M01/M02已集成，40pass、Ruff0、A24b无finding、guard/祖先0。恢复时用 fresh 独立索引核真实状态；共享 `.git/index` 极陈旧，裸 status 的 D/MM 不能当源码差异。本文件与流程由主代理独占；f4789001两文件提交防线/祖先0。
+- 当前主树 HEAD `3ac788de78a372eddc39b4a5abc6ca62d2a6baba`；L01已集成六路径，主树17pass5.78s/Ruff0、R25无阻断、guard/祖先0。M01/M02已集成，40pass、Ruff0、A24b无finding、guard/祖先0。恢复时用 fresh 独立索引核真实状态；共享 `.git/index` 极陈旧，裸 status 的 D/MM 不能当源码差异。本文件与流程由主代理独占；f4789001两文件提交防线/祖先0。
 - 主代理唯一串行提交者，索引 `coordinator/git/integration.idx`；fresh read-tree→精确add→record→commit无pathspec→verify→祖先。禁amend/reset/rebase/push与共享index写入。
 - 三处受保护路径：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`，不能修改。
 - 测试/probe用matrix或外部 `timeout N bash -c 'ulimit -d 4194304; exec "$@"' bash ...`。uv/bun；保存raw stdout/stderr及实际exit。已pass不为补日志重跑；缺失raw如实lost/转录。源码改后静态，Web改后build。
@@ -52,17 +52,21 @@
 ## 集成队列与依赖门
 
 1. E02c combined固定 `c9b2577a→4c2d238c`，5paths patch `dd634ba8` 中央strict/hash/raw0，3pass1.99s；旧 `_existing_index_connection(session_id=None)` 属E02b未迁，不能说全面闭合。E02d reader/indexed非空正常路径candidate `6d24717f`、3paths/patch `2e0fbad9` 中央strict3/blob/hash0，真实main/child1pass2.91s；两个productionpaths已同步U/V并Ruff0，真实SQLite测试归integration另delta由E02b处理。
-2. E04 root五path固定 `8392b195→a746ed8b`，中央standard patch `f182f78f`，4源码/test live一致，fixture仅目录hunk；104pass为工具转录，无配对raw不重跑补日志。已串行sync T/U/V/E01且Ruff0。A27两P1 gate：NodeDebug canonical全caller未交；旧catalog迁移仍Session折叠。已裁定删除仅旧JSON/开发兼容迁移链，全caller/fixture/spec完整迁至现行canonical；NodeDebug与旧链删除各交独立delta。
+2. E04 root五path固定 `8392b195→a746ed8b`，中央standard patch `f182f78f`，4源码/test live一致，fixture仅目录hunk；104pass为工具转录，无配对raw不重跑补日志。已串行sync T/U/V/E01且Ruff0。A27两P1 gate：NodeDebug canonical全caller原未交；现已交63path fixed增量，见下文最新门。旧catalog迁移仍Session折叠。已裁定删除仅旧JSON/开发兼容迁移链，全caller/fixture/spec完整迁至现行canonical；NodeDebug与旧链删除各交独立delta。
 3. E01 overlay写/fork固定 `69d19b5e→589c18a7`、19paths/patch `b624e226`，中央strict19hash0；读侧三元SQL与E02合后验。E01b由一个实现者贯穿admission+首次notice原子、execution/catalog关联、display_only生产membership；R27确认fixture直接INSERT掩盖生产两缺口，旧16+1 reader evidence仍保，不能当入口验收。
 4. V02closure `5eb701fb→388705ab`、29paths/patch `c5aaa589`，中央strict29hash0，候选外仅W04七path+OpenAPI两path。A26b Web身份闭包无finding。MessageRead独立 `388705ab→9aff7453`、2paths/patch `a6449f29` 中央strict/hash0，完整read依赖sync后newcaller2pass/21deselected2.81s；assembly pair callee待E01typed、normalindexed待E02d，不整体判pass。
 5. 中央E02sync V曾以dependency-only中间base三方合并，把消费树旧内容当删除，静态F821发现；用实际公共祖先eb9380aa重合六共享路径，完整owner模块恢复、Ruff0/import0。E04sync又漏已集成UUID生产前置；sqlite_state与六UUID模块已补T/U/E01，V补ExecutionAdmission/corecontext两模块。只读import不充分，真实creator入口仍须验；事实见coordinator/*prerequisite-sync.json。
 6. L02固定 `2323b40e→647cb052`、13paths/patch `10a07a15`，Node12/Python4/lifecycle2/resilience9pass；persistent首次1pass2setup errors，命令env指正式manifest后仅失败2case2pass30.53s。R28确认P1：Gateway launcher传控制面gw_*，Terminal UUID校验启动失败且Python业务UUID不匹配。候选暂停集成；A28比较保持aux先起的workspace-owned identity bootstrap与backend-first方案，后者存在active-goal恢复先于Terminal的竞态。Windows/真实remote未验，不当pass。L01仍主树已集成。
 7. 继续W/V预览与当前main合并，保C03/B01/J01/M01/M02/L01及三保护路径，最终统一生成协议/OpenAPI。既有 `529282d3/ea2386e2` 仅preview；不能旧tree替HEAD。ThreadRuntime/delegate/activation/persistent resource仍必要。outbox driver生产检索只定义，接线仍未完成；下一任务按既有量化gate和F1/F2/F4新source判定，勿重复造driver。
-8. D01机械化固定tree交付helper由Terminal作者独立实现，路径 `.codex/skills/team-collaboration-gpt/scripts/verify_delivery.py`，不写入口/台账；初版真实L02成功、遗漏caller/deletion/untracked负例拒绝已交原始输出；精确deferred文件规则和Git错误原因保存正在修，独立forward验证尚待。主代理继续依赖/独审/集成，不全面换分工；独立纵向切片与公共合同先提供后消费按返工/合并成本比较。
+8. D01交付helper固定SHA `c6831f673e96e3aa4c13d996334c37df1fbc8a355a4353ea2c19ca6315ad9eca`，Ruff0。D02独立最小真实Git仓库验证binary/mode/新增/删除/未知后缀全6path严格重建、错误Git诊断/私有index回收；发现候选外.proto漏判，静态同根因.ps1/.cjs；中央仅补三后缀，原proto无defer定点exit2、exactdeferexit0且manifest1项差异，ps1/cjs分类true，不复跑原完整绿suite。报告architecture_reviewer/artifacts/d02-delivery-helper-forward-review.md，原raw与修后raw都保。入口/共同流程已有调用参数；工具只证明完整性，业务独审仍必要。
 
 
-9. E01/E02共同依赖 ready tree `ef86c12b2ce14a02d0218aa022982897c4f9b929`（非commit，E01 HEAD仍ad093e0c）：中央34readpaths与f60前置15paths合并，保typed thread/cache/request content，消除重复参数与child强换main，补overlay SQL/keys/validator三元；Ruff0/import0。第一真实gate3pass1fail（缺checkpoint writer前置），补f60生产后仅失败indexedcase1pass2.76s，原raw都保。E01b开始单实现者贯穿真实reportback/admission/notice/membership；R29固定ready只读审新增merge，发现canonical item getter未接thread kw（主要fallback路径），已派E01 typed callee闭包，不删除kw掩盖child owner。
+9. E01/E02共同依赖 ready tree `ef86c12b2ce14a02d0218aa022982897c4f9b929`（非commit，E01 HEAD仍ad093e0c）：中央34readpaths与f60前置15paths合并，保typed thread/cache/request content，消除重复参数与child强换main，补overlay SQL/keys/validator三元；Ruff0/import0。第一真实gate3pass1fail（缺checkpoint writer前置），补f60生产后仅失败indexedcase1pass2.76s，原raw都保。E01b开始单实现者贯穿真实reportback/admission/notice/membership；R29最终仅确认旧v1 importer staging read_items旧arity；已授权整条删除旧importer/CLI/tests/spec兼容义务，现行v1拒绝/损坏断言保留。canonical getter签名可疑但沿runner证实生产fallback不可达，撤回P1判定；E01仍按原typed目标收紧callee。
 10. E02b caller map307记录，其中connect122/lock64：固定薄壳 `_connect(thread_id, checkpoint_ns, *, session_id: str, read_only=False)`、`_lock(thread_id, checkpoint_ns, *, session_id: str)`，session_id必填、删除fallback。授权单提供者全callee/callsite identity片段含assembly/execution/fork/writer与tests，保E01 admission语义/E04定位；消费者新增调用采用同shape，中央固定后按符号合，不另留可选thread在低层猜main。
+
+11. L02b ready dependency tree `2189b6ec17ab55b3d00d5ea19fbfc97b148b3192`（HEAD仍f478）=fixed647+14个W依赖路径；新增CLI未埋入base。全14Ruff0，首次support import缺process_scope原错误保留，补scope/conftest后production/support import0、相关2casepass0.64s；未跑预期JSON→裸UUID的消费者红灯。A28最终用既有identity module短CLI，不新wrapper、不backend-first；Terminal作者已获完整bootstrap/controller/runtime/testhelper消费+启动/adoption/request闭包，registry仍gw，Browser不扩UUID，保Wowned handles顺序/rollback。记录coordinator/artifacts/l02b-ready-dependency-tree.json。
+12. E04 NodeDebug fixed `a746ed8b→e47f8f99bcca136ccf9963e55ba9cbfcb232d1c1`，63path作者patch`5661e878`严格cached重建tree/blobs/hash全过，中央fullindex标准patch`e7878f46`；作者live源码零差异，仅.venv未跟踪。R30行为/A29架构独审已派；作者13unit/1integration/1232Web+build通过，fork4setup缺APIkey不当pass。E04b旧migration删除另delta，以e47为base，caller审计明确两个fixturegen/五integration/pathutils提示与旧reader/layout，继续canonical seeding、保业务断言与v4拒绝，不更改NodeDebug fixed。
+13. V新增真实POST Turn→MessageRead selector红灯1failed/15.73s，尚未到read断言；cleanup failures.py→Saver→storage recovery旧pair导致thread_id重复参数，可能覆盖首异常。E01b确认put缺execution_admission_scope、JobID当TurnID及stream/middleware只userturn、append硬编码main，正在同一纵链闭合reportback/Job/Runner/原子notice/membership/recovery。V暂停依赖重跑，原selector/raw保留；独立O01仅审当前Session outbox真实入口/已有driver/APIqueue，区分历史量化与固定main。
 
 ## 分工实践比较
 
@@ -73,7 +77,7 @@
 | E02读公共提供者→U/V/E01消费者 | 首次手筛patch残缺被拒；随后cache/indexed缺pair两轮；中央sync缺前置/基线错误又返工 | 固定tree机械交付与完整前置准入先试；主代理合并成本仍高，不能称已解决 |
 | L02同作者跨Node/Python，但Gateway启动caller未纳入 | fixed13paths可重建；helper绿，真实managed startup被R28阻断一次 | 下一L02b把启动/接管/请求链一并给同作者，观察入口遗漏及合并量是否下降 |
 | E01b单实现者纵向writer→reader | 当前只读设计完成，完整依赖已就绪并开工，尚无实现结果 | 等真实入口/atomic gate/首次交付和新增merge量后比较，不能预称最优 |
-| D01机械交付辅助 | 原始L02成功与三负例拒绝；精确deferred与Git诊断修订中，独审未完成 | 只证明候选完整性门可执行，业务owner仍需独审与真实入口 |
+| D01机械交付辅助 | 原始L02成功与三负例拒绝；独立D02发现后缀漏判，定点修复复验通过 | 工具可复用，分类规则仍需随语言核验；业务owner仍需独审与真实入口 |
 
 ## 目录、服务与清理
 

@@ -33,7 +33,7 @@ start_delegated_task({
 
 当前严重拖慢交付的实测原因与调整：
 
-- E02 手筛 patch hunk，补丁畸形且漏核心签名；V02 固定包漏 Web caller 和删除。交付由固定 Git base/target tree 直接导出、严格重建、核对 blob/hash，并列出候选外全部源码与未跟踪文件；通过后才交消费者。
+- E02 手筛 patch hunk，补丁畸形且漏核心签名；V02 固定包漏 Web caller 和删除。用 [交付校验脚本](scripts/verify_delivery.py) 从固定 Git base/target tree 导出、严格重建、核对 blob/hash，并列出候选外源码与未跟踪文件；通过后才交消费者。D02 独审实测发现后缀表漏 `.proto/.ps1/.cjs`，已修并定向验证；新增语言需核扫描边界，不能只看工具绿灯。
 - 公共 owner 合同多树并改，消费树缺生产模块或使用错误三方基线，造成 collection 失败与接口回退。派单登记完整依赖树和提供者；同步时用真实共同祖先，先验真实 import/入口，再开始消费者验证，不要求主代理反复人工重建残包。
 - R27 测试直接写 execution/membership 关系，绿灯掩盖生产 writer 未接线。验收必须有真实生产写入到读取/DTO 的一条证据；明确区分 reader 算法测试与入口闭包。
 - R28 Terminal helper 使用 UUID 通过测试，真实 Gateway launcher 却仍传控制面 `gw_*`，导致托管启动失败。身份迁移先核实际创建、启动、接管和请求链；控制面注册 ID 与业务 UUID 分属不同 owner，不以放宽校验或另读业务存储消解冲突。
