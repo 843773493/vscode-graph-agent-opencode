@@ -15,8 +15,8 @@
 
 ## 3. 视图与修订的结构化迁移
 
-- [ ] 3.1 将原 fragment 表达的信息迁移为会话上下文解析与入口的结构化字段：`information` → `view=information`；`record={index}` → `view=records` + `record_index`；`assembly={id}` → `view=assembly` + `assembly_ref: ResourceIdentity`。新入口拒绝 fragment，不保留旧字符串解析兼容分支。**生产实现未完成；规范裁定已单独登记于 8.3。**
-- [ ] 3.2 移植既有视图与资源种类兼容性校验规则集，并要求未登记 view 显式失败、已登记但与资源 kind 不兼容的 view 以 owner 已登记的 `unsupported_view` 显式失败，均不得降级为默认视图。**生产实现未完成；规范裁定已单独登记于 8.1。**
+- [ ] 3.1 将原 fragment 表达的信息迁移为会话上下文解析与入口的结构化字段：`information` → `view=information`；`record={index}` → `view=records` + `record_index`；`assembly={id}` → `view=assembly` + `assembly_ref: ResourceIdentity`。新入口拒绝 fragment，不保留旧字符串解析兼容分支。**本地生产入口已实现：中央 grammar、结构化 view/record_index/ResourceIdentity assembly_ref 已被 API 与工具消费；固定1c20只读对表及主线程14项边界探针通过。保持未勾，待客户端测试构造迁移与真实入口验收闭合；联邦解析由第4组继续。**
+- [ ] 3.2 移植既有视图与资源种类兼容性校验规则集，并要求未登记 view 显式失败、已登记但与资源 kind 不兼容的 view 以 owner 已登记的 `unsupported_view` 显式失败，均不得降级为默认视图。**本地生产规则已实现：未知 view 明确拒绝，kind/view不匹配使用统一 owner 的 unsupported_view；固定1c20调用链与主线程边界探针已核。保持未勾至完整入口验收，不沿用“未实现”诊断。**
 - [ ] 3.3 保留可重读修订绑定能力：`expected_revision` 不匹配时返回显式修订变更错误；游标继续绑定资源 + revision + operation，在固定修订上推进分页，并在 resource/revision/operation 不匹配时显式失败。
 - [ ] 3.4 断言 revision 只存在于结构化字段：对全部会话上下文路径做检查，确认生成的 URI 字符串在任何情况下都不含 revision/hash/snapshot 引用。
 
@@ -46,7 +46,8 @@
 - [x] 5A.5 删除 `app/agents/skill_runtime.py` 的 bundled 到 builtin 改名映射，向 `inline` 收敛（scope 正名由 `add-unified-virtual-resource-addressing` 归口）。 **（已由 `298ef599` 落地：`layer_order` 改为 `(inline,gateway,workspace)`，`scope = {...}[layer]` 改名 shim 物理删除，`layer` 名与 URI scope 名自此逐字一致；`rg -n 'bundled' app/agents/skill_runtime.py` 仅剩合法命名的 `resolve_bundled_skill_groups`。该 shim 已不存在，无需再删。）**
 - [x] 5A.6 断言配置来源的持久化记录与 API 响应体均不含真实路径。 **（已落地：`test_workspace_config_source.py::test_persisted_source_records_never_hold_real_path`、`test_config_service.py::test_workspace_config_migrates_mutable_json_layers_to_sqlite` 与 `test_config.py::test_config_sources_endpoint_never_exposes_real_path`。）**
 
-- **5A.7 登记：`ConfigCandidateApplier` 双定义（只登记不删，2026-10-01 独立 slice）**：`app/services/infrastructure/config/store.py:18` 与 `app/services/infrastructure/config_service/config_service_common.py:20` **字面相同**地各定义一次 `Callable[[ConfigSnapshot, ConfigSnapshot], Awaitable[None]]`。同目录 `config_service/AGENTS.md` 明文要求「不得在 `config_service_common.py` 之外重复定义 `logger`、`ConfigCandidateApplier`」，故此为**违反既有指令的重复定义**。**性质**：本次 config 服务拆分（`out/tests/temp/review_config_split/artifacts/REVIEW_config_service_split.md` §五第 1 条）实测为**改动前既存重复**，拆分未消除也未扩大。**裁定：只登记不删，本轮不收口**；收敛归 5A.x config 来源切片（消除重复定义=共享符号唯一定义在 `common`，另一处改为 import）。
+- **5A.7 重复定义已闭合**：当前唯一 `ConfigCandidateApplier` 定义在 `app/services/infrastructure/config/contracts.py`，`config/store.py` 与 `config_service/config_service_common.py` 均从中性合同层导入；原“仍双定义、待删”登记已失效。主线程在固定1c20全仓核仅一个定义，历史C03集成与后续URI317项相关验证保留，不重复重构。
+
 
 ## 6. 收口在途 change
 
@@ -64,6 +65,6 @@
 
 以下决定只收口规范分支；其 `[x]` 不代表生产 resolver 或会话上下文代码已经实现。owner 唯一登记处见 `add-unified-virtual-resource-addressing` 的对应 requirement。
 
-- [x] 8.1 **视图兼容性规则定稿**：未登记 view 显式失败；已识别但与资源 kind 不兼容的 view 以 owner 登记的 resolve 拒绝码 `unsupported_view` 显式失败，二者均不得降级为默认视图。本 change 只引用 owner 的拒绝码，不定义第二套；owner 的 resolver 实现任务仍未完成。
-- [x] 8.2 **`assembly_ref` 使用 `ResourceIdentity`**：复用统一 URI owner 的既有领域定义，不另造专用 ref 类型；本决定收口类型分支，相关生产建模与接线仍未完成。
+- [x] 8.1 **视图兼容性规则定稿**：未登记 view 显式失败；已识别但与资源 kind 不兼容的 view 以 owner 登记的 resolve 拒绝码 `unsupported_view` 显式失败，二者均不得降级为默认视图。本 change 只引用 owner 的拒绝码，不定义第二套；本地 view/resolve 消费已实现；联邦解析仍未完成，完整入口验收由3.2跟踪。
+- [x] 8.2 **`assembly_ref` 使用 `ResourceIdentity`**：复用统一 URI owner 的既有领域定义，不另造专用 ref 类型；本决定收口类型分支，ResourceIdentity已进入本地DTO、工具及assembly查询；完整生产验收由3.1跟踪。
 - [x] 8.3 **fragment 信息映射为结构化字段**：`#information` 映射到 `view=information`；`#record={index}` 映射到 `view=records` 与 `record_index`；`#assembly={assembly_id}` 映射到 `view=assembly` 与 `assembly_ref: ResourceIdentity`。映射与禁止 fragment 的规范已定稿于 design D2 与 spec「会话上下文视图选择必须结构化」；生产实现仍由 3.1 跟踪。

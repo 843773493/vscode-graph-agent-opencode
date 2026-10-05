@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 22:47（北京时间）。goal **active、无预算上限**；交接与七个 change 尚未全部验收。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 23:44（北京时间）。goal **active、无预算上限**；交接与七个 change 尚未全部验收。
 
 ## 授权与恢复坐标
 
@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-ROOT 当前核验 HEAD **9126fb76e7b72ff894324186916742cb3aca06c8**；业务源码最后提交 **1c20cc572039e8905483c0c8646a46d69f38055f**，tree=`621b97724cef1da73951d6a96bf4b16d6a7ad3d6`。后两笔仅文档，下次恢复重新核 HEAD，不把本文值当 live。
+ROOT 当前核验 HEAD **4d966c747b186df84fd0503c20d29191d38251c3**；业务源码最后提交 **1c20cc572039e8905483c0c8646a46d69f38055f**，tree=`621b97724cef1da73951d6a96bf4b16d6a7ad3d6`。后续三笔仅文档，下次恢复重新核 HEAD，不把本文值当 live。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。当前整组 **active**，实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs。
 
@@ -42,9 +42,10 @@ ROOT 当前核验 HEAD **9126fb76e7b72ff894324186916742cb3aca06c8**；业务源�
 ## 当前执行与后续顺序
 
 1. **Sol正在实现 R 正向生产切片**，产物 `r-producers-and-toolset-production/`。WT按三方同步163路径后，app/src/tests/scripts/configs/proto/openspec与ROOT1c20零差异；3生成冲突按合并proto等于ROOT后复用官方输出。证据 `root-dependency-sync-attempt-2/preparation.json`；build0/17.483s与真实composition import0/2.990s。不整树覆盖 .codex/docs，不启动 WT/ROOT全服务。
+   公共合同候选 **8f9227ab3b73e5d26bf65ff264792b0fea7f0650**（7f8dc基线、20path）已由主strict apply重建/ROOT preimage/三保护/sharedindex核验，尚未集成。作者189focused与25repair绿（有重叠），主与只读早审发现两个P2：prefix工具key未联selected ToolSet manifest/policy；真实CSM lifecycle descriptor→observation丢root_placement/policy_key。同Sol正交独立forward，原包冻结保留；先闭合公共合同再接消费者。4继承测试疑点未改golden/runtime：三typed detail golden缺thread identity、generation断言错误，未独立跑基线。证据 `r-public-primary-review/attempt-1/mechanical.json`、`r-producers-and-toolset-production/public-contract-attempt-1/`。
    R01–R07须从真实 producer→CSM→composition/Saver/compiler→Provider正向接通 typed SourceObservation/provenance/intent；不从最终request反推。首次/fork首root，合法compaction/rewind/toolset_changed新PrefixEpoch；tail_only独立user；并行工具先pending，下一request assistant calls→全部paired results→source。desired/applied ToolSet在安全边界切换。对应 context1.5/1.6剩余、4.6、5.1/5.2/5.4、6.7/7.1及itemized1.5/1.6生产证据；无固定交付前不勾整项。
 2. **activation**：现有组件接到真实user/internal执行，唯一freeze owner；assembly_ref=ResourceIdentity，不用execution ID冒充turn，不造internal Turn。保真实资源激活快照、来源控制、sealed重试；复验编译reasoning-only合法body及耗尽收敛。
-3. **delegate publication**：Session SQLite publication ledger与child发布同事务，真实factory/start caller与abort/recovery闭合，不倒删published，不造第二JSON账本。
+3. **delegate publication**：Session SQLite publication ledger与child发布同事务，真实factory/start caller与abort/recovery闭合，不倒删published，不造第二JSON账本。 原task对表发现粗队列漏了E01–E07 runtime source/wakeup、同Session team/fanout、通信accepted→binding→cold recovery/持久观察以及8.15背景任务/mailbox；已分成依赖清楚的待办，仍由同Sol后续实现。`create_and_run_internal`已有InternalExecutionIntent，不造真实user Turn；Terminal已有精确source_thread/claim。缺口是pending source与durable wakeup，禁止重建已完成admission。证据 `runtime-event-task-evidence-review/attempt-1/report.md`。
 4. **联邦 URI与target-main**：复用现有authority/grant/channel/cursor。已有 GET `/api/v1/sessions/{session_id}/main-thread` 是合同来源，不新增同义endpoint；稳定Gateway authority、受控peer-hub-star最多transit1/hops2/deadline，真实B⇄A⇄C与零副作用拒绝。证据 `remaining-addressing-contract-review/attempt-1/report.md`。
 5. **持久资源与最终验证**：1.4/5.3外置owner unknown崩溃窗口后新进程重开，5.2唯一正式WebE2E仍待。只读reviewer正在固定1c20核现有harness，报告 `persistent-remaining-review/attempt-1/report.md`；实现仍交同Sol。
 6. **继承消费者/关闭风险**：两个session_navigation旧DTO测试迁到durable operations/receipt，不恢复旧API；通用fixture10秒强杀Gateway父级的关闭风险仍待精确owner handle回收和透明失败，正常attempt7不能证明强杀安全。证据 `remote-cleanup-review/attempt-1/report.md`。最后逐原task/入口验收七change及handoff，不能当前阶段完成就结束goal。
@@ -57,6 +58,7 @@ ROOT 当前核验 HEAD **9126fb76e7b72ff894324186916742cb3aca06c8**；业务源�
 - 主线程错误诊断“Gateway缺句柄”已撤销。固定7f8dc已有两handle，真实Bun退出3约155ms和SIGTERM均可见，无源码/测试增量。清旧库后服务恢复；此前等待为何未看到退出仍未证明。证据 `dev-launcher-early-exit/final-readonly-attestation.json`。不对反证已推翻的诊断派实现或写镜像测试。
 - 主错误成本单列：不存在preload前置失败0.081s、首次依赖patch含已相同新增文件被拒（未写源码）、初始化探针猜错字段connection_state。原raw/exit保留，不计作者返工，不以重试覆盖。
 - ROOT共享index当前观察98850fa4…；WT默认index e1cb50fd…。早前f2afa→98850字节变化，但ls-files --stage逐字相同（stage SHA2ae32540…），发起者未归因、未恢复共享index。每次集成核fresh现场，不能宣称全期字节未变。
+- R公共合同的完整对象早审在生产大包前发现两个P2，已推同Sol独立forward；现机械交付完整不代表联合业务约束完整。此调整的最终效果须待forward固定验收，不提前记为闭合。技能入口事故段从13.8KB压至8.8KB，原件 `skill-state-maintenance/entry-pre-tightening-9126.md`；固定4d966文档集成strict40/0、skill validation0、guard/祖先/sharedindex核过。
 - 比较数据只维护 `efficiency-comparison.json`；首完整候选、真实入口遗漏、返工、依赖等待、主补救分开计。没有同起点可比试验，不给速度倍率，不宣布永久最佳模型。当前一个Sol贯穿、独审、主串行集成继续；不把继承缺陷、主协调错误或过去Luna投入全归当前作者。
 
 任务导航维护在 `current-task-index.json`，按实际文件刷新，编号任务（含嵌套和字母后缀）与未编号历史审计框分开；数量不证明业务完成。多工作区旧规划 guard及并存读取表述已在9126文档提交收回；只读对表仍以固定1c20检验源码。Gateway当前启动manifest仍只含一个workspace，两个独立backend的绿灯不证明同进程挂载。
@@ -64,3 +66,5 @@ ROOT 当前核验 HEAD **9126fb76e7b72ff894324186916742cb3aca06c8**；业务源�
 旧 WVL Terminal P1核验：d164cf6的Web确实直连Manager且缺owner body；1c20的Web→Workspace Resource API→TerminalResourceOwner→TerminalManagerClient已补齐，历史缺陷已闭合而非过去误报。证据是两个固定对象的完整caller/callee；新task对表不得沿用为剩余缺口。ROOT typed/URI组合真实SQLite/OpenAPI三文件47项通过（实际0/29.831秒），证据 `typed-root-composition-validation/attempt-1/`；不代R生产闭包。
 
 已关闭阶段查文档提交 `e972590dcd0bbe4122aae3bce870e7f72894ed65` 及上述原产物。本次压缩前台账快照保留于 `skill-state-maintenance/pre-compaction-68d597bf20f6.md`，其中“未集成”等记述已被本文当前状态替代；不作为现行指令，不复制回入口。
+
+本地URI task复核：ROOT4d966三服务consumer组合实际1/9.255秒，28项通过、GatewaySessionContextClient三个旧test构造漏必填local_token_supplier失败（maxfail3，不能称整组绿）；14项公开DTO/中央grammar/view/cursor边界探针全过/0.962秒。来源 `local-uri-task-acceptance/attempt-1/`。local模型/入口已实现的旧注释已主修，完整入口验收保持未勾；测试迁移纳同Sol后续消费者，不恢复None认证旁路。config5.4已有源码/原C03及URI317证据，已核记录为完成，source control/activation5.6仍待。ConfigCandidateApplier旧双定义已由中性config/contracts.py单owner闭合，已更正陈旧登记。
