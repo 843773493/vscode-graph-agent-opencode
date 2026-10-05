@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **56e6a1cdc0d9edb070ae73c913648c9f8734c18c**；最新已提交业务 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。已集成public0e2a→8ac、transaction e4d→39509、semantic58e1→0e423；ROOT现有d29＋6248＋ff1＋414＋5a89＋1ff0＋ce768＋cd4＋d04固定63路径组合已物化但未提交，组合tree=`4bb5f0af4f200469c6b2d0c0f4dc9a9c79106287`；主provider/AGENTS校准已在356文档提交，活跃记忆另更新，不能称工作树clean或生产已完成。下次恢复重新核HEAD/候选/preimage，不把本文值当live；三保护未变。
+本文更新前ROOT HEAD **4b3bed5d1cb60693e73881fc80972fc381414772**；最新已提交业务 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。已集成public0e2a→8ac、transaction e4d→39509、semantic58e1→0e423；ROOT现有d29＋6248＋ff1＋414＋5a89＋1ff0＋ce768＋cd4＋d04＋58ad＋e645固定66路径组合已物化但未提交，组合tree=`9422c9889e66b92cb333bf2fd1bed8ebdfec7a0c`；主provider/AGENTS校准已在356文档提交，活跃记忆另更新，不能称工作树clean或生产已完成。下次恢复重新核HEAD/候选/preimage，不把本文值当live；三保护未变。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（本恢复轮未重新核服务），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -118,6 +118,12 @@ schema恢复固定1ff0（base5a89）4path已闭合：原三文件53pass+4fail ac
 
 控制状态/SkillAPI固定cd4（basece768）4path已主strict/hash/preimage/保护/default index核验，主窄独审保原state_revision=3、重启/tracking/同Session sibling隔离和API冻结响应；ROOT单次37pass actual0/36.989秒、AST4/Ruff0。作者8pass1fail与定向1pass8deselected不合称单次9绿。证据 `r-source-control-consumers-primary-review/root-composed-attempt-1/`。新版全仓fixed/direct/helper/间接/deferred清点与主AST逐项一致；原技能调整发现漏项、后续包完整列出已证，最终全量删除仍待。主最初比对call首行与keyword自身行不同，统一节点行号后核销，无源码返工，不归作者。
 
-终态/取消/工具边界固定d04（basecd4）3path亦主strict/hash/preimage/保护/default index核验、AST3/Ruff0，ROOT最终三文件单次41pass actual0/44.868秒，含真实退出83/JSONL障碍与恢复；原取消/终态/零副作用/旧sealed bytes断言保留。证据 `r-terminal-consumers-primary-review/root-composed-attempt-1/`。三包新增组19/37/41分别计，未变旧组复用；当前63path未提交，主手写业务实现0。
+终态/取消/工具边界固定d04（basecd4）3path亦主strict/hash/preimage/保护/default index核验、AST3/Ruff0，ROOT最终三文件单次41pass actual0/44.868秒，含真实退出83/JSONL障碍与恢复；原取消/终态/零副作用/旧sealed bytes断言保留。证据 `r-terminal-consumers-primary-review/root-composed-attempt-1/`。三包新增组19/37/41分别计，未变旧组复用；该轮63path未提交，主手写业务实现0。
 
 真实transition入口窄审已由主fixed独核：paired validator在rewind/replay和自动compaction preflight已有生产caller；缺口是epoch intent consumer分支仍NotImplemented、成功view事务未提交pending transition、prepare未传transition、checkpoint-versioned CSM state未恢复。1ff至d04七个相关生产blob完全相同；报告 `r-transition-owner-boundary-review/attempt-1/report.md` 及主确认JSON。这是原context2.4/3.6未完范围，不从手工fixture失败推生产bug、不重做既有barrier。交同Sol在剩余5 caller＋source_manager后接单一事务；低层privacy/optional/detail tests用现有compose/register→唯一seal验本层，真实dispatch/retry走prepare/admission，不加CSM兼容字段。
+
+Turn recovery固定58ad（based04）单文件已主strict/hash/preimage/三保护/default index核验；真实dispatch/retry走prepare/admission，低层optional/private/detail走唯一seal并保原断言。ROOT受影响10pass、41deselected，actual0/10.191秒，AST1/Ruff0；未变41不重跑，不称完整R或Provider验收。证据 `r-turn-recovery-primary-review/root-composed-attempt-1/`。
+
+详情调用固定e645（base58ad）两文件已主strict/hash/preimage/保护/default index核验、AST2/Ruff0，共66owned物化未提交。共享projection fixture改为真实accept/owner/admission/Thread路径，旧dispatch重复参数化随废止API删除，保唯一seal/prepare的tombstone、零assembly、隐私与文件断言；作者单次12pass/actual0。主按实际依赖联验typed_detail/projection_contract/retry，停于projection_contract首4错签名：12pass、4fail，actual1/23.956秒，retry未执行。旧caller仍缺必填thread；固定只读retry同类缺项及其schema_checkpoint fixture依赖已交同Sol，不增兼容、不改guard、未跑旧baseline不归因e645新回归。证据 `r-typed-detail-primary-review/root-composed-attempt-1/`；fixture窄独审在途。
+
+技能原调用方条款已补完整签名/必填owner和共享fixture消费者验证。主fixed AST与作者inventory一致：4测试路径、16真旧API/keyword、15本地helper、1 options间接供应；source_manager在途仍计fixed。named count不能证明所有新签名已迁，后续相关包联验再登记修订效果，整R仍待。两新包均复用前序未变审查，主手写业务实现0。
