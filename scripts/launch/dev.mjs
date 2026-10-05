@@ -23,6 +23,7 @@ import { BOXTEAM_VERSION } from "../../packaging/runtime/versions.mjs";
 import {
   remainingOccupiedPorts,
   resolveDevelopmentLayout,
+  resolveBackendWorkspaceId,
 } from "./dev-environment.mjs";
 
 const developmentLayout = resolveDevelopmentLayout();
@@ -245,53 +246,6 @@ async function waitForHttpOk(
   );
 }
 
-function resolveBackendWorkspaceId(environment) {
-  const result = Bun.spawnSync(
-    [
-      pythonBin,
-      "-m",
-      "app.core.workspace_identity",
-      "--workspace-root",
-      defaultWorkspaceRoot,
-    ],
-    {
-      cwd: projectRoot,
-      env: environment,
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  const stdout = result.stdout.toString().trim();
-  const stderr = result.stderr.toString().trim();
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `Workspace backend UUID 初始化失败: exit=${String(result.exitCode)}${
-        stderr ? `\n${stderr}` : ""
-      }`,
-    );
-  }
-  let payload;
-  try {
-    payload = JSON.parse(stdout);
-  } catch (error) {
-    throw new Error(`Workspace backend UUID CLI 返回无效 JSON: ${stdout}`, {
-      cause: error,
-    });
-  }
-  const workspaceId = payload?.workspace_id;
-  if (
-    typeof workspaceId !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
-      workspaceId,
-    )
-  ) {
-    throw new Error(
-      `Workspace backend UUID CLI 返回非法 workspace_id: ${String(workspaceId)}`,
-    );
-  }
-  return workspaceId;
-}
-
 async function waitForDetachedReady(child, readyFile, logPath) {
   const timeoutMs = 120_000;
   const deadline = Date.now() + timeoutMs;
@@ -512,7 +466,10 @@ async function main() {
   installDevelopmentConfiguration(environment);
   const backendWorkspaceId =
     serviceMode === "backend" || serviceMode === "all"
-      ? resolveBackendWorkspaceId(environment)
+      ? resolveBackendWorkspaceId({
+          environment, projectRoot, workspaceRoot: defaultWorkspaceRoot,
+          pythonExecutable: pythonBin,
+        })
       : null;
   if (backendWorkspaceId !== null) {
     environment.BOXTEAM_WORKSPACE_ID = backendWorkspaceId;

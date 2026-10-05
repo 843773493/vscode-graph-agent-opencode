@@ -81,3 +81,27 @@ export function remainingOccupiedPorts(targetPorts, listenerPids) {
   }
   return occupied;
 }
+
+/** 直接消费 Workspace 唯一 CLI 的一行 UUID；不要另设 JSON 输出链路。 */
+export function resolveBackendWorkspaceId({
+  environment = process.env, projectRoot, workspaceRoot, pythonExecutable,
+}) {
+  const result = Bun.spawnSync([
+    pythonExecutable, "-m", "app.core.workspace_identity",
+    "--workspace-root", workspaceRoot,
+  ], { cwd: projectRoot, env: environment, stdout: "pipe", stderr: "pipe" });
+  const stdout = result.stdout.toString();
+  const stderr = result.stderr.toString();
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Workspace backend UUID CLI 初始化失败: exit=${String(result.exitCode)} stderr=${stderr}`,
+    );
+  }
+  if (stderr !== "") {
+    throw new Error(`Workspace backend UUID CLI 成功时 stderr 必须为空: ${stderr}`);
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\r?\n$/.test(stdout)) {
+    throw new Error(`Workspace backend UUID CLI 必须只输出一行标准 UUID: ${stdout}`);
+  }
+  return stdout.replace(/\r?\n$/, "");
+}

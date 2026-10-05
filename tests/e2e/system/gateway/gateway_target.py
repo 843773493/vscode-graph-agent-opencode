@@ -126,23 +126,11 @@ def start_remote_backend_via_ssh(
         ),
         timeout=60,
     )
-    try:
-        identity_payload = json.loads(identity_result.stdout)
-    except json.JSONDecodeError as error:
-        raise RuntimeError(
-            "远端 Workspace backend UUID CLI 返回无效 JSON: "
-            f"stdout={identity_result.stdout!r}"
-        ) from error
-    backend_workspace_id = (
-        identity_payload.get("workspace_id")
-        if isinstance(identity_payload, dict)
-        else None
-    )
-    if not isinstance(backend_workspace_id, str):
-        raise TypeError(
-            "远端 Workspace backend UUID CLI 缺少 workspace_id: "
-            f"payload={identity_payload!r}"
-        )
+    if identity_result.stderr:
+        raise RuntimeError(f"远端 Workspace backend UUID CLI 成功时 stderr 必须为空: {identity_result.stderr!r}")
+    if not identity_result.stdout.endswith("\n") or identity_result.stdout.count("\n") != 1:
+        raise TypeError(f"远端 Workspace backend UUID CLI 必须只输出一行 UUID: {identity_result.stdout!r}")
+    backend_workspace_id = validate_workspace_id(identity_result.stdout[:-1])
     mounted_workspaces = json.dumps(
         [
             {

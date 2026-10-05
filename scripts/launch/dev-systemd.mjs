@@ -145,23 +145,30 @@ function isManagerReady(unit, state) {
   }
 }
 
-async function waitForGateway(unit, timeoutMs = 120_000) {
+export async function waitForGateway(unit, timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
     const state = readUnitState(unit.serviceName);
-    if (state.activeState === "failed") {
+    if (state.loadState === "not-found" || ["failed", "inactive", "deactivating"].includes(state.activeState)) {
       throw new Error(
-        `${unit.serviceName} 启动失败；查看日志: journalctl --user-unit=${unit.serviceName} -n 200 --no-pager`,
+        `${unit.serviceName} 就绪前已退出或被回收: load=${state.loadState} active=${state.activeState} sub=${state.subState}；查看日志: journalctl --user-unit=${unit.serviceName} -n 200 --no-pager`,
       );
     }
     if (!isManagerReady(unit, state)) {
+      lastError = new Error(`manager 尚未就绪: load=${state.loadState} active=${state.activeState} sub=${state.subState}`);
       await Bun.sleep(250);
       continue;
     }
     try {
       const response = await fetch(unit.gatewayHealthUrl);
-      if (response.ok) return;
+      if (response.ok) {
+        const current = readUnitState(unit.serviceName);
+        if (current.activeState !== "active" || current.mainPid !== state.mainPid || !isManagerReady(unit, current)) {
+          throw new Error("健康请求结束时 development manager 已退出或更换");
+        }
+        return;
+      }
       lastError = new Error(`HTTP ${response.status} ${response.statusText}`);
     } catch (error) {
       lastError = error;
