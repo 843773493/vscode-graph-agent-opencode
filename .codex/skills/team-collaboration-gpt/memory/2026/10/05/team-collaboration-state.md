@@ -63,10 +63,12 @@ Browser 固定最终树 `f838d13ad91cbeaa13bc83eca41f324b3dfca451`。ROOT 产品
 
 继续单Sol：fork/Runner/runtime/catalog/Terminal/Browser固定闭包已交，主补业务源码仍为0。fork首完整候选106.84分钟；旧Luna fork4pass17fail/33.8s来自不同合同与前置，不是A/B。Terminal和Browser精确开始时间未核，不倒推耗时；typed起点单列。没有可信速度倍率或永久最优结论。作者调用方遗漏、故障返修、fixture接手与主协调成本均记 A/efficiency-comparison.json。
 
-远端Docker正式Browser/Terminal首次actual exit1、66.977秒（pytest65.21秒），bootstrap Web frozen lock失败，业务场景未开始。确认根锁和Bun1.3.11一致，Web lock遗漏早于本轮的@bufbuild/protobuf依赖（加入于277e4a96），不归因Sol；专用remote诊断锁已还原无源码差异。同Sol按独立1path锁forward修复，不混typed候选；重试验收仍待。原收据 A/root-product-verification/remote-browser-terminal-attempt-1/。
+远端Docker正式Browser/Terminal首次actual exit1、66.977秒（pytest65.21秒），bootstrap Web frozen lock失败，业务场景未开始。确认根锁和Bun1.3.11一致，Web lock遗漏早于本轮的@bufbuild/protobuf依赖（加入于277e4a96），不归因Sol；专用remote诊断锁已还原无源码差异。同Sol独立1path锁forward已集成c5a4c21，主严格重建f505、blob/hash/preimage、guard及双祖先通过，本次窗口共享index保持f2afa293不变；未混入111个typed在途路径。attempt2 Web frozen阶段已通过，但actual exit1/253.03秒（pytest251.36秒）：测试remote启动器漏BOXTEAM_RUNTIME_MANIFEST，Gateway启动即退出，就绪检查仍等完整期限。主从统一target入口读原stderr确定根因，不放宽生产distribution identity；同Sol在typed可停点后修既有gateway_target.py消费者及退出快失败，未启动另一个实现者。业务验收仍待。原收据 A/root-product-verification/remote-browser-terminal-attempt-{1,2}/，锁核验 A/web-frozen-lock-forward/root-integration/；技能新规则尚待修复后实测。
+
+正式Browser documented discovery真实user Job在ROOT c5a4c21 actual exit1/26.03秒（pytest21.78秒）：Workspace AGENTS activation Source HumanMessage缺canonical execution attribution，provider prepare在LLM调用前拒绝；资源操作通过不能背书Agent完整发现链路。原收据 A/root-product-verification/browser-documented-discovery-attempt-1/。同Sol已接为后续R/activation producer验收，不放宽归属约束，不打断当前typed闭包，也不归为已交typed遗漏。
 
 已验证改进：固定树严格交付，稳定差异早审与实现并行，未变审查复用；Browser确定拒绝回执与部分转换unknown分开，镜像同步放权威observe完成处，真实释放后才发布终态、失败保句柄。Luna仍适合本轮固定增量只读核验。screencast猜测经合法入口核查撤回，未要求作者盲修。
 
-主错误单列：私有/共享index误识别约九分钟、title合同误判、Gateway路由ID与旧Session DELETE探针假设；原失败留存，不计为作者返修。路径计数须显式--no-renames包含删除/新增。本轮fresh测得主ROOT共享index基线 dfe47bb5cd7eeffe7b1f6277141a116f846ca4dfd70221442e99d4a5411b345f；WT默认index e1cb50fdd86644b869eaa547caf1c572413c768fbb838e1cd636ea248670e73d；由absolute-git-dir/index定位。
+主错误单列：私有/共享index误识别约九分钟、title合同误判、Gateway路由ID与旧Session DELETE探针假设；原失败留存，不计为作者返修。路径计数须显式--no-renames包含删除/新增。ROOT共享index旧观察dfe47已过期，锁作者strict窗口后为f2afa293（变更原因未确定）；主锁集成窗口前后独立核验均为f2afa293，不能据此声称整个作者窗口未变。WT默认index最近观察e1cb50f；共享index由absolute-git-dir/index定位，继续fresh私有index，不还原共享暂存。
 
 目录迁移已释放系统盘约238GB；旧根terminal-manager曾被2026-10-04的steering fixture重新写入，2026-10-05确认仅completed测试记录后再次清理，当前fixture已走out/tests显式UUID路径；授权旧数据与可复现副本已清，独有源码保留。原目录审查见 docs/handoff/20261003-151500-team-collaboration-directory-review.md。原始报告和提交保真；本台账压缩不重复产生总结文档。
