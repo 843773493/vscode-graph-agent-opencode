@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-ROOT 源码 HEAD **1c20cc572039e8905483c0c8646a46d69f38055f**，tree=`621b97724cef1da73951d6a96bf4b16d6a7ad3d6`。下次恢复重新核 HEAD，不把本文值当 live。
+ROOT 当前核验 HEAD **9126fb76e7b72ff894324186916742cb3aca06c8**；业务源码最后提交 **1c20cc572039e8905483c0c8646a46d69f38055f**，tree=`621b97724cef1da73951d6a96bf4b16d6a7ad3d6`。后两笔仅文档，下次恢复重新核 HEAD，不把本文值当 live。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。当前整组 **active**，实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs。
 
@@ -59,6 +59,8 @@ ROOT 源码 HEAD **1c20cc572039e8905483c0c8646a46d69f38055f**，tree=`621b97724c
 - ROOT共享index当前观察98850fa4…；WT默认index e1cb50fd…。早前f2afa→98850字节变化，但ls-files --stage逐字相同（stage SHA2ae32540…），发起者未归因、未恢复共享index。每次集成核fresh现场，不能宣称全期字节未变。
 - 比较数据只维护 `efficiency-comparison.json`；首完整候选、真实入口遗漏、返工、依赖等待、主补救分开计。没有同起点可比试验，不给速度倍率，不宣布永久最佳模型。当前一个Sol贯穿、独审、主串行集成继续；不把继承缺陷、主协调错误或过去Luna投入全归当前作者。
 
-任务导航维护在 `current-task-index.json`，按实际文件刷新，编号任务（含嵌套和字母后缀）与未编号历史审计框分开；数量不证明业务完成。多工作区文档正在收回原规划阶段“不得写生产代码”的旧guard及并存读取表述，保持已授权实施与单链路原则；只读对表仍以固定1c20检验源码。
+任务导航维护在 `current-task-index.json`，按实际文件刷新，编号任务（含嵌套和字母后缀）与未编号历史审计框分开；数量不证明业务完成。多工作区旧规划 guard及并存读取表述已在9126文档提交收回；只读对表仍以固定1c20检验源码。Gateway当前启动manifest仍只含一个workspace，两个独立backend的绿灯不证明同进程挂载。
+
+旧 WVL Terminal P1核验：d164cf6的Web确实直连Manager且缺owner body；1c20的Web→Workspace Resource API→TerminalResourceOwner→TerminalManagerClient已补齐，历史缺陷已闭合而非过去误报。证据是两个固定对象的完整caller/callee；新task对表不得沿用为剩余缺口。ROOT typed/URI组合真实SQLite/OpenAPI三文件47项通过（实际0/29.831秒），证据 `typed-root-composition-validation/attempt-1/`；不代R生产闭包。
 
 已关闭阶段查文档提交 `e972590dcd0bbe4122aae3bce870e7f72894ed65` 及上述原产物。本次压缩前台账快照保留于 `skill-state-maintenance/pre-compaction-68d597bf20f6.md`，其中“未集成”等记述已被本文当前状态替代；不作为现行指令，不复制回入口。
